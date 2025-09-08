@@ -1,0 +1,39 @@
+cmake_minimum_required(VERSION 4.1)
+project(NewbieRenderer LANGUAGES CXX)
+
+# Require C++23; MSVC ships the C++ Standard Library modules (import std)
+# with recent VS 2022 toolsets.
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# find_package(imgui CONFIG REQUIRED) 
+# find_package(glfw3 CONFIG REQUIRED)
+find_package(Vulkan REQUIRED)
+
+function(nr_apply_msvc_settings target)
+    # WINDOWS-FLAG
+    if(MSVC)
+        if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+            set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+        endif()
+        target_link_options(${target} PRIVATE $<$<CONFIG:Debug>:/INCREMENTAL>)
+    endif()
+endfunction()
+
+# 包装器：创建目标后自动应用
+function(nr_add_executable target)
+    add_executable(${target} ${ARGN})
+    nr_apply_msvc_settings(${target})
+endfunction()
+
+function(nr_add_library target)
+    add_library(${target} ${ARGN})
+    nr_apply_msvc_settings(${target})
+endfunction()
+
+add_subdirectory(src)
+
+# Group sources nicely in IDEs
+
+

@@ -1,0 +1,20 @@
+add_subdirectory(hello)
+
+file(GLOB IMPL_SOURCES
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+)
+
+nr_add_executable(main main.cpp)
+target_link_libraries(main PRIVATE 
+    hello 
+    # Vulkan::Vulkan
+)
+target_sources(main
+	PRIVATE
+		${IMPL_SOURCES}
+)
+
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
+    src/${IMPL_SOURCES}
+)

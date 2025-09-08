@@ -1,0 +1,9 @@
+{
+  "name": "newbie-renderer",
+  "dependencies": [
+    "imgui",
+    "glfw3",
+    "vulkan",
+    "vulkan-validationlayers"
+  ]
+}
