@@ -2,3 +2,6 @@
 	path = src/extern/slang
 	url = https://github.com/shader-slang/slang.git
 	branch = master
+[submodule "src/extern/nvapi"]
+	path = src/extern/nvapi
+	url = https://github.com/NVIDIA/nvapi.git

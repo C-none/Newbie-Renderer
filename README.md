@@ -2,28 +2,52 @@
 
 ## Prerequisites
 - Visual Studio 2022
-- Vulkan SDK
+- Vulkan SDK 1.4.321.1
 - CMake
-- Ninja
-- Xmake
-- Other dependencies will be automatically downloaded by xmake
+- Vcpkg (set `VCPKG_ROOT` environment variable)
+- Other dependencies will be automatically downloaded by Vcpkg and submodules.
 
 ## Build
+
+### Method 1: Using CMake Presets (Recommended)
+
 1. Clone the repository
     ```bash
-    git clone https://github.com/C-none/Newbie-Renderer.git
+    git clone https://github.com/C-none/Newbie-Renderer.git --recurse-submodules
     cd Newbie-Renderer
     ```
-2. Create .SLN file using Xmake
+
+2. Configure using preset
     ```bash
-    xmake project -k vsxmake
+    cmake --preset msvc-vcpkg
     ```
-    It will automatically download and build dependencies.
 
-3. Open the generated `vsxmake2022/Newbie-Renderer.sln` file in Visual Studio 2022 and build the solution.
+3. Build the project
+    ```bash    
+    # Release build
+    cmake --build --preset release
+    ```
 
-4. Set the startup project to whatever you want to run e.g., `main2`, etc.(Right-click the project -> Set as Startup Project)
+### Method 2: Using Visual Studio 2022
 
+1. Open Visual Studio 2022
+2. Select "Open a local folder"
+3. Choose the project root directory
+4. Visual Studio will automatically detect the CMake presets
+5. Select configuration from the dropdown: `msvc-vcpkg`
+6. Select build preset: `release`
+7. Build the solution (Ctrl+Shift+B)
 
-Tips: It supposed to support other toolchains like `gcc`, `clang`, etc. However, you may need to manually fix some issues while installing required dependencies.(Add some flags maybe)
+## Packages
 
+### Submodules
+| Name      | Version     |
+|-----------|-------------|
+| Slang     | v2025.16.1 |
+| NvAPI     | R580       |
+| Aftermath | R580       |
+
+tips: You may update submodules by git if u like. However, Aftermath has to be updated manually by downloading the latest version from NVIDIA Developer [website](https://developer.nvidia.com/nsight-aftermath).
+
+### Vcpkg Packages
+- glm
