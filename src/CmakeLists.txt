@@ -1,3 +1,4 @@
+add_subdirectory(extern)
 add_subdirectory(hello)
 
 file(GLOB IMPL_SOURCES
@@ -8,7 +9,7 @@ file(GLOB IMPL_SOURCES
 nr_add_executable(main main.cpp)
 target_link_libraries(main PRIVATE 
     hello 
-    # Vulkan::Vulkan
+    slang
 )
 target_sources(main
 	PRIVATE

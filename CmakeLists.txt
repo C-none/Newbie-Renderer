@@ -33,7 +33,3 @@ function(nr_add_library target)
 endfunction()
 
 add_subdirectory(src)
-
-# Group sources nicely in IDEs
-
-
