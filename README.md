@@ -41,11 +41,11 @@
 ## Packages
 
 ### Submodules
-| Name      | Version     |
-|-----------|-------------|
+| Name      | Version  |
+| --------- | -------- |
 | Slang     | v2025.16 |
-| NvAPI     | R580       |
-| Aftermath | R580       |
+| NvAPI     | R580     |
+| Aftermath | R580     |
 
 tips: You may update submodules by git if u like. However, Aftermath has to be updated manually by downloading the latest version from NVIDIA Developer [website](https://developer.nvidia.com/nsight-aftermath).
 

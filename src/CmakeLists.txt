@@ -1,4 +1,9 @@
 add_subdirectory(extern)
+
+# utils must be before any other subdirectory that might depend on it
+add_subdirectory(utils)
+
+add_subdirectory(rhi)
 add_subdirectory(hello)
 
 file(GLOB IMPL_SOURCES
@@ -8,7 +13,8 @@ file(GLOB IMPL_SOURCES
 
 nr_add_executable(main main.cpp)
 target_link_libraries(main PRIVATE 
-    hello 
+    hello
+    nrrhi
     slang
 )
 target_sources(main

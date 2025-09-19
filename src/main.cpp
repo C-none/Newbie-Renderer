@@ -1,12 +1,14 @@
 #include <slang.h>
 
 import hello;
+import nr.rhi;
 import std;
 
 int main()
 {
     using namespace std;
-    hello::say("Hello, World!");
+    hello::helloSlang();
+    nr::rhi::rhiTest();
     // cout<<"Hello, World!";
     char p1[] = "abcdc";
     const char *p2 = "abcdc";

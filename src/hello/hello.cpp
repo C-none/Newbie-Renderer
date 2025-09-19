@@ -2,10 +2,11 @@ module hello;
 
 import std;
 
-namespace hello {
-    void say(const std::string& message)
-    {
-        auto foo = [](int x) { return x + 1; };
-        std::cout << message << "26" << std::endl;
-    }
+namespace hello
+{
+void helloSlang()
+{
+    auto foo = [](int x) { return x + 1; };
+    std::print("Hello, Slang! {}\n", foo(1));
 }
+} // namespace hello

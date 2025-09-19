@@ -2,6 +2,8 @@
   "name": "newbie-renderer",
   "dependencies": [
     "imgui",
-    "glfw3"
+    "glfw3",
+    "vulkan-memory-allocator",
+    "glm"
   ]
 }

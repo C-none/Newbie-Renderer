@@ -3,5 +3,5 @@ export module hello;
 import std;
 export namespace hello
 {
-void say(const std::string& message);
+void helloSlang();
 } // namespace hello

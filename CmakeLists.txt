@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.31)
+cmake_minimum_required(VERSION 4.1)
 project(NewbieRenderer LANGUAGES CXX)
 
 # Require C++23; MSVC ships the C++ Standard Library modules (import std)
@@ -7,6 +7,7 @@ project(NewbieRenderer LANGUAGES CXX)
 # set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # set(CMAKE_CXX_EXTENSIONS OFF)
 
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build." FORCE)
     # 设置可能的构建类型
@@ -14,7 +15,9 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # find_package(imgui CONFIG REQUIRED) 
-# find_package(glfw3 CONFIG REQUIRED)
+find_package(glm REQUIRED)
+find_package(glfw3 CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
 
 function(nr_apply_msvc_settings target)
@@ -23,11 +26,15 @@ function(nr_apply_msvc_settings target)
         if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
             set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
         endif()
-        target_link_options(${target} PRIVATE $<$<CONFIG:Debug>:/INCREMENTAL>)
+        add_compile_options(/MP)
+        target_link_options(${target} PRIVATE
+            $<$<CONFIG:Debug>:/INCREMENTAL>
+            $<$<CONFIG:Release>:/INCREMENTAL:NO>
+            $<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>)
     endif()
 endfunction()
 
-# 包装器：创建目标后自动应用
+
 function(nr_add_executable target)
     add_executable(${target} ${ARGN})
     nr_apply_msvc_settings(${target})
