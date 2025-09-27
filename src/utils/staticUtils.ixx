@@ -1,5 +1,5 @@
 module;
-export module nr.utils;
+export module nr.utils:staticUtils;
 
 export namespace nr
 {

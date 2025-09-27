@@ -19,6 +19,6 @@ target_sources(utils
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
-    src/${MODULE_UNITS}
+    ${MODULE_UNITS}
     # src/${IMPL_SOURCES}
 )
