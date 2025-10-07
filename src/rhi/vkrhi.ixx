@@ -8,19 +8,19 @@ export namespace nr::rhi
 
 enum class QueueKind
 {
-    Graphics,
-    Compute,
-    Transfer,
-    VideoDecode,
-    VideoEncode,
-    OpticalFlow,
-    Size
+    graphics,
+    compute,
+    transfer,
+    videoDecode,
+    videoEncode,
+    opticalFlow,
+    size
 };
 
 [[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance)
 {
     vk::raii::PhysicalDevices physicalDevices(instance);
-    assert(!physicalDevices.empty() && "No physical devices found.");
+    nrAssert(!physicalDevices.empty(), "No Available GPU!!!!!");
     vk::raii::PhysicalDevice bestDevice = physicalDevices.front();
     vk::PhysicalDeviceProperties bestProps = bestDevice.getProperties();
 

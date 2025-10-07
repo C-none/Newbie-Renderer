@@ -9,8 +9,9 @@ file(GLOB MODULE_UNITS
 # )
 
 nr_add_library(utils STATIC)
-# target_link_libraries(utils PRIVATE
-# )
+target_link_libraries(utils PRIVATE
+glm::glm
+)
 target_sources(utils
     # PRIVATE
     #     ${IMPL_SOURCES}

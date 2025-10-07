@@ -9,8 +9,12 @@ file(GLOB IMPL_SOURCES
 )
 
 nr_add_library(nrrhi STATIC)
-target_link_libraries(nrrhi PRIVATE
+target_link_libraries(nrrhi 
+PUBLIC
+    
+PRIVATE
     utils
+    glfw
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
 )
