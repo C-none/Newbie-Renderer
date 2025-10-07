@@ -1,4 +1,5 @@
 module;
+#include <GLFW/glfw3.h>
 #include <vulkan/vulkan_raii.hpp>
 export module nr.rhi;
 import nr.rhi.vk;
@@ -8,10 +9,37 @@ export namespace nr::rhi
 
 struct Surface
 {
-    vk::Extent2D extent;
+    class GlfwContext final
+    {
+      public:
+        GlfwContext()
+        {
+            if (glfwInit() != GLFW_TRUE)
+            {
+                throw std::runtime_error("Failed to initialize GLFW.");
+            }
+            glfwSetErrorCallback([](int error, const char *msg) { nrInfo()("glfw: (error number:{}) {}", error, msg); });
+        }
+        GlfwContext(GlfwContext const &) = delete;
+        GlfwContext &operator=(GlfwContext const &) = delete;
+        ~GlfwContext()
+        {
+            glfwTerminate();
+        }
+    } inline static glfwCtx;
+
+    std::unique_ptr<GLFWwindow, decltype(&glfwDestroyWindow)> handle{nullptr, &glfwDestroyWindow};
+    vk::Extent2D extent{1920, 1080};
     vk::raii::SurfaceKHR surface = {nullptr};
     vk::Format format;
-    Surface() = default;
+    Surface()
+    {
+        (void)&glfwCtx;
+    }
+    Surface(const Surface &) = delete;
+    Surface &operator=(const Surface &) = delete;
+    Surface(Surface &&) = default;
+    Surface &operator=(Surface &&) = default;
 };
 
 template <typename Derived> class Device
@@ -38,7 +66,7 @@ template <typename Derived> class Device
   protected:
     void setupInitialFlags();
     std::vector<std::string> instanceEnabledLayers{};
-    std::vector<std::string> instanceEnabledExtensions{VK_KHR_SURFACE_EXTENSION_NAME};
+    std::vector<std::string> instanceEnabledExtensions{};
     // std::vector<std::string> physicalDeviceFeatures{};
     std::vector<std::string> deviceEnabledExtensions{VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     std::array<size_t, static_cast<size_t>(QueueKind::size)> queueFamilyDict{};

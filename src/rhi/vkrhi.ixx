@@ -20,7 +20,7 @@ enum class QueueKind
 [[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance)
 {
     vk::raii::PhysicalDevices physicalDevices(instance);
-    nrAssert(!physicalDevices.empty(), "No Available GPU!!!!!");
+    nrAssert(!physicalDevices.empty())("No Available GPU!!!!!");
     vk::raii::PhysicalDevice bestDevice = physicalDevices.front();
     vk::PhysicalDeviceProperties bestProps = bestDevice.getProperties();
 
@@ -56,7 +56,7 @@ enum class QueueKind
 
     for (auto const &layer : uniqueLayers)
     {
-        nrAssert(std::ranges::any_of(layerProperties, [layer](vk::LayerProperties const &lp) { return layer == lp.layerName; }), "Requested layer '{}' is not available.", layer);
+        nrAssert(std::ranges::any_of(layerProperties, [layer](vk::LayerProperties const &lp) { return layer == lp.layerName; }))("Requested layer '{}' is not available.", layer);
         enabledLayers.push_back(layer.data());
     }
     return enabledLayers;
@@ -70,7 +70,8 @@ enum class QueueKind
     std::vector<char const *> enabledExtensions;
     for (auto const &extension : uniqueExtensions)
     {
-        nrAssert(std::any_of(extensionProperties.begin(), extensionProperties.end(), [extension](vk::ExtensionProperties const &ep) { return extension == ep.extensionName; }), "Requested extension '{}' is not available.", extension);
+        nrAssert(std::any_of(extensionProperties.begin(), extensionProperties.end(), [extension](vk::ExtensionProperties const &ep) { return extension == ep.extensionName; }))("Requested extension '{}' is not available.", extension);
+        nrAssert(true)("Requested extension '{}' is not available.", extension);
         enabledExtensions.push_back(extension.data());
     }
     return enabledExtensions;

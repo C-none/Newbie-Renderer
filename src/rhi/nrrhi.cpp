@@ -1,9 +1,11 @@
 module;
 
 // #include <vk_mem_alloc.h>
-#include <GLFW/glfw3.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
+
+#include <GLFW/glfw3.h>
+
 module nr.rhi;
 
 import std;
@@ -39,6 +41,12 @@ template <typename Derived> void Device<Derived>::initialize(std::string const &
 
 template <typename Derived> void Device<Derived>::setupInitialFlags()
 {
+    uint32_t glfwCount = 0;
+    const char **glfwExt = glfwGetRequiredInstanceExtensions(&glfwCount);
+    for (uint32_t i = 0; i < glfwCount; ++i)
+    {
+        instanceEnabledExtensions.push_back(glfwExt[i]);
+    }
     if constexpr (isDebugMode())
     {
         if (std::ranges::none_of(instanceEnabledLayers, [](std::string const &layer) { return layer == "VK_LAYER_KHRONOS_validation"; }))
@@ -108,13 +116,32 @@ template <typename Derived> vk::raii::Device Device<Derived>::makeDevice()
 
 template <typename Derived> Surface Device<Derived>::makeSurface()
 {
-    vk::su::WindowData window = vk::su::createWindow(AppName, {width, height});
-    VkSurfaceKHR _surface;
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    Surface result;
+    result.handle.reset(glfwCreateWindow(result.extent.width, result.extent.height, appName.c_str(), nullptr, nullptr));
+    VkSurfaceKHR rawSurface;
+    vk::detail::resultCheck(static_cast<vk::Result>(glfwCreateWindowSurface(*instance, result.handle.get(), nullptr, &rawSurface)), "Failed to create window surface");
 
-    // glfwCreateWindowSurface(*instance, nullptr, nullptr, &_surface);
-    vk::raii::SurfaceKHR surface(instance, _surface);
-    nrAssert(physicalDevice.getSurfaceSupportKHR(queueFamilyDict[static_cast<size_t>(QueueKind::graphics)], surface), "Surface not supported");
-    return Surface{extent : {window.width, window.height}, surface : surface, format : vk::Format::eB8G8R8A8Sr gb};
+    result.surface = vk::raii::SurfaceKHR(instance, rawSurface);
+
+    nrAssert(physicalDevice.getSurfaceSupportKHR(queueFamilyDict[static_cast<size_t>(QueueKind::graphics)], result.surface))("Surface not supported");
+    std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(result.surface);
+    nrAssert(!formats.empty())("No available surface formats");
+    nrInfo()("test");
+    auto selectedFormat = [&formats]() -> vk::SurfaceFormatKHR {
+        auto it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eB8G8R8A8Srgb; });
+        if (it != formats.end())
+            return *it;
+
+        it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eR8G8B8A8Srgb; });
+        if (it != formats.end())
+            return *it;
+        // nrInfo("WARNING! Your device does not support basic sRGB format. You may need to convert output color space manually.");
+        return formats.front();
+    }();
+
+    result.format = selectedFormat.format;
+    return result;
 }
 
 void application()
@@ -126,7 +153,7 @@ void rhiTest()
 {
     using namespace std;
     auto foo = [](const int x) { return x + 1; };
-    print("hello from rhiTest:{}", foo(1));
+    print("hello from rhiTest:{}\n", foo(1));
     application();
 }
 } // namespace nr::rhi
