@@ -6,7 +6,7 @@ import std;
 export namespace nr::rhi
 {
 
-enum class QueueKind
+enum class QueueKind : size_t
 {
     graphics,
     compute,

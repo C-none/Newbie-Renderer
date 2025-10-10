@@ -42,6 +42,24 @@ struct Surface
     Surface &operator=(Surface &&) = default;
 };
 
+struct SwapChain
+{
+    vk::raii::SwapchainKHR swapChain = {nullptr};
+    std::vector<vk::Image> swapChainImages;
+    std::vector<vk::raii::ImageView> imageViews;
+    SwapChain() = default;
+    SwapChain(const SwapChain &) = delete;
+    SwapChain &operator=(const SwapChain &) = delete;
+    SwapChain(SwapChain &&) = default;
+    SwapChain &operator=(SwapChain &&) = default;
+};
+
+struct Command
+{
+    vk::raii::CommandPool commandPool = {nullptr};
+    std::vector<vk::raii::CommandBuffer> commandBuffers;
+};
+
 template <typename Derived> class Device
 {
   public:
@@ -53,14 +71,14 @@ template <typename Derived> class Device
     vk::raii::PhysicalDevice physicalDevice = {nullptr};
     vk::raii::Device device = {nullptr};
     Surface surface;
-    vk::raii::SwapchainKHR swapchain = {nullptr};
+    SwapChain swapChain;
     Device() = default;
     Device(Device &) = delete;
     Device &operator=(Device &) = delete;
     void initialize(std::string const &appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"});
     vk::raii::Instance makeInstance(uint32_t apiVersion = VK_API_VERSION_1_4) const;
     vk::raii::Device makeDevice();
-    Surface makeSurface();
+    std::tuple<Surface, SwapChain> makeSurfaceAndSwapChain();
     ~Device() = default;
 
   protected:

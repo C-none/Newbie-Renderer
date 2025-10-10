@@ -36,7 +36,12 @@ template <typename Derived> void Device<Derived>::initialize(std::string const &
     }
     physicalDevice = selectPhysicalDevice(instance);
     device = makeDevice();
-    surface = makeSurface();
+    std::apply(
+        [this](Surface &&s, SwapChain &&sc) {
+            surface = std::move(s);
+            swapChain = std::move(sc);
+        },
+        makeSurfaceAndSwapChain());
 }
 
 template <typename Derived> void Device<Derived>::setupInitialFlags()
@@ -114,20 +119,20 @@ template <typename Derived> vk::raii::Device Device<Derived>::makeDevice()
     return vk::raii::Device(physicalDevice, deviceCreateInfo);
 }
 
-template <typename Derived> Surface Device<Derived>::makeSurface()
+template <typename Derived> std::tuple<Surface, SwapChain> Device<Derived>::makeSurfaceAndSwapChain()
 {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    Surface result;
-    result.handle.reset(glfwCreateWindow(result.extent.width, result.extent.height, appName.c_str(), nullptr, nullptr));
+    Surface resultSurface;
+    resultSurface.handle.reset(glfwCreateWindow(resultSurface.extent.width, resultSurface.extent.height, appName.c_str(), nullptr, nullptr));
     VkSurfaceKHR rawSurface;
-    vk::detail::resultCheck(static_cast<vk::Result>(glfwCreateWindowSurface(*instance, result.handle.get(), nullptr, &rawSurface)), "Failed to create window surface");
+    vk::detail::resultCheck(static_cast<vk::Result>(glfwCreateWindowSurface(*instance, resultSurface.handle.get(), nullptr, &rawSurface)), "Failed to create window surface");
 
-    result.surface = vk::raii::SurfaceKHR(instance, rawSurface);
+    resultSurface.surface = vk::raii::SurfaceKHR(instance, rawSurface);
 
-    nrAssert(physicalDevice.getSurfaceSupportKHR(queueFamilyDict[static_cast<size_t>(QueueKind::graphics)], result.surface))("Surface not supported");
-    std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(result.surface);
+    nrAssert(physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueKind::compute)]), resultSurface.surface))("Queue does not support present");
+    std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(resultSurface.surface);
     nrAssert(!formats.empty())("No available surface formats");
-    nrInfo()("test");
+
     auto selectedFormat = [&formats]() -> vk::SurfaceFormatKHR {
         auto it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eB8G8R8A8Srgb; });
         if (it != formats.end())
@@ -136,12 +141,25 @@ template <typename Derived> Surface Device<Derived>::makeSurface()
         it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eR8G8B8A8Srgb; });
         if (it != formats.end())
             return *it;
-        // nrInfo("WARNING! Your device does not support basic sRGB format. You may need to convert output color space manually.");
+        nrInfo(nr::LogLevel::warning)("Your device does not support basic sRGB format. You may need to convert output color space manually.");
         return formats.front();
     }();
+    resultSurface.format = selectedFormat.format;
 
-    result.format = selectedFormat.format;
-    return result;
+    vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(resultSurface.surface);
+    // auto property = physicalDevice.getImageFormatProperties(resultSurface.format, vk::ImageType::e2D, vk::ImageTiling::eLinear, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eStorage);
+    vk::SwapchainCreateInfoKHR swapChainCreateInfo(vk::SwapchainCreateFlagsKHR(), resultSurface.surface, std::clamp(3u, surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount), selectedFormat.format, selectedFormat.colorSpace, resultSurface.extent, 1,
+                                                   vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment, vk::SharingMode::eExclusive, {}, vk::SurfaceTransformFlagBitsKHR::eIdentity, vk::CompositeAlphaFlagBitsKHR::eOpaque, vk::PresentModeKHR::eMailbox, vk::False);
+    SwapChain resultSwapChain;
+    resultSwapChain.swapChain = {device, swapChainCreateInfo};
+    resultSwapChain.swapChainImages = resultSwapChain.swapChain.getImages();
+    vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, selectedFormat.format, {}, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+    resultSwapChain.imageViews = resultSwapChain.swapChainImages | std::views::transform([&](const auto &img) {
+                                     imageViewCreateInfo.image = img;
+                                     return vk::raii::ImageView(device, imageViewCreateInfo);
+                                 }) |
+                                 std::ranges::to<std::vector>();
+    return {std::move(resultSurface), std::move(resultSwapChain)};
 }
 
 void application()
@@ -153,7 +171,7 @@ void rhiTest()
 {
     using namespace std;
     auto foo = [](const int x) { return x + 1; };
-    print("hello from rhiTest:{}\n", foo(1));
+    // print("hello from rhiTest:{}\n", foo(1));
     application();
 }
 } // namespace nr::rhi

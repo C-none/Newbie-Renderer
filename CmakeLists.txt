@@ -10,7 +10,6 @@ project(NewbieRenderer LANGUAGES CXX)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build." FORCE)
-    # 设置可能的构建类型
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo")
 endif()
 
@@ -23,12 +22,16 @@ find_package(Vulkan REQUIRED)
 function(nr_apply_msvc_settings target)
     # WINDOWS-FLAG
     if(MSVC)
-        if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
-            set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
-        endif()
-        add_compile_options(/MP)
+        set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+        target_compile_options(${target} PRIVATE /MP)
+        
+        target_compile_options(${target} PRIVATE
+            $<$<CONFIG:Debug>:/W4>
+            $<$<CONFIG:Debug>:/WX>
+            $<$<CONFIG:Debug>:/fsanitize=address>)
         target_link_options(${target} PRIVATE
-            $<$<CONFIG:Debug>:/INCREMENTAL>
+            $<$<CONFIG:Debug>:/INCREMENTAL:NO>
+            $<$<CONFIG:Debug>:/DEBUG:FASTLINK>
             $<$<CONFIG:Release>:/INCREMENTAL:NO>
             $<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>)
     endif()
