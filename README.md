@@ -43,7 +43,7 @@
 ### Submodules
 | Name      | Version  |
 | --------- | -------- |
-| Slang     | v2025.16 |
+| Slang     | v2025.19.1 |
 | NvAPI     | R580     |
 | Aftermath | R580     |
 
@@ -51,3 +51,6 @@ tips: You may update submodules by git if u like. However, Aftermath has to be u
 
 ### Vcpkg Packages
 - glm
+- imgui
+- glfw3
+- vulkan-memory-allocator
