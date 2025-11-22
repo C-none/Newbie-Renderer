@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.1)
+cmake_minimum_required(VERSION 4.2)
 project(NewbieRenderer LANGUAGES CXX)
 
 # Require C++23; MSVC ships the C++ Standard Library modules (import std)
