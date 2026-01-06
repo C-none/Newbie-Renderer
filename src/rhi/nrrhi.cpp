@@ -1,16 +1,14 @@
 module;
+//#include <GLFW/glfw3.h>
+// #include <vulkan/vulkan_raii.hpp>
+//#include <vk_mem_alloc.h>
 
-// #include <vk_mem_alloc.h>
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_raii.hpp>
-
-#include <GLFW/glfw3.h>
 
 module nr.rhi;
-
+import dependency;
 import std;
 import nr.utils;
-import nr.rhi.vk;
+import :vk;
 
 template <typename T>
 concept hasCustomSetupInitialFlags = requires(T *t) {
@@ -30,10 +28,10 @@ template <typename Derived> void Device<Derived>::initialize(std::string const &
         static_cast<Derived *>(this)->setupInitialFlags();
     }
     instance = makeInstance();
-    if constexpr (isDebugMode())
-    {
-        debugUtilsMessenger = vk::raii::DebugUtilsMessengerEXT(instance, makeDebugUtilsMessengerCreateInfoEXT());
-    }
+    // if constexpr (isDebugMode())
+    //{
+    //     debugUtilsMessenger = vk::raii::DebugUtilsMessengerEXT(instance, makeDebugUtilsMessengerCreateInfoEXT());
+    // }
     physicalDevice = selectPhysicalDevice(instance);
     device = makeDevice();
     std::apply(
@@ -56,12 +54,13 @@ template <typename Derived> void Device<Derived>::setupInitialFlags()
     {
         if (std::ranges::none_of(instanceEnabledLayers, [](std::string const &layer) { return layer == "VK_LAYER_KHRONOS_validation"; }))
         {
+            // Check CPU error. switch to GPU AV to ckech error on GPU side.
             instanceEnabledLayers.push_back("VK_LAYER_KHRONOS_validation");
         }
-        if (std::ranges::none_of(instanceEnabledExtensions, [](std::string const &ext) { return ext == VK_EXT_DEBUG_UTILS_EXTENSION_NAME; }))
-        {
-            instanceEnabledExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        }
+        // if (std::ranges::none_of(instanceEnabledExtensions, [](std::string const &ext) { return ext == VK_EXT_DEBUG_UTILS_EXTENSION_NAME; }))
+        //{
+        //     instanceEnabledExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        // }
     }
 }
 
@@ -114,18 +113,22 @@ template <typename Derived> vk::raii::Device Device<Derived>::makeDevice()
                                                                   return vk::DeviceQueueCreateInfo({}, static_cast<uint32_t>(i), 1, &queuePriority);
                                                               }) |
                                                               std::ranges::to<std::vector>();
-    vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos, {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions, nullptr);
+
+    // VK_EXT_pageable_device_local_memory
+    vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageableFeatures(true, nullptr);
+
+    vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos, {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions, nullptr,&pageableFeatures);
 
     return vk::raii::Device(physicalDevice, deviceCreateInfo);
 }
 
 template <typename Derived> std::tuple<Surface, SwapChain> Device<Derived>::makeSurfaceAndSwapChain()
 {
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API );
     Surface resultSurface;
-    resultSurface.handle.reset(glfwCreateWindow(resultSurface.extent.width, resultSurface.extent.height, appName.c_str(), nullptr, nullptr));
+    resultSurface.handle.reset(glfw::createWindow(resultSurface.extent.width, resultSurface.extent.height, appName.c_str(), nullptr, nullptr));
     VkSurfaceKHR rawSurface;
-    vk::detail::resultCheck(static_cast<vk::Result>(glfwCreateWindowSurface(*instance, resultSurface.handle.get(), nullptr, &rawSurface)), "Failed to create window surface");
+    vk::detail::resultCheck(static_cast<vk::Result>(glfw::createWindowSurface(*instance, resultSurface.handle.get(), nullptr, &rawSurface)), "Failed to create window surface");
 
     resultSurface.surface = vk::raii::SurfaceKHR(instance, rawSurface);
 
@@ -169,9 +172,6 @@ void application()
 }
 void rhiTest()
 {
-    using namespace std;
-    auto foo = [](const int x) { return x + 1; };
-    // print("hello from rhiTest:{}\n", foo(1));
     application();
 }
 } // namespace nr::rhi

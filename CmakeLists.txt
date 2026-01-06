@@ -1,37 +1,42 @@
 cmake_minimum_required(VERSION 4.2)
 project(NewbieRenderer LANGUAGES CXX)
 
-# Require C++23; MSVC ships the C++ Standard Library modules (import std)
-# with recent VS 2022 toolsets.
-# set(CMAKE_CXX_STANDARD 23)
-# set(CMAKE_CXX_STANDARD_REQUIRED ON)
-# set(CMAKE_CXX_EXTENSIONS OFF)
-
-
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build." FORCE)
-    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo")
-endif()
-
 # find_package(imgui CONFIG REQUIRED) 
 find_package(glm REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
 
+if(${Vulkan_VERSION} VERSION_LESS "1.4.328")
+    message(FATAL_ERROR "Minimum required Vulkan version for C++ modules is 1.4.328. "
+        "Found ${Vulkan_VERSION}."
+    )
+endif()
+
+# add_library(VulkanHppModule)
+# target_sources(VulkanHppModule PRIVATE
+#     FILE_SET CXX_MODULES
+#     BASE_DIRS ${Vulkan_INCLUDE_DIR}
+#     FILES ${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm
+# )
+# target_compile_features(VulkanHppModule PUBLIC cxx_std_23)
+# target_link_libraries(VulkanHppModule PUBLIC Vulkan::Vulkan)
+
 function(nr_apply_msvc_settings target)
     # WINDOWS-FLAG
     if(MSVC)
-        set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
         target_compile_options(${target} PRIVATE /MP)
-        
+        set_target_properties(${target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         target_compile_options(${target} PRIVATE
             $<$<CONFIG:Debug>:/W4>
             $<$<CONFIG:Debug>:/WX>
-            $<$<CONFIG:Debug>:/fsanitize=address>)
+            $<$<CONFIG:Release>:/W4>
+            $<$<CONFIG:Release>:/WX>
+            # $<$<CONFIG:Debug>:/fsanitize=address> # Only enable when encountering memory issues(e.g. Segment fault). At the same time, disable INCREMENTAL flag if this flag is used.
+        )
         target_link_options(${target} PRIVATE
-            $<$<CONFIG:Debug>:/INCREMENTAL:NO>
-            $<$<CONFIG:Debug>:/DEBUG:FASTLINK>
+            $<$<CONFIG:Debug>:/INCREMENTAL>
+            $<$<CONFIG:Debug>:/DEBUG:FULL>
             $<$<CONFIG:Release>:/INCREMENTAL:NO>
             $<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>)
     endif()
@@ -49,3 +54,11 @@ function(nr_add_library target)
 endfunction()
 
 add_subdirectory(src)
+
+# Copy compile_commands.json to the root directory for clangd
+# add_custom_target(copy_compile_commands ALL
+#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#         "${CMAKE_BINARY_DIR}/compile_commands.json"
+#         "${CMAKE_SOURCE_DIR}/compile_commands.json"
+#     COMMENT "Copying compile_commands.json to root directory"
+# )

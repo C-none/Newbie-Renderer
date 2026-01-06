@@ -15,7 +15,7 @@ nr_add_executable(main main.cpp)
 target_link_libraries(main PRIVATE 
     hello
     nrrhi
-    slang
+    dependency
 )
 target_sources(main
 	PRIVATE

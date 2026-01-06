@@ -43,7 +43,7 @@
 ### Submodules
 | Name      | Version  |
 | --------- | -------- |
-| Slang     | v2025.19.1 |
+| Slang     | v2025.24.3 |
 | NvAPI     | R580     |
 | Aftermath | R580     |
 

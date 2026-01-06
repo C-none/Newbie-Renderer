@@ -1,6 +1,7 @@
 module;
-#include <vulkan/vulkan_raii.hpp>
-export module nr.rhi.vk;
+//#include <vulkan/vulkan_raii.hpp>
+export module nr.rhi:vk;
+import dependency;
 import nr.utils;
 import std;
 export namespace nr::rhi
@@ -49,35 +50,34 @@ enum class QueueKind : size_t
 
 [[nodiscard]] std::vector<char const *> gatherLayers(std::vector<std::string> const &layers)
 {
-    auto uniqueLayers = layers | std::ranges::to<std::set<std::string_view>>();
+    std::set<std::string_view> uniqueLayers(layers.begin(), layers.end());
 
-    const std::vector<vk::LayerProperties> &layerProperties = vk::enumerateInstanceLayerProperties();
+    const std::vector<vk::LayerProperties> layerProperties = vk::enumerateInstanceLayerProperties();
     std::vector<char const *> enabledLayers;
 
     for (auto const &layer : uniqueLayers)
     {
         nrAssert(std::ranges::any_of(layerProperties, [layer](vk::LayerProperties const &lp) { return layer == lp.layerName; }))("Requested layer '{}' is not available.", layer);
-        enabledLayers.push_back(layer.data());
+        enabledLayers.emplace_back(layer.data());
     }
     return enabledLayers;
 }
 
 [[nodiscard]] std::vector<char const *> gatherInstanceExtensions(std::vector<std::string> const &extensions)
 {
-    auto uniqueExtensions = extensions | std::ranges::to<std::set<std::string_view>>();
+    std::set<std::string_view> uniqueExtensions(extensions.begin(), extensions.end());
 
-    const std::vector<vk::ExtensionProperties> &extensionProperties = vk::enumerateInstanceExtensionProperties();
+    const std::vector<vk::ExtensionProperties> extensionProperties = vk::enumerateInstanceExtensionProperties();
     std::vector<char const *> enabledExtensions;
     for (auto const &extension : uniqueExtensions)
     {
         nrAssert(std::any_of(extensionProperties.begin(), extensionProperties.end(), [extension](vk::ExtensionProperties const &ep) { return extension == ep.extensionName; }))("Requested extension '{}' is not available.", extension);
-        nrAssert(true)("Requested extension '{}' is not available.", extension);
-        enabledExtensions.push_back(extension.data());
+        enabledExtensions.emplace_back(extension.data());
     }
     return enabledExtensions;
 }
 
-VKAPI_ATTR vk::Bool32 VKAPI_CALL debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity, vk::DebugUtilsMessageTypeFlagsEXT messageTypes, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void * /*pUserData*/)
+vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity, vk::DebugUtilsMessageTypeFlagsEXT messageTypes, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void * /*pUserData*/)
 {
     if constexpr (isDebugMode())
     {

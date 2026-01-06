@@ -1,12 +1,13 @@
 module;
-#include <GLFW/glfw3.h>
-#include <vulkan/vulkan_raii.hpp>
+// #include <GLFW/glfw3.h>
+// #include <vulkan/vulkan_raii.hpp>
 export module nr.rhi;
-import nr.rhi.vk;
+import dependency;
+import :vk;
 import nr.utils;
+
 export namespace nr::rhi
 {
-
 struct Surface
 {
     class GlfwContext final
@@ -14,7 +15,7 @@ struct Surface
       public:
         GlfwContext()
         {
-            if (glfwInit() != GLFW_TRUE)
+            if (static_cast<bool>(glfwInit()) != true)
             {
                 throw std::runtime_error("Failed to initialize GLFW.");
             }
@@ -67,7 +68,7 @@ template <typename Derived> class Device
     std::string engineName;
     vk::raii::Context context;
     vk::raii::Instance instance = {nullptr};
-    vk::raii::DebugUtilsMessengerEXT debugUtilsMessenger = {nullptr};
+    // vk::raii::DebugUtilsMessengerEXT debugUtilsMessenger = {nullptr};
     vk::raii::PhysicalDevice physicalDevice = {nullptr};
     vk::raii::Device device = {nullptr};
     Surface surface;
@@ -76,7 +77,7 @@ template <typename Derived> class Device
     Device(Device &) = delete;
     Device &operator=(Device &) = delete;
     void initialize(std::string const &appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"});
-    vk::raii::Instance makeInstance(uint32_t apiVersion = VK_API_VERSION_1_4) const;
+    vk::raii::Instance makeInstance(uint32_t apiVersion = vk::ApiVersion14) const;
     vk::raii::Device makeDevice();
     std::tuple<Surface, SwapChain> makeSurfaceAndSwapChain();
     ~Device() = default;
@@ -86,9 +87,8 @@ template <typename Derived> class Device
     std::vector<std::string> instanceEnabledLayers{};
     std::vector<std::string> instanceEnabledExtensions{};
     // std::vector<std::string> physicalDeviceFeatures{};
-    std::vector<std::string> deviceEnabledExtensions{VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    std::vector<std::string> deviceEnabledExtensions{vk::KHRAccelerationStructureExtensionName, vk::KHRRayTracingPipelineExtensionName, vk::KHRDeferredHostOperationsExtensionName, vk::KHRSwapchainExtensionName, vk::EXTMemoryPriorityExtensionName, vk::EXTPageableDeviceLocalMemoryExtensionName};
     std::array<size_t, static_cast<size_t>(QueueKind::size)> queueFamilyDict{};
 };
-
 void rhiTest();
 } // namespace nr::rhi

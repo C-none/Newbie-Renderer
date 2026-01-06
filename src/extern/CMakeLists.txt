@@ -38,8 +38,56 @@ set(Aftermath_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/aftermath")
 # set(Aftermath_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/aftermath/include")
 # set(Aftermath_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/aftermath/lib")
 
+# Helper function to disable warning as error for all targets in a directory and its subdirectories
+# function(disable_warning_as_error_recursive dir_path)
+#     get_property(targets DIRECTORY "${dir_path}" PROPERTY BUILDSYSTEM_TARGETS)
+#     foreach(target ${targets})
+#         if(TARGET ${target})
+#             # Check if target is a compilable type (not INTERFACE or UTILITY)
+#             get_target_property(target_type ${target} TYPE)
+#             if(NOT target_type MATCHES "INTERFACE_LIBRARY|UTILITY")
+#                 # Remove /WX flag (warning as error) from compile options
+#                 get_target_property(target_compile_options ${target} COMPILE_OPTIONS)
+#                 if(target_compile_options)
+#                     list(REMOVE_ITEM target_compile_options /WX)
+#                     set_target_properties(${target} PROPERTIES COMPILE_OPTIONS "${target_compile_options}")
+#                 endif()
+#                 # Add /WX- to explicitly disable warning as error
+#                 target_compile_options(${target} PRIVATE /WX-)
+#             endif()
+#         endif()
+#     endforeach()
+    
+#     # Recursively process subdirectories
+#     get_property(subdirs DIRECTORY "${dir_path}" PROPERTY SUBDIRECTORIES)
+#     foreach(subdir ${subdirs})
+#         disable_warning_as_error_recursive("${subdir}")
+#     endforeach()
+# endfunction()
+
 # Add slang submodule
 # According to https://docs.shader-slang.org/en/latest/external/slang/docs/building.html#configure-and-build
 set(SLANG_ENABLE_EXAMPLES False)
 set(SLANG_ENABLE_TESTS False)
 add_extern_library(slang)
+
+file(GLOB MODULE_UNITS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.ixx"
+)
+nr_add_library(dependency STATIC)
+target_link_libraries(dependency 
+PUBLIC
+    slang
+    glfw
+    glm::glm
+    Vulkan::Vulkan
+    GPUOpen::VulkanMemoryAllocator
+)
+target_sources(dependency
+    PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES FILES  ${MODULE_UNITS}
+)
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
+    ${MODULE_UNITS}
+)
