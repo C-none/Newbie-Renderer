@@ -11,8 +11,16 @@ import nr.utils;
 import :vk;
 
 template <typename T>
-concept hasCustomSetupInitialFlags = requires(T *t) {
+concept HasCustomSetupInitialFlags = requires(T * t) {
     { t->setupInitialFlags() } -> std::same_as<void>;
+};
+
+// Concept to validate Device compliance
+template <typename T>
+concept ValidDevice = requires(T * d, std::string_view name) {
+    typename T::element_type;  // Must have pointer-like behavior if template
+} || requires(T * d) {
+    { d->setupInitialFlags() } -> std::same_as<void>;
 };
 
 namespace nr::rhi
@@ -23,7 +31,7 @@ template <typename Derived> void Device<Derived>::initialize(std::string const &
     appName = _appName;
     engineName = _engineName;
     setupInitialFlags();
-    if constexpr (hasCustomSetupInitialFlags<Derived>)
+    if constexpr (HasCustomSetupInitialFlags<Derived>)
     {
         static_cast<Derived *>(this)->setupInitialFlags();
     }
@@ -34,12 +42,9 @@ template <typename Derived> void Device<Derived>::initialize(std::string const &
     // }
     physicalDevice = selectPhysicalDevice(instance);
     device = makeDevice();
-    std::apply(
-        [this](Surface &&s, SwapChain &&sc) {
-            surface = std::move(s);
-            swapChain = std::move(sc);
-        },
-        makeSurfaceAndSwapChain());
+    auto [s, sc] = makeSurfaceAndSwapChain();
+    surface = std::move(s);
+    swapChain = std::move(sc);
 }
 
 template <typename Derived> void Device<Derived>::setupInitialFlags()
@@ -74,7 +79,10 @@ template <typename Derived> vk::raii::Instance Device<Derived>::makeInstance(con
 
 template <typename Derived> vk::raii::Device Device<Derived>::makeDevice()
 {
-    std::vector<char const *> enabledExtensions = deviceEnabledExtensions | std::ranges::to<std::set<std::string_view>>() | std::views::transform([](auto const &ext) { return ext.data(); }) | std::ranges::to<std::vector<char const *>>();
+    // Optimize: Direct conversion without intermediate std::set
+    auto enabledExtensions = deviceEnabledExtensions 
+        | std::views::transform([](std::string_view ext) { return ext.data(); }) 
+        | std::ranges::to<std::vector<char const *>>();
 
     auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
@@ -128,13 +136,13 @@ template <typename Derived> std::tuple<Surface, SwapChain> Device<Derived>::make
     Surface resultSurface;
     resultSurface.handle.reset(glfw::createWindow(resultSurface.extent.width, resultSurface.extent.height, appName.c_str(), nullptr, nullptr));
     VkSurfaceKHR rawSurface;
-    vk::detail::resultCheck(static_cast<vk::Result>(glfw::createWindowSurface(*instance, resultSurface.handle.get(), nullptr, &rawSurface)), "Failed to create window surface");
+    vk::detail::resultCheck(glfw::createWindowSurface(*instance, resultSurface.handle.get(), nullptr, &rawSurface), "Failed to create window surface");
 
     resultSurface.surface = vk::raii::SurfaceKHR(instance, rawSurface);
 
-    nrAssert(physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueKind::compute)]), resultSurface.surface))("Queue does not support present");
+    nrAssert(physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueKind::compute)]), resultSurface.surface),std::format("Queue does not support present"));
     std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(resultSurface.surface);
-    nrAssert(!formats.empty())("No available surface formats");
+    nrAssert(!formats.empty(),std::format("No available surface formats"));
 
     auto selectedFormat = [&formats]() -> vk::SurfaceFormatKHR {
         auto it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eB8G8R8A8Srgb; });
@@ -144,7 +152,7 @@ template <typename Derived> std::tuple<Surface, SwapChain> Device<Derived>::make
         it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eR8G8B8A8Srgb; });
         if (it != formats.end())
             return *it;
-        nrInfo(nr::LogLevel::warning)("Your device does not support basic sRGB format. You may need to convert output color space manually.");
+        nrInfo(nr::LogLevel::warning,std::format("Your device does not support basic sRGB format. You may need to convert output color space manually."));
         return formats.front();
     }();
     resultSurface.format = selectedFormat.format;

@@ -21,7 +21,7 @@ enum class QueueKind : size_t
 [[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance)
 {
     vk::raii::PhysicalDevices physicalDevices(instance);
-    nrAssert(!physicalDevices.empty())("No Available GPU!!!!!");
+    nrAssert(!physicalDevices.empty(),std::format("No Available GPU!!!!!"));
     vk::raii::PhysicalDevice bestDevice = physicalDevices.front();
     vk::PhysicalDeviceProperties bestProps = bestDevice.getProperties();
 
@@ -48,30 +48,39 @@ enum class QueueKind : size_t
     return bestDevice;
 }
 
-[[nodiscard]] std::vector<char const *> gatherLayers(std::vector<std::string> const &layers)
+// Helper: Convert strings to const char* pointers with deduplication and validation
+[[nodiscard]] std::vector<char const *> gatherLayers(std::span<const std::string> layers)
 {
     std::set<std::string_view> uniqueLayers(layers.begin(), layers.end());
-
-    const std::vector<vk::LayerProperties> layerProperties = vk::enumerateInstanceLayerProperties();
+    const auto layerProperties = vk::enumerateInstanceLayerProperties();
+    
     std::vector<char const *> enabledLayers;
-
-    for (auto const &layer : uniqueLayers)
+    enabledLayers.reserve(uniqueLayers.size());
+    
+    for (std::string_view layer : uniqueLayers)
     {
-        nrAssert(std::ranges::any_of(layerProperties, [layer](vk::LayerProperties const &lp) { return layer == lp.layerName; }))("Requested layer '{}' is not available.", layer);
+        bool found = std::ranges::any_of(layerProperties, 
+            [layer](const vk::LayerProperties &lp) { return layer == std::string_view(lp.layerName); });
+        nrAssert(found, std::format("Requested layer '{}' is not available.", layer));
         enabledLayers.emplace_back(layer.data());
     }
     return enabledLayers;
 }
 
-[[nodiscard]] std::vector<char const *> gatherInstanceExtensions(std::vector<std::string> const &extensions)
+// Helper: Convert extension strings to const char* pointers with deduplication and validation
+[[nodiscard]] std::vector<char const *> gatherInstanceExtensions(std::span<const std::string> extensions)
 {
     std::set<std::string_view> uniqueExtensions(extensions.begin(), extensions.end());
-
-    const std::vector<vk::ExtensionProperties> extensionProperties = vk::enumerateInstanceExtensionProperties();
+    const auto extensionProperties = vk::enumerateInstanceExtensionProperties();
+    
     std::vector<char const *> enabledExtensions;
-    for (auto const &extension : uniqueExtensions)
+    enabledExtensions.reserve(uniqueExtensions.size());
+    
+    for (std::string_view extension : uniqueExtensions)
     {
-        nrAssert(std::any_of(extensionProperties.begin(), extensionProperties.end(), [extension](vk::ExtensionProperties const &ep) { return extension == ep.extensionName; }))("Requested extension '{}' is not available.", extension);
+        bool found = std::ranges::any_of(extensionProperties,
+            [extension](const vk::ExtensionProperties &ep) { return extension == std::string_view(ep.extensionName); });
+        nrAssert(found, std::format("Requested extension '{}' is not available.", extension));
         enabledExtensions.emplace_back(extension.data());
     }
     return enabledExtensions;

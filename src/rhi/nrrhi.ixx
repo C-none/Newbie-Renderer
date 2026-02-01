@@ -19,13 +19,19 @@ struct Surface
             {
                 throw std::runtime_error("Failed to initialize GLFW.");
             }
-            glfwSetErrorCallback([](int error, const char *msg) { nrInfo()("glfw: (error number:{}) {}", error, msg); });
+            glfwSetErrorCallback(&GlfwContext::errorCallback);
         }
         GlfwContext(GlfwContext const &) = delete;
         GlfwContext &operator=(GlfwContext const &) = delete;
         ~GlfwContext()
         {
             glfwTerminate();
+        }
+
+      private:
+        static void errorCallback(int error, const char *msg)
+        {
+            nrInfo(LogLevel::error, std::format("glfw: (error number:{}) {}", error, msg));
         }
     } inline static glfwCtx;
 
@@ -87,7 +93,15 @@ template <typename Derived> class Device
     std::vector<std::string> instanceEnabledLayers{};
     std::vector<std::string> instanceEnabledExtensions{};
     // std::vector<std::string> physicalDeviceFeatures{};
-    std::vector<std::string> deviceEnabledExtensions{vk::KHRAccelerationStructureExtensionName, vk::KHRRayTracingPipelineExtensionName, vk::KHRDeferredHostOperationsExtensionName, vk::KHRSwapchainExtensionName, vk::EXTMemoryPriorityExtensionName, vk::EXTPageableDeviceLocalMemoryExtensionName};
+    std::vector<std::string> deviceEnabledExtensions
+    {
+        vk::KHRAccelerationStructureExtensionName,
+        vk::KHRRayTracingPipelineExtensionName,
+        vk::KHRDeferredHostOperationsExtensionName,
+        vk::KHRSwapchainExtensionName,
+        vk::EXTMemoryPriorityExtensionName,
+        vk::EXTPageableDeviceLocalMemoryExtensionName
+    };
     std::array<size_t, static_cast<size_t>(QueueKind::size)> queueFamilyDict{};
 };
 void rhiTest();
