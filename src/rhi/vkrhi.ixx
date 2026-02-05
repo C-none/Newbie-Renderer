@@ -1,5 +1,4 @@
 module;
-//#include <vulkan/vulkan_raii.hpp>
 export module nr.rhi:vk;
 import dependency;
 import nr.utils;
@@ -88,7 +87,7 @@ enum class QueueKind : size_t
 
 vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity, vk::DebugUtilsMessageTypeFlagsEXT messageTypes, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void * /*pUserData*/)
 {
-    if constexpr (isDebugMode())
+    if constexpr (isDebugMode)
     {
         switch (static_cast<uint32_t>(pCallbackData->messageIdNumber))
         {

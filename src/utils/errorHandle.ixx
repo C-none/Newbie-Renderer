@@ -1,51 +1,42 @@
 module;
 export module nr.utils:errorHandle;
+import :staticUtils;
 import std;
 
- export namespace nr
- {
- enum class LogLevel
- {
-     info,
-     warning,
-     error,
-     number
- };
- 
- inline void nrAssert(bool condition, 
-                                  std::string_view context = "",
-                                  std::source_location loc = std::source_location::current())
- {
-        if (!condition)
-        {
-            std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
-            
-            std::println(std::cerr,
-                         "[nrAssert] FAILED\n"
-                         "  location : {}\n"
-                         "  function : {}\n"
-                         "  message  : {}\n"                         ,
-                         locationStr, loc.function_name(),
-                         context.empty() ? "(none)" : context);
-        }
- }
+export namespace nr
+{
+// LogLevel enum is now auto-generated in staticUtilsConstants.h
 
- inline void nrInfo(LogLevel level = LogLevel::info, 
-                             std::string_view context = "",
-                             std::source_location loc = std::source_location::current())
- {
-    std::array<std::string_view, static_cast<size_t>(nr::LogLevel::number)> levelDict{"INFO", "WARNING", "ERROR"};
-    bool isError = level == nr::LogLevel::error;
-    std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
-    std::println(isError ? std::cerr : std::cout,
+inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())
+{
+    if (!condition)
+    {
+        std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
+
+        std::print(std::cerr,
+                     "[nrAssert] FAILED\n"
+                     "  location : {}\n"
+                     "  function : {}\n"
+                     "  message  : {}\n",
+                     locationStr, loc.function_name(), context.empty() ? "(none)" : context);
+    }
+}
+template <LogLevel Level = LogLevel::info> inline void nrInfo(std::string_view context = "", std::source_location loc = std::source_location::current())
+{
+    // Compile-time log level filtering (type-safe enum comparison)
+    if constexpr (globalLogLevel <= Level)
+    {
+        constexpr bool isError = Level == LogLevel::error;
+        std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
+        std::print(isError ? std::cerr : std::cout,
                      "[nr::{}]\n"
                      "  location : {}\n"
                      "  function : {}\n"
                      "  message  : {}\n",
-                     levelDict[static_cast<size_t>(level)], locationStr, 
-                     loc.function_name(), context.empty() ? "(none)" : context);
-    if (isError)
-        std::exit(1);
+                     logLevelNames[static_cast<size_t>(Level)], locationStr, loc.function_name(), context.empty() ? "(none)" : context);
+        if constexpr (isError)
+            std::exit(1);
+    }
 }
 
 } // namespace nr

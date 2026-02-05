@@ -1,20 +1,30 @@
+# ============================================================================
+# Generate staticUtilsConstants.h before each build
+# ============================================================================
+add_custom_target(generate_constants
+    COMMAND ${CMAKE_COMMAND}
+        -D "NR_LOG_LEVEL=${NR_LOG_LEVEL}"
+        -D "INPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.h.in"
+        -D "OUTPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.h"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateConstants.cmake"
+    COMMENT "Generating staticUtilsConstants.h (NR_LOG_LEVEL=${NR_LOG_LEVEL})"
+)
+
+# ============================================================================
+# Build utils library
+# ============================================================================
+
 file(GLOB MODULE_UNITS
     CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.ixx"
 )
 
-# file(GLOB IMPL_SOURCES
-#     CONFIGURE_DEPENDS
-#     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
-# )
-
 nr_add_library(utils STATIC)
+add_dependencies(utils generate_constants)
 target_link_libraries(utils PRIVATE
     dependency
 )
 target_sources(utils
-    # PRIVATE
-    #     ${IMPL_SOURCES}
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES FILES ${MODULE_UNITS}
 )

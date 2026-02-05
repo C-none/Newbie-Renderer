@@ -80,6 +80,7 @@ target_link_libraries(dependency
 PUBLIC
     slang
     glfw
+    imgui::imgui
     glm::glm
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
@@ -91,3 +92,4 @@ target_sources(dependency
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
     ${MODULE_UNITS}
 )
+set_target_properties(dependency PROPERTIES FOLDER "extern")

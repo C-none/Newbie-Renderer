@@ -3,13 +3,15 @@ module;
 #include <slang.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <imgui.h>
 #include <vk_mem_alloc.h>
 export module dependency;
 export import <vulkan/vulkan_raii.hpp>;
 export import <slang.h>;
 export import <GLFW/glfw3.h>;
-export import <vk_mem_alloc.h>;
 export import <glm/glm.hpp>;
+export import <imgui.h>;
+export import <vk_mem_alloc.h>;
 #ifdef GLFW_NO_API
 #undef GLFW_NO_API
 #endif // GLFW_NO_API
@@ -26,8 +28,8 @@ inline GLFWwindow *createWindow(int width, int height, const char *title, GLFWmo
 {
     return glfwCreateWindow(width, height, title, monitor, share);
 }
-inline VkResult createWindowSurface(VkInstance instance, GLFWwindow *window, const VkAllocationCallbacks *allocator, VkSurfaceKHR *surface)
+inline vk::Result createWindowSurface(VkInstance instance, GLFWwindow *window, const VkAllocationCallbacks *allocator, VkSurfaceKHR *surface)
 {
-    return glfwCreateWindowSurface(instance, window, allocator, surface);
+    return static_cast<vk::Result>(glfwCreateWindowSurface(instance, window, allocator, surface));
 }
 } // namespace glfw
