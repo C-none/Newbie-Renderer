@@ -43,9 +43,9 @@
 ### Submodules
 | Name      | Version  |
 | --------- | -------- |
-| Slang     | v2025.24.3 |
-| NvAPI     | R580     |
-| Aftermath | R580     |
+| Slang     | v2026.1.1 |
+| NvAPI     | R590     |
+| Aftermath | R590     |
 
 tips: You may update submodules by git if u like. However, Aftermath has to be updated manually by downloading the latest version from NVIDIA Developer [website](https://developer.nvidia.com/nsight-aftermath).
 

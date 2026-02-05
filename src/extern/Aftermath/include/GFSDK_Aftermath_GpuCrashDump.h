@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2025, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -303,8 +303,30 @@ typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_ShaderDebugInfoCb)(const 
 // crash dump by calling the provided 'addValue' function. See the description of
 // 'GFSDK_Aftermath_EnableGpuCrashDumps' for more details.
 //
+// Threading requirement: The provided 'addValue' functor must be invoked from the same
+// thread and before the callback returns.
+//
 /////////////////////////////////////////////////////////////////////////
 typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_GpuCrashDumpDescriptionCb)(PFN_GFSDK_Aftermath_AddGpuCrashDumpDescription addValue, void* pUserData);
+
+/////////////////////////////////////////////////////////////////////////
+// PFN_GFSDK_Aftermath_ResolveMarker
+// ---------------------------------
+//
+// Function for resolving event marker data used by 'PFN_GFSDK_Aftermath_ResolveMarkerCb'.
+//
+// The marker data passed to this function is automatically copied and managed internally,
+// so applications do not need to ensure the data remains valid after the function returns.
+//
+// NOTE: For resolved markers, the pointer value is preserved for zero-sized payloads.
+// For non-zero-sized payloads, the data is fully preserved (when resolved), but the stored
+// pointer value may refer to an internal buffer. This consistent behavior applies during
+// crash dump generation or post-generation via the editor.
+//
+/////////////////////////////////////////////////////////////////////////
+typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_ResolveMarker)(
+    const void* pResolvedMarkerData,
+    const uint32_t resolvedMarkerDataSize);
 
 /////////////////////////////////////////////////////////////////////////
 // GFSDK_Aftermath_ResolveMarkerCb
@@ -312,20 +334,44 @@ typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_GpuCrashDumpDescriptionCb
 //
 // Marker data resolution callback.
 //
-// If registered via 'GFSDK_Aftermath_EnableGpuCrashDumps' it will be called during
+// If provided via 'GFSDK_Aftermath_EnableGpuCrashDumps', it will be called during
 // GPU crash dump data generation, i.e., before 'GFSDK_Aftermath_GpuCrashDumpCb' is
 // called, when a DX event marker or a Vulkan checkpoint will be recorded into the
-// crash dump. See the description of 'GFSDK_Aftermath_EnableGpuCrashDumps' for more details.
+// crash dump.
 //
-// NOTE: Except for the 'pUserData' pointer, all pointer values passed to the
-// callbacks are only valid for the duration of the call! The application must ensure
-// that the pointer returned through 'ppResolvedMarkerData' is valid after returning
-// from the callback. Then, the GPU crash dump data collection process will make an
-// internal copy of it. So, it's safe to reuse the memory in the next call, i.e., it's
-// OK to store the memory blob where the 'ppResolvedMarkerData' is pointed to in static memory.
+// If provided via 'GFSDK_Aftermath_GpuCrashDumpEditor_ResolveEventMarkers', it will
+// be called during post-generation editing for each event marker in the crash dump.
+// See the description of the respective APIs for more details.
+//
+// Calling the 'resolveMarker' functor within the callback allows an application to
+// update the existing event marker data before it gets written into the crash dump.
+// Note that this is optional! If the functor isn't called, the existing marker data
+// will be kept and stored in the crash dump.
+//
+// The data passed to the 'resolveMarker' functor is automatically copied and managed
+// internally, so applications do not need to ensure the data remains valid after the
+// callback returns.
+//
+// NOTE: During driver-side crash dump generation, individual event marker payloads may be
+// truncated to 1024 bytes. To avoid truncation at generation time, prefer application-managed
+// markers by setting 'markerDataSize = 0' in 'GFSDK_Aftermath_SetEventMarker' and providing
+// the payload via this callback.
+//
+// Threading requirement: The provided 'resolveMarker' functor must be invoked from the same
+// thread and before the callback returns.
+//
+// NOTE: For resolved markers, the pointer value is preserved for zero-sized payloads.
+// For non-zero-sized payloads, the data is fully preserved (when resolved via this
+// callback), but the stored pointer value may refer to an internal buffer. This
+// consistent behavior applies during crash dump generation or post-generation via the
+// editor.
 //
 /////////////////////////////////////////////////////////////////////////
-typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_ResolveMarkerCb)(const void* pMarkerData, const uint32_t markerDataSize, void* pUserData, void** ppResolvedMarkerData, uint32_t* pResolvedMarkerDataSize);
+typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_ResolveMarkerCb)(
+    const void* pMarkerData,
+    const uint32_t markerDataSize,
+    void* pUserData,
+    PFN_GFSDK_Aftermath_ResolveMarker resolveMarker);
 
 /////////////////////////////////////////////////////////////////////////
 // GFSDK_Aftermath_EnableGpuCrashDumps
@@ -381,28 +427,21 @@ typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_ResolveMarkerCb)(const vo
 // resolveMarkerCb;
 //      Optional, can be NULL.
 //
-//      Callback function to be called when the crash dump data generation encounters
-//      an event marker with a size of zero. This means that
-//      'GFSDK_Aftermath_SetEventMarker' was called with 'markerDataSize = 0', meaning
-//      that the marker payload itself is managed by the application rather than
-//      copied by Aftermath internally. All Vulkan markers set using the
-//      'NV_device_diagnostic_checkpoints' extension are application-managed as well.
-//      This callback allows the application to pass the marker's associated data
-//      back to the crash dump generation process to be included in the crash dump
-//      data. The application should set the value of 'ppResolvedMarkerData' to the
-//      pointer of the marker's data, and set the value of 'markerSize' to the size
-//      of the marker's data in bytes.
+//      Callback invoked during crash dump generation for event markers to allow the application
+//      to update the marker payload. For zero-sized markers (set via 'GFSDK_Aftermath_SetEventMarker'
+//      with 'markerDataSize = 0'), the application supplies the payload by calling the provided
+//      'resolveMarker' functor with a pointer and size. For non-zero-sized markers, the application
+//      may optionally replace the existing payload by calling 'resolveMarker'. If the functor is
+//      not called, the existing payload is kept and stored.
 //
-//      NOTE: Applications must ensure that the marker data memory passed back via
-//      'ppResolvedMarkerData' will remain valid for the entirety of the crash dump
-//      generation process, i.e., until 'gpuCrashDumpCb' is called.
+//      The data passed to 'resolveMarker' is copied and managed internally; it does not need to remain
+//      valid after the callback returns.
 //
 //      NOTE: This callback is only supported on R495 or later NVIDIA graphics drivers. If
 //      the application is running on a system using an earlier driver version, it will
 //      be ignored.
 //
-//      NOTE: This callback is free-threaded, ensure the provided function is
-//      thread-safe.
+//      NOTE: This callback is free-threaded, ensure the provided function is thread-safe.
 //
 // pUserData;
 //      Optional, can be NULL.

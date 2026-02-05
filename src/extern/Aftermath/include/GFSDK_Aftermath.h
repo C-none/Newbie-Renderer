@@ -167,11 +167,14 @@ GFSDK_AFTERMATH_DECLARE_ENUM(FeatureFlags){
     // development or QA systems. Therefore, on some driver versions, Aftermath
     // event marker tracking on DX11 and DX12 is only available if the Nsight
     // Aftermath GPU Crash Dump Monitor is running on the system. This requirement
-    // applies to R495 to R530 drivers for DX12 and R495+ drivers for DX11. No Aftermath
-    // configuration needs to be made in the Monitor. It serves only as a dongle to
-    // ensure Aftermath event markers do not impact application performance on end
-    // user systems. That means this flag will be ignored if the monitor process is
-    // not detected.
+    // applies to the following driver versions:
+    // - DX12: R495 to R530 (inclusive).
+    // - DX12 32-bit (x86): R495 to R590 (inclusive).
+    // - DX11: R495 and later.
+    // No Aftermath configuration needs to be made in the Monitor. It serves
+    // only as a dongle to ensure Aftermath event markers do not impact application
+    // performance on end user systems. That means this flag will be ignored if the
+    // monitor process is not detected.
     GFSDK_Aftermath_FeatureFlags_EnableMarkers = 0x00000001,
 
     // With this flag set, live and recently destroyed resources are tracked by the
@@ -447,7 +450,16 @@ GFSDK_Aftermath_API GFSDK_Aftermath_ReleaseContextHandle(const GFSDK_Aftermath_C
 //      making a copy. In this case, additional work is required to include the
 //      marker data into Aftermath crash dumps. The application needs to keep track
 //      of the 'markerData' pointer and resolve it to the actual marker data via the
-//      'resolveMarkerCb' provided to 'GFSDK_Aftermath_EnableGpuCrashDumps'.
+//      'resolveMarkerCb' provided to 'GFSDK_Aftermath_EnableGpuCrashDumps' during
+//      crash dump generation, or post-generation using
+//      GFSDK_Aftermath_GpuCrashDumpEditor_ResolveEventMarkers.
+//
+//      NOTE: For such application-managed markers (including Vulkan checkpoints),
+//      the marker pointer value is preserved for zero-sized payloads. For non-zero-sized
+//      payloads, the data is fully preserved (when provided directly or resolved via callbacks),
+//      but the stored pointer value may refer to an internal buffer. This consistent behavior
+//      applies both when setting markers and during their resolution in crash dump generation
+//      or post-generation via the editor.
 //
 //      NOTE: Aftermath will internally truncate marker data to a maximum size of
 //      1024 bytes. Use 'markerDataSize = 0' and manually manage memory for markers if

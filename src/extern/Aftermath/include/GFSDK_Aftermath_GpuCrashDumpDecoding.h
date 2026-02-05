@@ -42,8 +42,8 @@
  *
  */
 
-#ifndef GFSDK_Aftermath_CrashDumpDecoding_H
-#define GFSDK_Aftermath_CrashDumpDecoding_H
+#ifndef GFSDK_Aftermath_GpuCrashDumpDecoding_H
+#define GFSDK_Aftermath_GpuCrashDumpDecoding_H
 
 #include "GFSDK_Aftermath_Defines.h"
 
@@ -569,7 +569,9 @@ typedef void(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_ShaderSourceDebugInfoLook
 //      Size of GPU crash dump data in bytes.
 //
 // pDecoder;
-//      Pointer to a decoder object owned by the caller that is initialized.
+//      Pointer to receive the created decoder handle.
+//      On success, the caller owns the handle and must destroy it using
+//      'GFSDK_Aftermath_GpuCrashDump_DestroyDecoder'.
 //
 //// DESCRIPTION;
 //      Create a decoder object that can be used to query information about the
@@ -587,7 +589,8 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_CreateDecoder(
 // ---------------------------------
 //
 // decoder;
-//      A valid GPU crash dump decoder object.
+//      The decoder handle to be destroyed. After this call returns, the handle
+//      becomes invalid and must not be used.
 //
 //// DESCRIPTION;
 //      Free any data related to the passed in GPU crash dump decoder object.
@@ -601,7 +604,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_DestroyDecoder(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // pBaseInfo;
 //      Pointer to data structure owned by the caller that is filled in with
@@ -620,7 +623,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetBaseInfo(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // key;
 //      What value to query from the description section.
@@ -643,7 +646,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetDescriptionSize(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // key;
 //      What value to query from the description section.
@@ -669,7 +672,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetDescription(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // pDeviceInfo;
 //      Pointer to data structure owned by the caller that is filled in with
@@ -688,7 +691,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetDeviceInfo(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 //  pSystemInfo;
 //      Pointer to data structure owned by the caller that is filled in with
@@ -707,7 +710,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetSystemInfo(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // pGpuCount;
 //      Populated with the number of GPU entries from the GPU crash dump.
@@ -725,7 +728,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetGpuInfoCount(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // gpuInfoBufferCount;
 //      Number of elements in caller allocated array passed in 'pGpuInfo'.
@@ -748,7 +751,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetGpuInfo(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // pPageFaultInfo;
 //      Pointer to data structure owned by the caller that is filled in with
@@ -767,7 +770,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetPageFaultInfo(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // resourceInfoCount;
 //      Number of elements in caller allocated array passed in 'pResourceInfo'.
@@ -791,7 +794,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetPageFaultResourceInfo(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // pShaderCount;
 //      Populated with the number of active shaders from the GPU crash dump.
@@ -809,7 +812,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetActiveShadersInfoCount(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // shaderInfoBufferCount;
 //      Number of elements in caller allocated array passed in 'pShaderInfo'.
@@ -832,7 +835,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetActiveShadersInfo(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // pMarkerCount;
 //      Populated with the number of event markers from the GPU crash dump.
@@ -851,7 +854,7 @@ GFSDK_Aftermath_API GFSDK_Aftermath_GpuCrashDump_GetEventMarkersInfoCount(
 // ---------------------------------
 //
 // decoder;
-//      A valid decoder object.
+//      A valid decoder handle.
 //
 // markerInfoBufferCount;
 //      Number of elements in caller allocated array passed in 'pMarkerInfo'.
@@ -1297,4 +1300,4 @@ GFSDK_Aftermath_PFN(GFSDK_AFTERMATH_CALL* PFN_GFSDK_Aftermath_GetShaderDebugName
 
 #pragma pack(pop)
 
-#endif // GFSDK_Aftermath_CrashDumpDecoding_H
+#endif // GFSDK_Aftermath_GpuCrashDumpDecoding_H
