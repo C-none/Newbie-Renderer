@@ -4,6 +4,21 @@ import std;
 import dependency;
 export namespace nr
 {
+// =========================================================================
+// HASH UTILITY
+// =========================================================================
+
+/**
+ * @brief Boost-style hash combine for building composite hash values
+ *
+ * Mixes a new hash value into an existing seed using the golden ratio
+ * constant and bit shifts for good distribution.
+ */
+template <typename T> constexpr inline void hashCombine(std::size_t &seed, const T &v) noexcept
+{
+    seed ^= std::hash<T>{}(v) + 0x9e3779b9uz + (seed << 6) + (seed >> 2);
+}
+
 class Extent : public glm::uvec2
 {
   public:

@@ -9,3 +9,7 @@ export import :commandPool;
 export import :command;
 export import :commandBatch;
 export import :frameContext;
+export import :vmaAllocator;
+export import :memoryAllocator;
+export import :resource;
+export import :resourcePool;

@@ -2,20 +2,10 @@ module;
 export module nr.rhi:vk;
 import dependency;
 import nr.utils;
+import :type;
 import std;
 export namespace nr::rhi
 {
-
-enum class QueueKind : size_t
-{
-    graphics,
-    compute,
-    transfer,
-    videoDecode,
-    videoEncode,
-    opticalFlow,
-    size
-};
 
 [[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance)
 {
@@ -159,6 +149,86 @@ vk::DebugUtilsMessengerCreateInfoEXT makeDebugUtilsMessengerCreateInfoEXT()
 {
     return {
         {}, vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError, vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation, &debugUtilsMessengerCallback};
+}
+
+/**
+ * @brief Check if a Vulkan format contains a depth component
+ */
+[[nodiscard]] constexpr bool isDepthFormat(vk::Format format) noexcept
+{
+    switch (format)
+    {
+    case vk::Format::eD16Unorm:
+    case vk::Format::eD16UnormS8Uint:
+    case vk::Format::eD24UnormS8Uint:
+    case vk::Format::eD32Sfloat:
+    case vk::Format::eD32SfloatS8Uint:
+    case vk::Format::eX8D24UnormPack32:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/**
+ * @brief Check if a Vulkan format contains a stencil component
+ */
+[[nodiscard]] constexpr bool isStencilFormat(vk::Format format) noexcept
+{
+    switch (format)
+    {
+    case vk::Format::eS8Uint:
+    case vk::Format::eD16UnormS8Uint:
+    case vk::Format::eD24UnormS8Uint:
+    case vk::Format::eD32SfloatS8Uint:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/**
+ * @brief Check if a Vulkan format is a depth-stencil combined format
+ */
+[[nodiscard]] constexpr bool isDepthStencilFormat(vk::Format format) noexcept
+{
+    return isDepthFormat(format) && isStencilFormat(format);
+}
+
+/**
+ * @brief Infer the appropriate vk::ImageAspectFlags from a Vulkan format
+ *
+ * Returns Depth, Stencil, or Depth|Stencil for depth/stencil formats,
+ * and Color for everything else.
+ */
+[[nodiscard]] constexpr vk::ImageAspectFlags inferAspectFlags(vk::Format format) noexcept
+{
+    vk::ImageAspectFlags flags{};
+    if (isDepthFormat(format))
+        flags |= vk::ImageAspectFlagBits::eDepth;
+    if (isStencilFormat(format))
+        flags |= vk::ImageAspectFlagBits::eStencil;
+    if (!flags)
+        flags = vk::ImageAspectFlagBits::eColor;
+    return flags;
+}
+
+/**
+ * @brief Infer vk::ImageViewType from vk::ImageType and array layer count
+ */
+[[nodiscard]] constexpr vk::ImageViewType inferViewType(vk::ImageType imageType, uint32_t arrayLayers) noexcept
+{
+    switch (imageType)
+    {
+    case vk::ImageType::e1D:
+        return arrayLayers > 1 ? vk::ImageViewType::e1DArray : vk::ImageViewType::e1D;
+    case vk::ImageType::e2D:
+        return arrayLayers > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+    case vk::ImageType::e3D:
+        return vk::ImageViewType::e3D;
+    default:
+        return vk::ImageViewType::e2D;
+    }
 }
 
 } // namespace nr::rhi

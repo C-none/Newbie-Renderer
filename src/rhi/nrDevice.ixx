@@ -7,6 +7,8 @@ import :surface;
 import :swapchain;
 import :queue;
 import :frameContext;
+import :memoryAllocator;
+import :resourcePool;
 import nr.utils;
 import std;
 
@@ -35,19 +37,23 @@ template <typename Derived> class Device
     // vk::raii::DebugUtilsMessengerEXT debugUtilsMessenger = {nullptr};
     vk::raii::PhysicalDevice physicalDevice = {nullptr};
     vk::raii::Device device = {nullptr};
-    Surface surface;
-    SwapChain swapChain;
 
-    // =========================================================================
-    // COMMAND SUBMISSION SYSTEM MEMBERS
-    // =========================================================================
+    // Memory stack lifetime:
+    //   resourcePool -> memoryAllocator -> vk::raii::Device
+    // (declared in reverse dependency order for safe destruction)
+    MemoryAllocator memoryAllocator;
+    ResourcePool resourcePool;
+
     QueueManager queueManager;
     FrameManager frameManager;
-    // =========================================================================
+
+    Surface surface;
+    SwapChain swapChain;
 
     Device() = default;
     Device(Device &) = delete;
     Device &operator=(Device &) = delete;
+
     void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"})
     {
         appName = _appName;
@@ -65,6 +71,12 @@ template <typename Derived> class Device
         physicalDevice = selectPhysicalDevice(instance);
         device = makeDevice();
 
+        // Initialize memory stack in dependency order:
+        // 1) MemoryAllocator owns VMA allocator and internal pools
+        // 2) ResourcePool provides frame-scoped/caller-owned Buffer/Image helpers
+        memoryAllocator.initialize(instance, physicalDevice, device);
+        resourcePool.initialize(memoryAllocator, device);
+
         // Initialize command submission system after device creation
         initializeCommandSystem();
 
@@ -79,7 +91,7 @@ template <typename Derived> class Device
         std::vector<char const *> enabledExtensions = gatherInstanceExtensions(instanceEnabledExtensions);
         return vk::raii::Instance(context, vk::InstanceCreateInfo({}, &applicationInfo, enabledLayers, enabledExtensions));
     }
-    
+
     vk::raii::Device makeDevice()
     {
         // Optimize: Direct conversion without intermediate std::set
@@ -96,13 +108,13 @@ template <typename Derived> class Device
                 Contains,
                 Exact
             };
-            const std::array<std::tuple<QueueKind, vk::QueueFlags, MatchType>, 6> queueKindMapping = {{
-                {QueueKind::graphics, vk::QueueFlagBits::eGraphics, MatchType::Contains},
-                {QueueKind::compute, vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding | vk::QueueFlagBits::eCompute, MatchType::Exact},
-                {QueueKind::transfer, vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding, MatchType::Exact},
-                {QueueKind::videoDecode, vk::QueueFlagBits::eVideoDecodeKHR, MatchType::Contains},
-                {QueueKind::videoEncode, vk::QueueFlagBits::eVideoEncodeKHR, MatchType::Contains},
-                {QueueKind::opticalFlow, vk::QueueFlagBits::eOpticalFlowNV, MatchType::Contains},
+            const std::array<std::tuple<QueueFamilyKind, vk::QueueFlags, MatchType>, 6> queueKindMapping = {{
+                {QueueFamilyKind::graphics, vk::QueueFlagBits::eGraphics, MatchType::Contains},
+                {QueueFamilyKind::compute, vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding | vk::QueueFlagBits::eCompute, MatchType::Exact},
+                {QueueFamilyKind::transfer, vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding, MatchType::Exact},
+                {QueueFamilyKind::videoDecode, vk::QueueFlagBits::eVideoDecodeKHR, MatchType::Contains},
+                {QueueFamilyKind::videoEncode, vk::QueueFlagBits::eVideoEncodeKHR, MatchType::Contains},
+                {QueueFamilyKind::opticalFlow, vk::QueueFlagBits::eOpticalFlowNV, MatchType::Contains},
             }};
 
             auto results = std::views::cartesian_product(std::views::enumerate(queueFamilyProperties), queueKindMapping) | std::views::filter([](auto const &pair) {
@@ -116,6 +128,9 @@ template <typename Derived> class Device
                                return std::make_pair(kind, i);
                            });
 
+            // Initialize with SIZE_MAX to mark "not found"
+            std::ranges::fill(queueFamilyDict, std::numeric_limits<size_t>::max());
+            // Populate found queue families
             std::ranges::for_each(results, [this](auto const &pair) { queueFamilyDict[static_cast<size_t>(pair.first)] = pair.second; });
         }
         constexpr float queuePriority = 1.0f;
@@ -125,10 +140,19 @@ template <typename Derived> class Device
                                                                   }) |
                                                                   std::ranges::to<std::vector>();
 
-        // VK_EXT_pageable_device_local_memory
-        vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageableFeatures(true, nullptr);
-
-        vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos, {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions, nullptr, &pageableFeatures);
+        // Feature chain: buffer device address and ray tracing invocation reorder
+        // Query device capabilities
+        auto features2= physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2,
+            vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT,
+            vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
+        auto featureList = features2.get<vk::PhysicalDeviceFeatures2>();
+        vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT & bufferDeviceAddressFeatures =
+          features2.get<vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT>();
+        nrAssert(bufferDeviceAddressFeatures.bufferDeviceAddress, "Selected physical device does not support buffer device address feature.");
+        vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV &invocationReorderFeatures = 
+          features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
+        nrAssert(invocationReorderFeatures.rayTracingInvocationReorder, "Selected physical device does not support ray tracing invocation reorder feature.");
+        vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos, {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions, nullptr, featureList.pNext);
 
         auto resultDevice = vk::raii::Device(physicalDevice, deviceCreateInfo);
 
@@ -144,27 +168,24 @@ template <typename Derived> class Device
      *
      * Called automatically by initialize() after device creation.
      */
+
     void initializeCommandSystem()
     {
-        // =====================================================================
-        // STEP 1: Create GpuQueues from queue family indices
-        // =====================================================================
-        // Queue family indices were populated during makeDevice()
-        uint32_t graphicsFamily = static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueKind::graphics)]);
-        uint32_t computeFamily = static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueKind::compute)]);
-        uint32_t transferFamily = static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueKind::transfer)]);
+        // Get graphics queue first (required)
+        uint32_t graphicsFamily = getQueueFamilyWithFallback(QueueFamilyKind::graphics, 0);
+
+        // Get compute and transfer with fallback to graphics if unavailable
+        uint32_t computeFamily = getQueueFamilyWithFallback(QueueFamilyKind::compute, graphicsFamily);
+        uint32_t transferFamily = getQueueFamilyWithFallback(QueueFamilyKind::transfer, graphicsFamily);
 
         // Create typed queue wrappers
-        GpuQueue graphicsQueue(device, graphicsFamily, QueueType::Graphics);
-        GpuQueue computeQueue(device, computeFamily, QueueType::Compute);
-        GpuQueue transferQueue(device, transferFamily, QueueType::Transfer);
+        GpuQueue graphicsQueue(device, graphicsFamily, QueueRole::Graphics);
+        GpuQueue computeQueue(device, computeFamily, QueueRole::Compute);
+        GpuQueue transferQueue(device, transferFamily, QueueRole::Transfer);
 
         // Initialize QueueManager with all queues
         queueManager = QueueManager(std::move(graphicsQueue), std::move(computeQueue), std::move(transferQueue));
 
-        // =====================================================================
-        // STEP 2: Create FrameManager with per-frame command pools
-        // =====================================================================
         // Configure pool settings for each queue type
         FrameContext::PoolConfig graphicsConfig{.queueFamilyIndex = graphicsFamily};
         FrameContext::PoolConfig computeConfig{.queueFamilyIndex = computeFamily};
@@ -175,7 +196,7 @@ template <typename Derived> class Device
 
         nrInfo(std::format("Command system initialized: {} frames in flight, max {} worker threads", maxFrameInFlight, maxThreads));
     }
-    
+
     std::tuple<Surface, SwapChain> makeSurfaceAndSwapChain()
     {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -186,7 +207,7 @@ template <typename Derived> class Device
 
         resultSurface.surface = vk::raii::SurfaceKHR(instance, rawSurface);
 
-        nrAssert(physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueKind::compute)]), resultSurface.surface), std::format("Compute queue does not support present"));
+        nrAssert(physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueFamilyKind::compute)]), resultSurface.surface), std::format("Compute queue does not support present"));
         std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(resultSurface.surface);
         nrAssert(!formats.empty(), std::format("No available surface formats"));
 
@@ -251,17 +272,49 @@ template <typename Derived> class Device
                 // Check CPU error. switch to GPU AV to ckech error on GPU side.
                 instanceEnabledLayers.push_back("VK_LAYER_KHRONOS_validation");
             }
-            // if (std::ranges::none_of(instanceEnabledExtensions, [](std::string const &ext) { return ext == VK_EXT_DEBUG_UTILS_EXTENSION_NAME; }))
-            //{
-            //     instanceEnabledExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-            // }
+            if (std::ranges::none_of(instanceEnabledExtensions, [](std::string const &ext) { return ext == vk::EXTDebugUtilsExtensionName; }))
+            {
+                instanceEnabledExtensions.push_back(vk::EXTDebugUtilsExtensionName);
+            }
         }
     }
+
+    [[nodiscard]] uint32_t getQueueFamilyWithFallback(QueueFamilyKind kind, uint32_t graphicsFamily) const
+    {
+        size_t index = static_cast<size_t>(kind);
+        size_t familyIndex = queueFamilyDict[index];
+
+        // If found (not SIZE_MAX), return it
+        if (familyIndex != std::numeric_limits<size_t>::max())
+        {
+            return static_cast<uint32_t>(familyIndex);
+        }
+
+        // Apply fallback strategy for optional queues
+        switch (kind)
+        {
+        case QueueFamilyKind::graphics:
+            // Graphics is required - fail if not found
+            nrAssert(false, "Graphics queue family not found - this device is not supported");
+            std::unreachable();
+
+        case QueueFamilyKind::compute:
+        case QueueFamilyKind::transfer:
+            // Optional queues fall back to graphics
+            nrInfo<nr::LogLevel::warning>(std::format("Requested queue family not found ({}), falling back to graphics queue", kind == QueueFamilyKind::compute ? "compute" : "transfer"));
+            return graphicsFamily;
+
+        default:
+            // Return SIZE_MAX to indicate unavailable
+            return std::numeric_limits<uint32_t>::max();
+        }
+    }
+
     std::vector<std::string> instanceEnabledLayers{};
     std::vector<std::string> instanceEnabledExtensions{};
     // std::vector<std::string> physicalDeviceFeatures{}; // Currently not used
-    std::vector<std::string> deviceEnabledExtensions{vk::KHRAccelerationStructureExtensionName, vk::KHRRayTracingPipelineExtensionName, vk::KHRDeferredHostOperationsExtensionName, vk::KHRSwapchainExtensionName, vk::EXTMemoryPriorityExtensionName, vk::EXTPageableDeviceLocalMemoryExtensionName};
-    std::array<size_t, static_cast<size_t>(QueueKind::size)> queueFamilyDict{};
+    std::vector<std::string> deviceEnabledExtensions{vk::KHRDeferredHostOperationsExtensionName,vk::KHRAccelerationStructureExtensionName, vk::KHRRayTracingPipelineExtensionName, vk::KHRDeferredHostOperationsExtensionName, vk::KHRSwapchainExtensionName, vk::EXTMemoryBudgetExtensionName, vk::NVRayTracingInvocationReorderExtensionName};
+    std::array<size_t, static_cast<size_t>(QueueFamilyKind::size)> queueFamilyDict{};
 };
 void rhiTest()
 {

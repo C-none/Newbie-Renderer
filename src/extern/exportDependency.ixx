@@ -4,6 +4,7 @@ module;
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <imgui.h>
+#define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 export module dependency;
 export import <vulkan/vulkan_raii.hpp>;

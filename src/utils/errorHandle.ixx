@@ -7,7 +7,7 @@ export namespace nr
 {
 // LogLevel enum is now auto-generated in staticUtilsConstants.h
 
-inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())
+constexpr inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())
 {
     if (!condition)
     {
@@ -19,9 +19,11 @@ inline void nrAssert(bool condition, std::string_view context = "", std::source_
                      "  function : {}\n"
                      "  message  : {}\n",
                      locationStr, loc.function_name(), context.empty() ? "(none)" : context);
+
+        std::exit(1);
     }
 }
-template <LogLevel Level = LogLevel::info> inline void nrInfo(std::string_view context = "", std::source_location loc = std::source_location::current())
+template <LogLevel Level = LogLevel::info> constexpr inline void nrInfo(std::string_view context = "", std::source_location loc = std::source_location::current())
 {
     // Compile-time log level filtering (type-safe enum comparison)
     if constexpr (globalLogLevel <= Level)

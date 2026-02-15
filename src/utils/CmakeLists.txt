@@ -3,11 +3,12 @@
 # ============================================================================
 add_custom_target(generate_constants
     COMMAND ${CMAKE_COMMAND}
+        -D "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
         -D "NR_LOG_LEVEL=${NR_LOG_LEVEL}"
         -D "INPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.h.in"
         -D "OUTPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.h"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateConstants.cmake"
-    COMMENT "Generating staticUtilsConstants.h (NR_LOG_LEVEL=${NR_LOG_LEVEL})"
+    COMMENT "Generating staticUtilsConstants.h (BUILD_TYPE=${CMAKE_BUILD_TYPE}, NR_LOG_LEVEL=${NR_LOG_LEVEL})"
 )
 
 # ============================================================================

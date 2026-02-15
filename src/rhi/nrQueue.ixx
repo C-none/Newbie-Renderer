@@ -3,24 +3,10 @@ export module nr.rhi:queue;
 import dependency;
 import std;
 import :commandBatch;
+import :type;
 
-namespace nr::rhi
+export namespace nr::rhi
 {
-
-/**
- * @brief Minimal queue type enumeration for command submission
- *
- * Maps to the three most common queue families:
- * - Graphics: Rendering, compute, transfer
- * - Compute: Async compute workloads
- * - Transfer: DMA transfers
- */
-export enum class QueueType
-{
-    Graphics,
-    Compute,
-    Transfer
-};
 
 /**
  * @brief Thin wrapper around vk::raii::Queue for command submission
@@ -31,28 +17,26 @@ export enum class QueueType
  * - Pure submission interface
  *
  * Design Philosophy:
- * - Queue只负责submit + sync
+ * - Queue only for submit + sync
  * - All scheduling/orchestration happens outside
  * - RDG-ready: future render graphs will call the same submit()
  * 
  * Submit pattern follows vulkan-hpp RAII convention:
  *   queue.submit(vk::SubmitInfo(..., *commandBuffer), fence);
  */
-export class GpuQueue
+class GpuQueue
 {
   public:
     /// Default constructor for deferred initialization
-    GpuQueue() : type_(QueueType::Graphics)
-    {
-    }
+    GpuQueue() = default;
 
     /**
      * @brief Construct queue wrapper from device and queue family
      * @param device Vulkan device
      * @param queueFamilyIndex Queue family index
-     * @param type Logical queue type classification
+     * @param type Logical queue role classification
      */
-    GpuQueue(const vk::raii::Device& device, uint32_t queueFamilyIndex, QueueType type) 
+    GpuQueue(const vk::raii::Device& device, uint32_t queueFamilyIndex, QueueRole type) 
         : queue_(device.getQueue(queueFamilyIndex, queueIndex_))
         , queueFamilyIndex_(queueFamilyIndex)
         , type_(type)
@@ -66,102 +50,52 @@ export class GpuQueue
     GpuQueue& operator=(GpuQueue&&) noexcept = default;
 
     /**
-     * @brief Submit command buffers with RAII synchronization objects
-     * @param commandBuffers RAII command buffers
-     * @param waitSemaphores RAII semaphores to wait on
-     * @param waitStages Pipeline stages to wait at
-     * @param signalSemaphores RAII semaphores to signal
-     * @param fence RAII fence to signal (optional)
-     * 
-     * Following vulkan-hpp RAII convention:
-     *   queue.submit(vk::SubmitInfo(nullptr, nullptr, *commandBuffer), fence);
-     */
-    void submit(
-        std::span<const vk::raii::CommandBuffer> commandBuffers,
-        std::span<const vk::raii::Semaphore> waitSemaphores,
-        std::span<const vk::PipelineStageFlags> waitStages,
-        std::span<const vk::raii::Semaphore> signalSemaphores,
-        const vk::raii::Fence* fence = nullptr
-    )
-    {
-        // Extract raw handles from RAII objects (vulkan-hpp pattern)
-        std::vector<vk::CommandBuffer> cbHandles;
-        cbHandles.reserve(commandBuffers.size());
-        for (const auto& cb : commandBuffers) {
-            cbHandles.push_back(*cb);
-        }
-
-        std::vector<vk::Semaphore> waitHandles;
-        waitHandles.reserve(waitSemaphores.size());
-        for (const auto& sem : waitSemaphores) {
-            waitHandles.push_back(*sem);
-        }
-
-        std::vector<vk::Semaphore> signalHandles;
-        signalHandles.reserve(signalSemaphores.size());
-        for (const auto& sem : signalSemaphores) {
-            signalHandles.push_back(*sem);
-        }
-
-        vk::Fence fenceHandle = fence ? **fence : vk::Fence{};
-
-        vk::SubmitInfo submitInfo{waitHandles, waitStages, cbHandles, signalHandles};
-        queue_.submit(submitInfo, fenceHandle);
-    }
-
-    /**
      * @brief Submit single command buffer (convenience overload)
      * @param commandBuffer Single RAII command buffer
      * @param fence RAII fence to signal (optional)
+     * 
+     * Zero-copy fast path for single command buffer submission.
+     * For complex submissions with sync, use CommandBatch.
      * 
      * Follows vulkan-hpp RAII_Samples pattern:
      *   queue.submit(vk::SubmitInfo(nullptr, nullptr, *commandBuffer), fence);
      */
     void submit(
         const vk::raii::CommandBuffer& commandBuffer,
-        const vk::raii::Fence* fence = nullptr
+        std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
     )
     {
         vk::SubmitInfo submitInfo{nullptr, nullptr, *commandBuffer};
-        queue_.submit(submitInfo, fence ? **fence : vk::Fence{});
+        queue_.submit(submitInfo, fence ? *fence.value().get() : vk::Fence{});
     }
 
     /**
-     * @brief Submit a CommandBatch
      * @param batch Command batch to submit
      * @param fence RAII fence to signal (optional)
      *
-     * Queue is the executor; CommandBatch is passive data.
+     * This is the PRIMARY submission interface:
+     * - Zero-copy submission (no temporary allocations)
+     * - Reusable for render loops (call batch.clear() and rebuild)
+     * - CommandBatch internally stores handles, avoiding repeated extraction
+     * 
+     * Performance characteristics:
+     * - First use: O(n) handle extraction in batch.add*()
+     * - Reuse: O(1) submission via buildSubmitInfo()
+     * - Memory: Single allocation in CommandBatch, reused across frames
+     * 
+     * Usage:
+     *   CommandBatch batch;               // Construct once
+     *   batch.addCommandBuffer(cb);       // Build submission
+     *   queue.submit(batch, fence);       // Zero-copy submit
+     *   batch.clear();                    // Reuse next frame
      */
     void submit(
         const CommandBatch& batch,
-        const vk::raii::Fence* fence = nullptr
+        std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
     )
     {
-        vk::Fence fenceHandle = fence ? **fence : vk::Fence{};
+        vk::Fence fenceHandle = fence ? *fence.value().get() : vk::Fence{};
         queue_.submit(batch.buildSubmitInfo(), fenceHandle);
-    }
-
-    /**
-     * @brief Submit and wait for completion (blocking)
-     * @param device Device for fence creation
-     * @param commandBuffer Command buffer to submit
-     * 
-     * Follows vulkan-hpp RAII_Samples submitAndWait pattern:
-     *   vk::raii::Fence fence(device, vk::FenceCreateInfo());
-     *   queue.submit(vk::SubmitInfo(nullptr, nullptr, *commandBuffer), fence);
-     *   device.waitForFences({fence}, VK_TRUE, timeout);
-     */
-    void submitAndWait(
-        const vk::raii::Device& device,
-        const vk::raii::CommandBuffer& commandBuffer,
-        uint64_t timeout = std::numeric_limits<uint64_t>::max()
-    )
-    {
-        vk::raii::Fence fence(device, vk::FenceCreateInfo{});
-        queue_.submit(vk::SubmitInfo{nullptr, nullptr, *commandBuffer}, fence);
-        while (vk::Result::eTimeout == device.waitForFences({fence}, vk::True, timeout))
-            ;
     }
 
     /**
@@ -177,7 +111,7 @@ export class GpuQueue
     /**
      * @brief Get the queue type classification
      */
-    [[nodiscard]] QueueType type() const noexcept
+    [[nodiscard]] QueueRole type() const noexcept
     {
         return type_;
     }
@@ -207,10 +141,10 @@ export class GpuQueue
     }
 
   private:
+    uint32_t queueIndex_ = 0;
     vk::raii::Queue queue_ = {nullptr};
     uint32_t queueFamilyIndex_ = 0;
-    uint32_t queueIndex_ = 0;
-    QueueType type_;
+    QueueRole type_ = QueueRole::Graphics;
 };
 
 /**
@@ -225,7 +159,7 @@ export class GpuQueue
  *   queueManager.graphics().submit(commandBuffer);
  *   queueManager.graphics().submitAndWait(device, commandBuffer);
  */
-export class QueueManager
+class QueueManager
 {
   public:
     /// Default constructor for deferred initialization
@@ -262,34 +196,30 @@ export class QueueManager
     /**
      * @brief Get queue by type
      */
-    [[nodiscard]] GpuQueue& get(QueueType type)
+    template <QueueRole T>
+    [[nodiscard]] GpuQueue& get() noexcept
     {
-        switch (type)
-        {
-        case QueueType::Graphics:
+        if constexpr (T == QueueRole::Graphics)
             return graphics_;
-        case QueueType::Compute:
+        else if constexpr (T == QueueRole::Compute)
             return compute_;
-        case QueueType::Transfer:
+        else if constexpr (T == QueueRole::Transfer)
             return transfer_;
-        }
         std::unreachable();
     }
 
     /**
      * @brief Check if a specific queue type is available
      */
-    [[nodiscard]] bool hasQueue(QueueType type) const noexcept
+    template <QueueRole T>
+    [[nodiscard]] bool hasQueue() const noexcept
     {
-        switch (type)
-        {
-        case QueueType::Graphics:
+        if constexpr (T == QueueRole::Graphics)
             return graphics_.valid();
-        case QueueType::Compute:
+        else if constexpr (T == QueueRole::Compute)
             return compute_.valid();
-        case QueueType::Transfer:
+        else if constexpr (T == QueueRole::Transfer)
             return transfer_.valid();
-        }
         return false;
     }
 

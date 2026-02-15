@@ -84,6 +84,7 @@ PUBLIC
     glm::glm
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
+    Tracy::TracyClient
 )
 target_sources(dependency
     PUBLIC

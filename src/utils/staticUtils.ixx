@@ -1,6 +1,7 @@
 module;
 #include "staticUtilsConstants.h"
 export module nr.utils:staticUtils;
+import std;
 
 export namespace nr
 {
@@ -18,4 +19,5 @@ inline constexpr uint32_t maxFrameInFlight = 3;
     // substitue the macros defined in vk_platform.h
     return ((((variant)) << 29U) | (((major)) << 22U) | (((minor)) << 12U) | ((patch)));
 }
+
 } // namespace nr

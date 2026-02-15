@@ -7,7 +7,11 @@ namespace nr
 {
 
 // Build configuration
-inline constexpr bool isDebugMode = @IS_DEBUG_MODE@;
+#if defined(_DEBUG) || !defined(NDEBUG)
+inline constexpr bool isDebugMode = true;
+#else
+inline constexpr bool isDebugMode = false;
+#endif
 inline constexpr uint32_t maxThreads = @MAX_THREADS@;
 
 // Log level enumeration (auto-generated from CMake)
