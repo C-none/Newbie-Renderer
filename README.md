@@ -43,7 +43,7 @@
 ### Submodules
 | Name      | Version  |
 | --------- | -------- |
-| Slang     | v2026.1.1 |
+| Slang     | v2026.2.1 |
 | NvAPI     | R590     |
 | Aftermath | R590     |
 
