@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 4.2)
 project(NewbieRenderer LANGUAGES CXX)
 
+option(NR_BUILD_TESTS "Build unit tests" ON)
+
 set(NR_LOG_LEVEL "INFO")
+set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache" CACHE STRING "Runtime shader cache directory")
+set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory")
 
 find_package(Vulkan REQUIRED)
 find_package(imgui CONFIG REQUIRED) 
@@ -69,6 +73,12 @@ function(nr_add_library target)
 endfunction()
 
 add_subdirectory(src)
+add_subdirectory(shader)
+
+if(NR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(test)
+endif()
 
 # Copy compile_commands.json to the root directory for clangd
 # add_custom_target(copy_compile_commands ALL

@@ -1,7 +1,11 @@
 # Newbie-Renderer
 
+## Introduction
+
+Newbie-Renderer is a Vulkan-based renderer with C++23 support.
+
 ## Prerequisites
-- Visual Studio 2022
+- Visual Studio 2026
 - Vulkan SDK 1.4.321.1
 - CMake
 - Vcpkg (set `VCPKG_ROOT` environment variable)
@@ -28,15 +32,35 @@
     cmake --build --preset release
     ```
 
-### Method 2: Using Visual Studio 2022
+### Method 2: Using Visual Studio 2026
 
-1. Open Visual Studio 2022
+1. Open Visual Studio 2026
 2. Select "Open a local folder"
 3. Choose the project root directory
 4. Visual Studio will automatically detect the CMake presets
 5. Select configuration from the dropdown: `msvc-vcpkg`
 6. Select build preset: `release`
 7. Build the solution (Ctrl+Shift+B)
+
+## Test Framework
+
+The project keeps a built-in minimal test framework module for C++ modules workflow:
+
+- Framework module: `test/framework/nr_test.ixx` (`import nr.test;`)
+- Test runner object source: `test/framework/nr_test_main.cpp`
+- Core API (no macros):
+    - `nr::test::CaseRegistrar{name, [] { ... }}`
+    - `nr::test::require(condition, message)`
+    - `nr::test::requireEqual(lhs, rhs, message)`
+
+## Shader Compile Profiling
+
+Use `nr_slang_profile` to run and trace `nrrhi`/`nrslang` compilation on `shader/test/main/main.slang`:
+
+```bash
+cmake --build --preset debug --target nr_slang_profile
+./build/src/Debug/nr_slang_profile.exe
+```
 
 ## Packages
 

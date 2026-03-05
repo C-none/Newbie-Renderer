@@ -7,6 +7,26 @@ export namespace nr
 {
 // LogLevel enum is now auto-generated in staticUtilsConstants.h
 
+namespace detail
+{
+inline constexpr std::string_view ansiReset = "\x1b[0m";
+inline constexpr std::string_view ansiRedBold = "\x1b[1;31m";
+inline constexpr std::string_view ansiRed = "\x1b[31m";
+inline constexpr std::string_view ansiYellow = "\x1b[33m";
+inline constexpr std::string_view ansiCyan = "\x1b[36m";
+
+constexpr std::string_view levelColor(LogLevel level)
+{
+    switch (level)
+    {
+    case LogLevel::info: return ansiCyan;
+    case LogLevel::warning: return ansiYellow;
+    case LogLevel::error: return ansiRed;
+    default: return ansiReset;
+    }
+}
+} // namespace detail
+
 constexpr inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())
 {
     if (!condition)
@@ -14,11 +34,8 @@ constexpr inline void nrAssert(bool condition, std::string_view context = "", st
         std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
 
         std::print(std::cerr,
-                     "[nrAssert] FAILED\n"
-                     "  location : {}\n"
-                     "  function : {}\n"
-                     "  message  : {}\n",
-                     locationStr, loc.function_name(), context.empty() ? "(none)" : context);
+                   "{}[NR ASSERT]{} {}\n{}\n{}\n",
+                   detail::ansiRedBold, detail::ansiReset, locationStr, loc.function_name(), context.empty() ? "(none)" : context);
 
         std::exit(1);
     }
@@ -31,11 +48,9 @@ template <LogLevel Level = LogLevel::info> constexpr inline void nrInfo(std::str
         constexpr bool isError = Level == LogLevel::error;
         std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
         std::print(isError ? std::cerr : std::cout,
-                     "[nr::{}]\n"
-                     "  location : {}\n"
-                     "  function : {}\n"
-                     "  message  : {}\n",
-                     logLevelNames[static_cast<size_t>(Level)], locationStr, loc.function_name(), context.empty() ? "(none)" : context);
+                   "{}[NR {}]{} {}\n{}\n{}\n",
+                   detail::levelColor(Level), logLevelNames[static_cast<size_t>(Level)], detail::ansiReset,
+                   locationStr, loc.function_name(), context.empty() ? "(none)" : context);
         if constexpr (isError)
             std::exit(1);
     }

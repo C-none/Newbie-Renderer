@@ -11,6 +11,8 @@ using ::nr::maxThreads;
 using ::nr::LogLevel;
 using ::nr::globalLogLevel;
 using ::nr::logLevelNames;
+using ::nr::shaderCacheRoot;
+using ::nr::shaderRoot;
 
 // Application constants
 inline constexpr uint32_t maxFrameInFlight = 3;

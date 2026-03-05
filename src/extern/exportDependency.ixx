@@ -1,18 +1,23 @@
 module;
 #include <vulkan/vulkan_raii.hpp>
 #include <slang.h>
+#include <slang-com-ptr.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <imgui.h>
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
+// #define TRACY_ENABLE
+// #include <Tracy.hpp>
 export module dependency;
 export import <vulkan/vulkan_raii.hpp>;
 export import <slang.h>;
+export import <slang-com-ptr.h>;
 export import <GLFW/glfw3.h>;
 export import <glm/glm.hpp>;
 export import <imgui.h>;
 export import <vk_mem_alloc.h>;
+// export import <Tracy.hpp>
 #ifdef GLFW_NO_API
 #undef GLFW_NO_API
 #endif // GLFW_NO_API

@@ -83,4 +83,18 @@ enum class AllocationStrategy : unsigned
     Transient   ///< Immediate/short-lived staging, allocated from dedicated staging pool
 };
 
+enum class PipelineType : unsigned
+{
+    Graphics,
+    Compute,
+    Mesh,
+    RayTracing,
+};
+
+enum class GraphicsPipelineMode : unsigned 
+{
+    StandardGraphics,  // Requires vertex shader
+    Mesh,              // Requires mesh shader (task optional)
+};
+
 } // namespace nr::rhi

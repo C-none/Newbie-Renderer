@@ -1,0 +1,12 @@
+file(GLOB_RECURSE NR_SHADER_SLANG_FILES CONFIGURE_DEPENDS "*.slang")
+
+add_custom_target(ShaderAssets SOURCES ${NR_SHADER_SLANG_FILES})
+
+if(NR_SHADER_SLANG_FILES)
+    set_source_files_properties(${NR_SHADER_SLANG_FILES} PROPERTIES HEADER_FILE_ONLY TRUE)
+    source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${NR_SHADER_SLANG_FILES})
+endif()
+
+set_target_properties(ShaderAssets PROPERTIES
+    FOLDER "shader"
+)

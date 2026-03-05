@@ -1,0 +1,12 @@
+nr_add_executable(nr_slang_profile nr_slang_profile.cpp)
+set_target_properties(nr_slang_profile PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_slang_profile PRIVATE
+    nrrhi
+    utils
+    dependency
+)
+
+target_compile_definitions(nr_slang_profile PRIVATE
+    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+)

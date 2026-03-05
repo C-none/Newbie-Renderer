@@ -1,0 +1,29 @@
+# test output level flag (non-cache):
+# 0 -> concise, 1 -> normal, 2 -> detailed
+set(NR_TEST_OUTPUT_LEVEL_FLAG 2)
+
+if(NOT NR_TEST_OUTPUT_LEVEL_FLAG MATCHES "^[0-2]$")
+    message(FATAL_ERROR "NR_TEST_OUTPUT_LEVEL_FLAG must be 0, 1, or 2.")
+endif()
+
+nr_add_library(nr_test_framework STATIC)
+set_target_properties(nr_test_framework PROPERTIES FOLDER "Test/framework")
+target_sources(nr_test_framework
+	PUBLIC
+		FILE_SET cxx_modules TYPE CXX_MODULES FILES
+			${CMAKE_CURRENT_SOURCE_DIR}/framework/nr_test.ixx
+)
+target_compile_definitions(nr_test_framework
+	PUBLIC
+		NR_TEST_OUTPUT_LEVEL_FLAG=${NR_TEST_OUTPUT_LEVEL_FLAG}
+)
+
+add_library(nr_test_main OBJECT
+	${CMAKE_CURRENT_SOURCE_DIR}/framework/nr_test_main.cpp
+)
+set_target_properties(nr_test_main PROPERTIES FOLDER "Test/framework")
+target_link_libraries(nr_test_main PUBLIC
+	nr_test_framework
+)
+
+add_subdirectory(profile)

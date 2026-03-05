@@ -174,7 +174,7 @@ class Buffer
      * @param name        Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
      * @return Fully initialized Buffer
      */
-    [[nodiscard]] static Buffer create(const MemoryAllocator &allocator, const vk::raii::Device &device, const vk::BufferCreateInfo &createInfo, std::string_view name, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, AllocationStrategy strategy = AllocationStrategy::CrossFrame,
+    [[nodiscard]] inline static Buffer create(const MemoryAllocator &allocator, const vk::raii::Device &device, const vk::BufferCreateInfo &createInfo, std::string_view name, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, AllocationStrategy strategy = AllocationStrategy::CrossFrame,
                                        uint32_t frameIndex = 0)
     {
         Buffer result;
@@ -472,7 +472,7 @@ class Image
      * @param name         Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
      * @return Fully initialized Image with default view
      */
-    [[nodiscard]] static Image create(const MemoryAllocator &allocator, const vk::raii::Device &device, const vk::ImageCreateInfo &createInfo, std::string_view name, MemoryUsage memoryUsage = MemoryUsage::GpuOnly)
+    [[nodiscard]] inline static Image create(const MemoryAllocator &allocator, const vk::raii::Device &device, const vk::ImageCreateInfo &createInfo, std::string_view name, MemoryUsage memoryUsage = MemoryUsage::GpuOnly)
     {
         Image result;
         result.device_ = std::cref(device);

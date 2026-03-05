@@ -42,4 +42,14 @@ foreach(DEF ${LOG_LEVELS})
 endforeach()
 string(APPEND LOG_LEVEL_ENUM ",\n    number = ${i}")
 
+if(NR_SHADER_CACHE_DIR STREQUAL "")
+    set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache")
+endif()
+file(TO_CMAKE_PATH "${NR_SHADER_CACHE_DIR}" NR_SHADER_CACHE_DIR)
+
+if(NR_SHADER_ROOT_DIR STREQUAL "")
+    set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader")
+endif()
+file(TO_CMAKE_PATH "${NR_SHADER_ROOT_DIR}" NR_SHADER_ROOT_DIR)
+
 configure_file("${INPUT_FILE}" "${OUTPUT_FILE}")

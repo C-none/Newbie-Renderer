@@ -9,6 +9,7 @@ import :queue;
 import :frameContext;
 import :memoryAllocator;
 import :resourcePool;
+import :pipeline;
 import nr.utils;
 import std;
 
@@ -252,6 +253,107 @@ template <typename Derived> class Device
 
         // Wait for all frames to complete
         frameManager.waitAll();
+    }
+
+    [[nodiscard]] DescriptorPool createDescriptorPool(
+        const ReflectedPipelineLayout& layout,
+        uint32_t maxSets = 64,
+        vk::DescriptorPoolCreateFlags flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet) const
+    {
+        nrAssert(device != nullptr, "Device::createDescriptorPool requires a valid logical device.");
+        return DescriptorPool::create(device, layout, maxSets, flags);
+    }
+
+    [[nodiscard]] DescriptorSet allocateDescriptorSet(const ReflectedPipelineLayout& layout, DescriptorPool& descriptorPool, uint32_t setIndex) const
+    {
+        nrAssert(device != nullptr, "Device::allocateDescriptorSet requires a valid logical device.");
+        return descriptorPool.allocate(layout, setIndex);
+    }
+
+    [[nodiscard]] std::vector<DescriptorSet> allocateDescriptorSets(const ReflectedPipelineLayout& layout, DescriptorPool& descriptorPool) const
+    {
+        nrAssert(device != nullptr, "Device::allocateDescriptorSets requires a valid logical device.");
+        return descriptorPool.allocateAll(layout);
+    }
+
+    [[nodiscard]] SlangSampler createSampler(SlangSamplerDesc desc = {}, std::string_view debugName = {}) const
+    {
+        nrAssert(device != nullptr, "Device::createSampler requires a valid logical device.");
+        return SlangSampler::create(device, std::move(desc), debugName);
+    }
+
+    [[nodiscard]] SlangFileEntryCompileResult compileSlangByFileAndEntry(const SlangFileEntryCompileRequest &request) const
+    {
+        return ShaderService::instance().compileByFileAndEntry(request);
+    }
+
+    [[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(
+        const SlangProgram& slangProgram,
+        const GraphicsPipelineDesc& desc = {},
+        uint32_t descriptorMaxSets = 64,
+        std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+    {
+        nrAssert(device != nullptr, "Device::createGraphicsPipeline requires a valid logical device.");
+        nrAssert(slangProgram.valid(), "Device::createGraphicsPipeline requires a valid SlangProgram.");
+
+        auto reflection = slangProgram.reflection();
+        reflection.immutableSamplers.insert(reflection.immutableSamplers.end(), immutableSamplers.begin(), immutableSamplers.end());
+
+        auto layout = ReflectedPipelineLayout::create(device, reflection);
+        auto shaderProgram = VkShaderProgram::create(device, slangProgram);
+        auto pipeline = GraphicsPipeline::create(device, layout, shaderProgram, desc);
+        auto descriptorPool = DescriptorPool::create(device, layout, descriptorMaxSets);
+        return PipelineState<GraphicsPipeline>{
+            .layout = std::move(layout),
+            .descriptorPool = std::move(descriptorPool),
+            .pipeline = std::move(pipeline),
+        };
+    }
+
+    [[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(
+        const SlangProgram& slangProgram,
+        const ComputePipelineDesc& desc = {},
+        uint32_t descriptorMaxSets = 64,
+        std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+    {
+        nrAssert(device != nullptr, "Device::createComputePipeline requires a valid logical device.");
+        nrAssert(slangProgram.valid(), "Device::createComputePipeline requires a valid SlangProgram.");
+
+        auto reflection = slangProgram.reflection();
+        reflection.immutableSamplers.insert(reflection.immutableSamplers.end(), immutableSamplers.begin(), immutableSamplers.end());
+
+        auto layout = ReflectedPipelineLayout::create(device, reflection);
+        auto shaderProgram = VkShaderProgram::create(device, slangProgram);
+        auto pipeline = ComputePipeline::create(device, layout, shaderProgram, desc);
+        auto descriptorPool = DescriptorPool::create(device, layout, descriptorMaxSets);
+        return PipelineState<ComputePipeline>{
+            .layout = std::move(layout),
+            .descriptorPool = std::move(descriptorPool),
+            .pipeline = std::move(pipeline),
+        };
+    }
+
+    [[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(
+        const SlangProgram& slangProgram,
+        const RayTracingPipelineDesc& desc = {},
+        uint32_t descriptorMaxSets = 64,
+        std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+    {
+        nrAssert(device != nullptr, "Device::createRayTracingPipeline requires a valid logical device.");
+        nrAssert(slangProgram.valid(), "Device::createRayTracingPipeline requires a valid SlangProgram.");
+
+        auto reflection = slangProgram.reflection();
+        reflection.immutableSamplers.insert(reflection.immutableSamplers.end(), immutableSamplers.begin(), immutableSamplers.end());
+
+        auto layout = ReflectedPipelineLayout::create(device, reflection);
+        auto shaderProgram = VkShaderProgram::create(device, slangProgram);
+        auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, desc);
+        auto descriptorPool = DescriptorPool::create(device, layout, descriptorMaxSets);
+        return PipelineState<RayTracingPipeline>{
+            .layout = std::move(layout),
+            .descriptorPool = std::move(descriptorPool),
+            .pipeline = std::move(pipeline),
+        };
     }
 
     ~Device() = default;
