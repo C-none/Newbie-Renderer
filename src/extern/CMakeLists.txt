@@ -31,9 +31,6 @@ function(add_extern_library lib_name)
     move_targets_to_folder("${CMAKE_CURRENT_SOURCE_DIR}/${lib_name}" "extern/${lib_name}")
 endfunction()
 
-set(NVAPI_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/nvapi")
-# set(NVAPI_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/nvapi")
-# set(NVAPI_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/nvapi/amd64/nvapi64.lib")
 set(Aftermath_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/aftermath")
 # set(Aftermath_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/aftermath/include")
 # set(Aftermath_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/aftermath/lib")
@@ -79,6 +76,7 @@ nr_add_library(dependency STATIC)
 target_link_libraries(dependency 
 PUBLIC
     slang
+    slang-rhi
     glfw
     imgui::imgui
     glm::glm
@@ -94,3 +92,9 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
     ${MODULE_UNITS}
 )
 set_target_properties(dependency PROPERTIES FOLDER "extern")
+
+if(MSVC)
+    # slang-rhi headers currently emit C4267/C5260 when imported as header units.
+    # Keep /WX for project code while silencing those third-party diagnostics here.
+    target_compile_options(dependency PRIVATE /wd4267 /wd5260)
+endif()

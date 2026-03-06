@@ -3,6 +3,7 @@ export module nr.rhi;
 export import :command;
 export import :commandBatch;
 export import :commandPool;
+export import :descriptor;
 export import :device;
 export import :frameContext;
 export import :memoryAllocator;

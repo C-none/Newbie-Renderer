@@ -10,3 +10,21 @@ target_link_libraries(nr_slang_profile PRIVATE
 target_compile_definitions(nr_slang_profile PRIVATE
     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
 )
+
+nr_add_executable(nr_slang_single_entrypoint_contract nr_slang_single_entrypoint_contract.cpp)
+set_target_properties(nr_slang_single_entrypoint_contract PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_slang_single_entrypoint_contract PRIVATE
+    nrrhi
+    utils
+    dependency
+)
+
+nr_add_executable(nr_descriptor_cursor_conflict_merge_test nr_descriptor_cursor_conflict_merge_test.cpp)
+set_target_properties(nr_descriptor_cursor_conflict_merge_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_descriptor_cursor_conflict_merge_test PRIVATE
+    nrrhi
+    utils
+    dependency
+)

@@ -74,33 +74,6 @@
 
 ---
 
-## 4. Slang 路线：只做 Cursor 风格
-
-本项目后续 Slang 工作仅围绕以下目标：
-
-1. 保持现有编译流程：session -> module -> link -> SPIR-V。
-2. 反射输出重点服务于 Cursor 路径绑定。
-3. 上层绑定 API 只提供“按路径绑定”（例如 Globals.xxx、EntryPoints.xxx 或规范化路径）。
-
-不作为当前目标：
-- dynamic dispatch/type conformance。
-- 泛型 specialization 主动管理。
-- 与 Cursor 无关的平行绑定系统。
-
----
-
-## 5. 5070 Ti 定向策略（工程取舍）
-
-1. 允许优化“单设备最优路径”，减少通用适配代码。
-2. 允许使用该设备稳定支持的扩展特性作为默认路径。
-3. 仍保留基础断言与日志，确保失败可诊断。
-
-边界：
-- 不承诺在其他 GPU 上行为一致。
-- 若未来扩展到多设备，再引入更通用的 capability profile。
-
----
-
 ## 6. 建议的实现顺序（严格执行）
 
 ### 阶段 1（必须完成）
@@ -142,8 +115,6 @@
 你正在维护 Newbie-Renderer 的 src/rhi。请严格按以下约束实现：
 1) 仅支持 Vulkan + C++23；
 2) 目标设备是 NVIDIA GeForce RTX 5070 Ti；
-3) Slang 仅采用 Cursor 风格反射/绑定；
-4) 不引入多后端抽象，不引入与 Cursor 平行的绑定系统。
 
 请先完成 P0：
 - Swapchain acquire/present/recreate/resize/out-of-date 处理；
@@ -160,4 +131,20 @@
 
 ## 9. 一句话结论
 
-在“Vulkan-only + C++23 + RTX 5070 Ti + Slang Cursor-only”约束下，`nrrhi` 的优先任务不是扩展通用性，而是先补齐三大闭环：Swapchain、Frame、Barrier；完成后再强化 Cursor 绑定体验和工程可维护性。
+VK_KHR_dynamic_rendering
+VK_EXT_extended_dynamic_state
+VK_KHR_pipeline_library
+VK_KHR_deferred_host_operations
+VK_KHR_synchronization2
+VK_KHR_timeline_semaphore
+VK_EXT_descriptor_indexing
+VK_KHR_buffer_device_address
+VK_KHR_acceleration_structure
+VK_KHR_ray_tracing_pipeline
+VK_KHR_ray_query
+VK_EXT_mesh_shader
+VK_KHR_fragment_shading_rate
+VK_EXT_robustness2
+VK_EXT_pipeline_robustness
+VK_KHR_swapchain
+vk::NVRayTracingInvocationReorderExtensionName

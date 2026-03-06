@@ -1,7 +1,5 @@
 module;
 
-#include "slang.h"
-
 export module nr.rhi:slang;
 
 import dependency;
@@ -21,206 +19,10 @@ namespace nr::rhi::detail
 }
 
 constexpr SlangResult kSlangOk = 0;
-constexpr SlangResult kSlangFail = makeSlangError(0, 0x4005);
+// constexpr SlangResult kSlangFail = makeSlangError(0, 0x4005);
 constexpr SlangResult kSlangNoInterface = makeSlangError(0, 0x4002);
 constexpr SlangResult kSlangInvalidArg = makeSlangError(7, 0x57);
 constexpr SlangResult kSlangNotFound = makeSlangError(0x200, 5);
-
-constexpr SlangInt kSlangUnboundedSize = static_cast<SlangInt>(~size_t(0));
-constexpr SlangInt kSlangUnknownSize = static_cast<SlangInt>(~size_t(0) - size_t(1));
-
-void appendIntCompilerOption(std::vector<slang::CompilerOptionEntry> &options, slang::CompilerOptionName name, int32_t value)
-{
-    options.push_back(slang::CompilerOptionEntry{
-        .name = name,
-        .value =
-            slang::CompilerOptionValue{
-                .kind = slang::CompilerOptionValueKind::Int,
-                .intValue0 = value,
-            },
-    });
-}
-
-void appendStringCompilerOption(std::vector<slang::CompilerOptionEntry> &options, slang::CompilerOptionName name, const char *value)
-{
-    options.push_back(slang::CompilerOptionEntry{
-        .name = name,
-        .value =
-            slang::CompilerOptionValue{
-                .kind = slang::CompilerOptionValueKind::String,
-                .stringValue0 = value,
-            },
-    });
-}
-
-[[nodiscard]] std::vector<slang::CompilerOptionEntry> defaultCompilerOptions()
-{
-    std::vector<slang::CompilerOptionEntry> options;
-    options.reserve(6);
-
-    appendIntCompilerOption(options, slang::CompilerOptionName::EmitSpirvDirectly, 1);
-    appendIntCompilerOption(options, slang::CompilerOptionName::UseUpToDateBinaryModule, 1);
-    appendIntCompilerOption(options, slang::CompilerOptionName::Optimization, isDebugMode ? SLANG_OPTIMIZATION_LEVEL_NONE : SLANG_OPTIMIZATION_LEVEL_MAXIMAL);
-    appendIntCompilerOption(options, slang::CompilerOptionName::DebugInformation, isDebugMode ? SLANG_DEBUG_INFO_LEVEL_MAXIMAL : SLANG_DEBUG_INFO_LEVEL_NONE);
-    appendIntCompilerOption(options, slang::CompilerOptionName::EnableRichDiagnostics, isDebugMode ? 1 : 0);
-
-    if constexpr (isDebugMode)
-    {
-        appendStringCompilerOption(options, slang::CompilerOptionName::WarningsAsErrors, "all");
-    }
-
-    return options;
-}
-
-[[nodiscard]] bool cStringEqual(const char *lhs, const char *rhs)
-{
-    if (lhs == rhs)
-    {
-        return true;
-    }
-    if (!lhs || !rhs)
-    {
-        return false;
-    }
-    return std::string_view(lhs) == std::string_view(rhs);
-}
-
-[[nodiscard]] bool compilerOptionEqual(const slang::CompilerOptionEntry &lhs, const slang::CompilerOptionEntry &rhs)
-{
-    return lhs.name == rhs.name && lhs.value.kind == rhs.value.kind && lhs.value.intValue0 == rhs.value.intValue0 && lhs.value.intValue1 == rhs.value.intValue1 && cStringEqual(lhs.value.stringValue0, rhs.value.stringValue0) && cStringEqual(lhs.value.stringValue1, rhs.value.stringValue1);
-}
-
-[[nodiscard]] std::optional<vk::DescriptorType> mapBindingTypeToDescriptorType(slang::BindingType bindingType)
-{
-    switch (bindingType)
-    {
-    case slang::BindingType::Sampler:
-        return vk::DescriptorType::eSampler;
-    case slang::BindingType::CombinedTextureSampler:
-        return vk::DescriptorType::eCombinedImageSampler;
-    case slang::BindingType::Texture:
-        return vk::DescriptorType::eSampledImage;
-    case slang::BindingType::MutableTexture:
-        return vk::DescriptorType::eStorageImage;
-    case slang::BindingType::TypedBuffer:
-        return vk::DescriptorType::eUniformTexelBuffer;
-    case slang::BindingType::MutableTypedBuffer:
-        return vk::DescriptorType::eStorageTexelBuffer;
-    case slang::BindingType::RawBuffer:
-    case slang::BindingType::MutableRawBuffer:
-        return vk::DescriptorType::eStorageBuffer;
-    case slang::BindingType::InputRenderTarget:
-        return vk::DescriptorType::eInputAttachment;
-    case slang::BindingType::InlineUniformData:
-        return vk::DescriptorType::eInlineUniformBlockEXT;
-    case slang::BindingType::RayTracingAccelerationStructure:
-        return vk::DescriptorType::eAccelerationStructureKHR;
-    case slang::BindingType::ConstantBuffer:
-        return vk::DescriptorType::eUniformBuffer;
-    default:
-        return std::nullopt;
-    }
-}
-
-[[nodiscard]] bool sameGuid(const SlangUUID &a, const SlangUUID &b)
-{
-    return std::memcmp(&a, &b, sizeof(SlangUUID)) == 0;
-}
-
-class OwnedBlob final : public slang::IBlob
-{
-  public:
-    explicit OwnedBlob(std::vector<std::byte> bytes)
-        : m_bytes(std::move(bytes))
-    {
-    }
-
-    SLANG_NO_THROW SlangResult SLANG_MCALL queryInterface(SlangUUID const &uuid, void **outObject) override
-    {
-        if (!outObject)
-        {
-            return kSlangInvalidArg;
-        }
-
-        *outObject = nullptr;
-        if (sameGuid(uuid, slang::IBlob::getTypeGuid()) || sameGuid(uuid, ISlangUnknown::getTypeGuid()))
-        {
-            *outObject = static_cast<slang::IBlob *>(this);
-            addRef();
-            return kSlangOk;
-        }
-
-        return kSlangNoInterface;
-    }
-
-    SLANG_NO_THROW uint32_t SLANG_MCALL addRef() override
-    {
-        return ++m_refCount;
-    }
-
-    SLANG_NO_THROW uint32_t SLANG_MCALL release() override
-    {
-        auto const count = --m_refCount;
-        if (count == 0)
-        {
-            delete this;
-        }
-        return count;
-    }
-
-    SLANG_NO_THROW void const *SLANG_MCALL getBufferPointer() override
-    {
-        return m_bytes.empty() ? nullptr : m_bytes.data();
-    }
-
-    SLANG_NO_THROW size_t SLANG_MCALL getBufferSize() override
-    {
-        return m_bytes.size();
-    }
-
-  private:
-    std::atomic<uint32_t> m_refCount = 1;
-    std::vector<std::byte> m_bytes;
-};
-
-[[nodiscard]] std::vector<std::byte> readBinaryFile(const std::filesystem::path &path)
-{
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file)
-    {
-        return {};
-    }
-
-    auto const size = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-
-    std::vector<std::byte> bytes(size);
-    if (size > 0)
-    {
-        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
-    }
-    return bytes;
-}
-
-[[nodiscard]] bool isBinaryModuleBlobUpToDate(slang::ISession *session, std::string_view sourceModulePath, const std::filesystem::path &moduleBlobPath)
-{
-    if (!session)
-    {
-        return false;
-    }
-
-    auto binaryBytes = readBinaryFile(moduleBlobPath);
-    if (binaryBytes.empty())
-    {
-        return false;
-    }
-
-    auto *binaryBlob = new OwnedBlob(std::move(binaryBytes));
-    auto sourcePath = std::string(sourceModulePath);
-    auto upToDate = session->isBinaryModuleUpToDate(sourcePath.c_str(), binaryBlob);
-    binaryBlob->release();
-    return upToDate;
-}
 
 [[nodiscard]] std::string moduleNameToPath(std::string_view moduleName)
 {
@@ -382,7 +184,13 @@ class OwnedBlob final : public slang::IBlob
     if (hasParentTraversal)
         return std::nullopt;
 
-    auto normalizedModulePath = moduleNameToPath(modulePathToName(normalizedPath.generic_string()));
+    auto normalizedModuleName = modulePathToName(normalizedPath.generic_string());
+    if (normalizedModuleName.empty())
+    {
+        return std::nullopt;
+    }
+
+    auto normalizedModulePath = moduleNameToPath(normalizedModuleName);
     if (normalizedModulePath.empty())
         return std::nullopt;
         
@@ -399,37 +207,6 @@ class OwnedBlob final : public slang::IBlob
     return std::string(moduleName.substr(pos + 1));
 }
 
-[[nodiscard]] uint64_t fnv1a64(std::span<const std::byte> bytes)
-{
-    constexpr uint64_t offsetBasis = 14695981039346656037ull;
-    constexpr uint64_t prime = 1099511628211ull;
-    uint64_t hash = offsetBasis;
-    std::ranges::for_each(bytes, [&](auto b) {
-        hash ^= static_cast<uint64_t>(std::to_integer<uint8_t>(b));
-        hash *= prime;
-    });
-    return hash;
-}
-
-template <typename T> void hashAppend(uint64_t &state, const T &value)
-{
-    auto bytes = std::as_bytes(std::span{&value, 1});
-    auto mixed = fnv1a64(bytes);
-    state ^= mixed + 0x9e3779b97f4a7c15ull + (state << 6) + (state >> 2);
-}
-
-void hashAppendString(uint64_t &state, std::string_view value)
-{
-    auto bytes = std::as_bytes(std::span{value.data(), value.size()});
-    auto mixed = fnv1a64(bytes);
-    state ^= mixed + 0x9e3779b97f4a7c15ull + (state << 6) + (state >> 2);
-}
-
-[[nodiscard]] std::string toHex(uint64_t value)
-{
-    return std::format("{:016x}", value);
-}
-
 [[nodiscard]] std::filesystem::path resolveShaderRootPath()
 {
     auto rootPath = normalizePath(std::filesystem::path(std::string(shaderRoot)));
@@ -439,29 +216,6 @@ void hashAppendString(uint64_t &state, std::string_view value)
     nrAssert(!ec && isDirectory, std::format("Invalid shader root path from CMake: '{}'.", rootPath.generic_string()));
     return rootPath;
 }
-
-struct VulkanBindingMappingPolicy
-{
-    [[nodiscard]] uint32_t mapSpaceToSet(slang::TypeLayoutReflection *typeLayout, SlangInt descriptorSetIndex) const{
-        auto setSpace = typeLayout->getDescriptorSetSpaceOffset(descriptorSetIndex);
-        nrAssert(setSpace != kSlangUnknownSize && setSpace >= 0, "Invalid Slang descriptor set space offset for Vulkan mapping.");
-        return static_cast<uint32_t>(setSpace);
-    }
-
-    [[nodiscard]] uint32_t mapRangeIndexToBinding(slang::TypeLayoutReflection *typeLayout, SlangInt descriptorSetIndex, SlangInt descriptorRangeIndex) const{
-        auto bindingIndex = typeLayout->getDescriptorSetDescriptorRangeIndexOffset(descriptorSetIndex, descriptorRangeIndex);
-        nrAssert(bindingIndex != kSlangUnknownSize && bindingIndex >= 0, "Invalid Slang descriptor range binding offset for Vulkan mapping.");
-        return static_cast<uint32_t>(bindingIndex);
-    }
-
-    [[nodiscard]] uint32_t normalizeDescriptorCount(SlangInt descriptorCount) const{
-        if (descriptorCount == kSlangUnknownSize || descriptorCount == kSlangUnboundedSize || descriptorCount < 0)
-        {
-            return 1u;
-        }
-        return std::max(static_cast<uint32_t>(descriptorCount), 1u);
-    }
-};
 
 [[nodiscard]] std::filesystem::path makeModuleBinaryPath(const std::filesystem::path &cacheRoot, std::string_view moduleName)
 {
@@ -474,7 +228,7 @@ struct VulkanBindingMappingPolicy
     std::string_view moduleName)
 {
     // Business mapping is strict and 1:1 with `shader/` tree:
-    //   module test.utils.utils -> shader/test/utils/utils.slang
+    //   module test.utils.useFlag -> shader/test/utils/useFlag.slang
     return {std::filesystem::path(moduleNameToPath(moduleName) + ".slang")};
 }
 
@@ -564,8 +318,21 @@ export namespace nr::rhi
  */
 struct SlangMacro
 {
-    std::string name;
-    std::string value;
+    std::string_view name;
+    std::string_view value;
+};
+
+/**
+ * @brief Compile-time friendly compiler option payload.
+ */
+struct SlangCompilerOption
+{
+    slang::CompilerOptionName name = slang::CompilerOptionName::VulkanBindShiftAll;
+    slang::CompilerOptionValueKind kind = slang::CompilerOptionValueKind::Int;
+    int32_t intValue0 = 0;
+    int32_t intValue1 = 0;
+    std::string_view stringValue0{};
+    std::string_view stringValue1{};
 };
 
 /**
@@ -573,47 +340,103 @@ struct SlangMacro
  *
  * This project uses one unified Slang session configuration for all modules.
  */
+template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
 struct SlangCompileOptions
 {
-    // Runtime session search paths are fixed to:
-    //   1) <shaderCacheRoot>/<optionsHash>
-    //   2) <shaderRoot> (provided by CMake)
-    std::vector<std::string> searchPaths;
-    std::vector<SlangMacro> macros;
+    std::array<std::string_view, SearchPathCount> searchPaths;
+    std::array<SlangMacro, MacroCount> macros;
     SlangCompileTarget target = SLANG_SPIRV;
-    std::string profile = "SPIRV_1_6";
-    std::vector<slang::CompilerOptionEntry> compilerOptions;
+    std::string_view profile = "SPIRV_1_6";
+    std::array<SlangCompilerOption, CompilerOptionCount> compilerOptions;
+    uint64_t hashValue = hash::fnv1a64OffsetBasis;
+    std::array<char, 16> hashHex = hash::toHexChars(hash::fnv1a64OffsetBasis);
 };
 
-/**
- * @brief Reflected descriptor binding information used by Vulkan layout creation.
- */
-struct SlangDescriptorBinding
+template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+[[nodiscard]] consteval uint64_t computeCompileOptionsHashValue(
+    const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options) noexcept
 {
-    uint32_t binding = 0;
-    vk::DescriptorType descriptorType = vk::DescriptorType::eSampler;
-    uint32_t descriptorCount = 1;
-    vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
-};
+    uint64_t state = hash::fnv1a64OffsetBasis;
+    hash::hashAppend(state, static_cast<uint32_t>(options.target));
+    hash::hashAppendString(state, options.profile);
 
-/**
- * @brief One descriptor set and all reflected bindings in that set.
- */
-struct SlangDescriptorSetLayoutInfo
-{
-    uint32_t set = 0;
-    std::vector<SlangDescriptorBinding> bindings;
-};
+    std::ranges::for_each(options.searchPaths, [&](std::string_view path) constexpr noexcept {
+        hash::hashAppendString(state, path);
+    });
+    std::ranges::for_each(options.macros, [&](const SlangMacro &macro) constexpr noexcept {
+        hash::hashAppendString(state, macro.name);
+        hash::hashAppendString(state, macro.value);
+    });
+    std::ranges::for_each(options.compilerOptions, [&](const SlangCompilerOption &option) constexpr noexcept {
+        hash::hashAppend(state, static_cast<uint32_t>(option.name));
+        hash::hashAppend(state, static_cast<uint32_t>(option.kind));
+        hash::hashAppend(state, option.intValue0);
+        hash::hashAppend(state, option.intValue1);
+        hash::hashAppendString(state, option.stringValue0);
+        hash::hashAppendString(state, option.stringValue1);
+    });
+    return state;
+}
 
-/**
- * @brief Reflected push-constant range.
- */
-struct SlangPushConstantRange
+template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+[[nodiscard]] consteval SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> finalizeCompileOptions(
+    SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> options) noexcept
 {
-    uint32_t offset = 0;
-    uint32_t size = 0;
-    vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
-};
+    options.hashValue = computeCompileOptionsHashValue(options);
+    options.hashHex = hash::toHexChars(options.hashValue);
+    return options;
+}
+
+[[nodiscard]] consteval std::array<SlangCompilerOption, 5> makeBaseCompilerOptions(
+    int32_t optimizationLevel,
+    int32_t debugInfoLevel,
+    int32_t richDiagnosticsEnabled) noexcept
+{
+    return std::array<SlangCompilerOption, 5>{
+        SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
+        SlangCompilerOption{.name = slang::CompilerOptionName::UseUpToDateBinaryModule, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
+        SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = optimizationLevel},
+        SlangCompilerOption{.name = slang::CompilerOptionName::DebugInformation, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = debugInfoLevel},
+        SlangCompilerOption{.name = slang::CompilerOptionName::EnableRichDiagnostics, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = richDiagnosticsEnabled},
+    };
+}
+
+template <bool IsDebugModeValue>
+[[nodiscard]] consteval auto defaultCompilerOptions() noexcept
+    -> std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 6>, std::array<SlangCompilerOption, 5>>
+{
+    auto baseOptions = makeBaseCompilerOptions(
+        IsDebugModeValue ? SLANG_OPTIMIZATION_LEVEL_NONE : SLANG_OPTIMIZATION_LEVEL_MAXIMAL,
+        IsDebugModeValue ? SLANG_DEBUG_INFO_LEVEL_MAXIMAL : SLANG_DEBUG_INFO_LEVEL_NONE,
+        IsDebugModeValue ? 1 : 0);
+
+    using ResultType = std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 6>, std::array<SlangCompilerOption, 5>>;
+    ResultType options{};
+    std::ranges::copy(baseOptions, options.begin());
+
+    if constexpr (IsDebugModeValue)
+    {
+        options.back() = SlangCompilerOption{
+            .name = slang::CompilerOptionName::WarningsAsErrors,
+            .kind = slang::CompilerOptionValueKind::String,
+            .stringValue0 = "all",
+        };
+    }
+
+    return options;
+}
+
+inline constexpr auto kDefaultSlangCompileOptions = []() consteval {
+    constexpr auto compilerOptions = defaultCompilerOptions<isDebugMode>();
+    auto options = SlangCompileOptions<1, 0, compilerOptions.size()>{
+        .searchPaths = {shaderRoot},
+        .macros = {},
+        .target = SLANG_SPIRV,
+        .profile = "SPIRV_1_6",
+        .compilerOptions = compilerOptions,
+    };
+    return finalizeCompileOptions(options);
+}();
 
 /**
  * @brief Vulkan sampler creation parameters used by Slang-related APIs.
@@ -708,7 +531,7 @@ class SlangSampler
 };
 
 /**
- * @brief Immutable sampler declaration attached to a reflected descriptor binding.
+ * @brief Immutable sampler declaration for backend pipeline creation.
  */
 struct SlangImmutableSamplerBinding
 {
@@ -716,27 +539,6 @@ struct SlangImmutableSamplerBinding
     uint32_t binding = 0;
     uint32_t descriptorCount = 1;
     SlangSamplerDesc samplerDesc{};
-};
-
-/**
- * @brief Reflection payload consumed by `ReflectedPipelineLayout`.
- */
-struct SlangReflectionLayout
-{
-    struct CursorBinding
-    {
-        std::string path;
-        uint32_t set = 0;
-        uint32_t binding = 0;
-        vk::DescriptorType descriptorType = vk::DescriptorType::eSampler;
-        uint32_t descriptorCount = 1;
-        vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
-    };
-
-    std::vector<SlangDescriptorSetLayoutInfo> descriptorSets;
-    std::vector<SlangPushConstantRange> pushConstantRanges;
-    std::vector<SlangImmutableSamplerBinding> immutableSamplers;
-    std::vector<CursorBinding> cursorBindings;
 };
 
 /**
@@ -778,23 +580,15 @@ class SlangProgram
      */
     [[nodiscard]] bool valid() const noexcept
     {
-        return linkedProgram_ != nullptr && !entryPoints_.empty();
+        return linkedProgram_ != nullptr && programLayout_ != nullptr && entryPointLayout_ != nullptr && hasEntryPointBinary_;
     }
 
     /**
-     * @brief Enumerate compiled entry point binaries in link order.
+     * @brief Access the compiled single entrypoint binary payload.
      */
-    [[nodiscard]] std::span<const SlangEntryPointBinary> entryPoints() const noexcept
+    [[nodiscard]] const SlangEntryPointBinary *entryPointBinary() const noexcept
     {
-        return entryPoints_;
-    }
-
-    /**
-     * @brief Get descriptor and push-constant reflection for this program.
-     */
-    [[nodiscard]] const SlangReflectionLayout &reflection() const noexcept
-    {
-        return reflection_;
+        return hasEntryPointBinary_ ? &entryPointBinary_ : nullptr;
     }
 
     /**
@@ -805,30 +599,63 @@ class SlangProgram
         return linkedProgram_.get();
     }
 
+    /**
+     * @brief Access the linked Slang program layout reflection.
+     */
+    [[nodiscard]] slang::ProgramLayout *programLayout() const noexcept
+    {
+        return programLayout_;
+    }
+
+    /**
+     * @brief Access the linked Slang entry point layout reflection.
+     */
+    [[nodiscard]] slang::EntryPointReflection *entryPointLayout() const noexcept
+    {
+        return entryPointLayout_;
+    }
+
   private:
     friend class ShaderService;
 
     Slang::ComPtr<slang::IComponentType> linkedProgram_;
-    std::vector<SlangEntryPointBinary> entryPoints_;
-    SlangReflectionLayout reflection_;
+    slang::ProgramLayout *programLayout_ = nullptr;
+    slang::EntryPointReflection *entryPointLayout_ = nullptr;
+    SlangEntryPointBinary entryPointBinary_{};
+    bool hasEntryPointBinary_ = false;
 };
 
-struct SlangFileEntryCompileRequest
+struct SlangProgramCompileRequest
 {
     // Required input form:
-    // - test/utils/utils
+    // - test/utils/useFlag
     std::filesystem::path sourcePath;
     std::string entryPoint;
 };
 
-struct SlangFileEntryCompileResult
+struct RuntimeSlangMacro
 {
-    bool succeeded = false;
-    std::string moduleName;
-    std::string entryPoint;
-    SlangStage stage = SLANG_STAGE_NONE;
-    std::vector<uint32_t> spirvCode;
-    std::vector<SlangReflectionLayout::CursorBinding> cursorBindings;
+    std::string name;
+    std::string value;
+};
+
+struct RuntimeSlangCompilerOption
+{
+    slang::CompilerOptionName name = slang::CompilerOptionName::VulkanBindShiftAll;
+    slang::CompilerOptionValueKind kind = slang::CompilerOptionValueKind::Int;
+    int32_t intValue0 = 0;
+    int32_t intValue1 = 0;
+    std::string stringValue0;
+    std::string stringValue1;
+};
+
+struct RuntimeSlangCompileOptions
+{
+    std::vector<std::string> searchPaths;
+    std::vector<RuntimeSlangMacro> macros;
+    SlangCompileTarget target = SLANG_SPIRV;
+    std::string profile = "SPIRV_1_6";
+    std::vector<RuntimeSlangCompilerOption> compilerOptions;
 };
 
 /**
@@ -838,7 +665,7 @@ struct SlangFileEntryCompileResult
  * - Session configuration
  * - Module compile/load with cache
  * - Program link and entry point code generation
- * - Reflection extraction and hot-reload checks
+ * - Hot-reload/cache freshness checks
  */
 class ShaderService
 {
@@ -855,62 +682,48 @@ class ShaderService
     /**
      * @brief Configure Slang session options and reset in-memory caches.
      */
-    void configure(const SlangCompileOptions &options)
+    template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+    void configure(const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options)
     {
         std::scoped_lock lock(m_mutex);
-
-        SlangCompileOptions normalizedOptions = options;
-        if (normalizedOptions.compilerOptions.empty())
-        {
-            normalizedOptions.compilerOptions = detail::defaultCompilerOptions();
-        }
-
-        auto resolvedShaderRootPath = detail::resolveShaderRootPath();
-        normalizedOptions.searchPaths = {resolvedShaderRootPath.generic_string()};
-        if (m_session && compareCompileOptionsLocked(normalizedOptions, m_options))
-        {
-            return;
-        }
-
-        m_options = std::move(normalizedOptions);
-        m_shaderRootPath = std::move(resolvedShaderRootPath);
-
-        ensureGlobalSessionLocked();
-        recreateSessionLocked();
-
-        nrInfo<>(std::format("[ShaderService::configure] configured: shaderRoot='{}', profile='{}'", m_shaderRootPath.generic_string(), m_options.profile));
+        applyCompileOptionsLocked(options);
     }
 
-    [[nodiscard]] SlangFileEntryCompileResult compileByFileAndEntry(const SlangFileEntryCompileRequest &request)
+    /**
+     * @brief Configure Slang session with project default compile options.
+     */
+    void configure()
+    {
+        std::scoped_lock lock(m_mutex);
+        applyCompileOptionsLocked(kDefaultSlangCompileOptions);
+    }
+
+    [[nodiscard]] SlangProgram compileProgramByFileAndEntry(const SlangProgramCompileRequest &request)
     {
         std::scoped_lock lock(m_mutex);
         ensureConfiguredLocked();
 
-        SlangFileEntryCompileResult result;
+        SlangProgram result;
 
         if (request.entryPoint.empty())
         {
-            nrInfo<LogLevel::warning>("[ShaderService::compileByFileAndEntry] entryPoint is empty.");
+            nrInfo<LogLevel::warning>("[ShaderService::compileProgramByFileAndEntry] entryPoint is empty.");
             return result;
         }
 
         auto modulePath = detail::normalizeRequestModulePath(request.sourcePath);
         if (!modulePath.has_value())
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] invalid request.sourcePath='{}'. expected relative module-path form like 'test/utils/utils'.", request.sourcePath.string()));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] invalid request.sourcePath='{}'. expected relative module-path form like 'test/utils/useFlag'.", request.sourcePath.string()));
             return result;
         }
 
         auto moduleName = resolveModuleNameLocked(*modulePath);
         if (moduleName.empty())
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] unable to resolve module name from request.sourcePath='{}'.", request.sourcePath.string()));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] unable to resolve module name from request.sourcePath='{}'.", request.sourcePath.string()));
             return result;
         }
-
-        result.moduleName = moduleName;
-        result.entryPoint = request.entryPoint;
-        result.stage = SLANG_STAGE_NONE;
 
         auto rootModule = loadOrCompileModuleLocked(moduleName, modulePath);
         if (!rootModule.valid())
@@ -918,11 +731,51 @@ class ShaderService
             return result;
         }
         Slang::ComPtr<slang::IEntryPoint> entryPointComponent;
-        auto findEntryResult = rootModule.module->findEntryPointByName(request.entryPoint.c_str(), entryPointComponent.writeRef());
-        if (!detail::slangSucceeded(findEntryResult) || !entryPointComponent)
+        Slang::ComPtr<slang::IBlob> entryPointDiagnostics;
+        std::optional<SlangStage> resolvedStage = std::nullopt;
+
+        // Single-entrypoint contract: probe known shader stages and keep the first valid entrypoint.
+        constexpr auto candidateStages = std::array<SlangStage, 14>{
+            SLANG_STAGE_COMPUTE,
+            SLANG_STAGE_VERTEX,
+            SLANG_STAGE_FRAGMENT,
+            SLANG_STAGE_HULL,
+            SLANG_STAGE_DOMAIN,
+            SLANG_STAGE_GEOMETRY,
+            SLANG_STAGE_AMPLIFICATION,
+            SLANG_STAGE_MESH,
+            SLANG_STAGE_RAY_GENERATION,
+            SLANG_STAGE_INTERSECTION,
+            SLANG_STAGE_ANY_HIT,
+            SLANG_STAGE_CLOSEST_HIT,
+            SLANG_STAGE_MISS,
+            SLANG_STAGE_CALLABLE,
+        };
+
+        auto resolvedByStageProbe = std::ranges::any_of(candidateStages, [&](SlangStage stage) {
+            entryPointDiagnostics = nullptr;
+            auto stageResult = rootModule.module->findAndCheckEntryPoint(
+                request.entryPoint.c_str(),
+                stage,
+                entryPointComponent.writeRef(),
+                entryPointDiagnostics.writeRef());
+            emitDiagnosticsLocked(entryPointDiagnostics.get(), std::format("findAndCheckEntryPoint(stage={})", static_cast<int32_t>(stage)));
+            if (detail::slangSucceeded(stageResult) && entryPointComponent != nullptr)
+            {
+                resolvedStage = stage;
+                return true;
+            }
+            return false;
+        });
+
+        if (!resolvedByStageProbe)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] failed to resolve entryPoint='{}' in module='{}' via findEntryPointByName.", request.entryPoint, moduleName));
-            return result;
+            auto findEntryResult = rootModule.module->findEntryPointByName(request.entryPoint.c_str(), entryPointComponent.writeRef());
+            if (!detail::slangSucceeded(findEntryResult) || !entryPointComponent)
+            {
+                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] failed to resolve entryPoint='{}' in module='{}' via findAndCheckEntryPoint/findEntryPointByName.", request.entryPoint, moduleName));
+                return result;
+            }
         }
         std::vector<slang::IComponentType *> components = {
             rootModule.module.get(),
@@ -939,7 +792,7 @@ class ShaderService
         emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType");
         if (!detail::slangSucceeded(createResult) || !compositeProgram)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] createCompositeComponentType failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] createCompositeComponentType failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
             return result;
         }
 
@@ -949,7 +802,7 @@ class ShaderService
         emitDiagnosticsLocked(diagnostics.get(), "link");
         if (!detail::slangSucceeded(linkResult) || !linkedProgram)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] link failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] link failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
             return result;
         }
 
@@ -958,7 +811,7 @@ class ShaderService
         emitDiagnosticsLocked(diagnostics.get(), "getLayout");
         if (!layout)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] getLayout failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] getLayout failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
             return result;
         }
 
@@ -968,7 +821,7 @@ class ShaderService
         emitDiagnosticsLocked(diagnostics.get(), "getEntryPointCode");
         if (!detail::slangSucceeded(compileResult) || !codeBlob)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] getEntryPointCode failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] getEntryPointCode failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
             return result;
         }
 
@@ -976,26 +829,36 @@ class ShaderService
             static_cast<const std::byte *>(codeBlob->getBufferPointer()),
             codeBlob->getBufferSize()};
         auto dwordCount = (codeBytes.size() + sizeof(uint32_t) - 1) / sizeof(uint32_t);
-        result.spirvCode.resize(dwordCount, 0u);
+        SlangEntryPointBinary entryPointBinary{};
+        entryPointBinary.entryPointName = request.entryPoint;
+        entryPointBinary.spirv.resize(dwordCount, 0u);
         if (!codeBytes.empty())
         {
-            std::memcpy(result.spirvCode.data(), codeBytes.data(), codeBytes.size());
+            std::memcpy(entryPointBinary.spirv.data(), codeBytes.data(), codeBytes.size());
         }
-
-        SlangReflectionLayout reflection;
-        buildReflectionLayoutLocked(layout, reflection);
-        result.cursorBindings = std::move(reflection.cursorBindings);
 
         auto *entryPointLayout = layout->getEntryPointByIndex(0);
-        if (!entryPointLayout || entryPointLayout->getStage() == SLANG_STAGE_NONE)
+        if (!entryPointLayout)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileByFileAndEntry] entryPoint='{}' in module='{}' is missing [shader(...)] stage attribute.", request.entryPoint, moduleName));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] entryPoint='{}' in module='{}' has no entrypoint layout.", request.entryPoint, moduleName));
             return result;
         }
-        result.stage = entryPointLayout->getStage();
 
-        result.succeeded = !result.spirvCode.empty();
-        nrInfo<>(std::format("[ShaderService::compileByFileAndEntry] finished: module='{}', entry='{}', stage={}, words={}", moduleName, request.entryPoint, static_cast<int32_t>(result.stage), result.spirvCode.size()));
+        auto reflectedStage = entryPointLayout->getStage();
+        entryPointBinary.stage = reflectedStage != SLANG_STAGE_NONE ? reflectedStage : resolvedStage.value_or(SLANG_STAGE_NONE);
+        if (entryPointBinary.stage == SLANG_STAGE_NONE)
+        {
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] entryPoint='{}' in module='{}' is missing [shader(...)] stage metadata.", request.entryPoint, moduleName));
+            return result;
+        }
+
+        result.linkedProgram_ = linkedProgram;
+        result.programLayout_ = layout;
+        result.entryPointLayout_ = entryPointLayout;
+        result.entryPointBinary_ = std::move(entryPointBinary);
+        result.hasEntryPointBinary_ = true;
+
+        nrInfo<>(std::format("[ShaderService::compileProgramByFileAndEntry] finished: module='{}', entry='{}', stage={}, words={}", moduleName, request.entryPoint, static_cast<int32_t>(result.entryPointBinary_.stage), result.entryPointBinary_.spirv.size()));
         return result;
     }
 
@@ -1015,29 +878,6 @@ class ShaderService
         }).detach();
     }
 
-    [[nodiscard]] static std::string resolveEntryPointName(slang::EntryPointLayout *entryPointLayout, std::string_view fallbackName)
-    {
-        if (entryPointLayout && entryPointLayout->getNameOverride())
-        {
-            return entryPointLayout->getNameOverride();
-        }
-        if (entryPointLayout && entryPointLayout->getName())
-        {
-            return entryPointLayout->getName();
-        }
-        return std::string(fallbackName);
-    }
-
-    [[nodiscard]] static SlangStage resolveEntryPointStage(slang::EntryPointLayout *entryPointLayout)
-    {
-        return entryPointLayout ? entryPointLayout->getStage() : SLANG_STAGE_NONE;
-    }
-
-    [[nodiscard]] static uint32_t normalizeDescriptorCount(uint32_t descriptorCount)
-    {
-        return std::max(descriptorCount, 1u);
-    }
-    
     [[nodiscard]] std::optional<std::string> validateModulePathOrganizationLocked(std::string_view moduleName, std::string_view modulePath) const
     {
         if (moduleName.empty())
@@ -1059,63 +899,65 @@ class ShaderService
             expectedPath);
     }
 
-    template <typename Fn> void forEachDescriptorRange(slang::TypeLayoutReflection *typeLayout, Fn &&callback)
+    template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+    [[nodiscard]] static RuntimeSlangCompileOptions materializeRuntimeOptions(
+        const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options)
     {
-        if (!typeLayout)
+        RuntimeSlangCompileOptions runtimeOptions;
+        runtimeOptions.target = options.target;
+        runtimeOptions.profile = std::string(options.profile);
+        runtimeOptions.searchPaths = options.searchPaths |
+                                     std::views::transform([](std::string_view value) { return std::string(value); }) |
+                                     std::ranges::to<std::vector>();
+        runtimeOptions.macros = options.macros |
+                                std::views::transform([](const SlangMacro &macro) {
+                                    return RuntimeSlangMacro{
+                                        .name = std::string(macro.name),
+                                        .value = std::string(macro.value),
+                                    };
+                                }) |
+                                std::ranges::to<std::vector>();
+        runtimeOptions.compilerOptions = options.compilerOptions |
+                                         std::views::transform([](const SlangCompilerOption &option) {
+                                             return RuntimeSlangCompilerOption{
+                                                 .name = option.name,
+                                                 .kind = option.kind,
+                                                 .intValue0 = option.intValue0,
+                                                 .intValue1 = option.intValue1,
+                                                 .stringValue0 = std::string(option.stringValue0),
+                                                 .stringValue1 = std::string(option.stringValue1),
+                                             };
+                                         }) |
+                                         std::ranges::to<std::vector>();
+        return runtimeOptions;
+    }
+
+    template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+    void applyCompileOptionsLocked(const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options)
+    {
+        auto runtimeOptions = materializeRuntimeOptions(options);
+        auto resolvedShaderRootPath = detail::resolveShaderRootPath();
+        runtimeOptions.searchPaths = {resolvedShaderRootPath.generic_string()};
+
+        auto hashHex = std::string(hash::toHexView(options.hashHex));
+        if (m_session && m_optionsHashHex == hashHex)
         {
             return;
         }
 
-        detail::VulkanBindingMappingPolicy mappingPolicy;
-        auto descriptorSetCount = typeLayout->getDescriptorSetCount();
-        for (SlangInt setIndex = 0; setIndex < descriptorSetCount; ++setIndex)
-        {
-            auto set = mappingPolicy.mapSpaceToSet(typeLayout, setIndex);
-            auto rangeCount = typeLayout->getDescriptorSetDescriptorRangeCount(setIndex);
-            for (SlangInt rangeIndex = 0; rangeIndex < rangeCount; ++rangeIndex)
-            {
-                auto descriptorType = detail::mapBindingTypeToDescriptorType(typeLayout->getDescriptorSetDescriptorRangeType(setIndex, rangeIndex));
-                if (!descriptorType.has_value())
-                {
-                    continue;
-                }
+        m_options = std::move(runtimeOptions);
+        m_shaderRootPath = std::move(resolvedShaderRootPath);
+        m_optionsHashValue = options.hashValue;
+        m_optionsHashHex = std::move(hashHex);
 
-                auto binding = mappingPolicy.mapRangeIndexToBinding(typeLayout, setIndex, rangeIndex);
-                auto descriptorCount = mappingPolicy.normalizeDescriptorCount(typeLayout->getDescriptorSetDescriptorRangeDescriptorCount(setIndex, rangeIndex));
-                callback(set, binding, *descriptorType, descriptorCount);
-            }
-        }
-    }
+        ensureGlobalSessionLocked();
+        recreateSessionLocked();
 
-    [[nodiscard]] bool compareCompileOptionsLocked(const SlangCompileOptions &lhs, const SlangCompileOptions &rhs) const
-    {
-        if (lhs.target != rhs.target || lhs.profile != rhs.profile || lhs.searchPaths != rhs.searchPaths)
-        {
-            return false;
-        }
-
-        if (lhs.macros.size() != rhs.macros.size() || lhs.compilerOptions.size() != rhs.compilerOptions.size())
-        {
-            return false;
-        }
-
-        for (size_t i = 0; i < lhs.macros.size(); ++i)
-        {
-            if (lhs.macros[i].name != rhs.macros[i].name || lhs.macros[i].value != rhs.macros[i].value)
-            {
-                return false;
-            }
-        }
-
-        for (size_t i = 0; i < lhs.compilerOptions.size(); ++i)
-        {
-            if (!detail::compilerOptionEqual(lhs.compilerOptions[i], rhs.compilerOptions[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        nrInfo<>(std::format(
+            "[ShaderService::configure] configured: shaderRoot='{}', profile='{}', hash='{}'",
+            m_shaderRootPath.generic_string(),
+            m_options.profile,
+            m_optionsHashHex));
     }
 
     // Requires m_mutex.
@@ -1132,57 +974,23 @@ class ShaderService
     {
         if (!m_session)
         {
-            if (m_options.compilerOptions.empty())
-            {
-                m_options.compilerOptions = detail::defaultCompilerOptions();
-            }
-            m_shaderRootPath = detail::resolveShaderRootPath();
-            m_options.searchPaths = {m_shaderRootPath.generic_string()};
-            ensureGlobalSessionLocked();
-            recreateSessionLocked();
+            applyCompileOptionsLocked(kDefaultSlangCompileOptions);
         }
     }
 
-    [[nodiscard]] uint64_t computeOptionsHashValueLocked() const
+    [[nodiscard]] uint64_t computeOptionsHashValueLocked() const noexcept
     {
-        uint64_t hash = 0xcbf29ce484222325ull;
-        detail::hashAppend(hash, static_cast<uint32_t>(m_options.target));
-        detail::hashAppendString(hash, m_options.profile);
-        for (auto const &path : m_options.searchPaths)
-        {
-            detail::hashAppendString(hash, path);
-        }
-        for (auto const &macro : m_options.macros)
-        {
-            detail::hashAppendString(hash, macro.name);
-            detail::hashAppendString(hash, macro.value);
-        }
-        for (auto const &option : m_options.compilerOptions)
-        {
-            detail::hashAppend(hash, static_cast<uint32_t>(option.name));
-            detail::hashAppend(hash, static_cast<uint32_t>(option.value.kind));
-            detail::hashAppend(hash, static_cast<int32_t>(option.value.intValue0));
-            detail::hashAppend(hash, static_cast<int32_t>(option.value.intValue1));
-            if (option.value.stringValue0)
-            {
-                detail::hashAppendString(hash, option.value.stringValue0);
-            }
-            if (option.value.stringValue1)
-            {
-                detail::hashAppendString(hash, option.value.stringValue1);
-            }
-        }
-        return hash;
+        return m_optionsHashValue;
     }
 
-    [[nodiscard]] std::string optionsHashLocked() const
+    [[nodiscard]] std::string_view optionsHashLocked() const noexcept
     {
-        return detail::toHex(computeOptionsHashValueLocked());
+        return m_optionsHashHex;
     }
 
     [[nodiscard]] std::filesystem::path moduleCacheRootLocked() const
     {
-        return std::filesystem::path(std::string(shaderCacheRoot)) / optionsHashLocked();
+        return std::filesystem::path(std::string(shaderCacheRoot)) / std::string(optionsHashLocked());
     }
 
     void recreateSessionLocked()
@@ -1211,6 +1019,21 @@ class ShaderService
             });
         }
 
+        m_compilerOptionEntries.clear();
+        m_compilerOptionEntries.reserve(m_options.compilerOptions.size());
+        std::ranges::for_each(m_options.compilerOptions, [&](const RuntimeSlangCompilerOption &option) {
+            m_compilerOptionEntries.push_back(slang::CompilerOptionEntry{
+                .name = option.name,
+                .value = slang::CompilerOptionValue{
+                    .kind = option.kind,
+                    .intValue0 = option.intValue0,
+                    .intValue1 = option.intValue1,
+                    .stringValue0 = option.stringValue0.empty() ? nullptr : option.stringValue0.c_str(),
+                    .stringValue1 = option.stringValue1.empty() ? nullptr : option.stringValue1.c_str(),
+                },
+            });
+        });
+
         m_targetDesc = {};
         m_targetDesc.format = m_options.target;
         m_targetDesc.profile = m_globalSession->findProfile(m_options.profile.c_str());
@@ -1228,8 +1051,8 @@ class ShaderService
         sessionDesc.searchPathCount = static_cast<SlangInt>(m_searchPathPointers.size());
         sessionDesc.preprocessorMacros = m_macroDescs.empty() ? nullptr : m_macroDescs.data();
         sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(m_macroDescs.size());
-        sessionDesc.compilerOptionEntries = m_options.compilerOptions.empty() ? nullptr : m_options.compilerOptions.data();
-        sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(m_options.compilerOptions.size());
+        sessionDesc.compilerOptionEntries = m_compilerOptionEntries.empty() ? nullptr : m_compilerOptionEntries.data();
+        sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(m_compilerOptionEntries.size());
         sessionDesc.fileSystem = nullptr;
 
         auto result = m_globalSession->createSession(sessionDesc, m_session.writeRef());
@@ -1256,8 +1079,8 @@ class ShaderService
      * @brief Resolve canonical dotted module name from relative module-path input.
      *
      * Internal Input/Output examples:
-     * - input:  test/utils/utils
-     *   output: test.utils.utils
+    * - input:  test/utils/useFlag
+    *   output: test.utils.useFlag
      * - input valid, but declared module token conflicts with derived leaf token
      *   output: "" (empty, hard fail)
      */
@@ -1278,8 +1101,8 @@ class ShaderService
                 auto expectedLeaf = detail::moduleLeafName(derivedModuleName);
                 auto declaredMatches = false;
 
-                // Slang source may use leaf declaration (`module utils;`) while runtime
-                // identity is full path-derived module name (`test.utils.utils`).
+                // Slang source may use leaf declaration (`module useFlag;`) while runtime
+                // identity is full path-derived module name (`test.utils.useFlag`).
                 if (declaredModule.find('.') == std::string::npos)
                 {
                     declaredMatches = (declaredModule == expectedLeaf);
@@ -1321,11 +1144,7 @@ class ShaderService
         auto cacheRootPath = detail::normalizePath(moduleCacheRootLocked());
         auto moduleBlobPath = detail::makeModuleBinaryPath(cacheRootPath, normalizedModuleName);
         std::error_code moduleBlobEc;
-        auto moduleBlobExisted = std::filesystem::exists(moduleBlobPath, moduleBlobEc);
         auto sourceModulePath = normalizedModulePath + ".slang";
-        auto moduleBlobUpToDate = moduleBlobExisted
-            ? detail::isBinaryModuleBlobUpToDate(m_session.get(), sourceModulePath, moduleBlobPath)
-            : false;
 
         SlangCompiledModule result;
         result.moduleName = normalizedModuleName;
@@ -1341,330 +1160,20 @@ class ShaderService
 
         if (!loadedModule)
         {
-            auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via loadModule(module-path='{}'). Expected slash form like 'test/utils/utils'.", normalizedModuleName, normalizedModulePath);
+            auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via loadModule(module-path='{}'). Expected slash form like 'test/utils/useFlag'.", normalizedModuleName, normalizedModulePath);
             nrInfo<LogLevel::warning>(message);
             return {};
         }
 
         std::error_code createDirEc;
         std::filesystem::create_directories(moduleBlobPath.parent_path(), createDirEc);
-        if ( !moduleBlobExisted || !moduleBlobUpToDate)
-        {
+
             writeModuleCacheBlobAsync(loadedModule, moduleBlobPath);
-        }
 
         result.module = loadedModule;
         return result;
     }
 
-
-    void addDescriptorBinding(SlangReflectionLayout &reflection, uint32_t set, uint32_t binding, vk::DescriptorType descriptorType, uint32_t descriptorCount, vk::ShaderStageFlags stageFlags)
-    {
-        auto normalizedCount = normalizeDescriptorCount(descriptorCount);
-
-        auto setIt = std::ranges::find_if(reflection.descriptorSets, [set](const SlangDescriptorSetLayoutInfo &info) { return info.set == set; });
-        if (setIt == reflection.descriptorSets.end())
-        {
-            reflection.descriptorSets.push_back(SlangDescriptorSetLayoutInfo{.set = set});
-            setIt = std::prev(reflection.descriptorSets.end());
-        }
-
-        auto bindingIt = std::ranges::find_if(setIt->bindings, [binding](const SlangDescriptorBinding &info) { return info.binding == binding; });
-        if (bindingIt == setIt->bindings.end())
-        {
-            setIt->bindings.push_back(SlangDescriptorBinding{
-                .binding = binding,
-                .descriptorType = descriptorType,
-                .descriptorCount = normalizedCount,
-                .stageFlags = stageFlags,
-            });
-            return;
-        }
-
-        bindingIt->stageFlags |= stageFlags;
-        bindingIt->descriptorCount = std::max(bindingIt->descriptorCount, normalizedCount);
-    }
-
-    void addPushConstantRange(SlangReflectionLayout &reflection, uint32_t offset, uint32_t size, vk::ShaderStageFlags stageFlags)
-    {
-        if (size == 0)
-        {
-            return;
-        }
-
-        auto it = std::ranges::find_if(reflection.pushConstantRanges, [offset, size](const SlangPushConstantRange &range) { return range.offset == offset && range.size == size; });
-        if (it == reflection.pushConstantRanges.end())
-        {
-            reflection.pushConstantRanges.push_back(SlangPushConstantRange{
-                .offset = offset,
-                .size = size,
-                .stageFlags = stageFlags,
-            });
-            return;
-        }
-
-        it->stageFlags |= stageFlags;
-    }
-
-    void addCursorBinding(SlangReflectionLayout &reflection, std::string_view path, uint32_t set, uint32_t binding, vk::DescriptorType descriptorType, uint32_t descriptorCount, vk::ShaderStageFlags stageFlags)
-    {
-        if (path.empty())
-        {
-            return;
-        }
-
-        auto normalizedCount = normalizeDescriptorCount(descriptorCount);
-
-        auto it = std::ranges::find_if(reflection.cursorBindings, [path, set, binding](const SlangReflectionLayout::CursorBinding &item) { return item.path == path && item.set == set && item.binding == binding; });
-        if (it == reflection.cursorBindings.end())
-        {
-            reflection.cursorBindings.push_back(SlangReflectionLayout::CursorBinding{
-                .path = std::string(path),
-                .set = set,
-                .binding = binding,
-                .descriptorType = descriptorType,
-                .descriptorCount = normalizedCount,
-                .stageFlags = stageFlags,
-            });
-            return;
-        }
-
-        it->descriptorCount = std::max(it->descriptorCount, normalizedCount);
-        it->stageFlags |= stageFlags;
-    }
-
-    void collectCursorBindingsFromTypeLayout(slang::TypeLayoutReflection *typeLayout, std::string_view path, vk::ShaderStageFlags stageFlags, SlangReflectionLayout &outReflection)
-    {
-        if (!typeLayout)
-        {
-            return;
-        }
-
-        // Cursor path contract (Vulkan/SPIR-V profile):
-        // - Struct field navigation is represented as dot path: `a.b.c`.
-        // - Array navigation is represented as `[]` placeholder segments: `a[].b`.
-        // - This mirrors Slang ShaderCursor traversal semantics:
-        //      cursor.field("a").element(i).field("b")
-        //   where host code may provide element index at bind time while reflection keeps
-        //   one canonical path (`[]`) per descriptor leaf.
-        // - ParameterBlock/ConstantBuffer wrappers are transparent at path level.
-        //
-        // Using canonical placeholder paths keeps reflection stable across shader variants
-        // and avoids hardcoding backend binding numbers in host code.
-
-        forEachDescriptorRange(typeLayout, [&](uint32_t set, uint32_t binding, vk::DescriptorType descriptorType, uint32_t descriptorCount) {
-            addCursorBinding(outReflection, path, set, binding, descriptorType, descriptorCount, stageFlags);
-        });
-
-        switch (typeLayout->getKind())
-        {
-        case slang::TypeReflection::Kind::Struct: {
-            auto fieldCount = typeLayout->getFieldCount();
-            for (unsigned int fieldIndex = 0; fieldIndex < fieldCount; ++fieldIndex)
-            {
-                auto *fieldLayout = typeLayout->getFieldByIndex(fieldIndex);
-                if (!fieldLayout || !fieldLayout->getTypeLayout())
-                {
-                    continue;
-                }
-
-                auto fieldName = fieldLayout->getName() ? std::string(fieldLayout->getName()) : std::format("field_{}", fieldIndex);
-                auto childPath = path.empty() ? fieldName : std::format("{}.{}", path, fieldName);
-                collectCursorBindingsFromTypeLayout(fieldLayout->getTypeLayout(), childPath, stageFlags, outReflection);
-            }
-        }
-        break;
-        case slang::TypeReflection::Kind::Array: {
-            auto *elementTypeLayout = typeLayout->getElementTypeLayout();
-            if (elementTypeLayout)
-            {
-                // Keep array element index abstract here (`[]`), then let runtime bind
-                // call provide concrete descriptor array index.
-                auto arrayPath = path.empty() ? std::string("[]") : std::format("{}[]", path);
-                collectCursorBindingsFromTypeLayout(elementTypeLayout, arrayPath, stageFlags, outReflection);
-            }
-        }
-        break;
-        case slang::TypeReflection::Kind::ConstantBuffer:
-        case slang::TypeReflection::Kind::ParameterBlock: {
-            auto *elementVarLayout = typeLayout->getElementVarLayout();
-            if (elementVarLayout && elementVarLayout->getTypeLayout())
-            {
-                collectCursorBindingsFromTypeLayout(elementVarLayout->getTypeLayout(), path, stageFlags, outReflection);
-            }
-        }
-        break;
-        default:
-            break;
-        }
-
-        auto subObjectRangeCount = typeLayout->getSubObjectRangeCount();
-        for (SlangInt subObjectRangeIndex = 0; subObjectRangeIndex < subObjectRangeCount; ++subObjectRangeIndex)
-        {
-            auto *subObjectOffset = typeLayout->getSubObjectRangeOffset(subObjectRangeIndex);
-            if (!subObjectOffset || !subObjectOffset->getTypeLayout())
-            {
-                continue;
-            }
-
-            collectCursorBindingsFromTypeLayout(subObjectOffset->getTypeLayout(), path, stageFlags, outReflection);
-        }
-    }
-
-    void collectTypeLayoutBindings(slang::TypeLayoutReflection *typeLayout, vk::ShaderStageFlags stageFlags, SlangReflectionLayout &outReflection)
-    {
-        if (!typeLayout)
-        {
-            return;
-        }
-
-        auto pushConstantSize = static_cast<uint32_t>(typeLayout->getSize(slang::ParameterCategory::PushConstantBuffer));
-        if (pushConstantSize > 0)
-        {
-            addPushConstantRange(outReflection, 0u, pushConstantSize, stageFlags);
-        }
-
-        forEachDescriptorRange(typeLayout, [&](uint32_t set, uint32_t binding, vk::DescriptorType descriptorType, uint32_t descriptorCount) {
-            addDescriptorBinding(outReflection, set, binding, descriptorType, descriptorCount, stageFlags);
-        });
-
-        auto subObjectRangeCount = typeLayout->getSubObjectRangeCount();
-        for (SlangInt subObjectRangeIndex = 0; subObjectRangeIndex < subObjectRangeCount; ++subObjectRangeIndex)
-        {
-            auto subObjectOffset = typeLayout->getSubObjectRangeOffset(subObjectRangeIndex);
-            if (!subObjectOffset)
-            {
-                continue;
-            }
-
-            auto subObjectTypeLayout = subObjectOffset->getTypeLayout();
-            collectTypeLayoutBindings(subObjectTypeLayout, stageFlags, outReflection);
-        }
-    }
-
-    void stabilizeReflectionLayoutLocked(SlangReflectionLayout &reflection) const
-    {
-        for (auto &setInfo : reflection.descriptorSets)
-        {
-            std::ranges::sort(setInfo.bindings, [](auto const &lhs, auto const &rhs) {
-                if (lhs.binding != rhs.binding)
-                {
-                    return lhs.binding < rhs.binding;
-                }
-                if (lhs.descriptorType != rhs.descriptorType)
-                {
-                    return lhs.descriptorType < rhs.descriptorType;
-                }
-                if (lhs.descriptorCount != rhs.descriptorCount)
-                {
-                    return lhs.descriptorCount < rhs.descriptorCount;
-                }
-                return lhs.stageFlags < rhs.stageFlags;
-            });
-        }
-        std::ranges::sort(reflection.descriptorSets, [](auto const &lhs, auto const &rhs) { return lhs.set < rhs.set; });
-
-        std::ranges::sort(reflection.pushConstantRanges, [](auto const &lhs, auto const &rhs) {
-            if (lhs.offset != rhs.offset)
-            {
-                return lhs.offset < rhs.offset;
-            }
-            if (lhs.size != rhs.size)
-            {
-                return lhs.size < rhs.size;
-            }
-            return lhs.stageFlags < rhs.stageFlags;
-        });
-
-        std::ranges::sort(reflection.cursorBindings, [](auto const &lhs, auto const &rhs) {
-            if (lhs.path != rhs.path)
-            {
-                return lhs.path < rhs.path;
-            }
-            if (lhs.set != rhs.set)
-            {
-                return lhs.set < rhs.set;
-            }
-            if (lhs.binding != rhs.binding)
-            {
-                return lhs.binding < rhs.binding;
-            }
-            if (lhs.descriptorType != rhs.descriptorType)
-            {
-                return lhs.descriptorType < rhs.descriptorType;
-            }
-            if (lhs.descriptorCount != rhs.descriptorCount)
-            {
-                return lhs.descriptorCount < rhs.descriptorCount;
-            }
-            return lhs.stageFlags < rhs.stageFlags;
-        });
-    }
-
-    void buildReflectionLayoutLocked(slang::ProgramLayout *layout, SlangReflectionLayout &outReflection)
-    {
-        outReflection = {};
-
-        vk::ShaderStageFlags allEntryStages{};
-        auto entryPointCount = static_cast<uint32_t>(layout->getEntryPointCount());
-        for (uint32_t i = 0; i < entryPointCount; ++i)
-        {
-            auto *entryPoint = layout->getEntryPointByIndex(i);
-            if (!entryPoint)
-            {
-                continue;
-            }
-            allEntryStages |= toVkShaderStage(entryPoint->getStage());
-        }
-        if (allEntryStages == vk::ShaderStageFlags{})
-        {
-            allEntryStages = vk::ShaderStageFlagBits::eAll;
-        }
-
-        if (auto globalVarLayout = layout->getGlobalParamsVarLayout())
-        {
-            auto globalTypeLayout = globalVarLayout->getTypeLayout();
-            collectTypeLayoutBindings(globalTypeLayout, allEntryStages, outReflection);
-            collectCursorBindingsFromTypeLayout(globalTypeLayout, "Globals", allEntryStages, outReflection);
-            collectCursorBindingsFromTypeLayout(globalTypeLayout, "", allEntryStages, outReflection);
-            addPushConstantRangeFromVarLayout(globalVarLayout, allEntryStages, outReflection);
-        }
-
-        for (uint32_t i = 0; i < entryPointCount; ++i)
-        {
-            auto entryPoint = layout->getEntryPointByIndex(i);
-            if (!entryPoint)
-            {
-                continue;
-            }
-
-            auto stageFlags = toVkShaderStage(resolveEntryPointStage(entryPoint));
-            collectTypeLayoutBindings(entryPoint->getTypeLayout(), stageFlags, outReflection);
-
-            auto entryPointName = resolveEntryPointName(entryPoint, std::format("entrypoint_{}", i));
-            collectCursorBindingsFromTypeLayout(entryPoint->getTypeLayout(), std::format("EntryPoints.{}", entryPointName), stageFlags, outReflection);
-
-            addPushConstantRangeFromVarLayout(entryPoint->getVarLayout(), stageFlags, outReflection);
-        }
-
-        stabilizeReflectionLayoutLocked(outReflection);
-    }
-
-    void addPushConstantRangeFromVarLayout(slang::VariableLayoutReflection *varLayout, vk::ShaderStageFlags stageFlags, SlangReflectionLayout &outReflection)
-    {
-        if (!varLayout)
-        {
-            return;
-        }
-
-        auto pushConstantOffset = varLayout->getOffset(slang::ParameterCategory::PushConstantBuffer);
-        auto *typeLayout = varLayout->getTypeLayout();
-        auto pushConstantSize = typeLayout ? typeLayout->getSize(slang::ParameterCategory::PushConstantBuffer) : 0;
-        if (pushConstantOffset != detail::kSlangUnknownSize && pushConstantSize > 0)
-        {
-            addPushConstantRange(outReflection, static_cast<uint32_t>(pushConstantOffset), static_cast<uint32_t>(pushConstantSize), stageFlags);
-        }
-    }
 
   public:
     // Locking policy: all access to Slang session/global-session/module/component APIs
@@ -1675,12 +1184,15 @@ class ShaderService
     Slang::ComPtr<slang::IGlobalSession> m_globalSession;
     Slang::ComPtr<slang::ISession> m_session;
 
-    SlangCompileOptions m_options;
+    RuntimeSlangCompileOptions m_options;
+    uint64_t m_optionsHashValue = kDefaultSlangCompileOptions.hashValue;
+    std::string m_optionsHashHex = std::string(hash::toHexView(kDefaultSlangCompileOptions.hashHex));
     std::filesystem::path m_shaderRootPath = detail::resolveShaderRootPath();
 
     std::vector<std::string> m_effectiveSearchPaths;
     std::vector<const char *> m_searchPathPointers;
     std::vector<slang::PreprocessorMacroDesc> m_macroDescs;
+    std::vector<slang::CompilerOptionEntry> m_compilerOptionEntries;
     slang::TargetDesc m_targetDesc{};
 
 };

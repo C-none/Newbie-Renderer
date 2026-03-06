@@ -59,24 +59,24 @@ module utils;
 ### 1) `module` declaration (inside a primary file)
 
 - Use the **leaf name only** (no dots), matching current Slang limitation in this repo.
-- Recommended style: lower_snake_case identifier.
+- Required style: lower camelCase identifier.
 - Primary file name should match the leaf name.
 
 Example:
 
-- File: `shader/test/utils/utils.slang`
-- Declaration: `module utils;`
+- File: `shader/test/utils/useFlag.slang`
+- Declaration: `module useFlag;`
 
 ### 2) `import` declaration (cross-module reference)
 
 - Use **full shader-root-relative module name** in dotted form.
 - Do not use leaf-only imports when the module is outside current folder hierarchy.
-- Recommended style: all segments in lower_snake_case.
+- Required style: all segments in lower camelCase.
 
 Example:
 
 ```slang
-import test.utils.utils;
+import test.utils.useFlag;
 import test.dep.dep;
 ```
 
@@ -93,7 +93,7 @@ Example:
 
 ### 4) Consistency rule between filesystem and symbols
 
-- Directory path defines fully qualified module identity (`test/utils/utils` -> `test.utils.utils`).
+- Directory path defines fully qualified module identity (`test/utils/useFlag` -> `test.utils.useFlag`).
 - `module`/`implementing` keep leaf token (`utils`) for parser compatibility.
 - `import` must use fully qualified dotted name (`test.utils.utils`).
 
@@ -113,7 +113,7 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 ### 2) Module load and source/cache resolution
 
 - Convert module name to query path using module mapping rules.
-- Call `ISession::loadModule("<module_path>")` (slash form, e.g. `test/utils/utils`).
+- Call `ISession::loadModule("<module_path>")` (slash form, e.g. `test/utils/useFlag`).
 - Slang resolves the module by search-path order.
 - When an up-to-date `.slang-module` exists in cache, it can be loaded directly.
 - Otherwise Slang loads/parses source from `shader/` and builds module state.
@@ -150,6 +150,7 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 - One module identity corresponds to one normalized shader-root-relative path.
 - `import` identity is always fully qualified dotted name.
 - `module` and `implementing` token must match each other within the module folder.
+- Every module path segment must be lower camelCase (`useFlag`) and cannot contain `_` or `-`.
 - Cache artifact path must be the normalized module path with `.slang-module` suffix.
 - Search-path order is authoritative for cache-vs-source precedence.
 
