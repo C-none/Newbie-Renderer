@@ -21,8 +21,8 @@ export namespace nr::rhi
  * - All scheduling/orchestration happens outside
  * - RDG-ready: future render graphs will call the same submit()
  * 
- * Submit pattern follows vulkan-hpp RAII convention:
- *   queue.submit(vk::SubmitInfo(..., *commandBuffer), fence);
+ * Submit pattern follows synchronization2 (`vk::SubmitInfo2`) convention:
+ *   queue.submit2(vk::SubmitInfo2(...), fence);
  */
 class GpuQueue
 {
@@ -57,16 +57,23 @@ class GpuQueue
      * Zero-copy fast path for single command buffer submission.
      * For complex submissions with sync, use CommandBatch.
      * 
-     * Follows vulkan-hpp RAII_Samples pattern:
-     *   queue.submit(vk::SubmitInfo(nullptr, nullptr, *commandBuffer), fence);
+    * Uses synchronization2 submit path:
+    *   queue.submit2(vk::SubmitInfo2(...), fence);
      */
     void submit(
         const vk::raii::CommandBuffer& commandBuffer,
         std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
     )
     {
-        vk::SubmitInfo submitInfo{nullptr, nullptr, *commandBuffer};
-        queue_.submit(submitInfo, fence ? *fence.value().get() : vk::Fence{});
+        std::array<vk::CommandBufferSubmitInfo, 1> commandBufferInfos{
+            vk::CommandBufferSubmitInfo{*commandBuffer, 0},
+        };
+
+        vk::SubmitInfo2 submitInfo{};
+        submitInfo.commandBufferInfoCount = static_cast<uint32_t>(commandBufferInfos.size());
+        submitInfo.pCommandBufferInfos = commandBufferInfos.data();
+
+        queue_.submit2(submitInfo, fence ? *fence.value().get() : vk::Fence{});
     }
 
     /**
@@ -80,7 +87,7 @@ class GpuQueue
      * 
      * Performance characteristics:
      * - First use: O(n) handle extraction in batch.add*()
-     * - Reuse: O(1) submission via buildSubmitInfo()
+    * - Reuse: O(1) submission via buildSubmitInfo2()
      * - Memory: Single allocation in CommandBatch, reused across frames
      * 
      * Usage:
@@ -94,8 +101,9 @@ class GpuQueue
         std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
     )
     {
+        auto submitPacket = batch.buildSubmitInfo2();
         vk::Fence fenceHandle = fence ? *fence.value().get() : vk::Fence{};
-        queue_.submit(batch.buildSubmitInfo(), fenceHandle);
+        queue_.submit2(submitPacket.info(), fenceHandle);
     }
 
     /**

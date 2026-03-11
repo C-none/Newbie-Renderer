@@ -31,6 +31,13 @@ export namespace nr::rhi
 template <typename Derived> class Device
 {
   public:
+        struct FrameBeginResult
+        {
+                uint32_t frameIndex = 0;
+                uint32_t swapchainImageIndex = 0;
+        vk::Result swapchainResult = vk::Result::eSuccess;
+        };
+
     std::string appName;
     std::string engineName;
     vk::raii::Context context;
@@ -40,16 +47,17 @@ template <typename Derived> class Device
     vk::raii::Device device = {nullptr};
 
     // Memory stack lifetime:
-    //   resourcePool -> memoryAllocator -> vk::raii::Device
+    //   frameResourceArena/resourceFactory -> memoryAllocator -> vk::raii::Device
     // (declared in reverse dependency order for safe destruction)
     MemoryAllocator memoryAllocator;
+    ResourceFactory resourceFactory;
     ResourcePool resourcePool;
 
     QueueManager queueManager;
     FrameManager frameManager;
 
-    Surface surface;
-    SwapChain swapChain;
+    PresentationContext presentationContext;
+    PipelineService pipelineService;
 
     Device() = default;
     Device(Device &) = delete;
@@ -74,17 +82,117 @@ template <typename Derived> class Device
 
         // Initialize memory stack in dependency order:
         // 1) MemoryAllocator owns VMA allocator and internal pools
-        // 2) ResourcePool provides frame-scoped/caller-owned Buffer/Image helpers
+        // 2) ResourceFactory provides persistent caller-owned Buffer/Image creation
+        // 3) ResourcePool provides frame-local scratch allocation only
         memoryAllocator.initialize(instance, physicalDevice, device);
+        resourceFactory.initialize(memoryAllocator, device);
         resourcePool.initialize(memoryAllocator, device);
 
         // Initialize command submission system after device creation
         initializeCommandSystem();
 
-        auto [s, sc] = makeSurfaceAndSwapChain();
-        surface = std::move(s);
-        swapChain = std::move(sc);
+        presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
+        pipelineService.bindDevice(device);
     }
+
+    /**
+     * @brief Begin one frame transaction.
+     *
+     * Waits for the current frame fence, resets per-frame state, acquires one swapchain image,
+     * and lazily recreates the swapchain when acquire returns out-of-date/suboptimal.
+     */
+    [[nodiscard]] FrameBeginResult beginFrame(uint64_t acquireTimeout = std::numeric_limits<uint64_t>::max())
+    {
+        auto &frame = frameManager.current();
+        nrAssert(frame.waitForFence(), "Device::beginFrame timeout waiting for frame fence.");
+        frame.resetFence();
+        frame.resetPools();
+        frame.prepareSecondaryPools();
+
+        auto acquire = presentationContext.acquireNextImage(frame.imageAvailable(), acquireTimeout);
+        if (PresentationContext::needsSwapchainRecreate(acquire.result))
+        {
+            presentationContext.recreate(physicalDevice, device, queueManager);
+            acquire = presentationContext.acquireNextImage(frame.imageAvailable(), acquireTimeout);
+        }
+
+        nrAssert(acquire.result != vk::Result::eErrorOutOfDateKHR, "Device::beginFrame failed to acquire a valid swapchain image after recreation.");
+
+        presentationContext.setActiveSwapchainImage(acquire.imageIndex);
+        presentationContext.setFrameSubmitted(false);
+
+        return FrameBeginResult{
+            .frameIndex = static_cast<uint32_t>(frameManager.currentIndex()),
+            .swapchainImageIndex = acquire.imageIndex,
+            .swapchainResult = acquire.result,
+        };
+    }
+
+    /**
+     * @brief Submit one frame batch using frame-semaphores wired for present.
+     *
+     * Automatically waits on `imageAvailable` and signals `renderFinished` for the current frame.
+     */
+    void submitFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute)
+    {
+        nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrame requires beginFrame() before submission.");
+
+        auto &frame = frameManager.current();
+        auto submitBatch = batch;
+        submitBatch.addWait(frame.imageAvailable(), vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+        submitBatch.addSignal(frame.renderFinished());
+
+        if (submitRole == QueueRole::Graphics)
+        {
+            queueManager.graphics().submit(submitBatch, std::cref(frame.fence()));
+        }
+        else if (submitRole == QueueRole::Compute)
+        {
+            queueManager.compute().submit(submitBatch, std::cref(frame.fence()));
+        }
+        else
+        {
+            queueManager.transfer().submit(submitBatch, std::cref(frame.fence()));
+        }
+
+        presentationContext.setFrameSubmitted(true);
+    }
+
+    /**
+     * @brief Present the current frame and rotate frame-in-flight index.
+     *
+     * Uses compute queue as present carrier by default. If present reports out-of-date/suboptimal,
+     * swapchain recreation is triggered before advancing to the next frame.
+     */
+    [[nodiscard]] PresentResult presentFrame()
+    {
+        nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::presentFrame requires beginFrame() before present.");
+        nrAssert(presentationContext.hasSubmittedCurrentFrame(), "Device::presentFrame requires submitFrame() before present.");
+
+        auto &frame = frameManager.current();
+        auto presentResult = presentationContext.present(queueManager, frame.renderFinished());
+
+        if (PresentationContext::needsSwapchainRecreate(presentResult.result))
+        {
+            presentationContext.recreate(physicalDevice, device, queueManager);
+        }
+
+        frameManager.advanceFrame();
+        presentationContext.clearActiveSwapchainImage();
+        presentationContext.setFrameSubmitted(false);
+
+        return presentResult;
+    }
+
+    /**
+     * @brief Convenience API for the common frame tail path: submit then present.
+     */
+    [[nodiscard]] PresentResult endFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute)
+    {
+        submitFrame(batch, submitRole);
+        return presentFrame();
+    }
+
     vk::raii::Instance makeInstance(uint32_t apiVersion = vk::ApiVersion14) const
     {
         const vk::ApplicationInfo applicationInfo(appName.c_str(), 1, engineName.c_str(), 1, apiVersion);
@@ -97,22 +205,16 @@ template <typename Derived> class Device
     {
         auto availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
 
-        auto isExtensionSupported = [&availableExtensions](std::string_view extensionName) {
-            return std::ranges::any_of(availableExtensions, [extensionName](const vk::ExtensionProperties &property) { return std::string_view(property.extensionName) == extensionName; });
-        };
+        auto isExtensionSupported = [&availableExtensions](std::string_view extensionName) { return std::ranges::any_of(availableExtensions, [extensionName](const vk::ExtensionProperties &property) { return std::string_view(property.extensionName) == extensionName; }); };
 
         std::vector<char const *> enabledExtensions;
         enabledExtensions.reserve(deviceEnabledExtensions.size());
-        std::unordered_set<std::string_view> enabledExtensionSet;
+        std::set<std::string_view> enabledExtensionSet;
 
-        auto enableExtension = [&](std::string_view extensionName, bool required, std::string_view reason) {
+        auto enableExtension = [&](std::string_view extensionName, std::string_view reason) {
             if (!isExtensionSupported(extensionName))
             {
-                if (required)
-                {
-                    nrAssert(false, std::format("Required device extension '{}' is not supported ({})", extensionName, reason));
-                }
-                nrInfo<nr::LogLevel::warning>(std::format("Optional device extension '{}' is not supported ({})", extensionName, reason));
+                nrAssert(false, std::format("Required device extension '{}' is not supported ({})", extensionName, reason));
                 return false;
             }
             if (enabledExtensionSet.insert(extensionName).second)
@@ -122,22 +224,22 @@ template <typename Derived> class Device
             return true;
         };
 
-        const auto isRequiredExtension = [](std::string_view extensionName) {
-            return extensionName == vk::KHRSwapchainExtensionName || extensionName == vk::KHRDeferredHostOperationsExtensionName || extensionName == vk::KHRAccelerationStructureExtensionName || extensionName == vk::KHRRayTracingPipelineExtensionName || extensionName == vk::NVRayTracingInvocationReorderExtensionName;
-        };
-
         std::ranges::for_each(deviceEnabledExtensions, [&](std::string_view extensionName) {
-            std::string_view reason = "modern cursor-first pipeline backend";
+            std::string_view reason = "modern pipeline backend";
             if (extensionName == vk::KHRDynamicRenderingExtensionName)
                 reason = "dynamic rendering path";
             else if (extensionName == vk::EXTExtendedDynamicStateExtensionName)
                 reason = "extended dynamic pipeline state";
+            else if (extensionName == vk::EXTExtendedDynamicState3ExtensionName)
+                reason = "extended dynamic pipeline state v3";
             else if (extensionName == vk::KHRPipelineLibraryExtensionName)
                 reason = "pipeline library path";
+            else if (extensionName == vk::EXTDescriptorIndexingExtensionName)
+                reason = "descriptor indexing path";
             else if (extensionName == vk::EXTPipelineRobustnessExtensionName)
                 reason = "pipeline robustness controls";
 
-            enableExtension(extensionName, isRequiredExtension(extensionName), reason);
+            enableExtension(extensionName, reason);
         });
 
         auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
@@ -183,57 +285,21 @@ template <typename Derived> class Device
                                                                   }) |
                                                                   std::ranges::to<std::vector>();
 
-                // Query features into a chain, then pass the same chain to DeviceCreateInfo.
-                auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2,
-            vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT,
-                        vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
-                        vk::PhysicalDeviceDynamicRenderingFeatures,
-                        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
-                        vk::PhysicalDevicePipelineRobustnessFeatures,
-                        vk::PhysicalDeviceSynchronization2Features,
-                        vk::PhysicalDeviceDescriptorIndexingFeatures,
-                        vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
-                        vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-                        vk::PhysicalDeviceRayQueryFeaturesKHR>();
+        // Query features into a chain, then pass the same chain to DeviceCreateInfo.
+        auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT, vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV, vk::PhysicalDeviceDynamicRenderingFeatures, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                                                     vk::PhysicalDevicePipelineRobustnessFeatures, vk::PhysicalDeviceSynchronization2Features, vk::PhysicalDeviceDescriptorIndexingFeatures, vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+                                                     vk::PhysicalDeviceRayQueryFeaturesKHR>();
         auto featureList = features2.get<vk::PhysicalDeviceFeatures2>();
-                vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT &bufferDeviceAddressFeatures = features2.get<vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT>();
-        nrAssert(bufferDeviceAddressFeatures.bufferDeviceAddress, "Selected physical device does not support buffer device address feature.");
-                vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
-        nrAssert(invocationReorderFeatures.rayTracingInvocationReorder, "Selected physical device does not support ray tracing invocation reorder feature.");
-                auto &dynamicRenderingFeatures = features2.get<vk::PhysicalDeviceDynamicRenderingFeatures>();
-                auto &extendedDynamicStateFeatures = features2.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-                auto &pipelineRobustnessFeatures = features2.get<vk::PhysicalDevicePipelineRobustnessFeatures>();
-                auto &synchronization2Features = features2.get<vk::PhysicalDeviceSynchronization2Features>();
-                auto &descriptorIndexingFeatures = features2.get<vk::PhysicalDeviceDescriptorIndexingFeatures>();
-                auto &accelerationStructureFeatures = features2.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
-                auto &rayTracingPipelineFeatures = features2.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
-                auto &rayQueryFeatures = features2.get<vk::PhysicalDeviceRayQueryFeaturesKHR>();
-
-                const auto isEnabled = [&enabledExtensionSet](std::string_view extensionName) { return enabledExtensionSet.contains(extensionName); };
-
-                // Extension feature structs must be disabled when the extension is not enabled.
-                if (!isEnabled(vk::EXTExtendedDynamicStateExtensionName))
-                {
-                        extendedDynamicStateFeatures.extendedDynamicState = false;
-                }
-                if (!isEnabled(vk::EXTPipelineRobustnessExtensionName))
-                {
-                        pipelineRobustnessFeatures.pipelineRobustness = false;
-                }
-                if (!isEnabled(vk::KHRRayQueryExtensionName))
-                {
-                    rayQueryFeatures.rayQuery = false;
-                }
-
-                supportsDynamicRendering = dynamicRenderingFeatures.dynamicRendering;
-                supportsExtendedDynamicState = extendedDynamicStateFeatures.extendedDynamicState;
-                supportsPipelineLibrary = isEnabled(vk::KHRPipelineLibraryExtensionName);
-                supportsPipelineRobustness = pipelineRobustnessFeatures.pipelineRobustness;
-                supportsSynchronization2 = synchronization2Features.synchronization2;
-                supportsDescriptorIndexing = descriptorIndexingFeatures.runtimeDescriptorArray || descriptorIndexingFeatures.descriptorBindingPartiallyBound;
-                supportsAccelerationStructure = accelerationStructureFeatures.accelerationStructure;
-                supportsRayTracingPipeline = rayTracingPipelineFeatures.rayTracingPipeline;
-                supportsRayQuery = isEnabled(vk::KHRRayQueryExtensionName) && rayQueryFeatures.rayQuery;
+        [[maybe_unused]] auto &bufferDeviceAddressFeatures = features2.get<vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT>();
+        [[maybe_unused]] auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
+        [[maybe_unused]] auto &dynamicRenderingFeatures = features2.get<vk::PhysicalDeviceDynamicRenderingFeatures>();
+        [[maybe_unused]] auto &extendedDynamicStateFeatures = features2.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+        [[maybe_unused]] auto &pipelineRobustnessFeatures = features2.get<vk::PhysicalDevicePipelineRobustnessFeatures>();
+        [[maybe_unused]] auto &synchronization2Features = features2.get<vk::PhysicalDeviceSynchronization2Features>();
+        [[maybe_unused]] auto &descriptorIndexingFeatures = features2.get<vk::PhysicalDeviceDescriptorIndexingFeatures>();
+        [[maybe_unused]] auto &accelerationStructureFeatures = features2.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
+        [[maybe_unused]] auto &rayTracingPipelineFeatures = features2.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+        [[maybe_unused]] auto &rayQueryFeatures = features2.get<vk::PhysicalDeviceRayQueryFeaturesKHR>();
 
         vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos, {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions, nullptr, featureList.pNext);
 
@@ -254,12 +320,12 @@ template <typename Derived> class Device
 
     void initializeCommandSystem()
     {
-        // Get graphics queue first (required)
-        uint32_t graphicsFamily = getQueueFamilyWithFallback(QueueFamilyKind::graphics, 0);
+        // Queue families are mandatory under the hard-fail device capability contract.
+        uint32_t graphicsFamily = getQueueFamilyWithFallback(QueueFamilyKind::graphics);
 
-        // Get compute and transfer with fallback to graphics if unavailable
-        uint32_t computeFamily = getQueueFamilyWithFallback(QueueFamilyKind::compute, graphicsFamily);
-        uint32_t transferFamily = getQueueFamilyWithFallback(QueueFamilyKind::transfer, graphicsFamily);
+        // Compute and transfer queues are also required; helper asserts if unavailable.
+        uint32_t computeFamily = getQueueFamilyWithFallback(QueueFamilyKind::compute);
+        uint32_t transferFamily = getQueueFamilyWithFallback(QueueFamilyKind::transfer);
 
         // Create typed queue wrappers
         GpuQueue graphicsQueue(device, graphicsFamily, QueueRole::Graphics);
@@ -280,49 +346,6 @@ template <typename Derived> class Device
         nrInfo(std::format("Command system initialized: {} frames in flight, max {} worker threads", maxFrameInFlight, maxThreads));
     }
 
-    std::tuple<Surface, SwapChain> makeSurfaceAndSwapChain()
-    {
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        Surface resultSurface;
-        resultSurface.handle.reset(glfw::createWindow(resultSurface.extent.width, resultSurface.extent.height, appName.c_str(), nullptr, nullptr));
-        VkSurfaceKHR rawSurface;
-        vk::detail::resultCheck(glfw::createWindowSurface(*instance, resultSurface.handle.get(), nullptr, &rawSurface), "Failed to create window surface");
-
-        resultSurface.surface = vk::raii::SurfaceKHR(instance, rawSurface);
-
-        nrAssert(physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(queueFamilyDict[static_cast<size_t>(QueueFamilyKind::compute)]), resultSurface.surface), std::format("Compute queue does not support present"));
-        std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(resultSurface.surface);
-        nrAssert(!formats.empty(), std::format("No available surface formats"));
-
-        auto selectedFormat = [&formats]() -> vk::SurfaceFormatKHR {
-            auto it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eB8G8R8A8Srgb; });
-            if (it != formats.end())
-                return *it;
-
-            it = std::ranges::find_if(formats, [](const auto &f) { return f.format == vk::Format::eR8G8B8A8Srgb; });
-            if (it != formats.end())
-                return *it;
-            nrInfo<nr::LogLevel::warning>(std::format("Your device does not support basic sRGB format. You may need to convert output color space manually. You may choose graphic queue instead."));
-            return formats.front();
-        }();
-        resultSurface.format = selectedFormat.format;
-
-        vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(resultSurface.surface);
-        // auto property = physicalDevice.getImageFormatProperties(resultSurface.format, vk::ImageType::e2D, vk::ImageTiling::eLinear, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eStorage);
-        vk::SwapchainCreateInfoKHR swapChainCreateInfo(vk::SwapchainCreateFlagsKHR(), resultSurface.surface, std::clamp(3u, surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount), selectedFormat.format, selectedFormat.colorSpace, resultSurface.extent, 1,
-                                                       vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment, vk::SharingMode::eExclusive, {}, vk::SurfaceTransformFlagBitsKHR::eIdentity, vk::CompositeAlphaFlagBitsKHR::eOpaque, vk::PresentModeKHR::eMailbox, vk::False);
-        SwapChain resultSwapChain;
-        resultSwapChain.swapChain = {device, swapChainCreateInfo};
-        resultSwapChain.swapChainImages = resultSwapChain.swapChain.getImages();
-        vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, selectedFormat.format, {}, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-        resultSwapChain.imageViews = resultSwapChain.swapChainImages | std::views::transform([&](const auto &img) {
-                                         imageViewCreateInfo.image = img;
-                                         return vk::raii::ImageView(device, imageViewCreateInfo);
-                                     }) |
-                                     std::ranges::to<std::vector>();
-        return {std::move(resultSurface), std::move(resultSwapChain)};
-    }
-
     /**
      * @brief Wait for all GPU work to complete and clean up resources
      *
@@ -337,138 +360,19 @@ template <typename Derived> class Device
         frameManager.waitAll();
     }
 
-    [[nodiscard]] ShaderBindingPool createBindingPool(
-        const CursorPipelineLayout& layout,
-        uint32_t maxSets = 64,
-        vk::DescriptorPoolCreateFlags flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet) const
+    [[nodiscard]] PipelineService &pipeline() noexcept
     {
-        // Transitional API surface for explicit binding-pool ownership.
-        nrAssert(device != nullptr, "Device::createBindingPool requires a valid logical device.");
-        return ShaderBindingPool::create(device, layout, maxSets, flags);
+        return pipelineService;
     }
 
-    [[nodiscard]] ShaderBindingSet allocateBindingSet(const CursorPipelineLayout& layout, ShaderBindingPool& bindingPool, uint32_t setIndex) const
+    [[nodiscard]] const PipelineService &pipeline() const noexcept
     {
-        // Transitional API surface for explicit binding-set allocation.
-        nrAssert(device != nullptr, "Device::allocateBindingSet requires a valid logical device.");
-        return bindingPool.allocate(layout, setIndex);
+        return pipelineService;
     }
 
-    [[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSets(const CursorPipelineLayout& layout, ShaderBindingPool& bindingPool) const
+    [[nodiscard]] ShaderService &shaderCompiler() const
     {
-        // Transitional API surface for explicit binding-set allocation.
-        nrAssert(device != nullptr, "Device::allocateBindingSets requires a valid logical device.");
-        return bindingPool.allocateAll(layout);
-    }
-
-    [[nodiscard]] SlangSampler createSampler(SlangSamplerDesc desc = {}, std::string_view debugName = {}) const
-    {
-        nrAssert(device != nullptr, "Device::createSampler requires a valid logical device.");
-        return SlangSampler::create(device, std::move(desc), debugName);
-    }
-
-    [[nodiscard]] SlangProgram compileSlangProgramByFileAndEntry(const SlangProgramCompileRequest &request) const
-    {
-        return ShaderService::instance().compileProgramByFileAndEntry(request);
-    }
-
-    [[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(
-        const SlangProgram& slangProgram,
-        const GraphicsPipelineDesc& desc = {},
-        uint32_t descriptorMaxSets = 64,
-        std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
-    {
-        nrAssert(device != nullptr, "Device::createGraphicsPipeline requires a valid logical device.");
-        nrAssert(slangProgram.valid(), "Device::createGraphicsPipeline requires a valid SlangProgram.");
-
-        // Legacy reflection payload was removed from nrSlang.
-        // Immutable samplers will be consumed by the cursor-first backend path in a follow-up step.
-        (void)immutableSamplers;
-
-        auto runtimeCaps = queryPipelineRuntimeCapabilities();
-        auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
-        auto layout = CursorPipelineLayout::create(device, descriptorLayout);
-
-        auto effectiveDesc = desc;
-        if (runtimeCaps.extendedDynamicState)
-        {
-            auto appendDynamicState = [&effectiveDesc](vk::DynamicState state) {
-                if (std::ranges::none_of(effectiveDesc.dynamicStates, [state](vk::DynamicState current) { return current == state; }))
-                {
-                    effectiveDesc.dynamicStates.push_back(state);
-                }
-            };
-            appendDynamicState(vk::DynamicState::eCullModeEXT);
-            appendDynamicState(vk::DynamicState::eFrontFaceEXT);
-            appendDynamicState(vk::DynamicState::ePrimitiveTopologyEXT);
-        }
-
-        auto shaderProgram = VkShaderProgram::create(device, slangProgram);
-        auto pipeline = GraphicsPipeline::create(device, layout, shaderProgram, runtimeCaps, effectiveDesc);
-        auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, descriptorMaxSets);
-        return PipelineState<GraphicsPipeline>{
-            .layout = std::move(layout),
-            .descriptorLayout = std::move(descriptorLayout),
-            .bindingPool = std::move(bindingPool),
-            .runtimeCaps = runtimeCaps,
-            .pipeline = std::move(pipeline),
-        };
-    }
-
-    [[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(
-        const SlangProgram& slangProgram,
-        const ComputePipelineDesc& desc = {},
-        uint32_t descriptorMaxSets = 64,
-        std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
-    {
-        nrAssert(device != nullptr, "Device::createComputePipeline requires a valid logical device.");
-        nrAssert(slangProgram.valid(), "Device::createComputePipeline requires a valid SlangProgram.");
-
-        // Legacy reflection payload was removed from nrSlang.
-        // Immutable samplers will be consumed by the cursor-first backend path in a follow-up step.
-        (void)immutableSamplers;
-
-        auto runtimeCaps = queryPipelineRuntimeCapabilities();
-        auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
-        auto layout = CursorPipelineLayout::create(device, descriptorLayout);
-        auto shaderProgram = VkShaderProgram::create(device, slangProgram);
-        auto pipeline = ComputePipeline::create(device, layout, shaderProgram, runtimeCaps, desc);
-        auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, descriptorMaxSets);
-        return PipelineState<ComputePipeline>{
-            .layout = std::move(layout),
-            .descriptorLayout = std::move(descriptorLayout),
-            .bindingPool = std::move(bindingPool),
-            .runtimeCaps = runtimeCaps,
-            .pipeline = std::move(pipeline),
-        };
-    }
-
-    [[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(
-        const SlangProgram& slangProgram,
-        const RayTracingPipelineDesc& desc = {},
-        uint32_t descriptorMaxSets = 64,
-        std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
-    {
-        nrAssert(device != nullptr, "Device::createRayTracingPipeline requires a valid logical device.");
-        nrAssert(slangProgram.valid(), "Device::createRayTracingPipeline requires a valid SlangProgram.");
-
-        // Legacy reflection payload was removed from nrSlang.
-        // Immutable samplers will be consumed by the cursor-first backend path in a follow-up step.
-        (void)immutableSamplers;
-
-        auto runtimeCaps = queryPipelineRuntimeCapabilities();
-        auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
-        auto layout = CursorPipelineLayout::create(device, descriptorLayout);
-        auto shaderProgram = VkShaderProgram::create(device, slangProgram);
-        auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, runtimeCaps, desc);
-        auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, descriptorMaxSets);
-        return PipelineState<RayTracingPipeline>{
-            .layout = std::move(layout),
-            .descriptorLayout = std::move(descriptorLayout),
-            .bindingPool = std::move(bindingPool),
-            .runtimeCaps = runtimeCaps,
-            .pipeline = std::move(pipeline),
-        };
+        return ShaderService::instance();
     }
 
     ~Device() = default;
@@ -496,7 +400,7 @@ template <typename Derived> class Device
         }
     }
 
-    [[nodiscard]] uint32_t getQueueFamilyWithFallback(QueueFamilyKind kind, uint32_t graphicsFamily) const
+    [[nodiscard]] uint32_t getQueueFamilyWithFallback(QueueFamilyKind kind) const
     {
         size_t index = static_cast<size_t>(kind);
         size_t familyIndex = queueFamilyDict[index];
@@ -506,70 +410,28 @@ template <typename Derived> class Device
         {
             return static_cast<uint32_t>(familyIndex);
         }
-
-        // Apply fallback strategy for optional queues
-        switch (kind)
-        {
-        case QueueFamilyKind::graphics:
-            // Graphics is required - fail if not found
-            nrAssert(false, "Graphics queue family not found - this device is not supported");
-            std::unreachable();
-
-        case QueueFamilyKind::compute:
-        case QueueFamilyKind::transfer:
-            // Optional queues fall back to graphics
-            nrInfo<nr::LogLevel::warning>(std::format("Requested queue family not found ({}), falling back to graphics queue", kind == QueueFamilyKind::compute ? "compute" : "transfer"));
-            return graphicsFamily;
-
-        default:
-            // Return SIZE_MAX to indicate unavailable
-            return std::numeric_limits<uint32_t>::max();
-        }
+        // Hard-fail policy: required queue families are part of the device contract.
+        nrAssert(false, "Queue family not found - device capability contract violated.");
+        std::unreachable();
     }
 
-    [[nodiscard]] PipelineRuntimeCapabilities queryPipelineRuntimeCapabilities() const
+    [[nodiscard]] uint32_t presentQueueFamilyIndex() const
     {
-        return PipelineRuntimeCapabilities{
-            .dynamicRendering = supportsDynamicRendering,
-            .extendedDynamicState = supportsExtendedDynamicState,
-            .pipelineLibrary = supportsPipelineLibrary,
-            .pipelineRobustness = supportsPipelineRobustness,
-            .synchronization2 = supportsSynchronization2,
-            .descriptorIndexing = supportsDescriptorIndexing,
-            .accelerationStructure = supportsAccelerationStructure,
-            .rayTracingPipeline = supportsRayTracingPipeline,
-        };
+        // Stage-1 policy: compute queue is the present carrier.
+        return getQueueFamilyWithFallback(QueueFamilyKind::compute);
     }
 
     std::vector<std::string> instanceEnabledLayers{};
     std::vector<std::string> instanceEnabledExtensions{};
     // std::vector<std::string> physicalDeviceFeatures{}; // Currently not used
     std::vector<std::string> deviceEnabledExtensions{
-        vk::KHRSwapchainExtensionName,
-        vk::KHRDeferredHostOperationsExtensionName,
-        vk::KHRAccelerationStructureExtensionName,
-        vk::KHRRayTracingPipelineExtensionName,
-        vk::KHRRayQueryExtensionName,
-        vk::NVRayTracingInvocationReorderExtensionName,
-        vk::KHRBufferDeviceAddressExtensionName,
-        vk::KHRDynamicRenderingExtensionName,
-        vk::EXTExtendedDynamicStateExtensionName,
-        vk::KHRPipelineLibraryExtensionName,
-        vk::EXTPipelineRobustnessExtensionName,
-        vk::KHRSynchronization2ExtensionName,
-        vk::EXTMemoryBudgetExtensionName,
+        vk::KHRSwapchainExtensionName,           vk::KHRDeferredHostOperationsExtensionName, vk::KHRAccelerationStructureExtensionName, vk::KHRRayTracingPipelineExtensionName,   vk::KHRRayQueryExtensionName,        vk::NVRayTracingInvocationReorderExtensionName,
+        vk::KHRBufferDeviceAddressExtensionName, vk::KHRDynamicRenderingExtensionName,       vk::EXTExtendedDynamicState3ExtensionName, vk::EXTExtendedDynamicStateExtensionName, vk::KHRPipelineLibraryExtensionName, vk::EXTDescriptorIndexingExtensionName,
+        vk::EXTPipelineRobustnessExtensionName,  vk::KHRSynchronization2ExtensionName,       vk::EXTMemoryBudgetExtensionName,
     };
 
-    bool supportsDynamicRendering = false;
-    bool supportsExtendedDynamicState = false;
-    bool supportsPipelineLibrary = false;
-    bool supportsPipelineRobustness = false;
-    bool supportsSynchronization2 = false;
-    bool supportsDescriptorIndexing = false;
-    bool supportsAccelerationStructure = false;
-    bool supportsRayTracingPipeline = false;
-    bool supportsRayQuery = false;
     std::array<size_t, static_cast<size_t>(QueueFamilyKind::size)> queueFamilyDict{};
+    SwapChainConfig swapChainConfig_{};
 };
 void rhiTest()
 {

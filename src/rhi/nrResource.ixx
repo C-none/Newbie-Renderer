@@ -260,6 +260,24 @@ class Buffer
     }
 
     /**
+     * @brief Flush host writes for this buffer range.
+     */
+    void flush(vk::DeviceSize offset = 0, vk::DeviceSize size = vk::WholeSize) const
+    {
+        nrAssert(valid(), "Buffer::flush requires a valid buffer");
+        vmaBuffer_.flush(static_cast<VkDeviceSize>(offset), static_cast<VkDeviceSize>(size));
+    }
+
+    /**
+     * @brief Invalidate host cache for this buffer range after GPU writes.
+     */
+    void invalidate(vk::DeviceSize offset = 0, vk::DeviceSize size = vk::WholeSize) const
+    {
+        nrAssert(valid(), "Buffer::invalidate requires a valid buffer");
+        vmaBuffer_.invalidate(static_cast<VkDeviceSize>(offset), static_cast<VkDeviceSize>(size));
+    }
+
+    /**
      * @brief Get the buffer device address (BDA), cached after first call
      *
      * @return 64-bit device address for shader access

@@ -15,7 +15,7 @@ import std;
  *
  * - CrossFrame:  Standard long-lived allocations (default VMA pool)
  * - PerFrame:    Short-lived per-frame resources (linear pool, bulk-reset)
- * - Transient:   Immediate staging uploads (dedicated staging pool)
+ * - StagingTransient: Immediate staging uploads (dedicated staging pool)
  *
  * All GPU buffers automatically include VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
  * for Buffer Device Address (BDA) support.
@@ -65,7 +65,7 @@ class MemoryAllocator
      * Creates:
      * 1. VMA allocator with Vulkan 1.4
      * 2. Per-frame linear pools (one per frame-in-flight) for PerFrame strategy
-     * 3. Staging pool for Transient uploads
+    * 3. Staging pool for StagingTransient uploads
      */
     void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device)
     {
@@ -116,8 +116,8 @@ class MemoryAllocator
             configurePerFrame(allocInfo, frameIndex);
             break;
 
-        case AllocationStrategy::Transient:
-            configureTransient(allocInfo);
+        case AllocationStrategy::StagingTransient:
+            configureStagingTransient(allocInfo);
             break;
         }
 
@@ -151,8 +151,8 @@ class MemoryAllocator
         case AllocationStrategy::PerFrame:
             configurePerFrame(allocInfo, frameIndex);
             break;
-        case AllocationStrategy::Transient:
-            configureTransient(allocInfo);
+        case AllocationStrategy::StagingTransient:
+            configureStagingTransient(allocInfo);
             break;
         }
 
@@ -325,7 +325,7 @@ class MemoryAllocator
     }
 
     /**
-     * @brief Create staging pool for Transient strategy
+    * @brief Create staging pool for StagingTransient strategy
      *
      * Optimized for short-lived CPU->GPU transfer buffers.
      * Uses linear allocation for fast alloc/free patterns.
@@ -412,11 +412,11 @@ class MemoryAllocator
     }
 
     /**
-     * @brief Configure VMA allocation info for Transient strategy
+    * @brief Configure VMA allocation info for StagingTransient strategy
      *
      * Allocates from the staging pool. Host-visible, sequentially written.
      */
-    void configureTransient(VmaAllocationCreateInfo &allocInfo) const
+    void configureStagingTransient(VmaAllocationCreateInfo &allocInfo) const
     {
         allocInfo.pool = stagingPool_.handle();
         allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;

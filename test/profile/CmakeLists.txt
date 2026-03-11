@@ -28,3 +28,22 @@ target_link_libraries(nr_descriptor_cursor_conflict_merge_test PRIVATE
     utils
     dependency
 )
+
+nr_add_executable(nr_rhi_stage1_interfaces_test nr_rhi_stage1_interfaces_test.cpp)
+set_target_properties(nr_rhi_stage1_interfaces_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_rhi_stage1_interfaces_test PRIVATE
+    nrrhi
+    utils
+    dependency
+)
+
+nr_add_executable(nr_slang_two_compute_reflection nr_slang_two_compute_reflection.cpp)
+set_target_properties(nr_slang_two_compute_reflection PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_slang_two_compute_reflection PRIVATE
+    nrrhi
+    utils
+    dependency
+)
+

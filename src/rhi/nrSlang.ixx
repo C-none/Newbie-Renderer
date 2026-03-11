@@ -542,13 +542,19 @@ struct SlangImmutableSamplerBinding
 };
 
 /**
- * @brief One compiled entry point payload (SPIR-V + stage + name).
+ * @brief Compiled and reflected data for one linked entrypoint.
  */
-struct SlangEntryPointBinary
+struct SlangEntryPointData
 {
+    uint32_t linkedEntryPointIndex = 0;
     std::string entryPointName;
     SlangStage stage = SLANG_STAGE_NONE;
-    std::vector<uint32_t> spirv;
+    Slang::ComPtr<slang::IBlob> codeBlob;
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return !entryPointName.empty() && stage != SLANG_STAGE_NONE && codeBlob != nullptr;
+    }
 };
 
 /**
@@ -580,15 +586,86 @@ class SlangProgram
      */
     [[nodiscard]] bool valid() const noexcept
     {
-        return linkedProgram_ != nullptr && programLayout_ != nullptr && entryPointLayout_ != nullptr && hasEntryPointBinary_;
+        return linkedProgram_ != nullptr && entryPointCount() > 0;
     }
 
     /**
-     * @brief Access the compiled single entrypoint binary payload.
+     * @brief Number of linked entrypoints available in this program.
      */
-    [[nodiscard]] const SlangEntryPointBinary *entryPointBinary() const noexcept
+    [[nodiscard]] size_t entryPointCount() const noexcept
     {
-        return hasEntryPointBinary_ ? &entryPointBinary_ : nullptr;
+        if (!buildEntryPointCache())
+        {
+            return 0;
+        }
+        return entryPoints_.size();
+    }
+
+    /**
+     * @brief Access all linked entrypoint payloads.
+     */
+    [[nodiscard]] std::span<const SlangEntryPointData> entryPoints() const noexcept
+    {
+        if (!buildEntryPointCache())
+        {
+            return {};
+        }
+        return entryPoints_;
+    }
+
+    /**
+     * @brief Find entrypoint payload by name.
+     */
+    [[nodiscard]] const SlangEntryPointData *entryPointData(std::string_view entryPointName) const noexcept
+    {
+        if (!buildEntryPointCache())
+        {
+            return nullptr;
+        }
+
+        return findEntryPointDataCached(entryPointName);
+    }
+
+    /**
+     * @brief Get linked entrypoint reflection by name.
+     */
+    [[nodiscard]] slang::EntryPointReflection *entryPointLayout(std::string_view entryPointName) const noexcept
+    {
+        if (!buildEntryPointCache())
+        {
+            return nullptr;
+        }
+
+        auto const *entryPoint = findEntryPointDataCached(entryPointName);
+        auto *layout = programLayout();
+        if (!entryPoint || !layout)
+        {
+            return nullptr;
+        }
+
+        return layout->getEntryPointByIndex(entryPoint->linkedEntryPointIndex);
+    }
+
+    /**
+     * @brief Get linked entrypoint stage by name.
+     */
+    [[nodiscard]] std::optional<SlangStage> entryPointStage(std::string_view entryPointName) const noexcept
+    {
+        auto const *entryPoint = entryPointData(entryPointName);
+        if (!entryPoint)
+        {
+            return std::nullopt;
+        }
+        return entryPoint->stage;
+    }
+
+    /**
+     * @brief Get linked entrypoint code blob by name.
+     */
+    [[nodiscard]] slang::IBlob *entryPointBlob(std::string_view entryPointName) const noexcept
+    {
+        auto const *entryPoint = entryPointData(entryPointName);
+        return entryPoint ? entryPoint->codeBlob.get() : nullptr;
     }
 
     /**
@@ -604,33 +681,142 @@ class SlangProgram
      */
     [[nodiscard]] slang::ProgramLayout *programLayout() const noexcept
     {
-        return programLayout_;
-    }
+        if (hasQueriedProgramLayout_)
+        {
+            return cachedProgramLayout_;
+        }
 
-    /**
-     * @brief Access the linked Slang entry point layout reflection.
-     */
-    [[nodiscard]] slang::EntryPointReflection *entryPointLayout() const noexcept
-    {
-        return entryPointLayout_;
+        hasQueriedProgramLayout_ = true;
+        if (!linkedProgram_)
+        {
+            return nullptr;
+        }
+
+        Slang::ComPtr<slang::IBlob> diagnostics;
+        cachedProgramLayout_ = linkedProgram_->getLayout(0, diagnostics.writeRef());
+        return cachedProgramLayout_;
     }
 
   private:
     friend class ShaderService;
 
+    [[nodiscard]] const SlangEntryPointData *findEntryPointDataCached(std::string_view entryPointName) const noexcept
+    {
+        auto it = entryPointIndexByName_.find(std::string(entryPointName));
+        if (it == entryPointIndexByName_.end())
+        {
+            return nullptr;
+        }
+
+        auto index = it->second;
+        if (index >= entryPoints_.size())
+        {
+            return nullptr;
+        }
+        return &entryPoints_[index];
+    }
+
+    [[nodiscard]] bool buildEntryPointCache() const noexcept
+    {
+        if (entryPointCacheBuilt_)
+        {
+            return true;
+        }
+
+        entryPoints_.clear();
+        entryPointIndexByName_.clear();
+
+        if (!linkedProgram_)
+        {
+            return false;
+        }
+
+        auto *layout = programLayout();
+        if (!layout)
+        {
+            return false;
+        }
+
+        auto linkedEntryPointCount = std::max<SlangUInt>(0u, layout->getEntryPointCount());
+        if (linkedEntryPointCount == 0)
+        {
+            return false;
+        }
+
+        entryPoints_.reserve(static_cast<size_t>(linkedEntryPointCount));
+        entryPointIndexByName_.reserve(static_cast<size_t>(linkedEntryPointCount));
+
+        for (SlangUInt entryIndex = 0; entryIndex < linkedEntryPointCount; ++entryIndex)
+        {
+            auto *entryLayout = layout->getEntryPointByIndex(entryIndex);
+            if (!entryLayout)
+            {
+                return false;
+            }
+
+            auto entryName = std::string(entryLayout->getName() ? entryLayout->getName() : "");
+            if (entryName.empty())
+            {
+                entryName = std::format("entrypoint_{}", entryIndex);
+            }
+
+            auto reflectedStage = entryLayout->getStage();
+            if (reflectedStage == SLANG_STAGE_NONE)
+            {
+                return false;
+            }
+
+            auto *entryScopeVarLayout = entryLayout->getVarLayout();
+            auto *entryScopeTypeLayout = entryScopeVarLayout ? entryScopeVarLayout->getTypeLayout() : nullptr;
+            auto entryBindingRangeCount = entryScopeTypeLayout ? std::max<SlangInt>(0, entryScopeTypeLayout->getBindingRangeCount()) : 0;
+
+            nrAssert(
+                entryBindingRangeCount == 0,
+                std::format(
+                    "Entry-point resource binding is forbidden. Keep bindable resources in global scope only. entry='{}', bindingRangeCount={}",
+                    entryName,
+                    entryBindingRangeCount));
+
+            Slang::ComPtr<slang::IBlob> codeBlob;
+            Slang::ComPtr<slang::IBlob> diagnostics;
+            auto compileResult = linkedProgram_->getEntryPointCode(static_cast<SlangInt>(entryIndex), 0, codeBlob.writeRef(), diagnostics.writeRef());
+            if (!detail::slangSucceeded(compileResult) || !codeBlob)
+            {
+                return false;
+            }
+
+            SlangEntryPointData entryPointData{};
+            entryPointData.linkedEntryPointIndex = static_cast<uint32_t>(entryIndex);
+            entryPointData.entryPointName = std::move(entryName);
+            entryPointData.stage = reflectedStage;
+            entryPointData.codeBlob = std::move(codeBlob);
+
+            auto [_, inserted] = entryPointIndexByName_.try_emplace(entryPointData.entryPointName, entryPoints_.size());
+            if (!inserted)
+            {
+                return false;
+            }
+
+            entryPoints_.push_back(std::move(entryPointData));
+        }
+
+        entryPointCacheBuilt_ = true;
+        return true;
+    }
+
     Slang::ComPtr<slang::IComponentType> linkedProgram_;
-    slang::ProgramLayout *programLayout_ = nullptr;
-    slang::EntryPointReflection *entryPointLayout_ = nullptr;
-    SlangEntryPointBinary entryPointBinary_{};
-    bool hasEntryPointBinary_ = false;
+    mutable bool hasQueriedProgramLayout_ = false;
+    mutable slang::ProgramLayout *cachedProgramLayout_ = nullptr;
+    mutable bool entryPointCacheBuilt_ = false;
+    mutable std::vector<SlangEntryPointData> entryPoints_;
+    mutable std::unordered_map<std::string, size_t> entryPointIndexByName_;
 };
 
-struct SlangProgramCompileRequest
+struct SlangProgramCompileFileRequest
 {
     // Required input form:
     // - test/utils/useFlag
     std::filesystem::path sourcePath;
-    std::string entryPoint;
 };
 
 struct RuntimeSlangMacro
@@ -664,7 +850,7 @@ struct RuntimeSlangCompileOptions
  * Responsibilities:
  * - Session configuration
  * - Module compile/load with cache
- * - Program link and entry point code generation
+ * - Program link and deferred entrypoint query
  * - Hot-reload/cache freshness checks
  */
 class ShaderService
@@ -698,30 +884,24 @@ class ShaderService
         applyCompileOptionsLocked(kDefaultSlangCompileOptions);
     }
 
-    [[nodiscard]] SlangProgram compileProgramByFileAndEntry(const SlangProgramCompileRequest &request)
+    [[nodiscard]] SlangProgram compileProgramByFile(const SlangProgramCompileFileRequest &request)
     {
         std::scoped_lock lock(m_mutex);
         ensureConfiguredLocked();
 
         SlangProgram result;
 
-        if (request.entryPoint.empty())
-        {
-            nrInfo<LogLevel::warning>("[ShaderService::compileProgramByFileAndEntry] entryPoint is empty.");
-            return result;
-        }
-
         auto modulePath = detail::normalizeRequestModulePath(request.sourcePath);
         if (!modulePath.has_value())
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] invalid request.sourcePath='{}'. expected relative module-path form like 'test/utils/useFlag'.", request.sourcePath.string()));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] invalid request.sourcePath='{}'. expected relative module-path form like 'test/utils/useFlag'.", request.sourcePath.string()));
             return result;
         }
 
         auto moduleName = resolveModuleNameLocked(*modulePath);
         if (moduleName.empty())
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] unable to resolve module name from request.sourcePath='{}'.", request.sourcePath.string()));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] unable to resolve module name from request.sourcePath='{}'.", request.sourcePath.string()));
             return result;
         }
 
@@ -730,57 +910,34 @@ class ShaderService
         {
             return result;
         }
-        Slang::ComPtr<slang::IEntryPoint> entryPointComponent;
-        Slang::ComPtr<slang::IBlob> entryPointDiagnostics;
-        std::optional<SlangStage> resolvedStage = std::nullopt;
 
-        // Single-entrypoint contract: probe known shader stages and keep the first valid entrypoint.
-        constexpr auto candidateStages = std::array<SlangStage, 14>{
-            SLANG_STAGE_COMPUTE,
-            SLANG_STAGE_VERTEX,
-            SLANG_STAGE_FRAGMENT,
-            SLANG_STAGE_HULL,
-            SLANG_STAGE_DOMAIN,
-            SLANG_STAGE_GEOMETRY,
-            SLANG_STAGE_AMPLIFICATION,
-            SLANG_STAGE_MESH,
-            SLANG_STAGE_RAY_GENERATION,
-            SLANG_STAGE_INTERSECTION,
-            SLANG_STAGE_ANY_HIT,
-            SLANG_STAGE_CLOSEST_HIT,
-            SLANG_STAGE_MISS,
-            SLANG_STAGE_CALLABLE,
-        };
-
-        auto resolvedByStageProbe = std::ranges::any_of(candidateStages, [&](SlangStage stage) {
-            entryPointDiagnostics = nullptr;
-            auto stageResult = rootModule.module->findAndCheckEntryPoint(
-                request.entryPoint.c_str(),
-                stage,
-                entryPointComponent.writeRef(),
-                entryPointDiagnostics.writeRef());
-            emitDiagnosticsLocked(entryPointDiagnostics.get(), std::format("findAndCheckEntryPoint(stage={})", static_cast<int32_t>(stage)));
-            if (detail::slangSucceeded(stageResult) && entryPointComponent != nullptr)
-            {
-                resolvedStage = stage;
-                return true;
-            }
-            return false;
-        });
-
-        if (!resolvedByStageProbe)
+        auto definedEntryPointCount = std::max<SlangInt32>(0, rootModule.module->getDefinedEntryPointCount());
+        if (definedEntryPointCount == 0)
         {
-            auto findEntryResult = rootModule.module->findEntryPointByName(request.entryPoint.c_str(), entryPointComponent.writeRef());
-            if (!detail::slangSucceeded(findEntryResult) || !entryPointComponent)
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] module='{}' defines no entrypoints.", moduleName));
+            return result;
+        }
+
+        std::vector<Slang::ComPtr<slang::IEntryPoint>> entryPointComponents;
+        entryPointComponents.reserve(static_cast<size_t>(definedEntryPointCount));
+
+        std::vector<slang::IComponentType *> components;
+        components.reserve(static_cast<size_t>(definedEntryPointCount) + 1);
+        components.push_back(rootModule.module.get());
+
+        for (SlangInt32 index = 0; index < definedEntryPointCount; ++index)
+        {
+            Slang::ComPtr<slang::IEntryPoint> entryPointComponent;
+            auto getEntryResult = rootModule.module->getDefinedEntryPoint(index, entryPointComponent.writeRef());
+            if (!detail::slangSucceeded(getEntryResult) || !entryPointComponent)
             {
-                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] failed to resolve entryPoint='{}' in module='{}' via findAndCheckEntryPoint/findEntryPointByName.", request.entryPoint, moduleName));
+                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] getDefinedEntryPoint failed: module='{}', index={}", moduleName, index));
                 return result;
             }
+
+            components.push_back(entryPointComponent.get());
+            entryPointComponents.push_back(std::move(entryPointComponent));
         }
-        std::vector<slang::IComponentType *> components = {
-            rootModule.module.get(),
-            entryPointComponent.get(),
-        };
 
         Slang::ComPtr<slang::IComponentType> compositeProgram;
         Slang::ComPtr<slang::IBlob> diagnostics;
@@ -792,7 +949,7 @@ class ShaderService
         emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType");
         if (!detail::slangSucceeded(createResult) || !compositeProgram)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] createCompositeComponentType failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] createCompositeComponentType failed for module='{}'.", moduleName));
             return result;
         }
 
@@ -802,63 +959,13 @@ class ShaderService
         emitDiagnosticsLocked(diagnostics.get(), "link");
         if (!detail::slangSucceeded(linkResult) || !linkedProgram)
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] link failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
-            return result;
-        }
-
-        diagnostics = nullptr;
-        auto layout = linkedProgram->getLayout(0, diagnostics.writeRef());
-        emitDiagnosticsLocked(diagnostics.get(), "getLayout");
-        if (!layout)
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] getLayout failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
-            return result;
-        }
-
-        Slang::ComPtr<slang::IBlob> codeBlob;
-        diagnostics = nullptr;
-        auto compileResult = linkedProgram->getEntryPointCode(0, 0, codeBlob.writeRef(), diagnostics.writeRef());
-        emitDiagnosticsLocked(diagnostics.get(), "getEntryPointCode");
-        if (!detail::slangSucceeded(compileResult) || !codeBlob)
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] getEntryPointCode failed for module='{}', entry='{}'.", moduleName, request.entryPoint));
-            return result;
-        }
-
-        auto codeBytes = std::span{
-            static_cast<const std::byte *>(codeBlob->getBufferPointer()),
-            codeBlob->getBufferSize()};
-        auto dwordCount = (codeBytes.size() + sizeof(uint32_t) - 1) / sizeof(uint32_t);
-        SlangEntryPointBinary entryPointBinary{};
-        entryPointBinary.entryPointName = request.entryPoint;
-        entryPointBinary.spirv.resize(dwordCount, 0u);
-        if (!codeBytes.empty())
-        {
-            std::memcpy(entryPointBinary.spirv.data(), codeBytes.data(), codeBytes.size());
-        }
-
-        auto *entryPointLayout = layout->getEntryPointByIndex(0);
-        if (!entryPointLayout)
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] entryPoint='{}' in module='{}' has no entrypoint layout.", request.entryPoint, moduleName));
-            return result;
-        }
-
-        auto reflectedStage = entryPointLayout->getStage();
-        entryPointBinary.stage = reflectedStage != SLANG_STAGE_NONE ? reflectedStage : resolvedStage.value_or(SLANG_STAGE_NONE);
-        if (entryPointBinary.stage == SLANG_STAGE_NONE)
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFileAndEntry] entryPoint='{}' in module='{}' is missing [shader(...)] stage metadata.", request.entryPoint, moduleName));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] link failed for module='{}'.", moduleName));
             return result;
         }
 
         result.linkedProgram_ = linkedProgram;
-        result.programLayout_ = layout;
-        result.entryPointLayout_ = entryPointLayout;
-        result.entryPointBinary_ = std::move(entryPointBinary);
-        result.hasEntryPointBinary_ = true;
 
-        nrInfo<>(std::format("[ShaderService::compileProgramByFileAndEntry] finished: module='{}', entry='{}', stage={}, words={}", moduleName, request.entryPoint, static_cast<int32_t>(result.entryPointBinary_.stage), result.entryPointBinary_.spirv.size()));
+        nrInfo<>(std::format("[ShaderService::compileProgramByFile] finished: module='{}'", moduleName));
         return result;
     }
 
@@ -953,11 +1060,6 @@ class ShaderService
         ensureGlobalSessionLocked();
         recreateSessionLocked();
 
-        nrInfo<>(std::format(
-            "[ShaderService::configure] configured: shaderRoot='{}', profile='{}', hash='{}'",
-            m_shaderRootPath.generic_string(),
-            m_options.profile,
-            m_optionsHashHex));
     }
 
     // Requires m_mutex.
@@ -1057,7 +1159,6 @@ class ShaderService
 
         auto result = m_globalSession->createSession(sessionDesc, m_session.writeRef());
         nrAssert(detail::slangSucceeded(result), "Failed to create Slang session.");
-        nrInfo<>(std::format("[ShaderService::recreateSessionLocked] session created: profile='{}'", m_options.profile));
     }
 
     void emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string_view context) const
@@ -1149,8 +1250,6 @@ class ShaderService
         SlangCompiledModule result;
         result.moduleName = normalizedModuleName;
         result.sourcePath = std::filesystem::path(sourceModulePath);
-
-        nrInfo<>(std::format("[ShaderService::loadOrCompileModuleLocked] loading module='{}'", normalizedModuleName));
 
         Slang::ComPtr<slang::IBlob> diagnostics;
         Slang::ComPtr<slang::IModule> loadedModule;

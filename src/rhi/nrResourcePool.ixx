@@ -10,11 +10,11 @@ import std;
 
 /**
  * @file nrResourcePool.ixx
- * @brief Frame-scoped transient resource pool
+ * @brief Frame-local resource arena and persistent resource factory
  *
  * Sits at the top of the memory management stack:
  *
- *   nrResourcePool.ixx   <- this file (transient pool)
+ *   nrResourcePool.ixx   <- this file (frame-local arena + persistent factory)
  *   nrResource.ixx         (Buffer/Image RAII wrappers)
  *   nrMemoryAllocator.ixx  (strategy-based allocation)
  *   nrVmaAllocator.ixx     (VMA wrapper + statistics)
@@ -26,9 +26,7 @@ import std;
  *    linear pools. Bulk-reset each frame after fence signal. Zero CPU
  *    overhead on deallocation.
  *
- * Additionally, this pool provides thin helpers to create/destroy
- * non-transient (caller-owned) Buffer/Image objects. It does NOT cache
- * or recycle them — any reuse policy is owned by the upper layer.
+ * Persistent caller-owned Buffer/Image creation is provided via ResourceFactory.
  *
  * Thread Safety:
  * - Transient allocation methods are NOT thread-safe (one writer per frame).
@@ -38,8 +36,46 @@ import std;
 export namespace nr::rhi
 {
 
+class ResourceFactory
+{
+  public:
+    ResourceFactory() = default;
+
+    ResourceFactory(const ResourceFactory &) = delete;
+    ResourceFactory &operator=(const ResourceFactory &) = delete;
+    ResourceFactory(ResourceFactory &&) noexcept = default;
+    ResourceFactory &operator=(ResourceFactory &&) noexcept = default;
+
+    void initialize(const MemoryAllocator &allocator, const vk::raii::Device &device)
+    {
+        allocator_ = std::cref(allocator);
+        device_ = std::cref(device);
+    }
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return device_.has_value();
+    }
+
+    [[nodiscard]] Buffer createBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const
+    {
+        nrAssert(valid(), "ResourceFactory::createBuffer: factory not initialized");
+        return Buffer::create(*allocator_, device_->get(), createInfo, name, memoryUsage, AllocationStrategy::CrossFrame);
+    }
+
+    [[nodiscard]] Image createImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const
+    {
+        nrAssert(valid(), "ResourceFactory::createImage: factory not initialized");
+        return Image::create(*allocator_, device_->get(), createInfo, name, memoryUsage);
+    }
+
+  private:
+    std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+};
+
 // =========================================================================
-// ResourcePool — transient allocation only
+// ResourcePool — frame-local arena only
 // =========================================================================
 
 /**
@@ -120,31 +156,6 @@ class ResourcePool
         uint32_t idx = frameIndex % maxFrameInFlight;
         frameImages_[idx].emplace_back(Image::create(*allocator_, device_->get(), createInfo, name, memoryUsage));
         return frameImages_[idx].back();
-    }
-
-    // =====================================================================
-    // Cross-frame allocation helpers (NO caching)
-    // =====================================================================
-
-    /**
-     * @brief Create a caller-owned buffer (no caching/reuse in ResourcePool)
-     *
-     * If the upper layer wants buffer reuse, it should manage that policy
-     * itself (including any compatibility validation).
-     */
-    [[nodiscard]] Buffer acquireBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "")
-    {
-        nrAssert(valid(), "ResourcePool::acquireBuffer: pool not initialized");
-        return Buffer::create(*allocator_, device_->get(), createInfo, name, memoryUsage, AllocationStrategy::CrossFrame);
-    }
-
-    /**
-     * @brief Create a caller-owned image (no caching/reuse in ResourcePool)
-     */
-    [[nodiscard]] Image acquireImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "")
-    {
-        nrAssert(valid(), "ResourcePool::acquireImage: pool not initialized");
-        return Image::create(*allocator_, device_->get(), createInfo, name, memoryUsage);
     }
 
     // =====================================================================

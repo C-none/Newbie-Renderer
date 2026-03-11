@@ -19,27 +19,28 @@ export namespace nr::rhi
  * - Reset only when fence is signaled
  *
  * ============================================================================
- * MULTI-THREADED RECORDING WITH DYNAMIC THREAD REGISTRATION
+ * MULTI-THREADED RECORDING WITH FRAME-BEGIN PREBUILD
  * ============================================================================
  *
  * Thread Safety Model:
  * - Primary pools: Main thread only (no synchronization needed)
- * - Secondary pools: Thread-local with dynamic registration
+ * - Secondary pools: Prebuilt at frame-begin, then thread-local access only
  *
- * How Dynamic Vector with Thread Registration Works:
+ * How Prebuilt Secondary Pools Work:
  *
- * 1. Each FrameContext maintains a vector of secondary CommandPools per queue type
- *    Example: graphicsSecondary_ = vector<CommandPool>
+ * 1. Each FrameContext maintains fixed compile-time slots per queue type
+ *    Example: graphicsSecondary_ = array<optional<CommandPool>, maxThreads>
  *
- * 2. When a worker thread needs a secondary pool, it calls:
- *    frame.graphicsSecondary(threadId)
+ * 2. beginFrame calls prepareSecondaryPools() on the main thread.
+ *    Missing slots [0, maxThreads) are created before worker recording starts.
  *
- * 3. The method checks if threadId >= vector.size():
- *    - If YES: Acquire mutex, resize vector, create new pool(s)
- *    - If NO: Return existing pool (no lock needed for access)
+ * 3. Worker threads call frame.secondary<T>(threadId)
+ *    - No locks
+ *    - No growth
+ *    - O(1) index access with bounds assertions
  *
  * 4. Each thread uses its own pool index (threadId), so no contention
- *    during actual command recording - only during first-time registration.
+ *    during command recording.
  *
  * Usage Pattern:
  *
@@ -47,8 +48,8 @@ export namespace nr::rhi
  *   std::vector<std::future<vk::CommandBuffer>> futures;
  *   for (size_t i = 0; i < threadPool.size(); ++i) {
  *       futures.push_back(threadPool.submit([&, threadId = i]() {
- *           // First access auto-registers this thread
- *           CommandPool& pool = frame.graphicsSecondary(threadId);
+ *           // Pools are prebuilt at frame begin; this is lock-free indexed access.
+ *           CommandPool& pool = frame.secondary<QueueRole::Graphics>(threadId);
  *           vk::CommandBuffer cb = pool.allocateSecondary();
  *
  *           // Record commands (no locks needed here!)
@@ -75,13 +76,15 @@ export namespace nr::rhi
 class FrameContext
 {
   public:
+        /// Compile-time upper bound for worker-secondary pools on amd64 builds.
+        inline static constexpr uint32_t kMaxSecondaryWorkers = nr::maxThreads;
+
     /**
      * @brief Configuration for per-queue command pools
      */
     struct PoolConfig
     {
         uint32_t queueFamilyIndex;
-        uint32_t maxThreads = nr::maxThreads; // Initial capacity for thread-local secondary pools
     };
 
     /// Default constructor for deferred initialization
@@ -112,16 +115,11 @@ class FrameContext
 
         computePrimary_ = CommandPool(device, computeConfig.queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
 
-        // Pre-allocate secondary pool vectors with initial capacity
-        graphicsSecondary_.reserve(graphicsConfig.maxThreads);
-        computeSecondary_.reserve(computeConfig.maxThreads);
-
         // Handle optional transfer queue
         if (transferConfig)
         {
             transferQueueFamily_ = transferConfig->queueFamilyIndex;
             transferPrimary_ = CommandPool(device, transferConfig->queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
-            transferSecondary_.reserve(transferConfig->maxThreads);
         }
     }
 
@@ -178,9 +176,35 @@ class FrameContext
 
         // Reset all registered secondary pools
         // No lock needed here - reset only called from main thread after fence is signaled
-        std::ranges::for_each(graphicsSecondary_ | std::views::all, [](CommandPool &p) { p.reset(); });
-        std::ranges::for_each(computeSecondary_ | std::views::all, [](CommandPool &p) { p.reset(); });
-        std::ranges::for_each(transferSecondary_ | std::views::all, [](CommandPool &p) { p.reset(); });
+        std::ranges::for_each(graphicsSecondary_ | std::views::take(preparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
+            if (pool.has_value())
+                pool->reset();
+        });
+        std::ranges::for_each(computeSecondary_ | std::views::take(preparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
+            if (pool.has_value())
+                pool->reset();
+        });
+        std::ranges::for_each(transferSecondary_ | std::views::take(preparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
+            if (pool.has_value())
+                pool->reset();
+        });
+    }
+
+    /**
+     * @brief Prebuild secondary command pools for the next recording window.
+     *
+     * Call from frame-begin on the main thread before worker recording starts.
+     * Recording-time access (`secondary<T>()`) never grows storage or acquires locks.
+     */
+    void prepareSecondaryPools()
+    {
+        prepareQueueSecondaryPools(graphicsSecondary_, graphicsQueueFamily_);
+        prepareQueueSecondaryPools(computeSecondary_, computeQueueFamily_);
+        if (transferPrimary_.valid())
+        {
+            prepareQueueSecondaryPools(transferSecondary_, transferQueueFamily_);
+        }
+        preparedSecondaryWorkers_ = kMaxSecondaryWorkers;
     }
 
     /**
@@ -208,33 +232,28 @@ class FrameContext
      * @brief Get secondary command pool for queue (thread-local)
      * @param threadId Thread identifier (0-based, typically from thread pool)
      * @return Reference to thread's secondary pool
-     * ========================================================================
-     * This method implements dynamic thread registration:
-     *
-     * 1. Fast path (no lock): If threadId < vector.size(), pool already exists
-     *    - Direct array access, no synchronization overhead
-     *
-     * 2. Slow path (with lock): If threadId >= vector.size()
-     *    - Acquire mutex (only blocks other new registrations)
-     *    - Resize vector to accommodate new threadId
-     *    - Create new CommandPool for each new slot
-     *    - Release mutex
-     * ========================================================================
+    * Access is lock-free and does not allocate at record time.
+    * All slots are prepared by prepareSecondaryPools() at frame-begin.
      */
     template <QueueRole T> [[nodiscard]] CommandPool &secondary(size_t threadId)
     {
+        nrAssert(threadId < preparedSecondaryWorkers_, std::format("FrameContext::secondary threadId {} out of prepared range {}", threadId, preparedSecondaryWorkers_));
+
         if constexpr (T == QueueRole::Graphics)
         {
-            return getOrCreateSecondaryPool(graphicsSecondary_, graphicsSecondaryMutex_, threadId, graphicsQueueFamily_);
+            nrAssert(graphicsSecondary_[threadId].has_value(), "FrameContext::secondary graphics pool slot not prepared");
+            return *graphicsSecondary_[threadId];
         }
         else if constexpr (T == QueueRole::Compute)
         {
-            return getOrCreateSecondaryPool(computeSecondary_, computeSecondaryMutex_, threadId, computeQueueFamily_);
+            nrAssert(computeSecondary_[threadId].has_value(), "FrameContext::secondary compute pool slot not prepared");
+            return *computeSecondary_[threadId];
         }
         else if constexpr (T == QueueRole::Transfer)
         {
             nrAssert(transferPrimary_.valid(), "Transfer queue not configured for this FrameContext");
-            return getOrCreateSecondaryPool(transferSecondary_, transferSecondaryMutex_, threadId, transferQueueFamily_);
+            nrAssert(transferSecondary_[threadId].has_value(), "FrameContext::secondary transfer pool slot not prepared");
+            return *transferSecondary_[threadId];
         }
         std::unreachable();
     }
@@ -283,20 +302,12 @@ class FrameContext
      */
     template <QueueRole T> [[nodiscard]] size_t registeredThreads() const noexcept
     {
-        if constexpr (T == QueueRole::Graphics)
+        if constexpr (T == QueueRole::Transfer)
         {
-            return graphicsSecondary_.size();
+            if (!transferPrimary_.valid())
+                return 0;
         }
-        else if constexpr (T == QueueRole::Compute)
-        {
-            return computeSecondary_.size();
-        }
-        else if constexpr (T == QueueRole::Transfer)
-        {
-            nrInfo<LogLevel::warning>("Transfer queue not configured for this FrameContext");
-            return transferSecondary_.size();
-        }
-        std::unreachable();
+        return preparedSecondaryWorkers_;
     }
 
   private:
@@ -319,62 +330,26 @@ class FrameContext
 
         transferPrimary_ = std::move(other.transferPrimary_);
         transferSecondary_ = std::move(other.transferSecondary_);
+
+        preparedSecondaryWorkers_ = other.preparedSecondaryWorkers_;
     }
 
     /**
-     * @brief Core implementation of dynamic thread registration
-     *
-     * This is the heart of the multi-threaded command recording system.
-     *
-     * @param pools Vector of pools to access/grow
-     * @param mutex Mutex protecting the vector resize operation
-     * @param threadId Index of the requesting thread
-     * @param queueFamilyIndex Queue family for new pool creation
-     * @return Reference to the thread's dedicated pool
+     * @brief Ensure queue-specific secondary pool slots are materialized for [0, workerCount).
      */
-    CommandPool &getOrCreateSecondaryPool(std::vector<CommandPool> &pools, std::mutex &mutex, size_t threadId, uint32_t queueFamilyIndex)
+    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, uint32_t queueFamilyIndex)
     {
-        // =====================================================================
-        // FAST PATH: Pool already exists for this threadId
-        // =====================================================================
-        // This check is done WITHOUT acquiring the lock.
-        // Safe because:
-        // 1. We only read size(), which is atomic for most implementations
-        // 2. Once a pool is created at index i, it's never moved or deleted
-        // 3. Vector only grows, never shrinks
-        if (threadId < pools.size())
-        {
-            return pools[threadId];
-        }
-
-        // =====================================================================
-        // SLOW PATH: Need to register new thread(s)
-        // =====================================================================
-        // Acquire lock to safely resize the vector
-        std::lock_guard lock{mutex};
-
-        // Double-check after acquiring lock (another thread might have grown it)
-        if (threadId < pools.size())
-        {
-            return pools[threadId];
-        }
-
-        // Grow vector to accommodate new threadId
-        // Create pools for ALL indices up to threadId (handles sparse registration)
-        size_t oldSize = pools.size();
-        pools.reserve(threadId + 1);
-
-        for (size_t i = oldSize; i <= threadId; ++i)
-        {
-            // Each secondary pool uses TRANSIENT flag for short-lived buffers
-            pools.emplace_back(device_->get(), queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
-        }
-
-        return pools[threadId];
+        auto slotIndices = std::views::iota(uint32_t{0}, kMaxSecondaryWorkers);
+        std::ranges::for_each(slotIndices, [&](uint32_t slotIndex) {
+            if (!slots[slotIndex].has_value())
+            {
+                slots[slotIndex].emplace(device_->get(), queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
+            }
+        });
     }
 
   private:
-    // Device reference and queue family IDs (used for lazy secondary-pool creation)
+    // Device reference and queue family IDs (used for frame-begin secondary-pool prebuild)
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
     uint32_t graphicsQueueFamily_ = 0;
     uint32_t computeQueueFamily_ = 0;
@@ -387,18 +362,17 @@ class FrameContext
 
     // Graphics queue pools
     CommandPool graphicsPrimary_;
-    std::vector<CommandPool> graphicsSecondary_;
-    std::mutex graphicsSecondaryMutex_;
+    std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> graphicsSecondary_{};
 
     // Compute queue pools
     CommandPool computePrimary_;
-    std::vector<CommandPool> computeSecondary_;
-    std::mutex computeSecondaryMutex_;
+    std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> computeSecondary_{};
 
     // Transfer queue pools (optional)
     CommandPool transferPrimary_;
-    std::vector<CommandPool> transferSecondary_;
-    std::mutex transferSecondaryMutex_;
+    std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> transferSecondary_{};
+
+    uint32_t preparedSecondaryWorkers_ = 0;
 };
 
 /**

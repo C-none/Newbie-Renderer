@@ -53,22 +53,12 @@ The project keeps a built-in minimal test framework module for C++ modules workf
     - `nr::test::require(condition, message)`
     - `nr::test::requireEqual(lhs, rhs, message)`
 
-## Shader Compile Profiling
-
-Use `nr_slang_profile` to run and trace `nrrhi`/`nrslang` compilation on `shader/test/main/main.slang`:
-
-```bash
-cmake --build --preset debug --target nr_slang_profile
-./build/src/Debug/nr_slang_profile.exe
-```
-
 ## Packages
 
 ### Submodules
 | Name      | Version  |
 | --------- | -------- |
 | Slang     | v2026.3.1 |
-| NvAPI     | R590     |
 | Aftermath | R590     |
 
 tips: You may update submodules by git if u like. However, Aftermath has to be updated manually by downloading the latest version from NVIDIA Developer [website](https://developer.nvidia.com/nsight-aftermath).

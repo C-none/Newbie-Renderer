@@ -134,6 +134,32 @@ struct VmaBuffer
     {
         return (memoryProperties() & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
     }
+
+    /**
+     * @brief Flush host writes to make them visible to the device.
+     *
+     * VMA internally handles non-coherent atom-size alignment.
+     */
+    void flush(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const
+    {
+        if (allocation == nullptr)
+            return;
+        auto result = vmaFlushAllocation(allocator, allocation, offset, size);
+        nrAssert(result == VK_SUCCESS, std::format("vmaFlushAllocation failed: {}", static_cast<int>(result)));
+    }
+
+    /**
+     * @brief Invalidate host cache to make device writes visible to the CPU.
+     *
+     * VMA internally handles non-coherent atom-size alignment.
+     */
+    void invalidate(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const
+    {
+        if (allocation == nullptr)
+            return;
+        auto result = vmaInvalidateAllocation(allocator, allocation, offset, size);
+        nrAssert(result == VK_SUCCESS, std::format("vmaInvalidateAllocation failed: {}", static_cast<int>(result)));
+    }
 };
 
 // =========================================================================

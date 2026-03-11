@@ -9,7 +9,6 @@ import std;
 
 export namespace nr::rhi
 {
-
 // Cursor-first migration note:
 // This partition intentionally avoids exporting descriptor-reflection data models.
 // Pipeline setup consumes SlangProgram directly, while runtime parameter binding is
@@ -17,6 +16,7 @@ export namespace nr::rhi
 
 struct GraphicsPipelineDesc
 {
+		std::vector<std::string> entryPointNames;
 		std::vector<vk::Format> colorAttachmentFormats;
 		std::optional<vk::Format> depthAttachmentFormat;
 		std::optional<vk::Format> stencilAttachmentFormat;
@@ -36,6 +36,7 @@ struct GraphicsPipelineDesc
 
 struct ComputePipelineDesc
 {
+		std::string entryPointName;
 		vk::PipelineCreateFlags flags = {};
 };
 
@@ -50,22 +51,35 @@ struct RayTracingShaderGroupDesc
 
 struct RayTracingPipelineDesc
 {
+		std::vector<std::string> entryPointNames;
 		uint32_t maxRayRecursionDepth = 1;
 		std::vector<RayTracingShaderGroupDesc> groups;
 		vk::PipelineCreateFlags flags = {};
 };
 
-struct PipelineRuntimeCapabilities
+namespace detail
 {
-		bool dynamicRendering = false;
-		bool extendedDynamicState = false;
-		bool pipelineLibrary = false;
-		bool pipelineRobustness = false;
-		bool synchronization2 = false;
-		bool descriptorIndexing = false;
-		bool accelerationStructure = false;
-		bool rayTracingPipeline = false;
-};
+[[nodiscard]] bool isGraphicsStage(SlangStage stage)
+{
+	return stage == SLANG_STAGE_VERTEX ||
+	       stage == SLANG_STAGE_FRAGMENT ||
+	       stage == SLANG_STAGE_GEOMETRY ||
+	       stage == SLANG_STAGE_HULL ||
+	       stage == SLANG_STAGE_DOMAIN ||
+	       stage == SLANG_STAGE_AMPLIFICATION ||
+	       stage == SLANG_STAGE_MESH;
+}
+
+[[nodiscard]] bool isRayTracingStage(SlangStage stage)
+{
+	return stage == SLANG_STAGE_RAY_GENERATION ||
+	       stage == SLANG_STAGE_MISS ||
+	       stage == SLANG_STAGE_CLOSEST_HIT ||
+	       stage == SLANG_STAGE_ANY_HIT ||
+	       stage == SLANG_STAGE_INTERSECTION ||
+	       stage == SLANG_STAGE_CALLABLE;
+}
+}
 
 class CursorPipelineLayout
 {
@@ -97,6 +111,9 @@ class CursorPipelineLayout
 				vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
 				pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(pipelineSetLayouts.size());
 				pipelineLayoutInfo.pSetLayouts = pipelineSetLayouts.data();
+				auto pushConstantRanges = descriptorLayout.makeVkPushConstantRanges();
+				pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
+				pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
 				layout.pipelineLayout_ = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 				return layout;
 		}
@@ -123,6 +140,35 @@ class CursorPipelineLayout
 				       std::ranges::to<std::vector>();
 		}
 
+		void bindDescriptorSet(
+				vk::CommandBuffer commandBuffer,
+				vk::PipelineBindPoint bindPoint,
+				const ShaderBindingSet &set,
+				std::span<const uint32_t> dynamicOffsets = {}) const;
+
+		void bindDescriptorSets(
+				vk::CommandBuffer commandBuffer,
+				vk::PipelineBindPoint bindPoint,
+				std::span<const ShaderBindingSet> sets,
+				std::span<const uint32_t> dynamicOffsets = {}) const;
+
+		void pushConstants(
+				vk::CommandBuffer commandBuffer,
+				vk::ShaderStageFlags stageFlags,
+				uint32_t offset,
+				std::span<const uint8_t> bytes) const
+		{
+			nrAssert(valid(), "CursorPipelineLayout::pushConstants requires a valid pipeline layout.");
+			if (bytes.empty())
+			{
+				return;
+			}
+			nrAssert(
+				bytes.size() <= std::numeric_limits<uint32_t>::max(),
+				std::format("CursorPipelineLayout::pushConstants payload too large: {} bytes", bytes.size()));
+			commandBuffer.pushConstants(raw(), stageFlags, offset, static_cast<uint32_t>(bytes.size()), bytes.data());
+		}
+
 	private:
 		struct DescriptorSetLayoutHandle
 		{
@@ -135,124 +181,77 @@ class CursorPipelineLayout
 		vk::raii::PipelineLayout pipelineLayout_ = {nullptr};
 };
 
-class ShaderBindingSet
+inline void CursorPipelineLayout::bindDescriptorSet(
+		vk::CommandBuffer commandBuffer,
+		vk::PipelineBindPoint bindPoint,
+		const ShaderBindingSet &set,
+		std::span<const uint32_t> dynamicOffsets) const
 {
-	public:
-		[[nodiscard]] bool valid() const noexcept { return static_cast<bool>(set_); }
-		[[nodiscard]] vk::DescriptorSet raw() const noexcept { return set_; }
-		[[nodiscard]] uint32_t setIndex() const noexcept { return setIndex_; }
+	nrAssert(valid(), "CursorPipelineLayout::bindDescriptorSet requires a valid pipeline layout.");
+	nrAssert(set.valid(), std::format("CursorPipelineLayout::bindDescriptorSet received invalid set {}.", set.setIndex()));
 
-	private:
-		friend class ShaderBindingPool;
-		vk::DescriptorSet set_{};
-		uint32_t setIndex_ = 0;
-};
+	auto handle = set.raw();
+	commandBuffer.bindDescriptorSets(bindPoint, raw(), set.setIndex(), {handle}, dynamicOffsets);
+}
 
-class ShaderBindingPool
+inline void CursorPipelineLayout::bindDescriptorSets(
+		vk::CommandBuffer commandBuffer,
+		vk::PipelineBindPoint bindPoint,
+		std::span<const ShaderBindingSet> sets,
+		std::span<const uint32_t> dynamicOffsets) const
 {
-	public:
-		[[nodiscard]] static ShaderBindingPool create(
-				const vk::raii::Device &device,
-				const ShaderDescriptorLayout &descriptorLayout,
-				uint32_t maxSets = 64,
-				vk::DescriptorPoolCreateFlags flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
+	nrAssert(valid(), "CursorPipelineLayout::bindDescriptorSets requires a valid pipeline layout.");
+	nrAssert(
+		dynamicOffsets.empty(),
+		"CursorPipelineLayout::bindDescriptorSets with multiple sets does not accept shared dynamic offsets. Bind per-set when using dynamic offsets.");
+
+	for (const auto &set : sets)
+	{
+		if (!set.valid())
 		{
-				ShaderBindingPool pool;
-				pool.device_ = std::cref(device);
-
-				auto descriptorCounts = std::map<vk::DescriptorType, uint32_t>{};
-				std::ranges::for_each(descriptorLayout.descriptorSets(), [&](const DescriptorSetLayoutInfo &setInfo) {
-						std::ranges::for_each(setInfo.bindings, [&](const DescriptorBindingInfo &bindingInfo) {
-								descriptorCounts[bindingInfo.descriptorType] += bindingInfo.descriptorCount * std::max(maxSets, 1u);
-						});
-				});
-
-				auto poolSizes = descriptorCounts |
-				                 std::views::transform([](const auto &pair) {
-					                 return vk::DescriptorPoolSize{pair.first, pair.second};
-				                 }) |
-				                 std::ranges::to<std::vector>();
-
-				if (poolSizes.empty())
-				{
-						poolSizes.push_back(vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, std::max(maxSets, 1u)});
-				}
-
-				vk::DescriptorPoolCreateInfo poolInfo{};
-				poolInfo.flags = flags;
-				poolInfo.maxSets = std::max(maxSets, 1u);
-				poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-				poolInfo.pPoolSizes = poolSizes.data();
-				pool.pool_ = vk::raii::DescriptorPool(device, poolInfo);
-				return pool;
+			continue;
 		}
-
-		[[nodiscard]] ShaderBindingSet allocate(const CursorPipelineLayout &layout, uint32_t setIndex) const
-		{
-				nrAssert(device_.has_value(), "ShaderBindingPool::allocate requires an owning device reference.");
-
-				ShaderBindingSet set;
-				set.setIndex_ = setIndex;
-
-				auto descriptorSetLayout = layout.descriptorSetLayout(setIndex);
-				if (!descriptorSetLayout.has_value())
-				{
-						return set;
-				}
-
-				vk::DescriptorSetAllocateInfo allocateInfo{};
-				allocateInfo.descriptorPool = *pool_;
-				auto layoutHandle = *descriptorSetLayout;
-				allocateInfo.descriptorSetCount = 1;
-				allocateInfo.pSetLayouts = &layoutHandle;
-
-				auto allocatedSets = device_->get().allocateDescriptorSets(allocateInfo);
-				if (!allocatedSets.empty())
-				{
-						set.set_ = allocatedSets.front();
-				}
-				return set;
-		}
-
-		[[nodiscard]] std::vector<ShaderBindingSet> allocateAll(const CursorPipelineLayout &layout) const
-		{
-				return layout.setIndices() |
-				       std::views::transform([&](uint32_t setIndex) { return allocate(layout, setIndex); }) |
-				       std::ranges::to<std::vector>();
-		}
-
-	private:
-		std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-		vk::raii::DescriptorPool pool_ = {nullptr};
-};
+		bindDescriptorSet(commandBuffer, bindPoint, set, {});
+	}
+}
 
 class VkShaderProgram
 {
 	public:
-		[[nodiscard]] static VkShaderProgram create(const vk::raii::Device &device, const SlangProgram &slangProgram)
+		[[nodiscard]] static VkShaderProgram create(const vk::raii::Device &device, std::span<const SlangEntryPointData *const> selectedEntryPoints)
 		{
-				nrAssert(slangProgram.valid(), "VkShaderProgram::create requires a valid SlangProgram.");
-				auto const *entryPoint = slangProgram.entryPointBinary();
-				nrAssert(entryPoint != nullptr, "VkShaderProgram::create requires one compiled entrypoint binary.");
-				nrAssert(!entryPoint->spirv.empty(), std::format("Entry point '{}' has empty SPIR-V payload.", entryPoint->entryPointName));
+				nrAssert(!selectedEntryPoints.empty(), "VkShaderProgram::create requires at least one selected entrypoint.");
 
 				VkShaderProgram result;
-				result.modules_.reserve(1);
-				result.stageCreateInfos_.reserve(1);
+				result.modules_.reserve(selectedEntryPoints.size());
+				result.entryPointNames_.reserve(selectedEntryPoints.size());
+				result.stages_.reserve(selectedEntryPoints.size());
+				result.stageCreateInfos_.reserve(selectedEntryPoints.size());
 
-				vk::ShaderModuleCreateInfo moduleInfo{};
-				moduleInfo.codeSize = static_cast<size_t>(entryPoint->spirv.size() * sizeof(uint32_t));
-				moduleInfo.pCode = entryPoint->spirv.data();
-				result.modules_.emplace_back(device, moduleInfo);
+				std::ranges::for_each(selectedEntryPoints, [&](const SlangEntryPointData *entryPoint) {
+					nrAssert(entryPoint != nullptr, "VkShaderProgram::create received a null entrypoint selection.");
+					nrAssert(entryPoint->codeBlob != nullptr, std::format("Entry point '{}' has null code blob.", entryPoint->entryPointName));
 
-				result.entryPointNames_.push_back(entryPoint->entryPointName.empty() ? "main" : entryPoint->entryPointName);
-				result.stages_.push_back(entryPoint->stage);
+					auto codeSize = entryPoint->codeBlob->getBufferSize();
+					nrAssert(codeSize > 0, std::format("Entry point '{}' has empty code blob.", entryPoint->entryPointName));
+					nrAssert(
+						codeSize % sizeof(uint32_t) == 0,
+						std::format("Entry point '{}' code size is not uint32-aligned: {} bytes.", entryPoint->entryPointName, codeSize));
 
-				vk::PipelineShaderStageCreateInfo stageInfo{};
-				stageInfo.stage = toVkShaderStage(entryPoint->stage);
-				stageInfo.module = *result.modules_.back();
-				stageInfo.pName = result.entryPointNames_.back().c_str();
-				result.stageCreateInfos_.push_back(stageInfo);
+					vk::ShaderModuleCreateInfo moduleInfo{};
+					moduleInfo.codeSize = codeSize;
+					moduleInfo.pCode = static_cast<const uint32_t *>(entryPoint->codeBlob->getBufferPointer());
+					result.modules_.emplace_back(device, moduleInfo);
+
+					result.entryPointNames_.push_back(entryPoint->entryPointName.empty() ? "main" : entryPoint->entryPointName);
+					result.stages_.push_back(entryPoint->stage);
+
+					vk::PipelineShaderStageCreateInfo stageInfo{};
+					stageInfo.stage = toVkShaderStage(entryPoint->stage);
+					stageInfo.module = *result.modules_.back();
+					stageInfo.pName = result.entryPointNames_.back().c_str();
+					result.stageCreateInfos_.push_back(stageInfo);
+				});
 
 				return result;
 		}
@@ -260,6 +259,7 @@ class VkShaderProgram
 		[[nodiscard]] bool valid() const noexcept { return !stageCreateInfos_.empty(); }
 		[[nodiscard]] const vk::PipelineShaderStageCreateInfo &stageCreateInfo(uint32_t index) const noexcept { return stageCreateInfos_[index]; }
 		[[nodiscard]] std::span<const SlangStage> stages() const noexcept { return stages_; }
+		[[nodiscard]] std::span<const std::string> entryPointNames() const noexcept { return entryPointNames_; }
 
 	private:
 		std::vector<vk::raii::ShaderModule> modules_;
@@ -272,22 +272,129 @@ class GraphicsPipeline
 {
 	public:
 		[[nodiscard]] static GraphicsPipeline create(
-				const vk::raii::Device &,
-				const CursorPipelineLayout &,
-				const VkShaderProgram &,
-				const PipelineRuntimeCapabilities &runtimeCaps = {},
-				const GraphicsPipelineDesc & = {})
+				const vk::raii::Device &device,
+				const CursorPipelineLayout &layout,
+				const VkShaderProgram &shaderProgram,
+				const GraphicsPipelineDesc &desc = {})
 		{
-				if (runtimeCaps.dynamicRendering)
+				nrAssert(
+					!desc.colorAttachmentFormats.empty() || desc.depthAttachmentFormat.has_value() || desc.stencilAttachmentFormat.has_value(),
+					"GraphicsPipeline::create requires at least one attachment format when using dynamic rendering.");
+				nrAssert(layout.valid(), "GraphicsPipeline::create requires a valid pipeline layout.");
+				nrAssert(shaderProgram.valid(), "GraphicsPipeline::create requires a valid shader program.");
+
+				auto graphicsStageIndices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(shaderProgram.stages().size())) |
+				                          std::views::filter([&](uint32_t index) { return detail::isGraphicsStage(shaderProgram.stages()[index]); }) |
+				                          std::ranges::to<std::vector>();
+				nrAssert(!graphicsStageIndices.empty(), "GraphicsPipeline::create requires at least one graphics shader stage.");
+
+				auto stageCreateInfos = graphicsStageIndices |
+				                       std::views::transform([&](uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
+				                       std::ranges::to<std::vector>();
+
+				auto colorBlendAttachments = desc.colorBlendAttachments;
+				if (colorBlendAttachments.empty())
 				{
-					nrInfo<LogLevel::warning>("GraphicsPipeline::create is in cursor-first transition. Dynamic rendering capability is enabled but graphics pipeline assembly is still backend TODO.");
+					colorBlendAttachments = desc.colorAttachmentFormats |
+					                        std::views::transform([](vk::Format) {
+						                        return vk::PipelineColorBlendAttachmentState{
+							                        vk::False,
+							                        vk::BlendFactor::eOne,
+							                        vk::BlendFactor::eZero,
+							                        vk::BlendOp::eAdd,
+							                        vk::BlendFactor::eOne,
+							                        vk::BlendFactor::eZero,
+							                        vk::BlendOp::eAdd,
+							                        vk::ColorComponentFlagBits::eR |
+							                                vk::ColorComponentFlagBits::eG |
+							                                vk::ColorComponentFlagBits::eB |
+							                                vk::ColorComponentFlagBits::eA,
+						                        };
+					                        }) |
+					                        std::ranges::to<std::vector>();
 				}
-				else
+				nrAssert(
+					colorBlendAttachments.size() == desc.colorAttachmentFormats.size(),
+					std::format(
+						"GraphicsPipeline::create color blend attachment count mismatch. formats={}, blends={}",
+						desc.colorAttachmentFormats.size(),
+						colorBlendAttachments.size()));
+
+				auto dynamicStates = desc.dynamicStates;
+				if (dynamicStates.empty())
 				{
-					nrInfo<LogLevel::warning>("GraphicsPipeline::create is in cursor-first transition and currently returns an empty pipeline.");
+					dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
 				}
-				return {};
+
+				vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+				vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo{};
+				inputAssemblyInfo.topology = desc.topology;
+				inputAssemblyInfo.primitiveRestartEnable = vk::False;
+
+				vk::PipelineViewportStateCreateInfo viewportStateInfo{};
+				viewportStateInfo.viewportCount = 1;
+				viewportStateInfo.scissorCount = 1;
+
+				vk::PipelineRasterizationStateCreateInfo rasterizationInfo{};
+				rasterizationInfo.depthClampEnable = vk::False;
+				rasterizationInfo.rasterizerDiscardEnable = vk::False;
+				rasterizationInfo.polygonMode = desc.polygonMode;
+				rasterizationInfo.cullMode = desc.cullMode;
+				rasterizationInfo.frontFace = desc.frontFace;
+				rasterizationInfo.depthBiasEnable = vk::False;
+				rasterizationInfo.lineWidth = 1.0f;
+
+				vk::PipelineMultisampleStateCreateInfo multisampleInfo{};
+				multisampleInfo.rasterizationSamples = desc.sampleCount;
+				multisampleInfo.sampleShadingEnable = vk::False;
+
+				vk::PipelineDepthStencilStateCreateInfo depthStencilInfo{};
+				depthStencilInfo.depthTestEnable = desc.depthTestEnable ? vk::True : vk::False;
+				depthStencilInfo.depthWriteEnable = desc.depthWriteEnable ? vk::True : vk::False;
+				depthStencilInfo.depthCompareOp = desc.depthCompareOp;
+				depthStencilInfo.depthBoundsTestEnable = vk::False;
+				depthStencilInfo.stencilTestEnable = desc.stencilAttachmentFormat.has_value() ? vk::True : vk::False;
+
+				vk::PipelineColorBlendStateCreateInfo colorBlendInfo{};
+				colorBlendInfo.logicOpEnable = vk::False;
+				colorBlendInfo.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
+				colorBlendInfo.pAttachments = colorBlendAttachments.data();
+
+				vk::PipelineDynamicStateCreateInfo dynamicStateInfo{};
+				dynamicStateInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+				dynamicStateInfo.pDynamicStates = dynamicStates.data();
+
+				auto renderingColorFormats = desc.colorAttachmentFormats;
+				vk::PipelineRenderingCreateInfo renderingInfo{};
+				renderingInfo.colorAttachmentCount = static_cast<uint32_t>(renderingColorFormats.size());
+				renderingInfo.pColorAttachmentFormats = renderingColorFormats.data();
+				renderingInfo.depthAttachmentFormat = desc.depthAttachmentFormat.value_or(vk::Format::eUndefined);
+				renderingInfo.stencilAttachmentFormat = desc.stencilAttachmentFormat.value_or(vk::Format::eUndefined);
+
+				vk::GraphicsPipelineCreateInfo createInfo{};
+				createInfo.flags = desc.flags;
+				createInfo.stageCount = static_cast<uint32_t>(stageCreateInfos.size());
+				createInfo.pStages = stageCreateInfos.data();
+				createInfo.pVertexInputState = &vertexInputInfo;
+				createInfo.pInputAssemblyState = &inputAssemblyInfo;
+				createInfo.pViewportState = &viewportStateInfo;
+				createInfo.pRasterizationState = &rasterizationInfo;
+				createInfo.pMultisampleState = &multisampleInfo;
+				createInfo.pDepthStencilState = &depthStencilInfo;
+				createInfo.pColorBlendState = &colorBlendInfo;
+				createInfo.pDynamicState = &dynamicStateInfo;
+				createInfo.layout = layout.raw();
+				createInfo.renderPass = nullptr;
+				createInfo.subpass = 0;
+				createInfo.pNext = &renderingInfo;
+
+				GraphicsPipeline pipeline;
+				pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
+				return pipeline;
 		}
+
+		[[nodiscard]] bool valid() const noexcept { return pipeline_ != nullptr; }
+		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
 
 	private:
 		vk::raii::Pipeline pipeline_ = {nullptr};
@@ -300,7 +407,6 @@ class ComputePipeline
 				const vk::raii::Device &device,
 				const CursorPipelineLayout &layout,
 				const VkShaderProgram &shaderProgram,
-				const PipelineRuntimeCapabilities &,
 				const ComputePipelineDesc &desc = {})
 		{
 				nrAssert(layout.valid(), "ComputePipeline::create requires a valid pipeline layout.");
@@ -321,6 +427,9 @@ class ComputePipeline
 				return pipeline;
 		}
 
+		[[nodiscard]] bool valid() const noexcept { return pipeline_ != nullptr; }
+		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
+
 	private:
 		vk::raii::Pipeline pipeline_ = {nullptr};
 };
@@ -329,22 +438,84 @@ class RayTracingPipeline
 {
 	public:
 		[[nodiscard]] static RayTracingPipeline create(
-				const vk::raii::Device &,
-				const CursorPipelineLayout &,
-				const VkShaderProgram &,
-				const PipelineRuntimeCapabilities &runtimeCaps = {},
-				const RayTracingPipelineDesc & = {})
+				const vk::raii::Device &device,
+				const CursorPipelineLayout &layout,
+				const VkShaderProgram &shaderProgram,
+				const RayTracingPipelineDesc &desc = {})
 		{
-				if (runtimeCaps.pipelineLibrary)
+				nrAssert(layout.valid(), "RayTracingPipeline::create requires a valid pipeline layout.");
+				nrAssert(shaderProgram.valid(), "RayTracingPipeline::create requires a valid shader program.");
+				nrAssert(desc.maxRayRecursionDepth > 0u, "RayTracingPipeline::create requires maxRayRecursionDepth > 0.");
+				nrAssert(desc.groups.empty(), "RayTracingPipeline::create currently expects automatic shader-group derivation; custom groups are not yet supported.");
+
+				auto rtStageIndices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(shaderProgram.stages().size())) |
+				                  std::views::filter([&](uint32_t index) { return detail::isRayTracingStage(shaderProgram.stages()[index]); }) |
+				                  std::ranges::to<std::vector>();
+				nrAssert(!rtStageIndices.empty(), "RayTracingPipeline::create requires at least one ray tracing shader stage.");
+
+				auto stageCreateInfos = rtStageIndices |
+				                       std::views::transform([&](uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
+				                       std::ranges::to<std::vector>();
+
+				constexpr uint32_t shaderUnused = std::numeric_limits<uint32_t>::max();
+				auto groups = std::vector<vk::RayTracingShaderGroupCreateInfoKHR>{};
+				groups.reserve(stageCreateInfos.size());
+
+				for (uint32_t localIndex = 0; localIndex < static_cast<uint32_t>(rtStageIndices.size()); ++localIndex)
 				{
-					nrInfo<LogLevel::warning>("RayTracingPipeline::create is in cursor-first transition. Pipeline-library capability is enabled for future modular RT pipeline assembly.");
+					auto stage = shaderProgram.stages()[rtStageIndices[localIndex]];
+					vk::RayTracingShaderGroupCreateInfoKHR group{};
+					group.generalShader = shaderUnused;
+					group.closestHitShader = shaderUnused;
+					group.anyHitShader = shaderUnused;
+					group.intersectionShader = shaderUnused;
+
+					switch (stage)
+					{
+					case SLANG_STAGE_RAY_GENERATION:
+					case SLANG_STAGE_MISS:
+					case SLANG_STAGE_CALLABLE:
+						group.type = vk::RayTracingShaderGroupTypeKHR::eGeneral;
+						group.generalShader = localIndex;
+						break;
+					case SLANG_STAGE_CLOSEST_HIT:
+						group.type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup;
+						group.closestHitShader = localIndex;
+						break;
+					case SLANG_STAGE_ANY_HIT:
+						group.type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup;
+						group.anyHitShader = localIndex;
+						break;
+					case SLANG_STAGE_INTERSECTION:
+						group.type = vk::RayTracingShaderGroupTypeKHR::eProceduralHitGroup;
+						group.intersectionShader = localIndex;
+						break;
+					default:
+						nrAssert(false, "Unexpected non-ray-tracing stage found during RT pipeline assembly.");
+						break;
+					}
+
+					groups.push_back(group);
 				}
-				else
-				{
-					nrInfo<LogLevel::warning>("RayTracingPipeline::create is in cursor-first transition and currently returns an empty pipeline.");
-				}
-				return {};
+
+				vk::RayTracingPipelineCreateInfoKHR createInfo{};
+				createInfo.flags = desc.flags;
+				createInfo.stageCount = static_cast<uint32_t>(stageCreateInfos.size());
+				createInfo.pStages = stageCreateInfos.data();
+				createInfo.groupCount = static_cast<uint32_t>(groups.size());
+				createInfo.pGroups = groups.data();
+				createInfo.maxPipelineRayRecursionDepth = desc.maxRayRecursionDepth;
+				createInfo.layout = layout.raw();
+
+				RayTracingPipeline pipeline;
+				auto deferredOperation = vk::Optional<const vk::raii::DeferredOperationKHR>(nullptr);
+				auto pipelineCache = vk::Optional<const vk::raii::PipelineCache>(nullptr);
+				pipeline.pipeline_ = vk::raii::Pipeline(device, deferredOperation, pipelineCache, createInfo);
+				return pipeline;
 		}
+
+		[[nodiscard]] bool valid() const noexcept { return pipeline_ != nullptr; }
+		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
 
 	private:
 		vk::raii::Pipeline pipeline_ = {nullptr};
@@ -356,8 +527,193 @@ struct PipelineState
 		CursorPipelineLayout layout;
 		ShaderDescriptorLayout descriptorLayout;
 		ShaderBindingPool bindingPool;
-		PipelineRuntimeCapabilities runtimeCaps;
 		TPipeline pipeline;
+};
+
+/**
+ * @brief Internal pipeline construction service bound to one logical device lifetime.
+ *
+ * Lifetime contract: bind once after logical device creation, then use for explicit
+ * pipeline/binding/sampler creation calls from Device::pipeline().
+ */
+class PipelineService
+{
+  public:
+	void bindDevice(const vk::raii::Device &device)
+	{
+		device_ = std::cref(device);
+	}
+
+	[[nodiscard]] ShaderBindingPool createBindingPool(const ShaderDescriptorLayout &descriptorLayout, uint32_t maxSets = 64, vk::DescriptorPoolCreateFlags flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet) const
+	{
+		nrAssert(device_.has_value(), "PipelineService::createBindingPool requires a bound logical device.");
+		return ShaderBindingPool::create(device_->get(), descriptorLayout, maxSets, flags);
+	}
+
+	[[nodiscard]] ShaderBindingSet allocateBindingSet(const CursorPipelineLayout &layout, ShaderBindingPool &bindingPool, uint32_t setIndex) const
+	{
+		nrAssert(device_.has_value(), "PipelineService::allocateBindingSet requires a bound logical device.");
+		auto descriptorSetLayout = layout.descriptorSetLayout(setIndex);
+		if (!descriptorSetLayout.has_value())
+		{
+			return {};
+		}
+		return bindingPool.allocate(*descriptorSetLayout, setIndex);
+	}
+
+	[[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSets(const CursorPipelineLayout &layout, ShaderBindingPool &bindingPool) const
+	{
+		nrAssert(device_.has_value(), "PipelineService::allocateBindingSets requires a bound logical device.");
+		return layout.setIndices() |
+		       std::views::transform([&](uint32_t setIndex) { return allocateBindingSet(layout, bindingPool, setIndex); }) |
+		       std::ranges::to<std::vector>();
+	}
+
+	[[nodiscard]] SlangSampler createSampler(SlangSamplerDesc desc = {}, std::string_view debugName = {}) const
+	{
+		nrAssert(device_.has_value(), "PipelineService::createSampler requires a bound logical device.");
+		return SlangSampler::create(device_->get(), std::move(desc), debugName);
+	}
+
+	[[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(const SlangProgram &slangProgram, const GraphicsPipelineDesc &desc = {}, uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+	{
+		nrAssert(device_.has_value(), "PipelineService::createGraphicsPipeline requires a bound logical device.");
+		nrAssert(slangProgram.valid(), "PipelineService::createGraphicsPipeline requires a valid SlangProgram.");
+
+		(void)immutableSamplers;
+
+		const auto &device = device_->get();
+		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
+		auto layout = CursorPipelineLayout::create(device, descriptorLayout);
+
+		auto effectiveDesc = desc;
+		auto appendDynamicState = [&effectiveDesc](vk::DynamicState state) {
+			if (std::ranges::none_of(effectiveDesc.dynamicStates, [state](vk::DynamicState current) { return current == state; }))
+			{
+				effectiveDesc.dynamicStates.push_back(state);
+			}
+		};
+		appendDynamicState(vk::DynamicState::eCullModeEXT);
+		appendDynamicState(vk::DynamicState::eFrontFaceEXT);
+		appendDynamicState(vk::DynamicState::ePrimitiveTopologyEXT);
+		appendDynamicState(vk::DynamicState::eDepthTestEnableEXT);
+		appendDynamicState(vk::DynamicState::eDepthWriteEnableEXT);
+		appendDynamicState(vk::DynamicState::eDepthCompareOpEXT);
+		appendDynamicState(vk::DynamicState::ePolygonModeEXT);
+		appendDynamicState(vk::DynamicState::eRasterizationSamplesEXT);
+
+		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
+		if (!effectiveDesc.entryPointNames.empty())
+		{
+			selectedEntryPoints.reserve(effectiveDesc.entryPointNames.size());
+			std::ranges::for_each(effectiveDesc.entryPointNames, [&](const std::string &entryPointName) {
+				auto const *entryPointData = slangProgram.entryPointData(entryPointName);
+				nrAssert(entryPointData != nullptr, std::format("PipelineService::createGraphicsPipeline unknown entrypoint '{}'.", entryPointName));
+				nrAssert(detail::isGraphicsStage(entryPointData->stage), std::format("PipelineService::createGraphicsPipeline entrypoint '{}' is not a graphics stage.", entryPointName));
+				selectedEntryPoints.push_back(entryPointData);
+			});
+		}
+		else
+		{
+			selectedEntryPoints = slangProgram.entryPoints() |
+			                      std::views::filter([](const SlangEntryPointData &entryPoint) { return detail::isGraphicsStage(entryPoint.stage); }) |
+			                      std::views::transform([](const SlangEntryPointData &entryPoint) { return &entryPoint; }) |
+			                      std::ranges::to<std::vector>();
+		}
+		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createGraphicsPipeline requires at least one selected graphics entrypoint.");
+
+		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
+		auto pipeline = GraphicsPipeline::create(device, layout, shaderProgram, effectiveDesc);
+		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, descriptorMaxSets);
+		return PipelineState<GraphicsPipeline>{
+			.layout = std::move(layout),
+			.descriptorLayout = std::move(descriptorLayout),
+			.bindingPool = std::move(bindingPool),
+			.pipeline = std::move(pipeline),
+		};
+	}
+
+	[[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc = {}, uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+	{
+		nrAssert(device_.has_value(), "PipelineService::createComputePipeline requires a bound logical device.");
+		nrAssert(slangProgram.valid(), "PipelineService::createComputePipeline requires a valid SlangProgram.");
+
+		(void)immutableSamplers;
+
+		const auto &device = device_->get();
+		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
+		auto layout = CursorPipelineLayout::create(device, descriptorLayout);
+
+		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
+		if (!desc.entryPointName.empty())
+		{
+			auto const *entryPointData = slangProgram.entryPointData(desc.entryPointName);
+			nrAssert(entryPointData != nullptr, std::format("PipelineService::createComputePipeline unknown entrypoint '{}'.", desc.entryPointName));
+			nrAssert(entryPointData->stage == SLANG_STAGE_COMPUTE, std::format("PipelineService::createComputePipeline entrypoint '{}' is not a compute stage.", desc.entryPointName));
+			selectedEntryPoints.push_back(entryPointData);
+		}
+		else
+		{
+			auto it = std::ranges::find_if(slangProgram.entryPoints(), [](const SlangEntryPointData &entryPoint) { return entryPoint.stage == SLANG_STAGE_COMPUTE; });
+			nrAssert(it != std::ranges::end(slangProgram.entryPoints()), "PipelineService::createComputePipeline requires at least one compute entrypoint.");
+			selectedEntryPoints.push_back(&(*it));
+		}
+
+		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
+		auto pipeline = ComputePipeline::create(device, layout, shaderProgram, desc);
+		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, descriptorMaxSets);
+		return PipelineState<ComputePipeline>{
+			.layout = std::move(layout),
+			.descriptorLayout = std::move(descriptorLayout),
+			.bindingPool = std::move(bindingPool),
+			.pipeline = std::move(pipeline),
+		};
+	}
+
+	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(const SlangProgram &slangProgram, const RayTracingPipelineDesc &desc = {}, uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+	{
+		nrAssert(device_.has_value(), "PipelineService::createRayTracingPipeline requires a bound logical device.");
+		nrAssert(slangProgram.valid(), "PipelineService::createRayTracingPipeline requires a valid SlangProgram.");
+
+		(void)immutableSamplers;
+
+		const auto &device = device_->get();
+		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
+		auto layout = CursorPipelineLayout::create(device, descriptorLayout);
+
+		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
+		if (!desc.entryPointNames.empty())
+		{
+			selectedEntryPoints.reserve(desc.entryPointNames.size());
+			std::ranges::for_each(desc.entryPointNames, [&](const std::string &entryPointName) {
+				auto const *entryPointData = slangProgram.entryPointData(entryPointName);
+				nrAssert(entryPointData != nullptr, std::format("PipelineService::createRayTracingPipeline unknown entrypoint '{}'.", entryPointName));
+				nrAssert(detail::isRayTracingStage(entryPointData->stage), std::format("PipelineService::createRayTracingPipeline entrypoint '{}' is not a ray-tracing stage.", entryPointName));
+				selectedEntryPoints.push_back(entryPointData);
+			});
+		}
+		else
+		{
+			selectedEntryPoints = slangProgram.entryPoints() |
+			                      std::views::filter([](const SlangEntryPointData &entryPoint) { return detail::isRayTracingStage(entryPoint.stage); }) |
+			                      std::views::transform([](const SlangEntryPointData &entryPoint) { return &entryPoint; }) |
+			                      std::ranges::to<std::vector>();
+		}
+		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createRayTracingPipeline requires at least one selected ray-tracing entrypoint.");
+
+		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
+		auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, desc);
+		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, descriptorMaxSets);
+		return PipelineState<RayTracingPipeline>{
+			.layout = std::move(layout),
+			.descriptorLayout = std::move(descriptorLayout),
+			.bindingPool = std::move(bindingPool),
+			.pipeline = std::move(pipeline),
+		};
+	}
+
+  private:
+	std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
 };
 
 } // namespace nr::rhi

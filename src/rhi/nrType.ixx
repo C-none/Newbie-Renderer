@@ -80,7 +80,7 @@ enum class AllocationStrategy : unsigned
 {
     CrossFrame, ///< Long-lived, survives multiple frames (default pool, standard alloc)
     PerFrame,   ///< Single-frame lifetime, allocated from linear pool, bulk-reset each frame
-    Transient   ///< Immediate/short-lived staging, allocated from dedicated staging pool
+    StagingTransient ///< Immediate/short-lived staging, allocated from dedicated staging pool
 };
 
 enum class PipelineType : unsigned

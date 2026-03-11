@@ -2,6 +2,17 @@
 
 This document defines the enforced Slang module/file organization used by `ShaderService`.
 
+## Mandatory Resource Binding Scope Policy
+
+The following constraint is mandatory for all shader code consumed by `nrrhi`:
+
+- Bindable resources must be declared in **global scope** only.
+- Entry-point parameter lists may only contain stage IO (for example `SV_DispatchThreadID`, varyings, and non-bindable value parameters).
+- Any bindable resource declared directly on an entry point is forbidden.
+
+In this repository, descriptor/push-constant reflection for runtime binding is intentionally derived from global scope only.
+Entry-point resource bindings are rejected by RHI validation instead of being merged.
+
 ## Fixed Session Search Paths
 
 `ISession` only uses two search paths:

@@ -16,6 +16,7 @@ This document outlines the development standards, architectural principles, and 
 ### 2.2 Coding Style & Modern C++
 
 *   **Modernization:** Prioritize modern C++ features over legacy practices.
+*   **Pragmatic Design:** While fully leveraging modern C++ features, avoid redundant design and over-abstraction.
 *   **Loops vs. Algorithms:** Replace raw `for` loops with **C++20/23 Ranges and Views** (pipes) whenever possible.
     *   *Preferred:* `data | std::views::transform(...) | ...`
     *   *Avoid:* `for (int i = 0; i < n; ++i) { ... }` unless performance critical and unrolling is necessary or the range alternative is significantly more complex.

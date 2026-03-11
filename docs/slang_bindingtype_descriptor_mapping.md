@@ -1,0 +1,198 @@
+# Slang BindingType and Vulkan DescriptorType Mapping
+
+## Scope
+
+This document explains:
+
+- what `slang::BindingType` means
+- what `vk::DescriptorType` means
+- why the mapping in `src/rhi/nrDescriptor.ixx` is designed this way
+- how the runtime binding flow is completed in `nrDescriptor` and `nrPipeline`
+
+The implementation described here only covers `src/rhi` and does not modify `src/extern/slang`.
+
+## Concepts
+
+### Slang `BindingType`
+
+`slang::BindingType` is a reflection-level semantic category. It tells the host what kind of shader parameter is represented at a binding range (sampler, texture, raw buffer, typed buffer, push constant, etc.).
+
+Important characteristics:
+
+- It is API-neutral (works across Vulkan, D3D12, Metal, and others).
+- It describes shader resource semantics, not direct Vulkan API objects.
+- Some binding types are not descriptor-backed on Vulkan (for example `PushConstant`).
+
+### Vulkan `DescriptorType`
+
+`vk::DescriptorType` is Vulkan pipeline layout and descriptor set ABI detail. It defines exactly how a descriptor slot is interpreted by the driver and hardware.
+
+Important characteristics:
+
+- It is Vulkan-specific.
+- It directly determines descriptor set layout creation and descriptor write structure shape.
+- It is required at descriptor set layout creation and at descriptor update.
+
+## Mapping Table
+
+Current mapping in `src/rhi/nrDescriptor.ixx` (`detail::toVkDescriptorType`):
+
+| Slang `BindingType` | Vulkan `DescriptorType` | Notes |
+|---|---|---|
+| `Sampler` | `eSampler` | sampler-only descriptor |
+| `CombinedTextureSampler` | `eCombinedImageSampler` | image+sampler in one descriptor |
+| `Texture` | `eSampledImage` | sampled image view |
+| `MutableTexture` | `eStorageImage` | UAV/storage image |
+| `InputRenderTarget` | `eInputAttachment` | subpass input attachment |
+| `ConstantBuffer` | `eUniformBuffer` | constant/uniform buffer |
+| `ParameterBlock` | `eUniformBuffer` | default policy in this engine |
+| `TypedBuffer` | `eUniformTexelBuffer` | formatted read buffer |
+| `MutableTypedBuffer` | `eStorageTexelBuffer` | formatted read-write buffer |
+| `RawBuffer` | `eStorageBuffer` | structured/raw buffer view |
+| `MutableRawBuffer` | `eStorageBuffer` | read-write raw buffer |
+| `InlineUniformData` | `eInlineUniformBlock` | requires Vulkan feature/extension support |
+| `RayTracingAccelerationStructure` | `eAccelerationStructureKHR` | ray tracing AS descriptor |
+| `PushConstant` | N/A (not descriptor) | handled via pipeline push constant ranges |
+| `Unknown`, `VaryingInput`, `VaryingOutput`, `ExistentialValue`, `MutableFlag`, `BaseMask`, `ExtMask` | N/A | not mapped in descriptor layout |
+
+## Shader Declaration to BindingType to DescriptorType
+
+This section answers a practical question: when you write a resource declaration in Slang shader code, what does reflection report as `slang::BindingType`, and what Vulkan descriptor type does this backend use?
+
+### Common examples
+
+| Slang shader declaration example | Reflected `slang::BindingType` | Vulkan `vk::DescriptorType` in this project |
+|---|---|---|
+| `SamplerState linearSampler;` | `Sampler` | `eSampler` |
+| `Texture2D<float4> tex;` | `Texture` | `eSampledImage` |
+| `RWTexture2D<float4> rwTex;` | `MutableTexture` | `eStorageImage` |
+| `ConstantBuffer<MyData> cb;` | `ConstantBuffer` | `eUniformBuffer` |
+| `ParameterBlock<MyData> params;` | `ParameterBlock` | `eUniformBuffer` (project default policy) |
+| `Buffer<float4> typedBuf;` | `TypedBuffer` | `eUniformTexelBuffer` |
+| `RWBuffer<float4> rwTypedBuf;` | `MutableTypedBuffer` | `eStorageTexelBuffer` |
+| `ByteAddressBuffer rawBuf;` | `RawBuffer` | `eStorageBuffer` |
+| `RWByteAddressBuffer rwRawBuf;` | `MutableRawBuffer` | `eStorageBuffer` |
+| `[[vk::push_constant]] ConstantBuffer<PC> pushData;` | `PushConstant` | N/A (not descriptor; goes to push constant range) |
+| `RaytracingAccelerationStructure sceneAS;` | `RayTracingAccelerationStructure` | `eAccelerationStructureKHR` |
+
+### Representative shader snippet
+
+```slang
+struct CbData
+{
+   uint bias;
+   float scale;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<CbData> pushData;            // PushConstant -> no descriptor
+
+ConstantBuffer<CbData> cbData;              // ConstantBuffer -> eUniformBuffer
+Texture2D<float4> tex2d;                    // Texture -> eSampledImage
+RWTexture2D<float4> rwTex2d;                // MutableTexture -> eStorageImage
+SamplerState linearSampler;                 // Sampler -> eSampler
+Buffer<float4> typedBuffer;                 // TypedBuffer -> eUniformTexelBuffer
+RWBuffer<float4> rwTypedBuffer;             // MutableTypedBuffer -> eStorageTexelBuffer
+ByteAddressBuffer rawBuffer;                // RawBuffer -> eStorageBuffer
+RWByteAddressBuffer rwRawBuffer;            // MutableRawBuffer -> eStorageBuffer
+```
+
+### Notes on reflection behavior
+
+- Reflection reports resource categories as `BindingType` per binding range, not by variable spelling alone.
+- Arrays keep the same `BindingType`; the descriptor count (and array element addressing) changes.
+- `PushConstant` is intentionally outside descriptor-set mapping.
+- `ParameterBlock<T>` is a grouping abstraction in Slang. In this backend, default mapping policy is `eUniformBuffer` for descriptor-backed ordinary data path.
+
+### Where this is verified in the project
+
+- Shader declaration coverage example: `shader/test/main/resourceBindingReflection.slang`
+- Reflection and mapping checks: `test/profile/nr_slang_single_entrypoint_contract.cpp`
+- Runtime mapping function: `src/rhi/nrDescriptor.ixx`
+
+## Why this Mapping
+
+### 1) Preserve Slang semantic intent while producing Vulkan ABI
+
+Slang reflection gives a portable semantic category. Vulkan requires concrete descriptor ABI. The mapping is the translation boundary.
+
+### 2) `ParameterBlock` defaulting to `eUniformBuffer`
+
+Reason:
+
+- In Slang, `ParameterBlock<T>` is a grouping concept. For Vulkan, ordinary data in the block is represented through uniform-buffer-like binding behavior.
+- `eUniformBufferDynamic` requires dynamic offsets at bind time. Making it the default forces a runtime policy on all callers.
+- This engine keeps dynamic offsets as an optional higher-level policy, not an implicit default.
+
+So the default mapping is `ParameterBlock -> eUniformBuffer`.
+
+### 3) `PushConstant` is intentionally not a descriptor
+
+Push constants are part of `VkPipelineLayout` push constant ranges and `vkCmdPushConstants`, not descriptor sets. Therefore this binding type is excluded from descriptor mapping and handled in push constant range collection.
+
+## Runtime Binding Flow (Implemented)
+
+### Reflection and layout discovery
+
+- `ShaderDescriptorLayout::create(...)` in `src/rhi/nrDescriptor.ixx`
+- Collects descriptor set/binding metadata and push constant metadata
+- Exposes `ShaderCursor` for path-based lookup
+
+### Write request construction
+
+- `ShaderCursor` is intentionally address/reflection-only:
+   - path navigation (`field`, `element`, `getPath`)
+   - metadata query (`descriptorBinding`, type/layout helpers)
+- `ShaderResourceWriter` in `src/rhi/nrPipeline.ixx` builds write requests from runtime resources:
+   - RAII `Buffer` / `Image`
+   - `vk::Sampler`, `vk::BufferView`, `vk::AccelerationStructureKHR`
+- Output is `DescriptorWriteRequest` with resolved set/binding metadata from `ShaderCursor`.
+
+### Descriptor update submission
+
+- `ShaderBindingPool::update(...)` in `src/rhi/nrPipeline.ixx`
+- Converts `DescriptorWriteRequest` payloads to Vulkan write structs
+- Calls `vkUpdateDescriptorSets` through RAII device
+- Validates set index and array element bounds
+
+### RAII resource adaptation
+
+- `ShaderResourceWriter` directly adapts project resource wrappers:
+   - `bindUniformBuffer(const ShaderCursor&, const Buffer&, ...)`
+   - `bindStorageBuffer(const ShaderCursor&, const Buffer&, ...)`
+   - `bindSampledImage(const ShaderCursor&, const Image&, ...)`
+   - `bindStorageImage(const ShaderCursor&, const Image&, ...)`
+   - `bindCombinedImageSampler(const ShaderCursor&, const Image&, vk::Sampler, ...)`
+   - texel-buffer overloads that can auto-create `BufferView` from `Buffer::addView(...)`
+- This keeps VMA-backed resource details in resource/pipeline layer, not in cursor reflection layer.
+
+### Command binding
+
+Two layers are available:
+
+1. Pipeline-layout aware helpers:
+   - `CursorPipelineLayout::bindDescriptorSet(...)`
+   - `CursorPipelineLayout::bindDescriptorSets(...)`
+   - `CursorPipelineLayout::pushConstants(...)`
+
+2. Command utility helpers (`src/rhi/nrCommand.ixx`):
+   - `cmd::bindPipeline(...)`
+   - `cmd::bindDescriptorSet(...)`
+   - `cmd::bindDescriptorSets(...)`
+   - `cmd::pushConstants(...)`
+
+## Practical Usage Pattern
+
+1. Build descriptor layout from Slang program.
+2. Create pipeline layout and descriptor pool.
+3. Allocate descriptor sets.
+4. Build write requests from `ShaderCursor`.
+5. Submit descriptor writes through `ShaderBindingPool::update(...)`.
+6. Bind pipeline and descriptor sets on command buffer.
+7. Push constants through layout or command helpers.
+
+## Notes and Constraints
+
+- `InlineUniformData` and acceleration structure descriptors require device feature support; the current policy enforces required support during device extension enable flow (`Device::makeDevice()`), not via pipeline-time secondary capability validators.
+- Multi-set bind helper in `CursorPipelineLayout` intentionally disallows shared dynamic offsets to avoid ambiguous offset routing.
+- If dynamic UBO policy is needed later, add explicit API for binding-specific dynamic offset routing rather than changing default mapping.

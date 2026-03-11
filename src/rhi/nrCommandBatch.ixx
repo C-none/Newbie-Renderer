@@ -20,12 +20,31 @@ export namespace nr::rhi
  * Usage Pattern:
  *   CommandBatch batch{};
  *   batch.addCommandBuffer(primaryCB);
- *   batch.addWait(imageAvailable, vk::PipelineStageFlagBits::eColorAttachmentOutput);
+ *   batch.addWait(imageAvailable, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
  *   batch.addSignal(renderFinished);
  *   queue.submit(batch, &fence);
  */
 class CommandBatch {
 public:
+    struct SemaphoreSyncPoint {
+        vk::Semaphore semaphore = vk::Semaphore{};
+        vk::PipelineStageFlags2 stageMask = vk::PipelineStageFlagBits2::eAllCommands;
+        uint64_t value = 0;
+        uint32_t deviceIndex = 0;
+    };
+
+    struct SubmitInfo2Packet {
+        std::vector<vk::SemaphoreSubmitInfo> waitInfos;
+        std::vector<vk::CommandBufferSubmitInfo> commandBufferInfos;
+        std::vector<vk::SemaphoreSubmitInfo> signalInfos;
+        vk::SubmitInfo2 submitInfo{};
+
+        [[nodiscard]] const vk::SubmitInfo2& info() const noexcept
+        {
+            return submitInfo;
+        }
+    };
+
     /**
      * @brief Construct empty batch
      */
@@ -46,6 +65,16 @@ public:
     }
 
     /**
+     * @brief Add a raw command-buffer handle.
+     *
+     * This overload is useful for tests and interop code where
+     * the caller already owns raw Vulkan handles.
+     */
+    void addCommandBuffer(vk::CommandBuffer commandBuffer) {
+        commandBuffers_.push_back(commandBuffer);
+    }
+
+    /**
      * @brief Add multiple command buffers to the batch
      * @param commandBuffers Span of RAII command buffers
      */
@@ -63,9 +92,25 @@ public:
      * 
      * Queue will wait for semaphore before executing commands
      */
-    void addWait(const vk::raii::Semaphore& semaphore, vk::PipelineStageFlags stage) {
-        waitSemaphores_.push_back(*semaphore);
-        waitStages_.push_back(stage);
+    void addWait(const vk::raii::Semaphore& semaphore, vk::PipelineStageFlags2 stage, uint64_t value = 0, uint32_t deviceIndex = 0) {
+        waitPoints_.push_back(SemaphoreSyncPoint{
+            .semaphore = *semaphore,
+            .stageMask = stage,
+            .value = value,
+            .deviceIndex = deviceIndex,
+        });
+    }
+
+    /**
+     * @brief Add a raw wait semaphore sync point.
+     */
+    void addWait(vk::Semaphore semaphore, vk::PipelineStageFlags2 stage, uint64_t value = 0, uint32_t deviceIndex = 0) {
+        waitPoints_.push_back(SemaphoreSyncPoint{
+            .semaphore = semaphore,
+            .stageMask = stage,
+            .value = value,
+            .deviceIndex = deviceIndex,
+        });
     }
 
     /**
@@ -74,8 +119,25 @@ public:
      * 
      * Queue will signal semaphore when commands complete
      */
-    void addSignal(const vk::raii::Semaphore& semaphore) {
-        signalSemaphores_.push_back(*semaphore);
+    void addSignal(const vk::raii::Semaphore& semaphore, uint64_t value = 0, uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
+        signalPoints_.push_back(SemaphoreSyncPoint{
+            .semaphore = *semaphore,
+            .stageMask = stage,
+            .value = value,
+            .deviceIndex = deviceIndex,
+        });
+    }
+
+    /**
+     * @brief Add a raw signal semaphore sync point.
+     */
+    void addSignal(vk::Semaphore semaphore, uint64_t value = 0, uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
+        signalPoints_.push_back(SemaphoreSyncPoint{
+            .semaphore = semaphore,
+            .stageMask = stage,
+            .value = value,
+            .deviceIndex = deviceIndex,
+        });
     }
 
     /**
@@ -85,9 +147,8 @@ public:
      */
     void clear() noexcept {
         commandBuffers_.clear();
-        waitSemaphores_.clear();
-        waitStages_.clear();
-        signalSemaphores_.clear();
+        waitPoints_.clear();
+        signalPoints_.clear();
     }
 
     /**
@@ -101,14 +162,53 @@ public:
     [[nodiscard]] size_t commandBufferCount() const noexcept { return commandBuffers_.size(); }
 
     /**
-     * @brief Build a SubmitInfo from this batch
-     * @return vk::SubmitInfo ready for queue submission
+    * @brief Build a SubmitInfo2 packet from this batch.
+    * @return Packet owning submit arrays and `vk::SubmitInfo2` view.
      * 
      * CommandBatch is a passive data container.
      * Use batch::submit() for actual submission.
      */
-    [[nodiscard]] vk::SubmitInfo buildSubmitInfo() const noexcept {
-        return vk::SubmitInfo{waitSemaphores_, waitStages_, commandBuffers_, signalSemaphores_};
+    [[nodiscard]] SubmitInfo2Packet buildSubmitInfo2() const {
+        SubmitInfo2Packet packet{};
+
+        packet.waitInfos.reserve(waitPoints_.size());
+        packet.commandBufferInfos.reserve(commandBuffers_.size());
+        packet.signalInfos.reserve(signalPoints_.size());
+
+        std::ranges::for_each(waitPoints_, [&](const SemaphoreSyncPoint& waitPoint) {
+            packet.waitInfos.push_back(vk::SemaphoreSubmitInfo{
+                waitPoint.semaphore,
+                waitPoint.value,
+                waitPoint.stageMask,
+                waitPoint.deviceIndex,
+            });
+        });
+
+        std::ranges::for_each(commandBuffers_, [&](vk::CommandBuffer commandBuffer) {
+            packet.commandBufferInfos.push_back(vk::CommandBufferSubmitInfo{
+                commandBuffer,
+                0,
+            });
+        });
+
+        std::ranges::for_each(signalPoints_, [&](const SemaphoreSyncPoint& signalPoint) {
+            packet.signalInfos.push_back(vk::SemaphoreSubmitInfo{
+                signalPoint.semaphore,
+                signalPoint.value,
+                signalPoint.stageMask,
+                signalPoint.deviceIndex,
+            });
+        });
+
+        packet.submitInfo = vk::SubmitInfo2{};
+        packet.submitInfo.waitSemaphoreInfoCount = static_cast<uint32_t>(packet.waitInfos.size());
+        packet.submitInfo.pWaitSemaphoreInfos = packet.waitInfos.data();
+        packet.submitInfo.commandBufferInfoCount = static_cast<uint32_t>(packet.commandBufferInfos.size());
+        packet.submitInfo.pCommandBufferInfos = packet.commandBufferInfos.data();
+        packet.submitInfo.signalSemaphoreInfoCount = static_cast<uint32_t>(packet.signalInfos.size());
+        packet.submitInfo.pSignalSemaphoreInfos = packet.signalInfos.data();
+
+        return packet;
     }
 
     // ========== Builder-style interface ==========
@@ -124,25 +224,24 @@ public:
     /**
      * @brief Builder-style: add wait semaphore
      */
-    CommandBatch& withWait(const vk::raii::Semaphore& sem, vk::PipelineStageFlags stage) {
-        addWait(sem, stage);
+    CommandBatch& withWait(const vk::raii::Semaphore& sem, vk::PipelineStageFlags2 stage, uint64_t value = 0, uint32_t deviceIndex = 0) {
+        addWait(sem, stage, value, deviceIndex);
         return *this;
     }
 
     /**
      * @brief Builder-style: add signal semaphore
      */
-    CommandBatch& withSignal(const vk::raii::Semaphore& sem) {
-        addSignal(sem);
+    CommandBatch& withSignal(const vk::raii::Semaphore& sem, uint64_t value = 0, uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
+        addSignal(sem, value, deviceIndex, stage);
         return *this;
     }
 
 private:
     // Store raw handles internally (non-owning view extracted from RAII objects)
     std::vector<vk::CommandBuffer> commandBuffers_;
-    std::vector<vk::Semaphore> waitSemaphores_;
-    std::vector<vk::PipelineStageFlags> waitStages_;
-    std::vector<vk::Semaphore> signalSemaphores_;
+    std::vector<SemaphoreSyncPoint> waitPoints_;
+    std::vector<SemaphoreSyncPoint> signalPoints_;
 };
 
 /**
@@ -175,7 +274,7 @@ namespace batch {
 ) {
     CommandBatch batch{};
     batch.addCommandBuffer(commandBuffer);
-    batch.addWait(imageAvailable, vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    batch.addWait(imageAvailable, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
     batch.addSignal(renderFinished);
     return batch;
 }
