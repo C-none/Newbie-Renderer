@@ -58,7 +58,7 @@ The project keeps a built-in minimal test framework module for C++ modules workf
 ### Submodules
 | Name      | Version  |
 | --------- | -------- |
-| Slang     | v2026.3.1 |
+| Slang     | v2026.4.1 |
 | Aftermath | R590     |
 
 tips: You may update submodules by git if u like. However, Aftermath has to be updated manually by downloading the latest version from NVIDIA Developer [website](https://developer.nvidia.com/nsight-aftermath).

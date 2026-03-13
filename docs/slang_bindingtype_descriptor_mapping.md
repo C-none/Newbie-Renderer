@@ -50,7 +50,7 @@ Current mapping in `src/rhi/nrDescriptor.ixx` (`detail::toVkDescriptorType`):
 | `MutableTypedBuffer` | `eStorageTexelBuffer` | formatted read-write buffer |
 | `RawBuffer` | `eStorageBuffer` | structured/raw buffer view |
 | `MutableRawBuffer` | `eStorageBuffer` | read-write raw buffer |
-| `InlineUniformData` | `eInlineUniformBlock` | requires Vulkan feature/extension support |
+| `InlineUniformData` | `eInlineUniformBlock` | runtime write path is implemented via `ShaderResourceWriter::bindInlineUniformData(...)` |
 | `RayTracingAccelerationStructure` | `eAccelerationStructureKHR` | ray tracing AS descriptor |
 | `PushConstant` | N/A (not descriptor) | handled via pipeline push constant ranges |
 | `Unknown`, `VaryingInput`, `VaryingOutput`, `ExistentialValue`, `MutableFlag`, `BaseMask`, `ExtMask` | N/A | not mapped in descriptor layout |
@@ -143,14 +143,14 @@ Push constants are part of `VkPipelineLayout` push constant ranges and `vkCmdPus
 - `ShaderCursor` is intentionally address/reflection-only:
    - path navigation (`field`, `element`, `getPath`)
    - metadata query (`descriptorBinding`, type/layout helpers)
-- `ShaderResourceWriter` in `src/rhi/nrPipeline.ixx` builds write requests from runtime resources:
+- `ShaderResourceWriter` in `src/rhi/nrDescriptor.ixx` builds write requests from runtime resources:
    - RAII `Buffer` / `Image`
    - `vk::Sampler`, `vk::BufferView`, `vk::AccelerationStructureKHR`
 - Output is `DescriptorWriteRequest` with resolved set/binding metadata from `ShaderCursor`.
 
 ### Descriptor update submission
 
-- `ShaderBindingPool::update(...)` in `src/rhi/nrPipeline.ixx`
+- `ShaderBindingPool::update(...)` in `src/rhi/nrDescriptor.ixx`
 - Converts `DescriptorWriteRequest` payloads to Vulkan write structs
 - Calls `vkUpdateDescriptorSets` through RAII device
 - Validates set index and array element bounds
@@ -175,11 +175,42 @@ Two layers are available:
    - `CursorPipelineLayout::bindDescriptorSets(...)`
    - `CursorPipelineLayout::pushConstants(...)`
 
-2. Command utility helpers (`src/rhi/nrCommand.ixx`):
-   - `cmd::bindPipeline(...)`
-   - `cmd::bindDescriptorSet(...)`
-   - `cmd::bindDescriptorSets(...)`
-   - `cmd::pushConstants(...)`
+`src/rhi/nrCommand.ixx` currently only provides command-buffer begin/end recording helpers and does not expose descriptor/pipeline bind wrappers.
+
+## Resource-Type Support Matrix (Code-Accurate)
+
+This matrix reflects current behavior in `src/rhi/nrDescriptor.ixx`:
+
+| Slang `BindingType` | Mapped to Vulkan descriptor | `ShaderResourceWriter` bind API present | `ShaderBindingPool::update` payload support | End-to-end runtime bindable now |
+|---|---|---|---|---|
+| `Sampler` | Yes (`eSampler`) | Yes (`bindSampler`) | Yes (`ImageDescriptorWrite`) | Yes |
+| `CombinedTextureSampler` | Yes (`eCombinedImageSampler`) | Yes (`bindCombinedImageSampler`) | Yes (`ImageDescriptorWrite`) | Yes |
+| `Texture` | Yes (`eSampledImage`) | Yes (`bindSampledImage`) | Yes (`ImageDescriptorWrite`) | Yes |
+| `InputRenderTarget` | Yes (`eInputAttachment`) | Reuses `bindSampledImage` allow-list | Yes (`ImageDescriptorWrite`) | Yes |
+| `MutableTexture` | Yes (`eStorageImage`) | Yes (`bindStorageImage`) | Yes (`ImageDescriptorWrite`) | Yes |
+| `ConstantBuffer` | Yes (`eUniformBuffer`) | Yes (`bindUniformBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
+| `ParameterBlock` | Yes (`eUniformBuffer`) | Yes (`bindUniformBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
+| `TypedBuffer` | Yes (`eUniformTexelBuffer`) | Yes (`bindUniformTexelBuffer`) | Yes (`TexelBufferDescriptorWrite`) | Yes |
+| `MutableTypedBuffer` | Yes (`eStorageTexelBuffer`) | Yes (`bindStorageTexelBuffer`) | Yes (`TexelBufferDescriptorWrite`) | Yes |
+| `RawBuffer` | Yes (`eStorageBuffer`) | Yes (`bindStorageBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
+| `MutableRawBuffer` | Yes (`eStorageBuffer`) | Yes (`bindStorageBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
+| `RayTracingAccelerationStructure` | Yes (`eAccelerationStructureKHR`) | Yes (`bindAccelerationStructure`) | Yes (`AccelerationStructureDescriptorWrite`) | Yes |
+| `InlineUniformData` | Yes (`eInlineUniformBlock`) | Yes (`bindInlineUniformData`) | Yes (`InlineUniformDescriptorWrite` + `VkWriteDescriptorSetInlineUniformBlock`) | Yes |
+| `PushConstant` | Not descriptor-backed | N/A | N/A | Yes (via push constants path) |
+
+## Redundancy and Optimization Notes
+
+Two redundant traversal hotspots were optimized in code:
+
+1. Descriptor-set grouping in `ShaderDescriptorLayout::create(...)`
+   - Before: gather set indices, sort/unique, then rescan all bindings per set.
+   - Now: single-pass grouping directly over `bindingBySetAndBinding_` (already ordered by `(set, binding)`).
+
+2. Descriptor write pre-counting in `ShaderBindingPool::update(...)`
+   - Before: four `count_if` passes (buffer/texel/image/AS) plus one build pass.
+   - Now: single build pass with upfront reserve by `writeRequests.size()`.
+
+These changes preserve external APIs and behavior while reducing repeated scans.
 
 ## Practical Usage Pattern
 
@@ -193,6 +224,8 @@ Two layers are available:
 
 ## Notes and Constraints
 
-- `InlineUniformData` and acceleration structure descriptors require device feature support; the current policy enforces required support during device extension enable flow (`Device::makeDevice()`), not via pipeline-time secondary capability validators.
+- `InlineUniformData` runtime writes follow Vulkan inline-uniform rules: write size and destination byte offset are in bytes and must both be multiples of 4.
+- Device creation enables and validates `VK_EXT_inline_uniform_block` / `inlineUniformBlock` via the feature chain in `Device::makeDevice()`.
+- Acceleration structure descriptors require device feature support; the current policy enforces required support during device extension enable flow (`Device::makeDevice()`), not via pipeline-time secondary capability validators.
 - Multi-set bind helper in `CursorPipelineLayout` intentionally disallows shared dynamic offsets to avoid ambiguous offset routing.
 - If dynamic UBO policy is needed later, add explicit API for binding-specific dynamic offset routing rather than changing default mapping.

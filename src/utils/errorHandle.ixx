@@ -25,6 +25,25 @@ constexpr std::string_view levelColor(LogLevel level)
     default: return ansiReset;
     }
 }
+
+inline std::ostream &levelStream(LogLevel level)
+{
+    return level == LogLevel::error ? std::cerr : std::cout;
+}
+
+inline void emitLog(LogLevel level, std::string_view channel, std::string_view context, std::source_location loc)
+{
+    std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
+    std::print(levelStream(level),
+               "{}[NR {}:{}]{} {}\n{}\n{}\n",
+               detail::levelColor(level),
+               channel,
+               logLevelNames[static_cast<size_t>(level)],
+               detail::ansiReset,
+               locationStr,
+               loc.function_name(),
+               context.empty() ? "(none)" : context);
+}
 } // namespace detail
 
 constexpr inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())
@@ -46,13 +65,17 @@ template <LogLevel Level = LogLevel::info> constexpr inline void nrInfo(std::str
     if constexpr (globalLogLevel <= Level)
     {
         constexpr bool isError = Level == LogLevel::error;
-        std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
-        std::print(isError ? std::cerr : std::cout,
-                   "{}[NR {}]{} {}\n{}\n{}\n",
-                   detail::levelColor(Level), logLevelNames[static_cast<size_t>(Level)], detail::ansiReset,
-                   locationStr, loc.function_name(), context.empty() ? "(none)" : context);
+        detail::emitLog(Level, "LOG", context, loc);
         if constexpr (isError)
             std::exit(1);
+    }
+}
+
+constexpr inline void nrVulkan(LogLevel level, std::string_view context, std::source_location loc = std::source_location::current())
+{
+    if (globalLogLevel <= level)
+    {
+        detail::emitLog(level, "VULKAN", context, loc);
     }
 }
 

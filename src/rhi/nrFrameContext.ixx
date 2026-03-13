@@ -174,17 +174,16 @@ class FrameContext
         if (transferPrimary_.valid())
             transferPrimary_.reset();
 
-        // Reset all registered secondary pools
-        // No lock needed here - reset only called from main thread after fence is signaled
-        std::ranges::for_each(graphicsSecondary_ | std::views::take(preparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
+        // Reset all prepared secondary pools.
+        std::ranges::for_each(graphicsSecondary_ | std::views::take(graphicsPreparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
             if (pool.has_value())
                 pool->reset();
         });
-        std::ranges::for_each(computeSecondary_ | std::views::take(preparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
+        std::ranges::for_each(computeSecondary_ | std::views::take(computePreparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
             if (pool.has_value())
                 pool->reset();
         });
-        std::ranges::for_each(transferSecondary_ | std::views::take(preparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
+        std::ranges::for_each(transferSecondary_ | std::views::take(transferPreparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
             if (pool.has_value())
                 pool->reset();
         });
@@ -196,15 +195,23 @@ class FrameContext
      * Call from frame-begin on the main thread before worker recording starts.
      * Recording-time access (`secondary<T>()`) never grows storage or acquires locks.
      */
-    void prepareSecondaryPools()
+    void prepareSecondaryPools(uint32_t graphicsWorkerCount = kMaxSecondaryWorkers, uint32_t computeWorkerCount = kMaxSecondaryWorkers, uint32_t transferWorkerCount = 0)
     {
-        prepareQueueSecondaryPools(graphicsSecondary_, graphicsQueueFamily_);
-        prepareQueueSecondaryPools(computeSecondary_, computeQueueFamily_);
+        graphicsPreparedSecondaryWorkers_ = std::min(graphicsWorkerCount, kMaxSecondaryWorkers);
+        computePreparedSecondaryWorkers_ = std::min(computeWorkerCount, kMaxSecondaryWorkers);
+
+        prepareQueueSecondaryPools(graphicsSecondary_, graphicsQueueFamily_, graphicsPreparedSecondaryWorkers_);
+        prepareQueueSecondaryPools(computeSecondary_, computeQueueFamily_, computePreparedSecondaryWorkers_);
+
+        transferPreparedSecondaryWorkers_ = 0;
         if (transferPrimary_.valid())
         {
-            prepareQueueSecondaryPools(transferSecondary_, transferQueueFamily_);
+            transferPreparedSecondaryWorkers_ = std::min(transferWorkerCount, kMaxSecondaryWorkers);
+            if (transferPreparedSecondaryWorkers_ > 0)
+            {
+                prepareQueueSecondaryPools(transferSecondary_, transferQueueFamily_, transferPreparedSecondaryWorkers_);
+            }
         }
-        preparedSecondaryWorkers_ = kMaxSecondaryWorkers;
     }
 
     /**
@@ -237,21 +244,22 @@ class FrameContext
      */
     template <QueueRole T> [[nodiscard]] CommandPool &secondary(size_t threadId)
     {
-        nrAssert(threadId < preparedSecondaryWorkers_, std::format("FrameContext::secondary threadId {} out of prepared range {}", threadId, preparedSecondaryWorkers_));
-
         if constexpr (T == QueueRole::Graphics)
         {
+            nrAssert(threadId < graphicsPreparedSecondaryWorkers_, std::format("FrameContext::secondary graphics threadId {} out of prepared range {}", threadId, graphicsPreparedSecondaryWorkers_));
             nrAssert(graphicsSecondary_[threadId].has_value(), "FrameContext::secondary graphics pool slot not prepared");
             return *graphicsSecondary_[threadId];
         }
         else if constexpr (T == QueueRole::Compute)
         {
+            nrAssert(threadId < computePreparedSecondaryWorkers_, std::format("FrameContext::secondary compute threadId {} out of prepared range {}", threadId, computePreparedSecondaryWorkers_));
             nrAssert(computeSecondary_[threadId].has_value(), "FrameContext::secondary compute pool slot not prepared");
             return *computeSecondary_[threadId];
         }
         else if constexpr (T == QueueRole::Transfer)
         {
             nrAssert(transferPrimary_.valid(), "Transfer queue not configured for this FrameContext");
+            nrAssert(threadId < transferPreparedSecondaryWorkers_, std::format("FrameContext::secondary transfer threadId {} out of prepared range {}", threadId, transferPreparedSecondaryWorkers_));
             nrAssert(transferSecondary_[threadId].has_value(), "FrameContext::secondary transfer pool slot not prepared");
             return *transferSecondary_[threadId];
         }
@@ -302,12 +310,20 @@ class FrameContext
      */
     template <QueueRole T> [[nodiscard]] size_t registeredThreads() const noexcept
     {
-        if constexpr (T == QueueRole::Transfer)
+        if constexpr (T == QueueRole::Graphics)
+        {
+            return graphicsPreparedSecondaryWorkers_;
+        }
+        else if constexpr (T == QueueRole::Compute)
+        {
+            return computePreparedSecondaryWorkers_;
+        }
+        else
         {
             if (!transferPrimary_.valid())
                 return 0;
+            return transferPreparedSecondaryWorkers_;
         }
-        return preparedSecondaryWorkers_;
     }
 
   private:
@@ -331,15 +347,17 @@ class FrameContext
         transferPrimary_ = std::move(other.transferPrimary_);
         transferSecondary_ = std::move(other.transferSecondary_);
 
-        preparedSecondaryWorkers_ = other.preparedSecondaryWorkers_;
+        graphicsPreparedSecondaryWorkers_ = other.graphicsPreparedSecondaryWorkers_;
+        computePreparedSecondaryWorkers_ = other.computePreparedSecondaryWorkers_;
+        transferPreparedSecondaryWorkers_ = other.transferPreparedSecondaryWorkers_;
     }
 
     /**
      * @brief Ensure queue-specific secondary pool slots are materialized for [0, workerCount).
      */
-    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, uint32_t queueFamilyIndex)
+    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, uint32_t queueFamilyIndex, uint32_t workerCount)
     {
-        auto slotIndices = std::views::iota(uint32_t{0}, kMaxSecondaryWorkers);
+        auto slotIndices = std::views::iota(uint32_t{0}, workerCount);
         std::ranges::for_each(slotIndices, [&](uint32_t slotIndex) {
             if (!slots[slotIndex].has_value())
             {
@@ -372,7 +390,9 @@ class FrameContext
     CommandPool transferPrimary_;
     std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> transferSecondary_{};
 
-    uint32_t preparedSecondaryWorkers_ = 0;
+    uint32_t graphicsPreparedSecondaryWorkers_ = 0;
+    uint32_t computePreparedSecondaryWorkers_ = 0;
+    uint32_t transferPreparedSecondaryWorkers_ = 0;
 };
 
 /**

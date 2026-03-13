@@ -770,12 +770,20 @@ class SlangProgram
             auto *entryScopeTypeLayout = entryScopeVarLayout ? entryScopeVarLayout->getTypeLayout() : nullptr;
             auto entryBindingRangeCount = entryScopeTypeLayout ? std::max<SlangInt>(0, entryScopeTypeLayout->getBindingRangeCount()) : 0;
 
-            nrAssert(
-                entryBindingRangeCount == 0,
-                std::format(
-                    "Entry-point resource binding is forbidden. Keep bindable resources in global scope only. entry='{}', bindingRangeCount={}",
-                    entryName,
-                    entryBindingRangeCount));
+            if (entryScopeTypeLayout && entryBindingRangeCount > 0)
+            {
+                std::ranges::for_each(std::views::iota(SlangInt{0}, entryBindingRangeCount), [&](SlangInt rangeIndex) {
+                    auto bindingType = entryScopeTypeLayout->getBindingRangeType(rangeIndex);
+                    auto isStageIo = bindingType == slang::BindingType::VaryingInput || bindingType == slang::BindingType::VaryingOutput;
+                    nrAssert(
+                        isStageIo,
+                        std::format(
+                            "Entry-point descriptor binding is forbidden. Keep bindable resources in global scope only. entry='{}', rangeIndex={}, bindingType={}",
+                            entryName,
+                            rangeIndex,
+                            static_cast<int32_t>(bindingType)));
+                });
+            }
 
             Slang::ComPtr<slang::IBlob> codeBlob;
             Slang::ComPtr<slang::IBlob> diagnostics;

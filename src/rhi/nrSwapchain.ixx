@@ -116,8 +116,61 @@ struct SwapChain
         }();
 
         auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
+        auto presentModes = physicalDevice.getSurfacePresentModesKHR(surface);
+
         auto maxImageCount = capabilities.maxImageCount == 0 ? config.preferredImageCount : capabilities.maxImageCount;
         auto imageCount = std::clamp(config.preferredImageCount, capabilities.minImageCount, maxImageCount);
+
+        auto extent = surfaceExtent;
+        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+        {
+            extent = capabilities.currentExtent;
+        }
+        else
+        {
+            extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+            extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+        }
+
+        auto choosePresentMode = [&]() {
+            auto requested = std::ranges::find(presentModes, config.presentMode);
+            if (requested != presentModes.end())
+            {
+                return config.presentMode;
+            }
+            auto mailbox = std::ranges::find(presentModes, vk::PresentModeKHR::eMailbox);
+            if (mailbox != presentModes.end())
+            {
+                return vk::PresentModeKHR::eMailbox;
+            }
+            return vk::PresentModeKHR::eFifo;
+        };
+
+        auto chooseCompositeAlpha = [&]() {
+            if ((capabilities.supportedCompositeAlpha & config.compositeAlpha) == config.compositeAlpha)
+            {
+                return config.compositeAlpha;
+            }
+            constexpr std::array preferred{
+                vk::CompositeAlphaFlagBitsKHR::eOpaque,
+                vk::CompositeAlphaFlagBitsKHR::ePreMultiplied,
+                vk::CompositeAlphaFlagBitsKHR::ePostMultiplied,
+                vk::CompositeAlphaFlagBitsKHR::eInherit,
+            };
+            auto it = std::ranges::find_if(preferred, [&](vk::CompositeAlphaFlagBitsKHR candidate) {
+                return (capabilities.supportedCompositeAlpha & candidate) == candidate;
+            });
+            nrAssert(it != preferred.end(), "SwapChain::create found no supported composite alpha mode.");
+            return *it;
+        };
+
+        auto chooseSurfaceTransform = [&]() {
+            if ((capabilities.supportedTransforms & config.surfaceTransform) == config.surfaceTransform)
+            {
+                return config.surfaceTransform;
+            }
+            return capabilities.currentTransform;
+        };
 
         vk::SwapchainCreateInfoKHR createInfo(
             vk::SwapchainCreateFlagsKHR{},
@@ -125,22 +178,22 @@ struct SwapChain
             imageCount,
             selectedFormat.format,
             selectedFormat.colorSpace,
-            surfaceExtent,
+            extent,
             1,
             config.imageUsage,
             vk::SharingMode::eExclusive,
             {},
-            config.surfaceTransform,
-            config.compositeAlpha,
-            config.presentMode,
-            vk::False,
+            chooseSurfaceTransform(),
+            chooseCompositeAlpha(),
+            choosePresentMode(),
+            vk::True,
             oldSwapchain);
 
         SwapChain result;
         result.swapChain = vk::raii::SwapchainKHR(device, createInfo);
         result.swapChainImages = result.swapChain.getImages();
         result.format = selectedFormat.format;
-        result.extent = surfaceExtent;
+        result.extent = extent;
 
         vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, selectedFormat.format, {}, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
         result.imageViews = result.swapChainImages | std::views::transform([&](vk::Image image) {

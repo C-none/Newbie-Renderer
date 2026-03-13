@@ -375,11 +375,10 @@ class VmaAllocatorWrapper
      * @param device      RAII device (must outlive this allocator)
      *
      * Enables flags for:
-     * - Dedicated allocations (core 1.1)
-     * - Bind memory 2 (core 1.1)
      * - Buffer device address (core 1.2)
      * - Maintenance4 (core 1.3)
      * - Maintenance5 (core 1.3)
+     * - EXT memory budget query integration
      */
     VmaAllocatorWrapper(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device)
     {
@@ -388,7 +387,10 @@ class VmaAllocatorWrapper
         vulkanFunctions.vkGetDeviceProcAddr = device.getDispatcher()->vkGetDeviceProcAddr;
 
         VmaAllocatorCreateInfo createInfo{};
-        createInfo.flags = VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT | VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT | VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT | VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT;
+        createInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
+                           VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT |
+                           VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT |
+                           VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
         createInfo.vulkanApiVersion = vk::ApiVersion14;
         createInfo.physicalDevice = *physDevice;
         createInfo.device = *device;

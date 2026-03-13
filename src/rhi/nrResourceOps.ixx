@@ -556,6 +556,133 @@ inline void copyImageToBuffer(vk::CommandBuffer commandBuffer, const Image& src,
     commandBuffer.copyImageToBuffer(src.handle(), srcLayout, dst.handle(), {effectiveRegion});
 }
 
+struct RenderingAttachmentDesc
+{
+    vk::ImageView imageView{};
+    vk::ImageLayout imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    vk::ResolveModeFlagBits resolveMode = vk::ResolveModeFlagBits::eNone;
+    vk::ImageView resolveImageView{};
+    vk::ImageLayout resolveImageLayout = vk::ImageLayout::eUndefined;
+    vk::AttachmentLoadOp loadOp = vk::AttachmentLoadOp::eLoad;
+    vk::AttachmentStoreOp storeOp = vk::AttachmentStoreOp::eStore;
+    vk::ClearValue clearValue{};
+};
+
+struct RenderingDepthStencilAttachmentDesc
+{
+    vk::ImageView imageView{};
+    vk::ImageLayout imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    vk::ResolveModeFlagBits resolveMode = vk::ResolveModeFlagBits::eNone;
+    vk::ImageView resolveImageView{};
+    vk::ImageLayout resolveImageLayout = vk::ImageLayout::eUndefined;
+    vk::AttachmentLoadOp depthLoadOp = vk::AttachmentLoadOp::eLoad;
+    vk::AttachmentStoreOp depthStoreOp = vk::AttachmentStoreOp::eStore;
+    vk::AttachmentLoadOp stencilLoadOp = vk::AttachmentLoadOp::eLoad;
+    vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eStore;
+    vk::ClearDepthStencilValue clearValue{1.0f, 0u};
+};
+
+struct RenderingScopeDesc
+{
+    vk::Rect2D renderArea{};
+    uint32_t layerCount = 1;
+    uint32_t viewMask = 0;
+    vk::RenderingFlags flags{};
+    std::span<const RenderingAttachmentDesc> colorAttachments{};
+    std::optional<RenderingDepthStencilAttachmentDesc> depthAttachment;
+    std::optional<RenderingDepthStencilAttachmentDesc> stencilAttachment;
+};
+
+namespace detail
+{
+[[nodiscard]] inline vk::RenderingAttachmentInfo makeRenderingAttachmentInfo(const RenderingAttachmentDesc& desc)
+{
+    vk::RenderingAttachmentInfo info{};
+    info.imageView = desc.imageView;
+    info.imageLayout = desc.imageLayout;
+    info.resolveMode = desc.resolveMode;
+    info.resolveImageView = desc.resolveImageView;
+    info.resolveImageLayout = desc.resolveImageLayout;
+    info.loadOp = desc.loadOp;
+    info.storeOp = desc.storeOp;
+    info.clearValue = desc.clearValue;
+    return info;
+}
+
+[[nodiscard]] inline vk::RenderingAttachmentInfo makeRenderingAttachmentInfo(const RenderingDepthStencilAttachmentDesc& desc)
+{
+    vk::RenderingAttachmentInfo info{};
+    info.imageView = desc.imageView;
+    info.imageLayout = desc.imageLayout;
+    info.resolveMode = desc.resolveMode;
+    info.resolveImageView = desc.resolveImageView;
+    info.resolveImageLayout = desc.resolveImageLayout;
+    info.loadOp = desc.depthLoadOp;
+    info.storeOp = desc.depthStoreOp;
+    info.clearValue = vk::ClearValue{desc.clearValue};
+    return info;
+}
+} // namespace detail
+
+class ScopedRendering
+{
+  public:
+    ScopedRendering(vk::CommandBuffer commandBuffer, const RenderingScopeDesc& desc)
+        : commandBuffer_(commandBuffer)
+        , colorAttachmentInfos_(desc.colorAttachments |
+                                std::views::transform([](const RenderingAttachmentDesc& attachment) { return detail::makeRenderingAttachmentInfo(attachment); }) |
+                                std::ranges::to<std::vector>())
+    {
+        nrAssert(commandBuffer_ != nullptr, "ScopedRendering requires a valid command buffer.");
+
+        renderingInfo_.renderArea = desc.renderArea;
+        renderingInfo_.layerCount = desc.layerCount;
+        renderingInfo_.viewMask = desc.viewMask;
+        renderingInfo_.flags = desc.flags;
+        renderingInfo_.colorAttachmentCount = static_cast<uint32_t>(colorAttachmentInfos_.size());
+        renderingInfo_.pColorAttachments = colorAttachmentInfos_.data();
+
+        if (desc.depthAttachment.has_value())
+        {
+            depthAttachmentInfo_ = detail::makeRenderingAttachmentInfo(*desc.depthAttachment);
+            renderingInfo_.pDepthAttachment = &(*depthAttachmentInfo_);
+        }
+
+        if (desc.stencilAttachment.has_value())
+        {
+            auto stencilAttachmentInfo = detail::makeRenderingAttachmentInfo(*desc.stencilAttachment);
+            stencilAttachmentInfo.loadOp = desc.stencilAttachment->stencilLoadOp;
+            stencilAttachmentInfo.storeOp = desc.stencilAttachment->stencilStoreOp;
+            stencilAttachmentInfo_.emplace(stencilAttachmentInfo);
+            renderingInfo_.pStencilAttachment = &(*stencilAttachmentInfo_);
+        }
+
+        commandBuffer_.beginRendering(renderingInfo_);
+        isActive_ = true;
+    }
+
+    ~ScopedRendering()
+    {
+        if (isActive_ && commandBuffer_ != nullptr)
+        {
+            commandBuffer_.endRendering();
+        }
+    }
+
+    ScopedRendering(const ScopedRendering&) = delete;
+    ScopedRendering& operator=(const ScopedRendering&) = delete;
+    ScopedRendering(ScopedRendering&&) = delete;
+    ScopedRendering& operator=(ScopedRendering&&) = delete;
+
+  private:
+    vk::CommandBuffer commandBuffer_{};
+    std::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos_;
+    std::optional<vk::RenderingAttachmentInfo> depthAttachmentInfo_;
+    std::optional<vk::RenderingAttachmentInfo> stencilAttachmentInfo_;
+    vk::RenderingInfo renderingInfo_{};
+    bool isActive_ = false;
+};
+
 struct QueueOwnershipRequest
 {
     uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
@@ -589,7 +716,7 @@ class UploadReadbackContext
         , queueManager_(std::ref(queueManager))
         , uploadCapacity_(uploadRingSize)
         , readbackCapacity_(readbackRingSize)
-        , transferPool_(device, queueManager.transfer().queueFamilyIndex(), vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
+        , transferPool_(device, queueManager.transfer().queueFamilyIndex(), vk::CommandPoolCreateFlagBits::eTransient)
     {
         vk::BufferCreateInfo uploadInfo{};
         uploadInfo.size = uploadRingSize;
@@ -805,8 +932,18 @@ class UploadReadbackContext
             effectiveRegion.imageExtent = src.extent();
         }
 
-        const auto bytesPerPixel = static_cast<vk::DeviceSize>(4);
-        const auto readbackSize = std::max<vk::DeviceSize>(1, static_cast<vk::DeviceSize>(effectiveRegion.imageExtent.width) * effectiveRegion.imageExtent.height * effectiveRegion.imageExtent.depth * bytesPerPixel);
+        const auto elementSize = bytesPerPixel(src.format());
+        const auto rowLength = effectiveRegion.bufferRowLength > 0 ? effectiveRegion.bufferRowLength : effectiveRegion.imageExtent.width;
+        const auto imageHeight = effectiveRegion.bufferImageHeight > 0 ? effectiveRegion.bufferImageHeight : effectiveRegion.imageExtent.height;
+        const auto layerCount = std::max(1u, effectiveRegion.imageSubresource.layerCount);
+
+        const auto readbackSize = std::max<vk::DeviceSize>(
+            1,
+            static_cast<vk::DeviceSize>(rowLength) *
+                static_cast<vk::DeviceSize>(imageHeight) *
+                static_cast<vk::DeviceSize>(effectiveRegion.imageExtent.depth) *
+                static_cast<vk::DeviceSize>(layerCount) *
+                elementSize);
         auto allocation = reserveReadback(readbackSize, timelineSemaphore);
 
         auto commandBuffers = transferPool_.allocatePrimary(1);
@@ -862,7 +999,53 @@ class UploadReadbackContext
     {
         if (alignment <= 1)
             return value;
+        nrAssert((alignment & (alignment - 1)) == 0, std::format("UploadReadbackContext::alignUp requires power-of-2 alignment, got {}", alignment));
         return (value + alignment - 1) & ~(alignment - 1);
+    }
+
+    [[nodiscard]] static vk::DeviceSize bytesPerPixel(vk::Format format)
+    {
+        switch (format)
+        {
+        case vk::Format::eR8Unorm:
+        case vk::Format::eR8Snorm:
+        case vk::Format::eR8Uint:
+        case vk::Format::eR8Sint:
+            return 1;
+        case vk::Format::eR8G8Unorm:
+        case vk::Format::eR8G8Snorm:
+        case vk::Format::eR8G8Uint:
+        case vk::Format::eR8G8Sint:
+        case vk::Format::eR16Sfloat:
+        case vk::Format::eR16Uint:
+        case vk::Format::eR16Sint:
+            return 2;
+        case vk::Format::eR8G8B8A8Unorm:
+        case vk::Format::eR8G8B8A8Srgb:
+        case vk::Format::eB8G8R8A8Unorm:
+        case vk::Format::eB8G8R8A8Srgb:
+        case vk::Format::eR16G16Sfloat:
+        case vk::Format::eR16G16Uint:
+        case vk::Format::eR16G16Sint:
+        case vk::Format::eR32Sfloat:
+        case vk::Format::eR32Uint:
+        case vk::Format::eR32Sint:
+            return 4;
+        case vk::Format::eR16G16B16A16Sfloat:
+        case vk::Format::eR16G16B16A16Uint:
+        case vk::Format::eR16G16B16A16Sint:
+        case vk::Format::eR32G32Sfloat:
+        case vk::Format::eR32G32Uint:
+        case vk::Format::eR32G32Sint:
+            return 8;
+        case vk::Format::eR32G32B32A32Sfloat:
+        case vk::Format::eR32G32B32A32Uint:
+        case vk::Format::eR32G32B32A32Sint:
+            return 16;
+        default:
+            nrAssert(false, std::format("UploadReadbackContext::readbackImage unsupported format for readback size estimation: {}", vk::to_string(format)));
+            return 0;
+        }
     }
 
     [[nodiscard]] uint64_t queryTimelineValue(vk::Semaphore timelineSemaphore) const

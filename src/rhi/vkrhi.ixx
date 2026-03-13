@@ -100,48 +100,53 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
     const char *idName = pCallbackData->pMessageIdName ? pCallbackData->pMessageIdName : "";
     const char *message = pCallbackData->pMessage ? pCallbackData->pMessage : "";
 
-    print("{}: {}:\n"
-          "\tmessageIDName   = <{}>\n"
-          "\tmessageIdNumber = {}\n"
-          "\tmessage         = <{}>",
-          severityStr, typesStr, idName, pCallbackData->messageIdNumber, message);
+    std::string logMessage = std::format("severity={} types={} messageIDName=<{}> messageIdNumber={} message=<{}>",
+                                         severityStr,
+                                         typesStr,
+                                         idName,
+                                         pCallbackData->messageIdNumber,
+                                         message);
 
     auto queueLabels = std::span(pCallbackData->pQueueLabels, pCallbackData->queueLabelCount);
     if (!queueLabels.empty())
     {
-        std::print("\tQueue Labels:");
-        for (const auto &lbl : queueLabels)
-        {
-            std::print("\t\tlabelName = <{}>", lbl.pLabelName ? lbl.pLabelName : "");
-        }
+        std::ranges::for_each(queueLabels, [&](const auto &lbl) {
+            logMessage += std::format("\nqueueLabel=<{}>", lbl.pLabelName ? lbl.pLabelName : "");
+        });
     }
 
     auto cmdBufLabels = std::span(pCallbackData->pCmdBufLabels, pCallbackData->cmdBufLabelCount);
     if (!cmdBufLabels.empty())
     {
-        std::print("\tCommandBuffer Labels:");
-        for (const auto &lbl : cmdBufLabels)
-        {
-            std::print("\t\tlabelName = <{}>", lbl.pLabelName ? lbl.pLabelName : "");
-        }
+        std::ranges::for_each(cmdBufLabels, [&](const auto &lbl) {
+            logMessage += std::format("\ncmdLabel=<{}>", lbl.pLabelName ? lbl.pLabelName : "");
+        });
     }
 
     auto objects = std::span(pCallbackData->pObjects, pCallbackData->objectCount);
     if (!objects.empty())
     {
-        std::print("\tObjects:");
-        for (size_t i = 0; i < objects.size(); ++i)
-        {
-            const auto &obj = objects[i];
-            std::print("\t\tObject {}", i);
-            std::print("\t\t\tobjectType   = {}", vk::to_string(obj.objectType));
-            std::print("\t\t\tobjectHandle = {}", obj.objectHandle);
+        std::ranges::for_each(std::views::enumerate(objects), [&](auto const &entry) {
+            auto const &[i, obj] = entry;
+            logMessage += std::format("\nobject[{}]: type={} handle={}", i, vk::to_string(obj.objectType), obj.objectHandle);
             if (obj.pObjectName)
             {
-                std::print("\t\t\tobjectName   = <{}>", obj.pObjectName);
+                logMessage += std::format(" name=<{}>", obj.pObjectName);
             }
-        }
+        });
     }
+
+    auto level = LogLevel::info;
+    if (messageSeverity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
+    {
+        level = LogLevel::error;
+    }
+    else if (messageSeverity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
+    {
+        level = LogLevel::warning;
+    }
+    nrVulkan(level, logMessage);
+
     return vk::False;
 }
 

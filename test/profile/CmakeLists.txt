@@ -47,3 +47,12 @@ target_link_libraries(nr_slang_two_compute_reflection PRIVATE
     dependency
 )
 
+nr_add_executable(nr_slang_graphics_multi_entrypoint nr_slang_graphics_multi_entrypoint.cpp)
+set_target_properties(nr_slang_graphics_multi_entrypoint PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_slang_graphics_multi_entrypoint PRIVATE
+    nrrhi
+    utils
+    dependency
+)
+
