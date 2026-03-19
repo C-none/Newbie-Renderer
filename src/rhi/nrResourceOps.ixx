@@ -736,7 +736,7 @@ class UploadReadbackContext
         return uploadRing_.valid() && readbackRing_.valid() && transferPool_.valid();
     }
 
-    void reclaimCompleted(vk::Semaphore timelineSemaphore)
+    void reclaimCompleted(const vk::raii::Semaphore& timelineSemaphore)
     {
         const uint64_t completedValue = queryTimelineValue(timelineSemaphore);
         reclaimQueue(uploadInFlight_, uploadReclaimCursor_, completedValue);
@@ -752,7 +752,7 @@ class UploadReadbackContext
         std::span<const std::byte> data,
         const Buffer& dst,
         vk::DeviceSize dstOffset,
-        vk::Semaphore timelineSemaphore,
+        const vk::raii::Semaphore& timelineSemaphore,
         uint64_t signalValue,
         std::optional<QueueOwnershipRequest> ownership = std::nullopt)
     {
@@ -812,7 +812,7 @@ class UploadReadbackContext
         std::span<const std::byte> data,
         const Image& dst,
         vk::ImageLayout dstLayout,
-        vk::Semaphore timelineSemaphore,
+        const vk::raii::Semaphore& timelineSemaphore,
         uint64_t signalValue,
         const vk::BufferImageCopy& region = {},
         std::optional<QueueOwnershipRequest> ownership = std::nullopt)
@@ -879,7 +879,7 @@ class UploadReadbackContext
         const Buffer& src,
         vk::DeviceSize srcOffset,
         vk::DeviceSize size,
-        vk::Semaphore timelineSemaphore,
+        const vk::raii::Semaphore& timelineSemaphore,
         uint64_t signalValue)
     {
         nrAssert(valid(), "UploadReadbackContext::readbackBuffer requires a valid context.");
@@ -916,7 +916,7 @@ class UploadReadbackContext
     [[nodiscard]] ReadbackTicket readbackImage(
         const Image& src,
         vk::ImageLayout srcLayout,
-        vk::Semaphore timelineSemaphore,
+        const vk::raii::Semaphore& timelineSemaphore,
         uint64_t signalValue,
         const vk::BufferImageCopy& region = {})
     {
@@ -968,7 +968,7 @@ class UploadReadbackContext
     /**
      * @brief Block until ticket is ready, invalidate cache, and copy bytes out.
      */
-    [[nodiscard]] std::vector<std::byte> readbackBytes(const ReadbackTicket& ticket, vk::Semaphore timelineSemaphore)
+    [[nodiscard]] std::vector<std::byte> readbackBytes(const ReadbackTicket& ticket, const vk::raii::Semaphore& timelineSemaphore)
     {
         waitTimelineValue(timelineSemaphore, ticket.signalValue);
         readbackRing_.invalidate(ticket.offset, ticket.size);
@@ -1048,12 +1048,12 @@ class UploadReadbackContext
         }
     }
 
-    [[nodiscard]] uint64_t queryTimelineValue(vk::Semaphore timelineSemaphore) const
+    [[nodiscard]] uint64_t queryTimelineValue(const vk::raii::Semaphore& timelineSemaphore) const
     {
-        return sync::timelineValue(device_->get(), timelineSemaphore);
+        return sync::timelineValue(timelineSemaphore);
     }
 
-    void waitTimelineValue(vk::Semaphore timelineSemaphore, uint64_t targetValue) const
+    void waitTimelineValue(const vk::raii::Semaphore& timelineSemaphore, uint64_t targetValue) const
     {
         auto ok = sync::waitTimeline(device_->get(), timelineSemaphore, targetValue);
         nrAssert(ok, "UploadReadbackContext::waitTimelineValue failed while waiting timeline semaphore.");
@@ -1068,12 +1068,12 @@ class UploadReadbackContext
         }
     }
 
-    [[nodiscard]] RingAllocation reserveUpload(vk::DeviceSize size, vk::Semaphore timelineSemaphore)
+    [[nodiscard]] RingAllocation reserveUpload(vk::DeviceSize size, const vk::raii::Semaphore& timelineSemaphore)
     {
         return reserveRing(size, uploadCapacity_, uploadWriteCursor_, uploadReclaimCursor_, uploadInFlight_, timelineSemaphore);
     }
 
-    [[nodiscard]] RingAllocation reserveReadback(vk::DeviceSize size, vk::Semaphore timelineSemaphore)
+    [[nodiscard]] RingAllocation reserveReadback(vk::DeviceSize size, const vk::raii::Semaphore& timelineSemaphore)
     {
         return reserveRing(size, readbackCapacity_, readbackWriteCursor_, readbackReclaimCursor_, readbackInFlight_, timelineSemaphore);
     }
@@ -1084,7 +1084,7 @@ class UploadReadbackContext
         uint64_t& writeCursor,
         uint64_t& reclaimCursor,
         std::deque<InFlightBatch>& queue,
-        vk::Semaphore timelineSemaphore)
+        const vk::raii::Semaphore& timelineSemaphore)
     {
         nrAssert(size <= capacity, "UploadReadbackContext ring allocation exceeds ring capacity.");
 

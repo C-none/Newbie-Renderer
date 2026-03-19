@@ -2,11 +2,23 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 #include <slang.h>
 #include <slang-com-ptr.h>
-#include <slang-rhi.h>
-#include <slang-rhi/shader-cursor.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <imgui.h>
+#include <assimp/Importer.hpp>
+#include <assimp/material.h>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+#undef STB_IMAGE_IMPLEMENTATION
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+#include <turbojpeg.h>
 #include <atomic>
 #include <cstring>
 #include <vector>
@@ -18,11 +30,15 @@ export module dependency;
 export import <vulkan/vulkan_raii.hpp>;
 export import <slang.h>;
 export import <slang-com-ptr.h>;
-export import <slang-rhi.h>;
-export import <slang-rhi/shader-cursor.h>;
 export import <GLFW/glfw3.h>;
 export import <glm/glm.hpp>;
 export import <imgui.h>;
+export import <assimp/Importer.hpp>;
+export import <assimp/material.h>;
+export import <assimp/postprocess.h>;
+export import <assimp/scene.h>;
+export import <stb_image.h>;
+export import <turbojpeg.h>;
 export import <vk_mem_alloc.h>;
 // export import <Tracy.hpp>
 #ifdef GLFW_NO_API

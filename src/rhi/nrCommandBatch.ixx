@@ -90,7 +90,17 @@ public:
      * @param semaphore RAII semaphore to wait on
      * @param stage Pipeline stage to wait at
      * 
-     * Queue will wait for semaphore before executing commands
+        * Queue will wait for semaphore before executing commands.
+        *
+        * For cross-queue synchronization, this wait participates in the memory
+        * dependency created by the matching semaphore signal. In other words, a
+        * transfer-queue write followed by a semaphore signal, then a compute-queue
+        * wait at `eAccelerationStructureBuildKHR`, is normally sufficient to make
+        * the transfer writes visible to AS build reads.
+        *
+        * This does not replace queue-family ownership transfer barriers for
+        * VK_SHARING_MODE_EXCLUSIVE resources, and does not perform image layout
+        * transitions.
      */
     void addWait(const vk::raii::Semaphore& semaphore, vk::PipelineStageFlags2 stage, uint64_t value = 0, uint32_t deviceIndex = 0) {
         waitPoints_.push_back(SemaphoreSyncPoint{
@@ -117,7 +127,11 @@ public:
      * @brief Add a signal semaphore
      * @param semaphore RAII semaphore to signal after execution
      * 
-     * Queue will signal semaphore when commands complete
+        * Queue will signal semaphore when commands complete.
+        *
+        * Together with a matching wait in a later submission, this forms an
+        * inter-queue execution+memory dependency. For timeline semaphores, caller
+        * must keep signaled values strictly increasing across submissions.
      */
     void addSignal(const vk::raii::Semaphore& semaphore, uint64_t value = 0, uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
         signalPoints_.push_back(SemaphoreSyncPoint{

@@ -235,6 +235,43 @@ class PresentationContext
         return swapChain_.present(queueManager.compute().handle(), *activeSwapchainImageIndex_, waitSemaphore);
     }
 
+    [[nodiscard]] vk::Extent2D swapchainExtent() const noexcept
+    {
+        return swapChain_.extent;
+    }
+
+    [[nodiscard]] vk::Format swapchainFormat() const noexcept
+    {
+        return swapChain_.format;
+    }
+
+    [[nodiscard]] uint32_t swapchainImageCount() const noexcept
+    {
+        return static_cast<uint32_t>(swapChain_.swapChainImages.size());
+    }
+
+    [[nodiscard]] vk::Image swapchainImage(uint32_t imageIndex) const
+    {
+        nrAssert(imageIndex < swapChain_.swapChainImages.size(), std::format("PresentationContext::swapchainImage index out of range: {}", imageIndex));
+        return swapChain_.swapChainImages[imageIndex];
+    }
+
+    [[nodiscard]] vk::ImageView swapchainImageView(uint32_t imageIndex) const
+    {
+        nrAssert(imageIndex < swapChain_.imageViews.size(), std::format("PresentationContext::swapchainImageView index out of range: {}", imageIndex));
+        return *swapChain_.imageViews[imageIndex];
+    }
+
+    void pollEvents() const
+    {
+        glfwPollEvents();
+    }
+
+    [[nodiscard]] bool windowShouldClose() const
+    {
+        return surface_.handle == nullptr || glfwWindowShouldClose(surface_.handle.get()) != 0;
+    }
+
     void setActiveSwapchainImage(uint32_t imageIndex)
     {
         activeSwapchainImageIndex_ = imageIndex;

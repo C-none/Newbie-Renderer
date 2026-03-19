@@ -33,6 +33,23 @@ This document outlines the development standards, architectural principles, and 
 *   **Third-Party Libraries:** All third-party non-module libraries (legacy headers/libs) must be encapsulated and introduced through the **`dependency`** module (e.g., `src/extern` or equivalent wrapper modules).
 *   **Isolation:** Do not include raw third-party headers directly in core logic modules; use the adapted module interfaces.
 
+### 2.5 Platform & Hardware Targeting (RHI Scope)
+
+*   **OS Scope:** RHI design and implementation only target **Windows**.
+*   **Graphics API Scope:** RHI only targets **Vulkan**.
+*   **GPU Scope:** RHI only targets high-end **NVIDIA GeForce RTX 5070 Ti** class hardware.
+*   **Extension Strategy:** For future RHI optimization, required Vulkan extensions/features may be assumed supported on the target platform/hardware.
+*   **Fallback Policy:** Do **not** add fallback paths for unsupported extensions, unsupported vendors, or non-target hardware in the RHI layer.
+*   **Failure Mode:** If a required capability is unexpectedly unavailable at runtime, fail fast with clear diagnostics instead of adding compatibility fallbacks.
+
+### 2.6 Vulkan Command Invocation Policy
+
+*   **No Dispatch Tables in Project Code:** Do **not** introduce custom PFN dispatch tables or per-command function-pointer caches in `nrrhi` and test/profile code.
+*   **No Raw C API Command Calls:** Prefer Vulkan-Hpp RAII object member functions over raw `vkCmd*` / `vk*` C API entry points.
+    *   *Preferred:* `vk::raii::CommandBuffer::buildAccelerationStructuresKHR(...)`, `vk::raii::CommandBuffer::traceRaysKHR(...)`.
+    *   *Avoid:* manual `getProcAddr`, `dispatcher->vkCmd*`, `reinterpret_cast<PFN_vk...>`, or raw-handle `vkCmd*` calls.
+*   **Thin RHI Interfaces Only:** If an external API is needed, expose a small typed wrapper in existing RHI modules that directly forwards to RAII member functions without extra indirection layers.
+
 ## 3. Module Structure
 
 *   **`nrrhi`:** The Render Hardware Interface. Implements the abstraction over Vulkan.

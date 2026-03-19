@@ -1304,7 +1304,9 @@ class ShaderDescriptorLayout
     auto allocatedSets = device_->get().allocateDescriptorSets(allocateInfo);
     if (!allocatedSets.empty())
     {
-        set.set_ = allocatedSets.front();
+        // allocateDescriptorSets returns RAII wrappers; release ownership so the handle
+        // remains valid for pool-managed lifetime instead of being freed at scope exit.
+        set.set_ = allocatedSets.front().release();
     }
     return set;
 }

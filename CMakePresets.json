@@ -33,6 +33,20 @@
       "name": "release",
       "configurePreset": "msvc",
       "configuration": "Release"
+    },
+    {
+      "name": "run-debug",
+      "inherits": "debug",
+      "targets": [
+        "run_main"
+      ]
+    },
+    {
+      "name": "run-release",
+      "inherits": "release",
+      "targets": [
+        "run_main"
+      ]
     }
   ]
 }

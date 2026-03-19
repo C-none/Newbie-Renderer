@@ -232,7 +232,11 @@ class FrameContext
             nrAssert(transferPrimary_.valid(), "Transfer queue not configured for this FrameContext");
             return *transferPrimary_;
         }
-        std::unreachable();
+        else
+        {
+            static_assert(T == QueueRole::Graphics || T == QueueRole::Compute || T == QueueRole::Transfer,
+                          "Unsupported QueueRole template argument");
+        }
     }
 
     /**
@@ -263,7 +267,11 @@ class FrameContext
             nrAssert(transferSecondary_[threadId].has_value(), "FrameContext::secondary transfer pool slot not prepared");
             return *transferSecondary_[threadId];
         }
-        std::unreachable();
+        else
+        {
+            static_assert(T == QueueRole::Graphics || T == QueueRole::Compute || T == QueueRole::Transfer,
+                          "Unsupported QueueRole template argument");
+        }
     }
 
     // ========== Synchronization primitives ==========

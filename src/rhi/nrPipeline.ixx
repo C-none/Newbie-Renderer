@@ -49,13 +49,41 @@ struct RayTracingShaderGroupDesc
 		std::string intersectionEntryPoint;
 };
 
+struct RayTracingPipelineLibraryInterfaceDesc
+{
+		uint32_t maxPipelineRayPayloadSize = 0;
+		uint32_t maxPipelineRayHitAttributeSize = 0;
+};
+
 struct RayTracingPipelineDesc
 {
 		std::vector<std::string> entryPointNames;
 		uint32_t maxRayRecursionDepth = 1;
 		std::vector<RayTracingShaderGroupDesc> groups;
 		vk::PipelineCreateFlags flags = {};
+		bool createAsLibrary = false;
+		std::vector<vk::Pipeline> linkedLibraries;
+		std::optional<RayTracingPipelineLibraryInterfaceDesc> libraryInterface;
 };
+
+[[nodiscard]] inline std::optional<std::string> validateRayTracingPipelineDesc(const RayTracingPipelineDesc &desc)
+{
+	const auto createAsLibrary = desc.createAsLibrary || ((desc.flags & vk::PipelineCreateFlags{VK_PIPELINE_CREATE_LIBRARY_BIT_KHR}) != vk::PipelineCreateFlags{});
+	const auto usesLinkedLibraries = !desc.linkedLibraries.empty();
+	const auto hasLibraryInterface = desc.libraryInterface.has_value();
+
+	if ((createAsLibrary || usesLinkedLibraries) && !hasLibraryInterface)
+	{
+		return std::string{"RayTracingPipelineDesc library flow requires libraryInterface when creating/linking libraries."};
+	}
+
+	if (std::ranges::any_of(desc.linkedLibraries, [](vk::Pipeline pipelineHandle) { return pipelineHandle == vk::Pipeline{}; }))
+	{
+		return std::string{"RayTracingPipelineDesc::linkedLibraries contains VK_NULL_HANDLE."};
+	}
+
+	return std::nullopt;
+}
 
 namespace detail
 {
@@ -76,6 +104,39 @@ namespace detail
 	                             SLANG_STAGE_ANY_HIT, SLANG_STAGE_INTERSECTION, SLANG_STAGE_CALLABLE});
 }
 }
+
+struct MeshRasterState
+{
+	vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
+	vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
+	vk::Bool32 depthTestEnable = vk::False;
+	vk::Bool32 depthWriteEnable = vk::False;
+	vk::CompareOp depthCompareOp = vk::CompareOp::eLessOrEqual;
+	vk::PolygonMode polygonMode = vk::PolygonMode::eFill;
+	vk::SampleCountFlagBits rasterizationSamples = vk::SampleCountFlagBits::e1;
+};
+
+namespace mesh
+{
+inline void applyRasterState(const vk::raii::CommandBuffer &commandBuffer, const MeshRasterState &state)
+{
+	nrAssert(*commandBuffer != nullptr, "mesh::applyRasterState requires a valid command buffer.");
+	commandBuffer.setCullMode(state.cullMode);
+	commandBuffer.setFrontFace(state.frontFace);
+	commandBuffer.setDepthTestEnable(state.depthTestEnable);
+	commandBuffer.setDepthWriteEnable(state.depthWriteEnable);
+	commandBuffer.setDepthCompareOp(state.depthCompareOp);
+	commandBuffer.setPolygonModeEXT(state.polygonMode);
+	commandBuffer.setRasterizationSamplesEXT(state.rasterizationSamples);
+}
+
+inline void drawTasks(const vk::raii::CommandBuffer &commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+{
+	nrAssert(*commandBuffer != nullptr, "mesh::drawTasks requires a valid command buffer.");
+	nrAssert(groupCountX > 0 && groupCountY > 0 && groupCountZ > 0, "mesh::drawTasks requires non-zero dispatch group counts.");
+	commandBuffer.drawMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
+}
+} // namespace mesh
 
 class CursorPipelineLayout
 {
@@ -427,6 +488,25 @@ class GraphicsPipeline
 				                       std::views::transform([&](uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
 				                       std::ranges::to<std::vector>();
 
+				auto hasStage = [&](SlangStage stage) {
+					return std::ranges::any_of(
+						graphicsStageIndices,
+						[&](uint32_t stageIndex) { return shaderProgram.stages()[stageIndex] == stage; });
+				};
+				auto const hasVertexStage = hasStage(SLANG_STAGE_VERTEX);
+				auto const hasMeshStage = hasStage(SLANG_STAGE_MESH);
+
+				if (desc.mode == GraphicsPipelineMode::Mesh)
+				{
+					nrAssert(hasMeshStage, "GraphicsPipeline::create Mesh mode requires a mesh shader stage.");
+					nrAssert(!hasVertexStage, "GraphicsPipeline::create Mesh mode cannot include a vertex shader stage.");
+				}
+				else
+				{
+					nrAssert(hasVertexStage, "GraphicsPipeline::create StandardGraphics mode requires a vertex shader stage.");
+					nrAssert(!hasMeshStage, "GraphicsPipeline::create StandardGraphics mode cannot include mesh shader stages.");
+				}
+
 				auto colorBlendAttachments = desc.colorBlendAttachments;
 				if (colorBlendAttachments.empty())
 				{
@@ -510,8 +590,9 @@ class GraphicsPipeline
 				createInfo.flags = desc.flags;
 				createInfo.stageCount = static_cast<uint32_t>(stageCreateInfos.size());
 				createInfo.pStages = stageCreateInfos.data();
-				createInfo.pVertexInputState = &vertexInputInfo;
-				createInfo.pInputAssemblyState = &inputAssemblyInfo;
+				auto const usesMeshPipeline = desc.mode == GraphicsPipelineMode::Mesh;
+				createInfo.pVertexInputState = usesMeshPipeline ? nullptr : &vertexInputInfo;
+				createInfo.pInputAssemblyState = usesMeshPipeline ? nullptr : &inputAssemblyInfo;
 				createInfo.pViewportState = &viewportStateInfo;
 				createInfo.pRasterizationState = &rasterizationInfo;
 				createInfo.pMultisampleState = &multisampleInfo;
@@ -587,6 +668,14 @@ class RayTracingPipeline
 				nrAssert(layout.valid(), "RayTracingPipeline::create requires a valid pipeline layout.");
 				nrAssert(shaderProgram.valid(), "RayTracingPipeline::create requires a valid shader program.");
 				nrAssert(desc.maxRayRecursionDepth > 0u, "RayTracingPipeline::create requires maxRayRecursionDepth > 0.");
+				auto descValidation = validateRayTracingPipelineDesc(desc);
+				nrAssert(!descValidation.has_value(), std::format("RayTracingPipeline::create invalid desc: {}", descValidation.value_or(std::string{})));
+
+				auto createFlags = desc.flags;
+				if (desc.createAsLibrary)
+				{
+					createFlags |= vk::PipelineCreateFlags{VK_PIPELINE_CREATE_LIBRARY_BIT_KHR};
+				}
 
 				auto rtStageIndices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(shaderProgram.stages().size())) |
 				                  std::views::filter([&](uint32_t index) { return detail::isRayTracingStage(shaderProgram.stages()[index]); }) |
@@ -673,7 +762,7 @@ class RayTracingPipeline
 				}
 
 				vk::RayTracingPipelineCreateInfoKHR createInfo{};
-				createInfo.flags = desc.flags;
+				createInfo.flags = createFlags;
 				createInfo.stageCount = static_cast<uint32_t>(stageCreateInfos.size());
 				createInfo.pStages = stageCreateInfos.data();
 				createInfo.groupCount = static_cast<uint32_t>(groups.size());
@@ -681,18 +770,53 @@ class RayTracingPipeline
 				createInfo.maxPipelineRayRecursionDepth = desc.maxRayRecursionDepth;
 				createInfo.layout = layout.raw();
 
+				vk::PipelineLibraryCreateInfoKHR libraryInfo{};
+				if (!desc.linkedLibraries.empty())
+				{
+					libraryInfo.libraryCount = static_cast<uint32_t>(desc.linkedLibraries.size());
+					libraryInfo.pLibraries = desc.linkedLibraries.data();
+					createInfo.pLibraryInfo = &libraryInfo;
+				}
+
+				vk::RayTracingPipelineInterfaceCreateInfoKHR libraryInterface{};
+				if (desc.libraryInterface.has_value())
+				{
+					libraryInterface.maxPipelineRayPayloadSize = desc.libraryInterface->maxPipelineRayPayloadSize;
+					libraryInterface.maxPipelineRayHitAttributeSize = desc.libraryInterface->maxPipelineRayHitAttributeSize;
+					createInfo.pLibraryInterface = &libraryInterface;
+				}
+
 				RayTracingPipeline pipeline;
 				auto deferredOperation = vk::Optional<const vk::raii::DeferredOperationKHR>(nullptr);
 				auto pipelineCacheOptional =
 						pipelineCache != nullptr ? vk::Optional<const vk::raii::PipelineCache>(*pipelineCache) : vk::Optional<const vk::raii::PipelineCache>(nullptr);
 				pipeline.pipeline_ = vk::raii::Pipeline(device, deferredOperation, pipelineCacheOptional, createInfo);
+				pipeline.device_ = std::cref(device);
+				pipeline.shaderGroupCount_ = static_cast<uint32_t>(groups.size());
 				return pipeline;
 		}
 
 		[[nodiscard]] bool valid() const noexcept { return pipeline_ != nullptr; }
 		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
+		[[nodiscard]] uint32_t shaderGroupCount() const noexcept { return shaderGroupCount_; }
+
+		[[nodiscard]] std::vector<uint8_t> shaderGroupHandles(uint32_t firstGroup, uint32_t groupCount, uint32_t handleSize) const
+		{
+			nrAssert(valid(), "RayTracingPipeline::shaderGroupHandles requires a valid pipeline.");
+			nrAssert(device_.has_value(), "RayTracingPipeline::shaderGroupHandles requires a valid device reference.");
+			nrAssert(groupCount > 0u, "RayTracingPipeline::shaderGroupHandles requires groupCount > 0.");
+			nrAssert(handleSize > 0u, "RayTracingPipeline::shaderGroupHandles requires handleSize > 0.");
+			nrAssert(firstGroup < shaderGroupCount_, "RayTracingPipeline::shaderGroupHandles firstGroup is out of range.");
+			auto requestedEnd = static_cast<uint64_t>(firstGroup) + static_cast<uint64_t>(groupCount);
+			nrAssert(requestedEnd <= static_cast<uint64_t>(shaderGroupCount_), "RayTracingPipeline::shaderGroupHandles range exceeds group count.");
+
+			auto dataSize = static_cast<size_t>(handleSize) * static_cast<size_t>(groupCount);
+			return pipeline_.getRayTracingShaderGroupHandlesKHR<uint8_t>(firstGroup, groupCount, dataSize);
+		}
 
 	private:
+		std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+		uint32_t shaderGroupCount_ = 0;
 		vk::raii::Pipeline pipeline_ = {nullptr};
 };
 
@@ -714,9 +838,17 @@ struct PipelineState
 class PipelineService
 {
   public:
-	void bindDevice(const vk::raii::Device &device)
+	void bindDevice(const vk::raii::Device &device, const RayTracingCapabilitySnapshot *rtCapabilities = nullptr)
 	{
 		device_ = std::cref(device);
+		if (rtCapabilities != nullptr)
+		{
+			rtCapabilities_ = *rtCapabilities;
+		}
+		else
+		{
+			rtCapabilities_.reset();
+		}
 		vk::PipelineCacheCreateInfo cacheCreateInfo{};
 		pipelineCache_ = vk::raii::PipelineCache(device, cacheCreateInfo);
 	}
@@ -772,7 +904,10 @@ class PipelineService
 		};
 		appendDynamicState(vk::DynamicState::eCullModeEXT);
 		appendDynamicState(vk::DynamicState::eFrontFaceEXT);
-		appendDynamicState(vk::DynamicState::ePrimitiveTopologyEXT);
+		if (effectiveDesc.mode != GraphicsPipelineMode::Mesh)
+		{
+			appendDynamicState(vk::DynamicState::ePrimitiveTopologyEXT);
+		}
 		appendDynamicState(vk::DynamicState::eDepthTestEnableEXT);
 		appendDynamicState(vk::DynamicState::eDepthWriteEnableEXT);
 		appendDynamicState(vk::DynamicState::eDepthCompareOpEXT);
@@ -858,11 +993,22 @@ class PipelineService
 		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
 		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
 
-		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
-		if (!desc.entryPointNames.empty())
+		auto effectiveDesc = desc;
+		if (rtCapabilities_.has_value())
 		{
-			selectedEntryPoints.reserve(desc.entryPointNames.size());
-			std::ranges::for_each(desc.entryPointNames, [&](const std::string &entryPointName) {
+			nrAssert(
+				effectiveDesc.maxRayRecursionDepth <= rtCapabilities_->maxRayRecursionDepth,
+				std::format(
+					"PipelineService::createRayTracingPipeline recursion depth {} exceeds device max {}.",
+					effectiveDesc.maxRayRecursionDepth,
+					rtCapabilities_->maxRayRecursionDepth));
+		}
+
+		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
+		if (!effectiveDesc.entryPointNames.empty())
+		{
+			selectedEntryPoints.reserve(effectiveDesc.entryPointNames.size());
+			std::ranges::for_each(effectiveDesc.entryPointNames, [&](const std::string &entryPointName) {
 				auto const *entryPointData = slangProgram.entryPointData(entryPointName);
 				nrAssert(entryPointData != nullptr, std::format("PipelineService::createRayTracingPipeline unknown entrypoint '{}'.", entryPointName));
 				nrAssert(detail::isRayTracingStage(entryPointData->stage), std::format("PipelineService::createRayTracingPipeline entrypoint '{}' is not a ray-tracing stage.", entryPointName));
@@ -879,7 +1025,7 @@ class PipelineService
 		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createRayTracingPipeline requires at least one selected ray-tracing entrypoint.");
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, desc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
+		auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, effectiveDesc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
 		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
 		return PipelineState<RayTracingPipeline>{
 			.layout = std::move(layout),
@@ -891,6 +1037,7 @@ class PipelineService
 
   private:
 	std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+	std::optional<RayTracingCapabilitySnapshot> rtCapabilities_;
 	vk::raii::PipelineCache pipelineCache_ = {nullptr};
 };
 

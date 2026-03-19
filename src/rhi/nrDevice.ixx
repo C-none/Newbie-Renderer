@@ -5,6 +5,7 @@ import dependency;
 import :vk;
 import :surface;
 import :swapchain;
+import :type;
 import :queue;
 import :frameContext;
 import :memoryAllocator;
@@ -49,6 +50,11 @@ class Device
     Device(Device &) = delete;
     Device &operator=(Device &) = delete;
 
+    [[nodiscard]] const RayTracingCapabilitySnapshot &rayTracingCapabilities() const noexcept
+    {
+        return rtCapabilities_;
+    }
+
     void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"})
     {
         appName = _appName;
@@ -70,7 +76,7 @@ class Device
         uploadReadbackContext_.emplace(device, resourceFactory, queueManager);
 
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
-        pipelineService.bindDevice(device);
+        pipelineService.bindDevice(device, &rtCapabilities_);
     }
 
     [[nodiscard]] FrameBeginResult beginFrame(uint64_t acquireTimeout = std::numeric_limits<uint64_t>::max())
@@ -112,7 +118,17 @@ class Device
 
         auto &frame = frameManager.current();
         auto submitBatch = batch;
-        submitBatch.addWait(frame.imageAvailable(), vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+        auto waitStage = vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eColorAttachmentOutput};
+        if (submitRole == QueueRole::Compute)
+        {
+            waitStage = vk::PipelineStageFlagBits2::eTransfer;
+        }
+        else if (submitRole == QueueRole::Transfer)
+        {
+            waitStage = vk::PipelineStageFlagBits2::eTransfer;
+        }
+
+        submitBatch.addWait(frame.imageAvailable(), waitStage);
         submitBatch.addSignal(frame.renderFinished());
 
         if (submitRole == QueueRole::Graphics)
@@ -267,6 +283,7 @@ class Device
                                                      vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
                                                      vk::PhysicalDeviceCooperativeVectorFeaturesNV,
                                                      vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT,
+                                                     vk::PhysicalDeviceMeshShaderFeaturesEXT,
                                                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
                                                      vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
                                                      vk::PhysicalDeviceRayQueryFeaturesKHR>();
@@ -277,9 +294,20 @@ class Device
         auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
         auto &cooperativeVectorFeatures = features2.get<vk::PhysicalDeviceCooperativeVectorFeaturesNV>();
         auto &extendedDynamicState3Features = features2.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
+        auto &meshShaderFeatures = features2.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>();
         auto &accelerationStructureFeatures = features2.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
         auto &rayTracingPipelineFeatures = features2.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
         auto &rayQueryFeatures = features2.get<vk::PhysicalDeviceRayQueryFeaturesKHR>();
+
+        // Keep core mesh/task shader support enabled, but avoid optional mesh sub-features
+        // that require additional feature chains we do not currently enable.
+        meshShaderFeatures.multiviewMeshShader = vk::False;
+        meshShaderFeatures.primitiveFragmentShadingRateMeshShader = vk::False;
+
+        auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2,
+                                 vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        auto &physicalDeviceProperties = properties2.get<vk::PhysicalDeviceProperties2>();
+        auto &rayTracingPipelineProperties = properties2.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
 
 #define REQUIRE_FEATURE(feature_field, feature_name) \
         nrAssert(feature_field == vk::True, std::format("Required feature {} is not enabled.", feature_name))
@@ -291,6 +319,8 @@ class Device
         REQUIRE_FEATURE(vulkan13Features.synchronization2, "synchronization2");
         REQUIRE_FEATURE(extendedDynamicState3Features.extendedDynamicState3PolygonMode, "extendedDynamicState3PolygonMode");
         REQUIRE_FEATURE(extendedDynamicState3Features.extendedDynamicState3RasterizationSamples, "extendedDynamicState3RasterizationSamples");
+        REQUIRE_FEATURE(meshShaderFeatures.meshShader, "meshShader");
+        REQUIRE_FEATURE(meshShaderFeatures.taskShader, "taskShader");
         REQUIRE_FEATURE(accelerationStructureFeatures.accelerationStructure, "accelerationStructure");
         REQUIRE_FEATURE(rayTracingPipelineFeatures.rayTracingPipeline, "rayTracingPipeline");
         REQUIRE_FEATURE(rayQueryFeatures.rayQuery, "rayQuery");
@@ -298,6 +328,22 @@ class Device
         REQUIRE_FEATURE(cooperativeVectorFeatures.cooperativeVector, "cooperativeVector");
 
 #undef REQUIRE_FEATURE
+
+        auto const &limits = physicalDeviceProperties.properties.limits;
+        rtCapabilities_ = RayTracingCapabilitySnapshot{
+            .rayTracingPipelineTraceRaysIndirect = rayTracingPipelineFeatures.rayTracingPipelineTraceRaysIndirect == vk::True,
+            .shaderGroupHandleSize = rayTracingPipelineProperties.shaderGroupHandleSize,
+            .shaderGroupHandleAlignment = rayTracingPipelineProperties.shaderGroupHandleAlignment,
+            .shaderGroupBaseAlignment = rayTracingPipelineProperties.shaderGroupBaseAlignment,
+            .maxShaderGroupStride = rayTracingPipelineProperties.maxShaderGroupStride,
+            .maxRayDispatchInvocationCount = rayTracingPipelineProperties.maxRayDispatchInvocationCount,
+            .maxRayRecursionDepth = rayTracingPipelineProperties.maxRayRecursionDepth,
+            .maxDispatchDimensions = {
+                static_cast<uint64_t>(limits.maxComputeWorkGroupCount[0]) * static_cast<uint64_t>(limits.maxComputeWorkGroupSize[0]),
+                static_cast<uint64_t>(limits.maxComputeWorkGroupCount[1]) * static_cast<uint64_t>(limits.maxComputeWorkGroupSize[1]),
+                static_cast<uint64_t>(limits.maxComputeWorkGroupCount[2]) * static_cast<uint64_t>(limits.maxComputeWorkGroupSize[2]),
+            },
+        };
 
         vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos, {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions, nullptr, &featureList);
         return vk::raii::Device(physicalDevice, deviceCreateInfo);
@@ -360,7 +406,7 @@ class Device
 
     ~Device()
     {
-        if (device)
+        if (*device != nullptr)
         {
             waitIdle();
         }
@@ -402,14 +448,19 @@ class Device
     std::vector<std::string> deviceEnabledExtensions{
         vk::KHRSwapchainExtensionName,
         vk::KHRDeferredHostOperationsExtensionName,
+        vk::KHRShaderFloatControlsExtensionName,
+        vk::KHRSpirv14ExtensionName,
+        vk::EXTMeshShaderExtensionName,
         vk::KHRAccelerationStructureExtensionName,
         vk::KHRRayTracingPipelineExtensionName,
+        vk::KHRPipelineLibraryExtensionName,
         vk::KHRRayQueryExtensionName,
         vk::EXTRayTracingInvocationReorderExtensionName,
         vk::NVCooperativeVectorExtensionName,
         vk::EXTExtendedDynamicState3ExtensionName,
         vk::EXTMemoryBudgetExtensionName,
     };
+    RayTracingCapabilitySnapshot rtCapabilities_{};
 
     std::array<size_t, static_cast<size_t>(QueueFamilyKind::size)> queueFamilyDict{};
     SwapChainConfig swapChainConfig_{};

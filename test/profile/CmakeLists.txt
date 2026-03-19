@@ -56,3 +56,76 @@ target_link_libraries(nr_slang_graphics_multi_entrypoint PRIVATE
     dependency
 )
 
+nr_add_executable(nr_rt_p0_contract_test nr_rt_p0_contract_test.cpp)
+set_target_properties(nr_rt_p0_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_rt_p0_contract_test PRIVATE
+    nrrhi
+    utils
+    dependency
+)
+
+nr_add_executable(nr_rt_minimal_pipeline_test nr_rt_minimal_pipeline_test.cpp)
+set_target_properties(nr_rt_minimal_pipeline_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_rt_minimal_pipeline_test PRIVATE
+    nrrhi
+    utils
+    dependency
+    Vulkan::Vulkan
+)
+
+nr_add_executable(nr_mesh_minimal_pipeline_test nr_mesh_minimal_pipeline_test.cpp)
+set_target_properties(nr_mesh_minimal_pipeline_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_mesh_minimal_pipeline_test PRIVATE
+    nrrhi
+    utils
+    dependency
+    Vulkan::Vulkan
+)
+
+nr_add_executable(nr_load_assimp_smoke_test nr_load_assimp_smoke_test.cpp)
+set_target_properties(nr_load_assimp_smoke_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_load_assimp_smoke_test PRIVATE
+    nrload
+    utils
+    dependency
+)
+
+target_compile_definitions(nr_load_assimp_smoke_test PRIVATE
+    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+nr_add_executable(nr_load_multithread_image_decode_test nr_load_multithread_image_decode_test.cpp)
+set_target_properties(nr_load_multithread_image_decode_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_load_multithread_image_decode_test PRIVATE
+    nrload
+    utils
+    dependency
+)
+
+target_compile_definitions(nr_load_multithread_image_decode_test PRIVATE
+    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+nr_add_executable(nr_load_model_asset_test nr_load_model_asset_test.cpp)
+set_target_properties(nr_load_model_asset_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_load_model_asset_test PRIVATE
+    nrload
+    utils
+    dependency
+)
+
+target_compile_definitions(nr_load_model_asset_test PRIVATE
+    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+add_test(NAME nr_rt_p0_contract_test COMMAND nr_rt_p0_contract_test)
+add_test(NAME nr_load_assimp_smoke_test COMMAND nr_load_assimp_smoke_test)
+add_test(NAME nr_load_multithread_image_decode_test COMMAND nr_load_multithread_image_decode_test)
+add_test(NAME nr_load_model_asset_test COMMAND nr_load_model_asset_test)
+

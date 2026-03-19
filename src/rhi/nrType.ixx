@@ -97,4 +97,40 @@ enum class GraphicsPipelineMode : unsigned
     Mesh,              // Requires mesh shader (task optional)
 };
 
+struct ValidationDiagnostics
+{
+    bool isValid = false;
+    std::string message{};
+};
+
+[[nodiscard]] inline ValidationDiagnostics makeValidationSuccess()
+{
+    return ValidationDiagnostics{
+        .isValid = true,
+        .message = {},
+    };
+}
+
+[[nodiscard]] inline ValidationDiagnostics makeValidationFailure(std::string message)
+{
+    return ValidationDiagnostics{
+        .isValid = false,
+        .message = std::move(message),
+    };
+}
+
+struct RayTracingCapabilitySnapshot
+{
+    bool rayTracingPipelineTraceRaysIndirect = false;
+
+    std::uint32_t shaderGroupHandleSize = 0;
+    std::uint32_t shaderGroupHandleAlignment = 1;
+    std::uint32_t shaderGroupBaseAlignment = 1;
+    std::uint32_t maxShaderGroupStride = 0;
+    std::uint32_t maxRayDispatchInvocationCount = 0;
+    std::uint32_t maxRayRecursionDepth = 0;
+
+    std::array<std::uint64_t, 3> maxDispatchDimensions = {0u, 0u, 0u};
+};
+
 } // namespace nr::rhi

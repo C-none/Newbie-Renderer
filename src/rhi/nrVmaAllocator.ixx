@@ -382,10 +382,6 @@ class VmaAllocatorWrapper
      */
     VmaAllocatorWrapper(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device)
     {
-        VmaVulkanFunctions vulkanFunctions{};
-        vulkanFunctions.vkGetInstanceProcAddr = instance.getDispatcher()->vkGetInstanceProcAddr;
-        vulkanFunctions.vkGetDeviceProcAddr = device.getDispatcher()->vkGetDeviceProcAddr;
-
         VmaAllocatorCreateInfo createInfo{};
         createInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
                            VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT |
@@ -395,7 +391,7 @@ class VmaAllocatorWrapper
         createInfo.physicalDevice = *physDevice;
         createInfo.device = *device;
         createInfo.instance = *instance;
-        createInfo.pVulkanFunctions = &vulkanFunctions;
+        createInfo.pVulkanFunctions = nullptr;
 
         VkResult result = vmaCreateAllocator(&createInfo, &allocator_);
         nrAssert(result == VkResult::VK_SUCCESS, std::format("Failed to create VMA allocator: {}", static_cast<int>(result)));

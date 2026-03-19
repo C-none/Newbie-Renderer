@@ -1,5 +1,6 @@
 module;
 export module nr.rhi;
+export import :accelerationStructure;
 export import :command;
 export import :commandBatch;
 export import :commandPool;
@@ -9,6 +10,7 @@ export import :frameContext;
 export import :memoryAllocator;
 export import :pipeline;
 export import :queue;
+export import :rayTracing;
 export import :resource;
 export import :resourceOps;
 export import :resourcePool;

@@ -387,13 +387,14 @@ template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
     return options;
 }
 
-[[nodiscard]] consteval std::array<SlangCompilerOption, 5> makeBaseCompilerOptions(
+[[nodiscard]] consteval std::array<SlangCompilerOption, 6> makeBaseCompilerOptions(
     int32_t optimizationLevel,
     int32_t debugInfoLevel,
     int32_t richDiagnosticsEnabled) noexcept
 {
-    return std::array<SlangCompilerOption, 5>{
+    return std::array<SlangCompilerOption, 6>{
         SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
+        SlangCompilerOption{.name = slang::CompilerOptionName::VulkanUseEntryPointName, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::UseUpToDateBinaryModule, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = optimizationLevel},
         SlangCompilerOption{.name = slang::CompilerOptionName::DebugInformation, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = debugInfoLevel},
@@ -403,14 +404,14 @@ template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
 
 template <bool IsDebugModeValue>
 [[nodiscard]] consteval auto defaultCompilerOptions() noexcept
-    -> std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 6>, std::array<SlangCompilerOption, 5>>
+    -> std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 7>, std::array<SlangCompilerOption, 6>>
 {
     auto baseOptions = makeBaseCompilerOptions(
         IsDebugModeValue ? SLANG_OPTIMIZATION_LEVEL_NONE : SLANG_OPTIMIZATION_LEVEL_MAXIMAL,
         IsDebugModeValue ? SLANG_DEBUG_INFO_LEVEL_MAXIMAL : SLANG_DEBUG_INFO_LEVEL_NONE,
         IsDebugModeValue ? 1 : 0);
 
-    using ResultType = std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 6>, std::array<SlangCompilerOption, 5>>;
+    using ResultType = std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 7>, std::array<SlangCompilerOption, 6>>;
     ResultType options{};
     std::ranges::copy(baseOptions, options.begin());
 

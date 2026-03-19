@@ -42,7 +42,7 @@ public:
      * @brief Begin recording secondary command buffer
      * @param commandBuffer RAII command buffer to begin
      * @param inheritanceInfo Render pass inheritance information
-     * @param flags Optional begin flags
+     * @param flags Begin flags provided by caller
      * 
      * Secondary command buffers inherit state from primary and can be
      * executed via vkCmdExecuteCommands
@@ -50,7 +50,7 @@ public:
     static void beginSecondary(
         const vk::raii::CommandBuffer& commandBuffer,
         const vk::CommandBufferInheritanceInfo& inheritanceInfo,
-        vk::CommandBufferUsageFlags flags = vk::CommandBufferUsageFlagBits::eRenderPassContinue
+        vk::CommandBufferUsageFlags flags={}
     ) {
         vk::CommandBufferBeginInfo beginInfo{flags, &inheritanceInfo};
         commandBuffer.begin(beginInfo);
@@ -103,12 +103,12 @@ public:
      * @brief Begin secondary command buffer, end on destruction
      * @param commandBuffer RAII command buffer
      * @param inheritanceInfo Render pass inheritance information
-     * @param flags Recording flags
+     * @param flags Recording flags provided by caller
      */
     ScopedCommandBuffer(
         const vk::raii::CommandBuffer& commandBuffer,
         const vk::CommandBufferInheritanceInfo& inheritanceInfo,
-        vk::CommandBufferUsageFlags flags = vk::CommandBufferUsageFlagBits::eRenderPassContinue
+        vk::CommandBufferUsageFlags flags={}
     ) : commandBuffer_(commandBuffer)
     {
         CommandRecorder::beginSecondary(commandBuffer, inheritanceInfo, flags);

@@ -13,7 +13,7 @@ Newbie-Renderer is a Vulkan-based renderer with C++23 support.
 
 ## Build
 
-### Method 1: Using CMake Presets (Recommended)
+### Command Line (CMake Presets)
 
 1. Clone the repository
     ```bash
@@ -21,37 +21,29 @@ Newbie-Renderer is a Vulkan-based renderer with C++23 support.
     cd Newbie-Renderer
     ```
 
-2. Configure using preset
+2. Configure
     ```bash
-    cmake --preset msvc-vcpkg
+    cmake --preset msvc
     ```
 
-3. Build the project
-    ```bash    
-    # Release build
-    cmake --build --preset release
+3. Build
+    ```bash
+    # Release
+    cmake --build --preset release --target main
+
+    # Debug
+    cmake --build --preset debug --target main
     ```
 
-### Method 2: Using Visual Studio 2026
+4. Run
+    ```bash
+    # Release
+    cmake --build --preset run-release
 
-1. Open Visual Studio 2026
-2. Select "Open a local folder"
-3. Choose the project root directory
-4. Visual Studio will automatically detect the CMake presets
-5. Select configuration from the dropdown: `msvc-vcpkg`
-6. Select build preset: `release`
-7. Build the solution (Ctrl+Shift+B)
+    # Debug
+    cmake --build --preset run-debug
+    ```
 
-## Test Framework
-
-The project keeps a built-in minimal test framework module for C++ modules workflow:
-
-- Framework module: `test/framework/nr_test.ixx` (`import nr.test;`)
-- Test runner object source: `test/framework/nr_test_main.cpp`
-- Core API (no macros):
-    - `nr::test::CaseRegistrar{name, [] { ... }}`
-    - `nr::test::require(condition, message)`
-    - `nr::test::requireEqual(lhs, rhs, message)`
 
 ## Packages
 
@@ -68,3 +60,4 @@ tips: You may update submodules by git if u like. However, Aftermath has to be u
 - imgui
 - glfw3
 - vulkan-memory-allocator
+- assimp
