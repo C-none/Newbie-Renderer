@@ -61,7 +61,7 @@ add_extern_library(flecs)
 if(MSVC AND TARGET flecs_static)
     target_compile_options(flecs_static PUBLIC
         "$<$<COMPILE_LANGUAGE:CXX>:/wd5260>"
-        "$<$<COMPILE_LANGUAGE:CXX>:/wd2220>"
+        "$<$<COMPILE_LANGUAGE:CXX>:/wd4702>"
         "$<$<COMPILE_LANGUAGE:CXX>:/wd4267>"
     )
 endif()
@@ -97,8 +97,3 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
 )
 set_target_properties(dependency PROPERTIES FOLDER "extern")
 
-# if(MSVC)
-    # Some third-party headers currently emit warnings when imported as header units.
-    # Keep /WX for project code while silencing those third-party diagnostics here.
-    # target_compile_options(dependency PRIVATE /wd4267 /wd4702 /wd5260)
-# endif()
