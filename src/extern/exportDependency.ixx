@@ -4,7 +4,9 @@ module;
 #include <slang-com-ptr.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <imgui.h>
+#include <flecs.h>
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
 #include <assimp/postprocess.h>
@@ -19,9 +21,6 @@ module;
 #pragma warning(pop)
 #endif
 #include <turbojpeg.h>
-#include <atomic>
-#include <cstring>
-#include <vector>
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 // #define TRACY_ENABLE
@@ -32,7 +31,9 @@ export import <slang.h>;
 export import <slang-com-ptr.h>;
 export import <GLFW/glfw3.h>;
 export import <glm/glm.hpp>;
+export import <glm/gtc/quaternion.hpp>;
 export import <imgui.h>;
+export import <flecs.h>;
 export import <assimp/Importer.hpp>;
 export import <assimp/material.h>;
 export import <assimp/postprocess.h>;
@@ -51,6 +52,10 @@ export inline constexpr int GLFW_NO_API = 0;
 #endif
 export inline constexpr int GLFW_CLIENT_API = 0x00022001;
 
+#ifdef TJFLAG_FASTDCT
+#undef TJFLAG_FASTDCT
+#endif
+export constexpr inline uint32_t TJFLAG_FASTDCT = 2048;
 
 export namespace glfw
 {

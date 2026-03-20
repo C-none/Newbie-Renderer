@@ -3,6 +3,8 @@ add_subdirectory(extern)
 # utils must be before any other subdirectory that might depend on it
 add_subdirectory(utils)
 add_subdirectory(load)
+add_subdirectory(resource)
+add_subdirectory(scene)
 
 add_subdirectory(rhi)
 
@@ -14,6 +16,8 @@ file(GLOB IMPL_SOURCES
 nr_add_executable(main main.cpp)
 target_link_libraries(main PRIVATE 
     nrload
+    nrresource
+    nrscene
     nrrhi
     dependency
 )

@@ -50,6 +50,17 @@ This document outlines the development standards, architectural principles, and 
     *   *Avoid:* manual `getProcAddr`, `dispatcher->vkCmd*`, `reinterpret_cast<PFN_vk...>`, or raw-handle `vkCmd*` calls.
 *   **Thin RHI Interfaces Only:** If an external API is needed, expose a small typed wrapper in existing RHI modules that directly forwards to RAII member functions without extra indirection layers.
 
+### 2.7 Modern C++ Ownership & Reference Policy
+
+*   **No Raw Owning Pointers:** Do not use raw pointers to model ownership. Avoid `new`/`delete` in project code except in tightly scoped low-level wrappers that immediately hand off to RAII types.
+*   **Required Non-Owning Dependency:** If an object must exist and cannot be null, use `T&` / `const T&`.
+*   **Rebindable Non-Owning Handle:** If a non-owning reference must be stored and reassigned, use `std::reference_wrapper<T>` / `std::reference_wrapper<const T>`.
+*   **Optional Non-Owning Dependency:** If a non-owning dependency may be absent, use `std::optional<std::reference_wrapper<T>>`.
+*   **Observed Shared Lifetime:** If ownership is shared elsewhere and only observation is needed, use `std::weak_ptr<T>`, and always `lock()` before dereference.
+*   **Smart Pointer Ownership Rules:** Use `std::unique_ptr<T>` for exclusive ownership. Use `std::shared_ptr<T>` only when shared ownership is required by explicit design.
+*   **Public API Rule:** Do not expose nullable raw pointers in module interfaces for ownership or lifetime control. Prefer references, `weak_ptr`, `reference_wrapper`, or `optional<reference_wrapper>` depending on semantics.
+*   **Boundary Exception:** Raw pointers are allowed only at external C API boundaries (for example Vulkan/C libraries). Convert immediately to safe local abstractions and do not propagate raw-pointer ownership semantics into internal module APIs.
+
 ## 3. Module Structure
 
 *   **`nrrhi`:** The Render Hardware Interface. Implements the abstraction over Vulkan.
@@ -61,3 +72,5 @@ When generating code or refactoring:
 1.  **Check Context:** Verify if the file is a module interface (`.ixx`) or implementation (`.cpp`).
 2.  **Apply Constraints:** Ensure no raw loops are introduced if a range-based solution exists.
 3.  **Safety:** Verify RAII compliance in `nrrhi` classes.
+4.  **Language:** All code comments must be in English.
+5.  **Ownership Semantics:** Enforce Section 2.7 and avoid introducing raw-pointer ownership patterns.

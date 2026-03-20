@@ -59,20 +59,25 @@ struct QueueOwnershipBarrierConfig
 
 /**
  * @brief Build queue-ownership barrier for Buffer/Image with one strongly-typed template path.
- * @tparam TOwnershipPhase Compile-time phase selector: `Release` writes src masks; `Acquire` writes dst masks.
+ * @tparam TOwnershipPhase Compile-time phase selector: `Release` writes source-side
+ *         scopes and pins the ignored destination side to `eBottomOfPipe`; `Acquire`
+ *         writes destination-side scopes and pins the ignored source side to
+ *         `eTopOfPipe`.
  * @tparam TResourceKind Resource category (`Buffer` or `Image`) that determines barrier type/layout fields.
  */
 template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourceKind>
 [[nodiscard]] inline auto makeQueueOwnershipBarrier(const TResourceKind& resource, const QueueOwnershipBarrierConfig& config)
 {
     constexpr bool kIsRelease = TOwnershipPhase == OwnershipBarrierPhase::Release;
+    constexpr auto kAcquireBoundaryStage = vk::PipelineStageFlagBits2::eTopOfPipe;
+    constexpr auto kReleaseBoundaryStage = vk::PipelineStageFlagBits2::eBottomOfPipe;
 
     if constexpr (std::same_as<std::remove_cvref_t<TResourceKind>, Buffer>)
     {
         return vk::BufferMemoryBarrier2{
-            kIsRelease ? config.stages : vk::PipelineStageFlags2{},
+            kIsRelease ? config.stages : kAcquireBoundaryStage,
             kIsRelease ? config.access : vk::AccessFlags2{},
-            kIsRelease ? vk::PipelineStageFlags2{} : config.stages,
+            kIsRelease ? kReleaseBoundaryStage : config.stages,
             kIsRelease ? vk::AccessFlags2{} : config.access,
             config.srcQueueFamilyIndex,
             config.dstQueueFamilyIndex,
@@ -85,9 +90,9 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
     else
     {
         return vk::ImageMemoryBarrier2{
-            kIsRelease ? config.stages : vk::PipelineStageFlags2{},
+            kIsRelease ? config.stages : kAcquireBoundaryStage,
             kIsRelease ? config.access : vk::AccessFlags2{},
-            kIsRelease ? vk::PipelineStageFlags2{} : config.stages,
+            kIsRelease ? kReleaseBoundaryStage : config.stages,
             kIsRelease ? vk::AccessFlags2{} : config.access,
             config.oldLayout,
             config.newLayout,
@@ -153,9 +158,7 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
  * @brief Common factory: transfer-write buffer -> shader-read buffer.
  */
 [[nodiscard]] inline vk::BufferMemoryBarrier2 makeBufferTransferWriteToShaderReadBarrier(
-    const Buffer& buffer,
-    vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eVertexShader |
-                                         vk::PipelineStageFlagBits2::eFragmentShader |
+    const Buffer& buffer, vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eMeshShaderEXT |
                                          vk::PipelineStageFlagBits2::eComputeShader,
     vk::DeviceSize offset = 0,
     vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max())
@@ -260,26 +263,106 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
 }
 
 /**
+ * @brief Queue-family ownership request used on either the release side or the acquire side.
+ *
+ * The same type is intentionally reused for both phases. When the request is
+ * named `release`, `stages/access` describe the last access on the source queue.
+ * When it is named `acquire`, `stages/access` describe the first access on the
+ * destination queue.
+ */
+struct QueueOwnershipRequest
+{
+    uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    vk::PipelineStageFlags2 stages = vk::PipelineStageFlagBits2::eAllCommands;
+    vk::AccessFlags2 access = vk::AccessFlagBits2::eMemoryWrite;
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return srcQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+               dstQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+               srcQueueFamilyIndex != dstQueueFamilyIndex;
+    }
+};
+
+/**
+ * @brief Full queue-family hand-off plan: release, optional semaphore wait, and acquire.
+ *
+ * The release and acquire descriptions must mirror the same queue-family pair.
+ * The semaphore wait is optional for generic use, but upload paths require it
+ * whenever ownership is acquired into the transfer queue from another queue.
+ */
+struct QueueOwnershipTransfer
+{
+    QueueOwnershipRequest release{};
+    QueueOwnershipRequest acquire{
+        .stages = vk::PipelineStageFlagBits2::eAllCommands,
+        .access = vk::AccessFlagBits2::eMemoryRead,
+    };
+    vk::Semaphore waitSemaphore{};
+    uint64_t waitValue = 0;
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return release.valid() &&
+               acquire.valid() &&
+               release.srcQueueFamilyIndex == acquire.srcQueueFamilyIndex &&
+               release.dstQueueFamilyIndex == acquire.dstQueueFamilyIndex;
+    }
+
+    [[nodiscard]] bool hasWait() const noexcept
+    {
+        return waitSemaphore != vk::Semaphore{};
+    }
+};
+
+/**
+ * @brief Ownership plan for uploads that may need an incoming acquire to transfer
+ *        and always end with a release from transfer to the destination queue.
+ */
+struct BufferUploadOwnershipPlan
+{
+    std::optional<QueueOwnershipTransfer> acquireToTransfer;
+    QueueOwnershipTransfer releaseToDestination{};
+
+    [[nodiscard]] bool valid(uint32_t transferQueueFamilyIndex) const noexcept
+    {
+        auto outgoingValid =
+            releaseToDestination.valid() &&
+            releaseToDestination.release.srcQueueFamilyIndex == transferQueueFamilyIndex &&
+            releaseToDestination.acquire.srcQueueFamilyIndex == transferQueueFamilyIndex;
+
+        auto incomingValid =
+            !acquireToTransfer.has_value() ||
+            (acquireToTransfer->valid() &&
+             acquireToTransfer->hasWait() &&
+             acquireToTransfer->release.dstQueueFamilyIndex == transferQueueFamilyIndex &&
+             acquireToTransfer->acquire.dstQueueFamilyIndex == transferQueueFamilyIndex);
+
+        return outgoingValid && incomingValid;
+    }
+};
+
+/**
  * @brief Generic buffer queue-ownership release barrier (sync2).
  *
- * Destination stage/access are intentionally empty for release semantics.
+ * The ignored destination side is pinned to `eBottomOfPipe` so release barriers
+ * stay at the end of the source queue pipeline, per project policy.
  */
 [[nodiscard]] inline vk::BufferMemoryBarrier2 makeBufferOwnershipReleaseBarrier(
     const Buffer& buffer,
-    uint32_t srcQueueFamilyIndex,
-    uint32_t dstQueueFamilyIndex,
-    vk::PipelineStageFlags2 srcStages,
-    vk::AccessFlags2 srcAccess,
+    const QueueOwnershipRequest& release,
     vk::DeviceSize offset = 0,
     vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max())
 {
+    nrAssert(release.valid(), "makeBufferOwnershipReleaseBarrier requires valid queue-family indices.");
     return detail::makeQueueOwnershipBarrier<detail::OwnershipBarrierPhase::Release>(
         buffer,
         detail::QueueOwnershipBarrierConfig{
-            .srcQueueFamilyIndex = srcQueueFamilyIndex,
-            .dstQueueFamilyIndex = dstQueueFamilyIndex,
-            .stages = srcStages,
-            .access = srcAccess,
+            .srcQueueFamilyIndex = release.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = release.dstQueueFamilyIndex,
+            .stages = release.stages,
+            .access = release.access,
             .offset = offset,
             .size = size,
         });
@@ -288,24 +371,23 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
 /**
  * @brief Generic buffer queue-ownership acquire barrier (sync2).
  *
- * Source stage/access are intentionally empty for acquire semantics.
+ * The ignored source side is pinned to `eTopOfPipe` so acquire barriers stay at
+ * the beginning of the destination queue pipeline, per project policy.
  */
 [[nodiscard]] inline vk::BufferMemoryBarrier2 makeBufferOwnershipAcquireBarrier(
     const Buffer& buffer,
-    uint32_t srcQueueFamilyIndex,
-    uint32_t dstQueueFamilyIndex,
-    vk::PipelineStageFlags2 dstStages,
-    vk::AccessFlags2 dstAccess,
+    const QueueOwnershipRequest& acquire,
     vk::DeviceSize offset = 0,
     vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max())
 {
+    nrAssert(acquire.valid(), "makeBufferOwnershipAcquireBarrier requires valid queue-family indices.");
     return detail::makeQueueOwnershipBarrier<detail::OwnershipBarrierPhase::Acquire>(
         buffer,
         detail::QueueOwnershipBarrierConfig{
-            .srcQueueFamilyIndex = srcQueueFamilyIndex,
-            .dstQueueFamilyIndex = dstQueueFamilyIndex,
-            .stages = dstStages,
-            .access = dstAccess,
+            .srcQueueFamilyIndex = acquire.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = acquire.dstQueueFamilyIndex,
+            .stages = acquire.stages,
+            .access = acquire.access,
             .offset = offset,
             .size = size,
         });
@@ -316,20 +398,18 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
  */
 [[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageOwnershipReleaseBarrier(
     const Image& image,
-    uint32_t srcQueueFamilyIndex,
-    uint32_t dstQueueFamilyIndex,
     vk::ImageLayout oldLayout,
     vk::ImageLayout newLayout,
-    vk::PipelineStageFlags2 srcStages,
-    vk::AccessFlags2 srcAccess)
+    const QueueOwnershipRequest& release)
 {
+    nrAssert(release.valid(), "makeImageOwnershipReleaseBarrier requires valid queue-family indices.");
     return detail::makeQueueOwnershipBarrier<detail::OwnershipBarrierPhase::Release>(
         image,
         detail::QueueOwnershipBarrierConfig{
-            .srcQueueFamilyIndex = srcQueueFamilyIndex,
-            .dstQueueFamilyIndex = dstQueueFamilyIndex,
-            .stages = srcStages,
-            .access = srcAccess,
+            .srcQueueFamilyIndex = release.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = release.dstQueueFamilyIndex,
+            .stages = release.stages,
+            .access = release.access,
             .oldLayout = oldLayout,
             .newLayout = newLayout,
         });
@@ -340,20 +420,18 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
  */
 [[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageOwnershipAcquireBarrier(
     const Image& image,
-    uint32_t srcQueueFamilyIndex,
-    uint32_t dstQueueFamilyIndex,
     vk::ImageLayout oldLayout,
     vk::ImageLayout newLayout,
-    vk::PipelineStageFlags2 dstStages,
-    vk::AccessFlags2 dstAccess)
+    const QueueOwnershipRequest& acquire)
 {
+    nrAssert(acquire.valid(), "makeImageOwnershipAcquireBarrier requires valid queue-family indices.");
     return detail::makeQueueOwnershipBarrier<detail::OwnershipBarrierPhase::Acquire>(
         image,
         detail::QueueOwnershipBarrierConfig{
-            .srcQueueFamilyIndex = srcQueueFamilyIndex,
-            .dstQueueFamilyIndex = dstQueueFamilyIndex,
-            .stages = dstStages,
-            .access = dstAccess,
+            .srcQueueFamilyIndex = acquire.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = acquire.dstQueueFamilyIndex,
+            .stages = acquire.stages,
+            .access = acquire.access,
             .oldLayout = oldLayout,
             .newLayout = newLayout,
         });
@@ -371,10 +449,12 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
 {
     return makeBufferOwnershipReleaseBarrier(
         buffer,
-        transferQueueFamilyIndex,
-        dstQueueFamilyIndex,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::AccessFlagBits2::eTransferWrite,
+        QueueOwnershipRequest{
+            .srcQueueFamilyIndex = transferQueueFamilyIndex,
+            .dstQueueFamilyIndex = dstQueueFamilyIndex,
+            .stages = vk::PipelineStageFlagBits2::eTransfer,
+            .access = vk::AccessFlagBits2::eTransferWrite,
+        },
         offset,
         size);
 }
@@ -394,10 +474,12 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
 {
     return makeBufferOwnershipAcquireBarrier(
         buffer,
-        srcQueueFamilyIndex,
-        graphicsQueueFamilyIndex,
-        dstStages,
-        vk::AccessFlagBits2::eShaderRead,
+        QueueOwnershipRequest{
+            .srcQueueFamilyIndex = srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = graphicsQueueFamilyIndex,
+            .stages = dstStages,
+            .access = vk::AccessFlagBits2::eShaderRead,
+        },
         offset,
         size);
 }
@@ -683,12 +765,18 @@ class ScopedRendering
     bool isActive_ = false;
 };
 
-struct QueueOwnershipRequest
+struct BufferUploadTicket
 {
-    uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
-    uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
-    vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eAllCommands;
-    vk::AccessFlags2 dstAccess = vk::AccessFlagBits2::eMemoryRead;
+    std::optional<std::reference_wrapper<const Buffer>> buffer;
+    vk::DeviceSize dstOffset = 0;
+    vk::DeviceSize size = 0;
+    uint64_t signalValue = 0;
+    std::optional<QueueOwnershipTransfer> ownership;
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return buffer.has_value() && size > 0 && signalValue > 0 && ownership.has_value();
+    }
 };
 
 struct ReadbackTicket
@@ -701,7 +789,11 @@ struct ReadbackTicket
 /**
  * @brief Upload/readback helper built on persistent mapped ring buffers.
  *
- * Uses transfer queue + submit2 and timeline semaphore values supplied by caller.
+ * Uses a dedicated transfer queue, an internal upload timeline semaphore, and
+ * Vulkan's recommended queue-family transfer flow:
+ *   1. source queue records a release barrier,
+ *   2. a semaphore orders the queue submissions,
+ *   3. destination queue records the matching acquire barrier.
  */
 class UploadReadbackContext
 {
@@ -729,147 +821,177 @@ class UploadReadbackContext
         readbackInfo.usage = vk::BufferUsageFlagBits::eTransferDst;
         readbackInfo.sharingMode = vk::SharingMode::eExclusive;
         readbackRing_ = resourceFactory.createBuffer(readbackInfo, MemoryUsage::GpuToCpu, "readback_ring");
+
+        uploadTimeline_ = sync::createTimelineSemaphore(device, 0u);
     }
 
     [[nodiscard]] bool valid() const noexcept
     {
-        return uploadRing_.valid() && readbackRing_.valid() && transferPool_.valid();
+        return uploadRing_.valid() && readbackRing_.valid() && transferPool_.valid() && *uploadTimeline_ != nullptr;
     }
 
-    void reclaimCompleted(const vk::raii::Semaphore& timelineSemaphore)
+    [[nodiscard]] const vk::raii::Semaphore& uploadTimelineSemaphore() const noexcept
     {
-        const uint64_t completedValue = queryTimelineValue(timelineSemaphore);
-        reclaimQueue(uploadInFlight_, uploadReclaimCursor_, completedValue);
-        reclaimQueue(readbackInFlight_, readbackReclaimCursor_, completedValue);
+        return uploadTimeline_;
     }
 
     /**
-     * @brief Upload raw bytes into a destination buffer via transfer queue.
+     * @brief Block until upload timeline reaches @p signalValue.
      *
-     * If ownership is provided, records a release barrier on transfer queue.
+     * Passing `0` waits for the latest upload issued by this context.
      */
-    void uploadBuffer(
+    void waitUploadComplete(uint64_t signalValue = 0)
+    {
+        if (signalValue == 0)
+        {
+            signalValue = nextUploadSignalValue_ > 1 ? (nextUploadSignalValue_ - 1) : 0;
+        }
+
+        if (signalValue == 0)
+        {
+            return;
+        }
+
+        waitTimelineValue(uploadTimeline_, signalValue);
+        reclaimQueue(uploadInFlight_, uploadReclaimCursor_, queryTimelineValue(uploadTimeline_));
+    }
+
+    /**
+     * @brief Build acquire barrier from upload ticket.
+     */
+    [[nodiscard]] vk::BufferMemoryBarrier2 makeAcquireBarrier(const BufferUploadTicket& ticket) const
+    {
+        nrAssert(ticket.valid(), "UploadReadbackContext::makeAcquireBarrier requires a valid ticket.");
+        return makeBufferOwnershipAcquireBarrier(
+            ticket.buffer->get(),
+            ticket.ownership->acquire,
+            ticket.dstOffset,
+            ticket.size);
+    }
+
+    /**
+     * @brief Record acquire barrier from upload ticket into destination queue command buffer.
+     */
+    void recordAcquireBarrier(vk::CommandBuffer commandBuffer, const BufferUploadTicket& ticket) const
+    {
+        BarrierBatch acquireBarriers{};
+        acquireBarriers.add(makeAcquireBarrier(ticket));
+        pipelineBarrier(commandBuffer, acquireBarriers);
+    }
+
+    /**
+     * @brief Upload raw bytes into a destination buffer via transfer queue staging ring.
+     *
+     * This enforces non-UBO upload policy: transfer copy + queue ownership transfer.
+     * If `ownership.acquireToTransfer` is present, the first transfer submit waits
+     * on `acquireToTransfer.waitSemaphore` and records the matching acquire barrier
+     * at the beginning of the transfer pipeline. If it is omitted, this upload path
+     * assumes the written destination range does not need its previous contents
+     * preserved before the transfer queue starts overwriting it.
+     * If payload size exceeds ring capacity, data is chunked and submitted in-order.
+     */
+    [[nodiscard]] BufferUploadTicket uploadBuffer(
         std::span<const std::byte> data,
         const Buffer& dst,
         vk::DeviceSize dstOffset,
-        const vk::raii::Semaphore& timelineSemaphore,
-        uint64_t signalValue,
-        std::optional<QueueOwnershipRequest> ownership = std::nullopt)
+        const BufferUploadOwnershipPlan& ownership)
     {
         nrAssert(valid(), "UploadReadbackContext::uploadBuffer requires a valid context.");
         nrAssert(!data.empty(), "UploadReadbackContext::uploadBuffer requires non-empty data.");
 
-        auto allocation = reserveUpload(static_cast<vk::DeviceSize>(data.size_bytes()), timelineSemaphore);
+        const auto transferQueueFamilyIndex = queueManager_->get().transfer().queueFamilyIndex();
+        nrAssert(
+            ownership.valid(transferQueueFamilyIndex),
+            "UploadReadbackContext::uploadBuffer requires a valid ownership plan for the transfer queue.");
 
-        std::memcpy(static_cast<std::byte*>(uploadRing_.mapped()) + allocation.offset, data.data(), data.size_bytes());
-        uploadRing_.flush(allocation.offset, static_cast<vk::DeviceSize>(data.size_bytes()));
+        const auto totalSize = static_cast<vk::DeviceSize>(data.size_bytes());
+        nrAssert(dstOffset + totalSize <= dst.size(), "UploadReadbackContext::uploadBuffer destination range exceeds buffer size.");
+        nrAssert(
+            (dst.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
+            "UploadReadbackContext::uploadBuffer destination buffer must include eTransferDst usage.");
+        nrAssert(uploadRing_.mapped() != nullptr, "UploadReadbackContext::uploadBuffer requires a persistently mapped upload ring.");
 
-        auto commandBuffers = transferPool_.allocatePrimary(1);
-        auto& commandBuffer = commandBuffers.front();
+        auto remainingSize = totalSize;
+        auto uploadedSize = vk::DeviceSize{0};
+        auto lastSignalValue = uint64_t{0};
 
-        CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        while (remainingSize > 0)
         {
-            auto raw = *commandBuffer;
+            const auto chunkSize = std::min(remainingSize, uploadCapacity_);
+            auto allocation = reserveUpload(chunkSize, uploadTimeline_);
 
-            BarrierBatch stagingBarrier{};
-            stagingBarrier.add(makeBufferHostWriteToTransferReadBarrier(uploadRing_, allocation.offset, static_cast<vk::DeviceSize>(data.size_bytes())));
-            pipelineBarrier(raw, stagingBarrier);
+            std::memcpy(
+                static_cast<std::byte*>(uploadRing_.mapped()) + allocation.offset,
+                data.data() + static_cast<size_t>(uploadedSize),
+                static_cast<size_t>(chunkSize));
+            uploadRing_.flush(allocation.offset, chunkSize);
 
-            vk::BufferCopy copyRegion{};
-            copyRegion.srcOffset = allocation.offset;
-            copyRegion.dstOffset = dstOffset;
-            copyRegion.size = static_cast<vk::DeviceSize>(data.size_bytes());
-            raw.copyBuffer(uploadRing_.handle(), dst.handle(), {copyRegion});
+            auto commandBuffers = transferPool_.allocatePrimary(1);
+            auto& commandBuffer = commandBuffers.front();
 
-            if (ownership.has_value())
+            CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
             {
-                BarrierBatch releaseBarrier{};
-                releaseBarrier.add(makeBufferOwnershipReleaseBarrier(
-                    dst,
-                    ownership->srcQueueFamilyIndex,
-                    ownership->dstQueueFamilyIndex,
-                    vk::PipelineStageFlagBits2::eTransfer,
-                    vk::AccessFlagBits2::eTransferWrite,
-                    dstOffset,
-                    static_cast<vk::DeviceSize>(data.size_bytes())));
-                pipelineBarrier(raw, releaseBarrier);
+                auto raw = *commandBuffer;
+
+                if (uploadedSize == 0 && ownership.acquireToTransfer.has_value())
+                {
+                    BarrierBatch transferAcquireBarrier{};
+                    transferAcquireBarrier.add(makeBufferOwnershipAcquireBarrier(
+                        dst,
+                        ownership.acquireToTransfer->acquire,
+                        dstOffset,
+                        totalSize));
+                    pipelineBarrier(raw, transferAcquireBarrier);
+                }
+
+                // The Vulkan submission itself performs the required host->device
+                // domain operation after flush; no extra buffer barrier is needed here.
+                vk::BufferCopy copyRegion{};
+                copyRegion.srcOffset = allocation.offset;
+                copyRegion.dstOffset = dstOffset + uploadedSize;
+                copyRegion.size = chunkSize;
+                raw.copyBuffer(uploadRing_.handle(), dst.handle(), {copyRegion});
+
+                if (remainingSize == chunkSize)
+                {
+                    BarrierBatch releaseBarrier{};
+                    releaseBarrier.add(makeBufferOwnershipReleaseBarrier(
+                        dst,
+                        ownership.releaseToDestination.release,
+                        dstOffset,
+                        totalSize));
+                    pipelineBarrier(raw, releaseBarrier);
+                }
             }
+            CommandRecorder::end(commandBuffer);
+
+            const auto signalValue = consumeNextUploadSignalValue();
+            CommandBatch batch{};
+            if (uploadedSize == 0 && ownership.acquireToTransfer.has_value())
+            {
+                batch.addWait(
+                    ownership.acquireToTransfer->waitSemaphore,
+                    ownership.acquireToTransfer->acquire.stages,
+                    ownership.acquireToTransfer->waitValue);
+            }
+            batch.addCommandBuffer(commandBuffer);
+            batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
+            queueManager_->get().transfer().submit(batch);
+
+            addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
+
+            lastSignalValue = signalValue;
+            uploadedSize += chunkSize;
+            remainingSize -= chunkSize;
         }
-        CommandRecorder::end(commandBuffer);
 
-        CommandBatch batch{};
-        batch.addCommandBuffer(commandBuffer);
-        batch.addSignal(timelineSemaphore, signalValue, 0, vk::PipelineStageFlagBits2::eTransfer);
-        queueManager_->get().transfer().submit(batch);
-
-        addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
-    }
-
-    /**
-     * @brief Upload to an image via transfer queue copy.
-     */
-    void uploadImage(
-        std::span<const std::byte> data,
-        const Image& dst,
-        vk::ImageLayout dstLayout,
-        const vk::raii::Semaphore& timelineSemaphore,
-        uint64_t signalValue,
-        const vk::BufferImageCopy& region = {},
-        std::optional<QueueOwnershipRequest> ownership = std::nullopt)
-    {
-        nrAssert(valid(), "UploadReadbackContext::uploadImage requires a valid context.");
-        nrAssert(!data.empty(), "UploadReadbackContext::uploadImage requires non-empty data.");
-
-        auto allocation = reserveUpload(static_cast<vk::DeviceSize>(data.size_bytes()), timelineSemaphore);
-
-        std::memcpy(static_cast<std::byte*>(uploadRing_.mapped()) + allocation.offset, data.data(), data.size_bytes());
-        uploadRing_.flush(allocation.offset, static_cast<vk::DeviceSize>(data.size_bytes()));
-
-        auto commandBuffers = transferPool_.allocatePrimary(1);
-        auto& commandBuffer = commandBuffers.front();
-
-        CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-        {
-            auto raw = *commandBuffer;
-
-            BarrierBatch stagingBarrier{};
-            stagingBarrier.add(makeBufferHostWriteToTransferReadBarrier(uploadRing_, allocation.offset, static_cast<vk::DeviceSize>(data.size_bytes())));
-            pipelineBarrier(raw, stagingBarrier);
-
-            vk::BufferImageCopy effectiveRegion = region;
-            if (effectiveRegion.imageSubresource.aspectMask == vk::ImageAspectFlags{})
-            {
-                effectiveRegion.imageSubresource = vk::ImageSubresourceLayers{inferAspectFlags(dst.format()), 0, 0, 1};
-            }
-            if (effectiveRegion.imageExtent == vk::Extent3D{})
-            {
-                effectiveRegion.imageExtent = dst.extent();
-            }
-            effectiveRegion.bufferOffset += allocation.offset;
-            raw.copyBufferToImage(uploadRing_.handle(), dst.handle(), dstLayout, {effectiveRegion});
-
-            if (ownership.has_value())
-            {
-                BarrierBatch releaseBarrier{};
-                releaseBarrier.add(makeImageOwnershipReleaseBarrier(
-                    dst,
-                    ownership->srcQueueFamilyIndex,
-                    ownership->dstQueueFamilyIndex,
-                    dstLayout,
-                    dstLayout,
-                    vk::PipelineStageFlagBits2::eTransfer,
-                    vk::AccessFlagBits2::eTransferWrite));
-                pipelineBarrier(raw, releaseBarrier);
-            }
-        }
-        CommandRecorder::end(commandBuffer);
-
-        CommandBatch batch{};
-        batch.addCommandBuffer(commandBuffer);
-        batch.addSignal(timelineSemaphore, signalValue, 0, vk::PipelineStageFlagBits2::eTransfer);
-        queueManager_->get().transfer().submit(batch);
-
-        addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
+        return BufferUploadTicket{
+            .buffer = std::cref(dst),
+            .dstOffset = dstOffset,
+            .size = totalSize,
+            .signalValue = lastSignalValue,
+            .ownership = ownership.releaseToDestination,
+        };
     }
 
     /**
@@ -995,6 +1117,14 @@ class UploadReadbackContext
         std::optional<vk::raii::CommandBuffers> commandBuffers{};
     };
 
+    [[nodiscard]] uint64_t consumeNextUploadSignalValue()
+    {
+        auto value = nextUploadSignalValue_;
+        ++nextUploadSignalValue_;
+        nrAssert(nextUploadSignalValue_ > value, "UploadReadbackContext timeline signal value overflow.");
+        return value;
+    }
+
     [[nodiscard]] static uint64_t alignUp(uint64_t value, uint64_t alignment)
     {
         if (alignment <= 1)
@@ -1088,7 +1218,7 @@ class UploadReadbackContext
     {
         nrAssert(size <= capacity, "UploadReadbackContext ring allocation exceeds ring capacity.");
 
-        reclaimCompleted(timelineSemaphore);
+        reclaimQueue(queue, reclaimCursor, queryTimelineValue(timelineSemaphore));
 
         auto tryReserve = [&]() -> std::optional<RingAllocation> {
             constexpr uint64_t alignment = 16;
@@ -1119,7 +1249,7 @@ class UploadReadbackContext
         while (!queue.empty())
         {
             waitTimelineValue(timelineSemaphore, queue.front().signalValue);
-            reclaimCompleted(timelineSemaphore);
+            reclaimQueue(queue, reclaimCursor, queryTimelineValue(timelineSemaphore));
             if (auto allocation = tryReserve())
             {
                 writeCursor = allocation->end;
@@ -1154,6 +1284,8 @@ class UploadReadbackContext
     vk::DeviceSize readbackCapacity_ = 0;
 
     CommandPool transferPool_;
+    vk::raii::Semaphore uploadTimeline_ = {nullptr};
+    uint64_t nextUploadSignalValue_ = 1;
 
     uint64_t uploadWriteCursor_ = 0;
     uint64_t uploadReclaimCursor_ = 0;

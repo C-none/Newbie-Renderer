@@ -6,15 +6,12 @@ import :type;
 import :backend;
 import std;
 
-constexpr uint32_t TJFLAG_FASTDCT = 2048;
-
 export namespace nr::load
 {
 struct TextureDecodeOptions
 {
     uint32_t workerCount = 0;
     uint32_t requestedChannels = 4;
-    bool preferTurboJpeg = true;
 };
 
 [[nodiscard]] inline std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene,
@@ -371,63 +368,45 @@ struct TurboJpegHandleDeleter
     return image;
 }
 
-[[nodiscard]] inline std::expected<DecodedPayload, std::string> decodeEncodedTexture(std::span<const std::byte> encodedBytes,
-                                                                                      uint32_t requestedChannels,
-                                                                                      bool preferTurboJpeg)
+[[nodiscard]] inline std::expected<DecodedPayload, std::string> decodeEncodedTexture(const TextureAsset &texture,
+                                                                                      std::span<const std::byte> encodedBytes,
+                                                                                      uint32_t requestedChannels)
 {
-    auto turboError = std::string{};
-    if (preferTurboJpeg)
+    auto decodeAsJpeg = false;
+    if (texture.payloadKind == TexturePayloadKind::externalReference)
+    {
+        decodeAsJpeg = isJpegExtension(texture.resolvedPath) || hasJpegMagic(encodedBytes);
+    }
+    else if (texture.payloadKind == TexturePayloadKind::embeddedCompressedBlob)
+    {
+        auto hint = texture.compressed.has_value() ? texture.compressed->formatHint : std::string_view{};
+        decodeAsJpeg = isJpegHint(hint) || hasJpegMagic(encodedBytes);
+    }
+
+    if (decodeAsJpeg)
     {
         auto turboResult = decodeWithTurboJpeg(encodedBytes);
-        if (turboResult.has_value())
+        if (!turboResult.has_value())
         {
-            return DecodedPayload{
-                .image = std::move(turboResult.value()),
-                .decoder = "libjpeg-turbo",
-            };
+            return std::unexpected(std::format("libjpeg-turbo error: {}", turboResult.error()));
         }
 
-        turboError = turboResult.error();
+        return DecodedPayload{
+            .image = std::move(turboResult.value()),
+            .decoder = "libjpeg-turbo",
+        };
     }
 
     auto stbResult = decodeWithStb(encodedBytes, requestedChannels);
     if (!stbResult.has_value())
     {
-        if (turboError.empty())
-        {
-            return std::unexpected(stbResult.error());
-        }
-
-        return std::unexpected(std::format("libjpeg-turbo error: {}; stb fallback error: {}", turboError, stbResult.error()));
+        return std::unexpected(stbResult.error());
     }
 
     return DecodedPayload{
         .image = std::move(stbResult.value()),
         .decoder = "stb",
     };
-}
-
-[[nodiscard]] inline bool shouldUseTurboJpeg(const TextureAsset &texture,
-                                              std::span<const std::byte> encodedBytes,
-                                              bool preferTurboJpeg)
-{
-    if (!preferTurboJpeg)
-    {
-        return false;
-    }
-
-    if (texture.payloadKind == TexturePayloadKind::externalReference)
-    {
-        return isJpegExtension(texture.resolvedPath) || hasJpegMagic(encodedBytes);
-    }
-
-    if (texture.payloadKind == TexturePayloadKind::embeddedCompressedBlob)
-    {
-        auto hint = texture.compressed.has_value() ? texture.compressed->formatHint : std::string_view{};
-        return isJpegHint(hint) || hasJpegMagic(encodedBytes);
-    }
-
-    return false;
 }
 
 [[nodiscard]] inline TextureDecodeTaskResult decodeTextureTask(uint32_t textureIndex,
@@ -485,8 +464,7 @@ struct TurboJpegHandleDeleter
         return result;
     }
 
-    auto preferTurbo = shouldUseTurboJpeg(texture, encodedBytes, options.preferTurboJpeg);
-    auto decodeResult = decodeEncodedTexture(encodedBytes, options.requestedChannels, preferTurbo);
+    auto decodeResult = decodeEncodedTexture(texture, encodedBytes, options.requestedChannels);
     if (!decodeResult.has_value())
     {
         result.error = decodeResult.error();

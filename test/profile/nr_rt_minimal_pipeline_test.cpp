@@ -119,6 +119,12 @@ struct BlasGeometryUpload
     auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
     auto const computeQueueFamily = device.queueManager.compute().queueFamilyIndex();
 
+    if (transferQueueFamily == graphicsQueueFamily)
+    {
+        std::println("[error] transfer and graphics queue families must be distinct for this test.");
+        return false;
+    }
+
     BlasGeometryUpload geometryUpload{};
     geometryUpload.positions = {
         std::array<float, 3>{-0.8f, -0.6f, 0.0f},
@@ -133,33 +139,19 @@ struct BlasGeometryUpload
     cameraData.up = {0.0f, 1.25f, 0.0f, 0.0f};
     cameraData.forward = {0.0f, 0.0f, 1.0f, 0.0f};
 
-    vk::BufferCreateInfo geometryStagingInfo{};
-    geometryStagingInfo.size = sizeof(BlasGeometryUpload);
-    geometryStagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
-    geometryStagingInfo.sharingMode = vk::SharingMode::eExclusive;
-    auto geometryStaging = device.resourceFactory.createBuffer(geometryStagingInfo, nr::rhi::MemoryUsage::CpuToGpu, "rt_geometry_staging");
-    geometryStaging.write(std::as_bytes(std::span{&geometryUpload, 1}));
-    geometryStaging.flush();
-
     vk::BufferCreateInfo geometryBufferInfo{};
     geometryBufferInfo.size = sizeof(BlasGeometryUpload);
     geometryBufferInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
     geometryBufferInfo.sharingMode = vk::SharingMode::eExclusive;
     auto geometryBuffer = device.resourceFactory.createBuffer(geometryBufferInfo, nr::rhi::MemoryUsage::GpuOnly, "rt_geometry_gpu");
 
-    vk::BufferCreateInfo cameraStagingInfo{};
-    cameraStagingInfo.size = sizeof(CameraData);
-    cameraStagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
-    cameraStagingInfo.sharingMode = vk::SharingMode::eExclusive;
-    auto cameraStaging = device.resourceFactory.createBuffer(cameraStagingInfo, nr::rhi::MemoryUsage::CpuToGpu, "rt_camera_staging");
-    cameraStaging.write(std::as_bytes(std::span{&cameraData, 1}));
-    cameraStaging.flush();
-
     vk::BufferCreateInfo cameraBufferInfo{};
     cameraBufferInfo.size = sizeof(CameraData);
-    cameraBufferInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eUniformBuffer;
+    cameraBufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
     cameraBufferInfo.sharingMode = vk::SharingMode::eExclusive;
-    auto cameraBuffer = device.resourceFactory.createBuffer(cameraBufferInfo, nr::rhi::MemoryUsage::GpuOnly, "rt_camera_gpu");
+    auto cameraBuffer = device.resourceFactory.createBuffer(cameraBufferInfo, nr::rhi::MemoryUsage::CpuToGpu, "rt_camera_upload");
+    cameraBuffer.write(std::as_bytes(std::span{&cameraData, 1}));
+    cameraBuffer.flush();
 
     nr::rhi::AsBuildOptions buildOptions{};
     buildOptions.buildFlags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace;
@@ -200,14 +192,6 @@ struct BlasGeometryUpload
     tlasInstance.flags = static_cast<std::uint32_t>(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
     tlasInstance.accelerationStructureReference = blas.deviceAddress();
 
-    vk::BufferCreateInfo instanceStagingInfo{};
-    instanceStagingInfo.size = sizeof(vk::AccelerationStructureInstanceKHR);
-    instanceStagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
-    instanceStagingInfo.sharingMode = vk::SharingMode::eExclusive;
-    auto instanceStaging = device.resourceFactory.createBuffer(instanceStagingInfo, nr::rhi::MemoryUsage::CpuToGpu, "rt_instance_staging");
-    instanceStaging.write(std::as_bytes(std::span{&tlasInstance, 1}));
-    instanceStaging.flush();
-
     vk::BufferCreateInfo instanceBufferInfo{};
     instanceBufferInfo.size = sizeof(vk::AccelerationStructureInstanceKHR);
     instanceBufferInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
@@ -246,11 +230,48 @@ struct BlasGeometryUpload
         return false;
     }
 
-    auto setupTransferToGraphics = nr::rhi::sync::createSemaphore(device.device);
-
-    nr::rhi::CommandPool setupTransferPool(device.device, transferQueueFamily, vk::CommandPoolCreateFlagBits::eTransient);
-    auto setupTransferBuffers = setupTransferPool.allocatePrimary(1);
-    auto &setupTransfer = setupTransferBuffers.front();
+    auto &uploadContext = device.uploadReadback();
+    auto geometryUploadTicket = uploadContext.uploadBuffer(
+        std::as_bytes(std::span{&geometryUpload, 1}),
+        geometryBuffer,
+        0,
+        nr::rhi::ops::BufferUploadOwnershipPlan{
+            .releaseToDestination = nr::rhi::ops::QueueOwnershipTransfer{
+                .release = nr::rhi::ops::QueueOwnershipRequest{
+                    .srcQueueFamilyIndex = transferQueueFamily,
+                    .dstQueueFamilyIndex = graphicsQueueFamily,
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferWrite,
+                },
+                .acquire = nr::rhi::ops::QueueOwnershipRequest{
+                    .srcQueueFamilyIndex = transferQueueFamily,
+                    .dstQueueFamilyIndex = graphicsQueueFamily,
+                    .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+                    .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
+                },
+            },
+        });
+    auto instanceUploadTicket = uploadContext.uploadBuffer(
+        std::as_bytes(std::span{&tlasInstance, 1}),
+        instanceBuffer,
+        0,
+        nr::rhi::ops::BufferUploadOwnershipPlan{
+            .releaseToDestination = nr::rhi::ops::QueueOwnershipTransfer{
+                .release = nr::rhi::ops::QueueOwnershipRequest{
+                    .srcQueueFamilyIndex = transferQueueFamily,
+                    .dstQueueFamilyIndex = graphicsQueueFamily,
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferWrite,
+                },
+                .acquire = nr::rhi::ops::QueueOwnershipRequest{
+                    .srcQueueFamilyIndex = transferQueueFamily,
+                    .dstQueueFamilyIndex = graphicsQueueFamily,
+                    .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+                    .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
+                },
+            },
+        });
+    uploadContext.waitUploadComplete();
 
     nr::rhi::CommandPool setupGraphicsPool(device.device, graphicsQueueFamily, vk::CommandPoolCreateFlagBits::eTransient);
     auto setupGraphicsBuffers = setupGraphicsPool.allocatePrimary(1);
@@ -259,60 +280,13 @@ struct BlasGeometryUpload
     auto constexpr vertexDataOffset = vk::DeviceSize{0};
     auto const indexDataOffset = static_cast<vk::DeviceSize>(sizeof(geometryUpload.positions));
 
-    nr::rhi::CommandRecorder::beginPrimary(setupTransfer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    {
-        auto raw = *setupTransfer;
-
-        nr::rhi::ops::copyBuffer(raw, geometryStaging, geometryBuffer, geometryBuffer.size());
-        nr::rhi::ops::copyBuffer(raw, instanceStaging, instanceBuffer, instanceBuffer.size());
-        nr::rhi::ops::copyBuffer(raw, cameraStaging, cameraBuffer, cameraBuffer.size());
-
-        nr::rhi::ops::BarrierBatch transferReleaseBarriers{};
-        transferReleaseBarriers.add(nr::rhi::ops::makeBufferOwnershipReleaseBarrier(
-            geometryBuffer,
-            transferQueueFamily,
-            graphicsQueueFamily,
-            vk::PipelineStageFlagBits2::eTransfer,
-            vk::AccessFlagBits2::eTransferWrite));
-        transferReleaseBarriers.add(nr::rhi::ops::makeBufferOwnershipReleaseBarrier(
-            instanceBuffer,
-            transferQueueFamily,
-            graphicsQueueFamily,
-            vk::PipelineStageFlagBits2::eTransfer,
-            vk::AccessFlagBits2::eTransferWrite));
-        transferReleaseBarriers.add(nr::rhi::ops::makeBufferOwnershipReleaseBarrier(
-            cameraBuffer,
-            transferQueueFamily,
-            graphicsQueueFamily,
-            vk::PipelineStageFlagBits2::eTransfer,
-            vk::AccessFlagBits2::eTransferWrite));
-        nr::rhi::ops::pipelineBarrier(raw, transferReleaseBarriers);
-    }
-    nr::rhi::CommandRecorder::end(setupTransfer);
-
     nr::rhi::CommandRecorder::beginPrimary(setupGraphics, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     {
         auto raw = *setupGraphics;
 
         nr::rhi::ops::BarrierBatch transferAcquireBarriers{};
-        transferAcquireBarriers.add(nr::rhi::ops::makeBufferOwnershipAcquireBarrier(
-            geometryBuffer,
-            transferQueueFamily,
-            graphicsQueueFamily,
-            vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-            vk::AccessFlagBits2::eAccelerationStructureReadKHR));
-        transferAcquireBarriers.add(nr::rhi::ops::makeBufferOwnershipAcquireBarrier(
-            instanceBuffer,
-            transferQueueFamily,
-            graphicsQueueFamily,
-            vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-            vk::AccessFlagBits2::eAccelerationStructureReadKHR));
-        transferAcquireBarriers.add(nr::rhi::ops::makeBufferOwnershipAcquireBarrier(
-            cameraBuffer,
-            transferQueueFamily,
-            graphicsQueueFamily,
-            vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-            vk::AccessFlagBits2::eUniformRead));
+        transferAcquireBarriers.add(uploadContext.makeAcquireBarrier(geometryUploadTicket));
+        transferAcquireBarriers.add(uploadContext.makeAcquireBarrier(instanceUploadTicket));
         nr::rhi::ops::pipelineBarrier(raw, transferAcquireBarriers);
 
         nr::rhi::BlasBuildRecordInfo blasBuildRecord{};
@@ -367,14 +341,12 @@ struct BlasGeometryUpload
     }
     nr::rhi::CommandRecorder::end(setupGraphics);
 
-    nr::rhi::CommandBatch setupTransferBatch{};
-    setupTransferBatch.addCommandBuffer(setupTransfer);
-    setupTransferBatch.addSignal(setupTransferToGraphics, 0, 0, vk::PipelineStageFlagBits2::eTransfer);
-    device.queueManager.transfer().submit(setupTransferBatch);
-
     nr::rhi::CommandBatch setupGraphicsBatch{};
     setupGraphicsBatch.addCommandBuffer(setupGraphics);
-    setupGraphicsBatch.addWait(setupTransferToGraphics, vk::PipelineStageFlagBits2::eAllCommands);
+    setupGraphicsBatch.addWait(
+        uploadContext.uploadTimelineSemaphore(),
+        geometryUploadTicket.ownership->acquire.stages,
+        std::max(geometryUploadTicket.signalValue, instanceUploadTicket.signalValue));
     device.queueManager.graphics().submit(setupGraphicsBatch);
     device.queueManager.graphics().waitIdle();
 
@@ -475,12 +447,14 @@ struct BlasGeometryUpload
             {
                 traceInputBarriers.add(nr::rhi::ops::makeImageOwnershipAcquireBarrier(
                     outputImage,
-                    computeQueueFamily,
-                    graphicsQueueFamily,
                     vk::ImageLayout::eTransferSrcOptimal,
                     vk::ImageLayout::eGeneral,
-                    vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                    vk::AccessFlagBits2::eShaderWrite));
+                    nr::rhi::ops::QueueOwnershipRequest{
+                        .srcQueueFamilyIndex = computeQueueFamily,
+                        .dstQueueFamilyIndex = graphicsQueueFamily,
+                        .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+                        .access = vk::AccessFlagBits2::eShaderWrite,
+                    }));
             }
             else
             {
@@ -514,12 +488,14 @@ struct BlasGeometryUpload
             nr::rhi::ops::BarrierBatch graphicsToComputeRelease{};
             graphicsToComputeRelease.add(nr::rhi::ops::makeImageOwnershipReleaseBarrier(
                 outputImage,
-                graphicsQueueFamily,
-                computeQueueFamily,
                 vk::ImageLayout::eGeneral,
                 vk::ImageLayout::eTransferSrcOptimal,
-                vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                vk::AccessFlagBits2::eShaderWrite));
+                nr::rhi::ops::QueueOwnershipRequest{
+                    .srcQueueFamilyIndex = graphicsQueueFamily,
+                    .dstQueueFamilyIndex = computeQueueFamily,
+                    .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+                    .access = vk::AccessFlagBits2::eShaderWrite,
+                }));
             nr::rhi::ops::pipelineBarrier(raw, graphicsToComputeRelease);
         }
         nr::rhi::CommandRecorder::end(graphicsCommandBuffer);
@@ -538,12 +514,14 @@ struct BlasGeometryUpload
             nr::rhi::ops::BarrierBatch computeInputBarriers{};
             computeInputBarriers.add(nr::rhi::ops::makeImageOwnershipAcquireBarrier(
                 outputImage,
-                graphicsQueueFamily,
-                computeQueueFamily,
                 vk::ImageLayout::eGeneral,
                 vk::ImageLayout::eTransferSrcOptimal,
-                vk::PipelineStageFlagBits2::eTransfer,
-                vk::AccessFlagBits2::eTransferRead));
+                nr::rhi::ops::QueueOwnershipRequest{
+                    .srcQueueFamilyIndex = graphicsQueueFamily,
+                    .dstQueueFamilyIndex = computeQueueFamily,
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferRead,
+                }));
 
             vk::ImageMemoryBarrier2 swapchainToTransfer{};
             swapchainToTransfer.srcStageMask = swapchainWasPresented ? vk::PipelineStageFlagBits2::eBottomOfPipe : vk::PipelineStageFlagBits2::eTopOfPipe;
@@ -582,12 +560,14 @@ struct BlasGeometryUpload
             nr::rhi::ops::BarrierBatch computeToGraphicsRelease{};
             computeToGraphicsRelease.add(nr::rhi::ops::makeImageOwnershipReleaseBarrier(
                 outputImage,
-                computeQueueFamily,
-                graphicsQueueFamily,
                 vk::ImageLayout::eTransferSrcOptimal,
                 vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits2::eTransfer,
-                vk::AccessFlagBits2::eTransferRead));
+                nr::rhi::ops::QueueOwnershipRequest{
+                    .srcQueueFamilyIndex = computeQueueFamily,
+                    .dstQueueFamilyIndex = graphicsQueueFamily,
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferRead,
+                }));
             nr::rhi::ops::pipelineBarrier(raw, computeToGraphicsRelease);
 
             nr::rhi::ops::BarrierBatch presentBarriers{};
