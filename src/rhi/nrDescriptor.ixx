@@ -256,7 +256,7 @@ class ShaderBindingPool
   private:
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
     vk::raii::DescriptorPool pool_ = {nullptr};
-    std::unordered_map<uint32_t, uint32_t> variableDescriptorCapBySet_{};
+    std::map<uint32_t, uint32_t> variableDescriptorCapBySet_{};
 };
 
 class ShaderResourceWriter
@@ -875,9 +875,9 @@ class ShaderDescriptorLayout
     }
 
     bool isValid_ = false;
-    std::unordered_map<std::string, ShaderCursor::RootField> rootFields_;
-    std::unordered_map<uint32_t, DescriptorBindingInfo> bindingByRangeIndex_;
-    std::unordered_map<uint32_t, PushConstantRangeInfo> pushConstantByRangeIndex_;
+    std::map<std::string, ShaderCursor::RootField> rootFields_;
+    std::map<uint32_t, DescriptorBindingInfo> bindingByRangeIndex_;
+    std::map<uint32_t, PushConstantRangeInfo> pushConstantByRangeIndex_;
     std::map<std::tuple<uint32_t, uint32_t>, PushConstantRangeInfo> pushConstantByOffsetAndSize_;
     std::map<std::tuple<uint32_t, uint32_t>, DescriptorBindingInfo> bindingBySetAndBinding_;
     std::vector<DescriptorSetLayoutInfo> descriptorSets_;

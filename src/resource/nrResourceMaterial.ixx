@@ -28,8 +28,8 @@ struct Texture
 {
     std::string name{};
     std::filesystem::path sourcePath{};
-    TextureDimension dimension = TextureDimension::tex2D;
-    PixelFormat format = PixelFormat::unknown;
+    TextureDimension dimension = vk::ImageType::e2D;
+    PixelFormat format = vk::Format::eUndefined;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t depth = 1;
@@ -48,7 +48,7 @@ struct Texture
             return false;
         }
 
-        if (format == PixelFormat::unknown)
+        if (format == vk::Format::eUndefined)
         {
             return false;
         }
@@ -96,12 +96,12 @@ struct Texture
 
 struct SamplerDesc
 {
-    FilterMode minFilter = FilterMode::linear;
-    FilterMode magFilter = FilterMode::linear;
-    FilterMode mipFilter = FilterMode::linear;
-    AddressMode addressU = AddressMode::repeat;
-    AddressMode addressV = AddressMode::repeat;
-    AddressMode addressW = AddressMode::repeat;
+    FilterMode minFilter = vk::Filter::eLinear;
+    FilterMode magFilter = vk::Filter::eLinear;
+    MipFilterMode mipFilter = vk::SamplerMipmapMode::eLinear;
+    AddressMode addressU = vk::SamplerAddressMode::eRepeat;
+    AddressMode addressV = vk::SamplerAddressMode::eRepeat;
+    AddressMode addressW = vk::SamplerAddressMode::eRepeat;
     float mipLodBias = 0.0f;
     float minLod = 0.0f;
     float maxLod = std::numeric_limits<float>::max();

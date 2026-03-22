@@ -20,8 +20,7 @@ struct DecodedImageFingerprint
 
 [[nodiscard]] std::vector<std::uint32_t> collectReferencedTextureIndices(const nr::load::SceneAsset &scene)
 {
-    auto referenced = std::unordered_set<std::uint32_t>{};
-    referenced.reserve(scene.materials.size() * 2u);
+    auto referenced = std::set<std::uint32_t>{};
 
     std::ranges::for_each(scene.materials, [&](const nr::load::MaterialAsset &material) {
         std::ranges::for_each(material.textures, [&](const nr::load::MaterialTextureBinding &binding) {
@@ -33,7 +32,6 @@ struct DecodedImageFingerprint
     });
 
     auto ordered = std::vector<std::uint32_t>{referenced.begin(), referenced.end()};
-    std::ranges::sort(ordered);
     return ordered;
 }
 
@@ -77,7 +75,7 @@ void clearDecodedTextures(nr::load::SceneAsset &scene)
     });
 }
 
-[[nodiscard]] std::expected<std::unordered_map<std::uint32_t, DecodedImageFingerprint>, std::string>
+[[nodiscard]] std::expected<std::map<std::uint32_t, DecodedImageFingerprint>, std::string>
 decodeAndSnapshot(nr::load::SceneAsset &scene,
                   std::span<const std::uint32_t> referencedTextureIndices,
                   std::uint32_t workerCount)
@@ -101,8 +99,7 @@ decodeAndSnapshot(nr::load::SceneAsset &scene,
             error.message));
     }
 
-    auto snapshot = std::unordered_map<std::uint32_t, DecodedImageFingerprint>{};
-    snapshot.reserve(referencedTextureIndices.size());
+    auto snapshot = std::map<std::uint32_t, DecodedImageFingerprint>{};
 
     auto missingKeys = std::vector<std::string>{};
     missingKeys.reserve(referencedTextureIndices.size());
@@ -128,8 +125,8 @@ decodeAndSnapshot(nr::load::SceneAsset &scene,
 }
 
 [[nodiscard]] bool compareSnapshots(std::span<const std::uint32_t> referencedTextureIndices,
-                                    const std::unordered_map<std::uint32_t, DecodedImageFingerprint> &singleWorkerSnapshot,
-                                    const std::unordered_map<std::uint32_t, DecodedImageFingerprint> &multiWorkerSnapshot)
+                                    const std::map<std::uint32_t, DecodedImageFingerprint> &singleWorkerSnapshot,
+                                    const std::map<std::uint32_t, DecodedImageFingerprint> &multiWorkerSnapshot)
 {
     auto allMatched = true;
 
@@ -236,8 +233,7 @@ decodeAndSnapshot(nr::load::SceneAsset &scene,
         return false;
     }
 
-    auto decodeBackends = std::unordered_set<std::string>{};
-    decodeBackends.reserve(multiWorkerResult->size());
+    auto decodeBackends = std::set<std::string>{};
 
     std::ranges::for_each(*multiWorkerResult, [&](const auto &entry) {
         decodeBackends.emplace(entry.second.backend);

@@ -17,8 +17,8 @@ find_package(assimp CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(libjpeg-turbo CONFIG REQUIRED)
 
-if(${Vulkan_VERSION} VERSION_LESS "1.4.328")
-    message(FATAL_ERROR "Minimum required Vulkan version for C++ modules is 1.4.328. "
+if(${Vulkan_VERSION} VERSION_LESS "1.4.341")
+    message(FATAL_ERROR "Minimum required Vulkan version for C++ modules is 1.4.341. "
         "Found ${Vulkan_VERSION}."
     )
 endif()
@@ -41,22 +41,18 @@ function(nr_apply_msvc_settings target)
         # Link-time optimization for Release builds
         set_target_properties(${target} PROPERTIES
             INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-            INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE
         )
         
         # Warning levels using generator expressions (cleaner syntax)
         target_compile_options(${target} PRIVATE
             $<$<CONFIG:Debug>:/W4 /WX /Zi>           # All warnings as errors, debug info
             $<$<CONFIG:Release>:/W4 /WX /Ox>          # All warnings as errors, optimize
-            $<$<CONFIG:RelWithDebInfo>:/W4 /WX /Zi>  # Warnings + debug info
-            # $<$<CONFIG:Debug>:/fsanitize=address> # Only enable when encountering memory issues(e.g. Segment fault). At the same time, disable INCREMENTAL flag if this flag is used.
         )
         
         # Incremental linking for faster rebuilds
         target_link_options(${target} PRIVATE
             $<$<CONFIG:Debug>:/INCREMENTAL /DEBUG:FULL>
             $<$<CONFIG:Release>:/INCREMENTAL:NO /OPT:REF /OPT:ICF>
-            $<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO /DEBUG:FULL>
         )
         
         # Runtime library selection

@@ -20,6 +20,12 @@ This document outlines the development standards, architectural principles, and 
 *   **Loops vs. Algorithms:** Replace raw `for` loops with **C++20/23 Ranges and Views** (pipes) whenever possible.
     *   *Preferred:* `data | std::views::transform(...) | ...`
     *   *Avoid:* `for (int i = 0; i < n; ++i) { ... }` unless performance critical and unrolling is necessary or the range alternative is significantly more complex.
+*   **Compile-Time Variant Policy:** For call paths that only differ by a small constant parameter (for example `LogLevel`, resource kind labels, or policy tags), prefer a single template with a non-type template parameter and `if constexpr` over multiple near-identical wrapper functions.
+    *   *Preferred:* `template<LogLevel Level> void report(...);`
+    *   *Avoid:* `reportInfo(...)`, `reportWarning(...)`, `reportError(...)`-style wrapper triplets when behavior differs only by compile-time constants.
+*   **Associative Container Default:** When choosing an STL dictionary or tree container, default to `std::map` / `std::set`.
+    *   *Use `std::unordered_map` / `std::unordered_set` only when the expected container size is greater than 50 in most cases.*
+    *   *If the size is usually 50 or fewer elements, prefer `std::map` / `std::set` by default unless there is a clear, measured reason to do otherwise.*
 *   **Modules:** Use C++20 modules (`.ixx`) for internal code organization.
 
 ### 2.3 Resource Management (RAII)
@@ -60,6 +66,13 @@ This document outlines the development standards, architectural principles, and 
 *   **Smart Pointer Ownership Rules:** Use `std::unique_ptr<T>` for exclusive ownership. Use `std::shared_ptr<T>` only when shared ownership is required by explicit design.
 *   **Public API Rule:** Do not expose nullable raw pointers in module interfaces for ownership or lifetime control. Prefer references, `weak_ptr`, `reference_wrapper`, or `optional<reference_wrapper>` depending on semantics.
 *   **Boundary Exception:** Raw pointers are allowed only at external C API boundaries (for example Vulkan/C libraries). Convert immediately to safe local abstractions and do not propagate raw-pointer ownership semantics into internal module APIs.
+
+### 2.8 Error Reporting Policy
+
+*   **Single Error Facility:** Use `nr.utils:errorHandle` as the only in-project error reporting entrypoint.
+*   **No Module-Local Diagnostic Systems:** Do **not** introduce per-module custom diagnostics buffers/entry structs for production error reporting paths.
+*   **Scene Rule:** Scene import/bridge/runtime errors and warnings must be emitted through `nrLog`/`nrInfo`/`nrVulkan`/`nrAssert` from `errorHandle`.
+*   **Extensibility Rule:** If a module needs additional reporting behavior, extend `errorHandle` first, then reuse it everywhere instead of adding a new ad-hoc reporting API.
 
 ## 3. Module Structure
 

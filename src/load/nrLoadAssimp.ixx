@@ -38,6 +38,20 @@ inline constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
     }
 }
 
+[[nodiscard]] inline std::string lightSourceTypeName(aiLightSourceType lightType)
+{
+    switch (lightType)
+    {
+    case aiLightSource_UNDEFINED: return "undefined";
+    case aiLightSource_DIRECTIONAL: return "directional";
+    case aiLightSource_POINT: return "point";
+    case aiLightSource_SPOT: return "spot";
+    case aiLightSource_AMBIENT: return "ambient";
+    case aiLightSource_AREA: return "area";
+    default: return std::format("type_{}", static_cast<unsigned>(lightType));
+    }
+}
+
 [[nodiscard]] inline std::string normalizeTextureKey(std::string_view key)
 {
     std::string normalized{key};
@@ -98,6 +112,16 @@ inline constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
         matrix.d3,
         matrix.d4,
     };
+}
+
+[[nodiscard]] inline std::array<float, 3> toVector3(const aiVector3D &value)
+{
+    return {value.x, value.y, value.z};
+}
+
+[[nodiscard]] inline std::array<float, 3> toColor3(const aiColor3D &value)
+{
+    return {value.r, value.g, value.b};
 }
 
 [[nodiscard]] inline std::filesystem::path resolveTexturePath(const std::filesystem::path &baseDirectory,
@@ -214,7 +238,7 @@ inline constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
     return std::nullopt;
 }
 
-[[nodiscard]] inline uint32_t textureIndexFromKey(const std::unordered_map<std::string, uint32_t> &indexByKey,
+[[nodiscard]] inline uint32_t textureIndexFromKey(const std::map<std::string, uint32_t> &indexByKey,
                                                   std::string_view key)
 {
     auto found = indexByKey.find(std::string{key});
@@ -229,8 +253,7 @@ inline constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
                                                               const std::filesystem::path &baseDirectory,
                                                               SceneAsset &scene)
 {
-    auto textureIndexByKey = std::unordered_map<std::string, uint32_t>{};
-    textureIndexByKey.reserve(scene.textures.size() + 16);
+    auto textureIndexByKey = std::map<std::string, uint32_t>{};
     for (auto textureIndex : std::views::iota(uint32_t{0}, static_cast<uint32_t>(scene.textures.size())))
     {
         textureIndexByKey.emplace(scene.textures[textureIndex].key, textureIndex);
@@ -486,6 +509,182 @@ inline constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
     return std::nullopt;
 }
 
+[[nodiscard]] inline std::map<std::string, std::vector<uint32_t>> buildNodeIndicesByName(const SceneAsset &scene)
+{
+    auto nodeIndicesByName = std::map<std::string, std::vector<uint32_t>>{};
+
+    auto nodeIndices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(scene.nodes.size()));
+    for (auto nodeIndex : nodeIndices)
+    {
+        auto const &node = scene.nodes[nodeIndex];
+        if (node.name.empty())
+        {
+            continue;
+        }
+
+        nodeIndicesByName[node.name].push_back(nodeIndex);
+    }
+
+    return nodeIndicesByName;
+}
+
+[[nodiscard]] inline std::optional<LoadError> resolveNodeIndexByName(
+    const std::map<std::string, std::vector<uint32_t>> &nodeIndicesByName,
+    std::string_view nodeName,
+    std::string_view assetKind,
+    uint32_t assetIndex,
+    bool strict,
+    const SceneAsset &scene,
+    uint32_t &resolvedNodeIndex)
+{
+    resolvedNodeIndex = invalidIndex;
+    if (nodeName.empty())
+    {
+        return std::nullopt;
+    }
+
+    auto found = nodeIndicesByName.find(std::string{nodeName});
+    if (found == nodeIndicesByName.end())
+    {
+        if (!strict)
+        {
+            return std::nullopt;
+        }
+
+        return makeLoadError(
+            LoadErrorCode::invalidScene,
+            "assimp",
+            scene.sourcePath,
+            std::format("{} {} references missing node '{}'.", assetKind, assetIndex, nodeName));
+    }
+
+    auto const &matches = found->second;
+    if (matches.empty())
+    {
+        return std::nullopt;
+    }
+
+    resolvedNodeIndex = matches.front();
+    if (matches.size() > 1 && strict)
+    {
+        return makeLoadError(
+            LoadErrorCode::invalidScene,
+            "assimp",
+            scene.sourcePath,
+            std::format("{} {} references non-unique node name '{}' ({} matches).", assetKind, assetIndex, nodeName, matches.size()));
+    }
+
+    return std::nullopt;
+}
+
+[[nodiscard]] inline std::optional<LoadError> appendCameras(
+    const aiScene &assimpScene,
+    const std::map<std::string, std::vector<uint32_t>> &nodeIndicesByName,
+    SceneAsset &scene,
+    bool strict)
+{
+    auto cameraIndices = std::views::iota(0u, assimpScene.mNumCameras);
+    for (auto cameraIndex : cameraIndices)
+    {
+        auto const *camera = assimpScene.mCameras[cameraIndex];
+        if (camera == nullptr)
+        {
+            return makeLoadError(
+                LoadErrorCode::invalidScene,
+                "assimp",
+                scene.sourcePath,
+                std::format("Scene camera {} is null.", cameraIndex));
+        }
+
+        auto sourceNodeName = toStdString(camera->mName);
+
+        CameraAsset cameraAsset{};
+        cameraAsset.name = sourceNodeName.empty() ? std::format("camera_{}", cameraIndex) : sourceNodeName;
+        cameraAsset.sourceNodeName = sourceNodeName;
+        cameraAsset.position = toVector3(camera->mPosition);
+        cameraAsset.lookAt = toVector3(camera->mLookAt);
+        cameraAsset.up = toVector3(camera->mUp);
+        cameraAsset.horizontalFov = camera->mHorizontalFOV;
+        cameraAsset.aspect = camera->mAspect;
+        cameraAsset.nearPlane = camera->mClipPlaneNear;
+        cameraAsset.farPlane = camera->mClipPlaneFar;
+        cameraAsset.orthographicWidth = camera->mOrthographicWidth;
+
+        if (auto error = resolveNodeIndexByName(nodeIndicesByName,
+                                                sourceNodeName,
+                                                "camera",
+                                                cameraIndex,
+                                                strict,
+                                                scene,
+                                                cameraAsset.nodeIndex);
+            error.has_value())
+        {
+            return error;
+        }
+
+        scene.cameras.push_back(std::move(cameraAsset));
+    }
+
+    return std::nullopt;
+}
+
+[[nodiscard]] inline std::optional<LoadError> appendLights(
+    const aiScene &assimpScene,
+    const std::map<std::string, std::vector<uint32_t>> &nodeIndicesByName,
+    SceneAsset &scene,
+    bool strict)
+{
+    auto lightIndices = std::views::iota(0u, assimpScene.mNumLights);
+    for (auto lightIndex : lightIndices)
+    {
+        auto const *light = assimpScene.mLights[lightIndex];
+        if (light == nullptr)
+        {
+            return makeLoadError(
+                LoadErrorCode::invalidScene,
+                "assimp",
+                scene.sourcePath,
+                std::format("Scene light {} is null.", lightIndex));
+        }
+
+        auto sourceNodeName = toStdString(light->mName);
+
+        LightAsset lightAsset{};
+        lightAsset.name = sourceNodeName.empty() ? std::format("light_{}", lightIndex) : sourceNodeName;
+        lightAsset.sourceNodeName = sourceNodeName;
+        lightAsset.typeRaw = static_cast<uint32_t>(light->mType);
+        lightAsset.type = lightSourceTypeName(light->mType);
+        lightAsset.position = toVector3(light->mPosition);
+        lightAsset.direction = toVector3(light->mDirection);
+        lightAsset.up = toVector3(light->mUp);
+        lightAsset.colorDiffuse = toColor3(light->mColorDiffuse);
+        lightAsset.colorSpecular = toColor3(light->mColorSpecular);
+        lightAsset.colorAmbient = toColor3(light->mColorAmbient);
+        lightAsset.attenuationConstant = light->mAttenuationConstant;
+        lightAsset.attenuationLinear = light->mAttenuationLinear;
+        lightAsset.attenuationQuadratic = light->mAttenuationQuadratic;
+        lightAsset.innerCone = light->mAngleInnerCone;
+        lightAsset.outerCone = light->mAngleOuterCone;
+        lightAsset.areaSize = {light->mSize.x, light->mSize.y};
+
+        if (auto error = resolveNodeIndexByName(nodeIndicesByName,
+                                                sourceNodeName,
+                                                "light",
+                                                lightIndex,
+                                                strict,
+                                                scene,
+                                                lightAsset.nodeIndex);
+            error.has_value())
+        {
+            return error;
+        }
+
+        scene.lights.push_back(std::move(lightAsset));
+    }
+
+    return std::nullopt;
+}
+
 [[nodiscard]] inline uint32_t totalVertexCount(const SceneAsset &scene)
 {
     auto vertexSizes = scene.meshes | std::views::transform([](const MeshAsset &mesh) {
@@ -643,10 +842,23 @@ struct AssimpSceneImporter : SceneImporterBackendBase<AssimpSceneImporter>
             return SceneImportResult{std::unexpected(std::move(*error))};
         }
 
+        auto nodeIndicesByName = detail::buildNodeIndicesByName(scene);
+        if (auto error = detail::appendCameras(*assimpScene, nodeIndicesByName, scene, request.strict); error.has_value())
+        {
+            return SceneImportResult{std::unexpected(std::move(*error))};
+        }
+
+        if (auto error = detail::appendLights(*assimpScene, nodeIndicesByName, scene, request.strict); error.has_value())
+        {
+            return SceneImportResult{std::unexpected(std::move(*error))};
+        }
+
         scene.stats.nodeCount = static_cast<uint32_t>(scene.nodes.size());
         scene.stats.meshCount = static_cast<uint32_t>(scene.meshes.size());
         scene.stats.materialCount = static_cast<uint32_t>(scene.materials.size());
         scene.stats.textureCount = static_cast<uint32_t>(scene.textures.size());
+        scene.stats.cameraCount = static_cast<uint32_t>(scene.cameras.size());
+        scene.stats.lightCount = static_cast<uint32_t>(scene.lights.size());
         scene.stats.vertexCount = detail::totalVertexCount(scene);
         scene.stats.indexCount = detail::totalIndexCount(scene);
 

@@ -478,8 +478,7 @@ struct TurboJpegHandleDeleter
 
 [[nodiscard]] inline std::vector<uint32_t> collectReferencedTextureIndices(const SceneAsset &scene)
 {
-    auto referenced = std::unordered_set<uint32_t>{};
-    referenced.reserve(scene.materials.size() * 2u);
+    auto referenced = std::set<uint32_t>{};
 
     std::ranges::for_each(scene.materials, [&](const MaterialAsset &material) {
         std::ranges::for_each(material.textures, [&](const MaterialTextureBinding &binding) {
@@ -491,7 +490,6 @@ struct TurboJpegHandleDeleter
     });
 
     auto ordered = std::vector<uint32_t>{referenced.begin(), referenced.end()};
-    std::ranges::sort(ordered);
     return ordered;
 }
 

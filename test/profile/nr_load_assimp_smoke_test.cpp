@@ -30,7 +30,7 @@ namespace
         return false;
     }
 
-    auto referencedTextureIndices = std::unordered_set<std::uint32_t>{};
+    auto referencedTextureIndices = std::set<std::uint32_t>{};
     std::ranges::for_each(scene.materials, [&](const nr::load::MaterialAsset &material) {
         std::ranges::for_each(material.textures, [&](const nr::load::MaterialTextureBinding &binding) {
             if (binding.textureIndex < scene.textures.size())

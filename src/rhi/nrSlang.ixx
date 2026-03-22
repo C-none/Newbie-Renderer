@@ -745,7 +745,6 @@ class SlangProgram
         }
 
         entryPoints_.reserve(static_cast<size_t>(linkedEntryPointCount));
-        entryPointIndexByName_.reserve(static_cast<size_t>(linkedEntryPointCount));
 
         for (SlangUInt entryIndex = 0; entryIndex < linkedEntryPointCount; ++entryIndex)
         {
@@ -818,7 +817,7 @@ class SlangProgram
     mutable slang::ProgramLayout *cachedProgramLayout_ = nullptr;
     mutable bool entryPointCacheBuilt_ = false;
     mutable std::vector<SlangEntryPointData> entryPoints_;
-    mutable std::unordered_map<std::string, size_t> entryPointIndexByName_;
+    mutable std::map<std::string, size_t> entryPointIndexByName_;
 };
 
 struct SlangProgramCompileFileRequest

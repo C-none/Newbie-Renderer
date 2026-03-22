@@ -144,12 +144,50 @@ struct NodeAsset
     };
 };
 
+struct CameraAsset
+{
+    std::string name{};
+    std::string sourceNodeName{};
+    uint32_t nodeIndex = invalidIndex;
+    std::array<float, 3> position{};
+    std::array<float, 3> lookAt{0.0f, 0.0f, -1.0f};
+    std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    float horizontalFov = 0.0f;
+    float aspect = 0.0f;
+    float nearPlane = 0.1f;
+    float farPlane = 1000.0f;
+    float orthographicWidth = 0.0f;
+};
+
+struct LightAsset
+{
+    std::string name{};
+    std::string sourceNodeName{};
+    uint32_t nodeIndex = invalidIndex;
+    uint32_t typeRaw = 0;
+    std::string type{};
+    std::array<float, 3> position{};
+    std::array<float, 3> direction{0.0f, 0.0f, -1.0f};
+    std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    std::array<float, 3> colorDiffuse{};
+    std::array<float, 3> colorSpecular{};
+    std::array<float, 3> colorAmbient{};
+    float attenuationConstant = 0.0f;
+    float attenuationLinear = 0.0f;
+    float attenuationQuadratic = 0.0f;
+    float innerCone = 0.0f;
+    float outerCone = 0.0f;
+    std::array<float, 2> areaSize{};
+};
+
 struct SceneImportStatistics
 {
     uint32_t nodeCount = 0;
     uint32_t meshCount = 0;
     uint32_t materialCount = 0;
     uint32_t textureCount = 0;
+    uint32_t cameraCount = 0;
+    uint32_t lightCount = 0;
     uint32_t vertexCount = 0;
     uint32_t indexCount = 0;
 };
@@ -162,6 +200,8 @@ struct SceneAsset
     std::vector<MeshAsset> meshes{};
     std::vector<MaterialAsset> materials{};
     std::vector<TextureAsset> textures{};
+    std::vector<CameraAsset> cameras{};
+    std::vector<LightAsset> lights{};
     SceneImportStatistics stats{};
 };
 

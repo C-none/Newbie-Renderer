@@ -10,8 +10,7 @@ namespace
 
 [[nodiscard]] std::vector<std::uint32_t> collectReferencedTextureIndices(const nr::load::SceneAsset &scene)
 {
-    auto referenced = std::unordered_set<std::uint32_t>{};
-    referenced.reserve(scene.materials.size() * 2u);
+    auto referenced = std::set<std::uint32_t>{};
 
     std::ranges::for_each(scene.materials, [&](const nr::load::MaterialAsset &material) {
         std::ranges::for_each(material.textures, [&](const nr::load::MaterialTextureBinding &binding) {
@@ -23,7 +22,6 @@ namespace
     });
 
     auto ordered = std::vector<std::uint32_t>{referenced.begin(), referenced.end()};
-    std::ranges::sort(ordered);
     return ordered;
 }
 
@@ -56,8 +54,7 @@ namespace
     std::ranges::for_each(nodeIndices, [&](std::size_t nodeIndex) {
         auto const &node = scene.nodes[nodeIndex];
 
-        auto uniqueChildren = std::unordered_set<std::uint32_t>{};
-        uniqueChildren.reserve(node.childIndices.size());
+        auto uniqueChildren = std::set<std::uint32_t>{};
 
         std::ranges::for_each(node.childIndices, [&](std::uint32_t childIndex) {
             if (childIndex >= scene.nodes.size())

@@ -59,24 +59,45 @@ constexpr inline void nrAssert(bool condition, std::string_view context = "", st
         std::exit(1);
     }
 }
+
+constexpr inline void nrLog(LogLevel level,
+                            std::string_view channel,
+                            std::string_view context,
+                            std::source_location loc = std::source_location::current(),
+                            bool terminateOnError = false)
+{
+    if (globalLogLevel <= level)
+    {
+        detail::emitLog(level, channel, context, loc);
+    }
+
+    if (terminateOnError && level == LogLevel::error)
+    {
+        std::exit(1);
+    }
+}
+
+constexpr inline void nrLog(LogLevel level,
+                            std::string_view context,
+                            std::source_location loc = std::source_location::current(),
+                            bool terminateOnError = false)
+{
+    nrLog(level, "LOG", context, loc, terminateOnError);
+}
+
 template <LogLevel Level = LogLevel::info> constexpr inline void nrInfo(std::string_view context = "", std::source_location loc = std::source_location::current())
 {
     // Compile-time log level filtering (type-safe enum comparison)
     if constexpr (globalLogLevel <= Level)
     {
         constexpr bool isError = Level == LogLevel::error;
-        detail::emitLog(Level, "LOG", context, loc);
-        if constexpr (isError)
-            std::exit(1);
+        nrLog(Level, "LOG", context, loc, isError);
     }
 }
 
 constexpr inline void nrVulkan(LogLevel level, std::string_view context, std::source_location loc = std::source_location::current())
 {
-    if (globalLogLevel <= level)
-    {
-        detail::emitLog(level, "VULKAN", context, loc);
-    }
+    nrLog(level, "VULKAN", context, loc, false);
 }
 
 } // namespace nr
