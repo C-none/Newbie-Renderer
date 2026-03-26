@@ -201,6 +201,38 @@ struct SwapChain
                                 return vk::raii::ImageView(device, imageViewCreateInfo);
                             }) |
                             std::ranges::to<std::vector>();
+
+        if constexpr (isDebugMode)
+        {
+            auto imageIndices = std::views::iota(std::size_t{0}, result.swapChainImages.size());
+            std::ranges::for_each(imageIndices, [&](std::size_t index) {
+                auto imageName = std::format("Swapchain.Image[{}]", index);
+                auto viewName = std::format("Swapchain.View[{}]", index);
+
+                auto imageRaw = static_cast<VkImage>(result.swapChainImages[index]);
+                auto viewRaw = static_cast<VkImageView>(*result.imageViews[index]);
+
+                auto imageNameInfo = vk::DebugUtilsObjectNameInfoEXT{};
+                imageNameInfo.objectType = vk::ObjectType::eImage;
+                imageNameInfo.objectHandle = std::bit_cast<std::uint64_t>(imageRaw);
+                imageNameInfo.pObjectName = imageName.c_str();
+
+                auto viewNameInfo = vk::DebugUtilsObjectNameInfoEXT{};
+                viewNameInfo.objectType = vk::ObjectType::eImageView;
+                viewNameInfo.objectHandle = std::bit_cast<std::uint64_t>(viewRaw);
+                viewNameInfo.pObjectName = viewName.c_str();
+
+                try
+                {
+                    device.setDebugUtilsObjectNameEXT(imageNameInfo);
+                    device.setDebugUtilsObjectNameEXT(viewNameInfo);
+                }
+                catch (const std::exception&)
+                {
+                }
+            });
+        }
+
         return result;
     }
 };
@@ -285,6 +317,12 @@ class PresentationContext
     [[nodiscard]] bool hasActiveSwapchainImage() const
     {
         return activeSwapchainImageIndex_.has_value();
+    }
+
+    [[nodiscard]] uint32_t activeSwapchainImageIndex() const
+    {
+        nrAssert(activeSwapchainImageIndex_.has_value(), "PresentationContext::activeSwapchainImageIndex requires an active acquired image.");
+        return *activeSwapchainImageIndex_;
     }
 
     void setFrameSubmitted(bool submitted)

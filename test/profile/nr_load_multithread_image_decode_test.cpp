@@ -85,7 +85,6 @@ decodeAndSnapshot(nr::load::SceneAsset &scene,
     nr::load::TextureDecodeOptions options{};
     options.workerCount = workerCount;
     options.requestedChannels = 4;
-    options.preferTurboJpeg = true;
 
     auto decodeResult = nr::load::decodeSceneTextureImages(scene, options);
     if (!decodeResult.has_value())

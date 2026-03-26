@@ -94,6 +94,64 @@ using nr::rhi::CommandBatch;
                   decltype(&nr::rhi::ops::makeImageColorAttachmentToPresentBarrier),
                   const nr::rhi::Image&>);
 
+    static_assert(requires(
+        const nr::rhi::ShaderCursor &cursor,
+        const nr::rhi::Buffer &buffer,
+        nr::rhi::Buffer &mutableBuffer,
+        const nr::rhi::Image &image,
+        vk::BufferView texelView,
+        vk::Sampler sampler,
+        vk::AccelerationStructureKHR accelerationStructure,
+        const nr::rhi::LogicalResourceDescriptorWrite &logicalResource,
+        std::span<const uint8_t> bytes) {
+        { cursor.setData(bytes) } -> std::same_as<bool>;
+        { cursor.setObject(buffer, vk::DeviceSize{0}, vk::WholeSize) } -> std::same_as<bool>;
+        { cursor.setObject(texelView) } -> std::same_as<bool>;
+        { cursor.setObject(mutableBuffer, vk::Format::eR32Sfloat) } -> std::same_as<bool>;
+        { cursor.setObject(image, vk::ImageLayout::eGeneral) } -> std::same_as<bool>;
+        { cursor.setObject(sampler) } -> std::same_as<bool>;
+        { cursor.setObject(image, sampler, vk::ImageLayout::eShaderReadOnlyOptimal) } -> std::same_as<bool>;
+        { cursor.setObject(accelerationStructure) } -> std::same_as<bool>;
+        { cursor.setObject(logicalResource) } -> std::same_as<bool>;
+        { cursor.snapshot() } -> std::same_as<nr::rhi::ShaderBindingSnapshot>;
+        cursor.clearSnapshot();
+    });
+
+    static_assert(std::is_invocable_v<
+                  decltype(&nr::rhi::resolveDescriptorWriteRequests),
+                  const nr::rhi::ShaderBindingSnapshot &,
+                  nr::rhi::LogicalDescriptorResolver>);
+
+    using BindWithSetsOverload = void (*) (
+        vk::CommandBuffer,
+        vk::PipelineBindPoint,
+        const nr::rhi::CursorPipelineLayout &,
+        nr::rhi::ShaderBindingPool &,
+        std::span<const nr::rhi::ShaderBindingSet>,
+        const nr::rhi::ShaderBindingSnapshot &,
+        nr::rhi::LogicalDescriptorResolver);
+    [[maybe_unused]] BindWithSetsOverload bindWithSets = &nr::rhi::bindResourcesToCommandBuffer;
+
+    using BindAllocateOverload = std::vector<nr::rhi::ShaderBindingSet> (*) (
+        vk::CommandBuffer,
+        vk::PipelineBindPoint,
+        const nr::rhi::CursorPipelineLayout &,
+        nr::rhi::ShaderBindingPool &,
+        const nr::rhi::ShaderBindingSnapshot &,
+        nr::rhi::LogicalDescriptorResolver);
+    [[maybe_unused]] BindAllocateOverload bindAndAllocate = &nr::rhi::bindResourcesToCommandBuffer;
+
+    using PushReplayOverload = void (*) (
+        vk::CommandBuffer,
+        const nr::rhi::CursorPipelineLayout &,
+        const nr::rhi::ShaderBindingSnapshot &);
+    [[maybe_unused]] PushReplayOverload replayPushConstants = &nr::rhi::pushConstantsToCommandBuffer;
+
+    using AllocateSetsOverload = std::vector<nr::rhi::ShaderBindingSet> (*) (
+        const nr::rhi::CursorPipelineLayout &,
+        nr::rhi::ShaderBindingPool &);
+    [[maybe_unused]] AllocateSetsOverload allocateSets = &nr::rhi::allocateBindingSetsForLayout;
+
     return true;
 }
 } // namespace

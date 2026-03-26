@@ -90,15 +90,54 @@ struct MaterialTextureBinding
     std::string semantic{};
 };
 
+enum class MaterialAlphaModeHint : uint8_t
+{
+    opaque,
+    blend,
+    mask,
+};
+
+enum class MaterialWorkflowFlags : uint8_t
+{
+    metallicRoughness = 1 << 0,
+    specularGlossiness = 1 << 1,
+    anisotropy = 1 << 2,
+};
+
 struct MaterialAsset
 {
     std::string name{};
+    
+    // Authoring: Base color and emissive
     std::array<float, 4> baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
     std::array<float, 3> emissiveFactor{0.0f, 0.0f, 0.0f};
+    
+    // Authoring: Metallic/Roughness workflow
     float metallicFactor = 0.0f;
     float roughnessFactor = 1.0f;
+    
+    // Authoring: Specular/Glossiness workflow
+    std::optional<std::array<float, 3>> specularFactor{};
+    std::optional<float> glossinessFactor{};
+    
+    // Authoring: Anisotropy
+    std::optional<float> anisotropyFactor{};
+    
+    // Authoring: Transparency and rendering
     float opacity = 1.0f;
+    MaterialAlphaModeHint alphaModeHint = MaterialAlphaModeHint::opaque;
+    std::optional<float> alphaCutoff{};
+    
+    // Authoring: Surface properties
+    bool doubleSided = false;
+    std::optional<float> normalScale{};
+    std::optional<float> occlusionStrength{};
+    
+    // Authoring: Texture bindings
     std::vector<MaterialTextureBinding> textures{};
+    
+    // Workflow classification (populated by bridge/loader)
+    MaterialWorkflowFlags workflowFlags = MaterialWorkflowFlags::metallicRoughness;
 };
 
 struct VertexAsset

@@ -332,6 +332,16 @@ static_assert(std::same_as<
     {
         return false;
     }
+    if (!require(perspectiveCameraRecord->get().cpu.authoredAspectRatio.has_value(),
+                 "Perspective camera should preserve authored aspect ratio metadata."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(*perspectiveCameraRecord->get().cpu.authoredAspectRatio, sceneAsset.cameras[0].aspect),
+                 "Perspective camera authored aspect ratio metadata mismatch."))
+    {
+        return false;
+    }
 
     auto orthoCameraKey = nr::scene::SceneBridge::makeCameraCanonicalKey(sceneAsset, 1);
     auto orthoCameraHandle = scene.findCameraHandleByStableKey(orthoCameraKey);
@@ -351,6 +361,16 @@ static_assert(std::same_as<
         return false;
     }
     if (!require(almostEqual(orthoCameraRecord->get().cpu.orthoHeight, 10.0f), "Orthographic width/aspect should map to orthoHeight."))
+    {
+        return false;
+    }
+    if (!require(orthoCameraRecord->get().cpu.authoredAspectRatio.has_value(),
+                 "Orthographic camera should preserve authored aspect ratio metadata."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(*orthoCameraRecord->get().cpu.authoredAspectRatio, sceneAsset.cameras[1].aspect),
+                 "Orthographic camera authored aspect ratio metadata mismatch."))
     {
         return false;
     }

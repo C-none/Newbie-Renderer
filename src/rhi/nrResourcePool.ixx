@@ -187,8 +187,8 @@ class ResourcePool
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
 
     // Per-frame transient resources (bulk-reset each frame)
-    std::array<std::vector<Buffer>, maxFrameInFlight> frameBuffers_;
-    std::array<std::vector<Image>, maxFrameInFlight> frameImages_;
+    std::array<std::deque<Buffer>, maxFrameInFlight> frameBuffers_;
+    std::array<std::deque<Image>, maxFrameInFlight> frameImages_;
 };
 
 } // namespace nr::rhi

@@ -44,6 +44,17 @@ inline void emitLog(LogLevel level, std::string_view channel, std::string_view c
                loc.function_name(),
                context.empty() ? "(none)" : context);
 }
+
+inline void emitCompactLog(LogLevel level, std::string_view channel, std::string_view context)
+{
+    std::print(levelStream(level),
+               "{}[NR {}:{}]{} {}\n",
+               detail::levelColor(level),
+               channel,
+               logLevelNames[static_cast<size_t>(level)],
+               detail::ansiReset,
+               context.empty() ? "(none)" : context);
+}
 } // namespace detail
 
 constexpr inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())
@@ -95,9 +106,12 @@ template <LogLevel Level = LogLevel::info> constexpr inline void nrInfo(std::str
     }
 }
 
-constexpr inline void nrVulkan(LogLevel level, std::string_view context, std::source_location loc = std::source_location::current())
+constexpr inline void nrVulkan(LogLevel level, std::string_view context, std::source_location /*loc*/ = std::source_location::current())
 {
-    nrLog(level, "VULKAN", context, loc, false);
+    if (globalLogLevel <= level)
+    {
+        detail::emitCompactLog(level, "VULKAN", context);
+    }
 }
 
 } // namespace nr

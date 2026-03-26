@@ -230,28 +230,44 @@ export namespace nr::scene::detail
                                                              std::uint32_t sourceNodeIndex,
                                                              std::string_view resolvedName)
 {
-    return std::format("scene_template_{}_node_{}_{}", handle.slot, sourceNodeIndex, sanitizeEntityName(resolvedName));
+    return std::format("scene_template_{}_{}_node_{}_{}",
+                       handle.slot,
+                       handle.generation,
+                       sourceNodeIndex,
+                       sanitizeEntityName(resolvedName));
 }
 
 [[nodiscard]] inline std::string makeTemplateMeshEntityName(SceneTemplateHandle handle,
                                                              std::uint32_t sourceNodeIndex,
                                                              std::uint32_t meshSlot)
 {
-    return std::format("scene_template_{}_node_{}_mesh_{}", handle.slot, sourceNodeIndex, meshSlot);
+    return std::format("scene_template_{}_{}_node_{}_mesh_{}",
+                       handle.slot,
+                       handle.generation,
+                       sourceNodeIndex,
+                       meshSlot);
 }
 
 [[nodiscard]] inline std::string makeTemplateCameraEntityName(SceneTemplateHandle handle,
                                                                std::uint32_t sourceNodeIndex,
                                                                std::uint32_t cameraSlot)
 {
-    return std::format("scene_template_{}_node_{}_camera_{}", handle.slot, sourceNodeIndex, cameraSlot);
+    return std::format("scene_template_{}_{}_node_{}_camera_{}",
+                       handle.slot,
+                       handle.generation,
+                       sourceNodeIndex,
+                       cameraSlot);
 }
 
 [[nodiscard]] inline std::string makeTemplateLightEntityName(SceneTemplateHandle handle,
                                                               std::uint32_t sourceNodeIndex,
                                                               std::uint32_t lightSlot)
 {
-    return std::format("scene_template_{}_node_{}_light_{}", handle.slot, sourceNodeIndex, lightSlot);
+    return std::format("scene_template_{}_{}_node_{}_light_{}",
+                       handle.slot,
+                       handle.generation,
+                       sourceNodeIndex,
+                       lightSlot);
 }
 
 [[nodiscard]] inline glm::vec3 toVec3(std::array<float, 3> const &value)

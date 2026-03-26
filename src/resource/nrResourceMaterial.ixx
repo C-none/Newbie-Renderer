@@ -128,14 +128,26 @@ struct Material
     std::string name{};
     glm::vec4 baseColorFactor{1.0f};
     glm::vec3 emissiveFactor{0.0f};
+    
+    // Metallic/Roughness workflow
     float metallicFactor = 0.0f;
     float roughnessFactor = 1.0f;
+    
+    // Specular/Glossiness workflow
+    glm::vec3 specularFactor{0.0f};
+    float glossinessFactor = 0.0f;
+    
+    // Anisotropy workflow
+    float anisotropyFactor = 0.0f;
+    
+    // Surface properties
     float normalScale = 1.0f;
     float occlusionStrength = 1.0f;
     float alphaCutoff = 0.5f;
     AlphaMode alphaMode = AlphaMode::opaque;
     bool doubleSided = false;
 
+    // Texture slots: standard PBR/Blinn-Phong channels
     MaterialTextureSlot baseColor{};
     MaterialTextureSlot normal{};
     MaterialTextureSlot metallicRoughness{};
@@ -158,6 +170,21 @@ struct Material
     [[nodiscard]] bool isAlphaBlended() const noexcept
     {
         return alphaMode == AlphaMode::blend;
+    }
+    
+    [[nodiscard]] bool usesMetallicRoughnessWorkflow() const noexcept
+    {
+        return metallicFactor > 0.0f || roughnessFactor < 1.0f || metallicRoughness.texture.valid();
+    }
+    
+    [[nodiscard]] bool usesSpecularGlossinessWorkflow() const noexcept
+    {
+        return glm::any(glm::notEqual(specularFactor, glm::vec3{0.0f})) || glossinessFactor > 0.0f;
+    }
+    
+    [[nodiscard]] bool usesAnisotropy() const noexcept
+    {
+        return anisotropyFactor > 0.0f;
     }
 };
 

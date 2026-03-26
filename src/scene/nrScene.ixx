@@ -160,6 +160,20 @@ class KeyedSlotMapStorage
         return std::nullopt;
     }
 
+    bool erase(HandleT handle) noexcept
+    {
+        if (storage_.tryGet(handle) == nullptr)
+        {
+            return false;
+        }
+
+        std::erase_if(handlesByStableKey_, [handle](const auto &entry) {
+            return entry.second == handle;
+        });
+
+        return storage_.erase(handle);
+    }
+
     [[nodiscard]] std::size_t size() const noexcept
     {
         return storage_.size();
@@ -182,6 +196,7 @@ inline void registerSceneComponents(flecs::world &world)
     world.component<TlasBucketId>();
     world.component<StaticObject>();
     world.component<DynamicObject>();
+    world.component<SceneCameraBinding>();
 
     world.component<SceneTemplateRef>();
     world.component<SceneInstanceRef>();
@@ -204,21 +219,44 @@ inline constexpr std::uint64_t kDefaultRetireLatencySerial = 3;
 [[nodiscard]] inline detail::MaterialGpuData buildMaterialGpuData(const nr::resource::Material &material)
 {
     auto data = detail::MaterialGpuData{};
+    
+    // Base color (RGB) + opacity (A)
     data.baseColorFactor = material.baseColorFactor;
+    
+    // Emissive (RGB) + metallic (A)
     data.emissiveAndMetallic = glm::vec4{material.emissiveFactor, material.metallicFactor};
+    
+    // Roughness (R), Normal scale (G), Occlusion (B), Alpha cutoff (A)
     data.roughnessNormalOcclusionAlpha = glm::vec4{
         material.roughnessFactor,
         material.normalScale,
         material.occlusionStrength,
         material.alphaCutoff,
     };
+    
+    // Alpha mode (R) + flags (G: double-sided)
     data.alphaAndFlags = glm::uvec4{
         static_cast<std::uint32_t>(material.alphaMode),
         material.doubleSided ? 1u : 0u,
         0u,
         0u,
     };
+    
+    // Specular (RGB) + Glossiness (A)
+    data.specularAndGlossiness = glm::vec4{
+        material.specularFactor,
+        material.glossinessFactor,
+    };
+    
+    // Anisotropy (R) + workflow flags (GBA)
+    data.anisotropyAndWorkflow = glm::uvec4{
+        static_cast<std::uint32_t>(glm::packSnorm2x16(glm::vec2{material.anisotropyFactor, 0.0f})),
+        material.usesMetallicRoughnessWorkflow() ? 1u : 0u,
+        material.usesSpecularGlossinessWorkflow() ? 1u : 0u,
+        material.usesAnisotropy() ? 1u : 0u,
+    };
 
+    // Texture handles and UV sets
     auto slots = std::array{
         material.baseColor,
         material.normal,
@@ -295,6 +333,13 @@ class Scene
                 const TlasBucketId,
                 const WorldTransform,
                 const WorldBounds>()
+            .cached()
+            .without(EcsPrefab)
+            .build();
+
+        cameraCandidatesQuery_ = world_.query_builder<
+                const SceneCameraBinding,
+                const WorldTransform>()
             .cached()
             .without(EcsPrefab)
             .build();
@@ -388,6 +433,7 @@ class Scene
                 .handle = newHandle,
                 .stableKey = templateStableKey,
                 .prefabRoot = prefabRoot,
+                .prefabEntities = {prefabRoot.id()},
                 .pins = std::move(pinSet),
                 .liveInstanceCount = 0,
                 .hierarchyPolicy = createInfo.hierarchyPolicy,
@@ -415,10 +461,7 @@ class Scene
 
         if (!hierarchyBuilt || hasImportErrors_)
         {
-            if (templateRecord->prefabRoot.is_alive())
-            {
-                templateRecord->prefabRoot.destruct();
-            }
+            destroyTemplatePrefabEntities(*templateRecord);
             templates_.erase(handle);
             return {};
         }
@@ -502,7 +545,53 @@ class Scene
             updateInstanceHierarchy(*instanceRecord);
         }
 
+        syncFallbackCameraInfrastructure();
         return handle;
+    }
+
+    [[nodiscard]] DestroyTemplateResult destroyTemplate(SceneTemplateHandle templateHandle)
+    {
+        auto *templateRecord = templates_.tryGet(templateHandle);
+        if (templateRecord == nullptr)
+        {
+            return DestroyTemplateResult::notFound;
+        }
+
+        auto runtimeInstancesAlive = false;
+        runtimeRootQuery_.each([&](flecs::entity, const SceneInstanceRef &instanceRef) {
+            if (!runtimeInstancesAlive && instanceRef.templateHandle == templateHandle)
+            {
+                runtimeInstancesAlive = true;
+            }
+        });
+
+        if (templateRecord->liveInstanceCount > 0u || runtimeInstancesAlive)
+        {
+            return DestroyTemplateResult::instancesAlive;
+        }
+
+        auto pinSet = std::move(templateRecord->pins);
+        auto const stableKey = templateRecord->stableKey;
+        auto const nodeCount = templateRecord->templateNodeCount;
+        auto const meshBindingCount = templateRecord->templateMeshBindingCount;
+        auto const cameraBindingCount = templateRecord->templateCameraBindingCount;
+        auto const lightBindingCount = templateRecord->templateLightBindingCount;
+        destroyTemplatePrefabEntities(*templateRecord);
+
+        releaseTemplatePins(pinSet);
+        collectTemplatePinnedAssets(pinSet);
+
+        templatesByStableKey_.erase(stableKey);
+        templates_.erase(templateHandle);
+
+        subtractSaturating(templateNodeCount_, nodeCount);
+        subtractSaturating(templateMeshBindingCount_, meshBindingCount);
+        subtractSaturating(templateCameraBindingCount_, cameraBindingCount);
+        subtractSaturating(templateLightBindingCount_, lightBindingCount);
+
+        destroyFallbackCameraInfrastructureIfUnused();
+        compactDeadAssetHandles();
+        return DestroyTemplateResult::destroyed;
     }
 
     void destroyInstance(SceneInstanceHandle instanceHandle)
@@ -525,6 +614,7 @@ class Scene
         }
 
         instances_.erase(instanceHandle);
+        syncFallbackCameraInfrastructure();
     }
 
     void updateSimulation(const SceneUpdateInput &input)
@@ -545,6 +635,8 @@ class Scene
 
             updateInstanceHierarchy(*instanceRecord);
         });
+
+        syncFallbackCameraInfrastructure();
     }
 
     void beginFrame(std::uint32_t frameSlot)
@@ -591,7 +683,7 @@ class Scene
                 .debugName = std::move(debugName),
                 .domain = createInfo.domain,
                 .selection = createInfo.selection,
-                .requireResidentGeometry = createInfo.requireResidentGeometry,
+                .requireReadyForDomain = createInfo.requireReadyForDomain,
                 .requireActiveInstances = createInfo.requireActiveInstances,
                 .enableCoarseGrouping = createInfo.enableCoarseGrouping,
             };
@@ -614,6 +706,49 @@ class Scene
         }
 
         return extractPacketsDedicated(*profileRecord, input);
+    }
+
+    [[nodiscard]] std::optional<SceneResolvedCamera> tryGetPrimaryCamera(
+        const std::optional<glm::uvec2> &viewportExtent = std::nullopt) const
+    {
+        struct ImportedCameraCandidate
+        {
+            flecs::entity entity{};
+            nr::resource::CameraAssetHandle camera{};
+            std::uint32_t sourceCameraIndex = std::numeric_limits<std::uint32_t>::max();
+        };
+
+        auto bestImported = std::optional<ImportedCameraCandidate>{};
+        forEachImportedCameraInActiveInstances([&](flecs::entity entity, const SceneCameraBinding &cameraBinding) {
+            auto sourceCameraIndex = std::numeric_limits<std::uint32_t>::max();
+            if (auto sourceBinding = entity.try_get<SceneTemplateCameraBindingRef>(); sourceBinding != nullptr)
+            {
+                sourceCameraIndex = sourceBinding->sourceCameraIndex;
+            }
+
+            if (!bestImported.has_value() ||
+                sourceCameraIndex < bestImported->sourceCameraIndex ||
+                (sourceCameraIndex == bestImported->sourceCameraIndex && entity.id() < bestImported->entity.id()))
+            {
+                bestImported = ImportedCameraCandidate{
+                    .entity = entity,
+                    .camera = cameraBinding.camera,
+                    .sourceCameraIndex = sourceCameraIndex,
+                };
+            }
+        });
+
+        if (bestImported.has_value())
+        {
+            return buildResolvedCamera(bestImported->entity, bestImported->camera, false, viewportExtent);
+        }
+
+        if (templates_.size() == 0 || !fallbackCameraHandle_.valid() || !fallbackCameraEntity_.is_alive())
+        {
+            return std::nullopt;
+        }
+
+        return buildResolvedCamera(fallbackCameraEntity_, fallbackCameraHandle_, true, viewportExtent);
     }
 
     [[nodiscard]] SceneFrameStamp currentFrameStamp() const noexcept
@@ -817,8 +952,185 @@ class Scene
         return std::ranges::none_of(frustum.planes, isOutsidePlane);
     }
 
-    [[nodiscard]] static std::optional<std::reference_wrapper<const SceneFrustum>>
-    resolveExtractFrustum(const SceneExtractInput &input) noexcept
+    [[nodiscard]] static glm::mat4 buildViewMatrixFromWorld(const glm::mat4 &world) noexcept
+    {
+        if (!detail::finiteMat4(world))
+        {
+            return glm::mat4{1.0f};
+        }
+
+        auto const determinant = glm::determinant(world);
+        if (!std::isfinite(determinant) || std::abs(determinant) <= 1e-8f)
+        {
+            return glm::mat4{1.0f};
+        }
+
+        auto const view = glm::inverse(world);
+        if (!detail::finiteMat4(view))
+        {
+            return glm::mat4{1.0f};
+        }
+
+        return view;
+    }
+
+    [[nodiscard]] static std::optional<float> aspectRatioFromViewportExtent(const std::optional<glm::uvec2> &viewportExtent) noexcept
+    {
+        if (!viewportExtent.has_value())
+        {
+            return std::nullopt;
+        }
+
+        auto const extent = viewportExtent.value();
+        if (extent.x == 0u || extent.y == 0u)
+        {
+            return std::nullopt;
+        }
+
+        return static_cast<float>(extent.x) / static_cast<float>(extent.y);
+    }
+
+    [[nodiscard]] static float resolveProjectionAspectRatio(const nr::resource::CameraAsset &camera,
+                                                            const std::optional<glm::uvec2> &viewportExtent) noexcept
+    {
+        constexpr auto kMinAspect = 1e-4f;
+        constexpr auto kFallbackAspectRatio = 16.0f / 9.0f;
+
+        if (auto viewportAspectRatio = aspectRatioFromViewportExtent(viewportExtent); viewportAspectRatio.has_value())
+        {
+            if (std::isfinite(*viewportAspectRatio) && *viewportAspectRatio > kMinAspect)
+            {
+                return *viewportAspectRatio;
+            }
+        }
+
+        if (camera.authoredAspectRatio.has_value())
+        {
+            auto const authoredAspectRatio = *camera.authoredAspectRatio;
+            if (std::isfinite(authoredAspectRatio) && authoredAspectRatio > kMinAspect)
+            {
+                return authoredAspectRatio;
+            }
+        }
+
+        return kFallbackAspectRatio;
+    }
+
+    [[nodiscard]] static glm::mat4 buildProjectionMatrix(const nr::resource::CameraAsset &camera,
+                                                         float aspectRatio) noexcept
+    {
+        constexpr auto kFallbackAspectRatio = 16.0f / 9.0f;
+        constexpr auto kMinAspectRatio = 1e-4f;
+        constexpr auto kMinNearPlane = 1e-3f;
+        constexpr auto kMinDepthRange = 1e-3f;
+
+        if (!(std::isfinite(aspectRatio) && aspectRatio > kMinAspectRatio))
+        {
+            aspectRatio = kFallbackAspectRatio;
+        }
+
+        auto nearPlane = camera.nearPlane;
+        if (!(std::isfinite(nearPlane) && nearPlane > kMinNearPlane))
+        {
+            nearPlane = 0.1f;
+        }
+
+        auto farPlane = camera.farPlane;
+        if (!(std::isfinite(farPlane) && farPlane > nearPlane + kMinDepthRange))
+        {
+            farPlane = nearPlane + 1000.0f;
+        }
+
+        if (camera.perspective())
+        {
+            auto verticalFov = camera.verticalFovRadians;
+            if (!(std::isfinite(verticalFov) && verticalFov > kMinDepthRange && verticalFov < (glm::pi<float>() - kMinDepthRange)))
+            {
+                verticalFov = glm::radians(60.0f);
+            }
+
+            return glm::perspectiveRH_ZO(verticalFov, aspectRatio, nearPlane, farPlane);
+        }
+
+        auto halfHeight = camera.orthoHeight;
+        if (!(std::isfinite(halfHeight) && halfHeight > kMinDepthRange))
+        {
+            halfHeight = 10.0f;
+        }
+
+        auto const halfWidth = halfHeight * aspectRatio;
+        return glm::orthoRH_ZO(-halfWidth, halfWidth, -halfHeight, halfHeight, nearPlane, farPlane);
+    }
+
+    [[nodiscard]] static SceneFrustum buildFrustumFromViewProjection(const glm::mat4 &viewProjection) noexcept
+    {
+        auto frustum = SceneFrustum{};
+        auto const transposed = glm::transpose(viewProjection);
+
+        auto const rawPlanes = std::array{
+            transposed[3] + transposed[0],
+            transposed[3] - transposed[0],
+            transposed[3] + transposed[1],
+            transposed[3] - transposed[1],
+            transposed[3] + transposed[2],
+            transposed[3] - transposed[2],
+        };
+
+        auto const planeIndices = std::views::iota(std::size_t{0}, rawPlanes.size());
+        std::ranges::for_each(planeIndices, [&](std::size_t planeIndex) {
+            auto plane = rawPlanes[planeIndex];
+            auto const normal = glm::vec3{plane.x, plane.y, plane.z};
+            auto const normalLength = glm::length(normal);
+            if (std::isfinite(normalLength) && normalLength > 1e-6f)
+            {
+                plane /= normalLength;
+            }
+
+            frustum.planes[planeIndex] = plane;
+        });
+
+        return frustum;
+    }
+
+    [[nodiscard]] std::optional<SceneResolvedCamera> buildResolvedCamera(flecs::entity entity,
+                                                                          nr::resource::CameraAssetHandle cameraHandle,
+                                                                          bool fallback,
+                                                                          const std::optional<glm::uvec2> &viewportExtent) const
+    {
+        if (!entity.is_alive() || !cameraHandle.valid())
+        {
+            return std::nullopt;
+        }
+
+        auto const *cameraRecord = cameras_.tryGet(cameraHandle);
+        if (cameraRecord == nullptr || !cameraRecord->cpuReady)
+        {
+            return std::nullopt;
+        }
+
+        auto world = glm::mat4{1.0f};
+        if (auto worldTransform = entity.try_get<WorldTransform>(); worldTransform != nullptr && detail::finiteMat4(worldTransform->value))
+        {
+            world = worldTransform->value;
+        }
+
+        auto const view = buildViewMatrixFromWorld(world);
+        auto const aspectRatio = resolveProjectionAspectRatio(cameraRecord->cpu, viewportExtent);
+        auto const projection = buildProjectionMatrix(cameraRecord->cpu, aspectRatio);
+        auto const frustum = buildFrustumFromViewProjection(projection * view);
+
+        return SceneResolvedCamera{
+            .entity = entity,
+            .camera = cameraHandle,
+            .world = world,
+            .view = view,
+            .projection = projection,
+            .frustum = frustum,
+            .fallback = fallback,
+        };
+    }
+
+    [[nodiscard]] std::optional<SceneFrustum> resolveExtractFrustum(const SceneExtractInput &input) const
     {
         switch (input.visibility)
         {
@@ -827,13 +1139,13 @@ class Scene
         case SceneVisibilityMode::customFrustum:
             if (input.customFrustum.has_value())
             {
-                return std::cref(*input.customFrustum);
+                return *input.customFrustum;
             }
             return std::nullopt;
         case SceneVisibilityMode::primaryCameraFrustum:
-            if (input.customFrustum.has_value())
+            if (auto primaryCamera = tryGetPrimaryCamera(input.viewportExtent); primaryCamera.has_value())
             {
-                return std::cref(*input.customFrustum);
+                return primaryCamera->frustum;
             }
             return std::nullopt;
         default: return std::nullopt;
@@ -887,12 +1199,13 @@ class Scene
                 return;
             }
 
-            if (profileRecord.requireResidentGeometry && !meshIsResident(binding.mesh))
+            if (profileRecord.requireReadyForDomain &&
+                !renderableReadyForDomain(profileRecord.domain, binding))
             {
                 return;
             }
 
-            if (selectedFrustum.has_value() && !intersectsFrustum(worldBounds.value, selectedFrustum->get()))
+            if (selectedFrustum.has_value() && !intersectsFrustum(worldBounds.value, *selectedFrustum))
             {
                 return;
             }
@@ -976,6 +1289,96 @@ class Scene
                meshRecord->gpuVersion >= meshRecord->cpuVersion;
     }
 
+    [[nodiscard]] bool materialIsResident(nr::resource::MaterialHandle materialHandle) const noexcept
+    {
+        auto const *materialRecord = materials_.tryGet(materialHandle);
+        if (materialRecord == nullptr)
+        {
+            return false;
+        }
+
+        return materialRecord->gpuState == GpuResidencyState::resident &&
+               materialRecord->gpuVersion >= materialRecord->cpuVersion;
+    }
+
+    [[nodiscard]] bool textureIsResident(nr::resource::TextureHandle textureHandle) const noexcept
+    {
+        auto const *textureRecord = textures_.tryGet(textureHandle);
+        if (textureRecord == nullptr)
+        {
+            return false;
+        }
+
+        return textureRecord->gpuState == GpuResidencyState::resident &&
+               textureRecord->gpuVersion >= textureRecord->cpuVersion;
+    }
+
+    [[nodiscard]] bool materialTexturesReady(const nr::resource::Material &material) const noexcept
+    {
+        auto const textureHandles = std::array{
+            material.baseColor.texture,
+            material.normal.texture,
+            material.metallicRoughness.texture,
+            material.occlusion.texture,
+            material.emissive.texture,
+        };
+
+        return std::ranges::all_of(textureHandles, [&](nr::resource::TextureHandle textureHandle) {
+            if (!textureHandle.valid())
+            {
+                return true;
+            }
+
+            return textureIsResident(textureHandle);
+        });
+    }
+
+    [[nodiscard]] bool renderableReadyForRaster(const RenderableBinding &binding) const noexcept
+    {
+        if (!meshIsResident(binding.mesh))
+        {
+            return false;
+        }
+
+        if (!binding.material.valid())
+        {
+            return false;
+        }
+
+        if (!materialIsResident(binding.material))
+        {
+            return false;
+        }
+
+        auto const *materialRecord = materials_.tryGet(binding.material);
+        if (materialRecord == nullptr || !materialRecord->cpuReady)
+        {
+            return false;
+        }
+
+        return materialTexturesReady(materialRecord->cpu);
+    }
+
+    [[nodiscard]] bool renderableReadyForMeshOnlyDomain(const RenderableBinding &binding) const noexcept
+    {
+        return meshIsResident(binding.mesh);
+    }
+
+    [[nodiscard]] bool renderableReadyForDomain(ScenePacketDomain domain,
+                                                const RenderableBinding &binding) const noexcept
+    {
+        switch (domain)
+        {
+        case ScenePacketDomain::rasterDraw:
+            return renderableReadyForRaster(binding);
+        case ScenePacketDomain::rayTracingInstance:
+        case ScenePacketDomain::tlasBuildInput:
+            return renderableReadyForMeshOnlyDomain(binding);
+        default:
+            return false;
+        }
+    }
+
     [[nodiscard]] std::uint64_t rasterSortKey(
         const RenderableBinding &binding,
         std::uint64_t selectionBits,
@@ -1048,9 +1451,20 @@ class Scene
                     .sortKey = rasterSortKey(binding, selectionBits, submeshIndex, entity),
                 });
             }
-            else
+            else if constexpr (Domain == ScenePacketDomain::rayTracingInstance)
             {
                 packetSet.rtInstances.push_back(RayTracingInstancePacket{
+                    .renderable = entity,
+                    .mesh = binding.mesh,
+                    .submeshIndex = submeshIndex,
+                    .world = worldTransform.value,
+                    .instanceMask = makeRayTracingInstanceMask(selectionBits),
+                    .tlasBucket = tlasBucketId.value,
+                });
+            }
+            else if constexpr (Domain == ScenePacketDomain::tlasBuildInput)
+            {
+                packetSet.tlasBuildInputs.push_back(TlasBuildInputPacket{
                     .renderable = entity,
                     .mesh = binding.mesh,
                     .submeshIndex = submeshIndex,
@@ -1134,82 +1548,59 @@ class Scene
         record.gpuState = GpuResidencyState::uploadQueued;
     }
 
-    [[nodiscard]] static bool needsDeviceUpload(const MeshAssetRecord &record) noexcept
+    template <typename RecordT>
+    [[nodiscard]] static bool canConsiderUploadQueue(const RecordT &record) noexcept
     {
         return record.cpuReady &&
                !record.uploadQueued &&
-               record.gpuState != GpuResidencyState::waitingAcquire &&
-               record.cpuVersion > record.gpuVersion;
+               record.gpuState != GpuResidencyState::waitingAcquire;
     }
 
-    [[nodiscard]] static bool needsDeviceUpload(const MaterialAssetRecord &record) noexcept
+    template <typename RecordT>
+    [[nodiscard]] bool needsUploadQueue(const RecordT &record) const noexcept
     {
-        return record.cpuReady &&
-               !record.uploadQueued &&
-               record.gpuState != GpuResidencyState::waitingAcquire &&
-               record.cpuVersion > record.gpuVersion;
+        if (!canConsiderUploadQueue(record))
+        {
+            return false;
+        }
+
+        if constexpr (std::same_as<RecordT, CameraAssetRecord> || std::same_as<RecordT, LightAssetRecord>)
+        {
+            return record.cpuVersion > record.gpuVersion ||
+                   record.lastUploadFrameSerial != currentFrame_.frameSerial;
+        }
+
+        return record.cpuVersion > record.gpuVersion;
     }
 
-    [[nodiscard]] static bool needsDeviceUpload(const TextureAssetRecord &record) noexcept
+    template <typename HandleT, typename StorageT>
+    void queueUploadsFor(std::span<HandleT> handles, StorageT &storage)
     {
-        return record.cpuReady &&
-               !record.uploadQueued &&
-               record.gpuState != GpuResidencyState::waitingAcquire &&
-               record.cpuVersion > record.gpuVersion;
+        forEachLiveRecord(handles, storage, [&](HandleT, auto &record) {
+            if (needsUploadQueue(record))
+            {
+                markRecordUploadQueued(record);
+            }
+        });
     }
 
-    [[nodiscard]] bool needsPerFrameCpuWrite(const CameraAssetRecord &record) const noexcept
+    template <typename HandleT, typename StorageT, typename ExpiredFn>
+    static void reapRetiredFor(std::span<HandleT> handles,
+                               StorageT &storage,
+                               ExpiredFn &&expired)
     {
-        return record.cpuReady &&
-               !record.uploadQueued &&
-               record.gpuState != GpuResidencyState::waitingAcquire &&
-               (record.cpuVersion > record.gpuVersion || record.lastUploadFrameSerial != currentFrame_.frameSerial);
-    }
-
-    [[nodiscard]] bool needsPerFrameCpuWrite(const LightAssetRecord &record) const noexcept
-    {
-        return record.cpuReady &&
-               !record.uploadQueued &&
-               record.gpuState != GpuResidencyState::waitingAcquire &&
-               (record.cpuVersion > record.gpuVersion || record.lastUploadFrameSerial != currentFrame_.frameSerial);
+        forEachLiveRecord(handles, storage, [&](HandleT, auto &record) {
+            std::erase_if(record.retiredGpu, expired);
+        });
     }
 
     void queueGpuUploadsForFrame()
     {
-        forEachLiveRecord(std::span{meshHandles_}, meshes_, [&](nr::resource::MeshHandle, MeshAssetRecord &record) {
-            if (needsDeviceUpload(record))
-            {
-                markRecordUploadQueued(record);
-            }
-        });
-
-        forEachLiveRecord(std::span{materialHandles_}, materials_, [&](nr::resource::MaterialHandle, MaterialAssetRecord &record) {
-            if (needsDeviceUpload(record))
-            {
-                markRecordUploadQueued(record);
-            }
-        });
-
-        forEachLiveRecord(std::span{textureHandles_}, textures_, [&](nr::resource::TextureHandle, TextureAssetRecord &record) {
-            if (needsDeviceUpload(record))
-            {
-                markRecordUploadQueued(record);
-            }
-        });
-
-        forEachLiveRecord(std::span{cameraHandles_}, cameras_, [&](nr::resource::CameraAssetHandle, CameraAssetRecord &record) {
-            if (needsPerFrameCpuWrite(record))
-            {
-                markRecordUploadQueued(record);
-            }
-        });
-
-        forEachLiveRecord(std::span{lightHandles_}, lights_, [&](nr::resource::LightAssetHandle, LightAssetRecord &record) {
-            if (needsPerFrameCpuWrite(record))
-            {
-                markRecordUploadQueued(record);
-            }
-        });
+        queueUploadsFor(std::span{meshHandles_}, meshes_);
+        queueUploadsFor(std::span{materialHandles_}, materials_);
+        queueUploadsFor(std::span{textureHandles_}, textures_);
+        queueUploadsFor(std::span{cameraHandles_}, cameras_);
+        queueUploadsFor(std::span{lightHandles_}, lights_);
     }
 
     void reapRetiredGpuVersions()
@@ -1219,60 +1610,38 @@ class Scene
             return retiredVersion.retireAfterSerial <= serial;
         };
 
-        forEachLiveRecord(std::span{meshHandles_}, meshes_, [&](nr::resource::MeshHandle, MeshAssetRecord &record) {
-            std::erase_if(record.retiredGpu, expired);
-        });
+        reapRetiredFor(std::span{meshHandles_}, meshes_, expired);
+        reapRetiredFor(std::span{materialHandles_}, materials_, expired);
+        reapRetiredFor(std::span{textureHandles_}, textures_, expired);
+        reapRetiredFor(std::span{cameraHandles_}, cameras_, expired);
+        reapRetiredFor(std::span{lightHandles_}, lights_, expired);
 
-        forEachLiveRecord(std::span{materialHandles_}, materials_, [&](nr::resource::MaterialHandle, MaterialAssetRecord &record) {
-            std::erase_if(record.retiredGpu, expired);
-        });
-
-        forEachLiveRecord(std::span{textureHandles_}, textures_, [&](nr::resource::TextureHandle, TextureAssetRecord &record) {
-            std::erase_if(record.retiredGpu, expired);
-        });
-
-        forEachLiveRecord(std::span{cameraHandles_}, cameras_, [&](nr::resource::CameraAssetHandle, CameraAssetRecord &record) {
-            std::erase_if(record.retiredGpu, expired);
-        });
-
-        forEachLiveRecord(std::span{lightHandles_}, lights_, [&](nr::resource::LightAssetHandle, LightAssetRecord &record) {
-            std::erase_if(record.retiredGpu, expired);
-        });
+        std::erase_if(retiredMeshPayloadGraveyard_, expired);
+        std::erase_if(retiredMaterialPayloadGraveyard_, expired);
+        std::erase_if(retiredTexturePayloadGraveyard_, expired);
+        std::erase_if(retiredCameraPayloadGraveyard_, expired);
+        std::erase_if(retiredLightPayloadGraveyard_, expired);
     }
 
-    void discardUploadSourceIfConfigured(MeshAssetRecord &record)
+    template <typename RecordT>
+    void discardUploadSourceIfConfigured(RecordT &record)
     {
         if (cpuRetention_ != CpuRetentionPolicy::discardUploadSourceAfterResident)
         {
             return;
         }
 
-        record.cpu.vertices.clear();
-        record.cpu.indices.clear();
-    }
-
-    void discardUploadSourceIfConfigured(TextureAssetRecord &record)
-    {
-        if (cpuRetention_ != CpuRetentionPolicy::discardUploadSourceAfterResident)
+        if constexpr (std::same_as<RecordT, MeshAssetRecord>)
         {
-            return;
+            record.cpu.vertices.clear();
+            record.cpu.indices.clear();
         }
-
-        std::ranges::for_each(record.cpu.levels, [](nr::resource::ImageLevel &level) {
-            level.bytes.clear();
-        });
-    }
-
-    void discardUploadSourceIfConfigured(MaterialAssetRecord &)
-    {
-    }
-
-    void discardUploadSourceIfConfigured(CameraAssetRecord &)
-    {
-    }
-
-    void discardUploadSourceIfConfigured(LightAssetRecord &)
-    {
+        else if constexpr (std::same_as<RecordT, TextureAssetRecord>)
+        {
+            std::ranges::for_each(record.cpu.levels, [](nr::resource::ImageLevel &level) {
+                level.bytes.clear();
+            });
+        }
     }
 
     [[nodiscard]] static std::size_t pixelFormatByteSize(nr::resource::PixelFormat format)
@@ -1926,6 +2295,121 @@ class Scene
         });
     }
 
+    template <typename HandleT, typename StorageT>
+    static void decrementTemplatePins(std::span<const HandleT> handles, StorageT &storage)
+    {
+        std::ranges::for_each(handles, [&](HandleT handle) {
+            if (auto *record = storage.tryGet(handle); record != nullptr && record->liveTemplatePins > 0u)
+            {
+                --record->liveTemplatePins;
+            }
+        });
+    }
+
+    template <typename RecordT>
+    [[nodiscard]] static bool canCollect(const RecordT &record) noexcept
+    {
+        return record.liveTemplatePins == 0u && record.liveExplicitPins == 0u;
+    }
+
+    template <typename HandleT, typename StorageT>
+    static void compactDeadHandles(std::vector<HandleT> &handles, StorageT &storage)
+    {
+        std::erase_if(handles, [&](HandleT handle) {
+            return storage.tryGet(handle) == nullptr;
+        });
+    }
+
+    static void subtractSaturating(std::size_t &value, std::size_t delta) noexcept
+    {
+        value = value >= delta ? value - delta : 0u;
+    }
+
+    void compactDeadAssetHandles()
+    {
+        compactDeadHandles(meshHandles_, meshes_);
+        compactDeadHandles(materialHandles_, materials_);
+        compactDeadHandles(textureHandles_, textures_);
+        compactDeadHandles(cameraHandles_, cameras_);
+        compactDeadHandles(lightHandles_, lights_);
+    }
+
+    template <typename RetiredPayloadT>
+    static void moveRetiredPayloads(std::vector<RetiredPayloadT> &source,
+                                    std::vector<RetiredPayloadT> &destination)
+    {
+        if (source.empty())
+        {
+            return;
+        }
+
+        std::ranges::move(source, std::back_inserter(destination));
+        source.clear();
+    }
+
+    template <typename HandleT, typename StorageT, typename GraveyardT>
+    void collectUnusedAsset(HandleT handle,
+                            StorageT &storage,
+                            GraveyardT &graveyard)
+    {
+        auto *record = storage.tryGet(handle);
+        if (record == nullptr || !canCollect(*record))
+        {
+            return;
+        }
+
+        if (record->uploadQueued && !record->gpu.has_value())
+        {
+            record->uploadQueued = false;
+            record->gpuState = GpuResidencyState::none;
+        }
+
+        queueRetiredPayload(record->gpu, record->retiredGpu);
+        moveRetiredPayloads(record->retiredGpu, graveyard);
+
+        record->uploadQueued = false;
+        record->cpuReady = false;
+        storage.erase(handle);
+    }
+
+    void collectUnusedMeshAsset(nr::resource::MeshHandle handle)
+    {
+        collectUnusedAsset(handle, meshes_, retiredMeshPayloadGraveyard_);
+    }
+
+    void collectUnusedMaterialAsset(nr::resource::MaterialHandle handle)
+    {
+        collectUnusedAsset(handle, materials_, retiredMaterialPayloadGraveyard_);
+    }
+
+    void collectUnusedTextureAsset(nr::resource::TextureHandle handle)
+    {
+        collectUnusedAsset(handle, textures_, retiredTexturePayloadGraveyard_);
+    }
+
+    void collectUnusedCameraAsset(nr::resource::CameraAssetHandle handle)
+    {
+        collectUnusedAsset(handle, cameras_, retiredCameraPayloadGraveyard_);
+    }
+
+    void collectUnusedLightAsset(nr::resource::LightAssetHandle handle)
+    {
+        collectUnusedAsset(handle, lights_, retiredLightPayloadGraveyard_);
+    }
+
+    void collectTemplatePinnedAssets(const TemplateResourcePinSet &pinSet)
+    {
+        auto collectAssets = [&]<typename CollectorFn>(const auto &handles, CollectorFn &&collector) {
+            std::ranges::for_each(handles, std::forward<CollectorFn>(collector));
+        };
+
+        collectAssets(pinSet.meshes, [this](auto h) { collectUnusedMeshAsset(h); });
+        collectAssets(pinSet.materials, [this](auto h) { collectUnusedMaterialAsset(h); });
+        collectAssets(pinSet.textures, [this](auto h) { collectUnusedTextureAsset(h); });
+        collectAssets(pinSet.cameras, [this](auto h) { collectUnusedCameraAsset(h); });
+        collectAssets(pinSet.lights, [this](auto h) { collectUnusedLightAsset(h); });
+    }
+
     void bridgeTextures(const nr::load::SceneAsset &sceneAsset,
                         const SceneBridgePlan &plan,
                         std::vector<nr::resource::TextureHandle> &textureHandlesBySource)
@@ -2124,6 +2608,8 @@ class Scene
             auto const &sourceMaterial = sceneAsset.materials[entry.sourceIndex];
             auto material = nr::resource::Material{};
             material.name = sourceMaterial.name;
+            
+            // Base color and emissive
             material.baseColorFactor = glm::vec4{
                 sourceMaterial.baseColorFactor[0],
                 sourceMaterial.baseColorFactor[1],
@@ -2135,8 +2621,37 @@ class Scene
                 sourceMaterial.emissiveFactor[1],
                 sourceMaterial.emissiveFactor[2],
             };
+            
+            // Metallic/Roughness workflow
             material.metallicFactor = sourceMaterial.metallicFactor;
             material.roughnessFactor = sourceMaterial.roughnessFactor;
+            
+            // Specular/Glossiness workflow
+            assignIfPresent(sourceMaterial.specularFactor, [&](const std::array<float, 3> &specularFactor) {
+                material.specularFactor = glm::vec3{specularFactor[0], specularFactor[1], specularFactor[2]};
+            });
+            assignIfPresent(sourceMaterial.glossinessFactor, [&](float glossinessFactor) {
+                material.glossinessFactor = glossinessFactor;
+            });
+            
+            // Anisotropy
+            assignIfPresent(sourceMaterial.anisotropyFactor, [&](float anisotropyFactor) {
+                material.anisotropyFactor = anisotropyFactor;
+            });
+            
+            // Surface properties
+            material.doubleSided = sourceMaterial.doubleSided;
+            assignIfPresent(sourceMaterial.normalScale, [&](float normalScale) {
+                material.normalScale = normalScale;
+            });
+            assignIfPresent(sourceMaterial.occlusionStrength, [&](float occlusionStrength) {
+                material.occlusionStrength = occlusionStrength;
+            });
+            assignIfPresent(sourceMaterial.alphaCutoff, [&](float alphaCutoff) {
+                material.alphaCutoff = alphaCutoff;
+            });
+
+            material.alphaMode = resolveMaterialAlphaMode(sourceMaterial);
 
             auto materialHasError = false;
             std::ranges::for_each(sourceMaterial.textures, [&](const nr::load::MaterialTextureBinding &binding) {
@@ -2455,13 +2970,18 @@ class Scene
             camera.name = sourceCamera.name.empty()
                               ? std::format("camera_{}", entry.sourceIndex)
                               : sourceCamera.name;
+            camera.authoredAspectRatio = std::nullopt;
 
             if (sourceCamera.orthographicWidth > kEpsilon)
             {
                 camera.projection = nr::resource::CameraProjection::orthographic;
 
                 auto aspect = sourceCamera.aspect;
-                if (!(std::isfinite(aspect) && aspect > kEpsilon))
+                if (std::isfinite(aspect) && aspect > kEpsilon)
+                {
+                    camera.authoredAspectRatio = aspect;
+                }
+                else
                 {
                     aspect = 1.0f;
                     reportImport<nr::LogLevel::warning>(
@@ -2495,6 +3015,7 @@ class Scene
                 auto aspect = sourceCamera.aspect;
                 if (std::isfinite(aspect) && aspect > kEpsilon)
                 {
+                    camera.authoredAspectRatio = aspect;
                     camera.verticalFovRadians = 2.0f * std::atan(std::tan(horizontalFov * 0.5f) / aspect);
                 }
                 else
@@ -2701,22 +3222,43 @@ class Scene
         std::span<const nr::resource::LightAssetHandle> lightHandles) const
     {
         auto pinSet = TemplateResourcePinSet{};
-        appendValidUniqueHandles(meshHandles, pinSet.meshes);
-        appendValidUniqueHandles(materialHandles, pinSet.materials);
-        appendValidUniqueHandles(textureHandles, pinSet.textures);
-        appendValidUniqueHandles(cameraHandles, pinSet.cameras);
-        appendValidUniqueHandles(lightHandles, pinSet.lights);
+        auto appendHandles = [&](const auto &handles, auto &collection) {
+            appendValidUniqueHandles(handles, collection);
+        };
+
+        appendHandles(meshHandles, pinSet.meshes);
+        appendHandles(materialHandles, pinSet.materials);
+        appendHandles(textureHandles, pinSet.textures);
+        appendHandles(cameraHandles, pinSet.cameras);
+        appendHandles(lightHandles, pinSet.lights);
 
         return pinSet;
     }
 
     void retainTemplatePins(const TemplateResourcePinSet &pinSet)
     {
-        incrementTemplatePins(std::span{pinSet.meshes}, meshes_);
-        incrementTemplatePins(std::span{pinSet.materials}, materials_);
-        incrementTemplatePins(std::span{pinSet.textures}, textures_);
-        incrementTemplatePins(std::span{pinSet.cameras}, cameras_);
-        incrementTemplatePins(std::span{pinSet.lights}, lights_);
+        auto incrementPins = [&](const auto &collection, auto &storage) {
+            incrementTemplatePins(std::span{collection}, storage);
+        };
+
+        incrementPins(pinSet.meshes, meshes_);
+        incrementPins(pinSet.materials, materials_);
+        incrementPins(pinSet.textures, textures_);
+        incrementPins(pinSet.cameras, cameras_);
+        incrementPins(pinSet.lights, lights_);
+    }
+
+    void releaseTemplatePins(const TemplateResourcePinSet &pinSet)
+    {
+        auto decrementPins = [&](const auto &collection, auto &storage) {
+            decrementTemplatePins(std::span{collection}, storage);
+        };
+
+        decrementPins(pinSet.meshes, meshes_);
+        decrementPins(pinSet.materials, materials_);
+        decrementPins(pinSet.textures, textures_);
+        decrementPins(pinSet.cameras, cameras_);
+        decrementPins(pinSet.lights, lights_);
     }
 
     [[nodiscard]] static bool useParentHierarchyStorage(const nr::load::SceneAsset &sceneAsset,
@@ -2730,14 +3272,9 @@ class Scene
         default: break;
         }
 
-        if (sceneAsset.rootNodeIndex == nr::load::invalidIndex || sceneAsset.rootNodeIndex >= sceneAsset.nodes.size())
-        {
-            return true;
-        }
-
-        constexpr auto kLargeRootChildCount = std::size_t{512};
-        auto const rootChildCount = sceneAsset.nodes[sceneAsset.rootNodeIndex].childIndices.size();
-        return rootChildCount <= kLargeRootChildCount;
+        // Prefer ChildOf in auto mode for stable prefab teardown semantics.
+        (void)sceneAsset;
+        return false;
     }
 
     static void attachHierarchyRelation(flecs::entity child, flecs::entity parent, bool useParentStorage)
@@ -2749,6 +3286,31 @@ class Scene
         }
 
         child.add(EcsChildOf, parent.id());
+    }
+
+    template <typename T, typename AssignFn>
+    static void assignIfPresent(const std::optional<T> &value, AssignFn &&assign)
+    {
+        if (value.has_value())
+        {
+            assign(*value);
+        }
+    }
+
+    [[nodiscard]] static nr::resource::AlphaMode resolveMaterialAlphaMode(const nr::load::MaterialAsset &sourceMaterial) noexcept
+    {
+        if (sourceMaterial.alphaModeHint == nr::load::MaterialAlphaModeHint::mask)
+        {
+            return nr::resource::AlphaMode::mask;
+        }
+
+        if (sourceMaterial.alphaModeHint == nr::load::MaterialAlphaModeHint::blend ||
+            sourceMaterial.opacity < 1.0f)
+        {
+            return nr::resource::AlphaMode::blend;
+        }
+
+        return nr::resource::AlphaMode::opaque;
     }
 
     [[nodiscard]] nr::resource::Aabb meshLocalBounds(nr::resource::MeshHandle meshHandle) const
@@ -2795,8 +3357,11 @@ class Scene
 
     [[nodiscard]] std::uint64_t defaultSelectionBits(nr::resource::MaterialHandle materialHandle) const noexcept
     {
+        // All objects get ray-tracing and shadow casting capabilities
         auto bits = sceneSelectionMask(SceneSelectionBit::rtMain) |
                     sceneSelectionMask(SceneSelectionBit::shadowCaster);
+        
+        // Default to raster opaque if no material or not ready
         if (!materialHandle.valid())
         {
             return bits | sceneSelectionMask(SceneSelectionBit::rasterOpaque);
@@ -2808,6 +3373,9 @@ class Scene
             return bits | sceneSelectionMask(SceneSelectionBit::rasterOpaque);
         }
 
+        // Determine raster and RT blending modes from alpha mode
+        // NOTE: Material workflow (metallic/roughness vs specular/glossiness vs anisotropy)
+        // does NOT affect whether an object goes into graphics path - all materials are renderable
         if (materialRecord->cpu.isAlphaBlended())
         {
             return bits |
@@ -2822,6 +3390,7 @@ class Scene
                    sceneSelectionMask(SceneSelectionBit::alphaTest);
         }
 
+        // All other cases (opaque, specular/glossiness, anisotropy, etc.) go to raster opaque
         return bits | sceneSelectionMask(SceneSelectionBit::rasterOpaque);
     }
 
@@ -2994,6 +3563,12 @@ class Scene
         std::span<const nr::resource::CameraAssetHandle> cameraHandlesBySource,
         std::span<const nr::resource::LightAssetHandle> lightHandlesBySource)
     {
+        templateRecord.prefabEntities.clear();
+        if (templateRecord.prefabRoot.is_alive())
+        {
+            templateRecord.prefabEntities.push_back(templateRecord.prefabRoot.id());
+        }
+
         if (sceneAsset.nodes.empty())
         {
             templateRecord.templateNodeCount = 0;
@@ -3113,6 +3688,7 @@ class Scene
             nodeEntity.add(EcsPrefab);
             attachHierarchyRelation(nodeEntity, parentEntity, useParentStorage);
             nodeEntity.set(SceneTemplateRef{templateHandle});
+            templateRecord.prefabEntities.push_back(nodeEntity.id());
             nodeEntity.set(SceneTemplateNodeRef{
                 .templateHandle = templateHandle,
                 .sourceNodeIndex = nodeIndex,
@@ -3170,6 +3746,7 @@ class Scene
                 meshEntity.add(EcsPrefab);
                 attachHierarchyRelation(meshEntity, nodeEntity, useParentStorage);
                 meshEntity.set(SceneTemplateRef{templateHandle});
+                templateRecord.prefabEntities.push_back(meshEntity.id());
                 meshEntity.set(SceneTemplateMeshBindingRef{
                     .templateHandle = templateHandle,
                     .sourceNodeIndex = nodeIndex,
@@ -3215,11 +3792,16 @@ class Scene
                     cameraEntity.add(EcsPrefab);
                     attachHierarchyRelation(cameraEntity, nodeEntity, useParentStorage);
                     cameraEntity.set(SceneTemplateRef{templateHandle});
+                    templateRecord.prefabEntities.push_back(cameraEntity.id());
                     cameraEntity.set(SceneTemplateCameraBindingRef{
                         .templateHandle = templateHandle,
                         .sourceNodeIndex = nodeIndex,
                         .sourceCameraIndex = sourceCameraIndex,
                         .camera = cameraHandle,
+                    });
+                    cameraEntity.set(SceneCameraBinding{
+                        .camera = cameraHandle,
+                        .synthetic = false,
                     });
                     cameraEntity.set(LocalTransform{});
                     cameraEntity.set(WorldTransform{});
@@ -3250,6 +3832,7 @@ class Scene
                     lightEntity.add(EcsPrefab);
                     attachHierarchyRelation(lightEntity, nodeEntity, useParentStorage);
                     lightEntity.set(SceneTemplateRef{templateHandle});
+                    templateRecord.prefabEntities.push_back(lightEntity.id());
                     lightEntity.set(SceneTemplateLightBindingRef{
                         .templateHandle = templateHandle,
                         .sourceNodeIndex = nodeIndex,
@@ -3305,13 +3888,101 @@ class Scene
         return !hierarchyHasError;
     }
 
+    void destroyTemplatePrefabEntities(SceneTemplateRecord &templateRecord)
+    {
+        auto const reverseEntities = std::views::reverse(templateRecord.prefabEntities);
+        std::ranges::for_each(reverseEntities, [&](flecs::entity_t prefabEntityId) {
+            if (prefabEntityId == 0)
+            {
+                return;
+            }
+
+            auto prefabEntity = flecs::entity{world_.c_ptr(), prefabEntityId};
+            if (prefabEntity.is_alive())
+            {
+                prefabEntity.destruct();
+            }
+        });
+
+        templateRecord.prefabEntities.clear();
+        templateRecord.prefabRoot = {};
+    }
+
+    template <typename Fn>
+    void forEachImportedCameraInActiveInstances(Fn &&visit) const
+    {
+        cameraCandidatesQuery_.each([&](flecs::entity entity,
+                                        const SceneCameraBinding &cameraBinding,
+                                        const WorldTransform &) {
+            if (cameraBinding.synthetic || !belongsToActiveInstance(entity))
+            {
+                return;
+            }
+
+            visit(entity, cameraBinding);
+        });
+    }
+
+    [[nodiscard]] bool hasImportedCameraInActiveInstances() const
+    {
+        auto hasImportedCamera = false;
+        forEachImportedCameraInActiveInstances([&](flecs::entity, const SceneCameraBinding &) {
+            if (hasImportedCamera)
+            {
+                return;
+            }
+
+            hasImportedCamera = true;
+        });
+
+        return hasImportedCamera;
+    }
+
+    void destroyFallbackCameraInfrastructureIfUnused()
+    {
+        auto const fallbackEntityAlive = fallbackCameraEntity_.is_alive();
+        auto const fallbackHandleValid = fallbackCameraHandle_.valid();
+        if (!fallbackEntityAlive && !fallbackHandleValid)
+        {
+            return;
+        }
+
+        if (templates_.size() > 0u || hasImportedCameraInActiveInstances())
+        {
+            return;
+        }
+
+        if (fallbackEntityAlive)
+        {
+            fallbackCameraEntity_.destruct();
+        }
+        fallbackCameraEntity_ = {};
+
+        if (fallbackHandleValid)
+        {
+            collectUnusedCameraAsset(fallbackCameraHandle_);
+        }
+        fallbackCameraHandle_ = {};
+    }
+
+    void syncFallbackCameraInfrastructure()
+    {
+        if (templates_.size() > 0u && !hasImportedCameraInActiveInstances())
+        {
+            initializeFallbackCameraInfrastructure();
+            return;
+        }
+
+        destroyFallbackCameraInfrastructureIfUnused();
+    }
+
     [[nodiscard]] flecs::entity makeTemplatePrefab(SceneTemplateHandle handle,
                                                    std::string_view stableKey,
                                                    std::string_view debugName)
     {
         auto label = debugName.empty() ? stableKey : debugName;
         auto sanitized = detail::sanitizeEntityName(label);
-        auto name = std::format("scene_template_{}_{}", handle.slot, sanitized);
+        auto name = std::format("scene_template_{}_{}_{}", handle.slot, handle.generation, sanitized);
         auto prefab = world_.entity(name.c_str());
         prefab.add(EcsPrefab);
         return prefab;
@@ -3320,8 +3991,66 @@ class Scene
     [[nodiscard]] flecs::entity makeInstanceEntity(SceneInstanceHandle handle, std::string_view templateStableKey)
     {
         auto sanitized = detail::sanitizeEntityName(templateStableKey);
-        auto name = std::format("scene_instance_{}_{}", handle.slot, sanitized);
+        auto name = std::format("scene_instance_{}_{}_{}", handle.slot, handle.generation, sanitized);
         return world_.entity(name.c_str());
+    }
+
+    static constexpr std::string_view kFallbackCameraStableKey = "scene://runtime/fallback_camera/default";
+
+    [[nodiscard]] static nr::resource::CameraAsset makeFallbackCameraAsset()
+    {
+        auto fallbackCamera = nr::resource::CameraAsset{};
+        fallbackCamera.name = "scene_runtime_fallback_camera";
+        fallbackCamera.projection = nr::resource::CameraProjection::perspective;
+        fallbackCamera.verticalFovRadians = glm::radians(60.0f);
+        fallbackCamera.nearPlane = 0.1f;
+        fallbackCamera.farPlane = 1000.0f;
+        return fallbackCamera;
+    }
+
+    void initializeFallbackCameraInfrastructure()
+    {
+        auto [cameraHandle, created] = cameras_.getOrCreate(std::string{kFallbackCameraStableKey},
+                                                            [](nr::resource::CameraAssetHandle newHandle, const std::string &key) {
+                                                                return CameraAssetRecord{
+                                                                    .handle = newHandle,
+                                                                    .stableKey = key,
+                                                                };
+                                                            });
+
+        if (created)
+        {
+            cameraHandles_.push_back(cameraHandle);
+        }
+
+        if (auto *cameraRecord = cameras_.tryGet(cameraHandle); cameraRecord != nullptr)
+        {
+            cameraRecord->cpu = makeFallbackCameraAsset();
+            cameraRecord->cpuReady = true;
+            cameraRecord->uploadQueued = false;
+            if (cameraRecord->cpuVersion == 0u)
+            {
+                cameraRecord->cpuVersion = 1u;
+            }
+        }
+
+        fallbackCameraHandle_ = cameraHandle;
+        if (!fallbackCameraEntity_.is_alive())
+        {
+            auto const fallbackEntityName = std::format("scene_runtime_fallback_camera_{}_{}",
+                                                        cameraHandle.slot,
+                                                        cameraHandle.generation);
+            fallbackCameraEntity_ = world_.entity(fallbackEntityName.c_str());
+        }
+
+        fallbackCameraEntity_.set(SceneCameraBinding{
+            .camera = cameraHandle,
+            .synthetic = true,
+        });
+        fallbackCameraEntity_.set(LocalTransform{});
+        fallbackCameraEntity_.set(WorldTransform{});
+        fallbackCameraEntity_.set(LocalBounds{});
+        fallbackCameraEntity_.set(WorldBounds{});
     }
 
     nr::rhi::Device &device_;
@@ -3347,6 +4076,7 @@ class Scene
         const WorldTransform,
         const WorldBounds>
         rtCandidatesQuery_{};
+    flecs::query<const SceneCameraBinding, const WorldTransform> cameraCandidatesQuery_{};
     SceneFrameStamp currentFrame_{};
     std::vector<PendingAcquireBatch> pendingAcquireBatches_{};
 
@@ -3355,6 +4085,12 @@ class Scene
     std::vector<nr::resource::TextureHandle> textureHandles_{};
     std::vector<nr::resource::CameraAssetHandle> cameraHandles_{};
     std::vector<nr::resource::LightAssetHandle> lightHandles_{};
+
+    std::vector<detail::RetiredMeshGpuPayload> retiredMeshPayloadGraveyard_{};
+    std::vector<detail::RetiredMaterialGpuPayload> retiredMaterialPayloadGraveyard_{};
+    std::vector<detail::RetiredTextureGpuPayload> retiredTexturePayloadGraveyard_{};
+    std::vector<detail::RetiredCameraGpuPayload> retiredCameraPayloadGraveyard_{};
+    std::vector<detail::RetiredLightGpuPayload> retiredLightPayloadGraveyard_{};
 
     detail::KeyedSlotMapStorage<nr::resource::MeshHandle, MeshAssetRecord> meshes_{};
     detail::KeyedSlotMapStorage<nr::resource::MaterialHandle, MaterialAssetRecord> materials_{};
@@ -3365,6 +4101,8 @@ class Scene
     detail::SlotMapStorage<SceneInstanceHandle, SceneInstanceRecord> instances_{};
     detail::SlotMapStorage<SceneExtractProfileHandle, SceneExtractProfileRecord> extractProfiles_{};
     std::map<std::string, SceneTemplateHandle> templatesByStableKey_{};
+    nr::resource::CameraAssetHandle fallbackCameraHandle_{};
+    flecs::entity fallbackCameraEntity_{};
     std::size_t templateNodeCount_ = 0;
     std::size_t templateMeshBindingCount_ = 0;
     std::size_t templateCameraBindingCount_ = 0;

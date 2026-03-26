@@ -87,3 +87,44 @@ When generating code or refactoring:
 3.  **Safety:** Verify RAII compliance in `nrrhi` classes.
 4.  **Language:** All code comments must be in English.
 5.  **Ownership Semantics:** Enforce Section 2.7 and avoid introducing raw-pointer ownership patterns.
+
+### 4.1 Architecture Context Maintenance Rules
+
+When code changes affect architecture-facing behavior, agents must keep the architecture context documents synchronized, especially `docs/architecture/README.md`.
+
+Update the context documents in the same change whenever one or more of the following is true:
+
+1.  A core module's responsibility changes.
+2.  The primary data flow between `rhi`, `load`, `resource`, `scene`, `renderer`, and `renderPasses` changes.
+3.  A stable runtime boundary changes, such as:
+    - scene -> renderer bridge shape
+    - renderer -> renderPasses node lifecycle contract
+    - resource ownership/lifetime boundaries
+    - load -> scene bridge responsibilities
+4.  A major dependency framework is added, removed, or moved to a different layer.
+5.  A topic document linked from `docs/architecture/README.md` becomes outdated because of the code change.
+
+Agents must follow these rules to preserve consistency:
+
+1.  **Update docs in the same patch set.** Do not leave architecture document updates as follow-up work when the code change already changes the architecture story.
+2.  **Keep the global context high-level.** `docs/architecture/README.md` must stay concise and architectural. Do not copy detailed enums, record layouts, or low-level implementation logic into it unless that detail is required to explain module boundaries.
+3.  **Push details down to source-of-truth files.** Put detailed contracts in the relevant code files or topic documents, then link to them from the global context.
+4.  **Preserve section order.** Keep the architecture overview ordered as:
+    - `rhi`
+    - `load`
+    - `resources`
+    - `scene`
+    - `renderer`
+    - `renderpasses`
+    - `Overall`
+5.  **Describe reality, not intention.** The context document must reflect the current codebase and accepted project direction, not abandoned plans or speculative future designs.
+6.  **Update only the affected scope, but verify neighbors.** If one layer changes, update its section and re-check adjacent sections so the end-to-end flow still reads correctly.
+7.  **Maintain terminology consistency.** Use the same module names and runtime terms that appear in code and topic documents.
+8.  **Do not duplicate coding-policy content.** If a rule belongs in `AGENTS.md`, keep it here and reference it from architecture docs instead of duplicating it there.
+9.  **Prefer narrower claims when unsure.** If the code does not fully support a broader architectural statement, document the smaller true statement and link the reader to the implementation file.
+
+Minimum verification after an architecture-relevant change:
+
+1.  Check that `docs/architecture/README.md` still matches the current main flow.
+2.  Check that every newly introduced or changed stable boundary has at least one concrete code reference.
+3.  Check that linked topic documents still describe the same design direction as the code.

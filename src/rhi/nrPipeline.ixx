@@ -354,6 +354,42 @@ class CursorPipelineLayout
 			commandBuffer.pushConstants(raw(), stageFlags, offset, static_cast<uint32_t>(bytes.size()), bytes.data());
 		}
 
+		void pushConstants(
+				vk::CommandBuffer commandBuffer,
+				const ShaderCursor &cursor,
+				std::span<const uint8_t> bytes) const
+		{
+			nrAssert(valid(), "CursorPipelineLayout::pushConstants requires a valid pipeline layout.");
+			nrAssert(cursor.valid(), "CursorPipelineLayout::pushConstants requires a valid shader cursor.");
+
+			auto pushConstantRange = cursor.pushConstantRange();
+			nrAssert(
+				pushConstantRange.has_value(),
+				"CursorPipelineLayout::pushConstants requires cursor to reference push-constant storage.");
+
+			auto cursorOffset = cursor.address().uniformOffset;
+			nrAssert(
+				cursorOffset <= std::numeric_limits<uint32_t>::max(),
+				std::format("CursorPipelineLayout::pushConstants cursor offset overflow: {}", cursorOffset));
+
+			auto offset = static_cast<uint32_t>(cursorOffset);
+			auto rangeBegin = static_cast<uint64_t>(pushConstantRange->offset);
+			auto rangeEnd = rangeBegin + static_cast<uint64_t>(pushConstantRange->size);
+			auto writeBegin = static_cast<uint64_t>(offset);
+			auto writeEnd = writeBegin + static_cast<uint64_t>(bytes.size());
+
+			nrAssert(
+				writeBegin >= rangeBegin && writeEnd <= rangeEnd,
+				std::format(
+					"CursorPipelineLayout::pushConstants write outside push-constant range. offset={}, size={}, rangeBegin={}, rangeEnd={}",
+					offset,
+					bytes.size(),
+					pushConstantRange->offset,
+					pushConstantRange->offset + pushConstantRange->size));
+
+			pushConstants(commandBuffer, pushConstantRange->stageFlags, offset, bytes);
+		}
+
 	private:
 		struct DescriptorSetLayoutHandle
 		{
@@ -408,6 +444,119 @@ inline void CursorPipelineLayout::bindDescriptorSets(
 		}
 		bindDescriptorSet(commandBuffer, bindPoint, set, {});
 	}
+}
+
+inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout, ShaderBindingPool &pool)
+{
+	nrAssert(layout.valid(), "allocateBindingSetsForLayout requires a valid cursor pipeline layout.");
+
+	auto setIndices = layout.setIndices();
+	auto sets = std::vector<ShaderBindingSet>{};
+	sets.reserve(setIndices.size());
+
+	std::ranges::for_each(setIndices, [&](uint32_t setIndex) {
+		auto descriptorSetLayout = layout.descriptorSetLayout(setIndex);
+		nrAssert(
+			descriptorSetLayout.has_value(),
+			std::format("allocateBindingSetsForLayout missing descriptor set layout for set {}.", setIndex));
+
+		auto set = pool.allocate(*descriptorSetLayout, setIndex);
+		nrAssert(
+			set.valid(),
+			std::format("allocateBindingSetsForLayout failed to allocate descriptor set for set {}.", setIndex));
+		sets.push_back(set);
+	});
+
+	return sets;
+}
+
+inline void bindResourcesToCommandBuffer(
+	vk::CommandBuffer commandBuffer,
+	vk::PipelineBindPoint bindPoint,
+	const CursorPipelineLayout &layout,
+	ShaderBindingPool &pool,
+	std::span<const ShaderBindingSet> sets,
+	const ShaderBindingSnapshot &snapshot,
+	LogicalDescriptorResolver logicalResolver)
+{
+	nrAssert(layout.valid(), "bindResourcesToCommandBuffer requires a valid cursor pipeline layout.");
+	nrAssert(commandBuffer != vk::CommandBuffer{}, "bindResourcesToCommandBuffer requires a valid command buffer.");
+
+	auto writeRequests = resolveDescriptorWriteRequests(snapshot, std::move(logicalResolver));
+	if (!writeRequests.empty())
+	{
+		auto requestsBySet = std::map<uint32_t, std::vector<DescriptorWriteRequest>>{};
+		std::ranges::for_each(writeRequests, [&](const DescriptorWriteRequest &request) {
+			requestsBySet[request.binding.set].push_back(request);
+		});
+
+		std::ranges::for_each(sets, [&](const ShaderBindingSet &set) {
+			if (!set.valid())
+			{
+				return;
+			}
+
+			auto it = requestsBySet.find(set.setIndex());
+			if (it == requestsBySet.end())
+			{
+				return;
+			}
+
+			pool.update(set, it->second);
+			requestsBySet.erase(it);
+		});
+
+		nrAssert(
+			requestsBySet.empty(),
+			"bindResourcesToCommandBuffer could not find descriptor sets for one or more snapshot writes.");
+	}
+
+	if (!sets.empty())
+	{
+		layout.bindDescriptorSets(commandBuffer, bindPoint, sets);
+	}
+}
+
+inline std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
+	vk::CommandBuffer commandBuffer,
+	vk::PipelineBindPoint bindPoint,
+	const CursorPipelineLayout &layout,
+	ShaderBindingPool &pool,
+	const ShaderBindingSnapshot &snapshot,
+	LogicalDescriptorResolver logicalResolver)
+{
+	auto sets = allocateBindingSetsForLayout(layout, pool);
+	bindResourcesToCommandBuffer(
+		commandBuffer,
+		bindPoint,
+		layout,
+		pool,
+		std::span<const ShaderBindingSet>{sets.data(), sets.size()},
+		snapshot,
+		std::move(logicalResolver));
+	return sets;
+}
+
+inline void pushConstantsToCommandBuffer(
+	vk::CommandBuffer commandBuffer,
+	const CursorPipelineLayout &layout,
+	const ShaderBindingSnapshot &snapshot)
+{
+	nrAssert(layout.valid(), "pushConstantsToCommandBuffer requires a valid cursor pipeline layout.");
+	nrAssert(commandBuffer != vk::CommandBuffer{}, "pushConstantsToCommandBuffer requires a valid command buffer.");
+
+	std::ranges::for_each(snapshot.pushConstantWrites(), [&](const PushConstantWriteRecord &record) {
+		if (record.data.empty())
+		{
+			return;
+		}
+
+		layout.pushConstants(
+			commandBuffer,
+			record.range.stageFlags,
+			record.offset,
+			std::span<const uint8_t>{record.data.data(), record.data.size()});
+	});
 }
 
 class VkShaderProgram

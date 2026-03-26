@@ -216,7 +216,7 @@ void printByteList(std::string_view label, std::span<const std::byte> bytes)
         });
 
         nr::rhi::ops::BarrierBatch ownerReleaseBarrier{};
-        ownerReleaseBarrier.add(nr::rhi::ops::makeImageOwnershipReleaseBarrier(
+        ownerReleaseBarrier.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
             image,
             vk::ImageLayout::eGeneral,
             vk::ImageLayout::eGeneral,
@@ -387,7 +387,7 @@ void printByteList(std::string_view label, std::span<const std::byte> bytes)
         raw.fillBuffer(dstBuffer.handle(), 0, kUploadSize, 0u);
 
         nr::rhi::ops::BarrierBatch ownerReleaseBarrier{};
-        ownerReleaseBarrier.add(nr::rhi::ops::makeBufferOwnershipReleaseBarrier(
+        ownerReleaseBarrier.add(nr::rhi::ops::makeBufferOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
             dstBuffer,
             nr::rhi::ops::QueueOwnershipRequest{
                 .srcQueueFamilyIndex = ownerQueueFamily,
@@ -758,7 +758,7 @@ void printByteList(std::string_view label, std::span<const std::byte> bytes)
         raw.fillBuffer(dstBuffer.handle(), 0, kBufferSize, kInitialPattern);
 
         nr::rhi::ops::BarrierBatch ownerReleaseBarrier{};
-        ownerReleaseBarrier.add(nr::rhi::ops::makeBufferOwnershipReleaseBarrier(
+        ownerReleaseBarrier.add(nr::rhi::ops::makeBufferOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
             dstBuffer,
             nr::rhi::ops::QueueOwnershipRequest{
                 .srcQueueFamilyIndex = ownerQueueFamily,
@@ -928,7 +928,7 @@ void printByteList(std::string_view label, std::span<const std::byte> bytes)
         raw.fillBuffer(srcBuffer.handle(), 0, kBufferSize, kPattern);
 
         nr::rhi::ops::BarrierBatch releaseBarrier{};
-        releaseBarrier.add(nr::rhi::ops::makeBufferOwnershipReleaseBarrier(
+        releaseBarrier.add(nr::rhi::ops::makeBufferOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
             srcBuffer,
             nr::rhi::ops::QueueOwnershipRequest{
                 .srcQueueFamilyIndex = graphicsQueueFamily,
@@ -961,7 +961,7 @@ void printByteList(std::string_view label, std::span<const std::byte> bytes)
     nr::rhi::CommandRecorder::beginPrimary(computeAcquireCommandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     {
         nr::rhi::ops::BarrierBatch acquireBarrier{};
-        acquireBarrier.add(nr::rhi::ops::makeBufferOwnershipAcquireBarrier(
+        acquireBarrier.add(nr::rhi::ops::makeBufferOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Acquire>(
             srcBuffer,
             nr::rhi::ops::QueueOwnershipRequest{
                 .srcQueueFamilyIndex = graphicsQueueFamily,

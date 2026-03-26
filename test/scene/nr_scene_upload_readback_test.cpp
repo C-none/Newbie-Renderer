@@ -486,6 +486,18 @@ template <typename T>
         0u,
     };
 
+    data.specularAndGlossiness = glm::vec4{
+        material.specularFactor,
+        material.glossinessFactor,
+    };
+
+    data.anisotropyAndWorkflow = glm::uvec4{
+        static_cast<std::uint32_t>(glm::packSnorm2x16(glm::vec2{material.anisotropyFactor, 0.0f})),
+        material.usesMetallicRoughnessWorkflow() ? 1u : 0u,
+        material.usesSpecularGlossinessWorkflow() ? 1u : 0u,
+        material.usesAnisotropy() ? 1u : 0u,
+    };
+
     auto slots = std::array{
         material.baseColor,
         material.normal,
@@ -636,6 +648,251 @@ struct DeviceWaitIdleGuard
     }
 
     return handles;
+}
+
+[[nodiscard]] nr::load::SceneAsset buildRetentionSyntheticSceneAsset()
+{
+    auto scene = nr::load::SceneAsset{};
+    scene.sourcePath = std::filesystem::path{"manual_upload_retention_scene.gltf"};
+
+    auto image = nr::load::Image{};
+    image.width = 2;
+    image.height = 2;
+    image.channels = 4;
+    image.pixels = {
+        255, 0, 0, 255,
+        0, 255, 0, 255,
+        0, 0, 255, 255,
+        255, 255, 255, 255,
+    };
+
+    auto texture = nr::load::TextureAsset{};
+    texture.key = "manual://textures/upload_retention/baseColor";
+    texture.decodedImage = image;
+    scene.textures.push_back(std::move(texture));
+
+    auto material = nr::load::MaterialAsset{};
+    material.name = "retention_material";
+    material.textures.push_back(nr::load::MaterialTextureBinding{
+        .textureIndex = 0,
+        .uvChannel = 0,
+        .textureTypeRaw = 0,
+        .semantic = "diffuse",
+    });
+    scene.materials.push_back(std::move(material));
+
+    auto mesh = nr::load::MeshAsset{};
+    mesh.name = "retention_mesh";
+    mesh.materialIndex = 0;
+    mesh.vertices = {
+        nr::load::VertexAsset{.position = {-0.5f, -0.5f, 0.0f}},
+        nr::load::VertexAsset{.position = {0.5f, -0.5f, 0.0f}},
+        nr::load::VertexAsset{.position = {0.0f, 0.5f, 0.0f}},
+    };
+    mesh.indices = {0, 1, 2};
+    scene.meshes.push_back(std::move(mesh));
+
+    auto identity = std::array<float, 16>{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+
+    scene.nodes.resize(4);
+    scene.rootNodeIndex = 0;
+
+    scene.nodes[0].name = "Root";
+    scene.nodes[0].parentIndex = nr::load::invalidIndex;
+    scene.nodes[0].childIndices = {1, 2, 3};
+    scene.nodes[0].localTransform = identity;
+
+    scene.nodes[1].name = "MeshNode";
+    scene.nodes[1].parentIndex = 0;
+    scene.nodes[1].meshIndices = {0};
+    scene.nodes[1].localTransform = identity;
+
+    scene.nodes[2].name = "CameraNode";
+    scene.nodes[2].parentIndex = 0;
+    scene.nodes[2].localTransform = identity;
+
+    scene.nodes[3].name = "LightNode";
+    scene.nodes[3].parentIndex = 0;
+    scene.nodes[3].localTransform = identity;
+
+    scene.cameras.push_back(nr::load::CameraAsset{
+        .name = "RetentionCamera",
+        .sourceNodeName = "CameraNode",
+        .nodeIndex = 2,
+        .horizontalFov = glm::radians(70.0f),
+        .aspect = 16.0f / 9.0f,
+        .nearPlane = 0.1f,
+        .farPlane = 400.0f,
+        .orthographicWidth = 0.0f,
+    });
+
+    scene.lights.push_back(nr::load::LightAsset{
+        .name = "RetentionLight",
+        .sourceNodeName = "LightNode",
+        .nodeIndex = 3,
+        .typeRaw = 2,
+        .type = "point",
+        .colorDiffuse = {1.0f, 0.9f, 0.8f},
+        .attenuationLinear = 0.1f,
+    });
+
+    scene.stats.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
+    scene.stats.meshCount = static_cast<std::uint32_t>(scene.meshes.size());
+    scene.stats.materialCount = static_cast<std::uint32_t>(scene.materials.size());
+    scene.stats.textureCount = static_cast<std::uint32_t>(scene.textures.size());
+    scene.stats.cameraCount = static_cast<std::uint32_t>(scene.cameras.size());
+    scene.stats.lightCount = static_cast<std::uint32_t>(scene.lights.size());
+    scene.stats.vertexCount = 3;
+    scene.stats.indexCount = 3;
+
+    return scene;
+}
+
+[[nodiscard]] bool checkDiscardUploadSourceRetentionPolicy()
+{
+    std::println("\n=== Case: checkDiscardUploadSourceRetentionPolicy ===");
+
+    auto sceneAsset = buildRetentionSyntheticSceneAsset();
+
+    auto device = nr::rhi::Device{};
+    device.initialize("nr_scene_upload_readback_discard", "nrrhi_test");
+    auto waitIdleOnExit = DeviceWaitIdleGuard{.device = device};
+
+    auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{
+        .device = device,
+        .cpuRetention = nr::scene::CpuRetentionPolicy::discardUploadSourceAfterResident,
+    });
+
+    auto templateHandle = scene.registerTemplate(sceneAsset);
+    if (!require(templateHandle.valid(), "registerTemplate should succeed for retention synthetic scene."))
+    {
+        return false;
+    }
+
+    auto handles = resolveFirstHandles(scene, sceneAsset);
+    if (!handles.has_value())
+    {
+        return false;
+    }
+
+    scene.beginFrame(0);
+    scene.uploadPending();
+
+    if (handles->mesh.has_value())
+    {
+        auto meshRecordRef = scene.tryGetMeshAsset(*handles->mesh);
+        if (!require(meshRecordRef.has_value(), "Mesh record should exist for retention check."))
+        {
+            return false;
+        }
+
+        auto const &meshRecord = meshRecordRef->get();
+        if (!require(meshRecord.gpuState == nr::scene::GpuResidencyState::resident,
+                     "Mesh should be resident after uploadPending in retention check."))
+        {
+            return false;
+        }
+        if (!require(meshRecord.cpu.vertices.empty() && meshRecord.cpu.indices.empty(),
+                     "Mesh CPU upload sources should be discarded under discardUploadSourceAfterResident policy."))
+        {
+            return false;
+        }
+    }
+
+    if (handles->texture.has_value())
+    {
+        auto textureRecordRef = scene.tryGetTextureAsset(*handles->texture);
+        if (!require(textureRecordRef.has_value(), "Texture record should exist for retention check."))
+        {
+            return false;
+        }
+
+        auto const &textureRecord = textureRecordRef->get();
+        if (!require(textureRecord.gpuState == nr::scene::GpuResidencyState::resident,
+                     "Texture should be resident after uploadPending in retention check."))
+        {
+            return false;
+        }
+
+        auto levelsCleared = std::ranges::all_of(textureRecord.cpu.levels, [](const nr::resource::ImageLevel &level) {
+            return level.bytes.empty();
+        });
+        if (!require(levelsCleared,
+                     "Texture CPU upload source bytes should be discarded under discardUploadSourceAfterResident policy."))
+        {
+            return false;
+        }
+    }
+
+    if (handles->material.has_value())
+    {
+        auto materialRecordRef = scene.tryGetMaterialAsset(*handles->material);
+        if (!require(materialRecordRef.has_value(), "Material record should exist for retention check."))
+        {
+            return false;
+        }
+
+        auto const &materialRecord = materialRecordRef->get();
+        if (!require(materialRecord.gpuState == nr::scene::GpuResidencyState::resident,
+                     "Material should be resident after uploadPending in retention check."))
+        {
+            return false;
+        }
+        if (!require(materialRecord.cpu.name == "retention_material",
+                     "Material CPU data should be retained under discardUploadSourceAfterResident policy."))
+        {
+            return false;
+        }
+    }
+
+    if (handles->camera.has_value())
+    {
+        auto cameraRecordRef = scene.tryGetCameraAsset(*handles->camera);
+        if (!require(cameraRecordRef.has_value(), "Camera record should exist for retention check."))
+        {
+            return false;
+        }
+
+        auto const &cameraRecord = cameraRecordRef->get();
+        if (!require(cameraRecord.gpuState == nr::scene::GpuResidencyState::resident,
+                     "Camera should be resident after uploadPending in retention check."))
+        {
+            return false;
+        }
+        if (!require(cameraRecord.cpu.name == "RetentionCamera",
+                     "Camera CPU data should be retained under discardUploadSourceAfterResident policy."))
+        {
+            return false;
+        }
+    }
+
+    if (handles->light.has_value())
+    {
+        auto lightRecordRef = scene.tryGetLightAsset(*handles->light);
+        if (!require(lightRecordRef.has_value(), "Light record should exist for retention check."))
+        {
+            return false;
+        }
+
+        auto const &lightRecord = lightRecordRef->get();
+        if (!require(lightRecord.gpuState == nr::scene::GpuResidencyState::resident,
+                     "Light should be resident after uploadPending in retention check."))
+        {
+            return false;
+        }
+        if (!require(lightRecord.cpu.name == "RetentionLight",
+                     "Light CPU data should be retained under discardUploadSourceAfterResident policy."))
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 [[nodiscard]] bool checkSceneUploadAndReadbackFromRealTriangle()
@@ -976,7 +1233,25 @@ int main()
 {
     try
     {
-        if (!checkSceneUploadAndReadbackFromRealTriangle())
+        auto const cases = std::array{
+            std::pair{"checkSceneUploadAndReadbackFromRealTriangle", &checkSceneUploadAndReadbackFromRealTriangle},
+            std::pair{"checkDiscardUploadSourceRetentionPolicy", &checkDiscardUploadSourceRetentionPolicy},
+        };
+
+        std::size_t passedCount = 0;
+        for (auto const &[name, fn] : cases)
+        {
+            std::println("\n[run] {}", name);
+            auto const ok = fn();
+            std::println("[result] {} => {}", name, ok ? "PASS" : "FAIL");
+            if (ok)
+            {
+                ++passedCount;
+            }
+        }
+
+        std::println("\n[summary] passed={} failed={}", passedCount, cases.size() - passedCount);
+        if (passedCount != cases.size())
         {
             std::println("[FAIL] scene upload/readback validation failed");
             return 1;

@@ -28,3 +28,4 @@ target_link_libraries(nr_test_main PUBLIC
 
 add_subdirectory(scene)
 add_subdirectory(profile)
+add_subdirectory(app)

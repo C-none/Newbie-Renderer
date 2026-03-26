@@ -20,17 +20,31 @@
 
 为与当前代码状态保持一致，补充如下标注：
 
-1. 代码已回退到 Phase5 之后的功能基线，Phase6 的性能对比辅助代码已移除。
+1. `3.1` 到 `3.4` 的核心执行项已落地，Phase6 的性能对比辅助代码已移除。
 2. Scene 当前采取单策略实现：固定 dedicated cached query 路径，不再保留 broad/dedicated 双策略对比分支。
-3. 现行功能回归测试集合为：
+3. 已落地的关键能力包括：
+   - `tryGetPrimaryCamera()` 主相机解析与 fallback runtime camera
+   - `SceneVisibilityMode::primaryCameraFrustum` 的真实主相机 frustum 路径
+   - `SceneExtractInput.viewportExtent` 驱动的投影/视锥 contract
+   - `requireReadyForDomain` 按 domain 走差异化 readiness 过滤
+   - `ScenePacketSet::tlasBuildInputs` 与 `ScenePacketDomain::tlasBuildInput` 的独立输出
+   - template prefab entity 跟踪与 deterministic teardown（含 fallback camera 清理）
+   - 两条 Scene contract smoke consumer（graphics + RT/TLAS）
+4. 现行功能回归/集成测试集合为：
    - `nr_scene_phase1_test`
    - `nr_scene_phase2_test`
    - `nr_scene_phase25_test`
    - `nr_scene_phase3_test`
    - `nr_scene_phase4_test`
    - `nr_scene_phase5_test`
+   - `nr_scene_primary_camera_test`
+   - `nr_scene_camera_projection_contract_test`
+   - `nr_scene_packet_readiness_test`
+   - `nr_scene_template_release_test`
    - `nr_scene_upload_readback_test`
-4. 上述测试已执行并全部通过，当前结论聚焦“功能正确性与上传链路稳定性”，不再输出 Phase6 策略对比结论。
+   - `nr_scene_mesh_pipeline_integration_test`
+   - `nr_scene_rt_pipeline_integration_test`
+5. 上述测试已执行并全部通过，当前结论聚焦“功能正确性与 Scene contract 稳定性”，不再输出 Phase6 策略对比结论。
 
 说明：本文中涉及 Phase6 性能对比/遥测规划的段落仍可作为后续演进参考，但不代表当前代码已启用该能力。
 
@@ -153,31 +167,38 @@ Assimp import
 1. `registerTemplate()`
 2. `instantiate()`
 3. `destroyInstance()`
-4. `updateSimulation()`
-5. 统计与 registry 查询接口
-6. template/runtime 层级构建
-7. `ChildOf` / `Parent` 混合使用的初步策略
-8. 层级变换与 world bounds 更新
+4. `destroyTemplate()`
+5. `beginFrame(frameSerial)`
+6. `uploadPending()`
+7. `updateSimulation()`
+8. `tryGetPrimaryCamera()`
+9. `extractPackets()`（`rasterDraw` / `rayTracingInstance` / `tlasBuildInput`）
+10. 统计与 registry 查询接口
+11. template/runtime 层级构建
+12. `TemplateHierarchyPolicy`（`autoSelect` 当前默认 `ChildOf`，`Parent` 为显式 opt-in）
+13. 层级变换与 world bounds 更新
+14. fallback runtime camera 与 camera binding 统一查询路径
 
 当前测试已覆盖：
 
 1. phase1/phase2：静态导入、mesh/material/texture bridge、template/instance
 2. phase2.5：camera/light bridge、registry、template/runtime 绑定
 3. phase3：层级、transform、bounds
+4. phase4/phase5：上传状态、packet extraction、domain 语义
+5. primary camera：fallback、imported 优先、inactive 过滤、frustum cull
+6. profile 集成：graphics consumer + RT/TLAS consumer
 
 当前缺失：
 
-1. `beginFrame(frameSlot)`
-2. `uploadPending()`
-3. `frameSerial` 驱动的回收闭环
-4. 面向 renderer 的 packet extraction
-5. Flecs telemetry / explorer bridge
+1. Flecs telemetry / explorer bridge（dev-only）
+2. skeleton / animation / particle 的 Scene 集成
+3. 生产 renderer 模块对 Scene contract 的直接消费（当前为 profile smoke 落地点）
 
 设计含义：
 
-1. 现在真正该设计和实现的是 **Phase 4 / Phase 5 / Phase 6**。
-2. 旧文档里“多视图 RenderList”是架构目标，但当前代码并未朝那个方向落地。
-3. 这给我们留出了机会，把接口改成更适合当前 renderer 的形式。
+1. Phase4/Phase5 的核心能力已经落地并有回归覆盖。
+2. 下一阶段重点应聚焦 Phase6（telemetry）与 Phase7（skeleton/animation/particle）。
+3. 旧文档里的“多视图 RenderList”已不再是当前实现目标，继续按 selector-driven 接口演进。
 
 ### 1.5 当前 renderer 的真实目标前提
 
@@ -255,7 +276,7 @@ Flecs 官方文档明确指出：
 2. `Parent` 路径的热更新应优先采用 split query 或手动父组件读取。
 3. 需要把 rematching 纳入 telemetry，而不是等卡顿了再猜。
 
-### 2.3 `ChildOf` 与 `Parent` 不是二选一，而是要按场景混用
+### 2.3 `ChildOf` 与 `Parent` 的使用边界（当前 `autoSelect` 偏向 `ChildOf`）
 
 Flecs 官方 hierarchy storage 建议可以直接映射到 Scene：
 
@@ -263,16 +284,18 @@ Flecs 官方 hierarchy storage 建议可以直接映射到 Scene：
    - 适合大、动态、非结构化层级
    - 父节点 children 很多
    - 删除 child 是 O(1) archetype 级行为
+   - 在当前 Scene teardown 路径下稳定性更好
 2. `Parent`
    - 适合小、结构化、深层 prefab 树
    - 显著减少 table fragmentation
    - 对 prefab instantiation 更友好
+   - 需要更严格的 traversal/rematch 与 teardown 回归约束
 
 对 Scene 的约束：
 
-1. template/prefab 内部优先 `Parent`
-2. runtime scene root、streaming cell、动态附着优先 `ChildOf`
-3. 同一个 parent 可以混用两种 storage
+1. `TemplateHierarchyPolicy::autoSelect` 当前落地为 `ChildOf`，优先生命周期稳定性。
+2. `TemplateHierarchyPolicy::preferParent` 仅作为显式 opt-in，用于特定 prefab 压测或实验。
+3. runtime scene root、streaming cell、动态附着优先 `ChildOf`
 4. 一个 child 不能同时拥有 `ChildOf` 和 `Parent`
 
 ### 2.4 grouping 与排序：只用在低基数的地方
@@ -410,8 +433,8 @@ Flecs 名称在 scope 内必须唯一。
 | template / instance 模型 | 已落地 | 继续扩展 |
 | camera/light Scene 接入 | 已落地 | 保留，但不做 view-first API |
 | hierarchy / transform / bounds | 已落地基线 | 优化查询和 telemetry |
-| `frameSerial` / upload / retire | 未完成 | Phase 4 |
-| renderer packet extraction | 未完成 | 改为 selector-driven Phase 5 |
+| `frameSerial` / upload / retire | 已落地（同步上传路径） | 未来按需演进异步上传 |
+| renderer packet extraction | 已落地（selector-driven） | 持续补齐更多 consumer 合约 |
 | 多视图 RenderList | 不再作为目标 | 删除 |
 | telemetry / benchmark / explorer | 未完成 | Phase 6 |
 | skeleton / animation / particle | 未完成 | Phase 7 |
@@ -669,7 +692,7 @@ struct SceneExtractProfileCreateInfo
     std::string debugName{};
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
     SceneSelectionMask selection{};
-    bool requireResidentGeometry = true;
+    bool requireReadyForDomain = true;
     bool requireActiveInstances = true;
     bool enableCoarseGrouping = true;
 };
@@ -810,15 +833,16 @@ SceneAsset
 3. instance 负责 runtime root、活跃态、附着关系。
 4. imported camera/light 保留在 template/runtime 绑定中，但不驱动 extraction API。
 
-### 5.7 层级存储策略：明确混用，不自创关系
+### 5.7 层级存储策略：当前实现优先稳定性，不自创关系
 
 继续使用 Flecs 内建 `ChildOf` / `Parent`。
 
 推荐策略：
 
 1. template/prefab 内部结构：
-   - 默认 `Parent`
-   - 原因：小层级、结构稳定、实例化多
+   - `autoSelect` 默认 `ChildOf`
+   - 若确有必要，可显式 `preferParent` 做小层级 prefab 压测
+   - 原因：当前实现优先 teardown 生命周期稳定性
 2. runtime world root / attach / dynamic cell：
    - 默认 `ChildOf`
    - 原因：更适合大而动态的关系图
@@ -832,6 +856,7 @@ SceneAsset
 
 1. `Parent` 路径不要长期依赖 `up` traversal。
 2. 需要父组件时，优先 split query + manual fetch。
+3. 若启用 `preferParent`，必须同时保留 template destroy/reload 的回归用例。
 
 ### 5.8 ECS 组件策略：稳定实例态进 ECS，高频状态留在 Scene 私有队列
 
@@ -1001,7 +1026,7 @@ canonical key 继续推荐：
 
 并增加一条与 extraction 的联系：
 
-1. `SceneExtractProfileCreateInfo.requireResidentGeometry == true` 时，
+1. `SceneExtractProfileCreateInfo.requireReadyForDomain == true` 时，
 2. Scene 只输出已满足 resident 语义的 packet，
 3. 未 resident 的资产要么跳过，要么在 telemetry 中计数。
 
@@ -1544,7 +1569,7 @@ camera/light 的导入继续保留，但从本次架构修订开始，**不再�
 
 1. 热路径 query 只创建一次并复用。
 2. 不为每个 selector/mask 动态制造 cached query。
-3. template/prefab 优先 `Parent`，runtime dynamic attach 优先 `ChildOf`。
+3. `autoSelect` 下 template/prefab 与 runtime dynamic attach 均优先 `ChildOf`，`Parent` 仅显式启用。
 4. traversal 热路径保留 split-query / uncached fallback。
 5. observer 不进入主资源/提取路径。
 

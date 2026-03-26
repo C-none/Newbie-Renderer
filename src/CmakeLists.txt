@@ -7,6 +7,8 @@ add_subdirectory(resource)
 add_subdirectory(scene)
 
 add_subdirectory(rhi)
+add_subdirectory(renderer)
+add_subdirectory(renderPasses)
 
 file(GLOB IMPL_SOURCES
     CONFIGURE_DEPENDS
@@ -15,10 +17,8 @@ file(GLOB IMPL_SOURCES
 
 nr_add_executable(main main.cpp)
 target_link_libraries(main PRIVATE 
-    nrload
-    nrresource
-    nrscene
-    nrrhi
+    nrrenderer
+    nrrenderpasses
     dependency
 )
 target_sources(main

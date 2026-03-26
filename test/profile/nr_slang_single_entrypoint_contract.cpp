@@ -255,6 +255,67 @@ void printDescriptorLayout(const nr::rhi::ShaderDescriptorLayout &layout)
         return 122;
     }
 
+    if (layout.pushConstantRange(root).has_value())
+    {
+        std::println("[error] root cursor should not resolve to a push-constant range.");
+        return 128;
+    }
+
+    auto pushDataRange = layout.pushConstantRange(pushField);
+    if (!pushDataRange.has_value())
+    {
+        std::println("[error] pushData cursor failed to resolve push-constant range from descriptor layout.");
+        return 129;
+    }
+
+    auto pushBias = root.getPath("pushData.bias");
+    auto pushScale = root.getPath("pushData.scale");
+    if (!pushBias.valid() || !pushScale.valid())
+    {
+        std::println("[error] pushData field cursors are invalid.");
+        return 130;
+    }
+
+    auto pushBiasRange = pushBias.pushConstantRange();
+    auto pushScaleRange = layout.pushConstantRange(pushScale);
+    if (!pushBiasRange.has_value() || !pushScaleRange.has_value())
+    {
+        std::println("[error] pushData field cursor failed to resolve push-constant range.");
+        return 131;
+    }
+
+    if (pushBiasRange->bindingRangeIndex != pushScaleRange->bindingRangeIndex)
+    {
+        std::println("[error] pushData fields resolved to inconsistent push-constant binding ranges.");
+        return 132;
+    }
+
+    if (pushScale.address().uniformOffset <= pushBias.address().uniformOffset)
+    {
+        std::println(
+            "[error] pushData field offsets are invalid: biasOffset={}, scaleOffset={}",
+            pushBias.address().uniformOffset,
+            pushScale.address().uniformOffset);
+        return 133;
+    }
+
+    auto pushRangeEnd = static_cast<size_t>(pushScaleRange->offset) + static_cast<size_t>(pushScaleRange->size);
+    auto scaleFieldWriteEnd = pushScale.address().uniformOffset + sizeof(float);
+    if (scaleFieldWriteEnd > pushRangeEnd)
+    {
+        std::println(
+            "[error] pushData.scale write range overflow: writeEnd={}, pushRangeEnd={}",
+            scaleFieldWriteEnd,
+            pushRangeEnd);
+        return 134;
+    }
+
+    using CursorPushConstantOverload = void (nr::rhi::CursorPipelineLayout::*)(
+        vk::CommandBuffer,
+        const nr::rhi::ShaderCursor &,
+        std::span<const uint8_t>) const;
+    [[maybe_unused]] CursorPushConstantOverload pushConstantOverload = &nr::rhi::CursorPipelineLayout::pushConstants;
+
     printDescriptorLayout(layout);
     std::println("[ok] resource binding reflection and Vulkan mapping checks passed.");
     return 0;

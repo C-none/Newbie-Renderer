@@ -34,3 +34,28 @@ For each required command:
 - No `reinterpret_cast<PFN_vk...>` remains for migrated command paths.
 - No `vkGetSemaphoreCounterValue` / `vkWaitSemaphores` C API calls remain in `src/rhi` sync path.
 - Build and run target profile tests to confirm behavior equivalence.
+
+## 6. Compile-Time Branch Strategy in `nr.rhi:resourceOps`
+
+To reduce repetitive helper variants that only differ by fixed constants,
+`nr.rhi:resourceOps` now follows one template entry point with a non-type template parameter.
+
+Rules:
+
+1. Use `enum class ImageTransitionBranch` to encode transition branch kind.
+2. Use `makeImageTransitionBarrier<TBranch>(...)` as the primary implementation path.
+3. Resolve destination layout/stage/access through compile-time `if constexpr` selectors.
+4. Keep legacy `makeImageTo*` helpers as thin forwarders only when API compatibility is needed.
+5. For queue-ownership adapters, select `release` or `acquire` requests through
+   `OwnershipBarrierPhase` compile-time dispatch, not duplicated runtime branches.
+
+Example:
+
+```cpp
+auto barrier = nr::rhi::ops::makeImageTransitionBarrier<
+	nr::rhi::ops::ImageTransitionBranch::TransferDst>(
+	image,
+	vk::ImageLayout::eUndefined,
+	vk::PipelineStageFlagBits2::eTopOfPipe,
+	{});
+```

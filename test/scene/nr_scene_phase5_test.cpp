@@ -13,6 +13,7 @@ static_assert(requires(nr::scene::Scene &scene,
     { scene.registerExtractProfile(profileCreateInfo) } -> std::same_as<nr::scene::SceneExtractProfileHandle>;
     scene.destroyExtractProfile(profileHandle);
     { std::as_const(scene).extractPackets(profileHandle, extractInput) } -> std::same_as<nr::scene::ScenePacketSet>;
+    { std::as_const(scene).tryGetPrimaryCamera() } -> std::same_as<std::optional<nr::scene::SceneResolvedCamera>>;
 });
 
 static_assert(requires {
@@ -28,6 +29,8 @@ static_assert(requires {
     nr::scene::SceneExtractInput{};
     nr::scene::RasterDrawPacket{};
     nr::scene::RayTracingInstancePacket{};
+    nr::scene::TlasBuildInputPacket{};
+    nr::scene::SceneResolvedCamera{};
     nr::scene::ScenePacketSet{};
 });
 
@@ -48,6 +51,16 @@ static_assert(requires {
         1.0f, 0.0f, 0.0f, 0.0f,
         0.0f, 1.0f, 0.0f, 0.0f,
         0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+}
+
+[[nodiscard]] std::array<float, 16> translatedTransform(float tx, float ty, float tz)
+{
+    return {
+        1.0f, 0.0f, 0.0f, tx,
+        0.0f, 1.0f, 0.0f, ty,
+        0.0f, 0.0f, 1.0f, tz,
         0.0f, 0.0f, 0.0f, 1.0f,
     };
 }
@@ -83,7 +96,7 @@ static_assert(requires {
     scene.nodes[1].name = "MeshNode";
     scene.nodes[1].parentIndex = 0;
     scene.nodes[1].meshIndices = {0};
-    scene.nodes[1].localTransform = identityTransform();
+    scene.nodes[1].localTransform = translatedTransform(0.0f, 0.0f, -2.0f);
 
     scene.stats.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
     scene.stats.meshCount = static_cast<std::uint32_t>(scene.meshes.size());
@@ -146,7 +159,7 @@ static_assert(requires {
         .selection = nr::scene::SceneSelectionMask{
             .requireAll = nr::scene::sceneSelectionMask(nr::scene::SceneSelectionBit::rasterOpaque),
         },
-        .requireResidentGeometry = false,
+        .requireReadyForDomain = false,
         .requireActiveInstances = true,
     });
 
@@ -156,7 +169,7 @@ static_assert(requires {
         .selection = nr::scene::SceneSelectionMask{
             .requireAll = nr::scene::sceneSelectionMask(nr::scene::SceneSelectionBit::rasterOpaque),
         },
-        .requireResidentGeometry = false,
+        .requireReadyForDomain = false,
         .requireActiveInstances = false,
     });
 
@@ -166,7 +179,17 @@ static_assert(requires {
         .selection = nr::scene::SceneSelectionMask{
             .requireAll = nr::scene::sceneSelectionMask(nr::scene::SceneSelectionBit::rtMain),
         },
-        .requireResidentGeometry = false,
+        .requireReadyForDomain = false,
+        .requireActiveInstances = true,
+    });
+
+    auto tlasBuildProfile = scene.registerExtractProfile(nr::scene::SceneExtractProfileCreateInfo{
+        .debugName = "phase5_tlas_build",
+        .domain = nr::scene::ScenePacketDomain::tlasBuildInput,
+        .selection = nr::scene::SceneSelectionMask{
+            .requireAll = nr::scene::sceneSelectionMask(nr::scene::SceneSelectionBit::rtMain),
+        },
+        .requireReadyForDomain = false,
         .requireActiveInstances = true,
     });
 
@@ -182,10 +205,28 @@ static_assert(requires {
     {
         return false;
     }
+    if (!require(tlasBuildProfile.valid(), "TLAS-build profile should be valid."))
+    {
+        return false;
+    }
+
+    auto primaryCamera = scene.tryGetPrimaryCamera();
+    if (!require(primaryCamera.has_value(), "Primary camera should resolve with fallback when scene has no imported camera."))
+    {
+        return false;
+    }
+    if (!require(primaryCamera->fallback, "Primary camera should be marked as fallback for camera-less scene."))
+    {
+        return false;
+    }
 
     auto activePackets = scene.extractPackets(activeOnlyProfile);
     auto allPackets = scene.extractPackets(allInstancesProfile);
     auto rtPackets = scene.extractPackets(rtMainProfile);
+    auto tlasPackets = scene.extractPackets(tlasBuildProfile);
+    auto primaryFrustumPackets = scene.extractPackets(activeOnlyProfile, nr::scene::SceneExtractInput{
+                                                                           .visibility = nr::scene::SceneVisibilityMode::primaryCameraFrustum,
+                                                                       });
 
     if (!require(activePackets.domain == nr::scene::ScenePacketDomain::rasterDraw,
                  "Active-only profile should return raster packet domain."))
@@ -194,6 +235,11 @@ static_assert(requires {
     }
     if (!require(rtPackets.domain == nr::scene::ScenePacketDomain::rayTracingInstance,
                  "RT profile should return rayTracingInstance packet domain."))
+    {
+        return false;
+    }
+    if (!require(tlasPackets.domain == nr::scene::ScenePacketDomain::tlasBuildInput,
+                 "TLAS profile should return tlasBuildInput packet domain."))
     {
         return false;
     }
@@ -208,6 +254,23 @@ static_assert(requires {
         return false;
     }
     if (!require(!rtPackets.rtInstances.empty(), "RT profile should produce ray-tracing packets."))
+    {
+        return false;
+    }
+    if (!require(rtPackets.tlasBuildInputs.empty(), "rayTracingInstance domain should not emit tlasBuildInputs."))
+    {
+        return false;
+    }
+    if (!require(!tlasPackets.tlasBuildInputs.empty(), "TLAS profile should produce tlasBuildInputs packets."))
+    {
+        return false;
+    }
+    if (!require(tlasPackets.rtInstances.empty(), "tlasBuildInput domain should not emit rtInstances."))
+    {
+        return false;
+    }
+    if (!require(!primaryFrustumPackets.rasterDraws.empty(),
+                 "primaryCameraFrustum extraction should use resolved primary camera frustum."))
     {
         return false;
     }
@@ -265,9 +328,12 @@ static_assert(requires {
     scene.destroyExtractProfile(activeOnlyProfile);
     scene.destroyExtractProfile(allInstancesProfile);
     scene.destroyExtractProfile(rtMainProfile);
+    scene.destroyExtractProfile(tlasBuildProfile);
 
     auto afterDestroyPackets = scene.extractPackets(activeOnlyProfile);
-    if (!require(afterDestroyPackets.rasterDraws.empty() && afterDestroyPackets.rtInstances.empty(),
+    if (!require(afterDestroyPackets.rasterDraws.empty() &&
+                     afterDestroyPackets.rtInstances.empty() &&
+                     afterDestroyPackets.tlasBuildInputs.empty(),
                  "Destroyed extraction profile should produce empty packets."))
     {
         return false;

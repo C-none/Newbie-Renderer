@@ -363,7 +363,6 @@ struct MeshInputVertex
         return false;
     }
 
-    nr::rhi::ShaderResourceWriter writer{};
     auto root = meshPipelineState.descriptorLayout.rootCursor();
     if (!root.valid())
     {
@@ -371,22 +370,28 @@ struct MeshInputVertex
         return false;
     }
 
-    if (!writer.bindUniformBuffer(root["camera"], cameraBuffer, 0, sizeof(CameraData)))
+    if (!root["camera"].setObject(cameraBuffer, 0, sizeof(CameraData)))
     {
         std::println("[error] failed to bind camera uniform buffer descriptor.");
         return false;
     }
-    if (!writer.bindStorageBuffer(root["meshVertices"], meshVerticesBuffer, 0, sizeof(meshVertices)))
+    if (!root["meshVertices"].setObject(meshVerticesBuffer, 0, sizeof(meshVertices)))
     {
         std::println("[error] failed to bind meshVertices storage buffer descriptor.");
         return false;
     }
-    if (!writer.bindStorageBuffer(root["meshIndices"], meshIndicesBuffer, 0, sizeof(meshIndices)))
+    if (!root["meshIndices"].setObject(meshIndicesBuffer, 0, sizeof(meshIndices)))
     {
         std::println("[error] failed to bind meshIndices storage buffer descriptor.");
         return false;
     }
-    writer.commit(meshPipelineState.bindingPool, descriptorSets);
+
+    auto bindingSnapshot = root.snapshot();
+    if (bindingSnapshot.descriptorWriteCount() == 0u)
+    {
+        std::println("[error] descriptor snapshot is empty after mesh binding capture.");
+        return false;
+    }
 
     auto frameGraphicsCommandOwnership = std::vector<std::optional<vk::raii::CommandBuffers>>(device.frameManager.frameCount());
     auto frameComputeCommandOwnership = std::vector<std::optional<vk::raii::CommandBuffers>>(device.frameManager.frameCount());
@@ -432,7 +437,7 @@ struct MeshInputVertex
             nr::rhi::ops::BarrierBatch graphicsInputBarriers{};
             if (outputReadyForRender)
             {
-                graphicsInputBarriers.add(nr::rhi::ops::makeImageOwnershipAcquireBarrier(
+                graphicsInputBarriers.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Acquire>(
                     outputImage,
                     vk::ImageLayout::eTransferSrcOptimal,
                     vk::ImageLayout::eColorAttachmentOptimal,
@@ -478,7 +483,13 @@ struct MeshInputVertex
             {
                 nr::rhi::ops::ScopedRendering rendering(raw, renderingScope);
 
-                meshPipelineState.layout.bindDescriptorSets(raw, vk::PipelineBindPoint::eGraphics, descriptorSets);
+                nr::rhi::bindResourcesToCommandBuffer(
+                    raw,
+                    vk::PipelineBindPoint::eGraphics,
+                    meshPipelineState.layout,
+                    meshPipelineState.bindingPool,
+                    descriptorSets,
+                    bindingSnapshot);
                 raw.bindPipeline(vk::PipelineBindPoint::eGraphics, meshPipelineState.pipeline.raw());
 
                 auto viewport = vk::Viewport{0.0f, 0.0f, static_cast<float>(swapchainExtent.width), static_cast<float>(swapchainExtent.height), 0.0f, 1.0f};
@@ -500,7 +511,7 @@ struct MeshInputVertex
             }
 
             nr::rhi::ops::BarrierBatch graphicsToComputeRelease{};
-            graphicsToComputeRelease.add(nr::rhi::ops::makeImageOwnershipReleaseBarrier(
+            graphicsToComputeRelease.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
                 outputImage,
                 vk::ImageLayout::eColorAttachmentOptimal,
                 vk::ImageLayout::eTransferSrcOptimal,
@@ -526,7 +537,7 @@ struct MeshInputVertex
             auto raw = *computeCommandBuffer;
 
             nr::rhi::ops::BarrierBatch computeInputBarriers{};
-            computeInputBarriers.add(nr::rhi::ops::makeImageOwnershipAcquireBarrier(
+            computeInputBarriers.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Acquire>(
                 outputImage,
                 vk::ImageLayout::eColorAttachmentOptimal,
                 vk::ImageLayout::eTransferSrcOptimal,
@@ -571,7 +582,7 @@ struct MeshInputVertex
                 {copyRegion});
 
             nr::rhi::ops::BarrierBatch computeToGraphicsRelease{};
-            computeToGraphicsRelease.add(nr::rhi::ops::makeImageOwnershipReleaseBarrier(
+            computeToGraphicsRelease.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
                 outputImage,
                 vk::ImageLayout::eTransferSrcOptimal,
                 vk::ImageLayout::eColorAttachmentOptimal,

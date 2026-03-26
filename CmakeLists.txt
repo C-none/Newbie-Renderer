@@ -76,6 +76,10 @@ add_subdirectory(shader)
 
 if(NR_BUILD_TESTS)
     enable_testing()
+    # Configure CTest output and ensure Testing directory structure
+    set(CTEST_OUTPUT_ON_FAILURE ON CACHE BOOL "Enable verbose CTest output on failure" FORCE)
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/Testing/Temporary")
+    
     add_subdirectory(test)
 endif()
 

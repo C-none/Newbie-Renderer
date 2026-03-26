@@ -217,6 +217,7 @@ class ShaderBindingSet
 
 class ShaderDescriptorLayout;
 class ShaderCursor;
+class CursorPipelineLayout;
 
 enum class ShaderBindingPoolPolicy : unsigned
 {
@@ -259,178 +260,93 @@ class ShaderBindingPool
     std::map<uint32_t, uint32_t> variableDescriptorCapBySet_{};
 };
 
-class ShaderResourceWriter
+struct LogicalResourceDescriptorWrite
+{
+    uint64_t logicalResourceId = 0;
+    std::string debugName{};
+    vk::ImageLayout imageLayout = vk::ImageLayout::eGeneral;
+    vk::Sampler sampler{};
+    vk::DeviceSize offset = 0;
+    vk::DeviceSize range = detail::kWholeBufferRange;
+};
+
+using ShaderBindingRecordPayload =
+    std::variant<
+        BufferDescriptorWrite,
+        TexelBufferDescriptorWrite,
+        ImageDescriptorWrite,
+        AccelerationStructureDescriptorWrite,
+        InlineUniformDescriptorWrite,
+        LogicalResourceDescriptorWrite>;
+
+struct ShaderBindingRecord
+{
+    DescriptorBindingInfo binding;
+    uint32_t arrayElement = 0;
+    ShaderBindingRecordPayload payload;
+};
+
+struct PushConstantWriteRecord
+{
+    PushConstantRangeInfo range;
+    uint32_t offset = 0;
+    std::vector<uint8_t> data;
+};
+
+class ShaderBindingSnapshot
 {
   public:
-    // Binding timeline guide (Vulkan-oriented):
-    // - Layout creation phase:
-    //   ShaderDescriptorLayout + CursorPipelineLayout define descriptor types/counts/stages.
-    // - Descriptor update phase (host):
-    //   This class builds VkWriteDescriptorSet payloads and updates descriptor sets via commit().
-    // - Command recording phase:
-    //   Descriptor sets are bound on command buffers via CursorPipelineLayout::bindDescriptorSet(s).
-    // - Submission/execution phase:
-    //   Updated descriptors are consumed by GPU work.
-    //
-    // Update-after-bind rule:
-    // - By default, do not update a descriptor set after it is referenced by command buffers in
-    //   recording/executable/pending states.
-    // - Post-bind update is only legal when descriptor binding flags and required device features
-    //   explicitly allow it.
-    //
-    // Pseudocode:
-    //   auto root = pipelineState.descriptorLayout.rootCursor();
-    //   ShaderResourceWriter writer;
-    //   writer.bindSampledImage(root.getPath("gbuffer.albedo"), image);
-    //   writer.bindSampler(root["linearSampler"], sampler);
-    //   writer.bindInlineUniformData(root["frameConstants"], std::as_bytes(std::span{constants}));
-    //   writer.commit(pipelineState.bindingPool, set0);
-    //   pipelineState.layout.bindDescriptorSet(cmd, bindPoint, set0);
-
-    [[nodiscard]] bool empty() const noexcept { return requests_.empty(); }
-    [[nodiscard]] size_t size() const noexcept { return requests_.size(); }
-    void clear() { requests_.clear(); }
-
-    [[nodiscard]] std::span<const DescriptorWriteRequest> requests() const noexcept { return requests_; }
-
-    // Binding path: ConstantBuffer/ParameterBlock -> eUniformBuffer (or eUniformBufferDynamic).
-    // Recommended phase: descriptor update phase before command recording/submission.
-    [[nodiscard]] bool bindUniformBuffer(
-        const ShaderCursor &cursor,
-        const Buffer &buffer,
-        vk::DeviceSize offset = 0,
-        vk::DeviceSize range = vk::WholeSize);
-
-    // Binding path: RawBuffer/MutableRawBuffer -> eStorageBuffer.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    [[nodiscard]] bool bindStorageBuffer(
-        const ShaderCursor &cursor,
-        const Buffer &buffer,
-        vk::DeviceSize offset = 0,
-        vk::DeviceSize range = vk::WholeSize);
-
-    // Binding path: TypedBuffer -> eUniformTexelBuffer.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    [[nodiscard]] bool bindUniformTexelBuffer(const ShaderCursor &cursor, vk::BufferView view);
-
-    // Binding path: MutableTypedBuffer -> eStorageTexelBuffer.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    [[nodiscard]] bool bindStorageTexelBuffer(const ShaderCursor &cursor, vk::BufferView view);
-
-    [[nodiscard]] bool bindUniformTexelBuffer(
-        const ShaderCursor &cursor,
-        Buffer &buffer,
-        vk::Format format,
-        vk::DeviceSize offset = 0,
-        vk::DeviceSize range = vk::WholeSize,
-        std::string_view viewName = {});
-
-    [[nodiscard]] bool bindStorageTexelBuffer(
-        const ShaderCursor &cursor,
-        Buffer &buffer,
-        vk::Format format,
-        vk::DeviceSize offset = 0,
-        vk::DeviceSize range = vk::WholeSize,
-        std::string_view viewName = {});
-
-    // Binding path: Texture/InputRenderTarget -> eSampledImage/eInputAttachment.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    [[nodiscard]] bool bindSampledImage(
-        const ShaderCursor &cursor,
-        const Image &image,
-        vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal);
-
-    // Binding path: MutableTexture -> eStorageImage.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    [[nodiscard]] bool bindStorageImage(
-        const ShaderCursor &cursor,
-        const Image &image,
-        vk::ImageLayout imageLayout = vk::ImageLayout::eGeneral);
-
-    // Binding path: Sampler -> eSampler.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    // Note: if the set layout uses immutable samplers at this binding, sampler values are fixed at
-    //       layout creation and must not be updated through descriptor writes.
-    [[nodiscard]] bool bindSampler(const ShaderCursor &cursor, vk::Sampler sampler);
-
-    // Binding path: CombinedTextureSampler -> eCombinedImageSampler.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    // Note: with immutable samplers, image view/layout can still be updated while sampler is fixed.
-    [[nodiscard]] bool bindCombinedImageSampler(
-        const ShaderCursor &cursor,
-        const Image &image,
-        vk::Sampler sampler,
-        vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal);
-
-    // Binding path: RayTracingAccelerationStructure -> eAccelerationStructureKHR.
-    // Recommended phase: descriptor update phase before command recording/submission.
-    [[nodiscard]] bool bindAccelerationStructure(const ShaderCursor &cursor, vk::AccelerationStructureKHR accelerationStructure);
-
-    // Binding path: InlineUniformData -> eInlineUniformBlock.
-    // Recommended phase: descriptor update phase (host write through vkUpdateDescriptorSets).
-    // Vulkan requirements:
-    // - write byte size and destination byte offset are in bytes and must both be multiples of 4.
-    // - device feature inlineUniformBlock must be enabled.
-    // - updating after set bind is only legal when update-after-bind related flags/features are enabled.
-    [[nodiscard]] bool bindInlineUniformData(const ShaderCursor &cursor, std::span<const uint8_t> bytes);
-
-    template <typename T>
-    requires(std::is_trivially_copyable_v<std::remove_cvref_t<T>>)
-    [[nodiscard]] bool bindInlineUniformData(const ShaderCursor &cursor, const T &value)
+    [[nodiscard]] bool empty() const noexcept
     {
-        auto bytes = std::as_bytes(std::span{&value, 1});
-        auto *raw = reinterpret_cast<const uint8_t *>(bytes.data());
-        return bindInlineUniformData(cursor, std::span<const uint8_t>{raw, bytes.size()});
+        return descriptorWrites_.empty() && pushConstantWrites_.empty();
     }
 
-    void commit(const ShaderBindingPool &pool, const ShaderBindingSet &set) const;
+    [[nodiscard]] size_t descriptorWriteCount() const noexcept
+    {
+        return descriptorWrites_.size();
+    }
 
-    void commit(const ShaderBindingPool &pool, std::span<const ShaderBindingSet> sets) const;
+    [[nodiscard]] size_t pushConstantWriteCount() const noexcept
+    {
+        return pushConstantWrites_.size();
+    }
+
+    [[nodiscard]] std::span<const ShaderBindingRecord> descriptorWrites() const noexcept
+    {
+        return descriptorWrites_;
+    }
+
+    [[nodiscard]] std::span<const PushConstantWriteRecord> pushConstantWrites() const noexcept
+    {
+        return pushConstantWrites_;
+    }
 
   private:
-    [[nodiscard]] static vk::DeviceSize normalizeBufferRange(const Buffer &buffer, vk::DeviceSize offset, vk::DeviceSize range)
-    {
-        nrAssert(offset <= buffer.size(), std::format("Buffer write offset out of range: offset={}, size={}", offset, buffer.size()));
-        if (range == vk::WholeSize)
-        {
-            return buffer.size() - offset;
-        }
-        nrAssert(
-            offset + range <= buffer.size(),
-            std::format("Buffer write range out of bounds: offset={}, range={}, size={}", offset, range, buffer.size()));
-        return range;
-    }
-
-    [[nodiscard]] static bool acceptsType(vk::DescriptorType descriptorType, std::initializer_list<vk::DescriptorType> allowed)
-    {
-        return std::ranges::find(allowed, descriptorType) != allowed.end();
-    }
-
-    [[nodiscard]] static std::optional<DescriptorWriteRequest>
-    makeRequest(const ShaderCursor &cursor, DescriptorWritePayload payload, std::initializer_list<vk::DescriptorType> allowedTypes);
-
-    bool append(std::optional<DescriptorWriteRequest> request)
-    {
-        if (!request.has_value())
-        {
-            return false;
-        }
-        requests_.push_back(std::move(*request));
-        return true;
-    }
-
-    std::vector<DescriptorWriteRequest> requests_;
+    friend class ShaderCursor;
+    std::vector<ShaderBindingRecord> descriptorWrites_{};
+    std::vector<PushConstantWriteRecord> pushConstantWrites_{};
 };
+
+using LogicalDescriptorResolver = std::function<std::optional<DescriptorWritePayload>(
+    const LogicalResourceDescriptorWrite &logicalResource,
+    const DescriptorBindingInfo &binding,
+    uint32_t arrayElement)>;
+
+[[nodiscard]] std::vector<DescriptorWriteRequest> resolveDescriptorWriteRequests(
+    const ShaderBindingSnapshot &snapshot,
+    LogicalDescriptorResolver logicalResolver = {});
 
 class ShaderDescriptorLayout;
 
 class ShaderCursor
 {
   public:
-        // Cursor guide:
-        // - The cursor carries reflection type info and a logical write address (uniform offset, binding range index, array index).
-        // - descriptorBinding() resolves the current cursor position into concrete descriptor set/binding metadata.
-        // - For inline uniform writes, uniformOffset is forwarded as dstArrayElement (byte offset).
+    // Cursor guide:
+    // - The cursor carries reflection type info, a logical write address, and shared mutable binding state.
+    // - Copied sub-cursors write into one coherent binding snapshot.
+    // - setObject(...) records descriptor-backed resources (or logical graph references).
+    // - setData(...) records push constants or inline uniform bytes.
+    // - snapshot() captures a stable per-pass binding view for execute-time replay.
 
     ShaderCursor() = default;
 
@@ -456,6 +372,52 @@ class ShaderCursor
     [[nodiscard]] ShaderCursor getPath(std::string_view path) const;
 
     [[nodiscard]] std::optional<DescriptorBindingInfo> descriptorBinding() const;
+
+    [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange() const;
+
+    [[nodiscard]] bool setData(std::span<const uint8_t> bytes) const;
+
+    template <typename T>
+    requires(std::is_trivially_copyable_v<std::remove_cvref_t<T>>)
+    [[nodiscard]] bool setData(const T &value) const
+    {
+        auto bytes = std::as_bytes(std::span{&value, 1});
+        auto *raw = reinterpret_cast<const uint8_t *>(bytes.data());
+        return setData(std::span<const uint8_t>{raw, bytes.size()});
+    }
+
+    [[nodiscard]] bool setObject(
+        const Buffer &buffer,
+        vk::DeviceSize offset = 0,
+        vk::DeviceSize range = vk::WholeSize) const;
+
+    [[nodiscard]] bool setObject(vk::BufferView view) const;
+
+    [[nodiscard]] bool setObject(
+        Buffer &buffer,
+        vk::Format format,
+        vk::DeviceSize offset = 0,
+        vk::DeviceSize range = vk::WholeSize,
+        std::string_view viewName = {}) const;
+
+    [[nodiscard]] bool setObject(
+        const Image &image,
+        vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal) const;
+
+    [[nodiscard]] bool setObject(vk::Sampler sampler) const;
+
+    [[nodiscard]] bool setObject(
+        const Image &image,
+        vk::Sampler sampler,
+        vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal) const;
+
+    [[nodiscard]] bool setObject(vk::AccelerationStructureKHR accelerationStructure) const;
+
+    [[nodiscard]] bool setObject(const LogicalResourceDescriptorWrite &logicalResource) const;
+
+    [[nodiscard]] ShaderBindingSnapshot snapshot() const;
+
+    void clearSnapshot() const;
 
     // Cursor layout/type reflection helpers for runtime binding.
     [[nodiscard]] slang::TypeReflection::Kind kind() const noexcept;
@@ -505,6 +467,47 @@ class ShaderCursor
   private:
     friend class ShaderDescriptorLayout;
 
+    struct SharedBindingState
+    {
+        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, ShaderBindingRecord> descriptorWritesByBinding{};
+        std::map<std::tuple<uint32_t, uint32_t>, PushConstantWriteRecord> pushConstantWritesByRangeAndOffset{};
+
+        void writeDescriptor(ShaderBindingRecord record)
+        {
+            auto key = std::tuple{record.binding.set, record.binding.binding, record.arrayElement};
+            descriptorWritesByBinding.insert_or_assign(key, std::move(record));
+        }
+
+        void writePushConstant(PushConstantWriteRecord record)
+        {
+            auto key = std::tuple{record.range.bindingRangeIndex, record.offset};
+            pushConstantWritesByRangeAndOffset.insert_or_assign(key, std::move(record));
+        }
+
+        [[nodiscard]] ShaderBindingSnapshot snapshot() const
+        {
+            auto snapshot = ShaderBindingSnapshot{};
+            snapshot.descriptorWrites_.reserve(descriptorWritesByBinding.size());
+            snapshot.pushConstantWrites_.reserve(pushConstantWritesByRangeAndOffset.size());
+
+            std::ranges::for_each(descriptorWritesByBinding, [&](const auto &entry) {
+                snapshot.descriptorWrites_.push_back(entry.second);
+            });
+
+            std::ranges::for_each(pushConstantWritesByRangeAndOffset, [&](const auto &entry) {
+                snapshot.pushConstantWrites_.push_back(entry.second);
+            });
+
+            return snapshot;
+        }
+
+        void clear()
+        {
+            descriptorWritesByBinding.clear();
+            pushConstantWritesByRangeAndOffset.clear();
+        }
+    };
+
     struct RootField
     {
         slang::TypeLayoutReflection *typeLayout = nullptr;
@@ -512,12 +515,13 @@ class ShaderCursor
         std::string debugPath;
     };
 
-    ShaderCursor(const ShaderDescriptorLayout &layout, RootField field)
+    ShaderCursor(const ShaderDescriptorLayout &layout, RootField field, std::shared_ptr<SharedBindingState> bindingState)
         : layout_(std::cref(layout)),
           typeLayout_(field.typeLayout),
           address_(field.address),
           isRoot_(false),
-          debugPath_(std::move(field.debugPath))
+          debugPath_(std::move(field.debugPath)),
+          bindingState_(std::move(bindingState))
     {
     }
 
@@ -526,9 +530,33 @@ class ShaderCursor
           typeLayout_(nullptr),
           address_({}),
           isRoot_(true),
-          debugPath_("$root")
+          debugPath_("$root"),
+          bindingState_(std::make_shared<SharedBindingState>())
     {
     }
+
+    [[nodiscard]] static vk::DeviceSize normalizeBufferRange(const Buffer &buffer, vk::DeviceSize offset, vk::DeviceSize range)
+    {
+        nrAssert(offset <= buffer.size(), std::format("Buffer write offset out of range: offset={}, size={}", offset, buffer.size()));
+        if (range == vk::WholeSize)
+        {
+            return buffer.size() - offset;
+        }
+        nrAssert(
+            offset + range <= buffer.size(),
+            std::format("Buffer write range out of bounds: offset={}, range={}, size={}", offset, range, buffer.size()));
+        return range;
+    }
+
+    [[nodiscard]] static bool acceptsDescriptorType(vk::DescriptorType descriptorType, std::initializer_list<vk::DescriptorType> allowed)
+    {
+        return std::ranges::find(allowed, descriptorType) != allowed.end();
+    }
+
+    [[nodiscard]] bool writeDescriptorRecord(
+        ShaderBindingRecordPayload payload,
+        std::initializer_list<vk::DescriptorType> allowedTypes,
+        std::optional<uint32_t> explicitArrayElement = std::nullopt) const;
 
     [[nodiscard]] const ShaderDescriptorLayout &layoutRef() const
     {
@@ -541,6 +569,7 @@ class ShaderCursor
     CursorAddress address_{};
     bool isRoot_ = false;
     std::string debugPath_{};
+    std::shared_ptr<SharedBindingState> bindingState_{};
 };
 
 class ShaderDescriptorLayout
@@ -560,8 +589,8 @@ class ShaderDescriptorLayout
         //   binding = cursor.descriptorBinding() // -> set/binding/type
         //
         // PushConstant timing note:
-        // - Push constants are not descriptor writes and are not handled by ShaderResourceWriter.
-        // - They are updated during command recording through pipeline layout pushConstant ranges.
+        // - Push constants are captured through ShaderCursor::setData(...) into a snapshot.
+        // - Execute-time replay happens through pushConstantsToCommandBuffer(...).
 
     [[nodiscard]] static ShaderDescriptorLayout create(const SlangProgram &program, DescriptorBindingPolicy policy = {})
     {
@@ -833,6 +862,26 @@ class ShaderDescriptorLayout
         return pushConstantRanges_;
     }
 
+    [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange(const ShaderCursor &cursor) const
+    {
+        if (!cursor.valid() || cursor.isRoot_)
+        {
+            return std::nullopt;
+        }
+
+        if (!cursor.layout_.has_value() || std::addressof(cursor.layout_->get()) != this)
+        {
+            return std::nullopt;
+        }
+
+        auto it = pushConstantByRangeIndex_.find(cursor.address_.bindingRangeIndex);
+        if (it == pushConstantByRangeIndex_.end())
+        {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
     [[nodiscard]] std::vector<vk::PushConstantRange> makeVkPushConstantRanges() const
     {
         return pushConstantRanges_ |
@@ -884,6 +933,30 @@ class ShaderDescriptorLayout
     std::vector<PushConstantRangeInfo> pushConstantRanges_;
 };
 
+[[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout, ShaderBindingPool &pool);
+
+void bindResourcesToCommandBuffer(
+    vk::CommandBuffer commandBuffer,
+    vk::PipelineBindPoint bindPoint,
+    const CursorPipelineLayout &layout,
+    ShaderBindingPool &pool,
+    std::span<const ShaderBindingSet> sets,
+    const ShaderBindingSnapshot &snapshot,
+    LogicalDescriptorResolver logicalResolver = {});
+
+[[nodiscard]] std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
+    vk::CommandBuffer commandBuffer,
+    vk::PipelineBindPoint bindPoint,
+    const CursorPipelineLayout &layout,
+    ShaderBindingPool &pool,
+    const ShaderBindingSnapshot &snapshot,
+    LogicalDescriptorResolver logicalResolver = {});
+
+void pushConstantsToCommandBuffer(
+    vk::CommandBuffer commandBuffer,
+    const CursorPipelineLayout &layout,
+    const ShaderBindingSnapshot &snapshot);
+
 [[nodiscard]] ShaderCursor ShaderCursor::field(std::string_view fieldName) const
 {
     if (!valid())
@@ -898,7 +971,7 @@ class ShaderDescriptorLayout
         {
             return {};
         }
-        return ShaderCursor(layoutRef(), std::move(*rootField));
+        return ShaderCursor(layoutRef(), std::move(*rootField), bindingState_);
     }
 
     auto kind = typeLayout_->getKind();
@@ -1060,6 +1133,213 @@ class ShaderDescriptorLayout
         return std::nullopt;
     }
     return layoutRef().findBindingByRangeIndex(address_.bindingRangeIndex);
+}
+
+[[nodiscard]] std::optional<PushConstantRangeInfo> ShaderCursor::pushConstantRange() const
+{
+    if (!valid() || isRoot_)
+    {
+        return std::nullopt;
+    }
+    return layoutRef().pushConstantRange(*this);
+}
+
+[[nodiscard]] bool ShaderCursor::writeDescriptorRecord(
+    ShaderBindingRecordPayload payload,
+    std::initializer_list<vk::DescriptorType> allowedTypes,
+    std::optional<uint32_t> explicitArrayElement) const
+{
+    if (!valid() || isRoot_ || !bindingState_)
+    {
+        return false;
+    }
+
+    auto bindingInfo = descriptorBinding();
+    if (!bindingInfo.has_value() || !acceptsDescriptorType(bindingInfo->descriptorType, allowedTypes))
+    {
+        return false;
+    }
+
+    auto arrayElement = explicitArrayElement.value_or(address_.bindingArrayIndex);
+    bindingState_->writeDescriptor(ShaderBindingRecord{
+        .binding = *bindingInfo,
+        .arrayElement = arrayElement,
+        .payload = std::move(payload),
+    });
+    return true;
+}
+
+[[nodiscard]] bool ShaderCursor::setData(std::span<const uint8_t> bytes) const
+{
+    if (!valid() || isRoot_ || !bindingState_ || bytes.empty())
+    {
+        return false;
+    }
+
+    auto byteCount = static_cast<uint32_t>(bytes.size());
+    auto copiedBytes = std::vector<uint8_t>{};
+    copiedBytes.assign(bytes.begin(), bytes.end());
+
+    if (auto pushRange = pushConstantRange(); pushRange.has_value())
+    {
+        nrAssert(
+            address_.uniformOffset <= std::numeric_limits<uint32_t>::max(),
+            std::format("Push-constant cursor offset exceeds uint32 range (offset={}).", address_.uniformOffset));
+
+        auto offset = static_cast<uint32_t>(address_.uniformOffset);
+        auto rangeBegin = static_cast<uint64_t>(pushRange->offset);
+        auto rangeEnd = rangeBegin + static_cast<uint64_t>(pushRange->size);
+        auto writeBegin = static_cast<uint64_t>(offset);
+        auto writeEnd = writeBegin + static_cast<uint64_t>(byteCount);
+
+        nrAssert(
+            writeBegin >= rangeBegin && writeEnd <= rangeEnd,
+            std::format(
+                "Push-constant write outside range. path={}, offset={}, size={}, rangeBegin={}, rangeEnd={}",
+                debugPath_,
+                offset,
+                byteCount,
+                pushRange->offset,
+                pushRange->offset + pushRange->size));
+
+        bindingState_->writePushConstant(PushConstantWriteRecord{
+            .range = *pushRange,
+            .offset = offset,
+            .data = std::move(copiedBytes),
+        });
+        return true;
+    }
+
+    auto bindingInfo = descriptorBinding();
+    if (!bindingInfo.has_value() || bindingInfo->descriptorType != vk::DescriptorType::eInlineUniformBlock)
+    {
+        return false;
+    }
+
+    nrAssert(
+        detail::isInlineUniformByteCountValid(byteCount),
+        std::format("Inline uniform write size must be > 0 and multiple of 4 (size={}).", byteCount));
+
+    nrAssert(
+        address_.uniformOffset <= std::numeric_limits<uint32_t>::max(),
+        std::format("Inline uniform offset exceeds uint32 range (offset={}).", address_.uniformOffset));
+
+    auto arrayElement = static_cast<uint32_t>(address_.uniformOffset);
+    nrAssert(
+        (arrayElement % 4u) == 0u,
+        std::format(
+            "Inline uniform dstArrayElement must be multiple of 4. path={}, dstArrayElement={}",
+            debugPath_,
+            arrayElement));
+
+    return writeDescriptorRecord(
+        InlineUniformDescriptorWrite{.data = std::move(copiedBytes)},
+        {vk::DescriptorType::eInlineUniformBlock},
+        arrayElement);
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(
+    const Buffer &buffer,
+    vk::DeviceSize offset,
+    vk::DeviceSize range) const
+{
+    nrAssert(buffer.valid(), "ShaderCursor::setObject(Buffer) requires a valid Buffer.");
+    auto finalRange = normalizeBufferRange(buffer, offset, range);
+    return writeDescriptorRecord(
+        BufferDescriptorWrite{.buffer = buffer.handle(), .offset = offset, .range = finalRange},
+        {vk::DescriptorType::eUniformBuffer, vk::DescriptorType::eUniformBufferDynamic, vk::DescriptorType::eStorageBuffer});
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(vk::BufferView view) const
+{
+    return writeDescriptorRecord(
+        TexelBufferDescriptorWrite{.view = view},
+        {vk::DescriptorType::eUniformTexelBuffer, vk::DescriptorType::eStorageTexelBuffer});
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(
+    Buffer &buffer,
+    vk::Format format,
+    vk::DeviceSize offset,
+    vk::DeviceSize range,
+    std::string_view viewName) const
+{
+    nrAssert(buffer.valid(), "ShaderCursor::setObject(Buffer,Format) requires a valid Buffer.");
+    auto finalRange = normalizeBufferRange(buffer, offset, range);
+    auto view = buffer.addView(format, offset, finalRange, viewName);
+    return setObject(*view.get());
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(
+    const Image &image,
+    vk::ImageLayout imageLayout) const
+{
+    nrAssert(image.valid(), "ShaderCursor::setObject(Image) requires a valid Image.");
+    return writeDescriptorRecord(
+        ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = {}},
+        {vk::DescriptorType::eSampledImage, vk::DescriptorType::eInputAttachment, vk::DescriptorType::eStorageImage});
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(vk::Sampler sampler) const
+{
+    return writeDescriptorRecord(
+        ImageDescriptorWrite{.imageView = {}, .imageLayout = vk::ImageLayout::eUndefined, .sampler = sampler},
+        {vk::DescriptorType::eSampler});
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(
+    const Image &image,
+    vk::Sampler sampler,
+    vk::ImageLayout imageLayout) const
+{
+    nrAssert(image.valid(), "ShaderCursor::setObject(Image,Sampler) requires a valid Image.");
+    return writeDescriptorRecord(
+        ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = sampler},
+        {vk::DescriptorType::eCombinedImageSampler});
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(vk::AccelerationStructureKHR accelerationStructure) const
+{
+    return writeDescriptorRecord(
+        AccelerationStructureDescriptorWrite{.accelerationStructure = accelerationStructure},
+        {vk::DescriptorType::eAccelerationStructureKHR});
+}
+
+[[nodiscard]] bool ShaderCursor::setObject(const LogicalResourceDescriptorWrite &logicalResource) const
+{
+    return writeDescriptorRecord(
+        logicalResource,
+        {
+            vk::DescriptorType::eUniformBuffer,
+            vk::DescriptorType::eUniformBufferDynamic,
+            vk::DescriptorType::eStorageBuffer,
+            vk::DescriptorType::eUniformTexelBuffer,
+            vk::DescriptorType::eStorageTexelBuffer,
+            vk::DescriptorType::eSampledImage,
+            vk::DescriptorType::eStorageImage,
+            vk::DescriptorType::eInputAttachment,
+            vk::DescriptorType::eSampler,
+            vk::DescriptorType::eCombinedImageSampler,
+            vk::DescriptorType::eAccelerationStructureKHR,
+        });
+}
+
+[[nodiscard]] ShaderBindingSnapshot ShaderCursor::snapshot() const
+{
+    if (!bindingState_)
+    {
+        return {};
+    }
+    return bindingState_->snapshot();
+}
+
+void ShaderCursor::clearSnapshot() const
+{
+    if (!bindingState_)
+    {
+        return;
+    }
+    bindingState_->clear();
 }
 
 [[nodiscard]] slang::TypeReflection::Kind ShaderCursor::kind() const noexcept
@@ -1453,197 +1733,63 @@ void ShaderBindingPool::update(const ShaderBindingSet &set, const DescriptorWrit
     update(set, std::span<const DescriptorWriteRequest>{&writeRequest, 1});
 }
 
-[[nodiscard]] bool ShaderResourceWriter::bindUniformBuffer(
-    const ShaderCursor &cursor,
-    const Buffer &buffer,
-    vk::DeviceSize offset,
-    vk::DeviceSize range)
+[[nodiscard]] std::vector<DescriptorWriteRequest> resolveDescriptorWriteRequests(
+    const ShaderBindingSnapshot &snapshot,
+    LogicalDescriptorResolver logicalResolver)
 {
-    nrAssert(buffer.valid(), "ShaderResourceWriter::bindUniformBuffer requires a valid Buffer.");
-    auto finalRange = normalizeBufferRange(buffer, offset, range);
-    return append(makeRequest(
-        cursor,
-        BufferDescriptorWrite{.buffer = buffer.handle(), .offset = offset, .range = finalRange},
-        {vk::DescriptorType::eUniformBuffer, vk::DescriptorType::eUniformBufferDynamic}));
-}
+    auto requests = std::vector<DescriptorWriteRequest>{};
+    requests.reserve(snapshot.descriptorWriteCount());
 
-[[nodiscard]] bool ShaderResourceWriter::bindStorageBuffer(
-    const ShaderCursor &cursor,
-    const Buffer &buffer,
-    vk::DeviceSize offset,
-    vk::DeviceSize range)
-{
-    nrAssert(buffer.valid(), "ShaderResourceWriter::bindStorageBuffer requires a valid Buffer.");
-    auto finalRange = normalizeBufferRange(buffer, offset, range);
-    return append(makeRequest(
-        cursor,
-        BufferDescriptorWrite{.buffer = buffer.handle(), .offset = offset, .range = finalRange},
-        {vk::DescriptorType::eStorageBuffer}));
-}
+    std::ranges::for_each(snapshot.descriptorWrites(), [&](const ShaderBindingRecord &record) {
+        auto resolvedPayload = DescriptorWritePayload{};
+        auto resolved = std::visit(
+            [&](const auto &payload) -> bool {
+                using PayloadT = std::remove_cvref_t<decltype(payload)>;
+                if constexpr (std::same_as<PayloadT, LogicalResourceDescriptorWrite>)
+                {
+                    if (!logicalResolver)
+                    {
+                        return false;
+                    }
 
-[[nodiscard]] bool ShaderResourceWriter::bindUniformTexelBuffer(const ShaderCursor &cursor, vk::BufferView view)
-{
-    return append(makeRequest(cursor, TexelBufferDescriptorWrite{.view = view}, {vk::DescriptorType::eUniformTexelBuffer}));
-}
+                    auto resolvedLogical = logicalResolver(payload, record.binding, record.arrayElement);
+                    if (!resolvedLogical.has_value())
+                    {
+                        return false;
+                    }
 
-[[nodiscard]] bool ShaderResourceWriter::bindStorageTexelBuffer(const ShaderCursor &cursor, vk::BufferView view)
-{
-    return append(makeRequest(cursor, TexelBufferDescriptorWrite{.view = view}, {vk::DescriptorType::eStorageTexelBuffer}));
-}
+                    resolvedPayload = std::move(*resolvedLogical);
+                    return true;
+                }
+                else
+                {
+                    resolvedPayload = payload;
+                    return true;
+                }
+            },
+            record.payload);
 
-[[nodiscard]] bool ShaderResourceWriter::bindUniformTexelBuffer(
-    const ShaderCursor &cursor,
-    Buffer &buffer,
-    vk::Format format,
-    vk::DeviceSize offset,
-    vk::DeviceSize range,
-    std::string_view viewName)
-{
-    nrAssert(buffer.valid(), "ShaderResourceWriter::bindUniformTexelBuffer requires a valid Buffer.");
-    auto finalRange = normalizeBufferRange(buffer, offset, range);
-    auto view = buffer.addView(format, offset, finalRange, viewName);
-    return bindUniformTexelBuffer(cursor, *view.get());
-}
-
-[[nodiscard]] bool ShaderResourceWriter::bindStorageTexelBuffer(
-    const ShaderCursor &cursor,
-    Buffer &buffer,
-    vk::Format format,
-    vk::DeviceSize offset,
-    vk::DeviceSize range,
-    std::string_view viewName)
-{
-    nrAssert(buffer.valid(), "ShaderResourceWriter::bindStorageTexelBuffer requires a valid Buffer.");
-    auto finalRange = normalizeBufferRange(buffer, offset, range);
-    auto view = buffer.addView(format, offset, finalRange, viewName);
-    return bindStorageTexelBuffer(cursor, *view.get());
-}
-
-[[nodiscard]] bool ShaderResourceWriter::bindSampledImage(
-    const ShaderCursor &cursor,
-    const Image &image,
-    vk::ImageLayout imageLayout)
-{
-    nrAssert(image.valid(), "ShaderResourceWriter::bindSampledImage requires a valid Image.");
-    return append(makeRequest(
-        cursor,
-        ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = {}},
-        {vk::DescriptorType::eSampledImage, vk::DescriptorType::eInputAttachment}));
-}
-
-[[nodiscard]] bool ShaderResourceWriter::bindStorageImage(
-    const ShaderCursor &cursor,
-    const Image &image,
-    vk::ImageLayout imageLayout)
-{
-    nrAssert(image.valid(), "ShaderResourceWriter::bindStorageImage requires a valid Image.");
-    return append(makeRequest(
-        cursor,
-        ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = {}},
-        {vk::DescriptorType::eStorageImage}));
-}
-
-[[nodiscard]] bool ShaderResourceWriter::bindSampler(const ShaderCursor &cursor, vk::Sampler sampler)
-{
-    return append(makeRequest(
-        cursor,
-        ImageDescriptorWrite{.imageView = {}, .imageLayout = vk::ImageLayout::eUndefined, .sampler = sampler},
-        {vk::DescriptorType::eSampler}));
-}
-
-[[nodiscard]] bool ShaderResourceWriter::bindCombinedImageSampler(
-    const ShaderCursor &cursor,
-    const Image &image,
-    vk::Sampler sampler,
-    vk::ImageLayout imageLayout)
-{
-    nrAssert(image.valid(), "ShaderResourceWriter::bindCombinedImageSampler requires a valid Image.");
-    return append(makeRequest(
-        cursor,
-        ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = sampler},
-        {vk::DescriptorType::eCombinedImageSampler}));
-}
-
-[[nodiscard]] bool ShaderResourceWriter::bindAccelerationStructure(const ShaderCursor &cursor, vk::AccelerationStructureKHR accelerationStructure)
-{
-    return append(makeRequest(
-        cursor,
-        AccelerationStructureDescriptorWrite{.accelerationStructure = accelerationStructure},
-        {vk::DescriptorType::eAccelerationStructureKHR}));
-}
-
-[[nodiscard]] bool ShaderResourceWriter::bindInlineUniformData(const ShaderCursor &cursor, std::span<const uint8_t> bytes)
-{
-    if (bytes.empty())
-    {
-        return false;
-    }
-
-    auto byteCount = static_cast<uint32_t>(bytes.size());
-    nrAssert(
-        detail::isInlineUniformByteCountValid(byteCount),
-        std::format("Inline uniform write size must be > 0 and multiple of 4 (size={}).", byteCount));
-
-    auto copiedBytes = std::vector<uint8_t>{};
-    copiedBytes.assign(bytes.begin(), bytes.end());
-
-    return append(makeRequest(
-        cursor,
-        InlineUniformDescriptorWrite{.data = std::move(copiedBytes)},
-        {vk::DescriptorType::eInlineUniformBlock}));
-}
-
-void ShaderResourceWriter::commit(const ShaderBindingPool &pool, const ShaderBindingSet &set) const
-{
-    if (!set.valid() || requests_.empty())
-    {
-        return;
-    }
-
-    auto filtered = requests_ |
-        std::views::filter([setIndex = set.setIndex()](const DescriptorWriteRequest &request) {
-            return request.binding.set == setIndex;
-        }) |
-        std::ranges::to<std::vector>();
-
-    if (!filtered.empty())
-    {
-        pool.update(set, filtered);
-    }
-}
-
-void ShaderResourceWriter::commit(const ShaderBindingPool &pool, std::span<const ShaderBindingSet> sets) const
-{
-    for (const auto &set : sets)
-    {
-        commit(pool, set);
-    }
-}
-
-[[nodiscard]] std::optional<DescriptorWriteRequest>
-ShaderResourceWriter::makeRequest(const ShaderCursor &cursor, DescriptorWritePayload payload, std::initializer_list<vk::DescriptorType> allowedTypes)
-{
-    auto bindingInfo = cursor.descriptorBinding();
-    if (!bindingInfo.has_value() || !acceptsType(bindingInfo->descriptorType, allowedTypes))
-    {
-        return std::nullopt;
-    }
-
-    uint32_t arrayElement = cursor.address().bindingArrayIndex;
-    if (std::holds_alternative<InlineUniformDescriptorWrite>(payload))
-    {
-        auto uniformOffset = cursor.address().uniformOffset;
         nrAssert(
-            uniformOffset <= std::numeric_limits<uint32_t>::max(),
-            std::format("Inline uniform offset exceeds uint32 range (offset={}).", uniformOffset));
-        arrayElement = static_cast<uint32_t>(uniformOffset);
-    }
+            resolved,
+            std::format(
+                "resolveDescriptorWriteRequests failed to resolve descriptor record at set={}, binding={}, path='{}'.",
+                record.binding.set,
+                record.binding.binding,
+                record.binding.debugPath));
 
-    return DescriptorWriteRequest{
-        .binding = *bindingInfo,
-        .arrayElement = arrayElement,
-        .payload = std::move(payload),
-    };
+        if (!resolved)
+        {
+            return;
+        }
+
+        requests.push_back(DescriptorWriteRequest{
+            .binding = record.binding,
+            .arrayElement = record.arrayElement,
+            .payload = std::move(resolvedPayload),
+        });
+    });
+
+    return requests;
 }
 
 } // namespace nr::rhi

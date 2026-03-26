@@ -14,6 +14,13 @@ using SceneTemplateHandle = nr::resource::Handle<struct SceneTemplateTag>;
 using SceneInstanceHandle = nr::resource::Handle<struct SceneInstanceTag>;
 using SceneExtractProfileHandle = nr::resource::Handle<struct SceneExtractProfileTag>;
 
+enum class DestroyTemplateResult : std::uint8_t
+{
+    destroyed,
+    notFound,
+    instancesAlive,
+};
+
 enum class CpuRetentionPolicy : std::uint8_t
 {
     keepAll,
@@ -99,7 +106,9 @@ struct SceneExtractProfileCreateInfo
     std::string debugName{};
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
     SceneSelectionMask selection{};
-    bool requireResidentGeometry = true;
+    // When enabled, extraction only emits packets whose dependencies are ready
+    // for the selected domain (for example raster also requires material/texture readiness).
+    bool requireReadyForDomain = true;
     bool requireActiveInstances = true;
     bool enableCoarseGrouping = true;
 };
@@ -108,6 +117,7 @@ struct SceneExtractInput
 {
     SceneVisibilityMode visibility = SceneVisibilityMode::none;
     std::optional<SceneFrustum> customFrustum{};
+    std::optional<glm::uvec2> viewportExtent{};
     std::optional<std::uint32_t> partitionOverride{};
 };
 
@@ -132,11 +142,77 @@ struct RayTracingInstancePacket
     std::uint16_t tlasBucket = 0;
 };
 
+struct TlasBuildInputPacket
+{
+    flecs::entity renderable{};
+    nr::resource::MeshHandle mesh{};
+    std::uint32_t submeshIndex = 0;
+    glm::mat4 world{1.0f};
+    std::uint32_t instanceMask = 0xFF;
+    std::uint16_t tlasBucket = 0;
+};
+
+struct SceneCameraBinding
+{
+    nr::resource::CameraAssetHandle camera{};
+    bool synthetic = false;
+};
+
+struct SceneResolvedCamera
+{
+    flecs::entity entity{};
+    nr::resource::CameraAssetHandle camera{};
+    glm::mat4 world{1.0f};
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    SceneFrustum frustum{};
+    bool fallback = false;
+};
+
 struct ScenePacketSet
 {
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
     std::vector<RasterDrawPacket> rasterDraws{};
     std::vector<RayTracingInstancePacket> rtInstances{};
+    std::vector<TlasBuildInputPacket> tlasBuildInputs{};
+};
+
+struct SceneBridgeFrameConstants
+{
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    glm::mat4 viewProjection{1.0f};
+    glm::vec3 cameraWorld{0.0f};
+    float drawCount = 0.0f;
+};
+
+struct SceneBridgeDrawPacket
+{
+    flecs::entity renderable{};
+    nr::resource::MeshHandle mesh{};
+    nr::resource::MaterialHandle material{};
+    std::uint32_t submeshIndex = 0;
+    glm::mat4 world{1.0f};
+    nr::resource::Aabb worldBounds{};
+    std::uint64_t sortKey = 0;
+    std::uint32_t meshBindless = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
+};
+
+struct SceneBridgeDrawGroup
+{
+    nr::resource::MaterialHandle material{};
+    std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
+    std::vector<std::uint32_t> drawIndices{};
+};
+
+struct SceneBridgeFrame
+{
+    ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
+    std::vector<SceneBridgeDrawPacket> rasterDraws{};
+    std::vector<SceneBridgeDrawGroup> materialGroups{};
+    SceneBridgeFrameConstants frameConstants{};
+    bool hasPrimaryCamera = false;
 };
 
 enum class SceneSelectionBit : std::uint8_t
@@ -268,11 +344,30 @@ namespace detail
 {
 struct MaterialGpuData
 {
+    // RGB: base color, A: opacity
     glm::vec4 baseColorFactor{1.0f};
-    glm::vec4 emissiveAndMetallic{0.0f};
-    glm::vec4 roughnessNormalOcclusionAlpha{0.0f};
+    
+    // RGB: emissive, F: metallic factor
+    glm::vec4 emissiveAndMetallic{0.0f, 0.0f, 0.0f, 0.0f};
+    
+    // R: roughness, G: normal scale, B: occlusion strength, A: alpha cutoff
+    glm::vec4 roughnessNormalOcclusionAlpha{1.0f, 1.0f, 1.0f, 0.5f};
+    
+    // R: alpha mode, G: flags (double-sided), B: unused, A: unused
     glm::uvec4 alphaAndFlags{0u};
+    
+    // Specular/Glossiness workflow
+    // RGB: specular factor, A: glossiness factor
+    glm::vec4 specularAndGlossiness{0.0f};
+    
+    // Anisotropy and workflow flags
+    // R: anisotropy factor, G: metallic-roughness flag, B: specular-glossiness flag, A: anisotropy flag
+    glm::uvec4 anisotropyAndWorkflow{0u};
+    
+    // Texture handles: baseColor, normal, metallicRoughness, occlusion, emissive
     std::array<std::uint64_t, 5> textureHandles{};
+    
+    // UV sets for each texture
     std::array<std::uint32_t, 5> uvSets{};
 };
 
@@ -447,6 +542,7 @@ struct SceneTemplateRecord
     SceneTemplateHandle handle{};
     std::string stableKey{};
     flecs::entity prefabRoot{};
+    std::vector<flecs::entity_t> prefabEntities{};
     TemplateResourcePinSet pins{};
     std::uint32_t liveInstanceCount = 0;
     std::size_t templateNodeCount = 0;
@@ -471,7 +567,7 @@ struct SceneExtractProfileRecord
     std::string debugName{};
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
     SceneSelectionMask selection{};
-    bool requireResidentGeometry = true;
+    bool requireReadyForDomain = true;
     bool requireActiveInstances = true;
     bool enableCoarseGrouping = true;
 };

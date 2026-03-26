@@ -134,8 +134,90 @@ target_compile_definitions(nr_load_model_asset_test PRIVATE
     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
 )
 
+nr_add_executable(nr_renderer_phase3_contract_test nr_renderer_phase3_contract_test.cpp)
+set_target_properties(nr_renderer_phase3_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_phase3_contract_test PRIVATE
+    nrrenderpasses
+    utils
+    dependency
+)
+
+nr_add_executable(nr_renderer_phase2_contract_test nr_renderer_phase2_contract_test.cpp)
+set_target_properties(nr_renderer_phase2_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_phase2_contract_test PRIVATE
+    nrrenderpasses
+    utils
+    dependency
+)
+
+nr_add_executable(nr_renderer_stage2_lifecycle_contract_test nr_renderer_stage2_lifecycle_contract_test.cpp)
+set_target_properties(nr_renderer_stage2_lifecycle_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_stage2_lifecycle_contract_test PRIVATE
+    nrrenderer
+    utils
+    dependency
+)
+
+nr_add_executable(nr_renderer_stage3_public_api_contract_test nr_renderer_stage3_public_api_contract_test.cpp)
+set_target_properties(nr_renderer_stage3_public_api_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_stage3_public_api_contract_test PRIVATE
+    nrrenderer
+    utils
+    dependency
+)
+
+nr_add_executable(nr_renderer_stage4_scene_bridge_contract_test nr_renderer_stage4_scene_bridge_contract_test.cpp)
+set_target_properties(nr_renderer_stage4_scene_bridge_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_stage4_scene_bridge_contract_test PRIVATE
+    nrrenderer
+    nrscene
+    utils
+    dependency
+)
+
+nr_add_executable(nr_renderer_stage5_runtime_contract_test nr_renderer_stage5_runtime_contract_test.cpp)
+set_target_properties(nr_renderer_stage5_runtime_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_stage5_runtime_contract_test PRIVATE
+    nrrenderer
+    nrrhi
+    utils
+    dependency
+)
+
+nr_add_executable(nr_renderer_stage6_builtin_nodes_contract_test nr_renderer_stage6_builtin_nodes_contract_test.cpp)
+set_target_properties(nr_renderer_stage6_builtin_nodes_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_stage6_builtin_nodes_contract_test PRIVATE
+    nrrenderpasses
+    utils
+    dependency
+)
+
+nr_add_executable(nr_renderer_stage7_main_migration_contract_test nr_renderer_stage7_main_migration_contract_test.cpp)
+set_target_properties(nr_renderer_stage7_main_migration_contract_test PROPERTIES FOLDER "Test/profile")
+
+target_link_libraries(nr_renderer_stage7_main_migration_contract_test PRIVATE
+    nrrenderpasses
+    utils
+    dependency
+)
+
 add_test(NAME nr_rt_p0_contract_test COMMAND nr_rt_p0_contract_test)
 add_test(NAME nr_load_assimp_smoke_test COMMAND nr_load_assimp_smoke_test)
 add_test(NAME nr_load_multithread_image_decode_test COMMAND nr_load_multithread_image_decode_test)
 add_test(NAME nr_load_model_asset_test COMMAND nr_load_model_asset_test)
+add_test(NAME nr_renderer_phase2_contract_test COMMAND nr_renderer_phase2_contract_test)
+add_test(NAME nr_renderer_phase3_contract_test COMMAND nr_renderer_phase3_contract_test)
+add_test(NAME nr_renderer_stage2_lifecycle_contract_test COMMAND nr_renderer_stage2_lifecycle_contract_test)
+add_test(NAME nr_renderer_stage3_public_api_contract_test COMMAND nr_renderer_stage3_public_api_contract_test)
+add_test(NAME nr_renderer_stage4_scene_bridge_contract_test COMMAND nr_renderer_stage4_scene_bridge_contract_test)
+add_test(NAME nr_renderer_stage5_runtime_contract_test COMMAND nr_renderer_stage5_runtime_contract_test)
+add_test(NAME nr_renderer_stage6_builtin_nodes_contract_test COMMAND nr_renderer_stage6_builtin_nodes_contract_test)
+add_test(NAME nr_renderer_stage7_main_migration_contract_test COMMAND nr_renderer_stage7_main_migration_contract_test)
 

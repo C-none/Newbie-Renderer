@@ -321,6 +321,145 @@ namespace
     return true;
 }
 
+[[nodiscard]] bool checkMaterialAuthoringHintsBridgeToCanonicalMaterial()
+{
+    std::println("\n=== Case: checkMaterialAuthoringHintsBridgeToCanonicalMaterial ===");
+
+    nr::rhi::Device device{};
+    nr::scene::Scene scene(nr::scene::SceneCreateInfo{.device = device});
+
+    auto maskedAsset = buildDuplicateNameSceneAsset();
+    maskedAsset.sourcePath = std::filesystem::path{"manual_phase2_material_mask.gltf"};
+    maskedAsset.materials[0].alphaModeHint = nr::load::MaterialAlphaModeHint::mask;
+    maskedAsset.materials[0].opacity = 0.2f;
+    maskedAsset.materials[0].alphaCutoff = 0.35f;
+    maskedAsset.materials[0].doubleSided = true;
+    maskedAsset.materials[0].specularFactor = std::array<float, 3>{0.1f, 0.2f, 0.3f};
+    maskedAsset.materials[0].glossinessFactor = 0.7f;
+    maskedAsset.materials[0].anisotropyFactor = 0.4f;
+    maskedAsset.materials[0].normalScale = 0.5f;
+    maskedAsset.materials[0].occlusionStrength = 0.8f;
+
+    auto maskedTemplate = scene.registerTemplate(maskedAsset);
+    if (!require(maskedTemplate.valid(), "Masked template registration should succeed."))
+    {
+        return false;
+    }
+
+    auto maskedMaterialKey = nr::scene::SceneBridge::makeMaterialCanonicalKey(maskedAsset, 0);
+    auto maskedMaterialHandle = scene.findMaterialHandleByStableKey(maskedMaterialKey);
+    if (!require(maskedMaterialHandle.has_value(), "Masked material handle should be resolvable."))
+    {
+        return false;
+    }
+
+    auto maskedMaterialRecord = scene.tryGetMaterialAsset(*maskedMaterialHandle);
+    if (!require(maskedMaterialRecord.has_value(), "Masked material record should exist."))
+    {
+        return false;
+    }
+
+    auto const &maskedMaterial = maskedMaterialRecord->get().cpu;
+    if (!require(maskedMaterial.isAlphaMasked(), "Mask alphaModeHint should take precedence over opacity-based blend path."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(maskedMaterial.alphaCutoff, 0.35f), "Masked material alphaCutoff should preserve optional authored value."))
+    {
+        return false;
+    }
+    if (!require(maskedMaterial.doubleSided, "Masked material doubleSided flag should preserve authored value."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(maskedMaterial.specularFactor.x, 0.1f) &&
+                     almostEqual(maskedMaterial.specularFactor.y, 0.2f) &&
+                     almostEqual(maskedMaterial.specularFactor.z, 0.3f),
+                 "Masked material specularFactor should preserve optional authored value."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(maskedMaterial.glossinessFactor, 0.7f), "Masked material glossiness should preserve optional authored value."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(maskedMaterial.anisotropyFactor, 0.4f), "Masked material anisotropy should preserve optional authored value."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(maskedMaterial.normalScale, 0.5f), "Masked material normalScale should preserve optional authored value."))
+    {
+        return false;
+    }
+    if (!require(almostEqual(maskedMaterial.occlusionStrength, 0.8f), "Masked material occlusionStrength should preserve optional authored value."))
+    {
+        return false;
+    }
+
+    auto blendedAsset = buildDuplicateNameSceneAsset();
+    blendedAsset.sourcePath = std::filesystem::path{"manual_phase2_material_blend_hint.gltf"};
+    blendedAsset.materials[0].alphaModeHint = nr::load::MaterialAlphaModeHint::blend;
+    blendedAsset.materials[0].opacity = 1.0f;
+
+    auto blendedTemplate = scene.registerTemplate(blendedAsset);
+    if (!require(blendedTemplate.valid(), "Blended template registration should succeed."))
+    {
+        return false;
+    }
+
+    auto blendedMaterialKey = nr::scene::SceneBridge::makeMaterialCanonicalKey(blendedAsset, 0);
+    auto blendedMaterialHandle = scene.findMaterialHandleByStableKey(blendedMaterialKey);
+    if (!require(blendedMaterialHandle.has_value(), "Blended material handle should be resolvable."))
+    {
+        return false;
+    }
+
+    auto blendedMaterialRecord = scene.tryGetMaterialAsset(*blendedMaterialHandle);
+    if (!require(blendedMaterialRecord.has_value(), "Blended material record should exist."))
+    {
+        return false;
+    }
+
+    if (!require(blendedMaterialRecord->get().cpu.isAlphaBlended(),
+                 "Blend alphaModeHint should force blend even when opacity is 1."))
+    {
+        return false;
+    }
+
+    auto opaqueAsset = buildDuplicateNameSceneAsset();
+    opaqueAsset.sourcePath = std::filesystem::path{"manual_phase2_material_opaque.gltf"};
+    opaqueAsset.materials[0].alphaModeHint = nr::load::MaterialAlphaModeHint::opaque;
+    opaqueAsset.materials[0].opacity = 1.0f;
+
+    auto opaqueTemplate = scene.registerTemplate(opaqueAsset);
+    if (!require(opaqueTemplate.valid(), "Opaque template registration should succeed."))
+    {
+        return false;
+    }
+
+    auto opaqueMaterialKey = nr::scene::SceneBridge::makeMaterialCanonicalKey(opaqueAsset, 0);
+    auto opaqueMaterialHandle = scene.findMaterialHandleByStableKey(opaqueMaterialKey);
+    if (!require(opaqueMaterialHandle.has_value(), "Opaque material handle should be resolvable."))
+    {
+        return false;
+    }
+
+    auto opaqueMaterialRecord = scene.tryGetMaterialAsset(*opaqueMaterialHandle);
+    if (!require(opaqueMaterialRecord.has_value(), "Opaque material record should exist."))
+    {
+        return false;
+    }
+
+    auto const &opaqueMaterial = opaqueMaterialRecord->get().cpu;
+    if (!require(!opaqueMaterial.isAlphaBlended() && !opaqueMaterial.isAlphaMasked(),
+                 "Opaque authored material should remain opaque."))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 [[nodiscard]] bool checkDeterministicSiblingNamingAndTemplateTree()
 {
     std::println("\n=== Case: checkDeterministicSiblingNamingAndTemplateTree ===");
@@ -824,6 +963,7 @@ int main()
 {
     auto const cases = std::array{
         std::pair{"checkStaticBridgeAndValidation", &checkStaticBridgeAndValidation},
+        std::pair{"checkMaterialAuthoringHintsBridgeToCanonicalMaterial", &checkMaterialAuthoringHintsBridgeToCanonicalMaterial},
         std::pair{"checkDeterministicSiblingNamingAndTemplateTree", &checkDeterministicSiblingNamingAndTemplateTree},
         std::pair{"checkInstantiateRuntimeRootAndHierarchy", &checkInstantiateRuntimeRootAndHierarchy},
         std::pair{"checkTriangleExtractionAndExpectation", &checkTriangleExtractionAndExpectation},

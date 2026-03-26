@@ -230,7 +230,7 @@ class FrameContext
         else if constexpr (T == QueueRole::Transfer)
         {
             nrAssert(transferPrimary_.valid(), "Transfer queue not configured for this FrameContext");
-            return *transferPrimary_;
+            return transferPrimary_;
         }
         else
         {

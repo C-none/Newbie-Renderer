@@ -357,7 +357,6 @@ struct BlasGeometryUpload
         return false;
     }
 
-    nr::rhi::ShaderResourceWriter writer{};
     auto root = rtState.descriptorLayout.rootCursor();
     if (!root.valid())
     {
@@ -365,25 +364,30 @@ struct BlasGeometryUpload
         return false;
     }
 
-    if (!writer.bindAccelerationStructure(root["scene"], tlas.raw()))
+    if (!root["scene"].setObject(tlas.raw()))
     {
         std::println("[error] failed to bind TLAS descriptor.");
         return false;
     }
 
-    if (!writer.bindStorageImage(root["outputImage"], outputImage, vk::ImageLayout::eGeneral))
+    if (!root["outputImage"].setObject(outputImage, vk::ImageLayout::eGeneral))
     {
         std::println("[error] failed to bind storage image descriptor.");
         return false;
     }
 
-    if (!writer.bindUniformBuffer(root["camera"], cameraBuffer, 0, sizeof(CameraData)))
+    if (!root["camera"].setObject(cameraBuffer, 0, sizeof(CameraData)))
     {
         std::println("[error] failed to bind camera uniform buffer descriptor.");
         return false;
     }
 
-    writer.commit(rtState.bindingPool, descriptorSets);
+    auto bindingSnapshot = root.snapshot();
+    if (bindingSnapshot.descriptorWriteCount() == 0u)
+    {
+        std::println("[error] descriptor snapshot is empty after RT binding capture.");
+        return false;
+    }
 
     auto capabilities = device.rayTracingCapabilities();
     nr::rhi::ShaderBindingTableBuildDesc sbtDesc{};
@@ -445,7 +449,7 @@ struct BlasGeometryUpload
 
             if (outputReadyForTrace)
             {
-                traceInputBarriers.add(nr::rhi::ops::makeImageOwnershipAcquireBarrier(
+                traceInputBarriers.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Acquire>(
                     outputImage,
                     vk::ImageLayout::eTransferSrcOptimal,
                     vk::ImageLayout::eGeneral,
@@ -472,7 +476,13 @@ struct BlasGeometryUpload
 
             nr::rhi::ops::pipelineBarrier(raw, traceInputBarriers);
 
-            rtState.layout.bindDescriptorSets(raw, vk::PipelineBindPoint::eRayTracingKHR, descriptorSets);
+            nr::rhi::bindResourcesToCommandBuffer(
+                raw,
+                vk::PipelineBindPoint::eRayTracingKHR,
+                rtState.layout,
+                rtState.bindingPool,
+                descriptorSets,
+                bindingSnapshot);
 
             nr::rhi::TraceRaysDesc traceDesc{};
             traceDesc.pipeline = &rtState.pipeline;
@@ -486,7 +496,7 @@ struct BlasGeometryUpload
             nr::rhi::traceRays(graphicsCommandBuffer, traceDesc, capabilities);
 
             nr::rhi::ops::BarrierBatch graphicsToComputeRelease{};
-            graphicsToComputeRelease.add(nr::rhi::ops::makeImageOwnershipReleaseBarrier(
+            graphicsToComputeRelease.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
                 outputImage,
                 vk::ImageLayout::eGeneral,
                 vk::ImageLayout::eTransferSrcOptimal,
@@ -512,7 +522,7 @@ struct BlasGeometryUpload
             auto raw = *computeCommandBuffer;
 
             nr::rhi::ops::BarrierBatch computeInputBarriers{};
-            computeInputBarriers.add(nr::rhi::ops::makeImageOwnershipAcquireBarrier(
+            computeInputBarriers.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Acquire>(
                 outputImage,
                 vk::ImageLayout::eGeneral,
                 vk::ImageLayout::eTransferSrcOptimal,
@@ -558,7 +568,7 @@ struct BlasGeometryUpload
                 {copyRegion});
 
             nr::rhi::ops::BarrierBatch computeToGraphicsRelease{};
-            computeToGraphicsRelease.add(nr::rhi::ops::makeImageOwnershipReleaseBarrier(
+            computeToGraphicsRelease.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
                 outputImage,
                 vk::ImageLayout::eTransferSrcOptimal,
                 vk::ImageLayout::eGeneral,

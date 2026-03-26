@@ -11,6 +11,7 @@ struct CameraAsset
 {
     std::string name{};
     CameraProjection projection = CameraProjection::perspective;
+    std::optional<float> authoredAspectRatio{};
     float verticalFovRadians = glm::radians(60.0f);
     float orthoHeight = 10.0f;
     float nearPlane = 0.1f;

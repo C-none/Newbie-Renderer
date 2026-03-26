@@ -11,6 +11,77 @@ namespace nr::load::detail
 {
 inline constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
 
+struct MaterialPropertyKey
+{
+    const char *name{};
+    unsigned int type{};
+    unsigned int index{};
+};
+
+inline constexpr MaterialPropertyKey kMatKeyBaseColor{"$clr.base", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyColorEmissive{"$clr.emissive", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyMetallicFactor{"$mat.metallicFactor", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyRoughnessFactor{"$mat.roughnessFactor", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyAnisotropyFactor{"$mat.anisotropyFactor", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeySpecularFactor{"$mat.specularFactor", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyGlossinessFactor{"$mat.glossinessFactor", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyOpacity{"$mat.opacity", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyTwoSided{"$mat.twosided", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyBumpScaling{"$mat.bumpscaling", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyEmissiveIntensity{"$mat.emissiveIntensity", 0u, 0u};
+inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
+
+[[nodiscard]] inline bool readMaterialColor4(const aiMaterial &material,
+                                             const MaterialPropertyKey &key,
+                                             aiColor4D &value)
+{
+    return aiGetMaterialColor(&material, key.name, key.type, key.index, &value) == aiReturn_SUCCESS;
+}
+
+[[nodiscard]] inline bool readMaterialColor3(const aiMaterial &material,
+                                             const MaterialPropertyKey &key,
+                                             aiColor3D &value)
+{
+    auto color = aiColor4D{};
+    if (aiGetMaterialColor(&material, key.name, key.type, key.index, &color) != aiReturn_SUCCESS)
+    {
+        return false;
+    }
+
+    value = aiColor3D{color.r, color.g, color.b};
+    return true;
+}
+
+[[nodiscard]] inline bool readMaterialFloat(const aiMaterial &material,
+                                            const MaterialPropertyKey &key,
+                                            float &value)
+{
+    auto raw = ai_real{};
+    auto count = 1u;
+    if (aiGetMaterialFloatArray(&material, key.name, key.type, key.index, &raw, &count) != aiReturn_SUCCESS ||
+        count < 1u)
+    {
+        return false;
+    }
+
+    value = static_cast<float>(raw);
+    return true;
+}
+
+[[nodiscard]] inline bool readMaterialInteger(const aiMaterial &material,
+                                              const MaterialPropertyKey &key,
+                                              int &value)
+{
+    auto count = 1u;
+    if (aiGetMaterialIntegerArray(&material, key.name, key.type, key.index, &value, &count) != aiReturn_SUCCESS ||
+        count < 1u)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 [[nodiscard]] inline std::string toStdString(const aiString &value)
 {
     auto const *raw = value.C_Str();
@@ -279,6 +350,105 @@ inline constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
             materialAsset.name = std::format("material_{}", materialIndex);
         }
 
+        // Read base color factor
+        if (aiColor4D baseColor; readMaterialColor4(*material, kMatKeyBaseColor, baseColor))
+        {
+            materialAsset.baseColorFactor = {baseColor.r, baseColor.g, baseColor.b, baseColor.a};
+        }
+
+        // Read emissive factor
+        if (aiColor3D emissive; readMaterialColor3(*material, kMatKeyColorEmissive, emissive))
+        {
+            materialAsset.emissiveFactor = {emissive.r, emissive.g, emissive.b};
+        }
+
+        // Read metallic factor
+        if (float metallic; readMaterialFloat(*material, kMatKeyMetallicFactor, metallic))
+        {
+            materialAsset.metallicFactor = metallic;
+        }
+
+        // Read roughness factor
+        if (float roughness; readMaterialFloat(*material, kMatKeyRoughnessFactor, roughness))
+        {
+            materialAsset.roughnessFactor = roughness;
+        }
+
+        // Read anisotropy factor
+        if (float anisotropy; readMaterialFloat(*material, kMatKeyAnisotropyFactor, anisotropy))
+        {
+            materialAsset.anisotropyFactor = anisotropy;
+        }
+
+        // Read specular factor (for specular-glossiness workflow)
+        if (aiColor3D specular; readMaterialColor3(*material, kMatKeySpecularFactor, specular))
+        {
+            materialAsset.specularFactor = std::array<float, 3>{specular.r, specular.g, specular.b};
+        }
+
+        // Read glossiness factor
+        if (float glossiness; readMaterialFloat(*material, kMatKeyGlossinessFactor, glossiness))
+        {
+            materialAsset.glossinessFactor = glossiness;
+        }
+
+        // Read opacity
+        if (float opacity; readMaterialFloat(*material, kMatKeyOpacity, opacity))
+        {
+            materialAsset.opacity = opacity;
+        }
+
+        // Read two-sided flag
+        if (int twoSided; readMaterialInteger(*material, kMatKeyTwoSided, twoSided))
+        {
+            materialAsset.doubleSided = twoSided != 0;
+        }
+
+        // Read normal scale / bump scaling
+        if (float normalScale; readMaterialFloat(*material, kMatKeyBumpScaling, normalScale))
+        {
+            materialAsset.normalScale = normalScale;
+        }
+
+        // Read occlusion strength
+        if (float aoIntensity; readMaterialFloat(*material, kMatKeyEmissiveIntensity, aoIntensity))
+        {
+            materialAsset.occlusionStrength = aoIntensity;
+        }
+
+        // Classify alpha mode from blend function (if available)
+        if (int blendFunc; readMaterialInteger(*material, kMatKeyBlendFunc, blendFunc))
+        {
+            // Check if material has transparency-related properties
+            if (materialAsset.opacity < 1.0f)
+            {
+                materialAsset.alphaModeHint = MaterialAlphaModeHint::blend;
+            }
+        }
+
+        // Classify workflow flags based on properties
+        auto classifyWorkflow = [&]() {
+            MaterialWorkflowFlags flags = MaterialWorkflowFlags::metallicRoughness;
+            
+            if (materialAsset.specularFactor.has_value()  && materialAsset.glossinessFactor.has_value())
+            {
+                flags = static_cast<MaterialWorkflowFlags>(
+                    static_cast<uint8_t>(flags) | static_cast<uint8_t>(MaterialWorkflowFlags::specularGlossiness)
+                );
+            }
+            
+            if (materialAsset.anisotropyFactor.has_value() && *materialAsset.anisotropyFactor > 0.0f)
+            {
+                flags = static_cast<MaterialWorkflowFlags>(
+                    static_cast<uint8_t>(flags) | static_cast<uint8_t>(MaterialWorkflowFlags::anisotropy)
+                );
+            }
+            
+            return flags;
+        };
+        materialAsset.workflowFlags = classifyWorkflow();
+
+        // Read texture bindings
         auto textureTypeRange = std::views::iota(0u, static_cast<unsigned>(aiTextureType_UNKNOWN) + 1u);
         for (auto textureTypeRaw : textureTypeRange)
         {

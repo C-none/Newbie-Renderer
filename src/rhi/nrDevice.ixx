@@ -76,6 +76,7 @@ class Device
         uploadReadbackContext_.emplace(device, resourceFactory, queueManager);
 
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
+        refreshPresentSemaphores();
         pipelineService.bindDevice(device, &rtCapabilities_);
     }
 
@@ -97,6 +98,7 @@ class Device
         if (PresentationContext::needsSwapchainRecreate(acquire.result))
         {
             presentationContext.recreate(physicalDevice, device, queueManager);
+            refreshPresentSemaphores();
             acquire = presentationContext.acquireNextImage(frame.imageAvailable(), acquireTimeout);
         }
 
@@ -104,6 +106,8 @@ class Device
 
         presentationContext.setActiveSwapchainImage(acquire.imageIndex);
         presentationContext.setFrameSubmitted(false);
+        frameSubmitCount_ = 0;
+        frameFinalSubmitRole_.reset();
 
         return FrameBeginResult{
             .frameIndex = frameIndex,
@@ -112,62 +116,110 @@ class Device
         };
     }
 
-    void submitFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Graphics)
+    void submitFrameBatch(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false)
     {
-        nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrame requires beginFrame() before submission.");
+        nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrameBatch requires beginFrame() before submission.");
+        nrAssert(
+            !(frameFinalSubmitRole_.has_value() && !signalForPresent),
+            "Device::submitFrameBatch cannot submit additional batches after final present-signaling submit.");
 
-        auto &frame = frameManager.current();
+        if (signalForPresent)
+        {
+            nrAssert(!frameFinalSubmitRole_.has_value(), "Device::submitFrameBatch final present-signaling submit can only happen once per frame.");
+            nrAssert(submitRole == QueueRole::Compute, "Device::submitFrameBatch requires compute queue when signalForPresent=true.");
+        }
+
+        auto& frame = frameManager.current();
         auto submitBatch = batch;
-        auto waitStage = vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eColorAttachmentOutput};
-        if (submitRole == QueueRole::Compute)
+
+        auto waitStageForRole = [](QueueRole) {
+            return vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+        };
+
+        if (frameSubmitCount_ == 0)
         {
-            waitStage = vk::PipelineStageFlagBits2::eTransfer;
-        }
-        else if (submitRole == QueueRole::Transfer)
-        {
-            waitStage = vk::PipelineStageFlagBits2::eTransfer;
+            submitBatch.addWait(frame.imageAvailable(), waitStageForRole(submitRole));
         }
 
-        submitBatch.addWait(frame.imageAvailable(), waitStage);
-        submitBatch.addSignal(frame.renderFinished());
-
-        if (submitRole == QueueRole::Graphics)
+        if (signalForPresent)
         {
-            queueManager.graphics().submit(submitBatch, std::cref(frame.fence()));
-        }
-        else if (submitRole == QueueRole::Compute)
-        {
-            queueManager.compute().submit(submitBatch, std::cref(frame.fence()));
-        }
-        else
-        {
-            queueManager.transfer().submit(submitBatch, std::cref(frame.fence()));
+            submitBatch.addSignal(activePresentSemaphore());
         }
 
-        presentationContext.setFrameSubmitted(true);
+        auto submitToRole = [&](QueueRole role, std::optional<std::reference_wrapper<const vk::raii::Fence>> fence) {
+            if (role == QueueRole::Graphics)
+            {
+                queueManager.graphics().submit(submitBatch, fence);
+                return;
+            }
+            if (role == QueueRole::Compute)
+            {
+                queueManager.compute().submit(submitBatch, fence);
+                return;
+            }
+            queueManager.transfer().submit(submitBatch, fence);
+        };
+
+        auto fence = signalForPresent
+                         ? std::optional<std::reference_wrapper<const vk::raii::Fence>>(std::cref(frame.fence()))
+                         : std::nullopt;
+        submitToRole(submitRole, fence);
+
+        ++frameSubmitCount_;
+
+        if (signalForPresent)
+        {
+            frameFinalSubmitRole_ = submitRole;
+            presentationContext.setFrameSubmitted(true);
+        }
+    }
+
+    void submitFrame(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute)
+    {
+        submitFrameBatch(batch, submitRole, true);
+    }
+
+    [[nodiscard]] bool canPresentCurrentFrame() const noexcept
+    {
+        return frameSubmitCount_ > 0 &&
+               frameFinalSubmitRole_.has_value() &&
+               *frameFinalSubmitRole_ == QueueRole::Compute &&
+               presentationContext.hasSubmittedCurrentFrame();
+    }
+
+    [[nodiscard]] QueueRole submitRoleForPresent() const noexcept
+    {
+        return frameFinalSubmitRole_.value_or(QueueRole::Graphics);
+    }
+
+    [[nodiscard]] uint32_t frameSubmitCount() const noexcept
+    {
+        return frameSubmitCount_;
     }
 
     [[nodiscard]] PresentResult presentFrame()
     {
         nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::presentFrame requires beginFrame() before present.");
-        nrAssert(presentationContext.hasSubmittedCurrentFrame(), "Device::presentFrame requires submitFrame() before present.");
+        nrAssert(canPresentCurrentFrame(), "Device::presentFrame requires a compute-queue final submission that signals renderFinished.");
 
-        auto &frame = frameManager.current();
-        auto presentResult = presentationContext.present(queueManager, frame.renderFinished());
+        auto presentResult = presentationContext.present(queueManager, activePresentSemaphore());
 
         if (PresentationContext::needsSwapchainRecreate(presentResult.result))
         {
             presentationContext.recreate(physicalDevice, device, queueManager);
+            refreshPresentSemaphores();
         }
 
         frameManager.advanceFrame();
         presentationContext.clearActiveSwapchainImage();
         presentationContext.setFrameSubmitted(false);
+        frameSubmitCount_ = 0;
+        frameFinalSubmitRole_.reset();
 
         return presentResult;
     }
 
-    [[nodiscard]] PresentResult endFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Graphics)
+    [[nodiscard]] PresentResult endFrame(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute)
     {
         submitFrame(batch, submitRole);
         return presentFrame();
@@ -277,7 +329,8 @@ class Device
         });
 
         auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2,
-                                                     vk::PhysicalDeviceVulkan12Features,
+                                 vk::PhysicalDeviceVulkan11Features,
+                                 vk::PhysicalDeviceVulkan12Features,
                                                      vk::PhysicalDeviceVulkan13Features,
                                                      vk::PhysicalDeviceVulkan14Features,
                                                      vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
@@ -289,6 +342,7 @@ class Device
                                                      vk::PhysicalDeviceRayQueryFeaturesKHR>();
 
         auto &featureList = features2.get<vk::PhysicalDeviceFeatures2>();
+        auto &vulkan11Features = features2.get<vk::PhysicalDeviceVulkan11Features>();
         auto &vulkan12Features = features2.get<vk::PhysicalDeviceVulkan12Features>();
         auto &vulkan13Features = features2.get<vk::PhysicalDeviceVulkan13Features>();
         auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
@@ -312,6 +366,7 @@ class Device
 #define REQUIRE_FEATURE(feature_field, feature_name) \
         nrAssert(feature_field == vk::True, std::format("Required feature {} is not enabled.", feature_name))
 
+        REQUIRE_FEATURE(vulkan11Features.shaderDrawParameters, "shaderDrawParameters");
         REQUIRE_FEATURE(vulkan12Features.bufferDeviceAddress, "bufferDeviceAddress");
         REQUIRE_FEATURE(vulkan12Features.descriptorIndexing, "descriptorIndexing");
         REQUIRE_FEATURE(vulkan13Features.inlineUniformBlock, "inlineUniformBlock");
@@ -443,6 +498,37 @@ class Device
         return getQueueFamilyWithFallback(QueueFamilyKind::compute);
     }
 
+    void refreshPresentSemaphores()
+    {
+        auto swapchainImageCount = presentationContext.swapchainImageCount();
+        auto upToDate = presentSemaphoresByImage_.size() == swapchainImageCount &&
+                        std::ranges::all_of(presentSemaphoresByImage_, [](const vk::raii::Semaphore& semaphore) {
+                            return *semaphore != nullptr;
+                        });
+        if (upToDate)
+        {
+            return;
+        }
+
+        presentSemaphoresByImage_.clear();
+        presentSemaphoresByImage_.reserve(swapchainImageCount);
+
+        auto semaphoreCreateInfo = vk::SemaphoreCreateInfo{};
+        auto imageIndices = std::views::iota(uint32_t{0}, swapchainImageCount);
+        std::ranges::for_each(imageIndices, [&](uint32_t) {
+            presentSemaphoresByImage_.emplace_back(device, semaphoreCreateInfo);
+        });
+    }
+
+    [[nodiscard]] const vk::raii::Semaphore& activePresentSemaphore() const
+    {
+        auto imageIndex = presentationContext.activeSwapchainImageIndex();
+        nrAssert(
+            imageIndex < presentSemaphoresByImage_.size(),
+            std::format("Device::activePresentSemaphore image index {} is out of range for {} present semaphores.", imageIndex, presentSemaphoresByImage_.size()));
+        return presentSemaphoresByImage_[imageIndex];
+    }
+
     std::vector<std::string> instanceEnabledLayers{};
     std::vector<std::string> instanceEnabledExtensions{};
     std::vector<std::string> deviceEnabledExtensions{
@@ -464,6 +550,9 @@ class Device
 
     std::array<size_t, static_cast<size_t>(QueueFamilyKind::size)> queueFamilyDict{};
     SwapChainConfig swapChainConfig_{};
+    uint32_t frameSubmitCount_ = 0;
+    std::optional<QueueRole> frameFinalSubmitRole_{};
+    std::vector<vk::raii::Semaphore> presentSemaphoresByImage_{};
 };
 
 void rhiTest()
