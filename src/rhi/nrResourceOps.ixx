@@ -1174,13 +1174,13 @@ namespace detail
 class ScopedRendering
 {
   public:
-    ScopedRendering(vk::CommandBuffer commandBuffer, const RenderingScopeDesc& desc)
-        : commandBuffer_(commandBuffer)
+    ScopedRendering(const vk::raii::CommandBuffer& commandBuffer, const RenderingScopeDesc& desc)
+        : commandBuffer_(std::cref(commandBuffer))
         , colorAttachmentInfos_(desc.colorAttachments |
                                 std::views::transform([](const RenderingAttachmentDesc& attachment) { return detail::makeRenderingAttachmentInfo(attachment); }) |
                                 std::ranges::to<std::vector>())
     {
-        nrAssert(commandBuffer_ != nullptr, "ScopedRendering requires a valid command buffer.");
+        nrAssert(*commandBuffer_.get() != nullptr, "ScopedRendering requires a valid command buffer.");
 
         renderingInfo_.renderArea = desc.renderArea;
         renderingInfo_.layerCount = desc.layerCount;
@@ -1204,15 +1204,15 @@ class ScopedRendering
             renderingInfo_.pStencilAttachment = &(*stencilAttachmentInfo_);
         }
 
-        commandBuffer_.beginRendering(renderingInfo_);
+        commandBuffer_.get().beginRendering(renderingInfo_);
         isActive_ = true;
     }
 
     ~ScopedRendering()
     {
-        if (isActive_ && commandBuffer_ != nullptr)
+        if (isActive_ && *commandBuffer_.get() != nullptr)
         {
-            commandBuffer_.endRendering();
+            commandBuffer_.get().endRendering();
         }
     }
 
@@ -1222,7 +1222,7 @@ class ScopedRendering
     ScopedRendering& operator=(ScopedRendering&&) = delete;
 
   private:
-    vk::CommandBuffer commandBuffer_{};
+    std::reference_wrapper<const vk::raii::CommandBuffer> commandBuffer_;
     std::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos_;
     std::optional<vk::RenderingAttachmentInfo> depthAttachmentInfo_;
     std::optional<vk::RenderingAttachmentInfo> stencilAttachmentInfo_;

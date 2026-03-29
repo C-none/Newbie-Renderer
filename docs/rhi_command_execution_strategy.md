@@ -11,6 +11,7 @@ Move command recording to Vulkan-Hpp RAII member functions and remove raw C API 
 - Do not add custom PFN dispatch tables.
 - Do not call raw `vkCmd*` entry points directly in project code.
 - Use `vk::raii` object member functions for command recording.
+- Public command-recording helper APIs should use `const vk::raii::CommandBuffer&` as the first-choice command buffer type.
 - If a public RHI entry point is needed, add a thin typed wrapper in existing modules and forward directly to RAII member functions.
 
 ## 3. Minimal Implementation Pattern

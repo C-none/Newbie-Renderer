@@ -29,6 +29,8 @@ struct GraphicsPipelineDesc
 		bool depthWriteEnable = false;
 		vk::CompareOp depthCompareOp = vk::CompareOp::eLessOrEqual;
 		std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments;
+		std::vector<vk::VertexInputBindingDescription> vertexBindings;
+		std::vector<vk::VertexInputAttributeDescription> vertexAttributes;
 		std::vector<vk::DynamicState> dynamicStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
 		vk::PipelineCreateFlags flags = {};
 		GraphicsPipelineMode mode = GraphicsPipelineMode::StandardGraphics;
@@ -326,24 +328,25 @@ class CursorPipelineLayout
 		}
 
 		void bindDescriptorSet(
-				vk::CommandBuffer commandBuffer,
+				const vk::raii::CommandBuffer &commandBuffer,
 				vk::PipelineBindPoint bindPoint,
 				const ShaderBindingSet &set,
 				std::span<const uint32_t> dynamicOffsets = {}) const;
 
 		void bindDescriptorSets(
-				vk::CommandBuffer commandBuffer,
+				const vk::raii::CommandBuffer &commandBuffer,
 				vk::PipelineBindPoint bindPoint,
 				std::span<const ShaderBindingSet> sets,
 				std::span<const uint32_t> dynamicOffsets = {}) const;
 
 		void pushConstants(
-				vk::CommandBuffer commandBuffer,
+				const vk::raii::CommandBuffer &commandBuffer,
 				vk::ShaderStageFlags stageFlags,
 				uint32_t offset,
 				std::span<const uint8_t> bytes) const
 		{
 			nrAssert(valid(), "CursorPipelineLayout::pushConstants requires a valid pipeline layout.");
+			nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::pushConstants requires a valid command buffer.");
 			if (bytes.empty())
 			{
 				return;
@@ -351,16 +354,17 @@ class CursorPipelineLayout
 			nrAssert(
 				bytes.size() <= std::numeric_limits<uint32_t>::max(),
 				std::format("CursorPipelineLayout::pushConstants payload too large: {} bytes", bytes.size()));
-			commandBuffer.pushConstants(raw(), stageFlags, offset, static_cast<uint32_t>(bytes.size()), bytes.data());
+			commandBuffer.pushConstants(raw(), stageFlags, offset, vk::ArrayProxy<const uint8_t>(static_cast<uint32_t>(bytes.size()), bytes.data()));
 		}
 
 		void pushConstants(
-				vk::CommandBuffer commandBuffer,
+				const vk::raii::CommandBuffer &commandBuffer,
 				const ShaderCursor &cursor,
 				std::span<const uint8_t> bytes) const
 		{
 			nrAssert(valid(), "CursorPipelineLayout::pushConstants requires a valid pipeline layout.");
 			nrAssert(cursor.valid(), "CursorPipelineLayout::pushConstants requires a valid shader cursor.");
+			nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::pushConstants requires a valid command buffer.");
 
 			auto pushConstantRange = cursor.pushConstantRange();
 			nrAssert(
@@ -413,25 +417,27 @@ class CursorPipelineLayout
 };
 
 inline void CursorPipelineLayout::bindDescriptorSet(
-		vk::CommandBuffer commandBuffer,
+		const vk::raii::CommandBuffer &commandBuffer,
 		vk::PipelineBindPoint bindPoint,
 		const ShaderBindingSet &set,
 		std::span<const uint32_t> dynamicOffsets) const
 {
 	nrAssert(valid(), "CursorPipelineLayout::bindDescriptorSet requires a valid pipeline layout.");
 	nrAssert(set.valid(), std::format("CursorPipelineLayout::bindDescriptorSet received invalid set {}.", set.setIndex()));
+	nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::bindDescriptorSet requires a valid command buffer.");
 
 	auto handle = set.raw();
 	commandBuffer.bindDescriptorSets(bindPoint, raw(), set.setIndex(), {handle}, dynamicOffsets);
 }
 
 inline void CursorPipelineLayout::bindDescriptorSets(
-		vk::CommandBuffer commandBuffer,
+		const vk::raii::CommandBuffer &commandBuffer,
 		vk::PipelineBindPoint bindPoint,
 		std::span<const ShaderBindingSet> sets,
 		std::span<const uint32_t> dynamicOffsets) const
 {
 	nrAssert(valid(), "CursorPipelineLayout::bindDescriptorSets requires a valid pipeline layout.");
+	nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::bindDescriptorSets requires a valid command buffer.");
 	nrAssert(
 		dynamicOffsets.empty(),
 		"CursorPipelineLayout::bindDescriptorSets with multiple sets does not accept shared dynamic offsets. Bind per-set when using dynamic offsets.");
@@ -471,7 +477,7 @@ inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPi
 }
 
 inline void bindResourcesToCommandBuffer(
-	vk::CommandBuffer commandBuffer,
+	const vk::raii::CommandBuffer &commandBuffer,
 	vk::PipelineBindPoint bindPoint,
 	const CursorPipelineLayout &layout,
 	ShaderBindingPool &pool,
@@ -480,7 +486,7 @@ inline void bindResourcesToCommandBuffer(
 	LogicalDescriptorResolver logicalResolver)
 {
 	nrAssert(layout.valid(), "bindResourcesToCommandBuffer requires a valid cursor pipeline layout.");
-	nrAssert(commandBuffer != vk::CommandBuffer{}, "bindResourcesToCommandBuffer requires a valid command buffer.");
+	nrAssert(*commandBuffer != nullptr, "bindResourcesToCommandBuffer requires a valid command buffer.");
 
 	auto writeRequests = resolveDescriptorWriteRequests(snapshot, std::move(logicalResolver));
 	if (!writeRequests.empty())
@@ -518,7 +524,7 @@ inline void bindResourcesToCommandBuffer(
 }
 
 inline std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
-	vk::CommandBuffer commandBuffer,
+	const vk::raii::CommandBuffer &commandBuffer,
 	vk::PipelineBindPoint bindPoint,
 	const CursorPipelineLayout &layout,
 	ShaderBindingPool &pool,
@@ -538,12 +544,12 @@ inline std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
 }
 
 inline void pushConstantsToCommandBuffer(
-	vk::CommandBuffer commandBuffer,
+	const vk::raii::CommandBuffer &commandBuffer,
 	const CursorPipelineLayout &layout,
 	const ShaderBindingSnapshot &snapshot)
 {
 	nrAssert(layout.valid(), "pushConstantsToCommandBuffer requires a valid cursor pipeline layout.");
-	nrAssert(commandBuffer != vk::CommandBuffer{}, "pushConstantsToCommandBuffer requires a valid command buffer.");
+	nrAssert(*commandBuffer != nullptr, "pushConstantsToCommandBuffer requires a valid command buffer.");
 
 	std::ranges::for_each(snapshot.pushConstantWrites(), [&](const PushConstantWriteRecord &record) {
 		if (record.data.empty())
@@ -691,6 +697,10 @@ class GraphicsPipeline
 				}
 
 				vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+				vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(desc.vertexBindings.size());
+				vertexInputInfo.pVertexBindingDescriptions = desc.vertexBindings.empty() ? nullptr : desc.vertexBindings.data();
+				vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(desc.vertexAttributes.size());
+				vertexInputInfo.pVertexAttributeDescriptions = desc.vertexAttributes.empty() ? nullptr : desc.vertexAttributes.data();
 				vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo{};
 				inputAssemblyInfo.topology = desc.topology;
 				inputAssemblyInfo.primitiveRestartEnable = vk::False;

@@ -477,7 +477,7 @@ struct BlasGeometryUpload
             nr::rhi::ops::pipelineBarrier(raw, traceInputBarriers);
 
             nr::rhi::bindResourcesToCommandBuffer(
-                raw,
+                graphicsCommandBuffer,
                 vk::PipelineBindPoint::eRayTracingKHR,
                 rtState.layout,
                 rtState.bindingPool,

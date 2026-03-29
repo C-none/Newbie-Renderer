@@ -8,3 +8,4 @@ export import :renderGraphCompiler;
 export import :renderGraphExecutor;
 export import :rendererSubmission;
 export import :renderer;
+export import :viewerCamera;

@@ -21,6 +21,9 @@ target_link_libraries(main PRIVATE
     nrrenderpasses
     dependency
 )
+target_compile_definitions(main PRIVATE
+    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+)
 target_sources(main
 	PRIVATE
 		${IMPL_SOURCES}

@@ -1,56 +1,74 @@
 # Agent Global Architecture Context
 
-This is a high-density global architecture context for agents. It only describes module responsibilities, primary data flow, dependency frameworks, and current boundaries. It does not duplicate coding rules. All coding constraints, style rules, and agent behavior requirements are maintained in [AGENTS.md](../../AGENTS.md).
+This document is the project-wide architecture index for agents. It stays high-level on purpose:
 
-For concrete interfaces, enums, records, comments, and implementation details, follow the linked code files and topic documents instead of expanding this document into an implementation manual.
+- it describes current module responsibilities and stable runtime boundaries
+- it points to the code and topic documents that own detail
+- it does not duplicate coding policy from [AGENTS.md](../../AGENTS.md)
+- it describes current reality, not abandoned plans
 
 ## 1. `rhi`
 
-`nr.rhi` is the Vulkan execution substrate of the project and the host-side shader ABI boundary. It owns device and swapchain lifetime, RAII GPU resources, descriptor and pipeline layout infrastructure, command recording helpers, synchronization, upload/readback utilities, and Slang compilation/reflection services.
+`nr.rhi` is the Vulkan execution substrate and shader ABI layer of the project.
 
-Its meaning to upper layers is:
+It owns:
 
-- `scene` uses it for upload, residency, and deferred retirement.
-- `renderer` and `renderPasses` use it to create pipelines, resolve descriptor layouts, and record graphics/compute/copy/ray tracing commands.
-- It does not understand scene templates, ECS semantics, render graph topology, or pass-level business intent.
+- device, queue, frame, surface, and swapchain lifetime
+- RAII GPU resources and transient pools
+- descriptor and pipeline layout infrastructure
+- command recording helpers, synchronization, upload, and readback
+- Slang compilation and reflection services
+
+It does not own:
+
+- asset import
+- scene registries or ECS state
+- render-graph topology
+- feature-pass business logic
 
 Current dependency frameworks:
 
 - Vulkan-Hpp RAII
 - VMA
 - GLFW for window and surface bootstrap
-- Slang for shader compilation, module organization, and reflection
+- Slang
 
-Current boundary decisions:
+Current boundary notes:
 
-- `rhi` is the execution and ABI layer, not the content-organization layer.
-- Windows + Vulkan + RTX-class hardware are hard assumptions; no compatibility path is expected for non-target platforms.
-- Command invocation should center on Vulkan-Hpp RAII member functions, not project-local dispatch tables.
-- Shader binding capture is cursor-centric: nodes record descriptor/push bindings through `ShaderCursor` snapshots, and execute-time descriptor/push replay is handled through RHI helper APIs rather than per-node writer objects.
+- Windows + Vulkan + RTX-class hardware are hard assumptions.
+- Command invocation should stay on Vulkan-Hpp RAII member functions instead of project-local dispatch tables.
+- Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
+- `rhi` is the execution layer, not the content-organization layer.
 
-Detail entry points:
+Entry points:
 
 - Module aggregation: [../../src/rhi/exportModule.ixx](../../src/rhi/exportModule.ixx)
 - Device and frame lifetime: [../../src/rhi/nrDevice.ixx](../../src/rhi/nrDevice.ixx)
-- RAII GPU resources: [../../src/rhi/nrResource.ixx](../../src/rhi/nrResource.ixx)
-- Slang service: [../../src/rhi/nrSlang.ixx](../../src/rhi/nrSlang.ixx)
-- Descriptor and pipeline details: [../../src/rhi/nrDescriptor.ixx](../../src/rhi/nrDescriptor.ixx), [../../src/rhi/nrPipeline.ixx](../../src/rhi/nrPipeline.ixx)
-- Topic documents: [../rhi_command_execution_strategy.md](../rhi_command_execution_strategy.md), [../slang_bindingtype_descriptor_mapping.md](../slang_bindingtype_descriptor_mapping.md)
+- RAII resources: [../../src/rhi/nrResource.ixx](../../src/rhi/nrResource.ixx)
+- Descriptor and pipeline services: [../../src/rhi/nrDescriptor.ixx](../../src/rhi/nrDescriptor.ixx), [../../src/rhi/nrPipeline.ixx](../../src/rhi/nrPipeline.ixx)
+- Topic docs: [../rhi_command_execution_strategy.md](../rhi_command_execution_strategy.md), [../slang_bindingtype_descriptor_mapping.md](../slang_bindingtype_descriptor_mapping.md)
 
 ## 2. `load`
 
-`nr.load` is the file-import and texture-decode front end. It converts external asset formats into a unified `nr::load::SceneAsset`, but it does not own ECS state, canonical resource registries, GPU upload, or runtime rendering orchestration.
+`nr.load` is the file-import and texture-decode front end.
 
-The primary data flow is:
+It owns:
 
-`SceneLoadRequest` -> importer backend dispatch -> Assimp scene import -> texture discovery and multithreaded decode -> `SceneAsset`
+- importer backend dispatch
+- Assimp-based scene import
+- texture discovery and decode
+- construction of `nr::load::SceneAsset`
 
-Its current outputs are mainly:
+It does not own:
 
-- authoring data for nodes, meshes, materials, textures, cameras, and lights
-- import error structures and import statistics
-- importer registry and backend dispatch
-- texture decode helpers
+- runtime ECS state
+- canonical CPU registries
+- GPU residency
+- renderer orchestration
+
+Primary flow:
+
+`SceneLoadRequest` -> backend dispatch -> import/decode -> `SceneAsset`
 
 Current dependency frameworks:
 
@@ -58,161 +76,169 @@ Current dependency frameworks:
 - stb_image
 - libjpeg-turbo
 
-Current boundary decisions:
+Entry points:
 
-- `load` produces import results, not runtime objects.
-- `SceneAsset` is input to the scene bridge and should not be consumed as a long-lived runtime source by `renderer` or `rhi`.
-- Deeper normalization, validation, and handle allocation belong to `scene` and `resource`, not `load`.
-
-Detail entry points:
-
-- Load data model: [../../src/load/nrLoadType.ixx](../../src/load/nrLoadType.ixx)
+- Data model: [../../src/load/nrLoadType.ixx](../../src/load/nrLoadType.ixx)
 - Backend dispatch: [../../src/load/nrLoadBackend.ixx](../../src/load/nrLoadBackend.ixx)
-- Default loader entry: [../../src/load/nrLoadLoader.ixx](../../src/load/nrLoadLoader.ixx)
-- Assimp backend: [../../src/load/nrLoadAssimp.ixx](../../src/load/nrLoadAssimp.ixx)
-- Texture decode path: [../../src/load/nrLoadDecode.ixx](../../src/load/nrLoadDecode.ixx)
+- Loader entry: [../../src/load/nrLoadLoader.ixx](../../src/load/nrLoadLoader.ixx)
+- Assimp bridge: [../../src/load/nrLoadAssimp.ixx](../../src/load/nrLoadAssimp.ixx)
 
 ## 3. `resources`
 
-`nr.resource` is the CPU-side canonical resource data model. It defines value types, typed handles, lightweight math/geometry helpers, and local validation/normalization methods. It is the data language of scene registries, but it does not own ECS state or GPU handles.
+`nr.resource` is the canonical CPU-side resource data layer.
 
-Its position in the global architecture is:
+It owns:
 
-- `load` converts external formats into authoring data.
-- `scene` bridges that authoring data into `nr.resource::*`.
-- `scene` then uses typed handles to manage registries, instance bindings, and GPU versions.
-- `renderer` and `renderPasses` usually see handles or bridged runtime views instead of directly operating on large canonical CPU objects.
+- value-type resource structures
+- typed handles used across runtime layers
+- geometry and math helpers close to resource data
+- local validation and normalization helpers
 
-Current boundary decisions:
+It does not own:
 
-- `nr.resource` is a data layer, not an orchestration layer.
-- It should remain focused on value semantics and validation, not import, ECS, or GPU lifetime.
-- The handle family is the stable cross-module reference vocabulary, and registry families should align with it.
+- import backends
+- ECS or scene lifetime
+- GPU handles or Vulkan execution
+- viewer/input-driven runtime camera control
 
-Detail entry points:
+Important current facts:
+
+- handles are the stable cross-module reference vocabulary
+- `CameraAsset` stores authored projection data, not runtime view state
+- scene registries mirror this handle family
+
+Entry points:
 
 - Module export entry: [../../src/resource/exportModule.ixx](../../src/resource/exportModule.ixx)
-- Detailed topic document: [../resource_module_architecture.md](../resource_module_architecture.md)
+- Topic doc: [../resource_module_architecture.md](../resource_module_architecture.md)
 
 ## 4. `scene`
 
-`nr.scene` is the main integration hub of the current project. It sits between `load`, `resource`, `rhi`, and `renderer`. It owns canonical key planning, resource registries, template/instance lifetime, the Flecs ECS world, GPU upload and residency state, and selector-driven packet extraction.
+`nr.scene` is the runtime world and bridge layer between `load`, `resource`, `rhi`, and `renderer`.
 
-The primary data flow is:
+It owns:
 
-`nr::load::SceneAsset` -> `SceneBridge` builds canonical keys and a bridge plan -> `nr.resource::*` registration -> template prefab tree -> runtime ECS instances -> `beginFrame/uploadPending/updateSimulation/extractPackets` -> `ScenePacketSet` -> `SceneRenderBridge` -> `SceneBridgeFrame`
+- canonical key planning from `SceneAsset`
+- CPU registries for meshes, materials, textures, cameras, and lights
+- template and instance lifetime
+- Flecs world organization
+- GPU upload and residency tracking
+- selector-driven packet extraction
+- imported primary-camera resolution plus fallback runtime camera
 
-The most important facts for upper layers are:
+Primary flow:
 
-- `scene` is not view-first; it is selector/profile-first.
-- Runtime packet extraction is defined by domain + selection + optional visibility filter, not by a multi-view render-list API.
-- The preferred `renderer` input boundary is `SceneBridgeFrame`, not direct access to internal scene registries or Flecs queries.
+`SceneAsset` -> `SceneBridgePlan` -> resource registration -> template prefab tree -> runtime instances -> `beginFrame / uploadPending / updateSimulation / extractPackets` -> `ScenePacketSet` -> `SceneRenderBridge::buildFrame(...)` -> `SceneBridgeFrame`
 
-Current dependency frameworks:
+Stable output boundaries today:
 
-- Flecs
-- GLM
-- `nr.resource`
-- `nr.rhi`
+- `SceneExtractProfileCreateInfo` + `SceneExtractInput`
+- `ScenePacketSet`
+- `SceneResolvedCamera`
+- `SceneBridgeFrame`
 
-Current boundary decisions:
+Boundary notes:
 
-- `scene` owns runtime organization and GPU lifetime, not disk I/O.
-- It is the module closest to "runtime world state" in the rendering stack.
-- The currently closed main path focuses on static mesh/material/texture/camera/light integration; skeleton, animation, and particle integration remain future work.
+- extraction is profile-first, not multi-view render-list-first
+- viewport-dependent projection and frustum resolution already live here
+- input-driven free-camera control remains outside `scene`
+- `SceneRenderBridge` now supports frame-constants override and per-draw geometry resolution so render passes can consume draw-ready geometry through bridge contracts
 
-Detail entry points:
+Entry points:
 
-- Main Scene implementation: [../../src/scene/nrScene.ixx](../../src/scene/nrScene.ixx)
-- Public types, packet types, and bridge types: [../../src/scene/nrSceneType.ixx](../../src/scene/nrSceneType.ixx)
-- Canonical key and render bridge logic: [../../src/scene/nrSceneBridge.ixx](../../src/scene/nrSceneBridge.ixx)
-- Topic document: [../scene_module_flecs_architecture.md](../scene_module_flecs_architecture.md)
+- Main implementation: [../../src/scene/nrScene.ixx](../../src/scene/nrScene.ixx)
+- Public types: [../../src/scene/nrSceneType.ixx](../../src/scene/nrSceneType.ixx)
+- Bridge logic: [../../src/scene/nrSceneBridge.ixx](../../src/scene/nrSceneBridge.ixx)
+- Topic doc: [../scene_module_flecs_architecture.md](../scene_module_flecs_architecture.md)
 
 ## 5. `renderer`
 
-`nr.renderer` is the rendering-runtime orchestration layer. It owns the installed graph, node lifecycle, frame-graph build/compile/prepare/execute/present flow, and cross-queue submit structure, but it does not own scene asset lifetime.
+`nr.renderer` is the frame orchestration layer.
 
-The current primary flow is:
+It owns:
 
-`Renderer::installGraph(spec)` installs a long-lived graph once -> each frame `renderFrame(input)` optionally drives the scene path -> installed node runtimes generate the frame graph -> compile -> prepare -> execute -> present
+- installed graph lifetime
+- node initialize/build/shutdown lifecycle
+- frame-graph build, compile, prepare, execute, and present flow
+- submit-boundary planning across queues
+- scene-path integration inside `renderFrame(...)`
 
-Its responsibilities focus on:
+It does not own:
 
-- node-level queue constraints
-- node metadata shape is name/ports/queue only (no node-kind field in runtime or graph node descriptors)
-- graph resource and pass descriptions
-- per-pass registration through `addPass(intentList, name, executeLambda)`
-- compiler, executor, and submit-boundary orchestration
-- injecting `SceneBridgeFrame` into node build each frame
-- owning renderer-level shader service configuration during initialization (`Renderer::initialize()`)
-- threading pass debug names into execute-time command-buffer debug labels for capture/profiling
+- scene asset lifetime
+- scene registries
+- input handling
 
-Current boundary decisions:
+Current frame path:
 
-- `renderer` is an orchestration layer, not a scene registry.
-- Graph topology is long-lived, and nodes are long-lived runtime objects rather than per-frame scripts.
-- The stable boundary between scene and render passes should be `SceneBridgeFrame` whenever possible, instead of leaking scene internals into node implementations.
+`Renderer::installGraph(spec)` installs long-lived nodes once -> each `renderFrame(input)` begins the device frame -> optionally drives `scene` extraction and bridge building (with optional app-side camera override) -> builds the graph -> compiles -> prepares -> executes -> presents
 
-Detail entry points:
+Boundary notes:
 
-- Renderer runtime entry: [../../src/renderer/nrRenderer.ixx](../../src/renderer/nrRenderer.ixx)
+- the preferred scene-facing input is `SceneBridgeFrame`
+- renderer can use scene-resolved camera data or an optional app/viewer camera override
+- when camera override is present, scene extraction uses `customFrustum` and bridge frame constants come from override data
+
+Entry points:
+
+- Runtime entry: [../../src/renderer/nrRenderer.ixx](../../src/renderer/nrRenderer.ixx)
+- Viewer camera runtime module: [../../src/renderer/nrViewerCamera.ixx](../../src/renderer/nrViewerCamera.ixx)
 - Graph types: [../../src/renderer/nrRenderGraphType.ixx](../../src/renderer/nrRenderGraphType.ixx)
-- Builder, compiler, and executor: [../../src/renderer/nrRenderGraphBuilder.ixx](../../src/renderer/nrRenderGraphBuilder.ixx), [../../src/renderer/nrRenderGraphCompiler.ixx](../../src/renderer/nrRenderGraphCompiler.ixx), [../../src/renderer/nrRenderGraphExecutor.ixx](../../src/renderer/nrRenderGraphExecutor.ixx)
-- Short terminology note: [../../src/renderer/README.md](../../src/renderer/README.md)
-- Topic document: [../renderer_renderpasses_two_phase_todo.md](../renderer_renderpasses_two_phase_todo.md)
+- Builder, compiler, executor: [../../src/renderer/nrRenderGraphBuilder.ixx](../../src/renderer/nrRenderGraphBuilder.ixx), [../../src/renderer/nrRenderGraphCompiler.ixx](../../src/renderer/nrRenderGraphCompiler.ixx), [../../src/renderer/nrRenderGraphExecutor.ixx](../../src/renderer/nrRenderGraphExecutor.ixx)
+- Terminology note: [../../src/renderer/README.md](../../src/renderer/README.md)
 
 ## 6. `renderpasses`
 
-`nr.renderPasses` is the implementation layer for concrete `NodeRuntime` objects. It is no longer a script-style pass list assembler. It is a collection of feature nodes built on top of the renderer contract. The current built-in nodes are centered on `NormalViewNode` and `PresentNode`.
+`nr.renderPasses` is the feature-node implementation layer on top of the renderer contract.
 
-Its role in the global architecture is:
+Current built-in nodes:
 
-- receive `NodeBuildContext` and `NodeFrameParameters` from `renderer`
-- read upstream node ports and optional `SceneBridgeFrame`
-- declare graph resources and pass intents, then register execute lambdas through `addPass(...)`
-- use `rhi` pipeline, descriptor, and command facilities to record actual work
-- capture scene draw packets during build, while preparing per-draw push-constant payloads inside pass record callbacks
+- `EmbeddedTriangleNode`
+- `NormalViewNode`
+- `PresentNode`
 
-Current boundary decisions:
+It owns:
 
-- `renderPasses` does not own scene lifetime, asset import, or a global cache system.
-- It is the concrete feature-node layer, not a new graph or runtime core.
-- `PresentNode` is a single-pass copy node (`sourceColor -> swapchain`) with no compute present transform or intermediate image.
-- Node inputs and outputs should remain ports and per-frame parameters instead of leaking internal graph-handle details across module boundaries.
+- concrete `NodeRuntime` implementations
+- pass intent declaration
+- pass record callbacks that use `rhi` services
 
-Detail entry points:
+It does not own:
 
-- Node type alias layer: [../../src/renderPasses/nrNodeType.ixx](../../src/renderPasses/nrNodeType.ixx)
+- scene lifetime
+- render-graph core orchestration
+- asset import
+
+Current boundary notes:
+
+- nodes consume `NodeBuildContext` and `NodeFrameParameters`
+- `EmbeddedTriangleNode` is the scene-less graphics demo path that records a single triangle draw and consumes CPU camera uniforms.
+- `PresentNode` is the copy-to-swapchain path
+- `NormalViewNode` consumes bridge draw geometry contracts and records real scene mesh draw calls (indexed/non-indexed) with world-space normal visualization
+- node record callbacks should route command recording through `PassRecordContext::commandBuffer` as a RAII `vk::raii::CommandBuffer` reference when calling `nr.rhi` command helpers.
+
+Entry points:
+
+- Node type aliases: [../../src/renderPasses/nrNodeType.ixx](../../src/renderPasses/nrNodeType.ixx)
 - NormalView node: [../../src/renderPasses/NormalView/nrNormalViewNode.ixx](../../src/renderPasses/NormalView/nrNormalViewNode.ixx)
 - Present node: [../../src/renderPasses/Present/nrPresentNode.ixx](../../src/renderPasses/Present/nrPresentNode.ixx)
 - Module note: [../../src/renderPasses/README.md](../../src/renderPasses/README.md)
-- Topic document: [../renderer_renderpasses_two_phase_todo.md](../renderer_renderpasses_two_phase_todo.md)
+- Current execution plan: [../normal_view_camera_three_phase_plan.md](../normal_view_camera_three_phase_plan.md)
 
 ## 7. `Overall`
 
-The current project can be read as the following main chain:
+The current main chain is:
 
 external asset files  
 -> `nr.load` produces `SceneAsset`  
--> `nr.scene` performs canonical bridging, resource registration, template/instance management, and GPU residency  
--> `nr.scene` extracts `ScenePacketSet` and builds `SceneBridgeFrame`  
--> `nr.renderer` drives frame build/compile/prepare/execute through an installed graph  
--> `nr.renderPasses` provides concrete feature nodes  
--> `nr.rhi` executes Vulkan/Slang/descriptor/pipeline/queue/swapchain work  
--> present
+-> `nr.scene` bridges, registers, instantiates, uploads, and extracts runtime packets  
+-> `nr.scene` builds `SceneBridgeFrame`  
+-> `nr.renderer` builds and executes the installed graph  
+-> `nr.renderPasses` records concrete feature work  
+-> `nr.rhi` executes Vulkan and present work
 
-Dependency frameworks should also be read by layer:
+Useful reality checks:
 
-- Third-party non-module dependencies enter the project only through [../../src/extern/exportDependency.ixx](../../src/extern/exportDependency.ixx).
-- `rhi` sits directly on Vulkan-Hpp RAII, VMA, Slang, and GLFW.
-- `load` sits directly on Assimp, stb_image, and libjpeg-turbo.
-- `scene` sits directly on Flecs while depending upward on `load` and downward on `resource` + `rhi`.
-- `renderer` and `renderPasses` should depend on stable runtime contracts instead of reaching back into import-layer details.
-
-The most useful workflow for an agent is:
-
-1. Use this document to identify which layer owns the problem.
-2. Read the topic document for that layer.
-3. Then drill into the layer's interface files, type files, and node implementations.
-
-If you need to verify the real program entry flow quickly, read [../../src/main.cpp](../../src/main.cpp). The current sample graph is `NormalView -> explicit submit boundary -> Present`, which is a compact example of the scene/renderer/renderpasses/rhi layering.
+- [../../src/main.cpp](../../src/main.cpp) is the renderer-only `EmbeddedTriangle -> Present` window loop with viewer-camera controls.
+- [../../test/app/rasterNormalViewer.cpp](../../test/app/rasterNormalViewer.cpp) provides both default smoke mode and explicit `--interactive` camera-control mode.
+- default `rasterNormalViewer` behavior remains finite smoke execution for `ctest`, while `--interactive` runs a user-driven loop.

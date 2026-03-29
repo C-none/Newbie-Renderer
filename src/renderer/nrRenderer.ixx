@@ -4,6 +4,7 @@ export module nr.renderer:renderer;
 import dependency;
 import nr.rhi;
 import nr.scene;
+import nr.resource;
 import nr.utils;
 import std;
 import :renderGraphBuilder;
@@ -47,6 +48,12 @@ struct NodeFrameParameters
     std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame{};
     std::optional<std::reference_wrapper<const nr::scene::ScenePacketSet>> scenePackets{};
     std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};
+};
+
+struct RendererCameraOverride
+{
+    nr::scene::SceneBridgeFrameConstants frameConstants{};
+    nr::scene::SceneFrustum frustum{};
 };
 
 struct NodeInitContext
@@ -176,6 +183,7 @@ struct RendererFrameInput
     std::optional<std::reference_wrapper<nr::scene::Scene>> scene{};
     std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max();
     std::optional<nr::scene::SceneExtractInput> sceneExtractInput{};
+    std::optional<RendererCameraOverride> cameraOverride{};
 };
 
 struct RendererFrameResult
@@ -197,6 +205,7 @@ struct RendererFrameResult
     bool syntheticPresentBatchUsed = false;
 
     bool usedScenePath = false;
+    bool usedCameraOverride = false;
     bool sceneExtractProfileCreated = false;
     std::size_t sceneBridgeDrawCount = 0;
     std::size_t sceneRasterPacketCount = 0;
@@ -349,6 +358,7 @@ class Renderer
         auto primaryCamera = std::optional<nr::scene::SceneResolvedCamera>{};
         auto sceneBridgeFrame = std::optional<nr::scene::SceneBridgeFrame>{};
         auto sceneExtractProfileCreated = false;
+        auto sceneCameraOverride = input.cameraOverride;
 
         if (input.scene.has_value())
         {
@@ -366,13 +376,89 @@ class Renderer
                 extractInput.viewportExtent = glm::uvec2{extent.width, extent.height};
             }
 
+            if (sceneCameraOverride.has_value())
+            {
+                extractInput.visibility = nr::scene::SceneVisibilityMode::customFrustum;
+                extractInput.customFrustum = sceneCameraOverride->frustum;
+            }
+
             scenePackets = scene.extractPackets(profile, extractInput);
-            primaryCamera = scene.tryGetPrimaryCamera(extractInput.viewportExtent);
+            if (!sceneCameraOverride.has_value())
+            {
+                primaryCamera = scene.tryGetPrimaryCamera(extractInput.viewportExtent);
+            }
 
             auto bridgeBuildInput = nr::scene::SceneRenderBridgeBuildInput{
                 .packetSet = std::cref(*scenePackets),
                 .primaryCamera = std::nullopt,
+                .frameConstantsOverride = std::nullopt,
             };
+
+            if (sceneCameraOverride.has_value())
+            {
+                bridgeBuildInput.frameConstantsOverride = sceneCameraOverride->frameConstants;
+            }
+
+            bridgeBuildInput.resolveRasterDrawGeometry =
+                [&](nr::resource::MeshHandle meshHandle, std::uint32_t submeshIndex)
+                -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
+                auto meshRecordRef = scene.tryGetMeshAsset(meshHandle);
+                if (!meshRecordRef.has_value())
+                {
+                    return std::nullopt;
+                }
+
+                auto const &meshRecord = meshRecordRef->get();
+                if (!meshRecord.cpuReady || !meshRecord.gpu.has_value())
+                {
+                    return std::nullopt;
+                }
+
+                if (!meshRecord.gpu->vertexBuffer.valid())
+                {
+                    return std::nullopt;
+                }
+
+                if (submeshIndex >= meshRecord.cpu.submeshes.size())
+                {
+                    return std::nullopt;
+                }
+
+                auto const &submesh = meshRecord.cpu.submeshes[submeshIndex];
+                auto geometry = nr::scene::SceneBridgeDrawGeometry{};
+                geometry.vertexBuffer = nr::scene::SceneBridgeBufferBinding{
+                    .buffer = std::cref(meshRecord.gpu->vertexBuffer),
+                    .offset = 0,
+                };
+                geometry.frontFace = meshRecord.cpu.clockwiseFrontFace
+                                         ? vk::FrontFace::eClockwise
+                                         : vk::FrontFace::eCounterClockwise;
+
+                auto const indexedGeometry = meshRecord.gpu->indexBuffer.valid() && !meshRecord.cpu.indices.empty();
+                if (indexedGeometry)
+                {
+                    geometry.indexBuffer = nr::scene::SceneBridgeBufferBinding{
+                        .buffer = std::cref(meshRecord.gpu->indexBuffer),
+                        .offset = 0,
+                    };
+                    geometry.firstIndex = submesh.firstIndex;
+                    geometry.indexCount = submesh.indexCount > 0
+                                              ? submesh.indexCount
+                                              : meshRecord.gpu->indexCount;
+                    geometry.vertexOffset = submesh.vertexOffset <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())
+                                                ? static_cast<std::int32_t>(submesh.vertexOffset)
+                                                : std::numeric_limits<std::int32_t>::max();
+                    geometry.indexType = vk::IndexType::eUint32;
+                    return geometry;
+                }
+
+                geometry.firstVertex = submesh.vertexOffset;
+                geometry.vertexCount = submesh.indexCount > 0
+                                           ? submesh.indexCount
+                                           : meshRecord.gpu->vertexCount;
+                return geometry;
+            };
+
             if (primaryCamera.has_value())
             {
                 bridgeBuildInput.primaryCamera = std::cref(*primaryCamera);
@@ -437,6 +523,7 @@ class Renderer
             .appliedReleaseBarrierCount = executeReport.appliedReleaseBarrierCount,
             .syntheticPresentBatchUsed = executeReport.plan.requiresSyntheticPresentBatch,
             .usedScenePath = input.scene.has_value(),
+            .usedCameraOverride = sceneCameraOverride.has_value(),
             .sceneExtractProfileCreated = sceneExtractProfileCreated,
             .sceneBridgeDrawCount = sceneBridgeFrame.has_value() ? sceneBridgeFrame->rasterDraws.size() : 0,
             .sceneRasterPacketCount = scenePackets.has_value() ? scenePackets->rasterDraws.size() : 0,

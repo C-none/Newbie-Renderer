@@ -185,8 +185,10 @@ struct SceneRenderBridgeBuildInput
 {
     std::reference_wrapper<const ScenePacketSet> packetSet;
     std::optional<std::reference_wrapper<const SceneResolvedCamera>> primaryCamera{};
+    std::optional<SceneBridgeFrameConstants> frameConstantsOverride{};
     std::function<std::optional<std::uint32_t>(nr::resource::MeshHandle)> resolveMeshBindless{};
     std::function<std::optional<std::uint32_t>(nr::resource::MaterialHandle)> resolveMaterialBindless{};
+    std::function<std::optional<SceneBridgeDrawGeometry>(nr::resource::MeshHandle, std::uint32_t)> resolveRasterDrawGeometry{};
 };
 
 class SceneRenderBridge
@@ -197,6 +199,12 @@ class SceneRenderBridge
         auto frame = SceneBridgeFrame{};
         auto const &packetSet = input.packetSet.get();
         frame.domain = packetSet.domain;
+
+        if (input.frameConstantsOverride.has_value())
+        {
+            frame.frameConstants = *input.frameConstantsOverride;
+            frame.hasPrimaryCamera = true;
+        }
 
         if (input.primaryCamera.has_value())
         {
@@ -239,6 +247,19 @@ class SceneRenderBridge
             return materialHandle.valid() ? materialHandle.slot : std::numeric_limits<std::uint32_t>::max();
         };
 
+        auto resolveRasterDrawGeometry = [&](nr::resource::MeshHandle meshHandle, std::uint32_t submeshIndex) {
+            if (input.resolveRasterDrawGeometry)
+            {
+                auto resolved = input.resolveRasterDrawGeometry(meshHandle, submeshIndex);
+                if (resolved.has_value())
+                {
+                    return *resolved;
+                }
+            }
+
+            return SceneBridgeDrawGeometry{};
+        };
+
         frame.rasterDraws.reserve(packetSet.rasterDraws.size());
         std::ranges::for_each(packetSet.rasterDraws, [&](const RasterDrawPacket &packet) {
             frame.rasterDraws.push_back(SceneBridgeDrawPacket{
@@ -251,6 +272,7 @@ class SceneRenderBridge
                 .sortKey = packet.sortKey,
                 .meshBindless = resolveMeshBindless(packet.mesh),
                 .materialBindless = resolveMaterialBindless(packet.material),
+                .geometry = resolveRasterDrawGeometry(packet.mesh, packet.submeshIndex),
             });
         });
 

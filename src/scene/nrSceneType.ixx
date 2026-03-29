@@ -186,6 +186,35 @@ struct SceneBridgeFrameConstants
     float drawCount = 0.0f;
 };
 
+struct SceneBridgeBufferBinding
+{
+    std::optional<std::reference_wrapper<const nr::rhi::Buffer>> buffer{};
+    vk::DeviceSize offset = 0;
+};
+
+struct SceneBridgeDrawGeometry
+{
+    SceneBridgeBufferBinding vertexBuffer{};
+    SceneBridgeBufferBinding indexBuffer{};
+    std::uint32_t firstVertex = 0;
+    std::uint32_t vertexCount = 0;
+    std::uint32_t firstIndex = 0;
+    std::uint32_t indexCount = 0;
+    std::int32_t vertexOffset = 0;
+    vk::IndexType indexType = vk::IndexType::eUint32;
+    vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
+
+    [[nodiscard]] bool hasVertexBuffer() const noexcept
+    {
+        return vertexBuffer.buffer.has_value();
+    }
+
+    [[nodiscard]] bool hasIndexBuffer() const noexcept
+    {
+        return indexBuffer.buffer.has_value() && indexCount > 0;
+    }
+};
+
 struct SceneBridgeDrawPacket
 {
     flecs::entity renderable{};
@@ -197,6 +226,7 @@ struct SceneBridgeDrawPacket
     std::uint64_t sortKey = 0;
     std::uint32_t meshBindless = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
+    SceneBridgeDrawGeometry geometry{};
 };
 
 struct SceneBridgeDrawGroup

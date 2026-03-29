@@ -66,6 +66,10 @@ class Device
             debugUtilsMessenger = vk::raii::DebugUtilsMessengerEXT(instance, makeDebugUtilsMessengerCreateInfoEXT());
         }
         physicalDevice = selectPhysicalDevice(instance);
+        {
+            auto gpuProps = physicalDevice.getProperties();
+            nrInfo<>(std::format("Selected GPU: {}", gpuProps.deviceName.data()));
+        }
         device = makeDevice();
 
         memoryAllocator.initialize(instance, physicalDevice, device);

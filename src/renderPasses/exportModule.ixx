@@ -2,5 +2,6 @@ module;
 export module nr.renderPasses;
 
 export import :nodeType;
-export import :normalView;
+export import :embeddedTriangle;
+export import :normalBuffer;
 export import :presentNode;

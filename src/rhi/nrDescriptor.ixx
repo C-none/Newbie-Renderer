@@ -262,12 +262,13 @@ class ShaderBindingPool
 
 struct LogicalResourceDescriptorWrite
 {
+    // Reflection provides descriptor set/binding/type through DescriptorBindingInfo.
+    // This logical payload carries runtime resource identity plus optional per-descriptor state.
     uint64_t logicalResourceId = 0;
     std::string debugName{};
     vk::ImageLayout imageLayout = vk::ImageLayout::eGeneral;
     vk::Sampler sampler{};
     vk::DeviceSize offset = 0;
-    vk::DeviceSize range = detail::kWholeBufferRange;
 };
 
 using ShaderBindingRecordPayload =
@@ -936,7 +937,7 @@ class ShaderDescriptorLayout
 [[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout, ShaderBindingPool &pool);
 
 void bindResourcesToCommandBuffer(
-    vk::CommandBuffer commandBuffer,
+    const vk::raii::CommandBuffer& commandBuffer,
     vk::PipelineBindPoint bindPoint,
     const CursorPipelineLayout &layout,
     ShaderBindingPool &pool,
@@ -945,7 +946,7 @@ void bindResourcesToCommandBuffer(
     LogicalDescriptorResolver logicalResolver = {});
 
 [[nodiscard]] std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
-    vk::CommandBuffer commandBuffer,
+    const vk::raii::CommandBuffer& commandBuffer,
     vk::PipelineBindPoint bindPoint,
     const CursorPipelineLayout &layout,
     ShaderBindingPool &pool,
@@ -953,7 +954,7 @@ void bindResourcesToCommandBuffer(
     LogicalDescriptorResolver logicalResolver = {});
 
 void pushConstantsToCommandBuffer(
-    vk::CommandBuffer commandBuffer,
+    const vk::raii::CommandBuffer& commandBuffer,
     const CursorPipelineLayout &layout,
     const ShaderBindingSnapshot &snapshot);
 

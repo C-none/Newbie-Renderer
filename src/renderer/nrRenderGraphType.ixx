@@ -76,6 +76,7 @@ struct GraphTransientBufferDesc
     ResourceLifetime lifetime = ResourceLifetime::GraphTransient;
     vk::DeviceSize size = 0;
     std::vector<BufferUsageIntent> usageIntents{};
+    nr::rhi::MemoryUsage memoryUsage = nr::rhi::MemoryUsage::GpuOnly;
 };
 
 struct GraphTransientImageDesc
@@ -106,13 +107,13 @@ struct PassResourceUseDesc
 {
     GraphResourceHandle resource{};
 
-    std::optional<BufferUsageIntent> bufferUsage{};
-    std::optional<BufferAccessIntent> bufferAccess{};
+    std::optional<BufferUsageIntent> bufferUsage = std::nullopt;
+    std::optional<BufferAccessIntent> bufferAccess = std::nullopt;
 
-    std::optional<ImageUsageIntent> imageUsage{};
-    std::optional<ImageAccessIntent> imageAccess{};
-    std::optional<ImageLayoutIntent> imageLayout{};
-    std::optional<ImageAspectIntent> imageAspect{};
+    std::optional<ImageUsageIntent> imageUsage = std::nullopt;
+    std::optional<ImageAccessIntent> imageAccess = std::nullopt;
+    std::optional<ImageLayoutIntent> imageLayout = std::nullopt;
+    std::optional<ImageAspectIntent> imageAspect = std::nullopt;
 
     ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
     bool readOnly = false;
@@ -122,7 +123,7 @@ struct PassBufferResource
 {
     vk::Buffer buffer = vk::Buffer{};
     vk::DeviceSize size = 0;
-    std::optional<std::reference_wrapper<const nr::rhi::Buffer>> resource{};
+    std::optional<std::reference_wrapper<nr::rhi::Buffer>> resource{};
 };
 
 struct PassImageResource
@@ -235,6 +236,7 @@ struct CompiledResourceDesc
 
     ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined;
     ResourceOwnershipDomain finalOwnership = ResourceOwnershipDomain::Undefined;
+    nr::rhi::MemoryUsage resolvedBufferMemoryUsage = nr::rhi::MemoryUsage::GpuOnly;
 };
 
 struct CompiledPass

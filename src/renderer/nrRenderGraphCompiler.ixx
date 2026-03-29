@@ -229,6 +229,7 @@ class RenderGraphCompiler
                 .finalLayout = ImageLayoutIntent::Undefined,
                 .initialOwnership = ResourceOwnershipDomain::Undefined,
                 .finalOwnership = ResourceOwnershipDomain::Undefined,
+                .resolvedBufferMemoryUsage = nr::rhi::MemoryUsage::GpuOnly,
             };
 
             std::visit(
@@ -256,6 +257,7 @@ class RenderGraphCompiler
                         compiledResource.resolvedBufferSize = desc.size;
                         compiledResource.initialOwnership = ResourceOwnershipDomain::Undefined;
                         compiledResource.finalOwnership = ResourceOwnershipDomain::Undefined;
+                        compiledResource.resolvedBufferMemoryUsage = desc.memoryUsage;
                         std::ranges::for_each(desc.usageIntents, [&](BufferUsageIntent intent) {
                             compiledResource.resolvedBufferUsage |= mapBufferUsageIntent(intent);
                         });

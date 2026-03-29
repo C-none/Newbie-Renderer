@@ -55,7 +55,7 @@ struct PreparedResourceBinding
 
     vk::Buffer buffer = vk::Buffer{};
     vk::DeviceSize bufferSize = 0;
-    std::optional<std::reference_wrapper<const nr::rhi::Buffer>> bufferResource{};
+    std::optional<std::reference_wrapper<nr::rhi::Buffer>> bufferResource{};
     vk::Image image = vk::Image{};
     vk::ImageView imageView = vk::ImageView{};
     std::optional<std::reference_wrapper<const nr::rhi::Image>> imageResource{};
@@ -78,6 +78,145 @@ struct PreparedGraphFrame
     std::size_t invokedPassPrepareCount = 0;
 };
 
+[[nodiscard]] inline std::optional<nr::rhi::DescriptorWritePayload> resolveLogicalDescriptorWriteDefault(
+    const nr::rhi::LogicalResourceDescriptorWrite& logicalResource,
+    const nr::rhi::DescriptorBindingInfo& binding,
+    [[maybe_unused]] std::uint32_t arrayElement,
+    const PassRecordContext& recordContext)
+{
+    nrAssert(
+        static_cast<bool>(recordContext.resolveBuffer),
+        "resolveLogicalDescriptorWriteDefault requires resolveBuffer callback.");
+    nrAssert(
+        static_cast<bool>(recordContext.resolveImage),
+        "resolveLogicalDescriptorWriteDefault requires resolveImage callback.");
+
+    nrAssert(
+        logicalResource.logicalResourceId <= static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()),
+        std::format(
+            "resolveLogicalDescriptorWriteDefault logical resource id {} exceeds GraphResourceHandle capacity.",
+            logicalResource.logicalResourceId));
+
+    auto resourceHandle = GraphResourceHandle{
+        static_cast<std::uint32_t>(logicalResource.logicalResourceId),
+    };
+
+    auto resolveBufferDescriptor = [&]() -> std::optional<nr::rhi::DescriptorWritePayload> {
+        auto resolvedBuffer = recordContext.resolveBuffer(resourceHandle);
+        nrAssert(
+            resolvedBuffer.has_value(),
+            std::format(
+                "resolveLogicalDescriptorWriteDefault failed to resolve logical buffer '{}' ({}) for descriptor set={}, binding={}.",
+                logicalResource.debugName,
+                logicalResource.logicalResourceId,
+                binding.set,
+                binding.binding));
+        nrAssert(
+            logicalResource.offset <= resolvedBuffer->size,
+            std::format(
+                "resolveLogicalDescriptorWriteDefault buffer offset out of range. name='{}' offset={} size={}",
+                logicalResource.debugName,
+                logicalResource.offset,
+                resolvedBuffer->size));
+
+        auto resolvedRange = resolvedBuffer->size - logicalResource.offset;
+
+        return nr::rhi::DescriptorWritePayload{
+            nr::rhi::BufferDescriptorWrite{
+                .buffer = resolvedBuffer->buffer,
+                .offset = logicalResource.offset,
+                .range = resolvedRange,
+            }};
+    };
+
+    switch (binding.descriptorType)
+    {
+    case vk::DescriptorType::eUniformBuffer:
+    case vk::DescriptorType::eUniformBufferDynamic:
+        // Uniform descriptors use the logical offset and resolve range to [offset, bufferEnd).
+        return resolveBufferDescriptor();
+
+    case vk::DescriptorType::eStorageBuffer:
+        // Storage buffer descriptors share DescriptorBufferInfo payload shape with uniforms.
+        // The descriptor type itself remains `eStorageBuffer` through `binding.descriptorType`.
+        return resolveBufferDescriptor();
+
+    case vk::DescriptorType::eSampledImage:
+    case vk::DescriptorType::eStorageImage:
+    case vk::DescriptorType::eInputAttachment:
+    {
+        auto resolvedImage = recordContext.resolveImage(resourceHandle);
+        nrAssert(
+            resolvedImage.has_value(),
+            std::format(
+                "resolveLogicalDescriptorWriteDefault failed to resolve logical image '{}' ({}) for descriptor set={}, binding={}.",
+                logicalResource.debugName,
+                logicalResource.logicalResourceId,
+                binding.set,
+                binding.binding));
+        nrAssert(
+            resolvedImage->view != vk::ImageView{},
+            std::format(
+                "resolveLogicalDescriptorWriteDefault resolved logical image '{}' ({}) without a valid image view.",
+                logicalResource.debugName,
+                logicalResource.logicalResourceId));
+
+        return nr::rhi::DescriptorWritePayload{
+            nr::rhi::ImageDescriptorWrite{
+                .imageView = resolvedImage->view,
+                .imageLayout = logicalResource.imageLayout,
+                .sampler = {},
+            }};
+    }
+    case vk::DescriptorType::eSampler:
+    {
+        return nr::rhi::DescriptorWritePayload{
+            nr::rhi::ImageDescriptorWrite{
+                .imageView = {},
+                .imageLayout = vk::ImageLayout::eUndefined,
+                .sampler = logicalResource.sampler,
+            }};
+    }
+    case vk::DescriptorType::eCombinedImageSampler:
+    {
+        auto resolvedImage = recordContext.resolveImage(resourceHandle);
+        nrAssert(
+            resolvedImage.has_value(),
+            std::format(
+                "resolveLogicalDescriptorWriteDefault failed to resolve logical combined-image '{}' ({}) for descriptor set={}, binding={}.",
+                logicalResource.debugName,
+                logicalResource.logicalResourceId,
+                binding.set,
+                binding.binding));
+        nrAssert(
+            resolvedImage->view != vk::ImageView{},
+            std::format(
+                "resolveLogicalDescriptorWriteDefault resolved logical combined-image '{}' ({}) without a valid image view.",
+                logicalResource.debugName,
+                logicalResource.logicalResourceId));
+
+        return nr::rhi::DescriptorWritePayload{
+            nr::rhi::ImageDescriptorWrite{
+                .imageView = resolvedImage->view,
+                .imageLayout = logicalResource.imageLayout,
+                .sampler = logicalResource.sampler,
+            }};
+    }
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] inline nr::rhi::LogicalDescriptorResolver makeDefaultLogicalDescriptorResolver(const PassRecordContext& recordContext)
+{
+    return [&recordContext](
+               const nr::rhi::LogicalResourceDescriptorWrite& logicalResource,
+               const nr::rhi::DescriptorBindingInfo& binding,
+               std::uint32_t arrayElement) -> std::optional<nr::rhi::DescriptorWritePayload> {
+        return resolveLogicalDescriptorWriteDefault(logicalResource, binding, arrayElement, recordContext);
+    };
+}
+
 class RenderGraphExecutor
 {
   public:
@@ -88,7 +227,7 @@ class RenderGraphExecutor
         std::optional<std::uint32_t> swapchainImageIndex{};
         std::optional<std::reference_wrapper<RendererSubmissionTimeline>> submissionTimeline{};
 
-        std::map<GraphResourceHandle, std::reference_wrapper<const nr::rhi::Buffer>> importedBuffers{};
+        std::map<GraphResourceHandle, std::reference_wrapper<nr::rhi::Buffer>> importedBuffers{};
         std::map<GraphResourceHandle, vk::Image> importedImages{};
     };
 
@@ -662,12 +801,12 @@ class RenderGraphExecutor
 
                     auto& buffer = context.device.resourcePool.allocateTransientBuffer(
                         createInfo,
-                        nr::rhi::MemoryUsage::GpuOnly,
+                        resource.resolvedBufferMemoryUsage,
                         context.frameIndex,
                         resource.debugName);
                     binding.buffer = buffer.handle();
                     binding.bufferSize = buffer.size();
-                    binding.bufferResource = std::cref(buffer);
+                    binding.bufferResource = std::ref(buffer);
                 }
                 else
                 {

@@ -1,17 +1,16 @@
-nr_add_executable(rasterNormalViewer rasterNormalViewer.cpp)
-set_target_properties(rasterNormalViewer PROPERTIES FOLDER "Test/app")
+# nr_add_executable(rasterNormalViewer rasterNormalViewer.cpp)
+# set_target_properties(rasterNormalViewer PROPERTIES FOLDER "Test/app")
 
-target_link_libraries(rasterNormalViewer PRIVATE
-    nrrenderpasses
-    nrrenderer
-    nrscene
-    nrload
-    utils
-    dependency
-)
+# target_link_libraries(rasterNormalViewer PRIVATE
+#     nrrenderpasses
+#     nrrenderer
+#     nrscene
+#     nrload
+#     utils
+#     dependency
+# )
 
-target_compile_definitions(rasterNormalViewer PRIVATE
-    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
-)
+# target_compile_definitions(rasterNormalViewer PRIVATE
+#     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+# )
 
-add_test(NAME rasterNormalViewer COMMAND rasterNormalViewer)

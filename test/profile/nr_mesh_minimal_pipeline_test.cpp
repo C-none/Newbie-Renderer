@@ -481,10 +481,10 @@ struct MeshInputVertex
             renderingScope.colorAttachments = colorAttachments;
 
             {
-                nr::rhi::ops::ScopedRendering rendering(raw, renderingScope);
+                nr::rhi::ops::ScopedRendering rendering(graphicsCommandBuffer, renderingScope);
 
                 nr::rhi::bindResourcesToCommandBuffer(
-                    raw,
+                    graphicsCommandBuffer,
                     vk::PipelineBindPoint::eGraphics,
                     meshPipelineState.layout,
                     meshPipelineState.bindingPool,

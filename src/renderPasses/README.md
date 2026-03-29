@@ -9,5 +9,6 @@ This module uses the same fixed terms as renderer:
 Rules:
 
 - A Node may emit multiple passes.
-- NormalView Node targets graphics queue output.
+- EmbeddedTriangle Node targets graphics queue output, binds CPU camera uniforms, and emits a single draw-call demo pass.
+- NormalBuffer Node targets graphics queue output, outputs world-space interpolated vertex normals for any scene.
 - Present Node targets compute queue path and final present preparation.

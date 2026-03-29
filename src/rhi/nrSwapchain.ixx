@@ -299,6 +299,40 @@ class PresentationContext
         glfwPollEvents();
     }
 
+    [[nodiscard]] bool keyDown(int glfwKeyCode) const
+    {
+        if (surface_.handle == nullptr)
+        {
+            return false;
+        }
+
+        auto state = glfwGetKey(surface_.handle.get(), glfwKeyCode);
+        return state != 0;
+    }
+
+    [[nodiscard]] bool mouseButtonDown(int glfwMouseButton) const
+    {
+        if (surface_.handle == nullptr)
+        {
+            return false;
+        }
+
+        return glfwGetMouseButton(surface_.handle.get(), glfwMouseButton) != 0;
+    }
+
+    [[nodiscard]] glm::dvec2 cursorPosition() const
+    {
+        if (surface_.handle == nullptr)
+        {
+            return glm::dvec2{0.0, 0.0};
+        }
+
+        auto x = 0.0;
+        auto y = 0.0;
+        glfwGetCursorPos(surface_.handle.get(), &x, &y);
+        return glm::dvec2{x, y};
+    }
+
     [[nodiscard]] bool windowShouldClose() const
     {
         return surface_.handle == nullptr || glfwWindowShouldClose(surface_.handle.get()) != 0;
