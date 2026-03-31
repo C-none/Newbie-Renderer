@@ -88,8 +88,6 @@ nr::load::SceneAsset
 - 现有 `SceneBridgeFrame` 还没有把每个 draw 扩展成 render-pass 可直接消费的完整 draw-ready geometry contract
 - `NormalViewNode` 因此仍停留在“scene-driven draw planning 已成立、真实任意模型几何绘制尚未完成”的状态
 
-这部分后续工作已经单独落在 [normal_view_camera_three_phase_plan.md](./normal_view_camera_three_phase_plan.md)。
-
 ## 4. Flecs 在当前架构中的位置
 
 Flecs 目前用于：
@@ -153,15 +151,15 @@ Flecs 目前用于：
 如果要验证 scene 当前真实边界，优先看这些测试：
 
 - `test/scene/nr_scene_bridge_plan_test.cpp`
-- `test/scene/nr_scene_primary_camera_test.cpp`
 - `test/scene/nr_scene_camera_projection_contract_test.cpp`
-- `test/profile/nr_renderer_stage4_scene_bridge_contract_test.cpp`
-- `test/profile/nr_scene_mesh_pipeline_integration_test.cpp`
+- `test/scene/nr_scene_packet_readiness_test.cpp`
+- `test/profile/nr_renderer_camera_override_contract_test.cpp`
+- `test/app/normalBufferUiSmoke.cpp`
 
 这些测试覆盖了：
 
 - bridge plan 与 canonical key
-- imported / fallback primary camera
-- viewport 驱动的投影 contract
-- scene -> renderer bridge frame
-- scene packet 到 graphics consumer 的当前主路径
+- viewport 驱动的投影 contract 与主相机提取路径
+- packet readiness 与 scene 抽取主链路
+- renderer camera override 下的 scene -> renderer 桥接契约
+- `NormalBuffer + Ui -> Present` 主运行路径的端到端 smoke 覆盖

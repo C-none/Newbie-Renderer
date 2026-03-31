@@ -281,6 +281,15 @@ class EmbeddedTriangleNode final : public Node
 
     void shutdown(NodeShutdownContext&) override
     {
+        // Explicitly clear binding sets to ensure all descriptor sets are properly
+        // released to the binding pool before the pool is destroyed
+        if (runtime_)
+        {
+            for (auto& bindingSets : runtime_->passBindingSetsByFrame)
+            {
+                bindingSets.clear();
+            }
+        }
         runtime_.reset();
     }
 

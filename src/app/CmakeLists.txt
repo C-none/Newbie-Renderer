@@ -1,25 +1,23 @@
-file(GLOB_RECURSE MODULE_UNITS
+file(GLOB MODULE_UNITS
     CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.ixx"
 )
 
-file(GLOB_RECURSE IMPL_SOURCES
+file(GLOB IMPL_SOURCES
     CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
 )
 
-nr_add_library(nrrenderpasses STATIC)
-target_link_libraries(nrrenderpasses
+nr_add_library(nrapp STATIC)
+target_link_libraries(nrapp
 PUBLIC
-    nrapp
+    dependency
+    nrrhi
     nrrenderer
     nrscene
-    nrresource
-    nrrhi
     utils
-    dependency
 )
-target_sources(nrrenderpasses
+target_sources(nrapp
     PRIVATE
         ${IMPL_SOURCES}
     PUBLIC

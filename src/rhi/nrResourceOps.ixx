@@ -1320,8 +1320,8 @@ class UploadReadbackContext
         const vk::raii::Device& device,
         ResourceFactory& resourceFactory,
         QueueManager& queueManager,
-        vk::DeviceSize uploadRingSize = 16u * 1024u * 1024u,
-        vk::DeviceSize readbackRingSize = 16u * 1024u * 1024u)
+        vk::DeviceSize uploadRingSize = 64u * 1024u * 1024u,
+        vk::DeviceSize readbackRingSize = 64u * 1024u * 1024u)
         : device_(std::cref(device))
         , queueManager_(std::ref(queueManager))
         , uploadCapacity_(uploadRingSize)
@@ -1628,7 +1628,10 @@ class UploadReadbackContext
                 "UploadReadbackContext::uploadImage payload size mismatch: data={} bytes, expected={} bytes.",
                 static_cast<vk::DeviceSize>(data.size_bytes()),
                 payloadSize));
-        nrAssert(payloadSize <= uploadCapacity_, "UploadReadbackContext::uploadImage currently requires payload size <= upload ring capacity.");
+        nrAssert(payloadSize <= uploadCapacity_, 
+            std::format("UploadReadbackContext::uploadImage payload size ({} bytes) exceeds upload ring capacity ({} bytes). "
+                        "Consider increasing ring buffer size for large textures.",
+                        payloadSize, uploadCapacity_));
 
         auto allocation = reserveUpload(payloadSize, uploadTimeline_);
         std::memcpy(
@@ -2134,7 +2137,11 @@ class UploadReadbackContext
         std::deque<InFlightBatch>& queue,
         const vk::raii::Semaphore& timelineSemaphore)
     {
-        nrAssert(size <= capacity, "UploadReadbackContext ring allocation exceeds ring capacity.");
+        // Validate that the requested size can fit in the ring buffer
+        nrAssert(size <= capacity, 
+            std::format("UploadReadbackContext ring allocation size ({} bytes) exceeds ring capacity ({} bytes). "
+                        "Consider increasing the ring buffer size or using chunked uploads.",
+                        size, capacity));
 
         reclaimQueue(queue, reclaimCursor, queryTimelineValue(timelineSemaphore));
 
@@ -2164,6 +2171,7 @@ class UploadReadbackContext
             return *allocation;
         }
 
+        // Wait for pending transfers to complete and try to reclaim space
         while (!queue.empty())
         {
             waitTimelineValue(timelineSemaphore, queue.front().signalValue);
@@ -2175,7 +2183,22 @@ class UploadReadbackContext
             }
         }
 
-        nrAssert(false, "UploadReadbackContext failed to reserve ring allocation.");
+        // If queue is empty, reset cursors to start fresh from the beginning
+        // This handles the edge case where cursors have drifted far apart
+        if (queue.empty())
+        {
+            writeCursor = 0;
+            reclaimCursor = 0;
+            if (auto allocation = tryReserve())
+            {
+                writeCursor = allocation->end;
+                return *allocation;
+            }
+        }
+
+        nrAssert(false, 
+            std::format("UploadReadbackContext failed to reserve ring allocation of {} bytes with capacity {} bytes.",
+                        size, capacity));
         return RingAllocation{};
     }
 

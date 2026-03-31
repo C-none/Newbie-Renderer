@@ -74,6 +74,12 @@ This document outlines the development standards, architectural principles, and 
 *   **Scene Rule:** Scene import/bridge/runtime errors and warnings must be emitted through `nrLog`/`nrInfo`/`nrVulkan`/`nrAssert` from `errorHandle`.
 *   **Extensibility Rule:** If a module needs additional reporting behavior, extend `errorHandle` first, then reuse it everywhere instead of adding a new ad-hoc reporting API.
 
+### 2.9 RenderPass Resource Binding Policy
+
+*   **RenderPasses Binding:** In `renderPasses`, except for vertex/index buffers and pipeline-fixed resources, all bindable resources (descriptor-set describable resources and push constants) must be driven by `nrslang` reflection and the binding relations recorded via `shaderCursor`.
+*   **Binding Location:** Perform the actual GPU binding inside the `addPass` callback by calling `bindResourcesToCommandBuffer(...)` and `pushConstantsToCommandBuffer(...)` (see `src/rhi/nrPipeline.ixx`).
+*   **Avoid Manual Vulkan Binding:** Do not manually construct/bind Vulkan descriptor sets or push constants from `renderPasses` code outside of the `shaderCursor`-based pathway.
+
 ## 3. Module Structure
 
 *   **`nrrhi`:** The Render Hardware Interface. Implements the abstraction over Vulkan.

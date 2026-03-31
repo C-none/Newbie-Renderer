@@ -38,6 +38,8 @@ Current boundary notes:
 - Windows + Vulkan + RTX-class hardware are hard assumptions.
 - Command invocation should stay on Vulkan-Hpp RAII member functions instead of project-local dispatch tables.
 - Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
+- `nr.rhi` now exposes descriptor-indexing and buffer-device-address capability snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection.
+- `PipelineState` retains the source `SlangProgram` so reflection-backed cursor access remains valid after pipeline creation.
 - `rhi` is the execution layer, not the content-organization layer.
 
 Entry points:
@@ -141,7 +143,7 @@ Boundary notes:
 
 - extraction is profile-first, not multi-view render-list-first
 - viewport-dependent projection and frustum resolution already live here
-- input-driven free-camera control remains outside `scene`
+- input-driven free-camera control remains outside `scene` and is currently wrapped by `nr.app` for application-style entry points
 - `SceneRenderBridge` now supports frame-constants override and per-draw geometry resolution so render passes can consume draw-ready geometry through bridge contracts
 
 Entry points:
@@ -171,17 +173,20 @@ It does not own:
 
 Current frame path:
 
-`Renderer::installGraph(spec)` installs long-lived nodes once -> each `renderFrame(input)` begins the device frame -> optionally drives `scene` extraction and bridge building (with optional app-side camera override) -> builds the graph -> compiles -> prepares -> executes -> presents
+`Renderer::installGraph(spec)` installs long-lived nodes once -> each `renderFrame(input)` begins the device frame -> optionally drives `scene` extraction and bridge building (with optional app-side camera override) -> forwards optional per-frame service state through `FrameServices` -> builds the graph -> compiles -> prepares -> executes -> presents
 
 Boundary notes:
 
 - the preferred scene-facing input is `SceneBridgeFrame`
 - renderer can use scene-resolved camera data or an optional app/viewer camera override
 - when camera override is present, scene extraction uses `customFrustum` and bridge frame constants come from override data
+- `FrameServices` is the current renderer-side sideband for app-owned per-frame services that render passes may consume without creating a direct app-layer dependency on renderer internals
+- application-facing code that owns both renderer and scene should prefer `nr::app::AppSession`, which also owns the interactive app camera used to build viewer-style overrides
 
 Entry points:
 
 - Runtime entry: [../../src/renderer/nrRenderer.ixx](../../src/renderer/nrRenderer.ixx)
+- Frame service bridge: [../../src/renderer/nrFrameServices.ixx](../../src/renderer/nrFrameServices.ixx)
 - Viewer camera runtime module: [../../src/renderer/nrViewerCamera.ixx](../../src/renderer/nrViewerCamera.ixx)
 - Graph types: [../../src/renderer/nrRenderGraphType.ixx](../../src/renderer/nrRenderGraphType.ixx)
 - Builder, compiler, executor: [../../src/renderer/nrRenderGraphBuilder.ixx](../../src/renderer/nrRenderGraphBuilder.ixx), [../../src/renderer/nrRenderGraphCompiler.ixx](../../src/renderer/nrRenderGraphCompiler.ixx), [../../src/renderer/nrRenderGraphExecutor.ixx](../../src/renderer/nrRenderGraphExecutor.ixx)
@@ -194,7 +199,8 @@ Entry points:
 Current built-in nodes:
 
 - `EmbeddedTriangleNode`
-- `NormalViewNode`
+- `NormalBufferNode`
+- `UiNode`
 - `PresentNode`
 
 It owns:
@@ -213,17 +219,20 @@ Current boundary notes:
 
 - nodes consume `NodeBuildContext` and `NodeFrameParameters`
 - `EmbeddedTriangleNode` is the scene-less graphics demo path that records a single triangle draw and consumes CPU camera uniforms.
-- `PresentNode` is the copy-to-swapchain path
-- `NormalViewNode` consumes bridge draw geometry contracts and records real scene mesh draw calls (indexed/non-indexed) with world-space normal visualization
+- `PresentNode` is the final compute conversion and composition path. It converts the scene color buffer into swapchain-ready output, applies flip/gamma/channel conversion, and alpha-composites the standalone UI buffer before copy-to-swapchain
+- `NormalBufferNode` consumes bridge draw geometry contracts and records real scene mesh draw calls (indexed/non-indexed) with world-space normal visualization
+- `NormalBufferNode` now also consumes `nr::app::UiSystem` through `NodeFrameParameters::frameServices` to expose runtime controls such as FPS display, frame time, and front/back-face cull switching
+- `UiNode` is the Dear ImGui overlay build pass. It finalizes the app-owned UI frame, consumes draw data emitted earlier in the graph, honors Dear ImGui 1.92.6 `ImTextureData` requests from the vcpkg dependency, manages UI textures through a descriptor-indexed runtime sampled-image array, selects the sampled texture per draw through push constants, and renders the overlay into its own transparent `uiBuffer` for later composition in `PresentNode`
 - node record callbacks should route command recording through `PassRecordContext::commandBuffer` as a RAII `vk::raii::CommandBuffer` reference when calling `nr.rhi` command helpers.
 
 Entry points:
 
 - Node type aliases: [../../src/renderPasses/nrNodeType.ixx](../../src/renderPasses/nrNodeType.ixx)
-- NormalView node: [../../src/renderPasses/NormalView/nrNormalViewNode.ixx](../../src/renderPasses/NormalView/nrNormalViewNode.ixx)
+- NormalBuffer node: [../../src/renderPasses/NormalBuffer/nrNormalBufferNode.ixx](../../src/renderPasses/NormalBuffer/nrNormalBufferNode.ixx)
+- Ui node: [../../src/renderPasses/Ui/nrUiNode.ixx](../../src/renderPasses/Ui/nrUiNode.ixx)
 - Present node: [../../src/renderPasses/Present/nrPresentNode.ixx](../../src/renderPasses/Present/nrPresentNode.ixx)
 - Module note: [../../src/renderPasses/README.md](../../src/renderPasses/README.md)
-- Current execution plan: [../normal_view_camera_three_phase_plan.md](../normal_view_camera_three_phase_plan.md)
+- UI runtime handoff: [../ui_runtime_integration_plan.md](../ui_runtime_integration_plan.md)
 
 ## 7. `Overall`
 
@@ -237,8 +246,17 @@ external asset files
 -> `nr.renderPasses` records concrete feature work  
 -> `nr.rhi` executes Vulkan and present work
 
+Application-facing lifetime wrapper:
+
+- `nr::app::AppSession` is the preferred application boundary when one owner needs both `nr.renderer::Renderer` and an optional `nr.scene::Scene`.
+- It owns `AppCamera` as the application-side interactive viewer camera and can initialize it from the scene primary camera or a default fallback.
+- It also owns `UiSystem`, begins the Dear ImGui frame before rendering, and exports it to render passes through `makeFrameServices()`.
+- It is a safety wrapper, not a new rendering layer: it exists to enforce scene-before-renderer teardown while scene-owned GPU payloads still have a live device/VMA allocator behind them.
+
 Useful reality checks:
 
-- [../../src/main.cpp](../../src/main.cpp) is the renderer-only `EmbeddedTriangle -> Present` window loop with viewer-camera controls.
-- [../../test/app/rasterNormalViewer.cpp](../../test/app/rasterNormalViewer.cpp) provides both default smoke mode and explicit `--interactive` camera-control mode.
-- default `rasterNormalViewer` behavior remains finite smoke execution for `ctest`, while `--interactive` runs a user-driven loop.
+- [../../src/app/exportModule.ixx](../../src/app/exportModule.ixx), [../../src/app/nrAppSession.ixx](../../src/app/nrAppSession.ixx), and [../../src/app/nrAppCamera.ixx](../../src/app/nrAppCamera.ixx) provide the application-facing lifetime wrapper plus camera/input encapsulation.
+- [../../src/app/nrAppUi.ixx](../../src/app/nrAppUi.ixx) is the app-owned Dear ImGui system wrapper used by render-pass-facing UI.
+- [../../src/main.cpp](../../src/main.cpp) is the scene-driven viewer loop where `NormalBuffer` feeds `Present.sourceColor` and `Ui` feeds `Present.uiBuffer`, while `nr::app::AppSession` initializes both the app camera and the UI system.
+- [../../test/app/embeddedTriangle.cpp](../../test/app/embeddedTriangle.cpp) is the renderer-only window loop where `EmbeddedTriangle` feeds `Present.sourceColor` and `Ui` feeds `Present.uiBuffer`, using the same `nr::app::AppSession` camera and UI wrapper with the default camera path.
+- [../../test/app/normalBufferUiSmoke.cpp](../../test/app/normalBufferUiSmoke.cpp) is the current headless smoke path that validates the `NormalBuffer + Ui -> Present` integration, non-empty ImGui draw data, and the runtime normal-buffer cull toggle.

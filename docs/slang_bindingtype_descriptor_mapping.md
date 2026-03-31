@@ -101,14 +101,15 @@ RWByteAddressBuffer rwRawBuffer;            // MutableRawBuffer -> eStorageBuffe
 
 - Reflection reports resource categories as `BindingType` per binding range, not by variable spelling alone.
 - Arrays keep the same `BindingType`; the descriptor count (and array element addressing) changes.
+- Unbounded arrays such as `Texture2D<float4> textures[];` still reflect as the same resource semantic, but the engine can now map them to runtime-sized Vulkan descriptor-array bindings when `DescriptorBindingPolicy` enables variable descriptor count.
 - `PushConstant` is intentionally outside descriptor-set mapping.
 - `ParameterBlock<T>` is a grouping abstraction in Slang. In this backend, default mapping policy is `eUniformBuffer` for descriptor-backed ordinary data path.
 
 ### Where this is verified in the project
 
 - Shader declaration coverage example: `shader/test/main/resourceBindingReflection.slang`
-- Reflection and mapping checks: `test/profile/nr_slang_single_entrypoint_contract.cpp`
 - Runtime mapping function: `src/rhi/nrDescriptor.ixx`
+- Runtime smoke coverage path: `test/app/normalBufferUiSmoke.cpp` (through `shaderCursor` + descriptor write/update + draw/dispatch binding flow)
 
 ## Why this Mapping
 
@@ -136,7 +137,26 @@ Push constants are part of `VkPipelineLayout` push constant ranges and `vkCmdPus
 
 - `ShaderDescriptorLayout::create(...)` in `src/rhi/nrDescriptor.ixx`
 - Collects descriptor set/binding metadata and push constant metadata
+- Can now mark unbounded descriptor bindings as runtime-sized and attach:
+  - `eVariableDescriptorCount`
+  - `ePartiallyBound`
+  - `eUpdateAfterBind`
 - Exposes `ShaderCursor` for path-based lookup
+
+### Runtime descriptor arrays and cursor indexing
+
+- `ShaderCursor` can now index descriptor-backed resource arrays, including runtime-sized arrays such as `Texture2D[]`.
+- This support covers two reflection shapes:
+  - normal array/resource element layouts
+  - descriptor-array reflection shapes that expose binding counts without a regular `elementTypeLayout`
+- `ShaderCursor::referencesRuntimeDescriptorArray()` and `ShaderCursor::bindingDescriptorCount()` are the current runtime query helpers for this path.
+- `ShaderBindingSet` now records the allocated descriptor capacity for variable-count bindings so write validation uses the real runtime set capacity rather than only the layout default.
+
+### Reflection lifetime requirement
+
+- `ShaderDescriptorLayout` stores reflection-derived raw pointers into the linked Slang program layout.
+- Because of that, `PipelineState` in `src/rhi/nrPipeline.ixx` now retains a `SlangProgram` copy for the full lifetime of the descriptor layout and cursor usage.
+- Removing that ownership without replacing it with another lifetime guarantee will reintroduce dangling reflection pointers.
 
 ### Write request construction
 

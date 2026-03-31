@@ -78,6 +78,27 @@ constexpr SlangResult kSlangNotFound = makeSlangError(0x200, 5);
     ss << file.rdbuf();
     return ss.str();
 }
+
+[[nodiscard]] std::vector<std::byte> readBinaryFile(const std::filesystem::path &path)
+{
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file)
+        return {};
+
+    auto const size = static_cast<size_t>(file.tellg());
+    file.seekg(0, std::ios::beg);
+
+    std::vector<std::byte> bytes(size);
+    if (size > 0)
+    {
+        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
+        if (!file)
+        {
+            return {};
+        }
+    }
+    return bytes;
+}
 [[nodiscard]] std::filesystem::path normalizePath(const std::filesystem::path &path)
 {
     std::error_code ec;
@@ -1103,6 +1124,45 @@ class ShaderService
         return std::filesystem::path(std::string(shaderCacheRoot)) / std::string(optionsHashLocked());
     }
 
+    void invalidateStaleModuleCacheLocked(std::string_view modulePath, const std::filesystem::path &moduleBlobPath)
+    {
+        auto binaryBytes = detail::readBinaryFile(moduleBlobPath);
+        if (binaryBytes.empty())
+        {
+            return;
+        }
+
+        Slang::ComPtr<slang::IBlob> binaryBlob(slang_createBlob(binaryBytes.data(), binaryBytes.size()));
+        if (!binaryBlob)
+        {
+            return;
+        }
+
+        auto const sourceModulePath = std::string(modulePath) + ".slang";
+        if (m_session->isBinaryModuleUpToDate(sourceModulePath.c_str(), binaryBlob.get()))
+        {
+            return;
+        }
+
+        std::error_code removeEc;
+        auto removed = std::filesystem::remove(moduleBlobPath, removeEc);
+        if (removeEc)
+        {
+            nrInfo<nr::LogLevel::warning>(std::format(
+                "[ShaderService::invalidateStaleModuleCacheLocked] stale cache removal failed: path='{}', error='{}'",
+                moduleBlobPath.generic_string(),
+                removeEc.message()));
+            return;
+        }
+
+        if (removed)
+        {
+            nrInfo<>(std::format(
+                "[ShaderService::invalidateStaleModuleCacheLocked] removed stale cache blob: path='{}'",
+                moduleBlobPath.generic_string()));
+        }
+    }
+
     void recreateSessionLocked()
     {
         m_session = nullptr;
@@ -1254,6 +1314,12 @@ class ShaderService
         auto moduleBlobPath = detail::makeModuleBinaryPath(cacheRootPath, normalizedModuleName);
         std::error_code moduleBlobEc;
         auto sourceModulePath = normalizedModulePath + ".slang";
+
+        auto cacheExists = std::filesystem::exists(moduleBlobPath, moduleBlobEc);
+        if (!moduleBlobEc && cacheExists)
+        {
+            invalidateStaleModuleCacheLocked(normalizedModulePath, moduleBlobPath);
+        }
 
         SlangCompiledModule result;
         result.moduleName = normalizedModuleName;

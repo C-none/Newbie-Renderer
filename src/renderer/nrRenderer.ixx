@@ -7,6 +7,7 @@ import nr.scene;
 import nr.resource;
 import nr.utils;
 import std;
+import :frameServices;
 import :renderGraphBuilder;
 import :renderGraphCompiler;
 import :renderGraphExecutor;
@@ -48,6 +49,7 @@ struct NodeFrameParameters
     std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame{};
     std::optional<std::reference_wrapper<const nr::scene::ScenePacketSet>> scenePackets{};
     std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};
+    std::optional<std::reference_wrapper<FrameServices>> frameServices{};
 };
 
 struct RendererCameraOverride
@@ -184,6 +186,7 @@ struct RendererFrameInput
     std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max();
     std::optional<nr::scene::SceneExtractInput> sceneExtractInput{};
     std::optional<RendererCameraOverride> cameraOverride{};
+    std::optional<std::reference_wrapper<FrameServices>> frameServices{};
 };
 
 struct RendererFrameResult
@@ -475,6 +478,7 @@ class Renderer
             .sceneBridgeFrame = std::nullopt,
             .scenePackets = std::nullopt,
             .primaryCamera = std::nullopt,
+            .frameServices = input.frameServices,
         };
 
         if (sceneBridgeFrame.has_value())

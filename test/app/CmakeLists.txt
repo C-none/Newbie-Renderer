@@ -1,16 +1,44 @@
-# nr_add_executable(rasterNormalViewer rasterNormalViewer.cpp)
-# set_target_properties(rasterNormalViewer PROPERTIES FOLDER "Test/app")
+# Embedded Triangle Test Application
+nr_add_executable(embeddedTriangle embeddedTriangle.cpp)
+set_target_properties(embeddedTriangle PROPERTIES FOLDER "Test/app")
 
-# target_link_libraries(rasterNormalViewer PRIVATE
-#     nrrenderpasses
-#     nrrenderer
-#     nrscene
-#     nrload
-#     utils
-#     dependency
-# )
+target_link_libraries(embeddedTriangle PRIVATE
+    nrapp
+    nrrenderpasses
+    nrrenderer
+    utils
+    dependency
+)
 
-# target_compile_definitions(rasterNormalViewer PRIVATE
-#     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
-# )
+target_compile_definitions(embeddedTriangle PRIVATE
+    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+add_custom_target(run_embeddedTriangle
+    COMMAND $<TARGET_FILE:embeddedTriangle>
+    DEPENDS embeddedTriangle
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:embeddedTriangle>
+    COMMENT "Build and run embeddedTriangle test"
+    USES_TERMINAL
+)
+
+# NormalBuffer + UI smoke test
+nr_add_executable(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp)
+set_target_properties(nr_normal_buffer_ui_smoke_test PROPERTIES FOLDER "Test/app")
+
+target_link_libraries(nr_normal_buffer_ui_smoke_test PRIVATE
+    nrapp
+    nrrenderpasses
+    nrrenderer
+    nrscene
+    nrload
+    utils
+    dependency
+)
+
+target_compile_definitions(nr_normal_buffer_ui_smoke_test PRIVATE
+    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+add_test(NAME nr_normal_buffer_ui_smoke_test COMMAND nr_normal_buffer_ui_smoke_test)
 

@@ -19,7 +19,7 @@ Newbie-Renderer is a research-oriented renderer built around C++23 modules, Slan
 2. [x] Slang compilation and reflection pipeline for reusable shader/module workflows.
 3. [x] flecs integration as the scene-layer ECS runtime.
 4. [x] Asset import and decode foundation for glTF-oriented content ingestion.
-5. [ ] GPU scene upload and residency management for meshes, materials, textures, and instance data.
+5. [x] Asynchronous GPU physical queue submission and synchronization framework with timeline semaphores and CPU/GPU sync primitives.
 6. [ ] Scene-driven BLAS/TLAS build and update flow for ray tracing.
 7.  [ ] Light BVH / Many-Light Sampling. Suggested reference: [Dynamic Many-Light Sampling for Real-Time Ray Tracing](https://research.nvidia.com/sites/default/files/pubs/2019-07_Dynamic-Many-Light-Sampling//MPC19.pdf)
 8.  [ ] Neural Material System. Suggested reference: [Real-Time Neural Appearance Models](https://research.nvidia.com/labs/rtr/neural_appearance_models/)
@@ -77,16 +77,42 @@ Newbie-Renderer is a research-oriented renderer built around C++23 modules, Slan
    cmake --build --preset run-debug
    ```
 
+## App Session
+
+For application-style entry points, prefer `nr::app::AppSession`.
+It keeps renderer lifetime, optional scene lifetime, and the application-side interactive camera in one place.
+The scene is destroyed before renderer shutdown, so scene-owned GPU resources are released while the Vulkan device and VMA allocator are still alive.
+When a scene is available, `AppSession` can seed its camera from the scene primary camera; otherwise it falls back to a default viewer camera.
+
+```cpp
+auto app = nr::app::AppSession{};
+app.initialize({...});
+auto& scene = app.createScene();
+auto& renderer = app.renderer();
+app.resetCameraFromSceneOrDefault();
+...
+app.shutdown();
+```
+
 ## Packages
 
 ### Git Submodules and Vendored SDKs
 
 | Name | Current State | Purpose |
 | --- | --- | --- |
-| Slang | `v2026.4.2` | Shader language, compilation, reflection, SPIR-V generation |
+| Slang | `v2026.5.1` | Shader language, compilation, reflection, SPIR-V generation |
 | flecs | `v4.1.5` | ECS runtime used by the scene layer |
 | glTF-Sample-Assets | `c147d2fc` | Sample assets for import, testing, and regression cases |
 | Nsight Aftermath SDK | `R590` | bundled under `src/extern/Aftermath` | Future GPU crash diagnostics and shader crash analysis |
+
+Slang update cmd:
+
+```bash
+cd src/extern/slang
+git fetch --tags
+git checkout v202*.*.*
+git submodule update --init --recursive
+```
 
 ### Vcpkg Manifest Packages
 
@@ -96,7 +122,7 @@ Newbie-Renderer is a research-oriented renderer built around C++23 modules, Slan
 | `imgui` | Debug UI and tooling overlays |
 | `glfw3` | Window creation and Vulkan surface bootstrap |
 | `vulkan-memory-allocator` | Vulkan memory allocation |
-| `tracy` | Profiling hooks and future runtime instrumentation |
+<!-- | `tracy` | Profiling hooks and future runtime instrumentation | -->
 | `assimp` | Model and scene import |
 | `stb` | Generic image decode fallback |
 | `libjpeg-turbo` | Fast JPEG decode path |

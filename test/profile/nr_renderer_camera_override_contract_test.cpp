@@ -90,6 +90,7 @@ namespace
 {
     auto normalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
     normalBuffer->input.colorFormat = swapchainFormat;
+    auto ui = std::make_shared<nr::renderPasses::UiNode>();
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
 
     auto graphSpec = nr::renderer::RendererGraphSpec{};
@@ -98,6 +99,13 @@ namespace
             .runtime = normalBuffer,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "NormalBuffer",
+                .queue = nr::renderer::QueueDomain::Graphics,
+            },
+        },
+        nr::renderer::NodeCreateInfo{
+            .runtime = ui,
+            .config = nr::renderer::NodeConfig{
+                .instanceName = "Ui",
                 .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
@@ -112,8 +120,12 @@ namespace
 
     graphSpec.connections = {
         nr::renderer::NodeConnection{
-            .from = nr::renderer::NodePortRef{.nodeName = "NormalBuffer", .portName = "normalBuffer"},
+            .from = nr::renderer::NodePortRef{.nodeName = "NormalBuffer", .portName = "color"},
             .to = nr::renderer::NodePortRef{.nodeName = "Present", .portName = "sourceColor"},
+        },
+        nr::renderer::NodeConnection{
+            .from = nr::renderer::NodePortRef{.nodeName = "Ui", .portName = "uiBuffer"},
+            .to = nr::renderer::NodePortRef{.nodeName = "Present", .portName = "uiBuffer"},
         },
     };
 
@@ -121,7 +133,7 @@ namespace
         nr::renderer::SubmitNodeSpec{
             .debugName = "CameraOverride.GraphicsToCompute",
             .kind = nr::renderer::SubmitBoundaryKind::Explicit,
-            .afterNodeIndex = 0,
+            .afterNodeIndex = 1,
         },
     };
 

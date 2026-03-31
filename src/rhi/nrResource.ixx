@@ -285,7 +285,7 @@ class Buffer
      * Requires the buffer to have SHADER_DEVICE_ADDRESS_BIT usage
      * (automatically added by MemoryAllocator for GpuOnly/CpuToGpu).
      */
-    [[nodiscard]] VkDeviceAddress deviceAddress()
+    [[nodiscard]] VkDeviceAddress deviceAddress() const
     {
         if (!cachedAddress_.has_value())
         {
@@ -433,7 +433,7 @@ class Buffer
     AllocationStrategy strategy_ = AllocationStrategy::CrossFrame;
 
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-    std::optional<VkDeviceAddress> cachedAddress_;
+    mutable std::optional<VkDeviceAddress> cachedAddress_;
     std::map<std::string, vk::raii::BufferView> bufferViews_;  ///< Named view map (destroyed before VmaBuffer)
     std::string name_;  ///< Immutable after creation
 };

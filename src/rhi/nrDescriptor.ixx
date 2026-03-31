@@ -141,11 +141,27 @@ struct DescriptorBindingInfo
     uint32_t set = 0;
     uint32_t binding = 0;
     uint32_t descriptorCount = 1;
+    bool isRuntimeSized = false;
     vk::DescriptorType descriptorType = vk::DescriptorType::eStorageBuffer;
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
     vk::DescriptorBindingFlags bindingFlags{};
     uint32_t bindingRangeIndex = 0;
     std::string debugPath;
+
+    [[nodiscard]] bool supportsVariableDescriptorCount() const noexcept
+    {
+        return (bindingFlags & vk::DescriptorBindingFlagBits::eVariableDescriptorCount) == vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
+    }
+
+    [[nodiscard]] bool isPartiallyBound() const noexcept
+    {
+        return (bindingFlags & vk::DescriptorBindingFlagBits::ePartiallyBound) == vk::DescriptorBindingFlagBits::ePartiallyBound;
+    }
+
+    [[nodiscard]] bool isUpdateAfterBind() const noexcept
+    {
+        return (bindingFlags & vk::DescriptorBindingFlagBits::eUpdateAfterBind) == vk::DescriptorBindingFlagBits::eUpdateAfterBind;
+    }
 };
 
 struct DescriptorSetLayoutInfo
@@ -208,11 +224,21 @@ class ShaderBindingSet
     [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(set_); }
     [[nodiscard]] vk::DescriptorSet raw() const noexcept { return set_; }
     [[nodiscard]] uint32_t setIndex() const noexcept { return setIndex_; }
+    [[nodiscard]] uint32_t descriptorCapacity(const DescriptorBindingInfo &bindingInfo) const noexcept
+    {
+        auto it = allocatedDescriptorCountByBinding_.find(bindingInfo.binding);
+        if (it != allocatedDescriptorCountByBinding_.end())
+        {
+            return it->second;
+        }
+        return bindingInfo.descriptorCount;
+    }
 
   private:
     friend class ShaderBindingPool;
     vk::DescriptorSet set_{};
     uint32_t setIndex_ = 0;
+    std::map<uint32_t, uint32_t> allocatedDescriptorCountByBinding_{};
 };
 
 class ShaderDescriptorLayout;
@@ -238,6 +264,7 @@ struct DescriptorBindingPolicy
     bool enableUpdateAfterBind = true;
     bool enablePartiallyBound = true;
     bool enableVariableDescriptorCount = true;
+    uint32_t defaultRuntimeDescriptorCount = 1024;
 };
 
 class ShaderBindingPool
@@ -257,7 +284,7 @@ class ShaderBindingPool
   private:
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
     vk::raii::DescriptorPool pool_ = {nullptr};
-    std::map<uint32_t, uint32_t> variableDescriptorCapBySet_{};
+    std::map<uint32_t, std::map<uint32_t, uint32_t>> variableDescriptorCapBySetAndBinding_{};
 };
 
 struct LogicalResourceDescriptorWrite
@@ -375,6 +402,10 @@ class ShaderCursor
     [[nodiscard]] std::optional<DescriptorBindingInfo> descriptorBinding() const;
 
     [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange() const;
+
+    [[nodiscard]] std::optional<uint32_t> bindingDescriptorCount() const;
+
+    [[nodiscard]] bool referencesRuntimeDescriptorArray() const;
 
     [[nodiscard]] bool setData(std::span<const uint8_t> bytes) const;
 
@@ -691,9 +722,11 @@ class ShaderDescriptorLayout
                 info.set = static_cast<uint32_t>(setIndex);
                 info.binding = static_cast<uint32_t>(bindingIndex);
                 info.descriptorCount = detail::sanitizeDescriptorCount(descriptorCountRaw);
+                info.isRuntimeSized = detail::isUnboundedDescriptorCount(descriptorCountRaw);
                 info.descriptorType = *descriptorType;
-                if (detail::isUnboundedDescriptorCount(descriptorCountRaw) && policy.enableVariableDescriptorCount)
+                if (info.isRuntimeSized && policy.enableVariableDescriptorCount)
                 {
+                    info.descriptorCount = std::max(policy.defaultRuntimeDescriptorCount, 1u);
                     info.bindingFlags |= vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
                     if (policy.enablePartiallyBound)
                     {
@@ -729,7 +762,8 @@ class ShaderDescriptorLayout
                     nrAssert(
                         mergedIt->second.descriptorType == info.descriptorType &&
                             mergedIt->second.descriptorCount == info.descriptorCount &&
-                            mergedIt->second.bindingFlags == info.bindingFlags,
+                            mergedIt->second.bindingFlags == info.bindingFlags &&
+                            mergedIt->second.isRuntimeSized == info.isRuntimeSized,
                         std::format("Descriptor layout mismatch at set={}, binding={} when merging '{}'", info.set, info.binding, info.debugPath));
                     mergedIt->second.stageFlags |= info.stageFlags;
                     info = mergedIt->second;
@@ -794,6 +828,35 @@ class ShaderDescriptorLayout
         {
             layout.pushConstantRanges_.push_back(value);
         }
+
+        std::ranges::for_each(layout.descriptorSets_, [](const DescriptorSetLayoutInfo &setInfo) {
+            auto variableBindings = setInfo.bindings |
+                                    std::views::filter([](const DescriptorBindingInfo &bindingInfo) {
+                                        return bindingInfo.supportsVariableDescriptorCount();
+                                    }) |
+                                    std::ranges::to<std::vector>();
+            nrAssert(
+                variableBindings.size() <= 1u,
+                std::format(
+                    "ShaderDescriptorLayout::create supports at most one variable descriptor-count binding per set. set={}, count={}",
+                    setInfo.set,
+                    variableBindings.size()));
+            if (variableBindings.empty())
+            {
+                return;
+            }
+
+            auto maxBinding = std::ranges::max(
+                setInfo.bindings |
+                std::views::transform([](const DescriptorBindingInfo &bindingInfo) { return bindingInfo.binding; }));
+            nrAssert(
+                variableBindings.front().binding == maxBinding,
+                std::format(
+                    "Variable descriptor-count binding must be the largest binding number in the set. set={}, binding={}, maxBinding={}",
+                    setInfo.set,
+                    variableBindings.front().binding,
+                    maxBinding));
+        });
 
         std::ranges::sort(layout.pushConstantRanges_, [](const PushConstantRangeInfo &lhs, const PushConstantRangeInfo &rhs) {
             if (lhs.offset == rhs.offset)
@@ -936,6 +999,11 @@ class ShaderDescriptorLayout
 
 [[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout, ShaderBindingPool &pool);
 
+[[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
+    const CursorPipelineLayout &layout,
+    ShaderBindingPool &pool,
+    const std::map<uint32_t, uint32_t> &variableDescriptorCountsBySet);
+
 void bindResourcesToCommandBuffer(
     const vk::raii::CommandBuffer& commandBuffer,
     vk::PipelineBindPoint bindPoint,
@@ -1051,6 +1119,25 @@ void pushConstantsToCommandBuffer(
         return next;
     }
 
+    if (kind == slang::TypeReflection::Kind::Resource)
+    {
+        auto bindingInfo = descriptorBinding();
+        if (!bindingInfo.has_value())
+        {
+            return {};
+        }
+
+        if (!bindingInfo->isRuntimeSized && index >= bindingInfo->descriptorCount)
+        {
+            return {};
+        }
+
+        ShaderCursor next = *this;
+        next.address_.bindingArrayIndex += index;
+        next.debugPath_ = std::format("{}[{}]", debugPath_, index);
+        return next;
+    }
+
     if (kind != slang::TypeReflection::Kind::Array && kind != slang::TypeReflection::Kind::Vector && kind != slang::TypeReflection::Kind::Matrix)
     {
         return {};
@@ -1059,7 +1146,22 @@ void pushConstantsToCommandBuffer(
     auto *elementTypeLayout = typeLayout_->getElementTypeLayout();
     if (!elementTypeLayout)
     {
-        return {};
+        auto bindingInfo = descriptorBinding();
+        if (!bindingInfo.has_value())
+        {
+            return {};
+        }
+
+        auto elementCount = detail::tryElementCount(typeLayout_->getElementCount()).value_or(bindingInfo->descriptorCount);
+        if (!bindingInfo->isRuntimeSized && index >= elementCount)
+        {
+            return {};
+        }
+
+        ShaderCursor next = *this;
+        next.address_.bindingArrayIndex = next.address_.bindingArrayIndex * std::max(elementCount, 1u) + index;
+        next.debugPath_ = std::format("{}[{}]", debugPath_, index);
+        return next;
     }
 
     ShaderCursor next = *this;
@@ -1143,6 +1245,22 @@ void pushConstantsToCommandBuffer(
         return std::nullopt;
     }
     return layoutRef().pushConstantRange(*this);
+}
+
+[[nodiscard]] std::optional<uint32_t> ShaderCursor::bindingDescriptorCount() const
+{
+    auto bindingInfo = descriptorBinding();
+    if (!bindingInfo.has_value())
+    {
+        return std::nullopt;
+    }
+    return bindingInfo->descriptorCount;
+}
+
+[[nodiscard]] bool ShaderCursor::referencesRuntimeDescriptorArray() const
+{
+    auto bindingInfo = descriptorBinding();
+    return bindingInfo.has_value() && bindingInfo->isRuntimeSized;
 }
 
 [[nodiscard]] bool ShaderCursor::writeDescriptorRecord(
@@ -1388,12 +1506,33 @@ void ShaderCursor::clearSnapshot() const
     }
 
     auto kindValue = typeLayout_->getKind();
+    if (kindValue == slang::TypeReflection::Kind::Resource)
+    {
+        auto bindingInfo = descriptorBinding();
+        if (!bindingInfo.has_value())
+        {
+            return std::nullopt;
+        }
+        return bindingInfo->descriptorCount;
+    }
+
     if (kindValue != slang::TypeReflection::Kind::Array && kindValue != slang::TypeReflection::Kind::Vector && kindValue != slang::TypeReflection::Kind::Matrix)
     {
         return std::nullopt;
     }
 
-    return detail::tryElementCount(typeLayout_->getElementCount());
+    auto elementCount = detail::tryElementCount(typeLayout_->getElementCount());
+    if (elementCount.has_value())
+    {
+        return elementCount;
+    }
+
+    auto bindingInfo = descriptorBinding();
+    if (!bindingInfo.has_value())
+    {
+        return std::nullopt;
+    }
+    return bindingInfo->descriptorCount;
 }
 
 [[nodiscard]] std::optional<size_t> ShaderCursor::size(slang::ParameterCategory category) const
@@ -1503,12 +1642,13 @@ void ShaderCursor::clearSnapshot() const
     uint32_t inlineUniformBindingCount = 0;
     std::ranges::for_each(descriptorLayout.descriptorSets(), [&](const DescriptorSetLayoutInfo &setInfo) {
         std::ranges::for_each(setInfo.bindings, [&](const DescriptorBindingInfo &bindingInfo) {
-            const bool isVariableCount = (bindingInfo.bindingFlags & vk::DescriptorBindingFlagBits::eVariableDescriptorCount) == vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
+            const bool isVariableCount = bindingInfo.supportsVariableDescriptorCount();
             const uint32_t effectiveDescriptorCount = isVariableCount ? std::max(config.defaultVariableDescriptorCount, 1u) : bindingInfo.descriptorCount;
             descriptorCounts[bindingInfo.descriptorType] += effectiveDescriptorCount * maxSets;
             if (isVariableCount)
             {
-                auto &cap = pool.variableDescriptorCapBySet_[setInfo.set];
+                auto &bindingCaps = pool.variableDescriptorCapBySetAndBinding_[setInfo.set];
+                auto &cap = bindingCaps[bindingInfo.binding];
                 cap = std::max(cap, effectiveDescriptorCount);
             }
             if (bindingInfo.descriptorType == vk::DescriptorType::eInlineUniformBlock)
@@ -1573,13 +1713,21 @@ void ShaderCursor::clearSnapshot() const
     allocateInfo.pSetLayouts = &descriptorSetLayout;
 
     vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo{};
-    if (auto it = variableDescriptorCapBySet_.find(setIndex); it != variableDescriptorCapBySet_.end())
+    if (auto setIt = variableDescriptorCapBySetAndBinding_.find(setIndex); setIt != variableDescriptorCapBySetAndBinding_.end())
     {
-        const auto requestedCount = variableDescriptorCount.value_or(it->second);
-        const auto resolvedCount = std::clamp(requestedCount, 1u, it->second);
+        nrAssert(
+            setIt->second.size() == 1u,
+            std::format(
+                "ShaderBindingPool::allocate currently supports at most one variable descriptor-count binding per set. set={}, count={}",
+                setIndex,
+                setIt->second.size()));
+        auto const [bindingIndex, cap] = *setIt->second.begin();
+        const auto requestedCount = variableDescriptorCount.value_or(cap);
+        const auto resolvedCount = std::clamp(requestedCount, 1u, cap);
         variableCountInfo.descriptorSetCount = 1;
         variableCountInfo.pDescriptorCounts = &resolvedCount;
         allocateInfo.pNext = &variableCountInfo;
+        set.allocatedDescriptorCountByBinding_.insert_or_assign(bindingIndex, resolvedCount);
     }
 
     auto allocatedSets = device_->get().allocateDescriptorSets(allocateInfo);
@@ -1625,14 +1773,15 @@ void ShaderBindingPool::update(const ShaderBindingSet &set, std::span<const Desc
                 request.binding.set,
                 set.setIndex()));
 
+        auto const descriptorCapacity = set.descriptorCapacity(request.binding);
         nrAssert(
-            request.arrayElement < request.binding.descriptorCount,
+            request.arrayElement < descriptorCapacity,
             std::format(
                 "Descriptor write array index out of range. set={}, binding={}, arrayElement={}, descriptorCount={}",
                 request.binding.set,
                 request.binding.binding,
                 request.arrayElement,
-                request.binding.descriptorCount));
+                descriptorCapacity));
 
         vk::WriteDescriptorSet write{};
         write.dstSet = set.raw();
@@ -1703,14 +1852,14 @@ void ShaderBindingPool::update(const ShaderBindingSet &set, std::span<const Desc
                             request.binding.binding,
                             write.dstArrayElement));
                     nrAssert(
-                        write.dstArrayElement + byteCount <= request.binding.descriptorCount,
+                        write.dstArrayElement + byteCount <= descriptorCapacity,
                         std::format(
                             "Inline uniform write out of range. set={}, binding={}, dstArrayElement={}, size={}, bindingByteCapacity={}",
                             request.binding.set,
                             request.binding.binding,
                             write.dstArrayElement,
                             byteCount,
-                            request.binding.descriptorCount));
+                            descriptorCapacity));
 
                     write.descriptorCount = byteCount;
 

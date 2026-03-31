@@ -32,6 +32,7 @@ struct GraphicsPipelineDesc
 		std::vector<vk::VertexInputBindingDescription> vertexBindings;
 		std::vector<vk::VertexInputAttributeDescription> vertexAttributes;
 		std::vector<vk::DynamicState> dynamicStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+		DescriptorBindingPolicy descriptorBindingPolicy{};
 		vk::PipelineCreateFlags flags = {};
 		GraphicsPipelineMode mode = GraphicsPipelineMode::StandardGraphics;
 };
@@ -39,6 +40,7 @@ struct GraphicsPipelineDesc
 struct ComputePipelineDesc
 {
 		std::string entryPointName;
+		DescriptorBindingPolicy descriptorBindingPolicy{};
 		vk::PipelineCreateFlags flags = {};
 };
 
@@ -62,6 +64,7 @@ struct RayTracingPipelineDesc
 		std::vector<std::string> entryPointNames;
 		uint32_t maxRayRecursionDepth = 1;
 		std::vector<RayTracingShaderGroupDesc> groups;
+		DescriptorBindingPolicy descriptorBindingPolicy{};
 		vk::PipelineCreateFlags flags = {};
 		bool createAsLibrary = false;
 		std::vector<vk::Pipeline> linkedLibraries;
@@ -452,7 +455,10 @@ inline void CursorPipelineLayout::bindDescriptorSets(
 	}
 }
 
-inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout, ShaderBindingPool &pool)
+inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
+	const CursorPipelineLayout &layout,
+	ShaderBindingPool &pool,
+	const std::map<uint32_t, uint32_t> &variableDescriptorCountsBySet)
 {
 	nrAssert(layout.valid(), "allocateBindingSetsForLayout requires a valid cursor pipeline layout.");
 
@@ -466,7 +472,13 @@ inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPi
 			descriptorSetLayout.has_value(),
 			std::format("allocateBindingSetsForLayout missing descriptor set layout for set {}.", setIndex));
 
-		auto set = pool.allocate(*descriptorSetLayout, setIndex);
+		auto requestedVariableCount = variableDescriptorCountsBySet.find(setIndex);
+		auto set = pool.allocate(
+			*descriptorSetLayout,
+			setIndex,
+			requestedVariableCount != variableDescriptorCountsBySet.end()
+				? std::optional<uint32_t>(requestedVariableCount->second)
+				: std::nullopt);
 		nrAssert(
 			set.valid(),
 			std::format("allocateBindingSetsForLayout failed to allocate descriptor set for set {}.", setIndex));
@@ -474,6 +486,11 @@ inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPi
 	});
 
 	return sets;
+}
+
+inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout, ShaderBindingPool &pool)
+{
+	return allocateBindingSetsForLayout(layout, pool, {});
 }
 
 inline void bindResourcesToCommandBuffer(
@@ -982,6 +999,7 @@ class RayTracingPipeline
 template <typename TPipeline>
 struct PipelineState
 {
+		SlangProgram reflectionProgram;
 		CursorPipelineLayout layout;
 		ShaderDescriptorLayout descriptorLayout;
 		ShaderBindingPool bindingPool;
@@ -1051,10 +1069,10 @@ class PipelineService
 		(void)immutableSamplers;
 
 		const auto &device = device_->get();
-		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
+		auto effectiveDesc = desc;
+		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, effectiveDesc.descriptorBindingPolicy);
 		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
 
-		auto effectiveDesc = desc;
 		auto appendDynamicState = [&effectiveDesc](vk::DynamicState state) {
 			if (std::ranges::none_of(effectiveDesc.dynamicStates, [state](vk::DynamicState current) { return current == state; }))
 			{
@@ -1097,6 +1115,7 @@ class PipelineService
 		auto pipeline = GraphicsPipeline::create(device, layout, shaderProgram, effectiveDesc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
 		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
 		return PipelineState<GraphicsPipeline>{
+			.reflectionProgram = slangProgram,
 			.layout = std::move(layout),
 			.descriptorLayout = std::move(descriptorLayout),
 			.bindingPool = std::move(bindingPool),
@@ -1112,7 +1131,7 @@ class PipelineService
 		(void)immutableSamplers;
 
 		const auto &device = device_->get();
-		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
+		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, desc.descriptorBindingPolicy);
 		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
 
 		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
@@ -1134,6 +1153,7 @@ class PipelineService
 		auto pipeline = ComputePipeline::create(device, layout, shaderProgram, desc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
 		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
 		return PipelineState<ComputePipeline>{
+			.reflectionProgram = slangProgram,
 			.layout = std::move(layout),
 			.descriptorLayout = std::move(descriptorLayout),
 			.bindingPool = std::move(bindingPool),
@@ -1149,7 +1169,7 @@ class PipelineService
 		(void)immutableSamplers;
 
 		const auto &device = device_->get();
-		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram);
+		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, desc.descriptorBindingPolicy);
 		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
 
 		auto effectiveDesc = desc;
@@ -1187,6 +1207,7 @@ class PipelineService
 		auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, effectiveDesc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
 		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
 		return PipelineState<RayTracingPipeline>{
+			.reflectionProgram = slangProgram,
 			.layout = std::move(layout),
 			.descriptorLayout = std::move(descriptorLayout),
 			.bindingPool = std::move(bindingPool),

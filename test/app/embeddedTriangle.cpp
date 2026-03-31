@@ -3,21 +3,17 @@ import dependency;
 import nr.app;
 import nr.renderer;
 import nr.renderPasses;
-import nr.scene;
-import nr.load;
 
 namespace
 {
 void printUsage()
 {
     std::println("Usage:");
-    std::println("  main [model_path]");
-    std::println("  main --help");
+    std::println("  embeddedTriangle");
+    std::println("  embeddedTriangle --help");
     std::println("Controls:");
     std::println("  Move: W/S/A/D/Q/E");
     std::println("  Rotate: hold mouse left or right button and move cursor");
-    std::println("");
-    std::println("If no model_path is provided, the default Box model is loaded.");
 }
 
 [[nodiscard]] bool hasFlag(std::span<char*> args, std::string_view expected)
@@ -27,10 +23,10 @@ void printUsage()
     });
 }
 
-[[nodiscard]] nr::renderer::RendererGraphSpec buildNormalBufferGraphSpec(
-    const std::shared_ptr<nr::renderPasses::NormalBufferNode>& normalBuffer)
+[[nodiscard]] nr::renderer::RendererGraphSpec buildMainGraphSpec(
+    const std::shared_ptr<nr::renderPasses::EmbeddedTriangleNode>& embeddedTriangle)
 {
-    if (!normalBuffer)
+    if (!embeddedTriangle)
     {
         return {};
     }
@@ -41,9 +37,9 @@ void printUsage()
     auto graphSpec = nr::renderer::RendererGraphSpec{};
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
-            .runtime = normalBuffer,
+            .runtime = embeddedTriangle,
             .config = nr::renderer::NodeConfig{
-                .instanceName = "NormalBuffer",
+                .instanceName = "EmbeddedTriangle",
                 .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
@@ -66,7 +62,7 @@ void printUsage()
     graphSpec.connections = {
         nr::renderer::NodeConnection{
             .from = nr::renderer::NodePortRef{
-                .nodeName = "NormalBuffer",
+                .nodeName = "EmbeddedTriangle",
                 .portName = "color",
             },
             .to = nr::renderer::NodePortRef{
@@ -97,91 +93,30 @@ void printUsage()
     return graphSpec;
 }
 
-[[nodiscard]] std::filesystem::path resolveModelPath(std::span<char*> args)
-{
-    // Check for model path argument
-    for (const auto* arg : args)
-    {
-        if (arg == nullptr)
-        {
-            continue;
-        }
-        std::string_view argView{arg};
-        if (argView.starts_with("-"))
-        {
-            continue;
-        }
-        return std::filesystem::path{argView};
-    }
-
-    // Default: use Box model from glTF sample assets
-    return std::filesystem::path{NR_PROJECT_ROOT_DIR} / "assets" / "glTF-Sample-Assets" / "Models" / "Box" / "glTF" / "Box.gltf";
-}
-
-[[nodiscard]] int runMain(const std::filesystem::path& modelPath)
+[[nodiscard]] int runMain()
 {
     auto app = nr::app::AppSession{};
+    auto exitCode = 0;
 
     try
     {
         app.initialize(nr::renderer::RendererCreateInfo{
-            .appName = "NormalBufferViewer",
+            .appName = "EmbeddedTriangle",
             .engineName = "NewbieRenderer",
         });
 
         auto& renderer = app.renderer();
-        auto exitCode = [&]() -> int {
-            std::println("[info] Loading model: {}", modelPath.string());
-            auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
-                .sourcePath = modelPath,
-                .generateNormals = true,
-                .generateTangents = true,
-            });
+        {
+            auto& presentation = renderer.device().presentationContext;
+            auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
+            embeddedTriangle->input.colorFormat = presentation.swapchainFormat();
+            auto defaultCameraView = nr::app::AppCameraDefaultView{};
+            defaultCameraView.lens.farPlane = 100.0f;
+            app.resetCameraFromSceneOrDefault(defaultCameraView);
 
-            if (!loadResult.has_value())
+            if (exitCode == 0)
             {
-                std::println("[error] Failed to load model: {}", loadResult.error().message);
-                return 1;
-            }
-
-            auto& sceneAsset = loadResult.value();
-            std::println("[info] Model loaded: {} meshes, {} vertices, {} indices",
-                         sceneAsset.stats.meshCount,
-                         sceneAsset.stats.vertexCount,
-                         sceneAsset.stats.indexCount);
-
-            auto& scene = app.createScene();
-
-            auto templateHandle = scene.registerTemplate(sceneAsset);
-            if (!templateHandle.valid())
-            {
-                std::println("[error] Failed to register scene template.");
-                return 1;
-            }
-
-            auto instanceHandle = scene.instantiate(templateHandle);
-            if (!instanceHandle.valid())
-            {
-                std::println("[error] Failed to instantiate scene.");
-                return 1;
-            }
-
-            app.resetCameraFromSceneOrDefault();
-
-            [[maybe_unused]] auto extractProfile = scene.registerExtractProfile(nr::scene::SceneExtractProfileCreateInfo{
-                .debugName = "NormalBuffer.Extract",
-                .domain = nr::scene::ScenePacketDomain::rasterDraw,
-                .requireReadyForDomain = true,
-                .requireActiveInstances = true,
-            });
-
-            auto exitCode = 0;
-            {
-                auto& presentation = renderer.device().presentationContext;
-                auto normalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
-                normalBuffer->input.colorFormat = presentation.swapchainFormat();
-
-                renderer.installGraph(buildNormalBufferGraphSpec(normalBuffer));
+                renderer.installGraph(buildMainGraphSpec(embeddedTriangle));
                 auto frameServices = app.makeFrameServices();
 
                 auto previousTick = std::chrono::steady_clock::now();
@@ -195,20 +130,13 @@ void printUsage()
                     previousTick = now;
                     app.ui().beginFrame(presentation, deltaSeconds);
                     app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
-
-                    auto const cameraOverride = app.camera().buildRendererCameraOverride();
-                    normalBuffer->input.view = cameraOverride.frameConstants.view;
-                    normalBuffer->input.projection = cameraOverride.frameConstants.projection;
-                    normalBuffer->input.viewProjection = cameraOverride.frameConstants.viewProjection;
+                    embeddedTriangle->input.viewProjection =
+                        app.camera().buildRendererCameraOverride().frameConstants.viewProjection;
 
                     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
-                        .scene = std::ref(scene),
                         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
-                        .sceneExtractInput = nr::scene::SceneExtractInput{},
-                        .cameraOverride = cameraOverride,
                         .frameServices = std::ref(frameServices),
                     });
-
                     if (!frameResult.rendered)
                     {
                         std::println("[error] renderer returned rendered=false during main loop.");
@@ -233,9 +161,7 @@ void printUsage()
                     }
                 }
             }
-
-            return exitCode;
-        }();
+        }
 
         app.shutdown();
         return exitCode;
@@ -266,12 +192,12 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    auto modelPath = resolveModelPath(args);
-    if (!std::filesystem::exists(modelPath))
+    if (!args.empty())
     {
-        std::println("[error] Model file not found: {}", modelPath.string());
-        return 1;
+        std::println("[error] unknown argument: {}", std::string_view{args.front()});
+        printUsage();
+        return 2;
     }
 
-    return runMain(modelPath);
+    return runMain();
 }

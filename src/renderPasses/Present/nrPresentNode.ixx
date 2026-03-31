@@ -17,6 +17,7 @@ struct PresentConvertPushConstants
     std::uint32_t swizzleBgr = 0u;
     std::uint32_t outputSrgb = 0u;
     std::uint32_t flipY = 1u;
+    float uiOpacity = 1.0f;
 };
 
 static_assert(sizeof(PresentConvertPushConstants) <= 128u);
@@ -101,6 +102,7 @@ struct PresentNodeInput
     vk::Extent2D viewportExtent{1, 1};
     vk::Format format = vk::Format::eR8G8B8A8Unorm;
     bool flipY = true;
+    float uiOpacity = 1.0f;
 };
 
 struct PresentNodeOutput
@@ -120,6 +122,7 @@ class PresentNode final : public Node
             .name = "Present",
             .inputPorts = {
                 NodePort{.name = "sourceColor"},
+                NodePort{.name = "uiBuffer"},
             },
             .outputPorts = {
                 NodePort{.name = "swapchain"},
@@ -140,6 +143,8 @@ class PresentNode final : public Node
 
         auto sourceColor = context.resolveInput("sourceColor");
         nr::nrAssert(sourceColor.valid(), "Present node requires a valid sourceColor input from upstream graph connection.");
+        auto uiBuffer = context.resolveInput("uiBuffer");
+        nr::nrAssert(uiBuffer.valid(), "Present node requires a valid uiBuffer input from upstream graph connection.");
 
         auto viewportExtent = input.viewportExtent;
         if (viewportExtent.width == 1 && viewportExtent.height == 1)
@@ -192,22 +197,30 @@ class PresentNode final : public Node
             .swizzleBgr = formatConversion->swizzleBgr ? 1u : 0u,
             .outputSrgb = formatConversion->outputSrgb ? 1u : 0u,
             .flipY = input.flipY ? 1u : 0u,
+            .uiOpacity = std::clamp(input.uiOpacity, 0.0f, 1.0f),
         };
 
         auto convertRoot = runtime->pipeline.descriptorLayout.rootCursor();
         nr::nrAssert(convertRoot.valid(), "Present build stage requires a valid root shader cursor.");
 
         auto sourceCursor = convertRoot["gSourceColor"];
+        auto uiCursor = convertRoot["gUiColor"];
         auto convertedCursor = convertRoot["gConvertedColor"];
         auto pushCursor = convertRoot["gPresentConvert"];
 
         nr::nrAssert(sourceCursor.valid(), "Present build stage requires gSourceColor cursor.");
+        nr::nrAssert(uiCursor.valid(), "Present build stage requires gUiColor cursor.");
         nr::nrAssert(convertedCursor.valid(), "Present build stage requires gConvertedColor cursor.");
         nr::nrAssert(pushCursor.valid(), "Present build stage requires gPresentConvert push-constant cursor.");
 
         auto sourceBindOk = sourceCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = sourceColor.value,
             .debugName = "Present.SourceColor",
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        });
+        auto uiBindOk = uiCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = uiBuffer.value,
+            .debugName = "Present.UiBuffer",
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         });
         auto convertedBindOk = convertedCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
@@ -218,6 +231,7 @@ class PresentNode final : public Node
         auto pushConstantOk = pushCursor.setData(pushConstants);
 
         nr::nrAssert(sourceBindOk, "Present build stage failed to bind logical gSourceColor resource.");
+        nr::nrAssert(uiBindOk, "Present build stage failed to bind logical gUiColor resource.");
         nr::nrAssert(convertedBindOk, "Present build stage failed to bind logical gConvertedColor resource.");
         nr::nrAssert(pushConstantOk, "Present build stage failed to set gPresentConvert push constants.");
 
@@ -227,6 +241,15 @@ class PresentNode final : public Node
         auto convertPassIntents = std::array{
             nr::renderer::PassResourceUseDesc{
                 .resource = sourceColor,
+                .imageUsage = nr::renderer::ImageUsageIntent::Sampled,
+                .imageAccess = nr::renderer::ImageAccessIntent::SampledRead,
+                .imageLayout = nr::renderer::ImageLayoutIntent::ShaderReadOnly,
+                .imageAspect = nr::renderer::ImageAspectIntent::Color,
+                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
+                .readOnly = true,
+            },
+            nr::renderer::PassResourceUseDesc{
+                .resource = uiBuffer,
                 .imageUsage = nr::renderer::ImageUsageIntent::Sampled,
                 .imageAccess = nr::renderer::ImageAccessIntent::SampledRead,
                 .imageLayout = nr::renderer::ImageLayoutIntent::ShaderReadOnly,
@@ -324,6 +347,15 @@ class PresentNode final : public Node
 
     void shutdown(NodeShutdownContext&) override
     {
+        // Explicitly clear binding sets to ensure all descriptor sets are properly
+        // released to the binding pool before the pool is destroyed
+        if (runtime_)
+        {
+            for (auto& bindingSets : runtime_->convertBindingSetsByFrame)
+            {
+                bindingSets.clear();
+            }
+        }
         runtime_.reset();
         device_.reset();
     }

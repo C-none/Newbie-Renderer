@@ -17,6 +17,26 @@ import std;
 
 export namespace nr::rhi
 {
+struct DescriptorIndexingCapabilitySnapshot
+{
+    bool descriptorIndexing = false;
+    bool runtimeDescriptorArray = false;
+    bool descriptorBindingPartiallyBound = false;
+    bool descriptorBindingVariableDescriptorCount = false;
+    bool descriptorBindingSampledImageUpdateAfterBind = false;
+    bool descriptorBindingUpdateUnusedWhilePending = false;
+    bool shaderSampledImageArrayNonUniformIndexing = false;
+    uint32_t maxPerStageDescriptorUpdateAfterBindSampledImages = 0;
+    uint32_t maxDescriptorSetUpdateAfterBindSampledImages = 0;
+};
+
+struct BufferDeviceAddressCapabilitySnapshot
+{
+    bool bufferDeviceAddress = false;
+    bool bufferDeviceAddressCaptureReplay = false;
+    bool bufferDeviceAddressMultiDevice = false;
+};
+
 class Device
 {
   public:
@@ -53,6 +73,16 @@ class Device
     [[nodiscard]] const RayTracingCapabilitySnapshot &rayTracingCapabilities() const noexcept
     {
         return rtCapabilities_;
+    }
+
+    [[nodiscard]] const DescriptorIndexingCapabilitySnapshot &descriptorIndexingCapabilities() const noexcept
+    {
+        return descriptorIndexingCapabilities_;
+    }
+
+    [[nodiscard]] const BufferDeviceAddressCapabilitySnapshot &bufferDeviceAddressCapabilities() const noexcept
+    {
+        return bufferDeviceAddressCapabilities_;
     }
 
     void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"})
@@ -363,8 +393,10 @@ class Device
         meshShaderFeatures.primitiveFragmentShadingRateMeshShader = vk::False;
 
         auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2,
+                                 vk::PhysicalDeviceDescriptorIndexingProperties,
                                  vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
         auto &physicalDeviceProperties = properties2.get<vk::PhysicalDeviceProperties2>();
+        auto &descriptorIndexingProperties = properties2.get<vk::PhysicalDeviceDescriptorIndexingProperties>();
         auto &rayTracingPipelineProperties = properties2.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
 
 #define REQUIRE_FEATURE(feature_field, feature_name) \
@@ -373,6 +405,11 @@ class Device
         REQUIRE_FEATURE(vulkan11Features.shaderDrawParameters, "shaderDrawParameters");
         REQUIRE_FEATURE(vulkan12Features.bufferDeviceAddress, "bufferDeviceAddress");
         REQUIRE_FEATURE(vulkan12Features.descriptorIndexing, "descriptorIndexing");
+        REQUIRE_FEATURE(vulkan12Features.runtimeDescriptorArray, "runtimeDescriptorArray");
+        REQUIRE_FEATURE(vulkan12Features.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound");
+        REQUIRE_FEATURE(vulkan12Features.descriptorBindingVariableDescriptorCount, "descriptorBindingVariableDescriptorCount");
+        REQUIRE_FEATURE(vulkan12Features.descriptorBindingSampledImageUpdateAfterBind, "descriptorBindingSampledImageUpdateAfterBind");
+        REQUIRE_FEATURE(vulkan12Features.descriptorBindingUpdateUnusedWhilePending, "descriptorBindingUpdateUnusedWhilePending");
         REQUIRE_FEATURE(vulkan13Features.inlineUniformBlock, "inlineUniformBlock");
         REQUIRE_FEATURE(vulkan13Features.dynamicRendering, "dynamicRendering");
         REQUIRE_FEATURE(vulkan13Features.synchronization2, "synchronization2");
@@ -387,6 +424,23 @@ class Device
         REQUIRE_FEATURE(cooperativeVectorFeatures.cooperativeVector, "cooperativeVector");
 
 #undef REQUIRE_FEATURE
+
+        descriptorIndexingCapabilities_ = DescriptorIndexingCapabilitySnapshot{
+            .descriptorIndexing = vulkan12Features.descriptorIndexing == vk::True,
+            .runtimeDescriptorArray = vulkan12Features.runtimeDescriptorArray == vk::True,
+            .descriptorBindingPartiallyBound = vulkan12Features.descriptorBindingPartiallyBound == vk::True,
+            .descriptorBindingVariableDescriptorCount = vulkan12Features.descriptorBindingVariableDescriptorCount == vk::True,
+            .descriptorBindingSampledImageUpdateAfterBind = vulkan12Features.descriptorBindingSampledImageUpdateAfterBind == vk::True,
+            .descriptorBindingUpdateUnusedWhilePending = vulkan12Features.descriptorBindingUpdateUnusedWhilePending == vk::True,
+            .shaderSampledImageArrayNonUniformIndexing = vulkan12Features.shaderSampledImageArrayNonUniformIndexing == vk::True,
+            .maxPerStageDescriptorUpdateAfterBindSampledImages = descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindSampledImages,
+            .maxDescriptorSetUpdateAfterBindSampledImages = descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindSampledImages,
+        };
+        bufferDeviceAddressCapabilities_ = BufferDeviceAddressCapabilitySnapshot{
+            .bufferDeviceAddress = vulkan12Features.bufferDeviceAddress == vk::True,
+            .bufferDeviceAddressCaptureReplay = vulkan12Features.bufferDeviceAddressCaptureReplay == vk::True,
+            .bufferDeviceAddressMultiDevice = vulkan12Features.bufferDeviceAddressMultiDevice == vk::True,
+        };
 
         auto const &limits = physicalDeviceProperties.properties.limits;
         rtCapabilities_ = RayTracingCapabilitySnapshot{
@@ -551,6 +605,8 @@ class Device
         vk::EXTMemoryBudgetExtensionName,
     };
     RayTracingCapabilitySnapshot rtCapabilities_{};
+    DescriptorIndexingCapabilitySnapshot descriptorIndexingCapabilities_{};
+    BufferDeviceAddressCapabilitySnapshot bufferDeviceAddressCapabilities_{};
 
     std::array<size_t, static_cast<size_t>(QueueFamilyKind::size)> queueFamilyDict{};
     SwapChainConfig swapChainConfig_{};
