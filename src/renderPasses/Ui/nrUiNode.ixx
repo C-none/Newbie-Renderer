@@ -404,25 +404,36 @@ void recordUiTextureAcquireBarriers(
     auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
     auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
     
+    auto barriers = nr::rhi::ops::BarrierBatch{};
+    
     if (transferQueueFamily == graphicsQueueFamily)
     {
-        // No cross-queue acquire needed when queues share same family
+        // Same queue family: no ownership transfer, but still need layout transition
         std::ranges::for_each(runtime.textures, [&](auto& pair) {
+            if (!pair.second.pendingUpload.has_value() || !pair.second.pendingUpload->valid())
+            {
+                return;
+            }
+            
+            barriers.add(nr::rhi::ops::makeImageTransferDstToShaderReadBarrier(
+                pair.second.pendingUpload->image->get(),
+                vk::PipelineStageFlagBits2::eFragmentShader));
             pair.second.pendingUpload.reset();
         });
-        return;
     }
-
-    auto barriers = nr::rhi::ops::BarrierBatch{};
-    std::ranges::for_each(runtime.textures, [&](auto& pair) {
-        if (!pair.second.pendingUpload.has_value() || !pair.second.pendingUpload->valid())
-        {
-            return;
-        }
-        
-        barriers.add(uploadContext.makeImageAcquireBarrier(pair.second.pendingUpload.value()));
-        pair.second.pendingUpload.reset();
-    });
+    else
+    {
+        // Cross-queue: record ownership acquire barriers (which also handle layout transition)
+        std::ranges::for_each(runtime.textures, [&](auto& pair) {
+            if (!pair.second.pendingUpload.has_value() || !pair.second.pendingUpload->valid())
+            {
+                return;
+            }
+            
+            barriers.add(uploadContext.makeImageAcquireBarrier(pair.second.pendingUpload.value()));
+            pair.second.pendingUpload.reset();
+        });
+    }
 
     if (!barriers.empty())
     {
@@ -1000,6 +1011,7 @@ class UiNode final : public Node
                 nr::nrAssert(recordContext.commandBuffer.has_value(), "UiNode record stage requires RAII command buffer access.");
                 nr::nrAssert(static_cast<bool>(recordContext.resolveImage), "UiNode record stage requires image resolver callback.");
                 nr::nrAssert(static_cast<bool>(runtime), "UiNode record stage requires initialized runtime state.");
+                nr::nrAssert(recordContext.device.has_value(), "UiNode record stage requires device reference.");
 
                 auto uiBufferImage = recordContext.resolveImage(uiBuffer);
                 nr::nrAssert(uiBufferImage.has_value(), "UiNode failed to resolve uiBuffer image.");
@@ -1033,6 +1045,10 @@ class UiNode final : public Node
                 };
 
                 auto& commandBuffer = recordContext.commandBuffer->get();
+                
+                // Record layout transitions for any textures with pending uploads before rendering
+                recordUiTextureAcquireBarriers(recordContext.device->get(), *runtime, *commandBuffer);
+                
                 auto scopedRendering = nr::rhi::ops::ScopedRendering(commandBuffer, renderingScope);
 
                 if (drawFrame.commands.empty())

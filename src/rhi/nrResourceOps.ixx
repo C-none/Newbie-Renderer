@@ -668,8 +668,26 @@ struct BufferUploadOwnershipPlan
     std::optional<QueueOwnershipTransfer> acquireToTransfer;
     QueueOwnershipTransfer releaseToDestination{};
 
+    /**
+     * @brief Check if this plan is for same-queue-family upload (no ownership transfer needed).
+     */
+    [[nodiscard]] bool isSameQueueFamily() const noexcept
+    {
+        return !acquireToTransfer.has_value() &&
+               releaseToDestination.release.srcQueueFamilyIndex ==
+                   releaseToDestination.release.dstQueueFamilyIndex;
+    }
+
     [[nodiscard]] bool valid(uint32_t transferQueueFamilyIndex) const noexcept
     {
+        // Same-queue-family plans have a different validation path
+        if (isSameQueueFamily())
+        {
+            return releaseToDestination.release.srcQueueFamilyIndex == transferQueueFamilyIndex &&
+                   releaseToDestination.release.stages != vk::PipelineStageFlags2{} &&
+                   releaseToDestination.acquire.stages != vk::PipelineStageFlags2{};
+        }
+
         auto outgoingValid =
             releaseToDestination.valid() &&
             releaseToDestination.release.srcQueueFamilyIndex == transferQueueFamilyIndex &&
@@ -1679,11 +1697,32 @@ class UploadReadbackContext
             raw.copyBufferToImage(uploadRing_.handle(), dst.handle(), vk::ImageLayout::eTransferDstOptimal, {effectiveRegion});
 
             BarrierBatch releaseBarrier{};
-            releaseBarrier.add(makeImageOwnershipBarrier<OwnershipBarrierPhase::Release>(
-                dst,
-                vk::ImageLayout::eTransferDstOptimal,
-                destinationLayout,
-                ownership.releaseToDestination.release));
+            if (ownership.isSameQueueFamily())
+            {
+                // Same queue family: use simple layout transition, no ownership transfer
+                releaseBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
+                    ownership.releaseToDestination.release.stages,
+                    ownership.releaseToDestination.release.access,
+                    ownership.releaseToDestination.acquire.stages,
+                    ownership.releaseToDestination.acquire.access,
+                    vk::ImageLayout::eTransferDstOptimal,
+                    destinationLayout,
+                    kIgnoredQueueFamilyIndex,
+                    kIgnoredQueueFamilyIndex,
+                    vk::Image{},
+                    {},
+                    nullptr,
+                }));
+            }
+            else
+            {
+                // Cross-queue: use ownership transfer barrier
+                releaseBarrier.add(makeImageOwnershipBarrier<OwnershipBarrierPhase::Release>(
+                    dst,
+                    vk::ImageLayout::eTransferDstOptimal,
+                    destinationLayout,
+                    ownership.releaseToDestination.release));
+            }
             pipelineBarrier(raw, releaseBarrier);
         }
         CommandRecorder::end(commandBuffer);
