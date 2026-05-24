@@ -170,7 +170,10 @@ class Device
             return vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
         };
 
-        if (frameSubmitCount_ == 0)
+        // Keep pre-present work decoupled from swapchain availability.
+        // Waiting on imageAvailable only at the present-signaling submit prevents vblank pacing
+        // from stalling earlier GPU batches that do not touch the swapchain image.
+        if (signalForPresent)
         {
             submitBatch.addWait(frame.imageAvailable(), waitStageForRole(submitRole));
         }

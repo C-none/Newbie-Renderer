@@ -8,7 +8,7 @@ set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache" CACHE STRING "Runtime
 set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory")
 
 find_package(Vulkan REQUIRED)
-find_package(imgui CONFIG REQUIRED) 
+find_package(imgui CONFIG REQUIRED)
 find_package(glm REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
@@ -37,27 +37,27 @@ function(nr_apply_msvc_settings target)
     if(MSVC)
         # Modern parallel compilation
         target_compile_options(${target} PRIVATE /MP)
-        
+        target_compile_definitions(${target} PRIVATE
+            $<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=2>
+            $<$<NOT:$<CONFIG:Debug>>:_ITERATOR_DEBUG_LEVEL=0>
+        )
+
         # Link-time optimization for Release builds
         set_target_properties(${target} PROPERTIES
             INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
         )
-        
+
         # Warning levels using generator expressions (cleaner syntax)
         target_compile_options(${target} PRIVATE
-            $<$<CONFIG:Debug>:/W4 /WX /Zi>           # All warnings as errors, debug info
-            $<$<CONFIG:Release>:/W4 /WX /Ox>          # All warnings as errors, optimize
+            $<$<CONFIG:Debug>:/W4 /WX /Zi> # All warnings as errors, debug info
+            $<$<CONFIG:Release>:/W4 /WX /Ox> # All warnings as errors, optimize
         )
-        
+
         # Incremental linking for faster rebuilds
         target_link_options(${target} PRIVATE
             $<$<CONFIG:Debug>:/INCREMENTAL /DEBUG:FULL>
             $<$<CONFIG:Release>:/INCREMENTAL:NO /OPT:REF /OPT:ICF>
         )
-        
-        # Runtime library selection
-        # set_target_properties(${target} PROPERTIES MSVC_RUNTIME_LIBRARY 
-        #     MultiThreaded$<$<CONFIG:Debug>:Debug>)
     endif()
 endfunction()
 
@@ -79,7 +79,7 @@ if(NR_BUILD_TESTS)
     # Configure CTest output and ensure Testing directory structure
     set(CTEST_OUTPUT_ON_FAILURE ON CACHE BOOL "Enable verbose CTest output on failure" FORCE)
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/Testing/Temporary")
-    
+
     add_subdirectory(test)
 endif()
 

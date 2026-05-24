@@ -172,6 +172,8 @@ struct SwapChain
             return capabilities.currentTransform;
         };
 
+        auto selectedPresentMode = choosePresentMode();
+
         vk::SwapchainCreateInfoKHR createInfo(
             vk::SwapchainCreateFlagsKHR{},
             surface,
@@ -185,7 +187,7 @@ struct SwapChain
             {},
             chooseSurfaceTransform(),
             chooseCompositeAlpha(),
-            choosePresentMode(),
+            selectedPresentMode,
             vk::True,
             oldSwapchain);
 
@@ -194,6 +196,12 @@ struct SwapChain
         result.swapChainImages = result.swapChain.getImages();
         result.format = selectedFormat.format;
         result.extent = extent;
+
+        nrInfo(std::format(
+            "Swapchain created: requestedPresentMode={}, selectedPresentMode={}, imageCount={}.",
+            vk::to_string(config.presentMode),
+            vk::to_string(selectedPresentMode),
+            result.swapChainImages.size()));
 
         vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, selectedFormat.format, {}, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
         result.imageViews = result.swapChainImages | std::views::transform([&](vk::Image image) {

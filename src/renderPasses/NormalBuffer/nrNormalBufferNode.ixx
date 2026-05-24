@@ -18,6 +18,19 @@ struct NormalBufferRuntimeCache
 {
     nr::rhi::PipelineState<nr::rhi::GraphicsPipeline> pipeline{};
     std::array<std::vector<nr::rhi::ShaderBindingSet>, nr::maxFrameInFlight> passBindingSetsByFrame{};
+
+    // Pre-allocated per-frame-slot images to avoid runtime memory allocation.
+    // These are imported into the render graph at build time.
+    std::array<nr::rhi::Image, nr::maxFrameInFlight> normalBuffers{};
+    std::array<nr::rhi::Image, nr::maxFrameInFlight> depthBuffers{};
+
+    // Pre-allocated per-frame-slot uniform buffers for frame data.
+    std::array<nr::rhi::Buffer, nr::maxFrameInFlight> frameUniformBuffers{};
+
+    // Track allocated dimensions for resize detection
+    vk::Extent2D allocatedExtent{0, 0};
+    vk::Format allocatedColorFormat = vk::Format::eUndefined;
+    vk::Format allocatedDepthFormat = vk::Format::eUndefined;
 };
 
 struct NormalBufferFrameUniforms
@@ -112,7 +125,108 @@ inline constexpr std::uint32_t kOffsetNormal = 12;
             nr::rhi::allocateBindingSetsForLayout(runtime->pipeline.layout, runtime->pipeline.bindingPool);
     });
 
+    // Pre-allocate uniform buffers for each frame slot
+    for (std::size_t frameSlot = 0; frameSlot < nr::maxFrameInFlight; ++frameSlot)
+    {
+        auto bufferInfo = vk::BufferCreateInfo{};
+        bufferInfo.size = sizeof(NormalBufferFrameUniforms);
+        bufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+        bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+        runtime->frameUniformBuffers[frameSlot] = device.resourceFactory.createBuffer(
+            bufferInfo,
+            nr::rhi::MemoryUsage::CpuToGpu,
+            std::format("NormalBuffer.FrameUniforms[{}]", frameSlot));
+        nr::nrAssert(runtime->frameUniformBuffers[frameSlot].valid(),
+            std::format("NormalBuffer failed to create frame uniform buffer for frame slot {}.", frameSlot));
+    }
+
+    // Store formats for later resize detection
+    runtime->allocatedColorFormat = colorFormat;
+    runtime->allocatedDepthFormat = depthFormat;
+
     return runtime;
+}
+
+/// Ensure pre-allocated images have sufficient capacity for the given extent.
+/// Reallocates images if the extent or format changes.
+void ensureNormalBufferImages(
+    nr::rhi::Device& device,
+    NormalBufferRuntimeCache& runtime,
+    vk::Extent2D extent,
+    vk::Format colorFormat,
+    vk::Format depthFormat)
+{
+    // Check if we need to reallocate (extent or format changed)
+    bool needsRealloc = runtime.allocatedExtent.width < extent.width ||
+                        runtime.allocatedExtent.height < extent.height ||
+                        runtime.allocatedColorFormat != colorFormat ||
+                        runtime.allocatedDepthFormat != depthFormat;
+
+    if (!needsRealloc && runtime.normalBuffers[0].valid())
+    {
+        return;
+    }
+
+    // Grow to power of 2 or at least the requested size to minimize reallocations
+    auto newExtent = vk::Extent2D{
+        std::max(runtime.allocatedExtent.width, extent.width),
+        std::max(runtime.allocatedExtent.height, extent.height),
+    };
+
+    // Allocate images for each frame slot
+    for (std::size_t frameSlot = 0; frameSlot < nr::maxFrameInFlight; ++frameSlot)
+    {
+        // Normal buffer (color attachment)
+        {
+            auto imageInfo = vk::ImageCreateInfo{};
+            imageInfo.imageType = vk::ImageType::e2D;
+            imageInfo.format = colorFormat;
+            imageInfo.extent = vk::Extent3D{newExtent.width, newExtent.height, 1};
+            imageInfo.mipLevels = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.samples = vk::SampleCountFlagBits::e1;
+            imageInfo.tiling = vk::ImageTiling::eOptimal;
+            imageInfo.usage = vk::ImageUsageFlagBits::eColorAttachment |
+                              vk::ImageUsageFlagBits::eTransferSrc |
+                              vk::ImageUsageFlagBits::eSampled;
+            imageInfo.sharingMode = vk::SharingMode::eExclusive;
+            imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+            runtime.normalBuffers[frameSlot] = device.resourceFactory.createImage(
+                imageInfo,
+                nr::rhi::MemoryUsage::GpuOnly,
+                std::format("NormalBuffer.Color[{}]", frameSlot));
+            nr::nrAssert(runtime.normalBuffers[frameSlot].valid(),
+                std::format("NormalBuffer failed to create normal buffer image for frame slot {}.", frameSlot));
+        }
+
+        // Depth buffer
+        {
+            auto imageInfo = vk::ImageCreateInfo{};
+            imageInfo.imageType = vk::ImageType::e2D;
+            imageInfo.format = depthFormat;
+            imageInfo.extent = vk::Extent3D{newExtent.width, newExtent.height, 1};
+            imageInfo.mipLevels = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.samples = vk::SampleCountFlagBits::e1;
+            imageInfo.tiling = vk::ImageTiling::eOptimal;
+            imageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+            imageInfo.sharingMode = vk::SharingMode::eExclusive;
+            imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+            runtime.depthBuffers[frameSlot] = device.resourceFactory.createImage(
+                imageInfo,
+                nr::rhi::MemoryUsage::GpuOnly,
+                std::format("NormalBuffer.Depth[{}]", frameSlot));
+            nr::nrAssert(runtime.depthBuffers[frameSlot].valid(),
+                std::format("NormalBuffer failed to create depth buffer image for frame slot {}.", frameSlot));
+        }
+    }
+
+    runtime.allocatedExtent = newExtent;
+    runtime.allocatedColorFormat = colorFormat;
+    runtime.allocatedDepthFormat = depthFormat;
 }
 
 [[nodiscard]] std::optional<std::reference_wrapper<nr::app::UiSystem>> tryGetUiSystem(
@@ -166,27 +280,35 @@ class NormalBufferNode final : public Node
 
     void initialize(NodeInitContext& context) override
     {
+        device_ = context.device;
         auto colorFormat = input.colorFormat;
         if (colorFormat == vk::Format::eUndefined)
         {
             colorFormat = context.device.get().presentationContext.swapchainFormat();
         }
         runtime_ = ensureNormalBufferRuntime(context.device.get(), colorFormat, input.depthFormat);
+        
+        // Pre-allocate images with initial viewport extent
+        // These will be resized in build() if the viewport changes
+        auto initialExtent = input.viewportExtent;
+        if (initialExtent.width <= 1 || initialExtent.height <= 1)
+        {
+            // Use a reasonable default size that will likely be resized in first build()
+            initialExtent = vk::Extent2D{1920, 1080};
+        }
+        ensureNormalBufferImages(context.device.get(), *runtime_, initialExtent, colorFormat, input.depthFormat);
     }
 
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override
     {
         nr::nrAssert(static_cast<bool>(runtime_), "NormalBuffer build stage requires initialized runtime state.");
+        nr::nrAssert(device_.has_value(), "NormalBuffer build stage requires initialize() device reference.");
 
         if (auto uiSystem = tryGetUiSystem(frameParameters); uiSystem.has_value())
         {
             auto window = uiSystem->get().window("Normal Buffer");
             if (window)
             {
-                auto const& stats = uiSystem->get().stats();
-                uiSystem->get().textFmt("FPS: {:.1f}", stats.framesPerSecond);
-                uiSystem->get().textFmt("Frame Time: {:.2f} ms", stats.frameTimeMilliseconds);
-                uiSystem->get().separator();
                 [[maybe_unused]] auto checkboxChanged =
                     uiSystem->get().checkbox("Display Back Faces", input.displayBackFaces);
             }
@@ -204,10 +326,25 @@ class NormalBufferNode final : public Node
             colorFormat = frameParameters.swapchainFormat;
         }
 
-        // Create normal buffer output
-        output.normalBuffer = context.addResource(nr::renderer::GraphTransientImageDesc{
-            .debugName = "NormalBuffer.Color",
-            .lifetime = nr::renderer::ResourceLifetime::GraphTransient,
+        // Ensure pre-allocated images have sufficient capacity (may reallocate on resize)
+        ensureNormalBufferImages(device_->get(), *runtime_, viewportExtent, colorFormat, input.depthFormat);
+
+        // Get the current frame slot's pre-allocated images
+        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+        auto const& normalBufferImage = runtime_->normalBuffers[frameSlot];
+        auto const& depthBufferImage = runtime_->depthBuffers[frameSlot];
+
+        nr::nrAssert(normalBufferImage.valid(),
+            std::format("NormalBuffer build: pre-allocated normal image for frame slot {} is invalid.", frameSlot));
+        nr::nrAssert(depthBufferImage.valid(),
+            std::format("NormalBuffer build: pre-allocated depth image for frame slot {} is invalid.", frameSlot));
+
+        // Import pre-allocated normal buffer image into the render graph
+        output.normalBuffer = context.addResource(nr::renderer::GraphImportedImageDesc{
+            .debugName = std::format("NormalBuffer.Color[{}]", frameSlot),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
             .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
             .format = colorFormat,
             .usageIntents = {
@@ -215,37 +352,55 @@ class NormalBufferNode final : public Node
                 nr::renderer::ImageUsageIntent::TransferSrc,
                 nr::renderer::ImageUsageIntent::Sampled,
             },
-            .initialLayout = nr::renderer::ImageLayoutIntent::ColorAttachment,
+            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
             .aspect = nr::renderer::ImageAspectIntent::Color,
+            .importedResource = std::cref(normalBufferImage),
         });
 
-        // Create depth buffer
-        output.depthBuffer = context.addResource(nr::renderer::GraphTransientImageDesc{
-            .debugName = "NormalBuffer.Depth",
-            .lifetime = nr::renderer::ResourceLifetime::GraphTransient,
+        // Import pre-allocated depth buffer image into the render graph
+        output.depthBuffer = context.addResource(nr::renderer::GraphImportedImageDesc{
+            .debugName = std::format("NormalBuffer.Depth[{}]", frameSlot),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
             .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
             .format = input.depthFormat,
             .usageIntents = {
                 nr::renderer::ImageUsageIntent::DepthStencilAttachment,
             },
-            .initialLayout = nr::renderer::ImageLayoutIntent::DepthStencilAttachment,
+            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
             .aspect = nr::renderer::ImageAspectIntent::Depth,
+            .importedResource = std::cref(depthBufferImage),
         });
 
+        // Get the current frame slot's pre-allocated uniform buffer
+        auto& frameUniformBufferRef = runtime_->frameUniformBuffers[frameSlot];
+        nr::nrAssert(frameUniformBufferRef.valid(),
+            std::format("NormalBuffer build: pre-allocated frame uniform buffer for frame slot {} is invalid.", frameSlot));
+
+        // Update uniform buffer contents
         auto frameUniforms = NormalBufferFrameUniforms{
             .view = input.view,
             .projection = input.projection,
             .viewProjection = input.viewProjection,
         };
 
-        auto frameUniformBuffer = context.addResource(nr::renderer::GraphTransientBufferDesc{
-            .debugName = "NormalBuffer.FrameUniforms",
-            .lifetime = nr::renderer::ResourceLifetime::GraphTransient,
+        // Write uniform data directly to the pre-allocated buffer
+        auto* mappedData = frameUniformBufferRef.mapped();
+        nr::nrAssert(mappedData != nullptr, "NormalBuffer frame uniform buffer must be host-visible and mapped.");
+        std::memcpy(mappedData, &frameUniforms, sizeof(NormalBufferFrameUniforms));
+
+        // Import pre-allocated uniform buffer into the render graph
+        auto frameUniformBuffer = context.addResource(nr::renderer::GraphImportedBufferDesc{
+            .debugName = std::format("NormalBuffer.FrameUniforms[{}]", frameSlot),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
             .size = static_cast<vk::DeviceSize>(sizeof(NormalBufferFrameUniforms)),
             .usageIntents = {
                 nr::renderer::BufferUsageIntent::Uniform,
             },
-            .memoryUsage = nr::rhi::MemoryUsage::CpuToGpu,
+            .importedResource = std::ref(frameUniformBufferRef),
         });
 
         auto root = runtime_->pipeline.descriptorLayout.rootCursor();
@@ -506,5 +661,6 @@ class NormalBufferNode final : public Node
 
   private:
     std::shared_ptr<NormalBufferRuntimeCache> runtime_{};
+    std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
 };
 } // namespace nr::renderPasses

@@ -44,6 +44,13 @@ struct GraphImportedBufferDesc
     ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined;
     vk::DeviceSize size = 0;
     std::vector<BufferUsageIntent> usageIntents{};
+
+    /// Optional reference to a pre-allocated buffer resource held by the node.
+    /// When set, the render graph executor will use this buffer directly instead of
+    /// looking it up in the importedBuffers map. This enables nodes to pre-allocate
+    /// per-frame-slot resources at initialize time and import them into the graph
+    /// at build time, avoiding runtime memory allocations.
+    std::optional<std::reference_wrapper<nr::rhi::Buffer>> importedResource{};
 };
 
 struct GraphImportedImageDesc
@@ -57,6 +64,13 @@ struct GraphImportedImageDesc
     std::vector<ImageUsageIntent> usageIntents{};
     ImageLayoutIntent initialLayout = ImageLayoutIntent::Undefined;
     ImageAspectIntent aspect = ImageAspectIntent::Color;
+
+    /// Optional reference to a pre-allocated image resource held by the node.
+    /// When set, the render graph executor will use this image directly instead of
+    /// looking it up in the importedImages map. This enables nodes to pre-allocate
+    /// per-frame-slot resources at initialize time and import them into the graph
+    /// at build time, avoiding runtime memory allocations.
+    std::optional<std::reference_wrapper<const nr::rhi::Image>> importedResource{};
 };
 
 struct GraphImportedSwapchainImageDesc
@@ -237,6 +251,14 @@ struct CompiledResourceDesc
     ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined;
     ResourceOwnershipDomain finalOwnership = ResourceOwnershipDomain::Undefined;
     nr::rhi::MemoryUsage resolvedBufferMemoryUsage = nr::rhi::MemoryUsage::GpuOnly;
+
+    /// Optional reference to a pre-allocated imported buffer held by the node.
+    /// Populated from GraphImportedBufferDesc::importedResource during compilation.
+    std::optional<std::reference_wrapper<nr::rhi::Buffer>> importedBufferResource{};
+
+    /// Optional reference to a pre-allocated imported image held by the node.
+    /// Populated from GraphImportedImageDesc::importedResource during compilation.
+    std::optional<std::reference_wrapper<const nr::rhi::Image>> importedImageResource{};
 };
 
 struct CompiledPass

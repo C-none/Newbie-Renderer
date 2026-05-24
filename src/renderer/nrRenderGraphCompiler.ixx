@@ -245,6 +245,7 @@ class RenderGraphCompiler
                         compiledResource.resolvedBufferSize = desc.size;
                         compiledResource.initialOwnership = desc.initialOwnership;
                         compiledResource.finalOwnership = desc.initialOwnership;
+                        compiledResource.importedBufferResource = desc.importedResource;
                         std::ranges::for_each(desc.usageIntents, [&](BufferUsageIntent intent) {
                             compiledResource.resolvedBufferUsage |= mapBufferUsageIntent(intent);
                         });
@@ -274,6 +275,7 @@ class RenderGraphCompiler
                         compiledResource.finalLayout = desc.initialLayout;
                         compiledResource.initialOwnership = desc.initialOwnership;
                         compiledResource.finalOwnership = desc.initialOwnership;
+                        compiledResource.importedImageResource = desc.importedResource;
                         std::ranges::for_each(desc.usageIntents, [&](ImageUsageIntent intent) {
                             compiledResource.resolvedImageUsage |= mapImageUsageIntent(intent);
                         });

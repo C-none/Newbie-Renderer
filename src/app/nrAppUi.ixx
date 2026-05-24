@@ -15,6 +15,8 @@ inline constexpr float kUiWindowMargin = 16.0f;
 inline constexpr float kUiWindowDefaultWidth = 360.0f;
 inline constexpr float kUiWindowDefaultHeight = 160.0f;
 inline constexpr float kUiWindowVerticalStride = 184.0f;
+inline constexpr std::uint32_t kFpsSampleWindowFrameCount = 60u;
+inline constexpr std::string_view kUnifiedUiWindowTitle = "Renderer Controls";
 
 [[nodiscard]] float sanitizeUiDeltaSeconds(float deltaSeconds) noexcept
 {
@@ -51,9 +53,10 @@ class UiSystem
     {
       public:
         WindowScope() = default;
-        WindowScope(UiSystem& owner, bool visible) noexcept
+                WindowScope(UiSystem& owner, bool visible, bool closesWindow) noexcept
             : owner_(std::ref(owner))
             , visible_(visible)
+                        , closesWindow_(closesWindow)
         {
         }
 
@@ -63,9 +66,11 @@ class UiSystem
         WindowScope(WindowScope&& other) noexcept
             : owner_(other.owner_)
             , visible_(other.visible_)
+            , closesWindow_(other.closesWindow_)
         {
             other.owner_.reset();
             other.visible_ = false;
+            other.closesWindow_ = false;
         }
 
         WindowScope& operator=(WindowScope&& other) noexcept
@@ -78,8 +83,10 @@ class UiSystem
             close();
             owner_ = other.owner_;
             visible_ = other.visible_;
+            closesWindow_ = other.closesWindow_;
             other.owner_.reset();
             other.visible_ = false;
+            other.closesWindow_ = false;
             return *this;
         }
 
@@ -101,13 +108,15 @@ class UiSystem
                 return;
             }
 
-            owner_->get().endWindow();
+            owner_->get().endWindow(closesWindow_);
             owner_.reset();
             visible_ = false;
+            closesWindow_ = false;
         }
 
         std::optional<std::reference_wrapper<UiSystem>> owner_{};
         bool visible_ = false;
+        bool closesWindow_ = false;
     };
 
     UiSystem() = default;
@@ -162,6 +171,11 @@ class UiSystem
         frameFinalized_ = false;
         captureState_ = {};
         frameStats_ = {};
+        fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
+        fpsSampleFrameCount_ = 0u;
+        unifiedWindowOpen_ = false;
+        unifiedWindowVisible_ = false;
+        unifiedWindowSectionCount_ = 0u;
     }
 
     [[nodiscard]] bool initialized() const noexcept
@@ -181,13 +195,20 @@ class UiSystem
 
         auto const sanitizedDelta = sanitizeUiDeltaSeconds(deltaSeconds);
         frameStats_.deltaSeconds = sanitizedDelta;
-        frameStats_.smoothedDeltaSeconds = frameStats_.frameCounter == 0
-                                              ? sanitizedDelta
-                                              : std::lerp(frameStats_.smoothedDeltaSeconds, sanitizedDelta, 0.1f);
-        frameStats_.frameTimeMilliseconds = frameStats_.smoothedDeltaSeconds * 1000.0f;
-        frameStats_.framesPerSecond = frameStats_.smoothedDeltaSeconds > 0.0f
-                                          ? 1.0f / frameStats_.smoothedDeltaSeconds
-                                          : 0.0f;
+        fpsSampleAccumulatedDeltaSeconds_ += sanitizedDelta;
+        ++fpsSampleFrameCount_;
+        if (fpsSampleFrameCount_ >= kFpsSampleWindowFrameCount)
+        {
+            auto const averagedDeltaSeconds =
+                fpsSampleAccumulatedDeltaSeconds_ / static_cast<float>(fpsSampleFrameCount_);
+            frameStats_.smoothedDeltaSeconds = averagedDeltaSeconds;
+            frameStats_.frameTimeMilliseconds = averagedDeltaSeconds * 1000.0f;
+            frameStats_.framesPerSecond = averagedDeltaSeconds > 0.0f
+                                              ? 1.0f / averagedDeltaSeconds
+                                              : 0.0f;
+            fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
+            fpsSampleFrameCount_ = 0u;
+        }
         ++frameStats_.frameCounter;
 
         auto& io = ImGui::GetIO();
@@ -211,6 +232,9 @@ class UiSystem
         frameActive_ = true;
         frameFinalized_ = false;
         windowsOpenedThisFrame_ = 0u;
+        unifiedWindowOpen_ = false;
+        unifiedWindowVisible_ = false;
+        unifiedWindowSectionCount_ = 0u;
     }
 
     void finalizeFrame()
@@ -221,6 +245,13 @@ class UiSystem
         }
 
         setCurrentContext();
+        if (unifiedWindowOpen_)
+        {
+            ImGui::End();
+            unifiedWindowOpen_ = false;
+            unifiedWindowVisible_ = false;
+            unifiedWindowSectionCount_ = 0u;
+        }
         ImGui::Render();
 
         auto& io = ImGui::GetIO();
@@ -238,11 +269,16 @@ class UiSystem
         nrAssert(frameActive_ && !frameFinalized_, "UiSystem::window requires an active UI frame.");
         setCurrentContext();
 
-        prepareWindowDefaults();
+        if (!unifiedWindowOpen_)
+        {
+            prepareWindowDefaults();
+            auto const visible = ImGui::Begin(kUnifiedUiWindowTitle.data(), nullptr, flags);
+            unifiedWindowVisible_ = visible;
+            unifiedWindowOpen_ = true;
+        }
 
-        auto const ownedTitle = std::string{title};
-        auto const visible = ImGui::Begin(ownedTitle.c_str(), nullptr, flags);
-        return WindowScope{*this, visible};
+        emitSectionHeader(title);
+        return WindowScope{*this, unifiedWindowVisible_, false};
     }
 
     void separator()
@@ -307,10 +343,32 @@ class UiSystem
         ImGui::SetCurrentContext(context_);
     }
 
-    void endWindow()
+    void endWindow(bool closesWindow)
     {
+        if (!closesWindow)
+        {
+            return;
+        }
+
         setCurrentContext();
         ImGui::End();
+    }
+
+    void emitSectionHeader(std::string_view title)
+    {
+        if (!unifiedWindowVisible_ || title.empty())
+        {
+            return;
+        }
+
+        if (unifiedWindowSectionCount_ > 0u)
+        {
+            ImGui::Separator();
+        }
+
+        ImGui::TextUnformatted(title.data(), title.data() + title.size());
+        ImGui::Separator();
+        ++unifiedWindowSectionCount_;
     }
 
     void prepareWindowDefaults()
@@ -341,5 +399,10 @@ class UiSystem
     UiCaptureState captureState_{};
     UiFrameStats frameStats_{};
     std::uint32_t windowsOpenedThisFrame_ = 0u;
+    float fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
+    std::uint32_t fpsSampleFrameCount_ = 0u;
+    bool unifiedWindowOpen_ = false;
+    bool unifiedWindowVisible_ = false;
+    std::uint32_t unifiedWindowSectionCount_ = 0u;
 };
 } // namespace nr::app

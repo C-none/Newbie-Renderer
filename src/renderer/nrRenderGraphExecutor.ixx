@@ -9,6 +9,42 @@ import :renderGraphCompiler;
 import :renderGraphType;
 import :rendererSubmission;
 
+namespace nr::renderer::detail
+{
+using nr::rhi::ScopedCommandBufferDebugLabel;
+
+[[nodiscard]] inline std::string_view queueDomainLabel(QueueDomain queue) noexcept
+{
+    if (queue == QueueDomain::Graphics)
+    {
+        return "Graphics";
+    }
+    if (queue == QueueDomain::Compute)
+    {
+        return "Compute";
+    }
+    return "Transfer";
+}
+
+[[nodiscard]] inline std::string nodeScopeLabel(std::string_view passDebugName)
+{
+    // Pass labels follow "Node.Pass". If a node prefix is unavailable,
+    // keep the scope at the renderer level instead of inventing new ownership metadata.
+    auto const separator = passDebugName.find('.');
+    if (separator == std::string_view::npos || separator == 0)
+    {
+        return "Renderer";
+    }
+
+    return std::string{passDebugName.substr(0, separator)};
+}
+
+[[nodiscard]] inline std::string rendererBatchScopeLabel(std::uint32_t batchIndex, QueueDomain queue)
+{
+    return std::format("Renderer.Batch.{}.{}", queueDomainLabel(queue), batchIndex);
+}
+} // namespace nr::renderer::detail
+
 export namespace nr::renderer
 {
 struct ExecutorBatchPlan
@@ -362,54 +398,6 @@ class RenderGraphExecutor
         report.plan = prepared.plan;
         report.invokedPassPrepareCount = prepared.invokedPassPrepareCount;
 
-        class ScopedPassDebugLabel
-        {
-          public:
-            ScopedPassDebugLabel(vk::raii::CommandBuffer& commandBuffer, std::string_view label)
-                : commandBuffer_(std::ref(commandBuffer))
-            {
-                if (label.empty())
-                {
-                    return;
-                }
-
-                auto debugLabel = vk::DebugUtilsLabelEXT{};
-                debugLabel.pLabelName = label.data();
-
-                try
-                {
-                    commandBuffer_->get().beginDebugUtilsLabelEXT(debugLabel);
-                    active_ = true;
-                }
-                catch (const vk::SystemError&)
-                {
-                }
-            }
-
-            ~ScopedPassDebugLabel()
-            {
-                if (!active_ || !commandBuffer_.has_value())
-                {
-                    return;
-                }
-
-                try
-                {
-                    commandBuffer_->get().endDebugUtilsLabelEXT();
-                }
-                catch (const vk::SystemError&)
-                {
-                }
-            }
-
-            ScopedPassDebugLabel(const ScopedPassDebugLabel&) = delete;
-            ScopedPassDebugLabel& operator=(const ScopedPassDebugLabel&) = delete;
-
-          private:
-            std::optional<std::reference_wrapper<vk::raii::CommandBuffer>> commandBuffer_{};
-            bool active_ = false;
-        };
-
         auto const& compiled = prepared.compiled;
         auto const& runtimeBindings = prepared.runtimeBindings;
 
@@ -460,183 +448,183 @@ class RenderGraphExecutor
             auto& commandBuffer = commandBuffers.front();
 
             nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-            auto rawCommandBuffer = *commandBuffer;
-
-            static auto loggedBatchIndices = std::set<std::uint32_t>{};
-            if (loggedBatchIndices.insert(planBatch.batchIndex).second)
             {
-                auto queueLabel = std::string_view{"Transfer"};
-                if (planBatch.queue == QueueDomain::Graphics)
+                auto batchDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
+                    commandBuffer,
+                    detail::rendererBatchScopeLabel(planBatch.batchIndex, planBatch.queue),
+                };
+                auto rawCommandBuffer = *commandBuffer;
+
+                static auto loggedBatchIndices = std::set<std::uint32_t>{};
+                if (loggedBatchIndices.insert(planBatch.batchIndex).second)
                 {
-                    queueLabel = "Graphics";
-                }
-                else if (planBatch.queue == QueueDomain::Compute)
-                {
-                    queueLabel = "Compute";
+                    auto passList = std::string{};
+                    std::ranges::for_each(compiledBatch.passes, [&](const CompiledPass& pass) {
+                        if (!passList.empty())
+                        {
+                            passList += ",";
+                        }
+                        passList += pass.debugName;
+                    });
+
+                    auto commandBufferRaw = std::bit_cast<std::uint64_t>(static_cast<VkCommandBuffer>(rawCommandBuffer));
+                    nrInfo(std::format(
+                        "RenderGraphExecutor batch={} queue={} cmd=0x{:x} passes=[{}]",
+                        planBatch.batchIndex,
+                        detail::queueDomainLabel(planBatch.queue),
+                        commandBufferRaw,
+                        passList));
                 }
 
-                auto passList = std::string{};
-                std::ranges::for_each(compiledBatch.passes, [&](const CompiledPass& pass) {
-                    if (!passList.empty())
+                if (!planBatch.headAcquireTransitions.empty())
+                {
+                    auto barriers = nr::rhi::ops::BarrierBatch{};
+                    std::ranges::for_each(planBatch.headAcquireTransitions, [&](const ResourceStateTransition& transition) {
+                        auto resourceIt = compiledResourceByHandle.find(transition.resource);
+                        nrAssert(
+                            resourceIt != compiledResourceByHandle.end(),
+                            "RenderGraphExecutor::execute acquire transition references an unknown resource handle.");
+
+                        auto bindingIt = runtimeBindings.find(transition.resource);
+                        nrAssert(
+                            bindingIt != runtimeBindings.end(),
+                            "RenderGraphExecutor::execute acquire transition cannot resolve runtime resource binding.");
+
+                        addTransitionBarrier(
+                            barriers,
+                            resourceIt->second.get(),
+                            bindingIt->second,
+                            transition,
+                            TransitionPlacement::Acquire,
+                            queueFamilyIndexFor(context.device, transition.srcQueue),
+                            queueFamilyIndexFor(context.device, transition.dstQueue));
+
+                        ++report.appliedAcquireBarrierCount;
+                    });
+
+                    if (!barriers.empty())
                     {
-                        passList += ",";
+                        nr::rhi::ops::pipelineBarrier(rawCommandBuffer, barriers);
                     }
-                    passList += pass.debugName;
-                });
-
-                auto commandBufferRaw = std::bit_cast<std::uint64_t>(static_cast<VkCommandBuffer>(rawCommandBuffer));
-                nrInfo(std::format(
-                    "RenderGraphExecutor batch={} queue={} cmd=0x{:x} passes=[{}]",
-                    planBatch.batchIndex,
-                    queueLabel,
-                    commandBufferRaw,
-                    passList));
-            }
-
-            if (!planBatch.headAcquireTransitions.empty())
-            {
-                auto barriers = nr::rhi::ops::BarrierBatch{};
-                std::ranges::for_each(planBatch.headAcquireTransitions, [&](const ResourceStateTransition& transition) {
-                    auto resourceIt = compiledResourceByHandle.find(transition.resource);
-                    nrAssert(
-                        resourceIt != compiledResourceByHandle.end(),
-                        "RenderGraphExecutor::execute acquire transition references an unknown resource handle.");
-
-                    auto bindingIt = runtimeBindings.find(transition.resource);
-                    nrAssert(
-                        bindingIt != runtimeBindings.end(),
-                        "RenderGraphExecutor::execute acquire transition cannot resolve runtime resource binding.");
-
-                    addTransitionBarrier(
-                        barriers,
-                        resourceIt->second.get(),
-                        bindingIt->second,
-                        transition,
-                        TransitionPlacement::Acquire,
-                        queueFamilyIndexFor(context.device, transition.srcQueue),
-                        queueFamilyIndexFor(context.device, transition.dstQueue));
-
-                    ++report.appliedAcquireBarrierCount;
-                });
-
-                if (!barriers.empty())
-                {
-                    nr::rhi::ops::pipelineBarrier(rawCommandBuffer, barriers);
                 }
-            }
 
-            std::ranges::for_each(compiledBatch.passes, [&](const CompiledPass& pass) {
-                auto debugLabelScope = ScopedPassDebugLabel{commandBuffer, pass.debugName};
+                std::ranges::for_each(compiledBatch.passes, [&](const CompiledPass& pass) {
+                    auto nodeDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
+                        commandBuffer,
+                        detail::nodeScopeLabel(pass.debugName),
+                    };
+                    auto passDebugLabelScope = detail::ScopedCommandBufferDebugLabel{commandBuffer, pass.debugName};
 
-                auto inPassBarriers = nr::rhi::ops::BarrierBatch{};
-                std::ranges::for_each(pass.preBarriers, [&](const ResourceStateTransition& transition) {
-                    if (transition.strength != DependencyStrength::BarrierRequired)
+                    auto inPassBarriers = nr::rhi::ops::BarrierBatch{};
+                    std::ranges::for_each(pass.preBarriers, [&](const ResourceStateTransition& transition) {
+                        if (transition.strength != DependencyStrength::BarrierRequired)
+                        {
+                            return;
+                        }
+
+                        auto resourceIt = compiledResourceByHandle.find(transition.resource);
+                        nrAssert(
+                            resourceIt != compiledResourceByHandle.end(),
+                            "RenderGraphExecutor::execute pass barrier references an unknown resource handle.");
+
+                        auto bindingIt = runtimeBindings.find(transition.resource);
+                        nrAssert(
+                            bindingIt != runtimeBindings.end(),
+                            "RenderGraphExecutor::execute pass barrier cannot resolve runtime resource binding.");
+
+                        addTransitionBarrier(
+                            inPassBarriers,
+                            resourceIt->second.get(),
+                            bindingIt->second,
+                            transition,
+                            TransitionPlacement::InPass,
+                            nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                            nr::rhi::ops::kIgnoredQueueFamilyIndex);
+
+                        ++report.appliedInPassBarrierCount;
+                    });
+
+                    if (!inPassBarriers.empty())
                     {
+                        nr::rhi::ops::pipelineBarrier(rawCommandBuffer, inPassBarriers);
+                    }
+
+                    if (pass.record)
+                    {
+                        auto resolveBuffer = [&](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
+                            auto bindingIt = runtimeBindings.find(handle);
+                            if (bindingIt == runtimeBindings.end() || !bindingIt->second.isBuffer)
+                            {
+                                return std::nullopt;
+                            }
+
+                            return PassBufferResource{
+                                .buffer = bindingIt->second.buffer,
+                                .size = bindingIt->second.bufferSize,
+                                .resource = bindingIt->second.bufferResource,
+                            };
+                        };
+
+                        auto resolveImage = [&](GraphResourceHandle handle) -> std::optional<PassImageResource> {
+                            auto bindingIt = runtimeBindings.find(handle);
+                            if (bindingIt == runtimeBindings.end() || !bindingIt->second.isImage)
+                            {
+                                return std::nullopt;
+                            }
+
+                            return PassImageResource{
+                                .image = bindingIt->second.image,
+                                .view = bindingIt->second.imageView,
+                                .extent = bindingIt->second.extent,
+                                .subresourceRange = bindingIt->second.subresourceRange,
+                                .resource = bindingIt->second.imageResource,
+                            };
+                        };
+
+                        pass.record(PassRecordContext{
+                            .commandBuffer = std::cref(commandBuffer),
+                            .frameIndex = context.frameIndex,
+                            .device = std::ref(context.device),
+                            .resolveBuffer = resolveBuffer,
+                            .resolveImage = resolveImage,
+                        });
+                        ++report.invokedPassRecordCount;
                         return;
                     }
 
-                    auto resourceIt = compiledResourceByHandle.find(transition.resource);
-                    nrAssert(
-                        resourceIt != compiledResourceByHandle.end(),
-                        "RenderGraphExecutor::execute pass barrier references an unknown resource handle.");
-
-                    auto bindingIt = runtimeBindings.find(transition.resource);
-                    nrAssert(
-                        bindingIt != runtimeBindings.end(),
-                        "RenderGraphExecutor::execute pass barrier cannot resolve runtime resource binding.");
-
-                    addTransitionBarrier(
-                        inPassBarriers,
-                        resourceIt->second.get(),
-                        bindingIt->second,
-                        transition,
-                        TransitionPlacement::InPass,
-                        nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                        nr::rhi::ops::kIgnoredQueueFamilyIndex);
-
-                    ++report.appliedInPassBarrierCount;
+                    recordImplicitCopyPass(pass, rawCommandBuffer, runtimeBindings);
                 });
 
-                if (!inPassBarriers.empty())
+                if (!planBatch.tailReleaseTransitions.empty())
                 {
-                    nr::rhi::ops::pipelineBarrier(rawCommandBuffer, inPassBarriers);
-                }
+                    auto barriers = nr::rhi::ops::BarrierBatch{};
+                    std::ranges::for_each(planBatch.tailReleaseTransitions, [&](const ResourceStateTransition& transition) {
+                        auto resourceIt = compiledResourceByHandle.find(transition.resource);
+                        nrAssert(
+                            resourceIt != compiledResourceByHandle.end(),
+                            "RenderGraphExecutor::execute release transition references an unknown resource handle.");
 
-                if (pass.record)
-                {
-                    auto resolveBuffer = [&](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
-                        auto bindingIt = runtimeBindings.find(handle);
-                        if (bindingIt == runtimeBindings.end() || !bindingIt->second.isBuffer)
-                        {
-                            return std::nullopt;
-                        }
+                        auto bindingIt = runtimeBindings.find(transition.resource);
+                        nrAssert(
+                            bindingIt != runtimeBindings.end(),
+                            "RenderGraphExecutor::execute release transition cannot resolve runtime resource binding.");
 
-                        return PassBufferResource{
-                            .buffer = bindingIt->second.buffer,
-                            .size = bindingIt->second.bufferSize,
-                            .resource = bindingIt->second.bufferResource,
-                        };
-                    };
+                        addTransitionBarrier(
+                            barriers,
+                            resourceIt->second.get(),
+                            bindingIt->second,
+                            transition,
+                            TransitionPlacement::Release,
+                            queueFamilyIndexFor(context.device, transition.srcQueue),
+                            queueFamilyIndexFor(context.device, transition.dstQueue));
 
-                    auto resolveImage = [&](GraphResourceHandle handle) -> std::optional<PassImageResource> {
-                        auto bindingIt = runtimeBindings.find(handle);
-                        if (bindingIt == runtimeBindings.end() || !bindingIt->second.isImage)
-                        {
-                            return std::nullopt;
-                        }
-
-                        return PassImageResource{
-                            .image = bindingIt->second.image,
-                            .view = bindingIt->second.imageView,
-                            .extent = bindingIt->second.extent,
-                            .subresourceRange = bindingIt->second.subresourceRange,
-                            .resource = bindingIt->second.imageResource,
-                        };
-                    };
-
-                    pass.record(PassRecordContext{
-                        .commandBuffer = std::cref(commandBuffer),
-                        .frameIndex = context.frameIndex,
-                        .device = std::ref(context.device),
-                        .resolveBuffer = resolveBuffer,
-                        .resolveImage = resolveImage,
+                        ++report.appliedReleaseBarrierCount;
                     });
-                    ++report.invokedPassRecordCount;
-                    return;
-                }
 
-                recordImplicitCopyPass(pass, rawCommandBuffer, runtimeBindings);
-            });
-
-            if (!planBatch.tailReleaseTransitions.empty())
-            {
-                auto barriers = nr::rhi::ops::BarrierBatch{};
-                std::ranges::for_each(planBatch.tailReleaseTransitions, [&](const ResourceStateTransition& transition) {
-                    auto resourceIt = compiledResourceByHandle.find(transition.resource);
-                    nrAssert(
-                        resourceIt != compiledResourceByHandle.end(),
-                        "RenderGraphExecutor::execute release transition references an unknown resource handle.");
-
-                    auto bindingIt = runtimeBindings.find(transition.resource);
-                    nrAssert(
-                        bindingIt != runtimeBindings.end(),
-                        "RenderGraphExecutor::execute release transition cannot resolve runtime resource binding.");
-
-                    addTransitionBarrier(
-                        barriers,
-                        resourceIt->second.get(),
-                        bindingIt->second,
-                        transition,
-                        TransitionPlacement::Release,
-                        queueFamilyIndexFor(context.device, transition.srcQueue),
-                        queueFamilyIndexFor(context.device, transition.dstQueue));
-
-                    ++report.appliedReleaseBarrierCount;
-                });
-
-                if (!barriers.empty())
-                {
-                    nr::rhi::ops::pipelineBarrier(rawCommandBuffer, barriers);
+                    if (!barriers.empty())
+                    {
+                        nr::rhi::ops::pipelineBarrier(rawCommandBuffer, barriers);
+                    }
                 }
             }
 
@@ -808,8 +796,19 @@ class RenderGraphExecutor
                     binding.bufferSize = buffer.size();
                     binding.bufferResource = std::ref(buffer);
                 }
+                else if (resource.importedBufferResource.has_value())
+                {
+                    // Use pre-allocated imported buffer from node
+                    auto& buffer = resource.importedBufferResource->get();
+                    nrAssert(buffer.valid(),
+                        "RenderGraphExecutor::resolveRuntimeResources: importedBufferResource reference is invalid for resource: " + resource.debugName);
+                    binding.buffer = buffer.handle();
+                    binding.bufferSize = buffer.size();
+                    binding.bufferResource = std::ref(buffer);
+                }
                 else
                 {
+                    // Fallback to legacy imported buffers map
                     auto imported = context.importedBuffers.find(resource.handle);
                     if (imported != context.importedBuffers.end())
                     {
@@ -862,8 +861,23 @@ class RenderGraphExecutor
                         binding.imageView = *image.view();
                         binding.imageResource = std::cref(image);
                     }
+                    else if (resource.importedImageResource.has_value())
+                    {
+                        // Use pre-allocated imported image from node
+                        const auto& image = resource.importedImageResource->get();
+                        nrAssert(image.valid(),
+                            "RenderGraphExecutor::resolveRuntimeResources: importedImageResource reference is invalid for resource: " + resource.debugName);
+                        binding.image = image.handle();
+                        binding.imageView = *image.view();
+                        binding.imageResource = std::cref(image);
+                        // Use the declared extent from the resource descriptor, not the actual
+                        // image extent (which may be larger due to pre-allocation strategies).
+                        // The descriptor extent represents the valid region for rendering.
+                        binding.extent = resource.resolvedExtent;
+                    }
                     else
                     {
+                        // Fallback to legacy imported images map
                         auto imported = context.importedImages.find(resource.handle);
                         if (imported != context.importedImages.end())
                         {

@@ -179,17 +179,22 @@ class MemoryAllocator
         VmaAllocationCreateInfo allocInfo{};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-        // Dedicate large images (render targets, large textures)
-        vk::DeviceSize estimatedSize = static_cast<vk::DeviceSize>(imageInfo.extent.width) * imageInfo.extent.height * imageInfo.extent.depth * imageInfo.arrayLayers * 4; // rough estimate
-        if (estimatedSize >= kDedicatedAllocationThreshold)
-        {
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-        }
-
         // Apply host access for non-GPU-only images (e.g., readback)
+        // NOTE: Host-accessible images cannot use dedicated allocation due to
+        // VUID-VkMemoryAllocateInfo-pNext-02806 (dedicated allocation conflicts
+        // with VkImportMemoryHostPointerInfoEXT which profilers may inject).
         if (usage == MemoryUsage::GpuToCpu)
         {
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        }
+        else if (usage == MemoryUsage::GpuOnly)
+        {
+            // Only dedicate large GPU-only images (render targets, large textures)
+            vk::DeviceSize estimatedSize = static_cast<vk::DeviceSize>(imageInfo.extent.width) * imageInfo.extent.height * imageInfo.extent.depth * imageInfo.arrayLayers * 4; // rough estimate
+            if (estimatedSize >= kDedicatedAllocationThreshold)
+            {
+                allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+            }
         }
 
         return vma_.createImage(imageInfo, allocInfo);
@@ -364,6 +369,11 @@ class MemoryAllocator
      *             falls back to DEVICE_LOCAL with staging transfer
      * - GpuToCpu: HOST_VISIBLE + HOST_CACHED for CPU reads
      * - CpuOnly:  HOST_VISIBLE + MAPPED
+     *
+     * NOTE: Dedicated allocation (DEDICATED_MEMORY_BIT) is only applied to
+     * GpuOnly buffers. Host-accessible buffers must NOT use dedicated allocation
+     * because it conflicts with VkImportMemoryHostPointerInfoEXT (which profilers
+     * like NSight may inject). See VUID-VkMemoryAllocateInfo-pNext-02806.
      */
     static void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage, vk::DeviceSize size)
     {
@@ -373,6 +383,7 @@ class MemoryAllocator
         {
         case MemoryUsage::GpuOnly:
             // Large GPU-only buffers get dedicated allocations
+            // This is safe because GPU-only memory won't have host pointer imports
             if (size >= kDedicatedAllocationThreshold)
             {
                 allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
@@ -381,11 +392,14 @@ class MemoryAllocator
 
         case MemoryUsage::CpuToGpu:
             // Try ReBAR first, fall back to device-local + staging
+            // NOTE: Do NOT use DEDICATED_MEMORY_BIT here - it conflicts with
+            // VkImportMemoryHostPointerInfoEXT that profilers may inject
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
             break;
 
         case MemoryUsage::GpuToCpu:
             // Host-cached for CPU read performance
+            // NOTE: Do NOT use DEDICATED_MEMORY_BIT here - same reason as CpuToGpu
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
             break;
 

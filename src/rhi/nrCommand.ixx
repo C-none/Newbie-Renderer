@@ -139,4 +139,69 @@ private:
     const vk::raii::CommandBuffer& commandBuffer_;
 };
 
+/**
+ * @brief RAII wrapper for command buffer debug label scope
+ * 
+ * Automatically calls beginDebugUtilsLabelEXT on construction and
+ * endDebugUtilsLabelEXT on destruction. Useful for GPU debuggers
+ * like RenderDoc to group commands with named labels.
+ * 
+ * Usage:
+ *   {
+ *       ScopedCommandBufferDebugLabel label(cb, "Shadow Pass");
+ *       // ... shadow pass commands ...
+ *   } // Automatically ends debug label
+ */
+class ScopedCommandBufferDebugLabel {
+public:
+    ScopedCommandBufferDebugLabel(const vk::raii::CommandBuffer& commandBuffer, std::string_view label)
+        : commandBuffer_(std::cref(commandBuffer))
+        , label_(label)
+    {
+        if (label_.empty()) {
+            return;
+        }
+
+        auto debugLabel = vk::DebugUtilsLabelEXT{};
+        debugLabel.pLabelName = label_.c_str();
+
+        try {
+            commandBuffer_->get().beginDebugUtilsLabelEXT(debugLabel);
+            active_ = true;
+        }
+        catch (const vk::SystemError&) {
+            // Debug utils extension may not be available
+        }
+    }
+
+    ~ScopedCommandBufferDebugLabel() {
+        close();
+    }
+
+    // Non-copyable, non-movable (RAII lifetime bound to scope)
+    ScopedCommandBufferDebugLabel(const ScopedCommandBufferDebugLabel&) = delete;
+    ScopedCommandBufferDebugLabel& operator=(const ScopedCommandBufferDebugLabel&) = delete;
+    ScopedCommandBufferDebugLabel(ScopedCommandBufferDebugLabel&&) = delete;
+    ScopedCommandBufferDebugLabel& operator=(ScopedCommandBufferDebugLabel&&) = delete;
+
+    void close() {
+        if (!active_ || !commandBuffer_.has_value()) {
+            return;
+        }
+
+        try {
+            commandBuffer_->get().endDebugUtilsLabelEXT();
+        }
+        catch (const vk::SystemError&) {
+        }
+
+        active_ = false;
+    }
+
+private:
+    std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer_{};
+    std::string label_{};
+    bool active_ = false;
+};
+
 } // namespace nr::rhi
