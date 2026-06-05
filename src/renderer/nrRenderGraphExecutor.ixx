@@ -1109,7 +1109,13 @@ class RenderGraphExecutor
             std::min(srcBinding.extent.depth, dstBinding.extent.depth),
         };
 
-        commandBuffer.copyImage(srcBinding.image, srcLayout, dstBinding.image, dstLayout, {region});
+        nr::rhi::ops::copyImage2(
+            commandBuffer,
+            srcBinding.image,
+            srcLayout,
+            dstBinding.image,
+            dstLayout,
+            nr::rhi::ops::toImageCopy2(region));
 
         if (presentUse != pass.resourceUses.end() && presentUse->resource == dstUse->resource)
         {

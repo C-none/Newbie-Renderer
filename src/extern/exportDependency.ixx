@@ -33,7 +33,6 @@ export import <GLFW/glfw3.h>;
 export import <glm/glm.hpp>;
 export import <glm/gtc/quaternion.hpp>;
 export import <imgui.h>;
-export import <flecs.h>;
 export import <assimp/Importer.hpp>;
 export import <assimp/material.h>;
 export import <assimp/postprocess.h>;
@@ -42,6 +41,28 @@ export import <stb_image.h>;
 export import <turbojpeg.h>;
 export import <vk_mem_alloc.h>;
 // export import <Tracy.hpp>
+
+export namespace flecs
+{
+using ::flecs::entity_t;
+using ::flecs::entity;
+using ::flecs::world;
+using ::flecs::query;
+} // namespace flecs
+
+// Narrow flecs C API re-exports used by scene internals.
+export using ::ecs_entity_t;
+export using ::ecs_iter_t;
+export using ::ecs_world_t;
+export using ::EcsParent;
+export using ::EcsChildOf;
+export using ::EcsIsA;
+export using ::EcsPrefab;
+export using ::ecs_children;
+export using ::ecs_children_next;
+export using ::ecs_get_parent;
+export using ::ecs_init;
+
 #ifdef GLFW_NO_API
 #undef GLFW_NO_API
 #endif // GLFW_NO_API

@@ -122,6 +122,10 @@ target_include_directories(dependency
 PUBLIC
     ${Stb_INCLUDE_DIR}
 )
+if(MSVC)
+    # Flecs C++ lifecycle templates instantiate in downstream modules.
+    target_compile_options(dependency PUBLIC /wd4291)
+endif()
 target_sources(dependency
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES FILES  ${MODULE_UNITS}

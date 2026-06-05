@@ -34,7 +34,8 @@ inline std::ostream &levelStream(LogLevel level)
 inline void emitLog(LogLevel level, std::string_view channel, std::string_view context, std::source_location loc)
 {
     std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
-    std::print(levelStream(level),
+    auto& stream = levelStream(level);
+    std::print(stream,
                "{}[NR {}:{}]{} {}\n{}\n{}\n",
                detail::levelColor(level),
                channel,
@@ -43,17 +44,20 @@ inline void emitLog(LogLevel level, std::string_view channel, std::string_view c
                locationStr,
                loc.function_name(),
                context.empty() ? "(none)" : context);
+    stream.flush();
 }
 
 inline void emitCompactLog(LogLevel level, std::string_view channel, std::string_view context)
 {
-    std::print(levelStream(level),
+    auto& stream = levelStream(level);
+    std::print(stream,
                "{}[NR {}:{}]{} {}\n",
                detail::levelColor(level),
                channel,
                logLevelNames[static_cast<size_t>(level)],
                detail::ansiReset,
                context.empty() ? "(none)" : context);
+    stream.flush();
 }
 } // namespace detail
 

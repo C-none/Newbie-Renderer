@@ -1,6 +1,7 @@
 module;
 export module nr.rhi:command;
 import dependency;
+import nr.utils;
 import std;
 
 export namespace nr::rhi {
@@ -158,6 +159,11 @@ public:
         : commandBuffer_(std::cref(commandBuffer))
         , label_(label)
     {
+        if constexpr (!nr::isDebugMode)
+        {
+            return;
+        }
+
         if (label_.empty()) {
             return;
         }

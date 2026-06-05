@@ -38,7 +38,8 @@ Current boundary notes:
 - Windows + Vulkan + RTX-class hardware are hard assumptions.
 - Command invocation should stay on Vulkan-Hpp RAII member functions instead of project-local dispatch tables.
 - Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
-- `nr.rhi` now exposes descriptor-indexing and buffer-device-address capability snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection.
+- `nr.rhi` exposes descriptor-indexing, buffer-device-address, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection.
+- RHI copy helpers record Vulkan-Hpp copy commands 2 while keeping narrow adapters for existing copy-region structs.
 - `PipelineState` retains the source `SlangProgram` so reflection-backed cursor access remains valid after pipeline creation.
 - `rhi` is the execution layer, not the content-organization layer.
 
@@ -48,7 +49,7 @@ Entry points:
 - Device and frame lifetime: [../../src/rhi/nrDevice.ixx](../../src/rhi/nrDevice.ixx)
 - RAII resources: [../../src/rhi/nrResource.ixx](../../src/rhi/nrResource.ixx)
 - Descriptor and pipeline services: [../../src/rhi/nrDescriptor.ixx](../../src/rhi/nrDescriptor.ixx), [../../src/rhi/nrPipeline.ixx](../../src/rhi/nrPipeline.ixx)
-- Topic docs: [../rhi_command_execution_strategy.md](../rhi_command_execution_strategy.md), [../slang_bindingtype_descriptor_mapping.md](../slang_bindingtype_descriptor_mapping.md)
+- Topic docs: [../rhi_command_execution_strategy.md](../rhi_command_execution_strategy.md), [../slang_bindingtype_descriptor_mapping.md](../slang_bindingtype_descriptor_mapping.md), [../rhi_vulkan14_modernization_audit.md](../rhi_vulkan14_modernization_audit.md), [../rhi_rt_completion_audit.md](../rhi_rt_completion_audit.md), [../rhi_upload_readback_limits_audit.md](../rhi_upload_readback_limits_audit.md)
 
 ## 2. `load`
 

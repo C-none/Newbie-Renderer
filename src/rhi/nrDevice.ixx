@@ -37,6 +37,58 @@ struct BufferDeviceAddressCapabilitySnapshot
     bool bufferDeviceAddressMultiDevice = false;
 };
 
+struct Vulkan14CapabilitySnapshot
+{
+    bool globalPriorityQuery = false;
+    bool shaderSubgroupRotate = false;
+    bool shaderSubgroupRotateClustered = false;
+    bool shaderFloatControls2 = false;
+    bool shaderExpectAssume = false;
+    bool rectangularLines = false;
+    bool bresenhamLines = false;
+    bool smoothLines = false;
+    bool stippledRectangularLines = false;
+    bool stippledBresenhamLines = false;
+    bool stippledSmoothLines = false;
+    bool vertexAttributeInstanceRateDivisor = false;
+    bool vertexAttributeInstanceRateZeroDivisor = false;
+    bool indexTypeUint8 = false;
+    bool dynamicRenderingLocalRead = false;
+    bool maintenance5 = false;
+    bool maintenance6 = false;
+    bool pipelineProtectedAccess = false;
+    bool pipelineRobustness = false;
+    bool hostImageCopy = false;
+    bool pushDescriptor = false;
+};
+
+struct Vulkan14PropertySnapshot
+{
+    uint32_t lineSubPixelPrecisionBits = 0;
+    uint32_t maxVertexAttribDivisor = 0;
+    bool supportsNonZeroFirstInstance = false;
+    uint32_t maxPushDescriptors = 0;
+    bool dynamicRenderingLocalReadDepthStencilAttachments = false;
+    bool dynamicRenderingLocalReadMultisampledAttachments = false;
+    bool earlyFragmentMultisampleCoverageAfterSampleCounting = false;
+    bool earlyFragmentSampleMaskTestBeforeSampleCounting = false;
+    bool depthStencilSwizzleOneSupport = false;
+    bool polygonModePointSize = false;
+    bool nonStrictSinglePixelWideLinesUseParallelogram = false;
+    bool nonStrictWideLinesUseParallelogram = false;
+    bool blockTexelViewCompatibleMultipleLayers = false;
+    uint32_t maxCombinedImageSamplerDescriptorCount = 0;
+    bool fragmentShadingRateClampCombinerInputs = false;
+    vk::PipelineRobustnessBufferBehavior defaultRobustnessStorageBuffers = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
+    vk::PipelineRobustnessBufferBehavior defaultRobustnessUniformBuffers = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
+    vk::PipelineRobustnessBufferBehavior defaultRobustnessVertexInputs = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
+    vk::PipelineRobustnessImageBehavior defaultRobustnessImages = vk::PipelineRobustnessImageBehavior::eDeviceDefault;
+    std::vector<vk::ImageLayout> hostImageCopySrcLayouts{};
+    std::vector<vk::ImageLayout> hostImageCopyDstLayouts{};
+    std::array<std::uint8_t, vk::UuidSize> optimalTilingLayoutUUID{};
+    bool identicalMemoryTypeRequirements = false;
+};
+
 class Device
 {
   public:
@@ -83,6 +135,16 @@ class Device
     [[nodiscard]] const BufferDeviceAddressCapabilitySnapshot &bufferDeviceAddressCapabilities() const noexcept
     {
         return bufferDeviceAddressCapabilities_;
+    }
+
+    [[nodiscard]] const Vulkan14CapabilitySnapshot &vulkan14Capabilities() const noexcept
+    {
+        return vulkan14Capabilities_;
+    }
+
+    [[nodiscard]] const Vulkan14PropertySnapshot &vulkan14Properties() const noexcept
+    {
+        return vulkan14Properties_;
     }
 
     void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"})
@@ -382,6 +444,7 @@ class Device
         auto &vulkan11Features = features2.get<vk::PhysicalDeviceVulkan11Features>();
         auto &vulkan12Features = features2.get<vk::PhysicalDeviceVulkan12Features>();
         auto &vulkan13Features = features2.get<vk::PhysicalDeviceVulkan13Features>();
+        auto &vulkan14Features = features2.get<vk::PhysicalDeviceVulkan14Features>();
         auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
         auto &cooperativeVectorFeatures = features2.get<vk::PhysicalDeviceCooperativeVectorFeaturesNV>();
         auto &extendedDynamicState3Features = features2.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
@@ -444,6 +507,30 @@ class Device
             .bufferDeviceAddressCaptureReplay = vulkan12Features.bufferDeviceAddressCaptureReplay == vk::True,
             .bufferDeviceAddressMultiDevice = vulkan12Features.bufferDeviceAddressMultiDevice == vk::True,
         };
+        vulkan14Capabilities_ = Vulkan14CapabilitySnapshot{
+            .globalPriorityQuery = vulkan14Features.globalPriorityQuery == vk::True,
+            .shaderSubgroupRotate = vulkan14Features.shaderSubgroupRotate == vk::True,
+            .shaderSubgroupRotateClustered = vulkan14Features.shaderSubgroupRotateClustered == vk::True,
+            .shaderFloatControls2 = vulkan14Features.shaderFloatControls2 == vk::True,
+            .shaderExpectAssume = vulkan14Features.shaderExpectAssume == vk::True,
+            .rectangularLines = vulkan14Features.rectangularLines == vk::True,
+            .bresenhamLines = vulkan14Features.bresenhamLines == vk::True,
+            .smoothLines = vulkan14Features.smoothLines == vk::True,
+            .stippledRectangularLines = vulkan14Features.stippledRectangularLines == vk::True,
+            .stippledBresenhamLines = vulkan14Features.stippledBresenhamLines == vk::True,
+            .stippledSmoothLines = vulkan14Features.stippledSmoothLines == vk::True,
+            .vertexAttributeInstanceRateDivisor = vulkan14Features.vertexAttributeInstanceRateDivisor == vk::True,
+            .vertexAttributeInstanceRateZeroDivisor = vulkan14Features.vertexAttributeInstanceRateZeroDivisor == vk::True,
+            .indexTypeUint8 = vulkan14Features.indexTypeUint8 == vk::True,
+            .dynamicRenderingLocalRead = vulkan14Features.dynamicRenderingLocalRead == vk::True,
+            .maintenance5 = vulkan14Features.maintenance5 == vk::True,
+            .maintenance6 = vulkan14Features.maintenance6 == vk::True,
+            .pipelineProtectedAccess = vulkan14Features.pipelineProtectedAccess == vk::True,
+            .pipelineRobustness = vulkan14Features.pipelineRobustness == vk::True,
+            .hostImageCopy = vulkan14Features.hostImageCopy == vk::True,
+            .pushDescriptor = vulkan14Features.pushDescriptor == vk::True,
+        };
+        vulkan14Properties_ = queryVulkan14PropertySnapshot();
 
         auto const &limits = physicalDeviceProperties.properties.limits;
         rtCapabilities_ = RayTracingCapabilitySnapshot{
@@ -529,10 +616,68 @@ class Device
     }
 
   protected:
+    [[nodiscard]] Vulkan14PropertySnapshot queryVulkan14PropertySnapshot() const
+    {
+        auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan14Properties>();
+        auto vulkan14Properties = properties2.get<vk::PhysicalDeviceVulkan14Properties>();
+
+        std::vector<vk::ImageLayout> hostCopySrcLayouts(vulkan14Properties.copySrcLayoutCount);
+        std::vector<vk::ImageLayout> hostCopyDstLayouts(vulkan14Properties.copyDstLayoutCount);
+        if (!hostCopySrcLayouts.empty() || !hostCopyDstLayouts.empty())
+        {
+            vk::StructureChain<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan14Properties> layoutPropertyChain{};
+            auto& layoutProperties2 = layoutPropertyChain.get<vk::PhysicalDeviceProperties2>();
+            auto& layoutVulkan14Properties = layoutPropertyChain.get<vk::PhysicalDeviceVulkan14Properties>();
+
+            layoutVulkan14Properties.copySrcLayoutCount = static_cast<uint32_t>(hostCopySrcLayouts.size());
+            layoutVulkan14Properties.pCopySrcLayouts = hostCopySrcLayouts.data();
+            layoutVulkan14Properties.copyDstLayoutCount = static_cast<uint32_t>(hostCopyDstLayouts.size());
+            layoutVulkan14Properties.pCopyDstLayouts = hostCopyDstLayouts.data();
+
+            (*physicalDevice).getProperties2(&layoutProperties2, *physicalDevice.getDispatcher());
+            vulkan14Properties = layoutVulkan14Properties;
+        }
+
+        auto uuid = std::array<std::uint8_t, vk::UuidSize>{};
+        auto uuidIndices = std::views::iota(std::size_t{0}, uuid.size());
+        std::ranges::for_each(uuidIndices, [&](std::size_t i) {
+            uuid[i] = vulkan14Properties.optimalTilingLayoutUUID[i];
+        });
+
+        return Vulkan14PropertySnapshot{
+            .lineSubPixelPrecisionBits = vulkan14Properties.lineSubPixelPrecisionBits,
+            .maxVertexAttribDivisor = vulkan14Properties.maxVertexAttribDivisor,
+            .supportsNonZeroFirstInstance = vulkan14Properties.supportsNonZeroFirstInstance == vk::True,
+            .maxPushDescriptors = vulkan14Properties.maxPushDescriptors,
+            .dynamicRenderingLocalReadDepthStencilAttachments = vulkan14Properties.dynamicRenderingLocalReadDepthStencilAttachments == vk::True,
+            .dynamicRenderingLocalReadMultisampledAttachments = vulkan14Properties.dynamicRenderingLocalReadMultisampledAttachments == vk::True,
+            .earlyFragmentMultisampleCoverageAfterSampleCounting = vulkan14Properties.earlyFragmentMultisampleCoverageAfterSampleCounting == vk::True,
+            .earlyFragmentSampleMaskTestBeforeSampleCounting = vulkan14Properties.earlyFragmentSampleMaskTestBeforeSampleCounting == vk::True,
+            .depthStencilSwizzleOneSupport = vulkan14Properties.depthStencilSwizzleOneSupport == vk::True,
+            .polygonModePointSize = vulkan14Properties.polygonModePointSize == vk::True,
+            .nonStrictSinglePixelWideLinesUseParallelogram = vulkan14Properties.nonStrictSinglePixelWideLinesUseParallelogram == vk::True,
+            .nonStrictWideLinesUseParallelogram = vulkan14Properties.nonStrictWideLinesUseParallelogram == vk::True,
+            .blockTexelViewCompatibleMultipleLayers = vulkan14Properties.blockTexelViewCompatibleMultipleLayers == vk::True,
+            .maxCombinedImageSamplerDescriptorCount = vulkan14Properties.maxCombinedImageSamplerDescriptorCount,
+            .fragmentShadingRateClampCombinerInputs = vulkan14Properties.fragmentShadingRateClampCombinerInputs == vk::True,
+            .defaultRobustnessStorageBuffers = vulkan14Properties.defaultRobustnessStorageBuffers,
+            .defaultRobustnessUniformBuffers = vulkan14Properties.defaultRobustnessUniformBuffers,
+            .defaultRobustnessVertexInputs = vulkan14Properties.defaultRobustnessVertexInputs,
+            .defaultRobustnessImages = vulkan14Properties.defaultRobustnessImages,
+            .hostImageCopySrcLayouts = std::move(hostCopySrcLayouts),
+            .hostImageCopyDstLayouts = std::move(hostCopyDstLayouts),
+            .optimalTilingLayoutUUID = uuid,
+            .identicalMemoryTypeRequirements = vulkan14Properties.identicalMemoryTypeRequirements == vk::True,
+        };
+    }
+
     void setupInitialFlags()
     {
+        Surface::ensureGlfwInitialized();
+
         uint32_t glfwCount = 0;
         const char **glfwExt = glfwGetRequiredInstanceExtensions(&glfwCount);
+        nrAssert(glfwExt != nullptr && glfwCount > 0, "GLFW did not report Vulkan instance extensions.");
         instanceEnabledExtensions.assign(glfwExt, glfwExt + glfwCount);
         
         if constexpr (isDebugMode)
@@ -595,8 +740,6 @@ class Device
     std::vector<std::string> deviceEnabledExtensions{
         vk::KHRSwapchainExtensionName,
         vk::KHRDeferredHostOperationsExtensionName,
-        vk::KHRShaderFloatControlsExtensionName,
-        vk::KHRSpirv14ExtensionName,
         vk::EXTMeshShaderExtensionName,
         vk::KHRAccelerationStructureExtensionName,
         vk::KHRRayTracingPipelineExtensionName,
@@ -610,6 +753,8 @@ class Device
     RayTracingCapabilitySnapshot rtCapabilities_{};
     DescriptorIndexingCapabilitySnapshot descriptorIndexingCapabilities_{};
     BufferDeviceAddressCapabilitySnapshot bufferDeviceAddressCapabilities_{};
+    Vulkan14CapabilitySnapshot vulkan14Capabilities_{};
+    Vulkan14PropertySnapshot vulkan14Properties_{};
 
     std::array<size_t, static_cast<size_t>(QueueFamilyKind::size)> queueFamilyDict{};
     SwapChainConfig swapChainConfig_{};

@@ -46,6 +46,11 @@ struct Surface
     Surface(Surface &&) = default;
     Surface &operator=(Surface &&) = default;
 
+    static void ensureGlfwInitialized()
+    {
+        (void)&glfwCtx;
+    }
+
     /**
      * @brief Create GLFW window and Vulkan surface pair.
      *

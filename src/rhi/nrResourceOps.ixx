@@ -982,13 +982,86 @@ inline void transitionImage(vk::CommandBuffer commandBuffer, const Image& image,
 }
 
 /**
+ * @brief Convert an original buffer copy region to the pNext-capable copy-2 form.
+ */
+[[nodiscard]] inline vk::BufferCopy2 toBufferCopy2(vk::BufferCopy region)
+{
+    return vk::BufferCopy2{region.srcOffset, region.dstOffset, region.size};
+}
+
+/**
+ * @brief Convert an original buffer-image copy region to the pNext-capable copy-2 form.
+ */
+[[nodiscard]] inline vk::BufferImageCopy2 toBufferImageCopy2(vk::BufferImageCopy region)
+{
+    return vk::BufferImageCopy2{
+        region.bufferOffset,
+        region.bufferRowLength,
+        region.bufferImageHeight,
+        region.imageSubresource,
+        region.imageOffset,
+        region.imageExtent,
+    };
+}
+
+/**
+ * @brief Convert an original image copy region to the pNext-capable copy-2 form.
+ */
+[[nodiscard]] inline vk::ImageCopy2 toImageCopy2(vk::ImageCopy region)
+{
+    return vk::ImageCopy2{
+        region.srcSubresource,
+        region.srcOffset,
+        region.dstSubresource,
+        region.dstOffset,
+        region.extent,
+    };
+}
+
+/**
+ * @brief Record a Vulkan 1.3+ copy-buffer command with a pNext-capable region.
+ */
+inline void copyBuffer2(vk::CommandBuffer commandBuffer, vk::Buffer src, vk::Buffer dst, vk::BufferCopy2 region)
+{
+    auto copyInfo = vk::CopyBufferInfo2{src, dst, 1u, &region};
+    commandBuffer.copyBuffer2(copyInfo);
+}
+
+/**
+ * @brief Record a Vulkan 1.3+ copy-buffer-to-image command with a pNext-capable region.
+ */
+inline void copyBufferToImage2(vk::CommandBuffer commandBuffer, vk::Buffer src, vk::Image dst, vk::ImageLayout dstLayout, vk::BufferImageCopy2 region)
+{
+    auto copyInfo = vk::CopyBufferToImageInfo2{src, dst, dstLayout, 1u, &region};
+    commandBuffer.copyBufferToImage2(copyInfo);
+}
+
+/**
+ * @brief Record a Vulkan 1.3+ copy-image-to-buffer command with a pNext-capable region.
+ */
+inline void copyImageToBuffer2(vk::CommandBuffer commandBuffer, vk::Image src, vk::ImageLayout srcLayout, vk::Buffer dst, vk::BufferImageCopy2 region)
+{
+    auto copyInfo = vk::CopyImageToBufferInfo2{src, srcLayout, dst, 1u, &region};
+    commandBuffer.copyImageToBuffer2(copyInfo);
+}
+
+/**
+ * @brief Record a Vulkan 1.3+ copy-image command with a pNext-capable region.
+ */
+inline void copyImage2(vk::CommandBuffer commandBuffer, vk::Image src, vk::ImageLayout srcLayout, vk::Image dst, vk::ImageLayout dstLayout, vk::ImageCopy2 region)
+{
+    auto copyInfo = vk::CopyImageInfo2{src, srcLayout, dst, dstLayout, 1u, &region};
+    commandBuffer.copyImage2(copyInfo);
+}
+
+/**
  * @brief Copy one buffer into another with an optional explicit size.
  */
 inline void copyBuffer(vk::CommandBuffer commandBuffer, const Buffer& src, const Buffer& dst, vk::DeviceSize size = 0)
 {
     vk::DeviceSize copySize = size == 0 ? std::min(src.size(), dst.size()) : size;
     vk::BufferCopy region{0, 0, copySize};
-    commandBuffer.copyBuffer(src.handle(), dst.handle(), {region});
+    copyBuffer2(commandBuffer, src.handle(), dst.handle(), toBufferCopy2(region));
 }
 
 [[nodiscard]] inline vk::BufferImageCopy normalizeBufferImageCopyRegion(const Image& image, vk::BufferImageCopy region)
@@ -1025,7 +1098,7 @@ inline void copyBuffer(vk::CommandBuffer commandBuffer, const Buffer& src, const
 inline void copyBufferToImage(vk::CommandBuffer commandBuffer, const Buffer& src, const Image& dst, vk::ImageLayout dstLayout = vk::ImageLayout::eTransferDstOptimal, const vk::BufferImageCopy& region = {})
 {
     auto effectiveRegion = normalizeBufferImageCopyRegion(dst, region);
-    commandBuffer.copyBufferToImage(src.handle(), dst.handle(), dstLayout, {effectiveRegion});
+    copyBufferToImage2(commandBuffer, src.handle(), dst.handle(), dstLayout, toBufferImageCopy2(effectiveRegion));
 }
 
 /**
@@ -1034,7 +1107,7 @@ inline void copyBufferToImage(vk::CommandBuffer commandBuffer, const Buffer& src
 inline void copyImageToBuffer(vk::CommandBuffer commandBuffer, const Image& src, const Buffer& dst, vk::ImageLayout srcLayout = vk::ImageLayout::eTransferSrcOptimal, const vk::BufferImageCopy& region = {})
 {
     auto effectiveRegion = normalizeBufferImageCopyRegion(src, region);
-    commandBuffer.copyImageToBuffer(src.handle(), srcLayout, dst.handle(), {effectiveRegion});
+    copyImageToBuffer2(commandBuffer, src.handle(), srcLayout, dst.handle(), toBufferImageCopy2(effectiveRegion));
 }
 
 [[nodiscard]] inline vk::ImageCopy normalizeImageCopyRegion(const Image& src, const Image& dst, vk::ImageCopy region)
@@ -1102,7 +1175,7 @@ inline void copyImageToImage(
     const vk::ImageCopy& region = {})
 {
     auto effectiveRegion = normalizeImageCopyRegion(src, dst, region);
-    commandBuffer.copyImage(src.handle(), srcLayout, dst.handle(), dstLayout, {effectiveRegion});
+    copyImage2(commandBuffer, src.handle(), srcLayout, dst.handle(), dstLayout, toImageCopy2(effectiveRegion));
 }
 
 inline void copyImageToImage(
@@ -1118,7 +1191,7 @@ inline void copyImageToImage(
     const vk::ImageCopy& region = {})
 {
     auto effectiveRegion = normalizeImageCopyRegion(srcExtent, srcAspect, dstExtent, dstAspect, region);
-    commandBuffer.copyImage(src, srcLayout, dst, dstLayout, {effectiveRegion});
+    copyImage2(commandBuffer, src, srcLayout, dst, dstLayout, toImageCopy2(effectiveRegion));
 }
 
 struct RenderingAttachmentDesc
@@ -1561,7 +1634,7 @@ class UploadReadbackContext
                 copyRegion.srcOffset = allocation.offset;
                 copyRegion.dstOffset = dstOffset + uploadedSize;
                 copyRegion.size = chunkSize;
-                raw.copyBuffer(uploadRing_.handle(), dst.handle(), {copyRegion});
+                copyBuffer2(raw, uploadRing_.handle(), dst.handle(), toBufferCopy2(copyRegion));
 
                 if (remainingSize == chunkSize)
                 {
@@ -1606,12 +1679,12 @@ class UploadReadbackContext
     }
 
     /**
-     * @brief Upload one image payload via staging buffer -> copyBufferToImage.
+     * @brief Upload one image payload via staging buffer -> copyBufferToImage2.
      *
      * This path intentionally does not create a staging image. It performs:
      *   1) optional acquire-to-transfer ownership barrier + wait,
      *   2) transition to eTransferDstOptimal,
-     *   3) copyBufferToImage from upload ring,
+     *   3) copyBufferToImage2 from upload ring,
      *   4) release to destination queue with destination layout.
      *
      * Note: current implementation requires payload to fit in the upload ring.
@@ -1694,7 +1767,12 @@ class UploadReadbackContext
             }
 
             effectiveRegion.bufferOffset += allocation.offset;
-            raw.copyBufferToImage(uploadRing_.handle(), dst.handle(), vk::ImageLayout::eTransferDstOptimal, {effectiveRegion});
+            copyBufferToImage2(
+                raw,
+                uploadRing_.handle(),
+                dst.handle(),
+                vk::ImageLayout::eTransferDstOptimal,
+                toBufferImageCopy2(effectiveRegion));
 
             BarrierBatch releaseBarrier{};
             if (ownership.isSameQueueFamily())
@@ -1810,7 +1888,7 @@ class UploadReadbackContext
             copyRegion.srcOffset = srcOffset;
             copyRegion.dstOffset = allocation.offset;
             copyRegion.size = size;
-            raw.copyBuffer(src.handle(), readbackRing_.handle(), {copyRegion});
+            copyBuffer2(raw, src.handle(), readbackRing_.handle(), toBufferCopy2(copyRegion));
 
             recordReadbackRingHostVisibilityBarrier(raw, allocation.offset, size);
 
@@ -1906,7 +1984,12 @@ class UploadReadbackContext
             recordReadbackRingToTransferWriteBarrier(raw, allocation.offset, readbackSize);
 
             effectiveRegion.bufferOffset += allocation.offset;
-            raw.copyImageToBuffer(src.handle(), vk::ImageLayout::eTransferSrcOptimal, readbackRing_.handle(), {effectiveRegion});
+            copyImageToBuffer2(
+                raw,
+                src.handle(),
+                vk::ImageLayout::eTransferSrcOptimal,
+                readbackRing_.handle(),
+                toBufferImageCopy2(effectiveRegion));
 
             recordReadbackRingHostVisibilityBarrier(raw, allocation.offset, readbackSize);
 

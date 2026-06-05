@@ -36,7 +36,7 @@ function(nr_apply_msvc_settings target)
     # WINDOWS-FLAG
     if(MSVC)
         # Modern parallel compilation
-        target_compile_options(${target} PRIVATE /MP)
+        target_compile_options(${target} PRIVATE /MP /EHsc)
         target_compile_definitions(${target} PRIVATE
             $<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=2>
             $<$<NOT:$<CONFIG:Debug>>:_ITERATOR_DEBUG_LEVEL=0>
