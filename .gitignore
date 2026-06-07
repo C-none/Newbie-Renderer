@@ -1,5 +1,9 @@
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 build/
 compile_commands.json
 .github/
-src/utils/staticUtilsConstants.h
+src/utils/staticUtilsConstants.ixx.h

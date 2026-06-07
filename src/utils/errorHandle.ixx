@@ -1,11 +1,10 @@
-module;
 export module nr.utils:errorHandle;
 import :staticUtils;
 import std;
 
 export namespace nr
 {
-// LogLevel enum is now auto-generated in staticUtilsConstants.h
+// LogLevel enum is generated in the staticUtilsConstants module partition.
 
 namespace detail
 {
@@ -39,7 +38,7 @@ inline void emitLog(LogLevel level, std::string_view channel, std::string_view c
                "{}[NR {}:{}]{} {}\n{}\n{}\n",
                detail::levelColor(level),
                channel,
-               logLevelNames[static_cast<size_t>(level)],
+               logLevelNames[static_cast<std::size_t>(level)],
                detail::ansiReset,
                locationStr,
                loc.function_name(),
@@ -54,7 +53,7 @@ inline void emitCompactLog(LogLevel level, std::string_view channel, std::string
                "{}[NR {}:{}]{} {}\n",
                detail::levelColor(level),
                channel,
-               logLevelNames[static_cast<size_t>(level)],
+               logLevelNames[static_cast<std::size_t>(level)],
                detail::ansiReset,
                context.empty() ? "(none)" : context);
     stream.flush();

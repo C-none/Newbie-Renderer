@@ -68,10 +68,10 @@ inline auto runOne(const TestCase& testCase) -> TestResult
 
 export namespace nr::test {
 
-export inline constexpr std::uint32_t kOutputLevelConcise = 0u;
-export inline constexpr std::uint32_t kOutputLevelNormal = 1u;
-export inline constexpr std::uint32_t kOutputLevelDetailed = 2u;
-export inline constexpr std::uint32_t kOutputLevelFlag = NR_TEST_OUTPUT_LEVEL_FLAG;
+inline constexpr std::uint32_t kOutputLevelConcise = 0u;
+inline constexpr std::uint32_t kOutputLevelNormal = 1u;
+inline constexpr std::uint32_t kOutputLevelDetailed = 2u;
+inline constexpr std::uint32_t kOutputLevelFlag = NR_TEST_OUTPUT_LEVEL_FLAG;
 
 class CaseRegistrar {
 public:

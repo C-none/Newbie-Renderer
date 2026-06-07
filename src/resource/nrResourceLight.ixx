@@ -1,7 +1,6 @@
-module;
 export module nr.resource:light;
-
 import dependency;
+
 import std;
 import :type;
 

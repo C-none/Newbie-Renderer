@@ -1,16 +1,17 @@
 # ============================================================================
-# Generate staticUtilsConstants.h before each build
+# Generate staticUtilsConstants.ixx before each build
 # ============================================================================
 add_custom_target(generate_constants
     COMMAND ${CMAKE_COMMAND}
         -D "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+        -D "NR_BUILD_CONFIG=$<CONFIG>"
         -D "NR_LOG_LEVEL=${NR_LOG_LEVEL}"
         -D "NR_SHADER_CACHE_DIR=${NR_SHADER_CACHE_DIR}"
         -D "NR_SHADER_ROOT_DIR=${NR_SHADER_ROOT_DIR}"
-        -D "INPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.h.in"
-        -D "OUTPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.h"
+        -D "INPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.ixx.in"
+        -D "OUTPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.ixx"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateConstants.cmake"
-    COMMENT "Generating staticUtilsConstants.h (BUILD_TYPE=${CMAKE_BUILD_TYPE}, NR_LOG_LEVEL=${NR_LOG_LEVEL}, NR_SHADER_CACHE_DIR=${NR_SHADER_CACHE_DIR}, NR_SHADER_ROOT_DIR=${NR_SHADER_ROOT_DIR})"
+    COMMENT "Generating staticUtilsConstants.ixx (BUILD_CONFIG=$<CONFIG>, NR_LOG_LEVEL=${NR_LOG_LEVEL}, NR_SHADER_CACHE_DIR=${NR_SHADER_CACHE_DIR}, NR_SHADER_ROOT_DIR=${NR_SHADER_ROOT_DIR})"
 )
 
 # ============================================================================

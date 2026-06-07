@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:rayTracing;
 import dependency;
 import :type;
@@ -11,9 +10,9 @@ export namespace nr::rhi
 {
 struct ShaderBindingTableSectionDesc
 {
-    uint32_t firstGroup = 0;
-    uint32_t groupCount = 0;
-    uint32_t stride = 0;
+    std::uint32_t firstGroup = 0;
+    std::uint32_t groupCount = 0;
+    std::uint32_t stride = 0;
 };
 
 struct ShaderBindingTableBuildDesc
@@ -30,7 +29,7 @@ struct ShaderBindingTableBuildDesc
 struct ShaderBindingTableLayoutDesc
 {
     RayTracingCapabilitySnapshot capabilities{};
-    uint32_t pipelineGroupCount = 0;
+    std::uint32_t pipelineGroupCount = 0;
     ShaderBindingTableSectionDesc raygen{.firstGroup = 0, .groupCount = 1, .stride = 0};
     ShaderBindingTableSectionDesc miss{};
     ShaderBindingTableSectionDesc hit{};
@@ -49,9 +48,9 @@ struct ShaderBindingTableBuildPlanSection
 struct ShaderBindingTableBuildPlan
 {
     vk::DeviceSize totalSize = 0;
-    uint32_t handleSize = 0;
-    uint32_t handleAlignment = 1;
-    uint32_t baseAlignment = 1;
+    std::uint32_t handleSize = 0;
+    std::uint32_t handleAlignment = 1;
+    std::uint32_t baseAlignment = 1;
     ShaderBindingTableBuildPlanSection raygen{};
     ShaderBindingTableBuildPlanSection miss{};
     ShaderBindingTableBuildPlanSection hit{};
@@ -60,9 +59,9 @@ struct ShaderBindingTableBuildPlan
 
 struct TraceRaysDimensions
 {
-    uint32_t width = 1;
-    uint32_t height = 1;
-    uint32_t depth = 1;
+    std::uint32_t width = 1;
+    std::uint32_t height = 1;
+    std::uint32_t depth = 1;
 };
 
 using TraceRaysDispatchDiagnostics = ValidationDiagnostics;
@@ -96,7 +95,7 @@ struct TraceRaysIndirectDesc
     return value + (alignment - remainder);
 }
 
-[[nodiscard]] inline uint32_t alignUp(uint32_t value, uint32_t alignment)
+[[nodiscard]] inline std::uint32_t alignUp(std::uint32_t value, std::uint32_t alignment)
 {
     nrAssert(alignment > 0, "alignUp requires alignment > 0.");
     const auto remainder = value % alignment;
@@ -109,7 +108,7 @@ struct TraceRaysIndirectDesc
 
 namespace rt_detail
 {
-[[nodiscard]] inline uint32_t effectiveStride(const ShaderBindingTableSectionDesc &section, const RayTracingCapabilitySnapshot &capabilities)
+[[nodiscard]] inline std::uint32_t effectiveStride(const ShaderBindingTableSectionDesc &section, const RayTracingCapabilitySnapshot &capabilities)
 {
     if (section.groupCount == 0)
     {
@@ -127,9 +126,9 @@ namespace rt_detail
 [[nodiscard]] inline ShaderBindingTableBuildDiagnostics validateSection(
     std::string_view label,
     const ShaderBindingTableSectionDesc &section,
-    uint32_t effectiveSectionStride,
+    std::uint32_t effectiveSectionStride,
     const RayTracingCapabilitySnapshot &capabilities,
-    uint32_t pipelineGroupCount)
+    std::uint32_t pipelineGroupCount)
 {
     if (section.groupCount == 0)
     {
@@ -151,8 +150,8 @@ namespace rt_detail
         return makeValidationFailure(std::format("{} stride ({}) exceeds maxShaderGroupStride ({}).", label, effectiveSectionStride, capabilities.maxShaderGroupStride));
     }
 
-    auto groupEnd = static_cast<uint64_t>(section.firstGroup) + static_cast<uint64_t>(section.groupCount);
-    if (groupEnd > static_cast<uint64_t>(pipelineGroupCount))
+    auto groupEnd = static_cast<std::uint64_t>(section.firstGroup) + static_cast<std::uint64_t>(section.groupCount);
+    if (groupEnd > static_cast<std::uint64_t>(pipelineGroupCount))
     {
         return makeValidationFailure(std::format("{} group range [{}..{}) exceeds pipeline group count ({}).", label, section.firstGroup, groupEnd, pipelineGroupCount));
     }
@@ -378,29 +377,29 @@ class ShaderBindingTable
         auto plan = makeShaderBindingTableBuildPlan(desc);
         nrAssert(plan.totalSize > 0, "ShaderBindingTable::create requires totalSize > 0.");
 
-        auto packSection = [&](std::span<uint8_t> tableBytes, const ShaderBindingTableBuildPlanSection &plannedSection) {
+        auto packSection = [&](std::span<std::uint8_t> tableBytes, const ShaderBindingTableBuildPlanSection &plannedSection) {
             if (plannedSection.section.groupCount == 0)
             {
                 return;
             }
 
             auto handles = desc.pipeline->shaderGroupHandles(plannedSection.section.firstGroup, plannedSection.section.groupCount, plan.handleSize);
-            auto groupIndices = std::views::iota(uint32_t{0}, plannedSection.section.groupCount);
-            std::ranges::for_each(groupIndices, [&](uint32_t groupIndex) {
+            auto groupIndices = std::views::iota(std::uint32_t{0}, plannedSection.section.groupCount);
+            std::ranges::for_each(groupIndices, [&](std::uint32_t groupIndex) {
                 auto dstOffset = plannedSection.offset + (static_cast<vk::DeviceSize>(groupIndex) * plannedSection.section.stride);
-                auto srcOffset = static_cast<size_t>(groupIndex) * static_cast<size_t>(plan.handleSize);
+                auto srcOffset = static_cast<std::size_t>(groupIndex) * static_cast<std::size_t>(plan.handleSize);
 
-                auto dstStart = static_cast<size_t>(dstOffset);
-                nrAssert(dstStart + static_cast<size_t>(plan.handleSize) <= tableBytes.size(), "ShaderBindingTable::create destination copy range overflow.");
-                nrAssert(srcOffset + static_cast<size_t>(plan.handleSize) <= handles.size(), "ShaderBindingTable::create source handle range overflow.");
+                auto dstStart = static_cast<std::size_t>(dstOffset);
+                nrAssert(dstStart + static_cast<std::size_t>(plan.handleSize) <= tableBytes.size(), "ShaderBindingTable::create destination copy range overflow.");
+                nrAssert(srcOffset + static_cast<std::size_t>(plan.handleSize) <= handles.size(), "ShaderBindingTable::create source handle range overflow.");
 
-                auto srcView = std::span<const uint8_t>(handles).subspan(srcOffset, plan.handleSize);
+                auto srcView = std::span<const std::uint8_t>(handles).subspan(srcOffset, plan.handleSize);
                 auto dstView = tableBytes.subspan(dstStart, plan.handleSize);
                 std::ranges::copy(srcView, dstView.begin());
             });
         };
 
-        auto tableBytes = std::vector<uint8_t>(static_cast<size_t>(plan.totalSize), uint8_t{0});
+        auto tableBytes = std::vector<std::uint8_t>(static_cast<std::size_t>(plan.totalSize), std::uint8_t{0});
         packSection(tableBytes, plan.raygen);
         packSection(tableBytes, plan.miss);
         packSection(tableBytes, plan.hit);
@@ -415,7 +414,7 @@ class ShaderBindingTable
         nrAssert(buffer.valid(), "ShaderBindingTable::create failed to allocate SBT buffer.");
         nrAssert(buffer.mapped() != nullptr, "ShaderBindingTable::create requires a host-visible mapped SBT buffer.");
 
-        buffer.write(std::span<const uint8_t>(tableBytes));
+        buffer.write(std::span<const std::uint8_t>(tableBytes));
         buffer.flush(0, plan.totalSize);
 
         ShaderBindingTable sbt;
@@ -499,9 +498,9 @@ class ShaderBindingTable
         return makeValidationFailure("traceRays dimensions must all be > 0.");
     }
 
-    auto dispatchWidth = static_cast<uint64_t>(dimensions.width);
-    auto dispatchHeight = static_cast<uint64_t>(dimensions.height);
-    auto dispatchDepth = static_cast<uint64_t>(dimensions.depth);
+    auto dispatchWidth = static_cast<std::uint64_t>(dimensions.width);
+    auto dispatchHeight = static_cast<std::uint64_t>(dimensions.height);
+    auto dispatchDepth = static_cast<std::uint64_t>(dimensions.depth);
 
     if (capabilities.maxDispatchDimensions[0] > 0 && dispatchWidth > capabilities.maxDispatchDimensions[0])
     {

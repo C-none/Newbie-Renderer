@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:resourceOps;
 import dependency;
 import std;
@@ -14,7 +13,7 @@ import :vk;
 export namespace nr::rhi::ops
 {
 
-inline constexpr uint32_t kIgnoredQueueFamilyIndex = std::numeric_limits<uint32_t>::max();
+inline constexpr std::uint32_t kIgnoredQueueFamilyIndex = std::numeric_limits<std::uint32_t>::max();
 
 /**
  * @brief Barrier concept accepted by BarrierBatch::add.
@@ -47,8 +46,8 @@ concept QueueOwnershipResource = std::same_as<std::remove_cvref_t<TResourceKind>
  */
 struct QueueOwnershipBarrierConfig
 {
-    uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
-    uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    std::uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    std::uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
     vk::PipelineStageFlags2 stages = vk::PipelineStageFlags2{};
     vk::AccessFlags2 access = vk::AccessFlags2{};
     vk::ImageLayout oldLayout = vk::ImageLayout::eUndefined;
@@ -551,8 +550,8 @@ template <ImageTransitionBranch TBranch>
  */
 struct QueueOwnershipRequest
 {
-    uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
-    uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    std::uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    std::uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
     vk::PipelineStageFlags2 stages = vk::PipelineStageFlagBits2::eAllCommands;
     vk::AccessFlags2 access = vk::AccessFlagBits2::eMemoryWrite;
 
@@ -584,7 +583,7 @@ struct QueueAccessScope
 struct QueueOwnershipWait
 {
     vk::Semaphore semaphore = vk::Semaphore{};
-    uint64_t value = 0;
+    std::uint64_t value = 0;
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -593,8 +592,8 @@ struct QueueOwnershipWait
 };
 
 [[nodiscard]] inline QueueOwnershipRequest makeQueueOwnershipRequest(
-    uint32_t srcQueueFamilyIndex,
-    uint32_t dstQueueFamilyIndex,
+    std::uint32_t srcQueueFamilyIndex,
+    std::uint32_t dstQueueFamilyIndex,
     const QueueAccessScope& scope)
 {
     nrAssert(scope.valid(), "makeQueueOwnershipRequest requires non-empty stage mask.");
@@ -621,7 +620,7 @@ struct QueueOwnershipTransfer
         .access = vk::AccessFlagBits2::eMemoryRead,
     };
     vk::Semaphore waitSemaphore{};
-    uint64_t waitValue = 0;
+    std::uint64_t waitValue = 0;
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -638,8 +637,8 @@ struct QueueOwnershipTransfer
 };
 
 [[nodiscard]] inline QueueOwnershipTransfer makeQueueOwnershipTransfer(
-    uint32_t srcQueueFamilyIndex,
-    uint32_t dstQueueFamilyIndex,
+    std::uint32_t srcQueueFamilyIndex,
+    std::uint32_t dstQueueFamilyIndex,
     const QueueAccessScope& releaseScope,
     const QueueAccessScope& acquireScope,
     std::optional<QueueOwnershipWait> wait = std::nullopt)
@@ -678,7 +677,7 @@ struct BufferUploadOwnershipPlan
                    releaseToDestination.release.dstQueueFamilyIndex;
     }
 
-    [[nodiscard]] bool valid(uint32_t transferQueueFamilyIndex) const noexcept
+    [[nodiscard]] bool valid(std::uint32_t transferQueueFamilyIndex) const noexcept
     {
         // Same-queue-family plans have a different validation path
         if (isSameQueueFamily())
@@ -724,9 +723,9 @@ struct UploadQueueOwnershipBundle
  * - When source queue family equals transfer queue family, incoming transfer acquire is omitted.
  */
 [[nodiscard]] inline UploadQueueOwnershipBundle makeUploadQueueOwnershipBundle(
-    uint32_t sourceQueueFamilyIndex,
-    uint32_t transferQueueFamilyIndex,
-    uint32_t destinationQueueFamilyIndex,
+    std::uint32_t sourceQueueFamilyIndex,
+    std::uint32_t transferQueueFamilyIndex,
+    std::uint32_t destinationQueueFamilyIndex,
     const QueueAccessScope& sourceReleaseScope,
     const QueueAccessScope& destinationAcquireScope,
     std::optional<QueueOwnershipWait> sourceReleaseWait = std::nullopt,
@@ -947,11 +946,11 @@ class BarrierBatch
         packet.imageBarriers = imageBarriers_;
 
         packet.info = vk::DependencyInfo{};
-        packet.info.memoryBarrierCount = static_cast<uint32_t>(packet.memoryBarriers.size());
+        packet.info.memoryBarrierCount = static_cast<std::uint32_t>(packet.memoryBarriers.size());
         packet.info.pMemoryBarriers = packet.memoryBarriers.data();
-        packet.info.bufferMemoryBarrierCount = static_cast<uint32_t>(packet.bufferBarriers.size());
+        packet.info.bufferMemoryBarrierCount = static_cast<std::uint32_t>(packet.bufferBarriers.size());
         packet.info.pBufferMemoryBarriers = packet.bufferBarriers.data();
-        packet.info.imageMemoryBarrierCount = static_cast<uint32_t>(packet.imageBarriers.size());
+        packet.info.imageMemoryBarrierCount = static_cast<std::uint32_t>(packet.imageBarriers.size());
         packet.info.pImageMemoryBarriers = packet.imageBarriers.data();
         return packet;
     }
@@ -1223,8 +1222,8 @@ struct RenderingDepthStencilAttachmentDesc
 struct RenderingScopeDesc
 {
     vk::Rect2D renderArea{};
-    uint32_t layerCount = 1;
-    uint32_t viewMask = 0;
+    std::uint32_t layerCount = 1;
+    std::uint32_t viewMask = 0;
     vk::RenderingFlags flags{};
     std::span<const RenderingAttachmentDesc> colorAttachments{};
     std::optional<RenderingDepthStencilAttachmentDesc> depthAttachment;
@@ -1277,7 +1276,7 @@ class ScopedRendering
         renderingInfo_.layerCount = desc.layerCount;
         renderingInfo_.viewMask = desc.viewMask;
         renderingInfo_.flags = desc.flags;
-        renderingInfo_.colorAttachmentCount = static_cast<uint32_t>(colorAttachmentInfos_.size());
+        renderingInfo_.colorAttachmentCount = static_cast<std::uint32_t>(colorAttachmentInfos_.size());
         renderingInfo_.pColorAttachments = colorAttachmentInfos_.data();
 
         if (desc.depthAttachment.has_value())
@@ -1326,7 +1325,7 @@ struct BufferUploadTicket
     std::optional<std::reference_wrapper<const Buffer>> buffer;
     vk::DeviceSize dstOffset = 0;
     vk::DeviceSize size = 0;
-    uint64_t signalValue = 0;
+    std::uint64_t signalValue = 0;
     std::optional<QueueOwnershipTransfer> ownership;
 
     [[nodiscard]] bool valid() const noexcept
@@ -1339,7 +1338,7 @@ struct ImageUploadTicket
 {
     std::optional<std::reference_wrapper<const Image>> image;
     vk::ImageLayout layout = vk::ImageLayout::eUndefined;
-    uint64_t signalValue = 0;
+    std::uint64_t signalValue = 0;
     std::optional<QueueOwnershipTransfer> ownership;
 
     [[nodiscard]] bool valid() const noexcept
@@ -1355,7 +1354,7 @@ struct ReadbackTicket
 {
     vk::DeviceSize offset = 0;
     vk::DeviceSize size = 0;
-    uint64_t signalValue = 0;
+    std::uint64_t signalValue = 0;
 };
 
 /**
@@ -1445,7 +1444,7 @@ class UploadReadbackContext
         else
         {
             readbackInfo.sharingMode = vk::SharingMode::eConcurrent;
-            readbackInfo.queueFamilyIndexCount = static_cast<uint32_t>(readbackQueueFamilies.size());
+            readbackInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(readbackQueueFamilies.size());
             readbackInfo.pQueueFamilyIndices = readbackQueueFamilies.data();
         }
         readbackRing_ = resourceFactory.createBuffer(readbackInfo, MemoryUsage::GpuToCpu, "readback_ring");
@@ -1480,7 +1479,7 @@ class UploadReadbackContext
      *
      * Passing `0` waits for the latest upload issued by this context.
      */
-    void waitUploadComplete(uint64_t signalValue = 0)
+    void waitUploadComplete(std::uint64_t signalValue = 0)
     {
         if (signalValue == 0)
         {
@@ -1501,7 +1500,7 @@ class UploadReadbackContext
      *
      * Passing `0` waits for the latest readback issued by this context.
      */
-    void waitReadbackComplete(uint64_t signalValue = 0)
+    void waitReadbackComplete(std::uint64_t signalValue = 0)
     {
         if (signalValue == 0)
         {
@@ -1597,7 +1596,7 @@ class UploadReadbackContext
 
         auto remainingSize = totalSize;
         auto uploadedSize = vk::DeviceSize{0};
-        auto lastSignalValue = uint64_t{0};
+        auto lastSignalValue = std::uint64_t{0};
 
         while (remainingSize > 0)
         {
@@ -1606,8 +1605,8 @@ class UploadReadbackContext
 
             std::memcpy(
                 static_cast<std::byte*>(uploadRing_.mapped()) + allocation.offset,
-                data.data() + static_cast<size_t>(uploadedSize),
-                static_cast<size_t>(chunkSize));
+                data.data() + static_cast<std::size_t>(uploadedSize),
+                static_cast<std::size_t>(chunkSize));
             uploadRing_.flush(allocation.offset, chunkSize);
 
             auto commandBuffers = transferPool_.allocatePrimary(1);
@@ -1728,7 +1727,7 @@ class UploadReadbackContext
         std::memcpy(
             static_cast<std::byte*>(uploadRing_.mapped()) + allocation.offset,
             data.data(),
-            static_cast<size_t>(payloadSize));
+            static_cast<std::size_t>(payloadSize));
         uploadRing_.flush(allocation.offset, payloadSize);
 
         auto commandBuffers = transferPool_.allocatePrimary(1);
@@ -2036,7 +2035,7 @@ class UploadReadbackContext
         waitReadbackComplete(ticket.signalValue);
         readbackRing_.invalidate(ticket.offset, ticket.size);
 
-        std::vector<std::byte> data(static_cast<size_t>(ticket.size));
+        std::vector<std::byte> data(static_cast<std::size_t>(ticket.size));
         auto* src = static_cast<const std::byte*>(readbackRing_.mapped()) + ticket.offset;
         std::memcpy(data.data(), src, data.size());
         return data;
@@ -2051,20 +2050,20 @@ class UploadReadbackContext
 
     struct RingAllocation
     {
-        uint64_t begin = 0;
-        uint64_t end = 0;
+        std::uint64_t begin = 0;
+        std::uint64_t end = 0;
         vk::DeviceSize offset = 0;
     };
 
     struct InFlightBatch
     {
-        uint64_t begin = 0;
-        uint64_t end = 0;
-        uint64_t signalValue = 0;
+        std::uint64_t begin = 0;
+        std::uint64_t end = 0;
+        std::uint64_t signalValue = 0;
         std::optional<vk::raii::CommandBuffers> commandBuffers{};
     };
 
-    [[nodiscard]] uint64_t consumeNextUploadSignalValue()
+    [[nodiscard]] std::uint64_t consumeNextUploadSignalValue()
     {
         auto value = nextUploadSignalValue_;
         ++nextUploadSignalValue_;
@@ -2072,7 +2071,7 @@ class UploadReadbackContext
         return value;
     }
 
-    [[nodiscard]] uint64_t consumeNextReadbackSignalValue()
+    [[nodiscard]] std::uint64_t consumeNextReadbackSignalValue()
     {
         auto value = nextReadbackSignalValue_;
         ++nextReadbackSignalValue_;
@@ -2094,11 +2093,11 @@ class UploadReadbackContext
         return ReadbackRoute{std::ref(queueManager_->get().compute()), std::ref(computeReadbackPool_)};
     }
 
-    [[nodiscard]] static std::vector<uint32_t> uniqueReadbackQueueFamilies(std::array<uint32_t, 2> queueFamilies)
+    [[nodiscard]] static std::vector<std::uint32_t> uniqueReadbackQueueFamilies(std::array<std::uint32_t, 2> queueFamilies)
     {
         std::ranges::sort(queueFamilies);
         auto uniqueRange = std::ranges::unique(queueFamilies);
-        return std::vector<uint32_t>(queueFamilies.begin(), uniqueRange.begin());
+        return std::vector<std::uint32_t>(queueFamilies.begin(), uniqueRange.begin());
     }
 
     [[nodiscard]] static bool isReadbackQueueRoleSupported(QueueRole queueRole) noexcept
@@ -2168,7 +2167,7 @@ class UploadReadbackContext
         };
     }
 
-    [[nodiscard]] static uint64_t alignUp(uint64_t value, uint64_t alignment)
+    [[nodiscard]] static std::uint64_t alignUp(std::uint64_t value, std::uint64_t alignment)
     {
         if (alignment <= 1)
             return value;
@@ -2221,18 +2220,18 @@ class UploadReadbackContext
         }
     }
 
-    [[nodiscard]] uint64_t queryTimelineValue(const vk::raii::Semaphore& timelineSemaphore) const
+    [[nodiscard]] std::uint64_t queryTimelineValue(const vk::raii::Semaphore& timelineSemaphore) const
     {
         return sync::timelineValue(timelineSemaphore);
     }
 
-    void waitTimelineValue(const vk::raii::Semaphore& timelineSemaphore, uint64_t targetValue) const
+    void waitTimelineValue(const vk::raii::Semaphore& timelineSemaphore, std::uint64_t targetValue) const
     {
         auto ok = sync::waitTimeline(device_->get(), timelineSemaphore, targetValue);
         nrAssert(ok, "UploadReadbackContext::waitTimelineValue failed while waiting timeline semaphore.");
     }
 
-    static void reclaimQueue(std::deque<InFlightBatch>& queue, uint64_t& reclaimCursor, uint64_t completedValue)
+    static void reclaimQueue(std::deque<InFlightBatch>& queue, std::uint64_t& reclaimCursor, std::uint64_t completedValue)
     {
         while (!queue.empty() && queue.front().signalValue <= completedValue)
         {
@@ -2254,8 +2253,8 @@ class UploadReadbackContext
     [[nodiscard]] RingAllocation reserveRing(
         vk::DeviceSize size,
         vk::DeviceSize capacity,
-        uint64_t& writeCursor,
-        uint64_t& reclaimCursor,
+        std::uint64_t& writeCursor,
+        std::uint64_t& reclaimCursor,
         std::deque<InFlightBatch>& queue,
         const vk::raii::Semaphore& timelineSemaphore)
     {
@@ -2268,9 +2267,9 @@ class UploadReadbackContext
         reclaimQueue(queue, reclaimCursor, queryTimelineValue(timelineSemaphore));
 
         auto tryReserve = [&]() -> std::optional<RingAllocation> {
-            constexpr uint64_t alignment = 16;
-            uint64_t candidate = alignUp(writeCursor, alignment);
-            uint64_t cap = static_cast<uint64_t>(capacity);
+            constexpr std::uint64_t alignment = 16;
+            std::uint64_t candidate = alignUp(writeCursor, alignment);
+            std::uint64_t cap = static_cast<std::uint64_t>(capacity);
 
             auto ringOffset = static_cast<vk::DeviceSize>(candidate % cap);
             if (ringOffset + size > capacity)
@@ -2279,7 +2278,7 @@ class UploadReadbackContext
                 ringOffset = 0;
             }
 
-            uint64_t end = candidate + static_cast<uint64_t>(size);
+            std::uint64_t end = candidate + static_cast<std::uint64_t>(size);
             if (end - reclaimCursor > cap)
             {
                 return std::nullopt;
@@ -2324,7 +2323,7 @@ class UploadReadbackContext
         return RingAllocation{};
     }
 
-    static void addInFlight(std::deque<InFlightBatch>& queue, const RingAllocation& allocation, uint64_t signalValue, vk::raii::CommandBuffers commandBuffers)
+    static void addInFlight(std::deque<InFlightBatch>& queue, const RingAllocation& allocation, std::uint64_t signalValue, vk::raii::CommandBuffers commandBuffers)
     {
         if (!queue.empty())
         {
@@ -2352,13 +2351,13 @@ class UploadReadbackContext
 
     vk::raii::Semaphore uploadTimeline_ = {nullptr};
     vk::raii::Semaphore readbackTimeline_ = {nullptr};
-    uint64_t nextUploadSignalValue_ = 1;
-    uint64_t nextReadbackSignalValue_ = 1;
+    std::uint64_t nextUploadSignalValue_ = 1;
+    std::uint64_t nextReadbackSignalValue_ = 1;
 
-    uint64_t uploadWriteCursor_ = 0;
-    uint64_t uploadReclaimCursor_ = 0;
-    uint64_t readbackWriteCursor_ = 0;
-    uint64_t readbackReclaimCursor_ = 0;
+    std::uint64_t uploadWriteCursor_ = 0;
+    std::uint64_t uploadReclaimCursor_ = 0;
+    std::uint64_t readbackWriteCursor_ = 0;
+    std::uint64_t readbackReclaimCursor_ = 0;
 
     std::deque<InFlightBatch> uploadInFlight_;
     std::deque<InFlightBatch> readbackInFlight_;

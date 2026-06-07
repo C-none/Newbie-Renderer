@@ -8,6 +8,7 @@
     "tracy",
     "assimp",
     "stb",
-    "libjpeg-turbo"
+    "libjpeg-turbo",
+    "flecs"
   ]
 }

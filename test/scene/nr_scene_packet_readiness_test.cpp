@@ -1,6 +1,7 @@
 import std;
 import dependency;
 import nr.load;
+import nr.resource;
 import nr.rhi;
 import nr.scene;
 

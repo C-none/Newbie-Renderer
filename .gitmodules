@@ -5,6 +5,3 @@
 [submodule "assets/glTF-Sample-Assets"]
 	path = assets/glTF-Sample-Assets
 	url = https://github.com/KhronosGroup/glTF-Sample-Assets.git
-[submodule "src/extern/flecs"]
-	path = src/extern/flecs
-	url = https://github.com/SanderMertens/flecs.git

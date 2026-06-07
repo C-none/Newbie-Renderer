@@ -11,6 +11,8 @@ target_link_libraries(nr_load_assimp_smoke_test PRIVATE
     utils
     dependency
 )
+add_dependencies(nr_load_assimp_smoke_test nrload utils dependency)
+nr_add_clang_module_object_depends(nr_load_assimp_smoke_test.cpp nrload utils dependency)
 target_compile_definitions(nr_load_assimp_smoke_test PRIVATE
     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
 )
@@ -26,6 +28,8 @@ target_link_libraries(nr_renderer_camera_override_contract_test PRIVATE
     utils
     dependency
 )
+add_dependencies(nr_renderer_camera_override_contract_test nrrenderpasses nrrenderer nrscene nrload nrrhi utils dependency)
+nr_add_clang_module_object_depends(nr_renderer_camera_override_contract_test.cpp nrrenderpasses nrrenderer nrscene nrload nrrhi utils dependency)
 add_test(NAME nr_renderer_camera_override_contract_test COMMAND nr_renderer_camera_override_contract_test)
 
 nr_add_profile_contract_test(nr_renderer_viewer_camera_controller_contract_test nr_renderer_viewer_camera_controller_contract_test.cpp)
@@ -34,4 +38,6 @@ target_link_libraries(nr_renderer_viewer_camera_controller_contract_test PRIVATE
     utils
     dependency
 )
+add_dependencies(nr_renderer_viewer_camera_controller_contract_test nrrenderer utils dependency)
+nr_add_clang_module_object_depends(nr_renderer_viewer_camera_controller_contract_test.cpp nrrenderer utils dependency)
 add_test(NAME nr_renderer_viewer_camera_controller_contract_test COMMAND nr_renderer_viewer_camera_controller_contract_test)

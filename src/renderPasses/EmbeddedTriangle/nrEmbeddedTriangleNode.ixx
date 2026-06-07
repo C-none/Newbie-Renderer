@@ -1,7 +1,6 @@
-module;
 export module nr.renderPasses:embeddedTriangle;
-
 import dependency;
+
 import nr.renderer;
 import nr.rhi;
 import nr.utils;

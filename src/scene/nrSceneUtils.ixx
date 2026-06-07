@@ -1,7 +1,6 @@
-module;
 export module nr.scene:utils;
-
 import dependency;
+
 import nr.load;
 import nr.resource;
 import std;

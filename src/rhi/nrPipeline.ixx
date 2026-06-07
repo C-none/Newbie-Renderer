@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:pipeline;
 import dependency;
 import :type;
@@ -55,14 +54,14 @@ struct RayTracingShaderGroupDesc
 
 struct RayTracingPipelineLibraryInterfaceDesc
 {
-		uint32_t maxPipelineRayPayloadSize = 0;
-		uint32_t maxPipelineRayHitAttributeSize = 0;
+		std::uint32_t maxPipelineRayPayloadSize = 0;
+		std::uint32_t maxPipelineRayHitAttributeSize = 0;
 };
 
 struct RayTracingPipelineDesc
 {
 		std::vector<std::string> entryPointNames;
-		uint32_t maxRayRecursionDepth = 1;
+		std::uint32_t maxRayRecursionDepth = 1;
 		std::vector<RayTracingShaderGroupDesc> groups;
 		DescriptorBindingPolicy descriptorBindingPolicy{};
 		vk::PipelineCreateFlags flags = {};
@@ -135,7 +134,7 @@ inline void applyRasterState(const vk::raii::CommandBuffer &commandBuffer, const
 	commandBuffer.setRasterizationSamplesEXT(state.rasterizationSamples);
 }
 
-inline void drawTasks(const vk::raii::CommandBuffer &commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+inline void drawTasks(const vk::raii::CommandBuffer &commandBuffer, std::uint32_t groupCountX, std::uint32_t groupCountY, std::uint32_t groupCountZ)
 {
 	nrAssert(*commandBuffer != nullptr, "mesh::drawTasks requires a valid command buffer.");
 	nrAssert(groupCountX > 0 && groupCountY > 0 && groupCountZ > 0, "mesh::drawTasks requires non-zero dispatch group counts.");
@@ -157,7 +156,7 @@ class CursorPipelineLayout
 				auto setLayouts = descriptorLayout.descriptorSets();
 				layout.immutableSamplerBindings_.reserve(immutableSamplers.size());
 
-				auto findDescriptorBinding = [setLayouts](uint32_t setIndex, uint32_t bindingIndex) -> const DescriptorBindingInfo * {
+				auto findDescriptorBinding = [setLayouts](std::uint32_t setIndex, std::uint32_t bindingIndex) -> const DescriptorBindingInfo * {
 					auto setIt = std::ranges::find_if(setLayouts, [setIndex](const DescriptorSetLayoutInfo &setInfo) {
 						return setInfo.set == setIndex;
 					});
@@ -225,7 +224,7 @@ class CursorPipelineLayout
 					state.samplers.reserve(immutableSamplerBinding.descriptorCount);
 					state.rawSamplers.reserve(immutableSamplerBinding.descriptorCount);
 
-					std::ranges::for_each(std::views::iota(uint32_t{0}, immutableSamplerBinding.descriptorCount), [&](uint32_t arrayIndex) {
+					std::ranges::for_each(std::views::iota(std::uint32_t{0}, immutableSamplerBinding.descriptorCount), [&](std::uint32_t arrayIndex) {
 						auto samplerDebugName = std::format("immutable_sampler_s{}_b{}_i{}", state.set, state.binding, arrayIndex);
 						state.samplers.push_back(SlangSampler::create(device, immutableSamplerBinding.samplerDesc, samplerDebugName));
 						nrAssert(state.samplers.back().valid(), std::format("CursorPipelineLayout::create failed to create immutable sampler '{}'.", samplerDebugName));
@@ -267,11 +266,11 @@ class CursorPipelineLayout
 
 						vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
 						vk::DescriptorSetLayoutCreateInfo setLayoutInfo{};
-						setLayoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+						setLayoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
 						setLayoutInfo.pBindings = bindings.data();
 						if (!bindingFlags.empty())
 						{
-							bindingFlagsInfo.bindingCount = static_cast<uint32_t>(bindingFlags.size());
+							bindingFlagsInfo.bindingCount = static_cast<std::uint32_t>(bindingFlags.size());
 							bindingFlagsInfo.pBindingFlags = bindingFlags.data();
 							setLayoutInfo.pNext = &bindingFlagsInfo;
 							if (std::ranges::any_of(bindingFlags, [](vk::DescriptorBindingFlags flags) {
@@ -299,19 +298,19 @@ class CursorPipelineLayout
 				});
 
 				vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-				pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(pipelineSetLayouts.size());
+				pipelineLayoutInfo.setLayoutCount = static_cast<std::uint32_t>(pipelineSetLayouts.size());
 				pipelineLayoutInfo.pSetLayouts = pipelineSetLayouts.data();
 				auto pushConstantRanges = descriptorLayout.makeVkPushConstantRanges();
-				pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
+				pipelineLayoutInfo.pushConstantRangeCount = static_cast<std::uint32_t>(pushConstantRanges.size());
 				pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
 				layout.pipelineLayout_ = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 				return layout;
 		}
 
-		[[nodiscard]] bool valid() const noexcept { return pipelineLayout_ != nullptr; }
+		[[nodiscard]] bool valid() const noexcept { return *pipelineLayout_ != nullptr; }
 		[[nodiscard]] vk::PipelineLayout raw() const noexcept { return valid() ? *pipelineLayout_ : vk::PipelineLayout{}; }
 
-		[[nodiscard]] std::optional<vk::DescriptorSetLayout> descriptorSetLayout(uint32_t setIndex) const noexcept
+		[[nodiscard]] std::optional<vk::DescriptorSetLayout> descriptorSetLayout(std::uint32_t setIndex) const noexcept
 		{
 				auto it = std::ranges::find_if(setLayouts_, [setIndex](const DescriptorSetLayoutHandle &handle) {
 						return handle.set == setIndex;
@@ -323,7 +322,7 @@ class CursorPipelineLayout
 				return *it->layout;
 		}
 
-		[[nodiscard]] std::vector<uint32_t> setIndices() const
+		[[nodiscard]] std::vector<std::uint32_t> setIndices() const
 		{
 				return setLayouts_ |
 				       std::views::transform([](const DescriptorSetLayoutHandle &handle) { return handle.set; }) |
@@ -334,19 +333,19 @@ class CursorPipelineLayout
 				const vk::raii::CommandBuffer &commandBuffer,
 				vk::PipelineBindPoint bindPoint,
 				const ShaderBindingSet &set,
-				std::span<const uint32_t> dynamicOffsets = {}) const;
+				std::span<const std::uint32_t> dynamicOffsets = {}) const;
 
 		void bindDescriptorSets(
 				const vk::raii::CommandBuffer &commandBuffer,
 				vk::PipelineBindPoint bindPoint,
 				std::span<const ShaderBindingSet> sets,
-				std::span<const uint32_t> dynamicOffsets = {}) const;
+				std::span<const std::uint32_t> dynamicOffsets = {}) const;
 
 		void pushConstants(
 				const vk::raii::CommandBuffer &commandBuffer,
 				vk::ShaderStageFlags stageFlags,
-				uint32_t offset,
-				std::span<const uint8_t> bytes) const
+				std::uint32_t offset,
+				std::span<const std::uint8_t> bytes) const
 		{
 			nrAssert(valid(), "CursorPipelineLayout::pushConstants requires a valid pipeline layout.");
 			nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::pushConstants requires a valid command buffer.");
@@ -355,15 +354,15 @@ class CursorPipelineLayout
 				return;
 			}
 			nrAssert(
-				bytes.size() <= std::numeric_limits<uint32_t>::max(),
+				bytes.size() <= std::numeric_limits<std::uint32_t>::max(),
 				std::format("CursorPipelineLayout::pushConstants payload too large: {} bytes", bytes.size()));
-			commandBuffer.pushConstants(raw(), stageFlags, offset, vk::ArrayProxy<const uint8_t>(static_cast<uint32_t>(bytes.size()), bytes.data()));
+			commandBuffer.pushConstants(raw(), stageFlags, offset, vk::ArrayProxy<const std::uint8_t>(static_cast<std::uint32_t>(bytes.size()), bytes.data()));
 		}
 
 		void pushConstants(
 				const vk::raii::CommandBuffer &commandBuffer,
 				const ShaderCursor &cursor,
-				std::span<const uint8_t> bytes) const
+				std::span<const std::uint8_t> bytes) const
 		{
 			nrAssert(valid(), "CursorPipelineLayout::pushConstants requires a valid pipeline layout.");
 			nrAssert(cursor.valid(), "CursorPipelineLayout::pushConstants requires a valid shader cursor.");
@@ -376,14 +375,14 @@ class CursorPipelineLayout
 
 			auto cursorOffset = cursor.address().uniformOffset;
 			nrAssert(
-				cursorOffset <= std::numeric_limits<uint32_t>::max(),
+				cursorOffset <= std::numeric_limits<std::uint32_t>::max(),
 				std::format("CursorPipelineLayout::pushConstants cursor offset overflow: {}", cursorOffset));
 
-			auto offset = static_cast<uint32_t>(cursorOffset);
-			auto rangeBegin = static_cast<uint64_t>(pushConstantRange->offset);
-			auto rangeEnd = rangeBegin + static_cast<uint64_t>(pushConstantRange->size);
-			auto writeBegin = static_cast<uint64_t>(offset);
-			auto writeEnd = writeBegin + static_cast<uint64_t>(bytes.size());
+			auto offset = static_cast<std::uint32_t>(cursorOffset);
+			auto rangeBegin = static_cast<std::uint64_t>(pushConstantRange->offset);
+			auto rangeEnd = rangeBegin + static_cast<std::uint64_t>(pushConstantRange->size);
+			auto writeBegin = static_cast<std::uint64_t>(offset);
+			auto writeEnd = writeBegin + static_cast<std::uint64_t>(bytes.size());
 
 			nrAssert(
 				writeBegin >= rangeBegin && writeEnd <= rangeEnd,
@@ -400,14 +399,14 @@ class CursorPipelineLayout
 	private:
 		struct DescriptorSetLayoutHandle
 		{
-				uint32_t set = 0;
+				std::uint32_t set = 0;
 				vk::raii::DescriptorSetLayout layout = {nullptr};
 		};
 
 		struct ImmutableSamplerBindingState
 		{
-				uint32_t set = 0;
-				uint32_t binding = 0;
+				std::uint32_t set = 0;
+				std::uint32_t binding = 0;
 				std::vector<SlangSampler> samplers;
 				std::vector<vk::Sampler> rawSamplers;
 				bool isApplied = false;
@@ -423,7 +422,7 @@ inline void CursorPipelineLayout::bindDescriptorSet(
 		const vk::raii::CommandBuffer &commandBuffer,
 		vk::PipelineBindPoint bindPoint,
 		const ShaderBindingSet &set,
-		std::span<const uint32_t> dynamicOffsets) const
+		std::span<const std::uint32_t> dynamicOffsets) const
 {
 	nrAssert(valid(), "CursorPipelineLayout::bindDescriptorSet requires a valid pipeline layout.");
 	nrAssert(set.valid(), std::format("CursorPipelineLayout::bindDescriptorSet received invalid set {}.", set.setIndex()));
@@ -437,7 +436,7 @@ inline void CursorPipelineLayout::bindDescriptorSets(
 		const vk::raii::CommandBuffer &commandBuffer,
 		vk::PipelineBindPoint bindPoint,
 		std::span<const ShaderBindingSet> sets,
-		std::span<const uint32_t> dynamicOffsets) const
+		std::span<const std::uint32_t> dynamicOffsets) const
 {
 	nrAssert(valid(), "CursorPipelineLayout::bindDescriptorSets requires a valid pipeline layout.");
 	nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::bindDescriptorSets requires a valid command buffer.");
@@ -458,7 +457,7 @@ inline void CursorPipelineLayout::bindDescriptorSets(
 inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
 	const CursorPipelineLayout &layout,
 	ShaderBindingPool &pool,
-	const std::map<uint32_t, uint32_t> &variableDescriptorCountsBySet)
+	const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet)
 {
 	nrAssert(layout.valid(), "allocateBindingSetsForLayout requires a valid cursor pipeline layout.");
 
@@ -466,7 +465,7 @@ inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
 	auto sets = std::vector<ShaderBindingSet>{};
 	sets.reserve(setIndices.size());
 
-	std::ranges::for_each(setIndices, [&](uint32_t setIndex) {
+	std::ranges::for_each(setIndices, [&](std::uint32_t setIndex) {
 		auto descriptorSetLayout = layout.descriptorSetLayout(setIndex);
 		nrAssert(
 			descriptorSetLayout.has_value(),
@@ -477,7 +476,7 @@ inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
 			*descriptorSetLayout,
 			setIndex,
 			requestedVariableCount != variableDescriptorCountsBySet.end()
-				? std::optional<uint32_t>(requestedVariableCount->second)
+				? std::optional<std::uint32_t>(requestedVariableCount->second)
 				: std::nullopt);
 		nrAssert(
 			set.valid(),
@@ -508,7 +507,7 @@ inline void bindResourcesToCommandBuffer(
 	auto writeRequests = resolveDescriptorWriteRequests(snapshot, std::move(logicalResolver));
 	if (!writeRequests.empty())
 	{
-		auto requestsBySet = std::map<uint32_t, std::vector<DescriptorWriteRequest>>{};
+		auto requestsBySet = std::map<std::uint32_t, std::vector<DescriptorWriteRequest>>{};
 		std::ranges::for_each(writeRequests, [&](const DescriptorWriteRequest &request) {
 			requestsBySet[request.binding.set].push_back(request);
 		});
@@ -578,7 +577,7 @@ inline void pushConstantsToCommandBuffer(
 			commandBuffer,
 			record.range.stageFlags,
 			record.offset,
-			std::span<const uint8_t>{record.data.data(), record.data.size()});
+			std::span<const std::uint8_t>{record.data.data(), record.data.size()});
 	});
 }
 
@@ -602,12 +601,12 @@ class VkShaderProgram
 					auto codeSize = entryPoint->codeBlob->getBufferSize();
 					nrAssert(codeSize > 0, std::format("Entry point '{}' has empty code blob.", entryPoint->entryPointName));
 					nrAssert(
-						codeSize % sizeof(uint32_t) == 0,
+						codeSize % sizeof(std::uint32_t) == 0,
 						std::format("Entry point '{}' code size is not uint32-aligned: {} bytes.", entryPoint->entryPointName, codeSize));
 
 					vk::ShaderModuleCreateInfo moduleInfo{};
 					moduleInfo.codeSize = codeSize;
-					moduleInfo.pCode = static_cast<const uint32_t *>(entryPoint->codeBlob->getBufferPointer());
+					moduleInfo.pCode = static_cast<const std::uint32_t *>(entryPoint->codeBlob->getBufferPointer());
 					result.modules_.emplace_back(device, moduleInfo);
 
 					result.entryPointNames_.push_back(entryPoint->entryPointName.empty() ? "main" : entryPoint->entryPointName);
@@ -624,7 +623,7 @@ class VkShaderProgram
 		}
 
 		[[nodiscard]] bool valid() const noexcept { return !stageCreateInfos_.empty(); }
-		[[nodiscard]] const vk::PipelineShaderStageCreateInfo &stageCreateInfo(uint32_t index) const noexcept { return stageCreateInfos_[index]; }
+		[[nodiscard]] const vk::PipelineShaderStageCreateInfo &stageCreateInfo(std::uint32_t index) const noexcept { return stageCreateInfos_[index]; }
 		[[nodiscard]] std::span<const SlangStage> stages() const noexcept { return stages_; }
 		[[nodiscard]] std::span<const std::string> entryPointNames() const noexcept { return entryPointNames_; }
 
@@ -651,19 +650,19 @@ class GraphicsPipeline
 				nrAssert(layout.valid(), "GraphicsPipeline::create requires a valid pipeline layout.");
 				nrAssert(shaderProgram.valid(), "GraphicsPipeline::create requires a valid shader program.");
 
-				auto graphicsStageIndices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(shaderProgram.stages().size())) |
-				                          std::views::filter([&](uint32_t index) { return detail::isGraphicsStage(shaderProgram.stages()[index]); }) |
+				auto graphicsStageIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size())) |
+				                          std::views::filter([&](std::uint32_t index) { return detail::isGraphicsStage(shaderProgram.stages()[index]); }) |
 				                          std::ranges::to<std::vector>();
 				nrAssert(!graphicsStageIndices.empty(), "GraphicsPipeline::create requires at least one graphics shader stage.");
 
 				auto stageCreateInfos = graphicsStageIndices |
-				                       std::views::transform([&](uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
+				                       std::views::transform([&](std::uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
 				                       std::ranges::to<std::vector>();
 
 				auto hasStage = [&](SlangStage stage) {
 					return std::ranges::any_of(
 						graphicsStageIndices,
-						[&](uint32_t stageIndex) { return shaderProgram.stages()[stageIndex] == stage; });
+						[&](std::uint32_t stageIndex) { return shaderProgram.stages()[stageIndex] == stage; });
 				};
 				auto const hasVertexStage = hasStage(SLANG_STAGE_VERTEX);
 				auto const hasMeshStage = hasStage(SLANG_STAGE_MESH);
@@ -714,9 +713,9 @@ class GraphicsPipeline
 				}
 
 				vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
-				vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(desc.vertexBindings.size());
+				vertexInputInfo.vertexBindingDescriptionCount = static_cast<std::uint32_t>(desc.vertexBindings.size());
 				vertexInputInfo.pVertexBindingDescriptions = desc.vertexBindings.empty() ? nullptr : desc.vertexBindings.data();
-				vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(desc.vertexAttributes.size());
+				vertexInputInfo.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(desc.vertexAttributes.size());
 				vertexInputInfo.pVertexAttributeDescriptions = desc.vertexAttributes.empty() ? nullptr : desc.vertexAttributes.data();
 				vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo{};
 				inputAssemblyInfo.topology = desc.topology;
@@ -748,23 +747,23 @@ class GraphicsPipeline
 
 				vk::PipelineColorBlendStateCreateInfo colorBlendInfo{};
 				colorBlendInfo.logicOpEnable = vk::False;
-				colorBlendInfo.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
+				colorBlendInfo.attachmentCount = static_cast<std::uint32_t>(colorBlendAttachments.size());
 				colorBlendInfo.pAttachments = colorBlendAttachments.data();
 
 				vk::PipelineDynamicStateCreateInfo dynamicStateInfo{};
-				dynamicStateInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+				dynamicStateInfo.dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size());
 				dynamicStateInfo.pDynamicStates = dynamicStates.data();
 
 				auto renderingColorFormats = desc.colorAttachmentFormats;
 				vk::PipelineRenderingCreateInfo renderingInfo{};
-				renderingInfo.colorAttachmentCount = static_cast<uint32_t>(renderingColorFormats.size());
+				renderingInfo.colorAttachmentCount = static_cast<std::uint32_t>(renderingColorFormats.size());
 				renderingInfo.pColorAttachmentFormats = renderingColorFormats.data();
 				renderingInfo.depthAttachmentFormat = desc.depthAttachmentFormat.value_or(vk::Format::eUndefined);
 				renderingInfo.stencilAttachmentFormat = desc.stencilAttachmentFormat.value_or(vk::Format::eUndefined);
 
 				vk::GraphicsPipelineCreateInfo createInfo{};
 				createInfo.flags = desc.flags;
-				createInfo.stageCount = static_cast<uint32_t>(stageCreateInfos.size());
+				createInfo.stageCount = static_cast<std::uint32_t>(stageCreateInfos.size());
 				createInfo.pStages = stageCreateInfos.data();
 				auto const usesMeshPipeline = desc.mode == GraphicsPipelineMode::Mesh;
 				createInfo.pVertexInputState = usesMeshPipeline ? nullptr : &vertexInputInfo;
@@ -787,7 +786,7 @@ class GraphicsPipeline
 				return pipeline;
 		}
 
-		[[nodiscard]] bool valid() const noexcept { return pipeline_ != nullptr; }
+		[[nodiscard]] bool valid() const noexcept { return *pipeline_ != nullptr; }
 		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
 
 	private:
@@ -807,8 +806,8 @@ class ComputePipeline
 				nrAssert(layout.valid(), "ComputePipeline::create requires a valid pipeline layout.");
 				nrAssert(shaderProgram.valid(), "ComputePipeline::create requires a valid shader program.");
 
-				auto indices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(shaderProgram.stages().size()));
-				auto it = std::ranges::find_if(indices, [&](uint32_t index) { return shaderProgram.stages()[index] == SLANG_STAGE_COMPUTE; });
+				auto indices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size()));
+				auto it = std::ranges::find_if(indices, [&](std::uint32_t index) { return shaderProgram.stages()[index] == SLANG_STAGE_COMPUTE; });
 				nrAssert(it != std::ranges::end(indices), "ComputePipeline::create requires at least one compute entry point.");
 				auto stageIndex = *it;
 
@@ -824,7 +823,7 @@ class ComputePipeline
 				return pipeline;
 		}
 
-		[[nodiscard]] bool valid() const noexcept { return pipeline_ != nullptr; }
+		[[nodiscard]] bool valid() const noexcept { return *pipeline_ != nullptr; }
 		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
 
 	private:
@@ -853,16 +852,16 @@ class RayTracingPipeline
 					createFlags |= vk::PipelineCreateFlags{VK_PIPELINE_CREATE_LIBRARY_BIT_KHR};
 				}
 
-				auto rtStageIndices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(shaderProgram.stages().size())) |
-				                  std::views::filter([&](uint32_t index) { return detail::isRayTracingStage(shaderProgram.stages()[index]); }) |
+				auto rtStageIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size())) |
+				                  std::views::filter([&](std::uint32_t index) { return detail::isRayTracingStage(shaderProgram.stages()[index]); }) |
 				                  std::ranges::to<std::vector>();
 				nrAssert(!rtStageIndices.empty(), "RayTracingPipeline::create requires at least one ray tracing shader stage.");
 
 				auto stageCreateInfos = rtStageIndices |
-				                       std::views::transform([&](uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
+				                       std::views::transform([&](std::uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
 				                       std::ranges::to<std::vector>();
 
-				constexpr uint32_t shaderUnused = std::numeric_limits<uint32_t>::max();
+				constexpr std::uint32_t shaderUnused = std::numeric_limits<std::uint32_t>::max();
 				auto groups = std::vector<vk::RayTracingShaderGroupCreateInfoKHR>{};
 
 				auto findLocalStageIndex = [&](std::string_view entryPointName, std::initializer_list<SlangStage> expectedStages) {
@@ -872,20 +871,20 @@ class RayTracingPipeline
 					}
 					auto it = std::ranges::find(shaderProgram.entryPointNames(), entryPointName);
 					nrAssert(it != std::ranges::end(shaderProgram.entryPointNames()), std::format("RayTracingPipeline::create unknown entrypoint '{}' in custom group.", entryPointName));
-					auto globalIndex = static_cast<uint32_t>(std::distance(std::ranges::begin(shaderProgram.entryPointNames()), it));
+					auto globalIndex = static_cast<std::uint32_t>(std::distance(std::ranges::begin(shaderProgram.entryPointNames()), it));
 					auto localIt = std::ranges::find(rtStageIndices, globalIndex);
 					nrAssert(localIt != std::ranges::end(rtStageIndices), std::format("RayTracingPipeline::create entrypoint '{}' is not a RT stage.", entryPointName));
 					auto stage = shaderProgram.stages()[globalIndex];
 					nrAssert(
 						std::ranges::find(expectedStages, stage) != expectedStages.end(),
 						std::format("RayTracingPipeline::create entrypoint '{}' stage mismatch for custom group.", entryPointName));
-					return static_cast<uint32_t>(std::distance(std::ranges::begin(rtStageIndices), localIt));
+					return static_cast<std::uint32_t>(std::distance(std::ranges::begin(rtStageIndices), localIt));
 				};
 
 				if (desc.groups.empty())
 				{
 					groups.reserve(stageCreateInfos.size());
-					for (uint32_t localIndex = 0; localIndex < static_cast<uint32_t>(rtStageIndices.size()); ++localIndex)
+					for (std::uint32_t localIndex = 0; localIndex < static_cast<std::uint32_t>(rtStageIndices.size()); ++localIndex)
 					{
 						auto stage = shaderProgram.stages()[rtStageIndices[localIndex]];
 						vk::RayTracingShaderGroupCreateInfoKHR group{};
@@ -939,9 +938,9 @@ class RayTracingPipeline
 
 				vk::RayTracingPipelineCreateInfoKHR createInfo{};
 				createInfo.flags = createFlags;
-				createInfo.stageCount = static_cast<uint32_t>(stageCreateInfos.size());
+				createInfo.stageCount = static_cast<std::uint32_t>(stageCreateInfos.size());
 				createInfo.pStages = stageCreateInfos.data();
-				createInfo.groupCount = static_cast<uint32_t>(groups.size());
+				createInfo.groupCount = static_cast<std::uint32_t>(groups.size());
 				createInfo.pGroups = groups.data();
 				createInfo.maxPipelineRayRecursionDepth = desc.maxRayRecursionDepth;
 				createInfo.layout = layout.raw();
@@ -949,7 +948,7 @@ class RayTracingPipeline
 				vk::PipelineLibraryCreateInfoKHR libraryInfo{};
 				if (!desc.linkedLibraries.empty())
 				{
-					libraryInfo.libraryCount = static_cast<uint32_t>(desc.linkedLibraries.size());
+					libraryInfo.libraryCount = static_cast<std::uint32_t>(desc.linkedLibraries.size());
 					libraryInfo.pLibraries = desc.linkedLibraries.data();
 					createInfo.pLibraryInfo = &libraryInfo;
 				}
@@ -968,31 +967,31 @@ class RayTracingPipeline
 						pipelineCache != nullptr ? vk::Optional<const vk::raii::PipelineCache>(*pipelineCache) : vk::Optional<const vk::raii::PipelineCache>(nullptr);
 				pipeline.pipeline_ = vk::raii::Pipeline(device, deferredOperation, pipelineCacheOptional, createInfo);
 				pipeline.device_ = std::cref(device);
-				pipeline.shaderGroupCount_ = static_cast<uint32_t>(groups.size());
+				pipeline.shaderGroupCount_ = static_cast<std::uint32_t>(groups.size());
 				return pipeline;
 		}
 
-		[[nodiscard]] bool valid() const noexcept { return pipeline_ != nullptr; }
+		[[nodiscard]] bool valid() const noexcept { return *pipeline_ != nullptr; }
 		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
-		[[nodiscard]] uint32_t shaderGroupCount() const noexcept { return shaderGroupCount_; }
+		[[nodiscard]] std::uint32_t shaderGroupCount() const noexcept { return shaderGroupCount_; }
 
-		[[nodiscard]] std::vector<uint8_t> shaderGroupHandles(uint32_t firstGroup, uint32_t groupCount, uint32_t handleSize) const
+		[[nodiscard]] std::vector<std::uint8_t> shaderGroupHandles(std::uint32_t firstGroup, std::uint32_t groupCount, std::uint32_t handleSize) const
 		{
 			nrAssert(valid(), "RayTracingPipeline::shaderGroupHandles requires a valid pipeline.");
 			nrAssert(device_.has_value(), "RayTracingPipeline::shaderGroupHandles requires a valid device reference.");
 			nrAssert(groupCount > 0u, "RayTracingPipeline::shaderGroupHandles requires groupCount > 0.");
 			nrAssert(handleSize > 0u, "RayTracingPipeline::shaderGroupHandles requires handleSize > 0.");
 			nrAssert(firstGroup < shaderGroupCount_, "RayTracingPipeline::shaderGroupHandles firstGroup is out of range.");
-			auto requestedEnd = static_cast<uint64_t>(firstGroup) + static_cast<uint64_t>(groupCount);
-			nrAssert(requestedEnd <= static_cast<uint64_t>(shaderGroupCount_), "RayTracingPipeline::shaderGroupHandles range exceeds group count.");
+			auto requestedEnd = static_cast<std::uint64_t>(firstGroup) + static_cast<std::uint64_t>(groupCount);
+			nrAssert(requestedEnd <= static_cast<std::uint64_t>(shaderGroupCount_), "RayTracingPipeline::shaderGroupHandles range exceeds group count.");
 
-			auto dataSize = static_cast<size_t>(handleSize) * static_cast<size_t>(groupCount);
-			return pipeline_.getRayTracingShaderGroupHandlesKHR<uint8_t>(firstGroup, groupCount, dataSize);
+			auto dataSize = static_cast<std::size_t>(handleSize) * static_cast<std::size_t>(groupCount);
+			return pipeline_.getRayTracingShaderGroupHandlesKHR<std::uint8_t>(firstGroup, groupCount, dataSize);
 		}
 
 	private:
 		std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-		uint32_t shaderGroupCount_ = 0;
+		std::uint32_t shaderGroupCount_ = 0;
 		vk::raii::Pipeline pipeline_ = {nullptr};
 };
 
@@ -1036,7 +1035,7 @@ class PipelineService
 		return ShaderBindingPool::create(device_->get(), descriptorLayout, config);
 	}
 
-	[[nodiscard]] ShaderBindingSet allocateBindingSet(const CursorPipelineLayout &layout, ShaderBindingPool &bindingPool, uint32_t setIndex, std::optional<uint32_t> variableDescriptorCount = std::nullopt) const
+	[[nodiscard]] ShaderBindingSet allocateBindingSet(const CursorPipelineLayout &layout, ShaderBindingPool &bindingPool, std::uint32_t setIndex, std::optional<std::uint32_t> variableDescriptorCount = std::nullopt) const
 	{
 		nrAssert(device_.has_value(), "PipelineService::allocateBindingSet requires a bound logical device.");
 		auto descriptorSetLayout = layout.descriptorSetLayout(setIndex);
@@ -1051,7 +1050,7 @@ class PipelineService
 	{
 		nrAssert(device_.has_value(), "PipelineService::allocateBindingSets requires a bound logical device.");
 		return layout.setIndices() |
-		       std::views::transform([&](uint32_t setIndex) { return allocateBindingSet(layout, bindingPool, setIndex); }) |
+		       std::views::transform([&](std::uint32_t setIndex) { return allocateBindingSet(layout, bindingPool, setIndex); }) |
 		       std::ranges::to<std::vector>();
 	}
 
@@ -1061,7 +1060,7 @@ class PipelineService
 		return SlangSampler::create(device_->get(), std::move(desc), debugName);
 	}
 
-	[[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(const SlangProgram &slangProgram, const GraphicsPipelineDesc &desc = {}, uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+	[[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(const SlangProgram &slangProgram, const GraphicsPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
 	{
 		nrAssert(device_.has_value(), "PipelineService::createGraphicsPipeline requires a bound logical device.");
 		nrAssert(slangProgram.valid(), "PipelineService::createGraphicsPipeline requires a valid SlangProgram.");
@@ -1112,7 +1111,7 @@ class PipelineService
 		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createGraphicsPipeline requires at least one selected graphics entrypoint.");
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = GraphicsPipeline::create(device, layout, shaderProgram, effectiveDesc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
+		auto pipeline = GraphicsPipeline::create(device, layout, shaderProgram, effectiveDesc, *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
 		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
 		return PipelineState<GraphicsPipeline>{
 			.reflectionProgram = slangProgram,
@@ -1123,7 +1122,7 @@ class PipelineService
 		};
 	}
 
-	[[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc = {}, uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+	[[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
 	{
 		nrAssert(device_.has_value(), "PipelineService::createComputePipeline requires a bound logical device.");
 		nrAssert(slangProgram.valid(), "PipelineService::createComputePipeline requires a valid SlangProgram.");
@@ -1150,7 +1149,7 @@ class PipelineService
 		}
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = ComputePipeline::create(device, layout, shaderProgram, desc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
+		auto pipeline = ComputePipeline::create(device, layout, shaderProgram, desc, *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
 		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
 		return PipelineState<ComputePipeline>{
 			.reflectionProgram = slangProgram,
@@ -1161,7 +1160,7 @@ class PipelineService
 		};
 	}
 
-	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(const SlangProgram &slangProgram, const RayTracingPipelineDesc &desc = {}, uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
+	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(const SlangProgram &slangProgram, const RayTracingPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
 	{
 		nrAssert(device_.has_value(), "PipelineService::createRayTracingPipeline requires a bound logical device.");
 		nrAssert(slangProgram.valid(), "PipelineService::createRayTracingPipeline requires a valid SlangProgram.");
@@ -1204,7 +1203,7 @@ class PipelineService
 		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createRayTracingPipeline requires at least one selected ray-tracing entrypoint.");
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, effectiveDesc, pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
+		auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, effectiveDesc, *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
 		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
 		return PipelineState<RayTracingPipeline>{
 			.reflectionProgram = slangProgram,

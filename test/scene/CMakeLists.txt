@@ -12,6 +12,8 @@ function(nr_add_scene_contract_test target_name source_file)
         utils
         dependency
     )
+    add_dependencies(${target_name} nrscene nrload nrresource nrrhi utils dependency)
+    nr_add_clang_module_object_depends(${source_file} nrscene nrload nrresource nrrhi utils dependency)
 
     target_compile_definitions(${target_name} PRIVATE
         NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"

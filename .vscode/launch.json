@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug main (llvm-debug)",
+      "type": "lldb-dap",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/llvm-debug/src/main.exe",
+      "cwd": "${workspaceFolder}/build/llvm-debug/src",
+      "console": "integratedTerminal",
+      "stopOnEntry": false,
+      "preLaunchTask": "CMake: build debug main"
+    }
+  ]
+}

@@ -1,7 +1,6 @@
-module;
 export module nr.resource:skeletalAnimation;
-
 import dependency;
+
 import std;
 import :math;
 

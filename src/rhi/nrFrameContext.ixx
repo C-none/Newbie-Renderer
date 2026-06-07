@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:frameContext;
 import dependency;
 import nr.utils;
@@ -46,7 +45,7 @@ export namespace nr::rhi
  *
  *   // Main thread: dispatch work to thread pool
  *   std::vector<std::future<vk::CommandBuffer>> futures;
- *   for (size_t i = 0; i < threadPool.size(); ++i) {
+ *   for (std::size_t i = 0; i < threadPool.size(); ++i) {
  *       futures.push_back(threadPool.submit([&, threadId = i]() {
  *           // Pools are prebuilt at frame begin; this is lock-free indexed access.
  *           CommandPool& pool = frame.secondary<QueueRole::Graphics>(threadId);
@@ -77,14 +76,14 @@ class FrameContext
 {
   public:
         /// Compile-time upper bound for worker-secondary pools on amd64 builds.
-        inline static constexpr uint32_t kMaxSecondaryWorkers = nr::maxThreads;
+        inline static constexpr std::uint32_t kMaxSecondaryWorkers = nr::maxThreads;
 
     /**
      * @brief Configuration for per-queue command pools
      */
     struct PoolConfig
     {
-        uint32_t queueFamilyIndex;
+        std::uint32_t queueFamilyIndex;
     };
 
     /// Default constructor for deferred initialization
@@ -145,7 +144,7 @@ class FrameContext
      * @param timeout Timeout in nanoseconds (default: 10 second)
      * @return true if fence signaled, false if timeout
      */
-    [[nodiscard]] bool waitForFence(uint64_t timeout = 10'000'000'000)
+    [[nodiscard]] bool waitForFence(std::uint64_t timeout = 10'000'000'000)
     {
         auto result = device_->get().waitForFences(*fence_, vk::True, timeout);
         return result == vk::Result::eSuccess;
@@ -195,7 +194,7 @@ class FrameContext
      * Call from frame-begin on the main thread before worker recording starts.
      * Recording-time access (`secondary<T>()`) never grows storage or acquires locks.
      */
-    void prepareSecondaryPools(uint32_t graphicsWorkerCount = kMaxSecondaryWorkers, uint32_t computeWorkerCount = kMaxSecondaryWorkers, uint32_t transferWorkerCount = 0)
+    void prepareSecondaryPools(std::uint32_t graphicsWorkerCount = kMaxSecondaryWorkers, std::uint32_t computeWorkerCount = kMaxSecondaryWorkers, std::uint32_t transferWorkerCount = 0)
     {
         graphicsPreparedSecondaryWorkers_ = std::min(graphicsWorkerCount, kMaxSecondaryWorkers);
         computePreparedSecondaryWorkers_ = std::min(computeWorkerCount, kMaxSecondaryWorkers);
@@ -246,7 +245,7 @@ class FrameContext
     * Access is lock-free and does not allocate at record time.
     * All slots are prepared by prepareSecondaryPools() at frame-begin.
      */
-    template <QueueRole T> [[nodiscard]] CommandPool &secondary(size_t threadId)
+    template <QueueRole T> [[nodiscard]] CommandPool &secondary(std::size_t threadId)
     {
         if constexpr (T == QueueRole::Graphics)
         {
@@ -316,7 +315,7 @@ class FrameContext
     /**
      * @brief Get number of registered secondary pools
      */
-    template <QueueRole T> [[nodiscard]] size_t registeredThreads() const noexcept
+    template <QueueRole T> [[nodiscard]] std::size_t registeredThreads() const noexcept
     {
         if constexpr (T == QueueRole::Graphics)
         {
@@ -363,10 +362,10 @@ class FrameContext
     /**
      * @brief Ensure queue-specific secondary pool slots are materialized for [0, workerCount).
      */
-    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, uint32_t queueFamilyIndex, uint32_t workerCount)
+    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t queueFamilyIndex, std::uint32_t workerCount)
     {
-        auto slotIndices = std::views::iota(uint32_t{0}, workerCount);
-        std::ranges::for_each(slotIndices, [&](uint32_t slotIndex) {
+        auto slotIndices = std::views::iota(std::uint32_t{0}, workerCount);
+        std::ranges::for_each(slotIndices, [&](std::uint32_t slotIndex) {
             if (!slots[slotIndex].has_value())
             {
                 slots[slotIndex].emplace(device_->get(), queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
@@ -377,9 +376,9 @@ class FrameContext
   private:
     // Device reference and queue family IDs (used for frame-begin secondary-pool prebuild)
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-    uint32_t graphicsQueueFamily_ = 0;
-    uint32_t computeQueueFamily_ = 0;
-    uint32_t transferQueueFamily_ = 0;
+    std::uint32_t graphicsQueueFamily_ = 0;
+    std::uint32_t computeQueueFamily_ = 0;
+    std::uint32_t transferQueueFamily_ = 0;
 
     // Synchronization primitives (frame-owned)
     vk::raii::Fence fence_ = {nullptr};
@@ -398,9 +397,9 @@ class FrameContext
     CommandPool transferPrimary_;
     std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> transferSecondary_{};
 
-    uint32_t graphicsPreparedSecondaryWorkers_ = 0;
-    uint32_t computePreparedSecondaryWorkers_ = 0;
-    uint32_t transferPreparedSecondaryWorkers_ = 0;
+    std::uint32_t graphicsPreparedSecondaryWorkers_ = 0;
+    std::uint32_t computePreparedSecondaryWorkers_ = 0;
+    std::uint32_t transferPreparedSecondaryWorkers_ = 0;
 };
 
 /**
@@ -430,7 +429,7 @@ class FrameManager
     FrameManager(const vk::raii::Device &device, const FrameContext::PoolConfig &graphicsConfig, const FrameContext::PoolConfig &computeConfig, const std::optional<FrameContext::PoolConfig> &transferConfig = std::nullopt)
     {
         frames_.reserve(maxFrameInFlight);
-        for (uint32_t i = 0; i < maxFrameInFlight; ++i)
+        for (std::uint32_t i = 0; i < maxFrameInFlight; ++i)
         {
             frames_.emplace_back(device, graphicsConfig, computeConfig, transferConfig);
         }
@@ -462,7 +461,7 @@ class FrameManager
     /**
      * @brief Get frame context by index
      */
-    [[nodiscard]] FrameContext &operator[](size_t index) noexcept
+    [[nodiscard]] FrameContext &operator[](std::size_t index) noexcept
     {
         return frames_[index];
     }
@@ -470,7 +469,7 @@ class FrameManager
     /**
      * @brief Get total number of frame contexts
      */
-    [[nodiscard]] size_t frameCount() const noexcept
+    [[nodiscard]] std::size_t frameCount() const noexcept
     {
         return frames_.size();
     }
@@ -478,7 +477,7 @@ class FrameManager
     /**
      * @brief Get current frame index
      */
-    [[nodiscard]] size_t currentIndex() const noexcept
+    [[nodiscard]] std::size_t currentIndex() const noexcept
     {
         return currentIndex_;
     }
@@ -493,7 +492,7 @@ class FrameManager
 
   private:
     std::vector<FrameContext> frames_;
-    size_t currentIndex_ = 0;
+    std::size_t currentIndex_ = 0;
 };
 
 } // namespace nr::rhi

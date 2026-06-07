@@ -79,6 +79,11 @@ Current dependency frameworks:
 - stb_image
 - libjpeg-turbo
 
+Third-party boundary note:
+
+- Consumers reach legacy third-party declarations through the shared named C++ module `dependency`, implemented by [`src/extern/exportDependency.ixx`](../../src/extern/exportDependency.ixx).
+- External headers are confined to the `src/extern` boundary; internal project source imports `dependency` instead of including third-party headers directly.
+
 Entry points:
 
 - Data model: [../../src/load/nrLoadType.ixx](../../src/load/nrLoadType.ixx)
@@ -259,5 +264,6 @@ Useful reality checks:
 - [../../src/app/exportModule.ixx](../../src/app/exportModule.ixx), [../../src/app/nrAppSession.ixx](../../src/app/nrAppSession.ixx), and [../../src/app/nrAppCamera.ixx](../../src/app/nrAppCamera.ixx) provide the application-facing lifetime wrapper plus camera/input encapsulation.
 - [../../src/app/nrAppUi.ixx](../../src/app/nrAppUi.ixx) is the app-owned Dear ImGui system wrapper used by render-pass-facing UI.
 - [../../src/main.cpp](../../src/main.cpp) is the scene-driven viewer loop where `NormalBuffer` feeds `Present.sourceColor` and `Ui` feeds `Present.uiBuffer`, while `nr::app::AppSession` initializes both the app camera and the UI system.
+- [../../src/extern/CMakeLists.txt](../../src/extern/CMakeLists.txt) and [../../src/extern/exportDependency.ixx](../../src/extern/exportDependency.ixx) are the current source-of-truth for the centralized third-party module boundary used by the LLVM/Ninja build path.
 - [../../test/app/embeddedTriangle.cpp](../../test/app/embeddedTriangle.cpp) is the renderer-only window loop where `EmbeddedTriangle` feeds `Present.sourceColor` and `Ui` feeds `Present.uiBuffer`, using the same `nr::app::AppSession` camera and UI wrapper with the default camera path.
 - [../../test/app/normalBufferUiSmoke.cpp](../../test/app/normalBufferUiSmoke.cpp) is the current headless smoke path that validates the `NormalBuffer + Ui -> Present` integration, non-empty ImGui draw data, and the runtime normal-buffer cull toggle.

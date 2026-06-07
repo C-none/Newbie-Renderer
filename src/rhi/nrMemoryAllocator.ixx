@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:memoryAllocator;
 import dependency;
 import nr.utils;
@@ -91,7 +90,7 @@ class MemoryAllocator
      * @param frameIndex    Frame index for PerFrame strategy (mod maxFrameInFlight)
      * @return RAII VmaBuffer
      */
-    [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, uint32_t frameIndex = 0) const
+    [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const
     {
         // Add BDA support by default for all non-staging buffers
         if (usage == MemoryUsage::GpuOnly || usage == MemoryUsage::CpuToGpu)
@@ -130,7 +129,7 @@ class MemoryAllocator
      * Overload accepting vk::BufferCreateInfo for integration with
      * Vulkan-hpp code paths. Adds BDA flag automatically.
      */
-    [[nodiscard]] VmaBuffer allocateBuffer(const vk::BufferCreateInfo &createInfo, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, uint32_t frameIndex = 0) const
+    [[nodiscard]] VmaBuffer allocateBuffer(const vk::BufferCreateInfo &createInfo, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const
     {
         // Convert to C struct and delegate
         VkBufferCreateInfo bufferInfo = static_cast<VkBufferCreateInfo>(createInfo);
@@ -216,9 +215,9 @@ class MemoryAllocator
      *
      * @param frameIndex  Frame index (mod maxFrameInFlight)
      */
-    void resetFramePool(uint32_t frameIndex)
+    void resetFramePool(std::uint32_t frameIndex)
     {
-        uint32_t idx = frameIndex % maxFrameInFlight;
+        std::uint32_t idx = frameIndex % maxFrameInFlight;
         if (perFramePools_[idx].valid())
         {
             perFramePools_[idx].reset();
@@ -238,7 +237,7 @@ class MemoryAllocator
     void logBudget() const
     {
         auto budgets = vma_.getBudgets();
-        for (size_t i = 0; i < budgets.size(); ++i)
+        for (std::size_t i = 0; i < budgets.size(); ++i)
         {
             const auto &b = budgets[i];
             if (b.statistics.blockCount == 0)
@@ -254,7 +253,7 @@ class MemoryAllocator
      */
     void logFramePoolStats() const
     {
-        for (uint32_t i = 0; i < maxFrameInFlight; ++i)
+        for (std::uint32_t i = 0; i < maxFrameInFlight; ++i)
         {
             if (!perFramePools_[i].valid())
                 continue;
@@ -315,9 +314,9 @@ class MemoryAllocator
         sampleAlloc.usage = VMA_MEMORY_USAGE_AUTO;
         sampleAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-        uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
+        std::uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
 
-        for (uint32_t i = 0; i < maxFrameInFlight; ++i)
+        for (std::uint32_t i = 0; i < maxFrameInFlight; ++i)
         {
             VmaPoolCreateInfo poolInfo{};
             poolInfo.memoryTypeIndex = memTypeIndex;
@@ -345,7 +344,7 @@ class MemoryAllocator
         sampleAlloc.usage = VMA_MEMORY_USAGE_AUTO;
         sampleAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-        uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
+        std::uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
 
         VmaPoolCreateInfo poolInfo{};
         poolInfo.memoryTypeIndex = memTypeIndex;
@@ -417,9 +416,9 @@ class MemoryAllocator
      * Allocates from the frame-specific linear pool for O(1) bulk reset.
      * Always host-visible and mapped for CPU writes.
      */
-    void configurePerFrame(VmaAllocationCreateInfo &allocInfo, uint32_t frameIndex) const
+    void configurePerFrame(VmaAllocationCreateInfo &allocInfo, std::uint32_t frameIndex) const
     {
-        uint32_t idx = frameIndex % maxFrameInFlight;
+        std::uint32_t idx = frameIndex % maxFrameInFlight;
         allocInfo.pool = perFramePools_[idx].handle();
         allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
         // pool overrides memory type selection — no usage/flags needed for type

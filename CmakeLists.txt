@@ -1,11 +1,40 @@
 cmake_minimum_required(VERSION 4.2)
+
+# CMake still gates `import std;` behind an experimental opt-in that must be
+# visible before the CXX language is enabled.
+set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+
 project(NewbieRenderer LANGUAGES CXX)
 
 option(NR_BUILD_TESTS "Build unit tests" ON)
+option(NR_ENABLE_RELEASE_IPO "Enable IPO/LTO for Release builds when supported." ON)
 
 set(NR_LOG_LEVEL "INFO")
 set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache" CACHE STRING "Runtime shader cache directory")
 set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory")
+
+include(CheckIPOSupported)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+    set(CMAKE_CXX_MODULE_STD ON)
+endif()
+
+if(DEFINED VCPKG_CHAINLOAD_TOOLCHAIN_FILE AND VCPKG_CHAINLOAD_TOOLCHAIN_FILE MATCHES "msys2-clangxx\\.cmake$")
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires clang++ as the active C++ compiler.")
+    endif()
+
+    if(NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+        message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires the GNU-style clang++ frontend.")
+    endif()
+
+    if(NOT ";${CMAKE_CXX_COMPILER_IMPORT_STD};" MATCHES ";23;")
+        message(FATAL_ERROR
+            "The MSYS2 clang++ toolchain preset requires import std support for C++23. "
+            "Verify libc++.modules.json is discoverable by CMake."
+        )
+    endif()
+endif()
 
 find_package(Vulkan REQUIRED)
 find_package(imgui CONFIG REQUIRED)
@@ -32,8 +61,13 @@ endif()
 # target_compile_features(VulkanHppModule PUBLIC cxx_std_23)
 # target_link_libraries(VulkanHppModule PUBLIC Vulkan::Vulkan)
 
-function(nr_apply_msvc_settings target)
-    # WINDOWS-FLAG
+if(NR_ENABLE_RELEASE_IPO)
+    check_ipo_supported(RESULT NR_RELEASE_IPO_SUPPORTED OUTPUT NR_RELEASE_IPO_OUTPUT LANGUAGES CXX)
+else()
+    set(NR_RELEASE_IPO_SUPPORTED FALSE)
+endif()
+
+function(nr_apply_target_settings target)
     if(MSVC)
         # Modern parallel compilation
         target_compile_options(${target} PRIVATE /MP /EHsc)
@@ -42,33 +76,75 @@ function(nr_apply_msvc_settings target)
             $<$<NOT:$<CONFIG:Debug>>:_ITERATOR_DEBUG_LEVEL=0>
         )
 
-        # Link-time optimization for Release builds
-        set_target_properties(${target} PROPERTIES
-            INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-        )
+        if(NR_RELEASE_IPO_SUPPORTED)
+            set_target_properties(${target} PROPERTIES
+                INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+            )
+        endif()
 
-        # Warning levels using generator expressions (cleaner syntax)
         target_compile_options(${target} PRIVATE
-            $<$<CONFIG:Debug>:/W4 /WX /Zi> # All warnings as errors, debug info
-            $<$<CONFIG:Release>:/W4 /WX /Ox> # All warnings as errors, optimize
+            $<$<CONFIG:Debug>:/W4 /WX /Zi>
+            $<$<CONFIG:Release>:/W4 /WX /Ox>
         )
 
-        # Incremental linking for faster rebuilds
         target_link_options(${target} PRIVATE
             $<$<CONFIG:Debug>:/INCREMENTAL /DEBUG:FULL>
             $<$<CONFIG:Release>:/INCREMENTAL:NO /OPT:REF /OPT:ICF>
+        )
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+        if(NR_RELEASE_IPO_SUPPORTED)
+            set_target_properties(${target} PROPERTIES
+                INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+            )
+        endif()
+
+        target_compile_options(${target} PRIVATE
+            -Wall
+            -Wextra
+            -Werror
+            $<$<CONFIG:Debug>:-Og -g3 -fno-omit-frame-pointer>
+            $<$<CONFIG:Release>:-O3>
+        )
+
+        target_link_options(${target} PRIVATE
+            $<$<CONFIG:Release>:-Wl,--gc-sections -Wl,--icf=all>
         )
     endif()
 endfunction()
 
 function(nr_add_executable target)
     add_executable(${target} ${ARGN})
-    nr_apply_msvc_settings(${target})
+    nr_apply_target_settings(${target})
 endfunction()
 
 function(nr_add_library target)
     add_library(${target} ${ARGN})
-    nr_apply_msvc_settings(${target})
+    nr_apply_target_settings(${target})
+endfunction()
+
+function(nr_add_clang_module_object_depends source_file)
+    if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"))
+        return()
+    endif()
+
+    set(module_object_depends "")
+    foreach(dep_target IN LISTS ARGN)
+        if(NOT TARGET ${dep_target})
+            continue()
+        endif()
+
+        get_target_property(dep_target_type ${dep_target} TYPE)
+        if(NOT dep_target_type STREQUAL "STATIC_LIBRARY")
+            continue()
+        endif()
+
+        get_target_property(dep_target_binary_dir ${dep_target} BINARY_DIR)
+        list(APPEND module_object_depends "${dep_target_binary_dir}/${CMAKE_STATIC_LIBRARY_PREFIX}${dep_target}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    endforeach()
+
+    if(module_object_depends)
+        set_source_files_properties(${source_file} PROPERTIES OBJECT_DEPENDS "${module_object_depends}")
+    endif()
 endfunction()
 
 add_subdirectory(src)

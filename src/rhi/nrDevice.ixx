@@ -1,7 +1,6 @@
-module;
 export module nr.rhi:device;
-
 import dependency;
+
 import :vk;
 import :surface;
 import :swapchain;
@@ -26,8 +25,8 @@ struct DescriptorIndexingCapabilitySnapshot
     bool descriptorBindingSampledImageUpdateAfterBind = false;
     bool descriptorBindingUpdateUnusedWhilePending = false;
     bool shaderSampledImageArrayNonUniformIndexing = false;
-    uint32_t maxPerStageDescriptorUpdateAfterBindSampledImages = 0;
-    uint32_t maxDescriptorSetUpdateAfterBindSampledImages = 0;
+    std::uint32_t maxPerStageDescriptorUpdateAfterBindSampledImages = 0;
+    std::uint32_t maxDescriptorSetUpdateAfterBindSampledImages = 0;
 };
 
 struct BufferDeviceAddressCapabilitySnapshot
@@ -64,10 +63,10 @@ struct Vulkan14CapabilitySnapshot
 
 struct Vulkan14PropertySnapshot
 {
-    uint32_t lineSubPixelPrecisionBits = 0;
-    uint32_t maxVertexAttribDivisor = 0;
+    std::uint32_t lineSubPixelPrecisionBits = 0;
+    std::uint32_t maxVertexAttribDivisor = 0;
     bool supportsNonZeroFirstInstance = false;
-    uint32_t maxPushDescriptors = 0;
+    std::uint32_t maxPushDescriptors = 0;
     bool dynamicRenderingLocalReadDepthStencilAttachments = false;
     bool dynamicRenderingLocalReadMultisampledAttachments = false;
     bool earlyFragmentMultisampleCoverageAfterSampleCounting = false;
@@ -77,7 +76,7 @@ struct Vulkan14PropertySnapshot
     bool nonStrictSinglePixelWideLinesUseParallelogram = false;
     bool nonStrictWideLinesUseParallelogram = false;
     bool blockTexelViewCompatibleMultipleLayers = false;
-    uint32_t maxCombinedImageSamplerDescriptorCount = 0;
+    std::uint32_t maxCombinedImageSamplerDescriptorCount = 0;
     bool fragmentShadingRateClampCombinerInputs = false;
     vk::PipelineRobustnessBufferBehavior defaultRobustnessStorageBuffers = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
     vk::PipelineRobustnessBufferBehavior defaultRobustnessUniformBuffers = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
@@ -94,8 +93,8 @@ class Device
   public:
     struct FrameBeginResult
     {
-        uint32_t frameIndex = 0;
-        uint32_t swapchainImageIndex = 0;
+        std::uint32_t frameIndex = 0;
+        std::uint32_t swapchainImageIndex = 0;
         vk::Result swapchainResult = vk::Result::eSuccess;
     };
 
@@ -176,18 +175,18 @@ class Device
         pipelineService.bindDevice(device, &rtCapabilities_);
     }
 
-    [[nodiscard]] FrameBeginResult beginFrame(uint64_t acquireTimeout = std::numeric_limits<uint64_t>::max())
+    [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max())
     {
         auto &frame = frameManager.current();
         nrAssert(frame.waitForFence(), "Device::beginFrame timeout waiting for frame fence.");
 
-        const auto frameIndex = static_cast<uint32_t>(frameManager.currentIndex());
+        const auto frameIndex = static_cast<std::uint32_t>(frameManager.currentIndex());
         resourcePool.resetFrame(frameIndex);
         memoryAllocator.resetFramePool(frameIndex);
 
         frame.resetFence();
         frame.resetPools();
-        const auto workerCount = std::min<uint32_t>(maxThreads, std::max(1u, std::thread::hardware_concurrency()));
+        const auto workerCount = std::min<std::uint32_t>(maxThreads, std::max(1u, std::thread::hardware_concurrency()));
         frame.prepareSecondaryPools(workerCount, workerCount, 0u);
 
         auto acquire = presentationContext.acquireNextImage(frame.imageAvailable(), acquireTimeout);
@@ -291,7 +290,7 @@ class Device
         return frameFinalSubmitRole_.value_or(QueueRole::Graphics);
     }
 
-    [[nodiscard]] uint32_t frameSubmitCount() const noexcept
+    [[nodiscard]] std::uint32_t frameSubmitCount() const noexcept
     {
         return frameSubmitCount_;
     }
@@ -324,7 +323,7 @@ class Device
         return presentFrame();
     }
 
-    vk::raii::Instance makeInstance(uint32_t apiVersion = vk::ApiVersion14) const
+    vk::raii::Instance makeInstance(std::uint32_t apiVersion = vk::ApiVersion14) const
     {
         const vk::ApplicationInfo applicationInfo(appName.c_str(), 1, engineName.c_str(), 1, apiVersion);
         std::vector<char const *> enabledLayers = gatherLayers(instanceEnabledLayers);
@@ -343,10 +342,10 @@ class Device
     vk::raii::Device makeDevice()
     {
         auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
-        std::ranges::fill(queueFamilyDict, std::numeric_limits<size_t>::max());
+        std::ranges::fill(queueFamilyDict, std::numeric_limits<std::size_t>::max());
 
-        const auto queueIndices = std::views::iota(size_t{0}, queueFamilyProperties.size());
-        auto findFirst = [&](auto predicate) -> std::optional<size_t> {
+        const auto queueIndices = std::views::iota(std::size_t{0}, queueFamilyProperties.size());
+        auto findFirst = [&](auto predicate) -> std::optional<std::size_t> {
             auto it = std::ranges::find_if(queueIndices, predicate);
             if (it == std::ranges::end(queueIndices))
             {
@@ -355,23 +354,23 @@ class Device
             return *it;
         };
 
-        const auto hasFlags = [&](size_t i, vk::QueueFlags flags) {
+        const auto hasFlags = [&](std::size_t i, vk::QueueFlags flags) {
             return (queueFamilyProperties[i].queueFlags & flags) == flags;
         };
         
-        auto toQueueIndex = [](QueueFamilyKind kind) { return static_cast<size_t>(kind); };
+        auto toQueueIndex = [](QueueFamilyKind kind) { return static_cast<std::size_t>(kind); };
 
-        auto graphicsFamily = findFirst([&](size_t i) { return hasFlags(i, vk::QueueFlagBits::eGraphics); });
+        auto graphicsFamily = findFirst([&](std::size_t i) { return hasFlags(i, vk::QueueFlagBits::eGraphics); });
         nrAssert(graphicsFamily.has_value(), "No graphics queue family available.");
         queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)] = *graphicsFamily;
 
-        auto dedicatedCompute = findFirst([&](size_t i) {
+        auto dedicatedCompute = findFirst([&](std::size_t i) {
             auto flags = queueFamilyProperties[i].queueFlags;
             return (flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics);
         });
         queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)] = dedicatedCompute.value_or(*graphicsFamily);
 
-        auto dedicatedTransfer = findFirst([&](size_t i) {
+        auto dedicatedTransfer = findFirst([&](std::size_t i) {
             auto flags = queueFamilyProperties[i].queueFlags;
             return (flags & vk::QueueFlagBits::eTransfer) && !(flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics);
         });
@@ -379,19 +378,19 @@ class Device
 
         constexpr float queuePriority = 1.0f;
         auto uniqueFamilies = std::array{
-            static_cast<uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)]),
-            static_cast<uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)]),
-            static_cast<uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)])
+            static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)]),
+            static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)]),
+            static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)])
         };
         std::ranges::sort(uniqueFamilies);
         
         auto queueCreateInfos = uniqueFamilies | 
-                                std::views::filter([last = uint32_t(-1)](uint32_t f) mutable { 
+                                std::views::filter([last = std::uint32_t(-1)](std::uint32_t f) mutable { 
                                     if (f == last) return false; 
                                     last = f; 
                                     return true; 
                                 }) |
-                                std::views::transform([&](uint32_t familyIndex) {
+                                std::views::transform([&](std::uint32_t familyIndex) {
                                     return vk::DeviceQueueCreateInfo({}, familyIndex, 1, &queuePriority);
                                 }) |
                                 std::ranges::to<std::vector>();
@@ -542,9 +541,9 @@ class Device
             .maxRayDispatchInvocationCount = rayTracingPipelineProperties.maxRayDispatchInvocationCount,
             .maxRayRecursionDepth = rayTracingPipelineProperties.maxRayRecursionDepth,
             .maxDispatchDimensions = {
-                static_cast<uint64_t>(limits.maxComputeWorkGroupCount[0]) * static_cast<uint64_t>(limits.maxComputeWorkGroupSize[0]),
-                static_cast<uint64_t>(limits.maxComputeWorkGroupCount[1]) * static_cast<uint64_t>(limits.maxComputeWorkGroupSize[1]),
-                static_cast<uint64_t>(limits.maxComputeWorkGroupCount[2]) * static_cast<uint64_t>(limits.maxComputeWorkGroupSize[2]),
+                static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[0]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[0]),
+                static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[1]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[1]),
+                static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[2]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[2]),
             },
         };
 
@@ -554,9 +553,9 @@ class Device
 
     void initializeCommandSystem()
     {
-        uint32_t graphicsFamily = getQueueFamilyWithFallback(QueueFamilyKind::graphics);
-        uint32_t computeFamily = getQueueFamilyWithFallback(QueueFamilyKind::compute);
-        uint32_t transferFamily = getQueueFamilyWithFallback(QueueFamilyKind::transfer);
+        std::uint32_t graphicsFamily = getQueueFamilyWithFallback(QueueFamilyKind::graphics);
+        std::uint32_t computeFamily = getQueueFamilyWithFallback(QueueFamilyKind::compute);
+        std::uint32_t transferFamily = getQueueFamilyWithFallback(QueueFamilyKind::transfer);
 
         GpuQueue graphicsQueue(device, graphicsFamily, QueueRole::Graphics);
         GpuQueue computeQueue(device, computeFamily, QueueRole::Compute);
@@ -629,9 +628,9 @@ class Device
             auto& layoutProperties2 = layoutPropertyChain.get<vk::PhysicalDeviceProperties2>();
             auto& layoutVulkan14Properties = layoutPropertyChain.get<vk::PhysicalDeviceVulkan14Properties>();
 
-            layoutVulkan14Properties.copySrcLayoutCount = static_cast<uint32_t>(hostCopySrcLayouts.size());
+            layoutVulkan14Properties.copySrcLayoutCount = static_cast<std::uint32_t>(hostCopySrcLayouts.size());
             layoutVulkan14Properties.pCopySrcLayouts = hostCopySrcLayouts.data();
-            layoutVulkan14Properties.copyDstLayoutCount = static_cast<uint32_t>(hostCopyDstLayouts.size());
+            layoutVulkan14Properties.copyDstLayoutCount = static_cast<std::uint32_t>(hostCopyDstLayouts.size());
             layoutVulkan14Properties.pCopyDstLayouts = hostCopyDstLayouts.data();
 
             (*physicalDevice).getProperties2(&layoutProperties2, *physicalDevice.getDispatcher());
@@ -675,7 +674,7 @@ class Device
     {
         Surface::ensureGlfwInitialized();
 
-        uint32_t glfwCount = 0;
+        std::uint32_t glfwCount = 0;
         const char **glfwExt = glfwGetRequiredInstanceExtensions(&glfwCount);
         nrAssert(glfwExt != nullptr && glfwCount > 0, "GLFW did not report Vulkan instance extensions.");
         instanceEnabledExtensions.assign(glfwExt, glfwExt + glfwCount);
@@ -691,15 +690,15 @@ class Device
         }
     }
 
-    [[nodiscard]] uint32_t getQueueFamilyWithFallback(QueueFamilyKind kind) const
+    [[nodiscard]] std::uint32_t getQueueFamilyWithFallback(QueueFamilyKind kind) const
     {
-        size_t index = static_cast<size_t>(kind);
-        size_t familyIndex = queueFamilyDict[index];
-        nrAssert(familyIndex != std::numeric_limits<size_t>::max(), "Queue family not found - device capability contract violated.");
-        return static_cast<uint32_t>(familyIndex);
+        std::size_t index = static_cast<std::size_t>(kind);
+        std::size_t familyIndex = queueFamilyDict[index];
+        nrAssert(familyIndex != std::numeric_limits<std::size_t>::max(), "Queue family not found - device capability contract violated.");
+        return static_cast<std::uint32_t>(familyIndex);
     }
 
-    [[nodiscard]] uint32_t presentQueueFamilyIndex() const
+    [[nodiscard]] std::uint32_t presentQueueFamilyIndex() const
     {
         return getQueueFamilyWithFallback(QueueFamilyKind::compute);
     }
@@ -720,8 +719,8 @@ class Device
         presentSemaphoresByImage_.reserve(swapchainImageCount);
 
         auto semaphoreCreateInfo = vk::SemaphoreCreateInfo{};
-        auto imageIndices = std::views::iota(uint32_t{0}, swapchainImageCount);
-        std::ranges::for_each(imageIndices, [&](uint32_t) {
+        auto imageIndices = std::views::iota(std::uint32_t{0}, swapchainImageCount);
+        std::ranges::for_each(imageIndices, [&](std::uint32_t) {
             presentSemaphoresByImage_.emplace_back(device, semaphoreCreateInfo);
         });
     }
@@ -756,9 +755,9 @@ class Device
     Vulkan14CapabilitySnapshot vulkan14Capabilities_{};
     Vulkan14PropertySnapshot vulkan14Properties_{};
 
-    std::array<size_t, static_cast<size_t>(QueueFamilyKind::size)> queueFamilyDict{};
+    std::array<std::size_t, static_cast<std::size_t>(QueueFamilyKind::size)> queueFamilyDict{};
     SwapChainConfig swapChainConfig_{};
-    uint32_t frameSubmitCount_ = 0;
+    std::uint32_t frameSubmitCount_ = 0;
     std::optional<QueueRole> frameFinalSubmitRole_{};
     std::vector<vk::raii::Semaphore> presentSemaphoresByImage_{};
 };

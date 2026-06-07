@@ -1,3 +1,4 @@
 CompileFlags:
+  CompilationDatabase: build/llvm-debug
   Add:
     - --experimental-modules-support

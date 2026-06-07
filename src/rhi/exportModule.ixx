@@ -1,4 +1,3 @@
-module;
 export module nr.rhi;
 export import :accelerationStructure;
 export import :command;

@@ -1,7 +1,6 @@
-module;
 export module nr.app:ui;
-
 import dependency;
+
 import nr.rhi;
 import nr.utils;
 import std;

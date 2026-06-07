@@ -1,4 +1,3 @@
-module;
 export module nr.renderer;
 
 export import :rendererType;

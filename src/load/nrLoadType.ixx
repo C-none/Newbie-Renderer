@@ -1,4 +1,3 @@
-module;
 export module nr.load:type;
 import std;
 
@@ -7,9 +6,9 @@ export namespace nr::load
 using std::uint32_t;
 using std::uint8_t;
 
-inline constexpr uint32_t invalidIndex = std::numeric_limits<uint32_t>::max();
+inline constexpr std::uint32_t invalidIndex = std::numeric_limits<std::uint32_t>::max();
 
-enum class LoadErrorCode : uint8_t
+enum class LoadErrorCode : std::uint8_t
 {
     invalidArgument,
     fileNotFound,
@@ -43,7 +42,7 @@ struct SceneLoadRequest
     bool strict = true;
 };
 
-enum class TexturePayloadKind : uint8_t
+enum class TexturePayloadKind : std::uint8_t
 {
     externalReference,
     embeddedRawRgba8,
@@ -52,8 +51,8 @@ enum class TexturePayloadKind : uint8_t
 
 struct EmbeddedRawTexture
 {
-    uint32_t width = 0;
-    uint32_t height = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
     std::vector<std::byte> rgba8{};
 };
 
@@ -65,10 +64,10 @@ struct EmbeddedCompressedTexture
 
 struct Image
 {
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint32_t channels = 0;
-    std::vector<uint8_t> pixels{};
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t channels = 0;
+    std::vector<std::uint8_t> pixels{};
 };
 
 struct TextureAsset
@@ -84,20 +83,20 @@ struct TextureAsset
 
 struct MaterialTextureBinding
 {
-    uint32_t textureIndex = invalidIndex;
-    uint32_t uvChannel = 0;
-    uint32_t textureTypeRaw = 0;
+    std::uint32_t textureIndex = invalidIndex;
+    std::uint32_t uvChannel = 0;
+    std::uint32_t textureTypeRaw = 0;
     std::string semantic{};
 };
 
-enum class MaterialAlphaModeHint : uint8_t
+enum class MaterialAlphaModeHint : std::uint8_t
 {
     opaque,
     blend,
     mask,
 };
 
-enum class MaterialWorkflowFlags : uint8_t
+enum class MaterialWorkflowFlags : std::uint8_t
 {
     metallicRoughness = 1 << 0,
     specularGlossiness = 1 << 1,
@@ -153,16 +152,16 @@ struct MeshAsset
 {
     std::string name{};
     std::vector<VertexAsset> vertices{};
-    std::vector<uint32_t> indices{};
-    uint32_t materialIndex = invalidIndex;
+    std::vector<std::uint32_t> indices{};
+    std::uint32_t materialIndex = invalidIndex;
 };
 
 struct NodeAsset
 {
     std::string name{};
-    uint32_t parentIndex = invalidIndex;
-    std::vector<uint32_t> childIndices{};
-    std::vector<uint32_t> meshIndices{};
+    std::uint32_t parentIndex = invalidIndex;
+    std::vector<std::uint32_t> childIndices{};
+    std::vector<std::uint32_t> meshIndices{};
     std::array<float, 16> localTransform{
         1.0f,
         0.0f,
@@ -187,7 +186,7 @@ struct CameraAsset
 {
     std::string name{};
     std::string sourceNodeName{};
-    uint32_t nodeIndex = invalidIndex;
+    std::uint32_t nodeIndex = invalidIndex;
     std::array<float, 3> position{};
     std::array<float, 3> lookAt{0.0f, 0.0f, -1.0f};
     std::array<float, 3> up{0.0f, 1.0f, 0.0f};
@@ -202,8 +201,8 @@ struct LightAsset
 {
     std::string name{};
     std::string sourceNodeName{};
-    uint32_t nodeIndex = invalidIndex;
-    uint32_t typeRaw = 0;
+    std::uint32_t nodeIndex = invalidIndex;
+    std::uint32_t typeRaw = 0;
     std::string type{};
     std::array<float, 3> position{};
     std::array<float, 3> direction{0.0f, 0.0f, -1.0f};
@@ -221,20 +220,20 @@ struct LightAsset
 
 struct SceneImportStatistics
 {
-    uint32_t nodeCount = 0;
-    uint32_t meshCount = 0;
-    uint32_t materialCount = 0;
-    uint32_t textureCount = 0;
-    uint32_t cameraCount = 0;
-    uint32_t lightCount = 0;
-    uint32_t vertexCount = 0;
-    uint32_t indexCount = 0;
+    std::uint32_t nodeCount = 0;
+    std::uint32_t meshCount = 0;
+    std::uint32_t materialCount = 0;
+    std::uint32_t textureCount = 0;
+    std::uint32_t cameraCount = 0;
+    std::uint32_t lightCount = 0;
+    std::uint32_t vertexCount = 0;
+    std::uint32_t indexCount = 0;
 };
 
 struct SceneAsset
 {
     std::filesystem::path sourcePath{};
-    uint32_t rootNodeIndex = invalidIndex;
+    std::uint32_t rootNodeIndex = invalidIndex;
     std::vector<NodeAsset> nodes{};
     std::vector<MeshAsset> meshes{};
     std::vector<MaterialAsset> materials{};

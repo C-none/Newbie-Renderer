@@ -1,7 +1,6 @@
-module;
 export module nr.resource:type;
+import dependency;
 
-export import dependency;
 import std;
 
 export namespace nr::resource

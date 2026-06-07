@@ -1,7 +1,6 @@
-module;
 export module nr.renderer:renderer;
-
 import dependency;
+
 import nr.rhi;
 import nr.scene;
 import nr.resource;

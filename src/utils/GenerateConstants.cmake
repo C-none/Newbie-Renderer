@@ -1,7 +1,13 @@
-# GenerateConstants.cmake - Generate staticUtilsConstants.h from template
+# GenerateConstants.cmake - Generate staticUtilsConstants.ixx from template
 
 # Debug mode detection
-if(CMAKE_BUILD_TYPE STREQUAL "" OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(DEFINED NR_BUILD_CONFIG AND NOT NR_BUILD_CONFIG STREQUAL "")
+    set(NR_EFFECTIVE_BUILD_TYPE "${NR_BUILD_CONFIG}")
+else()
+    set(NR_EFFECTIVE_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+endif()
+
+if(NR_EFFECTIVE_BUILD_TYPE STREQUAL "" OR NR_EFFECTIVE_BUILD_TYPE STREQUAL "Debug")
     set(IS_DEBUG_MODE true)
 else()
     set(IS_DEBUG_MODE false)

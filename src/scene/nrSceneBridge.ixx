@@ -1,4 +1,3 @@
-module;
 export module nr.scene:bridge;
 
 import nr.load;
@@ -52,12 +51,21 @@ class SceneBridge
     [[nodiscard]] static constexpr std::string_view indexedCanonicalKeyLabel() noexcept
     {
         if constexpr (Kind == IndexedCanonicalKeyKind::material)
+        {
             return "material";
-        if constexpr (Kind == IndexedCanonicalKeyKind::mesh)
+        }
+        else if constexpr (Kind == IndexedCanonicalKeyKind::mesh)
+        {
             return "mesh";
-        if constexpr (Kind == IndexedCanonicalKeyKind::camera)
+        }
+        else if constexpr (Kind == IndexedCanonicalKeyKind::camera)
+        {
             return "camera";
-        return "light";
+        }
+        else
+        {
+            return "light";
+        }
     }
 
     template <IndexedCanonicalKeyKind Kind>

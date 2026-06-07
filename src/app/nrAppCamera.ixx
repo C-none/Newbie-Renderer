@@ -1,20 +1,23 @@
-module;
 export module nr.app:camera;
-
 import dependency;
+
 import nr.renderer;
 import nr.rhi;
 import nr.scene;
 import std;
 import :ui;
 
-namespace
+export namespace nr::app
 {
-struct CursorTrackingState
+struct AppCameraCursorTrackingState
 {
     bool hasPrevious = false;
     glm::dvec2 previous{0.0, 0.0};
 };
+} // namespace nr::app
+
+namespace
+{
 
 inline constexpr int kMouseButtonLeft = 0;
 inline constexpr int kMouseButtonRight = 1;
@@ -118,7 +121,7 @@ inline constexpr int kKeyE = 'E';
 [[nodiscard]] nr::renderer::ViewerCameraControlInput sampleControlInput(
     const nr::rhi::PresentationContext& presentation,
     float deltaSeconds,
-    CursorTrackingState& cursorTracking,
+    nr::app::AppCameraCursorTrackingState& cursorTracking,
     const nr::app::UiCaptureState& captureState) noexcept
 {
     auto const cursor = presentation.cursorPosition();
@@ -250,6 +253,6 @@ class AppCamera
 
   private:
     nr::renderer::ViewerPerspectiveCamera viewer_{};
-    CursorTrackingState cursorTracking_{};
+    AppCameraCursorTrackingState cursorTracking_{};
 };
 } // namespace nr::app

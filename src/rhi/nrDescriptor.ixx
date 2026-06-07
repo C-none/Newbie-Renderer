@@ -1,7 +1,6 @@
-module;
 export module nr.rhi:descriptor;
-
 import dependency;
+
 import :slang;
 import :resource;
 import std;
@@ -66,63 +65,63 @@ constexpr vk::DeviceSize kWholeBufferRange = std::numeric_limits<vk::DeviceSize>
     return descriptorCount <= 0;
 }
 
-[[nodiscard]] bool isInlineUniformByteCountValid(uint32_t byteCount)
+[[nodiscard]] bool isInlineUniformByteCountValid(std::uint32_t byteCount)
 {
     return byteCount > 0u && (byteCount % 4u) == 0u;
 }
 
 template <typename T, T DefaultValue>
-[[nodiscard]] uint32_t sanitizeCountOrSize(T value, bool invalidIfZero = true)
+[[nodiscard]] std::uint32_t sanitizeCountOrSize(T value, bool invalidIfZero = true)
 {
     if constexpr (std::is_signed_v<T>)
     {
-        if (value <= (invalidIfZero ? 0 : -1) || value > static_cast<T>(std::numeric_limits<uint32_t>::max()))
+        if (value <= (invalidIfZero ? 0 : -1) || value > static_cast<T>(std::numeric_limits<std::uint32_t>::max()))
             return DefaultValue;
     }
     else
     {
-        if ((invalidIfZero && value == 0) || value == std::numeric_limits<T>::max() || value > std::numeric_limits<uint32_t>::max())
+        if ((invalidIfZero && value == 0) || value == std::numeric_limits<T>::max() || value > std::numeric_limits<std::uint32_t>::max())
             return DefaultValue;
     }
-    return static_cast<uint32_t>(value);
+    return static_cast<std::uint32_t>(value);
 }
 
-[[nodiscard]] uint32_t sanitizePushConstantSize(size_t byteSize)
+[[nodiscard]] std::uint32_t sanitizePushConstantSize(std::size_t byteSize)
 {
-    return sanitizeCountOrSize<size_t, 0u>(byteSize);
+    return sanitizeCountOrSize<std::size_t, 0u>(byteSize);
 }
 
-[[nodiscard]] uint32_t sanitizeDescriptorCount(SlangInt descriptorCount)
+[[nodiscard]] std::uint32_t sanitizeDescriptorCount(SlangInt descriptorCount)
 {
     return sanitizeCountOrSize<SlangInt, 1u>(descriptorCount, true);
 }
 
-[[nodiscard]] uint32_t sanitizeRangeOffset(SlangInt rangeOffset)
+[[nodiscard]] std::uint32_t sanitizeRangeOffset(SlangInt rangeOffset)
 {
     return sanitizeCountOrSize<SlangInt, 0u>(rangeOffset, true);
 }
 
-[[nodiscard]] uint32_t sanitizeFieldIndex(SlangInt fieldIndex)
+[[nodiscard]] std::uint32_t sanitizeFieldIndex(SlangInt fieldIndex)
 {
-    if (fieldIndex < 0) return std::numeric_limits<uint32_t>::max();
-    return static_cast<uint32_t>(fieldIndex);
+    if (fieldIndex < 0) return std::numeric_limits<std::uint32_t>::max();
+    return static_cast<std::uint32_t>(fieldIndex);
 }
 
-[[nodiscard]] uint32_t sanitizeElementCount(size_t elementCount)
+[[nodiscard]] std::uint32_t sanitizeElementCount(std::size_t elementCount)
 {
-    return sanitizeCountOrSize<size_t, 1u>(elementCount);
+    return sanitizeCountOrSize<std::size_t, 1u>(elementCount);
 }
 
-[[nodiscard]] std::optional<uint32_t> tryElementCount(size_t elementCount)
+[[nodiscard]] std::optional<std::uint32_t> tryElementCount(std::size_t elementCount)
 {
-    if (elementCount == 0 || elementCount == std::numeric_limits<size_t>::max() || elementCount > std::numeric_limits<uint32_t>::max())
+    if (elementCount == 0 || elementCount == std::numeric_limits<std::size_t>::max() || elementCount > std::numeric_limits<std::uint32_t>::max())
         return std::nullopt;
-    return static_cast<uint32_t>(elementCount);
+    return static_cast<std::uint32_t>(elementCount);
 }
 
-[[nodiscard]] std::optional<size_t> tryLayoutSize(size_t value)
+[[nodiscard]] std::optional<std::size_t> tryLayoutSize(std::size_t value)
 {
-    return value == std::numeric_limits<size_t>::max() ? std::nullopt : std::optional<size_t>(value);
+    return value == std::numeric_limits<std::size_t>::max() ? std::nullopt : std::optional<std::size_t>(value);
 }
 }
 
@@ -131,21 +130,21 @@ export namespace nr::rhi
 
 struct CursorAddress
 {
-    size_t uniformOffset = 0;
-    uint32_t bindingRangeIndex = 0;
-    uint32_t bindingArrayIndex = 0;
+    std::size_t uniformOffset = 0;
+    std::uint32_t bindingRangeIndex = 0;
+    std::uint32_t bindingArrayIndex = 0;
 };
 
 struct DescriptorBindingInfo
 {
-    uint32_t set = 0;
-    uint32_t binding = 0;
-    uint32_t descriptorCount = 1;
+    std::uint32_t set = 0;
+    std::uint32_t binding = 0;
+    std::uint32_t descriptorCount = 1;
     bool isRuntimeSized = false;
     vk::DescriptorType descriptorType = vk::DescriptorType::eStorageBuffer;
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
     vk::DescriptorBindingFlags bindingFlags{};
-    uint32_t bindingRangeIndex = 0;
+    std::uint32_t bindingRangeIndex = 0;
     std::string debugPath;
 
     [[nodiscard]] bool supportsVariableDescriptorCount() const noexcept
@@ -166,16 +165,16 @@ struct DescriptorBindingInfo
 
 struct DescriptorSetLayoutInfo
 {
-    uint32_t set = 0;
+    std::uint32_t set = 0;
     std::vector<DescriptorBindingInfo> bindings;
 };
 
 struct PushConstantRangeInfo
 {
-    uint32_t offset = 0;
-    uint32_t size = 0;
+    std::uint32_t offset = 0;
+    std::uint32_t size = 0;
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
-    uint32_t bindingRangeIndex = 0;
+    std::uint32_t bindingRangeIndex = 0;
     std::string debugPath;
 };
 
@@ -205,7 +204,7 @@ struct AccelerationStructureDescriptorWrite
 
 struct InlineUniformDescriptorWrite
 {
-    std::vector<uint8_t> data;
+    std::vector<std::uint8_t> data;
 };
 
 using DescriptorWritePayload =
@@ -214,7 +213,7 @@ using DescriptorWritePayload =
 struct DescriptorWriteRequest
 {
     DescriptorBindingInfo binding;
-    uint32_t arrayElement = 0;
+    std::uint32_t arrayElement = 0;
     DescriptorWritePayload payload;
 };
 
@@ -223,8 +222,8 @@ class ShaderBindingSet
   public:
     [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(set_); }
     [[nodiscard]] vk::DescriptorSet raw() const noexcept { return set_; }
-    [[nodiscard]] uint32_t setIndex() const noexcept { return setIndex_; }
-    [[nodiscard]] uint32_t descriptorCapacity(const DescriptorBindingInfo &bindingInfo) const noexcept
+    [[nodiscard]] std::uint32_t setIndex() const noexcept { return setIndex_; }
+    [[nodiscard]] std::uint32_t descriptorCapacity(const DescriptorBindingInfo &bindingInfo) const noexcept
     {
         auto it = allocatedDescriptorCountByBinding_.find(bindingInfo.binding);
         if (it != allocatedDescriptorCountByBinding_.end())
@@ -237,8 +236,8 @@ class ShaderBindingSet
   private:
     friend class ShaderBindingPool;
     vk::DescriptorSet set_{};
-    uint32_t setIndex_ = 0;
-    std::map<uint32_t, uint32_t> allocatedDescriptorCountByBinding_{};
+    std::uint32_t setIndex_ = 0;
+    std::map<std::uint32_t, std::uint32_t> allocatedDescriptorCountByBinding_{};
 };
 
 class ShaderDescriptorLayout;
@@ -253,8 +252,8 @@ enum class ShaderBindingPoolPolicy : unsigned
 
 struct ShaderBindingPoolConfig
 {
-    uint32_t maxSets = 64;
-    uint32_t defaultVariableDescriptorCount = 1024;
+    std::uint32_t maxSets = 64;
+    std::uint32_t defaultVariableDescriptorCount = 1024;
     ShaderBindingPoolPolicy policy = ShaderBindingPoolPolicy::FrameReset;
     vk::DescriptorPoolCreateFlags extraFlags{};
 };
@@ -264,7 +263,7 @@ struct DescriptorBindingPolicy
     bool enableUpdateAfterBind = true;
     bool enablePartiallyBound = true;
     bool enableVariableDescriptorCount = true;
-    uint32_t defaultRuntimeDescriptorCount = 1024;
+    std::uint32_t defaultRuntimeDescriptorCount = 1024;
 };
 
 class ShaderBindingPool
@@ -275,7 +274,7 @@ class ShaderBindingPool
         const ShaderDescriptorLayout &descriptorLayout,
         ShaderBindingPoolConfig config = {});
 
-    [[nodiscard]] ShaderBindingSet allocate(vk::DescriptorSetLayout descriptorSetLayout, uint32_t setIndex, std::optional<uint32_t> variableDescriptorCount = std::nullopt) const;
+    [[nodiscard]] ShaderBindingSet allocate(vk::DescriptorSetLayout descriptorSetLayout, std::uint32_t setIndex, std::optional<std::uint32_t> variableDescriptorCount = std::nullopt) const;
 
     void update(const ShaderBindingSet &set, std::span<const DescriptorWriteRequest> writeRequests) const;
 
@@ -284,14 +283,14 @@ class ShaderBindingPool
   private:
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
     vk::raii::DescriptorPool pool_ = {nullptr};
-    std::map<uint32_t, std::map<uint32_t, uint32_t>> variableDescriptorCapBySetAndBinding_{};
+    std::map<std::uint32_t, std::map<std::uint32_t, std::uint32_t>> variableDescriptorCapBySetAndBinding_{};
 };
 
 struct LogicalResourceDescriptorWrite
 {
     // Reflection provides descriptor set/binding/type through DescriptorBindingInfo.
     // This logical payload carries runtime resource identity plus optional per-descriptor state.
-    uint64_t logicalResourceId = 0;
+    std::uint64_t logicalResourceId = 0;
     std::string debugName{};
     vk::ImageLayout imageLayout = vk::ImageLayout::eGeneral;
     vk::Sampler sampler{};
@@ -310,15 +309,15 @@ using ShaderBindingRecordPayload =
 struct ShaderBindingRecord
 {
     DescriptorBindingInfo binding;
-    uint32_t arrayElement = 0;
+    std::uint32_t arrayElement = 0;
     ShaderBindingRecordPayload payload;
 };
 
 struct PushConstantWriteRecord
 {
     PushConstantRangeInfo range;
-    uint32_t offset = 0;
-    std::vector<uint8_t> data;
+    std::uint32_t offset = 0;
+    std::vector<std::uint8_t> data;
 };
 
 class ShaderBindingSnapshot
@@ -329,12 +328,12 @@ class ShaderBindingSnapshot
         return descriptorWrites_.empty() && pushConstantWrites_.empty();
     }
 
-    [[nodiscard]] size_t descriptorWriteCount() const noexcept
+    [[nodiscard]] std::size_t descriptorWriteCount() const noexcept
     {
         return descriptorWrites_.size();
     }
 
-    [[nodiscard]] size_t pushConstantWriteCount() const noexcept
+    [[nodiscard]] std::size_t pushConstantWriteCount() const noexcept
     {
         return pushConstantWrites_.size();
     }
@@ -358,7 +357,7 @@ class ShaderBindingSnapshot
 using LogicalDescriptorResolver = std::function<std::optional<DescriptorWritePayload>(
     const LogicalResourceDescriptorWrite &logicalResource,
     const DescriptorBindingInfo &binding,
-    uint32_t arrayElement)>;
+    std::uint32_t arrayElement)>;
 
 [[nodiscard]] std::vector<DescriptorWriteRequest> resolveDescriptorWriteRequests(
     const ShaderBindingSnapshot &snapshot,
@@ -395,7 +394,7 @@ class ShaderCursor
 
     [[nodiscard]] ShaderCursor field(std::string_view fieldName) const;
 
-    [[nodiscard]] ShaderCursor element(uint32_t index) const;
+    [[nodiscard]] ShaderCursor element(std::uint32_t index) const;
 
     [[nodiscard]] ShaderCursor getPath(std::string_view path) const;
 
@@ -403,19 +402,19 @@ class ShaderCursor
 
     [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange() const;
 
-    [[nodiscard]] std::optional<uint32_t> bindingDescriptorCount() const;
+    [[nodiscard]] std::optional<std::uint32_t> bindingDescriptorCount() const;
 
     [[nodiscard]] bool referencesRuntimeDescriptorArray() const;
 
-    [[nodiscard]] bool setData(std::span<const uint8_t> bytes) const;
+    [[nodiscard]] bool setData(std::span<const std::uint8_t> bytes) const;
 
     template <typename T>
     requires(std::is_trivially_copyable_v<std::remove_cvref_t<T>>)
     [[nodiscard]] bool setData(const T &value) const
     {
         auto bytes = std::as_bytes(std::span{&value, 1});
-        auto *raw = reinterpret_cast<const uint8_t *>(bytes.data());
-        return setData(std::span<const uint8_t>{raw, bytes.size()});
+        auto *raw = reinterpret_cast<const std::uint8_t *>(bytes.data());
+        return setData(std::span<const std::uint8_t>{raw, bytes.size()});
     }
 
     [[nodiscard]] bool setObject(
@@ -456,15 +455,15 @@ class ShaderCursor
 
     [[nodiscard]] std::string typeName() const;
 
-    [[nodiscard]] uint32_t fieldCount() const noexcept;
+    [[nodiscard]] std::uint32_t fieldCount() const noexcept;
 
-    [[nodiscard]] std::optional<uint32_t> elementCount() const;
+    [[nodiscard]] std::optional<std::uint32_t> elementCount() const;
 
-    [[nodiscard]] std::optional<size_t> size(slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
+    [[nodiscard]] std::optional<std::size_t> size(slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
 
-    [[nodiscard]] std::optional<size_t> stride(slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
+    [[nodiscard]] std::optional<std::size_t> stride(slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
 
-    [[nodiscard]] std::optional<int32_t> alignment(slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
+    [[nodiscard]] std::optional<std::int32_t> alignment(slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
 
     [[nodiscard]] std::vector<slang::ParameterCategory> categories() const;
 
@@ -474,7 +473,7 @@ class ShaderCursor
 
     [[nodiscard]] slang::TypeReflection *resourceResultType() const noexcept;
 
-    [[nodiscard]] std::optional<uint32_t> resourceResultElementCount() const;
+    [[nodiscard]] std::optional<std::uint32_t> resourceResultElementCount() const;
 
     // Slang-style convenience accessors:
     // - cursor["field"] -> field lookup
@@ -493,7 +492,7 @@ class ShaderCursor
     requires(std::integral<std::remove_cvref_t<TIndex>> && !std::same_as<std::remove_cvref_t<TIndex>, bool>)
     [[nodiscard]] ShaderCursor operator[](TIndex index) const
     {
-        return element(static_cast<uint32_t>(index));
+        return element(static_cast<std::uint32_t>(index));
     }
 
   private:
@@ -501,8 +500,8 @@ class ShaderCursor
 
     struct SharedBindingState
     {
-        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, ShaderBindingRecord> descriptorWritesByBinding{};
-        std::map<std::tuple<uint32_t, uint32_t>, PushConstantWriteRecord> pushConstantWritesByRangeAndOffset{};
+        std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, ShaderBindingRecord> descriptorWritesByBinding{};
+        std::map<std::tuple<std::uint32_t, std::uint32_t>, PushConstantWriteRecord> pushConstantWritesByRangeAndOffset{};
 
         void writeDescriptor(ShaderBindingRecord record)
         {
@@ -588,7 +587,7 @@ class ShaderCursor
     [[nodiscard]] bool writeDescriptorRecord(
         ShaderBindingRecordPayload payload,
         std::initializer_list<vk::DescriptorType> allowedTypes,
-        std::optional<uint32_t> explicitArrayElement = std::nullopt) const;
+        std::optional<std::uint32_t> explicitArrayElement = std::nullopt) const;
 
     [[nodiscard]] const ShaderDescriptorLayout &layoutRef() const
     {
@@ -640,7 +639,7 @@ class ShaderDescriptorLayout
 
         layout.isValid_ = true;
 
-        uint32_t baseBindingRangeIndex = 0;
+        std::uint32_t baseBindingRangeIndex = 0;
 
         auto collectFromTypeLayout = [&](slang::TypeLayoutReflection *typeLayout, std::optional<SlangStage> stage, std::string_view scopeName) {
             if (!typeLayout)
@@ -656,7 +655,7 @@ class ShaderDescriptorLayout
                 auto setIndex = typeLayout->getBindingRangeDescriptorSetIndex(rangeIndex);
                 auto bindingIndex = typeLayout->getBindingRangeFirstDescriptorRangeIndex(rangeIndex);
                 auto bindingType = typeLayout->getBindingRangeType(rangeIndex);
-                auto bindingRangeIndex = baseBindingRangeIndex + static_cast<uint32_t>(rangeIndex);
+                auto bindingRangeIndex = baseBindingRangeIndex + static_cast<std::uint32_t>(rangeIndex);
 
                 if (bindingType == slang::BindingType::PushConstant)
                 {
@@ -676,9 +675,9 @@ class ShaderDescriptorLayout
                             "Invalid push constant size in '{}::bindingRange[{}]' (size={})",
                             scopeName,
                             rangeIndex,
-                            pushConstantBufferTypeLayout ? pushConstantBufferTypeLayout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) : size_t(0)));
+                            pushConstantBufferTypeLayout ? pushConstantBufferTypeLayout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) : std::size_t(0)));
 
-                    auto key = std::tuple<uint32_t, uint32_t>{0u, pushConstantSize};
+                    auto key = std::tuple<std::uint32_t, std::uint32_t>{0u, pushConstantSize};
                     auto mergedIt = layout.pushConstantByOffsetAndSize_.find(key);
                     PushConstantRangeInfo info{
                         .offset = 0,
@@ -712,15 +711,15 @@ class ShaderDescriptorLayout
                     descriptorType.has_value(),
                     std::format(
                         "Unsupported Slang binding type {} in '{}::bindingRange[{}]'.",
-                        static_cast<int32_t>(bindingType),
+                        static_cast<std::int32_t>(bindingType),
                         scopeName,
                         rangeIndex));
 
                 auto descriptorCountRaw = typeLayout->getBindingRangeBindingCount(rangeIndex);
 
                 DescriptorBindingInfo info{};
-                info.set = static_cast<uint32_t>(setIndex);
-                info.binding = static_cast<uint32_t>(bindingIndex);
+                info.set = static_cast<std::uint32_t>(setIndex);
+                info.binding = static_cast<std::uint32_t>(bindingIndex);
                 info.descriptorCount = detail::sanitizeDescriptorCount(descriptorCountRaw);
                 info.isRuntimeSized = detail::isUnboundedDescriptorCount(descriptorCountRaw);
                 info.descriptorType = *descriptorType;
@@ -751,7 +750,7 @@ class ShaderDescriptorLayout
                 info.bindingRangeIndex = bindingRangeIndex;
                 info.debugPath = std::format("{}::bindingRange[{}]", scopeName, rangeIndex);
 
-                auto key = std::tuple<uint32_t, uint32_t>{info.set, info.binding};
+                auto key = std::tuple<std::uint32_t, std::uint32_t>{info.set, info.binding};
                 auto mergedIt = layout.bindingBySetAndBinding_.find(key);
                 if (mergedIt == layout.bindingBySetAndBinding_.end())
                 {
@@ -806,7 +805,7 @@ class ShaderDescriptorLayout
                     std::format("Shader parameter name conflict detected for '{}'. Program-level and entrypoint-level resources must not share names.", name));
             }
 
-            baseBindingRangeIndex += static_cast<uint32_t>(bindingRangeCount);
+            baseBindingRangeIndex += static_cast<std::uint32_t>(bindingRangeCount);
         };
 
         auto *globalParamsVarLayout = programLayout->getGlobalParamsVarLayout();
@@ -879,7 +878,7 @@ class ShaderDescriptorLayout
         return descriptorSets_;
     }
 
-    [[nodiscard]] std::vector<vk::DescriptorSetLayoutBinding> makeVkSetLayoutBindings(uint32_t setIndex) const
+    [[nodiscard]] std::vector<vk::DescriptorSetLayoutBinding> makeVkSetLayoutBindings(std::uint32_t setIndex) const
     {
         auto it = std::ranges::find_if(descriptorSets_, [setIndex](const DescriptorSetLayoutInfo &setLayout) { return setLayout.set == setIndex; });
         if (it == std::ranges::end(descriptorSets_))
@@ -899,7 +898,7 @@ class ShaderDescriptorLayout
                std::ranges::to<std::vector>();
     }
 
-    [[nodiscard]] std::vector<vk::DescriptorBindingFlags> makeVkSetLayoutBindingFlags(uint32_t setIndex) const
+    [[nodiscard]] std::vector<vk::DescriptorBindingFlags> makeVkSetLayoutBindingFlags(std::uint32_t setIndex) const
     {
         auto it = std::ranges::find_if(descriptorSets_, [setIndex](const DescriptorSetLayoutInfo &setLayout) { return setLayout.set == setIndex; });
         if (it == std::ranges::end(descriptorSets_))
@@ -977,7 +976,7 @@ class ShaderDescriptorLayout
         return it->second;
     }
 
-    [[nodiscard]] std::optional<DescriptorBindingInfo> findBindingByRangeIndex(uint32_t bindingRangeIndex) const
+    [[nodiscard]] std::optional<DescriptorBindingInfo> findBindingByRangeIndex(std::uint32_t bindingRangeIndex) const
     {
         auto it = bindingByRangeIndex_.find(bindingRangeIndex);
         if (it == bindingByRangeIndex_.end())
@@ -989,10 +988,10 @@ class ShaderDescriptorLayout
 
     bool isValid_ = false;
     std::map<std::string, ShaderCursor::RootField> rootFields_;
-    std::map<uint32_t, DescriptorBindingInfo> bindingByRangeIndex_;
-    std::map<uint32_t, PushConstantRangeInfo> pushConstantByRangeIndex_;
-    std::map<std::tuple<uint32_t, uint32_t>, PushConstantRangeInfo> pushConstantByOffsetAndSize_;
-    std::map<std::tuple<uint32_t, uint32_t>, DescriptorBindingInfo> bindingBySetAndBinding_;
+    std::map<std::uint32_t, DescriptorBindingInfo> bindingByRangeIndex_;
+    std::map<std::uint32_t, PushConstantRangeInfo> pushConstantByRangeIndex_;
+    std::map<std::tuple<std::uint32_t, std::uint32_t>, PushConstantRangeInfo> pushConstantByOffsetAndSize_;
+    std::map<std::tuple<std::uint32_t, std::uint32_t>, DescriptorBindingInfo> bindingBySetAndBinding_;
     std::vector<DescriptorSetLayoutInfo> descriptorSets_;
     std::vector<PushConstantRangeInfo> pushConstantRanges_;
 };
@@ -1002,7 +1001,7 @@ class ShaderDescriptorLayout
 [[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
     const CursorPipelineLayout &layout,
     ShaderBindingPool &pool,
-    const std::map<uint32_t, uint32_t> &variableDescriptorCountsBySet);
+    const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
 
 void bindResourcesToCommandBuffer(
     const vk::raii::CommandBuffer& commandBuffer,
@@ -1063,7 +1062,7 @@ void pushConstantsToCommandBuffer(
     }
 
     auto fieldIndex = detail::sanitizeFieldIndex(typeLayout_->findFieldIndexByName(fieldName.data(), fieldName.data() + fieldName.size()));
-    if (fieldIndex == std::numeric_limits<uint32_t>::max())
+    if (fieldIndex == std::numeric_limits<std::uint32_t>::max())
     {
         return {};
     }
@@ -1089,7 +1088,7 @@ void pushConstantsToCommandBuffer(
     return next;
 }
 
-[[nodiscard]] ShaderCursor ShaderCursor::element(uint32_t index) const
+[[nodiscard]] ShaderCursor ShaderCursor::element(std::uint32_t index) const
 {
     if (!valid() || isRoot_)
     {
@@ -1166,7 +1165,7 @@ void pushConstantsToCommandBuffer(
 
     ShaderCursor next = *this;
     next.typeLayout_ = elementTypeLayout;
-    next.address_.uniformOffset += static_cast<size_t>(index) * typeLayout_->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM);
+    next.address_.uniformOffset += static_cast<std::size_t>(index) * typeLayout_->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM);
     next.address_.bindingArrayIndex = next.address_.bindingArrayIndex * detail::sanitizeElementCount(typeLayout_->getElementCount()) + index;
     next.debugPath_ = std::format("{}[{}]", debugPath_, index);
     return next;
@@ -1175,7 +1174,7 @@ void pushConstantsToCommandBuffer(
 [[nodiscard]] ShaderCursor ShaderCursor::getPath(std::string_view path) const
 {
     ShaderCursor cursor = *this;
-    size_t tokenBegin = 0;
+    std::size_t tokenBegin = 0;
 
     while (tokenBegin < path.size())
     {
@@ -1194,7 +1193,7 @@ void pushConstantsToCommandBuffer(
             }
 
             auto indexText = path.substr(tokenBegin + 1, tokenEnd - tokenBegin - 1);
-            uint32_t index = 0;
+            std::uint32_t index = 0;
             auto indexParse = std::from_chars(indexText.data(), indexText.data() + indexText.size(), index);
             if (indexParse.ec != std::errc{})
             {
@@ -1247,7 +1246,7 @@ void pushConstantsToCommandBuffer(
     return layoutRef().pushConstantRange(*this);
 }
 
-[[nodiscard]] std::optional<uint32_t> ShaderCursor::bindingDescriptorCount() const
+[[nodiscard]] std::optional<std::uint32_t> ShaderCursor::bindingDescriptorCount() const
 {
     auto bindingInfo = descriptorBinding();
     if (!bindingInfo.has_value())
@@ -1266,7 +1265,7 @@ void pushConstantsToCommandBuffer(
 [[nodiscard]] bool ShaderCursor::writeDescriptorRecord(
     ShaderBindingRecordPayload payload,
     std::initializer_list<vk::DescriptorType> allowedTypes,
-    std::optional<uint32_t> explicitArrayElement) const
+    std::optional<std::uint32_t> explicitArrayElement) const
 {
     if (!valid() || isRoot_ || !bindingState_)
     {
@@ -1288,28 +1287,28 @@ void pushConstantsToCommandBuffer(
     return true;
 }
 
-[[nodiscard]] bool ShaderCursor::setData(std::span<const uint8_t> bytes) const
+[[nodiscard]] bool ShaderCursor::setData(std::span<const std::uint8_t> bytes) const
 {
     if (!valid() || isRoot_ || !bindingState_ || bytes.empty())
     {
         return false;
     }
 
-    auto byteCount = static_cast<uint32_t>(bytes.size());
-    auto copiedBytes = std::vector<uint8_t>{};
+    auto byteCount = static_cast<std::uint32_t>(bytes.size());
+    auto copiedBytes = std::vector<std::uint8_t>{};
     copiedBytes.assign(bytes.begin(), bytes.end());
 
     if (auto pushRange = pushConstantRange(); pushRange.has_value())
     {
         nrAssert(
-            address_.uniformOffset <= std::numeric_limits<uint32_t>::max(),
+            address_.uniformOffset <= std::numeric_limits<std::uint32_t>::max(),
             std::format("Push-constant cursor offset exceeds uint32 range (offset={}).", address_.uniformOffset));
 
-        auto offset = static_cast<uint32_t>(address_.uniformOffset);
-        auto rangeBegin = static_cast<uint64_t>(pushRange->offset);
-        auto rangeEnd = rangeBegin + static_cast<uint64_t>(pushRange->size);
-        auto writeBegin = static_cast<uint64_t>(offset);
-        auto writeEnd = writeBegin + static_cast<uint64_t>(byteCount);
+        auto offset = static_cast<std::uint32_t>(address_.uniformOffset);
+        auto rangeBegin = static_cast<std::uint64_t>(pushRange->offset);
+        auto rangeEnd = rangeBegin + static_cast<std::uint64_t>(pushRange->size);
+        auto writeBegin = static_cast<std::uint64_t>(offset);
+        auto writeEnd = writeBegin + static_cast<std::uint64_t>(byteCount);
 
         nrAssert(
             writeBegin >= rangeBegin && writeEnd <= rangeEnd,
@@ -1340,10 +1339,10 @@ void pushConstantsToCommandBuffer(
         std::format("Inline uniform write size must be > 0 and multiple of 4 (size={}).", byteCount));
 
     nrAssert(
-        address_.uniformOffset <= std::numeric_limits<uint32_t>::max(),
+        address_.uniformOffset <= std::numeric_limits<std::uint32_t>::max(),
         std::format("Inline uniform offset exceeds uint32 range (offset={}).", address_.uniformOffset));
 
-    auto arrayElement = static_cast<uint32_t>(address_.uniformOffset);
+    auto arrayElement = static_cast<std::uint32_t>(address_.uniformOffset);
     nrAssert(
         (arrayElement % 4u) == 0u,
         std::format(
@@ -1489,16 +1488,16 @@ void ShaderCursor::clearSnapshot() const
     return std::string(type->getName());
 }
 
-[[nodiscard]] uint32_t ShaderCursor::fieldCount() const noexcept
+[[nodiscard]] std::uint32_t ShaderCursor::fieldCount() const noexcept
 {
     if (!valid() || isRoot_)
     {
         return 0u;
     }
-    return static_cast<uint32_t>(std::max<SlangInt>(0, typeLayout_->getFieldCount()));
+    return static_cast<std::uint32_t>(std::max<SlangInt>(0, typeLayout_->getFieldCount()));
 }
 
-[[nodiscard]] std::optional<uint32_t> ShaderCursor::elementCount() const
+[[nodiscard]] std::optional<std::uint32_t> ShaderCursor::elementCount() const
 {
     if (!valid() || isRoot_)
     {
@@ -1535,7 +1534,7 @@ void ShaderCursor::clearSnapshot() const
     return bindingInfo->descriptorCount;
 }
 
-[[nodiscard]] std::optional<size_t> ShaderCursor::size(slang::ParameterCategory category) const
+[[nodiscard]] std::optional<std::size_t> ShaderCursor::size(slang::ParameterCategory category) const
 {
     if (!valid() || isRoot_)
     {
@@ -1544,7 +1543,7 @@ void ShaderCursor::clearSnapshot() const
     return detail::tryLayoutSize(typeLayout_->getSize(category));
 }
 
-[[nodiscard]] std::optional<size_t> ShaderCursor::stride(slang::ParameterCategory category) const
+[[nodiscard]] std::optional<std::size_t> ShaderCursor::stride(slang::ParameterCategory category) const
 {
     if (!valid() || isRoot_)
     {
@@ -1553,7 +1552,7 @@ void ShaderCursor::clearSnapshot() const
     return detail::tryLayoutSize(typeLayout_->getStride(category));
 }
 
-[[nodiscard]] std::optional<int32_t> ShaderCursor::alignment(slang::ParameterCategory category) const
+[[nodiscard]] std::optional<std::int32_t> ShaderCursor::alignment(slang::ParameterCategory category) const
 {
     if (!valid() || isRoot_)
     {
@@ -1611,7 +1610,7 @@ void ShaderCursor::clearSnapshot() const
     return typeLayout_->getResourceResultType();
 }
 
-[[nodiscard]] std::optional<uint32_t> ShaderCursor::resourceResultElementCount() const
+[[nodiscard]] std::optional<std::uint32_t> ShaderCursor::resourceResultElementCount() const
 {
     auto *resultType = resourceResultType();
     if (!resultType)
@@ -1638,12 +1637,12 @@ void ShaderCursor::clearSnapshot() const
 
     const auto maxSets = std::max(config.maxSets, 1u);
 
-    auto descriptorCounts = std::map<vk::DescriptorType, uint32_t>{};
-    uint32_t inlineUniformBindingCount = 0;
+    auto descriptorCounts = std::map<vk::DescriptorType, std::uint32_t>{};
+    std::uint32_t inlineUniformBindingCount = 0;
     std::ranges::for_each(descriptorLayout.descriptorSets(), [&](const DescriptorSetLayoutInfo &setInfo) {
         std::ranges::for_each(setInfo.bindings, [&](const DescriptorBindingInfo &bindingInfo) {
             const bool isVariableCount = bindingInfo.supportsVariableDescriptorCount();
-            const uint32_t effectiveDescriptorCount = isVariableCount ? std::max(config.defaultVariableDescriptorCount, 1u) : bindingInfo.descriptorCount;
+            const std::uint32_t effectiveDescriptorCount = isVariableCount ? std::max(config.defaultVariableDescriptorCount, 1u) : bindingInfo.descriptorCount;
             descriptorCounts[bindingInfo.descriptorType] += effectiveDescriptorCount * maxSets;
             if (isVariableCount)
             {
@@ -1682,7 +1681,7 @@ void ShaderCursor::clearSnapshot() const
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = flags;
     poolInfo.maxSets = maxSets;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
 
     vk::DescriptorPoolInlineUniformBlockCreateInfo inlineUniformPoolInfo{};
@@ -1696,7 +1695,7 @@ void ShaderCursor::clearSnapshot() const
     return pool;
 }
 
-[[nodiscard]] ShaderBindingSet ShaderBindingPool::allocate(vk::DescriptorSetLayout descriptorSetLayout, uint32_t setIndex, std::optional<uint32_t> variableDescriptorCount) const
+[[nodiscard]] ShaderBindingSet ShaderBindingPool::allocate(vk::DescriptorSetLayout descriptorSetLayout, std::uint32_t setIndex, std::optional<std::uint32_t> variableDescriptorCount) const
 {
     nrAssert(device_.has_value(), "ShaderBindingPool::allocate requires an owning device reference.");
 
@@ -1836,7 +1835,7 @@ void ShaderBindingPool::update(const ShaderBindingSet &set, std::span<const Desc
                             request.binding.binding,
                             vk::to_string(write.descriptorType)));
 
-                    auto byteCount = static_cast<uint32_t>(payload.data.size());
+                    auto byteCount = static_cast<std::uint32_t>(payload.data.size());
                     nrAssert(
                         detail::isInlineUniformByteCountValid(byteCount),
                         std::format(

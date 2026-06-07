@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:type;
 import std;
 
@@ -27,7 +26,7 @@ export namespace nr::rhi
  * Note: This is a low-level enumeration for hardware capability detection.
  * For runtime queue access, use QueueRole instead.
  */
-enum class QueueFamilyKind : size_t
+enum class QueueFamilyKind : std::size_t
 {
     graphics,
     compute,

@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:commandBatch;
 import dependency;
 import std;
@@ -29,8 +28,8 @@ public:
     struct SemaphoreSyncPoint {
         vk::Semaphore semaphore = vk::Semaphore{};
         vk::PipelineStageFlags2 stageMask = vk::PipelineStageFlagBits2::eAllCommands;
-        uint64_t value = 0;
-        uint32_t deviceIndex = 0;
+        std::uint64_t value = 0;
+        std::uint32_t deviceIndex = 0;
     };
 
     struct SubmitInfo2Packet {
@@ -102,7 +101,7 @@ public:
         * VK_SHARING_MODE_EXCLUSIVE resources, and does not perform image layout
         * transitions.
      */
-    void addWait(const vk::raii::Semaphore& semaphore, vk::PipelineStageFlags2 stage, uint64_t value = 0, uint32_t deviceIndex = 0) {
+    void addWait(const vk::raii::Semaphore& semaphore, vk::PipelineStageFlags2 stage, std::uint64_t value = 0, std::uint32_t deviceIndex = 0) {
         waitPoints_.push_back(SemaphoreSyncPoint{
             .semaphore = *semaphore,
             .stageMask = stage,
@@ -114,7 +113,7 @@ public:
     /**
      * @brief Add a raw wait semaphore sync point.
      */
-    void addWait(vk::Semaphore semaphore, vk::PipelineStageFlags2 stage, uint64_t value = 0, uint32_t deviceIndex = 0) {
+    void addWait(vk::Semaphore semaphore, vk::PipelineStageFlags2 stage, std::uint64_t value = 0, std::uint32_t deviceIndex = 0) {
         waitPoints_.push_back(SemaphoreSyncPoint{
             .semaphore = semaphore,
             .stageMask = stage,
@@ -133,7 +132,7 @@ public:
         * inter-queue execution+memory dependency. For timeline semaphores, caller
         * must keep signaled values strictly increasing across submissions.
      */
-    void addSignal(const vk::raii::Semaphore& semaphore, uint64_t value = 0, uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
+    void addSignal(const vk::raii::Semaphore& semaphore, std::uint64_t value = 0, std::uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
         signalPoints_.push_back(SemaphoreSyncPoint{
             .semaphore = *semaphore,
             .stageMask = stage,
@@ -145,7 +144,7 @@ public:
     /**
      * @brief Add a raw signal semaphore sync point.
      */
-    void addSignal(vk::Semaphore semaphore, uint64_t value = 0, uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
+    void addSignal(vk::Semaphore semaphore, std::uint64_t value = 0, std::uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
         signalPoints_.push_back(SemaphoreSyncPoint{
             .semaphore = semaphore,
             .stageMask = stage,
@@ -173,7 +172,7 @@ public:
     /**
      * @brief Get number of command buffers in batch
      */
-    [[nodiscard]] size_t commandBufferCount() const noexcept { return commandBuffers_.size(); }
+    [[nodiscard]] std::size_t commandBufferCount() const noexcept { return commandBuffers_.size(); }
 
     /**
     * @brief Build a SubmitInfo2 packet from this batch.
@@ -215,11 +214,11 @@ public:
         });
 
         packet.submitInfo = vk::SubmitInfo2{};
-        packet.submitInfo.waitSemaphoreInfoCount = static_cast<uint32_t>(packet.waitInfos.size());
+        packet.submitInfo.waitSemaphoreInfoCount = static_cast<std::uint32_t>(packet.waitInfos.size());
         packet.submitInfo.pWaitSemaphoreInfos = packet.waitInfos.data();
-        packet.submitInfo.commandBufferInfoCount = static_cast<uint32_t>(packet.commandBufferInfos.size());
+        packet.submitInfo.commandBufferInfoCount = static_cast<std::uint32_t>(packet.commandBufferInfos.size());
         packet.submitInfo.pCommandBufferInfos = packet.commandBufferInfos.data();
-        packet.submitInfo.signalSemaphoreInfoCount = static_cast<uint32_t>(packet.signalInfos.size());
+        packet.submitInfo.signalSemaphoreInfoCount = static_cast<std::uint32_t>(packet.signalInfos.size());
         packet.submitInfo.pSignalSemaphoreInfos = packet.signalInfos.data();
 
         return packet;
@@ -238,7 +237,7 @@ public:
     /**
      * @brief Builder-style: add wait semaphore
      */
-    CommandBatch& withWait(const vk::raii::Semaphore& sem, vk::PipelineStageFlags2 stage, uint64_t value = 0, uint32_t deviceIndex = 0) {
+    CommandBatch& withWait(const vk::raii::Semaphore& sem, vk::PipelineStageFlags2 stage, std::uint64_t value = 0, std::uint32_t deviceIndex = 0) {
         addWait(sem, stage, value, deviceIndex);
         return *this;
     }
@@ -246,7 +245,7 @@ public:
     /**
      * @brief Builder-style: add signal semaphore
      */
-    CommandBatch& withSignal(const vk::raii::Semaphore& sem, uint64_t value = 0, uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
+    CommandBatch& withSignal(const vk::raii::Semaphore& sem, std::uint64_t value = 0, std::uint32_t deviceIndex = 0, vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands) {
         addSignal(sem, value, deviceIndex, stage);
         return *this;
     }

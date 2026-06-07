@@ -1,4 +1,3 @@
-module;
 export module nr.resource:handle;
 import std;
 import :type;

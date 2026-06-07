@@ -1,7 +1,6 @@
-module;
 export module nr.load:assimp;
-
 import dependency;
+
 import :type;
 import :backend;
 import :decode;
@@ -143,24 +142,24 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     return std::string{rawView};
 }
 
-[[nodiscard]] inline std::optional<uint32_t> parseEmbeddedTextureIndex(std::string_view reference)
+[[nodiscard]] inline std::optional<std::uint32_t> parseEmbeddedTextureIndex(std::string_view reference)
 {
     if (reference.size() < 2 || reference.front() != '*')
     {
         return std::nullopt;
     }
 
-    uint64_t value = 0;
+    std::uint64_t value = 0;
     auto digits = reference.substr(1);
     auto *first = digits.data();
     auto *last = digits.data() + digits.size();
     auto [parsedEnd, parseError] = std::from_chars(first, last, value);
-    if (parseError != std::errc{} || parsedEnd != last || value > std::numeric_limits<uint32_t>::max())
+    if (parseError != std::errc{} || parsedEnd != last || value > std::numeric_limits<std::uint32_t>::max())
     {
         return std::nullopt;
     }
 
-    return static_cast<uint32_t>(value);
+    return static_cast<std::uint32_t>(value);
 }
 
 [[nodiscard]] inline std::array<float, 16> toMatrix(const aiMatrix4x4 &matrix)
@@ -207,7 +206,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
 }
 
 [[nodiscard]] inline std::optional<LoadError> appendEmbeddedTexture(const aiTexture &texture,
-                                                                     uint32_t textureIndex,
+                                                                     std::uint32_t textureIndex,
                                                                      SceneAsset &scene)
 {
     TextureAsset textureAsset{};
@@ -215,7 +214,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
 
     if (texture.mHeight == 0)
     {
-        auto byteCount = static_cast<size_t>(texture.mWidth);
+        auto byteCount = static_cast<std::size_t>(texture.mWidth);
         auto const *byteSource = reinterpret_cast<const std::byte *>(texture.pcData);
         if (byteCount > 0 && byteSource == nullptr)
         {
@@ -240,8 +239,8 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
         return std::nullopt;
     }
 
-    auto width = static_cast<size_t>(texture.mWidth);
-    auto height = static_cast<size_t>(texture.mHeight);
+    auto width = static_cast<std::size_t>(texture.mWidth);
+    auto height = static_cast<std::size_t>(texture.mHeight);
     if (width == 0 || height == 0 || texture.pcData == nullptr)
     {
         return makeLoadError(
@@ -252,7 +251,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     }
 
     auto texelCount = width * height;
-    if (texelCount > std::numeric_limits<size_t>::max() / 4)
+    if (texelCount > std::numeric_limits<std::size_t>::max() / 4)
     {
         return makeLoadError(
             LoadErrorCode::textureDataUnsupported,
@@ -262,11 +261,11 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     }
 
     EmbeddedRawTexture raw{};
-    raw.width = static_cast<uint32_t>(width);
-    raw.height = static_cast<uint32_t>(height);
+    raw.width = static_cast<std::uint32_t>(width);
+    raw.height = static_cast<std::uint32_t>(height);
     raw.rgba8.resize(texelCount * 4);
 
-    for (auto texelIndex : std::views::iota(size_t{0}, texelCount))
+    for (auto texelIndex : std::views::iota(std::size_t{0}, texelCount))
     {
         auto const &texel = texture.pcData[texelIndex];
         auto const byteBase = texelIndex * 4;
@@ -309,7 +308,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     return std::nullopt;
 }
 
-[[nodiscard]] inline uint32_t textureIndexFromKey(const std::map<std::string, uint32_t> &indexByKey,
+[[nodiscard]] inline std::uint32_t textureIndexFromKey(const std::map<std::string, std::uint32_t> &indexByKey,
                                                   std::string_view key)
 {
     auto found = indexByKey.find(std::string{key});
@@ -324,8 +323,8 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
                                                               const std::filesystem::path &baseDirectory,
                                                               SceneAsset &scene)
 {
-    auto textureIndexByKey = std::map<std::string, uint32_t>{};
-    for (auto textureIndex : std::views::iota(uint32_t{0}, static_cast<uint32_t>(scene.textures.size())))
+    auto textureIndexByKey = std::map<std::string, std::uint32_t>{};
+    for (auto textureIndex : std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(scene.textures.size())))
     {
         textureIndexByKey.emplace(scene.textures[textureIndex].key, textureIndex);
     }
@@ -433,14 +432,14 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
             if (materialAsset.specularFactor.has_value()  && materialAsset.glossinessFactor.has_value())
             {
                 flags = static_cast<MaterialWorkflowFlags>(
-                    static_cast<uint8_t>(flags) | static_cast<uint8_t>(MaterialWorkflowFlags::specularGlossiness)
+                    static_cast<std::uint8_t>(flags) | static_cast<std::uint8_t>(MaterialWorkflowFlags::specularGlossiness)
                 );
             }
             
             if (materialAsset.anisotropyFactor.has_value() && *materialAsset.anisotropyFactor > 0.0f)
             {
                 flags = static_cast<MaterialWorkflowFlags>(
-                    static_cast<uint8_t>(flags) | static_cast<uint8_t>(MaterialWorkflowFlags::anisotropy)
+                    static_cast<std::uint8_t>(flags) | static_cast<std::uint8_t>(MaterialWorkflowFlags::anisotropy)
                 );
             }
             
@@ -471,7 +470,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
                     continue;
                 }
 
-                uint32_t resolvedTextureIndex = invalidIndex;
+                std::uint32_t resolvedTextureIndex = invalidIndex;
                 auto embeddedIndex = parseEmbeddedTextureIndex(rawTexturePath);
                 if (embeddedIndex.has_value())
                 {
@@ -499,7 +498,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
                         externalTexture.payloadKind = TexturePayloadKind::externalReference;
 
                         scene.textures.push_back(std::move(externalTexture));
-                        resolvedTextureIndex = static_cast<uint32_t>(scene.textures.size() - 1);
+                        resolvedTextureIndex = static_cast<std::uint32_t>(scene.textures.size() - 1);
                         textureIndexByKey.emplace(normalizedKey, resolvedTextureIndex);
                     }
                 }
@@ -592,7 +591,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
             meshAsset.vertices.push_back(vertex);
         }
 
-        meshAsset.indices.reserve(static_cast<size_t>(mesh->mNumFaces) * 3u);
+        meshAsset.indices.reserve(static_cast<std::size_t>(mesh->mNumFaces) * 3u);
         auto faceIndices = std::views::iota(0u, mesh->mNumFaces);
         for (auto faceIndex : faceIndices)
         {
@@ -624,11 +623,11 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     return std::nullopt;
 }
 
-[[nodiscard]] inline uint32_t appendNodeRecursive(const aiNode &node,
-                                                  uint32_t parentIndex,
+[[nodiscard]] inline std::uint32_t appendNodeRecursive(const aiNode &node,
+                                                  std::uint32_t parentIndex,
                                                   SceneAsset &scene)
 {
-    auto nodeIndex = static_cast<uint32_t>(scene.nodes.size());
+    auto nodeIndex = static_cast<std::uint32_t>(scene.nodes.size());
 
     NodeAsset nodeAsset{};
     nodeAsset.name = toStdString(node.mName);
@@ -679,11 +678,11 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     return std::nullopt;
 }
 
-[[nodiscard]] inline std::map<std::string, std::vector<uint32_t>> buildNodeIndicesByName(const SceneAsset &scene)
+[[nodiscard]] inline std::map<std::string, std::vector<std::uint32_t>> buildNodeIndicesByName(const SceneAsset &scene)
 {
-    auto nodeIndicesByName = std::map<std::string, std::vector<uint32_t>>{};
+    auto nodeIndicesByName = std::map<std::string, std::vector<std::uint32_t>>{};
 
-    auto nodeIndices = std::views::iota(uint32_t{0}, static_cast<uint32_t>(scene.nodes.size()));
+    auto nodeIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(scene.nodes.size()));
     for (auto nodeIndex : nodeIndices)
     {
         auto const &node = scene.nodes[nodeIndex];
@@ -699,13 +698,13 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
 }
 
 [[nodiscard]] inline std::optional<LoadError> resolveNodeIndexByName(
-    const std::map<std::string, std::vector<uint32_t>> &nodeIndicesByName,
+    const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
     std::string_view nodeName,
     std::string_view assetKind,
-    uint32_t assetIndex,
+    std::uint32_t assetIndex,
     bool strict,
     const SceneAsset &scene,
-    uint32_t &resolvedNodeIndex)
+    std::uint32_t &resolvedNodeIndex)
 {
     resolvedNodeIndex = invalidIndex;
     if (nodeName.empty())
@@ -749,7 +748,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
 
 [[nodiscard]] inline std::optional<LoadError> appendCameras(
     const aiScene &assimpScene,
-    const std::map<std::string, std::vector<uint32_t>> &nodeIndicesByName,
+    const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
     SceneAsset &scene,
     bool strict)
 {
@@ -800,7 +799,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
 
 [[nodiscard]] inline std::optional<LoadError> appendLights(
     const aiScene &assimpScene,
-    const std::map<std::string, std::vector<uint32_t>> &nodeIndicesByName,
+    const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
     SceneAsset &scene,
     bool strict)
 {
@@ -822,7 +821,7 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
         LightAsset lightAsset{};
         lightAsset.name = sourceNodeName.empty() ? std::format("light_{}", lightIndex) : sourceNodeName;
         lightAsset.sourceNodeName = sourceNodeName;
-        lightAsset.typeRaw = static_cast<uint32_t>(light->mType);
+        lightAsset.typeRaw = static_cast<std::uint32_t>(light->mType);
         lightAsset.type = lightSourceTypeName(light->mType);
         lightAsset.position = toVector3(light->mPosition);
         lightAsset.direction = toVector3(light->mDirection);
@@ -855,27 +854,27 @@ inline constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     return std::nullopt;
 }
 
-[[nodiscard]] inline uint32_t totalVertexCount(const SceneAsset &scene)
+[[nodiscard]] inline std::uint32_t totalVertexCount(const SceneAsset &scene)
 {
     auto vertexSizes = scene.meshes | std::views::transform([](const MeshAsset &mesh) {
-        return static_cast<uint64_t>(mesh.vertices.size());
+        return static_cast<std::uint64_t>(mesh.vertices.size());
     });
-    auto total = std::accumulate(vertexSizes.begin(), vertexSizes.end(), uint64_t{0});
-    return static_cast<uint32_t>(std::min<uint64_t>(total, std::numeric_limits<uint32_t>::max()));
+    auto total = std::accumulate(vertexSizes.begin(), vertexSizes.end(), std::uint64_t{0});
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(total, std::numeric_limits<std::uint32_t>::max()));
 }
 
-[[nodiscard]] inline uint32_t totalIndexCount(const SceneAsset &scene)
+[[nodiscard]] inline std::uint32_t totalIndexCount(const SceneAsset &scene)
 {
     auto indexSizes = scene.meshes | std::views::transform([](const MeshAsset &mesh) {
-        return static_cast<uint64_t>(mesh.indices.size());
+        return static_cast<std::uint64_t>(mesh.indices.size());
     });
-    auto total = std::accumulate(indexSizes.begin(), indexSizes.end(), uint64_t{0});
-    return static_cast<uint32_t>(std::min<uint64_t>(total, std::numeric_limits<uint32_t>::max()));
+    auto total = std::accumulate(indexSizes.begin(), indexSizes.end(), std::uint64_t{0});
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(total, std::numeric_limits<std::uint32_t>::max()));
 }
 
 [[nodiscard]] inline aiPostProcessSteps buildPostProcessFlags(const SceneLoadRequest &request)
 {
-    uint32_t flags = aiProcess_SortByPType;
+    std::uint32_t flags = aiProcess_SortByPType;
 
     if (request.triangulate)
     {
@@ -1023,12 +1022,12 @@ struct AssimpSceneImporter : SceneImporterBackendBase<AssimpSceneImporter>
             return SceneImportResult{std::unexpected(std::move(*error))};
         }
 
-        scene.stats.nodeCount = static_cast<uint32_t>(scene.nodes.size());
-        scene.stats.meshCount = static_cast<uint32_t>(scene.meshes.size());
-        scene.stats.materialCount = static_cast<uint32_t>(scene.materials.size());
-        scene.stats.textureCount = static_cast<uint32_t>(scene.textures.size());
-        scene.stats.cameraCount = static_cast<uint32_t>(scene.cameras.size());
-        scene.stats.lightCount = static_cast<uint32_t>(scene.lights.size());
+        scene.stats.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
+        scene.stats.meshCount = static_cast<std::uint32_t>(scene.meshes.size());
+        scene.stats.materialCount = static_cast<std::uint32_t>(scene.materials.size());
+        scene.stats.textureCount = static_cast<std::uint32_t>(scene.textures.size());
+        scene.stats.cameraCount = static_cast<std::uint32_t>(scene.cameras.size());
+        scene.stats.lightCount = static_cast<std::uint32_t>(scene.lights.size());
         scene.stats.vertexCount = detail::totalVertexCount(scene);
         scene.stats.indexCount = detail::totalIndexCount(scene);
 

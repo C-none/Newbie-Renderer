@@ -1,4 +1,3 @@
-module;
 export module nr.renderer:renderGraphBuilder;
 
 import nr.utils;
@@ -6,10 +5,13 @@ import std;
 import :renderGraphType;
 import :rendererType;
 
+export namespace nr::renderer
+{
+class RenderGraphBuilder;
+}
+
 namespace nr::renderer
 {
-// Forward declaration for RenderGraphBuilder
-class RenderGraphBuilder;
 
 // Internal implementation class - not part of the public API
 class RenderGraphNodeContext

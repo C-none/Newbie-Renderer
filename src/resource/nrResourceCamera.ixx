@@ -1,7 +1,6 @@
-module;
 export module nr.resource:camera;
-
 import dependency;
+
 import std;
 import :type;
 

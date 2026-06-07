@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:queue;
 import dependency;
 import std;
@@ -36,7 +35,7 @@ class GpuQueue
      * @param queueFamilyIndex Queue family index
      * @param type Logical queue role classification
      */
-    GpuQueue(const vk::raii::Device& device, uint32_t queueFamilyIndex, QueueRole type) 
+    GpuQueue(const vk::raii::Device& device, std::uint32_t queueFamilyIndex, QueueRole type) 
         : queue_(device.getQueue(queueFamilyIndex, queueIndex_))
         , queueFamilyIndex_(queueFamilyIndex)
         , type_(type)
@@ -70,7 +69,7 @@ class GpuQueue
         };
 
         vk::SubmitInfo2 submitInfo{};
-        submitInfo.commandBufferInfoCount = static_cast<uint32_t>(commandBufferInfos.size());
+        submitInfo.commandBufferInfoCount = static_cast<std::uint32_t>(commandBufferInfos.size());
         submitInfo.pCommandBufferInfos = commandBufferInfos.data();
 
         queue_.submit2(submitInfo, fence ? *fence.value().get() : vk::Fence{});
@@ -127,7 +126,7 @@ class GpuQueue
     /**
      * @brief Get the queue family index
      */
-    [[nodiscard]] uint32_t queueFamilyIndex() const noexcept
+    [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept
     {
         return queueFamilyIndex_;
     }
@@ -149,9 +148,9 @@ class GpuQueue
     }
 
   private:
-    uint32_t queueIndex_ = 0;
+    std::uint32_t queueIndex_ = 0;
     vk::raii::Queue queue_ = {nullptr};
-    uint32_t queueFamilyIndex_ = 0;
+    std::uint32_t queueFamilyIndex_ = 0;
     QueueRole type_ = QueueRole::Graphics;
 };
 

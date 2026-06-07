@@ -1,7 +1,6 @@
-module;
 export module nr.resource:particle;
-
 import dependency;
+
 import std;
 import :geometry;
 

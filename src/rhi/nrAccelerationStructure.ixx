@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:accelerationStructure;
 import dependency;
 import nr.utils;
@@ -20,7 +19,7 @@ struct BlasGeometryLayout
     vk::Format vertexFormat = vk::Format::eR32G32B32Sfloat;
     vk::DeviceSize vertexStride = 0;
     vk::IndexType indexType = vk::IndexType::eUint32;
-    uint32_t maxVertex = 0;
+    std::uint32_t maxVertex = 0;
     vk::GeometryFlagsKHR geometryFlags{};
 };
 
@@ -29,15 +28,15 @@ struct BlasGeometryInput
     vk::DeviceAddress vertexAddress = 0;
     vk::DeviceAddress indexAddress = 0;
     vk::DeviceAddress transformAddress = 0;
-    uint32_t primitiveCount = 0;
-    uint32_t firstVertex = 0;
-    uint32_t primitiveOffset = 0;
+    std::uint32_t primitiveCount = 0;
+    std::uint32_t firstVertex = 0;
+    std::uint32_t primitiveOffset = 0;
 };
 
 struct TlasBuildInput
 {
     vk::DeviceAddress instancesAddress = 0;
-    uint32_t instanceCount = 0;
+    std::uint32_t instanceCount = 0;
     bool arrayOfPointers = false;
 };
 
@@ -62,10 +61,10 @@ struct AsSubmitIntent
     // - If the same timeline semaphore is both waited and signaled in one submit,
     //   signalValue must be strictly greater than waitValue.
     vk::Semaphore waitSemaphore{};
-    uint64_t waitValue = 0;
+    std::uint64_t waitValue = 0;
     vk::PipelineStageFlags2 waitStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR;
     vk::Semaphore signalSemaphore{};
-    uint64_t signalValue = 0;
+    std::uint64_t signalValue = 0;
     vk::PipelineStageFlags2 signalStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR;
 };
 
@@ -84,9 +83,9 @@ struct AsBuildLimits
     // validateAsBuildInputs()/recordBuild*() so caller-owned scratch addresses
     // satisfy Vulkan alignment requirements.
     vk::DeviceSize minScratchAlignment = 1;
-    uint64_t maxGeometryCount = 0;
-    uint64_t maxPrimitiveCount = 0;
-    uint64_t maxInstanceCount = 0;
+    std::uint64_t maxGeometryCount = 0;
+    std::uint64_t maxPrimitiveCount = 0;
+    std::uint64_t maxInstanceCount = 0;
 };
 
 using AsDiagnostics = ValidationDiagnostics;
@@ -137,8 +136,8 @@ class AccelerationStructureResource
                 vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
                 objectNameInfo.objectType = vk::ObjectType::eAccelerationStructureKHR;
                 const auto rawHandle = static_cast<VkAccelerationStructureKHR>(*result.handle_);
-                static_assert(sizeof(rawHandle) == sizeof(uint64_t), "VkAccelerationStructureKHR handle size must match uint64_t for debug naming.");
-                objectNameInfo.objectHandle = std::bit_cast<uint64_t>(rawHandle);
+                static_assert(sizeof(rawHandle) == sizeof(std::uint64_t), "VkAccelerationStructureKHR handle size must match std::uint64_t for debug naming.");
+                objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
                 objectNameInfo.pObjectName = result.name_.c_str();
                 try
                 {
@@ -155,7 +154,7 @@ class AccelerationStructureResource
 
     [[nodiscard]] bool valid() const noexcept
     {
-        return handle_ != nullptr;
+        return *handle_ != nullptr;
     }
 
     [[nodiscard]] vk::AccelerationStructureKHR raw() const noexcept
@@ -394,7 +393,7 @@ namespace detail
 [[nodiscard]] inline AsBuildSizes queryBlasBuildSizes(
     const vk::raii::Device &device,
     const BlasGeometryLayout &layout,
-    uint32_t primitiveCount,
+    std::uint32_t primitiveCount,
     const AsBuildOptions &options = {},
     vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice)
 {

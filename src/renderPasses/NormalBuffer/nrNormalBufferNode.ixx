@@ -1,8 +1,6 @@
-module;
-#include <cstddef>
 export module nr.renderPasses:normalBuffer;
-
 import dependency;
+
 import nr.app;
 import nr.renderer;
 import nr.rhi;

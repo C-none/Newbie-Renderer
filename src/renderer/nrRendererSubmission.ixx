@@ -1,7 +1,6 @@
-module;
 export module nr.renderer:rendererSubmission;
-
 import dependency;
+
 import nr.rhi;
 import nr.utils;
 import std;

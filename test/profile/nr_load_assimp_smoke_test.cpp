@@ -51,7 +51,7 @@ namespace
 
     if (!missingDecodedTextureKeys.empty())
     {
-        auto previewCount = std::min<size_t>(missingDecodedTextureKeys.size(), 8);
+        auto previewCount = std::min<std::size_t>(missingDecodedTextureKeys.size(), 8);
         auto missingPreview = std::vector<std::string>{};
         missingPreview.reserve(previewCount);
         auto previewKeys = missingDecodedTextureKeys | std::views::take(previewCount);
@@ -61,7 +61,7 @@ namespace
         if (!missingPreview.empty())
         {
             missingPreviewText = missingPreview.front();
-            auto remainder = missingPreview | std::views::drop(size_t{1});
+            auto remainder = missingPreview | std::views::drop(std::size_t{1});
             std::ranges::for_each(remainder, [&](const std::string &key) {
                 missingPreviewText.append(", ");
                 missingPreviewText.append(key);

@@ -1,7 +1,6 @@
-module;
 export module nr.rhi:sync;
-
 import dependency;
+
 import nr.utils;
 import std;
 
@@ -24,7 +23,7 @@ export namespace nr::rhi::sync
  * Timeline semaphores express this dependency chain with one monotonically
  * increasing counter instead of many binary semaphores.
  */
-[[nodiscard]] inline vk::raii::Semaphore createTimelineSemaphore(const vk::raii::Device& device, uint64_t initialValue = 0)
+[[nodiscard]] inline vk::raii::Semaphore createTimelineSemaphore(const vk::raii::Device& device, std::uint64_t initialValue = 0)
 {
     vk::SemaphoreTypeCreateInfo typeInfo{
         vk::SemaphoreType::eTimeline,
@@ -38,7 +37,7 @@ export namespace nr::rhi::sync
 /**
  * @brief Query current timeline semaphore counter value.
  */
-[[nodiscard]] inline uint64_t timelineValue(const vk::raii::Semaphore& timelineSemaphore)
+[[nodiscard]] inline std::uint64_t timelineValue(const vk::raii::Semaphore& timelineSemaphore)
 {
     return timelineSemaphore.getCounterValue();
 }
@@ -46,7 +45,7 @@ export namespace nr::rhi::sync
 /**
  * @brief Wait until timeline semaphore reaches at least @p value.
  */
-[[nodiscard]] inline bool waitTimeline(const vk::raii::Device& device, const vk::raii::Semaphore& timelineSemaphore, uint64_t value, uint64_t timeout = std::numeric_limits<uint64_t>::max())
+[[nodiscard]] inline bool waitTimeline(const vk::raii::Device& device, const vk::raii::Semaphore& timelineSemaphore, std::uint64_t value, std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max())
 {
     auto semaphoreHandle = static_cast<vk::Semaphore>(*timelineSemaphore);
     vk::SemaphoreWaitInfo waitInfo{};

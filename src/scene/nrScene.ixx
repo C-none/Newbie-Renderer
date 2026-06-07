@@ -1,8 +1,7 @@
-module;
 // #include <flecs.h>
 export module nr.scene:scene;
-
 import dependency;
+
 import nr.load;
 import nr.resource;
 import nr.rhi;
@@ -1569,8 +1568,10 @@ class Scene
             return record.cpuVersion > record.gpuVersion ||
                    record.lastUploadFrameSerial != currentFrame_.frameSerial;
         }
-
-        return record.cpuVersion > record.gpuVersion;
+        else
+        {
+            return record.cpuVersion > record.gpuVersion;
+        }
     }
 
     template <typename HandleT, typename StorageT>

@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:command;
 import dependency;
 import nr.utils;
@@ -159,24 +158,21 @@ public:
         : commandBuffer_(std::cref(commandBuffer))
         , label_(label)
     {
-        if constexpr (!nr::isDebugMode)
-        {
-            return;
-        }
+        if constexpr (nr::isDebugMode) {
+            if (label_.empty()) {
+                return;
+            }
 
-        if (label_.empty()) {
-            return;
-        }
+            auto debugLabel = vk::DebugUtilsLabelEXT{};
+            debugLabel.pLabelName = label_.c_str();
 
-        auto debugLabel = vk::DebugUtilsLabelEXT{};
-        debugLabel.pLabelName = label_.c_str();
-
-        try {
-            commandBuffer_->get().beginDebugUtilsLabelEXT(debugLabel);
-            active_ = true;
-        }
-        catch (const vk::SystemError&) {
-            // Debug utils extension may not be available
+            try {
+                commandBuffer_->get().beginDebugUtilsLabelEXT(debugLabel);
+                active_ = true;
+            }
+            catch (const vk::SystemError&) {
+                // Debug utils extension may not be available
+            }
         }
     }
 

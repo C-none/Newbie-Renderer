@@ -1,8 +1,6 @@
-module;
-#include <cstddef>
 export module nr.renderPasses:uiNode;
-
 import dependency;
+
 import nr.app;
 import nr.renderer;
 import nr.rhi;
@@ -123,19 +121,19 @@ struct UiRuntimeCache
             0u,
             0u,
             vk::Format::eR32G32Sfloat,
-            static_cast<std::uint32_t>(offsetof(ImDrawVert, pos)),
+            static_cast<std::uint32_t>(imgui::drawVertPosOffset),
         },
         vk::VertexInputAttributeDescription{
             1u,
             0u,
             vk::Format::eR32G32Sfloat,
-            static_cast<std::uint32_t>(offsetof(ImDrawVert, uv)),
+            static_cast<std::uint32_t>(imgui::drawVertUvOffset),
         },
         vk::VertexInputAttributeDescription{
             2u,
             0u,
             vk::Format::eR8G8B8A8Unorm,
-            static_cast<std::uint32_t>(offsetof(ImDrawVert, col)),
+            static_cast<std::uint32_t>(imgui::drawVertColorOffset),
         },
     };
 }
@@ -872,7 +870,7 @@ void updateBindlessTextureBindingsForFrame(
         return;
     }
 
-    auto requestsBySet = std::map<uint32_t, std::vector<nr::rhi::DescriptorWriteRequest>>{};
+    auto requestsBySet = std::map<std::uint32_t, std::vector<nr::rhi::DescriptorWriteRequest>>{};
     std::ranges::for_each(writeRequests, [&](const nr::rhi::DescriptorWriteRequest& request) {
         requestsBySet[request.binding.set].push_back(request);
     });
@@ -1006,7 +1004,7 @@ void pushUiConstantsToCommandBuffer(
 
             nr::nrAssert(
                 vertexOffset <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()),
-                "UiNode vertex offset exceeds int32_t range.");
+                "UiNode vertex offset exceeds std::int32_t range.");
 
             auto scissor = vk::Rect2D{};
             scissor.offset = vk::Offset2D{offsetX, offsetY};

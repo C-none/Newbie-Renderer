@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:resourcePool;
 import dependency;
 import nr.utils;
@@ -127,11 +126,11 @@ class ResourcePool
      * @param name         Optional debug name for profiling tools
      * @return Non-owning reference to the allocated buffer (valid until resetFrame)
      */
-    Buffer &allocateTransientBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage, uint32_t frameIndex, std::string_view name = "")
+    Buffer &allocateTransientBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "")
     {
         nrAssert(valid(), "ResourcePool::allocateTransientBuffer: pool not initialized");
 
-        uint32_t idx = frameIndex % maxFrameInFlight;
+        std::uint32_t idx = frameIndex % maxFrameInFlight;
         frameBuffers_[idx].emplace_back(Buffer::create(*allocator_, device_->get(), createInfo, name, memoryUsage, AllocationStrategy::PerFrame, frameIndex));
         return frameBuffers_[idx].back();
     }
@@ -149,11 +148,11 @@ class ResourcePool
      * @param name         Optional debug name for profiling tools
      * @return Non-owning reference to the allocated image (valid until resetFrame)
      */
-    Image &allocateTransientImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage, uint32_t frameIndex, std::string_view name = "")
+    Image &allocateTransientImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "")
     {
         nrAssert(valid(), "ResourcePool::allocateTransientImage: pool not initialized");
 
-        uint32_t idx = frameIndex % maxFrameInFlight;
+        std::uint32_t idx = frameIndex % maxFrameInFlight;
         frameImages_[idx].emplace_back(Image::create(*allocator_, device_->get(), createInfo, name, memoryUsage));
         return frameImages_[idx].back();
     }
@@ -170,9 +169,9 @@ class ResourcePool
      *
      * NOT thread-safe — caller must ensure no concurrent access to this frame.
      */
-    void resetFrame(uint32_t frameIndex)
+    void resetFrame(std::uint32_t frameIndex)
     {
-        uint32_t idx = frameIndex % maxFrameInFlight;
+        std::uint32_t idx = frameIndex % maxFrameInFlight;
 
         // RAII destruction cascades to VMA + ImageViews
         frameBuffers_[idx].clear();

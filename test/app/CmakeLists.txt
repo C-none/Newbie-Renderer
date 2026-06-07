@@ -9,6 +9,8 @@ target_link_libraries(embeddedTriangle PRIVATE
     utils
     dependency
 )
+add_dependencies(embeddedTriangle nrapp nrrenderpasses nrrenderer utils dependency)
+nr_add_clang_module_object_depends(embeddedTriangle.cpp nrapp nrrenderpasses nrrenderer utils dependency)
 
 target_compile_definitions(embeddedTriangle PRIVATE
     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
@@ -35,6 +37,8 @@ target_link_libraries(nr_normal_buffer_ui_smoke_test PRIVATE
     utils
     dependency
 )
+add_dependencies(nr_normal_buffer_ui_smoke_test nrapp nrrenderpasses nrrenderer nrscene nrload utils dependency)
+nr_add_clang_module_object_depends(normalBufferUiSmoke.cpp nrapp nrrenderpasses nrrenderer nrscene nrload utils dependency)
 
 target_compile_definitions(nr_normal_buffer_ui_smoke_test PRIVATE
     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"

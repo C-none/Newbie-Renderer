@@ -1,7 +1,6 @@
-module;
 export module nr.resource:math;
-
 import dependency;
+
 import std;
 
 export namespace nr::resource::math

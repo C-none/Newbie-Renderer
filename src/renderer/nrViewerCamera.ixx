@@ -1,7 +1,6 @@
-module;
 export module nr.renderer:viewerCamera;
-
 import dependency;
+
 import nr.scene;
 import std;
 import :renderer;

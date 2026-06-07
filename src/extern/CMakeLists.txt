@@ -53,26 +53,26 @@ endfunction()
 # According to https://docs.shader-slang.org/en/latest/external/slang/docs/building.html#configure-and-build
 # Keep embedded Slang build lean for engine integration.
 set(SLANG_LIB_TYPE STATIC CACHE STRING "Build Slang as a static library for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_CUDA OFF CACHE BOOL "Disable CUDA support detection for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_OPTIX OFF CACHE BOOL "Disable OptiX support detection for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_NVAPI OFF CACHE BOOL "Disable NVAPI support detection for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_AFTERMATH OFF CACHE BOOL "Disable Slang Aftermath integration for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_TESTS OFF CACHE BOOL "Disable Slang tests for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_EXAMPLES OFF CACHE BOOL "Disable Slang examples for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_GFX OFF CACHE BOOL "Disable Slang gfx layer for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_SLANG_RHI OFF CACHE BOOL "Disable Slang RHI layer for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_SLANGRT OFF CACHE BOOL "Disable Slang runtime target for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_SLANG_GLSLANG OFF CACHE BOOL "Disable Slang glslang bridge for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_SLANGD OFF CACHE BOOL "Disable Slang language server for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_SLANGI OFF CACHE BOOL "Disable Slang interpreter for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_SLANGC OFF CACHE BOOL "Disable Slang command-line compiler for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_REPLAYER OFF CACHE BOOL "Disable Slang replay tool for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_DXIL OFF CACHE BOOL "Disable DXIL generation support for NewbieRenderer." FORCE)
-# set(SLANG_ENABLE_PREBUILT_BINARIES OFF CACHE BOOL "Disable copying optional prebuilt Slang runtime binaries for NewbieRenderer." FORCE)
-# set(SLANG_EXCLUDE_DAWN ON CACHE BOOL "Exclude WebGPU Dawn artifacts from the embedded Slang build." FORCE)
-# set(SLANG_EXCLUDE_TINT ON CACHE BOOL "Exclude slang-tint artifacts from the embedded Slang build." FORCE)
-# set(SLANG_SLANG_LLVM_FLAVOR DISABLE CACHE STRING "Disable LLVM support for SPIR-V-only NewbieRenderer builds." FORCE)
-# set(SLANG_ENABLE_RELEASE_DEBUG_INFO OFF CACHE BOOL "Disable debug info in Release builds of Slang for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_CUDA OFF CACHE BOOL "Disable CUDA support detection for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_OPTIX OFF CACHE BOOL "Disable OptiX support detection for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_NVAPI OFF CACHE BOOL "Disable NVAPI support detection for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_AFTERMATH OFF CACHE BOOL "Disable Slang Aftermath integration for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_TESTS OFF CACHE BOOL "Disable Slang tests for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_EXAMPLES OFF CACHE BOOL "Disable Slang examples for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_GFX OFF CACHE BOOL "Disable Slang gfx layer for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_SLANG_RHI OFF CACHE BOOL "Disable Slang RHI layer for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_SLANGRT OFF CACHE BOOL "Disable Slang runtime target for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_SLANG_GLSLANG OFF CACHE BOOL "Disable Slang glslang bridge for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_SLANGD OFF CACHE BOOL "Disable Slang language server for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_SLANGI OFF CACHE BOOL "Disable Slang interpreter for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_SLANGC OFF CACHE BOOL "Disable Slang command-line compiler for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_REPLAYER OFF CACHE BOOL "Disable Slang replay tool for NewbieRenderer." FORCE)
+set(SLANG_ENABLE_DXIL OFF CACHE BOOL "Disable DXIL generation support for Vulkan-only NewbieRenderer builds." FORCE)
+set(SLANG_ENABLE_PREBUILT_BINARIES OFF CACHE BOOL "Disable copying optional prebuilt Slang runtime binaries for NewbieRenderer." FORCE)
+set(SLANG_EXCLUDE_DAWN ON CACHE BOOL "Exclude WebGPU Dawn artifacts from the embedded Slang build." FORCE)
+set(SLANG_EXCLUDE_TINT ON CACHE BOOL "Exclude slang-tint artifacts from the embedded Slang build." FORCE)
+set(SLANG_SLANG_LLVM_FLAVOR DISABLE CACHE STRING "Disable LLVM support for SPIR-V-only NewbieRenderer builds." FORCE)
+set(SLANG_ENABLE_RELEASE_DEBUG_INFO OFF CACHE BOOL "Disable debug info in Release builds of Slang for NewbieRenderer." FORCE)
 block(SCOPE_FOR VARIABLES)
     if(MSVC)
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -80,35 +80,40 @@ block(SCOPE_FOR VARIABLES)
 
     add_extern_library(slang)
 
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU" AND WIN32)
+        foreach(slang_tool slang-bootstrap slangc slang-dispatcher)
+            if(TARGET ${slang_tool})
+                target_link_options(${slang_tool} PRIVATE -municode)
+            endif()
+        endforeach()
+    endif()
+
     if(MSVC AND CMAKE_GENERATOR MATCHES "^Visual Studio")
         # External Slang targets do not use C++20 modules, and disabling the
         # Visual Studio scan avoids noisy false-positive PCH diagnostics.
         disable_cxx_scan_for_targets("${CMAKE_CURRENT_SOURCE_DIR}/slang")
     endif()
 endblock()
+find_package(flecs CONFIG REQUIRED)
 
-set(FLECS_STATIC ON CACHE BOOL "Build static flecs library for NewbieRenderer." FORCE)
-set(FLECS_SHARED OFF CACHE BOOL "Disable shared flecs library for NewbieRenderer." FORCE)
-set(FLECS_TESTS OFF CACHE BOOL "Disable flecs tests." FORCE)
-add_extern_library(flecs)
-
-if(MSVC AND TARGET flecs_static)
-    target_compile_options(flecs_static PUBLIC
-        "$<$<COMPILE_LANGUAGE:CXX>:/wd5260>"
-        "$<$<COMPILE_LANGUAGE:CXX>:/wd4702>"
-        "$<$<COMPILE_LANGUAGE:CXX>:/wd4267>"
-    )
-endif()
-
-file(GLOB MODULE_UNITS
-    CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.ixx"
+set(DEPENDENCY_MODULE_UNITS
+    "${CMAKE_CURRENT_SOURCE_DIR}/exportDependency.ixx"
 )
+set(DEPENDENCY_IMPLEMENTATION_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyImpl.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/flecsPlacementNewTag.cpp"
+)
+
+set_source_files_properties(
+    ${DEPENDENCY_IMPLEMENTATION_SOURCES}
+    PROPERTIES CXX_SCAN_FOR_MODULES OFF
+)
+
 nr_add_library(dependency STATIC)
 target_link_libraries(dependency 
 PUBLIC
     slang
-    flecs::flecs_static
+    $<IF:$<TARGET_EXISTS:flecs::flecs>,flecs::flecs,flecs::flecs_static>
     glfw
     imgui::imgui
     glm::glm
@@ -124,14 +129,19 @@ PUBLIC
 )
 if(MSVC)
     # Flecs C++ lifecycle templates instantiate in downstream modules.
-    target_compile_options(dependency PUBLIC /wd4291)
+    target_compile_options(dependency
+        PUBLIC /wd4291
+        PRIVATE /wd4702
+    )
 endif()
 target_sources(dependency
     PUBLIC
-        FILE_SET cxx_modules TYPE CXX_MODULES FILES  ${MODULE_UNITS}
+        FILE_SET cxx_modules TYPE CXX_MODULES FILES ${DEPENDENCY_MODULE_UNITS}
+    PRIVATE
+        ${DEPENDENCY_IMPLEMENTATION_SOURCES}
 )
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
-    ${MODULE_UNITS}
+    ${DEPENDENCY_IMPLEMENTATION_SOURCES}
+    ${DEPENDENCY_MODULE_UNITS}
 )
 set_target_properties(dependency PROPERTIES FOLDER "extern")
-

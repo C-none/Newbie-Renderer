@@ -1,7 +1,6 @@
-module;
 export module nr.resource:geometry;
-
 import dependency;
+
 import std;
 import :math;
 

@@ -1,7 +1,6 @@
-module;
 export module nr.load:decode;
-
 import dependency;
+
 import :type;
 import :backend;
 import std;
@@ -10,8 +9,8 @@ export namespace nr::load
 {
 struct TextureDecodeOptions
 {
-    uint32_t workerCount = 0;
-    uint32_t requestedChannels = 4;
+    std::uint32_t workerCount = 0;
+    std::uint32_t requestedChannels = 4;
 };
 
 [[nodiscard]] inline std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene,
@@ -24,13 +23,13 @@ namespace nr::load::detail
 class DecodeThreadPool
 {
   public:
-    explicit DecodeThreadPool(uint32_t workerCount)
+    explicit DecodeThreadPool(std::uint32_t workerCount)
     {
         auto normalizedWorkers = std::max(workerCount, 1u);
         workers.reserve(normalizedWorkers);
 
-        auto workerSlots = std::views::iota(uint32_t{0}, normalizedWorkers);
-        std::ranges::for_each(workerSlots, [this](uint32_t) {
+        auto workerSlots = std::views::iota(std::uint32_t{0}, normalizedWorkers);
+        std::ranges::for_each(workerSlots, [this](std::uint32_t) {
             workers.emplace_back([this](std::stop_token stopToken) {
                 workerLoop(stopToken);
             });
@@ -108,7 +107,7 @@ class DecodeThreadPool
 
 struct TextureDecodeTaskResult
 {
-    uint32_t textureIndex = invalidIndex;
+    std::uint32_t textureIndex = invalidIndex;
     std::optional<Image> image{};
     std::string decoder{};
     std::string error{};
@@ -166,13 +165,13 @@ struct DecodedPayload
         return std::unexpected(std::format("Texture file '{}' is empty.", path.generic_string()));
     }
 
-    if (fileSize > static_cast<uintmax_t>(std::numeric_limits<size_t>::max()))
+    if (fileSize > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max()))
     {
         return std::unexpected(std::format("Texture file '{}' exceeds host addressable memory.", path.generic_string()));
     }
 
-    auto byteCount = static_cast<size_t>(fileSize);
-    if (byteCount > static_cast<size_t>(std::numeric_limits<std::streamsize>::max()))
+    auto byteCount = static_cast<std::size_t>(fileSize);
+    if (byteCount > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max()))
     {
         return std::unexpected(std::format("Texture file '{}' exceeds stream read limits.", path.generic_string()));
     }
@@ -194,14 +193,14 @@ struct DecodedPayload
 }
 
 [[nodiscard]] inline std::expected<Image, std::string> decodeWithStb(std::span<const std::byte> encodedBytes,
-                                                                      uint32_t requestedChannels)
+                                                                      std::uint32_t requestedChannels)
 {
     if (encodedBytes.empty())
     {
         return std::unexpected("Encoded texture bytes are empty.");
     }
 
-    if (encodedBytes.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+    if (encodedBytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
     {
         return std::unexpected("Encoded texture size exceeds stb_image input size limit.");
     }
@@ -233,18 +232,18 @@ struct DecodedPayload
         return std::unexpected("stb_image decoded non-positive dimensions.");
     }
 
-    auto const texelCount = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    auto const texelCount = static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
     auto const byteCount = texelCount * channelCount;
-    if (byteCount > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    if (byteCount > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
     {
         return std::unexpected("Decoded texture exceeds host memory limits.");
     }
 
     Image image{};
-    image.width = static_cast<uint32_t>(width);
-    image.height = static_cast<uint32_t>(height);
+    image.width = static_cast<std::uint32_t>(width);
+    image.height = static_cast<std::uint32_t>(height);
     image.channels = channelCount;
-    image.pixels.resize(static_cast<size_t>(byteCount));
+    image.pixels.resize(static_cast<std::size_t>(byteCount));
     std::memcpy(image.pixels.data(), decodedPixels.get(), image.pixels.size());
 
     return image;
@@ -274,7 +273,7 @@ struct TurboJpegHandleDeleter
         return std::unexpected("Encoded JPEG bytes are empty.");
     }
 
-    if (encodedBytes.size() > static_cast<size_t>(std::numeric_limits<unsigned long>::max()))
+    if (encodedBytes.size() > static_cast<std::size_t>(std::numeric_limits<unsigned long>::max()))
     {
         return std::unexpected("Encoded JPEG exceeds libjpeg-turbo input size limit.");
     }
@@ -307,18 +306,18 @@ struct TurboJpegHandleDeleter
         return std::unexpected("libjpeg-turbo decoded non-positive dimensions.");
     }
 
-    auto const texelCount = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    auto const texelCount = static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
     auto const byteCount = texelCount * 4u;
-    if (byteCount > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    if (byteCount > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
     {
         return std::unexpected("Decoded JPEG exceeds host memory limits.");
     }
 
     Image image{};
-    image.width = static_cast<uint32_t>(width);
-    image.height = static_cast<uint32_t>(height);
+    image.width = static_cast<std::uint32_t>(width);
+    image.height = static_cast<std::uint32_t>(height);
     image.channels = 4;
-    image.pixels.resize(static_cast<size_t>(byteCount));
+    image.pixels.resize(static_cast<std::size_t>(byteCount));
 
     auto decodeResult = tjDecompress2(
         handle.get(),
@@ -345,13 +344,13 @@ struct TurboJpegHandleDeleter
         return std::unexpected("Embedded raw texture dimensions are invalid.");
     }
 
-    auto const expectedByteCount = static_cast<uint64_t>(raw.width) * static_cast<uint64_t>(raw.height) * 4u;
-    if (expectedByteCount > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    auto const expectedByteCount = static_cast<std::uint64_t>(raw.width) * static_cast<std::uint64_t>(raw.height) * 4u;
+    if (expectedByteCount > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
     {
         return std::unexpected("Embedded raw texture exceeds host memory limits.");
     }
 
-    if (raw.rgba8.size() != static_cast<size_t>(expectedByteCount))
+    if (raw.rgba8.size() != static_cast<std::size_t>(expectedByteCount))
     {
         return std::unexpected("Embedded raw texture byte count does not match width * height * 4.");
     }
@@ -362,7 +361,7 @@ struct TurboJpegHandleDeleter
     image.channels = 4;
     image.pixels.resize(raw.rgba8.size());
     std::ranges::transform(raw.rgba8, image.pixels.begin(), [](std::byte value) {
-        return std::to_integer<uint8_t>(value);
+        return std::to_integer<std::uint8_t>(value);
     });
 
     return image;
@@ -370,7 +369,7 @@ struct TurboJpegHandleDeleter
 
 [[nodiscard]] inline std::expected<DecodedPayload, std::string> decodeEncodedTexture(const TextureAsset &texture,
                                                                                       std::span<const std::byte> encodedBytes,
-                                                                                      uint32_t requestedChannels)
+                                                                                      std::uint32_t requestedChannels)
 {
     auto decodeAsJpeg = false;
     if (texture.payloadKind == TexturePayloadKind::externalReference)
@@ -409,7 +408,7 @@ struct TurboJpegHandleDeleter
     };
 }
 
-[[nodiscard]] inline TextureDecodeTaskResult decodeTextureTask(uint32_t textureIndex,
+[[nodiscard]] inline TextureDecodeTaskResult decodeTextureTask(std::uint32_t textureIndex,
                                                                const TextureAsset &texture,
                                                                const TextureDecodeOptions &options)
 {
@@ -476,9 +475,9 @@ struct TurboJpegHandleDeleter
     return result;
 }
 
-[[nodiscard]] inline std::vector<uint32_t> collectReferencedTextureIndices(const SceneAsset &scene)
+[[nodiscard]] inline std::vector<std::uint32_t> collectReferencedTextureIndices(const SceneAsset &scene)
 {
-    auto referenced = std::set<uint32_t>{};
+    auto referenced = std::set<std::uint32_t>{};
 
     std::ranges::for_each(scene.materials, [&](const MaterialAsset &material) {
         std::ranges::for_each(material.textures, [&](const MaterialTextureBinding &binding) {
@@ -489,11 +488,11 @@ struct TurboJpegHandleDeleter
         });
     });
 
-    auto ordered = std::vector<uint32_t>{referenced.begin(), referenced.end()};
+    auto ordered = std::vector<std::uint32_t>{referenced.begin(), referenced.end()};
     return ordered;
 }
 
-[[nodiscard]] inline uint32_t resolveWorkerCount(uint32_t requestedWorkers, size_t taskCount)
+[[nodiscard]] inline std::uint32_t resolveWorkerCount(std::uint32_t requestedWorkers, std::size_t taskCount)
 {
     if (taskCount == 0)
     {
@@ -507,8 +506,8 @@ struct TurboJpegHandleDeleter
     }
 
     auto normalizedRequested = requestedWorkers == 0 ? autoWorkers : requestedWorkers;
-    auto clampedToTaskCount = std::min<uint64_t>(normalizedRequested, taskCount);
-    return static_cast<uint32_t>(std::max<uint64_t>(1, clampedToTaskCount));
+    auto clampedToTaskCount = std::min<std::uint64_t>(normalizedRequested, taskCount);
+    return static_cast<std::uint32_t>(std::max<std::uint64_t>(1, clampedToTaskCount));
 }
 
 [[nodiscard]] inline std::string joinLines(const std::vector<std::string> &lines)
@@ -519,7 +518,7 @@ struct TurboJpegHandleDeleter
     }
 
     auto joined = lines.front();
-    auto remaining = lines | std::views::drop(size_t{1});
+    auto remaining = lines | std::views::drop(std::size_t{1});
     std::ranges::for_each(remaining, [&](const std::string &line) {
         joined.append("\n");
         joined.append(line);
@@ -547,7 +546,7 @@ export namespace nr::load
     auto futures = std::vector<std::future<detail::TextureDecodeTaskResult>>{};
     futures.reserve(decodeIndices.size());
 
-    std::ranges::for_each(decodeIndices, [&](uint32_t textureIndex) {
+    std::ranges::for_each(decodeIndices, [&](std::uint32_t textureIndex) {
         auto const *texture = &scene.textures[textureIndex];
         futures.push_back(threadPool.submit([textureIndex, texture, options]() {
             return detail::decodeTextureTask(textureIndex, *texture, options);

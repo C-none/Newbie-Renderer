@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:vmaAllocator;
 import dependency;
 import nr.utils;
@@ -110,12 +109,9 @@ struct VmaBuffer
      * Requires the buffer to have been created with
      * VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT.
      */
-    [[nodiscard]] VkDeviceAddress deviceAddress(VkDevice device) const noexcept
+    [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device& device) const noexcept
     {
-        VkBufferDeviceAddressInfo addressInfo{};
-        addressInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-        addressInfo.buffer = buffer;
-        return vkGetBufferDeviceAddress(device, &addressInfo);
+        return static_cast<VkDeviceAddress>(device.getBufferAddress(vk::BufferDeviceAddressInfo{vk::Buffer{buffer}}));
     }
 
     /**
@@ -495,9 +491,9 @@ class VmaAllocatorWrapper
      * @param allocInfo   Desired allocation properties
      * @return Memory type index for VmaPoolCreateInfo
      */
-    [[nodiscard]] uint32_t findMemoryTypeIndexForBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const
+    [[nodiscard]] std::uint32_t findMemoryTypeIndexForBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const
     {
-        uint32_t memTypeIndex = 0;
+        std::uint32_t memTypeIndex = 0;
         // Convert to C struct for VMA API
         VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
         VkResult result = vmaFindMemoryTypeIndexForBufferInfo(allocator_, &cBufferInfo, &allocInfo, &memTypeIndex);
@@ -511,9 +507,9 @@ class VmaAllocatorWrapper
      * @param allocInfo   Desired allocation properties
      * @return Memory type index for VmaPoolCreateInfo
      */
-    [[nodiscard]] uint32_t findMemoryTypeIndexForImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const
+    [[nodiscard]] std::uint32_t findMemoryTypeIndexForImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const
     {
-        uint32_t memTypeIndex = 0;
+        std::uint32_t memTypeIndex = 0;
         // Convert to C struct for VMA API
         VkImageCreateInfo cImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
         VkResult result = vmaFindMemoryTypeIndexForImageInfo(allocator_, &cImageInfo, &allocInfo, &memTypeIndex);
@@ -534,7 +530,7 @@ class VmaAllocatorWrapper
      */
     [[nodiscard]] std::vector<VmaBudget> getBudgets() const
     {
-        constexpr size_t maxHeaps = 16; // VMA supports up to 16 memory heaps
+        constexpr std::size_t maxHeaps = 16; // VMA supports up to 16 memory heaps
         std::vector<VmaBudget> budgets(maxHeaps);
         vmaGetHeapBudgets(allocator_, budgets.data());
         return budgets;

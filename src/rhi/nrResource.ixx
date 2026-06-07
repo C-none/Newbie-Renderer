@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:resource;
 import dependency;
 import nr.utils;
@@ -30,7 +29,7 @@ import std;
  * Creation goes through static factory methods.
  */
 
-namespace nr::rhi
+export namespace nr::rhi
 {
 
 class Buffer;
@@ -57,17 +56,17 @@ void setResourceDebugName(Resource &resource)
         nrAssert(resource.valid(), "Cannot set debug name on invalid resource");
 
         vk::ObjectType objectType;
-        uint64_t objectHandle;
+        std::uint64_t objectHandle;
 
         if constexpr (BufferLike<Resource>)
         {
             objectType = vk::ObjectType::eBuffer;
-            objectHandle = reinterpret_cast<uint64_t>(static_cast<VkBuffer>(resource.handle()));
+            objectHandle = reinterpret_cast<std::uint64_t>(static_cast<VkBuffer>(resource.handle()));
         }
         else if constexpr (ImageLike<Resource>)
         {
             objectType = vk::ObjectType::eImage;
-            objectHandle = reinterpret_cast<uint64_t>(static_cast<VkImage>(resource.handle()));
+            objectHandle = reinterpret_cast<std::uint64_t>(static_cast<VkImage>(resource.handle()));
         }
 
         vk::DebugUtilsObjectNameInfoEXT nameInfo{objectType, objectHandle, resource.name_.c_str()};
@@ -79,7 +78,7 @@ void setResourceDebugName(Resource &resource)
             if constexpr (ImageLike<Resource>)
             {
                 std::string viewName = std::format("{}_defaultView", resource.name_);
-                vk::DebugUtilsObjectNameInfoEXT viewNameInfo{vk::ObjectType::eImageView, reinterpret_cast<uint64_t>(static_cast<VkImageView>(*resource.defaultView_)), viewName.c_str()};
+                vk::DebugUtilsObjectNameInfoEXT viewNameInfo{vk::ObjectType::eImageView, reinterpret_cast<std::uint64_t>(static_cast<VkImageView>(*resource.defaultView_)), viewName.c_str()};
                 resource.device_->get().setDebugUtilsObjectNameEXT(viewNameInfo);
             }
         }
@@ -110,7 +109,7 @@ void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::st
         viewType = vk::ObjectType::eImageView;
     }
 
-    vk::DebugUtilsObjectNameInfoEXT nameInfo{viewType, reinterpret_cast<uint64_t>(view), debugName.c_str()};
+    vk::DebugUtilsObjectNameInfoEXT nameInfo{viewType, reinterpret_cast<std::uint64_t>(view), debugName.c_str()};
     try
     {
         resource.device_->get().setDebugUtilsObjectNameEXT(nameInfo);
@@ -175,7 +174,7 @@ class Buffer
      * @return Fully initialized Buffer
      */
     [[nodiscard]] inline static Buffer create(const MemoryAllocator &allocator, const vk::raii::Device &device, const vk::BufferCreateInfo &createInfo, std::string_view name, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, AllocationStrategy strategy = AllocationStrategy::CrossFrame,
-                                       uint32_t frameIndex = 0)
+                                       std::uint32_t frameIndex = 0)
     {
         Buffer result;
         result.device_ = std::cref(device);
@@ -290,7 +289,7 @@ class Buffer
         if (!cachedAddress_.has_value())
         {
             nrAssert(device_.has_value(), "Buffer::deviceAddress requires a valid device reference");
-            cachedAddress_ = vmaBuffer_.deviceAddress(static_cast<VkDevice>(*device_->get()));
+            cachedAddress_ = vmaBuffer_.deviceAddress(device_->get());
         }
         return *cachedAddress_;
     }
@@ -335,9 +334,9 @@ class Buffer
         {
             std::string suffix;
             if (range == vk::WholeSize)
-                suffix = std::format("fmt{}_off{}_whole", static_cast<uint32_t>(format), offset);
+                suffix = std::format("fmt{}_off{}_whole", static_cast<std::uint32_t>(format), offset);
             else
-                suffix = std::format("fmt{}_off{}_rng{}", static_cast<uint32_t>(format), offset, range);
+                suffix = std::format("fmt{}_off{}_rng{}", static_cast<std::uint32_t>(format), offset, range);
             key = name_.empty() ? suffix : std::format("{}_{}", name_, suffix);
         }
         else
@@ -418,7 +417,7 @@ class Buffer
     void write(const void *data, std::size_t dataSize, std::size_t offset = 0)
     {
         nrAssert(mapped() != nullptr, "Buffer::write requires a mapped buffer");
-        nrAssert(offset + dataSize <= static_cast<std::size_t>(size()), std::format("Buffer::write out of bounds: offset={}, dataSize={}, bufferSize={}", offset, dataSize, static_cast<uint64_t>(size())));
+        nrAssert(offset + dataSize <= static_cast<std::size_t>(size()), std::format("Buffer::write out of bounds: offset={}, dataSize={}, bufferSize={}", offset, dataSize, static_cast<std::uint64_t>(size())));
         std::memcpy(static_cast<std::byte *>(mapped()) + offset, data, dataSize);
     }
 
@@ -574,13 +573,13 @@ class Image
     }
 
     /// Get the number of mip levels
-    [[nodiscard]] uint32_t mipLevels() const noexcept
+    [[nodiscard]] std::uint32_t mipLevels() const noexcept
     {
         return mipLevels_;
     }
 
     /// Get the number of array layers
-    [[nodiscard]] uint32_t arrayLayers() const noexcept
+    [[nodiscard]] std::uint32_t arrayLayers() const noexcept
     {
         return arrayLayers_;
     }
@@ -675,7 +674,7 @@ class Image
      * @param mipCount  Number of mip levels (default: 1)
      * @param viewName  Optional custom key; if empty, auto-generates from parameters
      */
-    std::reference_wrapper<const vk::raii::ImageView> addMipView(uint32_t baseMip, uint32_t mipCount = 1, std::string_view viewName = "")
+    std::reference_wrapper<const vk::raii::ImageView> addMipView(std::uint32_t baseMip, std::uint32_t mipCount = 1, std::string_view viewName = "")
     {
         std::string key;
         if (viewName.empty())
@@ -706,7 +705,7 @@ class Image
      * @param layerCount  Number of array layers (default: 1)
      * @param viewName    Optional custom key; if empty, auto-generates from parameters
      */
-    std::reference_wrapper<const vk::raii::ImageView> addLayerView(uint32_t baseLayer, uint32_t layerCount = 1, std::string_view viewName = "")
+    std::reference_wrapper<const vk::raii::ImageView> addLayerView(std::uint32_t baseLayer, std::uint32_t layerCount = 1, std::string_view viewName = "")
     {
         std::string key;
         if (viewName.empty())
@@ -755,7 +754,7 @@ class Image
                 key = name_.empty() ? std::string{"depthOnly"} : std::format("{}_depthOnly", name_);
             else
                 key = viewName;
-            return addView(key, viewInfo);
+            return vk::ImageView{*addView(key, viewInfo).get()};
         }
         else if constexpr (Aspect == vk::ImageAspectFlagBits::eStencil)
         {
@@ -766,7 +765,7 @@ class Image
                 key = name_.empty() ? std::string{"stencilOnly"} : std::format("{}_stencilOnly", name_);
             else
                 key = viewName;
-            return addView(key, viewInfo);
+            return vk::ImageView{*addView(key, viewInfo).get()};
         }
         std::unreachable();
     }
@@ -804,8 +803,8 @@ class Image
     vk::ImageType imageType_ = vk::ImageType::e2D;
     vk::Format format_ = vk::Format::eUndefined;
     vk::Extent3D extent_ = {0, 0, 0};
-    uint32_t mipLevels_ = 1;
-    uint32_t arrayLayers_ = 1;
+    std::uint32_t mipLevels_ = 1;
+    std::uint32_t arrayLayers_ = 1;
     vk::SampleCountFlagBits samples_ = vk::SampleCountFlagBits::e1;
     vk::ImageTiling tiling_ = vk::ImageTiling::eOptimal;
     vk::ImageUsageFlags usage_ = {};

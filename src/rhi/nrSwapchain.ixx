@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:swapchain;
 import dependency;
 import :surface;
@@ -11,7 +10,7 @@ export namespace nr::rhi
 
 struct AcquireResult
 {
-    uint32_t imageIndex = 0;
+    std::uint32_t imageIndex = 0;
     vk::Result result = vk::Result::eSuccess;
 };
 
@@ -22,7 +21,7 @@ struct PresentResult
 
 struct SwapChainConfig
 {
-    uint32_t preferredImageCount = 3;
+    std::uint32_t preferredImageCount = 3;
     vk::ImageUsageFlags imageUsage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment;
     vk::PresentModeKHR presentMode = vk::PresentModeKHR::eMailbox;
     vk::CompositeAlphaFlagBitsKHR compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
@@ -65,7 +64,7 @@ struct SwapChain
      * The provided semaphore is signaled when the image is ready for queue submission.
      * Returns status that the caller can use to trigger swapchain recreation.
      */
-    [[nodiscard]] AcquireResult acquireNextImage(const vk::raii::Semaphore &imageAvailable, uint64_t timeout = std::numeric_limits<uint64_t>::max()) const
+    [[nodiscard]] AcquireResult acquireNextImage(const vk::raii::Semaphore &imageAvailable, std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max()) const
     {
         auto [result, imageIndex] = swapChain.acquireNextImage(timeout, *imageAvailable, vk::Fence{});
         return AcquireResult{
@@ -79,7 +78,7 @@ struct SwapChain
      *
      * The wait semaphore should be signaled by the render submission for the same frame.
      */
-    [[nodiscard]] PresentResult present(const vk::raii::Queue &presentQueue, uint32_t imageIndex, const vk::raii::Semaphore &waitSemaphore) const
+    [[nodiscard]] PresentResult present(const vk::raii::Queue &presentQueue, std::uint32_t imageIndex, const vk::raii::Semaphore &waitSemaphore) const
     {
         vk::PresentInfoKHR presentInfo{};
         presentInfo.waitSemaphoreCount = 1;
@@ -122,7 +121,7 @@ struct SwapChain
         auto imageCount = std::clamp(config.preferredImageCount, capabilities.minImageCount, maxImageCount);
 
         auto extent = surfaceExtent;
-        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+        if (capabilities.currentExtent.width != std::numeric_limits<std::uint32_t>::max())
         {
             extent = capabilities.currentExtent;
         }
@@ -254,7 +253,7 @@ struct SwapChain
 class PresentationContext
 {
   public:
-    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, std::string_view appName, const SwapChainConfig &config, uint32_t presentQueueFamily)
+    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, std::string_view appName, const SwapChainConfig &config, std::uint32_t presentQueueFamily)
     {
         config_ = config;
         presentQueueFamily_ = presentQueueFamily;
@@ -264,7 +263,7 @@ class PresentationContext
         surface_.format = swapChain_.format;
     }
 
-    [[nodiscard]] AcquireResult acquireNextImage(const vk::raii::Semaphore &imageAvailable, uint64_t timeout = std::numeric_limits<uint64_t>::max()) const
+    [[nodiscard]] AcquireResult acquireNextImage(const vk::raii::Semaphore &imageAvailable, std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max()) const
     {
         return swapChain_.acquireNextImage(imageAvailable, timeout);
     }
@@ -285,18 +284,18 @@ class PresentationContext
         return swapChain_.format;
     }
 
-    [[nodiscard]] uint32_t swapchainImageCount() const noexcept
+    [[nodiscard]] std::uint32_t swapchainImageCount() const noexcept
     {
-        return static_cast<uint32_t>(swapChain_.swapChainImages.size());
+        return static_cast<std::uint32_t>(swapChain_.swapChainImages.size());
     }
 
-    [[nodiscard]] vk::Image swapchainImage(uint32_t imageIndex) const
+    [[nodiscard]] vk::Image swapchainImage(std::uint32_t imageIndex) const
     {
         nrAssert(imageIndex < swapChain_.swapChainImages.size(), std::format("PresentationContext::swapchainImage index out of range: {}", imageIndex));
         return swapChain_.swapChainImages[imageIndex];
     }
 
-    [[nodiscard]] vk::ImageView swapchainImageView(uint32_t imageIndex) const
+    [[nodiscard]] vk::ImageView swapchainImageView(std::uint32_t imageIndex) const
     {
         nrAssert(imageIndex < swapChain_.imageViews.size(), std::format("PresentationContext::swapchainImageView index out of range: {}", imageIndex));
         return *swapChain_.imageViews[imageIndex];
@@ -346,7 +345,7 @@ class PresentationContext
         return surface_.handle == nullptr || glfwWindowShouldClose(surface_.handle.get()) != 0;
     }
 
-    void setActiveSwapchainImage(uint32_t imageIndex)
+    void setActiveSwapchainImage(std::uint32_t imageIndex)
     {
         activeSwapchainImageIndex_ = imageIndex;
     }
@@ -361,7 +360,7 @@ class PresentationContext
         return activeSwapchainImageIndex_.has_value();
     }
 
-    [[nodiscard]] uint32_t activeSwapchainImageIndex() const
+    [[nodiscard]] std::uint32_t activeSwapchainImageIndex() const
     {
         nrAssert(activeSwapchainImageIndex_.has_value(), "PresentationContext::activeSwapchainImageIndex requires an active acquired image.");
         return *activeSwapchainImageIndex_;
@@ -402,8 +401,8 @@ class PresentationContext
     Surface surface_;
     SwapChain swapChain_;
     SwapChainConfig config_{};
-    uint32_t presentQueueFamily_ = 0;
-    std::optional<uint32_t> activeSwapchainImageIndex_;
+    std::uint32_t presentQueueFamily_ = 0;
+    std::optional<std::uint32_t> activeSwapchainImageIndex_;
     bool hasSubmittedCurrentFrame_ = false;
 };
 } // namespace nr::rhi

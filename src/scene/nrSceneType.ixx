@@ -1,8 +1,7 @@
-module;
 // #include <flecs.h>
 export module nr.scene:type;
-
 import dependency;
+
 import nr.load;
 import nr.resource;
 import nr.rhi;

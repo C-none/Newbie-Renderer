@@ -1,7 +1,6 @@
-module;
 export module nr.resource:material;
-
 import dependency;
+
 import std;
 import :type;
 import :handle;

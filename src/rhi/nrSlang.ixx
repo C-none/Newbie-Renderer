@@ -1,8 +1,7 @@
-module;
 
 export module nr.rhi:slang;
-
 import dependency;
+
 import nr.utils;
 import std;
 
@@ -13,9 +12,9 @@ namespace nr::rhi::detail
     return result >= 0;
 }
 
-[[nodiscard]] constexpr SlangResult makeSlangError(int32_t facility, int32_t code) noexcept
+[[nodiscard]] constexpr SlangResult makeSlangError(std::int32_t facility, std::int32_t code) noexcept
 {
-    return (facility << 16) | code | int32_t(0x80000000);
+    return (facility << 16) | code | std::int32_t(0x80000000);
 }
 
 constexpr SlangResult kSlangOk = 0;
@@ -85,7 +84,7 @@ constexpr SlangResult kSlangNotFound = makeSlangError(0x200, 5);
     if (!file)
         return {};
 
-    auto const size = static_cast<size_t>(file.tellg());
+    auto const size = static_cast<std::size_t>(file.tellg());
     file.seekg(0, std::ios::beg);
 
     std::vector<std::byte> bytes(size);
@@ -350,8 +349,8 @@ struct SlangCompilerOption
 {
     slang::CompilerOptionName name = slang::CompilerOptionName::VulkanBindShiftAll;
     slang::CompilerOptionValueKind kind = slang::CompilerOptionValueKind::Int;
-    int32_t intValue0 = 0;
-    int32_t intValue1 = 0;
+    std::int32_t intValue0 = 0;
+    std::int32_t intValue1 = 0;
     std::string_view stringValue0{};
     std::string_view stringValue1{};
 };
@@ -361,7 +360,7 @@ struct SlangCompilerOption
  *
  * This project uses one unified Slang session configuration for all modules.
  */
-template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
 struct SlangCompileOptions
 {
     std::array<std::string_view, SearchPathCount> searchPaths;
@@ -369,16 +368,16 @@ struct SlangCompileOptions
     SlangCompileTarget target = SLANG_SPIRV;
     std::string_view profile = "SPIRV_1_6";
     std::array<SlangCompilerOption, CompilerOptionCount> compilerOptions;
-    uint64_t hashValue = hash::fnv1a64OffsetBasis;
+    std::uint64_t hashValue = hash::fnv1a64OffsetBasis;
     std::array<char, 16> hashHex = hash::toHexChars(hash::fnv1a64OffsetBasis);
 };
 
-template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
-[[nodiscard]] consteval uint64_t computeCompileOptionsHashValue(
+template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
+[[nodiscard]] consteval std::uint64_t computeCompileOptionsHashValue(
     const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options) noexcept
 {
-    uint64_t state = hash::fnv1a64OffsetBasis;
-    hash::hashAppend(state, static_cast<uint32_t>(options.target));
+    std::uint64_t state = hash::fnv1a64OffsetBasis;
+    hash::hashAppend(state, static_cast<std::uint32_t>(options.target));
     hash::hashAppendString(state, options.profile);
 
     std::ranges::for_each(options.searchPaths, [&](std::string_view path) constexpr noexcept {
@@ -389,8 +388,8 @@ template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
         hash::hashAppendString(state, macro.value);
     });
     std::ranges::for_each(options.compilerOptions, [&](const SlangCompilerOption &option) constexpr noexcept {
-        hash::hashAppend(state, static_cast<uint32_t>(option.name));
-        hash::hashAppend(state, static_cast<uint32_t>(option.kind));
+        hash::hashAppend(state, static_cast<std::uint32_t>(option.name));
+        hash::hashAppend(state, static_cast<std::uint32_t>(option.kind));
         hash::hashAppend(state, option.intValue0);
         hash::hashAppend(state, option.intValue1);
         hash::hashAppendString(state, option.stringValue0);
@@ -399,7 +398,7 @@ template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
     return state;
 }
 
-template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
 [[nodiscard]] consteval SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> finalizeCompileOptions(
     SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> options) noexcept
 {
@@ -409,9 +408,9 @@ template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
 }
 
 [[nodiscard]] consteval std::array<SlangCompilerOption, 6> makeBaseCompilerOptions(
-    int32_t optimizationLevel,
-    int32_t debugInfoLevel,
-    int32_t richDiagnosticsEnabled) noexcept
+    std::int32_t optimizationLevel,
+    std::int32_t debugInfoLevel,
+    std::int32_t richDiagnosticsEnabled) noexcept
 {
     return std::array<SlangCompilerOption, 6>{
         SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
@@ -528,7 +527,7 @@ class SlangSampler
      */
     [[nodiscard]] bool valid() const noexcept
     {
-        return sampler_ != nullptr;
+        return *sampler_ != nullptr;
     }
 
     /**
@@ -557,9 +556,9 @@ class SlangSampler
  */
 struct SlangImmutableSamplerBinding
 {
-    uint32_t set = 0;
-    uint32_t binding = 0;
-    uint32_t descriptorCount = 1;
+    std::uint32_t set = 0;
+    std::uint32_t binding = 0;
+    std::uint32_t descriptorCount = 1;
     SlangSamplerDesc samplerDesc{};
 };
 
@@ -568,7 +567,7 @@ struct SlangImmutableSamplerBinding
  */
 struct SlangEntryPointData
 {
-    uint32_t linkedEntryPointIndex = 0;
+    std::uint32_t linkedEntryPointIndex = 0;
     std::string entryPointName;
     SlangStage stage = SLANG_STAGE_NONE;
     Slang::ComPtr<slang::IBlob> codeBlob;
@@ -614,7 +613,7 @@ class SlangProgram
     /**
      * @brief Number of linked entrypoints available in this program.
      */
-    [[nodiscard]] size_t entryPointCount() const noexcept
+    [[nodiscard]] std::size_t entryPointCount() const noexcept
     {
         if (!buildEntryPointCache())
         {
@@ -765,7 +764,7 @@ class SlangProgram
             return false;
         }
 
-        entryPoints_.reserve(static_cast<size_t>(linkedEntryPointCount));
+        entryPoints_.reserve(static_cast<std::size_t>(linkedEntryPointCount));
 
         for (SlangUInt entryIndex = 0; entryIndex < linkedEntryPointCount; ++entryIndex)
         {
@@ -802,7 +801,7 @@ class SlangProgram
                             "Entry-point descriptor binding is forbidden. Keep bindable resources in global scope only. entry='{}', rangeIndex={}, bindingType={}",
                             entryName,
                             rangeIndex,
-                            static_cast<int32_t>(bindingType)));
+                            static_cast<std::int32_t>(bindingType)));
                 });
             }
 
@@ -815,7 +814,7 @@ class SlangProgram
             }
 
             SlangEntryPointData entryPointData{};
-            entryPointData.linkedEntryPointIndex = static_cast<uint32_t>(entryIndex);
+            entryPointData.linkedEntryPointIndex = static_cast<std::uint32_t>(entryIndex);
             entryPointData.entryPointName = std::move(entryName);
             entryPointData.stage = reflectedStage;
             entryPointData.codeBlob = std::move(codeBlob);
@@ -838,7 +837,7 @@ class SlangProgram
     mutable slang::ProgramLayout *cachedProgramLayout_ = nullptr;
     mutable bool entryPointCacheBuilt_ = false;
     mutable std::vector<SlangEntryPointData> entryPoints_;
-    mutable std::map<std::string, size_t> entryPointIndexByName_;
+    mutable std::map<std::string, std::size_t> entryPointIndexByName_;
 };
 
 struct SlangProgramCompileFileRequest
@@ -858,8 +857,8 @@ struct RuntimeSlangCompilerOption
 {
     slang::CompilerOptionName name = slang::CompilerOptionName::VulkanBindShiftAll;
     slang::CompilerOptionValueKind kind = slang::CompilerOptionValueKind::Int;
-    int32_t intValue0 = 0;
-    int32_t intValue1 = 0;
+    std::int32_t intValue0 = 0;
+    std::int32_t intValue1 = 0;
     std::string stringValue0;
     std::string stringValue1;
 };
@@ -897,7 +896,7 @@ class ShaderService
     /**
      * @brief Configure Slang session options and reset in-memory caches.
      */
-    template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+    template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
     void configure(const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options)
     {
         std::scoped_lock lock(m_mutex);
@@ -948,10 +947,10 @@ class ShaderService
         }
 
         std::vector<Slang::ComPtr<slang::IEntryPoint>> entryPointComponents;
-        entryPointComponents.reserve(static_cast<size_t>(definedEntryPointCount));
+        entryPointComponents.reserve(static_cast<std::size_t>(definedEntryPointCount));
 
         std::vector<slang::IComponentType *> components;
-        components.reserve(static_cast<size_t>(definedEntryPointCount) + 1);
+        components.reserve(static_cast<std::size_t>(definedEntryPointCount) + 1);
         components.push_back(rootModule.module.get());
 
         for (SlangInt32 index = 0; index < definedEntryPointCount; ++index)
@@ -1008,7 +1007,7 @@ class ShaderService
             auto writeResult = module->writeToFile(pathText.c_str());
             if (!detail::slangSucceeded(writeResult))
             {
-                nrInfo<nr::LogLevel::warning>(std::format("[ShaderService::writeModuleCacheBlobAsync] writeToFile failed: path='{}', result={}", pathText, static_cast<int32_t>(writeResult)));
+                nrInfo<nr::LogLevel::warning>(std::format("[ShaderService::writeModuleCacheBlobAsync] writeToFile failed: path='{}', result={}", pathText, static_cast<std::int32_t>(writeResult)));
                 return;
             }
         }).detach();
@@ -1035,7 +1034,7 @@ class ShaderService
             expectedPath);
     }
 
-    template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+    template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
     [[nodiscard]] static RuntimeSlangCompileOptions materializeRuntimeOptions(
         const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options)
     {
@@ -1068,7 +1067,7 @@ class ShaderService
         return runtimeOptions;
     }
 
-    template <size_t SearchPathCount, size_t MacroCount, size_t CompilerOptionCount>
+    template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
     void applyCompileOptionsLocked(const SlangCompileOptions<SearchPathCount, MacroCount, CompilerOptionCount> &options)
     {
         auto runtimeOptions = materializeRuntimeOptions(options);
@@ -1109,7 +1108,7 @@ class ShaderService
         }
     }
 
-    [[nodiscard]] uint64_t computeOptionsHashValueLocked() const noexcept
+    [[nodiscard]] std::uint64_t computeOptionsHashValueLocked() const noexcept
     {
         return m_optionsHashValue;
     }
@@ -1222,7 +1221,7 @@ class ShaderService
         sessionDesc.preprocessorMacros = m_macroDescs.empty() ? nullptr : m_macroDescs.data();
         sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(m_macroDescs.size());
         sessionDesc.compilerOptionEntries = m_compilerOptionEntries.empty() ? nullptr : m_compilerOptionEntries.data();
-        sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(m_compilerOptionEntries.size());
+        sessionDesc.compilerOptionEntryCount = static_cast<std::uint32_t>(m_compilerOptionEntries.size());
         sessionDesc.fileSystem = nullptr;
 
         auto result = m_globalSession->createSession(sessionDesc, m_session.writeRef());
@@ -1358,7 +1357,7 @@ class ShaderService
     Slang::ComPtr<slang::ISession> m_session;
 
     RuntimeSlangCompileOptions m_options;
-    uint64_t m_optionsHashValue = kDefaultSlangCompileOptions.hashValue;
+    std::uint64_t m_optionsHashValue = kDefaultSlangCompileOptions.hashValue;
     std::string m_optionsHashHex = std::string(hash::toHexView(kDefaultSlangCompileOptions.hashHex));
     std::filesystem::path m_shaderRootPath = detail::resolveShaderRootPath();
 

@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:surface;
 import dependency;
 import nr.utils;
@@ -84,8 +83,8 @@ struct Surface
         int height = 0;
         glfwGetFramebufferSize(handle.get(), &width, &height);
         extent = vk::Extent2D{
-            static_cast<uint32_t>(std::max(width, 1)),
-            static_cast<uint32_t>(std::max(height, 1)),
+            static_cast<std::uint32_t>(std::max(width, 1)),
+            static_cast<std::uint32_t>(std::max(height, 1)),
         };
     }
 };

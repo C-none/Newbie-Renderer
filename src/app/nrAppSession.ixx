@@ -1,4 +1,3 @@
-module;
 export module nr.app:session;
 
 import nr.renderer;

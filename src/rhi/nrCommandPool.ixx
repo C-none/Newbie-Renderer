@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:commandPool;
 import dependency;
 import std;
@@ -36,7 +35,7 @@ class CommandPool
      * @param queueFamilyIndex Queue family this pool belongs to
      * @param flags Pool creation flags (e.g., TRANSIENT, RESET_COMMAND_BUFFER)
      */
-    CommandPool(const vk::raii::Device &device, uint32_t queueFamilyIndex, vk::CommandPoolCreateFlags flags = {}) : queueFamilyIndex_(queueFamilyIndex), device_(std::ref(device))
+    CommandPool(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, vk::CommandPoolCreateFlags flags = {}) : queueFamilyIndex_(queueFamilyIndex), device_(std::ref(device))
     {
         vk::CommandPoolCreateInfo createInfo{flags, queueFamilyIndex};
         pool_ = vk::raii::CommandPool(device, createInfo);
@@ -53,7 +52,7 @@ class CommandPool
      * @param count Number of buffers to allocate
      * @return RAII command buffers container
      */
-    [[nodiscard]] vk::raii::CommandBuffers allocatePrimary(uint32_t count = 1)
+    [[nodiscard]] vk::raii::CommandBuffers allocatePrimary(std::uint32_t count = 1)
     {
         vk::CommandBufferAllocateInfo allocInfo{*pool_, vk::CommandBufferLevel::ePrimary, count};
         return vk::raii::CommandBuffers(device_->get(), allocInfo);
@@ -64,7 +63,7 @@ class CommandPool
      * @param count Number of buffers to allocate
      * @return RAII command buffers container
      */
-    [[nodiscard]] vk::raii::CommandBuffers allocateSecondary(uint32_t count = 1)
+    [[nodiscard]] vk::raii::CommandBuffers allocateSecondary(std::uint32_t count = 1)
     {
         vk::CommandBufferAllocateInfo allocInfo{*pool_, vk::CommandBufferLevel::eSecondary, count};
         return vk::raii::CommandBuffers(device_->get(), allocInfo);
@@ -93,7 +92,7 @@ class CommandPool
     /**
      * @brief Get the queue family index this pool belongs to
      */
-    [[nodiscard]] uint32_t queueFamilyIndex() const noexcept
+    [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept
     {
         return queueFamilyIndex_;
     }
@@ -103,12 +102,12 @@ class CommandPool
      */
     [[nodiscard]] bool valid() const noexcept
     {
-        return pool_ != nullptr;
+        return device_.has_value() && *pool_ != nullptr;
     }
 
   private:
     vk::raii::CommandPool pool_ = {nullptr};
-    uint32_t queueFamilyIndex_ = 0;
+    std::uint32_t queueFamilyIndex_ = 0;
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
 };
 

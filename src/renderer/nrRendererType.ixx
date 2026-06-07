@@ -1,4 +1,3 @@
-module;
 export module nr.renderer:rendererType;
 
 import std;

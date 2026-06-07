@@ -34,11 +34,15 @@ Newbie-Renderer is a research-oriented renderer built around C++23 modules, Slan
 
 ## Prerequisites
 
-- Visual Studio 18 2026
+- MSYS2 CLANG64 tools on `PATH` (`clang++`, `lld`, `clangd`, `lldb-dap`, `ninja`)
 - Vulkan SDK 1.4.341 or newer
 - CMake 4.2 or newer
 - Vcpkg with `VCPKG_ROOT` configured
-- Git submodules initialized with `--recurse-submodules`
+- Git submodules initialized with `--recurse-submodules` for Slang and assets
+
+Optional fallback toolchain:
+
+- Visual Studio 18 2026
 
 ## Build
 
@@ -54,28 +58,39 @@ Newbie-Renderer is a research-oriented renderer built around C++23 modules, Slan
 2. Configure
 
    ```bash
-   cmake --preset msvc
+   cmake --preset llvm-debug
    ```
 
 3. Build
 
    ```bash
-   # Release
-   cmake --build --preset release --target main
-
    # Debug
    cmake --build --preset debug --target main
+
+   # Release
+   cmake --build --preset release --target main
    ```
 
 4. Run
 
    ```bash
-   # Release
-   cmake --build --preset run-release
-
    # Debug
    cmake --build --preset run-debug
+
+   # Release
+   cmake --build --preset run-release
    ```
+
+### MSVC Fallback
+
+```bash
+cmake --preset msvc
+cmake --build --preset debug-msvc --target main
+```
+
+`compile_commands.json` is generated in `build/llvm-debug` and `build/llvm-release` for clangd.
+
+The LLVM presets also keep vcpkg `buildtrees`, `packages`, and `downloads` under `build/vcpkg` so the full Ninja + clang++ workflow stays inside the repository workspace.
 
 ## App Session
 
@@ -101,7 +116,6 @@ app.shutdown();
 | Name | Current State | Purpose |
 | --- | --- | --- |
 | Slang | `v2026.5.1` | Shader language, compilation, reflection, SPIR-V generation |
-| flecs | `v4.1.5` | ECS runtime used by the scene layer |
 | glTF-Sample-Assets | `c147d2fc` | Sample assets for import, testing, and regression cases |
 | Nsight Aftermath SDK | `R590` | bundled under `src/extern/Aftermath` | Future GPU crash diagnostics and shader crash analysis |
 
@@ -126,9 +140,11 @@ git submodule update --init --recursive
 | `assimp` | Model and scene import |
 | `stb` | Generic image decode fallback |
 | `libjpeg-turbo` | Fast JPEG decode path |
+| `flecs` | ECS runtime used by the scene layer |
 
 ### Notes
 
+- Third-party C/C++ headers are surfaced to engine code through the `dependency` C++ module in `src/extern/exportDependency.ixx`; internal project sources should import that module instead of adding includes.
 - Additional transitive dependencies used by Slang, SPIR-V tooling, and related build scripts are resolved through the Slang submodule itself.
 - Vcpkg package versions are controlled by the active manifest/toolchain resolution in your local environment.
 - If you want to update submodules, use normal Git workflows. Nsight Aftermath is the exception and should be updated manually from the NVIDIA Developer website when needed.

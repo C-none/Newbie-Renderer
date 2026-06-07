@@ -1,4 +1,3 @@
-module;
 export module nr.renderPasses;
 
 export import :nodeType;

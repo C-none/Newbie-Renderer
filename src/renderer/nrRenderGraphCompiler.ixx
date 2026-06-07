@@ -1,7 +1,6 @@
-module;
 export module nr.renderer:renderGraphCompiler;
-
 import dependency;
+
 import nr.utils;
 import std;
 import :renderGraphType;

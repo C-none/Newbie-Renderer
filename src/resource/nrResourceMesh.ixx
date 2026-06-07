@@ -1,7 +1,6 @@
-module;
 export module nr.resource:mesh;
-
 import dependency;
+
 import std;
 import :handle;
 import :geometry;

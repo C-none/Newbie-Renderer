@@ -25,6 +25,8 @@ target_link_libraries(main PRIVATE
     nrload
     dependency
 )
+add_dependencies(main nrapp nrrenderer nrrenderpasses nrscene nrload dependency)
+nr_add_clang_module_object_depends(main.cpp nrapp nrrenderer nrrenderpasses nrscene nrload dependency)
 target_compile_definitions(main PRIVATE
     NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
 )

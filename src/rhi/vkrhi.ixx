@@ -1,4 +1,3 @@
-module;
 export module nr.rhi:vk;
 import dependency;
 import nr.utils;
@@ -79,7 +78,7 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
 {
     if constexpr (isDebugMode)
     {
-        switch (static_cast<uint32_t>(pCallbackData->messageIdNumber))
+        switch (static_cast<std::uint32_t>(pCallbackData->messageIdNumber))
         {
         case 0:
             // Validation Warning: Override layer has override paths set to C:/VulkanSDK/<version>/Bin
@@ -126,8 +125,9 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
     auto objects = std::span(pCallbackData->pObjects, pCallbackData->objectCount);
     if (!objects.empty())
     {
-        std::ranges::for_each(std::views::enumerate(objects), [&](auto const &entry) {
-            auto const &[i, obj] = entry;
+        auto objectIndices = std::views::iota(std::size_t{0}, objects.size());
+        std::ranges::for_each(objectIndices, [&](std::size_t i) {
+            auto const& obj = objects[i];
             logMessage += std::format("\nobject[{}]: type={} handle={}", i, vk::to_string(obj.objectType), obj.objectHandle);
             if (obj.pObjectName)
             {
@@ -221,7 +221,7 @@ vk::DebugUtilsMessengerCreateInfoEXT makeDebugUtilsMessengerCreateInfoEXT()
 /**
  * @brief Infer vk::ImageViewType from vk::ImageType and array layer count
  */
-[[nodiscard]] constexpr vk::ImageViewType inferViewType(vk::ImageType imageType, uint32_t arrayLayers) noexcept
+[[nodiscard]] constexpr vk::ImageViewType inferViewType(vk::ImageType imageType, std::uint32_t arrayLayers) noexcept
 {
     switch (imageType)
     {

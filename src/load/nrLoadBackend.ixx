@@ -1,4 +1,3 @@
-module;
 export module nr.load:backend;
 
 import :type;
