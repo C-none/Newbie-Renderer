@@ -1,22 +1,32 @@
 # ============================================================================
-# Generate staticUtilsConstants.ixx before each build
-# ============================================================================
-add_custom_target(generate_constants
-    COMMAND ${CMAKE_COMMAND}
-        -D "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
-        -D "NR_BUILD_CONFIG=$<CONFIG>"
-        -D "NR_LOG_LEVEL=${NR_LOG_LEVEL}"
-        -D "NR_SHADER_CACHE_DIR=${NR_SHADER_CACHE_DIR}"
-        -D "NR_SHADER_ROOT_DIR=${NR_SHADER_ROOT_DIR}"
-        -D "INPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.ixx.in"
-        -D "OUTPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/staticUtilsConstants.ixx"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateConstants.cmake"
-    COMMENT "Generating staticUtilsConstants.ixx (BUILD_CONFIG=$<CONFIG>, NR_LOG_LEVEL=${NR_LOG_LEVEL}, NR_SHADER_CACHE_DIR=${NR_SHADER_CACHE_DIR}, NR_SHADER_ROOT_DIR=${NR_SHADER_ROOT_DIR})"
-)
-
-# ============================================================================
 # Build utils library
 # ============================================================================
+
+if(NOT NR_LOG_LEVEL MATCHES "^(INFO|WARNING|ERROR)$")
+    message(FATAL_ERROR "NR_LOG_LEVEL must be INFO, WARNING, or ERROR.")
+endif()
+
+set(NR_STATIC_UTILS_CONSTANTS_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/staticUtilsConstantsConfig.inl")
+
+add_custom_command(
+    OUTPUT "${NR_STATIC_UTILS_CONSTANTS_CONFIG}"
+    COMMAND ${CMAKE_COMMAND}
+        -D "NR_CACHE_FILE=${CMAKE_BINARY_DIR}/CMakeCache.txt"
+        -D "NR_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        -D "NR_BINARY_DIR=${CMAKE_BINARY_DIR}"
+        -D "NR_BUILD_CONFIG=$<CONFIG>"
+        -D "NR_OUTPUT_FILE=${NR_STATIC_UTILS_CONSTANTS_CONFIG}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateStaticUtilsConstantsConfig.cmake"
+    DEPENDS
+        "${CMAKE_BINARY_DIR}/CMakeCache.txt"
+        "${CMAKE_CURRENT_SOURCE_DIR}/GenerateStaticUtilsConstantsConfig.cmake"
+    COMMENT "Generating staticUtilsConstantsConfig.inl (BUILD_CONFIG=$<CONFIG>)"
+    VERBATIM
+)
+
+add_custom_target(generate_static_utils_constants_config
+    DEPENDS "${NR_STATIC_UTILS_CONSTANTS_CONFIG}"
+)
 
 file(GLOB MODULE_UNITS
     CONFIGURE_DEPENDS
@@ -24,9 +34,12 @@ file(GLOB MODULE_UNITS
 )
 
 nr_add_library(utils STATIC)
-add_dependencies(utils generate_constants)
+add_dependencies(utils generate_static_utils_constants_config)
 target_link_libraries(utils PRIVATE
     dependency
+)
+target_include_directories(utils PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>"
 )
 target_sources(utils
     PUBLIC

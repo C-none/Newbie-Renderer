@@ -2,12 +2,12 @@
 
 ## Introduction
 
-Newbie-Renderer is a research-oriented renderer built around C++23 modules, Slang, and Vulkan. The project is intentionally focused on a narrow target stack for now: Windows, Vulkan, and RTX-class NVIDIA hardware. The goal is not broad compatibility first, but a clean experimental platform for advanced rendering algorithms, modern resource management, and future neural rendering workflows.
+Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slang, and Vulkan. The project is intentionally focused on a narrow target stack for now: Windows, Vulkan, and RTX-class NVIDIA hardware. The goal is not broad compatibility first, but a clean experimental platform for advanced rendering algorithms, modern resource management, and future neural rendering workflows.
 
 
 ## Key Features
 
-- **Modular Architecture:** Host-side code is organized with C++23 modules, while shader code is organized around Slang modules and reusable multi-entrypoint shader programs. This keeps compile boundaries explicit and makes the renderer easier to scale without turning the codebase into a header jungle.
+- **Modular Architecture:** Host-side code is organized with C++26 modules, while shader code is organized around Slang modules and reusable multi-entrypoint shader programs. This keeps compile boundaries explicit and makes the renderer easier to scale without turning the codebase into a header jungle.
 
 - **Shader Reflection:** Slang reflection is already used to inspect shader parameters, validate resource layouts, build descriptor bindings, and keep host/shader contracts synchronized with less manual bookkeeping.
 
@@ -34,13 +34,14 @@ Newbie-Renderer is a research-oriented renderer built around C++23 modules, Slan
 
 ## Prerequisites
 
-- MSYS2 CLANG64 tools on `PATH` (`clang++`, `lld`, `clangd`, `lldb-dap`, `ninja`)
+- MSYS2 CLANG64 tools on `PATH` (`clang`, `clang++`, `clang-scan-deps`, `lld`, `llvm-ar`, `llvm-ranlib`, `llvm-objcopy`, `llvm-strip`, `clangd`, `lldb-dap`, `ninja`)
+- A compiler toolchain with `import std;` support for C++26
 - Vulkan SDK 1.4.341 or newer
-- CMake 4.2 or newer
+- CMake 4.3.3 or newer
 - Vcpkg with `VCPKG_ROOT` configured
 - Git submodules initialized with `--recurse-submodules` for Slang and assets
 
-Optional fallback toolchain:
+Optional MSVC toolchains:
 
 - Visual Studio 18 2026
 
@@ -58,7 +59,7 @@ Optional fallback toolchain:
 2. Configure
 
    ```bash
-   cmake --preset llvm-debug
+   cmake --preset llvm
    ```
 
 3. Build
@@ -83,12 +84,16 @@ Optional fallback toolchain:
 
 ### MSVC Fallback
 
+Per the CMake 4.3.3 C++ modules manual, `import std` is currently supported only with Ninja generators. The supported MSVC preset in this repository is therefore `msvc`, which uses `Ninja Multi-Config` and should be launched from a Visual Studio 18 2026 Developer PowerShell/Prompt where `cl` is available on `PATH`.
+
 ```bash
 cmake --preset msvc
 cmake --build --preset debug-msvc --target main
 ```
 
-`compile_commands.json` is generated in `build/llvm-debug` and `build/llvm-release` for clangd.
+The `msvc-vs` preset keeps the Visual Studio solution generator available for IDE-oriented workflows, but it is not the supported `import std` build path under CMake 4.3.3.
+
+`compile_commands.json` is generated in `build/llvm` for clangd.
 
 The LLVM presets also keep vcpkg `buildtrees`, `packages`, and `downloads` under `build/vcpkg` so the full Ninja + clang++ workflow stays inside the repository workspace.
 

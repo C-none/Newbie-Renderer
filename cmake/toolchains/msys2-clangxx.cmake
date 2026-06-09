@@ -17,10 +17,13 @@ if(NOT _NR_MSYS2_CLANGXX_TOOLCHAIN)
     list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
         CMAKE_C_COMPILER
         CMAKE_CXX_COMPILER
+        CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS
         CMAKE_C_COMPILER_TARGET
         CMAKE_CXX_COMPILER_TARGET
         CMAKE_AR
         CMAKE_RANLIB
+        CMAKE_OBJCOPY
+        CMAKE_STRIP
         CMAKE_RC_COMPILER
         VCPKG_CRT_LINKAGE
         VCPKG_TARGET_ARCHITECTURE
@@ -58,8 +61,11 @@ if(NOT _NR_MSYS2_CLANGXX_TOOLCHAIN)
 
     find_program(_nr_clang_compiler NAMES clang.exe clang REQUIRED)
     find_program(_nr_clangxx_compiler NAMES clang++.exe clang++ REQUIRED)
+    find_program(_nr_clang_scan_deps NAMES clang-scan-deps.exe clang-scan-deps REQUIRED)
     find_program(_nr_llvm_ar NAMES llvm-ar.exe llvm-ar REQUIRED)
     find_program(_nr_llvm_ranlib NAMES llvm-ranlib.exe llvm-ranlib REQUIRED)
+    find_program(_nr_llvm_objcopy NAMES llvm-objcopy.exe llvm-objcopy objcopy.exe objcopy REQUIRED)
+    find_program(_nr_llvm_strip NAMES llvm-strip.exe llvm-strip strip.exe strip REQUIRED)
     find_program(_nr_llvm_rc NAMES llvm-rc.exe llvm-rc)
     if(NOT _nr_llvm_rc)
         find_program(_nr_llvm_rc NAMES windres.exe windres)
@@ -95,10 +101,13 @@ if(NOT _NR_MSYS2_CLANGXX_TOOLCHAIN)
     # The top-level project is C++-only, but vcpkg ports still need a C compiler.
     set(CMAKE_C_COMPILER "${_nr_clang_compiler}" CACHE FILEPATH "" FORCE)
     set(CMAKE_CXX_COMPILER "${_nr_clangxx_compiler}" CACHE FILEPATH "" FORCE)
+    set(CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS "${_nr_clang_scan_deps}" CACHE FILEPATH "" FORCE)
     set(CMAKE_C_COMPILER_TARGET "${_nr_target_triple}" CACHE STRING "" FORCE)
     set(CMAKE_CXX_COMPILER_TARGET "${_nr_target_triple}" CACHE STRING "" FORCE)
     set(CMAKE_AR "${_nr_llvm_ar}" CACHE FILEPATH "" FORCE)
     set(CMAKE_RANLIB "${_nr_llvm_ranlib}" CACHE FILEPATH "" FORCE)
+    set(CMAKE_OBJCOPY "${_nr_llvm_objcopy}" CACHE FILEPATH "" FORCE)
+    set(CMAKE_STRIP "${_nr_llvm_strip}" CACHE FILEPATH "" FORCE)
     if(_nr_llvm_rc)
         set(CMAKE_RC_COMPILER "${_nr_llvm_rc}" CACHE FILEPATH "" FORCE)
     endif()

@@ -1,38 +1,56 @@
-cmake_minimum_required(VERSION 4.2)
+cmake_minimum_required(VERSION 4.3.3)
 
-# CMake still gates `import std;` behind an experimental opt-in that must be
-# visible before the CXX language is enabled.
+# CMake 4.3.3 still gates `import std;` behind an experimental opt-in that
+# must be visible before the CXX language is enabled.
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+
+# Keep the project baseline on C++26 even outside the provided presets.
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 project(NewbieRenderer LANGUAGES CXX)
 
 option(NR_BUILD_TESTS "Build unit tests" ON)
 option(NR_ENABLE_RELEASE_IPO "Enable IPO/LTO for Release builds when supported." ON)
+option(NR_ENABLE_CLANGD_SYNC "Synchronize clangd's isolated compile database and standard module BMI during LLVM project builds." ON)
 
 set(NR_LOG_LEVEL "INFO")
-set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache" CACHE STRING "Runtime shader cache directory")
+set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache/$<CONFIG>" CACHE STRING "Runtime shader cache directory")
 set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory")
+set(NR_CLANGD_BINARY_DIR "${CMAKE_SOURCE_DIR}/build/llvm-clangd" CACHE PATH "Build directory used to generate clangd's isolated compile database and standard module BMI.")
 
 include(CheckIPOSupported)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
-    set(CMAKE_CXX_MODULE_STD ON)
+set(NR_USING_MSYS2_CLANGXX_TOOLCHAIN OFF)
+if(DEFINED VCPKG_CHAINLOAD_TOOLCHAIN_FILE AND VCPKG_CHAINLOAD_TOOLCHAIN_FILE MATCHES "msys2-clangxx\\.cmake$")
+    set(NR_USING_MSYS2_CLANGXX_TOOLCHAIN ON)
 endif()
 
-if(DEFINED VCPKG_CHAINLOAD_TOOLCHAIN_FILE AND VCPKG_CHAINLOAD_TOOLCHAIN_FILE MATCHES "msys2-clangxx\\.cmake$")
+if(CMAKE_GENERATOR MATCHES "^Ninja")
+    if(NOT 26 IN_LIST CMAKE_CXX_COMPILER_IMPORT_STD)
+        message(FATAL_ERROR
+            "Newbie-Renderer requires C++26 `import std` support from the active C++ toolchain. "
+            "CMake detected support levels: '${CMAKE_CXX_COMPILER_IMPORT_STD}'."
+        )
+    endif()
+
+    set(NR_CMAKE_ENABLE_IMPORT_STD ON)
+else()
+    set(NR_CMAKE_ENABLE_IMPORT_STD OFF)
+    message(WARNING
+        "CMake 4.3.3 documents `import std` support only for Ninja generators. "
+        "Newbie-Renderer enables the `CXX_MODULE_STD` target property only for Ninja-based builds."
+    )
+endif()
+
+if(NR_USING_MSYS2_CLANGXX_TOOLCHAIN)
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires clang++ as the active C++ compiler.")
     endif()
 
     if(NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
         message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires the GNU-style clang++ frontend.")
-    endif()
-
-    if(NOT ";${CMAKE_CXX_COMPILER_IMPORT_STD};" MATCHES ";23;")
-        message(FATAL_ERROR
-            "The MSYS2 clang++ toolchain preset requires import std support for C++23. "
-            "Verify libc++.modules.json is discoverable by CMake."
-        )
     endif()
 endif()
 
@@ -58,7 +76,7 @@ endif()
 #     BASE_DIRS ${Vulkan_INCLUDE_DIR}
 #     FILES ${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm
 # )
-# target_compile_features(VulkanHppModule PUBLIC cxx_std_23)
+# target_compile_features(VulkanHppModule PUBLIC cxx_std_26)
 # target_link_libraries(VulkanHppModule PUBLIC Vulkan::Vulkan)
 
 if(NR_ENABLE_RELEASE_IPO)
@@ -83,13 +101,20 @@ function(nr_apply_target_settings target)
         endif()
 
         target_compile_options(${target} PRIVATE
-            $<$<CONFIG:Debug>:/W4 /WX /Zi>
-            $<$<CONFIG:Release>:/W4 /WX /Ox>
+            $<$<CONFIG:Debug>:/W4>
+            $<$<CONFIG:Debug>:/WX>
+            $<$<CONFIG:Debug>:/Zi>
+            $<$<CONFIG:Release>:/W4>
+            $<$<CONFIG:Release>:/WX>
+            $<$<CONFIG:Release>:/Ox>
         )
 
         target_link_options(${target} PRIVATE
-            $<$<CONFIG:Debug>:/INCREMENTAL /DEBUG:FULL>
-            $<$<CONFIG:Release>:/INCREMENTAL:NO /OPT:REF /OPT:ICF>
+            $<$<CONFIG:Debug>:/INCREMENTAL>
+            $<$<CONFIG:Debug>:/DEBUG:FULL>
+            $<$<CONFIG:Release>:/INCREMENTAL:NO>
+            $<$<CONFIG:Release>:/OPT:REF>
+            $<$<CONFIG:Release>:/OPT:ICF>
         )
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
         if(NR_RELEASE_IPO_SUPPORTED)
@@ -102,28 +127,50 @@ function(nr_apply_target_settings target)
             -Wall
             -Wextra
             -Werror
-            $<$<CONFIG:Debug>:-Og -g3 -fno-omit-frame-pointer>
+            $<$<CONFIG:Debug>:-Og>
+            $<$<CONFIG:Debug>:-g3>
+            $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
             $<$<CONFIG:Release>:-O3>
+            $<$<CONFIG:Release>:-ffunction-sections>
+            $<$<CONFIG:Release>:-fdata-sections>
         )
 
         target_link_options(${target} PRIVATE
-            $<$<CONFIG:Release>:-Wl,--gc-sections -Wl,--icf=all>
+            $<$<CONFIG:Release>:-fuse-ld=lld>
+            $<$<CONFIG:Release>:-Wl,--gc-sections>
+            $<$<CONFIG:Release>:-Wl,--icf=all>
         )
     endif()
 endfunction()
 
 function(nr_add_executable target)
     add_executable(${target} ${ARGN})
+    if(TARGET nr_sync_clangd_database)
+        add_dependencies(${target} nr_sync_clangd_database)
+    endif()
+    if(NR_CMAKE_ENABLE_IMPORT_STD)
+        set_target_properties(${target} PROPERTIES CXX_MODULE_STD ON)
+    endif()
     nr_apply_target_settings(${target})
 endfunction()
 
 function(nr_add_library target)
     add_library(${target} ${ARGN})
+    if(TARGET nr_sync_clangd_database)
+        add_dependencies(${target} nr_sync_clangd_database)
+    endif()
+    if(NR_CMAKE_ENABLE_IMPORT_STD)
+        set_target_properties(${target} PROPERTIES CXX_MODULE_STD ON)
+    endif()
     nr_apply_target_settings(${target})
 endfunction()
 
 function(nr_add_clang_module_object_depends source_file)
     if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"))
+        return()
+    endif()
+
+    if(CMAKE_CONFIGURATION_TYPES)
         return()
     endif()
 
@@ -146,6 +193,82 @@ function(nr_add_clang_module_object_depends source_file)
         set_source_files_properties(${source_file} PROPERTIES OBJECT_DEPENDS "${module_object_depends}")
     endif()
 endfunction()
+
+function(nr_link_module_dependencies target source_file scope)
+    set(allowed_scopes PRIVATE PUBLIC INTERFACE)
+    if(NOT "${scope}" IN_LIST allowed_scopes)
+        message(FATAL_ERROR "nr_link_module_dependencies scope must be PRIVATE, PUBLIC, or INTERFACE.")
+    endif()
+
+    if(NOT ARGN)
+        message(FATAL_ERROR "nr_link_module_dependencies requires at least one dependency target.")
+    endif()
+
+    target_link_libraries(${target} ${scope} ${ARGN})
+    add_dependencies(${target} ${ARGN})
+    nr_add_clang_module_object_depends(${source_file} ${ARGN})
+endfunction()
+
+function(nr_append_clangd_cache_arg args_var name value)
+    string(REPLACE ";" "\\;" escaped_value "${value}")
+    list(APPEND ${args_var} -D "${name}=${escaped_value}")
+    set(${args_var} "${${args_var}}" PARENT_SCOPE)
+endfunction()
+
+if(NR_ENABLE_CLANGD_SYNC
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"
+   AND CMAKE_GENERATOR MATCHES "^Ninja")
+    set(nr_clangd_configure_args
+        -S "${CMAKE_SOURCE_DIR}"
+        -B "${NR_CLANGD_BINARY_DIR}"
+        -G "${CMAKE_GENERATOR}"
+        -D "CMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}"
+        -D "CMAKE_CXX_STANDARD_REQUIRED=${CMAKE_CXX_STANDARD_REQUIRED}"
+        -D "CMAKE_CXX_EXTENSIONS=${CMAKE_CXX_EXTENSIONS}"
+        -D "CMAKE_EXPORT_COMPILE_COMMANDS=ON"
+        -D "NR_BUILD_TESTS=${NR_BUILD_TESTS}"
+        -D "NR_ENABLE_RELEASE_IPO=${NR_ENABLE_RELEASE_IPO}"
+        -D "NR_ENABLE_CLANGD_SYNC=OFF"
+        -D "VCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}"
+    )
+
+    if(CMAKE_TOOLCHAIN_FILE)
+        nr_append_clangd_cache_arg(nr_clangd_configure_args CMAKE_TOOLCHAIN_FILE "${CMAKE_TOOLCHAIN_FILE}")
+    endif()
+
+    if(CMAKE_CONFIGURATION_TYPES)
+        nr_append_clangd_cache_arg(nr_clangd_configure_args CMAKE_CONFIGURATION_TYPES "Debug")
+        nr_append_clangd_cache_arg(nr_clangd_configure_args CMAKE_DEFAULT_BUILD_TYPE "Debug")
+    else()
+        nr_append_clangd_cache_arg(nr_clangd_configure_args CMAKE_BUILD_TYPE "Debug")
+    endif()
+
+    if(DEFINED VCPKG_FEATURE_FLAGS)
+        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_FEATURE_FLAGS "${VCPKG_FEATURE_FLAGS}")
+    endif()
+
+    if(DEFINED VCPKG_INSTALL_OPTIONS)
+        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_INSTALL_OPTIONS "${VCPKG_INSTALL_OPTIONS}")
+    endif()
+
+    if(DEFINED VCPKG_TARGET_TRIPLET)
+        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_TARGET_TRIPLET "${VCPKG_TARGET_TRIPLET}")
+    endif()
+
+    if(DEFINED VCPKG_OVERLAY_TRIPLETS)
+        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_OVERLAY_TRIPLETS "${VCPKG_OVERLAY_TRIPLETS}")
+    endif()
+
+    add_custom_target(nr_sync_clangd_database
+        COMMAND ${CMAKE_COMMAND} ${nr_clangd_configure_args}
+        COMMAND ${CMAKE_COMMAND} --build "${NR_CLANGD_BINARY_DIR}" --config Debug --target __cmake_cxx_std_26
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Synchronizing clangd compile database and Debug standard module BMI"
+        USES_TERMINAL
+        VERBATIM
+    )
+endif()
 
 add_subdirectory(src)
 add_subdirectory(shader)

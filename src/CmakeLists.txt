@@ -17,18 +17,14 @@ file(GLOB IMPL_SOURCES
 )
 
 nr_add_executable(main main.cpp)
-target_link_libraries(main PRIVATE 
+nr_link_module_dependencies(main main.cpp PRIVATE
+    utils
     nrapp
     nrrenderer
     nrrenderpasses
     nrscene
     nrload
     dependency
-)
-add_dependencies(main nrapp nrrenderer nrrenderpasses nrscene nrload dependency)
-nr_add_clang_module_object_depends(main.cpp nrapp nrrenderer nrrenderpasses nrscene nrload dependency)
-target_compile_definitions(main PRIVATE
-    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_sources(main
 	PRIVATE

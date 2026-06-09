@@ -55,6 +55,15 @@ export namespace nr::rhi
     return enabledLayers;
 }
 
+[[nodiscard]] bool hasInstanceLayer(std::string_view layer)
+{
+    const auto layerProperties = vk::enumerateInstanceLayerProperties();
+    return std::ranges::any_of(layerProperties,
+                               [layer](const vk::LayerProperties &property) {
+                                   return layer == std::string_view(property.layerName);
+                               });
+}
+
 // Helper: Convert extension strings to const char* pointers with deduplication and validation
 [[nodiscard]] std::vector<char const *> gatherInstanceExtensions(std::span<const std::string> extensions)
 {
@@ -72,6 +81,15 @@ export namespace nr::rhi
         enabledExtensions.emplace_back(extension.data());
     }
     return enabledExtensions;
+}
+
+[[nodiscard]] bool hasInstanceExtension(std::string_view extension)
+{
+    const auto extensionProperties = vk::enumerateInstanceExtensionProperties();
+    return std::ranges::any_of(extensionProperties,
+                               [extension](const vk::ExtensionProperties &property) {
+                                   return extension == std::string_view(property.extensionName);
+                               });
 }
 
 vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity, vk::DebugUtilsMessageTypeFlagsEXT messageTypes, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void * /*pUserData*/)

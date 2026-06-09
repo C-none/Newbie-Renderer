@@ -2,11 +2,13 @@
     "codium.codeCompletion.enable": false,
     "C_Cpp.intelliSenseEngine": "disabled",
     "cmake.useCMakePresets": "always",
+    "cmake.defaultConfigurePreset": "llvm",
+    "cmake.defaultBuildPreset": "debug",
     "cmake.configureOnOpen": false,
     "clangd.arguments": [
         "--background-index",
         "--experimental-modules-support",
-        "--query-driver=**/clang++.exe"
+        "--query-driver=**/clang++.exe,**/c++.exe"
     ],
     "lldb-dap.executable-path": "lldb-dap"
 }

@@ -146,6 +146,12 @@ class Device
         return vulkan14Properties_;
     }
 
+    [[nodiscard]] bool hasEnabledInstanceExtension(std::string_view extension) const
+    {
+        return std::ranges::any_of(instanceEnabledExtensions,
+                                   [extension](const std::string &item) { return item == extension; });
+    }
+
     void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"})
     {
         appName = _appName;
@@ -154,7 +160,10 @@ class Device
         instance = makeInstance();
         if constexpr (isDebugMode)
         {
-            debugUtilsMessenger = vk::raii::DebugUtilsMessengerEXT(instance, makeDebugUtilsMessengerCreateInfoEXT());
+            if (hasEnabledInstanceExtension(vk::EXTDebugUtilsExtensionName))
+            {
+                debugUtilsMessenger = vk::raii::DebugUtilsMessengerEXT(instance, makeDebugUtilsMessengerCreateInfoEXT());
+            }
         }
         physicalDevice = selectPhysicalDevice(instance);
         {
@@ -333,8 +342,11 @@ class Device
         vk::InstanceCreateInfo instanceCreateInfo({}, &applicationInfo, enabledLayers, enabledExtensions);
         if constexpr (isDebugMode)
         {
-            debugCreateInfo = makeDebugUtilsMessengerCreateInfoEXT();
-            instanceCreateInfo.pNext = &debugCreateInfo;
+            if (hasEnabledInstanceExtension(vk::EXTDebugUtilsExtensionName))
+            {
+                debugCreateInfo = makeDebugUtilsMessengerCreateInfoEXT();
+                instanceCreateInfo.pNext = &debugCreateInfo;
+            }
         }
         return vk::raii::Instance(context, instanceCreateInfo);
     }
@@ -685,8 +697,23 @@ class Device
                 if (std::ranges::none_of(list, [item](const auto &s) { return s == item; }))
                     list.push_back(std::string(item));
             };
-            addIfMissing(instanceEnabledLayers, "VK_LAYER_KHRONOS_validation");
-            addIfMissing(instanceEnabledExtensions, vk::EXTDebugUtilsExtensionName);
+            constexpr std::string_view validationLayer = "VK_LAYER_KHRONOS_validation";
+            nrAssert(
+                hasInstanceLayer(validationLayer),
+                std::format(
+                    "Debug builds require '{}'. The Vulkan loader did not enumerate this layer on the current machine. "
+                    "Validation layers are provided by the Vulkan SDK / validation-layer installation, not by the GPU or display driver.",
+                    validationLayer));
+            addIfMissing(instanceEnabledLayers, validationLayer);
+
+            if (hasInstanceExtension(vk::EXTDebugUtilsExtensionName))
+            {
+                addIfMissing(instanceEnabledExtensions, vk::EXTDebugUtilsExtensionName);
+            }
+            else
+            {
+                nrLog(LogLevel::warning, "VULKAN", "VK_EXT_debug_utils is unavailable; continuing without Vulkan debug labels and messenger.");
+            }
         }
     }
 

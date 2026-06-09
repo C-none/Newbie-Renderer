@@ -40,6 +40,23 @@ function(disable_cxx_scan_for_targets dir_path)
     endforeach()
 endfunction()
 
+function(disable_compile_commands_for_targets dir_path)
+    get_property(targets DIRECTORY "${dir_path}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target ${targets})
+        if(TARGET ${target})
+            get_target_property(target_type ${target} TYPE)
+            if(target_type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+                set_target_properties(${target} PROPERTIES EXPORT_COMPILE_COMMANDS OFF)
+            endif()
+        endif()
+    endforeach()
+
+    get_property(subdirs DIRECTORY "${dir_path}" PROPERTY SUBDIRECTORIES)
+    foreach(subdir ${subdirs})
+        disable_compile_commands_for_targets("${subdir}")
+    endforeach()
+endfunction()
+
 # Helper function specifically for external libraries
 function(add_extern_library lib_name)
     # Add the subdirectory
@@ -73,6 +90,23 @@ set(SLANG_EXCLUDE_DAWN ON CACHE BOOL "Exclude WebGPU Dawn artifacts from the emb
 set(SLANG_EXCLUDE_TINT ON CACHE BOOL "Exclude slang-tint artifacts from the embedded Slang build." FORCE)
 set(SLANG_SLANG_LLVM_FLAVOR DISABLE CACHE STRING "Disable LLVM support for SPIR-V-only NewbieRenderer builds." FORCE)
 set(SLANG_ENABLE_RELEASE_DEBUG_INFO OFF CACHE BOOL "Disable debug info in Release builds of Slang for NewbieRenderer." FORCE)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU" AND WIN32)
+    foreach(secure_crt_macro IN ITEMS
+        HAVE_MEMCPY_S
+        HAVE_FOPEN_S
+        HAVE_FREAD_S
+        HAVE_WCSNLEN_S
+        HAVE_STRNLEN_S
+        HAVE_SPRINTF_S
+        HAVE_SWPRINTF_S
+        HAVE_WCSCPY_S
+        HAVE_STRCPY_S
+        HAVE_WCSNCPY_S
+        HAVE_STRNCPY_S
+    )
+        set(${secure_crt_macro} ON CACHE INTERNAL "MSYS2 clang64 provides ${secure_crt_macro}." FORCE)
+    endforeach()
+endif()
 block(SCOPE_FOR VARIABLES)
     if(MSVC)
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -88,11 +122,13 @@ block(SCOPE_FOR VARIABLES)
         endforeach()
     endif()
 
-    if(MSVC AND CMAKE_GENERATOR MATCHES "^Visual Studio")
-        # External Slang targets do not use C++20 modules, and disabling the
-        # Visual Studio scan avoids noisy false-positive PCH diagnostics.
+    if(MSVC OR (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"))
+        # External Slang targets do not use C++20 modules. Keep CMake module
+        # scanning scoped to project module targets.
         disable_cxx_scan_for_targets("${CMAKE_CURRENT_SOURCE_DIR}/slang")
     endif()
+
+    disable_compile_commands_for_targets("${CMAKE_CURRENT_SOURCE_DIR}/slang")
 endblock()
 find_package(flecs CONFIG REQUIRED)
 
@@ -101,7 +137,6 @@ set(DEPENDENCY_MODULE_UNITS
 )
 set(DEPENDENCY_IMPLEMENTATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyImpl.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/flecsPlacementNewTag.cpp"
 )
 
 set_source_files_properties(

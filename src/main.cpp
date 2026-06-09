@@ -5,6 +5,7 @@ import nr.renderer;
 import nr.renderPasses;
 import nr.scene;
 import nr.load;
+import nr.utils;
 
 namespace
 {
@@ -115,7 +116,7 @@ void printUsage()
     }
 
     // Default: use Box model from glTF sample assets
-    return std::filesystem::path{NR_PROJECT_ROOT_DIR} / "assets" / "glTF-Sample-Assets" / "Models" / "Box" / "glTF" / "Box.gltf";
+    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" / "Box" / "glTF" / "Box.gltf";
 }
 
 [[nodiscard]] int runMain(const std::filesystem::path& modelPath)

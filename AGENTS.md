@@ -4,20 +4,20 @@ This document outlines the development standards, architectural principles, and 
 
 ## 1. Project Overview
 
-**Newbie-Renderer** is a modern rendering engine built with C++23 modules and Vulkan, utilizing Slang as the shading language. The architecture emphasizes modularity, type safety, and modern C++ practices.
+**Newbie-Renderer** is a modern rendering engine built with C++26 modules and Vulkan, utilizing Slang as the shading language. The architecture emphasizes modularity, type safety, and modern C++ practices.
 
 ## 2. Core Constraints
 
 ### 2.1 Language Standards
 
-*   **C++ Version:** strictly **C++23**.
+*   **C++ Version:** strictly **C++26**.
 *   **Shader Language:** strictly **Slang** compiling to **SPIR-V**. HLSL/GLSL are not to be used directly unless wrapped or transpiled via Slang.
 
 ### 2.2 Coding Style & Modern C++
 
 *   **Modernization:** Prioritize modern C++ features over legacy practices.
 *   **Pragmatic Design:** While fully leveraging modern C++ features, avoid redundant design and over-abstraction.
-*   **Loops vs. Algorithms:** Replace raw `for` loops with **C++20/23 Ranges and Views** (pipes) whenever possible.
+*   **Loops vs. Algorithms:** Replace raw `for` loops with **C++20+ Ranges and Views** (pipes) whenever possible.
     *   *Preferred:* `data | std::views::transform(...) | ...`
     *   *Avoid:* `for (int i = 0; i < n; ++i) { ... }` unless performance critical and unrolling is necessary or the range alternative is significantly more complex.
 *   **Compile-Time Variant Policy:** For call paths that only differ by a small constant parameter (for example `LogLevel`, resource kind labels, or policy tags), prefer a single template with a non-type template parameter and `if constexpr` over multiple near-identical wrapper functions.
@@ -94,7 +94,13 @@ When generating code or refactoring:
 4.  **Language:** All code comments must be in English.
 5.  **Ownership Semantics:** Enforce Section 2.7 and avoid introducing raw-pointer ownership patterns.
 
-### 4.1 Architecture Context Maintenance Rules
+### 4.1 Closed-Loop Verification Build Rules
+
+*   **Default Build Preset:** Closed-loop build and test verification must use the LLVM Debug configuration (`cmake --build --preset debug`, `ctest --preset debug`, or an equivalent LLVM Debug target build).
+*   **No Release Substitute:** Do not use Release builds for verification unless the user explicitly requests Release validation.
+*   **Blocked Debug Verification:** If LLVM Debug verification is blocked by environment, toolchain, or file-lock issues, report that blocker and the affected command instead of switching to Release as a substitute.
+
+### 4.2 Architecture Context Maintenance Rules
 
 When code changes affect architecture-facing behavior, agents must keep the architecture context documents synchronized, especially `docs/architecture/README.md`.
 

@@ -1,11 +1,12 @@
 import std;
 import nr.load;
+import nr.utils;
 
 namespace
 {
 [[nodiscard]] std::filesystem::path projectRoot()
 {
-    return std::filesystem::path{NR_PROJECT_ROOT_DIR};
+    return std::filesystem::path{std::string{nr::projectRoot}};
 }
 
 [[nodiscard]] bool validateScene(std::string_view label, const nr::load::SceneAsset &scene)

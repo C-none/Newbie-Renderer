@@ -2,18 +2,12 @@
 nr_add_executable(embeddedTriangle embeddedTriangle.cpp)
 set_target_properties(embeddedTriangle PROPERTIES FOLDER "Test/app")
 
-target_link_libraries(embeddedTriangle PRIVATE
+nr_link_module_dependencies(embeddedTriangle embeddedTriangle.cpp PRIVATE
     nrapp
     nrrenderpasses
     nrrenderer
     utils
     dependency
-)
-add_dependencies(embeddedTriangle nrapp nrrenderpasses nrrenderer utils dependency)
-nr_add_clang_module_object_depends(embeddedTriangle.cpp nrapp nrrenderpasses nrrenderer utils dependency)
-
-target_compile_definitions(embeddedTriangle PRIVATE
-    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
 )
 
 add_custom_target(run_embeddedTriangle
@@ -28,7 +22,7 @@ add_custom_target(run_embeddedTriangle
 nr_add_executable(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp)
 set_target_properties(nr_normal_buffer_ui_smoke_test PROPERTIES FOLDER "Test/app")
 
-target_link_libraries(nr_normal_buffer_ui_smoke_test PRIVATE
+nr_link_module_dependencies(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp PRIVATE
     nrapp
     nrrenderpasses
     nrrenderer
@@ -37,12 +31,5 @@ target_link_libraries(nr_normal_buffer_ui_smoke_test PRIVATE
     utils
     dependency
 )
-add_dependencies(nr_normal_buffer_ui_smoke_test nrapp nrrenderpasses nrrenderer nrscene nrload utils dependency)
-nr_add_clang_module_object_depends(normalBufferUiSmoke.cpp nrapp nrrenderpasses nrrenderer nrscene nrload utils dependency)
-
-target_compile_definitions(nr_normal_buffer_ui_smoke_test PRIVATE
-    NR_PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
-)
 
 add_test(NAME nr_normal_buffer_ui_smoke_test COMMAND nr_normal_buffer_ui_smoke_test)
-

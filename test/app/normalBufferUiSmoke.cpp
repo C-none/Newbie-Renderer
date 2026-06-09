@@ -5,6 +5,7 @@ import nr.renderer;
 import nr.renderPasses;
 import nr.scene;
 import nr.load;
+import nr.utils;
 
 namespace
 {
@@ -80,7 +81,7 @@ namespace
 
 [[nodiscard]] std::filesystem::path defaultModelPath()
 {
-    return std::filesystem::path{NR_PROJECT_ROOT_DIR} /
+    return std::filesystem::path{std::string{nr::projectRoot}} /
            "assets" /
            "glTF-Sample-Assets" /
            "Models" /

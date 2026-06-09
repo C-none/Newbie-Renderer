@@ -2,25 +2,12 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "CMake: configure llvm-debug",
+      "label": "CMake: configure llvm",
       "type": "shell",
       "command": "cmake",
       "args": [
         "--preset",
-        "llvm-debug"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "CMake: configure llvm-release",
-      "type": "shell",
-      "command": "cmake",
-      "args": [
-        "--preset",
-        "llvm-release"
+        "llvm"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -41,7 +28,7 @@
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "dependsOn": "CMake: configure llvm-debug",
+      "dependsOn": "CMake: configure llvm",
       "problemMatcher": [
         "$gcc"
       ]
@@ -60,7 +47,7 @@
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "dependsOn": "CMake: configure llvm-release",
+      "dependsOn": "CMake: configure llvm",
       "problemMatcher": [
         "$gcc"
       ]
