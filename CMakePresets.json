@@ -56,28 +56,33 @@
   ],
   "buildPresets": [
     {
+      "name": "build-base",
+      "hidden": true,
+      "jobs": 32
+    },
+    {
       "name": "debug",
+      "inherits": "build-base",
       "configurePreset": "llvm",
-      "configuration": "Debug",
-      "jobs": 0
+      "configuration": "Debug"
     },
     {
       "name": "release",
+      "inherits": "build-base",
       "configurePreset": "llvm",
-      "configuration": "Release",
-      "jobs": 0
+      "configuration": "Release"
     },
     {
       "name": "debug-msvc",
+      "inherits": "build-base",
       "configurePreset": "msvc-vs",
-      "configuration": "Debug",
-      "jobs": 0
+      "configuration": "Debug"
     },
     {
       "name": "release-msvc",
+      "inherits": "build-base",
       "configurePreset": "msvc-vs",
-      "configuration": "Release",
-      "jobs": 0
+      "configuration": "Release"
     },
     {
       "name": "run-debug",

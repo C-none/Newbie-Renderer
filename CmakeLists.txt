@@ -4,11 +4,6 @@ cmake_minimum_required(VERSION 4.3.3)
 # must be visible before the CXX language is enabled.
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
 
-# Keep the project baseline on C++26 even outside the provided presets.
-set(CMAKE_CXX_STANDARD 26)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
 project(NewbieRenderer LANGUAGES CXX)
 
 option(NR_BUILD_TESTS "Build unit tests" ON)
@@ -19,11 +14,20 @@ set(NR_LOG_LEVEL "INFO")
 set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache/$<CONFIG>" CACHE STRING "Runtime shader cache directory")
 set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory")
 set(NR_CLANGD_BINARY_DIR "${CMAKE_SOURCE_DIR}/build/llvm-clangd" CACHE PATH "Build directory used to generate clangd's isolated compile database and standard module BMI.")
+set(NR_CLANGD_SYNC_TARGET "main" CACHE STRING "Target built in the isolated clangd build tree to refresh project module BMI and modmap files.")
 
 include(CheckIPOSupported)
 
 set(NR_USING_MSYS2_CLANGXX_TOOLCHAIN OFF)
 if(DEFINED VCPKG_CHAINLOAD_TOOLCHAIN_FILE AND VCPKG_CHAINLOAD_TOOLCHAIN_FILE MATCHES "msys2-clangxx\\.cmake$")
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires clang++ as the active C++ compiler.")
+    endif()
+
+    if(NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+        message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires the GNU-style clang++ frontend.")
+    endif()
+
     set(NR_USING_MSYS2_CLANGXX_TOOLCHAIN ON)
 endif()
 
@@ -42,16 +46,6 @@ else()
         "CMake 4.3.3 documents `import std` support only for Ninja generators. "
         "Newbie-Renderer enables the `CXX_MODULE_STD` target property only for Ninja-based builds."
     )
-endif()
-
-if(NR_USING_MSYS2_CLANGXX_TOOLCHAIN)
-    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires clang++ as the active C++ compiler.")
-    endif()
-
-    if(NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
-        message(FATAL_ERROR "The MSYS2 clang++ toolchain preset requires the GNU-style clang++ frontend.")
-    endif()
 endif()
 
 find_package(Vulkan REQUIRED)
@@ -145,9 +139,6 @@ endfunction()
 
 function(nr_add_executable target)
     add_executable(${target} ${ARGN})
-    if(TARGET nr_sync_clangd_database)
-        add_dependencies(${target} nr_sync_clangd_database)
-    endif()
     if(NR_CMAKE_ENABLE_IMPORT_STD)
         set_target_properties(${target} PROPERTIES CXX_MODULE_STD ON)
     endif()
@@ -156,15 +147,25 @@ endfunction()
 
 function(nr_add_library target)
     add_library(${target} ${ARGN})
-    if(TARGET nr_sync_clangd_database)
-        add_dependencies(${target} nr_sync_clangd_database)
-    endif()
     if(NR_CMAKE_ENABLE_IMPORT_STD)
         set_target_properties(${target} PROPERTIES CXX_MODULE_STD ON)
     endif()
     nr_apply_target_settings(${target})
 endfunction()
 
+# GNU-style Clang single-config module builds can miss a source-level ordering
+# edge for entry translation units that directly import modules produced by
+# static library targets. target_link_libraries() records the module provider
+# targets, but it does not always make the importing source object's compile
+# step wait for the producer target's archive and module build work.
+#
+# Use this for a specific importing source file, typically an executable or test
+# entry .cpp, when that file directly imports modules exported by static library
+# targets. Do not use it as a generic replacement for target_link_libraries(),
+# do not add it to every module interface, and do not add it for normal library
+# module edges where CMake's CXX_MODULES file sets and dyndep scanning already
+# model BMI ordering. It is unnecessary for MSVC, multi-config generators,
+# non-static-library dependencies, and sources that do not import those modules.
 function(nr_add_clang_module_object_depends source_file)
     if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"))
         return()
@@ -194,6 +195,10 @@ function(nr_add_clang_module_object_depends source_file)
     endif()
 endfunction()
 
+# Convenience wrapper for executable/test entry sources that directly import
+# project modules from dependency targets. Library targets should usually keep
+# using target_link_libraries() and CXX_MODULES file sets unless they hit the
+# specific GNU-style Clang single-config ordering issue described above.
 function(nr_link_module_dependencies target source_file scope)
     set(allowed_scopes PRIVATE PUBLIC INTERFACE)
     if(NOT "${scope}" IN_LIST allowed_scopes)
@@ -205,7 +210,6 @@ function(nr_link_module_dependencies target source_file scope)
     endif()
 
     target_link_libraries(${target} ${scope} ${ARGN})
-    add_dependencies(${target} ${ARGN})
     nr_add_clang_module_object_depends(${source_file} ${ARGN})
 endfunction()
 
@@ -244,27 +248,22 @@ if(NR_ENABLE_CLANGD_SYNC
         nr_append_clangd_cache_arg(nr_clangd_configure_args CMAKE_BUILD_TYPE "Debug")
     endif()
 
-    if(DEFINED VCPKG_FEATURE_FLAGS)
-        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_FEATURE_FLAGS "${VCPKG_FEATURE_FLAGS}")
-    endif()
-
-    if(DEFINED VCPKG_INSTALL_OPTIONS)
-        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_INSTALL_OPTIONS "${VCPKG_INSTALL_OPTIONS}")
-    endif()
-
-    if(DEFINED VCPKG_TARGET_TRIPLET)
-        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_TARGET_TRIPLET "${VCPKG_TARGET_TRIPLET}")
-    endif()
-
-    if(DEFINED VCPKG_OVERLAY_TRIPLETS)
-        nr_append_clangd_cache_arg(nr_clangd_configure_args VCPKG_OVERLAY_TRIPLETS "${VCPKG_OVERLAY_TRIPLETS}")
-    endif()
+    foreach(nr_clangd_cache_var IN ITEMS
+        VCPKG_FEATURE_FLAGS
+        VCPKG_INSTALL_OPTIONS
+        VCPKG_TARGET_TRIPLET
+        VCPKG_OVERLAY_TRIPLETS
+    )
+        if(DEFINED ${nr_clangd_cache_var})
+            nr_append_clangd_cache_arg(nr_clangd_configure_args "${nr_clangd_cache_var}" "${${nr_clangd_cache_var}}")
+        endif()
+    endforeach()
 
     add_custom_target(nr_sync_clangd_database
         COMMAND ${CMAKE_COMMAND} ${nr_clangd_configure_args}
-        COMMAND ${CMAKE_COMMAND} --build "${NR_CLANGD_BINARY_DIR}" --config Debug --target __cmake_cxx_std_26
+        COMMAND ${CMAKE_COMMAND} --build "${NR_CLANGD_BINARY_DIR}" --config Debug --target "${NR_CLANGD_SYNC_TARGET}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Synchronizing clangd compile database and Debug standard module BMI"
+        COMMENT "Synchronizing clangd compile database and Debug module BMI"
         USES_TERMINAL
         VERBATIM
     )
@@ -281,11 +280,3 @@ if(NR_BUILD_TESTS)
 
     add_subdirectory(test)
 endif()
-
-# Copy compile_commands.json to the root directory for clangd
-# add_custom_target(copy_compile_commands ALL
-#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#         "${CMAKE_BINARY_DIR}/compile_commands.json"
-#         "${CMAKE_SOURCE_DIR}/compile_commands.json"
-#     COMMENT "Copying compile_commands.json to root directory"
-# )

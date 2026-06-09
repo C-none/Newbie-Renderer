@@ -17,7 +17,6 @@ PUBLIC
     nrscene
     utils
 )
-add_dependencies(nrapp dependency nrrhi nrrenderer nrscene utils)
 target_sources(nrapp
     PRIVATE
         ${IMPL_SOURCES}

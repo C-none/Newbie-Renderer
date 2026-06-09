@@ -17,7 +17,6 @@ PUBLIC
     nrrhi
     dependency
 )
-add_dependencies(nrrenderer utils nrscene nrresource nrrhi dependency)
 target_sources(nrrenderer
     PRIVATE
         ${IMPL_SOURCES}

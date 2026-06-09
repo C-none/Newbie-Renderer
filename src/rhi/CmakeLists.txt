@@ -10,7 +10,7 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrrhi STATIC)
 target_link_libraries(nrrhi 
-PRIVATE
+PUBLIC
     utils
     dependency
 )

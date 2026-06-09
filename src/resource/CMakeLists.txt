@@ -10,7 +10,7 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrresource STATIC)
 target_link_libraries(nrresource
-PRIVATE
+PUBLIC
     dependency
 )
 target_sources(nrresource

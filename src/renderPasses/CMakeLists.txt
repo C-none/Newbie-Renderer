@@ -19,7 +19,6 @@ PUBLIC
     utils
     dependency
 )
-add_dependencies(nrrenderpasses nrapp nrrenderer nrscene nrresource nrrhi utils dependency)
 target_sources(nrrenderpasses
     PRIVATE
         ${IMPL_SOURCES}

@@ -10,7 +10,7 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrload STATIC)
 target_link_libraries(nrload
-PRIVATE
+PUBLIC
     utils
     dependency
 )

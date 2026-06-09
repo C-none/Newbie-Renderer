@@ -35,7 +35,7 @@ file(GLOB MODULE_UNITS
 
 nr_add_library(utils STATIC)
 add_dependencies(utils generate_static_utils_constants_config)
-target_link_libraries(utils PRIVATE
+target_link_libraries(utils PUBLIC
     dependency
 )
 target_include_directories(utils PRIVATE
