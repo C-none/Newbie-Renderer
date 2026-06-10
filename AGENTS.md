@@ -74,7 +74,16 @@ This document outlines the development standards, architectural principles, and 
 *   **Scene Rule:** Scene import/bridge/runtime errors and warnings must be emitted through `nrLog`/`nrInfo`/`nrVulkan`/`nrAssert` from `errorHandle`.
 *   **Extensibility Rule:** If a module needs additional reporting behavior, extend `errorHandle` first, then reuse it everywhere instead of adding a new ad-hoc reporting API.
 
-### 2.9 RenderPass Resource Binding Policy
+### 2.9 Exception Handling Policy
+
+*   **No try/catch for In-Project Error Paths:** Project code must **not** use `try`/`catch` as a general error-handling mechanism. Errors must be detected, reported in-place via `nrInfo`/`nrAssert`, and handled locally (early return, sentinel value, or `std::exit`).
+*   **External Library Boundary Rule:** A small, focused `try`/`catch` is permitted **only** at the immediate call site of an external library API that is documented or known to throw non-`std::exception` exceptions (e.g., `Slang::InternalError`). The catch block must:
+    1.  Emit the error in-place via `nrInfo<LogLevel::error>` with enough context to identify the call site and the failing operation.
+    2.  Either terminate (`nrAssert(false, ...)`) or return a clearly invalid sentinel value — do **not** silently swallow or re-throw.
+*   **No Propagation Wrappers:** Do **not** wrap entire functions in `try`/`catch` just to translate or re-throw. Catching, logging, and immediately re-throwing (`throw;`) is only acceptable if the sole purpose is diagnostic logging and the exception will be caught and terminated at the nearest external boundary.
+*   **`noexcept` on Internal Helpers:** Internal helper functions that call only project code (no external library calls) should be marked `noexcept` where correct. Removing `noexcept` to accommodate unhandled external exceptions is not acceptable — handle the exception at the external call site instead.
+
+### 2.10 RenderPass Resource Binding Policy
 
 *   **RenderPasses Binding:** In `renderPasses`, except for vertex/index buffers and pipeline-fixed resources, all bindable resources (descriptor-set describable resources and push constants) must be driven by `nrslang` reflection and the binding relations recorded via `shaderCursor`.
 *   **Binding Location:** Perform the actual GPU binding inside the `addPass` callback by calling `bindResourcesToCommandBuffer(...)` and `pushConstantsToCommandBuffer(...)` (see `src/rhi/nrPipeline.ixx`).

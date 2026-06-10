@@ -424,19 +424,26 @@ template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t Compi
 
 template <bool IsDebugModeValue>
 [[nodiscard]] consteval auto defaultCompilerOptions() noexcept
-    -> std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 7>, std::array<SlangCompilerOption, 6>>
+    -> std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 8>, std::array<SlangCompilerOption, 6>>
 {
     auto baseOptions = makeBaseCompilerOptions(
         IsDebugModeValue ? SLANG_OPTIMIZATION_LEVEL_NONE : SLANG_OPTIMIZATION_LEVEL_MAXIMAL,
         IsDebugModeValue ? SLANG_DEBUG_INFO_LEVEL_MAXIMAL : SLANG_DEBUG_INFO_LEVEL_NONE,
         IsDebugModeValue ? 1 : 0);
 
-    using ResultType = std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 7>, std::array<SlangCompilerOption, 6>>;
+    using ResultType = std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 8>, std::array<SlangCompilerOption, 6>>;
     ResultType options{};
     std::ranges::copy(baseOptions, options.begin());
 
     if constexpr (IsDebugModeValue)
     {
+        // Dump a repro package on any compilation error so the exact failing
+        // input can be replayed offline via slangc --load-repro.
+        options[options.size() - 2] = SlangCompilerOption{
+            .name = slang::CompilerOptionName::DumpReproOnError,
+            .kind = slang::CompilerOptionValueKind::Int,
+            .intValue0 = 1,
+        };
         options.back() = SlangCompilerOption{
             .name = slang::CompilerOptionName::WarningsAsErrors,
             .kind = slang::CompilerOptionValueKind::String,
@@ -807,10 +814,29 @@ class SlangProgram
 
             Slang::ComPtr<slang::IBlob> codeBlob;
             Slang::ComPtr<slang::IBlob> diagnostics;
-            auto compileResult = linkedProgram_->getEntryPointCode(static_cast<SlangInt>(entryIndex), 0, codeBlob.writeRef(), diagnostics.writeRef());
-            if (!detail::slangSucceeded(compileResult) || !codeBlob)
+            try
             {
-                return false;
+                auto compileResult = linkedProgram_->getEntryPointCode(static_cast<SlangInt>(entryIndex), 0, codeBlob.writeRef(), diagnostics.writeRef());
+                if (diagnostics)
+                {
+                    auto text = std::string_view(static_cast<const char *>(diagnostics->getBufferPointer()), diagnostics->getBufferSize());
+                    if (!text.empty())
+                    {
+                        nrInfo<nr::LogLevel::warning>(std::format("[SlangProgram::buildEntryPointCache] entrypoint='{}' diagnostics:\n{}", entryName, text));
+                    }
+                }
+                if (!detail::slangSucceeded(compileResult) || !codeBlob)
+                {
+                    return false;
+                }
+            }
+            catch (...)
+            {
+                nrInfo<nr::LogLevel::error>(std::format(
+                    "[SlangProgram::buildEntryPointCache] Slang threw an internal exception during getEntryPointCode for entry='{}'. "
+                    "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
+                    entryName));
+                nrAssert(false, "Slang::IComponentType::getEntryPointCode threw an internal exception.");
             }
 
             SlangEntryPointData entryPointData{};
@@ -969,26 +995,50 @@ class ShaderService
 
         Slang::ComPtr<slang::IComponentType> compositeProgram;
         Slang::ComPtr<slang::IBlob> diagnostics;
-        auto createResult = m_session->createCompositeComponentType(
-            components.data(),
-            static_cast<SlangInt>(components.size()),
-            compositeProgram.writeRef(),
-            diagnostics.writeRef());
-        emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType");
-        if (!detail::slangSucceeded(createResult) || !compositeProgram)
+        try
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] createCompositeComponentType failed for module='{}'.", moduleName));
-            return result;
+            auto createResult = m_session->createCompositeComponentType(
+                components.data(),
+                static_cast<SlangInt>(components.size()),
+                compositeProgram.writeRef(),
+                diagnostics.writeRef());
+            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType");
+            if (!detail::slangSucceeded(createResult) || !compositeProgram)
+            {
+                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] createCompositeComponentType failed for module='{}'.", moduleName));
+                return result;
+            }
+        }
+        catch (...)
+        {
+            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(exception-path)");
+            nrInfo<nr::LogLevel::error>(std::format(
+                "[ShaderService::compileProgramByFile] Slang threw an internal exception during createCompositeComponentType for module='{}'. "
+                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
+                moduleName));
+            nrAssert(false, "Slang::ISession::createCompositeComponentType threw an internal exception.");
         }
 
         Slang::ComPtr<slang::IComponentType> linkedProgram;
         diagnostics = nullptr;
-        auto linkResult = compositeProgram->link(linkedProgram.writeRef(), diagnostics.writeRef());
-        emitDiagnosticsLocked(diagnostics.get(), "link");
-        if (!detail::slangSucceeded(linkResult) || !linkedProgram)
+        try
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] link failed for module='{}'.", moduleName));
-            return result;
+            auto linkResult = compositeProgram->link(linkedProgram.writeRef(), diagnostics.writeRef());
+            emitDiagnosticsLocked(diagnostics.get(), "link");
+            if (!detail::slangSucceeded(linkResult) || !linkedProgram)
+            {
+                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] link failed for module='{}'.", moduleName));
+                return result;
+            }
+        }
+        catch (...)
+        {
+            emitDiagnosticsLocked(diagnostics.get(), "link(exception-path)");
+            nrInfo<nr::LogLevel::error>(std::format(
+                "[ShaderService::compileProgramByFile] Slang threw an internal exception during link for module='{}'. "
+                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
+                moduleName));
+            nrAssert(false, "Slang::IComponentType::link threw an internal exception.");
         }
 
         result.linkedProgram_ = linkedProgram;
@@ -1095,8 +1145,18 @@ class ShaderService
     {
         if (!m_globalSession)
         {
-            auto result = slang::createGlobalSession(m_globalSession.writeRef());
-            nrAssert(detail::slangSucceeded(result), "Failed to create Slang global session.");
+            try
+            {
+                auto result = slang::createGlobalSession(m_globalSession.writeRef());
+                nrAssert(detail::slangSucceeded(result), "Failed to create Slang global session.");
+            }
+            catch (...)
+            {
+                nrInfo<nr::LogLevel::error>(
+                    "[ShaderService::ensureGlobalSessionLocked] Slang threw an internal exception during createGlobalSession. "
+                    "Attach a debugger and break on Slang::InternalError to inspect the Message field.");
+                nrAssert(false, "Slang::createGlobalSession threw an internal exception.");
+            }
         }
     }
 
@@ -1224,8 +1284,18 @@ class ShaderService
         sessionDesc.compilerOptionEntryCount = static_cast<std::uint32_t>(m_compilerOptionEntries.size());
         sessionDesc.fileSystem = nullptr;
 
-        auto result = m_globalSession->createSession(sessionDesc, m_session.writeRef());
-        nrAssert(detail::slangSucceeded(result), "Failed to create Slang session.");
+        try
+        {
+            auto result = m_globalSession->createSession(sessionDesc, m_session.writeRef());
+            nrAssert(detail::slangSucceeded(result), "Failed to create Slang session.");
+        }
+        catch (...)
+        {
+            nrInfo<nr::LogLevel::error>(
+                "[ShaderService::recreateSessionLocked] Slang threw an internal exception during createSession. "
+                "Attach a debugger and break on Slang::InternalError to inspect the Message field.");
+            nrAssert(false, "Slang::IGlobalSession::createSession threw an internal exception.");
+        }
     }
 
     void emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string_view context) const
@@ -1327,7 +1397,19 @@ class ShaderService
         Slang::ComPtr<slang::IBlob> diagnostics;
         Slang::ComPtr<slang::IModule> loadedModule;
         diagnostics = nullptr;
-        loadedModule = Slang::ComPtr<slang::IModule>(m_session->loadModule(normalizedModulePath.c_str(), diagnostics.writeRef()));
+        try
+        {
+            loadedModule = Slang::ComPtr<slang::IModule>(m_session->loadModule(normalizedModulePath.c_str(), diagnostics.writeRef()));
+        }
+        catch (...)
+        {
+            nrInfo<nr::LogLevel::error>(std::format(
+                "[ShaderService::loadOrCompileModuleLocked] Slang threw an internal exception during loadModule for module='{}' path='{}'. "
+                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
+                normalizedModuleName, normalizedModulePath));
+            emitDiagnosticsLocked(diagnostics.get(), "loadModule(exception-path)");
+            nrAssert(false, "Slang::ISession::loadModule threw an internal exception.");
+        }
         emitDiagnosticsLocked(diagnostics.get(), "loadModule(module-path)");
 
         if (!loadedModule)

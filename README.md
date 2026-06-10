@@ -76,10 +76,10 @@ Optional MSVC toolchains:
 
    ```bash
    # Debug
-   cmake --build --preset run-debug
+   ./build/llvm/Debug/main.exe
 
    # Release
-   cmake --build --preset run-release
+   ./build/llvm/Release/main.exe
    ```
 
 ### MSVC Fallback

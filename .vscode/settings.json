@@ -1,5 +1,4 @@
 {
-    "codium.codeCompletion.enable": false,
     "C_Cpp.intelliSenseEngine": "disabled",
     "cmake.useCMakePresets": "always",
     "cmake.defaultConfigurePreset": "llvm",
@@ -10,5 +9,11 @@
         "--experimental-modules-support",
         "--query-driver=**/clang++.exe,**/c++.exe"
     ],
-    "lldb-dap.executable-path": "lldb-dap"
+    "cmake.debugConfig": {
+        "type": "lldb-dap",
+        "request": "launch",
+        "program": "${command:cmake.buildDirectory}/src/Debug/main.exe",
+        "cwd": "${workspaceFolder}",
+        "stopOnEntry": false
+    }
 }

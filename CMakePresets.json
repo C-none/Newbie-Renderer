@@ -84,34 +84,6 @@
       "configurePreset": "msvc-vs",
       "configuration": "Release"
     },
-    {
-      "name": "run-debug",
-      "inherits": "debug",
-      "targets": [
-        "run_main"
-      ]
-    },
-    {
-      "name": "run-release",
-      "inherits": "release",
-      "targets": [
-        "run_main"
-      ]
-    },
-    {
-      "name": "run-debug-msvc",
-      "inherits": "debug-msvc",
-      "targets": [
-        "run_main"
-      ]
-    },
-    {
-      "name": "run-release-msvc",
-      "inherits": "release-msvc",
-      "targets": [
-        "run_main"
-      ]
-    }
   ],
   "testPresets": [
     {
