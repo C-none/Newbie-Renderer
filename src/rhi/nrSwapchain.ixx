@@ -66,11 +66,22 @@ struct SwapChain
      */
     [[nodiscard]] AcquireResult acquireNextImage(const vk::raii::Semaphore &imageAvailable, std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max()) const
     {
-        auto [result, imageIndex] = swapChain.acquireNextImage(timeout, *imageAvailable, vk::Fence{});
-        return AcquireResult{
-            .imageIndex = imageIndex,
-            .result = result,
-        };
+        try
+        {
+            auto [result, imageIndex] = swapChain.acquireNextImage(timeout, *imageAvailable, vk::Fence{});
+            return AcquireResult{
+                .imageIndex = imageIndex,
+                .result = result,
+            };
+        }
+        catch (const vk::SystemError& error)
+        {
+            nrAssert(isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::acquireNextImage failed: {}", error.what()));
+            return AcquireResult{
+                .imageIndex = 0,
+                .result = vk::Result::eErrorOutOfDateKHR,
+            };
+        }
     }
 
     /**
@@ -89,11 +100,25 @@ struct SwapChain
         presentInfo.pSwapchains = &swapchainHandle;
         presentInfo.pImageIndices = &imageIndex;
 
-        auto result = presentQueue.presentKHR(presentInfo);
-        return PresentResult{.result = result};
+        try
+        {
+            auto result = presentQueue.presentKHR(presentInfo);
+            return PresentResult{.result = result};
+        }
+        catch (const vk::SystemError& error)
+        {
+            nrAssert(isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::present failed: {}", error.what()));
+            return PresentResult{.result = vk::Result::eErrorOutOfDateKHR};
+        }
     }
 
   private:
+    template<vk::Result Expected>
+    [[nodiscard]] static bool isVulkanResult(const vk::SystemError& error) noexcept
+    {
+        return error.code().value() == static_cast<int>(Expected);
+    }
+
     [[nodiscard]] static SwapChain createImpl(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent, const SwapChainConfig &config, vk::SwapchainKHR oldSwapchain)
     {
         auto formats = physicalDevice.getSurfaceFormatsKHR(surface);
@@ -271,6 +296,12 @@ class PresentationContext
     [[nodiscard]] PresentResult present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore) const
     {
         nrAssert(activeSwapchainImageIndex_.has_value(), "PresentationContext::present requires a valid acquired swapchain image.");
+        nrAssert(
+            queueManager.compute().queueFamilyIndex() == presentQueueFamily_,
+            std::format(
+                "PresentationContext::present compute-present policy expected compute queue family {}, but got {}.",
+                presentQueueFamily_,
+                queueManager.compute().queueFamilyIndex()));
         return swapChain_.present(queueManager.compute().handle(), *activeSwapchainImageIndex_, waitSemaphore);
     }
 
@@ -395,7 +426,9 @@ class PresentationContext
   private:
     void ensurePresentSupport(const vk::raii::PhysicalDevice &physicalDevice) const
     {
-        nrAssert(physicalDevice.getSurfaceSupportKHR(presentQueueFamily_, surface_.surface), std::format("Compute queue family {} does not support present.", presentQueueFamily_));
+        nrAssert(
+            physicalDevice.getSurfaceSupportKHR(presentQueueFamily_, surface_.surface),
+            std::format("Compute-present policy requires compute queue family {} to support present.", presentQueueFamily_));
     }
 
     Surface surface_;

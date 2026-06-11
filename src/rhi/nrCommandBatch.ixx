@@ -64,24 +64,14 @@ public:
     }
 
     /**
-     * @brief Add a raw command-buffer handle.
-     *
-     * This overload is useful for tests and interop code where
-     * the caller already owns raw Vulkan handles.
-     */
-    void addCommandBuffer(vk::CommandBuffer commandBuffer) {
-        commandBuffers_.push_back(commandBuffer);
-    }
-
-    /**
      * @brief Add multiple command buffers to the batch
      * @param commandBuffers Span of RAII command buffers
      */
     void addCommandBuffers(std::span<const vk::raii::CommandBuffer> commandBuffers) {
         commandBuffers_.reserve(commandBuffers_.size() + commandBuffers.size());
-        for (const auto& cb : commandBuffers) {
+        std::ranges::for_each(commandBuffers, [&](const auto& cb) {
             commandBuffers_.push_back(*cb);
-        }
+        });
     }
 
     /**

@@ -12,6 +12,7 @@ inline constexpr std::string_view ansiReset = "\x1b[0m";
 inline constexpr std::string_view ansiRedBold = "\x1b[1;31m";
 inline constexpr std::string_view ansiRed = "\x1b[31m";
 inline constexpr std::string_view ansiYellow = "\x1b[33m";
+inline constexpr std::string_view ansiPaleYellow = "\x1b[93m";
 inline constexpr std::string_view ansiCyan = "\x1b[36m";
 
 constexpr std::string_view levelColor(LogLevel level)
@@ -35,13 +36,15 @@ inline void emitLog(LogLevel level, std::string_view channel, std::string_view c
     std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
     auto& stream = levelStream(level);
     std::print(stream,
-               "{}[NR {}:{}]{} {}\n{}\n{}\n",
+               "{}[NR {}:{}]{} {}\n{}{}{}\n{}\n",
                detail::levelColor(level),
                channel,
                logLevelNames[static_cast<std::size_t>(level)],
                detail::ansiReset,
                locationStr,
+               detail::ansiPaleYellow,
                loc.function_name(),
+               detail::ansiReset,
                context.empty() ? "(none)" : context);
     stream.flush();
 }
@@ -67,8 +70,14 @@ constexpr inline void nrAssert(bool condition, std::string_view context = "", st
         std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
 
         std::print(std::cerr,
-                   "{}[NR ASSERT]{} {}\n{}\n{}\n",
-                   detail::ansiRedBold, detail::ansiReset, locationStr, loc.function_name(), context.empty() ? "(none)" : context);
+                   "{}[NR ASSERT]{} {}\n{}{}{}\n{}\n",
+                   detail::ansiRedBold,
+                   detail::ansiReset,
+                   locationStr,
+                   detail::ansiPaleYellow,
+                   loc.function_name(),
+                   detail::ansiReset,
+                   context.empty() ? "(none)" : context);
 
         std::exit(1);
     }

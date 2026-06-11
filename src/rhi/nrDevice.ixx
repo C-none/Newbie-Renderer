@@ -146,6 +146,11 @@ class Device
         return vulkan14Properties_;
     }
 
+    [[nodiscard]] static constexpr QueueRole presentSubmitRole() noexcept
+    {
+        return QueueRole::Compute;
+    }
+
     [[nodiscard]] bool hasEnabledInstanceExtension(std::string_view extension) const
     {
         return std::ranges::any_of(instanceEnabledExtensions,
@@ -230,7 +235,7 @@ class Device
         if (signalForPresent)
         {
             nrAssert(!frameFinalSubmitRole_.has_value(), "Device::submitFrameBatch final present-signaling submit can only happen once per frame.");
-            nrAssert(submitRole == QueueRole::Compute, "Device::submitFrameBatch requires compute queue when signalForPresent=true.");
+            nrAssert(submitRole == presentSubmitRole(), "Device::submitFrameBatch compute-present policy requires the compute queue when signalForPresent=true.");
         }
 
         auto& frame = frameManager.current();
@@ -290,13 +295,13 @@ class Device
     {
         return frameSubmitCount_ > 0 &&
                frameFinalSubmitRole_.has_value() &&
-               *frameFinalSubmitRole_ == QueueRole::Compute &&
+               *frameFinalSubmitRole_ == presentSubmitRole() &&
                presentationContext.hasSubmittedCurrentFrame();
     }
 
     [[nodiscard]] QueueRole submitRoleForPresent() const noexcept
     {
-        return frameFinalSubmitRole_.value_or(QueueRole::Graphics);
+        return frameFinalSubmitRole_.value_or(presentSubmitRole());
     }
 
     [[nodiscard]] std::uint32_t frameSubmitCount() const noexcept
@@ -307,7 +312,7 @@ class Device
     [[nodiscard]] PresentResult presentFrame()
     {
         nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::presentFrame requires beginFrame() before present.");
-        nrAssert(canPresentCurrentFrame(), "Device::presentFrame requires a compute-queue final submission that signals renderFinished.");
+        nrAssert(canPresentCurrentFrame(), "Device::presentFrame compute-present policy requires a compute-queue final submission that signals renderFinished.");
 
         auto presentResult = presentationContext.present(queueManager, activePresentSemaphore());
 
@@ -380,13 +385,22 @@ class Device
             auto flags = queueFamilyProperties[i].queueFlags;
             return (flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics);
         });
-        queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)] = dedicatedCompute.value_or(*graphicsFamily);
+        auto computeFamily = dedicatedCompute;
+        if (!computeFamily.has_value())
+        {
+            computeFamily = findFirst([&](std::size_t i) {
+                return hasFlags(i, vk::QueueFlagBits::eCompute);
+            });
+        }
+        nrAssert(computeFamily.has_value(), "No compute queue family available.");
+        queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)] = *computeFamily;
 
         auto dedicatedTransfer = findFirst([&](std::size_t i) {
             auto flags = queueFamilyProperties[i].queueFlags;
             return (flags & vk::QueueFlagBits::eTransfer) && !(flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics);
         });
-        queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)] = dedicatedTransfer.value_or(queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)]);
+        nrAssert(dedicatedTransfer.has_value(), "Dedicated copy/transfer queue family is required, but no transfer-only queue family is available.");
+        queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)] = *dedicatedTransfer;
 
         constexpr float queuePriority = 1.0f;
         auto uniqueFamilies = std::array{

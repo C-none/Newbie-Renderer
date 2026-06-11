@@ -83,7 +83,7 @@
       "inherits": "build-base",
       "configurePreset": "msvc-vs",
       "configuration": "Release"
-    },
+    }
   ],
   "testPresets": [
     {

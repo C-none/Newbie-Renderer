@@ -44,12 +44,12 @@ export namespace nr::rhi
  * Usage Pattern:
  *
  *   // Main thread: dispatch work to thread pool
- *   std::vector<std::future<vk::CommandBuffer>> futures;
+ *   std::vector<std::future<vk::raii::CommandBuffer>> futures;
  *   for (std::size_t i = 0; i < threadPool.size(); ++i) {
  *       futures.push_back(threadPool.submit([&, threadId = i]() {
  *           // Pools are prebuilt at frame begin; this is lock-free indexed access.
  *           CommandPool& pool = frame.secondary<QueueRole::Graphics>(threadId);
- *           vk::CommandBuffer cb = pool.allocateSecondary();
+ *           auto cb = pool.allocateSecondary();
  *
  *           // Record commands (no locks needed here!)
  *           CommandRecorder::beginSecondary(cb, inheritanceInfo);
@@ -61,11 +61,11 @@ export namespace nr::rhi
  *   }
  *
  *   // Collect results
- *   std::vector<vk::CommandBuffer> secondaries;
+ *   std::vector<std::reference_wrapper<const vk::raii::CommandBuffer>> secondaries;
  *   for (auto& f : futures) secondaries.push_back(f.get());
  *
  *   // Main thread: build primary and execute secondaries
- *   vk::CommandBuffer primary = frame.graphicsPrimary().allocatePrimary();
+ *   auto primary = frame.graphicsPrimary().allocatePrimary();
  *   CommandRecorder::beginPrimary(primary);
  *   vkCmdExecuteCommands(primary, secondaries.size(), secondaries.data());
  *   CommandRecorder::end(primary);

@@ -36,9 +36,11 @@ Current dependency frameworks:
 Current boundary notes:
 
 - Windows + Vulkan + RTX-class hardware are hard assumptions.
+- RHI device creation requires graphics, compute, and a dedicated copy/transfer queue family; the frame-present policy is compute-final, and the selected compute queue family must support surface presentation.
 - Command invocation should stay on Vulkan-Hpp RAII member functions instead of project-local dispatch tables.
+- RHI command-buffer helper APIs expose `const vk::raii::CommandBuffer&`; raw `vk::CommandBuffer` handles stay internal implementation details.
 - Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
-- `nr.rhi` exposes descriptor-indexing, buffer-device-address, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection.
+- `nr.rhi` exposes descriptor-indexing, buffer-device-address, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection with a semantic multi-set ABI for runtime arrays.
 - RHI copy helpers record Vulkan-Hpp copy commands 2 while keeping narrow adapters for existing copy-region structs.
 - `PipelineState` retains the source `SlangProgram` so reflection-backed cursor access remains valid after pipeline creation.
 - `rhi` is the execution layer, not the content-organization layer.

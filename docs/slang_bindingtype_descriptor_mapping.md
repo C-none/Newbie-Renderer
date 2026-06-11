@@ -151,6 +151,21 @@ Push constants are part of `VkPipelineLayout` push constant ranges and `vkCmdPus
   - descriptor-array reflection shapes that expose binding counts without a regular `elementTypeLayout`
 - `ShaderCursor::referencesRuntimeDescriptorArray()` and `ShaderCursor::bindingDescriptorCount()` are the current runtime query helpers for this path.
 - `ShaderBindingSet` now records the allocated descriptor capacity for variable-count bindings so write validation uses the real runtime set capacity rather than only the layout default.
+- `DescriptorBindingPolicy` defaults to the semantic multi-set ABI for runtime-sized descriptor arrays. The RHI validates the set reported by Slang reflection and never remaps shader-declared `[[vk::binding(binding, set)]]` values on the host side.
+
+Default runtime-array set convention:
+
+| Runtime descriptor semantic | Required set |
+|---|---:|
+| `Sampler` | 0 |
+| `CombinedImageSampler` / `SampledImage` | 1 |
+| `StorageImage` | 2 |
+| buffer and texel-buffer descriptors | 3 |
+| `AccelerationStructure` | 4 |
+| `InputAttachment` | 5 |
+| `InlineUniformBlock` | 6 |
+
+Fixed-size descriptors can still use shader-declared sets outside this convention. The convention only applies when Slang reports an unbounded/runtime-sized descriptor array.
 
 ### Reflection lifetime requirement
 

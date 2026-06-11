@@ -130,11 +130,6 @@ public:
      */
     [[nodiscard]] const vk::raii::CommandBuffer& get() const noexcept { return commandBuffer_; }
 
-    /**
-     * @brief Implicit conversion to vk::CommandBuffer for convenience
-     */
-    [[nodiscard]] operator vk::CommandBuffer() const noexcept { return *commandBuffer_; }
-
 private:
     const vk::raii::CommandBuffer& commandBuffer_;
 };

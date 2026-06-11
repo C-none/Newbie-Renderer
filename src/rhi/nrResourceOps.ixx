@@ -964,7 +964,7 @@ class BarrierBatch
 /**
  * @brief Apply one sync2 barrier batch into a command buffer.
  */
-inline void pipelineBarrier(vk::CommandBuffer commandBuffer, const BarrierBatch& barriers)
+inline void pipelineBarrier(const vk::raii::CommandBuffer& commandBuffer, const BarrierBatch& barriers)
 {
     auto packet = barriers.buildDependencyInfo();
     commandBuffer.pipelineBarrier2(packet.dependencyInfo());
@@ -973,7 +973,7 @@ inline void pipelineBarrier(vk::CommandBuffer commandBuffer, const BarrierBatch&
 /**
  * @brief Transition one image using a single sync2 image barrier.
  */
-inline void transitionImage(vk::CommandBuffer commandBuffer, const Image& image, vk::ImageMemoryBarrier2 barrier)
+inline void transitionImage(const vk::raii::CommandBuffer& commandBuffer, const Image& image, vk::ImageMemoryBarrier2 barrier)
 {
     BarrierBatch barriers{};
     barriers.addImage(image, std::move(barrier));
@@ -1020,7 +1020,7 @@ inline void transitionImage(vk::CommandBuffer commandBuffer, const Image& image,
 /**
  * @brief Record a Vulkan 1.3+ copy-buffer command with a pNext-capable region.
  */
-inline void copyBuffer2(vk::CommandBuffer commandBuffer, vk::Buffer src, vk::Buffer dst, vk::BufferCopy2 region)
+inline void copyBuffer2(const vk::raii::CommandBuffer& commandBuffer, vk::Buffer src, vk::Buffer dst, vk::BufferCopy2 region)
 {
     auto copyInfo = vk::CopyBufferInfo2{src, dst, 1u, &region};
     commandBuffer.copyBuffer2(copyInfo);
@@ -1029,7 +1029,7 @@ inline void copyBuffer2(vk::CommandBuffer commandBuffer, vk::Buffer src, vk::Buf
 /**
  * @brief Record a Vulkan 1.3+ copy-buffer-to-image command with a pNext-capable region.
  */
-inline void copyBufferToImage2(vk::CommandBuffer commandBuffer, vk::Buffer src, vk::Image dst, vk::ImageLayout dstLayout, vk::BufferImageCopy2 region)
+inline void copyBufferToImage2(const vk::raii::CommandBuffer& commandBuffer, vk::Buffer src, vk::Image dst, vk::ImageLayout dstLayout, vk::BufferImageCopy2 region)
 {
     auto copyInfo = vk::CopyBufferToImageInfo2{src, dst, dstLayout, 1u, &region};
     commandBuffer.copyBufferToImage2(copyInfo);
@@ -1038,7 +1038,7 @@ inline void copyBufferToImage2(vk::CommandBuffer commandBuffer, vk::Buffer src, 
 /**
  * @brief Record a Vulkan 1.3+ copy-image-to-buffer command with a pNext-capable region.
  */
-inline void copyImageToBuffer2(vk::CommandBuffer commandBuffer, vk::Image src, vk::ImageLayout srcLayout, vk::Buffer dst, vk::BufferImageCopy2 region)
+inline void copyImageToBuffer2(const vk::raii::CommandBuffer& commandBuffer, vk::Image src, vk::ImageLayout srcLayout, vk::Buffer dst, vk::BufferImageCopy2 region)
 {
     auto copyInfo = vk::CopyImageToBufferInfo2{src, srcLayout, dst, 1u, &region};
     commandBuffer.copyImageToBuffer2(copyInfo);
@@ -1047,7 +1047,7 @@ inline void copyImageToBuffer2(vk::CommandBuffer commandBuffer, vk::Image src, v
 /**
  * @brief Record a Vulkan 1.3+ copy-image command with a pNext-capable region.
  */
-inline void copyImage2(vk::CommandBuffer commandBuffer, vk::Image src, vk::ImageLayout srcLayout, vk::Image dst, vk::ImageLayout dstLayout, vk::ImageCopy2 region)
+inline void copyImage2(const vk::raii::CommandBuffer& commandBuffer, vk::Image src, vk::ImageLayout srcLayout, vk::Image dst, vk::ImageLayout dstLayout, vk::ImageCopy2 region)
 {
     auto copyInfo = vk::CopyImageInfo2{src, srcLayout, dst, dstLayout, 1u, &region};
     commandBuffer.copyImage2(copyInfo);
@@ -1056,7 +1056,7 @@ inline void copyImage2(vk::CommandBuffer commandBuffer, vk::Image src, vk::Image
 /**
  * @brief Copy one buffer into another with an optional explicit size.
  */
-inline void copyBuffer(vk::CommandBuffer commandBuffer, const Buffer& src, const Buffer& dst, vk::DeviceSize size = 0)
+inline void copyBuffer(const vk::raii::CommandBuffer& commandBuffer, const Buffer& src, const Buffer& dst, vk::DeviceSize size = 0)
 {
     vk::DeviceSize copySize = size == 0 ? std::min(src.size(), dst.size()) : size;
     vk::BufferCopy region{0, 0, copySize};
@@ -1094,7 +1094,7 @@ inline void copyBuffer(vk::CommandBuffer commandBuffer, const Buffer& src, const
 /**
  * @brief Copy buffer data into an image.
  */
-inline void copyBufferToImage(vk::CommandBuffer commandBuffer, const Buffer& src, const Image& dst, vk::ImageLayout dstLayout = vk::ImageLayout::eTransferDstOptimal, const vk::BufferImageCopy& region = {})
+inline void copyBufferToImage(const vk::raii::CommandBuffer& commandBuffer, const Buffer& src, const Image& dst, vk::ImageLayout dstLayout = vk::ImageLayout::eTransferDstOptimal, const vk::BufferImageCopy& region = {})
 {
     auto effectiveRegion = normalizeBufferImageCopyRegion(dst, region);
     copyBufferToImage2(commandBuffer, src.handle(), dst.handle(), dstLayout, toBufferImageCopy2(effectiveRegion));
@@ -1103,7 +1103,7 @@ inline void copyBufferToImage(vk::CommandBuffer commandBuffer, const Buffer& src
 /**
  * @brief Copy image data into a buffer.
  */
-inline void copyImageToBuffer(vk::CommandBuffer commandBuffer, const Image& src, const Buffer& dst, vk::ImageLayout srcLayout = vk::ImageLayout::eTransferSrcOptimal, const vk::BufferImageCopy& region = {})
+inline void copyImageToBuffer(const vk::raii::CommandBuffer& commandBuffer, const Image& src, const Buffer& dst, vk::ImageLayout srcLayout = vk::ImageLayout::eTransferSrcOptimal, const vk::BufferImageCopy& region = {})
 {
     auto effectiveRegion = normalizeBufferImageCopyRegion(src, region);
     copyImageToBuffer2(commandBuffer, src.handle(), srcLayout, dst.handle(), toBufferImageCopy2(effectiveRegion));
@@ -1166,7 +1166,7 @@ inline void copyImageToBuffer(vk::CommandBuffer commandBuffer, const Image& src,
  * @brief Copy image data from one image to another.
  */
 inline void copyImageToImage(
-    vk::CommandBuffer commandBuffer,
+    const vk::raii::CommandBuffer& commandBuffer,
     const Image& src,
     const Image& dst,
     vk::ImageLayout srcLayout = vk::ImageLayout::eTransferSrcOptimal,
@@ -1178,7 +1178,7 @@ inline void copyImageToImage(
 }
 
 inline void copyImageToImage(
-    vk::CommandBuffer commandBuffer,
+    const vk::raii::CommandBuffer& commandBuffer,
     vk::Image src,
     vk::Extent3D srcExtent,
     vk::ImageAspectFlags srcAspect,
@@ -1532,7 +1532,7 @@ class UploadReadbackContext
     /**
      * @brief Record acquire barrier from upload ticket into destination queue command buffer.
      */
-    void recordAcquireBarrier(vk::CommandBuffer commandBuffer, const BufferUploadTicket& ticket) const
+    void recordAcquireBarrier(const vk::raii::CommandBuffer& commandBuffer, const BufferUploadTicket& ticket) const
     {
         BarrierBatch acquireBarriers{};
         acquireBarriers.add(makeAcquireBarrier(ticket));
@@ -1555,7 +1555,7 @@ class UploadReadbackContext
     /**
      * @brief Record acquire barrier from image upload ticket into destination queue command buffer.
      */
-    void recordImageAcquireBarrier(vk::CommandBuffer commandBuffer, const ImageUploadTicket& ticket) const
+    void recordImageAcquireBarrier(const vk::raii::CommandBuffer& commandBuffer, const ImageUploadTicket& ticket) const
     {
         BarrierBatch acquireBarriers{};
         acquireBarriers.add(makeImageAcquireBarrier(ticket));
@@ -1614,8 +1614,6 @@ class UploadReadbackContext
 
             CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
             {
-                auto raw = *commandBuffer;
-
                 if (uploadedSize == 0 && ownership.acquireToTransfer.has_value())
                 {
                     BarrierBatch transferAcquireBarrier{};
@@ -1624,7 +1622,7 @@ class UploadReadbackContext
                         ownership.acquireToTransfer->acquire,
                         dstOffset,
                         totalSize));
-                    pipelineBarrier(raw, transferAcquireBarrier);
+                    pipelineBarrier(commandBuffer, transferAcquireBarrier);
                 }
 
                 // The Vulkan submission itself performs the required host->device
@@ -1633,7 +1631,7 @@ class UploadReadbackContext
                 copyRegion.srcOffset = allocation.offset;
                 copyRegion.dstOffset = dstOffset + uploadedSize;
                 copyRegion.size = chunkSize;
-                copyBuffer2(raw, uploadRing_.handle(), dst.handle(), toBufferCopy2(copyRegion));
+                copyBuffer2(commandBuffer, uploadRing_.handle(), dst.handle(), toBufferCopy2(copyRegion));
 
                 if (remainingSize == chunkSize)
                 {
@@ -1643,7 +1641,7 @@ class UploadReadbackContext
                         ownership.releaseToDestination.release,
                         dstOffset,
                         totalSize));
-                    pipelineBarrier(raw, releaseBarrier);
+                    pipelineBarrier(commandBuffer, releaseBarrier);
                 }
             }
             CommandRecorder::end(commandBuffer);
@@ -1734,8 +1732,6 @@ class UploadReadbackContext
         auto& commandBuffer = commandBuffers.front();
         CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         {
-            auto raw = *commandBuffer;
-
             if (ownership.acquireToTransfer.has_value())
             {
                 BarrierBatch transferAcquireBarrier{};
@@ -1744,7 +1740,7 @@ class UploadReadbackContext
                     sourceLayout,
                     vk::ImageLayout::eTransferDstOptimal,
                     ownership.acquireToTransfer->acquire));
-                pipelineBarrier(raw, transferAcquireBarrier);
+                pipelineBarrier(commandBuffer, transferAcquireBarrier);
             }
             else
             {
@@ -1762,12 +1758,12 @@ class UploadReadbackContext
                     {},
                     nullptr,
                 }));
-                pipelineBarrier(raw, toTransferDstBarrier);
+                pipelineBarrier(commandBuffer, toTransferDstBarrier);
             }
 
             effectiveRegion.bufferOffset += allocation.offset;
             copyBufferToImage2(
-                raw,
+                commandBuffer,
                 uploadRing_.handle(),
                 dst.handle(),
                 vk::ImageLayout::eTransferDstOptimal,
@@ -1800,7 +1796,7 @@ class UploadReadbackContext
                     destinationLayout,
                     ownership.releaseToDestination.release));
             }
-            pipelineBarrier(raw, releaseBarrier);
+            pipelineBarrier(commandBuffer, releaseBarrier);
         }
         CommandRecorder::end(commandBuffer);
 
@@ -1864,8 +1860,6 @@ class UploadReadbackContext
         auto& commandBuffer = commandBuffers.front();
         CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         {
-            auto raw = *commandBuffer;
-
             BarrierBatch preCopyBarrier{};
             preCopyBarrier.add(makeBufferBarrier(src, vk::BufferMemoryBarrier2{
                 syncPlan.preCopy.stages,
@@ -1879,17 +1873,17 @@ class UploadReadbackContext
                 size,
                 nullptr,
             }));
-            pipelineBarrier(raw, preCopyBarrier);
+            pipelineBarrier(commandBuffer, preCopyBarrier);
 
-            recordReadbackRingToTransferWriteBarrier(raw, allocation.offset, size);
+            recordReadbackRingToTransferWriteBarrier(commandBuffer, allocation.offset, size);
 
             vk::BufferCopy copyRegion{};
             copyRegion.srcOffset = srcOffset;
             copyRegion.dstOffset = allocation.offset;
             copyRegion.size = size;
-            copyBuffer2(raw, src.handle(), readbackRing_.handle(), toBufferCopy2(copyRegion));
+            copyBuffer2(commandBuffer, src.handle(), readbackRing_.handle(), toBufferCopy2(copyRegion));
 
-            recordReadbackRingHostVisibilityBarrier(raw, allocation.offset, size);
+            recordReadbackRingHostVisibilityBarrier(commandBuffer, allocation.offset, size);
 
             BarrierBatch postCopyBarrier{};
             postCopyBarrier.add(makeBufferBarrier(src, vk::BufferMemoryBarrier2{
@@ -1904,7 +1898,7 @@ class UploadReadbackContext
                 size,
                 nullptr,
             }));
-            pipelineBarrier(raw, postCopyBarrier);
+            pipelineBarrier(commandBuffer, postCopyBarrier);
         }
         CommandRecorder::end(commandBuffer);
 
@@ -1962,8 +1956,6 @@ class UploadReadbackContext
         auto& commandBuffer = commandBuffers.front();
         CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         {
-            auto raw = *commandBuffer;
-
             BarrierBatch preCopyBarrier{};
             preCopyBarrier.add(makeImageBarrier(src, vk::ImageMemoryBarrier2{
                 syncPlan.preCopy.stages,
@@ -1978,19 +1970,19 @@ class UploadReadbackContext
                 subresourceRange,
                 nullptr,
             }));
-            pipelineBarrier(raw, preCopyBarrier);
+            pipelineBarrier(commandBuffer, preCopyBarrier);
 
-            recordReadbackRingToTransferWriteBarrier(raw, allocation.offset, readbackSize);
+            recordReadbackRingToTransferWriteBarrier(commandBuffer, allocation.offset, readbackSize);
 
             effectiveRegion.bufferOffset += allocation.offset;
             copyImageToBuffer2(
-                raw,
+                commandBuffer,
                 src.handle(),
                 vk::ImageLayout::eTransferSrcOptimal,
                 readbackRing_.handle(),
                 toBufferImageCopy2(effectiveRegion));
 
-            recordReadbackRingHostVisibilityBarrier(raw, allocation.offset, readbackSize);
+            recordReadbackRingHostVisibilityBarrier(commandBuffer, allocation.offset, readbackSize);
 
             BarrierBatch restoreBarrier{};
             restoreBarrier.add(makeImageBarrier(src, vk::ImageMemoryBarrier2{
@@ -2006,7 +1998,7 @@ class UploadReadbackContext
                 subresourceRange,
                 nullptr,
             }));
-            pipelineBarrier(raw, restoreBarrier);
+            pipelineBarrier(commandBuffer, restoreBarrier);
         }
         CommandRecorder::end(commandBuffer);
 
@@ -2105,7 +2097,7 @@ class UploadReadbackContext
         return queueRole == QueueRole::Graphics || queueRole == QueueRole::Compute;
     }
 
-    void recordReadbackRingToTransferWriteBarrier(vk::CommandBuffer commandBuffer, vk::DeviceSize offset, vk::DeviceSize size) const
+    void recordReadbackRingToTransferWriteBarrier(const vk::raii::CommandBuffer& commandBuffer, vk::DeviceSize offset, vk::DeviceSize size) const
     {
         BarrierBatch ringBarrier{};
         ringBarrier.add(makeBufferBarrier(readbackRing_, vk::BufferMemoryBarrier2{
@@ -2123,7 +2115,7 @@ class UploadReadbackContext
         pipelineBarrier(commandBuffer, ringBarrier);
     }
 
-    void recordReadbackRingHostVisibilityBarrier(vk::CommandBuffer commandBuffer, vk::DeviceSize offset, vk::DeviceSize size) const
+    void recordReadbackRingHostVisibilityBarrier(const vk::raii::CommandBuffer& commandBuffer, vk::DeviceSize offset, vk::DeviceSize size) const
     {
         BarrierBatch ringBarrier{};
         ringBarrier.add(makeBufferBarrier(readbackRing_, vk::BufferMemoryBarrier2{

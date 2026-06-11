@@ -445,7 +445,7 @@ void clearPendingUiTextureSourceRelease(UiTextureEntry& textureEntry)
             sourceLayout,
             vk::ImageLayout::eTransferDstOptimal,
             releaseRequest));
-        nr::rhi::ops::pipelineBarrier(*commandBuffer, releaseBarriers);
+        nr::rhi::ops::pipelineBarrier(commandBuffer, releaseBarriers);
         releaseLabelScope.close();
     }
     nr::rhi::CommandRecorder::end(commandBuffer);
@@ -521,7 +521,7 @@ void waitForPendingUiTextureUploads(
 void recordUiTextureAcquireBarriers(
     nr::rhi::Device& device,
     UiRuntimeCache& runtime,
-    vk::CommandBuffer commandBuffer)
+    const vk::raii::CommandBuffer& commandBuffer)
 {
     auto& uploadContext = device.uploadReadback();
     auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
@@ -1179,7 +1179,7 @@ class UiNode final : public Node
                 auto& commandBuffer = recordContext.commandBuffer->get();
                 
                 // Record layout transitions for any textures with pending uploads before rendering
-                recordUiTextureAcquireBarriers(recordContext.device->get(), *runtime, *commandBuffer);
+                recordUiTextureAcquireBarriers(recordContext.device->get(), *runtime, commandBuffer);
                 
                 auto scopedRendering = nr::rhi::ops::ScopedRendering(commandBuffer, renderingScope);
 

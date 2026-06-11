@@ -96,7 +96,7 @@ The following foundation is now in code:
    - `src/renderPasses/Ui/nrUiNode.ixx`
    - Shader model is now:
      - `[[vk::binding(0, 0)]] SamplerState gUiSampler;`
-     - `[[vk::binding(1, 0)]] Texture2D<float4> gUiTextures[];`
+     - `[[vk::binding(0, 1)]] Texture2D<float4> gUiTextures[];`
    - Push constants now include `textureIndex`.
    - `UiNode` now:
      - allocates stable texture slots
@@ -125,7 +125,7 @@ Current high-level flow:
 1. Dear ImGui emits `ImTextureData` requests.
 2. `UiNode` creates or updates `nr::rhi::Image` entries in `UiRuntimeCache::textures`.
 3. Each `ImTextureID` gets a stable integer slot through `textureSlotById`.
-4. For each frame slot, `UiNode` allocates one descriptor set with a variable descriptor-count binding for `gUiTextures`.
+4. For each frame slot, `UiNode` allocates the pipeline descriptor sets, with set 1 carrying the variable descriptor-count binding for `gUiTextures`.
 5. `UiNode` writes:
    - `gUiSampler`
    - `gUiTextures[slot]` for every live texture slot
@@ -181,9 +181,11 @@ Another agent should preserve these invariants:
 
 1. `gUiTextures` stays the last binding in its descriptor set.
    - Current variable descriptor-count support assumes that Vulkan rule.
+   - The sampled-image runtime array uses the RHI semantic multi-set ABI: sampled images live in set 1.
 
 2. Only one variable descriptor-count binding per set is supported by the current allocator/update path.
    - If future work needs more than one, extend `ShaderBindingPool` first.
+   - Prefer adding another semantic runtime-array set over placing multiple runtime arrays in one descriptor set.
 
 3. `PipelineState` must keep the `SlangProgram` alive as long as `ShaderDescriptorLayout` and any `ShaderCursor` derived from it can still be used.
 

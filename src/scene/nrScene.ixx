@@ -2163,13 +2163,12 @@ class Scene
 
         nr::rhi::CommandRecorder::beginPrimary(acquireCommandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         {
-            auto raw = *acquireCommandBuffer;
             std::ranges::for_each(pendingAcquireBatches_, [&](const PendingAcquireBatch &batch) {
                 std::ranges::for_each(batch.bufferTickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
-                    uploadContext.recordAcquireBarrier(raw, ticket);
+                    uploadContext.recordAcquireBarrier(acquireCommandBuffer, ticket);
                 });
                 std::ranges::for_each(batch.imageTickets, [&](const nr::rhi::ops::ImageUploadTicket &ticket) {
-                    uploadContext.recordImageAcquireBarrier(raw, ticket);
+                    uploadContext.recordImageAcquireBarrier(acquireCommandBuffer, ticket);
                 });
             });
         }

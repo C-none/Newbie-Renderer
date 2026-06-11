@@ -135,6 +135,172 @@ struct CursorAddress
     std::uint32_t bindingArrayIndex = 0;
 };
 
+enum class ShaderBindingPhase : unsigned
+{
+    Layout,
+    DescriptorWrite,
+    CommandRecord,
+};
+
+enum class ShaderBindingKind : unsigned
+{
+    None,
+    Descriptor,
+    PushConstant,
+};
+
+enum class ShaderDescriptorSemantic : unsigned
+{
+    Sampler,
+    CombinedImageSampler,
+    SampledImage,
+    StorageImage,
+    UniformTexelBuffer,
+    StorageTexelBuffer,
+    UniformBuffer,
+    StorageBuffer,
+    DynamicUniformBuffer,
+    DynamicStorageBuffer,
+    InputAttachment,
+    InlineUniformBlock,
+    AccelerationStructure,
+    Unsupported,
+};
+
+enum class RuntimeDescriptorArraySetPolicy : unsigned
+{
+    PreserveShaderSets,
+    RequireSemanticMultiSet,
+};
+
+struct RuntimeDescriptorArraySetConvention
+{
+    std::uint32_t samplerSet = 0;
+    std::uint32_t sampledImageSet = 1;
+    std::uint32_t storageImageSet = 2;
+    std::uint32_t bufferSet = 3;
+    std::uint32_t accelerationStructureSet = 4;
+    std::uint32_t inputAttachmentSet = 5;
+    std::uint32_t inlineUniformBlockSet = 6;
+};
+
+[[nodiscard]] std::string_view shaderDescriptorSemanticName(ShaderDescriptorSemantic semantic) noexcept
+{
+    switch (semantic)
+    {
+    case ShaderDescriptorSemantic::Sampler:
+        return "Sampler";
+    case ShaderDescriptorSemantic::CombinedImageSampler:
+        return "CombinedImageSampler";
+    case ShaderDescriptorSemantic::SampledImage:
+        return "SampledImage";
+    case ShaderDescriptorSemantic::StorageImage:
+        return "StorageImage";
+    case ShaderDescriptorSemantic::UniformTexelBuffer:
+        return "UniformTexelBuffer";
+    case ShaderDescriptorSemantic::StorageTexelBuffer:
+        return "StorageTexelBuffer";
+    case ShaderDescriptorSemantic::UniformBuffer:
+        return "UniformBuffer";
+    case ShaderDescriptorSemantic::StorageBuffer:
+        return "StorageBuffer";
+    case ShaderDescriptorSemantic::DynamicUniformBuffer:
+        return "DynamicUniformBuffer";
+    case ShaderDescriptorSemantic::DynamicStorageBuffer:
+        return "DynamicStorageBuffer";
+    case ShaderDescriptorSemantic::InputAttachment:
+        return "InputAttachment";
+    case ShaderDescriptorSemantic::InlineUniformBlock:
+        return "InlineUniformBlock";
+    case ShaderDescriptorSemantic::AccelerationStructure:
+        return "AccelerationStructure";
+    case ShaderDescriptorSemantic::Unsupported:
+        return "Unsupported";
+    default:
+        return "Unknown";
+    }
+}
+
+[[nodiscard]] ShaderDescriptorSemantic descriptorSemantic(vk::DescriptorType descriptorType) noexcept
+{
+    switch (descriptorType)
+    {
+    case vk::DescriptorType::eSampler:
+        return ShaderDescriptorSemantic::Sampler;
+    case vk::DescriptorType::eCombinedImageSampler:
+        return ShaderDescriptorSemantic::CombinedImageSampler;
+    case vk::DescriptorType::eSampledImage:
+        return ShaderDescriptorSemantic::SampledImage;
+    case vk::DescriptorType::eStorageImage:
+        return ShaderDescriptorSemantic::StorageImage;
+    case vk::DescriptorType::eUniformTexelBuffer:
+        return ShaderDescriptorSemantic::UniformTexelBuffer;
+    case vk::DescriptorType::eStorageTexelBuffer:
+        return ShaderDescriptorSemantic::StorageTexelBuffer;
+    case vk::DescriptorType::eUniformBuffer:
+        return ShaderDescriptorSemantic::UniformBuffer;
+    case vk::DescriptorType::eStorageBuffer:
+        return ShaderDescriptorSemantic::StorageBuffer;
+    case vk::DescriptorType::eUniformBufferDynamic:
+        return ShaderDescriptorSemantic::DynamicUniformBuffer;
+    case vk::DescriptorType::eStorageBufferDynamic:
+        return ShaderDescriptorSemantic::DynamicStorageBuffer;
+    case vk::DescriptorType::eInputAttachment:
+        return ShaderDescriptorSemantic::InputAttachment;
+    case vk::DescriptorType::eInlineUniformBlock:
+        return ShaderDescriptorSemantic::InlineUniformBlock;
+    case vk::DescriptorType::eAccelerationStructureKHR:
+        return ShaderDescriptorSemantic::AccelerationStructure;
+    default:
+        return ShaderDescriptorSemantic::Unsupported;
+    }
+}
+
+[[nodiscard]] bool supportsImmutableSampler(vk::DescriptorType descriptorType) noexcept
+{
+    return descriptorType == vk::DescriptorType::eSampler ||
+           descriptorType == vk::DescriptorType::eCombinedImageSampler;
+}
+
+[[nodiscard]] bool usesDynamicDescriptorOffset(vk::DescriptorType descriptorType) noexcept
+{
+    return descriptorType == vk::DescriptorType::eUniformBufferDynamic ||
+           descriptorType == vk::DescriptorType::eStorageBufferDynamic;
+}
+
+[[nodiscard]] std::optional<std::uint32_t> runtimeDescriptorArraySetFor(
+    ShaderDescriptorSemantic semantic,
+    const RuntimeDescriptorArraySetConvention &convention) noexcept
+{
+    switch (semantic)
+    {
+    case ShaderDescriptorSemantic::Sampler:
+        return convention.samplerSet;
+    case ShaderDescriptorSemantic::CombinedImageSampler:
+    case ShaderDescriptorSemantic::SampledImage:
+        return convention.sampledImageSet;
+    case ShaderDescriptorSemantic::StorageImage:
+        return convention.storageImageSet;
+    case ShaderDescriptorSemantic::UniformTexelBuffer:
+    case ShaderDescriptorSemantic::StorageTexelBuffer:
+    case ShaderDescriptorSemantic::UniformBuffer:
+    case ShaderDescriptorSemantic::StorageBuffer:
+    case ShaderDescriptorSemantic::DynamicUniformBuffer:
+    case ShaderDescriptorSemantic::DynamicStorageBuffer:
+        return convention.bufferSet;
+    case ShaderDescriptorSemantic::AccelerationStructure:
+        return convention.accelerationStructureSet;
+    case ShaderDescriptorSemantic::InputAttachment:
+        return convention.inputAttachmentSet;
+    case ShaderDescriptorSemantic::InlineUniformBlock:
+        return convention.inlineUniformBlockSet;
+    case ShaderDescriptorSemantic::Unsupported:
+        return std::nullopt;
+    default:
+        return std::nullopt;
+    }
+}
+
 struct DescriptorBindingInfo
 {
     std::uint32_t set = 0;
@@ -145,6 +311,7 @@ struct DescriptorBindingInfo
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
     vk::DescriptorBindingFlags bindingFlags{};
     std::uint32_t bindingRangeIndex = 0;
+    std::optional<std::uint32_t> expectedRuntimeSet{};
     std::string debugPath;
 
     [[nodiscard]] bool supportsVariableDescriptorCount() const noexcept
@@ -161,6 +328,39 @@ struct DescriptorBindingInfo
     {
         return (bindingFlags & vk::DescriptorBindingFlagBits::eUpdateAfterBind) == vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     }
+
+    [[nodiscard]] ShaderDescriptorSemantic semantic() const noexcept
+    {
+        return descriptorSemantic(descriptorType);
+    }
+
+    [[nodiscard]] bool supportsImmutableSampler() const noexcept
+    {
+        return nr::rhi::supportsImmutableSampler(descriptorType);
+    }
+
+    [[nodiscard]] bool usesDynamicDescriptorOffset() const noexcept
+    {
+        return nr::rhi::usesDynamicDescriptorOffset(descriptorType);
+    }
+
+    [[nodiscard]] bool followsExpectedRuntimeSet() const noexcept
+    {
+        return !expectedRuntimeSet.has_value() || set == *expectedRuntimeSet;
+    }
+
+    [[nodiscard]] bool hasPhase(ShaderBindingPhase phase) const noexcept
+    {
+        switch (phase)
+        {
+        case ShaderBindingPhase::Layout:
+        case ShaderBindingPhase::DescriptorWrite:
+        case ShaderBindingPhase::CommandRecord:
+            return true;
+        default:
+            return false;
+        }
+    }
 };
 
 struct DescriptorSetLayoutInfo
@@ -176,6 +376,61 @@ struct PushConstantRangeInfo
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
     std::uint32_t bindingRangeIndex = 0;
     std::string debugPath;
+
+    [[nodiscard]] bool hasPhase(ShaderBindingPhase phase) const noexcept
+    {
+        switch (phase)
+        {
+        case ShaderBindingPhase::Layout:
+        case ShaderBindingPhase::CommandRecord:
+            return true;
+        case ShaderBindingPhase::DescriptorWrite:
+            return false;
+        default:
+            return false;
+        }
+    }
+};
+
+struct ShaderBindingReflection
+{
+    ShaderBindingKind kind = ShaderBindingKind::None;
+    std::optional<DescriptorBindingInfo> descriptorBinding{};
+    std::optional<PushConstantRangeInfo> pushConstantRange{};
+
+    [[nodiscard]] bool hasPhase(ShaderBindingPhase phase) const noexcept
+    {
+        switch (kind)
+        {
+        case ShaderBindingKind::Descriptor:
+            return descriptorBinding.has_value() && descriptorBinding->hasPhase(phase);
+        case ShaderBindingKind::PushConstant:
+            return pushConstantRange.has_value() && pushConstantRange->hasPhase(phase);
+        case ShaderBindingKind::None:
+            return false;
+        default:
+            return false;
+        }
+    }
+
+    [[nodiscard]] std::optional<ShaderDescriptorSemantic> descriptorSemantic() const noexcept
+    {
+        if (!descriptorBinding.has_value())
+        {
+            return std::nullopt;
+        }
+        return descriptorBinding->semantic();
+    }
+
+    [[nodiscard]] bool supportsImmutableSampler() const noexcept
+    {
+        return descriptorBinding.has_value() && descriptorBinding->supportsImmutableSampler();
+    }
+
+    [[nodiscard]] bool usesDynamicDescriptorOffset() const noexcept
+    {
+        return descriptorBinding.has_value() && descriptorBinding->usesDynamicDescriptorOffset();
+    }
 };
 
 struct BufferDescriptorWrite
@@ -264,6 +519,8 @@ struct DescriptorBindingPolicy
     bool enablePartiallyBound = true;
     bool enableVariableDescriptorCount = true;
     std::uint32_t defaultRuntimeDescriptorCount = 1024;
+    RuntimeDescriptorArraySetPolicy runtimeArraySetPolicy = RuntimeDescriptorArraySetPolicy::RequireSemanticMultiSet;
+    RuntimeDescriptorArraySetConvention runtimeArraySetConvention{};
 };
 
 class ShaderBindingPool
@@ -371,6 +628,7 @@ class ShaderCursor
     // Cursor guide:
     // - The cursor carries reflection type info, a logical write address, and shared mutable binding state.
     // - Copied sub-cursors write into one coherent binding snapshot.
+    // - bindingReflection() classifies Vulkan shader-interface semantics without touching GPU objects.
     // - setObject(...) records descriptor-backed resources (or logical graph references).
     // - setData(...) records push constants or inline uniform bytes.
     // - snapshot() captures a stable per-pass binding view for execute-time replay.
@@ -401,6 +659,20 @@ class ShaderCursor
     [[nodiscard]] std::optional<DescriptorBindingInfo> descriptorBinding() const;
 
     [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange() const;
+
+    [[nodiscard]] ShaderBindingReflection bindingReflection() const;
+
+    [[nodiscard]] ShaderBindingKind bindingKind() const;
+
+    [[nodiscard]] bool hasBindingPhase(ShaderBindingPhase phase) const;
+
+    [[nodiscard]] std::optional<ShaderDescriptorSemantic> descriptorSemantic() const;
+
+    [[nodiscard]] bool supportsImmutableSampler() const;
+
+    [[nodiscard]] bool usesDynamicDescriptorOffset() const;
+
+    [[nodiscard]] std::optional<SlangImmutableSamplerBinding> makeImmutableSamplerBinding(SlangSamplerDesc samplerDesc) const;
 
     [[nodiscard]] std::optional<std::uint32_t> bindingDescriptorCount() const;
 
@@ -611,7 +883,8 @@ class ShaderDescriptorLayout
         // - Output:
         //   1) descriptor set layout metadata (set/binding/type/count/stageFlags)
         //   2) push constant ranges (for command recording time via vkCmdPushConstants)
-        //   3) root field map for cursor traversal.
+        //   3) Vulkan shader-binding phase metadata for cursor queries
+        //   4) root field map for cursor traversal.
         //
         // Pseudocode:
         //   layout = ShaderDescriptorLayout::create(program)
@@ -723,6 +996,29 @@ class ShaderDescriptorLayout
                 info.descriptorCount = detail::sanitizeDescriptorCount(descriptorCountRaw);
                 info.isRuntimeSized = detail::isUnboundedDescriptorCount(descriptorCountRaw);
                 info.descriptorType = *descriptorType;
+                info.stageFlags = stageFlags;
+                info.bindingRangeIndex = bindingRangeIndex;
+                info.debugPath = std::format("{}::bindingRange[{}]", scopeName, rangeIndex);
+                if (info.isRuntimeSized && policy.runtimeArraySetPolicy == RuntimeDescriptorArraySetPolicy::RequireSemanticMultiSet)
+                {
+                    auto expectedSet = runtimeDescriptorArraySetFor(info.semantic(), policy.runtimeArraySetConvention);
+                    nrAssert(
+                        expectedSet.has_value(),
+                        std::format(
+                            "Runtime descriptor array '{}' has unsupported descriptor semantic {}.",
+                            info.debugPath,
+                            shaderDescriptorSemanticName(info.semantic())));
+                    info.expectedRuntimeSet = expectedSet;
+                    nrAssert(
+                        info.followsExpectedRuntimeSet(),
+                        std::format(
+                            "Runtime descriptor array '{}' uses set {}, but the semantic multi-set ABI requires set {} for {} descriptors. "
+                            "Update the shader [[vk::binding(binding, set)]] declaration instead of remapping it in RHI.",
+                            info.debugPath,
+                            info.set,
+                            *expectedSet,
+                            shaderDescriptorSemanticName(info.semantic())));
+                }
                 if (info.isRuntimeSized && policy.enableVariableDescriptorCount)
                 {
                     info.descriptorCount = std::max(policy.defaultRuntimeDescriptorCount, 1u);
@@ -746,9 +1042,6 @@ class ShaderDescriptorLayout
                             info.binding,
                             info.descriptorCount));
                 }
-                info.stageFlags = stageFlags;
-                info.bindingRangeIndex = bindingRangeIndex;
-                info.debugPath = std::format("{}::bindingRange[{}]", scopeName, rangeIndex);
 
                 auto key = std::tuple<std::uint32_t, std::uint32_t>{info.set, info.binding};
                 auto mergedIt = layout.bindingBySetAndBinding_.find(key);
@@ -1244,6 +1537,77 @@ void pushConstantsToCommandBuffer(
         return std::nullopt;
     }
     return layoutRef().pushConstantRange(*this);
+}
+
+[[nodiscard]] ShaderBindingReflection ShaderCursor::bindingReflection() const
+{
+    auto reflection = ShaderBindingReflection{};
+    if (!valid() || isRoot_)
+    {
+        return reflection;
+    }
+
+    if (auto bindingInfo = descriptorBinding(); bindingInfo.has_value())
+    {
+        reflection.kind = ShaderBindingKind::Descriptor;
+        reflection.descriptorBinding = std::move(bindingInfo);
+        return reflection;
+    }
+
+    if (auto pushRange = pushConstantRange(); pushRange.has_value())
+    {
+        reflection.kind = ShaderBindingKind::PushConstant;
+        reflection.pushConstantRange = std::move(pushRange);
+        return reflection;
+    }
+
+    return reflection;
+}
+
+[[nodiscard]] ShaderBindingKind ShaderCursor::bindingKind() const
+{
+    return bindingReflection().kind;
+}
+
+[[nodiscard]] bool ShaderCursor::hasBindingPhase(ShaderBindingPhase phase) const
+{
+    return bindingReflection().hasPhase(phase);
+}
+
+[[nodiscard]] std::optional<ShaderDescriptorSemantic> ShaderCursor::descriptorSemantic() const
+{
+    return bindingReflection().descriptorSemantic();
+}
+
+[[nodiscard]] bool ShaderCursor::supportsImmutableSampler() const
+{
+    return bindingReflection().supportsImmutableSampler();
+}
+
+[[nodiscard]] bool ShaderCursor::usesDynamicDescriptorOffset() const
+{
+    return bindingReflection().usesDynamicDescriptorOffset();
+}
+
+[[nodiscard]] std::optional<SlangImmutableSamplerBinding> ShaderCursor::makeImmutableSamplerBinding(SlangSamplerDesc samplerDesc) const
+{
+    auto bindingInfo = descriptorBinding();
+    if (!bindingInfo.has_value() || !bindingInfo->supportsImmutableSampler())
+    {
+        return std::nullopt;
+    }
+
+    if (address_.bindingArrayIndex != 0u || bindingInfo->isRuntimeSized)
+    {
+        return std::nullopt;
+    }
+
+    return SlangImmutableSamplerBinding{
+        .set = bindingInfo->set,
+        .binding = bindingInfo->binding,
+        .descriptorCount = bindingInfo->descriptorCount,
+        .samplerDesc = samplerDesc,
+    };
 }
 
 [[nodiscard]] std::optional<std::uint32_t> ShaderCursor::bindingDescriptorCount() const

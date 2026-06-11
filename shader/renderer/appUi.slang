@@ -11,7 +11,7 @@ struct UiPushConstants
 [[vk::binding(0, 0)]]
 SamplerState gUiSampler;
 
-[[vk::binding(1, 0)]] // Variable descriptor-count binding must be the largest binding number in the set.
+[[vk::binding(0, 1)]] // Variable descriptor-count binding must be the largest binding number in the set.
 Texture2D<float4> gUiTextures[];
 
 [[vk::push_constant]]

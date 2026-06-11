@@ -452,7 +452,7 @@ class RenderGraphExecutor
                     commandBuffer,
                     detail::rendererBatchScopeLabel(planBatch.batchIndex, planBatch.queue),
                 };
-                auto rawCommandBuffer = *commandBuffer;
+                auto commandBufferHandle = *commandBuffer;
 
                 static auto loggedBatchIndices = std::set<std::uint32_t>{};
                 if (loggedBatchIndices.insert(planBatch.batchIndex).second)
@@ -466,7 +466,7 @@ class RenderGraphExecutor
                         passList += pass.debugName;
                     });
 
-                    auto commandBufferRaw = std::bit_cast<std::uint64_t>(static_cast<VkCommandBuffer>(rawCommandBuffer));
+                    auto commandBufferRaw = std::bit_cast<std::uint64_t>(static_cast<VkCommandBuffer>(commandBufferHandle));
                     nrInfo(std::format(
                         "RenderGraphExecutor batch={} queue={} cmd=0x{:x} passes=[{}]",
                         planBatch.batchIndex,
@@ -503,7 +503,7 @@ class RenderGraphExecutor
 
                     if (!barriers.empty())
                     {
-                        nr::rhi::ops::pipelineBarrier(rawCommandBuffer, barriers);
+                        nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
                     }
                 }
 
@@ -545,7 +545,7 @@ class RenderGraphExecutor
 
                     if (!inPassBarriers.empty())
                     {
-                        nr::rhi::ops::pipelineBarrier(rawCommandBuffer, inPassBarriers);
+                        nr::rhi::ops::pipelineBarrier(commandBuffer, inPassBarriers);
                     }
 
                     if (pass.record)
@@ -591,7 +591,7 @@ class RenderGraphExecutor
                         return;
                     }
 
-                    recordImplicitCopyPass(pass, rawCommandBuffer, runtimeBindings);
+                    recordImplicitCopyPass(pass, commandBuffer, runtimeBindings);
                 });
 
                 if (!planBatch.tailReleaseTransitions.empty())
@@ -622,7 +622,7 @@ class RenderGraphExecutor
 
                     if (!barriers.empty())
                     {
-                        nr::rhi::ops::pipelineBarrier(rawCommandBuffer, barriers);
+                        nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
                     }
                 }
             }
@@ -1051,7 +1051,7 @@ class RenderGraphExecutor
 
     static void recordImplicitCopyPass(
         const CompiledPass& pass,
-        vk::CommandBuffer commandBuffer,
+        const vk::raii::CommandBuffer& commandBuffer,
         const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings)
     {
         if (!pass.isCopyPass)
