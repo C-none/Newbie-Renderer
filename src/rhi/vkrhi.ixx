@@ -6,34 +6,107 @@ import std;
 export namespace nr::rhi
 {
 
+struct RequiredQueueFamilySelection
+{
+    std::uint32_t graphics = 0;
+    std::uint32_t compute = 0;
+    std::uint32_t transfer = 0;
+};
+
+[[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(const auto& queueFamilyProperties)
+{
+    const auto queueIndices = std::views::iota(std::size_t{0}, queueFamilyProperties.size());
+    auto findFirst = [&](auto predicate) -> std::optional<std::size_t> {
+        auto it = std::ranges::find_if(queueIndices, predicate);
+        if (it == std::ranges::end(queueIndices))
+        {
+            return std::nullopt;
+        }
+        return *it;
+    };
+
+    const auto hasFlags = [&](std::size_t index, vk::QueueFlags flags) {
+        const auto& family = queueFamilyProperties[index];
+        return family.queueCount > 0 && (family.queueFlags & flags) == flags;
+    };
+
+    auto graphicsFamily = findFirst([&](std::size_t index) {
+        return hasFlags(index, vk::QueueFlagBits::eGraphics);
+    });
+    if (!graphicsFamily.has_value())
+    {
+        return std::nullopt;
+    }
+
+    auto dedicatedComputeFamily = findFirst([&](std::size_t index) {
+        const auto& family = queueFamilyProperties[index];
+        return family.queueCount > 0 &&
+               (family.queueFlags & vk::QueueFlagBits::eCompute) &&
+               !(family.queueFlags & vk::QueueFlagBits::eGraphics);
+    });
+    auto computeFamily = dedicatedComputeFamily;
+    if (!computeFamily.has_value())
+    {
+        computeFamily = findFirst([&](std::size_t index) {
+            return hasFlags(index, vk::QueueFlagBits::eCompute);
+        });
+    }
+    if (!computeFamily.has_value())
+    {
+        return std::nullopt;
+    }
+
+    auto transferFamily = findFirst([&](std::size_t index) {
+        const auto& family = queueFamilyProperties[index];
+        return family.queueCount > 0 &&
+               (family.queueFlags & vk::QueueFlagBits::eTransfer) &&
+               !(family.queueFlags & vk::QueueFlagBits::eCompute) &&
+               !(family.queueFlags & vk::QueueFlagBits::eGraphics);
+    });
+    if (!transferFamily.has_value())
+    {
+        return std::nullopt;
+    }
+
+    return RequiredQueueFamilySelection{
+        .graphics = static_cast<std::uint32_t>(*graphicsFamily),
+        .compute = static_cast<std::uint32_t>(*computeFamily),
+        .transfer = static_cast<std::uint32_t>(*transferFamily),
+    };
+}
+
 [[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance)
 {
     vk::raii::PhysicalDevices physicalDevices(instance);
-    nrAssert(!physicalDevices.empty(),std::format("No Available GPU!!!!!"));
-    vk::raii::PhysicalDevice bestDevice = physicalDevices.front();
-    vk::PhysicalDeviceProperties bestProps = bestDevice.getProperties();
+    nrAssert(!physicalDevices.empty(), "No Vulkan physical devices are available.");
 
-    for (const auto &device : physicalDevices)
-    {
-        vk::PhysicalDeviceProperties props = device.getProperties();
-        if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
+    auto supportsRequiredQueues = [](const vk::raii::PhysicalDevice& device) {
+        auto queueFamilies = device.getQueueFamilyProperties();
+        return selectRequiredQueueFamilies(queueFamilies).has_value();
+    };
+    auto deviceRank = [](const vk::raii::PhysicalDevice& device) {
+        auto props = device.getProperties();
+        return std::tuple{
+            props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu,
+            props.limits.maxImageDimension2D,
+        };
+    };
+
+    std::optional<std::reference_wrapper<const vk::raii::PhysicalDevice>> bestDevice;
+    std::ranges::for_each(physicalDevices, [&](const vk::raii::PhysicalDevice& device) {
+        if (!supportsRequiredQueues(device))
         {
-            if (bestProps.deviceType != vk::PhysicalDeviceType::eDiscreteGpu || props.limits.maxImageDimension2D > bestProps.limits.maxImageDimension2D)
-            {
-                bestDevice = device;
-                bestProps = props;
-            }
+            return;
         }
-        else if (bestProps.deviceType != vk::PhysicalDeviceType::eDiscreteGpu)
+        if (!bestDevice.has_value() || deviceRank(bestDevice->get()) < deviceRank(device))
         {
-            if (props.limits.maxImageDimension2D > bestProps.limits.maxImageDimension2D)
-            {
-                bestDevice = device;
-                bestProps = props;
-            }
+            bestDevice = std::cref(device);
         }
-    }
-    return bestDevice;
+    });
+    nrAssert(
+        bestDevice.has_value(),
+        "No GPU exposes the required graphics, compute, and dedicated physical copy/transfer queue families.");
+    return bestDevice->get();
 }
 
 // Helper: Convert strings to const char* pointers with deduplication and validation

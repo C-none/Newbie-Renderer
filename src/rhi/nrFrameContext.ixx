@@ -94,10 +94,10 @@ class FrameContext
      * @param device Vulkan device
      * @param graphicsConfig Graphics queue pool configuration
      * @param computeConfig Compute queue pool configuration
-     * @param transferConfig Transfer queue pool configuration (optional)
+     * @param transferConfig Dedicated transfer queue pool configuration
      */
-    FrameContext(const vk::raii::Device &device, const PoolConfig &graphicsConfig, const PoolConfig &computeConfig, const std::optional<PoolConfig> &transferConfig = std::nullopt)
-        : device_(std::ref(device)), graphicsQueueFamily_(graphicsConfig.queueFamilyIndex), computeQueueFamily_(computeConfig.queueFamilyIndex)
+    FrameContext(const vk::raii::Device &device, const PoolConfig &graphicsConfig, const PoolConfig &computeConfig, const PoolConfig &transferConfig)
+        : device_(std::ref(device)), graphicsQueueFamily_(graphicsConfig.queueFamilyIndex), computeQueueFamily_(computeConfig.queueFamilyIndex), transferQueueFamily_(transferConfig.queueFamilyIndex)
     {
         // Create fence (signaled initially so first frame doesn't wait)
         vk::FenceCreateInfo fenceInfo{vk::FenceCreateFlagBits::eSignaled};
@@ -114,12 +114,7 @@ class FrameContext
 
         computePrimary_ = CommandPool(device, computeConfig.queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
 
-        // Handle optional transfer queue
-        if (transferConfig)
-        {
-            transferQueueFamily_ = transferConfig->queueFamilyIndex;
-            transferPrimary_ = CommandPool(device, transferConfig->queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
-        }
+        transferPrimary_ = CommandPool(device, transferConfig.queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
     }
 
     // Move-only semantics
@@ -170,8 +165,7 @@ class FrameContext
         // Reset primary pools
         graphicsPrimary_.reset();
         computePrimary_.reset();
-        if (transferPrimary_.valid())
-            transferPrimary_.reset();
+        transferPrimary_.reset();
 
         // Reset all prepared secondary pools.
         std::ranges::for_each(graphicsSecondary_ | std::views::take(graphicsPreparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
@@ -202,14 +196,10 @@ class FrameContext
         prepareQueueSecondaryPools(graphicsSecondary_, graphicsQueueFamily_, graphicsPreparedSecondaryWorkers_);
         prepareQueueSecondaryPools(computeSecondary_, computeQueueFamily_, computePreparedSecondaryWorkers_);
 
-        transferPreparedSecondaryWorkers_ = 0;
-        if (transferPrimary_.valid())
+        transferPreparedSecondaryWorkers_ = std::min(transferWorkerCount, kMaxSecondaryWorkers);
+        if (transferPreparedSecondaryWorkers_ > 0)
         {
-            transferPreparedSecondaryWorkers_ = std::min(transferWorkerCount, kMaxSecondaryWorkers);
-            if (transferPreparedSecondaryWorkers_ > 0)
-            {
-                prepareQueueSecondaryPools(transferSecondary_, transferQueueFamily_, transferPreparedSecondaryWorkers_);
-            }
+            prepareQueueSecondaryPools(transferSecondary_, transferQueueFamily_, transferPreparedSecondaryWorkers_);
         }
     }
 
@@ -228,7 +218,6 @@ class FrameContext
         }
         else if constexpr (T == QueueRole::Transfer)
         {
-            nrAssert(transferPrimary_.valid(), "Transfer queue not configured for this FrameContext");
             return transferPrimary_;
         }
         else
@@ -261,7 +250,6 @@ class FrameContext
         }
         else if constexpr (T == QueueRole::Transfer)
         {
-            nrAssert(transferPrimary_.valid(), "Transfer queue not configured for this FrameContext");
             nrAssert(threadId < transferPreparedSecondaryWorkers_, std::format("FrameContext::secondary transfer threadId {} out of prepared range {}", threadId, transferPreparedSecondaryWorkers_));
             nrAssert(transferSecondary_[threadId].has_value(), "FrameContext::secondary transfer pool slot not prepared");
             return *transferSecondary_[threadId];
@@ -327,8 +315,6 @@ class FrameContext
         }
         else
         {
-            if (!transferPrimary_.valid())
-                return 0;
             return transferPreparedSecondaryWorkers_;
         }
     }
@@ -393,7 +379,7 @@ class FrameContext
     CommandPool computePrimary_;
     std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> computeSecondary_{};
 
-    // Transfer queue pools (optional)
+    // Transfer queue pools
     CommandPool transferPrimary_;
     std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> transferSecondary_{};
 
@@ -424,15 +410,15 @@ class FrameManager
      * @param frameCount Number of frames in flight
      * @param graphicsConfig Graphics pool configuration
      * @param computeConfig Compute pool configuration
-     * @param transferConfig Transfer pool configuration (optional)
+     * @param transferConfig Dedicated transfer pool configuration
      */
-    FrameManager(const vk::raii::Device &device, const FrameContext::PoolConfig &graphicsConfig, const FrameContext::PoolConfig &computeConfig, const std::optional<FrameContext::PoolConfig> &transferConfig = std::nullopt)
+    FrameManager(const vk::raii::Device &device, const FrameContext::PoolConfig &graphicsConfig, const FrameContext::PoolConfig &computeConfig, const FrameContext::PoolConfig &transferConfig)
     {
         frames_.reserve(maxFrameInFlight);
-        for (std::uint32_t i = 0; i < maxFrameInFlight; ++i)
-        {
+        auto frameIndices = std::views::iota(std::uint32_t{0}, maxFrameInFlight);
+        std::ranges::for_each(frameIndices, [&](std::uint32_t) {
             frames_.emplace_back(device, graphicsConfig, computeConfig, transferConfig);
-        }
+        });
     }
 
     // Move-only semantics

@@ -161,13 +161,8 @@ public:
             auto debugLabel = vk::DebugUtilsLabelEXT{};
             debugLabel.pLabelName = label_.c_str();
 
-            try {
-                commandBuffer_->get().beginDebugUtilsLabelEXT(debugLabel);
-                active_ = true;
-            }
-            catch (const vk::SystemError&) {
-                // Debug utils extension may not be available
-            }
+            commandBuffer_->get().beginDebugUtilsLabelEXT(debugLabel);
+            active_ = true;
         }
     }
 
@@ -186,12 +181,7 @@ public:
             return;
         }
 
-        try {
-            commandBuffer_->get().endDebugUtilsLabelEXT();
-        }
-        catch (const vk::SystemError&) {
-        }
-
+        commandBuffer_->get().endDebugUtilsLabelEXT();
         active_ = false;
     }
 

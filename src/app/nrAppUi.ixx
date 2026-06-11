@@ -24,7 +24,7 @@ inline constexpr std::string_view kUnifiedUiWindowTitle = "Renderer Controls";
         return 1.0f / 60.0f;
     }
 
-    return std::clamp(deltaSeconds, 1.0f / 240.0f, 0.1f);
+    return std::min(deltaSeconds, 0.5f);
 }
 } // namespace
 

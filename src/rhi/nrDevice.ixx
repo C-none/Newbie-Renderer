@@ -186,7 +186,7 @@ class Device
 
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
         refreshPresentSemaphores();
-        pipelineService.bindDevice(device, &rtCapabilities_);
+        pipelineService.bindDevice(device, std::cref(rtCapabilities_));
     }
 
     [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max())
@@ -361,46 +361,15 @@ class Device
         auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
         std::ranges::fill(queueFamilyDict, std::numeric_limits<std::size_t>::max());
 
-        const auto queueIndices = std::views::iota(std::size_t{0}, queueFamilyProperties.size());
-        auto findFirst = [&](auto predicate) -> std::optional<std::size_t> {
-            auto it = std::ranges::find_if(queueIndices, predicate);
-            if (it == std::ranges::end(queueIndices))
-            {
-                return std::nullopt;
-            }
-            return *it;
-        };
+        auto queueFamilies = selectRequiredQueueFamilies(queueFamilyProperties);
+        nrAssert(
+            queueFamilies.has_value(),
+            "Selected GPU does not expose required graphics, compute, and dedicated physical copy/transfer queue families.");
 
-        const auto hasFlags = [&](std::size_t i, vk::QueueFlags flags) {
-            return (queueFamilyProperties[i].queueFlags & flags) == flags;
-        };
-        
         auto toQueueIndex = [](QueueFamilyKind kind) { return static_cast<std::size_t>(kind); };
-
-        auto graphicsFamily = findFirst([&](std::size_t i) { return hasFlags(i, vk::QueueFlagBits::eGraphics); });
-        nrAssert(graphicsFamily.has_value(), "No graphics queue family available.");
-        queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)] = *graphicsFamily;
-
-        auto dedicatedCompute = findFirst([&](std::size_t i) {
-            auto flags = queueFamilyProperties[i].queueFlags;
-            return (flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics);
-        });
-        auto computeFamily = dedicatedCompute;
-        if (!computeFamily.has_value())
-        {
-            computeFamily = findFirst([&](std::size_t i) {
-                return hasFlags(i, vk::QueueFlagBits::eCompute);
-            });
-        }
-        nrAssert(computeFamily.has_value(), "No compute queue family available.");
-        queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)] = *computeFamily;
-
-        auto dedicatedTransfer = findFirst([&](std::size_t i) {
-            auto flags = queueFamilyProperties[i].queueFlags;
-            return (flags & vk::QueueFlagBits::eTransfer) && !(flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics);
-        });
-        nrAssert(dedicatedTransfer.has_value(), "Dedicated copy/transfer queue family is required, but no transfer-only queue family is available.");
-        queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)] = *dedicatedTransfer;
+        queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)] = queueFamilies->graphics;
+        queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)] = queueFamilies->compute;
+        queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)] = queueFamilies->transfer;
 
         constexpr float queuePriority = 1.0f;
         auto uniqueFamilies = std::array{
@@ -579,9 +548,9 @@ class Device
 
     void initializeCommandSystem()
     {
-        std::uint32_t graphicsFamily = getQueueFamilyWithFallback(QueueFamilyKind::graphics);
-        std::uint32_t computeFamily = getQueueFamilyWithFallback(QueueFamilyKind::compute);
-        std::uint32_t transferFamily = getQueueFamilyWithFallback(QueueFamilyKind::transfer);
+        std::uint32_t graphicsFamily = requiredQueueFamily(QueueFamilyKind::graphics);
+        std::uint32_t computeFamily = requiredQueueFamily(QueueFamilyKind::compute);
+        std::uint32_t transferFamily = requiredQueueFamily(QueueFamilyKind::transfer);
 
         GpuQueue graphicsQueue(device, graphicsFamily, QueueRole::Graphics);
         GpuQueue computeQueue(device, computeFamily, QueueRole::Compute);
@@ -726,12 +695,13 @@ class Device
             }
             else
             {
-                nrLog(LogLevel::warning, "VULKAN", "VK_EXT_debug_utils is unavailable; continuing without Vulkan debug labels and messenger.");
+                nrInfo<LogLevel::error>("VK_EXT_debug_utils is unavailable in a debug build; debug labels and object names require this extension.");
+                nrAssert(false, "Debug builds require VK_EXT_debug_utils.");
             }
         }
     }
 
-    [[nodiscard]] std::uint32_t getQueueFamilyWithFallback(QueueFamilyKind kind) const
+    [[nodiscard]] std::uint32_t requiredQueueFamily(QueueFamilyKind kind) const
     {
         std::size_t index = static_cast<std::size_t>(kind);
         std::size_t familyIndex = queueFamilyDict[index];
@@ -741,7 +711,7 @@ class Device
 
     [[nodiscard]] std::uint32_t presentQueueFamilyIndex() const
     {
-        return getQueueFamilyWithFallback(QueueFamilyKind::compute);
+        return requiredQueueFamily(QueueFamilyKind::compute);
     }
 
     void refreshPresentSemaphores()

@@ -57,6 +57,29 @@ function(disable_compile_commands_for_targets dir_path)
     endforeach()
 endfunction()
 
+function(suppress_warning_diagnostics_for_targets dir_path)
+    get_property(targets DIRECTORY "${dir_path}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target ${targets})
+        if(TARGET ${target})
+            get_target_property(target_type ${target} TYPE)
+            if(target_type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+                set_target_properties(${target} PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+
+                if(MSVC)
+                    target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:/w>)
+                elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|GNU|AppleClang)$")
+                    target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-w>)
+                endif()
+            endif()
+        endif()
+    endforeach()
+
+    get_property(subdirs DIRECTORY "${dir_path}" PROPERTY SUBDIRECTORIES)
+    foreach(subdir ${subdirs})
+        suppress_warning_diagnostics_for_targets("${subdir}")
+    endforeach()
+endfunction()
+
 # Helper function specifically for external libraries
 function(add_extern_library lib_name)
     # Add the subdirectory
@@ -113,6 +136,7 @@ block(SCOPE_FOR VARIABLES)
     endif()
 
     add_extern_library(slang)
+    suppress_warning_diagnostics_for_targets("${CMAKE_CURRENT_SOURCE_DIR}/slang")
 
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU" AND WIN32)
         foreach(slang_tool slang-bootstrap slangc slang-dispatcher)

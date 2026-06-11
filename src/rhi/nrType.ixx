@@ -96,28 +96,6 @@ enum class GraphicsPipelineMode : unsigned
     Mesh,              // Requires mesh shader (task optional)
 };
 
-struct ValidationDiagnostics
-{
-    bool isValid = false;
-    std::string message{};
-};
-
-[[nodiscard]] inline ValidationDiagnostics makeValidationSuccess()
-{
-    return ValidationDiagnostics{
-        .isValid = true,
-        .message = {},
-    };
-}
-
-[[nodiscard]] inline ValidationDiagnostics makeValidationFailure(std::string message)
-{
-    return ValidationDiagnostics{
-        .isValid = false,
-        .message = std::move(message),
-    };
-}
-
 struct RayTracingCapabilitySnapshot
 {
     bool rayTracingPipelineTraceRaysIndirect = false;

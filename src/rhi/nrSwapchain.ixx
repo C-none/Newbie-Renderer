@@ -23,7 +23,7 @@ struct SwapChainConfig
 {
     std::uint32_t preferredImageCount = 3;
     vk::ImageUsageFlags imageUsage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment;
-    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eMailbox;
+    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eImmediate;
     vk::CompositeAlphaFlagBitsKHR compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
     vk::SurfaceTransformFlagBitsKHR surfaceTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
 };
@@ -77,6 +77,7 @@ struct SwapChain
         catch (const vk::SystemError& error)
         {
             nrAssert(isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::acquireNextImage failed: {}", error.what()));
+            nrInfo<LogLevel::warning>(std::format("SwapChain::acquireNextImage returned eErrorOutOfDateKHR: {}", error.what()));
             return AcquireResult{
                 .imageIndex = 0,
                 .result = vk::Result::eErrorOutOfDateKHR,
@@ -108,6 +109,7 @@ struct SwapChain
         catch (const vk::SystemError& error)
         {
             nrAssert(isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::present failed: {}", error.what()));
+            nrInfo<LogLevel::warning>(std::format("SwapChain::present returned eErrorOutOfDateKHR: {}", error.what()));
             return PresentResult{.result = vk::Result::eErrorOutOfDateKHR};
         }
     }
@@ -158,16 +160,12 @@ struct SwapChain
 
         auto choosePresentMode = [&]() {
             auto requested = std::ranges::find(presentModes, config.presentMode);
-            if (requested != presentModes.end())
-            {
-                return config.presentMode;
-            }
-            auto mailbox = std::ranges::find(presentModes, vk::PresentModeKHR::eMailbox);
-            if (mailbox != presentModes.end())
-            {
-                return vk::PresentModeKHR::eMailbox;
-            }
-            return vk::PresentModeKHR::eFifo;
+            nrAssert(
+                requested != presentModes.end(),
+                std::format(
+                    "SwapChain::create requires present mode '{}'; refusing to enable a v-sync fallback.",
+                    vk::to_string(config.presentMode)));
+            return config.presentMode;
         };
 
         auto chooseCompositeAlpha = [&]() {
@@ -259,8 +257,13 @@ struct SwapChain
                     device.setDebugUtilsObjectNameEXT(imageNameInfo);
                     device.setDebugUtilsObjectNameEXT(viewNameInfo);
                 }
-                catch (const std::exception&)
+                catch (const vk::SystemError& error)
                 {
+                    nrInfo<LogLevel::error>(std::format(
+                        "SwapChain::create failed to set debug names for swapchain image {}: {}",
+                        index,
+                        error.what()));
+                    nrAssert(false, "SwapChain::create failed to set Vulkan debug object names.");
                 }
             });
         }

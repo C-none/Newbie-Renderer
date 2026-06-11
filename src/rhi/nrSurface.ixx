@@ -12,11 +12,8 @@ struct Surface
       public:
         GlfwContext()
         {
-            if (static_cast<bool>(glfwInit()) != true)
-            {
-                throw std::runtime_error("Failed to initialize GLFW.");
-            }
             glfwSetErrorCallback(&GlfwContext::errorCallback);
+            nrAssert(static_cast<bool>(glfwInit()), "Failed to initialize GLFW.");
         }
         GlfwContext(GlfwContext const &) = delete;
         GlfwContext &operator=(GlfwContext const &) = delete;
@@ -30,7 +27,13 @@ struct Surface
         {
             nrInfo<LogLevel::error>(std::format("glfw: (error number:{}) {}", error, msg));
         }
-    } inline static glfwCtx;
+    };
+
+    [[nodiscard]] static GlfwContext &glfwContext()
+    {
+        static GlfwContext context;
+        return context;
+    }
 
     std::unique_ptr<GLFWwindow, decltype(&glfwDestroyWindow)> handle{nullptr, &glfwDestroyWindow};
     vk::Extent2D extent{1920, 1080};
@@ -38,7 +41,7 @@ struct Surface
     vk::Format format = vk::Format::eUndefined;
     Surface()
     {
-        (void)&glfwCtx;
+        ensureGlfwInitialized();
     }
     Surface(const Surface &) = delete;
     Surface &operator=(const Surface &) = delete;
@@ -47,7 +50,7 @@ struct Surface
 
     static void ensureGlfwInitialized()
     {
-        (void)&glfwCtx;
+        (void)glfwContext();
     }
 
     /**

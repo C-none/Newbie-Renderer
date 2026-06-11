@@ -88,8 +88,6 @@ struct AsBuildLimits
     std::uint64_t maxInstanceCount = 0;
 };
 
-using AsDiagnostics = ValidationDiagnostics;
-
 class AccelerationStructureResource
 {
   public:
@@ -143,8 +141,13 @@ class AccelerationStructureResource
                 {
                     result.device_->get().setDebugUtilsObjectNameEXT(objectNameInfo);
                 }
-                catch (const vk::SystemError &)
+                catch (const vk::SystemError &error)
                 {
+                    auto errorText = std::string_view{error.what()};
+                    nrInfo<LogLevel::error>(std::vformat(
+                        "AccelerationStructureResource::create failed to set debug name '{}': {}",
+                        std::make_format_args(result.name_, errorText)));
+                    nrAssert(false, "AccelerationStructureResource::create failed to set a Vulkan debug object name.");
                 }
             }
         }
@@ -204,10 +207,10 @@ class AccelerationStructureResource
 
 struct BlasBuildRecordInfo
 {
-    const AccelerationStructureResource *dst = nullptr;
-    const AccelerationStructureResource *src = nullptr;
-    const Buffer *geometryBuffer = nullptr;
-    const Buffer *scratchBuffer = nullptr;
+    const AccelerationStructureResource &dst;
+    std::optional<std::reference_wrapper<const AccelerationStructureResource>> src{};
+    const Buffer &geometryBuffer;
+    const Buffer &scratchBuffer;
     vk::DeviceAddress scratchAddress = 0;
     BlasGeometryLayout geometryLayout{};
     BlasGeometryInput geometryInput{};
@@ -216,17 +219,47 @@ struct BlasBuildRecordInfo
 
 struct TlasBuildRecordInfo
 {
-    const AccelerationStructureResource *dst = nullptr;
-    const AccelerationStructureResource *src = nullptr;
-    const Buffer *instanceBuffer = nullptr;
-    const Buffer *scratchBuffer = nullptr;
+    const AccelerationStructureResource &dst;
+    std::optional<std::reference_wrapper<const AccelerationStructureResource>> src{};
+    const Buffer &instanceBuffer;
+    const Buffer &scratchBuffer;
     vk::DeviceAddress scratchAddress = 0;
     TlasBuildInput buildInput{};
     AsBuildOptions options{};
 };
 
-namespace detail
+} // namespace nr::rhi
+
+namespace nr::rhi::detail
 {
+struct ValidationResult
+{
+    bool isValid = false;
+    std::string message{};
+};
+
+[[nodiscard]] inline ValidationResult validationSuccess()
+{
+    return ValidationResult{
+        .isValid = true,
+        .message = {},
+    };
+}
+
+[[nodiscard]] inline ValidationResult validationFailure(std::string message)
+{
+    return ValidationResult{
+        .isValid = false,
+        .message = std::move(message),
+    };
+}
+
+template <typename... Args>
+[[nodiscard]] inline std::string formatMessage(std::string_view format, const Args &...args)
+{
+    return std::vformat(format, std::make_format_args(args...));
+}
+
 [[nodiscard]] inline vk::BuildAccelerationStructureModeKHR toVkBuildMode(AsBuildMode mode)
 {
     return mode == AsBuildMode::Update ? vk::BuildAccelerationStructureModeKHR::eUpdate : vk::BuildAccelerationStructureModeKHR::eBuild;
@@ -237,25 +270,25 @@ namespace detail
     return (flags & bit) != vk::BuildAccelerationStructureFlagsKHR{};
 }
 
-[[nodiscard]] inline AsDiagnostics validateBuildFlagCombination(const AsBuildOptions &options)
+[[nodiscard]] inline ValidationResult validateBuildFlagCombination(const AsBuildOptions &options)
 {
     if (hasBuildFlag(options.buildFlags, vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastBuild) &&
         hasBuildFlag(options.buildFlags, vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace))
     {
-        return makeValidationFailure("AsBuildOptions.buildFlags cannot combine PREFER_FAST_BUILD and PREFER_FAST_TRACE.");
+        return validationFailure("AsBuildOptions.buildFlags cannot combine PREFER_FAST_BUILD and PREFER_FAST_TRACE.");
     }
 
     if (options.allowUpdateExpected && !hasBuildFlag(options.buildFlags, vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate))
     {
-        return makeValidationFailure("allowUpdateExpected=true requires VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR.");
+        return validationFailure("allowUpdateExpected=true requires VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR.");
     }
 
     if (options.mode == AsBuildMode::Update && !hasBuildFlag(options.buildFlags, vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate))
     {
-        return makeValidationFailure("Update mode requires VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR in buildFlags.");
+        return validationFailure("Update mode requires VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR in buildFlags.");
     }
 
-    return makeValidationSuccess();
+    return validationSuccess();
 }
 
 [[nodiscard]] inline vk::DeviceSize indexTypeAlignment(vk::IndexType type)
@@ -271,7 +304,10 @@ namespace detail
     }
 }
 
-} // namespace detail
+} // namespace nr::rhi::detail
+
+export namespace nr::rhi
+{
 
 // Query physical-device AS limits needed by the caller to size scratch buffers,
 // validate primitive counts, and choose legal alignment.
@@ -288,107 +324,117 @@ namespace detail
     };
 }
 
-[[nodiscard]] inline AsDiagnostics validateAsBuildInputs(const BlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
+} // namespace nr::rhi
+
+namespace nr::rhi::detail
+{
+
+[[nodiscard]] inline ValidationResult validateAsBuildInputs(const BlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
 {
     auto flagDiagnostics = detail::validateBuildFlagCombination(info.options);
     if (!flagDiagnostics.isValid)
         return flagDiagnostics;
 
-    if (info.dst == nullptr || !info.dst->valid())
-        return makeValidationFailure("BLAS build requires a valid destination acceleration structure.");
-    if (info.dst->type() != vk::AccelerationStructureTypeKHR::eBottomLevel)
-        return makeValidationFailure("BLAS build destination type must be VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR.");
-    if (info.geometryBuffer == nullptr || !info.geometryBuffer->valid())
-        return makeValidationFailure("BLAS build requires a valid geometry input buffer.");
-    if (info.scratchBuffer == nullptr || !info.scratchBuffer->valid())
-        return makeValidationFailure("BLAS build requires a valid scratch buffer.");
+    if (!info.dst.valid())
+        return validationFailure("BLAS build requires a valid destination acceleration structure.");
+    if (info.dst.type() != vk::AccelerationStructureTypeKHR::eBottomLevel)
+        return validationFailure("BLAS build destination type must be VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR.");
+    if (!info.geometryBuffer.valid())
+        return validationFailure("BLAS build requires a valid geometry input buffer.");
+    if (!info.scratchBuffer.valid())
+        return validationFailure("BLAS build requires a valid scratch buffer.");
     if (info.geometryLayout.vertexStride == 0)
-        return makeValidationFailure("BLAS build requires vertexStride > 0.");
+        return validationFailure("BLAS build requires vertexStride > 0.");
     if (info.geometryLayout.maxVertex == 0)
-        return makeValidationFailure("BLAS build requires maxVertex > 0.");
+        return validationFailure("BLAS build requires maxVertex > 0.");
     if (info.geometryInput.primitiveCount == 0)
-        return makeValidationFailure("BLAS build requires primitiveCount > 0.");
+        return validationFailure("BLAS build requires primitiveCount > 0.");
     if (info.geometryInput.vertexAddress == 0)
-        return makeValidationFailure("BLAS build requires a non-zero vertex address.");
+        return validationFailure("BLAS build requires a non-zero vertex address.");
 
     if (info.geometryLayout.indexType == vk::IndexType::eNoneKHR)
     {
         if (info.geometryInput.indexAddress != 0)
-            return makeValidationFailure("BLAS build requires indexAddress == 0 when indexType is VK_INDEX_TYPE_NONE_KHR.");
+            return validationFailure("BLAS build requires indexAddress == 0 when indexType is VK_INDEX_TYPE_NONE_KHR.");
     }
     else if (info.geometryInput.indexAddress == 0)
     {
-        return makeValidationFailure("BLAS build requires a non-zero index address when indexType is not VK_INDEX_TYPE_NONE_KHR.");
+        return validationFailure("BLAS build requires a non-zero index address when indexType is not VK_INDEX_TYPE_NONE_KHR.");
     }
 
     auto requiredIndexAlignment = detail::indexTypeAlignment(info.geometryLayout.indexType);
     if (requiredIndexAlignment > 0 && (info.geometryInput.indexAddress % requiredIndexAlignment) != 0)
-        return makeValidationFailure(std::format("BLAS index address must be aligned to {} bytes.", requiredIndexAlignment));
+        return validationFailure(formatMessage("BLAS index address must be aligned to {} bytes.", requiredIndexAlignment));
 
     if (info.geometryInput.transformAddress != 0 && (info.geometryInput.transformAddress % 16) != 0)
-        return makeValidationFailure("BLAS transform address must be 16-byte aligned when present.");
+        return validationFailure("BLAS transform address must be 16-byte aligned when present.");
     if (info.scratchAddress == 0)
-        return makeValidationFailure("BLAS build requires non-zero scratch device address.");
+        return validationFailure("BLAS build requires non-zero scratch device address.");
     if (scratchAlignment > 0 && (info.scratchAddress % scratchAlignment) != 0)
-        return makeValidationFailure(std::format("BLAS scratch address must be aligned to {} bytes.", scratchAlignment));
-    if ((info.geometryBuffer->usage() & vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR) == vk::BufferUsageFlags{})
-        return makeValidationFailure("BLAS geometry buffer must include VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR.");
-    if ((info.scratchBuffer->usage() & vk::BufferUsageFlagBits::eStorageBuffer) == vk::BufferUsageFlags{})
-        return makeValidationFailure("BLAS scratch buffer must include VK_BUFFER_USAGE_STORAGE_BUFFER_BIT.");
+        return validationFailure(formatMessage("BLAS scratch address must be aligned to {} bytes.", scratchAlignment));
+    if ((info.geometryBuffer.usage() & vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR) == vk::BufferUsageFlags{})
+        return validationFailure("BLAS geometry buffer must include VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR.");
+    if ((info.scratchBuffer.usage() & vk::BufferUsageFlagBits::eStorageBuffer) == vk::BufferUsageFlags{})
+        return validationFailure("BLAS scratch buffer must include VK_BUFFER_USAGE_STORAGE_BUFFER_BIT.");
     if (info.options.mode == AsBuildMode::Update)
     {
         if (!info.options.allowUpdateExpected)
-            return makeValidationFailure("BLAS update mode requires allowUpdateExpected=true.");
-        if (info.src == nullptr || !info.src->valid())
-            return makeValidationFailure("BLAS update mode requires a valid source acceleration structure.");
-        if (info.src->type() != info.dst->type())
-            return makeValidationFailure("BLAS update mode requires matching source/destination AS types.");
+            return validationFailure("BLAS update mode requires allowUpdateExpected=true.");
+        if (!info.src.has_value() || !info.src->get().valid())
+            return validationFailure("BLAS update mode requires a valid source acceleration structure.");
+        if (info.src->get().type() != info.dst.type())
+            return validationFailure("BLAS update mode requires matching source/destination AS types.");
     }
 
-    return makeValidationSuccess();
+    return validationSuccess();
 }
 
-[[nodiscard]] inline AsDiagnostics validateAsBuildInputs(const TlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
+[[nodiscard]] inline ValidationResult validateAsBuildInputs(const TlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
 {
     auto flagDiagnostics = detail::validateBuildFlagCombination(info.options);
     if (!flagDiagnostics.isValid)
         return flagDiagnostics;
 
-    if (info.dst == nullptr || !info.dst->valid())
-        return makeValidationFailure("TLAS build requires a valid destination acceleration structure.");
-    if (info.dst->type() != vk::AccelerationStructureTypeKHR::eTopLevel)
-        return makeValidationFailure("TLAS build destination type must be VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR.");
-    if (info.instanceBuffer == nullptr || !info.instanceBuffer->valid())
-        return makeValidationFailure("TLAS build requires a valid instance input buffer.");
-    if (info.scratchBuffer == nullptr || !info.scratchBuffer->valid())
-        return makeValidationFailure("TLAS build requires a valid scratch buffer.");
+    if (!info.dst.valid())
+        return validationFailure("TLAS build requires a valid destination acceleration structure.");
+    if (info.dst.type() != vk::AccelerationStructureTypeKHR::eTopLevel)
+        return validationFailure("TLAS build destination type must be VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR.");
+    if (!info.instanceBuffer.valid())
+        return validationFailure("TLAS build requires a valid instance input buffer.");
+    if (!info.scratchBuffer.valid())
+        return validationFailure("TLAS build requires a valid scratch buffer.");
     if (info.buildInput.instanceCount == 0)
-        return makeValidationFailure("TLAS build requires instanceCount > 0.");
+        return validationFailure("TLAS build requires instanceCount > 0.");
     if (info.buildInput.instancesAddress == 0)
-        return makeValidationFailure("TLAS build requires non-zero instances device address.");
+        return validationFailure("TLAS build requires non-zero instances device address.");
     auto instanceAddressAlignment = info.buildInput.arrayOfPointers ? vk::DeviceSize{8} : vk::DeviceSize{16};
     if ((info.buildInput.instancesAddress % instanceAddressAlignment) != 0)
-        return makeValidationFailure(std::format("TLAS instances address must be aligned to {} bytes.", instanceAddressAlignment));
+        return validationFailure(formatMessage("TLAS instances address must be aligned to {} bytes.", instanceAddressAlignment));
     if (info.scratchAddress == 0)
-        return makeValidationFailure("TLAS build requires non-zero scratch device address.");
+        return validationFailure("TLAS build requires non-zero scratch device address.");
     if (scratchAlignment > 0 && (info.scratchAddress % scratchAlignment) != 0)
-        return makeValidationFailure(std::format("TLAS scratch address must be aligned to {} bytes.", scratchAlignment));
-    if ((info.instanceBuffer->usage() & vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR) == vk::BufferUsageFlags{})
-        return makeValidationFailure("TLAS instance buffer must include VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR.");
-    if ((info.scratchBuffer->usage() & vk::BufferUsageFlagBits::eStorageBuffer) == vk::BufferUsageFlags{})
-        return makeValidationFailure("TLAS scratch buffer must include VK_BUFFER_USAGE_STORAGE_BUFFER_BIT.");
+        return validationFailure(formatMessage("TLAS scratch address must be aligned to {} bytes.", scratchAlignment));
+    if ((info.instanceBuffer.usage() & vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR) == vk::BufferUsageFlags{})
+        return validationFailure("TLAS instance buffer must include VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR.");
+    if ((info.scratchBuffer.usage() & vk::BufferUsageFlagBits::eStorageBuffer) == vk::BufferUsageFlags{})
+        return validationFailure("TLAS scratch buffer must include VK_BUFFER_USAGE_STORAGE_BUFFER_BIT.");
     if (info.options.mode == AsBuildMode::Update)
     {
         if (!info.options.allowUpdateExpected)
-            return makeValidationFailure("TLAS update mode requires allowUpdateExpected=true.");
-        if (info.src == nullptr || !info.src->valid())
-            return makeValidationFailure("TLAS update mode requires a valid source acceleration structure.");
-        if (info.src->type() != info.dst->type())
-            return makeValidationFailure("TLAS update mode requires matching source/destination AS types.");
+            return validationFailure("TLAS update mode requires allowUpdateExpected=true.");
+        if (!info.src.has_value() || !info.src->get().valid())
+            return validationFailure("TLAS update mode requires a valid source acceleration structure.");
+        if (info.src->get().type() != info.dst.type())
+            return validationFailure("TLAS update mode requires matching source/destination AS types.");
     }
 
-    return makeValidationSuccess();
+    return validationSuccess();
 }
+
+} // namespace nr::rhi::detail
+
+export namespace nr::rhi
+{
 
 [[nodiscard]] inline AsBuildSizes queryBlasBuildSizes(
     const vk::raii::Device &device,
@@ -402,7 +448,7 @@ namespace detail
     nrAssert(layout.maxVertex > 0, "queryBlasBuildSizes requires maxVertex > 0.");
 
     auto flagDiagnostics = detail::validateBuildFlagCombination(options);
-    nrAssert(flagDiagnostics.isValid, std::format("queryBlasBuildSizes invalid options: {}", flagDiagnostics.message));
+    nrAssert(flagDiagnostics.isValid, detail::formatMessage("queryBlasBuildSizes invalid options: {}", flagDiagnostics.message));
 
     vk::AccelerationStructureGeometryTrianglesDataKHR triangles{};
     triangles.vertexFormat = layout.vertexFormat;
@@ -441,7 +487,7 @@ namespace detail
     nrAssert(input.instanceCount > 0, "queryTlasBuildSizes requires instanceCount > 0.");
 
     auto flagDiagnostics = detail::validateBuildFlagCombination(options);
-    nrAssert(flagDiagnostics.isValid, std::format("queryTlasBuildSizes invalid options: {}", flagDiagnostics.message));
+    nrAssert(flagDiagnostics.isValid, detail::formatMessage("queryTlasBuildSizes invalid options: {}", flagDiagnostics.message));
 
     vk::AccelerationStructureGeometryInstancesDataKHR instances{};
     instances.arrayOfPointers = input.arrayOfPointers ? vk::True : vk::False;
@@ -470,6 +516,17 @@ namespace detail
 // Record one BLAS build into an existing command buffer.
 // This function only records vkCmdBuildAccelerationStructuresKHR and never submits.
 //
+// NVIDIA RTX guidance (developer.nvidia.com):
+// - Static BLAS should usually use PREFER_FAST_TRACE, optionally with
+//   ALLOW_COMPACTION when the caller will run post-build compaction.
+// - Dynamic BLAS update is suitable for small, coherent deformation. Large
+//   deformation, fractured geometry, particles, or primitive-count changes are
+//   better handled by rebuilds, often with PREFER_FAST_BUILD.
+// - Compaction is not completed by ALLOW_COMPACTION alone. The caller must
+//   build, query compacted size after the GPU build finishes, create a new AS,
+//   copy with COMPACT, then release the old AS. NVIDIA notes that compacted
+//   size is only known after the build.
+//
 // Synchronization notes:
 // - Cross-queue producer/consumer ordering should normally be expressed with
 //   semaphores at submit time.
@@ -483,8 +540,8 @@ namespace detail
 inline void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const BlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1)
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildBlas requires a valid command buffer.");
-    auto diagnostics = validateAsBuildInputs(info, scratchAlignment);
-    nrAssert(diagnostics.isValid, std::format("recordBuildBlas invalid input: {}", diagnostics.message));
+    auto diagnostics = detail::validateAsBuildInputs(info, scratchAlignment);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordBuildBlas invalid input: {}", diagnostics.message));
 
     vk::AccelerationStructureGeometryTrianglesDataKHR triangles{};
     triangles.vertexFormat = info.geometryLayout.vertexFormat;
@@ -510,8 +567,8 @@ inline void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const 
     buildInfo.type = vk::AccelerationStructureTypeKHR::eBottomLevel;
     buildInfo.flags = info.options.buildFlags;
     buildInfo.mode = detail::toVkBuildMode(info.options.mode);
-    buildInfo.srcAccelerationStructure = info.src != nullptr ? info.src->raw() : vk::AccelerationStructureKHR{};
-    buildInfo.dstAccelerationStructure = info.dst->raw();
+    buildInfo.srcAccelerationStructure = info.src.has_value() ? info.src->get().raw() : vk::AccelerationStructureKHR{};
+    buildInfo.dstAccelerationStructure = info.dst.raw();
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries = &geometry;
     buildInfo.scratchData.deviceAddress = info.scratchAddress;
@@ -524,6 +581,11 @@ inline void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const 
 
 // Record one TLAS build into an existing command buffer.
 // This function only records vkCmdBuildAccelerationStructuresKHR and never submits.
+//
+// NVIDIA RTX guidance (developer.nvidia.com): TLAS builds should usually use
+// PREFER_FAST_TRACE and rebuild instead of update; in many scenes update can
+// lose enough traversal quality that the cheaper refit is not worth it.
+//
 // If this TLAS consumes BLAS results produced earlier in the same command list,
 // caller must insert a barrier from
 //   srcStage = eAccelerationStructureBuildKHR,
@@ -535,8 +597,8 @@ inline void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const 
 inline void recordBuildTlas(const vk::raii::CommandBuffer &commandBuffer, const TlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1)
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildTlas requires a valid command buffer.");
-    auto diagnostics = validateAsBuildInputs(info, scratchAlignment);
-    nrAssert(diagnostics.isValid, std::format("recordBuildTlas invalid input: {}", diagnostics.message));
+    auto diagnostics = detail::validateAsBuildInputs(info, scratchAlignment);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordBuildTlas invalid input: {}", diagnostics.message));
 
     vk::AccelerationStructureGeometryInstancesDataKHR instances{};
     instances.arrayOfPointers = info.buildInput.arrayOfPointers ? vk::True : vk::False;
@@ -556,8 +618,8 @@ inline void recordBuildTlas(const vk::raii::CommandBuffer &commandBuffer, const 
     buildInfo.type = vk::AccelerationStructureTypeKHR::eTopLevel;
     buildInfo.flags = info.options.buildFlags;
     buildInfo.mode = detail::toVkBuildMode(info.options.mode);
-    buildInfo.srcAccelerationStructure = info.src != nullptr ? info.src->raw() : vk::AccelerationStructureKHR{};
-    buildInfo.dstAccelerationStructure = info.dst->raw();
+    buildInfo.srcAccelerationStructure = info.src.has_value() ? info.src->get().raw() : vk::AccelerationStructureKHR{};
+    buildInfo.dstAccelerationStructure = info.dst.raw();
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries = &geometry;
     buildInfo.scratchData.deviceAddress = info.scratchAddress;

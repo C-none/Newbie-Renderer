@@ -1014,12 +1014,14 @@ struct PipelineState
 class PipelineService
 {
   public:
-	void bindDevice(const vk::raii::Device &device, const RayTracingCapabilitySnapshot *rtCapabilities = nullptr)
+	void bindDevice(
+		const vk::raii::Device &device,
+		std::optional<std::reference_wrapper<const RayTracingCapabilitySnapshot>> rtCapabilities = std::nullopt)
 	{
 		device_ = std::cref(device);
-		if (rtCapabilities != nullptr)
+		if (rtCapabilities.has_value())
 		{
-			rtCapabilities_ = *rtCapabilities;
+			rtCapabilities_ = rtCapabilities->get();
 		}
 		else
 		{

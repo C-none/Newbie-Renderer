@@ -17,7 +17,7 @@ struct ShaderBindingTableSectionDesc
 
 struct ShaderBindingTableBuildDesc
 {
-    const RayTracingPipeline *pipeline = nullptr;
+    const RayTracingPipeline &pipeline;
     RayTracingCapabilitySnapshot capabilities{};
     ShaderBindingTableSectionDesc raygen{.firstGroup = 0, .groupCount = 1, .stride = 0};
     ShaderBindingTableSectionDesc miss{};
@@ -35,8 +35,6 @@ struct ShaderBindingTableLayoutDesc
     ShaderBindingTableSectionDesc hit{};
     ShaderBindingTableSectionDesc callable{};
 };
-
-using ShaderBindingTableBuildDiagnostics = ValidationDiagnostics;
 
 struct ShaderBindingTableBuildPlanSection
 {
@@ -64,22 +62,20 @@ struct TraceRaysDimensions
     std::uint32_t depth = 1;
 };
 
-using TraceRaysDispatchDiagnostics = ValidationDiagnostics;
-
 class ShaderBindingTable;
 
 struct TraceRaysDesc
 {
-    const RayTracingPipeline *pipeline = nullptr;
-    const ShaderBindingTable *shaderBindingTable = nullptr;
+    const RayTracingPipeline &pipeline;
+    const ShaderBindingTable &shaderBindingTable;
     TraceRaysDimensions dimensions{};
     QueueRole recordingQueueRole = QueueRole::Compute;
 };
 
 struct TraceRaysIndirectDesc
 {
-    const RayTracingPipeline *pipeline = nullptr;
-    const ShaderBindingTable *shaderBindingTable = nullptr;
+    const RayTracingPipeline &pipeline;
+    const ShaderBindingTable &shaderBindingTable;
     vk::DeviceAddress indirectDeviceAddress = 0;
     QueueRole recordingQueueRole = QueueRole::Compute;
 };
@@ -106,8 +102,38 @@ struct TraceRaysIndirectDesc
     return value + (alignment - remainder);
 }
 
-namespace rt_detail
+} // namespace nr::rhi
+
+namespace nr::rhi::rt_detail
 {
+struct ValidationResult
+{
+    bool isValid = false;
+    std::string message{};
+};
+
+[[nodiscard]] inline ValidationResult validationSuccess()
+{
+    return ValidationResult{
+        .isValid = true,
+        .message = {},
+    };
+}
+
+[[nodiscard]] inline ValidationResult validationFailure(std::string message)
+{
+    return ValidationResult{
+        .isValid = false,
+        .message = std::move(message),
+    };
+}
+
+template <typename... Args>
+[[nodiscard]] inline std::string formatMessage(std::string_view format, const Args &...args)
+{
+    return std::vformat(format, std::make_format_args(args...));
+}
+
 [[nodiscard]] inline std::uint32_t effectiveStride(const ShaderBindingTableSectionDesc &section, const RayTracingCapabilitySnapshot &capabilities)
 {
     if (section.groupCount == 0)
@@ -123,7 +149,7 @@ namespace rt_detail
     return alignUp(capabilities.shaderGroupHandleSize, capabilities.shaderGroupHandleAlignment);
 }
 
-[[nodiscard]] inline ShaderBindingTableBuildDiagnostics validateSection(
+[[nodiscard]] inline ValidationResult validateSection(
     std::string_view label,
     const ShaderBindingTableSectionDesc &section,
     std::uint32_t effectiveSectionStride,
@@ -132,31 +158,48 @@ namespace rt_detail
 {
     if (section.groupCount == 0)
     {
-        return makeValidationSuccess();
+        return validationSuccess();
     }
 
     if (effectiveSectionStride < capabilities.shaderGroupHandleSize)
     {
-        return makeValidationFailure(std::format("{} stride ({}) must be >= shaderGroupHandleSize ({}).", label, effectiveSectionStride, capabilities.shaderGroupHandleSize));
+        return validationFailure(formatMessage(
+            "{} stride ({}) must be >= shaderGroupHandleSize ({}).",
+            label,
+            effectiveSectionStride,
+            capabilities.shaderGroupHandleSize));
     }
 
     if ((effectiveSectionStride % capabilities.shaderGroupHandleAlignment) != 0)
     {
-        return makeValidationFailure(std::format("{} stride ({}) must be aligned to shaderGroupHandleAlignment ({}).", label, effectiveSectionStride, capabilities.shaderGroupHandleAlignment));
+        return validationFailure(formatMessage(
+            "{} stride ({}) must be aligned to shaderGroupHandleAlignment ({}).",
+            label,
+            effectiveSectionStride,
+            capabilities.shaderGroupHandleAlignment));
     }
 
     if (effectiveSectionStride > capabilities.maxShaderGroupStride)
     {
-        return makeValidationFailure(std::format("{} stride ({}) exceeds maxShaderGroupStride ({}).", label, effectiveSectionStride, capabilities.maxShaderGroupStride));
+        return validationFailure(formatMessage(
+            "{} stride ({}) exceeds maxShaderGroupStride ({}).",
+            label,
+            effectiveSectionStride,
+            capabilities.maxShaderGroupStride));
     }
 
     auto groupEnd = static_cast<std::uint64_t>(section.firstGroup) + static_cast<std::uint64_t>(section.groupCount);
     if (groupEnd > static_cast<std::uint64_t>(pipelineGroupCount))
     {
-        return makeValidationFailure(std::format("{} group range [{}..{}) exceeds pipeline group count ({}).", label, section.firstGroup, groupEnd, pipelineGroupCount));
+        return validationFailure(formatMessage(
+            "{} group range [{}..{}) exceeds pipeline group count ({}).",
+            label,
+            section.firstGroup,
+            groupEnd,
+            pipelineGroupCount));
     }
 
-    return makeValidationSuccess();
+    return validationSuccess();
 }
 
 [[nodiscard]] inline vk::DeviceSize sectionSize(const ShaderBindingTableSectionDesc &section)
@@ -205,20 +248,18 @@ namespace rt_detail
     region.size = section.size;
     return region;
 }
-} // namespace rt_detail
+[[nodiscard]] inline ValidationResult validateShaderBindingTableLayoutDesc(const ShaderBindingTableLayoutDesc &desc);
 
-[[nodiscard]] inline ShaderBindingTableBuildDiagnostics validateShaderBindingTableLayoutDesc(const ShaderBindingTableLayoutDesc &desc);
-
-[[nodiscard]] inline ShaderBindingTableBuildDiagnostics validateShaderBindingTableBuildDesc(const ShaderBindingTableBuildDesc &desc)
+[[nodiscard]] inline ValidationResult validateShaderBindingTableBuildDesc(const ShaderBindingTableBuildDesc &desc)
 {
-    if (desc.pipeline == nullptr || !desc.pipeline->valid())
+    if (!desc.pipeline.valid())
     {
-        return makeValidationFailure("ShaderBindingTableBuildDesc requires a valid ray tracing pipeline.");
+        return validationFailure("ShaderBindingTableBuildDesc requires a valid ray tracing pipeline.");
     }
 
     auto layoutDesc = ShaderBindingTableLayoutDesc{
         .capabilities = desc.capabilities,
-        .pipelineGroupCount = desc.pipeline->shaderGroupCount(),
+        .pipelineGroupCount = desc.pipeline.shaderGroupCount(),
         .raygen = desc.raygen,
         .miss = desc.miss,
         .hit = desc.hit,
@@ -228,36 +269,36 @@ namespace rt_detail
     return validateShaderBindingTableLayoutDesc(layoutDesc);
 }
 
-[[nodiscard]] inline ShaderBindingTableBuildDiagnostics validateShaderBindingTableLayoutDesc(const ShaderBindingTableLayoutDesc &desc)
+[[nodiscard]] inline ValidationResult validateShaderBindingTableLayoutDesc(const ShaderBindingTableLayoutDesc &desc)
 {
     if (desc.capabilities.shaderGroupHandleSize == 0)
     {
-        return makeValidationFailure("shaderGroupHandleSize must be > 0.");
+        return validationFailure("shaderGroupHandleSize must be > 0.");
     }
 
     if (desc.capabilities.shaderGroupHandleAlignment == 0)
     {
-        return makeValidationFailure("shaderGroupHandleAlignment must be > 0.");
+        return validationFailure("shaderGroupHandleAlignment must be > 0.");
     }
 
     if (desc.capabilities.shaderGroupBaseAlignment == 0)
     {
-        return makeValidationFailure("shaderGroupBaseAlignment must be > 0.");
+        return validationFailure("shaderGroupBaseAlignment must be > 0.");
     }
 
     if (desc.capabilities.maxShaderGroupStride == 0)
     {
-        return makeValidationFailure("maxShaderGroupStride must be > 0.");
+        return validationFailure("maxShaderGroupStride must be > 0.");
     }
 
     if (desc.pipelineGroupCount == 0)
     {
-        return makeValidationFailure("pipelineGroupCount must be > 0.");
+        return validationFailure("pipelineGroupCount must be > 0.");
     }
 
     if (desc.raygen.groupCount != 1)
     {
-        return makeValidationFailure("raygen section must contain exactly one group so size == stride.");
+        return validationFailure("raygen section must contain exactly one group so size == stride.");
     }
 
     auto raygen = desc.raygen;
@@ -299,16 +340,88 @@ namespace rt_detail
     auto raygenSize = rt_detail::sectionSize(raygen);
     if (raygenSize != raygen.stride)
     {
-        return makeValidationFailure("raygen section requires size == stride.");
+        return validationFailure("raygen section requires size == stride.");
     }
 
-    return makeValidationSuccess();
+    return validationSuccess();
 }
+
+[[nodiscard]] inline ValidationResult validateTraceRaysDispatch(const TraceRaysDimensions &dimensions, const RayTracingCapabilitySnapshot &capabilities)
+{
+    if (dimensions.width == 0 || dimensions.height == 0 || dimensions.depth == 0)
+    {
+        return validationFailure("traceRays dimensions must all be > 0.");
+    }
+
+    auto dispatchWidth = static_cast<std::uint64_t>(dimensions.width);
+    auto dispatchHeight = static_cast<std::uint64_t>(dimensions.height);
+    auto dispatchDepth = static_cast<std::uint64_t>(dimensions.depth);
+
+    if (capabilities.maxDispatchDimensions[0] > 0 && dispatchWidth > capabilities.maxDispatchDimensions[0])
+    {
+        return validationFailure(formatMessage(
+            "traceRays width ({}) exceeds max dispatch width ({}).",
+            dimensions.width,
+            capabilities.maxDispatchDimensions[0]));
+    }
+
+    if (capabilities.maxDispatchDimensions[1] > 0 && dispatchHeight > capabilities.maxDispatchDimensions[1])
+    {
+        return validationFailure(formatMessage(
+            "traceRays height ({}) exceeds max dispatch height ({}).",
+            dimensions.height,
+            capabilities.maxDispatchDimensions[1]));
+    }
+
+    if (capabilities.maxDispatchDimensions[2] > 0 && dispatchDepth > capabilities.maxDispatchDimensions[2])
+    {
+        return validationFailure(formatMessage(
+            "traceRays depth ({}) exceeds max dispatch depth ({}).",
+            dimensions.depth,
+            capabilities.maxDispatchDimensions[2]));
+    }
+
+    auto invocationCount = dispatchWidth * dispatchHeight * dispatchDepth;
+    if (capabilities.maxRayDispatchInvocationCount > 0 && invocationCount > capabilities.maxRayDispatchInvocationCount)
+    {
+        return validationFailure(formatMessage(
+            "traceRays invocation count ({}) exceeds maxRayDispatchInvocationCount ({}).",
+            invocationCount,
+            capabilities.maxRayDispatchInvocationCount));
+    }
+
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateTraceRaysIndirect(vk::DeviceAddress indirectDeviceAddress, const RayTracingCapabilitySnapshot &capabilities)
+{
+    if (!capabilities.rayTracingPipelineTraceRaysIndirect)
+    {
+        return validationFailure("traceRaysIndirect requires rayTracingPipelineTraceRaysIndirect feature.");
+    }
+
+    if (indirectDeviceAddress == 0)
+    {
+        return validationFailure("traceRaysIndirect requires a non-zero indirect device address.");
+    }
+
+    if ((indirectDeviceAddress % 4u) != 0)
+    {
+        return validationFailure("traceRaysIndirect indirect device address must be 4-byte aligned.");
+    }
+
+    return validationSuccess();
+}
+
+} // namespace nr::rhi::rt_detail
+
+export namespace nr::rhi
+{
 
 [[nodiscard]] inline ShaderBindingTableBuildPlan makeShaderBindingTableBuildPlan(const ShaderBindingTableLayoutDesc &desc)
 {
-    auto validation = validateShaderBindingTableLayoutDesc(desc);
-    nrAssert(validation.isValid, std::format("makeShaderBindingTableBuildPlan invalid desc: {}", validation.message));
+    auto validation = rt_detail::validateShaderBindingTableLayoutDesc(desc);
+    nrAssert(validation.isValid, rt_detail::formatMessage("makeShaderBindingTableBuildPlan invalid desc: {}", validation.message));
 
     auto normalizedDesc = desc;
     normalizedDesc.raygen.stride = rt_detail::effectiveStride(normalizedDesc.raygen, normalizedDesc.capabilities);
@@ -339,12 +452,12 @@ namespace rt_detail
 
 [[nodiscard]] inline ShaderBindingTableBuildPlan makeShaderBindingTableBuildPlan(const ShaderBindingTableBuildDesc &desc)
 {
-    auto validation = validateShaderBindingTableBuildDesc(desc);
-    nrAssert(validation.isValid, std::format("makeShaderBindingTableBuildPlan invalid desc: {}", validation.message));
+    auto validation = rt_detail::validateShaderBindingTableBuildDesc(desc);
+    nrAssert(validation.isValid, rt_detail::formatMessage("makeShaderBindingTableBuildPlan invalid desc: {}", validation.message));
 
     return makeShaderBindingTableBuildPlan(ShaderBindingTableLayoutDesc{
         .capabilities = desc.capabilities,
-        .pipelineGroupCount = desc.pipeline->shaderGroupCount(),
+        .pipelineGroupCount = desc.pipeline.shaderGroupCount(),
         .raygen = desc.raygen,
         .miss = desc.miss,
         .hit = desc.hit,
@@ -371,8 +484,8 @@ class ShaderBindingTable
 
     [[nodiscard]] static ShaderBindingTable create(const ResourceFactory &resourceFactory, const ShaderBindingTableBuildDesc &desc)
     {
-        auto validation = validateShaderBindingTableBuildDesc(desc);
-        nrAssert(validation.isValid, std::format("ShaderBindingTable::create invalid desc: {}", validation.message));
+        auto validation = rt_detail::validateShaderBindingTableBuildDesc(desc);
+        nrAssert(validation.isValid, rt_detail::formatMessage("ShaderBindingTable::create invalid desc: {}", validation.message));
 
         auto plan = makeShaderBindingTableBuildPlan(desc);
         nrAssert(plan.totalSize > 0, "ShaderBindingTable::create requires totalSize > 0.");
@@ -383,7 +496,7 @@ class ShaderBindingTable
                 return;
             }
 
-            auto handles = desc.pipeline->shaderGroupHandles(plannedSection.section.firstGroup, plannedSection.section.groupCount, plan.handleSize);
+            auto handles = desc.pipeline.shaderGroupHandles(plannedSection.section.firstGroup, plannedSection.section.groupCount, plan.handleSize);
             auto groupIndices = std::views::iota(std::uint32_t{0}, plannedSection.section.groupCount);
             std::ranges::for_each(groupIndices, [&](std::uint32_t groupIndex) {
                 auto dstOffset = plannedSection.offset + (static_cast<vk::DeviceSize>(groupIndex) * plannedSection.section.stride);
@@ -432,7 +545,9 @@ class ShaderBindingTable
             {
                 return;
             }
-            nrAssert((region.deviceAddress % baseAlignment) == 0, std::format("ShaderBindingTable::create {} deviceAddress is not shaderGroupBaseAlignment aligned.", label));
+            nrAssert(
+                (region.deviceAddress % baseAlignment) == 0,
+                rt_detail::formatMessage("ShaderBindingTable::create {} deviceAddress is not shaderGroupBaseAlignment aligned.", label));
         };
 
         checkRegionAlignment("raygen", sbt.raygenRegion_);
@@ -491,78 +606,20 @@ class ShaderBindingTable
     vk::StridedDeviceAddressRegionKHR callableRegion_{};
 };
 
-[[nodiscard]] inline TraceRaysDispatchDiagnostics validateTraceRaysDispatch(const TraceRaysDimensions &dimensions, const RayTracingCapabilitySnapshot &capabilities)
-{
-    if (dimensions.width == 0 || dimensions.height == 0 || dimensions.depth == 0)
-    {
-        return makeValidationFailure("traceRays dimensions must all be > 0.");
-    }
-
-    auto dispatchWidth = static_cast<std::uint64_t>(dimensions.width);
-    auto dispatchHeight = static_cast<std::uint64_t>(dimensions.height);
-    auto dispatchDepth = static_cast<std::uint64_t>(dimensions.depth);
-
-    if (capabilities.maxDispatchDimensions[0] > 0 && dispatchWidth > capabilities.maxDispatchDimensions[0])
-    {
-        return makeValidationFailure(std::format("traceRays width ({}) exceeds max dispatch width ({}).", dimensions.width, capabilities.maxDispatchDimensions[0]));
-    }
-
-    if (capabilities.maxDispatchDimensions[1] > 0 && dispatchHeight > capabilities.maxDispatchDimensions[1])
-    {
-        return makeValidationFailure(std::format("traceRays height ({}) exceeds max dispatch height ({}).", dimensions.height, capabilities.maxDispatchDimensions[1]));
-    }
-
-    if (capabilities.maxDispatchDimensions[2] > 0 && dispatchDepth > capabilities.maxDispatchDimensions[2])
-    {
-        return makeValidationFailure(std::format("traceRays depth ({}) exceeds max dispatch depth ({}).", dimensions.depth, capabilities.maxDispatchDimensions[2]));
-    }
-
-    auto invocationCount = dispatchWidth * dispatchHeight * dispatchDepth;
-    if (capabilities.maxRayDispatchInvocationCount > 0 && invocationCount > capabilities.maxRayDispatchInvocationCount)
-    {
-        return makeValidationFailure(std::format(
-            "traceRays invocation count ({}) exceeds maxRayDispatchInvocationCount ({}).",
-            invocationCount,
-            capabilities.maxRayDispatchInvocationCount));
-    }
-
-    return makeValidationSuccess();
-}
-
-[[nodiscard]] inline TraceRaysDispatchDiagnostics validateTraceRaysIndirect(vk::DeviceAddress indirectDeviceAddress, const RayTracingCapabilitySnapshot &capabilities)
-{
-    if (!capabilities.rayTracingPipelineTraceRaysIndirect)
-    {
-        return makeValidationFailure("traceRaysIndirect requires rayTracingPipelineTraceRaysIndirect feature.");
-    }
-
-    if (indirectDeviceAddress == 0)
-    {
-        return makeValidationFailure("traceRaysIndirect requires a non-zero indirect device address.");
-    }
-
-    if ((indirectDeviceAddress % 4u) != 0)
-    {
-        return makeValidationFailure("traceRaysIndirect indirect device address must be 4-byte aligned.");
-    }
-
-    return makeValidationSuccess();
-}
-
 inline void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc &desc, const RayTracingCapabilitySnapshot &capabilities)
 {
     nrAssert(*commandBuffer != nullptr, "traceRays requires a valid command buffer.");
-    nrAssert(desc.pipeline != nullptr && desc.pipeline->valid(), "traceRays requires a valid ray tracing pipeline.");
-    nrAssert(desc.shaderBindingTable != nullptr && desc.shaderBindingTable->valid(), "traceRays requires a valid shader binding table.");
+    nrAssert(desc.pipeline.valid(), "traceRays requires a valid ray tracing pipeline.");
+    nrAssert(desc.shaderBindingTable.valid(), "traceRays requires a valid shader binding table.");
     nrAssert(desc.recordingQueueRole != QueueRole::Transfer, "traceRays requires a queue family that supports compute operations.");
 
-    auto diagnostics = validateTraceRaysDispatch(desc.dimensions, capabilities);
-    nrAssert(diagnostics.isValid, std::format("traceRays invalid dispatch: {}", diagnostics.message));
+    auto diagnostics = rt_detail::validateTraceRaysDispatch(desc.dimensions, capabilities);
+    nrAssert(diagnostics.isValid, rt_detail::formatMessage("traceRays invalid dispatch: {}", diagnostics.message));
 
-    auto regions = desc.shaderBindingTable->regions();
+    auto regions = desc.shaderBindingTable.regions();
     nrAssert(regions.raygen.size == regions.raygen.stride, "traceRays requires raygen SBT region size == stride.");
 
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline->raw());
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
     commandBuffer.traceRaysKHR(
         regions.raygen,
         regions.miss,
@@ -576,17 +633,17 @@ inline void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceR
 inline void traceRaysIndirect(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysIndirectDesc &desc, const RayTracingCapabilitySnapshot &capabilities)
 {
     nrAssert(*commandBuffer != nullptr, "traceRaysIndirect requires a valid command buffer.");
-    nrAssert(desc.pipeline != nullptr && desc.pipeline->valid(), "traceRaysIndirect requires a valid ray tracing pipeline.");
-    nrAssert(desc.shaderBindingTable != nullptr && desc.shaderBindingTable->valid(), "traceRaysIndirect requires a valid shader binding table.");
+    nrAssert(desc.pipeline.valid(), "traceRaysIndirect requires a valid ray tracing pipeline.");
+    nrAssert(desc.shaderBindingTable.valid(), "traceRaysIndirect requires a valid shader binding table.");
     nrAssert(desc.recordingQueueRole != QueueRole::Transfer, "traceRaysIndirect requires a queue family that supports compute operations.");
 
-    auto diagnostics = validateTraceRaysIndirect(desc.indirectDeviceAddress, capabilities);
-    nrAssert(diagnostics.isValid, std::format("traceRaysIndirect invalid arguments: {}", diagnostics.message));
+    auto diagnostics = rt_detail::validateTraceRaysIndirect(desc.indirectDeviceAddress, capabilities);
+    nrAssert(diagnostics.isValid, rt_detail::formatMessage("traceRaysIndirect invalid arguments: {}", diagnostics.message));
 
-    auto regions = desc.shaderBindingTable->regions();
+    auto regions = desc.shaderBindingTable.regions();
     nrAssert(regions.raygen.size == regions.raygen.stride, "traceRaysIndirect requires raygen SBT region size == stride.");
 
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline->raw());
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
     commandBuffer.traceRaysIndirectKHR(
         regions.raygen,
         regions.miss,

@@ -36,7 +36,7 @@ Current dependency frameworks:
 Current boundary notes:
 
 - Windows + Vulkan + RTX-class hardware are hard assumptions.
-- RHI device creation requires graphics, compute, and a dedicated copy/transfer queue family; the frame-present policy is compute-final, and the selected compute queue family must support surface presentation.
+- RHI physical-device selection and device creation require graphics, compute, and a dedicated physical copy/transfer queue family; the frame-present policy is compute-final, and the selected compute queue family must support surface presentation.
 - Command invocation should stay on Vulkan-Hpp RAII member functions instead of project-local dispatch tables.
 - RHI command-buffer helper APIs expose `const vk::raii::CommandBuffer&`; raw `vk::CommandBuffer` handles stay internal implementation details.
 - Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.

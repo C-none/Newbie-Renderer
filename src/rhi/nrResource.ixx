@@ -82,9 +82,13 @@ void setResourceDebugName(Resource &resource)
                 resource.device_->get().setDebugUtilsObjectNameEXT(viewNameInfo);
             }
         }
-        catch (const vk::SystemError &)
+        catch (const vk::SystemError &error)
         {
-            // VK_EXT_debug_utils not available — silently ignore
+            nrInfo<LogLevel::error>(std::format(
+                "setResourceDebugName failed for '{}': {}",
+                resource.name_,
+                error.what()));
+            nrAssert(false, "setResourceDebugName failed to set a Vulkan debug object name.");
         }
     }
 }
@@ -114,8 +118,13 @@ void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::st
     {
         resource.device_->get().setDebugUtilsObjectNameEXT(nameInfo);
     }
-    catch (const vk::SystemError &)
+    catch (const vk::SystemError &error)
     {
+        nrInfo<LogLevel::error>(std::format(
+            "setResourceViewDebugName failed for '{}': {}",
+            debugName,
+            error.what()));
+        nrAssert(false, "setResourceViewDebugName failed to set a Vulkan debug object name.");
     }
 }
 } // namespace nr::rhi
