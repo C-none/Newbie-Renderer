@@ -655,16 +655,18 @@ class Scene
             return;
         }
 
-        pendingAcquireBatches_.clear();
-        auto uploadBudgetRemaining = uploadBudgetBytesPerFrame_;
         auto &uploadContext = device_.uploadReadback();
+        reapSubmittedAcquireWork();
+        submitReadyGraphicsAcquireBatches(uploadContext);
+
+        auto uploadBudgetRemaining = uploadBudgetBytesPerFrame_;
 
         uploadQueuedCameraAssets(uploadBudgetRemaining);
         uploadQueuedLightAssets(uploadBudgetRemaining);
         uploadQueuedMaterialAssets(uploadContext, uploadBudgetRemaining);
         uploadQueuedMeshAssets(uploadContext, uploadBudgetRemaining);
         uploadQueuedTextureAssets(uploadContext, uploadBudgetRemaining);
-        submitGraphicsAcquireBatches(uploadContext);
+        pollUploadTimelineUntilAcquireBatchesReady(uploadContext);
     }
 
     [[nodiscard]] SceneExtractProfileHandle registerExtractProfile(
@@ -868,6 +870,13 @@ class Scene
         std::uint64_t targetGpuVersion = 0;
         std::vector<nr::rhi::ops::BufferUploadTicket> bufferTickets{};
         std::vector<nr::rhi::ops::ImageUploadTicket> imageTickets{};
+    };
+
+    struct SubmittedAcquireWork
+    {
+        nr::rhi::CommandPool commandPool{};
+        std::optional<vk::raii::CommandBuffers> commandBuffers{};
+        vk::raii::Fence fence{nullptr};
     };
 
     template <typename HandleT>
@@ -1909,8 +1918,7 @@ class Scene
         }
 
         auto cameraGpuData = detail::buildCameraGpuData(record.cpu);
-        record.gpu->buffer.write(cameraGpuData);
-        record.gpu->buffer.flush(0, sizeof(detail::CameraGpuData));
+        record.gpu->buffer.writeMappedAndFlush(cameraGpuData);
 
         record.uploadQueued = false;
         record.gpuState = GpuResidencyState::resident;
@@ -1941,8 +1949,7 @@ class Scene
         }
 
         auto lightGpuData = detail::buildLightGpuData(record.cpu);
-        record.gpu->buffer.write(lightGpuData);
-        record.gpu->buffer.flush(0, sizeof(detail::LightGpuData));
+        record.gpu->buffer.writeMappedAndFlush(lightGpuData);
 
         record.uploadQueued = false;
         record.gpuState = GpuResidencyState::resident;
@@ -2130,40 +2137,88 @@ class Scene
         }
     }
 
-    void submitGraphicsAcquireBatches(nr::rhi::ops::UploadReadbackContext &uploadContext)
+    [[nodiscard]] static std::uint64_t maxUploadSignalValue(const PendingAcquireBatch &batch) noexcept
+    {
+        auto maxSignalValue = std::uint64_t{0};
+        std::ranges::for_each(batch.bufferTickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
+            maxSignalValue = std::max(maxSignalValue, ticket.signalValue);
+        });
+        std::ranges::for_each(batch.imageTickets, [&](const nr::rhi::ops::ImageUploadTicket &ticket) {
+            maxSignalValue = std::max(maxSignalValue, ticket.signalValue);
+        });
+        return maxSignalValue;
+    }
+
+    void reapSubmittedAcquireWork()
+    {
+        std::erase_if(submittedAcquireWork_, [&](SubmittedAcquireWork &work) {
+            nrAssert(*work.fence != nullptr, "Scene submitted acquire work requires a valid fence.");
+            auto result = device_.device.waitForFences(*work.fence, vk::True, 0u);
+            nrAssert(
+                result == vk::Result::eSuccess || result == vk::Result::eTimeout,
+                "Scene failed querying graphics acquire fence status.");
+            return result == vk::Result::eSuccess;
+        });
+    }
+
+    void submitReadyGraphicsAcquireBatches(nr::rhi::ops::UploadReadbackContext &uploadContext)
     {
         if (pendingAcquireBatches_.empty())
         {
             return;
         }
 
-        auto maxSignalValue = std::uint64_t{0};
-        std::ranges::for_each(pendingAcquireBatches_, [&](const PendingAcquireBatch &batch) {
-            std::ranges::for_each(batch.bufferTickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
-                maxSignalValue = std::max(maxSignalValue, ticket.signalValue);
-            });
-            std::ranges::for_each(batch.imageTickets, [&](const nr::rhi::ops::ImageUploadTicket &ticket) {
-                maxSignalValue = std::max(maxSignalValue, ticket.signalValue);
-            });
-        });
+        auto const completedUploadValue = uploadContext.completedUploadValue();
+        uploadContext.reclaimCompletedUploads();
 
-        if (maxSignalValue == 0)
+        auto readyBatches = std::vector<PendingAcquireBatch>{};
+        auto waitingBatches = std::vector<PendingAcquireBatch>{};
+        readyBatches.reserve(pendingAcquireBatches_.size());
+        waitingBatches.reserve(pendingAcquireBatches_.size());
+
+        std::ranges::for_each(pendingAcquireBatches_, [&](PendingAcquireBatch &batch) {
+            auto const batchSignalValue = maxUploadSignalValue(batch);
+            if (batchSignalValue <= completedUploadValue)
+            {
+                readyBatches.push_back(std::move(batch));
+            }
+            else
+            {
+                waitingBatches.push_back(std::move(batch));
+            }
+        });
+        pendingAcquireBatches_ = std::move(waitingBatches);
+
+        if (readyBatches.empty())
         {
-            pendingAcquireBatches_.clear();
             return;
         }
 
-        auto acquirePool = nr::rhi::CommandPool{
+        auto maxReadySignalValue = std::uint64_t{0};
+        std::ranges::for_each(readyBatches, [&](const PendingAcquireBatch &batch) {
+            maxReadySignalValue = std::max(maxReadySignalValue, maxUploadSignalValue(batch));
+        });
+
+        if (maxReadySignalValue == 0)
+        {
+            std::ranges::for_each(readyBatches, [&](const PendingAcquireBatch &batch) {
+                markAcquireBatchResident(batch);
+            });
+            return;
+        }
+
+        auto acquireWork = SubmittedAcquireWork{};
+        acquireWork.commandPool = nr::rhi::CommandPool{
             device_.device,
             device_.queueManager.graphics().queueFamilyIndex(),
             vk::CommandPoolCreateFlagBits::eTransient,
         };
-        auto acquireBuffers = acquirePool.allocatePrimary(1);
-        auto &acquireCommandBuffer = acquireBuffers.front();
+        acquireWork.commandBuffers.emplace(acquireWork.commandPool.allocatePrimary(1));
+        auto &acquireCommandBuffer = acquireWork.commandBuffers->front();
 
         nr::rhi::CommandRecorder::beginPrimary(acquireCommandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         {
-            std::ranges::for_each(pendingAcquireBatches_, [&](const PendingAcquireBatch &batch) {
+            std::ranges::for_each(readyBatches, [&](const PendingAcquireBatch &batch) {
                 std::ranges::for_each(batch.bufferTickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
                     uploadContext.recordAcquireBarrier(acquireCommandBuffer, ticket);
                 });
@@ -2178,20 +2233,28 @@ class Scene
         acquireSubmission.addWait(
             uploadContext.uploadTimelineSemaphore(),
             vk::PipelineStageFlagBits2::eAllCommands,
-            maxSignalValue);
+            maxReadySignalValue);
         acquireSubmission.addCommandBuffer(acquireCommandBuffer);
 
-        auto acquireFence = vk::raii::Fence(device_.device, vk::FenceCreateInfo{});
-        device_.queueManager.graphics().submit(acquireSubmission, std::cref(acquireFence));
+        acquireWork.fence = vk::raii::Fence(device_.device, vk::FenceCreateInfo{});
+        device_.queueManager.graphics().submit(acquireSubmission, std::cref(acquireWork.fence));
+        submittedAcquireWork_.push_back(std::move(acquireWork));
 
-        auto waitResult = device_.device.waitForFences(*acquireFence, vk::True, std::numeric_limits<std::uint64_t>::max());
-        nrAssert(waitResult == vk::Result::eSuccess,
-                 "Scene failed waiting for graphics acquire command list completion.");
-
-        std::ranges::for_each(pendingAcquireBatches_, [&](const PendingAcquireBatch &batch) {
+        std::ranges::for_each(readyBatches, [&](const PendingAcquireBatch &batch) {
             markAcquireBatchResident(batch);
         });
-        pendingAcquireBatches_.clear();
+    }
+
+    void pollUploadTimelineUntilAcquireBatchesReady(nr::rhi::ops::UploadReadbackContext &uploadContext)
+    {
+        while (!pendingAcquireBatches_.empty())
+        {
+            submitReadyGraphicsAcquireBatches(uploadContext);
+            if (!pendingAcquireBatches_.empty())
+            {
+                std::this_thread::yield();
+            }
+        }
     }
 
     [[nodiscard]] static constexpr std::string_view importStageName(ImportStage stage) noexcept
@@ -4079,6 +4142,7 @@ class Scene
     flecs::query<const SceneCameraBinding, const WorldTransform> cameraCandidatesQuery_{};
     SceneFrameStamp currentFrame_{};
     std::vector<PendingAcquireBatch> pendingAcquireBatches_{};
+    std::vector<SubmittedAcquireWork> submittedAcquireWork_{};
 
     std::vector<nr::resource::MeshHandle> meshHandles_{};
     std::vector<nr::resource::MaterialHandle> materialHandles_{};

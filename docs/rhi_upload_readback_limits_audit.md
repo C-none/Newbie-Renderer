@@ -74,13 +74,15 @@ Current status: implemented.
 Evidence:
 
 - `UploadReadbackContext` in `src/rhi/nrResourceOps.ixx` creates one upload
-  ring and one readback ring, both defaulting to 64 MiB.
+  ring and one readback ring, both defaulting to 128 MiB.
 - The upload ring is `MemoryUsage::CpuToGpu`, `eTransferSrc`, persistently
   mapped, and exclusive to the transfer queue.
 - The readback ring is `MemoryUsage::GpuToCpu`, `eTransferDst`, persistently
   mapped, and shared by graphics/compute queue families when needed.
 - VMA allocation wrappers expose `flush(...)` and `invalidate(...)`, and local
   comments state that VMA handles non-coherent atom-size alignment.
+- `Buffer::writeMappedAndFlush(...)` packages direct mapped writes and range
+  flushes for CPU-visible buffer updates.
 
 Assessment:
 
@@ -125,7 +127,8 @@ Evidence:
 - Scene texture upload currently creates one-mip, one-layer GPU images and
   uploads only the first CPU texture level.
 - UI texture upload uses `UploadReadbackContext::uploadImage(...)`; the UI plan
-  still lists partial texture updates as future work.
+  polls upload timeline tickets before recording graphics acquire barriers.
+  Partial texture updates are still listed as future work.
 
 Assessment:
 
@@ -191,14 +194,12 @@ Evidence:
 - `uploadImage(...)` asserts when `payloadSize > uploadCapacity_`.
 - `readbackImage(...)` reserves one readback allocation sized for the whole
   image copy and uses the same ring-capacity assertion through `reserveRing`.
-- `UploadReadbackContext` defaults the upload and readback rings to 64 MiB.
-- `SceneCreateInfo::uploadBudgetBytesPerFrame` defaults to 128 MiB, which is
-  larger than the default image upload ring.
+- `UploadReadbackContext` defaults the upload and readback rings to 128 MiB.
+- `SceneCreateInfo::uploadBudgetBytesPerFrame` defaults to 128 MiB.
 
 Impact:
 
-- A single texture can be accepted by the scene upload budget but still fail
-  the RHI image upload path.
+- A single texture larger than 128 MiB can still fail the RHI image upload path.
 - Large HDR targets, high-resolution screenshots, texture arrays, and 3D
   textures can exceed the ring even when total frame streaming budget is
   reasonable.
@@ -211,8 +212,8 @@ Recommendation:
   `vk::BufferImageCopy` regions.
 - Keep a hard maximum for single-region copies only where Vulkan block-size
   rules require it.
-- Align scene upload budget defaults with RHI ring capacity, or expose one
-  shared upload budget/capacity configuration.
+- Expose one shared upload budget/capacity configuration when these defaults
+  need to become runtime-tunable.
 
 ### 2. Image copy API is single-region and exact-size
 
@@ -445,8 +446,8 @@ Recommendation:
    from image transfer sizing.
 2. Add image upload/readback chunking for payloads larger than the ring.
 3. Add multi-region image upload/readback descriptors.
-4. Align scene upload budget with RHI ring capacity or expose shared
-   configuration.
+4. Expose shared upload budget/ring-capacity configuration when runtime tuning
+   is needed.
 5. Add tests for large image upload/readback, compressed formats, depth/stencil
    aspect selection, and dirty-rectangle uploads.
 

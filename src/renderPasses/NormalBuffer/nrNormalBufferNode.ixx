@@ -383,10 +383,7 @@ class NormalBufferNode final : public Node
             .viewProjection = input.viewProjection,
         };
 
-        // Write uniform data directly to the pre-allocated buffer
-        auto* mappedData = frameUniformBufferRef.mapped();
-        nr::nrAssert(mappedData != nullptr, "NormalBuffer frame uniform buffer must be host-visible and mapped.");
-        std::memcpy(mappedData, &frameUniforms, sizeof(NormalBufferFrameUniforms));
+        frameUniformBufferRef.writeMappedAndFlush(frameUniforms);
 
         // Import pre-allocated uniform buffer into the render graph
         auto frameUniformBuffer = context.addResource(nr::renderer::GraphImportedBufferDesc{
@@ -635,8 +632,7 @@ class NormalBufferNode final : public Node
                 nr::nrAssert(frameBuffer.mapped() != nullptr, "NormalBuffer pass prepare requires host-visible frame-uniform buffer.");
                 nr::nrAssert(frameBuffer.size() >= sizeof(NormalBufferFrameUniforms), "NormalBuffer pass prepare uniform buffer size is smaller than frame uniform payload.");
 
-                frameBuffer.write(frameUniforms);
-                frameBuffer.flush(0, static_cast<vk::DeviceSize>(sizeof(NormalBufferFrameUniforms)));
+                frameBuffer.writeMappedAndFlush(frameUniforms);
             });
 
         context.publishOutput("color", output.normalBuffer);

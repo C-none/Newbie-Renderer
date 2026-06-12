@@ -225,7 +225,8 @@ The current `createOrUpdateUiTexture(...)` path in `src/renderPasses/Ui/nrUiNode
 The upload path now uses `UploadReadbackContext::uploadImage(...)`:
 
 - `uploadUiTextureAsync()` - Async upload using UploadReadbackContext
-- `waitForPendingUiTextureUploads()` - Waits for timeline completion
+- `pollPendingUiTextureUploads()` - Polls timeline completion and clears ready tickets
+- `waitForPendingUiTextureUploadSignalsByPolling()` - Waits for upload signals through timeline polling
 - `makeUiTextureUploadOwnershipPlan()` - Creates proper ownership transfer
 
 Key data structures added:
@@ -235,7 +236,7 @@ Key data structures added:
 #### Validation ✅
 
 - No per-update temporary command pool creation
-- No per-update `waitIdle` - uses timeline semaphore wait instead
+- No per-update `waitIdle` or `waitUploadComplete` call - uses timeline semaphore polling instead
 - All smoke tests pass
 
 ### 2. Implement Partial Texture Updates for `ImTextureData::WantUpdates`

@@ -67,7 +67,7 @@ export namespace nr::rhi
  *   // Main thread: build primary and execute secondaries
  *   auto primary = frame.graphicsPrimary().allocatePrimary();
  *   CommandRecorder::beginPrimary(primary);
- *   vkCmdExecuteCommands(primary, secondaries.size(), secondaries.data());
+ *   primary.executeCommands(...);
  *   CommandRecorder::end(primary);
  *
  * ============================================================================
@@ -168,18 +168,9 @@ class FrameContext
         transferPrimary_.reset();
 
         // Reset all prepared secondary pools.
-        std::ranges::for_each(graphicsSecondary_ | std::views::take(graphicsPreparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
-            if (pool.has_value())
-                pool->reset();
-        });
-        std::ranges::for_each(computeSecondary_ | std::views::take(computePreparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
-            if (pool.has_value())
-                pool->reset();
-        });
-        std::ranges::for_each(transferSecondary_ | std::views::take(transferPreparedSecondaryWorkers_), [](std::optional<CommandPool> &pool) {
-            if (pool.has_value())
-                pool->reset();
-        });
+        resetPreparedSecondaryPools(graphicsSecondary_, graphicsPreparedSecondaryWorkers_);
+        resetPreparedSecondaryPools(computeSecondary_, computePreparedSecondaryWorkers_);
+        resetPreparedSecondaryPools(transferSecondary_, transferPreparedSecondaryWorkers_);
     }
 
     /**
@@ -208,23 +199,7 @@ class FrameContext
      */
     template <QueueRole T> [[nodiscard]] CommandPool &primary() noexcept
     {
-        if constexpr (T == QueueRole::Graphics)
-        {
-            return graphicsPrimary_;
-        }
-        else if constexpr (T == QueueRole::Compute)
-        {
-            return computePrimary_;
-        }
-        else if constexpr (T == QueueRole::Transfer)
-        {
-            return transferPrimary_;
-        }
-        else
-        {
-            static_assert(T == QueueRole::Graphics || T == QueueRole::Compute || T == QueueRole::Transfer,
-                          "Unsupported QueueRole template argument");
-        }
+        return primaryPool<T>();
     }
 
     /**
@@ -236,29 +211,14 @@ class FrameContext
      */
     template <QueueRole T> [[nodiscard]] CommandPool &secondary(std::size_t threadId)
     {
-        if constexpr (T == QueueRole::Graphics)
-        {
-            nrAssert(threadId < graphicsPreparedSecondaryWorkers_, std::format("FrameContext::secondary graphics threadId {} out of prepared range {}", threadId, graphicsPreparedSecondaryWorkers_));
-            nrAssert(graphicsSecondary_[threadId].has_value(), "FrameContext::secondary graphics pool slot not prepared");
-            return *graphicsSecondary_[threadId];
-        }
-        else if constexpr (T == QueueRole::Compute)
-        {
-            nrAssert(threadId < computePreparedSecondaryWorkers_, std::format("FrameContext::secondary compute threadId {} out of prepared range {}", threadId, computePreparedSecondaryWorkers_));
-            nrAssert(computeSecondary_[threadId].has_value(), "FrameContext::secondary compute pool slot not prepared");
-            return *computeSecondary_[threadId];
-        }
-        else if constexpr (T == QueueRole::Transfer)
-        {
-            nrAssert(threadId < transferPreparedSecondaryWorkers_, std::format("FrameContext::secondary transfer threadId {} out of prepared range {}", threadId, transferPreparedSecondaryWorkers_));
-            nrAssert(transferSecondary_[threadId].has_value(), "FrameContext::secondary transfer pool slot not prepared");
-            return *transferSecondary_[threadId];
-        }
-        else
-        {
-            static_assert(T == QueueRole::Graphics || T == QueueRole::Compute || T == QueueRole::Transfer,
-                          "Unsupported QueueRole template argument");
-        }
+        static_assert(isSupportedQueueRole<T>(), "Unsupported QueueRole template argument");
+        const auto preparedWorkers = preparedSecondaryWorkers<T>();
+        auto &slots = secondarySlots<T>();
+        nrAssert(
+            threadId < preparedWorkers,
+            std::format("FrameContext::secondary {} threadId {} out of prepared range {}", queueRoleName<T>(), threadId, preparedWorkers));
+        nrAssert(slots[threadId].has_value(), secondaryPoolNotPreparedMessage<T>());
+        return *slots[threadId];
     }
 
     // ========== Synchronization primitives ==========
@@ -305,18 +265,7 @@ class FrameContext
      */
     template <QueueRole T> [[nodiscard]] std::size_t registeredThreads() const noexcept
     {
-        if constexpr (T == QueueRole::Graphics)
-        {
-            return graphicsPreparedSecondaryWorkers_;
-        }
-        else if constexpr (T == QueueRole::Compute)
-        {
-            return computePreparedSecondaryWorkers_;
-        }
-        else
-        {
-            return transferPreparedSecondaryWorkers_;
-        }
+        return preparedSecondaryWorkers<T>();
     }
 
   private:
@@ -348,6 +297,14 @@ class FrameContext
     /**
      * @brief Ensure queue-specific secondary pool slots are materialized for [0, workerCount).
      */
+    static void resetPreparedSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t preparedWorkerCount)
+    {
+        std::ranges::for_each(slots | std::views::take(preparedWorkerCount), [](std::optional<CommandPool> &pool) {
+            if (pool.has_value())
+                pool->reset();
+        });
+    }
+
     void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t queueFamilyIndex, std::uint32_t workerCount)
     {
         auto slotIndices = std::views::iota(std::uint32_t{0}, workerCount);
@@ -357,6 +314,95 @@ class FrameContext
                 slots[slotIndex].emplace(device_->get(), queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
             }
         });
+    }
+
+    template <QueueRole T> [[nodiscard]] static consteval bool isSupportedQueueRole() noexcept
+    {
+        return T == QueueRole::Graphics || T == QueueRole::Compute || T == QueueRole::Transfer;
+    }
+
+    template <QueueRole T> [[nodiscard]] CommandPool &primaryPool() noexcept
+    {
+        static_assert(isSupportedQueueRole<T>(), "Unsupported QueueRole template argument");
+        if constexpr (T == QueueRole::Graphics)
+        {
+            return graphicsPrimary_;
+        }
+        else if constexpr (T == QueueRole::Compute)
+        {
+            return computePrimary_;
+        }
+        else
+        {
+            return transferPrimary_;
+        }
+    }
+
+    template <QueueRole T> [[nodiscard]] std::uint32_t preparedSecondaryWorkers() const noexcept
+    {
+        if constexpr (T == QueueRole::Graphics)
+        {
+            return graphicsPreparedSecondaryWorkers_;
+        }
+        else if constexpr (T == QueueRole::Compute)
+        {
+            return computePreparedSecondaryWorkers_;
+        }
+        else
+        {
+            return transferPreparedSecondaryWorkers_;
+        }
+    }
+
+    template <QueueRole T> [[nodiscard]] auto &secondarySlots() noexcept
+    {
+        static_assert(isSupportedQueueRole<T>(), "Unsupported QueueRole template argument");
+        if constexpr (T == QueueRole::Graphics)
+        {
+            return graphicsSecondary_;
+        }
+        else if constexpr (T == QueueRole::Compute)
+        {
+            return computeSecondary_;
+        }
+        else
+        {
+            return transferSecondary_;
+        }
+    }
+
+    template <QueueRole T> [[nodiscard]] static constexpr std::string_view queueRoleName() noexcept
+    {
+        static_assert(isSupportedQueueRole<T>(), "Unsupported QueueRole template argument");
+        if constexpr (T == QueueRole::Graphics)
+        {
+            return "graphics";
+        }
+        else if constexpr (T == QueueRole::Compute)
+        {
+            return "compute";
+        }
+        else
+        {
+            return "transfer";
+        }
+    }
+
+    template <QueueRole T> [[nodiscard]] static constexpr std::string_view secondaryPoolNotPreparedMessage() noexcept
+    {
+        static_assert(isSupportedQueueRole<T>(), "Unsupported QueueRole template argument");
+        if constexpr (T == QueueRole::Graphics)
+        {
+            return "FrameContext::secondary graphics pool slot not prepared";
+        }
+        else if constexpr (T == QueueRole::Compute)
+        {
+            return "FrameContext::secondary compute pool slot not prepared";
+        }
+        else
+        {
+            return "FrameContext::secondary transfer pool slot not prepared";
+        }
     }
 
   private:

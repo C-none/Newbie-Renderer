@@ -1062,17 +1062,58 @@ class PipelineService
 		return SlangSampler::create(device_->get(), std::move(desc), debugName);
 	}
 
+  private:
+	struct PipelineLayoutBundle
+	{
+		ShaderDescriptorLayout descriptorLayout;
+		CursorPipelineLayout layout;
+	};
+
+	[[nodiscard]] PipelineLayoutBundle createPipelineLayoutBundle(
+		const SlangProgram &slangProgram,
+		const DescriptorBindingPolicy &descriptorBindingPolicy,
+		std::span<const SlangImmutableSamplerBinding> immutableSamplers) const
+	{
+		const auto &device = device_->get();
+		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, descriptorBindingPolicy);
+		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
+		return PipelineLayoutBundle{
+			.descriptorLayout = std::move(descriptorLayout),
+			.layout = std::move(layout),
+		};
+	}
+
+	[[nodiscard]] const vk::raii::PipelineCache *pipelineCacheOrNull() const noexcept
+	{
+		return *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr;
+	}
+
+	template <typename TPipeline>
+	[[nodiscard]] PipelineState<TPipeline> makePipelineState(
+		const SlangProgram &slangProgram,
+		PipelineLayoutBundle bundle,
+		std::uint32_t descriptorMaxSets,
+		TPipeline pipeline) const
+	{
+		auto bindingPool = createBindingPool(bundle.descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
+		return PipelineState<TPipeline>{
+			.reflectionProgram = slangProgram,
+			.layout = std::move(bundle.layout),
+			.descriptorLayout = std::move(bundle.descriptorLayout),
+			.bindingPool = std::move(bindingPool),
+			.pipeline = std::move(pipeline),
+		};
+	}
+
+  public:
 	[[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(const SlangProgram &slangProgram, const GraphicsPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
 	{
 		nrAssert(device_.has_value(), "PipelineService::createGraphicsPipeline requires a bound logical device.");
 		nrAssert(slangProgram.valid(), "PipelineService::createGraphicsPipeline requires a valid SlangProgram.");
 
-		(void)immutableSamplers;
-
 		const auto &device = device_->get();
 		auto effectiveDesc = desc;
-		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, effectiveDesc.descriptorBindingPolicy);
-		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
+		auto layoutBundle = createPipelineLayoutBundle(slangProgram, effectiveDesc.descriptorBindingPolicy, immutableSamplers);
 
 		auto appendDynamicState = [&effectiveDesc](vk::DynamicState state) {
 			if (std::ranges::none_of(effectiveDesc.dynamicStates, [state](vk::DynamicState current) { return current == state; }))
@@ -1113,15 +1154,8 @@ class PipelineService
 		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createGraphicsPipeline requires at least one selected graphics entrypoint.");
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = GraphicsPipeline::create(device, layout, shaderProgram, effectiveDesc, *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
-		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
-		return PipelineState<GraphicsPipeline>{
-			.reflectionProgram = slangProgram,
-			.layout = std::move(layout),
-			.descriptorLayout = std::move(descriptorLayout),
-			.bindingPool = std::move(bindingPool),
-			.pipeline = std::move(pipeline),
-		};
+		auto pipeline = GraphicsPipeline::create(device, layoutBundle.layout, shaderProgram, effectiveDesc, pipelineCacheOrNull());
+		return makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
 	}
 
 	[[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
@@ -1129,11 +1163,8 @@ class PipelineService
 		nrAssert(device_.has_value(), "PipelineService::createComputePipeline requires a bound logical device.");
 		nrAssert(slangProgram.valid(), "PipelineService::createComputePipeline requires a valid SlangProgram.");
 
-		(void)immutableSamplers;
-
 		const auto &device = device_->get();
-		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, desc.descriptorBindingPolicy);
-		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
+		auto layoutBundle = createPipelineLayoutBundle(slangProgram, desc.descriptorBindingPolicy, immutableSamplers);
 
 		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
 		if (!desc.entryPointName.empty())
@@ -1151,15 +1182,8 @@ class PipelineService
 		}
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = ComputePipeline::create(device, layout, shaderProgram, desc, *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
-		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
-		return PipelineState<ComputePipeline>{
-			.reflectionProgram = slangProgram,
-			.layout = std::move(layout),
-			.descriptorLayout = std::move(descriptorLayout),
-			.bindingPool = std::move(bindingPool),
-			.pipeline = std::move(pipeline),
-		};
+		auto pipeline = ComputePipeline::create(device, layoutBundle.layout, shaderProgram, desc, pipelineCacheOrNull());
+		return makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
 	}
 
 	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(const SlangProgram &slangProgram, const RayTracingPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const
@@ -1167,11 +1191,8 @@ class PipelineService
 		nrAssert(device_.has_value(), "PipelineService::createRayTracingPipeline requires a bound logical device.");
 		nrAssert(slangProgram.valid(), "PipelineService::createRayTracingPipeline requires a valid SlangProgram.");
 
-		(void)immutableSamplers;
-
 		const auto &device = device_->get();
-		auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, desc.descriptorBindingPolicy);
-		auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
+		auto layoutBundle = createPipelineLayoutBundle(slangProgram, desc.descriptorBindingPolicy, immutableSamplers);
 
 		auto effectiveDesc = desc;
 		if (rtCapabilities_.has_value())
@@ -1205,15 +1226,8 @@ class PipelineService
 		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createRayTracingPipeline requires at least one selected ray-tracing entrypoint.");
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = RayTracingPipeline::create(device, layout, shaderProgram, effectiveDesc, *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr);
-		auto bindingPool = ShaderBindingPool::create(device, descriptorLayout, ShaderBindingPoolConfig{.maxSets = descriptorMaxSets});
-		return PipelineState<RayTracingPipeline>{
-			.reflectionProgram = slangProgram,
-			.layout = std::move(layout),
-			.descriptorLayout = std::move(descriptorLayout),
-			.bindingPool = std::move(bindingPool),
-			.pipeline = std::move(pipeline),
-		};
+		auto pipeline = RayTracingPipeline::create(device, layoutBundle.layout, shaderProgram, effectiveDesc, pipelineCacheOrNull());
+		return makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
 	}
 
   private:

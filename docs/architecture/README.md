@@ -42,6 +42,7 @@ Current boundary notes:
 - Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
 - `nr.rhi` exposes descriptor-indexing, buffer-device-address, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection with a semantic multi-set ABI for runtime arrays.
 - RHI copy helpers record Vulkan-Hpp copy commands 2 while keeping narrow adapters for existing copy-region structs.
+- `Buffer::writeMappedAndFlush(...)` is the RHI helper for direct CPU writes to mapped buffers; `UploadReadbackContext` defaults both upload and readback rings to 128 MiB and exposes upload timeline polling for higher layers.
 - `PipelineState` retains the source `SlangProgram` so reflection-backed cursor access remains valid after pipeline creation.
 - `rhi` is the execution layer, not the content-organization layer.
 
@@ -152,6 +153,7 @@ Boundary notes:
 - extraction is profile-first, not multi-view render-list-first
 - viewport-dependent projection and frustum resolution already live here
 - input-driven free-camera control remains outside `scene` and is currently wrapped by `nr.app` for application-style entry points
+- scene GPU uploads keep transfer-completed-but-not-acquired batches pending until the upload timeline reaches the ticket signal, then submit graphics acquire work without blocking the CPU on a fence
 - `SceneRenderBridge` now supports frame-constants override and per-draw geometry resolution so render passes can consume draw-ready geometry through bridge contracts
 
 Entry points:
@@ -230,7 +232,7 @@ Current boundary notes:
 - `PresentNode` is the final compute conversion and composition path. It converts the scene color buffer into swapchain-ready output, applies flip/gamma/channel conversion, and alpha-composites the standalone UI buffer before copy-to-swapchain
 - `NormalBufferNode` consumes bridge draw geometry contracts and records real scene mesh draw calls (indexed/non-indexed) with world-space normal visualization
 - `NormalBufferNode` now also consumes `nr::app::UiSystem` through `NodeFrameParameters::frameServices` to expose runtime controls such as FPS display, frame time, and front/back-face cull switching
-- `UiNode` is the Dear ImGui overlay build pass. It finalizes the app-owned UI frame, consumes draw data emitted earlier in the graph, honors Dear ImGui 1.92.6 `ImTextureData` requests from the vcpkg dependency, manages UI textures through a descriptor-indexed runtime sampled-image array, selects the sampled texture per draw through push constants, and renders the overlay into its own transparent `uiBuffer` for later composition in `PresentNode`
+- `UiNode` is the Dear ImGui overlay build pass. It finalizes the app-owned UI frame, consumes draw data emitted earlier in the graph, honors Dear ImGui 1.92.6 `ImTextureData` requests from the vcpkg dependency, manages UI textures through a descriptor-indexed runtime sampled-image array, polls pending texture upload tickets before recording acquire barriers, selects the sampled texture per draw through push constants, and renders the overlay into its own transparent `uiBuffer` for later composition in `PresentNode`
 - node record callbacks should route command recording through `PassRecordContext::commandBuffer` as a RAII `vk::raii::CommandBuffer` reference when calling `nr.rhi` command helpers.
 
 Entry points:

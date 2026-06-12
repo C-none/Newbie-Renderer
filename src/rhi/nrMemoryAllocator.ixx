@@ -218,9 +218,10 @@ class MemoryAllocator
     void resetFramePool(std::uint32_t frameIndex)
     {
         std::uint32_t idx = frameIndex % maxFrameInFlight;
-        if (perFramePools_[idx].valid())
+        if (perFramePools_[idx].valid() && perFramePoolDirty_[idx])
         {
             perFramePools_[idx].reset();
+            perFramePoolDirty_[idx] = false;
         }
     }
 
@@ -421,6 +422,7 @@ class MemoryAllocator
         std::uint32_t idx = frameIndex % maxFrameInFlight;
         allocInfo.pool = perFramePools_[idx].handle();
         allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        perFramePoolDirty_[idx] = true;
         // pool overrides memory type selection — no usage/flags needed for type
     }
 
@@ -440,6 +442,7 @@ class MemoryAllocator
     // -----------------------------------------------------------------
     VmaAllocatorWrapper vma_;
     std::array<VmaPoolHandle, maxFrameInFlight> perFramePools_;
+    mutable std::array<bool, maxFrameInFlight> perFramePoolDirty_{};
     VmaPoolHandle stagingPool_;
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
 };

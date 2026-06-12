@@ -10,7 +10,7 @@ export namespace nr::rhi {
  * 
  * Design Philosophy:
  * - Stateless utility class (no state stored)
- * - Thin wrapper around vkBeginCommandBuffer / vkEndCommandBuffer
+ * - Thin wrapper around vk::raii::CommandBuffer begin/end
  * - Works exclusively with vk::raii::CommandBuffer
  * - Does NOT own command buffers
  * - Does NOT know about pools or queues
@@ -18,7 +18,7 @@ export namespace nr::rhi {
  * Usage:
  *   auto cb = pool.allocatePrimary();
  *   CommandRecorder::beginPrimary(cb.front());
- *   // ... vkCmd* calls ...
+ *   // ... vk::raii::CommandBuffer member calls ...
  *   CommandRecorder::end(cb.front());
  */
 class CommandRecorder {
@@ -45,7 +45,7 @@ public:
      * @param flags Begin flags provided by caller
      * 
      * Secondary command buffers inherit state from primary and can be
-     * executed via vkCmdExecuteCommands
+     * executed through vk::raii::CommandBuffer::executeCommands.
      */
     static void beginSecondary(
         const vk::raii::CommandBuffer& commandBuffer,
@@ -73,10 +73,11 @@ public:
  * - ScopedCommandBuffer: Manages RECORDING scope (begin/end)
  * 
  * Usage with RAII command buffer:
- *   vk::raii::CommandBuffer cb = pool.allocatePrimaryRaii(); // RAII for memory
+ *   auto commandBuffers = pool.allocatePrimary(1); // RAII for memory
+ *   const auto& cb = commandBuffers.front();
  *   {
  *       ScopedCommandBuffer scoped(cb, flags);  // RAII for recording
- *       // ... vkCmd* calls ...
+ *       // ... vk::raii::CommandBuffer member calls ...
  *   } // Automatically calls end()
  *   // cb still valid, can be submitted
  */

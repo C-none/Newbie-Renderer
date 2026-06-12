@@ -271,8 +271,7 @@ class EmbeddedTriangleNode final : public Node
                 nr::nrAssert(frameBuffer.mapped() != nullptr, "EmbeddedTriangle pass prepare requires host-visible frame-uniform buffer.");
                 nr::nrAssert(frameBuffer.size() >= sizeof(EmbeddedTriangleFrameUniforms), "EmbeddedTriangle pass prepare uniform buffer size is smaller than frame uniform payload.");
 
-                frameBuffer.write(frameUniforms);
-                frameBuffer.flush(0, static_cast<vk::DeviceSize>(sizeof(EmbeddedTriangleFrameUniforms)));
+                frameBuffer.writeMappedAndFlush(frameUniforms);
             });
 
         context.publishOutput("color", output.color);

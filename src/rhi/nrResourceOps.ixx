@@ -14,6 +14,7 @@ export namespace nr::rhi::ops
 {
 
 inline constexpr std::uint32_t kIgnoredQueueFamilyIndex = std::numeric_limits<std::uint32_t>::max();
+inline constexpr vk::DeviceSize kDefaultUploadReadbackRingSize = 128ull * 1024ull * 1024ull;
 
 /**
  * @brief Barrier concept accepted by BarrierBatch::add.
@@ -1109,27 +1110,21 @@ inline void copyImageToBuffer(const vk::raii::CommandBuffer& commandBuffer, cons
     copyImageToBuffer2(commandBuffer, src.handle(), srcLayout, dst.handle(), toBufferImageCopy2(effectiveRegion));
 }
 
+[[nodiscard]] inline vk::ImageCopy normalizeImageCopyRegion(
+    vk::Extent3D srcExtent,
+    vk::ImageAspectFlags srcAspect,
+    vk::Extent3D dstExtent,
+    vk::ImageAspectFlags dstAspect,
+    vk::ImageCopy region);
+
 [[nodiscard]] inline vk::ImageCopy normalizeImageCopyRegion(const Image& src, const Image& dst, vk::ImageCopy region)
 {
-    if (region.srcSubresource.aspectMask == vk::ImageAspectFlags{})
-    {
-        region.srcSubresource = vk::ImageSubresourceLayers{inferAspectFlags(src.format()), 0, 0, 1};
-    }
-    if (region.dstSubresource.aspectMask == vk::ImageAspectFlags{})
-    {
-        region.dstSubresource = vk::ImageSubresourceLayers{inferAspectFlags(dst.format()), 0, 0, 1};
-    }
-    if (region.extent == vk::Extent3D{})
-    {
-        auto srcExtent = src.extent();
-        auto dstExtent = dst.extent();
-        region.extent = vk::Extent3D{
-            std::min(srcExtent.width, dstExtent.width),
-            std::min(srcExtent.height, dstExtent.height),
-            std::min(srcExtent.depth, dstExtent.depth),
-        };
-    }
-    return region;
+    return normalizeImageCopyRegion(
+        src.extent(),
+        inferAspectFlags(src.format()),
+        dst.extent(),
+        inferAspectFlags(dst.format()),
+        region);
 }
 
 [[nodiscard]] inline vk::ImageCopy normalizeImageCopyRegion(
@@ -1410,8 +1405,8 @@ class UploadReadbackContext
         const vk::raii::Device& device,
         ResourceFactory& resourceFactory,
         QueueManager& queueManager,
-        vk::DeviceSize uploadRingSize = 64u * 1024u * 1024u,
-        vk::DeviceSize readbackRingSize = 64u * 1024u * 1024u)
+        vk::DeviceSize uploadRingSize = kDefaultUploadReadbackRingSize,
+        vk::DeviceSize readbackRingSize = kDefaultUploadReadbackRingSize)
         : device_(std::cref(device))
         , queueManager_(std::ref(queueManager))
         , uploadCapacity_(uploadRingSize)
@@ -1472,6 +1467,30 @@ class UploadReadbackContext
     [[nodiscard]] const vk::raii::Semaphore& readbackTimelineSemaphore() const noexcept
     {
         return readbackTimeline_;
+    }
+
+    /**
+     * @brief Query the completed upload timeline value without blocking.
+     */
+    [[nodiscard]] std::uint64_t completedUploadValue() const
+    {
+        return queryTimelineValue(uploadTimeline_);
+    }
+
+    /**
+     * @brief Check whether a specific upload signal has completed without blocking.
+     */
+    [[nodiscard]] bool uploadComplete(std::uint64_t signalValue) const
+    {
+        return signalValue == 0u || completedUploadValue() >= signalValue;
+    }
+
+    /**
+     * @brief Reclaim upload ring allocations whose timeline signal has completed.
+     */
+    void reclaimCompletedUploads()
+    {
+        reclaimQueue(uploadInFlight_, uploadReclaimCursor_, completedUploadValue());
     }
 
     /**
@@ -1603,11 +1622,12 @@ class UploadReadbackContext
             const auto chunkSize = std::min(remainingSize, uploadCapacity_);
             auto allocation = reserveUpload(chunkSize, uploadTimeline_);
 
-            std::memcpy(
-                static_cast<std::byte*>(uploadRing_.mapped()) + allocation.offset,
-                data.data() + static_cast<std::size_t>(uploadedSize),
-                static_cast<std::size_t>(chunkSize));
-            uploadRing_.flush(allocation.offset, chunkSize);
+            uploadRing_.writeMappedAndFlush(
+                std::span<const std::byte>{
+                    data.data() + static_cast<std::size_t>(uploadedSize),
+                    static_cast<std::size_t>(chunkSize),
+                },
+                allocation.offset);
 
             auto commandBuffers = transferPool_.allocatePrimary(1);
             auto& commandBuffer = commandBuffers.front();
@@ -1646,20 +1666,13 @@ class UploadReadbackContext
             }
             CommandRecorder::end(commandBuffer);
 
-            const auto signalValue = consumeNextUploadSignalValue();
-            CommandBatch batch{};
+            auto acquireToTransferWait = std::optional<std::reference_wrapper<const QueueOwnershipTransfer>>{};
             if (uploadedSize == 0 && ownership.acquireToTransfer.has_value())
             {
-                batch.addWait(
-                    ownership.acquireToTransfer->waitSemaphore,
-                    ownership.acquireToTransfer->acquire.stages,
-                    ownership.acquireToTransfer->waitValue);
+                acquireToTransferWait = std::cref(*ownership.acquireToTransfer);
             }
-            batch.addCommandBuffer(commandBuffer);
-            batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
-            queueManager_->get().transfer().submit(batch);
 
-            addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
+            const auto signalValue = submitUploadCommandBuffers(std::move(commandBuffers), allocation, acquireToTransferWait);
 
             lastSignalValue = signalValue;
             uploadedSize += chunkSize;
@@ -1722,11 +1735,7 @@ class UploadReadbackContext
                         payloadSize, uploadCapacity_));
 
         auto allocation = reserveUpload(payloadSize, uploadTimeline_);
-        std::memcpy(
-            static_cast<std::byte*>(uploadRing_.mapped()) + allocation.offset,
-            data.data(),
-            static_cast<std::size_t>(payloadSize));
-        uploadRing_.flush(allocation.offset, payloadSize);
+        uploadRing_.writeMappedAndFlush(data, allocation.offset);
 
         auto commandBuffers = transferPool_.allocatePrimary(1);
         auto& commandBuffer = commandBuffers.front();
@@ -1800,20 +1809,12 @@ class UploadReadbackContext
         }
         CommandRecorder::end(commandBuffer);
 
-        const auto signalValue = consumeNextUploadSignalValue();
-        CommandBatch batch{};
+        auto acquireToTransferWait = std::optional<std::reference_wrapper<const QueueOwnershipTransfer>>{};
         if (ownership.acquireToTransfer.has_value())
         {
-            batch.addWait(
-                ownership.acquireToTransfer->waitSemaphore,
-                ownership.acquireToTransfer->acquire.stages,
-                ownership.acquireToTransfer->waitValue);
+            acquireToTransferWait = std::cref(*ownership.acquireToTransfer);
         }
-        batch.addCommandBuffer(commandBuffer);
-        batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
-        queueManager_->get().transfer().submit(batch);
-
-        addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
+        const auto signalValue = submitUploadCommandBuffers(std::move(commandBuffers), allocation, acquireToTransferWait);
 
         return ImageUploadTicket{
             .image = std::cref(dst),
@@ -1902,18 +1903,7 @@ class UploadReadbackContext
         }
         CommandRecorder::end(commandBuffer);
 
-        const auto signalValue = consumeNextReadbackSignalValue();
-        CommandBatch batch{};
-        if (signalValue > 1)
-        {
-            batch.addWait(readbackTimeline_, vk::PipelineStageFlagBits2::eTransfer, signalValue - 1);
-        }
-        batch.addCommandBuffer(commandBuffer);
-        batch.addSignal(readbackTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
-        readbackQueue.submit(batch);
-
-        addInFlight(readbackInFlight_, allocation, signalValue, std::move(commandBuffers));
-
+        const auto signalValue = submitReadbackCommandBuffers(readbackQueue, std::move(commandBuffers), allocation);
         return ReadbackTicket{allocation.offset, size, signalValue};
     }
 
@@ -2002,17 +1992,7 @@ class UploadReadbackContext
         }
         CommandRecorder::end(commandBuffer);
 
-        const auto signalValue = consumeNextReadbackSignalValue();
-        CommandBatch batch{};
-        if (signalValue > 1)
-        {
-            batch.addWait(readbackTimeline_, vk::PipelineStageFlagBits2::eTransfer, signalValue - 1);
-        }
-        batch.addCommandBuffer(commandBuffer);
-        batch.addSignal(readbackTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
-        readbackQueue.submit(batch);
-
-        addInFlight(readbackInFlight_, allocation, signalValue, std::move(commandBuffers));
+        const auto signalValue = submitReadbackCommandBuffers(readbackQueue, std::move(commandBuffers), allocation);
         return ReadbackTicket{allocation.offset, readbackSize, signalValue};
     }
 
@@ -2083,6 +2063,49 @@ class UploadReadbackContext
         }
 
         return ReadbackRoute{std::ref(queueManager_->get().compute()), std::ref(computeReadbackPool_)};
+    }
+
+    [[nodiscard]] std::uint64_t submitUploadCommandBuffers(
+        vk::raii::CommandBuffers commandBuffers,
+        const RingAllocation& allocation,
+        std::optional<std::reference_wrapper<const QueueOwnershipTransfer>> acquireToTransferWait)
+    {
+        const auto& commandBuffer = commandBuffers.front();
+        const auto signalValue = consumeNextUploadSignalValue();
+
+        CommandBatch batch{};
+        if (acquireToTransferWait.has_value())
+        {
+            const auto& wait = acquireToTransferWait->get();
+            batch.addWait(wait.waitSemaphore, wait.acquire.stages, wait.waitValue);
+        }
+        batch.addCommandBuffer(commandBuffer);
+        batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
+        queueManager_->get().transfer().submit(batch);
+
+        addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
+        return signalValue;
+    }
+
+    [[nodiscard]] std::uint64_t submitReadbackCommandBuffers(
+        GpuQueue& readbackQueue,
+        vk::raii::CommandBuffers commandBuffers,
+        const RingAllocation& allocation)
+    {
+        const auto& commandBuffer = commandBuffers.front();
+        const auto signalValue = consumeNextReadbackSignalValue();
+
+        CommandBatch batch{};
+        if (signalValue > 1)
+        {
+            batch.addWait(readbackTimeline_, vk::PipelineStageFlagBits2::eTransfer, signalValue - 1);
+        }
+        batch.addCommandBuffer(commandBuffer);
+        batch.addSignal(readbackTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
+        readbackQueue.submit(batch);
+
+        addInFlight(readbackInFlight_, allocation, signalValue, std::move(commandBuffers));
+        return signalValue;
     }
 
     [[nodiscard]] static std::vector<std::uint32_t> uniqueReadbackQueueFamilies(std::array<std::uint32_t, 2> queueFamilies)

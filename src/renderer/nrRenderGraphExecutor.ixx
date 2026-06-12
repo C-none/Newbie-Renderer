@@ -655,7 +655,10 @@ class RenderGraphExecutor
             }
 
             auto submitRole = toQueueRole(planBatch.queue);
-            context.device.submitFrameBatch(submitBatch, submitRole, planBatch.signalsPresent);
+            auto imageAvailableWaitStage = planBatch.signalsPresent
+                                               ? imageAvailableWaitStageForBatch(compiledBatch, compiledResourceByHandle)
+                                               : vk::PipelineStageFlags2{};
+            context.device.submitFrameBatch(submitBatch, submitRole, planBatch.signalsPresent, imageAvailableWaitStage);
             ++report.submittedBatchCount;
         });
 
@@ -725,6 +728,90 @@ class RenderGraphExecutor
             return vk::PipelineStageFlagBits2::eComputeShader;
         }
         return vk::PipelineStageFlagBits2::eTransfer;
+    }
+
+    [[nodiscard]] static vk::PipelineStageFlags2 shaderWaitStageForQueue(QueueDomain queue)
+    {
+        if (queue == QueueDomain::Compute)
+        {
+            return vk::PipelineStageFlagBits2::eComputeShader;
+        }
+        if (queue == QueueDomain::Graphics)
+        {
+            return vk::PipelineStageFlagBits2::eFragmentShader;
+        }
+        return vk::PipelineStageFlagBits2::eTransfer;
+    }
+
+    [[nodiscard]] static vk::PipelineStageFlags2 imageAccessWaitStage(
+        QueueDomain queue,
+        const PassResourceUseDesc& use)
+    {
+        if (use.imageAccess == ImageAccessIntent::TransferRead ||
+            use.imageAccess == ImageAccessIntent::TransferWrite ||
+            use.imageUsage == ImageUsageIntent::TransferSrc ||
+            use.imageUsage == ImageUsageIntent::TransferDst ||
+            use.imageUsage == ImageUsageIntent::CopySource ||
+            use.imageUsage == ImageUsageIntent::CopyDestination)
+        {
+            return vk::PipelineStageFlagBits2::eTransfer;
+        }
+
+        if (use.imageAccess == ImageAccessIntent::ColorAttachmentRead ||
+            use.imageAccess == ImageAccessIntent::ColorAttachmentWrite ||
+            use.imageUsage == ImageUsageIntent::ColorAttachment)
+        {
+            return vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+        }
+
+        if (use.imageAccess == ImageAccessIntent::DepthStencilRead ||
+            use.imageAccess == ImageAccessIntent::DepthStencilWrite ||
+            use.imageUsage == ImageUsageIntent::DepthStencilAttachment ||
+            use.imageUsage == ImageUsageIntent::DepthStencilReadOnly)
+        {
+            return vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                   vk::PipelineStageFlagBits2::eLateFragmentTests;
+        }
+
+        if (use.imageAccess == ImageAccessIntent::SampledRead ||
+            use.imageAccess == ImageAccessIntent::StorageRead ||
+            use.imageAccess == ImageAccessIntent::StorageWrite ||
+            use.imageAccess == ImageAccessIntent::StorageReadWrite ||
+            use.imageAccess == ImageAccessIntent::InputAttachmentRead ||
+            use.imageUsage == ImageUsageIntent::Sampled ||
+            use.imageUsage == ImageUsageIntent::StorageRead ||
+            use.imageUsage == ImageUsageIntent::StorageWrite ||
+            use.imageUsage == ImageUsageIntent::StorageReadWrite ||
+            use.imageUsage == ImageUsageIntent::InputAttachment)
+        {
+            return shaderWaitStageForQueue(queue);
+        }
+
+        return {};
+    }
+
+    [[nodiscard]] static vk::PipelineStageFlags2 imageAvailableWaitStageForBatch(
+        const CompiledSubmitBatch& batch,
+        const std::map<GraphResourceHandle, std::reference_wrapper<const CompiledResourceDesc>>& compiledResourceByHandle)
+    {
+        auto stages = vk::PipelineStageFlags2{};
+
+        std::ranges::for_each(batch.passes, [&](const CompiledPass& pass) {
+            std::ranges::for_each(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+                auto resourceIt = compiledResourceByHandle.find(use.resource);
+                if (resourceIt == compiledResourceByHandle.end() || !resourceIt->second.get().isSwapchain)
+                {
+                    return;
+                }
+                stages |= imageAccessWaitStage(pass.queue, use);
+            });
+        });
+
+        if (stages == vk::PipelineStageFlags2{})
+        {
+            return vk::PipelineStageFlagBits2::eAllCommands;
+        }
+        return stages;
     }
 
     [[nodiscard]] static std::uint32_t queueFamilyIndexFor(const nr::rhi::Device& device, QueueDomain queue)

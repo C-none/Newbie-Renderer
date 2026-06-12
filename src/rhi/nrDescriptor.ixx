@@ -861,6 +861,12 @@ class ShaderCursor
         std::initializer_list<vk::DescriptorType> allowedTypes,
         std::optional<std::uint32_t> explicitArrayElement = std::nullopt) const;
 
+    template <typename FieldLayout>
+    [[nodiscard]] ShaderCursor fieldCursorFromLayout(
+        FieldLayout &fieldLayout,
+        std::uint32_t fieldIndex,
+        std::string debugPath) const;
+
     [[nodiscard]] const ShaderDescriptorLayout &layoutRef() const
     {
         nrAssert(layout_.has_value(), "ShaderCursor requires a valid layout reference.");
@@ -1366,19 +1372,7 @@ void pushConstantsToCommandBuffer(
         return {};
     }
 
-    auto *fieldTypeLayout = fieldLayout->getTypeLayout();
-    if (!fieldTypeLayout)
-    {
-        return {};
-    }
-
-    ShaderCursor next = *this;
-    next.typeLayout_ = fieldTypeLayout;
-    next.address_.uniformOffset += fieldLayout->getOffset();
-    next.address_.bindingRangeIndex += detail::sanitizeRangeOffset(typeLayout_->getFieldBindingRangeOffset(static_cast<SlangInt>(fieldIndex)));
-    next.isRoot_ = false;
-    next.debugPath_ = std::format("{}.{}", debugPath_, fieldName);
-    return next;
+    return fieldCursorFromLayout(*fieldLayout, fieldIndex, std::format("{}.{}", debugPath_, fieldName));
 }
 
 [[nodiscard]] ShaderCursor ShaderCursor::element(std::uint32_t index) const
@@ -1397,18 +1391,7 @@ void pushConstantsToCommandBuffer(
             return {};
         }
 
-        auto *fieldTypeLayout = fieldLayout->getTypeLayout();
-        if (!fieldTypeLayout)
-        {
-            return {};
-        }
-
-        ShaderCursor next = *this;
-        next.typeLayout_ = fieldTypeLayout;
-        next.address_.uniformOffset += fieldLayout->getOffset();
-        next.address_.bindingRangeIndex += detail::sanitizeRangeOffset(typeLayout_->getFieldBindingRangeOffset(static_cast<SlangInt>(index)));
-        next.debugPath_ = std::format("{}[{}]", debugPath_, index);
-        return next;
+        return fieldCursorFromLayout(*fieldLayout, index, std::format("{}[{}]", debugPath_, index));
     }
 
     if (kind == slang::TypeReflection::Kind::Resource)
@@ -1519,6 +1502,27 @@ void pushConstantsToCommandBuffer(
     }
 
     return cursor;
+}
+
+template <typename FieldLayout>
+[[nodiscard]] ShaderCursor ShaderCursor::fieldCursorFromLayout(
+    FieldLayout &fieldLayout,
+    std::uint32_t fieldIndex,
+    std::string debugPath) const
+{
+    auto *fieldTypeLayout = fieldLayout.getTypeLayout();
+    if (!fieldTypeLayout)
+    {
+        return {};
+    }
+
+    ShaderCursor next = *this;
+    next.typeLayout_ = fieldTypeLayout;
+    next.address_.uniformOffset += fieldLayout.getOffset();
+    next.address_.bindingRangeIndex += detail::sanitizeRangeOffset(typeLayout_->getFieldBindingRangeOffset(static_cast<SlangInt>(fieldIndex)));
+    next.isRoot_ = false;
+    next.debugPath_ = std::move(debugPath);
+    return next;
 }
 
 [[nodiscard]] std::optional<DescriptorBindingInfo> ShaderCursor::descriptorBinding() const

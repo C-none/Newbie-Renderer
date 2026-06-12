@@ -527,8 +527,7 @@ class ShaderBindingTable
         nrAssert(buffer.valid(), "ShaderBindingTable::create failed to allocate SBT buffer.");
         nrAssert(buffer.mapped() != nullptr, "ShaderBindingTable::create requires a host-visible mapped SBT buffer.");
 
-        buffer.write(std::span<const std::uint8_t>(tableBytes));
-        buffer.flush(0, plan.totalSize);
+        buffer.writeMappedAndFlush(std::span<const std::uint8_t>(tableBytes));
 
         ShaderBindingTable sbt;
         auto baseAddress = buffer.deviceAddress();

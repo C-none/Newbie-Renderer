@@ -12,17 +12,6 @@ namespace nr::rhi::detail
     return result >= 0;
 }
 
-[[nodiscard]] constexpr SlangResult makeSlangError(std::int32_t facility, std::int32_t code) noexcept
-{
-    return (facility << 16) | code | std::int32_t(0x80000000);
-}
-
-constexpr SlangResult kSlangOk = 0;
-// constexpr SlangResult kSlangFail = makeSlangError(0, 0x4005);
-constexpr SlangResult kSlangNoInterface = makeSlangError(0, 0x4002);
-constexpr SlangResult kSlangInvalidArg = makeSlangError(7, 0x57);
-constexpr SlangResult kSlangNotFound = makeSlangError(0x200, 5);
-
 [[nodiscard]] std::string moduleNameToPath(std::string_view moduleName)
 {
     std::string out(moduleName);

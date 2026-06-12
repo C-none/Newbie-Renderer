@@ -80,19 +80,19 @@ class GpuQueue
      * @param fence RAII fence to signal (optional)
      *
      * This is the PRIMARY submission interface:
-     * - Zero-copy submission (no temporary allocations)
      * - Reusable for render loops (call batch.clear() and rebuild)
      * - CommandBatch internally stores handles, avoiding repeated extraction
      * 
      * Performance characteristics:
      * - First use: O(n) handle extraction in batch.add*()
-    * - Reuse: O(1) submission via buildSubmitInfo2()
-     * - Memory: Single allocation in CommandBatch, reused across frames
+     * - Submit: buildSubmitInfo2() creates a transient packet and fills submit arrays
+     * - Memory: CommandBatch storage can be reused across frames, but SubmitInfo2Packet
+     *   owns temporary vectors for each submit call
      * 
      * Usage:
      *   CommandBatch batch;               // Construct once
      *   batch.addCommandBuffer(cb);       // Build submission
-     *   queue.submit(batch, fence);       // Zero-copy submit
+     *   queue.submit(batch, fence);       // Build SubmitInfo2 packet and submit
      *   batch.clear();                    // Reuse next frame
      */
     void submit(
@@ -164,7 +164,7 @@ class GpuQueue
  *
  * Usage:
  *   queueManager.graphics().submit(commandBuffer);
- *   queueManager.graphics().submitAndWait(device, commandBuffer);
+ *   queueManager.waitAllIdle();
  */
 class QueueManager
 {

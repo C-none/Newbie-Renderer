@@ -415,6 +415,44 @@ class Buffer
         write(data.data(), data.size_bytes(), offset);
     }
 
+    /**
+     * @brief Write raw data to a mapped buffer and flush the written range.
+     */
+    void writeMappedAndFlush(const void *data, std::size_t dataSize, vk::DeviceSize offset = 0)
+    {
+        if (dataSize == 0)
+        {
+            return;
+        }
+
+        nrAssert(data != nullptr, "Buffer::writeMappedAndFlush requires non-null data for non-empty writes.");
+        nrAssert(
+            offset <= static_cast<vk::DeviceSize>(std::numeric_limits<std::size_t>::max()),
+            "Buffer::writeMappedAndFlush offset exceeds host size_t range.");
+
+        auto const hostOffset = static_cast<std::size_t>(offset);
+        nrAssert(
+            dataSize <= std::numeric_limits<std::size_t>::max() - hostOffset,
+            "Buffer::writeMappedAndFlush write range overflows host size_t.");
+
+        write(data, dataSize, hostOffset);
+        flush(offset, static_cast<vk::DeviceSize>(dataSize));
+    }
+
+    /// Write a single typed value to a mapped buffer and flush it.
+    template <typename T>
+        requires(!std::is_pointer_v<T>)
+    void writeMappedAndFlush(const T &data, vk::DeviceSize offset = 0)
+    {
+        writeMappedAndFlush(std::addressof(data), sizeof(T), offset);
+    }
+
+    /// Write a span of data to a mapped buffer and flush it.
+    template <typename T> void writeMappedAndFlush(std::span<const T> data, vk::DeviceSize offset = 0)
+    {
+        writeMappedAndFlush(data.data(), data.size_bytes(), offset);
+    }
+
   private:
     /**
      * @brief Write raw data to a mapped buffer

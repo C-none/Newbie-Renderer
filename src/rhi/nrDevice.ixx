@@ -225,7 +225,11 @@ class Device
         };
     }
 
-    void submitFrameBatch(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false)
+    void submitFrameBatch(
+        const CommandBatch& batch,
+        QueueRole submitRole,
+        bool signalForPresent,
+        vk::PipelineStageFlags2 imageAvailableWaitStage)
     {
         nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrameBatch requires beginFrame() before submission.");
         nrAssert(
@@ -241,16 +245,12 @@ class Device
         auto& frame = frameManager.current();
         auto submitBatch = batch;
 
-        auto waitStageForRole = [](QueueRole) {
-            return vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
-        };
-
         // Keep pre-present work decoupled from swapchain availability.
         // Waiting on imageAvailable only at the present-signaling submit prevents vblank pacing
         // from stalling earlier GPU batches that do not touch the swapchain image.
         if (signalForPresent)
         {
-            submitBatch.addWait(frame.imageAvailable(), waitStageForRole(submitRole));
+            submitBatch.addWait(frame.imageAvailable(), imageAvailableWaitStage);
         }
 
         if (signalForPresent)
@@ -284,6 +284,15 @@ class Device
             frameFinalSubmitRole_ = submitRole;
             presentationContext.setFrameSubmitted(true);
         }
+    }
+
+    void submitFrameBatch(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false)
+    {
+        submitFrameBatch(
+            batch,
+            submitRole,
+            signalForPresent,
+            vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands});
     }
 
     void submitFrame(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute)

@@ -65,6 +65,10 @@ struct UiRetiredTexture
     nr::rhi::Image image{};
     std::uint32_t slot = 0u;
     std::uint64_t retiredFrameIndex = 0u;
+    std::uint64_t pendingUploadSignalValue = 0u;
+    std::optional<nr::rhi::CommandPool> pendingSourceReleasePool{};
+    std::optional<vk::raii::CommandBuffers> pendingSourceReleaseCommandBuffers{};
+    std::optional<vk::raii::Semaphore> pendingSourceReleaseSemaphore{};
 };
 
 struct UiRuntimeCache
@@ -492,30 +496,75 @@ void clearPendingUiTextureSourceRelease(UiTextureEntry& textureEntry)
     return ticket;
 }
 
-void waitForPendingUiTextureUploads(
+void pollPendingUiTextureUploads(
     nr::rhi::Device& device,
     UiRuntimeCache& runtime)
 {
     auto& uploadContext = device.uploadReadback();
-    std::uint64_t maxSignalValue = 0u;
-    
-    std::ranges::for_each(runtime.textures, [&](auto& pair) {
-        if (pair.second.pendingUpload.has_value() && pair.second.pendingUpload->valid())
+    auto const completedUploadValue = uploadContext.completedUploadValue();
+    uploadContext.reclaimCompletedUploads();
+    auto const sameQueueFamily =
+        device.queueManager.transfer().queueFamilyIndex() ==
+        device.queueManager.graphics().queueFamilyIndex();
+
+    std::ranges::for_each(runtime.textures, [](auto& pair) {
+        auto& texture = pair.second;
+        if (!texture.pendingUpload.has_value())
         {
-            maxSignalValue = std::max(maxSignalValue, pair.second.pendingUpload->signalValue);
+            return;
+        }
+
+        if (!texture.pendingUpload->valid())
+        {
+            clearPendingUiTextureSourceRelease(texture);
+            texture.pendingUpload.reset();
         }
     });
 
-    if (maxSignalValue == 0u)
-    {
-        return;
-    }
+    std::ranges::for_each(runtime.textures, [&](auto& pair) {
+        auto& texture = pair.second;
+        if (!texture.pendingUpload.has_value() ||
+            !texture.pendingUpload->valid() ||
+            texture.pendingUpload->signalValue > completedUploadValue)
+        {
+            return;
+        }
 
-    uploadContext.waitUploadComplete(maxSignalValue);
-
-    std::ranges::for_each(runtime.textures, [](auto& pair) {
-        clearPendingUiTextureSourceRelease(pair.second);
+        clearPendingUiTextureSourceRelease(texture);
+        if (sameQueueFamily)
+        {
+            texture.pendingUpload.reset();
+        }
     });
+}
+
+[[nodiscard]] bool hasIncompleteUiTextureUpload(
+    const UiRuntimeCache& runtime,
+    std::uint64_t completedUploadValue)
+{
+    return std::ranges::any_of(runtime.textures, [&](const auto& pair) {
+        auto const& texture = pair.second;
+        return texture.pendingUpload.has_value() &&
+               texture.pendingUpload->valid() &&
+               texture.pendingUpload->signalValue > completedUploadValue;
+    });
+}
+
+void waitForPendingUiTextureUploadSignalsByPolling(
+    nr::rhi::Device& device,
+    UiRuntimeCache& runtime)
+{
+    auto& uploadContext = device.uploadReadback();
+    while (true)
+    {
+        pollPendingUiTextureUploads(device, runtime);
+        if (!hasIncompleteUiTextureUpload(runtime, uploadContext.completedUploadValue()))
+        {
+            return;
+        }
+
+        std::this_thread::yield();
+    }
 }
 
 void recordUiTextureAcquireBarriers(
@@ -526,6 +575,8 @@ void recordUiTextureAcquireBarriers(
     auto& uploadContext = device.uploadReadback();
     auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
     auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
+    auto const completedUploadValue = uploadContext.completedUploadValue();
+    uploadContext.reclaimCompletedUploads();
     
     auto barriers = nr::rhi::ops::BarrierBatch{};
     
@@ -540,6 +591,11 @@ void recordUiTextureAcquireBarriers(
             {
                 return;
             }
+            if (pair.second.pendingUpload->signalValue > completedUploadValue)
+            {
+                return;
+            }
+            clearPendingUiTextureSourceRelease(pair.second);
             pair.second.pendingUpload.reset();
         });
     }
@@ -551,8 +607,13 @@ void recordUiTextureAcquireBarriers(
             {
                 return;
             }
+            if (pair.second.pendingUpload->signalValue > completedUploadValue)
+            {
+                return;
+            }
             
             barriers.add(uploadContext.makeImageAcquireBarrier(pair.second.pendingUpload.value()));
+            clearPendingUiTextureSourceRelease(pair.second);
             pair.second.pendingUpload.reset();
         });
     }
@@ -579,6 +640,18 @@ void createOrUpdateUiTexture(
     {
         auto const currentExtent = existingTexture->second.image.extent();
         needsCreate = currentExtent.width != textureExtent.width || currentExtent.height != textureExtent.height;
+    }
+
+    if (existingTexture != runtime.textures.end() && existingTexture->second.pendingUpload.has_value())
+    {
+        if (existingTexture->second.pendingUpload->valid())
+        {
+            textureData.SetTexID(textureId);
+            return;
+        }
+
+        clearPendingUiTextureSourceRelease(existingTexture->second);
+        existingTexture->second.pendingUpload.reset();
     }
 
     if (needsCreate)
@@ -637,11 +710,19 @@ void destroyUiTexture(
     {
         auto slotIt = runtime.textureSlotById.find(textureId);
         auto const slot = slotIt != runtime.textureSlotById.end() ? slotIt->second : 0u;
+        auto const pendingUploadSignalValue =
+            textureIt->second.pendingUpload.has_value() && textureIt->second.pendingUpload->valid()
+                ? textureIt->second.pendingUpload->signalValue
+                : 0u;
         
         runtime.retiredTextures.push_back(UiRetiredTexture{
             .image = std::move(textureIt->second.image),
             .slot = slot,
             .retiredFrameIndex = currentFrameIndex,
+            .pendingUploadSignalValue = pendingUploadSignalValue,
+            .pendingSourceReleasePool = std::move(textureIt->second.pendingSourceReleasePool),
+            .pendingSourceReleaseCommandBuffers = std::move(textureIt->second.pendingSourceReleaseCommandBuffers),
+            .pendingSourceReleaseSemaphore = std::move(textureIt->second.pendingSourceReleaseSemaphore),
         });
         runtime.textures.erase(textureIt);
     }
@@ -662,13 +743,21 @@ void destroyUiTexture(
 }
 
 void cleanupRetiredTextures(
+    nr::rhi::Device& device,
     UiRuntimeCache& runtime,
     std::uint64_t currentFrameIndex)
 {
     constexpr auto kRetirementFrameCount = static_cast<std::uint64_t>(nr::maxFrameInFlight + 1u);
+    auto& uploadContext = device.uploadReadback();
+    auto const completedUploadValue = uploadContext.completedUploadValue();
+    uploadContext.reclaimCompletedUploads();
     
     std::erase_if(runtime.retiredTextures, [&](const UiRetiredTexture& retired) {
-        if (currentFrameIndex >= retired.retiredFrameIndex + kRetirementFrameCount)
+        auto const frameLatencySatisfied = currentFrameIndex >= retired.retiredFrameIndex + kRetirementFrameCount;
+        auto const uploadSatisfied =
+            retired.pendingUploadSignalValue == 0u ||
+            retired.pendingUploadSignalValue <= completedUploadValue;
+        if (frameLatencySatisfied && uploadSatisfied)
         {
             if (retired.slot < runtime.freeTextureSlots.size() ||
                 std::ranges::find(runtime.freeTextureSlots, retired.slot) == runtime.freeTextureSlots.end())
@@ -691,7 +780,7 @@ void synchronizeUiTextures(
     const ImDrawData& drawData,
     std::uint64_t currentFrameIndex)
 {
-    cleanupRetiredTextures(runtime, currentFrameIndex);
+    cleanupRetiredTextures(device, runtime, currentFrameIndex);
     
     if (drawData.Textures == nullptr)
     {
@@ -1115,8 +1204,9 @@ class UiNode final : public Node
             auto drawData = uiSystem->get().drawData();
             if (drawData.has_value())
             {
+                pollPendingUiTextureUploads(device_->get(), *runtime_);
                 synchronizeUiTextures(device_->get(), *runtime_, drawData->get(), currentFrameIndex);
-                waitForPendingUiTextureUploads(device_->get(), *runtime_);
+                waitForPendingUiTextureUploadSignalsByPolling(device_->get(), *runtime_);
                 drawFrame = copyUiDrawData(drawData->get(), bufferExtent);
             }
         }
@@ -1244,6 +1334,12 @@ class UiNode final : public Node
                         return;
                     }
 
+                    auto textureIt = runtime->textures.find(command.textureId);
+                    if (textureIt != runtime->textures.end() && textureIt->second.pendingUpload.has_value())
+                    {
+                        return;
+                    }
+
                     auto bindingSetsIt = runtime->textureSlotById.find(command.textureId);
                     nr::nrAssert(
                         bindingSetsIt != runtime->textureSlotById.end(),
@@ -1295,15 +1391,13 @@ class UiNode final : public Node
                 if (vertexBytes > 0u)
                 {
                     auto& vertexBuffer = runtime->vertexBuffers[frameSlot];
-                    vertexBuffer.write(std::span<const ImDrawVert>{drawFrame.vertices.data(), drawFrame.vertices.size()});
-                    vertexBuffer.flush(0u, vertexBytes);
+                    vertexBuffer.writeMappedAndFlush(std::span<const ImDrawVert>{drawFrame.vertices.data(), drawFrame.vertices.size()});
                 }
 
                 if (indexBytes > 0u)
                 {
                     auto& indexBuffer = runtime->indexBuffers[frameSlot];
-                    indexBuffer.write(std::span<const ImDrawIdx>{drawFrame.indices.data(), drawFrame.indices.size()});
-                    indexBuffer.flush(0u, indexBytes);
+                    indexBuffer.writeMappedAndFlush(std::span<const ImDrawIdx>{drawFrame.indices.data(), drawFrame.indices.size()});
                 }
             });
     }
