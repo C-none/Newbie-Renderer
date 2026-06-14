@@ -427,6 +427,8 @@ class Device
             auto reason = std::string_view{"modern pipeline backend"};
             if (extensionName == vk::EXTExtendedDynamicState3ExtensionName)
                 reason = "extended dynamic pipeline state v3";
+            if (extensionName == vk::EXTOpacityMicromapExtensionName)
+                reason = "ray tracing opacity micromap support";
             enableExtension(extensionName, reason);
         });
 
@@ -441,7 +443,8 @@ class Device
                                                      vk::PhysicalDeviceMeshShaderFeaturesEXT,
                                                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
                                                      vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-                                                     vk::PhysicalDeviceRayQueryFeaturesKHR>();
+                                                     vk::PhysicalDeviceRayQueryFeaturesKHR,
+                                                     vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
 
         auto &featureList = features2.get<vk::PhysicalDeviceFeatures2>();
         auto &vulkan11Features = features2.get<vk::PhysicalDeviceVulkan11Features>();
@@ -455,6 +458,7 @@ class Device
         auto &accelerationStructureFeatures = features2.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
         auto &rayTracingPipelineFeatures = features2.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
         auto &rayQueryFeatures = features2.get<vk::PhysicalDeviceRayQueryFeaturesKHR>();
+        auto &opacityMicromapFeatures = features2.get<vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
 
         // Keep core mesh/task shader support enabled, but avoid optional mesh sub-features
         // that require additional feature chains we do not currently enable.
@@ -489,6 +493,7 @@ class Device
         REQUIRE_FEATURE(accelerationStructureFeatures.accelerationStructure, "accelerationStructure");
         REQUIRE_FEATURE(rayTracingPipelineFeatures.rayTracingPipeline, "rayTracingPipeline");
         REQUIRE_FEATURE(rayQueryFeatures.rayQuery, "rayQuery");
+        REQUIRE_FEATURE(opacityMicromapFeatures.micromap, "opacityMicromap");
         REQUIRE_FEATURE(invocationReorderFeatures.rayTracingInvocationReorder, "rayTracingInvocationReorder");
         REQUIRE_FEATURE(cooperativeVectorFeatures.cooperativeVector, "cooperativeVector");
 
@@ -538,6 +543,9 @@ class Device
         auto const &limits = physicalDeviceProperties.properties.limits;
         rtCapabilities_ = RayTracingCapabilitySnapshot{
             .rayTracingPipelineTraceRaysIndirect = rayTracingPipelineFeatures.rayTracingPipelineTraceRaysIndirect == vk::True,
+            .opacityMicromap = opacityMicromapFeatures.micromap == vk::True,
+            .opacityMicromapCaptureReplay = opacityMicromapFeatures.micromapCaptureReplay == vk::True,
+            .opacityMicromapHostCommands = opacityMicromapFeatures.micromapHostCommands == vk::True,
             .shaderGroupHandleSize = rayTracingPipelineProperties.shaderGroupHandleSize,
             .shaderGroupHandleAlignment = rayTracingPipelineProperties.shaderGroupHandleAlignment,
             .shaderGroupBaseAlignment = rayTracingPipelineProperties.shaderGroupBaseAlignment,
@@ -764,6 +772,7 @@ class Device
         vk::KHRRayTracingPipelineExtensionName,
         vk::KHRPipelineLibraryExtensionName,
         vk::KHRRayQueryExtensionName,
+        vk::EXTOpacityMicromapExtensionName,
         vk::EXTRayTracingInvocationReorderExtensionName,
         vk::NVCooperativeVectorExtensionName,
         vk::EXTExtendedDynamicState3ExtensionName,

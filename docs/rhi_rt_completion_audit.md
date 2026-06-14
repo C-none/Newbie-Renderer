@@ -451,22 +451,26 @@ Evidence:
 
 - `Device` requires NVIDIA invocation reorder, but there is no RHI surface that
   exposes shader invocation reorder policy to RT pipeline/pass code.
-- The codebase does not expose opacity micromap, displacement micromap, motion
-  acceleration structure, or position fetch features.
+- `Device` requires `VK_EXT_opacity_micromap` and exposes the opacity micromap
+  feature bits through `RayTracingCapabilitySnapshot`, but there is no typed
+  RHI surface yet for micromap resources, build commands, or AS geometry
+  micromap attachment.
+- The codebase does not expose displacement micromap, motion acceleration
+  structure, or position fetch features.
 
 Assessment:
 
 - These features should not block completing the base KHR RT path.
 - Because the project targets RTX-class hardware and already requires some
   NVIDIA-specific capabilities, each optional RT extension needs an explicit
-  policy: required and surfaced, required but shader-only, or deliberately out
-  of scope.
+  policy: required and surfaced, required but low-level only, shader-only, or
+  deliberately out of scope.
 
 Recommended fix:
 
 - Do not mix these extensions into the first AS/SBT completion pass.
 - After base RT works, add a short feature-policy doc section for invocation
-  reorder and micromap-related features.
+  reorder and the remaining micromap-related feature surfaces.
 
 ### 9. Test and sample coverage is not enough
 

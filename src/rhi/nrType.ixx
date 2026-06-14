@@ -99,6 +99,9 @@ enum class GraphicsPipelineMode : unsigned
 struct RayTracingCapabilitySnapshot
 {
     bool rayTracingPipelineTraceRaysIndirect = false;
+    bool opacityMicromap = false;
+    bool opacityMicromapCaptureReplay = false;
+    bool opacityMicromapHostCommands = false;
 
     std::uint32_t shaderGroupHandleSize = 0;
     std::uint32_t shaderGroupHandleAlignment = 1;

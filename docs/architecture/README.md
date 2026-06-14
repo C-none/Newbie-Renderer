@@ -40,7 +40,7 @@ Current boundary notes:
 - Command invocation should stay on Vulkan-Hpp RAII member functions instead of project-local dispatch tables.
 - RHI command-buffer helper APIs expose `const vk::raii::CommandBuffer&`; raw `vk::CommandBuffer` handles stay internal implementation details.
 - Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
-- `nr.rhi` exposes descriptor-indexing, buffer-device-address, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection with a semantic multi-set ABI for runtime arrays.
+- `nr.rhi` exposes descriptor-indexing, buffer-device-address, ray-tracing, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection with a semantic multi-set ABI for runtime arrays.
 - RHI copy helpers record Vulkan-Hpp copy commands 2 while keeping narrow adapters for existing copy-region structs.
 - `Buffer::writeMappedAndFlush(...)` is the RHI helper for direct CPU writes to mapped buffers; `UploadReadbackContext` defaults both upload and readback rings to 128 MiB and exposes upload timeline polling for higher layers.
 - `PipelineState` retains the source `SlangProgram` so reflection-backed cursor access remains valid after pipeline creation.
