@@ -403,14 +403,13 @@ class RenderGraphExecutor
         auto frameCount = context.device.frameManager.frameCount();
         nrAssert(frameCount > 0, "RenderGraphExecutor::execute requires at least one frame context.");
 
-        if (retainedCommandBuffersByFrame_.size() != frameCount)
+        if (primaryCommandBuffersByFrame_.size() != frameCount)
         {
-            retainedCommandBuffersByFrame_.clear();
-            retainedCommandBuffersByFrame_.resize(frameCount);
+            primaryCommandBuffersByFrame_.clear();
+            primaryCommandBuffersByFrame_.resize(frameCount);
         }
 
         auto frameSlot = static_cast<std::size_t>(context.frameIndex % static_cast<std::uint32_t>(frameCount));
-        retainedCommandBuffersByFrame_[frameSlot].clear();
 
         auto compiledResourceByHandle = std::map<GraphResourceHandle, std::reference_wrapper<const CompiledResourceDesc>>{};
         std::ranges::for_each(compiled.resources, [&](const CompiledResourceDesc& resource) {
@@ -443,9 +442,9 @@ class RenderGraphExecutor
             const auto& planBatch = report.plan.batches[batchOrdinal];
             const auto& compiledBatch = compiled.submitBatches[batchOrdinal];
 
-            auto commandBuffers = allocatePrimaryForQueue(context, planBatch.queue);
-            auto& commandBuffer = commandBuffers.front();
+            auto& commandBuffer = primaryCommandBufferForQueue(context, frameSlot, planBatch.queue, batchOrdinal);
 
+            commandBuffer.reset();
             nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
             {
                 auto batchDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
@@ -507,11 +506,20 @@ class RenderGraphExecutor
                     }
                 }
 
+                // Node grouping region: spans consecutive same-node passes within this
+                // batch command buffer. Segmented by CompiledPass::node identity so a node's
+                // passes fold into one labeled region; never crosses the batch boundary.
+                std::optional<GraphNodeHandle> activeNodeGroup{};
+                std::optional<detail::ScopedCommandBufferDebugLabel> nodeDebugLabelScope{};
+
                 std::ranges::for_each(compiledBatch.passes, [&](const CompiledPass& pass) {
-                    auto nodeDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
-                        commandBuffer,
-                        detail::nodeScopeLabel(pass.debugName),
-                    };
+                    if (!activeNodeGroup.has_value() || activeNodeGroup.value() != pass.node)
+                    {
+                        nodeDebugLabelScope.reset();
+                        nodeDebugLabelScope.emplace(commandBuffer, detail::nodeScopeLabel(pass.debugName));
+                        activeNodeGroup = pass.node;
+                    }
+
                     auto passDebugLabelScope = detail::ScopedCommandBufferDebugLabel{commandBuffer, pass.debugName};
 
                     auto inPassBarriers = nr::rhi::ops::BarrierBatch{};
@@ -594,6 +602,10 @@ class RenderGraphExecutor
                     recordImplicitCopyPass(pass, commandBuffer, runtimeBindings);
                 });
 
+                // Close the trailing node region before tail-release barriers so labels
+                // stay balanced and barriers are not nested under a node scope.
+                nodeDebugLabelScope.reset();
+
                 if (!planBatch.tailReleaseTransitions.empty())
                 {
                     auto barriers = nr::rhi::ops::BarrierBatch{};
@@ -629,11 +641,8 @@ class RenderGraphExecutor
 
             nr::rhi::CommandRecorder::end(commandBuffer);
 
-            retainedCommandBuffersByFrame_[frameSlot].push_back(std::move(commandBuffers));
-            auto& stored = retainedCommandBuffersByFrame_[frameSlot].back();
-
             auto submitBatch = nr::rhi::CommandBatch{};
-            submitBatch.addCommandBuffer(stored.front());
+            submitBatch.addCommandBuffer(commandBuffer);
 
             if (timelineValid && planBatch.waitsForPreviousBatch && previousSignalToken.valid())
             {
@@ -664,17 +673,18 @@ class RenderGraphExecutor
 
         if (report.plan.requiresSyntheticPresentBatch)
         {
-            auto commandBuffers = allocatePrimaryForQueue(context, QueueDomain::Compute);
-            auto& commandBuffer = commandBuffers.front();
+            auto& commandBuffer = primaryCommandBufferForQueue(
+                context,
+                frameSlot,
+                QueueDomain::Compute,
+                report.plan.batches.size());
 
+            commandBuffer.reset();
             nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
             nr::rhi::CommandRecorder::end(commandBuffer);
 
-            retainedCommandBuffersByFrame_[frameSlot].push_back(std::move(commandBuffers));
-            auto& stored = retainedCommandBuffersByFrame_[frameSlot].back();
-
             auto submitBatch = nr::rhi::CommandBatch{};
-            submitBatch.addCommandBuffer(stored.front());
+            submitBatch.addCommandBuffer(commandBuffer);
 
             if (timelineValid && previousSignalToken.valid())
             {
@@ -693,7 +703,7 @@ class RenderGraphExecutor
 
     void clearRetainedState()
     {
-        retainedCommandBuffersByFrame_.clear();
+        primaryCommandBuffersByFrame_.clear();
     }
 
   private:
@@ -1048,11 +1058,37 @@ class RenderGraphExecutor
         return frame.primary<nr::rhi::QueueRole::Transfer>();
     }
 
-    [[nodiscard]] static vk::raii::CommandBuffers allocatePrimaryForQueue(const ExecuteContext& context, QueueDomain queue)
+    struct CachedPrimaryCommandBuffer
     {
-        auto& frame = context.device.frameManager.current();
-        auto& pool = primaryPoolForQueue(frame, queue);
-        return pool.allocatePrimary(1);
+        QueueDomain queue = QueueDomain::Graphics;
+        vk::raii::CommandBuffers buffers{nullptr};
+    };
+
+    [[nodiscard]] vk::raii::CommandBuffer& primaryCommandBufferForQueue(
+        const ExecuteContext& context,
+        std::size_t frameSlot,
+        QueueDomain queue,
+        std::size_t ordinal)
+    {
+        nrAssert(frameSlot < primaryCommandBuffersByFrame_.size(), "RenderGraphExecutor command buffer frame slot is out of range.");
+
+        auto& frameCache = primaryCommandBuffersByFrame_[frameSlot];
+        if (frameCache.size() <= ordinal)
+        {
+            frameCache.resize(ordinal + 1u);
+        }
+
+        auto& cached = frameCache[ordinal];
+        if (cached.buffers.empty() || cached.queue != queue)
+        {
+            cached.queue = queue;
+            auto& frame = context.device.frameManager.current();
+            auto& pool = primaryPoolForQueue(frame, queue);
+            cached.buffers = pool.allocatePrimary(1);
+        }
+
+        nrAssert(!cached.buffers.empty(), "RenderGraphExecutor cached command buffer allocation failed.");
+        return cached.buffers.front();
     }
 
     static void addTransitionBarrier(
@@ -1066,18 +1102,31 @@ class RenderGraphExecutor
     {
         constexpr auto kReadWriteAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
 
-        auto srcStageMask = vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
-        auto srcAccessMask = vk::AccessFlags2{kReadWriteAccess};
-        auto dstStageMask = vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
-        auto dstAccessMask = vk::AccessFlags2{kReadWriteAccess};
+        // Resolve each side from the precise declared scope when available, falling
+        // back to a conservative all-commands scope only for unresolved sides so
+        // resources without a declared access intent stay correct.
+        auto srcStageMask = transition.srcScope.resolved()
+                                ? transition.srcScope.stages
+                                : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+        auto srcAccessMask = transition.srcScope.resolved()
+                                 ? transition.srcScope.access
+                                 : vk::AccessFlags2{kReadWriteAccess};
+        auto dstStageMask = transition.dstScope.resolved()
+                                ? transition.dstScope.stages
+                                : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+        auto dstAccessMask = transition.dstScope.resolved()
+                                 ? transition.dstScope.access
+                                 : vk::AccessFlags2{kReadWriteAccess};
 
         if (placement == TransitionPlacement::Release)
         {
+            // Queue-release half: the destination side is the release boundary.
             dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe;
             dstAccessMask = vk::AccessFlags2{};
         }
         else if (placement == TransitionPlacement::Acquire)
         {
+            // Queue-acquire half: the source side is the acquire boundary.
             srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
             srcAccessMask = vk::AccessFlags2{};
         }
@@ -1231,6 +1280,6 @@ class RenderGraphExecutor
         }
     }
 
-    std::vector<std::vector<vk::raii::CommandBuffers>> retainedCommandBuffersByFrame_{};
+    std::vector<std::vector<CachedPrimaryCommandBuffer>> primaryCommandBuffersByFrame_{};
 };
 } // namespace nr::renderer

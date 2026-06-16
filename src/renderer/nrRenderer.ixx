@@ -354,7 +354,28 @@ class Renderer
             return RendererFrameResult{};
         }
 
+        // Per-phase CPU timing scaffolding. Averages are emitted once per window to
+        // keep print/flush overhead out of the measured hot path.
+        using ProfileClock = std::chrono::steady_clock;
+        auto profileMark = ProfileClock::now();
+        auto elapsedMicros = [&profileMark]() {
+            auto now = ProfileClock::now();
+            auto micros = std::chrono::duration<double, std::micro>(now - profileMark).count();
+            profileMark = now;
+            return micros;
+        };
+
+        static auto accumBeginFrame = 0.0;
+        static auto accumScene = 0.0;
+        static auto accumBuild = 0.0;
+        static auto accumCompile = 0.0;
+        static auto accumPrepare = 0.0;
+        static auto accumExecute = 0.0;
+        static auto accumPresent = 0.0;
+        static auto profiledFrameCount = 0u;
+
         auto begin = device_->beginFrame(input.acquireTimeout);
+        accumBeginFrame += elapsedMicros();
 
         auto scenePackets = std::optional<nr::scene::ScenePacketSet>{};
         auto primaryCamera = std::optional<nr::scene::SceneResolvedCamera>{};
@@ -495,8 +516,13 @@ class Renderer
             frameParameters.primaryCamera = std::cref(*primaryCamera);
         }
 
+        accumScene += elapsedMicros();
+
         auto frameDesc = buildInstalledGraph(frameParameters);
+        accumBuild += elapsedMicros();
+
         auto compiled = compiler_.compile(frameDesc);
+        accumCompile += elapsedMicros();
 
         auto executeContext = RenderGraphExecutor::ExecuteContext{
             .device = *device_,
@@ -508,9 +534,39 @@ class Renderer
         };
 
         auto prepared = executor_.prepareFrame(std::move(compiled), executeContext);
+        accumPrepare += elapsedMicros();
+
         auto executeReport = executor_.executePrepared(prepared, executeContext);
+        accumExecute += elapsedMicros();
 
         auto present = device_->presentFrame();
+        accumPresent += elapsedMicros();
+
+        ++profiledFrameCount;
+        constexpr auto kProfileWindowFrames = 1000u;
+        if (profiledFrameCount >= kProfileWindowFrames)
+        {
+            auto inv = 1.0 / static_cast<double>(profiledFrameCount);
+            nrInfo(std::format(
+                "renderFrame CPU avg over {} frames (us): begin={:.1f} scene={:.1f} build={:.1f} compile={:.1f} prepare={:.1f} execute={:.1f} present={:.1f}",
+                profiledFrameCount,
+                accumBeginFrame * inv,
+                accumScene * inv,
+                accumBuild * inv,
+                accumCompile * inv,
+                accumPrepare * inv,
+                accumExecute * inv,
+                accumPresent * inv));
+
+            accumBeginFrame = 0.0;
+            accumScene = 0.0;
+            accumBuild = 0.0;
+            accumCompile = 0.0;
+            accumPrepare = 0.0;
+            accumExecute = 0.0;
+            accumPresent = 0.0;
+            profiledFrameCount = 0u;
+        }
 
         return RendererFrameResult{
             .rendered = true,

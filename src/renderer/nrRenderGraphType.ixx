@@ -214,6 +214,23 @@ struct RenderGraphFrameDescription
     std::vector<GraphExecutionStep> executionOrder{};
 };
 
+/**
+ * @brief Precise sync2 stage+access scope for one side of a barrier.
+ *
+ * An empty `stages` mask marks the scope as unresolved; barrier emission then
+ * falls back to a conservative all-commands scope for that side only.
+ */
+struct AccessScope
+{
+    vk::PipelineStageFlags2 stages = vk::PipelineStageFlags2{};
+    vk::AccessFlags2 access = vk::AccessFlags2{};
+
+    [[nodiscard]] bool resolved() const noexcept
+    {
+        return stages != vk::PipelineStageFlags2{};
+    }
+};
+
 struct ResourceStateTransition
 {
     GraphResourceHandle resource{};
@@ -222,6 +239,11 @@ struct ResourceStateTransition
     ImageLayoutIntent oldLayout = ImageLayoutIntent::Undefined;
     ImageLayoutIntent newLayout = ImageLayoutIntent::Undefined;
     DependencyStrength strength = DependencyStrength::InOrder;
+
+    /// Producer-side scope (last access before the transition). Unresolved on first use.
+    AccessScope srcScope{};
+    /// Consumer-side scope (first access after the transition).
+    AccessScope dstScope{};
 };
 
 struct CompiledResourceDesc

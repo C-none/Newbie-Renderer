@@ -174,6 +174,131 @@ class RenderGraphCompiler
         return vk::ImageAspectFlagBits::eColor;
     }
 
+    /**
+     * @brief Resolve the shader pipeline stages a given queue may issue a descriptor/buffer access from.
+     *
+     * Access intents do not carry per-shader-stage granularity, so graphics-queue
+     * shader access widens to all graphics stages to stay correct for vertex-stage
+     * reads (for example camera uniforms). Compute narrows to the compute stage.
+     */
+    [[nodiscard]] static vk::PipelineStageFlags2 shaderStagesForQueue(QueueDomain queue)
+    {
+        if (queue == QueueDomain::Compute)
+        {
+            return vk::PipelineStageFlagBits2::eComputeShader;
+        }
+        if (queue == QueueDomain::Graphics)
+        {
+            return vk::PipelineStageFlagBits2::eAllGraphics;
+        }
+        return vk::PipelineStageFlagBits2::eAllCommands;
+    }
+
+    /**
+     * @brief Strict buffer access intent -> sync2 stage+access scope.
+     *
+     * Mapping follows the declared intent exactly; it does not widen writes to
+     * include implicit reads. An unset/None intent yields an unresolved scope.
+     */
+    [[nodiscard]] static AccessScope mapBufferAccessIntent(BufferAccessIntent intent, QueueDomain queue)
+    {
+        switch (intent)
+        {
+        case BufferAccessIntent::None:
+            return AccessScope{};
+        case BufferAccessIntent::TransferRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead};
+        case BufferAccessIntent::TransferWrite:
+            return AccessScope{vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite};
+        case BufferAccessIntent::UniformRead:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eUniformRead};
+        case BufferAccessIntent::ShaderSampleRead:
+        case BufferAccessIntent::TexelRead:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderSampledRead};
+        case BufferAccessIntent::ShaderStorageRead:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageRead};
+        case BufferAccessIntent::ShaderStorageWrite:
+        case BufferAccessIntent::TexelWrite:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageWrite};
+        case BufferAccessIntent::VertexRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eVertexAttributeInput, vk::AccessFlagBits2::eVertexAttributeRead};
+        case BufferAccessIntent::IndexRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eIndexInput, vk::AccessFlagBits2::eIndexRead};
+        case BufferAccessIntent::IndirectRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eDrawIndirect, vk::AccessFlagBits2::eIndirectCommandRead};
+        case BufferAccessIntent::AccelerationStructureRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureReadKHR};
+        case BufferAccessIntent::AccelerationStructureWrite:
+            return AccessScope{vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureWriteKHR};
+        case BufferAccessIntent::HostRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead};
+        case BufferAccessIntent::HostWrite:
+            return AccessScope{vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostWrite};
+        }
+        return AccessScope{};
+    }
+
+    /**
+     * @brief Strict image access intent -> sync2 stage+access scope.
+     *
+     * Mapping follows the declared intent exactly; write intents are not widened
+     * to include implicit reads. `PresentRead` maps to the bottom-of-pipe boundary
+     * with no access, since presentation is ordered by semaphore, not a barrier.
+     */
+    [[nodiscard]] static AccessScope mapImageAccessIntent(ImageAccessIntent intent, QueueDomain queue)
+    {
+        switch (intent)
+        {
+        case ImageAccessIntent::None:
+            return AccessScope{};
+        case ImageAccessIntent::TransferRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead};
+        case ImageAccessIntent::TransferWrite:
+            return AccessScope{vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite};
+        case ImageAccessIntent::SampledRead:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderSampledRead};
+        case ImageAccessIntent::StorageRead:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageRead};
+        case ImageAccessIntent::StorageWrite:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageWrite};
+        case ImageAccessIntent::StorageReadWrite:
+            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};
+        case ImageAccessIntent::ColorAttachmentRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentRead};
+        case ImageAccessIntent::ColorAttachmentWrite:
+            return AccessScope{vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentWrite};
+        case ImageAccessIntent::DepthStencilRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests, vk::AccessFlagBits2::eDepthStencilAttachmentRead};
+        case ImageAccessIntent::DepthStencilWrite:
+            return AccessScope{vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests, vk::AccessFlagBits2::eDepthStencilAttachmentWrite};
+        case ImageAccessIntent::InputAttachmentRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eInputAttachmentRead};
+        case ImageAccessIntent::PresentRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlags2{}};
+        }
+        return AccessScope{};
+    }
+
+    /**
+     * @brief Resolve the precise stage+access scope a pass applies to one resource use.
+     *
+     * Picks the buffer or image access intent declared on the use. Returns an
+     * unresolved scope when no access intent is set, leaving conservative
+     * fallback to the barrier emitter.
+     */
+    [[nodiscard]] static AccessScope resolveUseAccessScope(const PassResourceUseDesc& use, QueueDomain queue)
+    {
+        if (use.bufferAccess.has_value())
+        {
+            return mapBufferAccessIntent(*use.bufferAccess, queue);
+        }
+        if (use.imageAccess.has_value())
+        {
+            return mapImageAccessIntent(*use.imageAccess, queue);
+        }
+        return AccessScope{};
+    }
+
     [[nodiscard]] CompiledGraphFrame compile(const RenderGraphFrameDescription& frame) const
     {
         nrAssert(
@@ -202,6 +327,7 @@ class RenderGraphCompiler
         std::optional<ImageLayoutIntent> layout{};
         std::uint32_t batchIndex = 0;
         ResourceOwnershipDomain ownership = ResourceOwnershipDomain::Undefined;
+        AccessScope scope{};
     };
 
     [[nodiscard]] static std::vector<CompiledResourceDesc> compileResources(const RenderGraphFrameDescription& frame)
@@ -530,6 +656,8 @@ class RenderGraphCompiler
                         use.imageLayout,
                         previousUse.has_value() ? std::addressof(previousUse->get()) : nullptr);
 
+                    auto currentScope = resolveUseAccessScope(use, pass.queue);
+
                     if (previousUse.has_value() && !previousFromSamePass)
                     {
                         auto const &previous = previousUse->get();
@@ -558,6 +686,8 @@ class RenderGraphCompiler
                                 .oldLayout = previous.layout.value_or(ImageLayoutIntent::Undefined),
                                 .newLayout = resolvedLayout.value_or(previous.layout.value_or(ImageLayoutIntent::Undefined)),
                                 .strength = strength,
+                                .srcScope = previous.scope,
+                                .dstScope = currentScope,
                             };
                             pass.preBarriers.push_back(transition);
                             if (strength == DependencyStrength::ReleaseAcquireRequired)
@@ -582,6 +712,8 @@ class RenderGraphCompiler
                                     .oldLayout = oldLayout,
                                     .newLayout = newLayout,
                                     .strength = DependencyStrength::BarrierRequired,
+                                    .srcScope = AccessScope{},
+                                    .dstScope = currentScope,
                                 });
                             }
                         }
@@ -592,6 +724,7 @@ class RenderGraphCompiler
                         .layout = resolvedLayout,
                         .batchIndex = pass.submitBatchIndex,
                         .ownership = ownership,
+                        .scope = currentScope,
                     });
                 });
 

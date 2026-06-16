@@ -995,6 +995,42 @@ class RayTracingPipeline
 		vk::raii::Pipeline pipeline_ = {nullptr};
 };
 
+/**
+ * @brief Set a VK_EXT_debug_utils name on a VkPipeline for profiler/debugger labeling.
+ *
+ * No-op outside debug builds. Name source is typically a node's describe().name.
+ */
+inline void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline, std::string_view name)
+{
+	if constexpr (isDebugMode)
+	{
+		if (pipeline == vk::Pipeline{} || name.empty())
+		{
+			return;
+		}
+
+		auto debugName = std::string{name};
+		vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
+		objectNameInfo.objectType = vk::ObjectType::ePipeline;
+		const auto rawHandle = static_cast<VkPipeline>(pipeline);
+		static_assert(sizeof(rawHandle) == sizeof(std::uint64_t), "VkPipeline handle size must match std::uint64_t for debug naming.");
+		objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
+		objectNameInfo.pObjectName = debugName.c_str();
+		try
+		{
+			device.setDebugUtilsObjectNameEXT(objectNameInfo);
+		}
+		catch (const vk::SystemError &error)
+		{
+			auto errorText = std::string_view{error.what()};
+			nrInfo<LogLevel::error>(std::vformat(
+				"setPipelineDebugName failed to set debug name '{}': {}",
+				std::make_format_args(debugName, errorText)));
+			nrAssert(false, "setPipelineDebugName failed to set a Vulkan debug object name.");
+		}
+	}
+}
+
 template <typename TPipeline>
 struct PipelineState
 {

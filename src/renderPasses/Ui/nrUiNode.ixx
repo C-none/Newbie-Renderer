@@ -80,6 +80,10 @@ struct UiRuntimeCache
     nr::rhi::SlangSampler textureSampler{};
     std::array<nr::rhi::Buffer, nr::maxFrameInFlight> vertexBuffers{};
     std::array<nr::rhi::Buffer, nr::maxFrameInFlight> indexBuffers{};
+    // Pre-allocated per-frame-slot UI overlay images; avoids vmaCreateImage/vmaDestroyImage every frame.
+    std::array<nr::rhi::Image, nr::maxFrameInFlight> uiBuffers{};
+    vk::Extent2D allocatedUiExtent{0, 0};
+    vk::Format allocatedUiFormat = vk::Format::eUndefined;
     std::map<ImTextureID, UiTextureEntry> textures{};
     std::map<ImTextureID, std::uint32_t> textureSlotById{};
     std::vector<ImTextureID> textureIdsBySlot{};
@@ -140,6 +144,44 @@ struct UiRuntimeCache
             static_cast<std::uint32_t>(imgui::drawVertColorOffset),
         },
     };
+}
+
+void ensureUiBufferImages(
+    nr::rhi::Device& device,
+    UiRuntimeCache& runtime,
+    vk::Extent2D extent,
+    vk::Format format)
+{
+    if (runtime.allocatedUiExtent == extent &&
+        runtime.allocatedUiFormat == format &&
+        runtime.uiBuffers[0].valid())
+    {
+        return;
+    }
+
+    auto imageInfo = vk::ImageCreateInfo{};
+    imageInfo.imageType = vk::ImageType::e2D;
+    imageInfo.format = format;
+    imageInfo.extent = vk::Extent3D{extent.width, extent.height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = vk::SampleCountFlagBits::e1;
+    imageInfo.tiling = vk::ImageTiling::eOptimal;
+    imageInfo.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.sharingMode = vk::SharingMode::eExclusive;
+    imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+    auto frameSlots = std::views::iota(std::size_t{0}, runtime.uiBuffers.size());
+    std::ranges::for_each(frameSlots, [&](std::size_t slot) {
+        runtime.uiBuffers[slot] = device.resourceFactory.createImage(
+            imageInfo, nr::rhi::MemoryUsage::GpuOnly,
+            std::format("Ui.Buffer[{}]", slot));
+        nr::nrAssert(runtime.uiBuffers[slot].valid(),
+            std::format("UiNode failed to allocate Ui.Buffer image for frame slot {}.", slot));
+    });
+
+    runtime.allocatedUiExtent = extent;
+    runtime.allocatedUiFormat = format;
 }
 
 [[nodiscard]] std::shared_ptr<UiRuntimeCache> ensureUiRuntime(
@@ -352,15 +394,13 @@ void invalidateBindlessTextureTables(UiRuntimeCache& runtime)
         return nr::rhi::ops::BufferUploadOwnershipPlan{
             .acquireToTransfer = std::nullopt,
             .releaseToDestination = nr::rhi::ops::QueueOwnershipTransfer{
-                .release = nr::rhi::ops::QueueOwnershipRequest{
-                    .srcQueueFamilyIndex = transferQueueFamily,
-                    .dstQueueFamilyIndex = transferQueueFamily,
+                .srcQueueFamilyIndex = transferQueueFamily,
+                .dstQueueFamilyIndex = transferQueueFamily,
+                .release = nr::rhi::ops::QueueAccessScope{
                     .stages = vk::PipelineStageFlagBits2::eTransfer,
                     .access = vk::AccessFlagBits2::eTransferWrite,
                 },
-                .acquire = nr::rhi::ops::QueueOwnershipRequest{
-                    .srcQueueFamilyIndex = transferQueueFamily,
-                    .dstQueueFamilyIndex = transferQueueFamily,
+                .acquire = nr::rhi::ops::QueueAccessScope{
                     .stages = vk::PipelineStageFlagBits2::eFragmentShader,
                     .access = vk::AccessFlagBits2::eShaderRead,
                 },
@@ -370,8 +410,36 @@ void invalidateBindlessTextureTables(UiRuntimeCache& runtime)
 
     if (sourceLayout == vk::ImageLayout::eUndefined)
     {
-        auto ownershipBundle = nr::rhi::ops::makeUploadQueueOwnershipBundle(
+        return nr::rhi::ops::BufferUploadOwnershipPlan{
+            .acquireToTransfer = std::nullopt,
+            .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
+                transferQueueFamily,
+                graphicsQueueFamily,
+                nr::rhi::ops::QueueAccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferWrite,
+                },
+                nr::rhi::ops::QueueAccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eFragmentShader,
+                    .access = vk::AccessFlagBits2::eShaderRead,
+                }),
+        };
+    }
+
+    return nr::rhi::ops::BufferUploadOwnershipPlan{
+        .acquireToTransfer = nr::rhi::ops::makeQueueOwnershipTransfer(
+            graphicsQueueFamily,
             transferQueueFamily,
+            nr::rhi::ops::QueueAccessScope{
+                .stages = vk::PipelineStageFlagBits2::eFragmentShader,
+                .access = vk::AccessFlagBits2::eShaderRead,
+            },
+            nr::rhi::ops::QueueAccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferWrite,
+            },
+            sourceReleaseWait),
+        .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
             transferQueueFamily,
             graphicsQueueFamily,
             nr::rhi::ops::QueueAccessScope{
@@ -381,24 +449,8 @@ void invalidateBindlessTextureTables(UiRuntimeCache& runtime)
             nr::rhi::ops::QueueAccessScope{
                 .stages = vk::PipelineStageFlagBits2::eFragmentShader,
                 .access = vk::AccessFlagBits2::eShaderRead,
-            });
-        return ownershipBundle.uploadPlan;
-    }
-
-    auto ownershipBundle = nr::rhi::ops::makeUploadQueueOwnershipBundle(
-        graphicsQueueFamily,
-        transferQueueFamily,
-        graphicsQueueFamily,
-        nr::rhi::ops::QueueAccessScope{
-            .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-            .access = vk::AccessFlagBits2::eShaderRead,
-        },
-        nr::rhi::ops::QueueAccessScope{
-            .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-            .access = vk::AccessFlagBits2::eShaderRead,
-        },
-        sourceReleaseWait);
-    return ownershipBundle.uploadPlan;
+            }),
+    };
 }
 
 void clearPendingUiTextureSourceRelease(UiTextureEntry& textureEntry)
@@ -1153,6 +1205,10 @@ class UiNode final : public Node
                                 : input.bufferFormat;
 
         runtime_ = ensureUiRuntime(context.device.get(), bufferFormat);
+        nr::rhi::setPipelineDebugName(
+            context.device.get().device,
+            runtime_->pipeline.pipeline.raw(),
+            describe().name + ".Pipeline");
     }
 
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override
@@ -1168,17 +1224,27 @@ class UiNode final : public Node
                                       ? vk::Format::eR8G8B8A8Unorm
                                       : input.bufferFormat;
 
-        auto uiBuffer = context.addResource(nr::renderer::GraphTransientImageDesc{
-            .debugName = "Ui.Buffer",
-            .lifetime = nr::renderer::ResourceLifetime::GraphTransient,
+        ensureUiBufferImages(device_->get(), *runtime_, bufferExtent, bufferFormat);
+
+        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+        auto const& uiBufferImage = runtime_->uiBuffers[frameSlot];
+        nr::nrAssert(uiBufferImage.valid(),
+            std::format("UiNode build: pre-allocated Ui.Buffer image for frame slot {} is invalid.", frameSlot));
+
+        auto uiBuffer = context.addResource(nr::renderer::GraphImportedImageDesc{
+            .debugName = std::format("Ui.Buffer[{}]", frameSlot),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
             .extent = vk::Extent3D{bufferExtent.width, bufferExtent.height, 1u},
             .format = bufferFormat,
             .usageIntents = {
                 nr::renderer::ImageUsageIntent::ColorAttachment,
                 nr::renderer::ImageUsageIntent::Sampled,
             },
-            .initialLayout = nr::renderer::ImageLayoutIntent::ColorAttachment,
+            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
             .aspect = nr::renderer::ImageAspectIntent::Color,
+            .importedResource = std::cref(uiBufferImage),
         });
 
         output.uiBuffer = uiBuffer;

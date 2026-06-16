@@ -187,36 +187,93 @@ class Device
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
         refreshPresentSemaphores();
         pipelineService.bindDevice(device, std::cref(rtCapabilities_));
+
+        // Prime the first frame's acquire so beginFrame() can immediately consume it.
+        presentationContext.issueFirstAcquire();
     }
 
     [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max())
     {
-        auto &frame = frameManager.current();
-        nrAssert(frame.waitForFence(), "Device::beginFrame timeout waiting for frame fence.");
+        using ProfileClock = std::chrono::steady_clock;
+        auto profileMark = ProfileClock::now();
+        auto elapsedMicros = [&profileMark]() {
+            auto now = ProfileClock::now();
+            auto us = std::chrono::duration<double, std::micro>(now - profileMark).count();
+            profileMark = now;
+            return us;
+        };
+        static double accumFence = 0.0, accumResetResourcePool = 0.0, accumResetVmaPool = 0.0;
+        static double accumResetFence = 0.0, accumResetCmdPools = 0.0, accumPreparePools = 0.0;
+        static std::uint32_t beginProfileCount = 0;
 
+        auto &frame = frameManager.current();
         const auto frameIndex = static_cast<std::uint32_t>(frameManager.currentIndex());
+        nrAssert(frame.waitForFence(), "Device::beginFrame timeout waiting for frame fence.");
+        accumFence += elapsedMicros();
+
+        // After this frame slot's fence: its previous final submit has completed, meaning the
+        // imageAvailable wait bound to THIS frame slot was executed. Return that slot to the pool.
+        presentationContext.returnAcquireSemaphore(frameIndex);
+
         resourcePool.resetFrame(frameIndex);
+        accumResetResourcePool += elapsedMicros();
+
         memoryAllocator.resetFramePool(frameIndex);
+        accumResetVmaPool += elapsedMicros();
 
         frame.resetFence();
+        accumResetFence += elapsedMicros();
+
         frame.resetPools();
+        accumResetCmdPools += elapsedMicros();
+
         const auto workerCount = std::min<std::uint32_t>(maxThreads, std::max(1u, std::thread::hardware_concurrency()));
         frame.prepareSecondaryPools(workerCount, workerCount, 0u);
+        accumPreparePools += elapsedMicros();
 
-        auto acquire = presentationContext.acquireNextImage(frame.imageAvailable(), acquireTimeout);
+        // Consume the pre-acquired image (issued at end of previous presentFrame or initialize).
+        // If the pending acquire is absent (e.g., after a recreate that failed), issue now.
+        if (!presentationContext.hasPendingAcquire())
+        {
+            presentationContext.issueNextAcquire(acquireTimeout);
+        }
+
+        auto acquire = presentationContext.consumePendingAcquire(frameIndex);
+
         if (PresentationContext::needsSwapchainRecreate(acquire.result))
         {
             presentationContext.recreate(physicalDevice, device, queueManager);
             refreshPresentSemaphores();
-            acquire = presentationContext.acquireNextImage(frame.imageAvailable(), acquireTimeout);
+            presentationContext.issueNextAcquire(acquireTimeout);
+            acquire = presentationContext.consumePendingAcquire(frameIndex);
         }
 
         nrAssert(acquire.result != vk::Result::eErrorOutOfDateKHR, "Device::beginFrame failed to acquire a valid swapchain image after recreation.");
+
+        // Inject the borrowed semaphore into the current frame context for use in submitFrameBatch.
+        frame.setBorrowedAcquireSemaphore(&presentationContext.borrowedAcquireSemaphore(frameIndex));
 
         presentationContext.setActiveSwapchainImage(acquire.imageIndex);
         presentationContext.setFrameSubmitted(false);
         frameSubmitCount_ = 0;
         frameFinalSubmitRole_.reset();
+
+        ++beginProfileCount;
+        constexpr auto kBeginProfileWindow = 1000u;
+        if (beginProfileCount >= kBeginProfileWindow)
+        {
+            auto inv = 1.0 / static_cast<double>(beginProfileCount);
+            nrInfo(std::format(
+                "beginFrame sub-phase avg over {} frames (us): "
+                "waitFence={:.1f} resetResourcePool={:.1f} resetVmaPool={:.1f} "
+                "resetFence={:.1f} resetCmdPools={:.1f} preparePools={:.1f}",
+                beginProfileCount,
+                accumFence * inv, accumResetResourcePool * inv, accumResetVmaPool * inv,
+                accumResetFence * inv, accumResetCmdPools * inv, accumPreparePools * inv));
+            accumFence = 0; accumResetResourcePool = 0; accumResetVmaPool = 0;
+            accumResetFence = 0; accumResetCmdPools = 0; accumPreparePools = 0;
+            beginProfileCount = 0;
+        }
 
         return FrameBeginResult{
             .frameIndex = frameIndex,
@@ -329,6 +386,13 @@ class Device
         {
             presentationContext.recreate(physicalDevice, device, queueManager);
             refreshPresentSemaphores();
+            // After recreate the acquire pool was rebuilt; issue fresh acquire.
+            presentationContext.issueNextAcquire();
+        }
+        else
+        {
+            // Issue next frame's acquire immediately while GPU is busy rendering.
+            presentationContext.issueNextAcquire();
         }
 
         frameManager.advanceFrame();

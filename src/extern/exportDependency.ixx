@@ -564,6 +564,7 @@ export using ::VkImage;
 export using ::VkImageCreateInfo;
 export using ::VkImageView;
 export using ::VkInstance;
+export using ::VkPipeline;
 export using ::VkImportMemoryHostPointerInfoEXT;
 export using ::VkAllocationCallbacks;
 export using ::VkMemoryAllocateInfo;

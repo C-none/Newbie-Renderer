@@ -103,18 +103,21 @@ class FrameContext
         vk::FenceCreateInfo fenceInfo{vk::FenceCreateFlagBits::eSignaled};
         fence_ = vk::raii::Fence(device, fenceInfo);
 
-        // Create semaphores for frame synchronization
+        // renderFinished semaphore is owned here; imageAvailable is borrowed from
+        // the PresentationContext acquire pool and injected at frame-begin.
         vk::SemaphoreCreateInfo semaphoreInfo{};
-        imageAvailable_ = vk::raii::Semaphore(device, semaphoreInfo);
         renderFinished_ = vk::raii::Semaphore(device, semaphoreInfo);
 
-        // Create primary pools (one per queue type, main thread only)
-        // Use TRANSIENT flag for better performance with short-lived buffers
-        graphicsPrimary_ = CommandPool(device, graphicsConfig.queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
+        // Create primary pools (one per queue type, main thread only).
+        // Primary command buffers are retained and individually reset every frame,
+        // so pools must allow vkResetCommandBuffer.
+        constexpr auto primaryPoolFlags = vk::CommandPoolCreateFlagBits::eTransient |
+                                          vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+        graphicsPrimary_ = CommandPool(device, graphicsConfig.queueFamilyIndex, primaryPoolFlags);
 
-        computePrimary_ = CommandPool(device, computeConfig.queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
+        computePrimary_ = CommandPool(device, computeConfig.queueFamilyIndex, primaryPoolFlags);
 
-        transferPrimary_ = CommandPool(device, transferConfig.queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
+        transferPrimary_ = CommandPool(device, transferConfig.queueFamilyIndex, primaryPoolFlags);
     }
 
     // Move-only semantics
@@ -162,12 +165,8 @@ class FrameContext
      */
     void resetPools()
     {
-        // Reset primary pools
-        graphicsPrimary_.reset();
-        computePrimary_.reset();
-        transferPrimary_.reset();
-
-        // Reset all prepared secondary pools.
+        // Retained primary command buffers are individually reset by their owner
+        // after this frame's fence is signaled. Reset only transient secondary pools.
         resetPreparedSecondaryPools(graphicsSecondary_, graphicsPreparedSecondaryWorkers_);
         resetPreparedSecondaryPools(computeSecondary_, computePreparedSecondaryWorkers_);
         resetPreparedSecondaryPools(transferSecondary_, transferPreparedSecondaryWorkers_);
@@ -233,12 +232,25 @@ class FrameContext
     }
 
     /**
-     * @brief Get image available semaphore (signaled by swapchain acquire)
-     * @return Reference to vk::raii::Semaphore
+     * @brief Inject the pre-acquired image-available semaphore for this frame.
+     *
+     * Called by Device::beginFrame() after consuming the pending acquire from
+     * PresentationContext. The semaphore is owned by the acquire pool; this frame
+     * holds a non-owning pointer valid until Device::beginFrame() calls
+     * PresentationContext::returnAcquireSemaphore() on the next cycle.
+     */
+    void setBorrowedAcquireSemaphore(const vk::raii::Semaphore *semaphore) noexcept
+    {
+        borrowedAcquireSemaphore_ = semaphore;
+    }
+
+    /**
+     * @brief Get the image-available semaphore borrowed from the acquire pool.
      */
     [[nodiscard]] const vk::raii::Semaphore &imageAvailable() const noexcept
     {
-        return imageAvailable_;
+        nrAssert(borrowedAcquireSemaphore_ != nullptr, "FrameContext::imageAvailable requires a borrowed acquire semaphore (call setBorrowedAcquireSemaphore first).");
+        return *borrowedAcquireSemaphore_;
     }
 
     /**
@@ -277,7 +289,8 @@ class FrameContext
         transferQueueFamily_ = other.transferQueueFamily_;
 
         fence_ = std::move(other.fence_);
-        imageAvailable_ = std::move(other.imageAvailable_);
+        borrowedAcquireSemaphore_ = other.borrowedAcquireSemaphore_;
+        other.borrowedAcquireSemaphore_ = nullptr;
         renderFinished_ = std::move(other.renderFinished_);
 
         graphicsPrimary_ = std::move(other.graphicsPrimary_);
@@ -412,9 +425,11 @@ class FrameContext
     std::uint32_t computeQueueFamily_ = 0;
     std::uint32_t transferQueueFamily_ = 0;
 
-    // Synchronization primitives (frame-owned)
+    // Synchronization primitives
     vk::raii::Fence fence_ = {nullptr};
-    vk::raii::Semaphore imageAvailable_ = {nullptr};
+    // Non-owning pointer to a semaphore slot in PresentationContext::acquirePool_.
+    // Injected at beginFrame(), valid until returnAcquireSemaphore() at next beginFrame().
+    const vk::raii::Semaphore *borrowedAcquireSemaphore_ = nullptr;
     vk::raii::Semaphore renderFinished_ = {nullptr};
 
     // Graphics queue pools

@@ -158,8 +158,7 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
  * @brief Common factory: transfer-write buffer -> shader-read buffer.
  */
 [[nodiscard]] inline vk::BufferMemoryBarrier2 makeBufferTransferWriteToShaderReadBarrier(
-    const Buffer& buffer, vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eMeshShaderEXT |
-                                         vk::PipelineStageFlagBits2::eComputeShader,
+    const Buffer& buffer, vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eFragmentShader,
     vk::DeviceSize offset = 0,
     vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max())
 {
@@ -366,8 +365,8 @@ template <ImageTransitionBranch TBranch>
 [[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageTransitionBarrier(
     const Image& image,
     vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+    vk::PipelineStageFlags2 srcStages,
+    vk::AccessFlags2 srcAccess,
     vk::PipelineStageFlags2 dstStages = detail::imageTransitionDefaultDstStages<TBranch>(),
     vk::AccessFlags2 dstAccess = detail::imageTransitionDefaultDstAccess<TBranch>())
 {
@@ -379,166 +378,6 @@ template <ImageTransitionBranch TBranch>
         srcAccess,
         dstStages,
         dstAccess);
-}
-
-/**
- * @brief Generic image transition helper to transfer-src layout.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageToTransferSrcBarrier(
-    const Image& image,
-    vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
-{
-    return makeImageTransitionBarrier<ImageTransitionBranch::TransferSrc>(
-        image,
-        oldLayout,
-        srcStages,
-        srcAccess);
-}
-
-/**
- * @brief Generic image transition helper to transfer-dst layout.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageToTransferDstBarrier(
-    const Image& image,
-    vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
-{
-    return makeImageTransitionBarrier<ImageTransitionBranch::TransferDst>(
-        image,
-        oldLayout,
-        srcStages,
-        srcAccess);
-}
-
-/**
- * @brief Generic image transition helper to shader-read-only layout.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageToShaderReadOnlyBarrier(
-    const Image& image,
-    vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-    vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eFragmentShader |
-                                         vk::PipelineStageFlagBits2::eComputeShader)
-{
-    return makeImageTransitionBarrier<ImageTransitionBranch::ShaderReadOnly>(
-        image,
-        oldLayout,
-        srcStages,
-        srcAccess,
-        dstStages,
-        detail::imageTransitionDefaultDstAccess<ImageTransitionBranch::ShaderReadOnly>());
-}
-
-/**
- * @brief Generic image transition helper to general layout.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageToGeneralBarrier(
-    const Image& image,
-    vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-    vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 dstAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
-{
-    return makeImageTransitionBarrier<ImageTransitionBranch::General>(
-        image,
-        oldLayout,
-        srcStages,
-        srcAccess,
-        dstStages,
-        dstAccess);
-}
-
-/**
- * @brief Generic image transition helper to color-attachment layout.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageToColorAttachmentBarrier(
-    const Image& image,
-    vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
-{
-    return makeImageTransitionBarrier<ImageTransitionBranch::ColorAttachment>(
-        image,
-        oldLayout,
-        srcStages,
-        srcAccess);
-}
-
-/**
- * @brief Generic image transition helper to depth-stencil-attachment layout.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageToDepthStencilAttachmentBarrier(
-    const Image& image,
-    vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
-{
-    return makeImageTransitionBarrier<ImageTransitionBranch::DepthStencilAttachment>(
-        image,
-        oldLayout,
-        srcStages,
-        srcAccess);
-}
-
-/**
- * @brief Generic image transition helper to present-src layout.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageToPresentSrcBarrier(
-    const Image& image,
-    vk::ImageLayout oldLayout,
-    vk::PipelineStageFlags2 srcStages = vk::PipelineStageFlagBits2::eAllCommands,
-    vk::AccessFlags2 srcAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
-{
-    return makeImageTransitionBarrier<ImageTransitionBranch::PresentSrc>(
-        image,
-        oldLayout,
-        srcStages,
-        srcAccess);
-}
-
-/**
- * @brief Common factory: undefined image -> transfer-dst image.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageUndefinedToTransferDstBarrier(const Image& image)
-{
-    return makeImageToTransferDstBarrier(
-        image,
-        vk::ImageLayout::eUndefined,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        {});
-}
-
-/**
- * @brief Common factory: transfer-dst image -> shader-read image.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageTransferDstToShaderReadBarrier(
-    const Image& image,
-    vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eFragmentShader |
-                                         vk::PipelineStageFlagBits2::eComputeShader)
-{
-    return makeImageToShaderReadOnlyBarrier(
-        image,
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::PipelineStageFlagBits2::eTransfer,
-        vk::AccessFlagBits2::eTransferWrite,
-        dstStages);
-}
-
-/**
- * @brief Common factory: color-attachment image -> present image.
- */
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageColorAttachmentToPresentBarrier(const Image& image)
-{
-    return makeImageToPresentSrcBarrier(
-        image,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::AccessFlagBits2::eColorAttachmentWrite);
 }
 
 /**
@@ -607,28 +446,30 @@ struct QueueOwnershipWait
 }
 
 /**
- * @brief Full queue-family hand-off plan: release, optional semaphore wait, and acquire.
+ * @brief Full queue-family hand-off plan: a single queue-family pair plus the
+ *        release-side and acquire-side stage/access scopes.
  *
- * The release and acquire descriptions must mirror the same queue-family pair.
- * The semaphore wait is optional for generic use, but upload paths require it
- * whenever ownership is acquired into the transfer queue from another queue.
+ * The queue-family pair is stored once at the top level, so release and acquire
+ * always describe the same hand-off direction by construction. The semaphore
+ * wait is optional for generic use, but upload paths require it whenever
+ * ownership is acquired into the transfer queue from another queue.
  */
 struct QueueOwnershipTransfer
 {
-    QueueOwnershipRequest release{};
-    QueueOwnershipRequest acquire{
-        .stages = vk::PipelineStageFlagBits2::eAllCommands,
-        .access = vk::AccessFlagBits2::eMemoryRead,
-    };
+    std::uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    std::uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
+    QueueAccessScope release{};
+    QueueAccessScope acquire{};
     vk::Semaphore waitSemaphore{};
     std::uint64_t waitValue = 0;
 
     [[nodiscard]] bool valid() const noexcept
     {
-        return release.valid() &&
-               acquire.valid() &&
-               release.srcQueueFamilyIndex == acquire.srcQueueFamilyIndex &&
-               release.dstQueueFamilyIndex == acquire.dstQueueFamilyIndex;
+        return srcQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+               dstQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+               srcQueueFamilyIndex != dstQueueFamilyIndex &&
+               release.valid() &&
+               acquire.valid();
     }
 
     [[nodiscard]] bool hasWait() const noexcept
@@ -644,9 +485,15 @@ struct QueueOwnershipTransfer
     const QueueAccessScope& acquireScope,
     std::optional<QueueOwnershipWait> wait = std::nullopt)
 {
+    nrAssert(
+        releaseScope.valid() && acquireScope.valid(),
+        "makeQueueOwnershipTransfer requires non-empty release/acquire stage masks.");
+
     auto transfer = QueueOwnershipTransfer{
-        .release = makeQueueOwnershipRequest(srcQueueFamilyIndex, dstQueueFamilyIndex, releaseScope),
-        .acquire = makeQueueOwnershipRequest(srcQueueFamilyIndex, dstQueueFamilyIndex, acquireScope),
+        .srcQueueFamilyIndex = srcQueueFamilyIndex,
+        .dstQueueFamilyIndex = dstQueueFamilyIndex,
+        .release = releaseScope,
+        .acquire = acquireScope,
     };
 
     if (wait.has_value())
@@ -674,8 +521,8 @@ struct BufferUploadOwnershipPlan
     [[nodiscard]] bool isSameQueueFamily() const noexcept
     {
         return !acquireToTransfer.has_value() &&
-               releaseToDestination.release.srcQueueFamilyIndex ==
-                   releaseToDestination.release.dstQueueFamilyIndex;
+               releaseToDestination.srcQueueFamilyIndex ==
+                   releaseToDestination.dstQueueFamilyIndex;
     }
 
     [[nodiscard]] bool valid(std::uint32_t transferQueueFamilyIndex) const noexcept
@@ -683,89 +530,24 @@ struct BufferUploadOwnershipPlan
         // Same-queue-family plans have a different validation path
         if (isSameQueueFamily())
         {
-            return releaseToDestination.release.srcQueueFamilyIndex == transferQueueFamilyIndex &&
-                   releaseToDestination.release.stages != vk::PipelineStageFlags2{} &&
-                   releaseToDestination.acquire.stages != vk::PipelineStageFlags2{};
+            return releaseToDestination.srcQueueFamilyIndex == transferQueueFamilyIndex &&
+                   releaseToDestination.release.valid() &&
+                   releaseToDestination.acquire.valid();
         }
 
         auto outgoingValid =
             releaseToDestination.valid() &&
-            releaseToDestination.release.srcQueueFamilyIndex == transferQueueFamilyIndex &&
-            releaseToDestination.acquire.srcQueueFamilyIndex == transferQueueFamilyIndex;
+            releaseToDestination.srcQueueFamilyIndex == transferQueueFamilyIndex;
 
         auto incomingValid =
             !acquireToTransfer.has_value() ||
             (acquireToTransfer->valid() &&
              acquireToTransfer->hasWait() &&
-             acquireToTransfer->release.dstQueueFamilyIndex == transferQueueFamilyIndex &&
-             acquireToTransfer->acquire.dstQueueFamilyIndex == transferQueueFamilyIndex);
+             acquireToTransfer->dstQueueFamilyIndex == transferQueueFamilyIndex);
 
         return outgoingValid && incomingValid;
     }
 };
-
-/**
- * @brief Helper bundle for upload ownership setup across source/transfer/destination queues.
- *
- * `sourceReleaseToTransfer` must be recorded by the source queue command buffer
- * before invoking upload when source queue family differs from transfer.
- */
-struct UploadQueueOwnershipBundle
-{
-    std::optional<QueueOwnershipRequest> sourceReleaseToTransfer;
-    BufferUploadOwnershipPlan uploadPlan{};
-};
-
-/**
- * @brief Build a consistent upload ownership bundle and remove hand-written duplication.
- *
- * - Always emits transfer -> destination ownership transfer in `uploadPlan.releaseToDestination`.
- * - Optionally emits source -> transfer ownership transfer with wait payload.
- * - When source queue family equals transfer queue family, incoming transfer acquire is omitted.
- */
-[[nodiscard]] inline UploadQueueOwnershipBundle makeUploadQueueOwnershipBundle(
-    std::uint32_t sourceQueueFamilyIndex,
-    std::uint32_t transferQueueFamilyIndex,
-    std::uint32_t destinationQueueFamilyIndex,
-    const QueueAccessScope& sourceReleaseScope,
-    const QueueAccessScope& destinationAcquireScope,
-    std::optional<QueueOwnershipWait> sourceReleaseWait = std::nullopt,
-    const QueueAccessScope& transferWriteScope = QueueAccessScope{
-        .stages = vk::PipelineStageFlagBits2::eTransfer,
-        .access = vk::AccessFlagBits2::eTransferWrite,
-    })
-{
-    nrAssert(
-        destinationQueueFamilyIndex != transferQueueFamilyIndex,
-        "makeUploadQueueOwnershipBundle requires destination queue family different from transfer queue family.");
-
-    UploadQueueOwnershipBundle bundle{};
-    bundle.uploadPlan.releaseToDestination = makeQueueOwnershipTransfer(
-        transferQueueFamilyIndex,
-        destinationQueueFamilyIndex,
-        transferWriteScope,
-        destinationAcquireScope);
-
-    if (sourceQueueFamilyIndex == transferQueueFamilyIndex)
-    {
-        return bundle;
-    }
-
-    nrAssert(
-        sourceReleaseWait.has_value() && sourceReleaseWait->valid(),
-        "makeUploadQueueOwnershipBundle requires a valid sourceReleaseWait when source queue family differs from transfer queue family.");
-
-    auto sourceToTransfer = makeQueueOwnershipTransfer(
-        sourceQueueFamilyIndex,
-        transferQueueFamilyIndex,
-        sourceReleaseScope,
-        transferWriteScope,
-        sourceReleaseWait);
-
-    bundle.sourceReleaseToTransfer = sourceToTransfer.release;
-    bundle.uploadPlan.acquireToTransfer = sourceToTransfer;
-    return bundle;
-}
 
 /**
  * @brief Generic buffer queue-ownership barrier (sync2).
@@ -821,15 +603,25 @@ template <OwnershipBarrierPhase TOwnershipPhase>
 namespace detail
 {
 template <OwnershipBarrierPhase TOwnershipPhase>
-[[nodiscard]] inline const QueueOwnershipRequest& selectOwnershipRequest(const QueueOwnershipTransfer& transfer)
+[[nodiscard]] inline QueueOwnershipRequest selectOwnershipRequest(const QueueOwnershipTransfer& transfer)
 {
     if constexpr (TOwnershipPhase == OwnershipBarrierPhase::Release)
     {
-        return transfer.release;
+        return QueueOwnershipRequest{
+            .srcQueueFamilyIndex = transfer.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = transfer.dstQueueFamilyIndex,
+            .stages = transfer.release.stages,
+            .access = transfer.release.access,
+        };
     }
     else
     {
-        return transfer.acquire;
+        return QueueOwnershipRequest{
+            .srcQueueFamilyIndex = transfer.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = transfer.dstQueueFamilyIndex,
+            .stages = transfer.acquire.stages,
+            .access = transfer.acquire.access,
+        };
     }
 }
 } // namespace detail
@@ -1541,9 +1333,9 @@ class UploadReadbackContext
     [[nodiscard]] vk::BufferMemoryBarrier2 makeAcquireBarrier(const BufferUploadTicket& ticket) const
     {
         nrAssert(ticket.valid(), "UploadReadbackContext::makeAcquireBarrier requires a valid ticket.");
-        return makeBufferOwnershipBarrier<OwnershipBarrierPhase::Acquire>(
+        return makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
             ticket.buffer->get(),
-            ticket.ownership->acquire,
+            *ticket.ownership,
             ticket.dstOffset,
             ticket.size);
     }
@@ -1564,11 +1356,11 @@ class UploadReadbackContext
     [[nodiscard]] vk::ImageMemoryBarrier2 makeImageAcquireBarrier(const ImageUploadTicket& ticket) const
     {
         nrAssert(ticket.valid(), "UploadReadbackContext::makeImageAcquireBarrier requires a valid ticket.");
-        return makeImageOwnershipBarrier<OwnershipBarrierPhase::Acquire>(
+        return makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
             ticket.image->get(),
             vk::ImageLayout::eTransferDstOptimal,
             ticket.layout,
-            ticket.ownership->acquire);
+            *ticket.ownership);
     }
 
     /**
@@ -1637,9 +1429,9 @@ class UploadReadbackContext
                 if (uploadedSize == 0 && ownership.acquireToTransfer.has_value())
                 {
                     BarrierBatch transferAcquireBarrier{};
-                    transferAcquireBarrier.add(makeBufferOwnershipBarrier<OwnershipBarrierPhase::Acquire>(
+                    transferAcquireBarrier.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
                         dst,
-                        ownership.acquireToTransfer->acquire,
+                        *ownership.acquireToTransfer,
                         dstOffset,
                         totalSize));
                     pipelineBarrier(commandBuffer, transferAcquireBarrier);
@@ -1656,9 +1448,9 @@ class UploadReadbackContext
                 if (remainingSize == chunkSize)
                 {
                     BarrierBatch releaseBarrier{};
-                    releaseBarrier.add(makeBufferOwnershipBarrier<OwnershipBarrierPhase::Release>(
+                    releaseBarrier.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
                         dst,
-                        ownership.releaseToDestination.release,
+                        ownership.releaseToDestination,
                         dstOffset,
                         totalSize));
                     pipelineBarrier(commandBuffer, releaseBarrier);
@@ -1744,11 +1536,11 @@ class UploadReadbackContext
             if (ownership.acquireToTransfer.has_value())
             {
                 BarrierBatch transferAcquireBarrier{};
-                transferAcquireBarrier.add(makeImageOwnershipBarrier<OwnershipBarrierPhase::Acquire>(
+                transferAcquireBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
                     dst,
                     sourceLayout,
                     vk::ImageLayout::eTransferDstOptimal,
-                    ownership.acquireToTransfer->acquire));
+                    *ownership.acquireToTransfer));
                 pipelineBarrier(commandBuffer, transferAcquireBarrier);
             }
             else
@@ -1799,11 +1591,11 @@ class UploadReadbackContext
             else
             {
                 // Cross-queue: use ownership transfer barrier
-                releaseBarrier.add(makeImageOwnershipBarrier<OwnershipBarrierPhase::Release>(
+                releaseBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
                     dst,
                     vk::ImageLayout::eTransferDstOptimal,
                     destinationLayout,
-                    ownership.releaseToDestination.release));
+                    ownership.releaseToDestination));
             }
             pipelineBarrier(commandBuffer, releaseBarrier);
         }

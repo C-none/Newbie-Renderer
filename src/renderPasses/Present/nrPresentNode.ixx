@@ -31,6 +31,10 @@ struct PresentRuntimeCache
 {
     nr::rhi::PipelineState<nr::rhi::ComputePipeline> pipeline{};
     std::array<std::vector<nr::rhi::ShaderBindingSet>, nr::maxFrameInFlight> convertBindingSetsByFrame{};
+
+    // Pre-allocated per-frame-slot images; avoids vmaCreateImage/vmaDestroyImage every frame.
+    std::array<nr::rhi::Image, nr::maxFrameInFlight> convertedColorImages{};
+    vk::Extent2D allocatedExtent{0, 0};
 };
 
 [[nodiscard]] std::optional<PresentFormatConversion> resolvePresentFormatConversion(vk::Format format)
@@ -92,6 +96,40 @@ struct PresentRuntimeCache
     nr::nrAssert(divisor > 0u, "divideRoundUp requires divisor > 0.");
     return (value + divisor - 1u) / divisor;
 }
+
+void ensureConvertedColorImages(
+    nr::rhi::Device& device,
+    PresentRuntimeCache& runtime,
+    vk::Extent2D extent)
+{
+    if (runtime.allocatedExtent == extent && runtime.convertedColorImages[0].valid())
+    {
+        return;
+    }
+
+    auto imageInfo = vk::ImageCreateInfo{};
+    imageInfo.imageType = vk::ImageType::e2D;
+    imageInfo.format = vk::Format::eR8G8B8A8Unorm;
+    imageInfo.extent = vk::Extent3D{extent.width, extent.height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = vk::SampleCountFlagBits::e1;
+    imageInfo.tiling = vk::ImageTiling::eOptimal;
+    imageInfo.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc;
+    imageInfo.sharingMode = vk::SharingMode::eExclusive;
+    imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+    auto frameSlots = std::views::iota(std::size_t{0}, runtime.convertedColorImages.size());
+    std::ranges::for_each(frameSlots, [&](std::size_t slot) {
+        runtime.convertedColorImages[slot] = device.resourceFactory.createImage(
+            imageInfo, nr::rhi::MemoryUsage::GpuOnly,
+            std::format("Present.ConvertedColor[{}]", slot));
+        nr::nrAssert(runtime.convertedColorImages[slot].valid(),
+            std::format("Present failed to allocate convertedColor image for frame slot {}.", slot));
+    });
+
+    runtime.allocatedExtent = extent;
+}
 } // namespace
 
 export namespace nr::renderPasses
@@ -133,6 +171,10 @@ class PresentNode final : public Node
     {
         device_ = context.device;
         runtime_ = ensurePresentRuntime(context.device.get());
+        nr::rhi::setPipelineDebugName(
+            context.device.get().device,
+            runtime_->pipeline.pipeline.raw(),
+            describe().name + ".Pipeline");
     }
 
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override
@@ -159,17 +201,27 @@ class PresentNode final : public Node
             formatConversion.has_value(),
             std::format("Present node only supports RGBA8/BGRA8 swapchain formats for compute conversion. got={}", vk::to_string(swapchainFormat)));
 
-        auto convertedColor = context.addResource(nr::renderer::GraphTransientImageDesc{
-            .debugName = "Present.ConvertedColor",
-            .lifetime = nr::renderer::ResourceLifetime::GraphTransient,
+        ensureConvertedColorImages(device_->get(), *runtime_, viewportExtent);
+
+        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+        auto const& convertedColorImage = runtime_->convertedColorImages[frameSlot];
+        nr::nrAssert(convertedColorImage.valid(),
+            std::format("Present build: pre-allocated convertedColor image for frame slot {} is invalid.", frameSlot));
+
+        auto convertedColor = context.addResource(nr::renderer::GraphImportedImageDesc{
+            .debugName = std::format("Present.ConvertedColor[{}]", frameSlot),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
             .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
             .format = vk::Format::eR8G8B8A8Unorm,
             .usageIntents = {
                 nr::renderer::ImageUsageIntent::StorageWrite,
                 nr::renderer::ImageUsageIntent::TransferSrc,
             },
-            .initialLayout = nr::renderer::ImageLayoutIntent::General,
+            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
             .aspect = nr::renderer::ImageAspectIntent::Color,
+            .importedResource = std::cref(convertedColorImage),
         });
 
         auto swapchainImage = context.addResource(nr::renderer::GraphImportedSwapchainImageDesc{

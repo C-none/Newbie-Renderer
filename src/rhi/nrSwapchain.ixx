@@ -273,27 +273,180 @@ struct SwapChain
 };
 
 /**
+ * @brief Reusable pool of binary semaphores for outstanding swapchain acquires.
+ *
+ * Vulkan restricts vkAcquireNextImageKHR to binary semaphores only. This pool
+ * decouples semaphore lifetime from frame-in-flight slots so that the next frame
+ * can be acquired immediately after present, while the previous frame's semaphore
+ * is still live inside the GPU pipeline.
+ *
+ * Pool capacity = swapchainImageCount + 1 covers the maximum number of
+ * outstanding acquires the spec allows (swapchainImageCount - minImageCount + 1 ≤ capacity).
+ */
+class AcquireSemaphorePool
+{
+  public:
+    void initialize(const vk::raii::Device &device, std::uint32_t capacity)
+    {
+        semaphores_.clear();
+        freeSlots_.clear();
+        semaphores_.reserve(capacity);
+        freeSlots_.reserve(capacity);
+
+        auto indices = std::views::iota(std::uint32_t{0}, capacity);
+        std::ranges::for_each(indices, [&](std::uint32_t i) {
+            semaphores_.emplace_back(device, vk::SemaphoreCreateInfo{});
+            freeSlots_.push_back(i);
+        });
+    }
+
+    /**
+     * @brief Borrow a free semaphore slot.
+     * @return Slot index to pass back to returnSlot() after the semaphore is consumed by a submit wait.
+     */
+    [[nodiscard]] std::uint32_t borrow()
+    {
+        nrAssert(!freeSlots_.empty(), "AcquireSemaphorePool::borrow exhausted all slots.");
+        auto slot = freeSlots_.back();
+        freeSlots_.pop_back();
+        return slot;
+    }
+
+    /**
+     * @brief Return a slot whose semaphore has been fully consumed by the GPU (wait executed).
+     */
+    void returnSlot(std::uint32_t slot)
+    {
+        nrAssert(slot < semaphores_.size(), "AcquireSemaphorePool::returnSlot slot index out of range.");
+        freeSlots_.push_back(slot);
+    }
+
+    [[nodiscard]] const vk::raii::Semaphore &semaphore(std::uint32_t slot) const
+    {
+        nrAssert(slot < semaphores_.size(), "AcquireSemaphorePool::semaphore slot index out of range.");
+        return semaphores_[slot];
+    }
+
+    [[nodiscard]] bool empty() const noexcept { return semaphores_.empty(); }
+
+  private:
+    std::vector<vk::raii::Semaphore> semaphores_;
+    std::vector<std::uint32_t> freeSlots_;
+};
+
+/**
+ * @brief Tracks a single outstanding (not yet GPU-waited) acquire result.
+ */
+struct PendingAcquire
+{
+    std::uint32_t semaphoreSlot = 0;
+    std::uint32_t imageIndex = 0;
+};
+
+/**
  * @brief Internal presentation lifecycle service.
  *
  * Lifetime contract: owns Surface + SwapChain and all present contract checks for
  * one Device instance after initialize() until Device destruction.
+ *
+ * Acquire lifecycle (post-present acquire):
+ *   1. initialize() calls issueFirstAcquire() to prime the first frame.
+ *   2. presentFrame() calls issueNextAcquire() immediately after vkQueuePresentKHR returns.
+ *   3. beginFrame() calls consumePendingAcquire() to take ownership of the pre-acquired
+ *      semaphore slot + image index for the coming frame.
+ *   4. submitFrameBatch(signalForPresent=true) waits on the borrowed semaphore via addWait().
+ *   5. After the final submit fence is signaled (next beginFrame waitForFence), the borrowed
+ *      semaphore slot is returned to the pool via returnAcquireSemaphore().
  */
 class PresentationContext
 {
   public:
     void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, std::string_view appName, const SwapChainConfig &config, std::uint32_t presentQueueFamily)
     {
+        device_ = std::cref(device);
         config_ = config;
         presentQueueFamily_ = presentQueueFamily;
         surface_ = Surface::create(instance, appName);
         ensurePresentSupport(physicalDevice);
         swapChain_ = SwapChain::create(physicalDevice, device, surface_.surface, surface_.extent, config_);
         surface_.format = swapChain_.format;
+
+        auto poolCapacity = swapChain_.swapChainImages.size() + 1u;
+        acquirePool_.initialize(device, static_cast<std::uint32_t>(poolCapacity));
     }
 
-    [[nodiscard]] AcquireResult acquireNextImage(const vk::raii::Semaphore &imageAvailable, std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max()) const
+    /**
+     * @brief Issue the very first acquire at the start of the application.
+     *
+     * Must be called once after initialize(), before the first beginFrame().
+     */
+    void issueFirstAcquire(std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max())
     {
-        return swapChain_.acquireNextImage(imageAvailable, timeout);
+        nrAssert(!pendingAcquire_.has_value(), "PresentationContext::issueFirstAcquire called while a pending acquire already exists.");
+        issuePendingAcquireImpl(timeout);
+    }
+
+    /**
+     * @brief Issue acquire for the next frame immediately after present.
+     *
+     * On eErrorOutOfDateKHR the pending state is cleared; the caller must recreate
+     * and call issueFirstAcquire() again.
+     */
+    void issueNextAcquire(std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max())
+    {
+        nrAssert(!pendingAcquire_.has_value(), "PresentationContext::issueNextAcquire called while a pending acquire already exists.");
+        issuePendingAcquireImpl(timeout);
+    }
+
+    /**
+     * @brief Consume the pre-acquired image for the coming frame.
+     *
+     * Returns the image index and records the borrowed semaphore slot against the
+     * given frame slot. The caller must call returnAcquireSemaphore(frameSlot) only
+     * after that frame slot's fence is signaled (the imageAvailable wait executed).
+     */
+    [[nodiscard]] AcquireResult consumePendingAcquire(std::uint32_t frameSlot)
+    {
+        nrAssert(pendingAcquire_.has_value(), "PresentationContext::consumePendingAcquire requires a pending acquire.");
+        nrAssert(frameSlot < borrowedAcquireSlotByFrame_.size(), "PresentationContext::consumePendingAcquire frameSlot out of range.");
+        nrAssert(!borrowedAcquireSlotByFrame_[frameSlot].has_value(), "PresentationContext::consumePendingAcquire frame slot still holds an un-returned acquire semaphore.");
+        auto pending = *pendingAcquire_;
+        pendingAcquire_.reset();
+        borrowedAcquireSlotByFrame_[frameSlot] = pending.semaphoreSlot;
+        return AcquireResult{.imageIndex = pending.imageIndex, .result = vk::Result::eSuccess};
+    }
+
+    /**
+     * @brief Return the acquire semaphore slot bound to a frame slot.
+     *
+     * Call once per frame after waitForFence(frameSlot) confirms that frame's
+     * final submit has completed (meaning the imageAvailable wait was executed).
+     */
+    void returnAcquireSemaphore(std::uint32_t frameSlot)
+    {
+        nrAssert(frameSlot < borrowedAcquireSlotByFrame_.size(), "PresentationContext::returnAcquireSemaphore frameSlot out of range.");
+        if (borrowedAcquireSlotByFrame_[frameSlot].has_value())
+        {
+            acquirePool_.returnSlot(*borrowedAcquireSlotByFrame_[frameSlot]);
+            borrowedAcquireSlotByFrame_[frameSlot].reset();
+        }
+    }
+
+    /**
+     * @brief Get the semaphore bound to a frame slot's borrowed acquire slot.
+     *
+     * Valid between consumePendingAcquire(frameSlot) and returnAcquireSemaphore(frameSlot).
+     */
+    [[nodiscard]] const vk::raii::Semaphore &borrowedAcquireSemaphore(std::uint32_t frameSlot) const
+    {
+        nrAssert(frameSlot < borrowedAcquireSlotByFrame_.size(), "PresentationContext::borrowedAcquireSemaphore frameSlot out of range.");
+        nrAssert(borrowedAcquireSlotByFrame_[frameSlot].has_value(), "PresentationContext::borrowedAcquireSemaphore requires an active borrowed slot for the frame slot.");
+        return acquirePool_.semaphore(*borrowedAcquireSlotByFrame_[frameSlot]);
+    }
+
+    [[nodiscard]] bool hasPendingAcquire() const noexcept
+    {
+        return pendingAcquire_.has_value();
     }
 
     [[nodiscard]] PresentResult present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore) const
@@ -306,6 +459,18 @@ class PresentationContext
                 presentQueueFamily_,
                 queueManager.compute().queueFamilyIndex()));
         return swapChain_.present(queueManager.compute().handle(), *activeSwapchainImageIndex_, waitSemaphore);
+    }
+
+    /**
+     * @brief Rebuild the acquire semaphore pool after swapchain recreation.
+     */
+    void rebuildAcquirePool()
+    {
+        nrAssert(device_.has_value(), "PresentationContext::rebuildAcquirePool requires device reference from initialize().");
+        pendingAcquire_.reset();
+        std::ranges::for_each(borrowedAcquireSlotByFrame_, [](auto& slot) { slot.reset(); });
+        auto poolCapacity = swapChain_.swapChainImages.size() + 1u;
+        acquirePool_.initialize(device_->get(), static_cast<std::uint32_t>(poolCapacity));
     }
 
     [[nodiscard]] vk::Extent2D swapchainExtent() const noexcept
@@ -424,6 +589,7 @@ class PresentationContext
         auto rebuilt = SwapChain::recreate(physicalDevice, device, surface_.surface, surface_.extent, oldSwapchain, config_);
         surface_.format = rebuilt.format;
         swapChain_ = std::move(rebuilt);
+        rebuildAcquirePool();
     }
 
   private:
@@ -434,11 +600,38 @@ class PresentationContext
             std::format("Compute-present policy requires compute queue family {} to support present.", presentQueueFamily_));
     }
 
+    void issuePendingAcquireImpl(std::uint64_t timeout)
+    {
+        auto slot = acquirePool_.borrow();
+        auto acquireResult = swapChain_.acquireNextImage(acquirePool_.semaphore(slot), timeout);
+
+        if (acquireResult.result == vk::Result::eErrorOutOfDateKHR)
+        {
+            acquirePool_.returnSlot(slot);
+            nrInfo<LogLevel::warning>("PresentationContext::issuePendingAcquireImpl got eErrorOutOfDateKHR; caller must recreate.");
+            return;
+        }
+
+        nrAssert(
+            acquireResult.result == vk::Result::eSuccess || acquireResult.result == vk::Result::eSuboptimalKHR,
+            std::format("PresentationContext::issuePendingAcquireImpl unexpected acquire result: {}", vk::to_string(acquireResult.result)));
+
+        pendingAcquire_ = PendingAcquire{
+            .semaphoreSlot = slot,
+            .imageIndex = acquireResult.imageIndex,
+        };
+    }
+
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     Surface surface_;
     SwapChain swapChain_;
     SwapChainConfig config_{};
     std::uint32_t presentQueueFamily_ = 0;
     std::optional<std::uint32_t> activeSwapchainImageIndex_;
     bool hasSubmittedCurrentFrame_ = false;
+
+    AcquireSemaphorePool acquirePool_{};
+    std::optional<PendingAcquire> pendingAcquire_{};
+    std::array<std::optional<std::uint32_t>, maxFrameInFlight> borrowedAcquireSlotByFrame_{};
 };
 } // namespace nr::rhi

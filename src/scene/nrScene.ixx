@@ -1498,19 +1498,20 @@ class Scene
         nrAssert(transferQueueFamily != graphicsQueueFamily,
                  "Scene Phase4 upload requires distinct transfer and graphics queue families.");
 
-        auto ownershipBundle = nr::rhi::ops::makeUploadQueueOwnershipBundle(
-            transferQueueFamily,
-            transferQueueFamily,
-            graphicsQueueFamily,
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            nr::rhi::ops::QueueAccessScope{
-                .stages = acquireStages,
-                .access = acquireAccess,
-            });
-        return ownershipBundle.uploadPlan;
+        return nr::rhi::ops::BufferUploadOwnershipPlan{
+            .acquireToTransfer = std::nullopt,
+            .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
+                transferQueueFamily,
+                graphicsQueueFamily,
+                nr::rhi::ops::QueueAccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferWrite,
+                },
+                nr::rhi::ops::QueueAccessScope{
+                    .stages = acquireStages,
+                    .access = acquireAccess,
+                }),
+        };
     }
 
     [[nodiscard]] static std::size_t meshUploadBytes(const nr::resource::Mesh &mesh) noexcept

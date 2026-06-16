@@ -16,8 +16,9 @@ import std;
  * - PerFrame:    Short-lived per-frame resources (linear pool, bulk-reset)
  * - StagingTransient: Immediate staging uploads (dedicated staging pool)
  *
- * All GPU buffers automatically include VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
- * for Buffer Device Address (BDA) support.
+ * GpuOnly buffers automatically include VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+ * for Buffer Device Address (BDA) support. Host-mapped CpuToGpu buffers do not, so
+ * pure-staging buffers are not pushed into BAR by VMA's deviceAccess heuristic.
  *
  * Thread Safety:
  * - allocateBuffer/allocateImage are thread-safe (VMA internally synchronized)
@@ -27,8 +28,6 @@ import std;
 export namespace nr::rhi
 {
 
-/// Threshold above which GPU-only buffers get dedicated allocations (4 MiB)
-inline constexpr vk::DeviceSize kDedicatedAllocationThreshold = 4u * 1024u * 1024u;
 
 /**
  * @brief Strategy-based memory allocator for the rendering pipeline
@@ -92,8 +91,13 @@ class MemoryAllocator
      */
     [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const
     {
-        // Add BDA support by default for all non-staging buffers
-        if (usage == MemoryUsage::GpuOnly || usage == MemoryUsage::CpuToGpu)
+        // Add BDA only for device-local buffers. CpuToGpu buffers are host-mapped
+        // (UBOs via descriptor sets, vertex/index via bind, staging rings via copy)
+        // and none consume a device address, so adding eShaderDeviceAddress would only
+        // flip VMA's deviceAccess heuristic and force pure-staging buffers into scarce
+        // BAR memory instead of system RAM. Callers that genuinely need an address
+        // (e.g. shader binding tables) request eShaderDeviceAddress explicitly.
+        if (usage == MemoryUsage::GpuOnly)
         {
             bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
         }
@@ -108,7 +112,7 @@ class MemoryAllocator
         switch (strategy)
         {
         case AllocationStrategy::CrossFrame:
-            configureCrossFrame(allocInfo, usage, size);
+            configureCrossFrame(allocInfo, usage);
             break;
 
         case AllocationStrategy::PerFrame:
@@ -134,8 +138,10 @@ class MemoryAllocator
         // Convert to C struct and delegate
         VkBufferCreateInfo bufferInfo = static_cast<VkBufferCreateInfo>(createInfo);
 
-        // Add BDA for GPU-visible buffers
-        if (usage == MemoryUsage::GpuOnly || usage == MemoryUsage::CpuToGpu)
+        // Add BDA only for device-local buffers (see size/usage overload for rationale):
+        // CpuToGpu buffers never consume a device address, and auto-adding one would push
+        // pure-staging buffers into BAR via VMA's deviceAccess heuristic.
+        if (usage == MemoryUsage::GpuOnly)
         {
             bufferInfo.usage |= static_cast<VkBufferUsageFlags>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
         }
@@ -145,7 +151,7 @@ class MemoryAllocator
         switch (strategy)
         {
         case AllocationStrategy::CrossFrame:
-            configureCrossFrame(allocInfo, usage, bufferInfo.size);
+            configureCrossFrame(allocInfo, usage);
             break;
         case AllocationStrategy::PerFrame:
             configurePerFrame(allocInfo, frameIndex);
@@ -166,10 +172,13 @@ class MemoryAllocator
      * @brief Allocate a GPU image with VMA
      *
      * Images are always CrossFrame — per-frame image pools are not
-     * typically useful. Uses DEDICATED_MEMORY_BIT for large images
-     * and render targets.
+     * typically useful. VMA automatically uses dedicated allocation when the
+     * driver reports requiresDedicatedAllocation/prefersDedicatedAllocation
+     * (common for render targets and large textures on NVIDIA). No explicit
+     * DEDICATED_MEMORY_BIT is set to avoid VUID-VkMemoryAllocateInfo-pNext-02806
+     * when profilers inject VkImportMemoryHostPointerInfoEXT.
      *
-    * @param imageInfo   Vulkan image create info (Vulkan-hpp type)
+     * @param imageInfo   Vulkan image create info (Vulkan-hpp type)
      * @param usage       Memory usage (typically GpuOnly)
      * @return RAII VmaImage
      */
@@ -178,23 +187,11 @@ class MemoryAllocator
         VmaAllocationCreateInfo allocInfo{};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-        // Apply host access for non-GPU-only images (e.g., readback)
-        // NOTE: Host-accessible images cannot use dedicated allocation due to
-        // VUID-VkMemoryAllocateInfo-pNext-02806 (dedicated allocation conflicts
-        // with VkImportMemoryHostPointerInfoEXT which profilers may inject).
         if (usage == MemoryUsage::GpuToCpu)
         {
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
         }
-        else if (usage == MemoryUsage::GpuOnly)
-        {
-            // Only dedicate large GPU-only images (render targets, large textures)
-            vk::DeviceSize estimatedSize = static_cast<vk::DeviceSize>(imageInfo.extent.width) * imageInfo.extent.height * imageInfo.extent.depth * imageInfo.arrayLayers * 4; // rough estimate
-            if (estimatedSize >= kDedicatedAllocationThreshold)
-            {
-                allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-            }
-        }
+        // GpuOnly: no flags needed — VMA defers dedicated decision to driver query results.
 
         return vma_.createImage(imageInfo, allocInfo);
     }
@@ -364,42 +361,52 @@ class MemoryAllocator
      * @brief Configure VMA allocation info for CrossFrame strategy
      *
      * Long-lived resources in the default VMA pool.
-     * - GpuOnly:  DEVICE_LOCAL, dedicated for large buffers
-     * - CpuToGpu: Tries ReBAR (HOST_VISIBLE + DEVICE_LOCAL) first,
-     *             falls back to DEVICE_LOCAL with staging transfer
+     * - GpuOnly:  DEVICE_LOCAL. VMA automatically handles dedicated allocation when
+     *             the driver reports requiresDedicatedAllocation/prefersDedicatedAllocation
+     *             via vkGetBufferMemoryRequirements2. No explicit DEDICATED_MEMORY_BIT is
+     *             set here because doing so forces VkMemoryDedicatedAllocateInfo into the
+     *             pNext chain, which conflicts with VkImportMemoryHostPointerInfoEXT that
+     *             profilers (NSight, RenderDoc) may inject — VUID-VkMemoryAllocateInfo-pNext-02806.
+     * - CpuToGpu: HOST_VISIBLE, persistently mapped (ReBAR HOST_VISIBLE+DEVICE_LOCAL
+     *             when available, otherwise plain HOST_VISIBLE). Always mappable.
      * - GpuToCpu: HOST_VISIBLE + HOST_CACHED for CPU reads
      * - CpuOnly:  HOST_VISIBLE + MAPPED
-     *
-     * NOTE: Dedicated allocation (DEDICATED_MEMORY_BIT) is only applied to
-     * GpuOnly buffers. Host-accessible buffers must NOT use dedicated allocation
-     * because it conflicts with VkImportMemoryHostPointerInfoEXT (which profilers
-     * like NSight may inject). See VUID-VkMemoryAllocateInfo-pNext-02806.
      */
-    static void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage, vk::DeviceSize size)
+    static void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage)
     {
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
         switch (usage)
         {
         case MemoryUsage::GpuOnly:
-            // Large GPU-only buffers get dedicated allocations
-            // This is safe because GPU-only memory won't have host pointer imports
-            if (size >= kDedicatedAllocationThreshold)
-            {
-                allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-            }
+            // No explicit flags: VMA selects DEVICE_LOCAL and will use a dedicated
+            // VkDeviceMemory only when the driver requires or prefers it for this resource.
             break;
 
         case MemoryUsage::CpuToGpu:
-            // Try ReBAR first, fall back to device-local + staging
-            // NOTE: Do NOT use DEDICATED_MEMORY_BIT here - it conflicts with
-            // VkImportMemoryHostPointerInfoEXT that profilers may inject
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            // CpuToGpu is contractually host-writable and persistently mapped: every
+            // CpuToGpu user maps the allocation (dynamic UBOs, staging rings, etc.).
+            // Do NOT set HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT here: that bit lets VMA
+            // place the buffer in non-host-visible memory, which silently drops the
+            // mapping and breaks every mapped() caller on non-ReBAR configurations.
+            //
+            // Why a single CpuToGpu is sufficient (no staging/dynamic enum split):
+            // With AUTO + SEQUENTIAL_WRITE (and no transfer-instead), VMA forces a
+            // HOST_VISIBLE type, then bifurcates on the buffer's *usage* deviceAccess
+            // (see vk_mem_alloc.h selection logic):
+            //   - usage with GPU read (Uniform/Vertex/Index/SBT) => deviceAccess=true
+            //     => DEVICE_LOCAL preferred => lands in BAR (DEVICE_LOCAL|HOST_VISIBLE)
+            //     on the ReBAR target: full-bandwidth GPU reads, write-combined CPU writes.
+            //   - transfer-only usage (TransferSrc staging ring) => deviceAccess=false
+            //     => DEVICE_LOCAL not-preferred => stays in system RAM, leaving scarce
+            //     BAR space free.
+            // So memory placement is driven by buffer usage, not by enum granularity;
+            // one CpuToGpu value already selects the optimal heap per buffer.
+            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
             break;
 
         case MemoryUsage::GpuToCpu:
             // Host-cached for CPU read performance
-            // NOTE: Do NOT use DEDICATED_MEMORY_BIT here - same reason as CpuToGpu
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
             break;
 

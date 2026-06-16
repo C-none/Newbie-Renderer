@@ -285,6 +285,10 @@ class NormalBufferNode final : public Node
             colorFormat = context.device.get().presentationContext.swapchainFormat();
         }
         runtime_ = ensureNormalBufferRuntime(context.device.get(), colorFormat, input.depthFormat);
+        nr::rhi::setPipelineDebugName(
+            context.device.get().device,
+            runtime_->pipeline.pipeline.raw(),
+            describe().name + ".Pipeline");
         
         // Pre-allocate images with initial viewport extent
         // These will be resized in build() if the viewport changes

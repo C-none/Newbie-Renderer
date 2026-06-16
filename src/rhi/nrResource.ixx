@@ -291,7 +291,8 @@ class Buffer
      * @return 64-bit device address for shader access
      *
      * Requires the buffer to have SHADER_DEVICE_ADDRESS_BIT usage
-     * (automatically added by MemoryAllocator for GpuOnly/CpuToGpu).
+     * (automatically added by MemoryAllocator for GpuOnly; CpuToGpu callers
+     * that need an address must request eShaderDeviceAddress explicitly).
      */
     [[nodiscard]] VkDeviceAddress deviceAddress() const
     {

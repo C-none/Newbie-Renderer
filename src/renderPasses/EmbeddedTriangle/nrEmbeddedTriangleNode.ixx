@@ -13,6 +13,8 @@ struct EmbeddedTriangleRuntimeCache
 {
     nr::rhi::PipelineState<nr::rhi::GraphicsPipeline> pipeline{};
     std::array<std::vector<nr::rhi::ShaderBindingSet>, nr::maxFrameInFlight> passBindingSetsByFrame{};
+    // Pre-allocated per-frame-slot uniform buffers; avoids vmaCreateBuffer/vmaDestroyBuffer every frame.
+    std::array<nr::rhi::Buffer, nr::maxFrameInFlight> frameUniformBuffers{};
 };
 
 struct EmbeddedTriangleFrameUniforms
@@ -46,6 +48,17 @@ struct EmbeddedTriangleFrameUniforms
     std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) {
         runtime->passBindingSetsByFrame[frameSlot] =
             nr::rhi::allocateBindingSetsForLayout(runtime->pipeline.layout, runtime->pipeline.bindingPool);
+
+        auto bufferInfo = vk::BufferCreateInfo{};
+        bufferInfo.size = sizeof(EmbeddedTriangleFrameUniforms);
+        bufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+        bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+        runtime->frameUniformBuffers[frameSlot] = device.resourceFactory.createBuffer(
+            bufferInfo,
+            nr::rhi::MemoryUsage::CpuToGpu,
+            std::format("EmbeddedTriangle.FrameUniforms[{}]", frameSlot));
+        nr::nrAssert(runtime->frameUniformBuffers[frameSlot].valid(),
+            std::format("EmbeddedTriangle failed to create frame uniform buffer for frame slot {}.", frameSlot));
     });
 
     return runtime;
@@ -91,6 +104,10 @@ class EmbeddedTriangleNode final : public Node
             colorFormat = context.device.get().presentationContext.swapchainFormat();
         }
         runtime_ = ensureEmbeddedTriangleRuntime(context.device.get(), colorFormat);
+        nr::rhi::setPipelineDebugName(
+            context.device.get().device,
+            runtime_->pipeline.pipeline.raw(),
+            describe().name + ".Pipeline");
     }
 
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override
@@ -127,14 +144,22 @@ class EmbeddedTriangleNode final : public Node
             .viewProjection = input.viewProjection,
         };
 
-        auto frameUniformBuffer = context.addResource(nr::renderer::GraphTransientBufferDesc{
-            .debugName = "EmbeddedTriangle.FrameUniforms",
-            .lifetime = nr::renderer::ResourceLifetime::GraphTransient,
+        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+        auto& frameUniformBufferRef = runtime_->frameUniformBuffers[frameSlot];
+        nr::nrAssert(frameUniformBufferRef.valid(),
+            std::format("EmbeddedTriangle build: pre-allocated frame uniform buffer for frame slot {} is invalid.", frameSlot));
+        frameUniformBufferRef.writeMappedAndFlush(frameUniforms);
+
+        auto frameUniformBuffer = context.addResource(nr::renderer::GraphImportedBufferDesc{
+            .debugName = std::format("EmbeddedTriangle.FrameUniforms[{}]", frameSlot),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
             .size = static_cast<vk::DeviceSize>(sizeof(EmbeddedTriangleFrameUniforms)),
             .usageIntents = {
                 nr::renderer::BufferUsageIntent::Uniform,
             },
-            .memoryUsage = nr::rhi::MemoryUsage::CpuToGpu,
+            .importedResource = std::ref(frameUniformBufferRef),
         });
 
         auto root = runtime_->pipeline.descriptorLayout.rootCursor();
@@ -153,7 +178,6 @@ class EmbeddedTriangleNode final : public Node
         root.clearSnapshot();
 
         auto colorHandle = output.color;
-        auto frameUniformHandle = frameUniformBuffer;
         auto runtime = runtime_;
 
         auto passIntents = std::array{
@@ -167,7 +191,7 @@ class EmbeddedTriangleNode final : public Node
                 .readOnly = false,
             },
             nr::renderer::PassResourceUseDesc{
-                .resource = frameUniformHandle,
+                .resource = frameUniformBuffer,
                 .bufferUsage = nr::renderer::BufferUsageIntent::Uniform,
                 .bufferAccess = nr::renderer::BufferAccessIntent::UniformRead,
                 .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
@@ -259,19 +283,6 @@ class EmbeddedTriangleNode final : public Node
                     nr::rhi::mesh::applyRasterState(commandBuffer, rasterState);
                     commandBuffer.draw(3, 1, 0, 0);
                 }
-            },
-            [frameUniformHandle, frameUniforms](const nr::renderer::PassPrepareContext& prepareContext) {
-                nr::nrAssert(static_cast<bool>(prepareContext.resolveBuffer), "EmbeddedTriangle pass prepare requires buffer resolver callback.");
-
-                auto resolvedBuffer = prepareContext.resolveBuffer(frameUniformHandle);
-                nr::nrAssert(resolvedBuffer.has_value(), "EmbeddedTriangle pass prepare failed to resolve frame-uniform buffer resource.");
-                nr::nrAssert(resolvedBuffer->resource.has_value(), "EmbeddedTriangle pass prepare requires managed frame-uniform buffer resource.");
-
-                auto& frameBuffer = resolvedBuffer->resource->get();
-                nr::nrAssert(frameBuffer.mapped() != nullptr, "EmbeddedTriangle pass prepare requires host-visible frame-uniform buffer.");
-                nr::nrAssert(frameBuffer.size() >= sizeof(EmbeddedTriangleFrameUniforms), "EmbeddedTriangle pass prepare uniform buffer size is smaller than frame uniform payload.");
-
-                frameBuffer.writeMappedAndFlush(frameUniforms);
             });
 
         context.publishOutput("color", output.color);
