@@ -33,6 +33,22 @@ struct BlasGeometryInput
     std::uint32_t primitiveOffset = 0;
 };
 
+struct BlasAabbGeometryInput
+{
+    vk::DeviceAddress dataAddress = 0;
+    vk::DeviceSize stride = sizeof(vk::AabbPositionsKHR);
+    std::uint32_t primitiveCount = 0;
+    std::uint32_t primitiveOffset = 0;
+    vk::GeometryFlagsKHR geometryFlags{};
+};
+
+struct BlasGeometryRecord
+{
+    std::reference_wrapper<const Buffer> geometryBuffer;
+    vk::AccelerationStructureGeometryKHR geometry{};
+    vk::AccelerationStructureBuildRangeInfoKHR range{};
+};
+
 struct TlasBuildInput
 {
     vk::DeviceAddress instancesAddress = 0;
@@ -75,6 +91,14 @@ struct AsBuildSizes
     vk::DeviceSize updateScratchSize = 0;
 };
 
+struct AsIndirectBuildCommand
+{
+    vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    vk::DeviceAddress indirectDeviceAddress = 0;
+    std::uint32_t indirectStride = 0;
+    std::span<const std::uint32_t> maxPrimitiveCounts{};
+};
+
 struct AsBuildLimits
 {
     // Device-side limits relevant to AS query/build helpers.
@@ -103,7 +127,8 @@ class AccelerationStructureResource
         vk::DeviceSize storageOffset,
         vk::DeviceSize accelerationStructureSize,
         vk::AccelerationStructureTypeKHR type,
-        std::string_view name = {})
+        std::string_view name = {},
+        vk::AccelerationStructureCreateFlagsKHR createFlags = {})
     {
         nrAssert(storageBuffer.valid(), "AccelerationStructureResource::create requires a valid storage buffer.");
         nrAssert(accelerationStructureSize > 0, "AccelerationStructureResource::create requires accelerationStructureSize > 0.");
@@ -121,6 +146,7 @@ class AccelerationStructureResource
         result.name_ = name;
 
         vk::AccelerationStructureCreateInfoKHR createInfo{};
+        createInfo.createFlags = createFlags;
         createInfo.buffer = storageBuffer.handle();
         createInfo.offset = storageOffset;
         createInfo.size = accelerationStructureSize;
@@ -196,8 +222,8 @@ class AccelerationStructureResource
     }
 
   private:
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-    std::optional<std::reference_wrapper<const Buffer>> storageBuffer_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
+    std::optional<std::reference_wrapper<const Buffer>> storageBuffer_{};
     vk::DeviceSize storageOffset_ = 0;
     vk::DeviceSize accelerationStructureSize_ = 0;
     vk::AccelerationStructureTypeKHR type_ = vk::AccelerationStructureTypeKHR::eBottomLevel;
@@ -217,6 +243,16 @@ struct BlasBuildRecordInfo
     AsBuildOptions options{};
 };
 
+struct BlasGeometriesBuildRecordInfo
+{
+    const AccelerationStructureResource &dst;
+    std::optional<std::reference_wrapper<const AccelerationStructureResource>> src{};
+    std::span<const BlasGeometryRecord> geometries{};
+    const Buffer &scratchBuffer;
+    vk::DeviceAddress scratchAddress = 0;
+    AsBuildOptions options{};
+};
+
 struct TlasBuildRecordInfo
 {
     const AccelerationStructureResource &dst;
@@ -226,6 +262,27 @@ struct TlasBuildRecordInfo
     vk::DeviceAddress scratchAddress = 0;
     TlasBuildInput buildInput{};
     AsBuildOptions options{};
+};
+
+struct AsCopyRecordInfo
+{
+    const AccelerationStructureResource &src;
+    const AccelerationStructureResource &dst;
+    vk::CopyAccelerationStructureModeKHR mode = vk::CopyAccelerationStructureModeKHR::eClone;
+};
+
+struct AsCopyToDeviceMemoryRecordInfo
+{
+    const AccelerationStructureResource &src;
+    vk::DeviceAddress dstAddress = 0;
+    vk::CopyAccelerationStructureModeKHR mode = vk::CopyAccelerationStructureModeKHR::eSerialize;
+};
+
+struct AsCopyFromDeviceMemoryRecordInfo
+{
+    vk::DeviceAddress srcAddress = 0;
+    const AccelerationStructureResource &dst;
+    vk::CopyAccelerationStructureModeKHR mode = vk::CopyAccelerationStructureModeKHR::eDeserialize;
 };
 
 } // namespace nr::rhi
@@ -304,6 +361,205 @@ template <typename... Args>
     }
 }
 
+[[nodiscard]] inline std::uint32_t geometryPrimitiveCount(const BlasGeometryRecord &record) noexcept
+{
+    return record.range.primitiveCount;
+}
+
+[[nodiscard]] inline ValidationResult validateTriangleGeometry(const vk::AccelerationStructureGeometryTrianglesDataKHR &triangles, const vk::AccelerationStructureBuildRangeInfoKHR &range)
+{
+    if (triangles.vertexStride == 0)
+        return validationFailure("Triangle BLAS geometry requires vertexStride > 0.");
+    if (triangles.maxVertex == 0)
+        return validationFailure("Triangle BLAS geometry requires maxVertex > 0.");
+    if (triangles.vertexData.deviceAddress == 0)
+        return validationFailure("Triangle BLAS geometry requires a non-zero vertex address.");
+    if (range.primitiveCount == 0)
+        return validationFailure("Triangle BLAS geometry requires primitiveCount > 0.");
+
+    if (triangles.indexType == vk::IndexType::eNoneKHR)
+    {
+        if (triangles.indexData.deviceAddress != 0)
+            return validationFailure("Triangle BLAS geometry requires index address == 0 when indexType is VK_INDEX_TYPE_NONE_KHR.");
+    }
+    else if (triangles.indexData.deviceAddress == 0)
+    {
+        return validationFailure("Triangle BLAS geometry requires a non-zero index address when indexType is not VK_INDEX_TYPE_NONE_KHR.");
+    }
+
+    auto requiredIndexAlignment = detail::indexTypeAlignment(triangles.indexType);
+    if (requiredIndexAlignment > 0 && (triangles.indexData.deviceAddress % requiredIndexAlignment) != 0)
+        return validationFailure(formatMessage("Triangle BLAS index address must be aligned to {} bytes.", requiredIndexAlignment));
+
+    if (triangles.transformData.deviceAddress != 0 && (triangles.transformData.deviceAddress % 16) != 0)
+        return validationFailure("Triangle BLAS transform address must be 16-byte aligned when present.");
+
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateAabbGeometry(const vk::AccelerationStructureGeometryAabbsDataKHR &aabbs, const vk::AccelerationStructureBuildRangeInfoKHR &range)
+{
+    if (aabbs.data.deviceAddress == 0)
+        return validationFailure("AABB BLAS geometry requires a non-zero AABB data address.");
+    if (aabbs.stride < sizeof(vk::AabbPositionsKHR))
+        return validationFailure("AABB BLAS geometry stride must be at least sizeof(VkAabbPositionsKHR).");
+    if ((aabbs.stride % 8) != 0)
+        return validationFailure("AABB BLAS geometry stride must be 8-byte aligned.");
+    if (range.primitiveCount == 0)
+        return validationFailure("AABB BLAS geometry requires primitiveCount > 0.");
+
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateBlasGeometryRecord(const BlasGeometryRecord &record)
+{
+    if (!record.geometryBuffer.get().valid())
+        return validationFailure("BLAS geometry record requires a valid geometry input buffer.");
+    if ((record.geometryBuffer.get().usage() & vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR) == vk::BufferUsageFlags{})
+        return validationFailure("BLAS geometry input buffer must include VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR.");
+
+    switch (record.geometry.geometryType)
+    {
+    case vk::GeometryTypeKHR::eTriangles:
+        return validateTriangleGeometry(record.geometry.geometry.triangles, record.range);
+    case vk::GeometryTypeKHR::eAabbs:
+        return validateAabbGeometry(record.geometry.geometry.aabbs, record.range);
+    default:
+        return validationFailure("BLAS geometry record supports only triangle and AABB geometry.");
+    }
+}
+
+[[nodiscard]] inline ValidationResult validateBlasGeometryRecords(std::span<const BlasGeometryRecord> geometries)
+{
+    if (geometries.empty())
+        return validationFailure("BLAS build requires at least one geometry record.");
+
+    auto invalidIt = std::ranges::find_if(geometries, [](const BlasGeometryRecord &record) {
+        return !validateBlasGeometryRecord(record).isValid;
+    });
+    if (invalidIt != std::ranges::end(geometries))
+        return validateBlasGeometryRecord(*invalidIt);
+
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateIndirectBuildCommands(std::span<const AsIndirectBuildCommand> commands)
+{
+    if (commands.empty())
+        return validationFailure("Indirect AS build requires at least one command.");
+
+    auto invalidIt = std::ranges::find_if(commands, [](const AsIndirectBuildCommand &command) {
+        const auto &buildInfo = command.buildInfo;
+        return buildInfo.dstAccelerationStructure == vk::AccelerationStructureKHR{} ||
+               buildInfo.geometryCount == 0 ||
+               (buildInfo.pGeometries == nullptr && buildInfo.ppGeometries == nullptr) ||
+               (buildInfo.pGeometries != nullptr && buildInfo.ppGeometries != nullptr) ||
+               buildInfo.scratchData.deviceAddress == 0 ||
+               command.indirectDeviceAddress == 0 ||
+               command.indirectStride == 0 ||
+               (command.indirectDeviceAddress % 4u) != 0 ||
+               (command.indirectStride % 4u) != 0 ||
+               command.maxPrimitiveCounts.size() != buildInfo.geometryCount;
+    });
+
+    if (invalidIt == std::ranges::end(commands))
+        return validationSuccess();
+
+    const auto &buildInfo = invalidIt->buildInfo;
+    if (buildInfo.dstAccelerationStructure == vk::AccelerationStructureKHR{})
+        return validationFailure("Indirect AS build requires a valid destination acceleration structure handle.");
+    if (buildInfo.geometryCount == 0)
+        return validationFailure("Indirect AS build requires geometryCount > 0.");
+    if (buildInfo.pGeometries == nullptr && buildInfo.ppGeometries == nullptr)
+        return validationFailure("Indirect AS build requires pGeometries or ppGeometries.");
+    if (buildInfo.pGeometries != nullptr && buildInfo.ppGeometries != nullptr)
+        return validationFailure("Indirect AS build must not set both pGeometries and ppGeometries.");
+    if (buildInfo.scratchData.deviceAddress == 0)
+        return validationFailure("Indirect AS build requires non-zero scratch device address.");
+    if (invalidIt->indirectDeviceAddress == 0)
+        return validationFailure("Indirect AS build requires a non-zero indirect device address.");
+    if (invalidIt->indirectStride == 0)
+        return validationFailure("Indirect AS build requires indirectStride > 0.");
+    if ((invalidIt->indirectDeviceAddress % 4u) != 0)
+        return validationFailure("Indirect AS build indirect device address must be 4-byte aligned.");
+    if ((invalidIt->indirectStride % 4u) != 0)
+        return validationFailure("Indirect AS build indirect stride must be 4-byte aligned.");
+    return validationFailure(formatMessage(
+        "Indirect AS build maxPrimitiveCounts count ({}) must match geometryCount ({}).",
+        invalidIt->maxPrimitiveCounts.size(),
+        buildInfo.geometryCount));
+}
+
+[[nodiscard]] inline ValidationResult validateAsCopyInfo(const vk::CopyAccelerationStructureInfoKHR &info)
+{
+    if (info.src == vk::AccelerationStructureKHR{})
+        return validationFailure("AS copy requires a valid source acceleration structure.");
+    if (info.dst == vk::AccelerationStructureKHR{})
+        return validationFailure("AS copy requires a valid destination acceleration structure.");
+    if (info.mode != vk::CopyAccelerationStructureModeKHR::eClone &&
+        info.mode != vk::CopyAccelerationStructureModeKHR::eCompact)
+        return validationFailure("AS copy supports only CLONE and COMPACT modes.");
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateAsCopyInfo(const AsCopyRecordInfo &info)
+{
+    if (!info.src.valid())
+        return validationFailure("AS copy requires a valid source acceleration structure.");
+    if (!info.dst.valid())
+        return validationFailure("AS copy requires a valid destination acceleration structure.");
+    if (info.src.type() != info.dst.type())
+        return validationFailure("AS copy requires matching source/destination acceleration structure types.");
+    if (info.mode != vk::CopyAccelerationStructureModeKHR::eClone &&
+        info.mode != vk::CopyAccelerationStructureModeKHR::eCompact)
+        return validationFailure("AS copy supports only CLONE and COMPACT modes.");
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateAsCopyToMemoryInfo(const vk::CopyAccelerationStructureToMemoryInfoKHR &info)
+{
+    if (info.src == vk::AccelerationStructureKHR{})
+        return validationFailure("AS serialize requires a valid source acceleration structure.");
+    if (info.dst.deviceAddress == 0)
+        return validationFailure("AS serialize requires a non-zero destination device address.");
+    if (info.mode != vk::CopyAccelerationStructureModeKHR::eSerialize)
+        return validationFailure("AS serialize requires SERIALIZE mode.");
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateAsCopyToMemoryInfo(const AsCopyToDeviceMemoryRecordInfo &info)
+{
+    if (!info.src.valid())
+        return validationFailure("AS serialize requires a valid source acceleration structure.");
+    if (info.dstAddress == 0)
+        return validationFailure("AS serialize requires a non-zero destination device address.");
+    if (info.mode != vk::CopyAccelerationStructureModeKHR::eSerialize)
+        return validationFailure("AS serialize requires SERIALIZE mode.");
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateAsCopyFromMemoryInfo(const vk::CopyMemoryToAccelerationStructureInfoKHR &info)
+{
+    if (info.src.deviceAddress == 0)
+        return validationFailure("AS deserialize requires a non-zero source device address.");
+    if (info.dst == vk::AccelerationStructureKHR{})
+        return validationFailure("AS deserialize requires a valid destination acceleration structure.");
+    if (info.mode != vk::CopyAccelerationStructureModeKHR::eDeserialize)
+        return validationFailure("AS deserialize requires DESERIALIZE mode.");
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validateAsCopyFromMemoryInfo(const AsCopyFromDeviceMemoryRecordInfo &info)
+{
+    if (info.srcAddress == 0)
+        return validationFailure("AS deserialize requires a non-zero source device address.");
+    if (!info.dst.valid())
+        return validationFailure("AS deserialize requires a valid destination acceleration structure.");
+    if (info.mode != vk::CopyAccelerationStructureModeKHR::eDeserialize)
+        return validationFailure("AS deserialize requires DESERIALIZE mode.");
+    return validationSuccess();
+}
+
 } // namespace nr::rhi::detail
 
 export namespace nr::rhi
@@ -321,6 +577,61 @@ export namespace nr::rhi
         .maxGeometryCount = asProps.maxGeometryCount,
         .maxPrimitiveCount = asProps.maxPrimitiveCount,
         .maxInstanceCount = asProps.maxInstanceCount,
+    };
+}
+
+[[nodiscard]] inline BlasGeometryRecord makeBlasTriangleGeometryRecord(
+    const Buffer &geometryBuffer,
+    const BlasGeometryLayout &layout,
+    const BlasGeometryInput &input)
+{
+    vk::AccelerationStructureGeometryTrianglesDataKHR triangles{};
+    triangles.vertexFormat = layout.vertexFormat;
+    triangles.vertexData.deviceAddress = input.vertexAddress;
+    triangles.vertexStride = layout.vertexStride;
+    triangles.maxVertex = layout.maxVertex;
+    triangles.indexType = layout.indexType;
+    triangles.indexData.deviceAddress = input.indexAddress;
+    triangles.transformData.deviceAddress = input.transformAddress;
+
+    vk::AccelerationStructureGeometryKHR geometry{};
+    geometry.geometryType = vk::GeometryTypeKHR::eTriangles;
+    geometry.geometry.triangles = triangles;
+    geometry.flags = layout.geometryFlags;
+
+    vk::AccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = input.primitiveCount;
+    range.primitiveOffset = input.primitiveOffset;
+    range.firstVertex = input.firstVertex;
+
+    return BlasGeometryRecord{
+        .geometryBuffer = std::cref(geometryBuffer),
+        .geometry = geometry,
+        .range = range,
+    };
+}
+
+[[nodiscard]] inline BlasGeometryRecord makeBlasAabbGeometryRecord(
+    const Buffer &geometryBuffer,
+    const BlasAabbGeometryInput &input)
+{
+    vk::AccelerationStructureGeometryAabbsDataKHR aabbs{};
+    aabbs.data.deviceAddress = input.dataAddress;
+    aabbs.stride = input.stride;
+
+    vk::AccelerationStructureGeometryKHR geometry{};
+    geometry.geometryType = vk::GeometryTypeKHR::eAabbs;
+    geometry.geometry.aabbs = aabbs;
+    geometry.flags = input.geometryFlags;
+
+    vk::AccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = input.primitiveCount;
+    range.primitiveOffset = input.primitiveOffset;
+
+    return BlasGeometryRecord{
+        .geometryBuffer = std::cref(geometryBuffer),
+        .geometry = geometry,
+        .range = range,
     };
 }
 
@@ -389,6 +700,42 @@ namespace nr::rhi::detail
     return validationSuccess();
 }
 
+[[nodiscard]] inline ValidationResult validateAsBuildInputs(const BlasGeometriesBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
+{
+    auto flagDiagnostics = detail::validateBuildFlagCombination(info.options);
+    if (!flagDiagnostics.isValid)
+        return flagDiagnostics;
+
+    if (!info.dst.valid())
+        return validationFailure("BLAS build requires a valid destination acceleration structure.");
+    if (info.dst.type() != vk::AccelerationStructureTypeKHR::eBottomLevel)
+        return validationFailure("BLAS build destination type must be VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR.");
+    if (!info.scratchBuffer.valid())
+        return validationFailure("BLAS build requires a valid scratch buffer.");
+    if ((info.scratchBuffer.usage() & vk::BufferUsageFlagBits::eStorageBuffer) == vk::BufferUsageFlags{})
+        return validationFailure("BLAS scratch buffer must include VK_BUFFER_USAGE_STORAGE_BUFFER_BIT.");
+    if (info.scratchAddress == 0)
+        return validationFailure("BLAS build requires non-zero scratch device address.");
+    if (scratchAlignment > 0 && (info.scratchAddress % scratchAlignment) != 0)
+        return validationFailure(formatMessage("BLAS scratch address must be aligned to {} bytes.", scratchAlignment));
+
+    auto geometryDiagnostics = detail::validateBlasGeometryRecords(info.geometries);
+    if (!geometryDiagnostics.isValid)
+        return geometryDiagnostics;
+
+    if (info.options.mode == AsBuildMode::Update)
+    {
+        if (!info.options.allowUpdateExpected)
+            return validationFailure("BLAS update mode requires allowUpdateExpected=true.");
+        if (!info.src.has_value() || !info.src->get().valid())
+            return validationFailure("BLAS update mode requires a valid source acceleration structure.");
+        if (info.src->get().type() != info.dst.type())
+            return validationFailure("BLAS update mode requires matching source/destination AS types.");
+    }
+
+    return validationSuccess();
+}
+
 [[nodiscard]] inline ValidationResult validateAsBuildInputs(const TlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
 {
     auto flagDiagnostics = detail::validateBuildFlagCombination(info.options);
@@ -436,6 +783,36 @@ namespace nr::rhi::detail
 export namespace nr::rhi
 {
 
+[[nodiscard]] inline AsBuildSizes queryAccelerationStructureBuildSizes(
+    const vk::raii::Device &device,
+    vk::AccelerationStructureTypeKHR type,
+    std::span<const vk::AccelerationStructureGeometryKHR> geometries,
+    std::span<const std::uint32_t> maxPrimitiveCounts,
+    const AsBuildOptions &options = {},
+    vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice)
+{
+    nrAssert(!geometries.empty(), "queryAccelerationStructureBuildSizes requires at least one geometry.");
+    nrAssert(geometries.size() == maxPrimitiveCounts.size(), "queryAccelerationStructureBuildSizes requires one max primitive count per geometry.");
+
+    auto flagDiagnostics = detail::validateBuildFlagCombination(options);
+    nrAssert(flagDiagnostics.isValid, detail::formatMessage("queryAccelerationStructureBuildSizes invalid options: {}", flagDiagnostics.message));
+
+    vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.type = type;
+    buildInfo.flags = options.buildFlags;
+    // vkGetAccelerationStructureBuildSizesKHR ignores mode/src/dst and runtime addresses.
+    buildInfo.mode = vk::BuildAccelerationStructureModeKHR::eBuild;
+    buildInfo.geometryCount = static_cast<std::uint32_t>(geometries.size());
+    buildInfo.pGeometries = geometries.data();
+
+    auto sizeInfo = device.getAccelerationStructureBuildSizesKHR(buildType, buildInfo, maxPrimitiveCounts);
+    return AsBuildSizes{
+        .accelerationStructureSize = sizeInfo.accelerationStructureSize,
+        .buildScratchSize = sizeInfo.buildScratchSize,
+        .updateScratchSize = sizeInfo.updateScratchSize,
+    };
+}
+
 [[nodiscard]] inline AsBuildSizes queryBlasBuildSizes(
     const vk::raii::Device &device,
     const BlasGeometryLayout &layout,
@@ -443,12 +820,9 @@ export namespace nr::rhi
     const AsBuildOptions &options = {},
     vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice)
 {
-    nrAssert(primitiveCount > 0, "queryBlasBuildSizes requires primitiveCount > 0.");
     nrAssert(layout.vertexStride > 0, "queryBlasBuildSizes requires vertexStride > 0.");
     nrAssert(layout.maxVertex > 0, "queryBlasBuildSizes requires maxVertex > 0.");
-
-    auto flagDiagnostics = detail::validateBuildFlagCombination(options);
-    nrAssert(flagDiagnostics.isValid, detail::formatMessage("queryBlasBuildSizes invalid options: {}", flagDiagnostics.message));
+    nrAssert(primitiveCount > 0, "queryBlasBuildSizes requires primitiveCount > 0.");
 
     vk::AccelerationStructureGeometryTrianglesDataKHR triangles{};
     triangles.vertexFormat = layout.vertexFormat;
@@ -461,21 +835,39 @@ export namespace nr::rhi
     geometry.geometry.triangles = triangles;
     geometry.flags = layout.geometryFlags;
 
-    vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
-    buildInfo.type = vk::AccelerationStructureTypeKHR::eBottomLevel;
-    buildInfo.flags = options.buildFlags;
-    // vkGetAccelerationStructureBuildSizesKHR ignores mode/src/dst and runtime addresses.
-    buildInfo.mode = vk::BuildAccelerationStructureModeKHR::eBuild;
-    buildInfo.geometryCount = 1;
-    buildInfo.pGeometries = &geometry;
-
     auto primitiveCounts = std::array{primitiveCount};
-    auto sizeInfo = device.getAccelerationStructureBuildSizesKHR(buildType, buildInfo, primitiveCounts);
-    return AsBuildSizes{
-        .accelerationStructureSize = sizeInfo.accelerationStructureSize,
-        .buildScratchSize = sizeInfo.buildScratchSize,
-        .updateScratchSize = sizeInfo.updateScratchSize,
-    };
+    return queryAccelerationStructureBuildSizes(
+        device,
+        vk::AccelerationStructureTypeKHR::eBottomLevel,
+        std::span<const vk::AccelerationStructureGeometryKHR>{&geometry, 1},
+        std::span<const std::uint32_t>{primitiveCounts},
+        options,
+        buildType);
+}
+
+[[nodiscard]] inline AsBuildSizes queryBlasBuildSizes(
+    const vk::raii::Device &device,
+    std::span<const BlasGeometryRecord> geometries,
+    const AsBuildOptions &options = {},
+    vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice)
+{
+    auto geometryDiagnostics = detail::validateBlasGeometryRecords(geometries);
+    nrAssert(geometryDiagnostics.isValid, detail::formatMessage("queryBlasBuildSizes invalid geometry: {}", geometryDiagnostics.message));
+
+    auto vkGeometries = geometries |
+                        std::views::transform([](const BlasGeometryRecord &record) { return record.geometry; }) |
+                        std::ranges::to<std::vector>();
+    auto primitiveCounts = geometries |
+                           std::views::transform([](const BlasGeometryRecord &record) { return detail::geometryPrimitiveCount(record); }) |
+                           std::ranges::to<std::vector>();
+
+    return queryAccelerationStructureBuildSizes(
+        device,
+        vk::AccelerationStructureTypeKHR::eBottomLevel,
+        std::span<const vk::AccelerationStructureGeometryKHR>{vkGeometries},
+        std::span<const std::uint32_t>{primitiveCounts},
+        options,
+        buildType);
 }
 
 [[nodiscard]] inline AsBuildSizes queryTlasBuildSizes(
@@ -537,6 +929,34 @@ export namespace nr::rhi
 //   build before a dependent TLAS build in the same command list.
 // - If source buffers use VK_SHARING_MODE_EXCLUSIVE across different queue
 //   families, caller must perform queue-family release/acquire barriers.
+inline void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, const BlasGeometriesBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1)
+{
+    nrAssert(*commandBuffer != nullptr, "recordBuildBlasGeometries requires a valid command buffer.");
+    auto diagnostics = detail::validateAsBuildInputs(info, scratchAlignment);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordBuildBlasGeometries invalid input: {}", diagnostics.message));
+
+    auto geometries = info.geometries |
+                      std::views::transform([](const BlasGeometryRecord &record) { return record.geometry; }) |
+                      std::ranges::to<std::vector>();
+    auto rangeInfos = info.geometries |
+                      std::views::transform([](const BlasGeometryRecord &record) { return record.range; }) |
+                      std::ranges::to<std::vector>();
+
+    vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.type = vk::AccelerationStructureTypeKHR::eBottomLevel;
+    buildInfo.flags = info.options.buildFlags;
+    buildInfo.mode = detail::toVkBuildMode(info.options.mode);
+    buildInfo.srcAccelerationStructure = info.src.has_value() ? info.src->get().raw() : vk::AccelerationStructureKHR{};
+    buildInfo.dstAccelerationStructure = info.dst.raw();
+    buildInfo.geometryCount = static_cast<std::uint32_t>(geometries.size());
+    buildInfo.pGeometries = geometries.data();
+    buildInfo.scratchData.deviceAddress = info.scratchAddress;
+
+    auto buildInfos = std::array{buildInfo};
+    auto rangeInfoPtrGroups = std::array<const vk::AccelerationStructureBuildRangeInfoKHR *, 1>{rangeInfos.data()};
+    commandBuffer.buildAccelerationStructuresKHR(buildInfos, rangeInfoPtrGroups);
+}
+
 inline void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const BlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1)
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildBlas requires a valid command buffer.");
@@ -642,9 +1062,277 @@ inline void recordUpdateTlas(const vk::raii::CommandBuffer &commandBuffer, TlasB
     recordBuildTlas(commandBuffer, info, scratchAlignment);
 }
 
-inline void recordCopyAccelerationStructure(const vk::raii::CommandBuffer &, vk::CopyAccelerationStructureInfoKHR)
+inline void recordBuildAccelerationStructuresIndirect(const vk::raii::CommandBuffer &commandBuffer, std::span<const AsIndirectBuildCommand> commands)
 {
-    nrAssert(false, "recordCopyAccelerationStructure is reserved for a future stage.");
+    nrAssert(*commandBuffer != nullptr, "recordBuildAccelerationStructuresIndirect requires a valid command buffer.");
+    auto diagnostics = detail::validateIndirectBuildCommands(commands);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordBuildAccelerationStructuresIndirect invalid input: {}", diagnostics.message));
+
+    auto buildInfos = commands |
+                      std::views::transform([](const AsIndirectBuildCommand &command) { return command.buildInfo; }) |
+                      std::ranges::to<std::vector>();
+    auto indirectDeviceAddresses = commands |
+                                   std::views::transform([](const AsIndirectBuildCommand &command) { return command.indirectDeviceAddress; }) |
+                                   std::ranges::to<std::vector<vk::DeviceAddress>>();
+    auto indirectStrides = commands |
+                           std::views::transform([](const AsIndirectBuildCommand &command) { return command.indirectStride; }) |
+                           std::ranges::to<std::vector<std::uint32_t>>();
+    auto maxPrimitiveCountPtrs = commands |
+                                 std::views::transform([](const AsIndirectBuildCommand &command) { return command.maxPrimitiveCounts.data(); }) |
+                                 std::ranges::to<std::vector<const std::uint32_t *>>();
+
+    commandBuffer.buildAccelerationStructuresIndirectKHR(buildInfos, indirectDeviceAddresses, indirectStrides, maxPrimitiveCountPtrs);
+}
+
+[[nodiscard]] inline vk::CopyAccelerationStructureInfoKHR makeCopyAccelerationStructureInfo(const AsCopyRecordInfo &record)
+{
+    auto diagnostics = detail::validateAsCopyInfo(record);
+    nrAssert(diagnostics.isValid, detail::formatMessage("makeCopyAccelerationStructureInfo invalid input: {}", diagnostics.message));
+
+    vk::CopyAccelerationStructureInfoKHR info{};
+    info.src = record.src.raw();
+    info.dst = record.dst.raw();
+    info.mode = record.mode;
+    return info;
+}
+
+[[nodiscard]] inline vk::CopyAccelerationStructureToMemoryInfoKHR makeCopyAccelerationStructureToMemoryInfo(const AsCopyToDeviceMemoryRecordInfo &record)
+{
+    auto diagnostics = detail::validateAsCopyToMemoryInfo(record);
+    nrAssert(diagnostics.isValid, detail::formatMessage("makeCopyAccelerationStructureToMemoryInfo invalid input: {}", diagnostics.message));
+
+    vk::CopyAccelerationStructureToMemoryInfoKHR info{};
+    info.src = record.src.raw();
+    info.dst.deviceAddress = record.dstAddress;
+    info.mode = record.mode;
+    return info;
+}
+
+[[nodiscard]] inline vk::CopyMemoryToAccelerationStructureInfoKHR makeCopyMemoryToAccelerationStructureInfo(const AsCopyFromDeviceMemoryRecordInfo &record)
+{
+    auto diagnostics = detail::validateAsCopyFromMemoryInfo(record);
+    nrAssert(diagnostics.isValid, detail::formatMessage("makeCopyMemoryToAccelerationStructureInfo invalid input: {}", diagnostics.message));
+
+    vk::CopyMemoryToAccelerationStructureInfoKHR info{};
+    info.src.deviceAddress = record.srcAddress;
+    info.dst = record.dst.raw();
+    info.mode = record.mode;
+    return info;
+}
+
+inline void recordCopyAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const vk::CopyAccelerationStructureInfoKHR &info)
+{
+    nrAssert(*commandBuffer != nullptr, "recordCopyAccelerationStructure requires a valid command buffer.");
+    auto diagnostics = detail::validateAsCopyInfo(info);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordCopyAccelerationStructure invalid input: {}", diagnostics.message));
+
+    commandBuffer.copyAccelerationStructureKHR(info);
+}
+
+inline void recordCopyAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const AsCopyRecordInfo &record)
+{
+    recordCopyAccelerationStructure(commandBuffer, makeCopyAccelerationStructureInfo(record));
+}
+
+inline void recordCopyAccelerationStructureToMemory(const vk::raii::CommandBuffer &commandBuffer, const vk::CopyAccelerationStructureToMemoryInfoKHR &info)
+{
+    nrAssert(*commandBuffer != nullptr, "recordCopyAccelerationStructureToMemory requires a valid command buffer.");
+    auto diagnostics = detail::validateAsCopyToMemoryInfo(info);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordCopyAccelerationStructureToMemory invalid input: {}", diagnostics.message));
+
+    commandBuffer.copyAccelerationStructureToMemoryKHR(info);
+}
+
+inline void recordCopyAccelerationStructureToMemory(const vk::raii::CommandBuffer &commandBuffer, const AsCopyToDeviceMemoryRecordInfo &record)
+{
+    recordCopyAccelerationStructureToMemory(commandBuffer, makeCopyAccelerationStructureToMemoryInfo(record));
+}
+
+inline void recordCopyMemoryToAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const vk::CopyMemoryToAccelerationStructureInfoKHR &info)
+{
+    nrAssert(*commandBuffer != nullptr, "recordCopyMemoryToAccelerationStructure requires a valid command buffer.");
+    auto diagnostics = detail::validateAsCopyFromMemoryInfo(info);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordCopyMemoryToAccelerationStructure invalid input: {}", diagnostics.message));
+
+    commandBuffer.copyMemoryToAccelerationStructureKHR(info);
+}
+
+inline void recordCopyMemoryToAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const AsCopyFromDeviceMemoryRecordInfo &record)
+{
+    recordCopyMemoryToAccelerationStructure(commandBuffer, makeCopyMemoryToAccelerationStructureInfo(record));
+}
+
+[[nodiscard]] inline vk::Result copyAccelerationStructure(
+    const vk::raii::Device &device,
+    vk::DeferredOperationKHR deferredOperation,
+    const vk::CopyAccelerationStructureInfoKHR &info)
+{
+    nrAssert(*device != nullptr, "copyAccelerationStructure requires a valid device.");
+    auto diagnostics = detail::validateAsCopyInfo(info);
+    nrAssert(diagnostics.isValid, detail::formatMessage("copyAccelerationStructure invalid input: {}", diagnostics.message));
+
+    return device.copyAccelerationStructureKHR(deferredOperation, info);
+}
+
+[[nodiscard]] inline vk::Result copyAccelerationStructure(
+    const vk::raii::Device &device,
+    vk::DeferredOperationKHR deferredOperation,
+    const AsCopyRecordInfo &record)
+{
+    return copyAccelerationStructure(device, deferredOperation, makeCopyAccelerationStructureInfo(record));
+}
+
+[[nodiscard]] inline vk::Result copyAccelerationStructureToMemory(
+    const vk::raii::Device &device,
+    vk::DeferredOperationKHR deferredOperation,
+    const vk::CopyAccelerationStructureToMemoryInfoKHR &info)
+{
+    nrAssert(*device != nullptr, "copyAccelerationStructureToMemory requires a valid device.");
+    auto diagnostics = detail::validateAsCopyToMemoryInfo(info);
+    nrAssert(diagnostics.isValid, detail::formatMessage("copyAccelerationStructureToMemory invalid input: {}", diagnostics.message));
+
+    return device.copyAccelerationStructureToMemoryKHR(deferredOperation, info);
+}
+
+[[nodiscard]] inline vk::Result copyAccelerationStructureToMemory(
+    const vk::raii::Device &device,
+    vk::DeferredOperationKHR deferredOperation,
+    const AsCopyToDeviceMemoryRecordInfo &record)
+{
+    return copyAccelerationStructureToMemory(device, deferredOperation, makeCopyAccelerationStructureToMemoryInfo(record));
+}
+
+[[nodiscard]] inline vk::Result copyMemoryToAccelerationStructure(
+    const vk::raii::Device &device,
+    vk::DeferredOperationKHR deferredOperation,
+    const vk::CopyMemoryToAccelerationStructureInfoKHR &info)
+{
+    nrAssert(*device != nullptr, "copyMemoryToAccelerationStructure requires a valid device.");
+    auto diagnostics = detail::validateAsCopyFromMemoryInfo(info);
+    nrAssert(diagnostics.isValid, detail::formatMessage("copyMemoryToAccelerationStructure invalid input: {}", diagnostics.message));
+
+    return device.copyMemoryToAccelerationStructureKHR(deferredOperation, info);
+}
+
+[[nodiscard]] inline vk::Result copyMemoryToAccelerationStructure(
+    const vk::raii::Device &device,
+    vk::DeferredOperationKHR deferredOperation,
+    const AsCopyFromDeviceMemoryRecordInfo &record)
+{
+    return copyMemoryToAccelerationStructure(device, deferredOperation, makeCopyMemoryToAccelerationStructureInfo(record));
+}
+
+[[nodiscard]] inline vk::raii::DeferredOperationKHR createDeferredOperation(const vk::raii::Device &device)
+{
+    nrAssert(*device != nullptr, "createDeferredOperation requires a valid device.");
+    return device.createDeferredOperationKHR();
+}
+
+template <typename T>
+[[nodiscard]] inline std::vector<T> queryAccelerationStructureProperties(
+    const vk::raii::Device &device,
+    std::span<const vk::AccelerationStructureKHR> accelerationStructures,
+    vk::QueryType queryType)
+{
+    nrAssert(*device != nullptr, "queryAccelerationStructureProperties requires a valid device.");
+    nrAssert(!accelerationStructures.empty(), "queryAccelerationStructureProperties requires at least one acceleration structure.");
+    nrAssert(std::ranges::none_of(accelerationStructures, [](vk::AccelerationStructureKHR handle) { return handle == vk::AccelerationStructureKHR{}; }),
+             "queryAccelerationStructureProperties requires valid acceleration structure handles.");
+
+    return device.writeAccelerationStructuresPropertiesKHR<T>(
+        accelerationStructures,
+        queryType,
+        sizeof(T) * accelerationStructures.size(),
+        sizeof(T));
+}
+
+template <typename T>
+[[nodiscard]] inline T queryAccelerationStructureProperty(
+    const vk::raii::Device &device,
+    const AccelerationStructureResource &accelerationStructure,
+    vk::QueryType queryType)
+{
+    nrAssert(accelerationStructure.valid(), "queryAccelerationStructureProperty requires a valid acceleration structure.");
+    auto handles = std::array{accelerationStructure.raw()};
+    auto values = queryAccelerationStructureProperties<T>(
+        device,
+        std::span<const vk::AccelerationStructureKHR>{handles},
+        queryType);
+    nrAssert(values.size() == 1, "queryAccelerationStructureProperty expected one result.");
+    return values.front();
+}
+
+[[nodiscard]] inline vk::DeviceSize queryAccelerationStructureCompactedSize(
+    const vk::raii::Device &device,
+    const AccelerationStructureResource &accelerationStructure)
+{
+    return queryAccelerationStructureProperty<vk::DeviceSize>(
+        device,
+        accelerationStructure,
+        vk::QueryType::eAccelerationStructureCompactedSizeKHR);
+}
+
+[[nodiscard]] inline vk::DeviceSize queryAccelerationStructureSerializationSize(
+    const vk::raii::Device &device,
+    const AccelerationStructureResource &accelerationStructure)
+{
+    return queryAccelerationStructureProperty<vk::DeviceSize>(
+        device,
+        accelerationStructure,
+        vk::QueryType::eAccelerationStructureSerializationSizeKHR);
+}
+
+[[nodiscard]] inline vk::DeviceSize queryAccelerationStructureDeviceTimelineSize(
+    const vk::raii::Device &device,
+    const AccelerationStructureResource &accelerationStructure)
+{
+    return queryAccelerationStructureProperty<vk::DeviceSize>(
+        device,
+        accelerationStructure,
+        vk::QueryType::eAccelerationStructureSizeKHR);
+}
+
+[[nodiscard]] inline std::uint64_t queryAccelerationStructureSerializationBottomLevelPointerCount(
+    const vk::raii::Device &device,
+    const AccelerationStructureResource &accelerationStructure)
+{
+    return queryAccelerationStructureProperty<std::uint64_t>(
+        device,
+        accelerationStructure,
+        vk::QueryType::eAccelerationStructureSerializationBottomLevelPointersKHR);
+}
+
+inline void recordWriteAccelerationStructureProperties(
+    const vk::raii::CommandBuffer &commandBuffer,
+    std::span<const vk::AccelerationStructureKHR> accelerationStructures,
+    vk::QueryType queryType,
+    vk::QueryPool queryPool,
+    std::uint32_t firstQuery)
+{
+    nrAssert(*commandBuffer != nullptr, "recordWriteAccelerationStructureProperties requires a valid command buffer.");
+    nrAssert(queryPool != vk::QueryPool{}, "recordWriteAccelerationStructureProperties requires a valid query pool.");
+    nrAssert(!accelerationStructures.empty(), "recordWriteAccelerationStructureProperties requires at least one acceleration structure.");
+    nrAssert(std::ranges::none_of(accelerationStructures, [](vk::AccelerationStructureKHR handle) { return handle == vk::AccelerationStructureKHR{}; }),
+             "recordWriteAccelerationStructureProperties requires valid acceleration structure handles.");
+
+    commandBuffer.writeAccelerationStructuresPropertiesKHR(accelerationStructures, queryType, queryPool, firstQuery);
+}
+
+inline void recordWriteAccelerationStructureProperty(
+    const vk::raii::CommandBuffer &commandBuffer,
+    const AccelerationStructureResource &accelerationStructure,
+    vk::QueryType queryType,
+    vk::QueryPool queryPool,
+    std::uint32_t firstQuery)
+{
+    nrAssert(accelerationStructure.valid(), "recordWriteAccelerationStructureProperty requires a valid acceleration structure.");
+    auto handles = std::array{accelerationStructure.raw()};
+    recordWriteAccelerationStructureProperties(
+        commandBuffer,
+        std::span<const vk::AccelerationStructureKHR>{handles},
+        queryType,
+        queryPool,
+        firstQuery);
 }
 
 // Append AS-related wait/signal metadata into an existing CommandBatch.

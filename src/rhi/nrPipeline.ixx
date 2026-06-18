@@ -17,8 +17,8 @@ struct GraphicsPipelineDesc
 {
 		std::vector<std::string> entryPointNames;
 		std::vector<vk::Format> colorAttachmentFormats;
-		std::optional<vk::Format> depthAttachmentFormat;
-		std::optional<vk::Format> stencilAttachmentFormat;
+		std::optional<vk::Format> depthAttachmentFormat{};
+		std::optional<vk::Format> stencilAttachmentFormat{};
 		vk::PrimitiveTopology topology = vk::PrimitiveTopology::eTriangleList;
 		vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
 		vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
@@ -50,6 +50,7 @@ struct RayTracingShaderGroupDesc
 		std::string closestHitEntryPoint;
 		std::string anyHitEntryPoint;
 		std::string intersectionEntryPoint;
+		std::vector<std::uint8_t> captureReplayHandle;
 };
 
 struct RayTracingPipelineLibraryInterfaceDesc
@@ -67,7 +68,9 @@ struct RayTracingPipelineDesc
 		vk::PipelineCreateFlags flags = {};
 		bool createAsLibrary = false;
 		std::vector<vk::Pipeline> linkedLibraries;
-		std::optional<RayTracingPipelineLibraryInterfaceDesc> libraryInterface;
+		std::optional<RayTracingPipelineLibraryInterfaceDesc> libraryInterface{};
+		bool dynamicPipelineStackSize = false;
+		std::optional<std::reference_wrapper<const vk::raii::DeferredOperationKHR>> deferredOperation{};
 };
 
 [[nodiscard]] inline std::optional<std::string> validateRayTracingPipelineDesc(const RayTracingPipelineDesc &desc)
@@ -412,7 +415,7 @@ class CursorPipelineLayout
 				bool isApplied = false;
 		};
 
-		std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+		std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 		std::vector<DescriptorSetLayoutHandle> setLayouts_;
 		std::vector<ImmutableSamplerBindingState> immutableSamplerBindings_;
 		vk::raii::PipelineLayout pipelineLayout_ = {nullptr};
@@ -775,8 +778,6 @@ class GraphicsPipeline
 				createInfo.pColorBlendState = &colorBlendInfo;
 				createInfo.pDynamicState = &dynamicStateInfo;
 				createInfo.layout = layout.raw();
-				createInfo.renderPass = nullptr;
-				createInfo.subpass = 0;
 				createInfo.pNext = &renderingInfo;
 
 				GraphicsPipeline pipeline;
@@ -850,6 +851,14 @@ class RayTracingPipeline
 				if (desc.createAsLibrary)
 				{
 					createFlags |= vk::PipelineCreateFlags{VK_PIPELINE_CREATE_LIBRARY_BIT_KHR};
+				}
+
+				auto hasCaptureReplayHandles = std::ranges::any_of(desc.groups, [](const RayTracingShaderGroupDesc &groupDesc) {
+					return !groupDesc.captureReplayHandle.empty();
+				});
+				if (hasCaptureReplayHandles)
+				{
+					createFlags |= vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR;
 				}
 
 				auto rtStageIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size())) |
@@ -932,8 +941,20 @@ class RayTracingPipeline
 						group.closestHitShader = findLocalStageIndex(groupDesc.closestHitEntryPoint, {SLANG_STAGE_CLOSEST_HIT});
 						group.anyHitShader = findLocalStageIndex(groupDesc.anyHitEntryPoint, {SLANG_STAGE_ANY_HIT});
 						group.intersectionShader = findLocalStageIndex(groupDesc.intersectionEntryPoint, {SLANG_STAGE_INTERSECTION});
+						if (!groupDesc.captureReplayHandle.empty())
+						{
+							group.pShaderGroupCaptureReplayHandle = groupDesc.captureReplayHandle.data();
+						}
 						groups.push_back(group);
 					}
+				}
+
+				auto dynamicStates = std::array{vk::DynamicState::eRayTracingPipelineStackSizeKHR};
+				vk::PipelineDynamicStateCreateInfo dynamicStateInfo{};
+				if (desc.dynamicPipelineStackSize)
+				{
+					dynamicStateInfo.dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size());
+					dynamicStateInfo.pDynamicStates = dynamicStates.data();
 				}
 
 				vk::RayTracingPipelineCreateInfoKHR createInfo{};
@@ -944,6 +965,7 @@ class RayTracingPipeline
 				createInfo.pGroups = groups.data();
 				createInfo.maxPipelineRayRecursionDepth = desc.maxRayRecursionDepth;
 				createInfo.layout = layout.raw();
+				createInfo.pDynamicState = desc.dynamicPipelineStackSize ? &dynamicStateInfo : nullptr;
 
 				vk::PipelineLibraryCreateInfoKHR libraryInfo{};
 				if (!desc.linkedLibraries.empty())
@@ -962,18 +984,22 @@ class RayTracingPipeline
 				}
 
 				RayTracingPipeline pipeline;
-				auto deferredOperation = vk::Optional<const vk::raii::DeferredOperationKHR>(nullptr);
+				auto deferredOperation = desc.deferredOperation.has_value()
+				                             ? vk::Optional<const vk::raii::DeferredOperationKHR>(desc.deferredOperation->get())
+				                             : vk::Optional<const vk::raii::DeferredOperationKHR>(nullptr);
 				auto pipelineCacheOptional =
 						pipelineCache != nullptr ? vk::Optional<const vk::raii::PipelineCache>(*pipelineCache) : vk::Optional<const vk::raii::PipelineCache>(nullptr);
 				pipeline.pipeline_ = vk::raii::Pipeline(device, deferredOperation, pipelineCacheOptional, createInfo);
 				pipeline.device_ = std::cref(device);
 				pipeline.shaderGroupCount_ = static_cast<std::uint32_t>(groups.size());
+				pipeline.dynamicPipelineStackSize_ = desc.dynamicPipelineStackSize;
 				return pipeline;
 		}
 
 		[[nodiscard]] bool valid() const noexcept { return *pipeline_ != nullptr; }
 		[[nodiscard]] vk::Pipeline raw() const noexcept { return valid() ? *pipeline_ : vk::Pipeline{}; }
 		[[nodiscard]] std::uint32_t shaderGroupCount() const noexcept { return shaderGroupCount_; }
+		[[nodiscard]] bool dynamicPipelineStackSize() const noexcept { return dynamicPipelineStackSize_; }
 
 		[[nodiscard]] std::vector<std::uint8_t> shaderGroupHandles(std::uint32_t firstGroup, std::uint32_t groupCount, std::uint32_t handleSize) const
 		{
@@ -989,9 +1015,30 @@ class RayTracingPipeline
 			return pipeline_.getRayTracingShaderGroupHandlesKHR<std::uint8_t>(firstGroup, groupCount, dataSize);
 		}
 
+		[[nodiscard]] std::vector<std::uint8_t> captureReplayShaderGroupHandles(std::uint32_t firstGroup, std::uint32_t groupCount, std::uint32_t captureReplayHandleSize) const
+		{
+			nrAssert(valid(), "RayTracingPipeline::captureReplayShaderGroupHandles requires a valid pipeline.");
+			nrAssert(groupCount > 0u, "RayTracingPipeline::captureReplayShaderGroupHandles requires groupCount > 0.");
+			nrAssert(captureReplayHandleSize > 0u, "RayTracingPipeline::captureReplayShaderGroupHandles requires captureReplayHandleSize > 0.");
+			nrAssert(firstGroup < shaderGroupCount_, "RayTracingPipeline::captureReplayShaderGroupHandles firstGroup is out of range.");
+			auto requestedEnd = static_cast<std::uint64_t>(firstGroup) + static_cast<std::uint64_t>(groupCount);
+			nrAssert(requestedEnd <= static_cast<std::uint64_t>(shaderGroupCount_), "RayTracingPipeline::captureReplayShaderGroupHandles range exceeds group count.");
+
+			auto dataSize = static_cast<std::size_t>(captureReplayHandleSize) * static_cast<std::size_t>(groupCount);
+			return pipeline_.getRayTracingCaptureReplayShaderGroupHandlesKHR<std::uint8_t>(firstGroup, groupCount, dataSize);
+		}
+
+		[[nodiscard]] vk::DeviceSize shaderGroupStackSize(std::uint32_t group, vk::ShaderGroupShaderKHR groupShader) const
+		{
+			nrAssert(valid(), "RayTracingPipeline::shaderGroupStackSize requires a valid pipeline.");
+			nrAssert(group < shaderGroupCount_, "RayTracingPipeline::shaderGroupStackSize group is out of range.");
+			return pipeline_.getRayTracingShaderGroupStackSizeKHR(group, groupShader);
+		}
+
 	private:
-		std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+		std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 		std::uint32_t shaderGroupCount_ = 0;
+		bool dynamicPipelineStackSize_ = false;
 		vk::raii::Pipeline pipeline_ = {nullptr};
 };
 
@@ -1231,6 +1278,13 @@ class PipelineService
 		auto layoutBundle = createPipelineLayoutBundle(slangProgram, desc.descriptorBindingPolicy, immutableSamplers);
 
 		auto effectiveDesc = desc;
+		auto hasCaptureReplayHandles = std::ranges::any_of(effectiveDesc.groups, [](const RayTracingShaderGroupDesc &groupDesc) {
+			return !groupDesc.captureReplayHandle.empty();
+		});
+		if (hasCaptureReplayHandles)
+		{
+			effectiveDesc.flags |= vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR;
+		}
 		if (rtCapabilities_.has_value())
 		{
 			nrAssert(
@@ -1239,6 +1293,33 @@ class PipelineService
 					"PipelineService::createRayTracingPipeline recursion depth {} exceeds device max {}.",
 					effectiveDesc.maxRayRecursionDepth,
 					rtCapabilities_->maxRayRecursionDepth));
+
+			auto wantsCaptureReplay =
+				hasCaptureReplayHandles ||
+				((effectiveDesc.flags & vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR) != vk::PipelineCreateFlags{});
+			if (wantsCaptureReplay)
+			{
+				nrAssert(
+					rtCapabilities_->rayTracingPipelineShaderGroupHandleCaptureReplay,
+					"PipelineService::createRayTracingPipeline requires rayTracingPipelineShaderGroupHandleCaptureReplay for capture/replay handles.");
+			}
+
+			if (hasCaptureReplayHandles)
+			{
+				nrAssert(
+					rtCapabilities_->shaderGroupHandleCaptureReplaySize > 0,
+					"PipelineService::createRayTracingPipeline requires a non-zero shaderGroupHandleCaptureReplaySize.");
+
+				auto invalidHandleIt = std::ranges::find_if(effectiveDesc.groups, [&](const RayTracingShaderGroupDesc &groupDesc) {
+					return !groupDesc.captureReplayHandle.empty() &&
+					       groupDesc.captureReplayHandle.size() != static_cast<std::size_t>(rtCapabilities_->shaderGroupHandleCaptureReplaySize);
+				});
+				nrAssert(
+					invalidHandleIt == std::ranges::end(effectiveDesc.groups),
+					std::format(
+						"PipelineService::createRayTracingPipeline capture replay handles must be {} bytes.",
+						rtCapabilities_->shaderGroupHandleCaptureReplaySize));
+			}
 		}
 
 		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
@@ -1267,8 +1348,8 @@ class PipelineService
 	}
 
   private:
-	std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-	std::optional<RayTracingCapabilitySnapshot> rtCapabilities_;
+	std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
+	std::optional<RayTracingCapabilitySnapshot> rtCapabilities_{};
 	vk::raii::PipelineCache pipelineCache_ = {nullptr};
 };
 

@@ -70,8 +70,16 @@ class MemoryAllocator
         device_ = std::ref(device);
         vma_ = VmaAllocatorWrapper(instance, physDevice, device);
 
+        nsightProfilerActive_ = nr::platform::isNsightInjected();
+
         createPerFramePools();
         createStagingPool();
+
+        if (nsightProfilerActive_)
+        {
+            nrInfo("Nsight Graphics interception detected: routing GpuOnly buffers through a profiler-safe pool to avoid VUID-VkMemoryAllocateInfo-pNext-02806.");
+            createProfilerSafePool();
+        }
     }
 
     // =====================================================================
@@ -175,8 +183,9 @@ class MemoryAllocator
      * typically useful. VMA automatically uses dedicated allocation when the
      * driver reports requiresDedicatedAllocation/prefersDedicatedAllocation
      * (common for render targets and large textures on NVIDIA). No explicit
-     * DEDICATED_MEMORY_BIT is set to avoid VUID-VkMemoryAllocateInfo-pNext-02806
-     * when profilers inject VkImportMemoryHostPointerInfoEXT.
+     * DEDICATED_MEMORY_BIT is set here. Unlike GpuOnly buffers, images are not
+     * rerouted under Nsight; the observed VUID-VkMemoryAllocateInfo-pNext-02806
+     * conflicts came from buffers, so only the buffer path is mitigated.
      *
      * @param imageInfo   Vulkan image create info (Vulkan-hpp type)
      * @param usage       Memory usage (typically GpuOnly)
@@ -353,6 +362,43 @@ class MemoryAllocator
         stagingPool_ = vma_.createPool(poolInfo);
     }
 
+    /**
+     * @brief Create a device-local pool with an explicit block size for Nsight runs.
+     *
+     * VMA disables dedicated allocation for any pool that has an explicit block size
+     * (vk_mem_alloc.h: canAllocateDedicated is false when the block vector
+     * HasExplicitBlockSize()). Routing GpuOnly buffers here therefore stops VMA from
+     * attaching VkMemoryDedicatedAllocateInfo, which the host-pointer import injected by
+     * Nsight conflicts with (VUID-VkMemoryAllocateInfo-pNext-02806). Created only while
+     * Nsight is intercepting; normal runs keep the driver-preferred dedicated path.
+     *
+     * Allocations larger than the block size cannot be served from this pool. GpuOnly
+     * buffers in this engine stay well below the block size, and this path is only active
+     * under profiling, so the looser placement is acceptable.
+     */
+    void createProfilerSafePool()
+    {
+        // Representative GpuOnly buffer: device-local, BDA-enabled, broad GPU usage so
+        // the query resolves to the same device-local memory type GpuOnly buffers use.
+        vk::BufferCreateInfo sampleBuf{};
+        sampleBuf.size = 0x10000;
+        sampleBuf.usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eShaderDeviceAddress;
+
+        VmaAllocationCreateInfo sampleAlloc{};
+        sampleAlloc.usage = VMA_MEMORY_USAGE_AUTO;
+
+        std::uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
+
+        VmaPoolCreateInfo poolInfo{};
+        poolInfo.memoryTypeIndex = memTypeIndex;
+        // Explicit (non-zero) block size is what disables dedicated allocation for this pool.
+        poolInfo.blockSize = static_cast<VkDeviceSize>(256) * 1024 * 1024;
+        poolInfo.minBlockCount = 0;
+        poolInfo.maxBlockCount = 0; // unlimited blocks
+
+        profilerSafePool_ = vma_.createPool(poolInfo);
+    }
+
     // -----------------------------------------------------------------
     // Strategy configuration helpers
     // -----------------------------------------------------------------
@@ -364,15 +410,18 @@ class MemoryAllocator
      * - GpuOnly:  DEVICE_LOCAL. VMA automatically handles dedicated allocation when
      *             the driver reports requiresDedicatedAllocation/prefersDedicatedAllocation
      *             via vkGetBufferMemoryRequirements2. No explicit DEDICATED_MEMORY_BIT is
-     *             set here because doing so forces VkMemoryDedicatedAllocateInfo into the
-     *             pNext chain, which conflicts with VkImportMemoryHostPointerInfoEXT that
-     *             profilers (NSight, RenderDoc) may inject — VUID-VkMemoryAllocateInfo-pNext-02806.
+     *             set here, so normal runs keep the driver-preferred dedicated allocation.
+     *             Under Nsight (nsightProfilerActive_) the buffer is instead routed to
+     *             profilerSafePool_ below: VMA disables dedicated allocation for explicit
+     *             block-size pools, so no VkMemoryDedicatedAllocateInfo is emitted and it
+     *             cannot conflict with the VkImportMemoryHostPointerInfoEXT Nsight injects
+     *             (VUID-VkMemoryAllocateInfo-pNext-02806).
      * - CpuToGpu: HOST_VISIBLE, persistently mapped (ReBAR HOST_VISIBLE+DEVICE_LOCAL
      *             when available, otherwise plain HOST_VISIBLE). Always mappable.
      * - GpuToCpu: HOST_VISIBLE + HOST_CACHED for CPU reads
      * - CpuOnly:  HOST_VISIBLE + MAPPED
      */
-    static void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage)
+    void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage) const
     {
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
@@ -416,6 +465,15 @@ class MemoryAllocator
             allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
             break;
         }
+
+        // Under Nsight, route GpuOnly buffers through the explicit-block-size pool so VMA
+        // performs block sub-allocation instead of a dedicated allocation, avoiding the
+        // VkMemoryDedicatedAllocateInfo that conflicts with Nsight's host-pointer import
+        // (VUID-VkMemoryAllocateInfo-pNext-02806). No effect on normal runs or host-visible usages.
+        if (nsightProfilerActive_ && usage == MemoryUsage::GpuOnly)
+        {
+            allocInfo.pool = profilerSafePool_.handle();
+        }
     }
 
     /**
@@ -451,7 +509,14 @@ class MemoryAllocator
     std::array<VmaPoolHandle, maxFrameInFlight> perFramePools_;
     mutable std::array<bool, maxFrameInFlight> perFramePoolDirty_{};
     VmaPoolHandle stagingPool_;
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
+
+    // True when NVIDIA Nsight Graphics is intercepting this process. When set,
+    // GpuOnly CrossFrame buffers are routed through profilerSafePool_ so VMA does
+    // not emit VkMemoryDedicatedAllocateInfo, which conflicts with the host-pointer
+    // import Nsight injects (VUID-VkMemoryAllocateInfo-pNext-02806).
+    bool nsightProfilerActive_ = false;
+    VmaPoolHandle profilerSafePool_;
 };
 
 } // namespace nr::rhi

@@ -417,6 +417,118 @@ struct QueueAccessScope
     }
 };
 
+[[nodiscard]] constexpr QueueAccessScope accelerationStructureBuildReadScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
+    };
+}
+
+[[nodiscard]] constexpr QueueAccessScope accelerationStructureBuildWriteScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+    };
+}
+
+[[nodiscard]] constexpr QueueAccessScope accelerationStructureCopyReadScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureCopyKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
+    };
+}
+
+[[nodiscard]] constexpr QueueAccessScope accelerationStructureCopyWriteScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureCopyKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+    };
+}
+
+[[nodiscard]] constexpr QueueAccessScope rayTracingShaderAccelerationStructureReadScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
+    };
+}
+
+[[nodiscard]] constexpr QueueAccessScope shaderBindingTableReadScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        .access = vk::AccessFlagBits2::eShaderBindingTableReadKHR,
+    };
+}
+
+[[nodiscard]] inline vk::MemoryBarrier2 makeAccelerationStructureBarrier(
+    const QueueAccessScope &srcScope,
+    const QueueAccessScope &dstScope)
+{
+    nrAssert(srcScope.valid() && dstScope.valid(), "makeAccelerationStructureBarrier requires valid source/destination scopes.");
+    return vk::MemoryBarrier2{
+        srcScope.stages,
+        srcScope.access,
+        dstScope.stages,
+        dstScope.access,
+        nullptr,
+    };
+}
+
+[[nodiscard]] inline vk::MemoryBarrier2 makeAccelerationStructureBuildToBuildReadBarrier()
+{
+    return makeAccelerationStructureBarrier(
+        accelerationStructureBuildWriteScope(),
+        accelerationStructureBuildReadScope());
+}
+
+[[nodiscard]] inline vk::MemoryBarrier2 makeAccelerationStructureBuildToTraceReadBarrier()
+{
+    return makeAccelerationStructureBarrier(
+        accelerationStructureBuildWriteScope(),
+        rayTracingShaderAccelerationStructureReadScope());
+}
+
+[[nodiscard]] inline vk::MemoryBarrier2 makeAccelerationStructureBuildToCopyReadBarrier()
+{
+    return makeAccelerationStructureBarrier(
+        accelerationStructureBuildWriteScope(),
+        accelerationStructureCopyReadScope());
+}
+
+[[nodiscard]] inline vk::MemoryBarrier2 makeAccelerationStructureCopyToTraceReadBarrier()
+{
+    return makeAccelerationStructureBarrier(
+        accelerationStructureCopyWriteScope(),
+        rayTracingShaderAccelerationStructureReadScope());
+}
+
+[[nodiscard]] inline vk::BufferMemoryBarrier2 makeShaderBindingTableReadBarrier(
+    const Buffer& buffer,
+    vk::PipelineStageFlags2 srcStages,
+    vk::AccessFlags2 srcAccess,
+    vk::DeviceSize offset = 0,
+    vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max())
+{
+    nrAssert(buffer.valid(), "makeShaderBindingTableReadBarrier requires a valid buffer.");
+    return makeBufferBarrier(buffer, vk::BufferMemoryBarrier2{
+        srcStages,
+        srcAccess,
+        vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        vk::AccessFlagBits2::eShaderBindingTableReadKHR,
+        kIgnoredQueueFamilyIndex,
+        kIgnoredQueueFamilyIndex,
+        vk::Buffer{},
+        offset,
+        size,
+        nullptr,
+    });
+}
+
 /**
  * @brief Optional semaphore wait payload used by ownership helpers.
  */
@@ -512,7 +624,7 @@ struct QueueOwnershipTransfer
  */
 struct BufferUploadOwnershipPlan
 {
-    std::optional<QueueOwnershipTransfer> acquireToTransfer;
+    std::optional<QueueOwnershipTransfer> acquireToTransfer{};
     QueueOwnershipTransfer releaseToDestination{};
 
     /**
@@ -1013,8 +1125,8 @@ struct RenderingScopeDesc
     std::uint32_t viewMask = 0;
     vk::RenderingFlags flags{};
     std::span<const RenderingAttachmentDesc> colorAttachments{};
-    std::optional<RenderingDepthStencilAttachmentDesc> depthAttachment;
-    std::optional<RenderingDepthStencilAttachmentDesc> stencilAttachment;
+    std::optional<RenderingDepthStencilAttachmentDesc> depthAttachment{};
+    std::optional<RenderingDepthStencilAttachmentDesc> stencilAttachment{};
 };
 
 namespace detail
@@ -1101,19 +1213,19 @@ class ScopedRendering
   private:
     std::reference_wrapper<const vk::raii::CommandBuffer> commandBuffer_;
     std::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos_;
-    std::optional<vk::RenderingAttachmentInfo> depthAttachmentInfo_;
-    std::optional<vk::RenderingAttachmentInfo> stencilAttachmentInfo_;
+    std::optional<vk::RenderingAttachmentInfo> depthAttachmentInfo_{};
+    std::optional<vk::RenderingAttachmentInfo> stencilAttachmentInfo_{};
     vk::RenderingInfo renderingInfo_{};
     bool isActive_ = false;
 };
 
 struct BufferUploadTicket
 {
-    std::optional<std::reference_wrapper<const Buffer>> buffer;
+    std::optional<std::reference_wrapper<const Buffer>> buffer{};
     vk::DeviceSize dstOffset = 0;
     vk::DeviceSize size = 0;
     std::uint64_t signalValue = 0;
-    std::optional<QueueOwnershipTransfer> ownership;
+    std::optional<QueueOwnershipTransfer> ownership{};
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -1123,10 +1235,10 @@ struct BufferUploadTicket
 
 struct ImageUploadTicket
 {
-    std::optional<std::reference_wrapper<const Image>> image;
+    std::optional<std::reference_wrapper<const Image>> image{};
     vk::ImageLayout layout = vk::ImageLayout::eUndefined;
     std::uint64_t signalValue = 0;
-    std::optional<QueueOwnershipTransfer> ownership;
+    std::optional<QueueOwnershipTransfer> ownership{};
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -2144,8 +2256,8 @@ class UploadReadbackContext
         });
     }
 
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-    std::optional<std::reference_wrapper<QueueManager>> queueManager_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
+    std::optional<std::reference_wrapper<QueueManager>> queueManager_{};
 
     Buffer uploadRing_;
     Buffer readbackRing_;

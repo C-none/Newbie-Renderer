@@ -331,54 +331,16 @@ class NormalBufferNode final : public Node
         // Ensure pre-allocated images have sufficient capacity (may reallocate on resize)
         ensureNormalBufferImages(device_->get(), *runtime_, viewportExtent, colorFormat, input.depthFormat);
 
-        // Get the current frame slot's pre-allocated images
-        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-        auto const& normalBufferImage = runtime_->normalBuffers[frameSlot];
-        auto const& depthBufferImage = runtime_->depthBuffers[frameSlot];
-
-        nr::nrAssert(normalBufferImage.valid(),
-            std::format("NormalBuffer build: pre-allocated normal image for frame slot {} is invalid.", frameSlot));
-        nr::nrAssert(depthBufferImage.valid(),
-            std::format("NormalBuffer build: pre-allocated depth image for frame slot {} is invalid.", frameSlot));
-
-        // Import pre-allocated normal buffer image into the render graph
-        output.normalBuffer = context.addResource(nr::renderer::GraphImportedImageDesc{
-            .debugName = std::format("NormalBuffer.Color[{}]", frameSlot),
-            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
-            .residency = nr::renderer::ResourceResidency::Imported,
-            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
-            .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
-            .format = colorFormat,
-            .usageIntents = {
-                nr::renderer::ImageUsageIntent::ColorAttachment,
-                nr::renderer::ImageUsageIntent::TransferSrc,
-                nr::renderer::ImageUsageIntent::Sampled,
-            },
-            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
-            .aspect = nr::renderer::ImageAspectIntent::Color,
-            .importedResource = std::cref(normalBufferImage),
-        });
-
-        // Import pre-allocated depth buffer image into the render graph
-        output.depthBuffer = context.addResource(nr::renderer::GraphImportedImageDesc{
-            .debugName = std::format("NormalBuffer.Depth[{}]", frameSlot),
-            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
-            .residency = nr::renderer::ResourceResidency::Imported,
-            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
-            .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
-            .format = input.depthFormat,
-            .usageIntents = {
-                nr::renderer::ImageUsageIntent::DepthStencilAttachment,
-            },
-            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
-            .aspect = nr::renderer::ImageAspectIntent::Depth,
-            .importedResource = std::cref(depthBufferImage),
-        });
-
-        // Get the current frame slot's pre-allocated uniform buffer
-        auto& frameUniformBufferRef = runtime_->frameUniformBuffers[frameSlot];
-        nr::nrAssert(frameUniformBufferRef.valid(),
-            std::format("NormalBuffer build: pre-allocated frame uniform buffer for frame slot {} is invalid.", frameSlot));
+        output.normalBuffer = context.importFrameColor(
+            runtime_->normalBuffers,
+            "NormalBuffer.Color",
+            viewportExtent,
+            colorFormat);
+        output.depthBuffer = context.importFrameDepth(
+            runtime_->depthBuffers,
+            "NormalBuffer.Depth",
+            viewportExtent,
+            input.depthFormat);
 
         // Update uniform buffer contents
         auto frameUniforms = NormalBufferFrameUniforms{
@@ -387,32 +349,17 @@ class NormalBufferNode final : public Node
             .viewProjection = input.viewProjection,
         };
 
-        frameUniformBufferRef.writeMappedAndFlush(frameUniforms);
-
-        // Import pre-allocated uniform buffer into the render graph
-        auto frameUniformBuffer = context.addResource(nr::renderer::GraphImportedBufferDesc{
-            .debugName = std::format("NormalBuffer.FrameUniforms[{}]", frameSlot),
-            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
-            .residency = nr::renderer::ResourceResidency::Imported,
-            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
-            .size = static_cast<vk::DeviceSize>(sizeof(NormalBufferFrameUniforms)),
-            .usageIntents = {
-                nr::renderer::BufferUsageIntent::Uniform,
-            },
-            .importedResource = std::ref(frameUniformBufferRef),
-        });
+        auto frameUniformBuffer = context.importFrameUniform(
+            runtime_->frameUniformBuffers,
+            "NormalBuffer.FrameUniforms",
+            frameUniforms);
 
         auto root = runtime_->pipeline.descriptorLayout.rootCursor();
-        nr::nrAssert(root.valid(), "NormalBuffer build stage requires a valid root shader cursor.");
-
         auto frameCursor = root["gFrame"];
-        nr::nrAssert(frameCursor.valid(), "NormalBuffer build stage requires gFrame uniform cursor.");
-
-        auto frameBindOk = frameCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+        static_cast<void>(frameCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = frameUniformBuffer.value,
             .debugName = "NormalBuffer.FrameUniforms",
-        });
-        nr::nrAssert(frameBindOk, "NormalBuffer build stage failed to bind logical gFrame uniform resource.");
+        }));
 
         auto passBindingSnapshot = root.snapshot();
         root.clearSnapshot();
@@ -431,31 +378,9 @@ class NormalBufferNode final : public Node
         }
 
         auto passIntents = std::array{
-            nr::renderer::PassResourceUseDesc{
-                .resource = output.normalBuffer,
-                .imageUsage = nr::renderer::ImageUsageIntent::ColorAttachment,
-                .imageAccess = nr::renderer::ImageAccessIntent::ColorAttachmentWrite,
-                .imageLayout = nr::renderer::ImageLayoutIntent::ColorAttachment,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = false,
-            },
-            nr::renderer::PassResourceUseDesc{
-                .resource = output.depthBuffer,
-                .imageUsage = nr::renderer::ImageUsageIntent::DepthStencilAttachment,
-                .imageAccess = nr::renderer::ImageAccessIntent::DepthStencilWrite,
-                .imageLayout = nr::renderer::ImageLayoutIntent::DepthStencilAttachment,
-                .imageAspect = nr::renderer::ImageAspectIntent::Depth,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = false,
-            },
-            nr::renderer::PassResourceUseDesc{
-                .resource = frameUniformHandle,
-                .bufferUsage = nr::renderer::BufferUsageIntent::Uniform,
-                .bufferAccess = nr::renderer::BufferAccessIntent::UniformRead,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = true,
-            },
+            nr::renderer::use::colorWrite(output.normalBuffer),
+            nr::renderer::use::depthWrite(output.depthBuffer),
+            nr::renderer::use::uniformRead(frameUniformHandle),
         };
 
         [[maybe_unused]] auto rasterPassHandle = context.addPass(
@@ -483,37 +408,22 @@ class NormalBufferNode final : public Node
 
                 auto colorAttachment = nr::rhi::ops::RenderingAttachmentDesc{
                     .imageView = colorImage->view,
-                    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                    .resolveMode = vk::ResolveModeFlagBits::eNone,
-                    .resolveImageView = {},
-                    .resolveImageLayout = vk::ImageLayout::eUndefined,
                     .loadOp = vk::AttachmentLoadOp::eClear,
-                    .storeOp = vk::AttachmentStoreOp::eStore,
                     .clearValue = vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.5f, 0.5f, 1.0f, 1.0f}}},
                 };
 
                 auto depthAttachment = nr::rhi::ops::RenderingDepthStencilAttachmentDesc{
                     .imageView = depthImage->view,
-                    .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-                    .resolveMode = vk::ResolveModeFlagBits::eNone,
-                    .resolveImageView = {},
-                    .resolveImageLayout = vk::ImageLayout::eUndefined,
                     .depthLoadOp = vk::AttachmentLoadOp::eClear,
-                    .depthStoreOp = vk::AttachmentStoreOp::eStore,
                     .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
                     .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
-                    .clearValue = vk::ClearDepthStencilValue{1.0f, 0u},
                 };
 
                 auto colorAttachments = std::array{colorAttachment};
                 auto renderingScope = nr::rhi::ops::RenderingScopeDesc{
                     .renderArea = vk::Rect2D{vk::Offset2D{0, 0}, targetExtent},
-                    .layerCount = 1,
-                    .viewMask = 0,
-                    .flags = {},
                     .colorAttachments = colorAttachments,
                     .depthAttachment = depthAttachment,
-                    .stencilAttachment = std::nullopt,
                 };
 
                 auto& commandBuffer = recordContext.commandBuffer->get();
@@ -563,10 +473,7 @@ class NormalBufferNode final : public Node
                     if (capturedBridgeFrame.has_value())
                     {
                         auto drawRoot = runtime->pipeline.descriptorLayout.rootCursor();
-                        nr::nrAssert(drawRoot.valid(), "NormalBuffer pass requires a valid root shader cursor for push constants.");
-
                         auto drawPushCursor = drawRoot["gPushConstants"];
-                        nr::nrAssert(drawPushCursor.valid(), "NormalBuffer pass requires gPushConstants cursor.");
 
                         for (const auto& draw : capturedBridgeFrame->rasterDraws)
                         {
@@ -579,8 +486,7 @@ class NormalBufferNode final : public Node
                             auto pushConstants = NormalBufferPushConstants{
                                 .model = draw.world,
                             };
-                            auto pushConstantOk = drawPushCursor.setData(pushConstants);
-                            nr::nrAssert(pushConstantOk, "NormalBuffer pass failed to set gPushConstants data.");
+                            static_cast<void>(drawPushCursor.setData(pushConstants));
 
                             auto drawBindingSnapshot = drawRoot.snapshot();
                             drawRoot.clearSnapshot();

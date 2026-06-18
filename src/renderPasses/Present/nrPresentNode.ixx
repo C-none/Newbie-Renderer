@@ -203,36 +203,16 @@ class PresentNode final : public Node
 
         ensureConvertedColorImages(device_->get(), *runtime_, viewportExtent);
 
-        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-        auto const& convertedColorImage = runtime_->convertedColorImages[frameSlot];
-        nr::nrAssert(convertedColorImage.valid(),
-            std::format("Present build: pre-allocated convertedColor image for frame slot {} is invalid.", frameSlot));
+        auto convertedColor = context.importFrameStorageColor(
+            runtime_->convertedColorImages,
+            "Present.ConvertedColor",
+            viewportExtent,
+            vk::Format::eR8G8B8A8Unorm);
 
-        auto convertedColor = context.addResource(nr::renderer::GraphImportedImageDesc{
-            .debugName = std::format("Present.ConvertedColor[{}]", frameSlot),
-            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
-            .residency = nr::renderer::ResourceResidency::Imported,
-            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
-            .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
-            .format = vk::Format::eR8G8B8A8Unorm,
-            .usageIntents = {
-                nr::renderer::ImageUsageIntent::StorageWrite,
-                nr::renderer::ImageUsageIntent::TransferSrc,
-            },
-            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
-            .aspect = nr::renderer::ImageAspectIntent::Color,
-            .importedResource = std::cref(convertedColorImage),
-        });
-
-        auto swapchainImage = context.addResource(nr::renderer::GraphImportedSwapchainImageDesc{
-            .debugName = "Swapchain.Image",
-            .lifetime = nr::renderer::ResourceLifetime::SwapchainRelative,
-            .residency = nr::renderer::ResourceResidency::Swapchain,
-            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
-            .swapchainImageIndex = frameParameters.swapchainImageIndex,
-            .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
-            .format = swapchainFormat,
-        });
+        auto swapchainFrameParameters = frameParameters;
+        swapchainFrameParameters.swapchainExtent = viewportExtent;
+        swapchainFrameParameters.swapchainFormat = swapchainFormat;
+        auto swapchainImage = context.importSwapchain("Swapchain.Image", swapchainFrameParameters);
 
         output.swapchainImage = swapchainImage;
 
@@ -252,71 +232,35 @@ class PresentNode final : public Node
         };
 
         auto convertRoot = runtime->pipeline.descriptorLayout.rootCursor();
-        nr::nrAssert(convertRoot.valid(), "Present build stage requires a valid root shader cursor.");
-
         auto sourceCursor = convertRoot["gSourceColor"];
         auto uiCursor = convertRoot["gUiColor"];
         auto convertedCursor = convertRoot["gConvertedColor"];
         auto pushCursor = convertRoot["gPresentConvert"];
 
-        nr::nrAssert(sourceCursor.valid(), "Present build stage requires gSourceColor cursor.");
-        nr::nrAssert(uiCursor.valid(), "Present build stage requires gUiColor cursor.");
-        nr::nrAssert(convertedCursor.valid(), "Present build stage requires gConvertedColor cursor.");
-        nr::nrAssert(pushCursor.valid(), "Present build stage requires gPresentConvert push-constant cursor.");
-
-        auto sourceBindOk = sourceCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+        static_cast<void>(sourceCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = sourceColor.value,
             .debugName = "Present.SourceColor",
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        });
-        auto uiBindOk = uiCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+        }));
+        static_cast<void>(uiCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = uiBuffer.value,
             .debugName = "Present.UiBuffer",
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        });
-        auto convertedBindOk = convertedCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+        }));
+        static_cast<void>(convertedCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = convertedColor.value,
             .debugName = "Present.ConvertedColor",
             .imageLayout = vk::ImageLayout::eGeneral,
-        });
-        auto pushConstantOk = pushCursor.setData(pushConstants);
-
-        nr::nrAssert(sourceBindOk, "Present build stage failed to bind logical gSourceColor resource.");
-        nr::nrAssert(uiBindOk, "Present build stage failed to bind logical gUiColor resource.");
-        nr::nrAssert(convertedBindOk, "Present build stage failed to bind logical gConvertedColor resource.");
-        nr::nrAssert(pushConstantOk, "Present build stage failed to set gPresentConvert push constants.");
+        }));
+        static_cast<void>(pushCursor.setData(pushConstants));
 
         auto convertBindingSnapshot = convertRoot.snapshot();
         convertRoot.clearSnapshot();
 
         auto convertPassIntents = std::array{
-            nr::renderer::PassResourceUseDesc{
-                .resource = sourceColor,
-                .imageUsage = nr::renderer::ImageUsageIntent::Sampled,
-                .imageAccess = nr::renderer::ImageAccessIntent::SampledRead,
-                .imageLayout = nr::renderer::ImageLayoutIntent::ShaderReadOnly,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = true,
-            },
-            nr::renderer::PassResourceUseDesc{
-                .resource = uiBuffer,
-                .imageUsage = nr::renderer::ImageUsageIntent::Sampled,
-                .imageAccess = nr::renderer::ImageAccessIntent::SampledRead,
-                .imageLayout = nr::renderer::ImageLayoutIntent::ShaderReadOnly,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = true,
-            },
-            nr::renderer::PassResourceUseDesc{
-                .resource = convertedColor,
-                .imageUsage = nr::renderer::ImageUsageIntent::StorageWrite,
-                .imageAccess = nr::renderer::ImageAccessIntent::StorageWrite,
-                .imageLayout = nr::renderer::ImageLayoutIntent::General,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = false,
-            },
+            nr::renderer::use::sampledRead(sourceColor),
+            nr::renderer::use::sampledRead(uiBuffer),
+            nr::renderer::use::storageWrite(convertedColor),
         };
 
         [[maybe_unused]] auto convertPassHandle = context.addPass(
@@ -357,33 +301,9 @@ class PresentNode final : public Node
             });
 
         auto copyPassIntents = std::array{
-            nr::renderer::PassResourceUseDesc{
-                .resource = convertedColor,
-                .imageUsage = nr::renderer::ImageUsageIntent::TransferSrc,
-                .imageAccess = nr::renderer::ImageAccessIntent::TransferRead,
-                .imageLayout = nr::renderer::ImageLayoutIntent::TransferSrc,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = true,
-            },
-            nr::renderer::PassResourceUseDesc{
-                .resource = swapchainImage,
-                .imageUsage = nr::renderer::ImageUsageIntent::TransferDst,
-                .imageAccess = nr::renderer::ImageAccessIntent::TransferWrite,
-                .imageLayout = nr::renderer::ImageLayoutIntent::TransferDst,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = false,
-            },
-            nr::renderer::PassResourceUseDesc{
-                .resource = swapchainImage,
-                .imageUsage = nr::renderer::ImageUsageIntent::PresentSource,
-                .imageAccess = nr::renderer::ImageAccessIntent::PresentRead,
-                .imageLayout = nr::renderer::ImageLayoutIntent::PresentSrc,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Compute,
-                .readOnly = true,
-            },
+            nr::renderer::use::transferSrc(convertedColor),
+            nr::renderer::use::transferDst(swapchainImage),
+            nr::renderer::use::presentRead(swapchainImage),
         };
 
         [[maybe_unused]] auto copyPassHandle = context.addPass(

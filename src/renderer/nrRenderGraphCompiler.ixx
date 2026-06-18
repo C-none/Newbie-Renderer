@@ -301,12 +301,24 @@ class RenderGraphCompiler
 
     [[nodiscard]] CompiledGraphFrame compile(const RenderGraphFrameDescription& frame) const
     {
+        return compileImpl<false>(frame);
+    }
+
+    [[nodiscard]] CompiledGraphFrame compileConsuming(RenderGraphFrameDescription& frame) const
+    {
+        return compileImpl<true>(frame);
+    }
+
+  private:
+    template <bool MoveFramePayloads, typename FrameT>
+    [[nodiscard]] CompiledGraphFrame compileImpl(FrameT& frame) const
+    {
         nrAssert(
             hasExplicitSubmitBoundariesForQueueTransitions(frame),
             "RenderGraphCompiler::compile requires explicit submitNode boundaries before cross-queue pass transitions.");
 
-        auto resources = compileResources(frame);
-        auto submitBatches = compileSubmitBatches(frame, resources);
+        auto resources = compileResources<MoveFramePayloads>(frame);
+        auto submitBatches = compileSubmitBatches<MoveFramePayloads>(frame, resources);
 
         auto compiled = CompiledGraphFrame{
             .resources = std::move(resources),
@@ -320,7 +332,6 @@ class RenderGraphCompiler
         return compiled;
     }
 
-  private:
     struct LastResourceUse
     {
         QueueDomain queue = QueueDomain::Graphics;
@@ -330,12 +341,48 @@ class RenderGraphCompiler
         AccessScope scope{};
     };
 
-    [[nodiscard]] static std::vector<CompiledResourceDesc> compileResources(const RenderGraphFrameDescription& frame)
+    template <bool MovePayload, typename T>
+    [[nodiscard]] static std::remove_cvref_t<T> transferPayload(T& value)
+    {
+        if constexpr (MovePayload)
+        {
+            static_assert(
+                !std::is_const_v<std::remove_reference_t<T>>,
+                "RenderGraphCompiler::transferPayload cannot move from const input.");
+            return std::move(value);
+        }
+        else
+        {
+            return value;
+        }
+    }
+
+    template <typename IntentRange>
+    static void mergeUsageIntents(
+        CompiledResourceDesc& resource,
+        const IntentRange& usageIntents)
+    {
+        using IntentT = std::ranges::range_value_t<IntentRange>;
+
+        std::ranges::for_each(usageIntents, [&](IntentT intent) {
+            if constexpr (std::same_as<IntentT, BufferUsageIntent>)
+            {
+                resource.resolvedBufferUsage |= mapBufferUsageIntent(intent);
+            }
+            else if constexpr (std::same_as<IntentT, ImageUsageIntent>)
+            {
+                resource.resolvedImageUsage |= mapImageUsageIntent(intent);
+            }
+        });
+    }
+
+    template <bool MoveFramePayloads, typename FrameT>
+    [[nodiscard]] static std::vector<CompiledResourceDesc> compileResources(FrameT& frame)
     {
         auto resources = std::vector<CompiledResourceDesc>{};
         resources.reserve(frame.resources.size());
 
-        std::ranges::for_each(frame.resources, [&](const GraphResourceDesc& resource) {
+        std::ranges::for_each(frame.resources, [&](auto& resource) {
             auto compiledResource = CompiledResourceDesc{
                 .handle = resource.handle,
                 .debugName = {},
@@ -358,9 +405,9 @@ class RenderGraphCompiler
             };
 
             std::visit(
-                [&](const auto& desc) {
+                [&](auto& desc) {
                     using DescT = std::remove_cvref_t<decltype(desc)>;
-                    compiledResource.debugName = desc.debugName;
+                    compiledResource.debugName = transferPayload<MoveFramePayloads>(desc.debugName);
 
                     if constexpr (std::same_as<DescT, GraphImportedBufferDesc>)
                     {
@@ -371,9 +418,7 @@ class RenderGraphCompiler
                         compiledResource.initialOwnership = desc.initialOwnership;
                         compiledResource.finalOwnership = desc.initialOwnership;
                         compiledResource.importedBufferResource = desc.importedResource;
-                        std::ranges::for_each(desc.usageIntents, [&](BufferUsageIntent intent) {
-                            compiledResource.resolvedBufferUsage |= mapBufferUsageIntent(intent);
-                        });
+                        mergeUsageIntents(compiledResource, desc.usageIntents);
                     }
                     else if constexpr (std::same_as<DescT, GraphTransientBufferDesc>)
                     {
@@ -384,9 +429,7 @@ class RenderGraphCompiler
                         compiledResource.initialOwnership = ResourceOwnershipDomain::Undefined;
                         compiledResource.finalOwnership = ResourceOwnershipDomain::Undefined;
                         compiledResource.resolvedBufferMemoryUsage = desc.memoryUsage;
-                        std::ranges::for_each(desc.usageIntents, [&](BufferUsageIntent intent) {
-                            compiledResource.resolvedBufferUsage |= mapBufferUsageIntent(intent);
-                        });
+                        mergeUsageIntents(compiledResource, desc.usageIntents);
                     }
                     else if constexpr (std::same_as<DescT, GraphImportedImageDesc>)
                     {
@@ -401,9 +444,7 @@ class RenderGraphCompiler
                         compiledResource.initialOwnership = desc.initialOwnership;
                         compiledResource.finalOwnership = desc.initialOwnership;
                         compiledResource.importedImageResource = desc.importedResource;
-                        std::ranges::for_each(desc.usageIntents, [&](ImageUsageIntent intent) {
-                            compiledResource.resolvedImageUsage |= mapImageUsageIntent(intent);
-                        });
+                        mergeUsageIntents(compiledResource, desc.usageIntents);
                     }
                     else if constexpr (std::same_as<DescT, GraphTransientImageDesc>)
                     {
@@ -418,9 +459,7 @@ class RenderGraphCompiler
                         compiledResource.finalLayout = ImageLayoutIntent::Undefined;
                         compiledResource.initialOwnership = ResourceOwnershipDomain::Undefined;
                         compiledResource.finalOwnership = ResourceOwnershipDomain::Undefined;
-                        std::ranges::for_each(desc.usageIntents, [&](ImageUsageIntent intent) {
-                            compiledResource.resolvedImageUsage |= mapImageUsageIntent(intent);
-                        });
+                        mergeUsageIntents(compiledResource, desc.usageIntents);
                     }
                     else if constexpr (std::same_as<DescT, GraphImportedSwapchainImageDesc>)
                     {
@@ -508,13 +547,15 @@ class RenderGraphCompiler
         return indices;
     }
 
+    template <bool MovePassPayloads, typename FrameT>
     [[nodiscard]] static std::vector<CompiledSubmitBatch> compileSubmitBatches(
-        const RenderGraphFrameDescription& frame,
+        FrameT& frame,
         const std::vector<CompiledResourceDesc>& compiledResources)
     {
-        auto passByHandle = std::map<GraphPassHandle, std::reference_wrapper<const PassExecutionDesc>>{};
-        std::ranges::for_each(frame.passes, [&](const PassExecutionDesc& pass) {
-            passByHandle.emplace(pass.handle, std::cref(pass));
+        using PassRef = std::conditional_t<MovePassPayloads, PassExecutionDesc, const PassExecutionDesc>;
+        auto passByHandle = std::map<GraphPassHandle, std::reference_wrapper<PassRef>>{};
+        std::ranges::for_each(frame.passes, [&](auto& pass) {
+            passByHandle.emplace(pass.handle, std::ref(pass));
         });
 
         auto resourceIndexByHandle = std::map<GraphResourceHandle, std::size_t>{};
@@ -547,7 +588,7 @@ class RenderGraphCompiler
             auto passHandle = std::get<GraphPassHandle>(step);
             auto passIt = passByHandle.find(passHandle);
             nrAssert(passIt != passByHandle.end(), "RenderGraphCompiler::compileSubmitBatches execution order references unknown pass handle.");
-            const auto& pass = passIt->second.get();
+            auto& pass = passIt->second.get();
 
             if (currentBatch.has_value() &&
                 currentBatch->queue != pass.queue &&
@@ -574,18 +615,19 @@ class RenderGraphCompiler
                 pendingBoundary.reset();
             }
 
+            auto resolvedResourceIndices = resolvePassResourceIndices(pass.resourceUses, resourceIndexByHandle);
             currentBatch->passes.push_back(CompiledPass{
                 .handle = pass.handle,
                 .node = pass.node,
-                .debugName = pass.debugName,
+                .debugName = transferPayload<MovePassPayloads>(pass.debugName),
                 .isCopyPass = pass.isCopyPass,
                 .queue = pass.queue,
                 .submitBatchIndex = currentBatch->batchIndex,
-                .resourceUses = pass.resourceUses,
-                .resolvedResourceIndices = resolvePassResourceIndices(pass.resourceUses, resourceIndexByHandle),
+                .resourceUses = transferPayload<MovePassPayloads>(pass.resourceUses),
+                .resolvedResourceIndices = std::move(resolvedResourceIndices),
                 .preBarriers = {},
-                .prepare = pass.prepare,
-                .record = pass.record,
+                .prepare = transferPayload<MovePassPayloads>(pass.prepare),
+                .record = transferPayload<MovePassPayloads>(pass.record),
             });
         });
 
@@ -660,7 +702,7 @@ class RenderGraphCompiler
 
                     if (previousUse.has_value() && !previousFromSamePass)
                     {
-                        auto const &previous = previousUse->get();
+                        const auto& previous = previousUse->get();
                         auto strength = DependencyStrength::InOrder;
                         if (previous.queue != pass.queue)
                         {

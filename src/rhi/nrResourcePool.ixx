@@ -69,8 +69,8 @@ class ResourceFactory
     }
 
   private:
-    std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_;
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+    std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_{};
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 };
 
 // =========================================================================
@@ -182,8 +182,8 @@ class ResourcePool
     // Members
     // -----------------------------------------------------------------
 
-    std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_;
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+    std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_{};
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 
     // Per-frame transient resources (bulk-reset each frame)
     std::array<std::deque<Buffer>, maxFrameInFlight> frameBuffers_;

@@ -16,6 +16,12 @@ module;
 #include <turbojpeg.h>
 #include <vk_mem_alloc.h>
 
+// Defined in dependencyImpl.cpp (a non-module global translation unit). Declaring
+// it in the global module fragment keeps the C-linkage symbol reachable to the
+// exported nr::platform::isNsightInjected wrapper without pulling <windows.h> into
+// module-consuming translation units.
+extern "C" bool nrPlatformNsightInjected() noexcept;
+
 export module dependency;
 
 export namespace vk
@@ -24,7 +30,9 @@ using ::vk::AccelerationStructureBuildGeometryInfoKHR;
 using ::vk::AccelerationStructureBuildRangeInfoKHR;
 using ::vk::AccelerationStructureBuildTypeKHR;
 using ::vk::AccelerationStructureCreateInfoKHR;
+using ::vk::AccelerationStructureCreateFlagsKHR;
 using ::vk::AccelerationStructureDeviceAddressInfoKHR;
+using ::vk::AccelerationStructureGeometryAabbsDataKHR;
 using ::vk::AccelerationStructureGeometryInstancesDataKHR;
 using ::vk::AccelerationStructureGeometryKHR;
 using ::vk::AccelerationStructureGeometryTrianglesDataKHR;
@@ -79,10 +87,13 @@ using ::vk::ComponentMapping;
 using ::vk::CompositeAlphaFlagBitsKHR;
 using ::vk::ComputePipelineCreateInfo;
 using ::vk::CopyAccelerationStructureInfoKHR;
+using ::vk::CopyAccelerationStructureModeKHR;
+using ::vk::CopyAccelerationStructureToMemoryInfoKHR;
 using ::vk::CopyBufferInfo2;
 using ::vk::CopyBufferToImageInfo2;
 using ::vk::CopyImageInfo2;
 using ::vk::CopyImageToBufferInfo2;
+using ::vk::CopyMemoryToAccelerationStructureInfoKHR;
 using ::vk::CullModeFlagBits;
 using ::vk::CullModeFlags;
 using ::vk::DebugUtilsLabelEXT;
@@ -93,6 +104,7 @@ using ::vk::DebugUtilsMessageTypeFlagsEXT;
 using ::vk::DebugUtilsMessengerCallbackDataEXT;
 using ::vk::DebugUtilsMessengerCreateInfoEXT;
 using ::vk::DebugUtilsObjectNameInfoEXT;
+using ::vk::DeferredOperationKHR;
 using ::vk::DependencyInfo;
 using ::vk::DescriptorBindingFlagBits;
 using ::vk::DescriptorBindingFlags;
@@ -113,6 +125,8 @@ using ::vk::DescriptorSetLayoutCreateInfo;
 using ::vk::DescriptorSetVariableDescriptorCountAllocateInfo;
 using ::vk::DescriptorType;
 using ::vk::DeviceAddress;
+using ::vk::DeviceOrHostAddressConstKHR;
+using ::vk::DeviceOrHostAddressKHR;
 using ::vk::DeviceCreateFlags;
 using ::vk::DeviceCreateInfo;
 using ::vk::DeviceQueueCreateInfo;
@@ -139,6 +153,7 @@ using ::vk::FrontFace;
 using ::vk::GeometryFlagsKHR;
 using ::vk::GeometryTypeKHR;
 using ::vk::GraphicsPipelineCreateInfo;
+using ::vk::AabbPositionsKHR;
 using ::vk::Image;
 using ::vk::ImageAspectFlagBits;
 using ::vk::ImageAspectFlags;
@@ -163,6 +178,7 @@ using ::vk::KHRAccelerationStructureExtensionName;
 using ::vk::KHRDeferredHostOperationsExtensionName;
 using ::vk::KHRPipelineLibraryExtensionName;
 using ::vk::KHRRayQueryExtensionName;
+using ::vk::KHRRayTracingMaintenance1ExtensionName;
 using ::vk::KHRRayTracingPipelineExtensionName;
 using ::vk::KHRShaderFloatControlsExtensionName;
 using ::vk::KHRSpirv14ExtensionName;
@@ -186,6 +202,7 @@ using ::vk::PhysicalDeviceProperties;
 using ::vk::PhysicalDeviceProperties2;
 using ::vk::PhysicalDeviceRayQueryFeaturesKHR;
 using ::vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV;
+using ::vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR;
 using ::vk::PhysicalDeviceRayTracingPipelineFeaturesKHR;
 using ::vk::PhysicalDeviceRayTracingPipelinePropertiesKHR;
 using ::vk::PhysicalDeviceType;
@@ -199,6 +216,7 @@ using ::vk::PipelineBindPoint;
 using ::vk::PipelineCacheCreateInfo;
 using ::vk::PipelineColorBlendAttachmentState;
 using ::vk::PipelineColorBlendStateCreateInfo;
+using ::vk::PipelineCreateFlagBits;
 using ::vk::PipelineCreateFlags;
 using ::vk::PipelineDepthStencilStateCreateInfo;
 using ::vk::PipelineDynamicStateCreateInfo;
@@ -223,6 +241,8 @@ using ::vk::PrimitiveTopology;
 using ::vk::PushConstantRange;
 using ::vk::QueueFlagBits;
 using ::vk::QueueFlags;
+using ::vk::QueryPool;
+using ::vk::QueryType;
 using ::vk::RayTracingPipelineCreateInfoKHR;
 using ::vk::RayTracingPipelineInterfaceCreateInfoKHR;
 using ::vk::RayTracingShaderGroupCreateInfoKHR;
@@ -245,6 +265,7 @@ using ::vk::SemaphoreType;
 using ::vk::SemaphoreTypeCreateInfo;
 using ::vk::SemaphoreWaitInfo;
 using ::vk::ShaderModuleCreateInfo;
+using ::vk::ShaderGroupShaderKHR;
 using ::vk::ShaderStageFlagBits;
 using ::vk::ShaderStageFlags;
 using ::vk::SharingMode;
@@ -258,6 +279,7 @@ using ::vk::SwapchainKHR;
 using ::vk::SystemError;
 using ::vk::StructureChain;
 using ::vk::to_string;
+using ::vk::TraceRaysIndirectCommand2KHR;
 using ::vk::True;
 using ::vk::VertexInputAttributeDescription;
 using ::vk::VertexInputBindingDescription;
@@ -657,3 +679,19 @@ inline vk::Result createWindowSurface(
         glfwCreateWindowSurface(instance, window, allocator, surface));
 }
 } // namespace glfw
+
+export namespace nr::platform
+{
+/**
+ * @brief Whether NVIDIA Nsight Graphics is intercepting the current process.
+ *
+ * Windows-only; returns false otherwise. The memory allocator queries this to
+ * switch GpuOnly buffers onto a profiler-safe path that avoids
+ * VkMemoryDedicatedAllocateInfo, which conflicts with the
+ * VkImportMemoryHostPointerInfoEXT Nsight injects (VUID-VkMemoryAllocateInfo-pNext-02806).
+ */
+inline bool isNsightInjected() noexcept
+{
+    return nrPlatformNsightInjected();
+}
+} // namespace nr::platform

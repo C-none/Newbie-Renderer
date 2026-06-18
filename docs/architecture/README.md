@@ -41,6 +41,7 @@ Current boundary notes:
 - RHI command-buffer helper APIs expose `const vk::raii::CommandBuffer&`; raw `vk::CommandBuffer` handles stay internal implementation details.
 - Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
 - `nr.rhi` exposes descriptor-indexing, buffer-device-address, ray-tracing, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection with a semantic multi-set ABI for runtime arrays.
+- RHI ray-tracing helpers cover BLAS/TLAS build recording, multi-geometry BLAS input, AS copy/compaction/serialization/query operations, SBT record payload packing, trace/indirect-trace recording, maintenance1 indirect2 dispatch, and RT-specific sync2 stage/access helpers.
 - RHI copy helpers record Vulkan-Hpp copy commands 2 while keeping narrow adapters for existing copy-region structs.
 - `Buffer::writeMappedAndFlush(...)` is the RHI helper for direct CPU writes to mapped buffers; `UploadReadbackContext` defaults both upload and readback rings to 128 MiB and exposes upload timeline polling for higher layers.
 - `PipelineState` retains the source `SlangProgram` so reflection-backed cursor access remains valid after pipeline creation.
@@ -52,6 +53,7 @@ Entry points:
 - Device and frame lifetime: [../../src/rhi/nrDevice.ixx](../../src/rhi/nrDevice.ixx)
 - RAII resources: [../../src/rhi/nrResource.ixx](../../src/rhi/nrResource.ixx)
 - Descriptor and pipeline services: [../../src/rhi/nrDescriptor.ixx](../../src/rhi/nrDescriptor.ixx), [../../src/rhi/nrPipeline.ixx](../../src/rhi/nrPipeline.ixx)
+- Ray tracing helpers: [../../src/rhi/nrAccelerationStructure.ixx](../../src/rhi/nrAccelerationStructure.ixx), [../../src/rhi/nrRayTracing.ixx](../../src/rhi/nrRayTracing.ixx), [../../src/rhi/nrResourceOps.ixx](../../src/rhi/nrResourceOps.ixx)
 - Topic docs: [../rhi_command_execution_strategy.md](../rhi_command_execution_strategy.md), [../slang_bindingtype_descriptor_mapping.md](../slang_bindingtype_descriptor_mapping.md), [../rhi_vulkan14_modernization_audit.md](../rhi_vulkan14_modernization_audit.md), [../rhi_rt_completion_audit.md](../rhi_rt_completion_audit.md), [../rhi_upload_readback_limits_audit.md](../rhi_upload_readback_limits_audit.md)
 
 ## 2. `load`
@@ -191,6 +193,7 @@ Boundary notes:
 - renderer can use scene-resolved camera data or an optional app/viewer camera override
 - when camera override is present, scene extraction uses `customFrustum` and bridge frame constants come from override data
 - `FrameServices` is the current renderer-side sideband for app-owned per-frame services that render passes may consume without creating a direct app-layer dependency on renderer internals
+- `NodeBuildContext` exposes node-scoped resource declaration phrases for common color/depth/uniform/swapchain frame resources, and `nr::renderer::use::*` factories produce the canonical pass-use descriptors that still flow through `RenderGraphBuilder` validation.
 - application-facing code that owns both renderer and scene should prefer `nr::app::AppSession`, which also owns the interactive app camera used to build viewer-style overrides
 
 Entry points:
@@ -232,8 +235,12 @@ Current boundary notes:
 - `PresentNode` is the final compute conversion and composition path. It converts the scene color buffer into swapchain-ready output, applies flip/gamma/channel conversion, and alpha-composites the standalone UI buffer before copy-to-swapchain
 - `NormalBufferNode` consumes bridge draw geometry contracts and records real scene mesh draw calls (indexed/non-indexed) with world-space normal visualization
 - `NormalBufferNode` now also consumes `nr::app::UiSystem` through `NodeFrameParameters::frameServices` to expose runtime controls such as FPS display, frame time, and front/back-face cull switching
-- `UiNode` is the Dear ImGui overlay build pass. It finalizes the app-owned UI frame, consumes draw data emitted earlier in the graph, honors Dear ImGui 1.92.6 `ImTextureData` requests from the vcpkg dependency, manages UI textures through a descriptor-indexed runtime sampled-image array, polls pending texture upload tickets before recording acquire barriers, selects the sampled texture per draw through push constants, and renders the overlay into its own transparent `uiBuffer` for later composition in `PresentNode`
+- `UiNode` is the Dear ImGui overlay build node. It finalizes the app-owned UI frame, consumes draw data emitted earlier in the graph, honors Dear ImGui 1.92.6 `ImTextureData` requests from the vcpkg dependency, manages UI textures through a descriptor-indexed runtime sampled-image array, emits a `Ui.TextureUpload` pass before `Ui.Overlay` when texture pixels need staging, selects the sampled texture per draw through push constants, and renders the overlay into its own transparent `uiBuffer` for later composition in `PresentNode`
 - node record callbacks should route command recording through `PassRecordContext::commandBuffer` as a RAII `vk::raii::CommandBuffer` reference when calling `nr.rhi` command helpers.
+- common pass resource declarations should prefer `NodeBuildContext` resource phrases and `nr::renderer::use::*` intent factories over hand-written graph descriptor fields where the phrase matches the pass semantics.
+- shader-visible node bindings must be expressed through `ShaderCursor` and `ShaderBindingSnapshot`. Descriptor-backed resources should deploy through `bindResourcesToCommandBuffer(...)`, and push constants should deploy through `pushConstantsToCommandBuffer(...)` inside the `addPass` record callback.
+- render-pass nodes should not directly perform shader-visible descriptor writes or binds through `ShaderBindingPool::update(...)`, `resolveDescriptorWriteRequests(...)`, `CursorPipelineLayout::bindDescriptorSets(...)`, or `CursorPipelineLayout::pushConstants(...)`; the detailed policy remains in [../../AGENTS.md](../../AGENTS.md).
+- current audit note: `UiNode` push constants and bindless texture descriptors now use cursor snapshots plus the shared RHI deployment helpers. The previous bindless texture issue was node-level boundary drift, not a missing low-level RHI capability.
 
 Entry points:
 

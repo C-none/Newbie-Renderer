@@ -9,23 +9,51 @@ endif()
 nr_add_library(nr_test_framework STATIC)
 set_target_properties(nr_test_framework PROPERTIES FOLDER "Test/framework")
 target_sources(nr_test_framework
-	PUBLIC
-		FILE_SET cxx_modules TYPE CXX_MODULES FILES
-			${CMAKE_CURRENT_SOURCE_DIR}/framework/nr_test.ixx
+    PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/framework/nr_test.ixx
 )
 target_compile_definitions(nr_test_framework
-	PUBLIC
-		NR_TEST_OUTPUT_LEVEL_FLAG=${NR_TEST_OUTPUT_LEVEL_FLAG}
+    PUBLIC
+        NR_TEST_OUTPUT_LEVEL_FLAG=${NR_TEST_OUTPUT_LEVEL_FLAG}
 )
 
 add_library(nr_test_main OBJECT
-	${CMAKE_CURRENT_SOURCE_DIR}/framework/nr_test_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/framework/nr_test_main.cpp
 )
 set_target_properties(nr_test_main PROPERTIES FOLDER "Test/framework")
 target_link_libraries(nr_test_main PUBLIC
-	nr_test_framework
+    nr_test_framework
 )
 
-add_subdirectory(scene)
-add_subdirectory(profile)
-add_subdirectory(app)
+function(nr_add_contract_test target_name source_file labels)
+    nr_add_executable(${target_name}
+        ${source_file}
+    )
+    set_target_properties(${target_name} PROPERTIES FOLDER "Test")
+    target_link_libraries(${target_name} PRIVATE nr_test_main)
+
+    if(ARGN)
+        nr_link_module_dependencies(${target_name} ${source_file} PRIVATE
+            nr_test_framework
+            ${ARGN}
+        )
+    else()
+        nr_link_module_dependencies(${target_name} ${source_file} PRIVATE
+            nr_test_framework
+        )
+    endif()
+
+    add_test(NAME ${target_name} COMMAND ${target_name})
+    set_tests_properties(${target_name} PROPERTIES LABELS "${labels}")
+endfunction()
+
+add_subdirectory(unit/resource)
+add_subdirectory(unit/load)
+add_subdirectory(unit/rhi)
+add_subdirectory(unit/renderer)
+add_subdirectory(integration/scene)
+add_subdirectory(integration/rhi)
+add_subdirectory(integration/renderer)
+add_subdirectory(smoke/load)
+add_subdirectory(smoke/app)

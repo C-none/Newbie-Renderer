@@ -49,7 +49,6 @@ export namespace nr::rhi::sync
 {
     auto semaphoreHandle = static_cast<vk::Semaphore>(*timelineSemaphore);
     vk::SemaphoreWaitInfo waitInfo{};
-    waitInfo.flags = {};
     waitInfo.semaphoreCount = 1;
     waitInfo.pSemaphores = &semaphoreHandle;
     waitInfo.pValues = &value;

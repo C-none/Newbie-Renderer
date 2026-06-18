@@ -1,6 +1,6 @@
-# Embedded Triangle Test Application
+# Embedded Triangle remains a manually-run sample target, not a default CTest.
 nr_add_executable(embeddedTriangle embeddedTriangle.cpp)
-set_target_properties(embeddedTriangle PROPERTIES FOLDER "Test/app")
+set_target_properties(embeddedTriangle PROPERTIES FOLDER "Test/smoke/app")
 
 nr_link_module_dependencies(embeddedTriangle embeddedTriangle.cpp PRIVATE
     nrapp
@@ -14,13 +14,12 @@ add_custom_target(run_embeddedTriangle
     COMMAND $<TARGET_FILE:embeddedTriangle>
     DEPENDS embeddedTriangle
     WORKING_DIRECTORY $<TARGET_FILE_DIR:embeddedTriangle>
-    COMMENT "Build and run embeddedTriangle test"
+    COMMENT "Build and run embeddedTriangle smoke sample"
     USES_TERMINAL
 )
 
-# NormalBuffer + UI smoke test
 nr_add_executable(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp)
-set_target_properties(nr_normal_buffer_ui_smoke_test PROPERTIES FOLDER "Test/app")
+set_target_properties(nr_normal_buffer_ui_smoke_test PROPERTIES FOLDER "Test/smoke/app")
 
 nr_link_module_dependencies(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp PRIVATE
     nrapp
@@ -33,3 +32,4 @@ nr_link_module_dependencies(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.c
 )
 
 add_test(NAME nr_normal_buffer_ui_smoke_test COMMAND nr_normal_buffer_ui_smoke_test)
+set_tests_properties(nr_normal_buffer_ui_smoke_test PROPERTIES LABELS "gpu;window;smoke;app")

@@ -120,17 +120,111 @@ struct PassResourceUseDesc
 {
     GraphResourceHandle resource{};
 
-    std::optional<BufferUsageIntent> bufferUsage = std::nullopt;
-    std::optional<BufferAccessIntent> bufferAccess = std::nullopt;
+    std::optional<BufferUsageIntent> bufferUsage{};
+    std::optional<BufferAccessIntent> bufferAccess{};
 
-    std::optional<ImageUsageIntent> imageUsage = std::nullopt;
-    std::optional<ImageAccessIntent> imageAccess = std::nullopt;
-    std::optional<ImageLayoutIntent> imageLayout = std::nullopt;
-    std::optional<ImageAspectIntent> imageAspect = std::nullopt;
+    std::optional<ImageUsageIntent> imageUsage{};
+    std::optional<ImageAccessIntent> imageAccess{};
+    std::optional<ImageLayoutIntent> imageLayout{};
+    std::optional<ImageAspectIntent> imageAspect{};
 
     ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
     bool readOnly = false;
 };
+
+namespace use
+{
+[[nodiscard]] inline PassResourceUseDesc colorWrite(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = ImageUsageIntent::ColorAttachment,
+        .imageAccess = ImageAccessIntent::ColorAttachmentWrite,
+        .imageLayout = ImageLayoutIntent::ColorAttachment,
+        .imageAspect = ImageAspectIntent::Color,
+    };
+}
+
+[[nodiscard]] inline PassResourceUseDesc depthWrite(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = ImageUsageIntent::DepthStencilAttachment,
+        .imageAccess = ImageAccessIntent::DepthStencilWrite,
+        .imageLayout = ImageLayoutIntent::DepthStencilAttachment,
+        .imageAspect = ImageAspectIntent::Depth,
+    };
+}
+
+[[nodiscard]] inline PassResourceUseDesc sampledRead(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = ImageUsageIntent::Sampled,
+        .imageAccess = ImageAccessIntent::SampledRead,
+        .imageLayout = ImageLayoutIntent::ShaderReadOnly,
+        .imageAspect = ImageAspectIntent::Color,
+        .readOnly = true,
+    };
+}
+
+[[nodiscard]] inline PassResourceUseDesc storageWrite(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = ImageUsageIntent::StorageWrite,
+        .imageAccess = ImageAccessIntent::StorageWrite,
+        .imageLayout = ImageLayoutIntent::General,
+        .imageAspect = ImageAspectIntent::Color,
+    };
+}
+
+[[nodiscard]] inline PassResourceUseDesc uniformRead(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .bufferUsage = BufferUsageIntent::Uniform,
+        .bufferAccess = BufferAccessIntent::UniformRead,
+        .readOnly = true,
+    };
+}
+
+[[nodiscard]] inline PassResourceUseDesc transferSrc(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = ImageUsageIntent::TransferSrc,
+        .imageAccess = ImageAccessIntent::TransferRead,
+        .imageLayout = ImageLayoutIntent::TransferSrc,
+        .imageAspect = ImageAspectIntent::Color,
+        .readOnly = true,
+    };
+}
+
+[[nodiscard]] inline PassResourceUseDesc transferDst(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = ImageUsageIntent::TransferDst,
+        .imageAccess = ImageAccessIntent::TransferWrite,
+        .imageLayout = ImageLayoutIntent::TransferDst,
+        .imageAspect = ImageAspectIntent::Color,
+    };
+}
+
+[[nodiscard]] inline PassResourceUseDesc presentRead(GraphResourceHandle resource) noexcept
+{
+    return PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = ImageUsageIntent::PresentSource,
+        .imageAccess = ImageAccessIntent::PresentRead,
+        .imageLayout = ImageLayoutIntent::PresentSrc,
+        .imageAspect = ImageAspectIntent::Color,
+        .ownershipDomain = ResourceOwnershipDomain::Compute,
+        .readOnly = true,
+    };
+}
+} // namespace use
 
 struct PassBufferResource
 {

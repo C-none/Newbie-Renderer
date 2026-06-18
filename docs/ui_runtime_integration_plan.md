@@ -108,6 +108,12 @@ The following foundation is now in code:
    - `src/renderPasses/Ui/nrUiNode.ixx`
    - This keeps the existing persistent-buffer model but reduces realloc frequency under slowly growing UI workloads.
 
+10. UI texture uploads are now graph-integrated
+   - `src/renderPasses/Ui/nrUiNode.ixx`
+   - `UiNode` stores per-frame-slot CPU-visible texture staging buffers beside each managed UI texture.
+   - Texture create/update requests populate staging data during build and emit a `Ui.TextureUpload` pass before `Ui.Overlay`.
+   - The render graph owns the `TransferDst -> ShaderReadOnly` layout transition between upload and sampling through declared pass resource intents.
+
 ### Verified
 
 Current validation that was run after the changes:
@@ -125,12 +131,13 @@ Current high-level flow:
 1. Dear ImGui emits `ImTextureData` requests.
 2. `UiNode` creates or updates `nr::rhi::Image` entries in `UiRuntimeCache::textures`.
 3. Each `ImTextureID` gets a stable integer slot through `textureSlotById`.
-4. For each frame slot, `UiNode` allocates the pipeline descriptor sets, with set 1 carrying the variable descriptor-count binding for `gUiTextures`.
-5. `UiNode` writes:
+4. Texture create/update requests write pixels into a per-frame-slot staging buffer and add a `Ui.TextureUpload` pass before `Ui.Overlay`.
+5. For each frame slot, `UiNode` allocates the pipeline descriptor sets, with set 1 carrying the variable descriptor-count binding for `gUiTextures`.
+6. `UiNode` writes:
    - `gUiSampler`
    - `gUiTextures[slot]` for every live texture slot
-6. Record stage binds the frame's descriptor set once.
-7. Each draw command pushes `UiPushConstants.textureIndex` before draw if the slot changed.
+7. Record stage binds the frame's descriptor set once.
+8. Each draw command pushes `UiPushConstants.textureIndex` before draw if the slot changed.
 
 ### Why This Design
 
@@ -167,6 +174,7 @@ Descriptor indexing integrates with the current engine architecture. Descriptor 
 - `src/renderPasses/Ui/nrUiNode.ixx`
   - bindless descriptor-table runtime
   - texture-slot allocator
+  - graph-integrated `Ui.TextureUpload` pass
   - per-draw texture push constant
   - geometric vertex/index growth
 
@@ -205,9 +213,9 @@ Another agent should preserve these invariants:
 
 ~~The biggest remaining cost is still texture upload behavior.~~ **This section has been largely completed.**
 
-The bindless descriptor path reduces descriptor churn. The upload path has now been migrated to `UploadReadbackContext`.
+The bindless descriptor path reduces descriptor churn. The upload path now stages texture data in persistent per-frame buffers and records copy work as a graph pass before UI drawing.
 
-### 1. Replace Synchronous UI Texture Uploads with `UploadReadbackContext` ✅ COMPLETED
+### 1. Replace Immediate UI Texture Upload Submissions ✅ COMPLETED
 
 #### Why
 
@@ -222,21 +230,23 @@ The current `createOrUpdateUiTexture(...)` path in `src/renderPasses/Ui/nrUiNode
 
 #### Implementation (Completed)
 
-The upload path now uses `UploadReadbackContext::uploadImage(...)`:
+The upload path now uses render-graph resource intents:
 
-- `uploadUiTextureAsync()` - Async upload using UploadReadbackContext
-- `pollPendingUiTextureUploads()` - Polls timeline completion and clears ready tickets
-- `waitForPendingUiTextureUploadSignalsByPolling()` - Waits for upload signals through timeline polling
-- `makeUiTextureUploadOwnershipPlan()` - Creates proper ownership transfer
+- `UiTextureEntry::uploadBuffers` stores per-frame-slot staging buffers.
+- `createOrUpdateUiTexture(...)` writes pixels into the current frame slot's staging buffer and queues a `UiTextureUploadJob`.
+- `addUiTextureUploadPass(...)` imports those staging buffers and destination images into the graph, then records copy commands in `Ui.TextureUpload`.
+- `Ui.Overlay` declares sampled reads of live UI textures, so the graph emits the required layout transition before sampling.
 
 Key data structures added:
-- `UiTextureEntry::pendingUpload` - Stores upload ticket per texture
-- Uses `device.uploadReadback()` for the upload context
+- `UiTextureEntry::uploadBuffers` - CPU-visible staging buffers retained per managed texture
+- `UiTextureEntry::currentLayout` - Imported-image starting layout for the next graph build
+- `UiTextureUploadJob` - Build-time upload request consumed when emitting `Ui.TextureUpload`
 
 #### Validation ✅
 
 - No per-update temporary command pool creation
-- No per-update `waitIdle` or `waitUploadComplete` call - uses timeline semaphore polling instead
+- No per-update `waitIdle` or `waitUploadComplete` call
+- Upload-to-sample visibility is expressed through render graph pass resource intents
 - All smoke tests pass
 
 ### 2. Implement Partial Texture Updates for `ImTextureData::WantUpdates`
@@ -264,7 +274,7 @@ For `WantUpdates`:
 1. Check the Dear ImGui texture request fields used by the vcpkg backend version in this project.
 2. Extract dirty-region bounds.
 3. Compute row pitch and sub-rectangle byte span correctly.
-4. Feed the rectangle into `UploadReadbackContext::uploadImage(...)` or a thin helper around it.
+4. Feed the rectangle into `Ui.TextureUpload` through a narrowed `vk::BufferImageCopy` region.
 5. Keep the existing texture slot stable. Partial updates must not invalidate the slot mapping.
 
 #### Validation
@@ -360,12 +370,10 @@ Do not replace texture sampling descriptors with raw addresses. Images still nee
 
 If another agent continues this work, the safest order is:
 
-1. Finish upload-path migration to `UploadReadbackContext`
-2. Add partial dirty-rect updates
-3. Add deferred destroy/retirement
-4. Add descriptor-table dirty-slot tracking
-5. Add CPU scratch reuse
-6. Add optional BDA array utilities
+1. Add partial dirty-rect updates
+2. Add descriptor-table dirty-slot tracking
+3. Add CPU scratch reuse
+4. Add optional BDA array utilities
 
 This order yields the best performance return early while minimizing the risk of destabilizing the working descriptor-indexing path.
 
@@ -407,12 +415,12 @@ ctest --test-dir build -C Debug -R nr_normal_buffer_ui_smoke_test --output-on-fa
    - Vulkan variable descriptor-count bindings must remain last in the set.
 
 3. Upload-path optimization changes synchronization semantics.
-   - When replacing the current synchronous upload path, lifetime and visibility must be revalidated carefully.
+   - Keep texture upload copies and overlay sampling in graph resource-intent declarations so layout and visibility stay compiler-owned.
 
 4. Descriptor invalidation can silently become too broad.
    - Keep identity changes, content changes, and slot-allocation changes separate.
 
-5. UI texture destroy must become timeline-safe before upload path is made fully asynchronous.
+5. UI texture retirement must continue to cover both images and per-frame staging buffers until the graph no longer references them.
 
 ## External References
 

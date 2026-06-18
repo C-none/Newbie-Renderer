@@ -1271,7 +1271,6 @@ class ShaderService
         sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(m_macroDescs.size());
         sessionDesc.compilerOptionEntries = m_compilerOptionEntries.empty() ? nullptr : m_compilerOptionEntries.data();
         sessionDesc.compilerOptionEntryCount = static_cast<std::uint32_t>(m_compilerOptionEntries.size());
-        sessionDesc.fileSystem = nullptr;
 
         try
         {

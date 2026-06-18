@@ -54,7 +54,7 @@ Important baseline facts:
 
 ### 1. Device feature and extension contract
 
-Current status: partially present.
+Current status: present for the required KHR baseline used by the engine.
 
 Evidence:
 
@@ -63,8 +63,10 @@ Evidence:
   `VK_KHR_pipeline_library`, `VK_KHR_ray_query`,
   `VK_KHR_deferred_host_operations`, and NVIDIA RT-related features such as
   `VK_EXT_ray_tracing_invocation_reorder`.
-- `Device` snapshots only the RT pipeline properties needed by SBT creation
-  and `traceRays` validation in `RayTracingCapabilitySnapshot`.
+- `Device` snapshots RT pipeline properties needed by SBT creation,
+  `traceRays` validation, capture/replay handles, and
+  `VK_KHR_ray_tracing_maintenance1` indirect2 support in
+  `RayTracingCapabilitySnapshot`.
 - AS limits are queried separately through
   `queryAsBuildLimits(...)` in `src/rhi/nrAccelerationStructure.ixx`.
 
@@ -72,11 +74,10 @@ Assessment:
 
 - The base RT extensions are assumed, which matches the fail-fast target
   policy.
-- The capability model is split and incomplete. Pipeline dispatch/SBT limits
-  live in `RayTracingCapabilitySnapshot`, while AS limits require a separate
-  call. No device-level snapshot covers AS feature bits such as indirect build,
-  host commands, serialization support, maintenance1 features, or optional
-  modern RT extensions.
+- The capability model is still split. Pipeline dispatch/SBT limits and
+  maintenance1 feature bits live in `RayTracingCapabilitySnapshot`, while AS
+  limits require a separate call. There is still no unified device-level
+  snapshot for every AS feature bit and optional modern RT extension.
 
 ### 2. Acceleration structure resource wrapper
 
@@ -99,14 +100,18 @@ Assessment:
 
 ### 3. BLAS and TLAS build/update recording
 
-Current status: one-geometry wrappers exist.
+Current status: direct BLAS/TLAS build wrappers exist, including
+multi-geometry BLAS input.
 
 Evidence:
 
 - `queryBlasBuildSizes(...)` and `queryTlasBuildSizes(...)` call
   `getAccelerationStructureBuildSizesKHR(...)`.
-- `recordBuildBlas(...)` and `recordBuildTlas(...)` record
-  `buildAccelerationStructuresKHR(...)`.
+- `recordBuildBlas(...)`, `recordBuildBlasGeometries(...)`, and
+  `recordBuildTlas(...)` record `buildAccelerationStructuresKHR(...)`.
+- `recordBuildAccelerationStructuresIndirect(...)` forwards to
+  `buildAccelerationStructuresIndirectKHR(...)` for caller-prepared indirect
+  build records.
 - `recordUpdateBlas(...)` and `recordUpdateTlas(...)` reuse the same build
   path with update mode.
 - Validation covers scratch alignment, required buffer usage, BLAS/TLAS type,
@@ -115,11 +120,11 @@ Evidence:
 
 Assessment:
 
-- This is the strongest completed RT area.
-- The shape is still minimal: one BLAS triangle geometry, one build range, one
-  TLAS instance geometry, one command wrapper call. It does not model batch
-  builds, multi-geometry BLAS, multiple ranges, procedural AABB geometry,
-  indirect builds, or compaction/serialization workflows.
+- This is now a usable low-level RT area for triangle and AABB BLAS geometry,
+  TLAS instance geometry, direct update paths, and indirect AS build recording.
+- The remaining gap is ownership/orchestration: direct batch build APIs for
+  several AS objects, storage/scratch allocation policy, compaction scheduling,
+  and renderer-facing instance construction are still outside this layer.
 
 ### 4. Ray tracing pipeline and SBT
 
@@ -140,15 +145,13 @@ Evidence:
 Assessment:
 
 - RT pipeline creation and dispatch are present.
-- SBT construction currently packs shader group handles only. The stride can
-  be larger than the handle, but there is no typed API for writing per-record
-  shader data.
-- There is no wrapper for `vkGetRayTracingShaderGroupStackSizeKHR` or
-  `vkCmdSetRayTracingPipelineStackSizeKHR`, so recursion-heavy or callable-hit
-  layouts cannot tune pipeline stack size through RHI.
-- `traceRaysIndirect(...)` supports the base KHR indirect command, but there
-  is no maintenance1 `traceRaysIndirect2` path where SBT regions and dispatch
-  dimensions are sourced from the device.
+- SBT construction supports shader group handles plus per-record byte payloads
+  and non-contiguous shader group indices.
+- `RayTracingPipeline` exposes shader group stack-size and capture/replay
+  handle queries, and trace helpers can record dynamic pipeline stack size.
+- `traceRaysIndirect(...)` supports the base KHR indirect command, and
+  `traceRaysIndirect2(...)` supports the maintenance1 path where SBT regions
+  and dispatch dimensions are sourced from the device.
 
 ### 5. Descriptor and shader ABI support
 
@@ -196,89 +199,74 @@ Assessment:
 
 ## Completion Gaps
 
-### 1. AS copy, compaction, serialization, and property query are not done
+### 1. AS copy, compaction, serialization, and property query are low-level complete
 
-Severity: high.
+Severity: remaining risk is medium, mostly orchestration and tests.
 
 Evidence:
 
-- `recordCopyAccelerationStructure(...)` exists in
-  `src/rhi/nrAccelerationStructure.ixx` but only asserts that it is reserved
-  for a future stage.
+- `recordCopyAccelerationStructure(...)`,
+  `recordCopyAccelerationStructureToMemory(...)`, and
+  `recordCopyMemoryToAccelerationStructure(...)` forward to Vulkan-Hpp RAII
+  AS copy commands.
+- Host/device copy helpers expose the corresponding Vulkan-Hpp device
+  functions and optional deferred operation handles.
+- AS property helpers cover compacted size, serialization size, maintenance1
+  device-timeline size, and serialized BLAS pointer count.
 - `AsBuildOptions` accepts arbitrary Vulkan AS build flags, including flags
-  that can imply later compaction, but the RHI has no compacted-size query
-  helper or compact-copy path.
+  that can imply later compaction; the low-level compacted-size query and
+  compact-copy path now exist, but no renderer policy schedules them yet.
 
-Missing API coverage:
+Remaining coverage:
 
-- `vkCmdCopyAccelerationStructureKHR` / device copy.
-- `VK_COPY_ACCELERATION_STRUCTURE_MODE_CLONE_KHR`.
-- `VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR`.
-- `VK_COPY_ACCELERATION_STRUCTURE_MODE_SERIALIZE_KHR`.
-- `VK_COPY_ACCELERATION_STRUCTURE_MODE_DESERIALIZE_KHR`.
-- `vkCmdCopyAccelerationStructureToMemoryKHR`.
-- `vkCmdCopyMemoryToAccelerationStructureKHR`.
-- `vkCmdWriteAccelerationStructuresPropertiesKHR` /
-  `vkWriteAccelerationStructuresPropertiesKHR`.
-- query handling for compacted size and serialization size.
+- Renderer-side scheduling of compact-copy and old-storage retirement.
+- Serialization cache policy, compatible storage allocation, and persistence
+  ownership.
+- GPU tests for query/write/copy/compact paths.
 
 Impact:
 
-- Builds can produce AS objects, but the engine cannot compact BLAS memory.
-- AS cache/persistence workflows cannot be represented.
-- A build flag policy that enables `eAllowCompaction` would not have a matching
-  RHI completion path.
+- The RHI can express the Vulkan copy/query operations, but callers still need
+  a higher-level builder to schedule compaction and storage replacement safely.
 
 Recommended fix:
 
-- Add a narrow copy/query surface first:
-  `recordCopyAccelerationStructure(...)`,
-  `recordWriteAccelerationStructureProperties(...)`, and a small query helper
-  for compacted size/serialization size.
-- Keep wrappers thin and forward to Vulkan-Hpp RAII members directly.
-- Add validation that `eAllowCompaction` is only accepted by higher-level
-  builder flows when a compact-copy step is scheduled.
+- Add renderer/builder policy around `eAllowCompaction`, query timing, compact
+  destination allocation, and source AS retirement.
 
-### 2. AS build model is triangle-only and single-range
+### 2. AS build model still lacks renderer-facing batch/instance policy
 
 Severity: high for production RT scenes, medium for the current minimal sample.
 
 Evidence:
 
-- `BlasGeometryLayout` and `BlasGeometryInput` describe one triangle geometry.
-- `recordBuildBlas(...)` writes one
-  `vk::AccelerationStructureGeometryTrianglesDataKHR`, one
-  `vk::AccelerationStructureGeometryKHR`, and one build range.
+- `BlasGeometryLayout` and `BlasGeometryInput` describe one triangle geometry
+  for the convenience path.
+- `BlasGeometryRecord` plus `recordBuildBlasGeometries(...)` support
+  multi-geometry triangle/AABB BLAS input with one range per geometry.
 - `recordBuildTlas(...)` writes one instance geometry.
 
-Missing API coverage:
+Remaining API/runtime coverage:
 
-- Multiple BLAS geometries in one build.
-- Multiple build ranges.
-- AABB/procedural geometry input and intersection shader workflows.
+- Direct batch recording for several BLAS/TLAS objects in one wrapper call.
 - Per-instance full `VkAccelerationStructureInstanceKHR` construction policy,
   including SBT record offset, custom index, mask, flags, and BLAS reference.
-- Indirect AS builds through `vkCmdBuildAccelerationStructuresIndirectKHR`.
-- Batch build recording for several BLAS/TLAS objects in one command.
 
 Impact:
 
-- Any mesh with multiple submeshes/material-hit groups needs external splitting
-  or a custom one-off bridge.
-- Procedural primitives are impossible even though RT pipeline creation can
-  create procedural hit groups.
-- GPU-driven or large-scene AS update flows cannot use indirect builds.
+- Meshes with multiple submeshes/material-hit groups can be represented in the
+  low-level BLAS wrapper, but no renderer AS builder maps scene mesh/material
+  batches into those records yet.
+- Procedural AABB geometry is available at the RHI command-wrapper level, but
+  no renderer-facing primitive/instance policy consumes it yet.
 
 Recommended fix:
 
-- Introduce a multi-geometry `BlasBuildDesc` with spans of triangle/AABB
-  geometry descriptors and range descriptors.
-- Keep the current single-geometry helper as a convenience adapter if useful.
 - Add a typed instance-builder helper that produces
   `vk::AccelerationStructureInstanceKHR` from scene packets and SBT layout
   decisions.
-- Add batch build recording before indirect build; indirect build should follow
-  once the direct multi-build shape is stable.
+- Add direct batch build recording if production build scheduling needs to pack
+  several AS objects into one helper call.
 
 ### 3. AS allocation, scratch, and lifetime orchestration are external
 
@@ -315,7 +303,7 @@ Recommended fix:
   helpers for the renderer to allocate storage/scratch without duplicating
   Vulkan details.
 
-### 4. Synchronization is documented but not automated
+### 4. Synchronization has RHI helpers but is not automated by renderer scheduling
 
 Severity: medium to high.
 
@@ -325,94 +313,85 @@ Evidence:
   hazards and queue-family ownership transfers are caller responsibilities.
 - `appendAsSubmitIntent(...)` only appends wait/signal metadata to
   `CommandBatch`.
+- RHI `ops` exposes sync2 scopes/barriers for AS build/copy, RT shader AS read,
+  and maintenance1 SBT read access.
 - Render graph buffer intents include AS read/write and SBT usage, but no RT
   node currently exercises AS build, AS copy, SBT read, or trace hazards.
 
 Missing coverage:
 
-- Barrier helpers for BLAS build to TLAS build in the same command buffer.
-- Barrier helpers for AS build/update/copy to RT shader read.
-- Barrier helpers for SBT upload/write to RT shader SBT read.
-- Integration of AS build/copy stage/access into render graph scheduling.
-- Maintenance1 sync2 stage/access bits when the project chooses to require
-  `VK_KHR_ray_tracing_maintenance1`.
+- Integration of AS build/copy and SBT read stage/access into render graph
+  scheduling.
+- RT node usage that proves the helper path in a real frame.
 
 Impact:
 
-- Correct execution depends on every caller remembering the Vulkan AS/RT sync
-  rules.
+- Correct execution still depends on callers choosing the right helper until
+  renderer scheduling owns these hazards.
 - Once an RT pass is added, missing barriers can appear as intermittent
   traversal or SBT-data faults.
 
 Recommended fix:
 
-- Add small AS/SBT barrier helper functions in RHI using synchronization2.
 - Thread AS build/copy and SBT read access through render graph compiler rules
   before adding a production RT node.
 
-### 5. SBT records cannot carry typed shader-record data
+### 5. SBT records carry byte payloads; typed layout policy is still external
 
 Severity: medium.
 
 Evidence:
 
-- `ShaderBindingTable::create(...)` copies shader group handles into each
-  record.
-- `ShaderBindingTableSectionDesc::stride` can reserve extra bytes, but no API
-  accepts per-record payload data.
+- `ShaderBindingTable::create(...)` copies shader group handles and optional
+  byte-span record payload data into each record.
+- `ShaderBindingTableSectionDesc::records` can select non-contiguous shader
+  groups and validates payload fit against stride.
 
 Missing coverage:
 
-- Typed or byte-span per-record data for raygen, miss, hit, and callable
-  records.
-- Validation that record data fits in the selected stride.
+- Typed wrappers over the byte-span record payload API.
 - SBT update/rebuild policy when per-material or per-instance records change.
 - A connection between TLAS instance SBT offsets and hit record layout.
 
 Impact:
 
-- Materials, geometry data pointers, texture indices, and local constants must
-  be accessed through global descriptors or ad hoc side channels.
-- The current SBT is enough for a minimal triangle sample but not for a
-  materialized scene.
+- Materials, geometry data pointers, texture indices, and local constants can
+  be packed into SBT record data, but scene/material systems do not yet produce
+  those typed payloads.
 
 Recommended fix:
 
-- Add `ShaderBindingTableRecordData` as byte spans or typed trivially-copyable
-  records.
+- Add typed trivially-copyable record builders on top of byte spans.
 - Make the TLAS instance builder consume a hit-group layout so
   `instanceShaderBindingTableRecordOffset` matches the SBT.
 
-### 6. Pipeline stack-size control is missing
+### 6. Pipeline stack-size control exists; budgeting policy is missing
 
 Severity: medium.
 
 Evidence:
 
 - `RayTracingPipeline::create(...)` sets `maxPipelineRayRecursionDepth`.
-- There is no wrapper for shader group stack-size query or command-buffer stack
-  size setting.
+- `RayTracingPipeline::shaderGroupStackSize(...)` wraps
+  `vkGetRayTracingShaderGroupStackSizeKHR`.
+- `setRayTracingPipelineStackSize(...)` and trace helpers wrap
+  `vkCmdSetRayTracingPipelineStackSizeKHR` when the pipeline uses dynamic
+  stack size.
 
 Missing coverage:
 
-- `vkGetRayTracingShaderGroupStackSizeKHR`.
-- `vkCmdSetRayTracingPipelineStackSizeKHR`.
 - Policy for recursion depth, callable shaders, continuation shaders, and hit
   group stack budgeting.
 
 Impact:
 
-- The RHI cannot tune stack size for complex RT pipelines.
-- Increasing recursion depth or introducing callable/intersection shaders may
-  overpay or under-specify stack requirements depending on driver defaults and
-  pipeline shape.
+- The RHI can record the stack-size state, but it does not compute a renderer
+  policy for recursion/callable/intersection-heavy pipelines.
 
 Recommended fix:
 
-- Add a thin query helper on `RayTracingPipeline`.
-- Add a command-buffer helper for setting stack size before `traceRays(...)`.
-- Keep the default path simple for one-bounce/minimal RT, but expose an
-  explicit advanced path.
+- Add a stack-budget helper once concrete RT pipelines exist, using shader
+  group stack queries and the intended max recursion/callable depths.
 
 ### 7. Ray query is enabled but not surfaced as a runtime feature
 
@@ -506,11 +485,10 @@ Recommended fix:
 
 ### P0: make current RT wrappers complete enough for real AS objects
 
-1. Implement AS copy/compact/property query wrappers.
-2. Add multi-geometry and multi-range BLAS descriptors.
-3. Add batch AS build recording.
-4. Add AS/SBT synchronization2 helper functions.
-5. Add tests for AS query/build/update/copy validation.
+1. Add tests for AS query/build/update/copy validation.
+2. Add direct batch AS build recording if renderer scheduling needs it.
+3. Add typed `VkAccelerationStructureInstanceKHR` construction from scene
+   packets and SBT layout decisions.
 
 ### P1: connect RT to renderer data flow
 
@@ -522,22 +500,21 @@ Recommended fix:
 
 ### P2: production RT pipeline features
 
-1. Add SBT record data.
-2. Add pipeline stack-size query/set helpers.
-3. Add `VK_KHR_ray_tracing_maintenance1` policy and optionally
-   `traceRaysIndirect2`.
-4. Add serialization/cache policy if startup time or streaming requires it.
-5. Decide invocation reorder and micromap policy after base KHR RT is stable.
+1. Add typed SBT record builders over the current byte-span API.
+2. Add stack-budget policy once real RT pipelines exist.
+3. Add serialization/cache policy if startup time or streaming requires it.
+4. Decide invocation reorder and micromap policy after base KHR RT is stable.
 
 ## Current Conclusion
 
-The current RHI has the correct base pieces for Vulkan KHR ray tracing:
-required extensions/features, RAII AS handles, single BLAS/TLAS build/update
-helpers, RT pipeline creation, SBT allocation, trace commands, AS descriptors,
-and scene packet inputs.
+The current RHI has the correct low-level pieces for Vulkan KHR ray tracing:
+required extensions/features, RAII AS handles, BLAS/TLAS build/update helpers,
+multi-geometry BLAS input, AS copy/query/serialization wrappers, RT pipeline
+creation, SBT allocation with record payloads, trace/indirect trace commands,
+maintenance1 indirect2 dispatch, AS descriptors, and scene packet inputs.
 
 The incomplete areas are not small polish issues. The most important missing
-pieces are AS copy/compaction/serialization/property query, multi-geometry and
-batch AS builds, renderer-owned AS lifetime and scratch orchestration, AS/SBT
-barrier integration, SBT record data, pipeline stack-size control, and a real
-render graph node that consumes scene TLAS packets and records `traceRays(...)`.
+pieces are renderer-owned AS lifetime and scratch orchestration, compaction and
+serialization policy, typed TLAS/SBT layout construction, render-graph hazard
+scheduling, test coverage, and a real render graph node that consumes scene
+TLAS packets and records `traceRays(...)`.

@@ -126,53 +126,23 @@ class EmbeddedTriangleNode final : public Node
             colorFormat = frameParameters.swapchainFormat;
         }
 
-        output.color = context.addResource(nr::renderer::GraphTransientImageDesc{
-            .debugName = "EmbeddedTriangle.Color",
-            .lifetime = nr::renderer::ResourceLifetime::GraphTransient,
-            .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1},
-            .format = colorFormat,
-            .usageIntents = {
-                nr::renderer::ImageUsageIntent::ColorAttachment,
-                nr::renderer::ImageUsageIntent::TransferSrc,
-                nr::renderer::ImageUsageIntent::Sampled,
-            },
-            .initialLayout = nr::renderer::ImageLayoutIntent::ColorAttachment,
-            .aspect = nr::renderer::ImageAspectIntent::Color,
-        });
+        output.color = context.transientColor("EmbeddedTriangle.Color", viewportExtent, colorFormat);
 
         auto frameUniforms = EmbeddedTriangleFrameUniforms{
             .viewProjection = input.viewProjection,
         };
 
-        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-        auto& frameUniformBufferRef = runtime_->frameUniformBuffers[frameSlot];
-        nr::nrAssert(frameUniformBufferRef.valid(),
-            std::format("EmbeddedTriangle build: pre-allocated frame uniform buffer for frame slot {} is invalid.", frameSlot));
-        frameUniformBufferRef.writeMappedAndFlush(frameUniforms);
-
-        auto frameUniformBuffer = context.addResource(nr::renderer::GraphImportedBufferDesc{
-            .debugName = std::format("EmbeddedTriangle.FrameUniforms[{}]", frameSlot),
-            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
-            .residency = nr::renderer::ResourceResidency::Imported,
-            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
-            .size = static_cast<vk::DeviceSize>(sizeof(EmbeddedTriangleFrameUniforms)),
-            .usageIntents = {
-                nr::renderer::BufferUsageIntent::Uniform,
-            },
-            .importedResource = std::ref(frameUniformBufferRef),
-        });
+        auto frameUniformBuffer = context.importFrameUniform(
+            runtime_->frameUniformBuffers,
+            "EmbeddedTriangle.FrameUniforms",
+            frameUniforms);
 
         auto root = runtime_->pipeline.descriptorLayout.rootCursor();
-        nr::nrAssert(root.valid(), "EmbeddedTriangle build stage requires a valid root shader cursor.");
-
         auto frameCursor = root["gFrame"];
-        nr::nrAssert(frameCursor.valid(), "EmbeddedTriangle build stage requires gFrame uniform cursor.");
-
-        auto frameBindOk = frameCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+        static_cast<void>(frameCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = frameUniformBuffer.value,
             .debugName = "EmbeddedTriangle.FrameUniforms",
-        });
-        nr::nrAssert(frameBindOk, "EmbeddedTriangle build stage failed to bind logical gFrame uniform resource.");
+        }));
 
         auto passBindingSnapshot = root.snapshot();
         root.clearSnapshot();
@@ -181,22 +151,8 @@ class EmbeddedTriangleNode final : public Node
         auto runtime = runtime_;
 
         auto passIntents = std::array{
-            nr::renderer::PassResourceUseDesc{
-                .resource = output.color,
-                .imageUsage = nr::renderer::ImageUsageIntent::ColorAttachment,
-                .imageAccess = nr::renderer::ImageAccessIntent::ColorAttachmentWrite,
-                .imageLayout = nr::renderer::ImageLayoutIntent::ColorAttachment,
-                .imageAspect = nr::renderer::ImageAspectIntent::Color,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = false,
-            },
-            nr::renderer::PassResourceUseDesc{
-                .resource = frameUniformBuffer,
-                .bufferUsage = nr::renderer::BufferUsageIntent::Uniform,
-                .bufferAccess = nr::renderer::BufferAccessIntent::UniformRead,
-                .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = true,
-            },
+            nr::renderer::use::colorWrite(output.color),
+            nr::renderer::use::uniformRead(frameUniformBuffer),
         };
 
         [[maybe_unused]] auto rasterPassHandle = context.addPass(
@@ -219,24 +175,14 @@ class EmbeddedTriangleNode final : public Node
 
                 auto colorAttachment = nr::rhi::ops::RenderingAttachmentDesc{
                     .imageView = colorImage->view,
-                    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                    .resolveMode = vk::ResolveModeFlagBits::eNone,
-                    .resolveImageView = {},
-                    .resolveImageLayout = vk::ImageLayout::eUndefined,
                     .loadOp = vk::AttachmentLoadOp::eClear,
-                    .storeOp = vk::AttachmentStoreOp::eStore,
                     .clearValue = vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}},
                 };
 
                 auto colorAttachments = std::array{colorAttachment};
                 auto renderingScope = nr::rhi::ops::RenderingScopeDesc{
                     .renderArea = vk::Rect2D{vk::Offset2D{0, 0}, targetExtent},
-                    .layerCount = 1,
-                    .viewMask = 0,
-                    .flags = {},
                     .colorAttachments = colorAttachments,
-                    .depthAttachment = std::nullopt,
-                    .stencilAttachment = std::nullopt,
                 };
 
                 auto& commandBuffer = recordContext.commandBuffer->get();

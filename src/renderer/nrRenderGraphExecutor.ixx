@@ -855,18 +855,12 @@ class RenderGraphExecutor
         auto bindings = std::map<GraphResourceHandle, PreparedResourceBinding>{};
 
         std::ranges::for_each(compiled.resources, [&](const CompiledResourceDesc& resource) {
-            auto binding = PreparedResourceBinding{
-                .isBuffer = resource.isBuffer,
-                .isImage = resource.isImage,
-                .buffer = vk::Buffer{},
-                .bufferSize = resource.resolvedBufferSize,
-                .bufferResource = std::nullopt,
-                .image = vk::Image{},
-                .imageView = vk::ImageView{},
-                .imageResource = std::nullopt,
-                .extent = resource.resolvedExtent,
-                .subresourceRange = subresourceRangeFor(resource),
-            };
+            auto binding = PreparedResourceBinding{};
+            binding.isBuffer = resource.isBuffer;
+            binding.isImage = resource.isImage;
+            binding.bufferSize = resource.resolvedBufferSize;
+            binding.extent = resource.resolvedExtent;
+            binding.subresourceRange = subresourceRangeFor(resource);
 
             if (resource.isBuffer)
             {

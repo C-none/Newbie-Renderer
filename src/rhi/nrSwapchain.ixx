@@ -627,7 +627,7 @@ class PresentationContext
     SwapChain swapChain_;
     SwapChainConfig config_{};
     std::uint32_t presentQueueFamily_ = 0;
-    std::optional<std::uint32_t> activeSwapchainImageIndex_;
+    std::optional<std::uint32_t> activeSwapchainImageIndex_{};
     bool hasSubmittedCurrentFrame_ = false;
 
     AcquireSemaphorePool acquirePool_{};

@@ -387,7 +387,6 @@ class VmaAllocatorWrapper
         createInfo.physicalDevice = *physDevice;
         createInfo.device = *device;
         createInfo.instance = *instance;
-        createInfo.pVulkanFunctions = nullptr;
 
         VkResult result = vmaCreateAllocator(&createInfo, &allocator_);
         nrAssert(result == VkResult::VK_SUCCESS, std::format("Failed to create VMA allocator: {}", static_cast<int>(result)));

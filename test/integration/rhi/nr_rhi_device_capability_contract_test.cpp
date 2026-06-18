@@ -1,0 +1,45 @@
+import std;
+import dependency;
+import nr.rhi;
+import nr.test;
+
+namespace
+{
+const nr::test::CaseRegistrar deviceCapabilityCase{
+    "rhi device initialization exposes required target capabilities",
+    [] {
+        auto device = nr::rhi::Device{};
+        device.initialize("nr_rhi_device_capability_contract_test", "NewbieRenderer");
+
+        nr::test::require(device.queueManager.graphics().valid(), "graphics queue should be valid");
+        nr::test::require(device.queueManager.compute().valid(), "compute queue should be valid");
+        nr::test::require(device.queueManager.transfer().valid(), "transfer queue should be valid");
+        nr::test::require(device.resourceFactory.valid(), "resource factory should be initialized");
+        nr::test::require(device.resourcePool.valid(), "resource pool should be initialized");
+        nr::test::require(device.uploadReadback().valid(), "upload/readback context should be initialized");
+
+        auto const &descriptorIndexing = device.descriptorIndexingCapabilities();
+        nr::test::require(descriptorIndexing.descriptorIndexing, "descriptor indexing should be enabled");
+        nr::test::require(descriptorIndexing.runtimeDescriptorArray, "runtime descriptor arrays should be enabled");
+        nr::test::require(descriptorIndexing.descriptorBindingPartiallyBound, "partially bound descriptors should be enabled");
+        nr::test::require(descriptorIndexing.descriptorBindingVariableDescriptorCount, "variable descriptor counts should be enabled");
+        nr::test::require(descriptorIndexing.maxDescriptorSetUpdateAfterBindSampledImages > 0,
+                          "sampled-image update-after-bind limit should be populated");
+
+        auto const &bufferAddress = device.bufferDeviceAddressCapabilities();
+        nr::test::require(bufferAddress.bufferDeviceAddress, "buffer device address should be enabled");
+
+        auto const &vulkan14 = device.vulkan14Capabilities();
+        nr::test::require(vulkan14.maintenance5, "Vulkan 1.4 maintenance5 should be enabled on the target profile");
+        nr::test::require(vulkan14.maintenance6, "Vulkan 1.4 maintenance6 should be enabled on the target profile");
+
+        auto const &rt = device.rayTracingCapabilities();
+        nr::test::require(rt.rayTracingMaintenance1, "ray tracing maintenance1 should be enabled");
+        nr::test::require(rt.rayTracingPipelineTraceRaysIndirect, "traceRaysIndirect should be enabled");
+        nr::test::require(rt.shaderGroupHandleSize > 0, "shader-group handle size should be populated");
+        nr::test::require(rt.shaderGroupBaseAlignment > 0, "shader-group base alignment should be populated");
+        nr::test::require(rt.maxRayRecursionDepth > 0, "ray recursion depth limit should be populated");
+
+        device.waitIdle();
+    }};
+} // namespace

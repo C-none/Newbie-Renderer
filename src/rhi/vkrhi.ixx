@@ -92,7 +92,7 @@ struct RequiredQueueFamilySelection
         };
     };
 
-    std::optional<std::reference_wrapper<const vk::raii::PhysicalDevice>> bestDevice;
+    std::optional<std::reference_wrapper<const vk::raii::PhysicalDevice>> bestDevice{};
     std::ranges::for_each(physicalDevices, [&](const vk::raii::PhysicalDevice& device) {
         if (!supportsRequiredQueues(device))
         {

@@ -31,8 +31,6 @@ inline constexpr vk::DeviceSize kInitialUiIndexBufferCapacity = 32u * 1024u;
 
 static_assert(sizeof(UiPushConstants) <= 128u, "UiNode push constants exceed 128 bytes.");
 
-using nr::rhi::ScopedCommandBufferDebugLabel;
-
 struct UiDrawCommand
 {
     vk::Rect2D scissor{};
@@ -54,21 +52,34 @@ struct UiFrameDrawData
 struct UiTextureEntry
 {
     nr::rhi::Image image{};
-    std::optional<nr::rhi::ops::ImageUploadTicket> pendingUpload{};
-    std::optional<nr::rhi::CommandPool> pendingSourceReleasePool{};
-    std::optional<vk::raii::CommandBuffers> pendingSourceReleaseCommandBuffers{};
-    std::optional<vk::raii::Semaphore> pendingSourceReleaseSemaphore{};
+    std::array<nr::rhi::Buffer, nr::maxFrameInFlight> uploadBuffers{};
+    nr::renderer::ImageLayoutIntent currentLayout = nr::renderer::ImageLayoutIntent::Undefined;
 };
 
 struct UiRetiredTexture
 {
     nr::rhi::Image image{};
+    std::array<nr::rhi::Buffer, nr::maxFrameInFlight> uploadBuffers{};
     std::uint32_t slot = 0u;
     std::uint64_t retiredFrameIndex = 0u;
-    std::uint64_t pendingUploadSignalValue = 0u;
-    std::optional<nr::rhi::CommandPool> pendingSourceReleasePool{};
-    std::optional<vk::raii::CommandBuffers> pendingSourceReleaseCommandBuffers{};
-    std::optional<vk::raii::Semaphore> pendingSourceReleaseSemaphore{};
+    bool releaseSlot = true;
+};
+
+struct UiTextureUploadJob
+{
+    ImTextureID textureId = kInvalidTextureId;
+    std::reference_wrapper<nr::rhi::Buffer> uploadBuffer;
+    vk::Extent2D extent{1u, 1u};
+    vk::DeviceSize byteSize = 0;
+    nr::renderer::ImageLayoutIntent initialLayout = nr::renderer::ImageLayoutIntent::Undefined;
+};
+
+struct UiTextureUploadCopy
+{
+    nr::renderer::GraphResourceHandle sourceBuffer{};
+    nr::renderer::GraphResourceHandle destinationImage{};
+    vk::Extent2D extent{1u, 1u};
+    vk::DeviceSize byteSize = 0;
 };
 
 struct UiRuntimeCache
@@ -380,306 +391,47 @@ void invalidateBindlessTextureTables(UiRuntimeCache& runtime)
     return image;
 }
 
-[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUiTextureUploadOwnershipPlan(
+void ensureUiTextureUploadBuffer(
     nr::rhi::Device& device,
-    vk::ImageLayout sourceLayout,
-    std::optional<nr::rhi::ops::QueueOwnershipWait> sourceReleaseWait = std::nullopt)
+    nr::rhi::Buffer& buffer,
+    vk::DeviceSize requiredSize,
+    std::string_view debugName)
 {
-    auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
-    
-    if (transferQueueFamily == graphicsQueueFamily)
+    if (requiredSize == 0u)
     {
-        // Same queue family, no ownership transfer needed - use simple exclusive plan
-        return nr::rhi::ops::BufferUploadOwnershipPlan{
-            .acquireToTransfer = std::nullopt,
-            .releaseToDestination = nr::rhi::ops::QueueOwnershipTransfer{
-                .srcQueueFamilyIndex = transferQueueFamily,
-                .dstQueueFamilyIndex = transferQueueFamily,
-                .release = nr::rhi::ops::QueueAccessScope{
-                    .stages = vk::PipelineStageFlagBits2::eTransfer,
-                    .access = vk::AccessFlagBits2::eTransferWrite,
-                },
-                .acquire = nr::rhi::ops::QueueAccessScope{
-                    .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-                    .access = vk::AccessFlagBits2::eShaderRead,
-                },
-            },
-        };
+        return;
     }
 
-    if (sourceLayout == vk::ImageLayout::eUndefined)
+    if (buffer.valid() && buffer.size() >= requiredSize)
     {
-        return nr::rhi::ops::BufferUploadOwnershipPlan{
-            .acquireToTransfer = std::nullopt,
-            .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
-                transferQueueFamily,
-                graphicsQueueFamily,
-                nr::rhi::ops::QueueAccessScope{
-                    .stages = vk::PipelineStageFlagBits2::eTransfer,
-                    .access = vk::AccessFlagBits2::eTransferWrite,
-                },
-                nr::rhi::ops::QueueAccessScope{
-                    .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-                    .access = vk::AccessFlagBits2::eShaderRead,
-                }),
-        };
+        return;
     }
 
-    return nr::rhi::ops::BufferUploadOwnershipPlan{
-        .acquireToTransfer = nr::rhi::ops::makeQueueOwnershipTransfer(
-            graphicsQueueFamily,
-            transferQueueFamily,
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-                .access = vk::AccessFlagBits2::eShaderRead,
-            },
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            sourceReleaseWait),
-        .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
-            transferQueueFamily,
-            graphicsQueueFamily,
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-                .access = vk::AccessFlagBits2::eShaderRead,
-            }),
-    };
-}
-
-void clearPendingUiTextureSourceRelease(UiTextureEntry& textureEntry)
-{
-    textureEntry.pendingSourceReleaseCommandBuffers.reset();
-    textureEntry.pendingSourceReleasePool.reset();
-    textureEntry.pendingSourceReleaseSemaphore.reset();
-}
-
-[[nodiscard]] std::optional<nr::rhi::ops::QueueOwnershipWait> submitUiTextureSourceReleaseToTransfer(
-    nr::rhi::Device& device,
-    UiTextureEntry& textureEntry,
-    vk::ImageLayout sourceLayout)
-{
-    auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
-    if (sourceLayout == vk::ImageLayout::eUndefined || transferQueueFamily == graphicsQueueFamily)
+    auto capacity = std::max<vk::DeviceSize>(buffer.valid() ? buffer.size() : 1u, 1u);
+    while (capacity < requiredSize)
     {
-        clearPendingUiTextureSourceRelease(textureEntry);
-        return std::nullopt;
+        capacity = std::max(requiredSize, capacity * 2u);
     }
 
-    clearPendingUiTextureSourceRelease(textureEntry);
+    auto bufferInfo = vk::BufferCreateInfo{};
+    bufferInfo.size = capacity;
+    bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    bufferInfo.sharingMode = vk::SharingMode::eExclusive;
 
-    auto releaseRequest = nr::rhi::ops::makeQueueOwnershipRequest(
-        graphicsQueueFamily,
-        transferQueueFamily,
-        nr::rhi::ops::QueueAccessScope{
-            .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-            .access = vk::AccessFlagBits2::eShaderRead,
-        });
-
-    textureEntry.pendingSourceReleaseSemaphore.emplace(nr::rhi::sync::createSemaphore(device.device));
-    textureEntry.pendingSourceReleasePool.emplace(
-        device.device,
-        graphicsQueueFamily,
-        vk::CommandPoolCreateFlagBits::eTransient);
-
-    auto commandBuffers = textureEntry.pendingSourceReleasePool->allocatePrimary(1u);
-    auto& commandBuffer = commandBuffers.front();
-
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    {
-        auto releaseLabelScope = ScopedCommandBufferDebugLabel{commandBuffer, "Renderer"};
-        auto releaseBarriers = nr::rhi::ops::BarrierBatch{};
-        releaseBarriers.add(nr::rhi::ops::makeImageOwnershipBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(
-            textureEntry.image,
-            sourceLayout,
-            vk::ImageLayout::eTransferDstOptimal,
-            releaseRequest));
-        nr::rhi::ops::pipelineBarrier(commandBuffer, releaseBarriers);
-        releaseLabelScope.close();
-    }
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addCommandBuffer(commandBuffer);
-    batch.addSignal(*textureEntry.pendingSourceReleaseSemaphore);
-    device.queueManager.graphics().submit(batch);
-
-    textureEntry.pendingSourceReleaseCommandBuffers.emplace(std::move(commandBuffers));
-    return nr::rhi::ops::QueueOwnershipWait{
-        .semaphore = *textureEntry.pendingSourceReleaseSemaphore,
-        .value = 0u,
-    };
-}
-
-[[nodiscard]] std::optional<nr::rhi::ops::ImageUploadTicket> uploadUiTextureAsync(
-    nr::rhi::Device& device,
-    nr::rhi::Image& image,
-    std::span<const std::byte> uploadBytes,
-    vk::ImageLayout oldLayout,
-    std::optional<nr::rhi::ops::QueueOwnershipWait> sourceReleaseWait = std::nullopt)
-{
-    nr::nrAssert(image.valid(), "UiNode texture upload requires a valid destination image.");
-    nr::nrAssert(!uploadBytes.empty(), "UiNode texture upload requires non-empty upload bytes.");
-
-    auto& uploadContext = device.uploadReadback();
-    nr::nrAssert(uploadContext.valid(), "UiNode requires a valid upload context for async texture uploads.");
-
-    auto ownership = makeUiTextureUploadOwnershipPlan(device, oldLayout, sourceReleaseWait);
-    auto ticket = uploadContext.uploadImage(
-        uploadBytes,
-        image,
-        oldLayout,
-        vk::ImageLayout::eShaderReadOnlyOptimal,
-        ownership);
-    
-    if (!ticket.valid())
-    {
-        nr::nrInfo("UiNode: async texture upload failed, ticket invalid.");
-        return std::nullopt;
-    }
-
-    return ticket;
-}
-
-void pollPendingUiTextureUploads(
-    nr::rhi::Device& device,
-    UiRuntimeCache& runtime)
-{
-    auto& uploadContext = device.uploadReadback();
-    auto const completedUploadValue = uploadContext.completedUploadValue();
-    uploadContext.reclaimCompletedUploads();
-    auto const sameQueueFamily =
-        device.queueManager.transfer().queueFamilyIndex() ==
-        device.queueManager.graphics().queueFamilyIndex();
-
-    std::ranges::for_each(runtime.textures, [](auto& pair) {
-        auto& texture = pair.second;
-        if (!texture.pendingUpload.has_value())
-        {
-            return;
-        }
-
-        if (!texture.pendingUpload->valid())
-        {
-            clearPendingUiTextureSourceRelease(texture);
-            texture.pendingUpload.reset();
-        }
-    });
-
-    std::ranges::for_each(runtime.textures, [&](auto& pair) {
-        auto& texture = pair.second;
-        if (!texture.pendingUpload.has_value() ||
-            !texture.pendingUpload->valid() ||
-            texture.pendingUpload->signalValue > completedUploadValue)
-        {
-            return;
-        }
-
-        clearPendingUiTextureSourceRelease(texture);
-        if (sameQueueFamily)
-        {
-            texture.pendingUpload.reset();
-        }
-    });
-}
-
-[[nodiscard]] bool hasIncompleteUiTextureUpload(
-    const UiRuntimeCache& runtime,
-    std::uint64_t completedUploadValue)
-{
-    return std::ranges::any_of(runtime.textures, [&](const auto& pair) {
-        auto const& texture = pair.second;
-        return texture.pendingUpload.has_value() &&
-               texture.pendingUpload->valid() &&
-               texture.pendingUpload->signalValue > completedUploadValue;
-    });
-}
-
-void waitForPendingUiTextureUploadSignalsByPolling(
-    nr::rhi::Device& device,
-    UiRuntimeCache& runtime)
-{
-    auto& uploadContext = device.uploadReadback();
-    while (true)
-    {
-        pollPendingUiTextureUploads(device, runtime);
-        if (!hasIncompleteUiTextureUpload(runtime, uploadContext.completedUploadValue()))
-        {
-            return;
-        }
-
-        std::this_thread::yield();
-    }
-}
-
-void recordUiTextureAcquireBarriers(
-    nr::rhi::Device& device,
-    UiRuntimeCache& runtime,
-    const vk::raii::CommandBuffer& commandBuffer)
-{
-    auto& uploadContext = device.uploadReadback();
-    auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
-    auto const completedUploadValue = uploadContext.completedUploadValue();
-    uploadContext.reclaimCompletedUploads();
-    
-    auto barriers = nr::rhi::ops::BarrierBatch{};
-    
-    if (transferQueueFamily == graphicsQueueFamily)
-    {
-        // Same queue family uploads already finish with a TransferDst -> ShaderReadOnly
-        // layout transition inside UploadReadbackContext::uploadImage(...).
-        // Only clear the pending ticket here; recording another "acquire" transition
-        // would re-state an outdated oldLayout and confuse validation tracking.
-        std::ranges::for_each(runtime.textures, [&](auto& pair) {
-            if (!pair.second.pendingUpload.has_value() || !pair.second.pendingUpload->valid())
-            {
-                return;
-            }
-            if (pair.second.pendingUpload->signalValue > completedUploadValue)
-            {
-                return;
-            }
-            clearPendingUiTextureSourceRelease(pair.second);
-            pair.second.pendingUpload.reset();
-        });
-    }
-    else
-    {
-        // Cross-queue: record ownership acquire barriers (which also handle layout transition)
-        std::ranges::for_each(runtime.textures, [&](auto& pair) {
-            if (!pair.second.pendingUpload.has_value() || !pair.second.pendingUpload->valid())
-            {
-                return;
-            }
-            if (pair.second.pendingUpload->signalValue > completedUploadValue)
-            {
-                return;
-            }
-            
-            barriers.add(uploadContext.makeImageAcquireBarrier(pair.second.pendingUpload.value()));
-            clearPendingUiTextureSourceRelease(pair.second);
-            pair.second.pendingUpload.reset();
-        });
-    }
-
-    if (!barriers.empty())
-    {
-        nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
-    }
+    buffer = device.resourceFactory.createBuffer(
+        bufferInfo,
+        nr::rhi::MemoryUsage::CpuToGpu,
+        debugName);
+    nr::nrAssert(buffer.valid(), std::format("UiNode failed to create texture upload buffer '{}'.", debugName));
 }
 
 void createOrUpdateUiTexture(
     nr::rhi::Device& device,
     UiRuntimeCache& runtime,
-    ImTextureData& textureData)
+    ImTextureData& textureData,
+    std::size_t frameSlot,
+    std::uint64_t currentFrameIndex,
+    std::vector<UiTextureUploadJob>& uploadJobs)
 {
     auto const textureId = makeManagedTextureId(textureData);
     auto const textureSlot = acquireUiTextureSlot(runtime, textureId);
@@ -694,20 +446,19 @@ void createOrUpdateUiTexture(
         needsCreate = currentExtent.width != textureExtent.width || currentExtent.height != textureExtent.height;
     }
 
-    if (existingTexture != runtime.textures.end() && existingTexture->second.pendingUpload.has_value())
-    {
-        if (existingTexture->second.pendingUpload->valid())
-        {
-            textureData.SetTexID(textureId);
-            return;
-        }
-
-        clearPendingUiTextureSourceRelease(existingTexture->second);
-        existingTexture->second.pendingUpload.reset();
-    }
-
     if (needsCreate)
     {
+        if (existingTexture != runtime.textures.end())
+        {
+            runtime.retiredTextures.push_back(UiRetiredTexture{
+                .image = std::move(existingTexture->second.image),
+                .uploadBuffers = std::move(existingTexture->second.uploadBuffers),
+                .slot = textureSlot,
+                .retiredFrameIndex = currentFrameIndex,
+                .releaseSlot = false,
+            });
+        }
+
         auto [textureIt, inserted] = runtime.textures.insert_or_assign(
             textureId,
             UiTextureEntry{
@@ -715,32 +466,33 @@ void createOrUpdateUiTexture(
                     device,
                     textureExtent,
                     std::format("Ui.Texture[{}:{}]", textureData.UniqueID, textureSlot)),
-                .pendingUpload = std::nullopt,
             });
         nr::nrAssert(inserted || textureIt != runtime.textures.end(), "UiNode failed to store the created texture entry.");
 
-        textureIt->second.pendingUpload = uploadUiTextureAsync(
-            device,
-            textureIt->second.image,
-            std::span<const std::byte>{uploadBytes.data(), uploadBytes.size()},
-            vk::ImageLayout::eUndefined);
-
         invalidateBindlessTextureTables(runtime);
+        existingTexture = textureIt;
     }
-    else
-    {
-        auto sourceReleaseWait = submitUiTextureSourceReleaseToTransfer(
-            device,
-            existingTexture->second,
-            vk::ImageLayout::eShaderReadOnlyOptimal);
-        auto ticket = uploadUiTextureAsync(
-            device,
-            existingTexture->second.image,
-            std::span<const std::byte>{uploadBytes.data(), uploadBytes.size()},
-            vk::ImageLayout::eShaderReadOnlyOptimal,
-            sourceReleaseWait);
-        existingTexture->second.pendingUpload = ticket;
-    }
+
+    nr::nrAssert(existingTexture != runtime.textures.end(), "UiNode failed to resolve texture entry for upload staging.");
+    auto& textureEntry = existingTexture->second;
+    auto const initialLayout = textureEntry.currentLayout;
+    auto const uploadByteSize = static_cast<vk::DeviceSize>(uploadBytes.size());
+    auto& uploadBuffer = textureEntry.uploadBuffers[frameSlot];
+    ensureUiTextureUploadBuffer(
+        device,
+        uploadBuffer,
+        uploadByteSize,
+        std::format("Ui.TextureUpload[{}:{}:{}]", textureData.UniqueID, textureSlot, frameSlot));
+    uploadBuffer.writeMappedAndFlush(std::span<const std::byte>{uploadBytes.data(), uploadBytes.size()});
+
+    uploadJobs.push_back(UiTextureUploadJob{
+        .textureId = textureId,
+        .uploadBuffer = std::ref(uploadBuffer),
+        .extent = textureExtent,
+        .byteSize = uploadByteSize,
+        .initialLayout = initialLayout,
+    });
+    textureEntry.currentLayout = nr::renderer::ImageLayoutIntent::ShaderReadOnly;
 
     textureData.SetTexID(textureId);
     textureData.SetStatus(ImTextureStatus_OK);
@@ -762,19 +514,12 @@ void destroyUiTexture(
     {
         auto slotIt = runtime.textureSlotById.find(textureId);
         auto const slot = slotIt != runtime.textureSlotById.end() ? slotIt->second : 0u;
-        auto const pendingUploadSignalValue =
-            textureIt->second.pendingUpload.has_value() && textureIt->second.pendingUpload->valid()
-                ? textureIt->second.pendingUpload->signalValue
-                : 0u;
-        
+
         runtime.retiredTextures.push_back(UiRetiredTexture{
             .image = std::move(textureIt->second.image),
+            .uploadBuffers = std::move(textureIt->second.uploadBuffers),
             .slot = slot,
             .retiredFrameIndex = currentFrameIndex,
-            .pendingUploadSignalValue = pendingUploadSignalValue,
-            .pendingSourceReleasePool = std::move(textureIt->second.pendingSourceReleasePool),
-            .pendingSourceReleaseCommandBuffers = std::move(textureIt->second.pendingSourceReleaseCommandBuffers),
-            .pendingSourceReleaseSemaphore = std::move(textureIt->second.pendingSourceReleaseSemaphore),
         });
         runtime.textures.erase(textureIt);
     }
@@ -795,23 +540,16 @@ void destroyUiTexture(
 }
 
 void cleanupRetiredTextures(
-    nr::rhi::Device& device,
     UiRuntimeCache& runtime,
     std::uint64_t currentFrameIndex)
 {
     constexpr auto kRetirementFrameCount = static_cast<std::uint64_t>(nr::maxFrameInFlight + 1u);
-    auto& uploadContext = device.uploadReadback();
-    auto const completedUploadValue = uploadContext.completedUploadValue();
-    uploadContext.reclaimCompletedUploads();
-    
+
     std::erase_if(runtime.retiredTextures, [&](const UiRetiredTexture& retired) {
         auto const frameLatencySatisfied = currentFrameIndex >= retired.retiredFrameIndex + kRetirementFrameCount;
-        auto const uploadSatisfied =
-            retired.pendingUploadSignalValue == 0u ||
-            retired.pendingUploadSignalValue <= completedUploadValue;
-        if (frameLatencySatisfied && uploadSatisfied)
+        if (frameLatencySatisfied)
         {
-            if (retired.slot < runtime.freeTextureSlots.size() ||
+            if (retired.releaseSlot &&
                 std::ranges::find(runtime.freeTextureSlots, retired.slot) == runtime.freeTextureSlots.end())
             {
                 if (retired.slot < runtime.textureIdsBySlot.size() &&
@@ -830,9 +568,11 @@ void synchronizeUiTextures(
     nr::rhi::Device& device,
     UiRuntimeCache& runtime,
     const ImDrawData& drawData,
-    std::uint64_t currentFrameIndex)
+    std::size_t frameSlot,
+    std::uint64_t currentFrameIndex,
+    std::vector<UiTextureUploadJob>& uploadJobs)
 {
-    cleanupRetiredTextures(device, runtime, currentFrameIndex);
+    cleanupRetiredTextures(runtime, currentFrameIndex);
     
     if (drawData.Textures == nullptr)
     {
@@ -849,7 +589,7 @@ void synchronizeUiTextures(
         {
         case ImTextureStatus_WantCreate:
         case ImTextureStatus_WantUpdates:
-            createOrUpdateUiTexture(device, runtime, *textureData);
+            createOrUpdateUiTexture(device, runtime, *textureData, frameSlot, currentFrameIndex, uploadJobs);
             break;
         case ImTextureStatus_WantDestroy:
             destroyUiTexture(runtime, *textureData, currentFrameIndex);
@@ -858,6 +598,173 @@ void synchronizeUiTextures(
             break;
         }
     });
+}
+
+[[nodiscard]] std::map<ImTextureID, nr::renderer::GraphResourceHandle> registerUiTextureImageResources(
+    nr::renderer::NodeBuildContext& context,
+    const UiRuntimeCache& runtime,
+    std::span<const UiTextureUploadJob> uploadJobs)
+{
+    auto uploadInitialLayoutByTexture = std::map<ImTextureID, nr::renderer::ImageLayoutIntent>{};
+    std::ranges::for_each(uploadJobs, [&](const UiTextureUploadJob& job) {
+        uploadInitialLayoutByTexture.insert_or_assign(job.textureId, job.initialLayout);
+    });
+
+    auto graphResourceByTexture = std::map<ImTextureID, nr::renderer::GraphResourceHandle>{};
+    auto slotRange = std::views::iota(std::size_t{0}, runtime.textureIdsBySlot.size());
+    std::ranges::for_each(slotRange, [&](std::size_t slot) {
+        auto const textureId = runtime.textureIdsBySlot[slot];
+        if (textureId == kInvalidTextureId)
+        {
+            return;
+        }
+
+        auto textureIt = runtime.textures.find(textureId);
+        nr::nrAssert(
+            textureIt != runtime.textures.end(),
+            std::format(
+                "UiNode graph resource registration could not resolve texture id {} for slot {}.",
+                static_cast<unsigned long long>(textureId),
+                slot));
+
+        auto const& textureEntry = textureIt->second;
+        if (!textureEntry.image.valid())
+        {
+            return;
+        }
+
+        auto const imageExtent = textureEntry.image.extent();
+        auto initialLayout = textureEntry.currentLayout;
+        if (auto uploadLayoutIt = uploadInitialLayoutByTexture.find(textureId);
+            uploadLayoutIt != uploadInitialLayoutByTexture.end())
+        {
+            initialLayout = uploadLayoutIt->second;
+        }
+
+        auto resource = context.addResource(nr::renderer::GraphImportedImageDesc{
+            .debugName = std::format("Ui.TextureResource[{}]", slot),
+            .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
+            .extent = imageExtent,
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .usageIntents = {
+                nr::renderer::ImageUsageIntent::TransferDst,
+                nr::renderer::ImageUsageIntent::Sampled,
+            },
+            .initialLayout = initialLayout,
+            .aspect = nr::renderer::ImageAspectIntent::Color,
+            .importedResource = std::cref(textureEntry.image),
+        });
+
+        graphResourceByTexture.insert_or_assign(textureId, resource);
+    });
+
+    return graphResourceByTexture;
+}
+
+void addUiTextureUploadPass(
+    nr::renderer::NodeBuildContext& context,
+    std::span<const UiTextureUploadJob> uploadJobs,
+    const std::map<ImTextureID, nr::renderer::GraphResourceHandle>& graphResourceByTexture)
+{
+    if (uploadJobs.empty())
+    {
+        return;
+    }
+
+    auto passIntents = std::vector<nr::renderer::PassResourceUseDesc>{};
+    passIntents.reserve(uploadJobs.size() * 2u);
+    auto uploadCopies = std::vector<UiTextureUploadCopy>{};
+    uploadCopies.reserve(uploadJobs.size());
+
+    std::ranges::for_each(uploadJobs, [&](const UiTextureUploadJob& job) {
+        auto imageResourceIt = graphResourceByTexture.find(job.textureId);
+        nr::nrAssert(
+            imageResourceIt != graphResourceByTexture.end(),
+            std::format(
+                "UiNode upload pass could not resolve graph image resource for texture id {}.",
+                static_cast<unsigned long long>(job.textureId)));
+
+        auto sourceBuffer = context.addResource(nr::renderer::GraphImportedBufferDesc{
+            .debugName = std::format("Ui.TextureUploadBuffer[{}]", static_cast<unsigned long long>(job.textureId)),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .residency = nr::renderer::ResourceResidency::Imported,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Undefined,
+            .size = job.byteSize,
+            .usageIntents = {
+                nr::renderer::BufferUsageIntent::TransferSrc,
+            },
+            .importedResource = std::ref(job.uploadBuffer.get()),
+        });
+
+        passIntents.push_back(nr::renderer::PassResourceUseDesc{
+            .resource = sourceBuffer,
+            .bufferUsage = nr::renderer::BufferUsageIntent::TransferSrc,
+            .bufferAccess = nr::renderer::BufferAccessIntent::TransferRead,
+            .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
+            .readOnly = true,
+        });
+
+        passIntents.push_back(nr::renderer::PassResourceUseDesc{
+            .resource = imageResourceIt->second,
+            .imageUsage = nr::renderer::ImageUsageIntent::TransferDst,
+            .imageAccess = nr::renderer::ImageAccessIntent::TransferWrite,
+            .imageLayout = nr::renderer::ImageLayoutIntent::TransferDst,
+            .imageAspect = nr::renderer::ImageAspectIntent::Color,
+            .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
+            .readOnly = false,
+        });
+
+        uploadCopies.push_back(UiTextureUploadCopy{
+            .sourceBuffer = sourceBuffer,
+            .destinationImage = imageResourceIt->second,
+            .extent = job.extent,
+            .byteSize = job.byteSize,
+        });
+    });
+
+    [[maybe_unused]] auto uploadPassHandle = context.addPass(
+        std::span<const nr::renderer::PassResourceUseDesc>{passIntents.data(), passIntents.size()},
+        "Ui.TextureUpload",
+        [uploadCopies](const nr::renderer::PassRecordContext& recordContext) {
+            nr::nrAssert(recordContext.commandBuffer.has_value(), "UiNode texture upload pass requires RAII command buffer access.");
+            nr::nrAssert(static_cast<bool>(recordContext.resolveBuffer), "UiNode texture upload pass requires buffer resolver.");
+            nr::nrAssert(static_cast<bool>(recordContext.resolveImage), "UiNode texture upload pass requires image resolver.");
+
+            auto& commandBuffer = recordContext.commandBuffer->get();
+            std::ranges::for_each(uploadCopies, [&](const UiTextureUploadCopy& copy) {
+                auto sourceBuffer = recordContext.resolveBuffer(copy.sourceBuffer);
+                auto destinationImage = recordContext.resolveImage(copy.destinationImage);
+                nr::nrAssert(sourceBuffer.has_value(), "UiNode texture upload pass failed to resolve source buffer.");
+                nr::nrAssert(destinationImage.has_value(), "UiNode texture upload pass failed to resolve destination image.");
+                nr::nrAssert(sourceBuffer->buffer != vk::Buffer{}, "UiNode texture upload pass resolved an invalid source buffer.");
+                nr::nrAssert(destinationImage->image != vk::Image{}, "UiNode texture upload pass resolved an invalid destination image.");
+                nr::nrAssert(
+                    sourceBuffer->size >= copy.byteSize,
+                    "UiNode texture upload pass source buffer is smaller than the queued upload payload.");
+
+                auto copyRegion = vk::BufferImageCopy{};
+                copyRegion.imageSubresource = vk::ImageSubresourceLayers{
+                    vk::ImageAspectFlagBits::eColor,
+                    0u,
+                    0u,
+                    1u,
+                };
+                copyRegion.imageExtent = vk::Extent3D{
+                    copy.extent.width,
+                    copy.extent.height,
+                    1u,
+                };
+
+                nr::rhi::ops::copyBufferToImage2(
+                    commandBuffer,
+                    sourceBuffer->buffer,
+                    destinationImage->image,
+                    vk::ImageLayout::eTransferDstOptimal,
+                    nr::rhi::ops::toBufferImageCopy2(copyRegion));
+            });
+        });
 }
 
 void ensureFrameUploadBuffer(
@@ -918,7 +825,6 @@ void ensureFrameUploadBuffer(
     }
 
     auto root = runtime.pipeline.descriptorLayout.rootCursor();
-    nr::nrAssert(root.valid(), "UiNode requires a valid root shader cursor for bindless descriptor allocation.");
     auto textureCursor = root["gUiTextures"];
     auto textureBinding = textureCursor.descriptorBinding();
     nr::nrAssert(
@@ -947,26 +853,21 @@ void ensureFrameUploadBuffer(
     return bindingSets;
 }
 
-void updateBindlessTextureBindingsForFrame(
+[[nodiscard]] nr::rhi::ShaderBindingSnapshot makeBindlessTextureBindingSnapshotForFrame(
     UiRuntimeCache& runtime,
     std::size_t frameSlot)
 {
     auto& bindingSets = ensureBindlessTextureBindingSetsForFrame(runtime, frameSlot);
     if (runtime.bindlessDescriptorsInitializedByFrame[frameSlot])
     {
-        return;
+        return {};
     }
 
     auto root = runtime.pipeline.descriptorLayout.rootCursor();
-    nr::nrAssert(root.valid(), "UiNode requires a valid root shader cursor for descriptor updates.");
-
     auto texturesCursor = root["gUiTextures"];
     auto samplerCursor = root["gUiSampler"];
-    nr::nrAssert(texturesCursor.valid(), "UiNode requires gUiTextures cursor for descriptor updates.");
-    nr::nrAssert(samplerCursor.valid(), "UiNode requires gUiSampler cursor for descriptor updates.");
 
-    auto samplerBindOk = samplerCursor.setObject(runtime.textureSampler.raw());
-    nr::nrAssert(samplerBindOk, "UiNode failed to write gUiSampler descriptor.");
+    static_cast<void>(samplerCursor.setObject(runtime.textureSampler.raw()));
 
     auto slotRange = std::views::iota(std::size_t{0}, runtime.textureIdsBySlot.size());
     std::ranges::for_each(slotRange, [&](std::size_t slot) {
@@ -985,55 +886,15 @@ void updateBindlessTextureBindingsForFrame(
                 slot));
 
         auto textureElementCursor = texturesCursor[slot];
-        auto textureBinding = textureElementCursor.descriptorBinding();
-        auto textureBindOk = textureElementCursor.setObject(textureIt->second.image, vk::ImageLayout::eShaderReadOnlyOptimal);
-        nr::nrAssert(
-            textureBindOk,
-            std::format(
-                "UiNode failed to write gUiTextures[{}] descriptor for ImGui texture id {}. cursorValid={}, kind={}, type='{}', bindingPresent={}, descriptorType={}, bindingArrayIndex={}, bindingRangeIndex={}.",
-                slot,
-                static_cast<unsigned long long>(textureId),
-                textureElementCursor.valid(),
-                static_cast<int>(textureElementCursor.kind()),
-                textureElementCursor.typeName(),
-                textureBinding.has_value(),
-                textureBinding.has_value() ? vk::to_string(textureBinding->descriptorType) : std::string("<none>"),
-                textureElementCursor.address().bindingArrayIndex,
-                textureElementCursor.address().bindingRangeIndex));
+        static_cast<void>(textureElementCursor.setObject(textureIt->second.image, vk::ImageLayout::eShaderReadOnlyOptimal));
     });
 
     auto bindingSnapshot = root.snapshot();
     root.clearSnapshot();
-
-    auto writeRequests = nr::rhi::resolveDescriptorWriteRequests(bindingSnapshot, {});
-    if (writeRequests.empty())
-    {
-        return;
-    }
-
-    auto requestsBySet = std::map<std::uint32_t, std::vector<nr::rhi::DescriptorWriteRequest>>{};
-    std::ranges::for_each(writeRequests, [&](const nr::rhi::DescriptorWriteRequest& request) {
-        requestsBySet[request.binding.set].push_back(request);
-    });
-
-    std::ranges::for_each(bindingSets, [&](const nr::rhi::ShaderBindingSet& bindingSet) {
-        auto it = requestsBySet.find(bindingSet.setIndex());
-        if (it == requestsBySet.end())
-        {
-            return;
-        }
-
-        runtime.pipeline.bindingPool.update(bindingSet, std::span<const nr::rhi::DescriptorWriteRequest>{it->second.data(), it->second.size()});
-        requestsBySet.erase(it);
-    });
-
-    nr::nrAssert(
-        requestsBySet.empty(),
-        std::format(
-            "UiNode could not resolve bindless descriptor set writes in frame slot {}.",
-            frameSlot));
-
+    nr::nrAssert(!bindingSnapshot.empty(), "UiNode bindless descriptor snapshot should contain sampler or texture writes.");
+    nr::nrAssert(!bindingSets.empty(), "UiNode requires bindless descriptor sets before snapshot deployment.");
     runtime.bindlessDescriptorsInitializedByFrame[frameSlot] = true;
+    return bindingSnapshot;
 }
 
 void pushUiConstantsToCommandBuffer(
@@ -1042,13 +903,8 @@ void pushUiConstantsToCommandBuffer(
     const UiPushConstants& pushConstants)
 {
     auto root = pipeline.descriptorLayout.rootCursor();
-    nr::nrAssert(root.valid(), "UiNode requires a valid root shader cursor for push constants.");
-
     auto pushCursor = root["gUiPush"];
-    nr::nrAssert(pushCursor.valid(), "UiNode requires gUiPush cursor for push constants.");
-
-    auto pushBindOk = pushCursor.setData(pushConstants);
-    nr::nrAssert(pushBindOk, "UiNode failed to write gUiPush.");
+    static_cast<void>(pushCursor.setData(pushConstants));
 
     auto bindingSnapshot = root.snapshot();
     root.clearSnapshot();
@@ -1254,6 +1110,7 @@ class UiNode final : public Node
         auto drawFrame = UiFrameDrawData{};
         drawFrame.framebufferExtent = bufferExtent;
         auto const currentFrameIndex = static_cast<std::uint64_t>(frameParameters.frameIndex);
+        auto uiTextureUploadJobs = std::vector<UiTextureUploadJob>{};
         if (uiSystem.has_value())
         {
             {
@@ -1270,24 +1127,50 @@ class UiNode final : public Node
             auto drawData = uiSystem->get().drawData();
             if (drawData.has_value())
             {
-                pollPendingUiTextureUploads(device_->get(), *runtime_);
-                synchronizeUiTextures(device_->get(), *runtime_, drawData->get(), currentFrameIndex);
-                waitForPendingUiTextureUploadSignalsByPolling(device_->get(), *runtime_);
+                synchronizeUiTextures(
+                    device_->get(),
+                    *runtime_,
+                    drawData->get(),
+                    frameSlot,
+                    currentFrameIndex,
+                    uiTextureUploadJobs);
                 drawFrame = copyUiDrawData(drawData->get(), bufferExtent);
             }
         }
 
-        auto passIntents = std::array{
-            nr::renderer::PassResourceUseDesc{
-                .resource = uiBuffer,
-                .imageUsage = nr::renderer::ImageUsageIntent::ColorAttachment,
-                .imageAccess = nr::renderer::ImageAccessIntent::ColorAttachmentWrite,
-                .imageLayout = nr::renderer::ImageLayoutIntent::ColorAttachment,
+        auto graphResourceByTexture = registerUiTextureImageResources(
+            context,
+            *runtime_,
+            std::span<const UiTextureUploadJob>{uiTextureUploadJobs.data(), uiTextureUploadJobs.size()});
+
+        addUiTextureUploadPass(
+            context,
+            std::span<const UiTextureUploadJob>{uiTextureUploadJobs.data(), uiTextureUploadJobs.size()},
+            graphResourceByTexture);
+
+        auto passIntents = std::vector<nr::renderer::PassResourceUseDesc>{};
+        passIntents.reserve(1u + graphResourceByTexture.size());
+        passIntents.push_back(nr::renderer::PassResourceUseDesc{
+            .resource = uiBuffer,
+            .imageUsage = nr::renderer::ImageUsageIntent::ColorAttachment,
+            .imageAccess = nr::renderer::ImageAccessIntent::ColorAttachmentWrite,
+            .imageLayout = nr::renderer::ImageLayoutIntent::ColorAttachment,
+            .imageAspect = nr::renderer::ImageAspectIntent::Color,
+            .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
+            .readOnly = false,
+        });
+
+        std::ranges::for_each(graphResourceByTexture, [&](const auto& pair) {
+            passIntents.push_back(nr::renderer::PassResourceUseDesc{
+                .resource = pair.second,
+                .imageUsage = nr::renderer::ImageUsageIntent::Sampled,
+                .imageAccess = nr::renderer::ImageAccessIntent::SampledRead,
+                .imageLayout = nr::renderer::ImageLayoutIntent::ShaderReadOnly,
                 .imageAspect = nr::renderer::ImageAspectIntent::Color,
                 .ownershipDomain = nr::renderer::ResourceOwnershipDomain::Undefined,
-                .readOnly = false,
-            },
-        };
+                .readOnly = true,
+            });
+        });
 
         auto runtime = runtime_;
         [[maybe_unused]] auto overlayPassHandle = context.addPass(
@@ -1312,31 +1195,18 @@ class UiNode final : public Node
 
                 auto colorAttachment = nr::rhi::ops::RenderingAttachmentDesc{
                     .imageView = uiBufferImage->view,
-                    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                    .resolveMode = vk::ResolveModeFlagBits::eNone,
-                    .resolveImageView = {},
-                    .resolveImageLayout = vk::ImageLayout::eUndefined,
                     .loadOp = vk::AttachmentLoadOp::eClear,
-                    .storeOp = vk::AttachmentStoreOp::eStore,
                     .clearValue = vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}},
                 };
 
                 auto colorAttachments = std::array{colorAttachment};
                 auto renderingScope = nr::rhi::ops::RenderingScopeDesc{
                     .renderArea = vk::Rect2D{vk::Offset2D{0, 0}, targetExtent},
-                    .layerCount = 1u,
-                    .viewMask = 0u,
-                    .flags = {},
                     .colorAttachments = colorAttachments,
-                    .depthAttachment = std::nullopt,
-                    .stencilAttachment = std::nullopt,
                 };
 
                 auto& commandBuffer = recordContext.commandBuffer->get();
-                
-                // Record layout transitions for any textures with pending uploads before rendering
-                recordUiTextureAcquireBarriers(recordContext.device->get(), *runtime, commandBuffer);
-                
+
                 auto scopedRendering = nr::rhi::ops::ScopedRendering(commandBuffer, renderingScope);
 
                 if (drawFrame.commands.empty())
@@ -1383,25 +1253,22 @@ class UiNode final : public Node
                     0u,
                     sizeof(ImDrawIdx) == 2u ? vk::IndexType::eUint16 : vk::IndexType::eUint32);
 
-                updateBindlessTextureBindingsForFrame(*runtime, frameSlot);
+                auto bindlessBindingSnapshot = makeBindlessTextureBindingSnapshotForFrame(*runtime, frameSlot);
                 auto& bindingSets = runtime->bindlessBindingSetsByFrame[frameSlot];
                 nr::nrAssert(!bindingSets.empty(), "UiNode requires initialized bindless descriptor sets for the active frame slot.");
-                runtime->pipeline.layout.bindDescriptorSets(
+                nr::rhi::bindResourcesToCommandBuffer(
                     commandBuffer,
                     vk::PipelineBindPoint::eGraphics,
+                    runtime->pipeline.layout,
+                    runtime->pipeline.bindingPool,
                     std::span<const nr::rhi::ShaderBindingSet>{bindingSets.data(), bindingSets.size()},
+                    bindlessBindingSnapshot,
                     {});
 
                 auto drawPushConstants = drawFrame.pushConstants;
                 std::optional<std::uint32_t> lastTextureIndex{};
                 std::ranges::for_each(drawFrame.commands, [&](const UiDrawCommand& command) {
                     if (command.elementCount == 0u || command.scissor.extent.width == 0u || command.scissor.extent.height == 0u)
-                    {
-                        return;
-                    }
-
-                    auto textureIt = runtime->textures.find(command.textureId);
-                    if (textureIt != runtime->textures.end() && textureIt->second.pendingUpload.has_value())
                     {
                         return;
                     }

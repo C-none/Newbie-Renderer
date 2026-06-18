@@ -26,6 +26,8 @@ This document outlines the development standards, architectural principles, and 
 *   **Associative Container Default:** When choosing an STL dictionary or tree container, default to `std::map` / `std::set`.
     *   *Use `std::unordered_map` / `std::unordered_set` only when the expected container size is greater than 50 in most cases.*
     *   *If the size is usually 50 or fewer elements, prefer `std::map` / `std::set` by default unless there is a clear, measured reason to do otherwise.*
+*   **Default-Member Construction:** When an aggregate or object member already has a default member initializer, omit that member during construction if the constructed value would be identical to the default. Assign only members whose value changes from the default, unless an explicit assignment is needed to document an API boundary, disambiguate overloads, or intentionally reset an existing object after construction.
+*   **Null-Equivalent Construction:** For optional or pointer-like objects that default to an empty/null state (for example `std::optional`, nullable external API pointers, Vulkan-Hpp optional handles, or RAII handle wrappers), do not explicitly assign `std::nullopt`, `nullptr`, or an equivalent empty value during aggregate/object construction when the value would remain unchanged. Use `{}` default member initialization for stored optional-like fields that need an explicit empty default. Use explicit empty assignments only when clearing an existing object, defining an API default argument, disambiguating overloads, or passing a required null at an external API boundary.
 *   **Modules:** Use C++20 modules (`.ixx`) for internal code organization.
 
 ### 2.3 Resource Management (RAII)

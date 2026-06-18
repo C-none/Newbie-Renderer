@@ -1,3 +1,10 @@
 CompileFlags:
-  # Keep clangd's module/BMI paths away from the LLVM Debug build tree used for verification.
+  # Isolation contract:
+  #   build/llvm-clangd  -- sole compile_commands.json for clangd; all project module PCMs and
+  #                         vcpkg headers installed here; clangd reads/writes only this tree.
+  #   build/llvm         -- main/test build tree; no compile_commands.json emitted (preset has
+  #                         CMAKE_EXPORT_COMPILE_COMMANDS=OFF); clangd never touches this tree.
+  #
+  # Result: building any target under build/llvm while clangd is running cannot conflict with
+  # the PCMs or headers that clangd holds open in build/llvm-clangd.
   CompilationDatabase: build/llvm-clangd

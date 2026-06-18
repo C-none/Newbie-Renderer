@@ -538,7 +538,7 @@ class ShaderBindingPool
     void update(const ShaderBindingSet &set, const DescriptorWriteRequest &writeRequest) const;
 
   private:
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     vk::raii::DescriptorPool pool_ = {nullptr};
     std::map<std::uint32_t, std::map<std::uint32_t, std::uint32_t>> variableDescriptorCapBySetAndBinding_{};
 };
@@ -856,6 +856,20 @@ class ShaderCursor
         return std::ranges::find(allowed, descriptorType) != allowed.end();
     }
 
+    [[nodiscard]] static std::string describeDescriptorBinding(const DescriptorBindingInfo &bindingInfo);
+
+    [[nodiscard]] static std::string describeDescriptorTypes(std::initializer_list<vk::DescriptorType> descriptorTypes);
+
+    [[nodiscard]] static std::string describeRootFields(const ShaderDescriptorLayout &layout);
+
+    [[nodiscard]] static std::string describeStructFields(slang::TypeLayoutReflection *typeLayout);
+
+    [[nodiscard]] std::string debugSummary() const;
+
+    void assertValidCursor(std::string_view operation) const;
+
+    void assertWritableCursor(std::string_view operation) const;
+
     [[nodiscard]] bool writeDescriptorRecord(
         ShaderBindingRecordPayload payload,
         std::initializer_list<vk::DescriptorType> allowedTypes,
@@ -873,7 +887,7 @@ class ShaderCursor
         return layout_->get();
     }
 
-    std::optional<std::reference_wrapper<const ShaderDescriptorLayout>> layout_;
+    std::optional<std::reference_wrapper<const ShaderDescriptorLayout>> layout_{};
     slang::TypeLayoutReflection *typeLayout_ = nullptr;
     CursorAddress address_{};
     bool isRoot_ = false;
@@ -959,7 +973,6 @@ class ShaderDescriptorLayout
                     auto key = std::tuple<std::uint32_t, std::uint32_t>{0u, pushConstantSize};
                     auto mergedIt = layout.pushConstantByOffsetAndSize_.find(key);
                     PushConstantRangeInfo info{
-                        .offset = 0,
                         .size = pushConstantSize,
                         .stageFlags = stageFlags,
                         .bindingRangeIndex = bindingRangeIndex,
@@ -1259,6 +1272,7 @@ class ShaderDescriptorLayout
 
     [[nodiscard]] ShaderCursor rootCursor() const
     {
+        nrAssert(valid(), "ShaderDescriptorLayout::rootCursor requires a valid descriptor layout.");
         return ShaderCursor(*this);
     }
 
@@ -1324,88 +1338,205 @@ void pushConstantsToCommandBuffer(
     const CursorPipelineLayout &layout,
     const ShaderBindingSnapshot &snapshot);
 
+[[nodiscard]] std::string ShaderCursor::describeDescriptorBinding(const DescriptorBindingInfo &bindingInfo)
+{
+    return std::format(
+        "set={}, binding={}, type={}, count={}, runtime={}, range={}, path='{}'",
+        bindingInfo.set,
+        bindingInfo.binding,
+        vk::to_string(bindingInfo.descriptorType),
+        bindingInfo.descriptorCount,
+        bindingInfo.isRuntimeSized,
+        bindingInfo.bindingRangeIndex,
+        bindingInfo.debugPath);
+}
+
+[[nodiscard]] std::string ShaderCursor::describeDescriptorTypes(std::initializer_list<vk::DescriptorType> descriptorTypes)
+{
+    auto result = std::string{};
+    std::ranges::for_each(descriptorTypes, [&](vk::DescriptorType descriptorType) {
+        if (!result.empty())
+        {
+            result += ", ";
+        }
+        result += vk::to_string(descriptorType);
+    });
+    return result.empty() ? std::string{"<none>"} : result;
+}
+
+[[nodiscard]] std::string ShaderCursor::describeRootFields(const ShaderDescriptorLayout &layout)
+{
+    auto result = std::string{};
+    std::ranges::for_each(layout.rootFields_, [&](const auto &entry) {
+        if (!result.empty())
+        {
+            result += ", ";
+        }
+        result += entry.first;
+    });
+    return result.empty() ? std::string{"<none>"} : result;
+}
+
+[[nodiscard]] std::string ShaderCursor::describeStructFields(slang::TypeLayoutReflection *typeLayout)
+{
+    if (!typeLayout)
+    {
+        return "<null type layout>";
+    }
+
+    auto result = std::string{};
+    auto fieldCountValue = std::max<SlangInt>(0, typeLayout->getFieldCount());
+    auto fieldIndices = std::views::iota(SlangInt{0}, fieldCountValue);
+    std::ranges::for_each(fieldIndices, [&](SlangInt fieldIndex) {
+        auto *fieldLayout = typeLayout->getFieldByIndex(static_cast<unsigned int>(fieldIndex));
+        auto *fieldVariable = fieldLayout ? fieldLayout->getVariable() : nullptr;
+        auto *fieldName = fieldVariable ? fieldVariable->getName() : nullptr;
+        if (!fieldName)
+        {
+            return;
+        }
+
+        if (!result.empty())
+        {
+            result += ", ";
+        }
+        result += fieldName;
+    });
+    return result.empty() ? std::string{"<none>"} : result;
+}
+
+[[nodiscard]] std::string ShaderCursor::debugSummary() const
+{
+    return std::format(
+        "path='{}', valid={}, root={}, typeKind={}, offset={}, range={}, array={}",
+        debugPath_.empty() ? std::string{"<empty>"} : debugPath_,
+        valid(),
+        isRoot_,
+        typeLayout_ ? static_cast<int>(typeLayout_->getKind()) : -1,
+        address_.uniformOffset,
+        address_.bindingRangeIndex,
+        address_.bindingArrayIndex);
+}
+
+void ShaderCursor::assertValidCursor(std::string_view operation) const
+{
+    nrAssert(
+        valid(),
+        std::format("{} requires a valid ShaderCursor. cursor={}", operation, debugSummary()));
+}
+
+void ShaderCursor::assertWritableCursor(std::string_view operation) const
+{
+    assertValidCursor(operation);
+    nrAssert(
+        !isRoot_,
+        std::format("{} requires a non-root ShaderCursor. cursor={}", operation, debugSummary()));
+    nrAssert(
+        static_cast<bool>(bindingState_),
+        std::format("{} requires shared binding state. cursor={}", operation, debugSummary()));
+}
+
 [[nodiscard]] ShaderCursor ShaderCursor::field(std::string_view fieldName) const
 {
-    if (!valid())
-    {
-        return {};
-    }
+    assertValidCursor("ShaderCursor::field");
+    nrAssert(
+        !fieldName.empty(),
+        std::format("ShaderCursor::field requires a non-empty field name. cursor={}", debugSummary()));
 
     if (isRoot_)
     {
-        auto rootField = layoutRef().findRootField(fieldName);
-        if (!rootField.has_value())
-        {
-            return {};
-        }
-        return ShaderCursor(layoutRef(), std::move(*rootField), bindingState_);
+        const auto &layout = layoutRef();
+        auto rootField = layout.findRootField(fieldName);
+        nrAssert(
+            rootField.has_value(),
+            std::format(
+                "ShaderCursor::field failed to resolve root field '{}'. availableRootFields=[{}]. cursor={}",
+                fieldName,
+                describeRootFields(layout),
+                debugSummary()));
+        return ShaderCursor(layout, std::move(*rootField), bindingState_);
     }
 
     auto kind = typeLayout_->getKind();
     if (kind == slang::TypeReflection::Kind::ConstantBuffer || kind == slang::TypeReflection::Kind::ParameterBlock)
     {
         auto *elementType = typeLayout_->getElementTypeLayout();
-        if (!elementType)
-        {
-            return {};
-        }
+        nrAssert(
+            elementType != nullptr,
+            std::format("ShaderCursor::field could not dereference constant-buffer/parameter-block cursor for field '{}'. cursor={}", fieldName, debugSummary()));
 
         ShaderCursor dereferenced = *this;
         dereferenced.typeLayout_ = elementType;
         return dereferenced.field(fieldName);
     }
 
-    if (kind != slang::TypeReflection::Kind::Struct)
-    {
-        return {};
-    }
+    nrAssert(
+        kind == slang::TypeReflection::Kind::Struct,
+        std::format(
+            "ShaderCursor::field requires a root, struct, constant-buffer, or parameter-block cursor. requestedField='{}', cursor={}",
+            fieldName,
+            debugSummary()));
 
     auto fieldIndex = detail::sanitizeFieldIndex(typeLayout_->findFieldIndexByName(fieldName.data(), fieldName.data() + fieldName.size()));
-    if (fieldIndex == std::numeric_limits<std::uint32_t>::max())
-    {
-        return {};
-    }
+    nrAssert(
+        fieldIndex != std::numeric_limits<std::uint32_t>::max(),
+        std::format(
+            "ShaderCursor::field could not find field '{}'. availableFields=[{}]. cursor={}",
+            fieldName,
+            describeStructFields(typeLayout_),
+            debugSummary()));
 
     auto *fieldLayout = typeLayout_->getFieldByIndex(fieldIndex);
-    if (!fieldLayout)
-    {
-        return {};
-    }
+    nrAssert(
+        fieldLayout != nullptr,
+        std::format(
+            "ShaderCursor::field found field index {} for '{}', but Slang returned a null field layout. cursor={}",
+            fieldIndex,
+            fieldName,
+            debugSummary()));
 
     return fieldCursorFromLayout(*fieldLayout, fieldIndex, std::format("{}.{}", debugPath_, fieldName));
 }
 
 [[nodiscard]] ShaderCursor ShaderCursor::element(std::uint32_t index) const
 {
-    if (!valid() || isRoot_)
-    {
-        return {};
-    }
+    assertValidCursor("ShaderCursor::element");
+    nrAssert(
+        !isRoot_,
+        std::format("ShaderCursor::element cannot index the root cursor. index={}, cursor={}", index, debugSummary()));
 
     auto kind = typeLayout_->getKind();
     if (kind == slang::TypeReflection::Kind::Struct)
     {
+        auto structFieldCount = static_cast<std::uint32_t>(std::max<SlangInt>(0, typeLayout_->getFieldCount()));
         auto *fieldLayout = typeLayout_->getFieldByIndex(index);
-        if (!fieldLayout)
-        {
-            return {};
-        }
+        nrAssert(
+            fieldLayout != nullptr,
+            std::format(
+                "ShaderCursor::element struct field index out of range. index={}, fieldCount={}, availableFields=[{}], cursor={}",
+                index,
+                structFieldCount,
+                describeStructFields(typeLayout_),
+                debugSummary()));
 
         return fieldCursorFromLayout(*fieldLayout, index, std::format("{}[{}]", debugPath_, index));
     }
 
+    const auto &layout = layoutRef();
     if (kind == slang::TypeReflection::Kind::Resource)
     {
-        auto bindingInfo = descriptorBinding();
-        if (!bindingInfo.has_value())
-        {
-            return {};
-        }
+        auto bindingInfo = layout.findBindingByRangeIndex(address_.bindingRangeIndex);
+        nrAssert(
+            bindingInfo.has_value(),
+            std::format("ShaderCursor::element requires a descriptor binding for resource indexing. index={}, cursor={}", index, debugSummary()));
 
-        if (!bindingInfo->isRuntimeSized && index >= bindingInfo->descriptorCount)
-        {
-            return {};
-        }
+        nrAssert(
+            bindingInfo->isRuntimeSized || index < bindingInfo->descriptorCount,
+            std::format(
+                "ShaderCursor::element descriptor array index out of range. index={}, binding={}, cursor={}",
+                index,
+                describeDescriptorBinding(*bindingInfo),
+                debugSummary()));
 
         ShaderCursor next = *this;
         next.address_.bindingArrayIndex += index;
@@ -1413,31 +1544,45 @@ void pushConstantsToCommandBuffer(
         return next;
     }
 
-    if (kind != slang::TypeReflection::Kind::Array && kind != slang::TypeReflection::Kind::Vector && kind != slang::TypeReflection::Kind::Matrix)
-    {
-        return {};
-    }
+    nrAssert(
+        kind == slang::TypeReflection::Kind::Array || kind == slang::TypeReflection::Kind::Vector || kind == slang::TypeReflection::Kind::Matrix,
+        std::format("ShaderCursor::element requires a struct, resource, array, vector, or matrix cursor. index={}, cursor={}", index, debugSummary()));
 
     auto *elementTypeLayout = typeLayout_->getElementTypeLayout();
     if (!elementTypeLayout)
     {
-        auto bindingInfo = descriptorBinding();
-        if (!bindingInfo.has_value())
-        {
-            return {};
-        }
+        auto bindingInfo = layout.findBindingByRangeIndex(address_.bindingRangeIndex);
+        nrAssert(
+            bindingInfo.has_value(),
+            std::format(
+                "ShaderCursor::element could not resolve an element type layout or descriptor binding. index={}, cursor={}",
+                index,
+                debugSummary()));
 
         auto elementCount = detail::tryElementCount(typeLayout_->getElementCount()).value_or(bindingInfo->descriptorCount);
-        if (!bindingInfo->isRuntimeSized && index >= elementCount)
-        {
-            return {};
-        }
+        nrAssert(
+            bindingInfo->isRuntimeSized || index < elementCount,
+            std::format(
+                "ShaderCursor::element descriptor-backed array index out of range. index={}, elementCount={}, binding={}, cursor={}",
+                index,
+                elementCount,
+                describeDescriptorBinding(*bindingInfo),
+                debugSummary()));
 
         ShaderCursor next = *this;
         next.address_.bindingArrayIndex = next.address_.bindingArrayIndex * std::max(elementCount, 1u) + index;
         next.debugPath_ = std::format("{}[{}]", debugPath_, index);
         return next;
     }
+
+    auto elementCount = detail::tryElementCount(typeLayout_->getElementCount());
+    nrAssert(
+        !elementCount.has_value() || index < *elementCount,
+        std::format(
+            "ShaderCursor::element array/vector/matrix index out of range. index={}, elementCount={}, cursor={}",
+            index,
+            elementCount.has_value() ? std::to_string(*elementCount) : std::string{"<runtime/unknown>"},
+            debugSummary()));
 
     ShaderCursor next = *this;
     next.typeLayout_ = elementTypeLayout;
@@ -1449,6 +1594,11 @@ void pushConstantsToCommandBuffer(
 
 [[nodiscard]] ShaderCursor ShaderCursor::getPath(std::string_view path) const
 {
+    assertValidCursor("ShaderCursor::getPath");
+    nrAssert(
+        !path.empty(),
+        std::format("ShaderCursor::getPath requires a non-empty path. cursor={}", debugSummary()));
+
     ShaderCursor cursor = *this;
     std::size_t tokenBegin = 0;
 
@@ -1463,37 +1613,41 @@ void pushConstantsToCommandBuffer(
         if (path[tokenBegin] == '[')
         {
             auto tokenEnd = path.find(']', tokenBegin + 1);
-            if (tokenEnd == std::string_view::npos)
-            {
-                return {};
-            }
+            nrAssert(
+                tokenEnd != std::string_view::npos,
+                std::format(
+                    "ShaderCursor::getPath found an unterminated array index. path='{}', tokenBegin={}, cursor={}",
+                    path,
+                    tokenBegin,
+                    cursor.debugSummary()));
 
             auto indexText = path.substr(tokenBegin + 1, tokenEnd - tokenBegin - 1);
             std::uint32_t index = 0;
             auto indexParse = std::from_chars(indexText.data(), indexText.data() + indexText.size(), index);
-            if (indexParse.ec != std::errc{})
-            {
-                return {};
-            }
+            nrAssert(
+                indexParse.ec == std::errc{} && indexParse.ptr == indexText.data() + indexText.size(),
+                std::format(
+                    "ShaderCursor::getPath failed to parse array index '{}'. path='{}', tokenBegin={}, cursor={}",
+                    indexText,
+                    path,
+                    tokenBegin,
+                    cursor.debugSummary()));
 
             cursor = cursor.element(index);
-            if (!cursor.valid())
-            {
-                return {};
-            }
-
             tokenBegin = tokenEnd + 1;
             continue;
         }
 
         auto tokenEnd = path.find_first_of(".[", tokenBegin);
         auto token = path.substr(tokenBegin, tokenEnd == std::string_view::npos ? path.size() - tokenBegin : tokenEnd - tokenBegin);
+        nrAssert(
+            !token.empty(),
+            std::format(
+                "ShaderCursor::getPath found an empty field token. path='{}', tokenBegin={}, cursor={}",
+                path,
+                tokenBegin,
+                cursor.debugSummary()));
         cursor = cursor.field(token);
-        if (!cursor.valid())
-        {
-            return {};
-        }
-
         if (tokenEnd == std::string_view::npos)
         {
             break;
@@ -1511,10 +1665,13 @@ template <typename FieldLayout>
     std::string debugPath) const
 {
     auto *fieldTypeLayout = fieldLayout.getTypeLayout();
-    if (!fieldTypeLayout)
-    {
-        return {};
-    }
+    nrAssert(
+        fieldTypeLayout != nullptr,
+        std::format(
+            "ShaderCursor::fieldCursorFromLayout requires a non-null field type layout. fieldIndex={}, debugPath='{}', cursor={}",
+            fieldIndex,
+            debugPath,
+            debugSummary()));
 
     ShaderCursor next = *this;
     next.typeLayout_ = fieldTypeLayout;
@@ -1635,18 +1792,31 @@ template <typename FieldLayout>
     std::initializer_list<vk::DescriptorType> allowedTypes,
     std::optional<std::uint32_t> explicitArrayElement) const
 {
-    if (!valid() || isRoot_ || !bindingState_)
-    {
-        return false;
-    }
+    assertWritableCursor("ShaderCursor::writeDescriptorRecord");
 
-    auto bindingInfo = descriptorBinding();
-    if (!bindingInfo.has_value() || !acceptsDescriptorType(bindingInfo->descriptorType, allowedTypes))
-    {
-        return false;
-    }
+    auto bindingInfo = layoutRef().findBindingByRangeIndex(address_.bindingRangeIndex);
+    nrAssert(
+        bindingInfo.has_value(),
+        std::format(
+            "ShaderCursor::writeDescriptorRecord requires a descriptor binding. allowedTypes=[{}], cursor={}",
+            describeDescriptorTypes(allowedTypes),
+            debugSummary()));
+    nrAssert(
+        acceptsDescriptorType(bindingInfo->descriptorType, allowedTypes),
+        std::format(
+            "ShaderCursor::writeDescriptorRecord descriptor type mismatch. allowedTypes=[{}], actualBinding={}, cursor={}",
+            describeDescriptorTypes(allowedTypes),
+            describeDescriptorBinding(*bindingInfo),
+            debugSummary()));
 
     auto arrayElement = explicitArrayElement.value_or(address_.bindingArrayIndex);
+    nrAssert(
+        bindingInfo->isRuntimeSized || arrayElement < bindingInfo->descriptorCount,
+        std::format(
+            "ShaderCursor::writeDescriptorRecord descriptor array element out of range. arrayElement={}, binding={}, cursor={}",
+            arrayElement,
+            describeDescriptorBinding(*bindingInfo),
+            debugSummary()));
     bindingState_->writeDescriptor(ShaderBindingRecord{
         .binding = *bindingInfo,
         .arrayElement = arrayElement,
@@ -1657,24 +1827,30 @@ template <typename FieldLayout>
 
 [[nodiscard]] bool ShaderCursor::setData(std::span<const std::uint8_t> bytes) const
 {
-    if (!valid() || isRoot_ || !bindingState_ || bytes.empty())
-    {
-        return false;
-    }
+    assertWritableCursor("ShaderCursor::setData");
+    nrAssert(
+        !bytes.empty(),
+        std::format("ShaderCursor::setData requires a non-empty byte payload. cursor={}", debugSummary()));
+    nrAssert(
+        bytes.size() <= std::numeric_limits<std::uint32_t>::max(),
+        std::format("ShaderCursor::setData payload too large. size={}, cursor={}", bytes.size(), debugSummary()));
 
     auto byteCount = static_cast<std::uint32_t>(bytes.size());
     auto copiedBytes = std::vector<std::uint8_t>{};
     copiedBytes.assign(bytes.begin(), bytes.end());
 
-    if (auto pushRange = pushConstantRange(); pushRange.has_value())
+    const auto &layout = layoutRef();
+    auto pushRangeIt = layout.pushConstantByRangeIndex_.find(address_.bindingRangeIndex);
+    if (pushRangeIt != layout.pushConstantByRangeIndex_.end())
     {
+        const auto &pushRange = pushRangeIt->second;
         nrAssert(
             address_.uniformOffset <= std::numeric_limits<std::uint32_t>::max(),
             std::format("Push-constant cursor offset exceeds uint32 range (offset={}).", address_.uniformOffset));
 
         auto offset = static_cast<std::uint32_t>(address_.uniformOffset);
-        auto rangeBegin = static_cast<std::uint64_t>(pushRange->offset);
-        auto rangeEnd = rangeBegin + static_cast<std::uint64_t>(pushRange->size);
+        auto rangeBegin = static_cast<std::uint64_t>(pushRange.offset);
+        auto rangeEnd = rangeBegin + static_cast<std::uint64_t>(pushRange.size);
         auto writeBegin = static_cast<std::uint64_t>(offset);
         auto writeEnd = writeBegin + static_cast<std::uint64_t>(byteCount);
 
@@ -1685,22 +1861,27 @@ template <typename FieldLayout>
                 debugPath_,
                 offset,
                 byteCount,
-                pushRange->offset,
-                pushRange->offset + pushRange->size));
+                pushRange.offset,
+                pushRange.offset + pushRange.size));
 
         bindingState_->writePushConstant(PushConstantWriteRecord{
-            .range = *pushRange,
+            .range = pushRange,
             .offset = offset,
             .data = std::move(copiedBytes),
         });
         return true;
     }
 
-    auto bindingInfo = descriptorBinding();
-    if (!bindingInfo.has_value() || bindingInfo->descriptorType != vk::DescriptorType::eInlineUniformBlock)
-    {
-        return false;
-    }
+    auto bindingInfo = layout.findBindingByRangeIndex(address_.bindingRangeIndex);
+    nrAssert(
+        bindingInfo.has_value(),
+        std::format("ShaderCursor::setData requires a push-constant range or inline-uniform descriptor binding. cursor={}", debugSummary()));
+    nrAssert(
+        bindingInfo->descriptorType == vk::DescriptorType::eInlineUniformBlock,
+        std::format(
+            "ShaderCursor::setData can only write push constants or inline uniform blocks. actualBinding={}, cursor={}",
+            describeDescriptorBinding(*bindingInfo),
+            debugSummary()));
 
     nrAssert(
         detail::isInlineUniformByteCountValid(byteCount),
@@ -1729,7 +1910,12 @@ template <typename FieldLayout>
     vk::DeviceSize offset,
     vk::DeviceSize range) const
 {
-    nrAssert(buffer.valid(), "ShaderCursor::setObject(Buffer) requires a valid Buffer.");
+    nrAssert(
+        buffer.valid(),
+        std::format(
+            "ShaderCursor::setObject(Buffer) requires a valid Buffer. offset={}, range={}",
+            offset,
+            range == vk::WholeSize ? std::string{"vk::WholeSize"} : std::to_string(range)));
     auto finalRange = normalizeBufferRange(buffer, offset, range);
     return writeDescriptorRecord(
         BufferDescriptorWrite{.buffer = buffer.handle(), .offset = offset, .range = finalRange},
@@ -1738,6 +1924,9 @@ template <typename FieldLayout>
 
 [[nodiscard]] bool ShaderCursor::setObject(vk::BufferView view) const
 {
+    nrAssert(
+        view != vk::BufferView{},
+        "ShaderCursor::setObject(BufferView) requires a non-null buffer view.");
     return writeDescriptorRecord(
         TexelBufferDescriptorWrite{.view = view},
         {vk::DescriptorType::eUniformTexelBuffer, vk::DescriptorType::eStorageTexelBuffer});
@@ -1750,7 +1939,14 @@ template <typename FieldLayout>
     vk::DeviceSize range,
     std::string_view viewName) const
 {
-    nrAssert(buffer.valid(), "ShaderCursor::setObject(Buffer,Format) requires a valid Buffer.");
+    nrAssert(
+        buffer.valid(),
+        std::format(
+            "ShaderCursor::setObject(Buffer, Format) requires a valid Buffer. format={}, offset={}, range={}, viewName='{}'",
+            vk::to_string(format),
+            offset,
+            range == vk::WholeSize ? std::string{"vk::WholeSize"} : std::to_string(range),
+            viewName));
     auto finalRange = normalizeBufferRange(buffer, offset, range);
     auto view = buffer.addView(format, offset, finalRange, viewName);
     return setObject(*view.get());
@@ -1760,7 +1956,12 @@ template <typename FieldLayout>
     const Image &image,
     vk::ImageLayout imageLayout) const
 {
-    nrAssert(image.valid(), "ShaderCursor::setObject(Image) requires a valid Image.");
+    nrAssert(
+        image.valid(),
+        std::format("ShaderCursor::setObject(Image) requires a valid Image. imageLayout={}", vk::to_string(imageLayout)));
+    nrAssert(
+        *image.view() != vk::ImageView{},
+        std::format("ShaderCursor::setObject(Image) requires a valid default image view. imageLayout={}", vk::to_string(imageLayout)));
     return writeDescriptorRecord(
         ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = {}},
         {vk::DescriptorType::eSampledImage, vk::DescriptorType::eInputAttachment, vk::DescriptorType::eStorageImage});
@@ -1768,6 +1969,9 @@ template <typename FieldLayout>
 
 [[nodiscard]] bool ShaderCursor::setObject(vk::Sampler sampler) const
 {
+    nrAssert(
+        sampler != vk::Sampler{},
+        "ShaderCursor::setObject(Sampler) requires a non-null sampler.");
     return writeDescriptorRecord(
         ImageDescriptorWrite{.imageView = {}, .imageLayout = vk::ImageLayout::eUndefined, .sampler = sampler},
         {vk::DescriptorType::eSampler});
@@ -1778,7 +1982,15 @@ template <typename FieldLayout>
     vk::Sampler sampler,
     vk::ImageLayout imageLayout) const
 {
-    nrAssert(image.valid(), "ShaderCursor::setObject(Image,Sampler) requires a valid Image.");
+    nrAssert(
+        image.valid(),
+        std::format("ShaderCursor::setObject(Image, Sampler) requires a valid Image. imageLayout={}", vk::to_string(imageLayout)));
+    nrAssert(
+        *image.view() != vk::ImageView{},
+        std::format("ShaderCursor::setObject(Image, Sampler) requires a valid default image view. imageLayout={}", vk::to_string(imageLayout)));
+    nrAssert(
+        sampler != vk::Sampler{},
+        std::format("ShaderCursor::setObject(Image, Sampler) requires a non-null sampler. imageLayout={}", vk::to_string(imageLayout)));
     return writeDescriptorRecord(
         ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = sampler},
         {vk::DescriptorType::eCombinedImageSampler});
@@ -1786,6 +1998,9 @@ template <typename FieldLayout>
 
 [[nodiscard]] bool ShaderCursor::setObject(vk::AccelerationStructureKHR accelerationStructure) const
 {
+    nrAssert(
+        accelerationStructure != vk::AccelerationStructureKHR{},
+        "ShaderCursor::setObject(AccelerationStructure) requires a non-null acceleration structure.");
     return writeDescriptorRecord(
         AccelerationStructureDescriptorWrite{.accelerationStructure = accelerationStructure},
         {vk::DescriptorType::eAccelerationStructureKHR});

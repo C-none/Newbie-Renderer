@@ -71,6 +71,7 @@ struct NodeBuildContext
 {
     std::reference_wrapper<RenderGraphBuilder> graphBuilder;
     GraphNodeHandle nodeHandle{};
+    std::uint32_t frameIndex = 0;
     std::function<GraphResourceHandle(std::string_view)> resolveInputPort{};
     std::function<void(std::string_view, GraphResourceHandle)> publishOutputPort{};
 
@@ -99,6 +100,137 @@ struct NodeBuildContext
         return graphBuilder.get().addResource(desc);
     }
 
+    [[nodiscard]] GraphResourceHandle transientColor(
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format)
+    {
+        return addResource(GraphTransientImageDesc{
+            .debugName = std::string(debugName),
+            .extent = vk::Extent3D{extent.width, extent.height, 1},
+            .format = format,
+            .usageIntents = {
+                ImageUsageIntent::ColorAttachment,
+                ImageUsageIntent::TransferSrc,
+                ImageUsageIntent::Sampled,
+            },
+            .initialLayout = ImageLayoutIntent::ColorAttachment,
+        });
+    }
+
+    template <std::size_t FrameSlotCount>
+    [[nodiscard]] GraphResourceHandle importFrameColor(
+        const std::array<nr::rhi::Image, FrameSlotCount>& images,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format)
+    {
+        auto const frameSlot = frameSlotIndex(FrameSlotCount);
+        auto const& image = images[frameSlot];
+        nrAssert(image.valid(), std::format("{} frame image slot {} is invalid.", debugName, frameSlot));
+
+        return addResource(GraphImportedImageDesc{
+            .debugName = indexedFrameDebugName(debugName, frameSlot),
+            .lifetime = ResourceLifetime::FrameLocal,
+            .extent = vk::Extent3D{extent.width, extent.height, 1},
+            .format = format,
+            .usageIntents = {
+                ImageUsageIntent::ColorAttachment,
+                ImageUsageIntent::TransferSrc,
+                ImageUsageIntent::Sampled,
+            },
+            .importedResource = std::cref(image),
+        });
+    }
+
+    template <std::size_t FrameSlotCount>
+    [[nodiscard]] GraphResourceHandle importFrameStorageColor(
+        const std::array<nr::rhi::Image, FrameSlotCount>& images,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format)
+    {
+        auto const frameSlot = frameSlotIndex(FrameSlotCount);
+        auto const& image = images[frameSlot];
+        nrAssert(image.valid(), std::format("{} frame storage image slot {} is invalid.", debugName, frameSlot));
+
+        return addResource(GraphImportedImageDesc{
+            .debugName = indexedFrameDebugName(debugName, frameSlot),
+            .lifetime = ResourceLifetime::FrameLocal,
+            .extent = vk::Extent3D{extent.width, extent.height, 1},
+            .format = format,
+            .usageIntents = {
+                ImageUsageIntent::StorageWrite,
+                ImageUsageIntent::TransferSrc,
+            },
+            .importedResource = std::cref(image),
+        });
+    }
+
+    template <std::size_t FrameSlotCount>
+    [[nodiscard]] GraphResourceHandle importFrameDepth(
+        const std::array<nr::rhi::Image, FrameSlotCount>& images,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format)
+    {
+        auto const frameSlot = frameSlotIndex(FrameSlotCount);
+        auto const& image = images[frameSlot];
+        nrAssert(image.valid(), std::format("{} frame depth image slot {} is invalid.", debugName, frameSlot));
+
+        return addResource(GraphImportedImageDesc{
+            .debugName = indexedFrameDebugName(debugName, frameSlot),
+            .lifetime = ResourceLifetime::FrameLocal,
+            .extent = vk::Extent3D{extent.width, extent.height, 1},
+            .format = format,
+            .usageIntents = {
+                ImageUsageIntent::DepthStencilAttachment,
+            },
+            .aspect = ImageAspectIntent::Depth,
+            .importedResource = std::cref(image),
+        });
+    }
+
+    template <typename TPayload, std::size_t FrameSlotCount>
+    [[nodiscard]] GraphResourceHandle importFrameUniform(
+        std::array<nr::rhi::Buffer, FrameSlotCount>& buffers,
+        std::string_view debugName,
+        const TPayload& value)
+    {
+        auto const frameSlot = frameSlotIndex(FrameSlotCount);
+        auto& buffer = buffers[frameSlot];
+        nrAssert(buffer.valid(), std::format("{} frame uniform buffer slot {} is invalid.", debugName, frameSlot));
+        nrAssert(buffer.size() >= sizeof(TPayload), std::format("{} frame uniform buffer slot {} is too small.", debugName, frameSlot));
+
+        buffer.writeMappedAndFlush(value);
+
+        return addResource(GraphImportedBufferDesc{
+            .debugName = indexedFrameDebugName(debugName, frameSlot),
+            .lifetime = ResourceLifetime::FrameLocal,
+            .size = static_cast<vk::DeviceSize>(sizeof(TPayload)),
+            .usageIntents = {
+                BufferUsageIntent::Uniform,
+            },
+            .importedResource = std::ref(buffer),
+        });
+    }
+
+    [[nodiscard]] GraphResourceHandle importSwapchain(
+        std::string_view debugName,
+        const NodeFrameParameters& frameParameters)
+    {
+        return addResource(GraphImportedSwapchainImageDesc{
+            .debugName = std::string(debugName),
+            .swapchainImageIndex = frameParameters.swapchainImageIndex,
+            .extent = vk::Extent3D{
+                frameParameters.swapchainExtent.width,
+                frameParameters.swapchainExtent.height,
+                1,
+            },
+            .format = frameParameters.swapchainFormat,
+        });
+    }
+
     [[nodiscard]] GraphPassHandle addPass(
         std::span<const PassResourceUseDesc> intentList,
         std::string_view debugName,
@@ -120,6 +252,18 @@ struct NodeBuildContext
         SubmitBoundaryKind kind = SubmitBoundaryKind::Explicit)
     {
         return graphBuilder.get().addSubmitNode(debugName, kind);
+    }
+
+  private:
+    [[nodiscard]] std::size_t frameSlotIndex(std::size_t frameSlotCount) const
+    {
+        nrAssert(frameSlotCount > 0, "NodeBuildContext frame resource helper requires at least one frame slot.");
+        return static_cast<std::size_t>(frameIndex) % frameSlotCount;
+    }
+
+    [[nodiscard]] static std::string indexedFrameDebugName(std::string_view debugName, std::size_t frameSlot)
+    {
+        return std::format("{}[{}]", debugName, frameSlot);
     }
 };
 
@@ -354,28 +498,8 @@ class Renderer
             return RendererFrameResult{};
         }
 
-        // Per-phase CPU timing scaffolding. Averages are emitted once per window to
-        // keep print/flush overhead out of the measured hot path.
-        using ProfileClock = std::chrono::steady_clock;
-        auto profileMark = ProfileClock::now();
-        auto elapsedMicros = [&profileMark]() {
-            auto now = ProfileClock::now();
-            auto micros = std::chrono::duration<double, std::micro>(now - profileMark).count();
-            profileMark = now;
-            return micros;
-        };
-
-        static auto accumBeginFrame = 0.0;
-        static auto accumScene = 0.0;
-        static auto accumBuild = 0.0;
-        static auto accumCompile = 0.0;
-        static auto accumPrepare = 0.0;
-        static auto accumExecute = 0.0;
-        static auto accumPresent = 0.0;
-        static auto profiledFrameCount = 0u;
 
         auto begin = device_->beginFrame(input.acquireTimeout);
-        accumBeginFrame += elapsedMicros();
 
         auto scenePackets = std::optional<nr::scene::ScenePacketSet>{};
         auto primaryCamera = std::optional<nr::scene::SceneResolvedCamera>{};
@@ -413,8 +537,6 @@ class Renderer
 
             auto bridgeBuildInput = nr::scene::SceneRenderBridgeBuildInput{
                 .packetSet = std::cref(*scenePackets),
-                .primaryCamera = std::nullopt,
-                .frameConstantsOverride = std::nullopt,
             };
 
             if (sceneCameraOverride.has_value())
@@ -451,7 +573,6 @@ class Renderer
                 auto geometry = nr::scene::SceneBridgeDrawGeometry{};
                 geometry.vertexBuffer = nr::scene::SceneBridgeBufferBinding{
                     .buffer = std::cref(meshRecord.gpu->vertexBuffer),
-                    .offset = 0,
                 };
                 geometry.frontFace = meshRecord.cpu.clockwiseFrontFace
                                          ? vk::FrontFace::eClockwise
@@ -462,7 +583,6 @@ class Renderer
                 {
                     geometry.indexBuffer = nr::scene::SceneBridgeBufferBinding{
                         .buffer = std::cref(meshRecord.gpu->indexBuffer),
-                        .offset = 0,
                     };
                     geometry.firstIndex = submesh.firstIndex;
                     geometry.indexCount = submesh.indexCount > 0
@@ -490,16 +610,15 @@ class Renderer
             sceneBridgeFrame = nr::scene::SceneRenderBridge::buildFrame(bridgeBuildInput);
         }
 
-        auto frameParameters = NodeFrameParameters{
-            .frameIndex = begin.frameIndex,
-            .swapchainImageIndex = begin.swapchainImageIndex,
-            .swapchainExtent = device_->presentationContext.swapchainExtent(),
-            .swapchainFormat = device_->presentationContext.swapchainFormat(),
-            .sceneBridgeFrame = std::nullopt,
-            .scenePackets = std::nullopt,
-            .primaryCamera = std::nullopt,
-            .frameServices = input.frameServices,
-        };
+        auto frameParameters = NodeFrameParameters{};
+        frameParameters.frameIndex = begin.frameIndex;
+        frameParameters.swapchainImageIndex = begin.swapchainImageIndex;
+        frameParameters.swapchainExtent = device_->presentationContext.swapchainExtent();
+        frameParameters.swapchainFormat = device_->presentationContext.swapchainFormat();
+        if (input.frameServices.has_value())
+        {
+            frameParameters.frameServices = input.frameServices;
+        }
 
         if (sceneBridgeFrame.has_value())
         {
@@ -516,13 +635,9 @@ class Renderer
             frameParameters.primaryCamera = std::cref(*primaryCamera);
         }
 
-        accumScene += elapsedMicros();
+        buildInstalledGraph(frameParameters);
 
-        auto frameDesc = buildInstalledGraph(frameParameters);
-        accumBuild += elapsedMicros();
-
-        auto compiled = compiler_.compile(frameDesc);
-        accumCompile += elapsedMicros();
+        auto compiled = compiler_.compileConsuming(builder_.mutableFrame());
 
         auto executeContext = RenderGraphExecutor::ExecuteContext{
             .device = *device_,
@@ -534,39 +649,10 @@ class Renderer
         };
 
         auto prepared = executor_.prepareFrame(std::move(compiled), executeContext);
-        accumPrepare += elapsedMicros();
 
         auto executeReport = executor_.executePrepared(prepared, executeContext);
-        accumExecute += elapsedMicros();
 
         auto present = device_->presentFrame();
-        accumPresent += elapsedMicros();
-
-        ++profiledFrameCount;
-        constexpr auto kProfileWindowFrames = 1000u;
-        if (profiledFrameCount >= kProfileWindowFrames)
-        {
-            auto inv = 1.0 / static_cast<double>(profiledFrameCount);
-            nrInfo(std::format(
-                "renderFrame CPU avg over {} frames (us): begin={:.1f} scene={:.1f} build={:.1f} compile={:.1f} prepare={:.1f} execute={:.1f} present={:.1f}",
-                profiledFrameCount,
-                accumBeginFrame * inv,
-                accumScene * inv,
-                accumBuild * inv,
-                accumCompile * inv,
-                accumPrepare * inv,
-                accumExecute * inv,
-                accumPresent * inv));
-
-            accumBeginFrame = 0.0;
-            accumScene = 0.0;
-            accumBuild = 0.0;
-            accumCompile = 0.0;
-            accumPrepare = 0.0;
-            accumExecute = 0.0;
-            accumPresent = 0.0;
-            profiledFrameCount = 0u;
-        }
 
         return RendererFrameResult{
             .rendered = true,
@@ -625,7 +711,7 @@ class Renderer
         return std::format("{}::{}", nodeName, portName);
     }
 
-    [[nodiscard]] RenderGraphFrameDescription buildInstalledGraph(const NodeFrameParameters& frameParameters)
+    void buildInstalledGraph(const NodeFrameParameters& frameParameters)
     {
         nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
@@ -666,6 +752,7 @@ class Renderer
             auto buildContext = NodeBuildContext{
                 .graphBuilder = std::ref(builder_),
                 .nodeHandle = nodeHandle,
+                .frameIndex = frameParameters.frameIndex,
                 .resolveInputPort = resolveInputPort,
                 .publishOutputPort = publishOutputPort,
             };
@@ -682,7 +769,6 @@ class Renderer
             });
         });
 
-        return builder_.build();
     }
 
     void teardownInstalledGraph()

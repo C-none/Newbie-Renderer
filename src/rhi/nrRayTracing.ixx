@@ -8,11 +8,18 @@ import std;
 
 export namespace nr::rhi
 {
+struct ShaderBindingTableRecordDesc
+{
+    std::uint32_t groupIndex = 0;
+    std::span<const std::uint8_t> data{};
+};
+
 struct ShaderBindingTableSectionDesc
 {
     std::uint32_t firstGroup = 0;
     std::uint32_t groupCount = 0;
     std::uint32_t stride = 0;
+    std::span<const ShaderBindingTableRecordDesc> records{};
 };
 
 struct ShaderBindingTableBuildDesc
@@ -70,6 +77,7 @@ struct TraceRaysDesc
     const ShaderBindingTable &shaderBindingTable;
     TraceRaysDimensions dimensions{};
     QueueRole recordingQueueRole = QueueRole::Compute;
+    std::optional<std::uint32_t> pipelineStackSize{};
 };
 
 struct TraceRaysIndirectDesc
@@ -78,6 +86,15 @@ struct TraceRaysIndirectDesc
     const ShaderBindingTable &shaderBindingTable;
     vk::DeviceAddress indirectDeviceAddress = 0;
     QueueRole recordingQueueRole = QueueRole::Compute;
+    std::optional<std::uint32_t> pipelineStackSize{};
+};
+
+struct TraceRaysIndirect2Desc
+{
+    const RayTracingPipeline &pipeline;
+    vk::DeviceAddress indirectDeviceAddress = 0;
+    QueueRole recordingQueueRole = QueueRole::Compute;
+    std::optional<std::uint32_t> pipelineStackSize{};
 };
 
 [[nodiscard]] inline vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment)
@@ -134,9 +151,32 @@ template <typename... Args>
     return std::vformat(format, std::make_format_args(args...));
 }
 
+[[nodiscard]] inline std::uint32_t recordCount(const ShaderBindingTableSectionDesc &section)
+{
+    if (!section.records.empty())
+    {
+        nrAssert(section.records.size() <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()), "SBT section record count exceeds uint32_t range.");
+        return static_cast<std::uint32_t>(section.records.size());
+    }
+
+    return section.groupCount;
+}
+
+[[nodiscard]] inline std::size_t maxRecordDataSize(const ShaderBindingTableSectionDesc &section)
+{
+    if (section.records.empty())
+    {
+        return 0;
+    }
+
+    auto sizes = section.records |
+                 std::views::transform([](const ShaderBindingTableRecordDesc &record) { return record.data.size(); });
+    return std::ranges::max(sizes);
+}
+
 [[nodiscard]] inline std::uint32_t effectiveStride(const ShaderBindingTableSectionDesc &section, const RayTracingCapabilitySnapshot &capabilities)
 {
-    if (section.groupCount == 0)
+    if (recordCount(section) == 0)
     {
         return 0;
     }
@@ -146,7 +186,9 @@ template <typename... Args>
         return section.stride;
     }
 
-    return alignUp(capabilities.shaderGroupHandleSize, capabilities.shaderGroupHandleAlignment);
+    auto minimumStride = static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleSize) + static_cast<vk::DeviceSize>(maxRecordDataSize(section));
+    nrAssert(minimumStride <= static_cast<vk::DeviceSize>(std::numeric_limits<std::uint32_t>::max()), "SBT record stride exceeds uint32_t range.");
+    return static_cast<std::uint32_t>(alignUp(minimumStride, static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleAlignment)));
 }
 
 [[nodiscard]] inline ValidationResult validateSection(
@@ -156,18 +198,35 @@ template <typename... Args>
     const RayTracingCapabilitySnapshot &capabilities,
     std::uint32_t pipelineGroupCount)
 {
-    if (section.groupCount == 0)
+    const auto sectionRecordCount = recordCount(section);
+    if (sectionRecordCount == 0)
     {
         return validationSuccess();
     }
 
-    if (effectiveSectionStride < capabilities.shaderGroupHandleSize)
+    if (!section.records.empty() && section.groupCount != 0 && section.groupCount != sectionRecordCount)
     {
         return validationFailure(formatMessage(
-            "{} stride ({}) must be >= shaderGroupHandleSize ({}).",
+            "{} groupCount ({}) must be 0 or match records.size() ({}) when records are provided.",
+            label,
+            section.groupCount,
+            sectionRecordCount));
+    }
+
+    auto requiredStride = static_cast<std::uint64_t>(capabilities.shaderGroupHandleSize) +
+                          static_cast<std::uint64_t>(maxRecordDataSize(section));
+    if (requiredStride > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()))
+    {
+        return validationFailure(formatMessage("{} record payload makes stride exceed uint32_t range.", label));
+    }
+
+    if (effectiveSectionStride < requiredStride)
+    {
+        return validationFailure(formatMessage(
+            "{} stride ({}) must be >= shaderGroupHandleSize + max record payload ({}).",
             label,
             effectiveSectionStride,
-            capabilities.shaderGroupHandleSize));
+            requiredStride));
     }
 
     if ((effectiveSectionStride % capabilities.shaderGroupHandleAlignment) != 0)
@@ -188,15 +247,32 @@ template <typename... Args>
             capabilities.maxShaderGroupStride));
     }
 
-    auto groupEnd = static_cast<std::uint64_t>(section.firstGroup) + static_cast<std::uint64_t>(section.groupCount);
-    if (groupEnd > static_cast<std::uint64_t>(pipelineGroupCount))
+    if (section.records.empty())
     {
-        return validationFailure(formatMessage(
-            "{} group range [{}..{}) exceeds pipeline group count ({}).",
-            label,
-            section.firstGroup,
-            groupEnd,
-            pipelineGroupCount));
+        auto groupEnd = static_cast<std::uint64_t>(section.firstGroup) + static_cast<std::uint64_t>(section.groupCount);
+        if (groupEnd > static_cast<std::uint64_t>(pipelineGroupCount))
+        {
+            return validationFailure(formatMessage(
+                "{} group range [{}..{}) exceeds pipeline group count ({}).",
+                label,
+                section.firstGroup,
+                groupEnd,
+                pipelineGroupCount));
+        }
+    }
+    else
+    {
+        auto invalidRecordIt = std::ranges::find_if(section.records, [&](const ShaderBindingTableRecordDesc &record) {
+            return record.groupIndex >= pipelineGroupCount;
+        });
+        if (invalidRecordIt != std::ranges::end(section.records))
+        {
+            return validationFailure(formatMessage(
+                "{} record group index ({}) exceeds pipeline group count ({}).",
+                label,
+                invalidRecordIt->groupIndex,
+                pipelineGroupCount));
+        }
     }
 
     return validationSuccess();
@@ -204,7 +280,7 @@ template <typename... Args>
 
 [[nodiscard]] inline vk::DeviceSize sectionSize(const ShaderBindingTableSectionDesc &section)
 {
-    return static_cast<vk::DeviceSize>(section.groupCount) * static_cast<vk::DeviceSize>(section.stride);
+    return static_cast<vk::DeviceSize>(recordCount(section)) * static_cast<vk::DeviceSize>(section.stride);
 }
 
 [[nodiscard]] inline std::array<ShaderBindingTableBuildPlanSection, 4> buildSectionPlan(const ShaderBindingTableLayoutDesc &desc)
@@ -218,7 +294,7 @@ template <typename... Args>
 
     auto runningOffset = vk::DeviceSize{0};
     std::ranges::for_each(sections, [&](ShaderBindingTableBuildPlanSection &plannedSection) {
-        if (plannedSection.section.groupCount == 0)
+        if (recordCount(plannedSection.section) == 0)
         {
             plannedSection.offset = 0;
             plannedSection.size = 0;
@@ -237,7 +313,7 @@ template <typename... Args>
 
 [[nodiscard]] inline vk::StridedDeviceAddressRegionKHR buildRegion(vk::DeviceAddress baseAddress, const ShaderBindingTableBuildPlanSection &section)
 {
-    if (section.section.groupCount == 0)
+    if (recordCount(section.section) == 0)
     {
         return vk::StridedDeviceAddressRegionKHR{};
     }
@@ -296,9 +372,9 @@ template <typename... Args>
         return validationFailure("pipelineGroupCount must be > 0.");
     }
 
-    if (desc.raygen.groupCount != 1)
+    if (rt_detail::recordCount(desc.raygen) != 1)
     {
-        return validationFailure("raygen section must contain exactly one group so size == stride.");
+        return validationFailure("raygen section must contain exactly one record so size == stride.");
     }
 
     auto raygen = desc.raygen;
@@ -413,6 +489,54 @@ template <typename... Args>
     return validationSuccess();
 }
 
+[[nodiscard]] inline ValidationResult validateTraceRaysIndirect2(vk::DeviceAddress indirectDeviceAddress, const RayTracingCapabilitySnapshot &capabilities)
+{
+    if (!capabilities.rayTracingMaintenance1)
+    {
+        return validationFailure("traceRaysIndirect2 requires rayTracingMaintenance1 feature.");
+    }
+
+    if (!capabilities.rayTracingPipelineTraceRaysIndirect2)
+    {
+        return validationFailure("traceRaysIndirect2 requires rayTracingPipelineTraceRaysIndirect2 feature.");
+    }
+
+    if (indirectDeviceAddress == 0)
+    {
+        return validationFailure("traceRaysIndirect2 requires a non-zero indirect device address.");
+    }
+
+    if ((indirectDeviceAddress % 4u) != 0)
+    {
+        return validationFailure("traceRaysIndirect2 indirect device address must be 4-byte aligned.");
+    }
+
+    return validationSuccess();
+}
+
+[[nodiscard]] inline ValidationResult validatePipelineStackSize(const RayTracingPipeline &pipeline, std::optional<std::uint32_t> pipelineStackSize)
+{
+    if (pipeline.dynamicPipelineStackSize())
+    {
+        if (!pipelineStackSize.has_value())
+        {
+            return validationFailure("Ray tracing pipeline uses dynamic stack size; pipelineStackSize must be provided before trace.");
+        }
+        if (*pipelineStackSize == 0)
+        {
+            return validationFailure("Ray tracing pipeline stack size must be > 0.");
+        }
+        return validationSuccess();
+    }
+
+    if (pipelineStackSize.has_value())
+    {
+        return validationFailure("pipelineStackSize can only be provided for pipelines created with dynamicPipelineStackSize=true.");
+    }
+
+    return validationSuccess();
+}
+
 } // namespace nr::rhi::rt_detail
 
 export namespace nr::rhi
@@ -491,13 +615,45 @@ class ShaderBindingTable
         nrAssert(plan.totalSize > 0, "ShaderBindingTable::create requires totalSize > 0.");
 
         auto packSection = [&](std::span<std::uint8_t> tableBytes, const ShaderBindingTableBuildPlanSection &plannedSection) {
-            if (plannedSection.section.groupCount == 0)
+            auto sectionRecordCount = rt_detail::recordCount(plannedSection.section);
+            if (sectionRecordCount == 0)
             {
                 return;
             }
 
-            auto handles = desc.pipeline.shaderGroupHandles(plannedSection.section.firstGroup, plannedSection.section.groupCount, plan.handleSize);
-            auto groupIndices = std::views::iota(std::uint32_t{0}, plannedSection.section.groupCount);
+            auto copyRecord = [&](std::uint32_t recordIndex, std::uint32_t shaderGroupIndex, std::span<const std::uint8_t> recordData) {
+                auto dstOffset = plannedSection.offset + (static_cast<vk::DeviceSize>(recordIndex) * plannedSection.section.stride);
+                auto dstStart = static_cast<std::size_t>(dstOffset);
+                nrAssert(dstStart + static_cast<std::size_t>(plan.handleSize) <= tableBytes.size(), "ShaderBindingTable::create destination handle copy range overflow.");
+                nrAssert(
+                    dstStart + static_cast<std::size_t>(plan.handleSize) + recordData.size() <= tableBytes.size(),
+                    "ShaderBindingTable::create destination record data copy range overflow.");
+
+                auto handle = desc.pipeline.shaderGroupHandles(shaderGroupIndex, 1, plan.handleSize);
+                nrAssert(handle.size() == static_cast<std::size_t>(plan.handleSize), "ShaderBindingTable::create expected one shader group handle.");
+
+                auto dstHandleView = tableBytes.subspan(dstStart, plan.handleSize);
+                std::ranges::copy(handle, dstHandleView.begin());
+
+                if (!recordData.empty())
+                {
+                    auto dstDataView = tableBytes.subspan(dstStart + static_cast<std::size_t>(plan.handleSize), recordData.size());
+                    std::ranges::copy(recordData, dstDataView.begin());
+                }
+            };
+
+            if (!plannedSection.section.records.empty())
+            {
+                auto recordIndices = std::views::iota(std::uint32_t{0}, sectionRecordCount);
+                std::ranges::for_each(recordIndices, [&](std::uint32_t recordIndex) {
+                    const auto &record = plannedSection.section.records[recordIndex];
+                    copyRecord(recordIndex, record.groupIndex, record.data);
+                });
+                return;
+            }
+
+            auto handles = desc.pipeline.shaderGroupHandles(plannedSection.section.firstGroup, sectionRecordCount, plan.handleSize);
+            auto groupIndices = std::views::iota(std::uint32_t{0}, sectionRecordCount);
             std::ranges::for_each(groupIndices, [&](std::uint32_t groupIndex) {
                 auto dstOffset = plannedSection.offset + (static_cast<vk::DeviceSize>(groupIndex) * plannedSection.section.stride);
                 auto srcOffset = static_cast<std::size_t>(groupIndex) * static_cast<std::size_t>(plan.handleSize);
@@ -597,6 +753,27 @@ class ShaderBindingTable
         };
     }
 
+    [[nodiscard]] vk::TraceRaysIndirectCommand2KHR traceRaysIndirectCommand2(TraceRaysDimensions dimensions) const noexcept
+    {
+        auto regions = this->regions();
+        vk::TraceRaysIndirectCommand2KHR command{};
+        command.raygenShaderRecordAddress = regions.raygen.deviceAddress;
+        command.raygenShaderRecordSize = regions.raygen.size;
+        command.missShaderBindingTableAddress = regions.miss.deviceAddress;
+        command.missShaderBindingTableSize = regions.miss.size;
+        command.missShaderBindingTableStride = regions.miss.stride;
+        command.hitShaderBindingTableAddress = regions.hit.deviceAddress;
+        command.hitShaderBindingTableSize = regions.hit.size;
+        command.hitShaderBindingTableStride = regions.hit.stride;
+        command.callableShaderBindingTableAddress = regions.callable.deviceAddress;
+        command.callableShaderBindingTableSize = regions.callable.size;
+        command.callableShaderBindingTableStride = regions.callable.stride;
+        command.width = dimensions.width;
+        command.height = dimensions.height;
+        command.depth = dimensions.depth;
+        return command;
+    }
+
   private:
     Buffer buffer_{};
     vk::StridedDeviceAddressRegionKHR raygenRegion_{};
@@ -604,6 +781,35 @@ class ShaderBindingTable
     vk::StridedDeviceAddressRegionKHR hitRegion_{};
     vk::StridedDeviceAddressRegionKHR callableRegion_{};
 };
+
+[[nodiscard]] inline vk::TraceRaysIndirectCommand2KHR makeTraceRaysIndirectCommand2(
+    const ShaderBindingTable &shaderBindingTable,
+    TraceRaysDimensions dimensions)
+{
+    nrAssert(shaderBindingTable.valid(), "makeTraceRaysIndirectCommand2 requires a valid shader binding table.");
+    return shaderBindingTable.traceRaysIndirectCommand2(dimensions);
+}
+
+inline void setRayTracingPipelineStackSize(const vk::raii::CommandBuffer &commandBuffer, std::uint32_t pipelineStackSize)
+{
+    nrAssert(*commandBuffer != nullptr, "setRayTracingPipelineStackSize requires a valid command buffer.");
+    nrAssert(pipelineStackSize > 0, "setRayTracingPipelineStackSize requires pipelineStackSize > 0.");
+    commandBuffer.setRayTracingPipelineStackSizeKHR(pipelineStackSize);
+}
+
+inline void applyRayTracingPipelineStackSize(
+    const vk::raii::CommandBuffer &commandBuffer,
+    const RayTracingPipeline &pipeline,
+    std::optional<std::uint32_t> pipelineStackSize)
+{
+    auto diagnostics = rt_detail::validatePipelineStackSize(pipeline, pipelineStackSize);
+    nrAssert(diagnostics.isValid, rt_detail::formatMessage("applyRayTracingPipelineStackSize invalid state: {}", diagnostics.message));
+
+    if (pipelineStackSize.has_value())
+    {
+        setRayTracingPipelineStackSize(commandBuffer, *pipelineStackSize);
+    }
+}
 
 inline void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc &desc, const RayTracingCapabilitySnapshot &capabilities)
 {
@@ -619,6 +825,7 @@ inline void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceR
     nrAssert(regions.raygen.size == regions.raygen.stride, "traceRays requires raygen SBT region size == stride.");
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
+    applyRayTracingPipelineStackSize(commandBuffer, desc.pipeline, desc.pipelineStackSize);
     commandBuffer.traceRaysKHR(
         regions.raygen,
         regions.miss,
@@ -643,12 +850,27 @@ inline void traceRaysIndirect(const vk::raii::CommandBuffer &commandBuffer, cons
     nrAssert(regions.raygen.size == regions.raygen.stride, "traceRaysIndirect requires raygen SBT region size == stride.");
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
+    applyRayTracingPipelineStackSize(commandBuffer, desc.pipeline, desc.pipelineStackSize);
     commandBuffer.traceRaysIndirectKHR(
         regions.raygen,
         regions.miss,
         regions.hit,
         regions.callable,
         desc.indirectDeviceAddress);
+}
+
+inline void traceRaysIndirect2(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysIndirect2Desc &desc, const RayTracingCapabilitySnapshot &capabilities)
+{
+    nrAssert(*commandBuffer != nullptr, "traceRaysIndirect2 requires a valid command buffer.");
+    nrAssert(desc.pipeline.valid(), "traceRaysIndirect2 requires a valid ray tracing pipeline.");
+    nrAssert(desc.recordingQueueRole != QueueRole::Transfer, "traceRaysIndirect2 requires a queue family that supports compute operations.");
+
+    auto diagnostics = rt_detail::validateTraceRaysIndirect2(desc.indirectDeviceAddress, capabilities);
+    nrAssert(diagnostics.isValid, rt_detail::formatMessage("traceRaysIndirect2 invalid arguments: {}", diagnostics.message));
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
+    applyRayTracingPipelineStackSize(commandBuffer, desc.pipeline, desc.pipelineStackSize);
+    commandBuffer.traceRaysIndirect2KHR(desc.indirectDeviceAddress);
 }
 
 } // namespace nr::rhi

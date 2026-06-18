@@ -420,7 +420,7 @@ class FrameContext
 
   private:
     // Device reference and queue family IDs (used for frame-begin secondary-pool prebuild)
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     std::uint32_t graphicsQueueFamily_ = 0;
     std::uint32_t computeQueueFamily_ = 0;
     std::uint32_t transferQueueFamily_ = 0;

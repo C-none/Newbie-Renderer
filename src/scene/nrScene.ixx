@@ -1498,20 +1498,19 @@ class Scene
         nrAssert(transferQueueFamily != graphicsQueueFamily,
                  "Scene Phase4 upload requires distinct transfer and graphics queue families.");
 
-        return nr::rhi::ops::BufferUploadOwnershipPlan{
-            .acquireToTransfer = std::nullopt,
-            .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
-                transferQueueFamily,
-                graphicsQueueFamily,
-                nr::rhi::ops::QueueAccessScope{
-                    .stages = vk::PipelineStageFlagBits2::eTransfer,
-                    .access = vk::AccessFlagBits2::eTransferWrite,
-                },
-                nr::rhi::ops::QueueAccessScope{
-                    .stages = acquireStages,
-                    .access = acquireAccess,
-                }),
-        };
+        auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{};
+        plan.releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
+            transferQueueFamily,
+            graphicsQueueFamily,
+            nr::rhi::ops::QueueAccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferWrite,
+            },
+            nr::rhi::ops::QueueAccessScope{
+                .stages = acquireStages,
+                .access = acquireAccess,
+            });
+        return plan;
     }
 
     [[nodiscard]] static std::size_t meshUploadBytes(const nr::resource::Mesh &mesh) noexcept
@@ -3034,7 +3033,6 @@ class Scene
             camera.name = sourceCamera.name.empty()
                               ? std::format("camera_{}", entry.sourceIndex)
                               : sourceCamera.name;
-            camera.authoredAspectRatio = std::nullopt;
 
             if (sourceCamera.orthographicWidth > kEpsilon)
             {

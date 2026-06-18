@@ -194,42 +194,24 @@ class Device
 
     [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max())
     {
-        using ProfileClock = std::chrono::steady_clock;
-        auto profileMark = ProfileClock::now();
-        auto elapsedMicros = [&profileMark]() {
-            auto now = ProfileClock::now();
-            auto us = std::chrono::duration<double, std::micro>(now - profileMark).count();
-            profileMark = now;
-            return us;
-        };
-        static double accumFence = 0.0, accumResetResourcePool = 0.0, accumResetVmaPool = 0.0;
-        static double accumResetFence = 0.0, accumResetCmdPools = 0.0, accumPreparePools = 0.0;
-        static std::uint32_t beginProfileCount = 0;
-
         auto &frame = frameManager.current();
         const auto frameIndex = static_cast<std::uint32_t>(frameManager.currentIndex());
         nrAssert(frame.waitForFence(), "Device::beginFrame timeout waiting for frame fence.");
-        accumFence += elapsedMicros();
 
         // After this frame slot's fence: its previous final submit has completed, meaning the
         // imageAvailable wait bound to THIS frame slot was executed. Return that slot to the pool.
         presentationContext.returnAcquireSemaphore(frameIndex);
 
         resourcePool.resetFrame(frameIndex);
-        accumResetResourcePool += elapsedMicros();
 
         memoryAllocator.resetFramePool(frameIndex);
-        accumResetVmaPool += elapsedMicros();
 
         frame.resetFence();
-        accumResetFence += elapsedMicros();
 
         frame.resetPools();
-        accumResetCmdPools += elapsedMicros();
 
         const auto workerCount = std::min<std::uint32_t>(maxThreads, std::max(1u, std::thread::hardware_concurrency()));
         frame.prepareSecondaryPools(workerCount, workerCount, 0u);
-        accumPreparePools += elapsedMicros();
 
         // Consume the pre-acquired image (issued at end of previous presentFrame or initialize).
         // If the pending acquire is absent (e.g., after a recreate that failed), issue now.
@@ -257,23 +239,6 @@ class Device
         presentationContext.setFrameSubmitted(false);
         frameSubmitCount_ = 0;
         frameFinalSubmitRole_.reset();
-
-        ++beginProfileCount;
-        constexpr auto kBeginProfileWindow = 1000u;
-        if (beginProfileCount >= kBeginProfileWindow)
-        {
-            auto inv = 1.0 / static_cast<double>(beginProfileCount);
-            nrInfo(std::format(
-                "beginFrame sub-phase avg over {} frames (us): "
-                "waitFence={:.1f} resetResourcePool={:.1f} resetVmaPool={:.1f} "
-                "resetFence={:.1f} resetCmdPools={:.1f} preparePools={:.1f}",
-                beginProfileCount,
-                accumFence * inv, accumResetResourcePool * inv, accumResetVmaPool * inv,
-                accumResetFence * inv, accumResetCmdPools * inv, accumPreparePools * inv));
-            accumFence = 0; accumResetResourcePool = 0; accumResetVmaPool = 0;
-            accumResetFence = 0; accumResetCmdPools = 0; accumPreparePools = 0;
-            beginProfileCount = 0;
-        }
 
         return FrameBeginResult{
             .frameIndex = frameIndex,
@@ -504,11 +469,12 @@ class Device
                                                      vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
                                                      vk::PhysicalDeviceCooperativeVectorFeaturesNV,
                                                      vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT,
-                                                     vk::PhysicalDeviceMeshShaderFeaturesEXT,
-                                                     vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
-                                                     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-                                                     vk::PhysicalDeviceRayQueryFeaturesKHR,
-                                                     vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
+                                                      vk::PhysicalDeviceMeshShaderFeaturesEXT,
+                                                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+                                                      vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+                                                      vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR,
+                                                      vk::PhysicalDeviceRayQueryFeaturesKHR,
+                                                      vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
 
         auto &featureList = features2.get<vk::PhysicalDeviceFeatures2>();
         auto &vulkan11Features = features2.get<vk::PhysicalDeviceVulkan11Features>();
@@ -521,6 +487,7 @@ class Device
         auto &meshShaderFeatures = features2.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>();
         auto &accelerationStructureFeatures = features2.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
         auto &rayTracingPipelineFeatures = features2.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+        auto &rayTracingMaintenance1Features = features2.get<vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR>();
         auto &rayQueryFeatures = features2.get<vk::PhysicalDeviceRayQueryFeaturesKHR>();
         auto &opacityMicromapFeatures = features2.get<vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
 
@@ -556,6 +523,7 @@ class Device
         REQUIRE_FEATURE(meshShaderFeatures.taskShader, "taskShader");
         REQUIRE_FEATURE(accelerationStructureFeatures.accelerationStructure, "accelerationStructure");
         REQUIRE_FEATURE(rayTracingPipelineFeatures.rayTracingPipeline, "rayTracingPipeline");
+        REQUIRE_FEATURE(rayTracingMaintenance1Features.rayTracingMaintenance1, "rayTracingMaintenance1");
         REQUIRE_FEATURE(rayQueryFeatures.rayQuery, "rayQuery");
         REQUIRE_FEATURE(opacityMicromapFeatures.micromap, "opacityMicromap");
         REQUIRE_FEATURE(invocationReorderFeatures.rayTracingInvocationReorder, "rayTracingInvocationReorder");
@@ -606,16 +574,23 @@ class Device
 
         auto const &limits = physicalDeviceProperties.properties.limits;
         rtCapabilities_ = RayTracingCapabilitySnapshot{
+            .rayTracingMaintenance1 = rayTracingMaintenance1Features.rayTracingMaintenance1 == vk::True,
             .rayTracingPipelineTraceRaysIndirect = rayTracingPipelineFeatures.rayTracingPipelineTraceRaysIndirect == vk::True,
+            .rayTracingPipelineTraceRaysIndirect2 = rayTracingMaintenance1Features.rayTracingPipelineTraceRaysIndirect2 == vk::True,
+            .rayTracingPipelineShaderGroupHandleCaptureReplay = rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplay == vk::True,
+            .rayTracingPipelineShaderGroupHandleCaptureReplayMixed = rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplayMixed == vk::True,
+            .rayTraversalPrimitiveCulling = rayTracingPipelineFeatures.rayTraversalPrimitiveCulling == vk::True,
             .opacityMicromap = opacityMicromapFeatures.micromap == vk::True,
             .opacityMicromapCaptureReplay = opacityMicromapFeatures.micromapCaptureReplay == vk::True,
             .opacityMicromapHostCommands = opacityMicromapFeatures.micromapHostCommands == vk::True,
             .shaderGroupHandleSize = rayTracingPipelineProperties.shaderGroupHandleSize,
             .shaderGroupHandleAlignment = rayTracingPipelineProperties.shaderGroupHandleAlignment,
             .shaderGroupBaseAlignment = rayTracingPipelineProperties.shaderGroupBaseAlignment,
+            .shaderGroupHandleCaptureReplaySize = rayTracingPipelineProperties.shaderGroupHandleCaptureReplaySize,
             .maxShaderGroupStride = rayTracingPipelineProperties.maxShaderGroupStride,
             .maxRayDispatchInvocationCount = rayTracingPipelineProperties.maxRayDispatchInvocationCount,
             .maxRayRecursionDepth = rayTracingPipelineProperties.maxRayRecursionDepth,
+            .maxRayHitAttributeSize = rayTracingPipelineProperties.maxRayHitAttributeSize,
             .maxDispatchDimensions = {
                 static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[0]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[0]),
                 static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[1]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[1]),
@@ -834,6 +809,7 @@ class Device
         vk::EXTMeshShaderExtensionName,
         vk::KHRAccelerationStructureExtensionName,
         vk::KHRRayTracingPipelineExtensionName,
+        vk::KHRRayTracingMaintenance1ExtensionName,
         vk::KHRPipelineLibraryExtensionName,
         vk::KHRRayQueryExtensionName,
         vk::EXTOpacityMicromapExtensionName,

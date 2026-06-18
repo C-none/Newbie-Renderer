@@ -108,7 +108,7 @@ class CommandPool
   private:
     vk::raii::CommandPool pool_ = {nullptr};
     std::uint32_t queueFamilyIndex_ = 0;
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 };
 
 } // namespace nr::rhi

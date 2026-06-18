@@ -479,8 +479,8 @@ class Buffer
     MemoryUsage memoryUsage_ = MemoryUsage::GpuOnly;
     AllocationStrategy strategy_ = AllocationStrategy::CrossFrame;
 
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
-    mutable std::optional<VkDeviceAddress> cachedAddress_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
+    mutable std::optional<VkDeviceAddress> cachedAddress_{};
     std::map<std::string, vk::raii::BufferView> bufferViews_;  ///< Named view map (destroyed before VmaBuffer)
     std::string name_;  ///< Immutable after creation
 };
@@ -862,7 +862,7 @@ class Image
 
     vk::raii::ImageView defaultView_ = {nullptr};
     std::map<std::string, vk::raii::ImageView> imageViews_;  ///< Named auxiliary view map (destroyed before VmaImage)
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_;
+    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     std::string name_;  ///< Immutable after creation
 };
 
