@@ -15,14 +15,10 @@ module;
 #include <stb_image.h>
 #include <turbojpeg.h>
 #include <vk_mem_alloc.h>
-
-// Defined in dependencyImpl.cpp (a non-module global translation unit). Declaring
-// it in the global module fragment keeps the C-linkage symbol reachable to the
-// exported nr::platform::isNsightInjected wrapper without pulling <windows.h> into
-// module-consuming translation units.
-extern "C" bool nrPlatformNsightInjected() noexcept;
+#include "nsightGraphicsSdkBridge.h"
 
 export module dependency;
+import std;
 
 export namespace vk
 {
@@ -139,6 +135,7 @@ using ::vk::ExtensionProperties;
 using ::vk::Extent2D;
 using ::vk::Extent3D;
 using ::vk::EXTExtendedDynamicState3ExtensionName;
+using ::vk::EXTFrameBoundaryExtensionName;
 using ::vk::EXTMemoryBudgetExtensionName;
 using ::vk::EXTMeshShaderExtensionName;
 using ::vk::EXTOpacityMicromapExtensionName;
@@ -149,6 +146,9 @@ using ::vk::FenceCreateFlagBits;
 using ::vk::FenceCreateInfo;
 using ::vk::Filter;
 using ::vk::Format;
+using ::vk::FrameBoundaryEXT;
+using ::vk::FrameBoundaryFlagBitsEXT;
+using ::vk::FrameBoundaryFlagsEXT;
 using ::vk::FrontFace;
 using ::vk::GeometryFlagsKHR;
 using ::vk::GeometryTypeKHR;
@@ -196,6 +196,7 @@ using ::vk::PhysicalDeviceCooperativeVectorFeaturesNV;
 using ::vk::PhysicalDeviceDescriptorIndexingProperties;
 using ::vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT;
 using ::vk::PhysicalDeviceFeatures2;
+using ::vk::PhysicalDeviceFrameBoundaryFeaturesEXT;
 using ::vk::PhysicalDeviceMeshShaderFeaturesEXT;
 using ::vk::PhysicalDeviceOpacityMicromapFeaturesEXT;
 using ::vk::PhysicalDeviceProperties;
@@ -278,6 +279,7 @@ using ::vk::SwapchainCreateInfoKHR;
 using ::vk::SwapchainKHR;
 using ::vk::SystemError;
 using ::vk::StructureChain;
+using ::vk::StructureType;
 using ::vk::to_string;
 using ::vk::TraceRaysIndirectCommand2KHR;
 using ::vk::True;
@@ -591,6 +593,7 @@ export using ::VkImportMemoryHostPointerInfoEXT;
 export using ::VkAllocationCallbacks;
 export using ::VkMemoryAllocateInfo;
 export using ::VkMemoryPropertyFlags;
+export using ::VkQueue;
 export using ::VkResult;
 export using ::VkSurfaceKHR;
 
@@ -682,6 +685,184 @@ inline vk::Result createWindowSurface(
 
 export namespace nr::platform
 {
+enum class NsightGraphicsActivity : std::uint32_t
+{
+    Off,
+    Capture,
+    Trace,
+};
+
+enum class NsightGraphicsResult : std::uint32_t
+{
+    Success,
+    Unavailable,
+    NotFound,
+    DifferentActivity,
+    InvalidParameter,
+    InvalidState,
+    Timeout,
+    Failed,
+};
+
+enum class NsightGraphicsCaptureDelimiter : std::uint32_t
+{
+    Present,
+    FrameBoundary,
+    VkFrameBoundaryExt,
+};
+
+struct NsightGraphicsConfig
+{
+    NsightGraphicsActivity activity = NsightGraphicsActivity::Off;
+    std::wstring installationPath{};
+    std::string outputDir{};
+    std::uint32_t frameCount = 1;
+    bool noHud = true;
+};
+
+struct NsightGraphicsCaptureRequest
+{
+    NsightGraphicsCaptureDelimiter delimiter = NsightGraphicsCaptureDelimiter::VkFrameBoundaryExt;
+    std::uint32_t framesBeforeStart = 0;
+    std::uint32_t framesToCapture = 1;
+};
+
+struct NsightGraphicsFrameBoundary
+{
+    VkQueue queue = nullptr;
+    VkImage outputImage = nullptr;
+    bool hasOutputImage = false;
+};
+
+struct NsightGraphicsTraceStop
+{
+    VkQueue queue = nullptr;
+    VkImage outputImage = nullptr;
+    bool hasOutputImage = false;
+    bool stopOnNextFrameBoundary = true;
+};
+} // namespace nr::platform
+
+namespace nr::platform_detail
+{
+[[nodiscard]] inline NrPlatformNsightGraphicsActivity toPlatform(nr::platform::NsightGraphicsActivity activity) noexcept
+{
+    switch (activity)
+    {
+    case nr::platform::NsightGraphicsActivity::Off:
+        return NrPlatformNsightGraphicsActivity::Off;
+    case nr::platform::NsightGraphicsActivity::Capture:
+        return NrPlatformNsightGraphicsActivity::Capture;
+    case nr::platform::NsightGraphicsActivity::Trace:
+        return NrPlatformNsightGraphicsActivity::Trace;
+    }
+    return NrPlatformNsightGraphicsActivity::Off;
+}
+
+[[nodiscard]] inline NrPlatformNsightGraphicsCaptureDelimiter toPlatform(nr::platform::NsightGraphicsCaptureDelimiter delimiter) noexcept
+{
+    switch (delimiter)
+    {
+    case nr::platform::NsightGraphicsCaptureDelimiter::Present:
+        return NrPlatformNsightGraphicsCaptureDelimiter::Present;
+    case nr::platform::NsightGraphicsCaptureDelimiter::FrameBoundary:
+        return NrPlatformNsightGraphicsCaptureDelimiter::FrameBoundary;
+    case nr::platform::NsightGraphicsCaptureDelimiter::VkFrameBoundaryExt:
+        return NrPlatformNsightGraphicsCaptureDelimiter::VkFrameBoundaryExt;
+    }
+    return NrPlatformNsightGraphicsCaptureDelimiter::FrameBoundary;
+}
+
+[[nodiscard]] inline nr::platform::NsightGraphicsResult toNsightGraphicsResult(NrPlatformNsightGraphicsResult result) noexcept
+{
+    switch (result)
+    {
+    case NrPlatformNsightGraphicsResult::Success:
+        return nr::platform::NsightGraphicsResult::Success;
+    case NrPlatformNsightGraphicsResult::Unavailable:
+        return nr::platform::NsightGraphicsResult::Unavailable;
+    case NrPlatformNsightGraphicsResult::NotFound:
+        return nr::platform::NsightGraphicsResult::NotFound;
+    case NrPlatformNsightGraphicsResult::DifferentActivity:
+        return nr::platform::NsightGraphicsResult::DifferentActivity;
+    case NrPlatformNsightGraphicsResult::InvalidParameter:
+        return nr::platform::NsightGraphicsResult::InvalidParameter;
+    case NrPlatformNsightGraphicsResult::InvalidState:
+        return nr::platform::NsightGraphicsResult::InvalidState;
+    case NrPlatformNsightGraphicsResult::Timeout:
+        return nr::platform::NsightGraphicsResult::Timeout;
+    case NrPlatformNsightGraphicsResult::Failed:
+        return nr::platform::NsightGraphicsResult::Failed;
+    }
+    return nr::platform::NsightGraphicsResult::Failed;
+}
+} // namespace nr::platform_detail
+
+export namespace nr::platform
+{
+[[nodiscard]] inline bool nsightGraphicsSdkCompiled() noexcept
+{
+    return nrPlatformNsightGraphicsSdkCompiled();
+}
+
+[[nodiscard]] inline NsightGraphicsResult injectNsightGraphics(const NsightGraphicsConfig& config) noexcept
+{
+    auto desc = NrPlatformNsightGraphicsInjectDesc{
+        .activity = nr::platform_detail::toPlatform(config.activity),
+        .installationPath = config.installationPath.empty() ? nullptr : config.installationPath.c_str(),
+        .outputDir = config.outputDir.empty() ? nullptr : config.outputDir.c_str(),
+        .frameCount = config.frameCount,
+        .noHud = config.noHud,
+    };
+    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsInject(&desc));
+}
+
+[[nodiscard]] inline NsightGraphicsResult initializeNsightGraphics(NsightGraphicsActivity activity) noexcept
+{
+    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsInitialize(nr::platform_detail::toPlatform(activity)));
+}
+
+[[nodiscard]] inline NsightGraphicsResult activateNsightTrace(VkQueue queue) noexcept
+{
+    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsActivateTrace(queue));
+}
+
+[[nodiscard]] inline NsightGraphicsResult requestNsightCapture(const NsightGraphicsCaptureRequest& request) noexcept
+{
+    auto platformRequest = NrPlatformNsightGraphicsCaptureRequest{
+        .delimiter = nr::platform_detail::toPlatform(request.delimiter),
+        .framesBeforeStart = request.framesBeforeStart,
+        .framesToCapture = request.framesToCapture,
+    };
+    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsRequestCapture(&platformRequest));
+}
+
+[[nodiscard]] inline NsightGraphicsResult startNsightTrace() noexcept
+{
+    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsStartTrace());
+}
+
+[[nodiscard]] inline NsightGraphicsResult stopNsightTrace(const NsightGraphicsTraceStop& desc) noexcept
+{
+    auto platformDesc = NrPlatformNsightGraphicsTraceStop{
+        .queue = desc.queue,
+        .outputImage = desc.outputImage,
+        .hasOutputImage = desc.hasOutputImage,
+        .stopOnNextFrameBoundary = desc.stopOnNextFrameBoundary,
+    };
+    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsStopTrace(&platformDesc));
+}
+
+[[nodiscard]] inline NsightGraphicsResult markNsightFrameBoundary(const NsightGraphicsFrameBoundary& desc) noexcept
+{
+    auto platformDesc = NrPlatformNsightGraphicsFrameBoundary{
+        .queue = desc.queue,
+        .outputImage = desc.outputImage,
+        .hasOutputImage = desc.hasOutputImage,
+    };
+    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsMarkFrameBoundary(&platformDesc));
+}
+
 /**
  * @brief Whether NVIDIA Nsight Graphics is intercepting the current process.
  *

@@ -31,7 +31,8 @@ Current dependency frameworks:
 - Vulkan-Hpp RAII
 - VMA
 - GLFW for window and surface bootstrap
-- Slang
+- Slang, built from the `src/extern/slang` submodule as a local CMake package and imported through `find_package(slang)` at the `src/extern` boundary
+- Nsight Graphics SDK through the `dependency` wrapper when enabled
 
 Current boundary notes:
 
@@ -39,7 +40,9 @@ Current boundary notes:
 - RHI physical-device selection and device creation require graphics, compute, and a dedicated physical copy/transfer queue family; the frame-present policy is compute-final, and the selected compute queue family must support surface presentation.
 - Command invocation should stay on Vulkan-Hpp RAII member functions instead of project-local dispatch tables.
 - RHI command-buffer helper APIs expose `const vk::raii::CommandBuffer&`; raw `vk::CommandBuffer` handles stay internal implementation details.
-- Public command-recording helper interfaces in `nr.rhi` (for example `bindResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take `const vk::raii::CommandBuffer&` as the primary boundary type.
+- RHI device creation optionally enables `VK_EXT_frame_boundary` when a graphics debugger exposes it, and `CommandBatch` can attach frame-boundary submit metadata through `vk::SubmitInfo2::pNext` without making the debugger extension a required runtime capability.
+- RHI owns env-driven Nsight Graphics SDK activity setup through `NsightGraphicsFrameHelper`. `Device` calls the helper at Vulkan lifecycle points while the helper reads `NR_NSIGHT_GRAPHICS_ACTIVITY`, `NR_NSIGHT_GRAPHICS_FRAME`, `NR_NSIGHT_GRAPHICS_FRAMES`, `NR_NSIGHT_GRAPHICS_OUTPUT_DIR`, and `NR_NSIGHT_GRAPHICS_INSTALL_DIR`, injects the selected capture-or-trace activity before Vulkan instance creation, initializes it after queues are ready, and emits SDK frame boundaries from the compute-present path with the current swapchain image.
+- Public command-recording helper interfaces in `nr.rhi` (for example `updateResourcesForBindingSnapshot`, `bindPreparedResourcesToCommandBuffer`, `pushConstantsToCommandBuffer`, and `ops::ScopedRendering`) take project-owned typed inputs; command-recording helpers take `const vk::raii::CommandBuffer&` as the primary boundary type.
 - `nr.rhi` exposes descriptor-indexing, buffer-device-address, ray-tracing, and Vulkan 1.4 capability/property snapshots from `Device`, and its descriptor/pipeline layer supports runtime-sized descriptor arrays driven by Slang reflection with a semantic multi-set ABI for runtime arrays.
 - RHI ray-tracing helpers cover BLAS/TLAS build recording, multi-geometry BLAS input, AS copy/compaction/serialization/query operations, SBT record payload packing, trace/indirect-trace recording, maintenance1 indirect2 dispatch, and RT-specific sync2 stage/access helpers.
 - RHI copy helpers record Vulkan-Hpp copy commands 2 while keeping narrow adapters for existing copy-region structs.
@@ -51,6 +54,7 @@ Entry points:
 
 - Module aggregation: [../../src/rhi/exportModule.ixx](../../src/rhi/exportModule.ixx)
 - Device and frame lifetime: [../../src/rhi/nrDevice.ixx](../../src/rhi/nrDevice.ixx)
+- Nsight Graphics SDK frame helper: [../../src/rhi/nrNsightGraphics.ixx](../../src/rhi/nrNsightGraphics.ixx)
 - RAII resources: [../../src/rhi/nrResource.ixx](../../src/rhi/nrResource.ixx)
 - Descriptor and pipeline services: [../../src/rhi/nrDescriptor.ixx](../../src/rhi/nrDescriptor.ixx), [../../src/rhi/nrPipeline.ixx](../../src/rhi/nrPipeline.ixx)
 - Ray tracing helpers: [../../src/rhi/nrAccelerationStructure.ixx](../../src/rhi/nrAccelerationStructure.ixx), [../../src/rhi/nrRayTracing.ixx](../../src/rhi/nrRayTracing.ixx), [../../src/rhi/nrResourceOps.ixx](../../src/rhi/nrResourceOps.ixx)
@@ -88,6 +92,8 @@ Third-party boundary note:
 
 - Consumers reach legacy third-party declarations through the shared named C++ module `dependency`, implemented by [`src/extern/exportDependency.ixx`](../../src/extern/exportDependency.ixx).
 - External headers are confined to the `src/extern` boundary; internal project source imports `dependency` instead of including third-party headers directly.
+- The bundled Slang submodule is configured and installed into the build tree as a local package before `dependency` links the imported `slang::slang` target.
+- Nsight Graphics SDK headers stay private to [`src/extern/nsightGraphicsSdkImpl.cpp`](../../src/extern/nsightGraphicsSdkImpl.cpp); engine modules use the exported `nr::platform` wrapper API from `dependency`.
 
 Entry points:
 
@@ -185,7 +191,7 @@ It does not own:
 
 Current frame path:
 
-`Renderer::installGraph(spec)` installs long-lived nodes once -> each `renderFrame(input)` begins the device frame -> optionally drives `scene` extraction and bridge building (with optional app-side camera override) -> forwards optional per-frame service state through `FrameServices` -> builds the graph -> compiles -> prepares -> executes -> presents
+`Renderer::installGraph(spec)` installs long-lived nodes once -> each `renderFrame(input)` begins the device frame -> optionally drives `scene` extraction and bridge building (with optional app-side camera override) -> forwards optional per-frame service state through `FrameServices` -> builds the graph -> compiles -> prepares on the main thread -> records pass secondaries on RDG worker threads -> merges, submits, and presents on the main thread
 
 Boundary notes:
 
@@ -194,6 +200,9 @@ Boundary notes:
 - when camera override is present, scene extraction uses `customFrustum` and bridge frame constants come from override data
 - `FrameServices` is the current renderer-side sideband for app-owned per-frame services that render passes may consume without creating a direct app-layer dependency on renderer internals
 - `NodeBuildContext` exposes node-scoped resource declaration phrases for common color/depth/uniform/swapchain frame resources, and `nr::renderer::use::*` factories produce the canonical pass-use descriptors that still flow through `RenderGraphBuilder` validation.
+- `RenderGraphExecutor` owns a fixed `std::jthread` pool for RDG CPU recording work. Build, compile, runtime resource resolution, pass prepare callbacks, primary command buffers, queue submit, and present remain main-thread responsibilities.
+- Pass record callbacks are worker-capable and record into executor-retained secondary command buffers. The executor gathers one-shot `std::future` results from `std::packaged_task` work items and executes the recorded secondaries on the primary command buffer in compiled pass order.
+- When `VK_EXT_frame_boundary` is enabled by an injected graphics debugger, each RDG submit batch is tagged with the same monotonic frame-boundary ID and the final compute-present submit carries `eFrameEnd` plus the current swapchain image handle so multi-queue captures group graphics and compute work as one frame.
 - application-facing code that owns both renderer and scene should prefer `nr::app::AppSession`, which also owns the interactive app camera used to build viewer-style overrides
 
 Entry points:
@@ -220,7 +229,8 @@ It owns:
 
 - concrete `NodeRuntime` implementations
 - pass intent declaration
-- pass record callbacks that use `rhi` services
+- pass prepare callbacks for descriptor updates and per-frame mutable setup
+- pass record callbacks that use `rhi` command-recording services
 
 It does not own:
 
@@ -238,9 +248,9 @@ Current boundary notes:
 - `UiNode` is the Dear ImGui overlay build node. It finalizes the app-owned UI frame, consumes draw data emitted earlier in the graph, honors Dear ImGui 1.92.6 `ImTextureData` requests from the vcpkg dependency, manages UI textures through a descriptor-indexed runtime sampled-image array, emits a `Ui.TextureUpload` pass before `Ui.Overlay` when texture pixels need staging, selects the sampled texture per draw through push constants, and renders the overlay into its own transparent `uiBuffer` for later composition in `PresentNode`
 - node record callbacks should route command recording through `PassRecordContext::commandBuffer` as a RAII `vk::raii::CommandBuffer` reference when calling `nr.rhi` command helpers.
 - common pass resource declarations should prefer `NodeBuildContext` resource phrases and `nr::renderer::use::*` intent factories over hand-written graph descriptor fields where the phrase matches the pass semantics.
-- shader-visible node bindings must be expressed through `ShaderCursor` and `ShaderBindingSnapshot`. Descriptor-backed resources should deploy through `bindResourcesToCommandBuffer(...)`, and push constants should deploy through `pushConstantsToCommandBuffer(...)` inside the `addPass` record callback.
+- shader-visible node bindings must be expressed through `ShaderCursor` and `ShaderBindingSnapshot`. Descriptor-backed resources should update through `updateResourcesForBindingSnapshot(...)` inside the `addPass` prepare callback, and record callbacks should only bind prepared descriptor sets through `bindPreparedResourcesToCommandBuffer(...)` plus push constants through `pushConstantsToCommandBuffer(...)`.
 - render-pass nodes should not directly perform shader-visible descriptor writes or binds through `ShaderBindingPool::update(...)`, `resolveDescriptorWriteRequests(...)`, `CursorPipelineLayout::bindDescriptorSets(...)`, or `CursorPipelineLayout::pushConstants(...)`; the detailed policy remains in [../../AGENTS.md](../../AGENTS.md).
-- current audit note: `UiNode` push constants and bindless texture descriptors now use cursor snapshots plus the shared RHI deployment helpers. The previous bindless texture issue was node-level boundary drift, not a missing low-level RHI capability.
+- current audit note: built-in nodes update descriptor snapshots during prepare and only bind prepared descriptor sets during record. `UiNode` push constants and bindless texture descriptors use cursor snapshots plus the shared RHI deployment helpers. The previous bindless texture issue was node-level boundary drift, not a missing low-level RHI capability.
 
 Entry points:
 
@@ -275,6 +285,6 @@ Useful reality checks:
 - [../../src/app/exportModule.ixx](../../src/app/exportModule.ixx), [../../src/app/nrAppSession.ixx](../../src/app/nrAppSession.ixx), and [../../src/app/nrAppCamera.ixx](../../src/app/nrAppCamera.ixx) provide the application-facing lifetime wrapper plus camera/input encapsulation.
 - [../../src/app/nrAppUi.ixx](../../src/app/nrAppUi.ixx) is the app-owned Dear ImGui system wrapper used by render-pass-facing UI.
 - [../../src/main.cpp](../../src/main.cpp) is the scene-driven viewer loop where `NormalBuffer` feeds `Present.sourceColor` and `Ui` feeds `Present.uiBuffer`, while `nr::app::AppSession` initializes both the app camera and the UI system.
-- [../../src/extern/CMakeLists.txt](../../src/extern/CMakeLists.txt) and [../../src/extern/exportDependency.ixx](../../src/extern/exportDependency.ixx) are the current source-of-truth for the centralized third-party module boundary used by the LLVM/Ninja build path.
+- [../../src/extern/CMakeLists.txt](../../src/extern/CMakeLists.txt), [../../src/extern/exportDependency.ixx](../../src/extern/exportDependency.ixx), and [../../src/extern/nsightGraphicsSdkBridge.h](../../src/extern/nsightGraphicsSdkBridge.h) are the current source-of-truth for the centralized third-party module boundary used by the LLVM/Ninja build path.
 - [../../test/app/embeddedTriangle.cpp](../../test/app/embeddedTriangle.cpp) is the renderer-only window loop where `EmbeddedTriangle` feeds `Present.sourceColor` and `Ui` feeds `Present.uiBuffer`, using the same `nr::app::AppSession` camera and UI wrapper with the default camera path.
 - [../../test/app/normalBufferUiSmoke.cpp](../../test/app/normalBufferUiSmoke.cpp) is the current headless smoke path that validates the `NormalBuffer + Ui -> Present` integration, non-empty ImGui draw data, and the runtime normal-buffer cull toggle.

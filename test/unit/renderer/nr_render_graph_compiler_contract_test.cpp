@@ -41,6 +41,38 @@ namespace
     return builder.build();
 }
 
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildMultiPassGraphicsFrame()
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode("Graphics", nr::renderer::QueueDomain::Graphics);
+
+    auto first = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "First",
+        .extent = vk::Extent3D{64, 64, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+    auto second = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "Second",
+        .extent = vk::Extent3D{64, 64, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+    auto third = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "Third",
+        .extent = vk::Extent3D{64, 64, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+
+    auto firstUses = std::array{nr::renderer::use::colorWrite(first)};
+    auto secondUses = std::array{nr::renderer::use::sampledRead(first), nr::renderer::use::colorWrite(second)};
+    auto thirdUses = std::array{nr::renderer::use::sampledRead(second), nr::renderer::use::colorWrite(third)};
+
+    static_cast<void>(builder.addPass("Graphics.First", node, firstUses, [](const nr::renderer::PassRecordContext&) {}));
+    static_cast<void>(builder.addPass("Graphics.Second", node, secondUses, [](const nr::renderer::PassRecordContext&) {}));
+    static_cast<void>(builder.addPass("Graphics.Third", node, thirdUses, [](const nr::renderer::PassRecordContext&) {}));
+
+    return builder.build();
+}
+
 const nr::test::CaseRegistrar compilerMappingCase{
     "render graph compiler maps usage and access intents",
     [] {
@@ -95,5 +127,49 @@ const nr::test::CaseRegistrar compilerCrossQueueCase{
         nr::test::requireEqual(compiled.ownershipTransitions.size(), std::size_t{1});
         nr::test::require(compiled.debugView.find("ownershipTransition") != std::string::npos,
                           "debug view should include ownership transition diagnostics");
+    }};
+
+const nr::test::CaseRegistrar compilerPassOrderCase{
+    "render graph compiler preserves compiled pass order for executor merge",
+    [] {
+        auto frame = buildMultiPassGraphicsFrame();
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(frame);
+
+        nr::test::requireEqual(compiled.submitBatches.size(), std::size_t{1});
+        nr::test::requireEqual(compiled.submitBatches.front().passes.size(), std::size_t{3});
+        nr::test::requireEqual(compiled.submitBatches.front().passes[0].debugName, std::string{"Graphics.First"});
+        nr::test::requireEqual(compiled.submitBatches.front().passes[1].debugName, std::string{"Graphics.Second"});
+        nr::test::requireEqual(compiled.submitBatches.front().passes[2].debugName, std::string{"Graphics.Third"});
+    }};
+
+const nr::test::CaseRegistrar compilerPrepareRecordSplitCase{
+    "render graph compiler keeps prepare and record callbacks separate",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("Bindings", nr::renderer::QueueDomain::Graphics);
+        auto color = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Bindings.Color",
+            .extent = vk::Extent3D{32, 32, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+
+        auto uses = std::array{nr::renderer::use::colorWrite(color)};
+        auto pass = builder.addPass(
+            "Bindings.Split",
+            node,
+            uses,
+            [](const nr::renderer::PassRecordContext&) {},
+            [](const nr::renderer::PassPrepareContext&) {});
+        nr::test::require(pass.valid(), "split binding pass should be valid");
+
+        auto frame = builder.build();
+        nr::test::require(static_cast<bool>(frame.passes.front().prepare), "builder should retain prepare callback");
+        nr::test::require(static_cast<bool>(frame.passes.front().record), "builder should retain record callback");
+
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(frame);
+        auto const& compiledPass = compiled.submitBatches.front().passes.front();
+        nr::test::require(static_cast<bool>(compiledPass.prepare), "compiler should retain prepare callback");
+        nr::test::require(static_cast<bool>(compiledPass.record), "compiler should retain record callback");
+        nr::test::requireEqual(compiledPass.debugName, std::string{"Bindings.Split"});
     }};
 } // namespace

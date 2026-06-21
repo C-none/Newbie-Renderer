@@ -23,7 +23,7 @@ export namespace nr::rhi
  *
  * Thread Safety Model:
  * - Primary pools: Main thread only (no synchronization needed)
- * - Secondary pools: Prebuilt at frame-begin, then thread-local access only
+ * - Secondary pools: prebuilt at frame-begin and split into worker-local slots
  *
  * How Prebuilt Secondary Pools Work:
  *
@@ -31,40 +31,30 @@ export namespace nr::rhi
  *    Example: graphicsSecondary_ = array<optional<CommandPool>, maxThreads>
  *
  * 2. beginFrame calls prepareSecondaryPools() on the main thread.
- *    Missing slots [0, maxThreads) are created before worker recording starts.
+ *    Missing slots [0, workerCount) are created before RDG recording starts.
  *
- * 3. Worker threads call frame.secondary<T>(threadId)
+ * 3. The RDG executor allocates retained secondary command buffers from
+ *    frame.secondary<T>(threadId) on the main thread before submitting record work.
  *    - No locks
  *    - No growth
  *    - O(1) index access with bounds assertions
  *
- * 4. Each thread uses its own pool index (threadId), so no contention
- *    during command recording.
+ * 4. Worker threads reset and record only command buffers from their own pool
+ *    index (threadId), so command-pool operations do not contend during recording.
  *
  * Usage Pattern:
  *
- *   // Main thread: dispatch work to thread pool
- *   std::vector<std::future<vk::raii::CommandBuffer>> futures;
- *   for (std::size_t i = 0; i < threadPool.size(); ++i) {
- *       futures.push_back(threadPool.submit([&, threadId = i]() {
- *           // Pools are prebuilt at frame begin; this is lock-free indexed access.
- *           CommandPool& pool = frame.secondary<QueueRole::Graphics>(threadId);
- *           auto cb = pool.allocateSecondary();
+ *   // Main thread: allocate retained secondaries from worker-local pools.
+ *   CommandPool& pool = frame.secondary<QueueRole::Graphics>(workerId);
+ *   vk::raii::CommandBuffer& secondary = retainedCache.getOrAllocate(pool);
  *
- *           // Record commands (no locks needed here!)
- *           CommandRecorder::beginSecondary(cb, inheritanceInfo);
- *           recordDrawCalls(cb, ...);
- *           CommandRecorder::end(cb);
+ *   // Worker thread: reset and record the assigned secondary only.
+ *   secondary.reset();
+ *   CommandRecorder::beginSecondary(secondary, inheritanceInfo);
+ *   recordPass(secondary, ...);
+ *   CommandRecorder::end(secondary);
  *
- *           return cb;
- *       }));
- *   }
- *
- *   // Collect results
- *   std::vector<std::reference_wrapper<const vk::raii::CommandBuffer>> secondaries;
- *   for (auto& f : futures) secondaries.push_back(f.get());
- *
- *   // Main thread: build primary and execute secondaries
+ *   // Main thread: build primary and execute secondaries.
  *   auto primary = frame.graphicsPrimary().allocatePrimary();
  *   CommandRecorder::beginPrimary(primary);
  *   primary.executeCommands(...);
@@ -324,7 +314,10 @@ class FrameContext
         std::ranges::for_each(slotIndices, [&](std::uint32_t slotIndex) {
             if (!slots[slotIndex].has_value())
             {
-                slots[slotIndex].emplace(device_->get(), queueFamilyIndex, vk::CommandPoolCreateFlagBits::eTransient);
+                slots[slotIndex].emplace(
+                    device_->get(),
+                    queueFamilyIndex,
+                    vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
             }
         });
     }

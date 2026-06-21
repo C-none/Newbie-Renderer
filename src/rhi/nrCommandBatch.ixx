@@ -36,6 +36,9 @@ public:
         std::vector<vk::SemaphoreSubmitInfo> waitInfos;
         std::vector<vk::CommandBufferSubmitInfo> commandBufferInfos;
         std::vector<vk::SemaphoreSubmitInfo> signalInfos;
+        std::vector<vk::Image> frameBoundaryImages;
+        std::vector<vk::Buffer> frameBoundaryBuffers;
+        std::optional<vk::FrameBoundaryEXT> frameBoundary;
         vk::SubmitInfo2 submitInfo{};
 
         [[nodiscard]] const vk::SubmitInfo2& info() const noexcept
@@ -144,6 +147,46 @@ public:
     }
 
     /**
+     * @brief Attach optional VK_EXT_frame_boundary metadata to the next submit.
+     *
+     * The extension is debugger-facing metadata. CommandBatch owns copies of the
+     * image/buffer handle arrays so SubmitInfo2Packet can safely expose pNext views.
+     */
+    void setFrameBoundary(
+        std::uint64_t frameID,
+        vk::FrameBoundaryFlagsEXT flags = {},
+        std::span<const vk::Image> images = {},
+        std::span<const vk::Buffer> buffers = {})
+    {
+        frameBoundary_ = FrameBoundaryMetadata{
+            .frameID = frameID,
+            .flags = flags,
+        };
+        frameBoundary_->images.assign(images.begin(), images.end());
+        frameBoundary_->buffers.assign(buffers.begin(), buffers.end());
+    }
+
+    void clearFrameBoundary() noexcept
+    {
+        frameBoundary_.reset();
+    }
+
+    [[nodiscard]] bool hasFrameBoundary() const noexcept
+    {
+        return frameBoundary_.has_value();
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> frameBoundaryFrameID() const noexcept
+    {
+        if (!frameBoundary_.has_value())
+        {
+            return {};
+        }
+
+        return frameBoundary_->frameID;
+    }
+
+    /**
      * @brief Clear all command buffers and synchronization
      * 
      * Resets batch to empty state
@@ -152,6 +195,7 @@ public:
         commandBuffers_.clear();
         waitPoints_.clear();
         signalPoints_.clear();
+        frameBoundary_.reset();
     }
 
     /**
@@ -211,6 +255,26 @@ public:
         packet.submitInfo.signalSemaphoreInfoCount = static_cast<std::uint32_t>(packet.signalInfos.size());
         packet.submitInfo.pSignalSemaphoreInfos = packet.signalInfos.data();
 
+        if (frameBoundary_.has_value())
+        {
+            packet.frameBoundaryImages = frameBoundary_->images;
+            packet.frameBoundaryBuffers = frameBoundary_->buffers;
+
+            auto const imageCount = static_cast<std::uint32_t>(packet.frameBoundaryImages.size());
+            auto const bufferCount = static_cast<std::uint32_t>(packet.frameBoundaryBuffers.size());
+            auto const* imageData = packet.frameBoundaryImages.empty() ? nullptr : packet.frameBoundaryImages.data();
+            auto const* bufferData = packet.frameBoundaryBuffers.empty() ? nullptr : packet.frameBoundaryBuffers.data();
+
+            packet.frameBoundary.emplace(
+                frameBoundary_->flags,
+                frameBoundary_->frameID,
+                imageCount,
+                imageData,
+                bufferCount,
+                bufferData);
+            packet.submitInfo.pNext = std::addressof(*packet.frameBoundary);
+        }
+
         return packet;
     }
 
@@ -241,10 +305,19 @@ public:
     }
 
 private:
+    struct FrameBoundaryMetadata
+    {
+        std::uint64_t frameID = 0;
+        vk::FrameBoundaryFlagsEXT flags{};
+        std::vector<vk::Image> images{};
+        std::vector<vk::Buffer> buffers{};
+    };
+
     // Store raw handles internally (non-owning view extracted from RAII objects)
     std::vector<vk::CommandBuffer> commandBuffers_;
     std::vector<SemaphoreSyncPoint> waitPoints_;
     std::vector<SemaphoreSyncPoint> signalPoints_;
+    std::optional<FrameBoundaryMetadata> frameBoundary_;
 };
 
 /**

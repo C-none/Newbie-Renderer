@@ -137,11 +137,51 @@ function(nr_apply_target_settings target)
     endif()
 endfunction()
 
+function(nr_add_slang_runtime_dependency target)
+    if(NOT WIN32 OR NOT DEFINED NR_SLANG_RUNTIME_DIR)
+        return()
+    endif()
+
+    set(runtime_output_dir "${CMAKE_CURRENT_BINARY_DIR}")
+    if(CMAKE_CONFIGURATION_TYPES)
+        string(APPEND runtime_output_dir "/$<CONFIG>")
+    endif()
+
+    string(SHA256 runtime_copy_hash "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${runtime_copy_hash}" 0 16 runtime_copy_hash)
+    set(runtime_copy_target "nr_copy_slang_runtime_${runtime_copy_hash}")
+    set(runtime_copy_stamp "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${runtime_copy_target}_$<CONFIG>.stamp")
+
+    if(NOT TARGET ${runtime_copy_target})
+        set(runtime_copy_dependencies)
+        if(DEFINED NR_SLANG_RUNTIME_STAMP)
+            list(APPEND runtime_copy_dependencies "${NR_SLANG_RUNTIME_STAMP}")
+        endif()
+
+        add_custom_command(
+            OUTPUT "${runtime_copy_stamp}"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${NR_SLANG_RUNTIME_DIR}"
+                "${runtime_output_dir}"
+            COMMAND ${CMAKE_COMMAND} -E touch "${runtime_copy_stamp}"
+            DEPENDS ${runtime_copy_dependencies}
+            COMMENT "Copying Slang runtime files to ${runtime_output_dir}"
+            VERBATIM
+        )
+        add_custom_target(${runtime_copy_target}
+            DEPENDS "${runtime_copy_stamp}"
+        )
+    endif()
+
+    add_dependencies(${target} ${runtime_copy_target})
+endfunction()
+
 function(nr_add_executable target)
     add_executable(${target} ${ARGN})
     if(NR_CMAKE_ENABLE_IMPORT_STD)
         set_target_properties(${target} PROPERTIES CXX_MODULE_STD ON)
     endif()
+    nr_add_slang_runtime_dependency(${target})
     nr_apply_target_settings(${target})
 endfunction()
 

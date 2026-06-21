@@ -8,6 +8,7 @@ import :type;
 import :queue;
 import :frameContext;
 import :memoryAllocator;
+import :nsightGraphics;
 import :resourcePool;
 import :pipeline;
 import :resourceOps;
@@ -151,10 +152,19 @@ class Device
         return QueueRole::Compute;
     }
 
+    [[nodiscard]] bool frameBoundaryEnabled() const noexcept
+    {
+        return frameBoundaryEnabled_;
+    }
+
+    [[nodiscard]] bool nsightGraphicsEnabled() const noexcept
+    {
+        return nsightGraphics_.enabled();
+    }
+
     [[nodiscard]] bool hasEnabledInstanceExtension(std::string_view extension) const
     {
-        return std::ranges::any_of(instanceEnabledExtensions,
-                                   [extension](const std::string &item) { return item == extension; });
+        return std::ranges::any_of(instanceEnabledExtensions, [extension](const std::string &item) { return item == extension; });
     }
 
     void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"})
@@ -162,6 +172,8 @@ class Device
         appName = _appName;
         engineName = _engineName;
         setupInitialFlags();
+        nsightGraphics_.configureFromEnvironment();
+        nsightGraphics_.injectIfRequested();
         instance = makeInstance();
         if constexpr (isDebugMode)
         {
@@ -175,13 +187,33 @@ class Device
             auto gpuProps = physicalDevice.getProperties();
             nrInfo<>(std::format("Selected GPU: {}", gpuProps.deviceName.data()));
         }
-        device = makeDevice();
+        try
+        {
+            device = makeDevice();
+        }
+        catch (const vk::SystemError& error)
+        {
+            nrLog(
+                LogLevel::error,
+                std::format("Device::initialize failed while creating the Vulkan logical device: {}", error.what()),
+                std::source_location::current(),
+                true);
+        }
+        catch (const std::exception& error)
+        {
+            nrLog(
+                LogLevel::error,
+                std::format("Device::initialize failed while creating the Vulkan logical device: {}", error.what()),
+                std::source_location::current(),
+                true);
+        }
 
         memoryAllocator.initialize(instance, physicalDevice, device);
         resourceFactory.initialize(memoryAllocator, device);
         resourcePool.initialize(memoryAllocator, device);
 
         initializeCommandSystem();
+        nsightGraphics_.initializeIfRequested(presentQueueRawForExternalTools());
         uploadReadbackContext_.emplace(device, resourceFactory, queueManager);
 
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
@@ -211,7 +243,7 @@ class Device
         frame.resetPools();
 
         const auto workerCount = std::min<std::uint32_t>(maxThreads, std::max(1u, std::thread::hardware_concurrency()));
-        frame.prepareSecondaryPools(workerCount, workerCount, 0u);
+        frame.prepareSecondaryPools(workerCount, workerCount, workerCount);
 
         // Consume the pre-acquired image (issued at end of previous presentFrame or initialize).
         // If the pending acquire is absent (e.g., after a recreate that failed), issue now.
@@ -239,6 +271,8 @@ class Device
         presentationContext.setFrameSubmitted(false);
         frameSubmitCount_ = 0;
         frameFinalSubmitRole_.reset();
+        presentFrameBoundaryFrameID_.reset();
+        nsightGraphics_.beginFrame(frameBoundaryEnabled_);
 
         return FrameBeginResult{
             .frameIndex = frameIndex,
@@ -247,16 +281,10 @@ class Device
         };
     }
 
-    void submitFrameBatch(
-        const CommandBatch& batch,
-        QueueRole submitRole,
-        bool signalForPresent,
-        vk::PipelineStageFlags2 imageAvailableWaitStage)
+    void submitFrameBatch(const CommandBatch &batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage)
     {
         nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrameBatch requires beginFrame() before submission.");
-        nrAssert(
-            !(frameFinalSubmitRole_.has_value() && !signalForPresent),
-            "Device::submitFrameBatch cannot submit additional batches after final present-signaling submit.");
+        nrAssert(!(frameFinalSubmitRole_.has_value() && !signalForPresent), "Device::submitFrameBatch cannot submit additional batches after final present-signaling submit.");
 
         if (signalForPresent)
         {
@@ -264,7 +292,7 @@ class Device
             nrAssert(submitRole == presentSubmitRole(), "Device::submitFrameBatch compute-present policy requires the compute queue when signalForPresent=true.");
         }
 
-        auto& frame = frameManager.current();
+        auto &frame = frameManager.current();
         auto submitBatch = batch;
 
         // Keep pre-present work decoupled from swapchain availability.
@@ -294,9 +322,7 @@ class Device
             queueManager.transfer().submit(submitBatch, fence);
         };
 
-        auto fence = signalForPresent
-                         ? std::optional<std::reference_wrapper<const vk::raii::Fence>>(std::cref(frame.fence()))
-                         : std::nullopt;
+        auto fence = signalForPresent ? std::optional<std::reference_wrapper<const vk::raii::Fence>>(std::cref(frame.fence())) : std::nullopt;
         submitToRole(submitRole, fence);
 
         ++frameSubmitCount_;
@@ -305,29 +331,27 @@ class Device
         {
             frameFinalSubmitRole_ = submitRole;
             presentationContext.setFrameSubmitted(true);
+            presentFrameBoundaryFrameID_.reset();
+            if (frameBoundaryEnabled_)
+            {
+                presentFrameBoundaryFrameID_ = submitBatch.frameBoundaryFrameID();
+            }
         }
     }
 
-    void submitFrameBatch(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false)
+    void submitFrameBatch(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false)
     {
-        submitFrameBatch(
-            batch,
-            submitRole,
-            signalForPresent,
-            vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands});
+        submitFrameBatch(batch, submitRole, signalForPresent, vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands});
     }
 
-    void submitFrame(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute)
+    void submitFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute)
     {
         submitFrameBatch(batch, submitRole, true);
     }
 
     [[nodiscard]] bool canPresentCurrentFrame() const noexcept
     {
-        return frameSubmitCount_ > 0 &&
-               frameFinalSubmitRole_.has_value() &&
-               *frameFinalSubmitRole_ == presentSubmitRole() &&
-               presentationContext.hasSubmittedCurrentFrame();
+        return frameSubmitCount_ > 0 && frameFinalSubmitRole_.has_value() && *frameFinalSubmitRole_ == presentSubmitRole() && presentationContext.hasSubmittedCurrentFrame();
     }
 
     [[nodiscard]] QueueRole submitRoleForPresent() const noexcept
@@ -345,7 +369,11 @@ class Device
         nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::presentFrame requires beginFrame() before present.");
         nrAssert(canPresentCurrentFrame(), "Device::presentFrame compute-present policy requires a compute-queue final submission that signals renderFinished.");
 
-        auto presentResult = presentationContext.present(queueManager, activePresentSemaphore());
+        auto const presentImage = activeSwapchainImageRawForExternalTools();
+        nsightGraphics_.stopTraceBeforeBoundaryIfNeeded(presentImage);
+
+        auto presentResult = presentationContext.present(queueManager, activePresentSemaphore(), presentFrameBoundaryFrameID_);
+        nsightGraphics_.markFrameBoundaryAfterPresent(presentResult.result, presentImage);
 
         if (PresentationContext::needsSwapchainRecreate(presentResult.result))
         {
@@ -365,11 +393,12 @@ class Device
         presentationContext.setFrameSubmitted(false);
         frameSubmitCount_ = 0;
         frameFinalSubmitRole_.reset();
+        presentFrameBoundaryFrameID_.reset();
 
         return presentResult;
     }
 
-    [[nodiscard]] PresentResult endFrame(const CommandBatch& batch, QueueRole submitRole = QueueRole::Compute)
+    [[nodiscard]] PresentResult endFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute)
     {
         submitFrame(batch, submitRole);
         return presentFrame();
@@ -400,43 +429,45 @@ class Device
         std::ranges::fill(queueFamilyDict, std::numeric_limits<std::size_t>::max());
 
         auto queueFamilies = selectRequiredQueueFamilies(queueFamilyProperties);
-        nrAssert(
-            queueFamilies.has_value(),
-            "Selected GPU does not expose required graphics, compute, and dedicated physical copy/transfer queue families.");
+        nrAssert(queueFamilies.has_value(), "Selected GPU does not expose required graphics, compute, and dedicated physical copy/transfer queue families.");
 
         auto toQueueIndex = [](QueueFamilyKind kind) { return static_cast<std::size_t>(kind); };
         queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)] = queueFamilies->graphics;
         queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)] = queueFamilies->compute;
         queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)] = queueFamilies->transfer;
 
-        constexpr float queuePriority = 1.0f;
-        auto uniqueFamilies = std::array{
-            static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)]),
-            static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)]),
-            static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)])
+        auto queueFamilySummary = [&](std::uint32_t familyIndex) {
+            const auto& family = queueFamilyProperties[familyIndex];
+            return std::format(
+                "index={} flags={} queueCount={}",
+                familyIndex,
+                vk::to_string(family.queueFlags),
+                family.queueCount);
         };
+        auto queueFamilySelectionMessage = std::format(
+            "Vulkan queue family selection: graphics{{{}}} compute{{{}}} transfer{{{}}}",
+            queueFamilySummary(queueFamilies->graphics),
+            queueFamilySummary(queueFamilies->compute),
+            queueFamilySummary(queueFamilies->transfer));
+        nrInfo(queueFamilySelectionMessage);
+
+        constexpr float queuePriority = 1.0f;
+        auto uniqueFamilies = std::array{static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)]), static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::compute)]), static_cast<std::uint32_t>(queueFamilyDict[toQueueIndex(QueueFamilyKind::transfer)])};
         std::ranges::sort(uniqueFamilies);
-        
-        auto queueCreateInfos = uniqueFamilies | 
-                                std::views::filter([last = std::uint32_t(-1)](std::uint32_t f) mutable { 
-                                    if (f == last) return false; 
-                                    last = f; 
-                                    return true; 
+
+        auto queueCreateInfos = uniqueFamilies | std::views::filter([last = std::uint32_t(-1)](std::uint32_t f) mutable {
+                                    if (f == last)
+                                        return false;
+                                    last = f;
+                                    return true;
                                 }) |
-                                std::views::transform([&](std::uint32_t familyIndex) {
-                                    return vk::DeviceQueueCreateInfo({}, familyIndex, 1, &queuePriority);
-                                }) |
-                                std::ranges::to<std::vector>();
+                                std::views::transform([&](std::uint32_t familyIndex) { return vk::DeviceQueueCreateInfo({}, familyIndex, 1, &queuePriority); }) | std::ranges::to<std::vector>();
 
         auto availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
-        auto isExtensionSupported = [&availableExtensions](std::string_view extensionName) {
-            return std::ranges::any_of(availableExtensions, [extensionName](const vk::ExtensionProperties &property) {
-                return std::string_view(property.extensionName) == extensionName;
-            });
-        };
+        auto isExtensionSupported = [&availableExtensions](std::string_view extensionName) { return std::ranges::any_of(availableExtensions, [extensionName](const vk::ExtensionProperties &property) { return std::string_view(property.extensionName) == extensionName; }); };
 
         std::vector<char const *> enabledExtensions;
-        enabledExtensions.reserve(deviceEnabledExtensions.size());
+        enabledExtensions.reserve(deviceEnabledExtensions.size() + 1);
         std::set<std::string_view> enabledExtensionSet;
 
         auto enableExtension = [&](std::string_view extensionName, std::string_view reason) {
@@ -461,20 +492,18 @@ class Device
             enableExtension(extensionName, reason);
         });
 
-        auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2,
-                                 vk::PhysicalDeviceVulkan11Features,
-                                 vk::PhysicalDeviceVulkan12Features,
-                                                     vk::PhysicalDeviceVulkan13Features,
-                                                     vk::PhysicalDeviceVulkan14Features,
-                                                     vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
-                                                     vk::PhysicalDeviceCooperativeVectorFeaturesNV,
-                                                     vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT,
-                                                      vk::PhysicalDeviceMeshShaderFeaturesEXT,
-                                                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
-                                                      vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-                                                      vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR,
-                                                      vk::PhysicalDeviceRayQueryFeaturesKHR,
-                                                      vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
+        auto const frameBoundaryExtensionSupported = isExtensionSupported(vk::EXTFrameBoundaryExtensionName);
+        auto frameBoundaryFeatureSupported = false;
+        if (frameBoundaryExtensionSupported)
+        {
+            auto frameBoundaryFeatureQuery = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceFrameBoundaryFeaturesEXT>();
+            auto const &frameBoundaryFeatures = frameBoundaryFeatureQuery.get<vk::PhysicalDeviceFrameBoundaryFeaturesEXT>();
+            frameBoundaryFeatureSupported = frameBoundaryFeatures.frameBoundary == vk::True;
+        }
+
+        auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
+                                                     vk::PhysicalDeviceCooperativeVectorFeaturesNV, vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+                                                     vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR, vk::PhysicalDeviceRayQueryFeaturesKHR, vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
 
         auto &featureList = features2.get<vk::PhysicalDeviceFeatures2>();
         auto &vulkan11Features = features2.get<vk::PhysicalDeviceVulkan11Features>();
@@ -496,15 +525,12 @@ class Device
         meshShaderFeatures.multiviewMeshShader = vk::False;
         meshShaderFeatures.primitiveFragmentShadingRateMeshShader = vk::False;
 
-        auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2,
-                                 vk::PhysicalDeviceDescriptorIndexingProperties,
-                                 vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorIndexingProperties, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
         auto &physicalDeviceProperties = properties2.get<vk::PhysicalDeviceProperties2>();
         auto &descriptorIndexingProperties = properties2.get<vk::PhysicalDeviceDescriptorIndexingProperties>();
         auto &rayTracingPipelineProperties = properties2.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
 
-#define REQUIRE_FEATURE(feature_field, feature_name) \
-        nrAssert(feature_field == vk::True, std::format("Required feature {} is not enabled.", feature_name))
+#define REQUIRE_FEATURE(feature_field, feature_name) nrAssert(feature_field == vk::True, std::format("Required feature {} is not enabled.", feature_name))
 
         REQUIRE_FEATURE(vulkan11Features.shaderDrawParameters, "shaderDrawParameters");
         REQUIRE_FEATURE(vulkan12Features.bufferDeviceAddress, "bufferDeviceAddress");
@@ -572,6 +598,21 @@ class Device
         };
         vulkan14Properties_ = queryVulkan14PropertySnapshot();
 
+        auto frameBoundaryCreateFeatures = vk::PhysicalDeviceFrameBoundaryFeaturesEXT{};
+        frameBoundaryEnabled_ = frameBoundaryExtensionSupported && frameBoundaryFeatureSupported;
+        if (frameBoundaryEnabled_)
+        {
+            enableExtension(vk::EXTFrameBoundaryExtensionName, "graphics debugger frame boundary metadata");
+            frameBoundaryCreateFeatures.frameBoundary = vk::True;
+            frameBoundaryCreateFeatures.pNext = featureList.pNext;
+            featureList.pNext = std::addressof(frameBoundaryCreateFeatures);
+            nrInfo("VK_EXT_frame_boundary enabled for graphics debugger frame capture.");
+        }
+        else if (frameBoundaryExtensionSupported)
+        {
+            nrInfo<LogLevel::warning>("VK_EXT_frame_boundary was exposed without its frameBoundary feature; frame-boundary tagging is disabled.");
+        }
+
         auto const &limits = physicalDeviceProperties.properties.limits;
         rtCapabilities_ = RayTracingCapabilitySnapshot{
             .rayTracingMaintenance1 = rayTracingMaintenance1Features.rayTracingMaintenance1 == vk::True,
@@ -591,11 +632,12 @@ class Device
             .maxRayDispatchInvocationCount = rayTracingPipelineProperties.maxRayDispatchInvocationCount,
             .maxRayRecursionDepth = rayTracingPipelineProperties.maxRayRecursionDepth,
             .maxRayHitAttributeSize = rayTracingPipelineProperties.maxRayHitAttributeSize,
-            .maxDispatchDimensions = {
-                static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[0]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[0]),
-                static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[1]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[1]),
-                static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[2]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[2]),
-            },
+            .maxDispatchDimensions =
+                {
+                    static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[0]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[0]),
+                    static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[1]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[1]),
+                    static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[2]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[2]),
+                },
         };
 
         vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos, {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions, nullptr, &featureList);
@@ -666,6 +708,17 @@ class Device
     }
 
   protected:
+    [[nodiscard]] VkQueue presentQueueRawForExternalTools() const noexcept
+    {
+        return static_cast<VkQueue>(*queueManager.compute().handle());
+    }
+
+    [[nodiscard]] VkImage activeSwapchainImageRawForExternalTools() const
+    {
+        auto const imageIndex = presentationContext.activeSwapchainImageIndex();
+        return static_cast<VkImage>(presentationContext.swapchainImage(imageIndex));
+    }
+
     [[nodiscard]] Vulkan14PropertySnapshot queryVulkan14PropertySnapshot() const
     {
         auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan14Properties>();
@@ -676,8 +729,8 @@ class Device
         if (!hostCopySrcLayouts.empty() || !hostCopyDstLayouts.empty())
         {
             vk::StructureChain<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan14Properties> layoutPropertyChain{};
-            auto& layoutProperties2 = layoutPropertyChain.get<vk::PhysicalDeviceProperties2>();
-            auto& layoutVulkan14Properties = layoutPropertyChain.get<vk::PhysicalDeviceVulkan14Properties>();
+            auto &layoutProperties2 = layoutPropertyChain.get<vk::PhysicalDeviceProperties2>();
+            auto &layoutVulkan14Properties = layoutPropertyChain.get<vk::PhysicalDeviceVulkan14Properties>();
 
             layoutVulkan14Properties.copySrcLayoutCount = static_cast<std::uint32_t>(hostCopySrcLayouts.size());
             layoutVulkan14Properties.pCopySrcLayouts = hostCopySrcLayouts.data();
@@ -690,9 +743,7 @@ class Device
 
         auto uuid = std::array<std::uint8_t, vk::UuidSize>{};
         auto uuidIndices = std::views::iota(std::size_t{0}, uuid.size());
-        std::ranges::for_each(uuidIndices, [&](std::size_t i) {
-            uuid[i] = vulkan14Properties.optimalTilingLayoutUUID[i];
-        });
+        std::ranges::for_each(uuidIndices, [&](std::size_t i) { uuid[i] = vulkan14Properties.optimalTilingLayoutUUID[i]; });
 
         return Vulkan14PropertySnapshot{
             .lineSubPixelPrecisionBits = vulkan14Properties.lineSubPixelPrecisionBits,
@@ -729,21 +780,43 @@ class Device
         const char **glfwExt = glfwGetRequiredInstanceExtensions(&glfwCount);
         nrAssert(glfwExt != nullptr && glfwCount > 0, "GLFW did not report Vulkan instance extensions.");
         instanceEnabledExtensions.assign(glfwExt, glfwExt + glfwCount);
-        
+
         if constexpr (isDebugMode)
         {
             auto addIfMissing = [](std::vector<std::string> &list, std::string_view item) {
                 if (std::ranges::none_of(list, [item](const auto &s) { return s == item; }))
                     list.push_back(std::string(item));
             };
+
+            auto envFlagEnabled = [](const char* name) {
+                const auto* value = std::getenv(name);
+                if (value == nullptr)
+                {
+                    return false;
+                }
+
+                auto text = std::string_view{value};
+                return text == "1" ||
+                       text == "true" ||
+                       text == "TRUE" ||
+                       text == "on" ||
+                       text == "ON" ||
+                       text == "yes" ||
+                       text == "YES";
+            };
+
             constexpr std::string_view validationLayer = "VK_LAYER_KHRONOS_validation";
-            nrAssert(
-                hasInstanceLayer(validationLayer),
-                std::format(
-                    "Debug builds require '{}'. The Vulkan loader did not enumerate this layer on the current machine. "
-                    "Validation layers are provided by the Vulkan SDK / validation-layer installation, not by the GPU or display driver.",
-                    validationLayer));
-            addIfMissing(instanceEnabledLayers, validationLayer);
+            if (!envFlagEnabled("NR_DISABLE_VULKAN_VALIDATION"))
+            {
+                nrAssert(hasInstanceLayer(validationLayer), std::format("Debug builds require '{}'. The Vulkan loader did not enumerate this layer on the current machine. "
+                                                                        "Validation layers are provided by the Vulkan SDK / validation-layer installation, not by the GPU or display driver.",
+                                                                        validationLayer));
+                addIfMissing(instanceEnabledLayers, validationLayer);
+            }
+            else
+            {
+                nrInfo<LogLevel::warning>("Debug Vulkan validation layer disabled by NR_DISABLE_VULKAN_VALIDATION.");
+            }
 
             if (hasInstanceExtension(vk::EXTDebugUtilsExtensionName))
             {
@@ -773,10 +846,7 @@ class Device
     void refreshPresentSemaphores()
     {
         auto swapchainImageCount = presentationContext.swapchainImageCount();
-        auto upToDate = presentSemaphoresByImage_.size() == swapchainImageCount &&
-                        std::ranges::all_of(presentSemaphoresByImage_, [](const vk::raii::Semaphore& semaphore) {
-                            return *semaphore != nullptr;
-                        });
+        auto upToDate = presentSemaphoresByImage_.size() == swapchainImageCount && std::ranges::all_of(presentSemaphoresByImage_, [](const vk::raii::Semaphore &semaphore) { return *semaphore != nullptr; });
         if (upToDate)
         {
             return;
@@ -787,35 +857,22 @@ class Device
 
         auto semaphoreCreateInfo = vk::SemaphoreCreateInfo{};
         auto imageIndices = std::views::iota(std::uint32_t{0}, swapchainImageCount);
-        std::ranges::for_each(imageIndices, [&](std::uint32_t) {
-            presentSemaphoresByImage_.emplace_back(device, semaphoreCreateInfo);
-        });
+        std::ranges::for_each(imageIndices, [&](std::uint32_t) { presentSemaphoresByImage_.emplace_back(device, semaphoreCreateInfo); });
     }
 
-    [[nodiscard]] const vk::raii::Semaphore& activePresentSemaphore() const
+    [[nodiscard]] const vk::raii::Semaphore &activePresentSemaphore() const
     {
         auto imageIndex = presentationContext.activeSwapchainImageIndex();
-        nrAssert(
-            imageIndex < presentSemaphoresByImage_.size(),
-            std::format("Device::activePresentSemaphore image index {} is out of range for {} present semaphores.", imageIndex, presentSemaphoresByImage_.size()));
+        nrAssert(imageIndex < presentSemaphoresByImage_.size(), std::format("Device::activePresentSemaphore image index {} is out of range for {} present semaphores.", imageIndex, presentSemaphoresByImage_.size()));
         return presentSemaphoresByImage_[imageIndex];
     }
 
     std::vector<std::string> instanceEnabledLayers{};
     std::vector<std::string> instanceEnabledExtensions{};
     std::vector<std::string> deviceEnabledExtensions{
-        vk::KHRSwapchainExtensionName,
-        vk::KHRDeferredHostOperationsExtensionName,
-        vk::EXTMeshShaderExtensionName,
-        vk::KHRAccelerationStructureExtensionName,
-        vk::KHRRayTracingPipelineExtensionName,
-        vk::KHRRayTracingMaintenance1ExtensionName,
-        vk::KHRPipelineLibraryExtensionName,
-        vk::KHRRayQueryExtensionName,
-        vk::EXTOpacityMicromapExtensionName,
-        vk::EXTRayTracingInvocationReorderExtensionName,
-        vk::NVCooperativeVectorExtensionName,
-        vk::EXTExtendedDynamicState3ExtensionName,
+        vk::KHRSwapchainExtensionName,          vk::KHRDeferredHostOperationsExtensionName,      vk::EXTMeshShaderExtensionName,       vk::KHRAccelerationStructureExtensionName,
+        vk::KHRRayTracingPipelineExtensionName, vk::KHRRayTracingMaintenance1ExtensionName,      vk::KHRPipelineLibraryExtensionName,  vk::KHRRayQueryExtensionName,
+        vk::EXTOpacityMicromapExtensionName,    vk::EXTRayTracingInvocationReorderExtensionName, vk::NVCooperativeVectorExtensionName, vk::EXTExtendedDynamicState3ExtensionName,
         vk::EXTMemoryBudgetExtensionName,
     };
     RayTracingCapabilitySnapshot rtCapabilities_{};
@@ -823,11 +880,14 @@ class Device
     BufferDeviceAddressCapabilitySnapshot bufferDeviceAddressCapabilities_{};
     Vulkan14CapabilitySnapshot vulkan14Capabilities_{};
     Vulkan14PropertySnapshot vulkan14Properties_{};
+    bool frameBoundaryEnabled_ = false;
+    NsightGraphicsFrameHelper nsightGraphics_{};
 
     std::array<std::size_t, static_cast<std::size_t>(QueueFamilyKind::size)> queueFamilyDict{};
     SwapChainConfig swapChainConfig_{};
     std::uint32_t frameSubmitCount_ = 0;
     std::optional<QueueRole> frameFinalSubmitRole_{};
+    std::optional<std::uint64_t> presentFrameBoundaryFrameID_{};
     std::vector<vk::raii::Semaphore> presentSemaphoresByImage_{};
 };
 

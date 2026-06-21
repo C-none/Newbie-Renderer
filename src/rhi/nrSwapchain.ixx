@@ -90,8 +90,10 @@ struct SwapChain
      *
      * The wait semaphore should be signaled by the render submission for the same frame.
      */
-    [[nodiscard]] PresentResult present(const vk::raii::Queue &presentQueue, std::uint32_t imageIndex, const vk::raii::Semaphore &waitSemaphore) const
+    [[nodiscard]] PresentResult present(const vk::raii::Queue &presentQueue, std::uint32_t imageIndex, const vk::raii::Semaphore &waitSemaphore, std::optional<std::uint64_t> frameBoundaryFrameID) const
     {
+        nrAssert(imageIndex < swapChainImages.size(), std::format("SwapChain::present image index {} is out of range for {} swapchain images.", imageIndex, swapChainImages.size()));
+
         vk::PresentInfoKHR presentInfo{};
         presentInfo.waitSemaphoreCount = 1;
         presentInfo.pWaitSemaphores = &*waitSemaphore;
@@ -100,6 +102,21 @@ struct SwapChain
         presentInfo.swapchainCount = 1;
         presentInfo.pSwapchains = &swapchainHandle;
         presentInfo.pImageIndices = &imageIndex;
+
+        std::array<vk::Image, 1> frameBoundaryImages{};
+        vk::FrameBoundaryEXT frameBoundary{};
+        if (frameBoundaryFrameID.has_value())
+        {
+            frameBoundaryImages[0] = swapChainImages[imageIndex];
+            frameBoundary = vk::FrameBoundaryEXT(
+                vk::FrameBoundaryFlagBitsEXT::eFrameEnd,
+                *frameBoundaryFrameID,
+                static_cast<std::uint32_t>(frameBoundaryImages.size()),
+                frameBoundaryImages.data(),
+                0,
+                nullptr);
+            presentInfo.pNext = std::addressof(frameBoundary);
+        }
 
         try
         {
@@ -449,7 +466,7 @@ class PresentationContext
         return pendingAcquire_.has_value();
     }
 
-    [[nodiscard]] PresentResult present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore) const
+    [[nodiscard]] PresentResult present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore, std::optional<std::uint64_t> frameBoundaryFrameID) const
     {
         nrAssert(activeSwapchainImageIndex_.has_value(), "PresentationContext::present requires a valid acquired swapchain image.");
         nrAssert(
@@ -458,7 +475,7 @@ class PresentationContext
                 "PresentationContext::present compute-present policy expected compute queue family {}, but got {}.",
                 presentQueueFamily_,
                 queueManager.compute().queueFamilyIndex()));
-        return swapChain_.present(queueManager.compute().handle(), *activeSwapchainImageIndex_, waitSemaphore);
+        return swapChain_.present(queueManager.compute().handle(), *activeSwapchainImageIndex_, waitSemaphore, frameBoundaryFrameID);
     }
 
     /**

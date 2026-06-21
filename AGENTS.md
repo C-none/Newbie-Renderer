@@ -88,8 +88,8 @@ This document outlines the development standards, architectural principles, and 
 ### 2.10 RenderPass Resource Binding Policy
 
 *   **RenderPasses Binding:** In `renderPasses`, except for vertex/index buffers and pipeline-fixed resources, all bindable resources (descriptor-set describable resources and push constants) must be driven by `nrslang` reflection and the binding relations recorded via `shaderCursor`.
-*   **Binding Location:** Perform the actual GPU binding inside the `addPass` callback by calling `bindResourcesToCommandBuffer(...)` and `pushConstantsToCommandBuffer(...)` (see `src/rhi/nrPipeline.ixx`).
-*   **Avoid Manual Vulkan Binding:** Do not manually construct/bind Vulkan descriptor sets or push constants from `renderPasses` code outside of the `shaderCursor`-based pathway.
+*   **Binding Location:** In RDG parallel execution, descriptor-backed resources must be updated from the `addPass` prepare callback by calling `updateResourcesForBindingSnapshot(...)`; the record callback must only bind already-updated descriptor sets through `bindPreparedResourcesToCommandBuffer(...)` and push constants through `pushConstantsToCommandBuffer(...)` (see `src/rhi/nrPipeline.ixx`). `bindResourcesToCommandBuffer(...)` is a legacy/synchronous helper and must not be used by parallel RDG paths.
+*   **Avoid Manual Vulkan Binding:** Do not manually construct/update/bind Vulkan descriptor sets or push constants from `renderPasses` code outside of the `shaderCursor`-based pathway.
 
 ## 3. Module Structure
 

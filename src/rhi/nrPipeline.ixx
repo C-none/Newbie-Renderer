@@ -495,18 +495,12 @@ inline std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPi
 	return allocateBindingSetsForLayout(layout, pool, {});
 }
 
-inline void bindResourcesToCommandBuffer(
-	const vk::raii::CommandBuffer &commandBuffer,
-	vk::PipelineBindPoint bindPoint,
-	const CursorPipelineLayout &layout,
+inline void updateResourcesForBindingSnapshot(
 	ShaderBindingPool &pool,
 	std::span<const ShaderBindingSet> sets,
 	const ShaderBindingSnapshot &snapshot,
 	LogicalDescriptorResolver logicalResolver)
 {
-	nrAssert(layout.valid(), "bindResourcesToCommandBuffer requires a valid cursor pipeline layout.");
-	nrAssert(*commandBuffer != nullptr, "bindResourcesToCommandBuffer requires a valid command buffer.");
-
 	auto writeRequests = resolveDescriptorWriteRequests(snapshot, std::move(logicalResolver));
 	if (!writeRequests.empty())
 	{
@@ -533,13 +527,43 @@ inline void bindResourcesToCommandBuffer(
 
 		nrAssert(
 			requestsBySet.empty(),
-			"bindResourcesToCommandBuffer could not find descriptor sets for one or more snapshot writes.");
+			"updateResourcesForBindingSnapshot could not find descriptor sets for one or more snapshot writes.");
 	}
+}
+
+inline void bindPreparedResourcesToCommandBuffer(
+	const vk::raii::CommandBuffer &commandBuffer,
+	vk::PipelineBindPoint bindPoint,
+	const CursorPipelineLayout &layout,
+	std::span<const ShaderBindingSet> sets)
+{
+	nrAssert(layout.valid(), "bindPreparedResourcesToCommandBuffer requires a valid cursor pipeline layout.");
+	nrAssert(*commandBuffer != nullptr, "bindPreparedResourcesToCommandBuffer requires a valid command buffer.");
 
 	if (!sets.empty())
 	{
 		layout.bindDescriptorSets(commandBuffer, bindPoint, sets);
 	}
+}
+
+inline void bindResourcesToCommandBuffer(
+	const vk::raii::CommandBuffer &commandBuffer,
+	vk::PipelineBindPoint bindPoint,
+	const CursorPipelineLayout &layout,
+	ShaderBindingPool &pool,
+	std::span<const ShaderBindingSet> sets,
+	const ShaderBindingSnapshot &snapshot,
+	LogicalDescriptorResolver logicalResolver)
+{
+	nrAssert(layout.valid(), "bindResourcesToCommandBuffer requires a valid cursor pipeline layout.");
+	nrAssert(*commandBuffer != nullptr, "bindResourcesToCommandBuffer requires a valid command buffer.");
+
+	updateResourcesForBindingSnapshot(
+		pool,
+		sets,
+		snapshot,
+		std::move(logicalResolver));
+	bindPreparedResourcesToCommandBuffer(commandBuffer, bindPoint, layout, sets);
 }
 
 inline std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(

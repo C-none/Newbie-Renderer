@@ -1253,17 +1253,13 @@ class UiNode final : public Node
                     0u,
                     sizeof(ImDrawIdx) == 2u ? vk::IndexType::eUint16 : vk::IndexType::eUint32);
 
-                auto bindlessBindingSnapshot = makeBindlessTextureBindingSnapshotForFrame(*runtime, frameSlot);
                 auto& bindingSets = runtime->bindlessBindingSetsByFrame[frameSlot];
                 nr::nrAssert(!bindingSets.empty(), "UiNode requires initialized bindless descriptor sets for the active frame slot.");
-                nr::rhi::bindResourcesToCommandBuffer(
+                nr::rhi::bindPreparedResourcesToCommandBuffer(
                     commandBuffer,
                     vk::PipelineBindPoint::eGraphics,
                     runtime->pipeline.layout,
-                    runtime->pipeline.bindingPool,
-                    std::span<const nr::rhi::ShaderBindingSet>{bindingSets.data(), bindingSets.size()},
-                    bindlessBindingSnapshot,
-                    {});
+                    std::span<const nr::rhi::ShaderBindingSet>{bindingSets.data(), bindingSets.size()});
 
                 auto drawPushConstants = drawFrame.pushConstants;
                 std::optional<std::uint32_t> lastTextureIndex{};
@@ -1332,6 +1328,15 @@ class UiNode final : public Node
                     auto& indexBuffer = runtime->indexBuffers[frameSlot];
                     indexBuffer.writeMappedAndFlush(std::span<const ImDrawIdx>{drawFrame.indices.data(), drawFrame.indices.size()});
                 }
+
+                auto bindlessBindingSnapshot = makeBindlessTextureBindingSnapshotForFrame(*runtime, frameSlot);
+                auto const& bindingSets = runtime->bindlessBindingSetsByFrame[frameSlot];
+                nr::nrAssert(!bindingSets.empty(), "UiNode prepare stage requires initialized bindless descriptor sets for the active frame slot.");
+                nr::rhi::updateResourcesForBindingSnapshot(
+                    runtime->pipeline.bindingPool,
+                    std::span<const nr::rhi::ShaderBindingSet>{bindingSets.data(), bindingSets.size()},
+                    bindlessBindingSnapshot,
+                    {});
             });
     }
 

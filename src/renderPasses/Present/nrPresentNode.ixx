@@ -267,8 +267,8 @@ class PresentNode final : public Node
             std::span<const nr::renderer::PassResourceUseDesc>{convertPassIntents.data(), convertPassIntents.size()},
             "Present.Convert",
             [runtime,
-             conversionExtent,
-             convertBindingSnapshot = std::move(convertBindingSnapshot)](const nr::renderer::PassRecordContext& recordContext) {
+              conversionExtent,
+              convertBindingSnapshot](const nr::renderer::PassRecordContext& recordContext) {
                 nr::nrAssert(recordContext.commandBuffer.has_value(), "Present convert pass requires RAII command buffer access.");
                 nr::nrAssert(static_cast<bool>(runtime), "Present convert pass record stage requires initialized runtime state.");
 
@@ -279,14 +279,11 @@ class PresentNode final : public Node
                 auto const& frameBindingSets = runtime->convertBindingSetsByFrame[frameSlot];
                 nr::nrAssert(!frameBindingSets.empty(), "Present convert pass requires preallocated descriptor sets for the active frame slot.");
 
-                nr::rhi::bindResourcesToCommandBuffer(
+                nr::rhi::bindPreparedResourcesToCommandBuffer(
                     commandBuffer,
                     vk::PipelineBindPoint::eCompute,
                     runtime->pipeline.layout,
-                    runtime->pipeline.bindingPool,
-                    std::span<const nr::rhi::ShaderBindingSet>{frameBindingSets.data(), frameBindingSets.size()},
-                    convertBindingSnapshot,
-                    nr::renderer::makeDefaultLogicalDescriptorResolver(recordContext));
+                    std::span<const nr::rhi::ShaderBindingSet>{frameBindingSets.data(), frameBindingSets.size()});
 
                 nr::rhi::pushConstantsToCommandBuffer(
                     commandBuffer,
@@ -298,6 +295,19 @@ class PresentNode final : public Node
                     divideRoundUp(conversionExtent.width, kThreadGroupSize),
                     divideRoundUp(conversionExtent.height, kThreadGroupSize),
                     1u);
+            },
+            [runtime, convertBindingSnapshot](const nr::renderer::PassPrepareContext& prepareContext) {
+                nr::nrAssert(static_cast<bool>(runtime), "Present convert pass prepare stage requires initialized runtime state.");
+
+                auto frameSlot = static_cast<std::size_t>(prepareContext.frameIndex % runtime->convertBindingSetsByFrame.size());
+                auto const& frameBindingSets = runtime->convertBindingSetsByFrame[frameSlot];
+                nr::nrAssert(!frameBindingSets.empty(), "Present convert pass prepare requires preallocated descriptor sets for the active frame slot.");
+
+                nr::rhi::updateResourcesForBindingSnapshot(
+                    runtime->pipeline.bindingPool,
+                    std::span<const nr::rhi::ShaderBindingSet>{frameBindingSets.data(), frameBindingSets.size()},
+                    convertBindingSnapshot,
+                    nr::renderer::makeDefaultLogicalDescriptorResolver(prepareContext));
             });
 
         auto copyPassIntents = std::array{

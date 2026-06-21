@@ -386,8 +386,7 @@ class NormalBufferNode final : public Node
         [[maybe_unused]] auto rasterPassHandle = context.addPass(
             std::span<const nr::renderer::PassResourceUseDesc>{passIntents.data(), passIntents.size()},
             "NormalBuffer.Raster",
-            [colorHandle, depthHandle, viewportExtent, runtime, capturedBridgeFrame, displayBackFaces,
-             passBindingSnapshot = std::move(passBindingSnapshot)](
+            [colorHandle, depthHandle, viewportExtent, runtime, capturedBridgeFrame, displayBackFaces](
                 const nr::renderer::PassRecordContext& recordContext) {
                 nr::nrAssert(static_cast<bool>(recordContext.resolveImage), "NormalBuffer pass requires image resolver callback.");
                 nr::nrAssert(recordContext.commandBuffer.has_value(), "NormalBuffer pass requires RAII command buffer access.");
@@ -435,14 +434,11 @@ class NormalBufferNode final : public Node
                     auto const& passBindingSets = runtime->passBindingSetsByFrame[frameSlot];
                     nr::nrAssert(!passBindingSets.empty(), "NormalBuffer pass requires preallocated descriptor sets for the active frame slot.");
 
-                    nr::rhi::bindResourcesToCommandBuffer(
+                    nr::rhi::bindPreparedResourcesToCommandBuffer(
                         commandBuffer,
                         vk::PipelineBindPoint::eGraphics,
                         runtime->pipeline.layout,
-                        runtime->pipeline.bindingPool,
-                        std::span<const nr::rhi::ShaderBindingSet>{passBindingSets.data(), passBindingSets.size()},
-                        passBindingSnapshot,
-                        nr::renderer::makeDefaultLogicalDescriptorResolver(recordContext));
+                        std::span<const nr::rhi::ShaderBindingSet>{passBindingSets.data(), passBindingSets.size()});
 
                     auto viewport = vk::Viewport{
                         0.0f,
@@ -531,8 +527,9 @@ class NormalBufferNode final : public Node
                     }
                 }
             },
-            [frameUniformHandle, frameUniforms](const nr::renderer::PassPrepareContext& prepareContext) {
+            [runtime, frameUniformHandle, frameUniforms, passBindingSnapshot](const nr::renderer::PassPrepareContext& prepareContext) {
                 nr::nrAssert(static_cast<bool>(prepareContext.resolveBuffer), "NormalBuffer pass prepare requires buffer resolver callback.");
+                nr::nrAssert(static_cast<bool>(runtime), "NormalBuffer pass prepare stage requires initialized runtime state.");
 
                 auto resolvedBuffer = prepareContext.resolveBuffer(frameUniformHandle);
                 nr::nrAssert(resolvedBuffer.has_value(), "NormalBuffer pass prepare failed to resolve frame-uniform buffer resource.");
@@ -543,6 +540,16 @@ class NormalBufferNode final : public Node
                 nr::nrAssert(frameBuffer.size() >= sizeof(NormalBufferFrameUniforms), "NormalBuffer pass prepare uniform buffer size is smaller than frame uniform payload.");
 
                 frameBuffer.writeMappedAndFlush(frameUniforms);
+
+                auto const frameSlot = static_cast<std::size_t>(prepareContext.frameIndex % runtime->passBindingSetsByFrame.size());
+                auto const& passBindingSets = runtime->passBindingSetsByFrame[frameSlot];
+                nr::nrAssert(!passBindingSets.empty(), "NormalBuffer pass prepare requires preallocated descriptor sets for the active frame slot.");
+
+                nr::rhi::updateResourcesForBindingSnapshot(
+                    runtime->pipeline.bindingPool,
+                    std::span<const nr::rhi::ShaderBindingSet>{passBindingSets.data(), passBindingSets.size()},
+                    passBindingSnapshot,
+                    nr::renderer::makeDefaultLogicalDescriptorResolver(prepareContext));
             });
 
         context.publishOutput("color", output.normalBuffer);

@@ -158,7 +158,7 @@ class EmbeddedTriangleNode final : public Node
         [[maybe_unused]] auto rasterPassHandle = context.addPass(
             std::span<const nr::renderer::PassResourceUseDesc>{passIntents.data(), passIntents.size()},
             "EmbeddedTriangle.Raster",
-                [colorHandle, viewportExtent, runtime, passBindingSnapshot = std::move(passBindingSnapshot)](
+            [colorHandle, viewportExtent, runtime](
                 const nr::renderer::PassRecordContext& recordContext) {
                 nr::nrAssert(static_cast<bool>(recordContext.resolveImage), "EmbeddedTriangle pass requires image resolver callback.");
                 nr::nrAssert(recordContext.commandBuffer.has_value(), "EmbeddedTriangle pass requires RAII command buffer access.");
@@ -194,14 +194,11 @@ class EmbeddedTriangleNode final : public Node
                     auto const& passBindingSets = runtime->passBindingSetsByFrame[frameSlot];
                     nr::nrAssert(!passBindingSets.empty(), "EmbeddedTriangle pass requires preallocated descriptor sets for the active frame slot.");
 
-                    nr::rhi::bindResourcesToCommandBuffer(
+                    nr::rhi::bindPreparedResourcesToCommandBuffer(
                         commandBuffer,
                         vk::PipelineBindPoint::eGraphics,
                         runtime->pipeline.layout,
-                        runtime->pipeline.bindingPool,
-                        std::span<const nr::rhi::ShaderBindingSet>{passBindingSets.data(), passBindingSets.size()},
-                        passBindingSnapshot,
-                        nr::renderer::makeDefaultLogicalDescriptorResolver(recordContext));
+                        std::span<const nr::rhi::ShaderBindingSet>{passBindingSets.data(), passBindingSets.size()});
 
                     auto viewport = vk::Viewport{
                         0.0f,
@@ -229,6 +226,19 @@ class EmbeddedTriangleNode final : public Node
                     nr::rhi::mesh::applyRasterState(commandBuffer, rasterState);
                     commandBuffer.draw(3, 1, 0, 0);
                 }
+            },
+            [runtime, passBindingSnapshot](const nr::renderer::PassPrepareContext& prepareContext) {
+                nr::nrAssert(static_cast<bool>(runtime), "EmbeddedTriangle pass prepare stage requires initialized runtime state.");
+
+                auto const frameSlot = static_cast<std::size_t>(prepareContext.frameIndex % runtime->passBindingSetsByFrame.size());
+                auto const& passBindingSets = runtime->passBindingSetsByFrame[frameSlot];
+                nr::nrAssert(!passBindingSets.empty(), "EmbeddedTriangle pass prepare requires preallocated descriptor sets for the active frame slot.");
+
+                nr::rhi::updateResourcesForBindingSnapshot(
+                    runtime->pipeline.bindingPool,
+                    std::span<const nr::rhi::ShaderBindingSet>{passBindingSets.data(), passBindingSets.size()},
+                    passBindingSnapshot,
+                    nr::renderer::makeDefaultLogicalDescriptorResolver(prepareContext));
             });
 
         context.publishOutput("color", output.color);

@@ -95,7 +95,7 @@ The `msvc-vs` preset keeps the Visual Studio solution generator available for ID
 
 `compile_commands.json` is generated in `build/llvm` for clangd.
 
-The LLVM presets also keep vcpkg `buildtrees`, `packages`, and `downloads` under `build/vcpkg` so the full Ninja + clang++ workflow stays inside the repository workspace.
+The LLVM presets keep vcpkg `buildtrees` and temporary `packages` staging under `build/vcpkg`, while source downloads and compiled binary packages use vcpkg's default global caches. Installed dependencies remain under `build/llvm/vcpkg_installed`.
 
 ## App Session
 
@@ -122,7 +122,8 @@ app.shutdown();
 | --- | --- | --- |
 | Slang | `v2026.5.1` | Shader language, compilation, reflection, SPIR-V generation |
 | glTF-Sample-Assets | `c147d2fc` | Sample assets for import, testing, and regression cases |
-| Nsight Aftermath SDK | `R590` | bundled under `src/extern/Aftermath` | Future GPU crash diagnostics and shader crash analysis |
+| Nsight Aftermath SDK `R590` | bundled under `src/extern/Aftermath` | Future GPU crash diagnostics and shader crash analysis |
+| Nsight Graphics SDK `0.9.0` | bundled under `src/extern/NsightGraphics/0.9.0` | Env-driven Graphics Capture, GPU Trace, and SDK frame boundaries |
 
 Slang update cmd:
 
@@ -150,6 +151,7 @@ git submodule update --init --recursive
 ### Notes
 
 - Third-party C/C++ headers are surfaced to engine code through the `dependency` C++ module in `src/extern/exportDependency.ixx`; internal project sources should import that module instead of adding includes.
+- The Slang git submodule is kept under `src/extern/slang`, configured as a local build-tree CMake package, and consumed by the engine through `find_package(slang)` / `slang::slang`.
 - Additional transitive dependencies used by Slang, SPIR-V tooling, and related build scripts are resolved through the Slang submodule itself.
 - Vcpkg package versions are controlled by the active manifest/toolchain resolution in your local environment.
 - If you want to update submodules, use normal Git workflows. Nsight Aftermath is the exception and should be updated manually from the NVIDIA Developer website when needed.

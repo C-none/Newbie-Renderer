@@ -70,14 +70,19 @@ class MemoryAllocator
         device_ = std::ref(device);
         vma_ = VmaAllocatorWrapper(instance, physDevice, device);
 
-        nsightProfilerActive_ = nr::platform::isNsightInjected();
+        nsightProfilerActive_ = nr::platform::isNsightInjected() || nsightGraphicsActivityRequested();
 
         createPerFramePools();
         createStagingPool();
 
         if (nsightProfilerActive_)
         {
-            nrInfo("Nsight Graphics interception detected: routing GpuOnly buffers through a profiler-safe pool to avoid VUID-VkMemoryAllocateInfo-pNext-02806.");
+            nrLog(
+                LogLevel::error,
+                "RHI-DIAG",
+                "Nsight Graphics profiling mode detected: routing GpuOnly buffers through a profiler-safe pool to avoid VUID-VkMemoryAllocateInfo-pNext-02806. This diagnostic channel is non-fatal.",
+                std::source_location::current(),
+                false);
             createProfilerSafePool();
         }
     }
@@ -299,6 +304,23 @@ class MemoryAllocator
     }
 
   private:
+    [[nodiscard]] static bool nsightGraphicsActivityRequested() noexcept
+    {
+        const auto* value = std::getenv("NR_NSIGHT_GRAPHICS_ACTIVITY");
+        if (value == nullptr)
+        {
+            return false;
+        }
+
+        auto text = std::string_view{value};
+        return text == "capture" ||
+               text == "CAPTURE" ||
+               text == "Capture" ||
+               text == "trace" ||
+               text == "TRACE" ||
+               text == "Trace";
+    }
+
     // -----------------------------------------------------------------
     // Internal pool creation
     // -----------------------------------------------------------------

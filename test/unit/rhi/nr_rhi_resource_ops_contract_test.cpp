@@ -83,6 +83,40 @@ const nr::test::CaseRegistrar barrierBatchCase{
         nr::test::require(batch.empty(), "clear should empty all barrier arrays");
     }};
 
+const nr::test::CaseRegistrar commandBatchFrameBoundaryCase{
+    "rhi command batch owns frame-boundary submit metadata",
+    [] {
+        auto batch = nr::rhi::CommandBatch{};
+        auto flags = vk::FrameBoundaryFlagsEXT{};
+        flags |= vk::FrameBoundaryFlagBitsEXT::eFrameEnd;
+
+        auto images = std::array{vk::Image{}};
+        batch.setFrameBoundary(
+            42u,
+            flags,
+            std::span<const vk::Image>{images.data(), images.size()});
+
+        auto packet = batch.buildSubmitInfo2();
+        nr::test::require(batch.hasFrameBoundary(), "batch should retain frame-boundary metadata");
+        nr::test::require(packet.info().pNext != nullptr, "submit info should expose frame-boundary pNext");
+        nr::test::require(packet.frameBoundary.has_value(), "packet should own a frame-boundary structure");
+        nr::test::requireEqual(packet.frameBoundaryImages.size(), std::size_t{1});
+
+        auto const* boundary = static_cast<const vk::FrameBoundaryEXT*>(packet.info().pNext);
+        nr::test::require(boundary->sType == vk::StructureType::eFrameBoundaryEXT);
+        nr::test::requireEqual(boundary->frameID, std::uint64_t{42});
+        nr::test::require(
+            (boundary->flags & vk::FrameBoundaryFlagBitsEXT::eFrameEnd) != vk::FrameBoundaryFlagsEXT{},
+            "final submit should carry eFrameEnd");
+        nr::test::requireEqual(boundary->imageCount, 1u);
+        nr::test::require(boundary->pImages == packet.frameBoundaryImages.data(), "frame-boundary images should point to packet-owned storage");
+
+        batch.clearFrameBoundary();
+        auto clearedPacket = batch.buildSubmitInfo2();
+        nr::test::require(!batch.hasFrameBoundary(), "clearFrameBoundary should remove metadata");
+        nr::test::require(clearedPacket.info().pNext == nullptr, "cleared submit should not expose frame-boundary pNext");
+    }};
+
 const nr::test::CaseRegistrar readbackSyncPlanCase{
     "rhi readback sync plan requires producer and host-visible scopes",
     [] {
