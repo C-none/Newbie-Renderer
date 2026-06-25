@@ -5,62 +5,37 @@ import std;
 
 namespace nr::rhi
 {
-[[nodiscard]] const vk::SubmitInfo2& CommandBatch::SubmitInfo2Packet::info() const noexcept
-{
-            return submitInfo;
-        }
-
 void CommandBatch::addCommandBuffer(const vk::raii::CommandBuffer& commandBuffer)
 {
-        commandBuffers_.push_back(*commandBuffer);
+        commandBufferInfos_.push_back(vk::CommandBufferSubmitInfo{*commandBuffer, 0});
     }
 
 void CommandBatch::addCommandBuffers(std::span<const vk::raii::CommandBuffer> commandBuffers)
 {
-        commandBuffers_.reserve(commandBuffers_.size() + commandBuffers.size());
+        commandBufferInfos_.reserve(commandBufferInfos_.size() + commandBuffers.size());
         std::ranges::for_each(commandBuffers, [&](const auto& cb) {
-            commandBuffers_.push_back(*cb);
+            commandBufferInfos_.push_back(vk::CommandBufferSubmitInfo{*cb, 0});
         });
     }
 
 void CommandBatch::addWait(const vk::raii::Semaphore& semaphore, vk::PipelineStageFlags2 stage, std::uint64_t value, std::uint32_t deviceIndex)
 {
-        waitPoints_.push_back(SemaphoreSyncPoint{
-            .semaphore = *semaphore,
-            .stageMask = stage,
-            .value = value,
-            .deviceIndex = deviceIndex,
-        });
+        addWait(*semaphore, stage, value, deviceIndex);
     }
 
 void CommandBatch::addWait(vk::Semaphore semaphore, vk::PipelineStageFlags2 stage, std::uint64_t value, std::uint32_t deviceIndex)
 {
-        waitPoints_.push_back(SemaphoreSyncPoint{
-            .semaphore = semaphore,
-            .stageMask = stage,
-            .value = value,
-            .deviceIndex = deviceIndex,
-        });
+        waitInfos_.push_back(vk::SemaphoreSubmitInfo{semaphore, value, stage, deviceIndex});
     }
 
 void CommandBatch::addSignal(const vk::raii::Semaphore& semaphore, std::uint64_t value, std::uint32_t deviceIndex, vk::PipelineStageFlags2 stage)
 {
-        signalPoints_.push_back(SemaphoreSyncPoint{
-            .semaphore = *semaphore,
-            .stageMask = stage,
-            .value = value,
-            .deviceIndex = deviceIndex,
-        });
+        addSignal(*semaphore, value, deviceIndex, stage);
     }
 
 void CommandBatch::addSignal(vk::Semaphore semaphore, std::uint64_t value, std::uint32_t deviceIndex, vk::PipelineStageFlags2 stage)
 {
-        signalPoints_.push_back(SemaphoreSyncPoint{
-            .semaphore = semaphore,
-            .stageMask = stage,
-            .value = value,
-            .deviceIndex = deviceIndex,
-        });
+        signalInfos_.push_back(vk::SemaphoreSubmitInfo{semaphore, value, stage, deviceIndex});
     }
 
 void CommandBatch::setFrameBoundary(
@@ -99,80 +74,50 @@ void CommandBatch::clearFrameBoundary() noexcept
 
 void CommandBatch::clear() noexcept
 {
-        commandBuffers_.clear();
-        waitPoints_.clear();
-        signalPoints_.clear();
+        commandBufferInfos_.clear();
+        waitInfos_.clear();
+        signalInfos_.clear();
         frameBoundary_.reset();
     }
 
 [[nodiscard]] bool CommandBatch::empty() const noexcept
-{ return commandBuffers_.empty(); }
+{ return commandBufferInfos_.empty(); }
 
 [[nodiscard]] std::size_t CommandBatch::commandBufferCount() const noexcept
-{ return commandBuffers_.size(); }
+{ return commandBufferInfos_.size(); }
 
-[[nodiscard]] CommandBatch::SubmitInfo2Packet CommandBatch::buildSubmitInfo2() const
+[[nodiscard]] std::optional<vk::FrameBoundaryEXT> CommandBatch::frameBoundarySubmitInfo() const
 {
-        SubmitInfo2Packet packet{};
-
-        packet.waitInfos.reserve(waitPoints_.size());
-        packet.commandBufferInfos.reserve(commandBuffers_.size());
-        packet.signalInfos.reserve(signalPoints_.size());
-
-        std::ranges::for_each(waitPoints_, [&](const SemaphoreSyncPoint& waitPoint) {
-            packet.waitInfos.push_back(vk::SemaphoreSubmitInfo{
-                waitPoint.semaphore,
-                waitPoint.value,
-                waitPoint.stageMask,
-                waitPoint.deviceIndex,
-            });
-        });
-
-        std::ranges::for_each(commandBuffers_, [&](vk::CommandBuffer commandBuffer) {
-            packet.commandBufferInfos.push_back(vk::CommandBufferSubmitInfo{
-                commandBuffer,
-                0,
-            });
-        });
-
-        std::ranges::for_each(signalPoints_, [&](const SemaphoreSyncPoint& signalPoint) {
-            packet.signalInfos.push_back(vk::SemaphoreSubmitInfo{
-                signalPoint.semaphore,
-                signalPoint.value,
-                signalPoint.stageMask,
-                signalPoint.deviceIndex,
-            });
-        });
-
-        packet.submitInfo = vk::SubmitInfo2{};
-        packet.submitInfo.waitSemaphoreInfoCount = static_cast<std::uint32_t>(packet.waitInfos.size());
-        packet.submitInfo.pWaitSemaphoreInfos = packet.waitInfos.data();
-        packet.submitInfo.commandBufferInfoCount = static_cast<std::uint32_t>(packet.commandBufferInfos.size());
-        packet.submitInfo.pCommandBufferInfos = packet.commandBufferInfos.data();
-        packet.submitInfo.signalSemaphoreInfoCount = static_cast<std::uint32_t>(packet.signalInfos.size());
-        packet.submitInfo.pSignalSemaphoreInfos = packet.signalInfos.data();
-
-        if (frameBoundary_.has_value())
+        if (!frameBoundary_.has_value())
         {
-            packet.frameBoundaryImages = frameBoundary_->images;
-            packet.frameBoundaryBuffers = frameBoundary_->buffers;
-
-            auto const imageCount = static_cast<std::uint32_t>(packet.frameBoundaryImages.size());
-            auto const bufferCount = static_cast<std::uint32_t>(packet.frameBoundaryBuffers.size());
-            auto const* imageData = packet.frameBoundaryImages.empty() ? nullptr : packet.frameBoundaryImages.data();
-            auto const* bufferData = packet.frameBoundaryBuffers.empty() ? nullptr : packet.frameBoundaryBuffers.data();
-
-            packet.frameBoundary.emplace(
-                frameBoundary_->flags,
-                frameBoundary_->frameID,
-                imageCount,
-                imageData,
-                bufferCount,
-                bufferData);
-            packet.submitInfo.pNext = std::addressof(*packet.frameBoundary);
+            return {};
         }
 
-        return packet;
+        auto const imageCount = static_cast<std::uint32_t>(frameBoundary_->images.size());
+        auto const bufferCount = static_cast<std::uint32_t>(frameBoundary_->buffers.size());
+        auto const* imageData = frameBoundary_->images.empty() ? nullptr : frameBoundary_->images.data();
+        auto const* bufferData = frameBoundary_->buffers.empty() ? nullptr : frameBoundary_->buffers.data();
+        return vk::FrameBoundaryEXT{
+            frameBoundary_->flags,
+            frameBoundary_->frameID,
+            imageCount,
+            imageData,
+            bufferCount,
+            bufferData,
+        };
+    }
+
+[[nodiscard]] vk::SubmitInfo2 CommandBatch::submitInfo2View(const vk::FrameBoundaryEXT* frameBoundary) const noexcept
+{
+        auto submitInfo = vk::SubmitInfo2{};
+        submitInfo.waitSemaphoreInfoCount = static_cast<std::uint32_t>(waitInfos_.size());
+        submitInfo.pWaitSemaphoreInfos = waitInfos_.empty() ? nullptr : waitInfos_.data();
+        submitInfo.commandBufferInfoCount = static_cast<std::uint32_t>(commandBufferInfos_.size());
+        submitInfo.pCommandBufferInfos = commandBufferInfos_.empty() ? nullptr : commandBufferInfos_.data();
+        submitInfo.signalSemaphoreInfoCount = static_cast<std::uint32_t>(signalInfos_.size());
+        submitInfo.pSignalSemaphoreInfos = signalInfos_.empty() ? nullptr : signalInfos_.data();
+        submitInfo.pNext = frameBoundary;
+        return submitInfo;
     }
 
 CommandBatch& CommandBatch::withCommandBuffer(const vk::raii::CommandBuffer& cb)

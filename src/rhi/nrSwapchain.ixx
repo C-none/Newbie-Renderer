@@ -24,7 +24,7 @@ struct SwapChainConfig
 {
     std::uint32_t preferredImageCount = 3;
     vk::ImageUsageFlags imageUsage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment;
-    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eMailbox;
+    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eImmediate;
     vk::CompositeAlphaFlagBitsKHR compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
     vk::SurfaceTransformFlagBitsKHR surfaceTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
 };

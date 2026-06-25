@@ -1102,7 +1102,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         }
         batch.addCommandBuffer(commandBuffer);
         batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
-        queueManager_->get().transfer().submit(batch);
+        queueManager_->get().transfer().submit(std::move(batch));
 
         addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
         return signalValue;
@@ -1123,7 +1123,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         }
         batch.addCommandBuffer(commandBuffer);
         batch.addSignal(readbackTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
-        readbackQueue.submit(batch);
+        readbackQueue.submit(std::move(batch));
 
         addInFlight(readbackInFlight_, allocation, signalValue, std::move(commandBuffers));
         return signalValue;

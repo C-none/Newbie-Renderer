@@ -63,24 +63,23 @@ class GpuQueue
      * @param batch Command batch to submit
      * @param fence RAII fence to signal (optional)
      *
-     * This is the PRIMARY submission interface:
-     * - Reusable for render loops (call batch.clear() and rebuild)
-     * - CommandBatch internally stores handles, avoiding repeated extraction
+     * This is the PRIMARY submission interface for synchronized batches:
+     * - Consumes a one-shot CommandBatch description
+     * - Callers must pass std::move(batch) so reuse is explicit and visible
+     * - CommandBatch internally stores handles, avoiding repeated extraction while building
      * 
      * Performance characteristics:
-     * - First use: O(n) handle extraction in batch.add*()
-     * - Submit: buildSubmitInfo2() creates a transient packet and fills submit arrays
-     * - Memory: CommandBatch storage can be reused across frames, but SubmitInfo2Packet
-     *   owns temporary vectors for each submit call
+     * - Build: add*() appends submit-ready Vulkan-Hpp structures
+     * - Submit: creates only a stack SubmitInfo2 view and optional frame-boundary view
+     * - Memory: no per-submit submit-packet vectors are allocated
      * 
      * Usage:
-     *   CommandBatch batch;               // Construct once
+     *   CommandBatch batch;               // Build a one-shot submission
      *   batch.addCommandBuffer(cb);       // Build submission
-     *   queue.submit(batch, fence);       // Build SubmitInfo2 packet and submit
-     *   batch.clear();                    // Reuse next frame
+     *   queue.submit(std::move(batch), fence);
      */
     void submit(
-        const CommandBatch& batch,
+        CommandBatch&& batch,
         std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
     );
 

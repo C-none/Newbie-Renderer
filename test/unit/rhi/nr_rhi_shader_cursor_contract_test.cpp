@@ -13,6 +13,62 @@ struct UiPushConstants
     glm::uvec3 padding{};
 };
 
+const nr::test::CaseRegistrar globalFrameUniformCase{
+    "rhi shader cursor exposes global frame uniform at set5 binding0",
+    [] {
+        auto &shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/normalBuffer"},
+        });
+        nr::test::require(program.valid(), "normalBuffer shader program should compile");
+
+        auto layout = nr::rhi::ShaderDescriptorLayout::create(program);
+        nr::test::require(layout.valid(), "normalBuffer descriptor layout should be valid");
+
+        auto descriptorSets = layout.descriptorSets();
+        nr::test::require(
+            std::ranges::any_of(descriptorSets, [](const nr::rhi::DescriptorSetLayoutInfo &setInfo) {
+                return setInfo.set == 5u;
+            }),
+            "normalBuffer descriptor layout should expose set 5");
+        nr::test::require(
+            std::ranges::none_of(descriptorSets, [](const nr::rhi::DescriptorSetLayoutInfo &setInfo) {
+                return setInfo.set == 6u;
+            }),
+            "normalBuffer descriptor layout should not expose set 6");
+
+        auto root = layout.rootCursor();
+        auto frameCursor = root["gFrame"];
+        nr::test::require(frameCursor.valid(), "gFrame cursor should resolve");
+        nr::test::require(frameCursor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
+
+        auto binding = frameCursor.descriptorBinding();
+        nr::test::require(binding.has_value(), "gFrame should have descriptor binding reflection");
+        nr::test::requireEqual(binding->set, 5u);
+        nr::test::requireEqual(binding->binding, 0u);
+        nr::test::require(binding->descriptorType == vk::DescriptorType::eUniformBuffer);
+
+        nr::test::require(frameCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = 7,
+            .debugName = "Renderer.GlobalFrameUniforms",
+            .offset = 256,
+            .range = 192,
+        }));
+
+        auto snapshot = root.snapshot();
+        nr::test::requireEqual(snapshot.descriptorWriteCount(), std::size_t{1});
+        auto const &write = snapshot.descriptorWrites().front();
+        nr::test::requireEqual(write.binding.set, 5u);
+        nr::test::requireEqual(write.binding.binding, 0u);
+        nr::test::require(std::holds_alternative<nr::rhi::LogicalResourceDescriptorWrite>(write.payload));
+        auto const &logical = std::get<nr::rhi::LogicalResourceDescriptorWrite>(write.payload);
+        nr::test::requireEqual(logical.logicalResourceId, std::uint64_t{7});
+        nr::test::requireEqual(logical.offset, vk::DeviceSize{256});
+        nr::test::requireEqual(logical.range, vk::DeviceSize{192});
+    }};
+
 const nr::test::CaseRegistrar appUiCursorCase{
     "rhi shader cursor captures runtime descriptor array and push constants",
     [] {

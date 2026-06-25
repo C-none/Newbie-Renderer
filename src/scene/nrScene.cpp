@@ -1849,7 +1849,7 @@ void Scene::submitReadyGraphicsAcquireBatches(nr::rhi::ops::UploadReadbackContex
         acquireSubmission.addCommandBuffer(acquireCommandBuffer);
 
         acquireWork.fence = vk::raii::Fence(device_.device, vk::FenceCreateInfo{});
-        device_.queueManager.graphics().submit(acquireSubmission, std::cref(acquireWork.fence));
+        device_.queueManager.graphics().submit(std::move(acquireSubmission), std::cref(acquireWork.fence));
         submittedAcquireWork_.push_back(std::move(acquireWork));
 
         std::ranges::for_each(readyBatches, [&](const PendingAcquireBatch &batch) {

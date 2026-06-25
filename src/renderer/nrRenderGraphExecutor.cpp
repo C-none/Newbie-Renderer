@@ -10,6 +10,15 @@ import :rendererSubmission;
 
 namespace nr::renderer::detail
 {
+inline constexpr std::uint32_t kExecuteCpuTimingLogFrameInterval = 2000;
+
+[[nodiscard]] double elapsedMilliseconds(
+    std::chrono::steady_clock::time_point start,
+    std::chrono::steady_clock::time_point end) noexcept
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 [[nodiscard]] std::uint32_t secondaryPoolSlotForRecordWorker(std::uint32_t recordWorkerId) noexcept
 {
     return recordWorkerId + kWorkerSecondaryPoolSlotBase;
@@ -273,6 +282,16 @@ namespace nr::renderer
 
 [[nodiscard]] ExecuteReport RenderGraphExecutor::executePrepared(const PreparedGraphFrame& prepared, const ExecuteContext& context)
 {
+        auto executeCpuTimings = ExecuteCpuTimings{};
+        auto const executeCpuStart = std::chrono::steady_clock::now();
+        auto phaseStart = executeCpuStart;
+        auto recordPhase = [&]() {
+            auto const phaseEnd = std::chrono::steady_clock::now();
+            auto const elapsed = detail::elapsedMilliseconds(phaseStart, phaseEnd);
+            phaseStart = phaseEnd;
+            return elapsed;
+        };
+
         auto report = ExecuteReport{};
         report.plan = prepared.plan;
         report.invokedPassPrepareCount = prepared.invokedPassPrepareCount;
@@ -303,6 +322,8 @@ namespace nr::renderer
         }
 
         auto frameSlot = static_cast<std::size_t>(context.frameIndex % static_cast<std::uint32_t>(frameCount));
+        executeCpuTimings.retainedStateMilliseconds += recordPhase();
+
         auto& frameTimingState = gpuPassTimingStatesByFrame_[frameSlot];
         report.completedGpuPassTimingFrame = collectCompletedGpuPassTimings(context.device, frameTimingState);
 
@@ -317,10 +338,12 @@ namespace nr::renderer
             context.device,
             frameTimingState,
             timingQueryCountForPassCount(currentTimingSamples.size()));
+        executeCpuTimings.gpuTimingSetupMilliseconds += recordPhase();
 
         auto desiredWorkerCount = resolvedRecordWorkerCount(context.device.frameManager.current());
         recordThreadPool_.ensureWorkerCount(desiredWorkerCount);
         report.recordWorkerCount = recordThreadPool_.workerCount();
+        executeCpuTimings.workerSetupMilliseconds += recordPhase();
 
         auto compiledResourceByHandle = std::map<GraphResourceHandle, std::reference_wrapper<const CompiledResourceDesc>>{};
         std::ranges::for_each(compiled.resources, [&](const CompiledResourceDesc& resource) {
@@ -350,6 +373,23 @@ namespace nr::renderer
                 timelineValid,
                 "RenderGraphExecutor::execute requires a valid submission timeline when inserting a synthetic compute-final present batch.");
         }
+        executeCpuTimings.lookupSetupMilliseconds += recordPhase();
+
+        auto const launchRecordTasksStart = std::chrono::steady_clock::now();
+        auto recordTasksByBatch = launchRecordTasksForAllBatches(
+            context,
+            frameSlot,
+            compiled,
+            compiledResourceByHandle,
+            runtimeBindings,
+            frameDataByHandle,
+            report);
+        executeCpuTimings.launchRecordTasksMilliseconds += detail::elapsedMilliseconds(
+            launchRecordTasksStart,
+            std::chrono::steady_clock::now());
+        nrAssert(
+            recordTasksByBatch.size() == report.plan.batches.size(),
+            "RenderGraphExecutor::execute expected one record task group per submit batch.");
 
         auto previousSignalToken = RendererSubmitToken{};
         auto timedPassOffset = std::size_t{0};
@@ -362,6 +402,7 @@ namespace nr::renderer
             auto const batchTimedPassCount = compiledBatch.passes.size();
             timedPassOffset += batchTimedPassCount;
 
+            auto const primarySetupStart = std::chrono::steady_clock::now();
             auto& commandBuffer = primaryCommandBufferForQueue(context, frameSlot, planBatch.queue, batchOrdinal);
 
             commandBuffer.reset();
@@ -397,6 +438,11 @@ namespace nr::renderer
                         passList));
                 }
 
+                executeCpuTimings.primarySetupMilliseconds += detail::elapsedMilliseconds(
+                    primarySetupStart,
+                    std::chrono::steady_clock::now());
+
+                auto const queryResetStart = std::chrono::steady_clock::now();
                 if (batchTimedPassCount > 0u)
                 {
                     commandBuffer.resetQueryPool(
@@ -404,7 +450,11 @@ namespace nr::renderer
                         beginTimingQueryForPass(batchTimedPassOffset),
                         timingQueryCountForPassCount(batchTimedPassCount));
                 }
+                executeCpuTimings.queryResetMilliseconds += detail::elapsedMilliseconds(
+                    queryResetStart,
+                    std::chrono::steady_clock::now());
 
+                auto const acquireBarrierStart = std::chrono::steady_clock::now();
                 if (!planBatch.headAcquireTransitions.empty())
                 {
                     auto barriers = nr::rhi::ops::BarrierBatch{};
@@ -436,23 +486,30 @@ namespace nr::renderer
                         nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
                     }
                 }
+                executeCpuTimings.acquireBarrierMilliseconds += detail::elapsedMilliseconds(
+                    acquireBarrierStart,
+                    std::chrono::steady_clock::now());
 
-                auto recordResults = recordBatchPasses(
-                    context,
-                    frameSlot,
-                    planBatch,
-                    compiledBatch,
+                auto const collectRecordTasksStart = std::chrono::steady_clock::now();
+                auto recordResults = collectRecordTaskResults(
+                    recordTasksByBatch[batchOrdinal],
                     batchOrdinal,
-                    compiledResourceByHandle,
-                    runtimeBindings,
-                    frameDataByHandle,
                     report);
+                executeCpuTimings.collectRecordTasksMilliseconds += detail::elapsedMilliseconds(
+                    collectRecordTasksStart,
+                    std::chrono::steady_clock::now());
+
+                auto const executeSecondariesStart = std::chrono::steady_clock::now();
                 executeRecordedSecondaries(
                     commandBuffer,
                     std::span<const RecordTaskResult>{recordResults.data(), recordResults.size()},
                     *frameTimingState.queryPool,
                     batchTimedPassOffset);
+                executeCpuTimings.executeSecondariesMilliseconds += detail::elapsedMilliseconds(
+                    executeSecondariesStart,
+                    std::chrono::steady_clock::now());
 
+                auto const releaseBarrierStart = std::chrono::steady_clock::now();
                 if (!planBatch.tailReleaseTransitions.empty())
                 {
                     auto barriers = nr::rhi::ops::BarrierBatch{};
@@ -484,10 +541,18 @@ namespace nr::renderer
                         nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
                     }
                 }
+                executeCpuTimings.releaseBarrierMilliseconds += detail::elapsedMilliseconds(
+                    releaseBarrierStart,
+                    std::chrono::steady_clock::now());
             }
 
+            auto const primaryEndStart = std::chrono::steady_clock::now();
             nr::rhi::CommandRecorder::end(commandBuffer);
+            executeCpuTimings.primaryEndMilliseconds += detail::elapsedMilliseconds(
+                primaryEndStart,
+                std::chrono::steady_clock::now());
 
+            auto const submitStart = std::chrono::steady_clock::now();
             auto submitBatch = nr::rhi::CommandBatch{};
             submitBatch.addCommandBuffer(commandBuffer);
 
@@ -515,12 +580,16 @@ namespace nr::renderer
                                                ? imageAvailableWaitStageForBatch(compiledBatch, compiledResourceByHandle)
                                                : vk::PipelineStageFlags2{};
             attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, planBatch.signalsPresent);
-            context.device.submitFrameBatch(submitBatch, submitRole, planBatch.signalsPresent, imageAvailableWaitStage);
+            context.device.submitFrameBatch(std::move(submitBatch), submitRole, planBatch.signalsPresent, imageAvailableWaitStage);
             ++report.submittedBatchCount;
+            executeCpuTimings.submitMilliseconds += detail::elapsedMilliseconds(
+                submitStart,
+                std::chrono::steady_clock::now());
         });
 
         if (report.plan.requiresSyntheticPresentBatch)
         {
+            auto const syntheticPresentStart = std::chrono::steady_clock::now();
             auto& commandBuffer = primaryCommandBufferForQueue(
                 context,
                 frameSlot,
@@ -543,12 +612,21 @@ namespace nr::renderer
             }
 
             attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, true);
-            context.device.submitFrameBatch(submitBatch, nr::rhi::QueueRole::Compute, true);
+            context.device.submitFrameBatch(std::move(submitBatch), nr::rhi::QueueRole::Compute, true);
             ++report.submittedBatchCount;
+            executeCpuTimings.syntheticPresentMilliseconds += detail::elapsedMilliseconds(
+                syntheticPresentStart,
+                std::chrono::steady_clock::now());
         }
 
         frameTimingState.pendingFrameIndex = context.frameIndex;
         frameTimingState.pendingPasses = std::move(currentTimingSamples);
+        executeCpuTimings.totalMilliseconds = detail::elapsedMilliseconds(
+            executeCpuStart,
+            std::chrono::steady_clock::now());
+        executeCpuTimings.submittedBatchCount = report.submittedBatchCount;
+        executeCpuTimings.submittedRecordTaskCount = report.submittedRecordTaskCount;
+        recordExecuteCpuTimingSample(executeCpuTimings, context.frameIndex);
 
         return report;
     }
@@ -558,6 +636,67 @@ void RenderGraphExecutor::clearRetainedState()
         primaryCommandBuffersByFrame_.clear();
         secondaryCommandBuffersByFrame_.clear();
         gpuPassTimingStatesByFrame_.clear();
+        executeCpuTimingAccumulator_ = {};
+    }
+
+void RenderGraphExecutor::recordExecuteCpuTimingSample(
+        const RenderGraphExecutor::ExecuteCpuTimings& timings,
+        std::uint32_t frameIndex)
+{
+        auto& total = executeCpuTimingAccumulator_.total;
+        total.retainedStateMilliseconds += timings.retainedStateMilliseconds;
+        total.gpuTimingSetupMilliseconds += timings.gpuTimingSetupMilliseconds;
+        total.workerSetupMilliseconds += timings.workerSetupMilliseconds;
+        total.lookupSetupMilliseconds += timings.lookupSetupMilliseconds;
+        total.launchRecordTasksMilliseconds += timings.launchRecordTasksMilliseconds;
+        total.primarySetupMilliseconds += timings.primarySetupMilliseconds;
+        total.queryResetMilliseconds += timings.queryResetMilliseconds;
+        total.acquireBarrierMilliseconds += timings.acquireBarrierMilliseconds;
+        total.collectRecordTasksMilliseconds += timings.collectRecordTasksMilliseconds;
+        total.executeSecondariesMilliseconds += timings.executeSecondariesMilliseconds;
+        total.releaseBarrierMilliseconds += timings.releaseBarrierMilliseconds;
+        total.primaryEndMilliseconds += timings.primaryEndMilliseconds;
+        total.submitMilliseconds += timings.submitMilliseconds;
+        total.syntheticPresentMilliseconds += timings.syntheticPresentMilliseconds;
+        total.totalMilliseconds += timings.totalMilliseconds;
+        total.submittedBatchCount += timings.submittedBatchCount;
+        total.submittedRecordTaskCount += timings.submittedRecordTaskCount;
+
+        ++executeCpuTimingAccumulator_.sampleCount;
+        if (executeCpuTimingAccumulator_.sampleCount < detail::kExecuteCpuTimingLogFrameInterval)
+        {
+            return;
+        }
+
+        auto const divisor = static_cast<double>(executeCpuTimingAccumulator_.sampleCount);
+        nrInfo(std::format(
+            "RenderGraphExecutor execute CPU average over {} frames ending frameSlot {}: "
+            "total={:.3f}ms retainedState={:.3f}ms gpuTimingSetup={:.3f}ms workerSetup={:.3f}ms "
+            "lookupSetup={:.3f}ms launchRecordTasks={:.3f}ms primarySetup={:.3f}ms "
+            "queryReset={:.3f}ms acquireBarriers={:.3f}ms collectRecordTasks={:.3f}ms "
+            "executeSecondaries={:.3f}ms releaseBarriers={:.3f}ms primaryEnd={:.3f}ms "
+            "submit={:.3f}ms syntheticPresent={:.3f}ms submittedBatches={:.2f} recordTasks={:.2f}",
+            executeCpuTimingAccumulator_.sampleCount,
+            frameIndex,
+            total.totalMilliseconds / divisor,
+            total.retainedStateMilliseconds / divisor,
+            total.gpuTimingSetupMilliseconds / divisor,
+            total.workerSetupMilliseconds / divisor,
+            total.lookupSetupMilliseconds / divisor,
+            total.launchRecordTasksMilliseconds / divisor,
+            total.primarySetupMilliseconds / divisor,
+            total.queryResetMilliseconds / divisor,
+            total.acquireBarrierMilliseconds / divisor,
+            total.collectRecordTasksMilliseconds / divisor,
+            total.executeSecondariesMilliseconds / divisor,
+            total.releaseBarrierMilliseconds / divisor,
+            total.primaryEndMilliseconds / divisor,
+            total.submitMilliseconds / divisor,
+            total.syntheticPresentMilliseconds / divisor,
+            static_cast<double>(total.submittedBatchCount) / divisor,
+            static_cast<double>(total.submittedRecordTaskCount) / divisor));
+
+        executeCpuTimingAccumulator_ = {};
     }
 
 [[nodiscard]] nr::rhi::QueueRole RenderGraphExecutor::toQueueRole(QueueDomain queue)
@@ -1551,76 +1690,100 @@ void RenderGraphExecutor::ensureTimingQueryPool(
         return frame;
     }
 
-[[nodiscard]] std::vector<RecordTaskResult> RenderGraphExecutor::recordBatchPasses(
+[[nodiscard]] std::vector<RenderGraphExecutor::RecordBatchTasks> RenderGraphExecutor::launchRecordTasksForAllBatches(
         const ExecuteContext& context,
         std::size_t frameSlot,
-        const ExecutorBatchPlan& planBatch,
-        const CompiledSubmitBatch& compiledBatch,
-        std::size_t batchOrdinal,
+        const CompiledGraphFrame& compiled,
         const CompiledResourceLookup& compiledResourceByHandle,
         const RuntimeBindingMap& runtimeBindings,
         const CompiledFrameDataLookup& frameDataByHandle,
         ExecuteReport& report)
 {
-        auto results = std::vector<RecordTaskResult>{};
-        if (compiledBatch.passes.empty())
-        {
-            return results;
-        }
+        nrAssert(
+            report.plan.batches.size() == compiled.submitBatches.size(),
+            "RenderGraphExecutor::launchRecordTasksForAllBatches requires plan and compiled batch counts to match.");
 
         auto& frame = context.device.frameManager.current();
-        auto queueWorkerCount = std::min(
-            recordThreadPool_.workerCount(),
-            preparedRecordWorkerCountForQueue(frame, planBatch.queue));
-        nrAssert(queueWorkerCount > 0, "RenderGraphExecutor::recordBatchPasses requires at least one worker-only secondary command pool for the batch queue.");
+        auto tasksByBatch = std::vector<RecordBatchTasks>{};
+        tasksByBatch.reserve(compiled.submitBatches.size());
+        auto usedWorkerIds = std::set<std::uint32_t>{};
+        auto recordTaskOrdinal = std::size_t{0};
 
-        report.parallelPassRecording = report.parallelPassRecording ||
-                                       (queueWorkerCount > 1u && compiledBatch.passes.size() > 1u);
+        auto batchOrdinals = std::views::iota(std::size_t{0}, compiled.submitBatches.size());
+        std::ranges::for_each(batchOrdinals, [&](std::size_t batchOrdinal) {
+            const auto& planBatch = report.plan.batches[batchOrdinal];
+            const auto& compiledBatch = compiled.submitBatches[batchOrdinal];
 
-        auto futures = std::vector<std::future<RecordTaskResult>>{};
-        futures.reserve(compiledBatch.passes.size());
-        auto taskDescs = std::vector<RecordTaskDesc>{};
-        taskDescs.reserve(compiledBatch.passes.size());
-
-        auto passOrdinals = std::views::iota(std::size_t{0}, compiledBatch.passes.size());
-        std::ranges::for_each(passOrdinals, [&](std::size_t passOrdinal) {
-            auto workerId = static_cast<std::uint32_t>(passOrdinal % queueWorkerCount);
-            auto secondaryPoolSlot = detail::secondaryPoolSlotForRecordWorker(workerId);
-            auto& secondaryCommandBuffer = secondaryCommandBufferForPass(
-                context,
-                frameSlot,
-                planBatch.queue,
-                batchOrdinal,
-                passOrdinal,
-                secondaryPoolSlot);
-
-            auto desc = RecordTaskDesc{
+            auto batchTasks = RecordBatchTasks{
                 .batchOrdinal = batchOrdinal,
-                .passOrdinal = passOrdinal,
-                .workerId = workerId,
-                .secondaryPoolSlot = secondaryPoolSlot,
-                .queue = planBatch.queue,
-                .pass = std::cref(compiledBatch.passes[passOrdinal]),
-                .commandBuffer = std::cref(secondaryCommandBuffer),
-                .frameIndex = context.frameIndex,
-                .device = std::ref(context.device),
-                .compiledResourceByHandle = std::cref(compiledResourceByHandle),
-                .runtimeBindings = std::cref(runtimeBindings),
-                .frameDataByHandle = std::cref(frameDataByHandle),
             };
+            batchTasks.futures.reserve(compiledBatch.passes.size());
 
-            taskDescs.push_back(desc);
+            if (!compiledBatch.passes.empty())
+            {
+                auto queueWorkerCount = std::min(
+                    recordThreadPool_.workerCount(),
+                    preparedRecordWorkerCountForQueue(frame, planBatch.queue));
+                nrAssert(
+                    queueWorkerCount > 0,
+                    "RenderGraphExecutor::launchRecordTasksForAllBatches requires at least one worker-only secondary command pool for the batch queue.");
+
+                auto passOrdinals = std::views::iota(std::size_t{0}, compiledBatch.passes.size());
+                std::ranges::for_each(passOrdinals, [&](std::size_t passOrdinal) {
+                    auto workerId = static_cast<std::uint32_t>(recordTaskOrdinal % queueWorkerCount);
+                    ++recordTaskOrdinal;
+                    usedWorkerIds.insert(workerId);
+
+                    auto secondaryPoolSlot = detail::secondaryPoolSlotForRecordWorker(workerId);
+                    auto& secondaryCommandBuffer = secondaryCommandBufferForPass(
+                        context,
+                        frameSlot,
+                        planBatch.queue,
+                        batchOrdinal,
+                        passOrdinal,
+                        secondaryPoolSlot);
+
+                    auto desc = RecordTaskDesc{
+                        .batchOrdinal = batchOrdinal,
+                        .passOrdinal = passOrdinal,
+                        .workerId = workerId,
+                        .secondaryPoolSlot = secondaryPoolSlot,
+                        .queue = planBatch.queue,
+                        .pass = std::cref(compiledBatch.passes[passOrdinal]),
+                        .commandBuffer = std::cref(secondaryCommandBuffer),
+                        .frameIndex = context.frameIndex,
+                        .device = std::ref(context.device),
+                        .compiledResourceByHandle = std::cref(compiledResourceByHandle),
+                        .runtimeBindings = std::cref(runtimeBindings),
+                        .frameDataByHandle = std::cref(frameDataByHandle),
+                    };
+
+                    batchTasks.futures.push_back(recordThreadPool_.submit(desc.workerId, [desc]() {
+                        return recordPassToSecondary(desc);
+                    }));
+                    ++report.submittedRecordTaskCount;
+                });
+            }
+
+            tasksByBatch.push_back(std::move(batchTasks));
         });
 
-        std::ranges::for_each(taskDescs, [&](const RecordTaskDesc& desc) {
-            futures.push_back(recordThreadPool_.submit(desc.workerId, [desc]() {
-                return recordPassToSecondary(desc);
-            }));
-            ++report.submittedRecordTaskCount;
-        });
+        report.parallelPassRecording = usedWorkerIds.size() > 1u;
+        return tasksByBatch;
+    }
 
-        results.reserve(futures.size());
-        std::ranges::for_each(futures, [&](std::future<RecordTaskResult>& future) {
+[[nodiscard]] std::vector<RecordTaskResult> RenderGraphExecutor::collectRecordTaskResults(
+        RecordBatchTasks& tasks,
+        std::size_t batchOrdinal,
+        ExecuteReport& report)
+{
+        nrAssert(
+            tasks.batchOrdinal == batchOrdinal,
+            "RenderGraphExecutor::collectRecordTaskResults received a task group for the wrong submit batch.");
+
+        auto results = std::vector<RecordTaskResult>{};
+        results.reserve(tasks.futures.size());
+        std::ranges::for_each(tasks.futures, [&](std::future<RecordTaskResult>& future) {
             auto result = future.get();
             report.invokedPassRecordCount += result.invokedPassRecordCount;
             report.appliedInPassBarrierCount += result.appliedInPassBarrierCount;
@@ -1634,9 +1797,10 @@ void RenderGraphExecutor::ensureTimingQueryPool(
             nrAssert(
                 results[resultOrdinal].batchOrdinal == batchOrdinal &&
                     results[resultOrdinal].passOrdinal == resultOrdinal,
-                "RenderGraphExecutor::recordBatchPasses collected an out-of-order or mismatched record task result.");
+                "RenderGraphExecutor::collectRecordTaskResults collected an out-of-order or mismatched record task result.");
         });
 
+        tasks.futures.clear();
         return results;
     }
 

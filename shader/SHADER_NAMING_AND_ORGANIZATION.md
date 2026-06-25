@@ -127,11 +127,11 @@ import common;
 
 ```slang
 public struct GlobalFrameUniforms { /* ... */ }
-[[vk::binding(0, 7)]]
+[[vk::binding(0, 5)]]
 public ConstantBuffer<GlobalFrameUniforms> gFrame;
 ```
 
-The global frame uniform reserves Vulkan descriptor set 7, binding 0. Keep set 0-6 available for the existing semantic descriptor-array conventions and local fixed bindings unless a shader-specific ABI document says otherwise.
+The global frame uniform uses Vulkan descriptor set 5, binding 0. Keep set 0-4 available for the existing semantic descriptor-array conventions and local fixed bindings unless a shader-specific ABI document says otherwise. Set 6 is not reserved by the common ABI.
 
 Only shaders that actually reference `gFrame` require a matching C++ descriptor binding. Pass code should bind it through the reflection-backed `shaderCursor` path, normally via renderer pass builders such as:
 

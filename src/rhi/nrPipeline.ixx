@@ -149,6 +149,7 @@ class CursorPipelineLayout
 		{
 				std::uint32_t set = 0;
 				vk::raii::DescriptorSetLayout layout = {nullptr};
+				bool isPlaceholder = false;
 		};
 
 		struct ImmutableSamplerBindingState

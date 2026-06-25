@@ -232,12 +232,14 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
 
     if (auto uiSystem = detail::tryGetUiSystem(frameParameters); uiSystem.has_value())
     {
-        auto window = uiSystem->get().window("Normal Buffer");
-        if (window)
-        {
-            [[maybe_unused]] auto checkboxChanged =
-                uiSystem->get().checkbox("Display Back Faces", input.displayBackFaces);
-        }
+        uiSystem->get().queueSection(nr::app::UiSection{
+            .id = "normal.buffer",
+            .title = "Normal Buffer",
+            .draw = [this](nr::app::UiSystem& ui) {
+                [[maybe_unused]] auto checkboxChanged =
+                    ui.checkbox("Display Back Faces", input.displayBackFaces);
+            },
+        });
     }
 
     auto viewportExtent = input.viewportExtent;

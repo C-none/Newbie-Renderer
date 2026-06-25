@@ -106,6 +106,45 @@ namespace nr::rhi::detail
 {
     return value == std::numeric_limits<std::size_t>::max() ? std::nullopt : std::optional<std::size_t>(value);
 }
+
+[[nodiscard]] std::optional<std::uint32_t> trySlangLayoutIndex(std::size_t value)
+{
+    constexpr auto unboundedSize = std::numeric_limits<std::size_t>::max();
+    constexpr auto unknownSize = unboundedSize - 1u;
+    if (value == unknownSize || value == unboundedSize || value > std::numeric_limits<std::uint32_t>::max())
+    {
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+[[nodiscard]] std::optional<slang::ParameterCategory> bindingLayoutCategory(slang::BindingType bindingType) noexcept
+{
+    switch (bindingType)
+    {
+    case slang::BindingType::Sampler:
+        return slang::ParameterCategory::SamplerState;
+    case slang::BindingType::Texture:
+    case slang::BindingType::CombinedTextureSampler:
+    case slang::BindingType::TypedBuffer:
+    case slang::BindingType::RawBuffer:
+    case slang::BindingType::RayTracingAccelerationStructure:
+        return slang::ParameterCategory::ShaderResource;
+    case slang::BindingType::MutableTexture:
+    case slang::BindingType::MutableTypedBuffer:
+    case slang::BindingType::MutableRawBuffer:
+        return slang::ParameterCategory::UnorderedAccess;
+    case slang::BindingType::ConstantBuffer:
+    case slang::BindingType::ParameterBlock:
+        return slang::ParameterCategory::ConstantBuffer;
+    case slang::BindingType::InlineUniformData:
+        return slang::ParameterCategory::Uniform;
+    case slang::BindingType::InputRenderTarget:
+        return slang::ParameterCategory::InputAttachmentIndex;
+    default:
+        return std::nullopt;
+    }
+}
 } // namespace nr::rhi::detail
 
 namespace nr::rhi
@@ -485,11 +524,25 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
 
             auto stageFlags = detail::toVkShaderStageFlags(stage);
             auto bindingRangeCount = std::max<SlangInt>(0, typeLayout->getBindingRangeCount());
+            auto fieldCount = std::max<SlangInt>(0, typeLayout->getFieldCount());
+            auto fieldLayoutByBindingRangeOffset = std::map<std::uint32_t, std::reference_wrapper<slang::VariableLayoutReflection>>{};
+
+            std::ranges::for_each(std::views::iota(SlangInt{0}, fieldCount), [&](SlangInt fieldIndex) {
+                auto *fieldLayout = typeLayout->getFieldByIndex(static_cast<unsigned int>(fieldIndex));
+                auto fieldBindingRangeOffset = typeLayout->getFieldBindingRangeOffset(fieldIndex);
+                if (!fieldLayout || fieldBindingRangeOffset < 0 || fieldBindingRangeOffset >= bindingRangeCount)
+                {
+                    return;
+                }
+                fieldLayoutByBindingRangeOffset.try_emplace(static_cast<std::uint32_t>(fieldBindingRangeOffset), std::ref(*fieldLayout));
+            });
 
             for (SlangInt rangeIndex = 0; rangeIndex < bindingRangeCount; ++rangeIndex)
             {
-                auto setIndex = typeLayout->getBindingRangeDescriptorSetIndex(rangeIndex);
-                auto bindingIndex = typeLayout->getBindingRangeFirstDescriptorRangeIndex(rangeIndex);
+                auto *leafVariable = typeLayout->getBindingRangeLeafVariable(rangeIndex);
+                auto bindingRangeDebugPath = leafVariable && leafVariable->getName()
+                                                 ? std::format("{}::{}::bindingRange[{}]", scopeName, leafVariable->getName(), rangeIndex)
+                                                 : std::format("{}::bindingRange[{}]", scopeName, rangeIndex);
                 auto bindingType = typeLayout->getBindingRangeType(rangeIndex);
                 auto bindingRangeIndex = baseBindingRangeIndex + static_cast<std::uint32_t>(rangeIndex);
 
@@ -508,17 +561,15 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
                     nrAssert(
                         pushConstantSize > 0,
                         std::format(
-                            "Invalid push constant size in '{}::bindingRange[{}]' (size={})",
-                            scopeName,
-                            rangeIndex,
+                            "Invalid push constant size in '{}' (size={})",
+                            bindingRangeDebugPath,
                             pushConstantBufferTypeLayout ? pushConstantBufferTypeLayout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) : std::size_t(0)));
                     nrAssert(
                         pushConstantSize <= kMaxPushConstantBytes,
                         std::format(
-                            "Push constant range in '{}::bindingRange[{}]' is {} bytes, but Newbie-Renderer allows at most {} bytes. "
+                            "Push constant range in '{}' is {} bytes, but Newbie-Renderer allows at most {} bytes. "
                             "Move larger payload fields to frame uniforms or buffer/texture upload paths.",
-                            scopeName,
-                            rangeIndex,
+                            bindingRangeDebugPath,
                             pushConstantSize,
                             kMaxPushConstantBytes));
 
@@ -528,7 +579,7 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
                         .size = pushConstantSize,
                         .stageFlags = stageFlags,
                         .bindingRangeIndex = bindingRangeIndex,
-                        .debugPath = std::format("{}::bindingRange[{}]", scopeName, rangeIndex),
+                        .debugPath = bindingRangeDebugPath,
                     };
 
                     if (mergedIt == layout.pushConstantByOffsetAndSize_.end())
@@ -545,21 +596,51 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
                     continue;
                 }
 
+                auto descriptorSetIndex = typeLayout->getBindingRangeDescriptorSetIndex(rangeIndex);
+                auto firstDescriptorRangeIndex = typeLayout->getBindingRangeFirstDescriptorRangeIndex(rangeIndex);
+                auto descriptorRangeCount = typeLayout->getBindingRangeDescriptorRangeCount(rangeIndex);
+                if (descriptorSetIndex < 0 || firstDescriptorRangeIndex < 0 || descriptorRangeCount <= 0)
+                {
+                    continue;
+                }
+
+                auto descriptorRangeIndex = firstDescriptorRangeIndex;
+                auto setIndex = typeLayout->getDescriptorSetSpaceOffset(descriptorSetIndex);
+                auto bindingIndex = typeLayout->getDescriptorSetDescriptorRangeIndexOffset(descriptorSetIndex, descriptorRangeIndex);
+                auto descriptorBindingType = typeLayout->getDescriptorSetDescriptorRangeType(descriptorSetIndex, descriptorRangeIndex);
+                auto descriptorCategory = detail::bindingLayoutCategory(descriptorBindingType)
+                                              .value_or(typeLayout->getDescriptorSetDescriptorRangeCategory(descriptorSetIndex, descriptorRangeIndex));
+                if (auto fieldLayoutIt = fieldLayoutByBindingRangeOffset.find(static_cast<std::uint32_t>(rangeIndex));
+                    fieldLayoutIt != fieldLayoutByBindingRangeOffset.end() && descriptorCategory != slang::ParameterCategory::None)
+                {
+                    auto &fieldLayout = fieldLayoutIt->second.get();
+                    auto fieldSetIndex = detail::trySlangLayoutIndex(fieldLayout.getBindingSpace(descriptorCategory));
+                    auto fieldBindingIndex = detail::trySlangLayoutIndex(fieldLayout.getOffset(descriptorCategory));
+                    if (fieldSetIndex.has_value() && fieldBindingIndex.has_value())
+                    {
+                        if (setIndex != static_cast<SlangInt>(*fieldSetIndex))
+                        {
+                            // Slang descriptor-set ranges can report fallback set0/binding0 for globals
+                            // from imported modules; the field layout preserves the source set.
+                            setIndex = static_cast<SlangInt>(*fieldSetIndex);
+                            bindingIndex = static_cast<SlangInt>(*fieldBindingIndex);
+                        }
+                    }
+                }
                 if (setIndex < 0 || bindingIndex < 0)
                 {
                     continue;
                 }
 
-                auto descriptorType = detail::toVkDescriptorType(bindingType);
+                auto descriptorType = detail::toVkDescriptorType(descriptorBindingType);
                 nrAssert(
                     descriptorType.has_value(),
                     std::format(
-                        "Unsupported Slang binding type {} in '{}::bindingRange[{}]'.",
-                        static_cast<std::int32_t>(bindingType),
-                        scopeName,
-                        rangeIndex));
+                        "Unsupported Slang descriptor binding type {} in '{}'.",
+                        static_cast<std::int32_t>(descriptorBindingType),
+                        bindingRangeDebugPath));
 
-                auto descriptorCountRaw = typeLayout->getBindingRangeBindingCount(rangeIndex);
+                auto descriptorCountRaw = typeLayout->getDescriptorSetDescriptorRangeDescriptorCount(descriptorSetIndex, descriptorRangeIndex);
 
                 DescriptorBindingInfo info{};
                 info.set = static_cast<std::uint32_t>(setIndex);
@@ -569,7 +650,7 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
                 info.descriptorType = *descriptorType;
                 info.stageFlags = stageFlags;
                 info.bindingRangeIndex = bindingRangeIndex;
-                info.debugPath = std::format("{}::bindingRange[{}]", scopeName, rangeIndex);
+                info.debugPath = bindingRangeDebugPath;
                 if (info.isRuntimeSized && policy.runtimeArraySetPolicy == RuntimeDescriptorArraySetPolicy::RequireSemanticMultiSet)
                 {
                     auto expectedSet = runtimeDescriptorArraySetFor(info.semantic(), policy.runtimeArraySetConvention);
@@ -627,7 +708,18 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
                             mergedIt->second.descriptorCount == info.descriptorCount &&
                             mergedIt->second.bindingFlags == info.bindingFlags &&
                             mergedIt->second.isRuntimeSized == info.isRuntimeSized,
-                        std::format("Descriptor layout mismatch at set={}, binding={} when merging '{}'", info.set, info.binding, info.debugPath));
+                        std::format(
+                            "Descriptor layout mismatch at set={}, binding={} when merging '{}' (type={}, count={}, runtime={}) with existing '{}' (type={}, count={}, runtime={}).",
+                            info.set,
+                            info.binding,
+                            info.debugPath,
+                            vk::to_string(info.descriptorType),
+                            info.descriptorCount,
+                            info.isRuntimeSized,
+                            mergedIt->second.debugPath,
+                            vk::to_string(mergedIt->second.descriptorType),
+                            mergedIt->second.descriptorCount,
+                            mergedIt->second.isRuntimeSized));
                     mergedIt->second.stageFlags |= info.stageFlags;
                     info = mergedIt->second;
                 }
@@ -635,7 +727,6 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
                 layout.bindingByRangeIndex_.insert_or_assign(info.bindingRangeIndex, info);
             }
 
-            auto fieldCount = std::max<SlangInt>(0, typeLayout->getFieldCount());
             for (SlangInt fieldIndex = 0; fieldIndex < fieldCount; ++fieldIndex)
             {
                 auto *fieldLayout = typeLayout->getFieldByIndex(static_cast<unsigned int>(fieldIndex));

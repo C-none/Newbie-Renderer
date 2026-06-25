@@ -32,6 +32,7 @@ using ::slang::SessionDesc;
 using ::slang::TargetDesc;
 using ::slang::TypeLayoutReflection;
 using ::slang::TypeReflection;
+using ::slang::VariableLayoutReflection;
 } // namespace slang
 
 

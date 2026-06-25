@@ -36,6 +36,7 @@ export using ::ImGuiBackendFlags_RendererHasTextures;
 export using ::ImGuiBackendFlags_RendererHasVtxOffset;
 export using ::ImGuiCond_FirstUseEver;
 export using ::ImGuiContext;
+export using ::ImGuiTreeNodeFlags_DefaultOpen;
 export using ::ImGuiTreeNodeFlags_None;
 export using ::ImGuiWindowFlags;
 export using ::ImTextureData;

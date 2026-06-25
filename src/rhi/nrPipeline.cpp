@@ -118,17 +118,24 @@ namespace nr::rhi
 					layout.immutableSamplerBindings_.push_back(std::move(state));
 				});
 
-				layout.setLayouts_.reserve(setLayouts.size());
+				auto setInfoByIndex = std::map<std::uint32_t, std::reference_wrapper<const DescriptorSetLayoutInfo>>{};
+				std::ranges::for_each(setLayouts, [&](const DescriptorSetLayoutInfo &setInfo) {
+						setInfoByIndex.emplace(setInfo.set, std::cref(setInfo));
+				});
+
+				auto maxSetIndex = setInfoByIndex.empty() ? std::uint32_t{0} : setInfoByIndex.rbegin()->first;
+				auto pipelineSetLayoutCount = setInfoByIndex.empty() ? std::size_t{0} : static_cast<std::size_t>(maxSetIndex) + 1u;
+				layout.setLayouts_.reserve(pipelineSetLayoutCount);
 
 				std::vector<vk::DescriptorSetLayout> pipelineSetLayouts;
-				pipelineSetLayouts.reserve(setLayouts.size());
+				pipelineSetLayouts.reserve(pipelineSetLayoutCount);
 
-				std::ranges::for_each(setLayouts, [&](const DescriptorSetLayoutInfo &setInfo) {
-						auto bindings = descriptorLayout.makeVkSetLayoutBindings(setInfo.set);
-						auto bindingFlags = descriptorLayout.makeVkSetLayoutBindingFlags(setInfo.set);
+				auto makeSetLayout = [&](std::uint32_t setIndex, const DescriptorSetLayoutInfo *setInfo) {
+						auto bindings = setInfo ? descriptorLayout.makeVkSetLayoutBindings(setIndex) : std::vector<vk::DescriptorSetLayoutBinding>{};
+						auto bindingFlags = setInfo ? descriptorLayout.makeVkSetLayoutBindingFlags(setIndex) : std::vector<vk::DescriptorBindingFlags>{};
 						std::ranges::for_each(bindings, [&](vk::DescriptorSetLayoutBinding &binding) {
 							auto immutableSamplerIt = std::ranges::find_if(layout.immutableSamplerBindings_, [&](ImmutableSamplerBindingState &state) {
-								return state.set == setInfo.set && state.binding == binding.binding;
+								return state.set == setIndex && state.binding == binding.binding;
 							});
 							if (immutableSamplerIt == std::ranges::end(layout.immutableSamplerBindings_))
 							{
@@ -139,7 +146,7 @@ namespace nr::rhi
 								binding.descriptorCount == immutableSamplerIt->rawSamplers.size(),
 								std::format(
 									"CursorPipelineLayout::create immutable sampler descriptorCount mismatch at set={}, binding={}, layoutCount={}, immutableCount={}",
-									setInfo.set,
+									setIndex,
 									binding.binding,
 									binding.descriptorCount,
 									immutableSamplerIt->rawSamplers.size()));
@@ -166,11 +173,22 @@ namespace nr::rhi
 						}
 
 						layout.setLayouts_.push_back(DescriptorSetLayoutHandle{
-								.set = setInfo.set,
+								.set = setIndex,
 								.layout = vk::raii::DescriptorSetLayout(device, setLayoutInfo),
+								.isPlaceholder = setInfo == nullptr,
 						});
 						pipelineSetLayouts.push_back(*layout.setLayouts_.back().layout);
-				});
+				};
+
+				if (!setInfoByIndex.empty())
+				{
+					std::ranges::for_each(std::views::iota(std::uint32_t{0}, maxSetIndex + 1u), [&](std::uint32_t setIndex) {
+						auto setIt = setInfoByIndex.find(setIndex);
+						makeSetLayout(
+							setIndex,
+							setIt != setInfoByIndex.end() ? std::addressof(setIt->second.get()) : nullptr);
+					});
+				}
 
 				std::ranges::for_each(layout.immutableSamplerBindings_, [](const ImmutableSamplerBindingState &state) {
 					nrAssert(
@@ -208,7 +226,7 @@ namespace nr::rhi
 [[nodiscard]] std::optional<vk::DescriptorSetLayout> CursorPipelineLayout::descriptorSetLayout(std::uint32_t setIndex) const noexcept
 {
 				auto it = std::ranges::find_if(setLayouts_, [setIndex](const DescriptorSetLayoutHandle &handle) {
-						return handle.set == setIndex;
+						return handle.set == setIndex && !handle.isPlaceholder;
 				});
 				if (it == std::ranges::end(setLayouts_))
 				{
@@ -220,6 +238,7 @@ namespace nr::rhi
 [[nodiscard]] std::vector<std::uint32_t> CursorPipelineLayout::setIndices() const
 {
 				return setLayouts_ |
+				       std::views::filter([](const DescriptorSetLayoutHandle &handle) { return !handle.isPlaceholder; }) |
 				       std::views::transform([](const DescriptorSetLayoutHandle &handle) { return handle.set; }) |
 				       std::ranges::to<std::vector>();
 		}

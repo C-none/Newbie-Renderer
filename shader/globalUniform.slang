@@ -7,5 +7,5 @@ public struct GlobalFrameUniforms
     public column_major float4x4 viewProjection;
 };
 
-[[vk::binding(0, 7)]]
+[[vk::binding(0, 5)]]
 public ConstantBuffer<GlobalFrameUniforms> gFrame;

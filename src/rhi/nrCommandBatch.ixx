@@ -21,29 +21,10 @@ export namespace nr::rhi
  *   batch.addCommandBuffer(primaryCB);
  *   batch.addWait(imageAvailable, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
  *   batch.addSignal(renderFinished);
- *   queue.submit(batch, &fence);
+ *   queue.submit(std::move(batch), &fence);
  */
 class CommandBatch {
 public:
-    struct SemaphoreSyncPoint {
-        vk::Semaphore semaphore = vk::Semaphore{};
-        vk::PipelineStageFlags2 stageMask = vk::PipelineStageFlagBits2::eAllCommands;
-        std::uint64_t value = 0;
-        std::uint32_t deviceIndex = 0;
-    };
-
-    struct SubmitInfo2Packet {
-        std::vector<vk::SemaphoreSubmitInfo> waitInfos;
-        std::vector<vk::CommandBufferSubmitInfo> commandBufferInfos;
-        std::vector<vk::SemaphoreSubmitInfo> signalInfos;
-        std::vector<vk::Image> frameBoundaryImages;
-        std::vector<vk::Buffer> frameBoundaryBuffers;
-        std::optional<vk::FrameBoundaryEXT> frameBoundary;
-        vk::SubmitInfo2 submitInfo{};
-
-        [[nodiscard]] const vk::SubmitInfo2& info() const noexcept;
-    };
-
     /**
      * @brief Construct empty batch
      */
@@ -112,7 +93,8 @@ public:
      * @brief Attach optional VK_EXT_frame_boundary metadata to the next submit.
      *
      * The extension is debugger-facing metadata. CommandBatch owns copies of the
-     * image/buffer handle arrays so SubmitInfo2Packet can safely expose pNext views.
+     * image/buffer handle arrays so a submit-time FrameBoundaryEXT view can safely
+     * expose pNext pointers for the duration of queue submission.
      */
     void setFrameBoundary(
         std::uint64_t frameID,
@@ -143,14 +125,9 @@ public:
      */
     [[nodiscard]] std::size_t commandBufferCount() const noexcept;
 
-    /**
-    * @brief Build a SubmitInfo2 packet from this batch.
-    * @return Packet owning submit arrays and `vk::SubmitInfo2` view.
-     * 
-     * CommandBatch is a passive data container.
-     * Use batch::submit() for actual submission.
-     */
-    [[nodiscard]] SubmitInfo2Packet buildSubmitInfo2() const;
+    [[nodiscard]] std::optional<vk::FrameBoundaryEXT> frameBoundarySubmitInfo() const;
+
+    [[nodiscard]] vk::SubmitInfo2 submitInfo2View(const vk::FrameBoundaryEXT* frameBoundary = nullptr) const noexcept;
 
     // ========== Builder-style interface ==========
 
@@ -178,10 +155,9 @@ private:
         std::vector<vk::Buffer> buffers{};
     };
 
-    // Store raw handles internally (non-owning view extracted from RAII objects)
-    std::vector<vk::CommandBuffer> commandBuffers_;
-    std::vector<SemaphoreSyncPoint> waitPoints_;
-    std::vector<SemaphoreSyncPoint> signalPoints_;
+    std::vector<vk::CommandBufferSubmitInfo> commandBufferInfos_;
+    std::vector<vk::SemaphoreSubmitInfo> waitInfos_;
+    std::vector<vk::SemaphoreSubmitInfo> signalInfos_;
     std::optional<FrameBoundaryMetadata> frameBoundary_;
 };
 

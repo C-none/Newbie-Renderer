@@ -31,6 +31,7 @@ struct UiSection
     std::string_view id{};
     std::string_view title{};
     UiSectionDrawCallback draw{};
+    bool defaultOpen = false;
 };
 
 class UiSystem
@@ -75,7 +76,12 @@ class UiSystem
     void finalizeFrame();
 
     [[nodiscard]] WindowScope window(std::string_view title, ImGuiWindowFlags flags = 0);
+    void queueSection(UiSection section);
     void renderSections(std::span<const UiSection> sections, ImGuiWindowFlags flags = 0);
+    void renderSections(
+        std::span<const UiSection> leadingSections,
+        std::span<const UiSection> trailingSections,
+        ImGuiWindowFlags flags = 0);
     void separator();
     void text(std::string_view content);
 
@@ -97,7 +103,7 @@ class UiSystem
   private:
     void setCurrentContext() const noexcept;
     void endWindow(bool closesWindow);
-    [[nodiscard]] bool beginSection(std::string_view id, std::string_view title);
+    [[nodiscard]] bool beginSection(std::string_view id, std::string_view title, bool defaultOpen = false);
     void prepareWindowDefaults();
 
     ImGuiContext* context_ = nullptr;
@@ -107,6 +113,7 @@ class UiSystem
     UiFrameStats frameStats_{};
     nr::renderer::RendererCpuStatistics cpuStatistics_{};
     nr::renderer::RendererGpuPassStatistics gpuPassStatistics_{};
+    std::vector<UiSection> queuedSections_{};
     std::uint32_t windowsOpenedThisFrame_ = 0u;
     float fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
     std::uint32_t fpsSampleFrameCount_ = 0u;

@@ -46,7 +46,7 @@ void acquireUploadedBufferOnGraphics(nr::rhi::Device &device,
                   ticket.signalValue);
     batch.addCommandBuffer(commandBuffer);
 
-    device.queueManager.graphics().submit(batch);
+    device.queueManager.graphics().submit(std::move(batch));
     device.queueManager.graphics().waitIdle();
 }
 

@@ -13,9 +13,10 @@ inline constexpr int kMouseButtonLeft = 0;
 inline constexpr int kMouseButtonRight = 1;
 inline constexpr int kMouseButtonMiddle = 2;
 inline constexpr float kUiWindowMargin = 16.0f;
-inline constexpr float kUiWindowDefaultWidth = 360.0f;
-inline constexpr float kUiWindowDefaultHeight = 160.0f;
-inline constexpr float kUiWindowVerticalStride = 184.0f;
+inline constexpr float kUiWindowDefaultWidth = 600.0f;
+inline constexpr float kUiWindowDefaultHeight = 960.0f;
+inline constexpr float kUiWindowVerticalStride = 20.0f;
+inline constexpr float kUiFontGlobalScale = 2.0f;
 inline constexpr std::string_view kUnifiedUiWindowTitle = "Renderer Controls";
 
 [[nodiscard]] float sanitizeUiDeltaSeconds(float deltaSeconds) noexcept
@@ -111,6 +112,7 @@ void UiSystem::initialize()
     io.BackendRendererName = "NewbieRenderer.UiNode";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.FontGlobalScale = detail::kUiFontGlobalScale;
 
     ImGui::StyleColorsDark();
 }
@@ -141,6 +143,7 @@ void UiSystem::shutdown()
     unifiedWindowOpen_ = false;
     unifiedWindowVisible_ = false;
     unifiedWindowSectionCount_ = 0u;
+    queuedSections_.clear();
 }
 
 bool UiSystem::initialized() const noexcept
@@ -200,6 +203,7 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, floa
     unifiedWindowOpen_ = false;
     unifiedWindowVisible_ = false;
     unifiedWindowSectionCount_ = 0u;
+    queuedSections_.clear();
 }
 
 void UiSystem::finalizeFrame()
@@ -217,6 +221,7 @@ void UiSystem::finalizeFrame()
         unifiedWindowVisible_ = false;
         unifiedWindowSectionCount_ = 0u;
     }
+    queuedSections_.clear();
     ImGui::Render();
 
     auto& io = ImGui::GetIO();
@@ -246,12 +251,26 @@ UiSystem::WindowScope UiSystem::window(std::string_view title, ImGuiWindowFlags 
     return WindowScope{*this, sectionVisible, false};
 }
 
+void UiSystem::queueSection(UiSection section)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::queueSection requires an active UI frame.");
+    queuedSections_.push_back(std::move(section));
+}
+
 void UiSystem::renderSections(std::span<const UiSection> sections, ImGuiWindowFlags flags)
+{
+    renderSections(sections, {}, flags);
+}
+
+void UiSystem::renderSections(
+    std::span<const UiSection> leadingSections,
+    std::span<const UiSection> trailingSections,
+    ImGuiWindowFlags flags)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::renderSections requires an active UI frame.");
     setCurrentContext();
 
-    if (sections.empty())
+    if (leadingSections.empty() && queuedSections_.empty() && trailingSections.empty())
     {
         return;
     }
@@ -269,8 +288,8 @@ void UiSystem::renderSections(std::span<const UiSection> sections, ImGuiWindowFl
         return;
     }
 
-    std::ranges::for_each(sections, [&](const UiSection& section) {
-        if (!beginSection(section.id, section.title) || !section.draw)
+    auto drawSection = [&](const UiSection& section) {
+        if (!beginSection(section.id, section.title, section.defaultOpen) || !section.draw)
         {
             return;
         }
@@ -279,7 +298,16 @@ void UiSystem::renderSections(std::span<const UiSection> sections, ImGuiWindowFl
         section.draw(*this);
         ImGui::Unindent();
         ImGui::Spacing();
-    });
+    };
+
+    auto drawSections = [&](std::span<const UiSection> sectionSpan) {
+        std::ranges::for_each(sectionSpan, drawSection);
+    };
+
+    drawSections(leadingSections);
+    std::ranges::for_each(queuedSections_, drawSection);
+    drawSections(trailingSections);
+    queuedSections_.clear();
 }
 
 void UiSystem::separator()
@@ -368,7 +396,7 @@ void UiSystem::endWindow(bool closesWindow)
     ImGui::End();
 }
 
-bool UiSystem::beginSection(std::string_view id, std::string_view title)
+bool UiSystem::beginSection(std::string_view id, std::string_view title, bool defaultOpen)
 {
     if (!unifiedWindowVisible_ || title.empty())
     {
@@ -388,7 +416,10 @@ bool UiSystem::beginSection(std::string_view id, std::string_view title)
         label += id;
     }
 
-    return ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_None);
+    auto const flags = defaultOpen
+                           ? ImGuiTreeNodeFlags_DefaultOpen
+                           : ImGuiTreeNodeFlags_None;
+    return ImGui::CollapsingHeader(label.c_str(), flags);
 }
 
 void UiSystem::prepareWindowDefaults()

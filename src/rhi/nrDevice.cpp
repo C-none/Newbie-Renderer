@@ -191,7 +191,7 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
         };
     }
 
-void Device::submitFrameBatch(const CommandBatch &batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage)
+void Device::submitFrameBatch(CommandBatch&& batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage)
 {
         nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrameBatch requires beginFrame() before submission.");
         nrAssert(!(frameFinalSubmitRole_.has_value() && !signalForPresent), "Device::submitFrameBatch cannot submit additional batches after final present-signaling submit.");
@@ -203,37 +203,37 @@ void Device::submitFrameBatch(const CommandBatch &batch, QueueRole submitRole, b
         }
 
         auto &frame = frameManager.current();
-        auto submitBatch = batch;
 
         // Keep pre-present work decoupled from swapchain availability.
         // Waiting on imageAvailable only at the present-signaling submit prevents vblank pacing
         // from stalling earlier GPU batches that do not touch the swapchain image.
         if (signalForPresent)
         {
-            submitBatch.addWait(frame.imageAvailable(), imageAvailableWaitStage);
+            batch.addWait(frame.imageAvailable(), imageAvailableWaitStage);
         }
 
         if (signalForPresent)
         {
-            submitBatch.addSignal(activePresentSemaphore());
+            batch.addSignal(activePresentSemaphore());
         }
 
-        auto submitToRole = [&](QueueRole role, std::optional<std::reference_wrapper<const vk::raii::Fence>> fence) {
+        auto frameBoundaryFrameID = batch.frameBoundaryFrameID();
+        auto submitToRole = [&](CommandBatch&& consumedBatch, QueueRole role, std::optional<std::reference_wrapper<const vk::raii::Fence>> fence) {
             if (role == QueueRole::Graphics)
             {
-                queueManager.graphics().submit(submitBatch, fence);
+                queueManager.graphics().submit(std::move(consumedBatch), fence);
                 return;
             }
             if (role == QueueRole::Compute)
             {
-                queueManager.compute().submit(submitBatch, fence);
+                queueManager.compute().submit(std::move(consumedBatch), fence);
                 return;
             }
-            queueManager.transfer().submit(submitBatch, fence);
+            queueManager.transfer().submit(std::move(consumedBatch), fence);
         };
 
         auto fence = signalForPresent ? std::optional<std::reference_wrapper<const vk::raii::Fence>>(std::cref(frame.fence())) : std::nullopt;
-        submitToRole(submitRole, fence);
+        submitToRole(std::move(batch), submitRole, fence);
 
         ++frameSubmitCount_;
 
@@ -244,19 +244,19 @@ void Device::submitFrameBatch(const CommandBatch &batch, QueueRole submitRole, b
             presentFrameBoundaryFrameID_.reset();
             if (frameBoundaryEnabled_)
             {
-                presentFrameBoundaryFrameID_ = submitBatch.frameBoundaryFrameID();
+                presentFrameBoundaryFrameID_ = frameBoundaryFrameID;
             }
         }
     }
 
-void Device::submitFrameBatch(const CommandBatch &batch, QueueRole submitRole, bool signalForPresent)
+void Device::submitFrameBatch(CommandBatch&& batch, QueueRole submitRole, bool signalForPresent)
 {
-        submitFrameBatch(batch, submitRole, signalForPresent, vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands});
+        submitFrameBatch(std::move(batch), submitRole, signalForPresent, vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands});
     }
 
-void Device::submitFrame(const CommandBatch &batch, QueueRole submitRole)
+void Device::submitFrame(CommandBatch&& batch, QueueRole submitRole)
 {
-        submitFrameBatch(batch, submitRole, true);
+        submitFrameBatch(std::move(batch), submitRole, true);
     }
 
 [[nodiscard]] bool Device::canPresentCurrentFrame() const noexcept
@@ -308,9 +308,9 @@ void Device::submitFrame(const CommandBatch &batch, QueueRole submitRole)
         return presentResult;
     }
 
-[[nodiscard]] PresentResult Device::endFrame(const CommandBatch &batch, QueueRole submitRole)
+[[nodiscard]] PresentResult Device::endFrame(CommandBatch&& batch, QueueRole submitRole)
 {
-        submitFrame(batch, submitRole);
+        submitFrame(std::move(batch), submitRole);
         return presentFrame();
     }
 

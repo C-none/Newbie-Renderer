@@ -417,7 +417,7 @@ void submitAndWaitUiTextureAcquire(
     acquireSubmission.addCommandBuffer(acquireCommandBuffer);
 
     auto acquireFence = vk::raii::Fence{device.device, vk::FenceCreateInfo{}};
-    device.queueManager.graphics().submit(acquireSubmission, std::cref(acquireFence));
+    device.queueManager.graphics().submit(std::move(acquireSubmission), std::cref(acquireFence));
 
     auto const waitResult = device.device.waitForFences(
         *acquireFence,
@@ -681,22 +681,9 @@ void drawCpuTimingLine(nr::app::UiSystem& ui, std::string_view label, double mil
 }
 
 template <typename Statistics>
-[[nodiscard]] bool drawSampleWindowStatus(nr::app::UiSystem& ui, const Statistics& statistics)
+[[nodiscard]] bool hasPerformanceSample(const Statistics& statistics) noexcept
 {
-    ui.textFmt("Sample Window: {} frames", nr::statisticsSampleFrameCount);
-    ui.textFmt(
-        "Next Sample: {} / {} frames",
-        statistics.pendingSampleFrameCount,
-        nr::statisticsSampleFrameCount);
-
-    if (!statistics.valid)
-    {
-        ui.text("Waiting for first sample");
-        return false;
-    }
-
-    ui.textFmt("Average: {} frames", statistics.averagedFrameCount);
-    return true;
+    return statistics.valid;
 }
 
 [[nodiscard]] std::string_view queueDomainLabel(nr::renderer::QueueDomain queue) noexcept
@@ -738,7 +725,7 @@ void drawGpuPassTimingLine(
 void drawCpuPerformanceSection(nr::app::UiSystem& ui)
 {
     auto const& statistics = ui.cpuStatistics();
-    if (!drawSampleWindowStatus(ui, statistics))
+    if (!hasPerformanceSample(statistics))
     {
         return;
     }
@@ -758,7 +745,7 @@ void drawCpuPerformanceSection(nr::app::UiSystem& ui)
 void drawGpuPassPerformanceSection(nr::app::UiSystem& ui)
 {
     auto const& statistics = ui.gpuPassStatistics();
-    if (!drawSampleWindowStatus(ui, statistics))
+    if (!hasPerformanceSample(statistics))
     {
         return;
     }
@@ -774,22 +761,38 @@ void drawGpuPassPerformanceSection(nr::app::UiSystem& ui)
     });
 }
 
-[[nodiscard]] std::vector<nr::app::UiSection> makeUiSections()
+template <std::size_t N>
+using UiSectionArray = std::array<nr::app::UiSection, N>;
+
+template <std::size_t N>
+[[nodiscard]] std::span<const nr::app::UiSection> sectionSpan(const UiSectionArray<N>& sections) noexcept
+{
+    return std::span<const nr::app::UiSection>{sections.data(), sections.size()};
+}
+
+[[nodiscard]] UiSectionArray<1> makeLeadingUiSections()
 {
     return {
         nr::app::UiSection{
-            .id = "renderer.stats",
-            .title = "Renderer Stats",
+            .id = "frame.status",
+            .title = "Frame Status",
             .draw = drawRendererStatsSection,
+            .defaultOpen = true,
         },
+    };
+}
+
+[[nodiscard]] UiSectionArray<2> makeTrailingUiSections()
+{
+    return {
         nr::app::UiSection{
             .id = "cpu.performance",
             .title = "CPU Performance",
             .draw = drawCpuPerformanceSection,
         },
         nr::app::UiSection{
-            .id = "gpu.passes",
-            .title = "GPU Passes",
+            .id = "gpu.performance",
+            .title = "GPU Performance",
             .draw = drawGpuPassPerformanceSection,
         },
     };
@@ -1032,8 +1035,9 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
         auto const currentFrameIndex = static_cast<std::uint64_t>(frameParameters.frameIndex);
         if (uiSystem.has_value())
         {
-            auto sections = makeUiSections();
-            uiSystem->get().renderSections(std::span<const nr::app::UiSection>{sections.data(), sections.size()});
+            auto leadingSections = makeLeadingUiSections();
+            auto trailingSections = makeTrailingUiSections();
+            uiSystem->get().renderSections(sectionSpan(leadingSections), sectionSpan(trailingSections));
             uiSystem->get().finalizeFrame();
             auto drawData = uiSystem->get().drawData();
             if (drawData.has_value())

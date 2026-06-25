@@ -150,11 +150,11 @@ class Device
 
     [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max());
 
-    void submitFrameBatch(const CommandBatch &batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage);
+    void submitFrameBatch(CommandBatch&& batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage);
 
-    void submitFrameBatch(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false);
+    void submitFrameBatch(CommandBatch&& batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false);
 
-    void submitFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute);
+    void submitFrame(CommandBatch&& batch, QueueRole submitRole = QueueRole::Compute);
 
     [[nodiscard]] bool canPresentCurrentFrame() const noexcept;
 
@@ -164,7 +164,7 @@ class Device
 
     [[nodiscard]] PresentResult presentFrame();
 
-    [[nodiscard]] PresentResult endFrame(const CommandBatch &batch, QueueRole submitRole = QueueRole::Compute);
+    [[nodiscard]] PresentResult endFrame(CommandBatch&& batch, QueueRole submitRole = QueueRole::Compute);
 
     vk::raii::Instance makeInstance(std::uint32_t apiVersion = vk::ApiVersion14) const;
 

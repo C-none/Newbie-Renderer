@@ -165,7 +165,7 @@ Default runtime-array set convention:
 | buffer and texel-buffer descriptors | 3 |
 | `AccelerationStructure` | 4 |
 
-Fixed-size descriptors can still use shader-declared sets outside this convention. The convention only applies when Slang reports an unbounded/runtime-sized descriptor array. Runtime-sized input-attachment and inline-uniform-block arrays do not have reserved semantic sets in the current ABI; add an explicit convention only when a real pass requires that model.
+Fixed-size descriptors can still use shader-declared sets outside this convention. The shared global frame uniform `gFrame` is one such fixed descriptor and lives at Vulkan set 5, binding 0. Set 6 is not reserved by the current RHI ABI. The convention only applies when Slang reports an unbounded/runtime-sized descriptor array. Runtime-sized input-attachment and inline-uniform-block arrays do not have reserved semantic sets in the current ABI; add an explicit convention only when a real pass requires that model.
 
 ### Reflection lifetime requirement
 
