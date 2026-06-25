@@ -42,8 +42,8 @@ const nr::test::CaseRegistrar sbtPlanCase{
         auto desc = nr::rhi::ShaderBindingTableLayoutDesc{
             .capabilities = testCapabilities(),
             .pipelineGroupCount = 4,
-            .raygen = nr::rhi::ShaderBindingTableSectionDesc{.firstGroup = 0, .groupCount = 1},
-            .miss = nr::rhi::ShaderBindingTableSectionDesc{.firstGroup = 1, .groupCount = 0, .records = missRecords},
+            .raygen = nr::rhi::ShaderBindingTableSectionDesc{.groupCount = 1},
+            .miss = nr::rhi::ShaderBindingTableSectionDesc{.firstGroup = 1, .records = missRecords},
             .hit = nr::rhi::ShaderBindingTableSectionDesc{.firstGroup = 3, .groupCount = 1},
         };
 

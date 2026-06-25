@@ -33,12 +33,10 @@ namespace
     translated[3] = glm::vec4{1.0f, 2.0f, 3.0f, 1.0f};
 
     return nr::scene::ScenePacketSet{
-        .domain = nr::scene::ScenePacketDomain::rasterDraw,
         .rasterDraws = {
             nr::scene::RasterDrawPacket{
                 .mesh = meshA,
                 .material = material,
-                .submeshIndex = 0,
                 .world = glm::mat4{1.0f},
                 .worldBounds = nr::resource::Aabb{glm::vec3{-1.0f, -1.0f, -1.0f}, glm::vec3{1.0f, 1.0f, 1.0f}},
                 .sortKey = 10,

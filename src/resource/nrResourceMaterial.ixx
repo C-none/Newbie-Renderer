@@ -1,5 +1,6 @@
 export module nr.resource:material;
-import dependency;
+import dependency.math;
+import dependency.vulkan;
 
 import std;
 import :type;
@@ -17,10 +18,7 @@ struct ImageLevel
     ImageLevel() = default;
     ~ImageLevel() = default;
 
-    [[nodiscard]] std::size_t byteSize() const noexcept
-    {
-        return bytes.size();
-    }
+    [[nodiscard]] std::size_t byteSize() const noexcept;
 };
 
 struct Texture
@@ -40,57 +38,13 @@ struct Texture
     Texture() = default;
     ~Texture() = default;
 
-    [[nodiscard]] bool valid() const noexcept
-    {
-        if (width == 0u || height == 0u || depth == 0u || mipCount == 0u)
-        {
-            return false;
-        }
+    [[nodiscard]] bool valid() const noexcept;
 
-        if (format == vk::Format::eUndefined)
-        {
-            return false;
-        }
+    [[nodiscard]] bool hasCpuPixels() const noexcept;
 
-        if (levels.size() > static_cast<std::size_t>(mipCount))
-        {
-            return false;
-        }
+    [[nodiscard]] std::size_t byteSize() const noexcept;
 
-        return true;
-    }
-
-    [[nodiscard]] bool hasCpuPixels() const noexcept
-    {
-        return std::ranges::any_of(levels, [](const ImageLevel &level) {
-            return !level.bytes.empty();
-        });
-    }
-
-    [[nodiscard]] std::size_t byteSize() const noexcept
-    {
-        return std::ranges::fold_left(
-            levels,
-            std::size_t{0},
-            [](std::size_t sum, const ImageLevel &level) {
-                return sum + level.byteSize();
-            });
-    }
-
-    [[nodiscard]] glm::uvec3 mipExtent(std::uint32_t mip) const noexcept
-    {
-        if (mip >= mipCount)
-        {
-            return glm::uvec3{0u, 0u, 0u};
-        }
-
-        auto reduce = [mip](std::uint32_t value) {
-            auto shifted = value >> mip;
-            return std::max(shifted, 1u);
-        };
-
-        return glm::uvec3{reduce(width), reduce(height), reduce(depth)};
-    }
+    [[nodiscard]] glm::uvec3 mipExtent(std::uint32_t mip) const noexcept;
 };
 
 struct SamplerDesc
@@ -156,35 +110,17 @@ struct Material
     Material() = default;
     ~Material() = default;
 
-    [[nodiscard]] bool isOpaque() const noexcept
-    {
-        return alphaMode == AlphaMode::opaque;
-    }
+    [[nodiscard]] bool isOpaque() const noexcept;
 
-    [[nodiscard]] bool isAlphaMasked() const noexcept
-    {
-        return alphaMode == AlphaMode::mask;
-    }
+    [[nodiscard]] bool isAlphaMasked() const noexcept;
 
-    [[nodiscard]] bool isAlphaBlended() const noexcept
-    {
-        return alphaMode == AlphaMode::blend;
-    }
+    [[nodiscard]] bool isAlphaBlended() const noexcept;
     
-    [[nodiscard]] bool usesMetallicRoughnessWorkflow() const noexcept
-    {
-        return metallicFactor > 0.0f || roughnessFactor < 1.0f || metallicRoughness.texture.valid();
-    }
+    [[nodiscard]] bool usesMetallicRoughnessWorkflow() const noexcept;
     
-    [[nodiscard]] bool usesSpecularGlossinessWorkflow() const noexcept
-    {
-        return glm::any(glm::notEqual(specularFactor, glm::vec3{0.0f})) || glossinessFactor > 0.0f;
-    }
+    [[nodiscard]] bool usesSpecularGlossinessWorkflow() const noexcept;
     
-    [[nodiscard]] bool usesAnisotropy() const noexcept
-    {
-        return anisotropyFactor > 0.0f;
-    }
+    [[nodiscard]] bool usesAnisotropy() const noexcept;
 };
 
 } // namespace nr::resource

@@ -82,18 +82,18 @@ Optional MSVC toolchains:
    ./build/llvm/Release/main.exe
    ```
 
-### MSVC Fallback
+### MSVC / Visual Studio Generator
 
-Per the CMake 4.3.3 C++ modules manual, `import std` is currently supported only with Ninja generators. The supported MSVC preset in this repository is therefore `msvc`, which uses `Ninja Multi-Config` and should be launched from a Visual Studio 18 2026 Developer PowerShell/Prompt where `cl` is available on `PATH`.
+Per the CMake 4.3.3 C++ modules manual, `import std` is currently supported only with Ninja generators. The supported build and verification path in this repository is therefore the LLVM/Ninja preset above.
+
+The available MSVC-oriented configure preset is `msvc-vs`, which uses the Visual Studio 18 2026 generator and is kept for IDE-oriented workflows. It is not the supported `import std` verification path under CMake 4.3.3.
 
 ```bash
-cmake --preset msvc
+cmake --preset msvc-vs
 cmake --build --preset debug-msvc --target main
 ```
 
-The `msvc-vs` preset keeps the Visual Studio solution generator available for IDE-oriented workflows, but it is not the supported `import std` build path under CMake 4.3.3.
-
-`compile_commands.json` is generated in `build/llvm` for clangd.
+`compile_commands.json` for clangd is generated in the isolated `build/llvm-clangd` tree. The main LLVM build tree intentionally keeps `CMAKE_EXPORT_COMPILE_COMMANDS=OFF`, and `.clangd` points clangd at `build/llvm-clangd`.
 
 The LLVM presets keep vcpkg `buildtrees` and temporary `packages` staging under `build/vcpkg`, while source downloads and compiled binary packages use vcpkg's default global caches. Installed dependencies remain under `build/llvm/vcpkg_installed`.
 
@@ -120,8 +120,8 @@ app.shutdown();
 
 | Name | Current State | Purpose |
 | --- | --- | --- |
-| Slang | `v2026.5.1` | Shader language, compilation, reflection, SPIR-V generation |
-| glTF-Sample-Assets | `c147d2fc` | Sample assets for import, testing, and regression cases |
+| Slang | `v2026.10.2` | Shader language, compilation, reflection, SPIR-V generation |
+| glTF-Sample-Assets | `2bac6f8c` | Sample assets for import, testing, and regression cases |
 | Nsight Aftermath SDK `R590` | bundled under `src/extern/Aftermath` | Future GPU crash diagnostics and shader crash analysis |
 | Nsight Graphics SDK `0.9.0` | bundled under `src/extern/NsightGraphics/0.9.0` | Env-driven Graphics Capture, GPU Trace, and SDK frame boundaries |
 
@@ -142,7 +142,7 @@ git submodule update --init --recursive
 | `imgui` | Debug UI and tooling overlays |
 | `glfw3` | Window creation and Vulkan surface bootstrap |
 | `vulkan-memory-allocator` | Vulkan memory allocation |
-<!-- | `tracy` | Profiling hooks and future runtime instrumentation | -->
+| `tracy` | Profiling hooks and runtime instrumentation support |
 | `assimp` | Model and scene import |
 | `stb` | Generic image decode fallback |
 | `libjpeg-turbo` | Fast JPEG decode path |
@@ -150,7 +150,7 @@ git submodule update --init --recursive
 
 ### Notes
 
-- Third-party C/C++ headers are surfaced to engine code through the `dependency` C++ module in `src/extern/exportDependency.ixx`; internal project sources should import that module instead of adding includes.
+- Third-party C/C++ headers are surfaced to engine code through narrow `dependency.*` C++ modules under `src/extern`; `src/extern/exportDependency.ixx` remains a compatibility umbrella. Internal project sources should import the narrow module they need instead of adding raw third-party includes.
 - The Slang git submodule is kept under `src/extern/slang`, configured as a local build-tree CMake package, and consumed by the engine through `find_package(slang)` / `slang::slang`.
 - Additional transitive dependencies used by Slang, SPIR-V tooling, and related build scripts are resolved through the Slang submodule itself.
 - Vcpkg package versions are controlled by the active manifest/toolchain resolution in your local environment.

@@ -26,41 +26,11 @@ constexpr std::string_view levelColor(LogLevel level)
     }
 }
 
-inline std::ostream &levelStream(LogLevel level)
-{
-    return level == LogLevel::error ? std::cerr : std::cout;
-}
+std::ostream &levelStream(LogLevel level);
 
-inline void emitLog(LogLevel level, std::string_view channel, std::string_view context, std::source_location loc)
-{
-    std::string locationStr = std::format("{}:{}", loc.file_name(), loc.line());
-    auto& stream = levelStream(level);
-    std::print(stream,
-               "{}[NR {}:{}]{} {}\n{}{}{}\n{}\n",
-               detail::levelColor(level),
-               channel,
-               logLevelNames[static_cast<std::size_t>(level)],
-               detail::ansiReset,
-               locationStr,
-               detail::ansiPaleYellow,
-               loc.function_name(),
-               detail::ansiReset,
-               context.empty() ? "(none)" : context);
-    stream.flush();
-}
+void emitLog(LogLevel level, std::string_view channel, std::string_view context, std::source_location loc);
 
-inline void emitCompactLog(LogLevel level, std::string_view channel, std::string_view context)
-{
-    auto& stream = levelStream(level);
-    std::print(stream,
-               "{}[NR {}:{}]{} {}\n",
-               detail::levelColor(level),
-               channel,
-               logLevelNames[static_cast<std::size_t>(level)],
-               detail::ansiReset,
-               context.empty() ? "(none)" : context);
-    stream.flush();
-}
+void emitCompactLog(LogLevel level, std::string_view channel, std::string_view context);
 } // namespace detail
 
 constexpr inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())

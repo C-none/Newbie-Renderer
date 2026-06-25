@@ -1,5 +1,7 @@
 export module nr.rhi:memoryAllocator;
-import dependency;
+import dependency.vma;
+import dependency.nsight;
+import dependency.vulkan;
 import nr.utils;
 import :type;
 import :vmaAllocator;
@@ -65,27 +67,7 @@ class MemoryAllocator
      * 2. Per-frame linear pools (one per frame-in-flight) for PerFrame strategy
     * 3. Staging pool for StagingTransient uploads
      */
-    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device)
-    {
-        device_ = std::ref(device);
-        vma_ = VmaAllocatorWrapper(instance, physDevice, device);
-
-        nsightProfilerActive_ = nr::platform::isNsightInjected() || nsightGraphicsActivityRequested();
-
-        createPerFramePools();
-        createStagingPool();
-
-        if (nsightProfilerActive_)
-        {
-            nrLog(
-                LogLevel::error,
-                "RHI-DIAG",
-                "Nsight Graphics profiling mode detected: routing GpuOnly buffers through a profiler-safe pool to avoid VUID-VkMemoryAllocateInfo-pNext-02806. This diagnostic channel is non-fatal.",
-                std::source_location::current(),
-                false);
-            createProfilerSafePool();
-        }
-    }
+    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device);
 
     // =====================================================================
     // Strategy-Based Buffer Allocation
@@ -102,43 +84,7 @@ class MemoryAllocator
      * @param frameIndex    Frame index for PerFrame strategy (mod maxFrameInFlight)
      * @return RAII VmaBuffer
      */
-    [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const
-    {
-        // Add BDA only for device-local buffers. CpuToGpu buffers are host-mapped
-        // (UBOs via descriptor sets, vertex/index via bind, staging rings via copy)
-        // and none consume a device address, so adding eShaderDeviceAddress would only
-        // flip VMA's deviceAccess heuristic and force pure-staging buffers into scarce
-        // BAR memory instead of system RAM. Callers that genuinely need an address
-        // (e.g. shader binding tables) request eShaderDeviceAddress explicitly.
-        if (usage == MemoryUsage::GpuOnly)
-        {
-            bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-        }
-
-        vk::BufferCreateInfo bufferInfo{};
-        bufferInfo.size = size;
-        bufferInfo.usage = bufferUsage;
-        bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-
-        VmaAllocationCreateInfo allocInfo{};
-
-        switch (strategy)
-        {
-        case AllocationStrategy::CrossFrame:
-            configureCrossFrame(allocInfo, usage);
-            break;
-
-        case AllocationStrategy::PerFrame:
-            configurePerFrame(allocInfo, frameIndex);
-            break;
-
-        case AllocationStrategy::StagingTransient:
-            configureStagingTransient(allocInfo);
-            break;
-        }
-
-        return vma_.createBuffer(bufferInfo, allocInfo);
-    }
+    [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const;
 
     /**
      * @brief Allocate a buffer from Vulkan-hpp style create info
@@ -146,36 +92,7 @@ class MemoryAllocator
      * Overload accepting vk::BufferCreateInfo for integration with
      * Vulkan-hpp code paths. Adds BDA flag automatically.
      */
-    [[nodiscard]] VmaBuffer allocateBuffer(const vk::BufferCreateInfo &createInfo, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const
-    {
-        // Convert to C struct and delegate
-        VkBufferCreateInfo bufferInfo = static_cast<VkBufferCreateInfo>(createInfo);
-
-        // Add BDA only for device-local buffers (see size/usage overload for rationale):
-        // CpuToGpu buffers never consume a device address, and auto-adding one would push
-        // pure-staging buffers into BAR via VMA's deviceAccess heuristic.
-        if (usage == MemoryUsage::GpuOnly)
-        {
-            bufferInfo.usage |= static_cast<VkBufferUsageFlags>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
-        }
-
-        VmaAllocationCreateInfo allocInfo{};
-
-        switch (strategy)
-        {
-        case AllocationStrategy::CrossFrame:
-            configureCrossFrame(allocInfo, usage);
-            break;
-        case AllocationStrategy::PerFrame:
-            configurePerFrame(allocInfo, frameIndex);
-            break;
-        case AllocationStrategy::StagingTransient:
-            configureStagingTransient(allocInfo);
-            break;
-        }
-
-        return vma_.createBuffer(bufferInfo, allocInfo);
-    }
+    [[nodiscard]] VmaBuffer allocateBuffer(const vk::BufferCreateInfo &createInfo, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const;
 
     // =====================================================================
     // Image Allocation (always CrossFrame)
@@ -196,19 +113,7 @@ class MemoryAllocator
      * @param usage       Memory usage (typically GpuOnly)
      * @return RAII VmaImage
      */
-    [[nodiscard]] VmaImage allocateImage(const vk::ImageCreateInfo &imageInfo, MemoryUsage usage = MemoryUsage::GpuOnly) const
-    {
-        VmaAllocationCreateInfo allocInfo{};
-        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-
-        if (usage == MemoryUsage::GpuToCpu)
-        {
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        }
-        // GpuOnly: no flags needed — VMA defers dedicated decision to driver query results.
-
-        return vma_.createImage(imageInfo, allocInfo);
-    }
+    [[nodiscard]] VmaImage allocateImage(const vk::ImageCreateInfo &imageInfo, MemoryUsage usage = MemoryUsage::GpuOnly) const;
 
     /**
      * @brief Allocate a GPU image from Vulkan-hpp create info
@@ -226,15 +131,7 @@ class MemoryAllocator
      *
      * @param frameIndex  Frame index (mod maxFrameInFlight)
      */
-    void resetFramePool(std::uint32_t frameIndex)
-    {
-        std::uint32_t idx = frameIndex % maxFrameInFlight;
-        if (perFramePools_[idx].valid() && perFramePoolDirty_[idx])
-        {
-            perFramePools_[idx].reset();
-            perFramePoolDirty_[idx] = false;
-        }
-    }
+    void resetFramePool(std::uint32_t frameIndex);
 
     // =====================================================================
     // Query & Diagnostics
@@ -246,33 +143,12 @@ class MemoryAllocator
      * Outputs allocation and budget stats for each memory heap.
      * Safe to call every frame (uses fast VMA budget query).
      */
-    void logBudget() const
-    {
-        auto budgets = vma_.getBudgets();
-        for (std::size_t i = 0; i < budgets.size(); ++i)
-        {
-            const auto &b = budgets[i];
-            if (b.statistics.blockCount == 0)
-                continue;
-
-            nrInfo(std::format("Heap {}: {:.2f} MiB used / {:.2f} MiB allocated / {:.2f} MiB budget ({} blocks, {} allocs)", i, static_cast<double>(b.statistics.allocationBytes) / (1024.0 * 1024.0), static_cast<double>(b.statistics.blockBytes) / (1024.0 * 1024.0),
-                               static_cast<double>(b.budget) / (1024.0 * 1024.0), b.statistics.blockCount, b.statistics.allocationCount));
-        }
-    }
+    void logBudget() const;
 
     /**
      * @brief Log per-frame pool statistics
      */
-    void logFramePoolStats() const
-    {
-        for (std::uint32_t i = 0; i < maxFrameInFlight; ++i)
-        {
-            if (!perFramePools_[i].valid())
-                continue;
-            auto stats = perFramePools_[i].statistics();
-            nrInfo(std::format("Frame pool [{}]: {:.2f} KiB used / {:.2f} KiB allocated ({} allocs)", i, static_cast<double>(stats.allocationBytes) / 1024.0, static_cast<double>(stats.blockBytes) / 1024.0, stats.allocationCount));
-        }
-    }
+    void logFramePoolStats() const;
 
     /**
      * @brief Check if a buffer's memory is host-visible
@@ -280,46 +156,19 @@ class MemoryAllocator
      * Useful for the "try ReBAR, fall back to staging" pattern:
      * allocate with CpuToGpu + CrossFrame, then check if direct write is possible.
      */
-    [[nodiscard]] static bool isHostVisible(const VmaBuffer &buffer)
-    {
-        return buffer.isHostVisible();
-    }
+    [[nodiscard]] static bool isHostVisible(const VmaBuffer &buffer);
 
     /// Get the underlying VMA allocator wrapper (for advanced usage)
-    [[nodiscard]] const VmaAllocatorWrapper &vma() const noexcept
-    {
-        return vma_;
-    }
+    [[nodiscard]] const VmaAllocatorWrapper &vma() const noexcept;
 
     /// Get raw VMA allocator handle (for interop)
-    [[nodiscard]] VmaAllocator handle() const noexcept
-    {
-        return vma_.handle();
-    }
+    [[nodiscard]] VmaAllocator handle() const noexcept;
 
     /// Check if initialized
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return vma_.valid();
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
   private:
-    [[nodiscard]] static bool nsightGraphicsActivityRequested() noexcept
-    {
-        const auto* value = std::getenv("NR_NSIGHT_GRAPHICS_ACTIVITY");
-        if (value == nullptr)
-        {
-            return false;
-        }
-
-        auto text = std::string_view{value};
-        return text == "capture" ||
-               text == "CAPTURE" ||
-               text == "Capture" ||
-               text == "trace" ||
-               text == "TRACE" ||
-               text == "Trace";
-    }
+    [[nodiscard]] static bool nsightGraphicsActivityRequested() noexcept;
 
     // -----------------------------------------------------------------
     // Internal pool creation
@@ -332,30 +181,7 @@ class MemoryAllocator
      * O(1) bulk deallocation (free-all-at-once pattern).
      * One pool per frame-in-flight, sized for typical per-frame scratch work.
      */
-    void createPerFramePools()
-    {
-        // Find the right memory type for host-visible, sequentially-written buffers
-        vk::BufferCreateInfo sampleBuf{};
-        sampleBuf.size = 0x10000; // sample size, not actual block size
-        sampleBuf.usage = vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eShaderDeviceAddress;
-
-        VmaAllocationCreateInfo sampleAlloc{};
-        sampleAlloc.usage = VMA_MEMORY_USAGE_AUTO;
-        sampleAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-        std::uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
-
-        for (std::uint32_t i = 0; i < maxFrameInFlight; ++i)
-        {
-            VmaPoolCreateInfo poolInfo{};
-            poolInfo.memoryTypeIndex = memTypeIndex;
-            poolInfo.flags = VMA_POOL_CREATE_LINEAR_ALGORITHM_BIT;
-            poolInfo.blockSize = 0;     // Let VMA manage block sizes
-            poolInfo.maxBlockCount = 0; // No limit on blocks
-
-            perFramePools_[i] = vma_.createPool(poolInfo);
-        }
-    }
+    void createPerFramePools();
 
     /**
     * @brief Create staging pool for StagingTransient strategy
@@ -363,26 +189,7 @@ class MemoryAllocator
      * Optimized for short-lived CPU->GPU transfer buffers.
      * Uses linear allocation for fast alloc/free patterns.
      */
-    void createStagingPool()
-    {
-        vk::BufferCreateInfo sampleBuf{};
-        sampleBuf.size = 0x10000;
-        sampleBuf.usage = vk::BufferUsageFlagBits::eTransferSrc;
-
-        VmaAllocationCreateInfo sampleAlloc{};
-        sampleAlloc.usage = VMA_MEMORY_USAGE_AUTO;
-        sampleAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-        std::uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
-
-        VmaPoolCreateInfo poolInfo{};
-        poolInfo.memoryTypeIndex = memTypeIndex;
-        poolInfo.flags = VMA_POOL_CREATE_LINEAR_ALGORITHM_BIT;
-        poolInfo.blockSize = 0;
-        poolInfo.maxBlockCount = 0;
-
-        stagingPool_ = vma_.createPool(poolInfo);
-    }
+    void createStagingPool();
 
     /**
      * @brief Create a device-local pool with an explicit block size for Nsight runs.
@@ -398,28 +205,7 @@ class MemoryAllocator
      * buffers in this engine stay well below the block size, and this path is only active
      * under profiling, so the looser placement is acceptable.
      */
-    void createProfilerSafePool()
-    {
-        // Representative GpuOnly buffer: device-local, BDA-enabled, broad GPU usage so
-        // the query resolves to the same device-local memory type GpuOnly buffers use.
-        vk::BufferCreateInfo sampleBuf{};
-        sampleBuf.size = 0x10000;
-        sampleBuf.usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eShaderDeviceAddress;
-
-        VmaAllocationCreateInfo sampleAlloc{};
-        sampleAlloc.usage = VMA_MEMORY_USAGE_AUTO;
-
-        std::uint32_t memTypeIndex = vma_.findMemoryTypeIndexForBuffer(sampleBuf, sampleAlloc);
-
-        VmaPoolCreateInfo poolInfo{};
-        poolInfo.memoryTypeIndex = memTypeIndex;
-        // Explicit (non-zero) block size is what disables dedicated allocation for this pool.
-        poolInfo.blockSize = static_cast<VkDeviceSize>(256) * 1024 * 1024;
-        poolInfo.minBlockCount = 0;
-        poolInfo.maxBlockCount = 0; // unlimited blocks
-
-        profilerSafePool_ = vma_.createPool(poolInfo);
-    }
+    void createProfilerSafePool();
 
     // -----------------------------------------------------------------
     // Strategy configuration helpers
@@ -443,60 +229,18 @@ class MemoryAllocator
      * - GpuToCpu: HOST_VISIBLE + HOST_CACHED for CPU reads
      * - CpuOnly:  HOST_VISIBLE + MAPPED
      */
-    void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage) const
-    {
-        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage) const;
 
-        switch (usage)
-        {
-        case MemoryUsage::GpuOnly:
-            // No explicit flags: VMA selects DEVICE_LOCAL and will use a dedicated
-            // VkDeviceMemory only when the driver requires or prefers it for this resource.
-            break;
-
-        case MemoryUsage::CpuToGpu:
-            // CpuToGpu is contractually host-writable and persistently mapped: every
-            // CpuToGpu user maps the allocation (dynamic UBOs, staging rings, etc.).
-            // Do NOT set HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT here: that bit lets VMA
-            // place the buffer in non-host-visible memory, which silently drops the
-            // mapping and breaks every mapped() caller on non-ReBAR configurations.
-            //
-            // Why a single CpuToGpu is sufficient (no staging/dynamic enum split):
-            // With AUTO + SEQUENTIAL_WRITE (and no transfer-instead), VMA forces a
-            // HOST_VISIBLE type, then bifurcates on the buffer's *usage* deviceAccess
-            // (see vk_mem_alloc.h selection logic):
-            //   - usage with GPU read (Uniform/Vertex/Index/SBT) => deviceAccess=true
-            //     => DEVICE_LOCAL preferred => lands in BAR (DEVICE_LOCAL|HOST_VISIBLE)
-            //     on the ReBAR target: full-bandwidth GPU reads, write-combined CPU writes.
-            //   - transfer-only usage (TransferSrc staging ring) => deviceAccess=false
-            //     => DEVICE_LOCAL not-preferred => stays in system RAM, leaving scarce
-            //     BAR space free.
-            // So memory placement is driven by buffer usage, not by enum granularity;
-            // one CpuToGpu value already selects the optimal heap per buffer.
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            break;
-
-        case MemoryUsage::GpuToCpu:
-            // Host-cached for CPU read performance
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            break;
-
-        case MemoryUsage::CpuOnly:
-            // Persistently mapped host memory
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            break;
-        }
-
-        // Under Nsight, route GpuOnly buffers through the explicit-block-size pool so VMA
-        // performs block sub-allocation instead of a dedicated allocation, avoiding the
-        // VkMemoryDedicatedAllocateInfo that conflicts with Nsight's host-pointer import
-        // (VUID-VkMemoryAllocateInfo-pNext-02806). No effect on normal runs or host-visible usages.
-        if (nsightProfilerActive_ && usage == MemoryUsage::GpuOnly)
-        {
-            allocInfo.pool = profilerSafePool_.handle();
-        }
-    }
+    /**
+     * @brief Avoid buffer-specific dedicated-allocation metadata while Nsight is intercepting allocations.
+     *
+     * Nsight Graphics capture can inject VkImportMemoryHostPointerInfoEXT into vkAllocateMemory.
+     * Vulkan forbids that host-pointer import from sharing a pNext chain with
+     * VkMemoryDedicatedAllocateInfo when the dedicated structure names a buffer. VMA's
+     * CAN_ALIAS flag keeps any fallback dedicated allocation from adding that buffer
+     * handle, covering host-visible rings as well as GpuOnly buffers.
+     */
+    void configureProfilerBufferCompatibility(VmaAllocationCreateInfo &allocInfo) const noexcept;
 
     /**
      * @brief Configure VMA allocation info for PerFrame strategy
@@ -504,25 +248,14 @@ class MemoryAllocator
      * Allocates from the frame-specific linear pool for O(1) bulk reset.
      * Always host-visible and mapped for CPU writes.
      */
-    void configurePerFrame(VmaAllocationCreateInfo &allocInfo, std::uint32_t frameIndex) const
-    {
-        std::uint32_t idx = frameIndex % maxFrameInFlight;
-        allocInfo.pool = perFramePools_[idx].handle();
-        allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        perFramePoolDirty_[idx] = true;
-        // pool overrides memory type selection — no usage/flags needed for type
-    }
+    void configurePerFrame(VmaAllocationCreateInfo &allocInfo, std::uint32_t frameIndex) const;
 
     /**
     * @brief Configure VMA allocation info for StagingTransient strategy
      *
      * Allocates from the staging pool. Host-visible, sequentially written.
      */
-    void configureStagingTransient(VmaAllocationCreateInfo &allocInfo) const
-    {
-        allocInfo.pool = stagingPool_.handle();
-        allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    }
+    void configureStagingTransient(VmaAllocationCreateInfo &allocInfo) const;
 
     // -----------------------------------------------------------------
     // Members
@@ -534,9 +267,9 @@ class MemoryAllocator
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 
     // True when NVIDIA Nsight Graphics is intercepting this process. When set,
-    // GpuOnly CrossFrame buffers are routed through profilerSafePool_ so VMA does
-    // not emit VkMemoryDedicatedAllocateInfo, which conflicts with the host-pointer
-    // import Nsight injects (VUID-VkMemoryAllocateInfo-pNext-02806).
+    // all buffer allocations suppress buffer-specific dedicated-allocation metadata.
+    // GpuOnly CrossFrame buffers also route through profilerSafePool_ to keep the
+    // original profiling placement policy.
     bool nsightProfilerActive_ = false;
     VmaPoolHandle profilerSafePool_;
 };

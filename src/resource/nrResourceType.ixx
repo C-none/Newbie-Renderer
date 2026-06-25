@@ -1,5 +1,5 @@
 export module nr.resource:type;
-import dependency;
+import dependency.vulkan;
 
 import std;
 

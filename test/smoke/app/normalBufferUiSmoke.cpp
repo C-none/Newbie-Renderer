@@ -26,14 +26,12 @@ namespace
             .runtime = normalBuffer,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "NormalBuffer",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = ui,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "Ui",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
@@ -71,7 +69,6 @@ namespace
     graphSpec.submitNodes = {
         nr::renderer::SubmitNodeSpec{
             .debugName = "Smoke.GraphicsToCompute",
-            .kind = nr::renderer::SubmitBoundaryKind::Explicit,
             .afterNodeIndex = 1,
         },
     };
@@ -111,9 +108,6 @@ namespace
     app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
 
     auto const cameraOverride = app.camera().buildRendererCameraOverride();
-    normalBuffer->input.view = cameraOverride.frameConstants.view;
-    normalBuffer->input.projection = cameraOverride.frameConstants.projection;
-    normalBuffer->input.viewProjection = cameraOverride.frameConstants.viewProjection;
 
     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
         .scene = std::ref(scene),
@@ -184,8 +178,6 @@ namespace
         auto modelPath = defaultModelPath();
         auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
             .sourcePath = modelPath,
-            .generateNormals = true,
-            .generateTangents = true,
         });
         if (!loadResult.has_value())
         {
@@ -217,7 +209,6 @@ namespace
         auto frameServices = app.makeFrameServices();
         constexpr auto deltaSeconds = 1.0f / 60.0f;
 
-        normalBuffer->input.displayBackFaces = false;
         if (!renderOneFrame(app, scene, frameServices, normalBuffer, deltaSeconds))
         {
             return false;

@@ -82,11 +82,13 @@ nr::load::SceneAsset
 - raster draw 列表
 - material grouping
 - frame 常量（view / projection / viewProjection / cameraWorld / drawCount）
+- 每个 draw 的 `SceneBridgeDrawGeometry`，通过 `SceneRenderBridgeBuildInput::resolveRasterDrawGeometry` 解析成 render-pass 可直接消费的 vertex/index buffer binding、draw count、offset 与 front-face state
 
-但要注意一个现实限制：
+这意味着：
 
-- 现有 `SceneBridgeFrame` 还没有把每个 draw 扩展成 render-pass 可直接消费的完整 draw-ready geometry contract
-- `NormalViewNode` 因此仍停留在“scene-driven draw planning 已成立、真实任意模型几何绘制尚未完成”的状态
+- renderer / renderPasses 不需要读取 scene 内部 registry 或 Flecs query 来绘制 mesh
+- `NormalBufferNode` 已经消费 bridge geometry contract，并记录 indexed / non-indexed 的真实 scene mesh draw call
+- renderer 在 graph build 边界把 `SceneBridgeFrame` 导入为 graph-owned frame data handle；renderPasses 通过 pass context 解析该 handle，而不是持有 scene/build 阶段的借用引用
 
 ## 4. Flecs 在当前架构中的位置
 
@@ -115,13 +117,13 @@ Flecs 目前用于：
 - viewport-aware projection contract
 - primary-camera frustum visibility
 
-当前 scene 还没有做的事情：
+当前仍明确留在 scene 外部的能力：
 
-- viewer 侧自由相机模块
-- 键盘与鼠标交互驱动的运行时相机
-- 把 app 侧 camera override 作为 renderer 默认输入路径
+- viewer 侧自由相机模块（在 `nr.renderer` / `nr.app`）
+- 键盘与鼠标交互驱动的运行时相机（在 `nr.app::AppCamera`）
+- renderer camera override 接入（通过 `RendererCameraOverride`、`SceneVisibilityMode::customFrustum` 和 bridge frame-constants override）
 
-因此，后续“自由相机 + `rasterNormalViewer` 交互”不应通过向 `SceneAsset` 或 `CameraAsset` 塞入输入状态来实现，而应保持为 scene 之外的运行时层能力。
+因此，“自由相机 + `NormalBuffer` 交互”不应通过向 `SceneAsset` 或 `CameraAsset` 塞入输入状态来实现，而应保持为 scene 之外的运行时层能力。
 
 ## 6. 当前明确不在本模块内解决的问题
 
@@ -132,12 +134,7 @@ Flecs 目前用于：
 - 按住左键旋转视角的控制器状态机
 - render pass 直接向 scene 请求内部 mesh record 的捷径接口
 
-如果后续为了自由相机接入需要扩展边界，优先扩的是：
-
-- renderer 的 frame input
-- scene 的 custom-frustum / bridge helper 契约
-
-而不是把 app 输入逻辑下沉到 `scene`。
+这些能力当前通过 `nr.app::AppCamera`、`nr.renderer::RendererCameraOverride`、scene 的 custom-frustum 入口和 bridge frame-constants override 接入，而不是把 app 输入逻辑下沉到 `scene`。
 
 ## 7. 当前代码入口
 
@@ -150,16 +147,16 @@ Flecs 目前用于：
 
 如果要验证 scene 当前真实边界，优先看这些测试：
 
-- `test/scene/nr_scene_bridge_plan_test.cpp`
-- `test/scene/nr_scene_camera_projection_contract_test.cpp`
-- `test/scene/nr_scene_packet_readiness_test.cpp`
-- `test/profile/nr_renderer_camera_override_contract_test.cpp`
-- `test/app/normalBufferUiSmoke.cpp`
+- `test/integration/scene/nr_scene_bridge_plan_contract_test.cpp`
+- `test/integration/scene/nr_scene_runtime_extraction_contract_test.cpp`
+- `test/integration/scene/nr_scene_render_bridge_contract_test.cpp`
+- `test/integration/renderer/nr_renderer_camera_override_contract_test.cpp`
+- `test/smoke/app/normalBufferUiSmoke.cpp`
 
 这些测试覆盖了：
 
 - bridge plan 与 canonical key
-- viewport 驱动的投影 contract 与主相机提取路径
-- packet readiness 与 scene 抽取主链路
+- runtime extraction 与 scene 抽取主链路
+- `SceneBridgeFrame` 的 frame constants override 与 draw geometry 解析契约
 - renderer camera override 下的 scene -> renderer 桥接契约
 - `NormalBuffer + Ui -> Present` 主运行路径的端到端 smoke 覆盖

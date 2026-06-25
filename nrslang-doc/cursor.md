@@ -1,3 +1,5 @@
+> Newbie-Renderer project note: this file is Slang reference material, not the project shader policy. For shader code in this repository, follow [../shader/SHADER_NAMING_AND_ORGANIZATION.md](../shader/SHADER_NAMING_AND_ORGANIZATION.md); bindable resources consumed by `nr.rhi` must be declared at global scope, even where this reference discusses entry-point `ParameterBlock<>` parameters.
+
 A practical and scalable approach to cross-platform shader parameter passing using Slang’s reflection API
 Introduction
 This document describes a comprehensive strategy for handling parameter-passing for GPU shader code. The presented approach is able to scale to large shader codebases which implement many different features across multiple modules. The Slang reflection API was intentionally designed to support this approach and to make it practical to adopt.

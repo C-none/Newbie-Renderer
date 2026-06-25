@@ -1,18 +1,10 @@
 module normalBuffer;
-
-struct NormalBufferFrameUniforms
-{
-    column_major float4x4 view;
-    column_major float4x4 projection;
-    column_major float4x4 viewProjection;
-};
+import common;
 
 struct NormalBufferPushConstants
 {
     column_major float4x4 model;
 };
-
-ConstantBuffer<NormalBufferFrameUniforms> gFrame;
 
 [[vk::push_constant]]
 NormalBufferPushConstants gPushConstants;

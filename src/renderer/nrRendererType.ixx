@@ -68,15 +68,37 @@ enum class BufferAccessIntent : std::uint8_t
     ShaderSampleRead,
     ShaderStorageRead,
     ShaderStorageWrite,
+    ShaderStorageReadWrite,
     VertexRead,
     IndexRead,
     IndirectRead,
     TexelRead,
     TexelWrite,
+    TexelReadWrite,
     AccelerationStructureRead,
     AccelerationStructureWrite,
+    ShaderBindingTableRead,
     HostRead,
     HostWrite,
+};
+
+enum class AccelerationStructureUsageIntent : std::uint8_t
+{
+    BuildInput,
+    BuildOutput,
+    TraceInput,
+    CopySource,
+    CopyDestination,
+};
+
+enum class AccelerationStructureAccessIntent : std::uint8_t
+{
+    None,
+    BuildRead,
+    BuildWrite,
+    TraceRead,
+    CopyRead,
+    CopyWrite,
 };
 
 enum class ImageUsageIntent : std::uint8_t
@@ -110,8 +132,10 @@ enum class ImageAccessIntent : std::uint8_t
     StorageReadWrite,
     ColorAttachmentRead,
     ColorAttachmentWrite,
+    ColorAttachmentReadWrite,
     DepthStencilRead,
     DepthStencilWrite,
+    DepthStencilReadWrite,
     InputAttachmentRead,
     PresentRead,
 };
@@ -188,13 +212,6 @@ enum class ClearValueKind : std::uint8_t
     DepthStencil,
 };
 
-enum class SubmitBoundaryKind : std::uint8_t
-{
-    Explicit,
-    QueueTransition,
-    FrameFinal,
-};
-
 enum class DependencyStrength : std::uint8_t
 {
     InOrder,
@@ -202,16 +219,5 @@ enum class DependencyStrength : std::uint8_t
     ReleaseAcquireRequired,
 };
 
-[[nodiscard]] inline ResourceOwnershipDomain ownershipDomainFromQueue(QueueDomain queue) noexcept
-{
-    if (queue == QueueDomain::Graphics)
-    {
-        return ResourceOwnershipDomain::Graphics;
-    }
-    if (queue == QueueDomain::Compute)
-    {
-        return ResourceOwnershipDomain::Compute;
-    }
-    return ResourceOwnershipDomain::Transfer;
-}
+[[nodiscard]] ResourceOwnershipDomain ownershipDomainFromQueue(QueueDomain queue) noexcept;
 } // namespace nr::renderer

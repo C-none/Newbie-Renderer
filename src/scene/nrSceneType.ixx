@@ -1,6 +1,8 @@
 // #include <flecs.h>
 export module nr.scene:type;
-import dependency;
+import dependency.math;
+import dependency.ecs;
+import dependency.vulkan;
 
 import nr.load;
 import nr.resource;
@@ -203,15 +205,9 @@ struct SceneBridgeDrawGeometry
     vk::IndexType indexType = vk::IndexType::eUint32;
     vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
 
-    [[nodiscard]] bool hasVertexBuffer() const noexcept
-    {
-        return vertexBuffer.buffer.has_value();
-    }
+    [[nodiscard]] bool hasVertexBuffer() const noexcept;
 
-    [[nodiscard]] bool hasIndexBuffer() const noexcept
-    {
-        return indexBuffer.buffer.has_value() && indexCount > 0;
-    }
+    [[nodiscard]] bool hasIndexBuffer() const noexcept;
 };
 
 struct SceneBridgeDrawPacket

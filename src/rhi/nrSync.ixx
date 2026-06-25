@@ -1,5 +1,5 @@
 export module nr.rhi:sync;
-import dependency;
+import dependency.vulkan;
 
 import nr.utils;
 import std;

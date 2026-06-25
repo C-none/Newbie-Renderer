@@ -1,4 +1,4 @@
-import dependency;
+import dependency.vulkan;
 import std;
 import nr.app;
 import nr.renderer;
@@ -45,14 +45,12 @@ void printUsage()
             .runtime = normalBuffer,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "NormalBuffer",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = ui,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "Ui",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
@@ -90,7 +88,6 @@ void printUsage()
     graphSpec.submitNodes = {
         nr::renderer::SubmitNodeSpec{
             .debugName = "Main.GraphicsToCompute",
-            .kind = nr::renderer::SubmitBoundaryKind::Explicit,
             .afterNodeIndex = 1,
         },
     };
@@ -135,8 +132,6 @@ void printUsage()
             std::println("[info] Loading model: {}", modelPath.string());
             auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
                 .sourcePath = modelPath,
-                .generateNormals = true,
-                .generateTangents = true,
             });
 
             if (!loadResult.has_value())
@@ -171,9 +166,6 @@ void printUsage()
 
             [[maybe_unused]] auto extractProfile = scene.registerExtractProfile(nr::scene::SceneExtractProfileCreateInfo{
                 .debugName = "NormalBuffer.Extract",
-                .domain = nr::scene::ScenePacketDomain::rasterDraw,
-                .requireReadyForDomain = true,
-                .requireActiveInstances = true,
             });
 
             auto exitCode = 0;
@@ -198,9 +190,6 @@ void printUsage()
                     app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
 
                     auto const cameraOverride = app.camera().buildRendererCameraOverride();
-                    normalBuffer->input.view = cameraOverride.frameConstants.view;
-                    normalBuffer->input.projection = cameraOverride.frameConstants.projection;
-                    normalBuffer->input.viewProjection = cameraOverride.frameConstants.viewProjection;
 
                     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
                         .scene = std::ref(scene),
@@ -209,6 +198,11 @@ void printUsage()
                         .cameraOverride = cameraOverride,
                         .frameServices = std::ref(frameServices),
                     });
+                    if (frameResult.rendered)
+                    {
+                        app.ui().setCpuStatistics(frameResult.cpuStatistics);
+                        app.ui().setGpuPassStatistics(frameResult.gpuPassStatistics);
+                    }
 
                     if (!frameResult.rendered)
                     {

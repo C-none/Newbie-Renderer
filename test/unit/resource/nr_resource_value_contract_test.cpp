@@ -107,7 +107,6 @@ const nr::test::CaseRegistrar textureMaterialCase{
         auto texture = nr::resource::Texture{};
         texture.width = 8;
         texture.height = 4;
-        texture.depth = 1;
         texture.mipCount = 4;
         texture.format = vk::Format::eR8G8B8A8Unorm;
         auto level = nr::resource::ImageLevel{};

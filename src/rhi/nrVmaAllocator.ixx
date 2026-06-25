@@ -1,5 +1,6 @@
 export module nr.rhi:vmaAllocator;
-import dependency;
+import dependency.vma;
+import dependency.vulkan;
 import nr.utils;
 import :type;
 import std;
@@ -43,63 +44,29 @@ struct VmaBuffer
 
     VmaBuffer() = default;
 
-    VmaBuffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation mem, VmaAllocationInfo allocInfo)
-        : allocator(alloc), buffer(buf), allocation(mem), info(allocInfo)
-    {
-    }
+    VmaBuffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation mem, VmaAllocationInfo allocInfo);
 
-    ~VmaBuffer()
-    {
-        if (buffer != nullptr)
-        {
-            vmaDestroyBuffer(allocator, buffer, allocation);
-        }
-    }
+    ~VmaBuffer();
 
     // Move-only
     VmaBuffer(const VmaBuffer &) = delete;
     VmaBuffer &operator=(const VmaBuffer &) = delete;
 
-    VmaBuffer(VmaBuffer &&other) noexcept
-        : allocator(other.allocator), buffer(other.buffer), allocation(other.allocation), info(other.info)
-    {
-        other.allocator = nullptr;
-        other.buffer = nullptr;
-        other.allocation = nullptr;
-        other.info = {};
-    }
+    VmaBuffer(VmaBuffer &&other) noexcept;
 
-    VmaBuffer &operator=(VmaBuffer &&other) noexcept
-    {
-        if (this != &other)
-        {
-            if (buffer != nullptr)
-            {
-                vmaDestroyBuffer(allocator, buffer, allocation);
-            }
-            allocator = other.allocator;
-            buffer = other.buffer;
-            allocation = other.allocation;
-            info = other.info;
-            other.allocator = nullptr;
-            other.buffer = nullptr;
-            other.allocation = nullptr;
-            other.info = {};
-        }
-        return *this;
-    }
+    VmaBuffer &operator=(VmaBuffer &&other) noexcept;
 
     /// Check if this buffer holds a valid allocation
-    [[nodiscard]] bool valid() const noexcept { return buffer != nullptr; }
+    [[nodiscard]] bool valid() const noexcept;
 
     /// Get the persistently mapped pointer (nullptr if not mapped)
-    [[nodiscard]] void *mapped() const noexcept { return info.pMappedData; }
+    [[nodiscard]] void *mapped() const noexcept;
 
     /// Get the allocation size in bytes
-    [[nodiscard]] VkDeviceSize size() const noexcept { return info.size; }
+    [[nodiscard]] VkDeviceSize size() const noexcept;
 
     /// Get the raw VkBuffer handle
-    [[nodiscard]] VkBuffer handle() const noexcept { return buffer; }
+    [[nodiscard]] VkBuffer handle() const noexcept;
 
     /**
      * @brief Get the buffer device address (BDA)
@@ -109,53 +76,30 @@ struct VmaBuffer
      * Requires the buffer to have been created with
      * VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT.
      */
-    [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device& device) const noexcept
-    {
-        return static_cast<VkDeviceAddress>(device.getBufferAddress(vk::BufferDeviceAddressInfo{vk::Buffer{buffer}}));
-    }
+    [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device& device) const noexcept;
 
     /**
      * @brief Query the actual memory property flags for this allocation
      * @return Vulkan memory property flags (HOST_VISIBLE, DEVICE_LOCAL, etc.)
      */
-    [[nodiscard]] VkMemoryPropertyFlags memoryProperties() const
-    {
-        VkMemoryPropertyFlags flags = 0;
-        vmaGetAllocationMemoryProperties(allocator, allocation, &flags);
-        return flags;
-    }
+    [[nodiscard]] VkMemoryPropertyFlags memoryProperties() const;
 
     /// Check if the underlying memory is host-visible
-    [[nodiscard]] bool isHostVisible() const
-    {
-        return (memoryProperties() & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
-    }
+    [[nodiscard]] bool isHostVisible() const;
 
     /**
      * @brief Flush host writes to make them visible to the device.
      *
      * VMA internally handles non-coherent atom-size alignment.
      */
-    void flush(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const
-    {
-        if (allocation == nullptr)
-            return;
-        auto result = vmaFlushAllocation(allocator, allocation, offset, size);
-        nrAssert(result == VK_SUCCESS, std::format("vmaFlushAllocation failed: {}", static_cast<int>(result)));
-    }
+    void flush(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const;
 
     /**
      * @brief Invalidate host cache to make device writes visible to the CPU.
      *
      * VMA internally handles non-coherent atom-size alignment.
      */
-    void invalidate(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const
-    {
-        if (allocation == nullptr)
-            return;
-        auto result = vmaInvalidateAllocation(allocator, allocation, offset, size);
-        nrAssert(result == VK_SUCCESS, std::format("vmaInvalidateAllocation failed: {}", static_cast<int>(result)));
-    }
+    void invalidate(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const;
 };
 
 // =========================================================================
@@ -177,66 +121,29 @@ struct VmaImage
 
     VmaImage() = default;
 
-    VmaImage(VmaAllocator alloc, VkImage img, VmaAllocation mem, VmaAllocationInfo allocInfo)
-        : allocator(alloc), image(img), allocation(mem), info(allocInfo)
-    {
-    }
+    VmaImage(VmaAllocator alloc, VkImage img, VmaAllocation mem, VmaAllocationInfo allocInfo);
 
-    ~VmaImage()
-    {
-        if (image != nullptr)
-        {
-            vmaDestroyImage(allocator, image, allocation);
-        }
-    }
+    ~VmaImage();
 
     // Move-only
     VmaImage(const VmaImage &) = delete;
     VmaImage &operator=(const VmaImage &) = delete;
 
-    VmaImage(VmaImage &&other) noexcept
-        : allocator(other.allocator), image(other.image), allocation(other.allocation), info(other.info)
-    {
-        other.image = nullptr;
-        other.allocation = nullptr;
-        other.info = {};
-    }
+    VmaImage(VmaImage &&other) noexcept;
 
-    VmaImage &operator=(VmaImage &&other) noexcept
-    {
-        if (this != &other)
-        {
-            if (image != nullptr)
-            {
-                vmaDestroyImage(allocator, image, allocation);
-            }
-            allocator = other.allocator;
-            image = other.image;
-            allocation = other.allocation;
-            info = other.info;
-            other.image = nullptr;
-            other.allocation = nullptr;
-            other.info = {};
-        }
-        return *this;
-    }
+    VmaImage &operator=(VmaImage &&other) noexcept;
 
     /// Check if this image holds a valid allocation
-    [[nodiscard]] bool valid() const noexcept { return image != nullptr; }
+    [[nodiscard]] bool valid() const noexcept;
 
     /// Get the raw VkImage handle
-    [[nodiscard]] VkImage handle() const noexcept { return image; }
+    [[nodiscard]] VkImage handle() const noexcept;
 
     /// Get the allocation size in bytes
-    [[nodiscard]] VkDeviceSize size() const noexcept { return info.size; }
+    [[nodiscard]] VkDeviceSize size() const noexcept;
 
     /// Query memory property flags
-    [[nodiscard]] VkMemoryPropertyFlags memoryProperties() const
-    {
-        VkMemoryPropertyFlags flags = 0;
-        vmaGetAllocationMemoryProperties(allocator, allocation, &flags);
-        return flags;
-    }
+    [[nodiscard]] VkMemoryPropertyFlags memoryProperties() const;
 };
 
 // =========================================================================
@@ -257,53 +164,22 @@ struct VmaPoolHandle
 
     VmaPoolHandle() = default;
 
-    VmaPoolHandle(VmaAllocator alloc, VmaPool p) : allocator(alloc), pool(p) {}
+    VmaPoolHandle(VmaAllocator alloc, VmaPool p);
 
-    VmaPoolHandle(VmaAllocator alloc, VmaPool p, const VmaPoolCreateInfo &info)
-        : allocator(alloc), pool(p), createInfo(info)
-    {
-    }
+    VmaPoolHandle(VmaAllocator alloc, VmaPool p, const VmaPoolCreateInfo &info);
 
-    ~VmaPoolHandle()
-    {
-        if (pool != nullptr)
-        {
-            vmaDestroyPool(allocator, pool);
-        }
-    }
+    ~VmaPoolHandle();
 
     // Move-only
     VmaPoolHandle(const VmaPoolHandle &) = delete;
     VmaPoolHandle &operator=(const VmaPoolHandle &) = delete;
 
-    VmaPoolHandle(VmaPoolHandle &&other) noexcept
-        : allocator(other.allocator), pool(other.pool), createInfo(std::move(other.createInfo))
-    {
-        other.allocator = nullptr;
-        other.pool = nullptr;
-        other.createInfo.reset();
-    }
+    VmaPoolHandle(VmaPoolHandle &&other) noexcept;
 
-    VmaPoolHandle &operator=(VmaPoolHandle &&other) noexcept
-    {
-        if (this != &other)
-        {
-            if (pool != nullptr)
-            {
-                vmaDestroyPool(allocator, pool);
-            }
-            allocator = other.allocator;
-            pool = other.pool;
-            createInfo = std::move(other.createInfo);
-            other.allocator = nullptr;
-            other.pool = nullptr;
-            other.createInfo.reset();
-        }
-        return *this;
-    }
+    VmaPoolHandle &operator=(VmaPoolHandle &&other) noexcept;
 
-    [[nodiscard]] bool valid() const noexcept { return pool != nullptr; }
-    [[nodiscard]] VmaPool handle() const noexcept { return pool; }
+    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] VmaPool handle() const noexcept;
 
     /**
      * @brief Reset all allocations in this pool (linear pools only)
@@ -312,32 +188,10 @@ struct VmaPoolHandle
      * VMA 3.3 removed vmaResetPool, so we recreate the pool to free all allocations.
      * Ideal for per-frame transient resource pools.
      */
-    void reset()
-    {
-        if (pool != nullptr)
-        {
-            nrAssert(createInfo.has_value(), std::format("VmaPoolHandle::reset requires pool creation info."));
-
-            vmaDestroyPool(allocator, pool);
-            pool = nullptr;
-
-            VmaPool newPool = nullptr;
-            VkResult result = vmaCreatePool(allocator, &(*createInfo), &newPool);
-            nrAssert(result == VK_SUCCESS, std::format("vmaCreatePool failed: {}", static_cast<int>(result)));
-            pool = newPool;
-        }
-    }
+    void reset();
 
     /// Get pool statistics (fast, safe to call per-frame)
-    [[nodiscard]] VmaStatistics statistics() const
-    {
-        VmaStatistics stats{};
-        if (pool != nullptr)
-        {
-            vmaGetPoolStatistics(allocator, pool, &stats);
-        }
-        return stats;
-    }
+    [[nodiscard]] VmaStatistics statistics() const;
 };
 
 // =========================================================================
@@ -376,55 +230,20 @@ class VmaAllocatorWrapper
      * - Maintenance5 (core 1.3)
      * - EXT memory budget query integration
      */
-    VmaAllocatorWrapper(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device)
-    {
-        VmaAllocatorCreateInfo createInfo{};
-        createInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
-                           VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT |
-                           VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT |
-                           VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
-        createInfo.vulkanApiVersion = vk::ApiVersion14;
-        createInfo.physicalDevice = *physDevice;
-        createInfo.device = *device;
-        createInfo.instance = *instance;
+    VmaAllocatorWrapper(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device);
 
-        VkResult result = vmaCreateAllocator(&createInfo, &allocator_);
-        nrAssert(result == VkResult::VK_SUCCESS, std::format("Failed to create VMA allocator: {}", static_cast<int>(result)));
-    }
-
-    ~VmaAllocatorWrapper()
-    {
-        if (allocator_ != nullptr)
-        {
-            vmaDestroyAllocator(allocator_);
-        }
-    }
+    ~VmaAllocatorWrapper();
 
     // Move-only
     VmaAllocatorWrapper(const VmaAllocatorWrapper &) = delete;
     VmaAllocatorWrapper &operator=(const VmaAllocatorWrapper &) = delete;
 
-    VmaAllocatorWrapper(VmaAllocatorWrapper &&other) noexcept : allocator_(other.allocator_)
-    {
-        other.allocator_ = nullptr;
-    }
+    VmaAllocatorWrapper(VmaAllocatorWrapper &&other) noexcept;
 
-    VmaAllocatorWrapper &operator=(VmaAllocatorWrapper &&other) noexcept
-    {
-        if (this != &other)
-        {
-            if (allocator_ != nullptr)
-            {
-                vmaDestroyAllocator(allocator_);
-            }
-            allocator_ = other.allocator_;
-            other.allocator_ = nullptr;
-        }
-        return *this;
-    }
+    VmaAllocatorWrapper &operator=(VmaAllocatorWrapper &&other) noexcept;
 
-    [[nodiscard]] bool valid() const noexcept { return allocator_ != nullptr; }
-    [[nodiscard]] VmaAllocator handle() const noexcept { return allocator_; }
+    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] VmaAllocator handle() const noexcept;
 
     // =====================================================================
     // Resource Creation
@@ -436,19 +255,7 @@ class VmaAllocatorWrapper
      * @param allocInfo   VMA allocation create info (usage, flags, priority, pool)
      * @return RAII VmaBuffer owning both the buffer and allocation
      */
-    [[nodiscard]] VmaBuffer createBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const
-    {
-        VkBuffer buffer = nullptr;
-        VmaAllocation allocation = nullptr;
-        VmaAllocationInfo resultInfo{};
-
-        // Convert to C struct for VMA API
-        VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
-        VkResult result = vmaCreateBuffer(allocator_, &cBufferInfo, &allocInfo, &buffer, &allocation, &resultInfo);
-        nrAssert(result == VK_SUCCESS, std::format("vmaCreateBuffer failed: {}", static_cast<int>(result)));
-
-        return VmaBuffer(allocator_, buffer, allocation, resultInfo);
-    }
+    [[nodiscard]] VmaBuffer createBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const;
 
     /**
      * @brief Create a VkImage with VMA allocation
@@ -456,33 +263,14 @@ class VmaAllocatorWrapper
      * @param allocInfo   VMA allocation create info
      * @return RAII VmaImage owning both the image and allocation
      */
-    [[nodiscard]] VmaImage createImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const
-    {
-        VkImage image = nullptr;
-        VmaAllocation allocation = nullptr;
-        VmaAllocationInfo resultInfo{};
-
-        // Convert to C struct for VMA API
-        VkImageCreateInfo cImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
-        VkResult result = vmaCreateImage(allocator_, &cImageInfo, &allocInfo, &image, &allocation, &resultInfo);
-        nrAssert(result == VK_SUCCESS, std::format("vmaCreateImage failed: {}", static_cast<int>(result)));
-
-        return VmaImage(allocator_, image, allocation, resultInfo);
-    }
+    [[nodiscard]] VmaImage createImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const;
 
     /**
      * @brief Create a custom VMA pool
      * @param poolInfo  Pool creation parameters (memory type, algorithm, block size)
      * @return RAII VmaPoolHandle
      */
-    [[nodiscard]] VmaPoolHandle createPool(const VmaPoolCreateInfo &poolInfo) const
-    {
-        VmaPool pool = nullptr;
-        VkResult result = vmaCreatePool(allocator_, &poolInfo, &pool);
-        nrAssert(result == VK_SUCCESS, std::format("vmaCreatePool failed: {}", static_cast<int>(result)));
-
-        return VmaPoolHandle(allocator_, pool, poolInfo);
-    }
+    [[nodiscard]] VmaPoolHandle createPool(const VmaPoolCreateInfo &poolInfo) const;
 
     /**
      * @brief Find the memory type index suitable for a buffer configuration
@@ -490,15 +278,7 @@ class VmaAllocatorWrapper
      * @param allocInfo   Desired allocation properties
      * @return Memory type index for VmaPoolCreateInfo
      */
-    [[nodiscard]] std::uint32_t findMemoryTypeIndexForBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const
-    {
-        std::uint32_t memTypeIndex = 0;
-        // Convert to C struct for VMA API
-        VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
-        VkResult result = vmaFindMemoryTypeIndexForBufferInfo(allocator_, &cBufferInfo, &allocInfo, &memTypeIndex);
-        nrAssert(result == VK_SUCCESS, std::format("vmaFindMemoryTypeIndexForBufferInfo failed: {}", static_cast<int>(result)));
-        return memTypeIndex;
-    }
+    [[nodiscard]] std::uint32_t findMemoryTypeIndexForBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const;
 
     /**
      * @brief Find the memory type index suitable for an image configuration
@@ -506,15 +286,7 @@ class VmaAllocatorWrapper
      * @param allocInfo   Desired allocation properties
      * @return Memory type index for VmaPoolCreateInfo
      */
-    [[nodiscard]] std::uint32_t findMemoryTypeIndexForImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const
-    {
-        std::uint32_t memTypeIndex = 0;
-        // Convert to C struct for VMA API
-        VkImageCreateInfo cImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
-        VkResult result = vmaFindMemoryTypeIndexForImageInfo(allocator_, &cImageInfo, &allocInfo, &memTypeIndex);
-        nrAssert(result == VK_SUCCESS, std::format("vmaFindMemoryTypeIndexForImageInfo failed: {}", static_cast<int>(result)));
-        return memTypeIndex;
-    }
+    [[nodiscard]] std::uint32_t findMemoryTypeIndexForImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const;
 
     // =====================================================================
     // Statistics & Budget
@@ -527,25 +299,14 @@ class VmaAllocatorWrapper
      * - Allocated block bytes and allocation bytes
      * - OS-reported usage and budget (with VK_EXT_memory_budget)
      */
-    [[nodiscard]] std::vector<VmaBudget> getBudgets() const
-    {
-        constexpr std::size_t maxHeaps = 16; // VMA supports up to 16 memory heaps
-        std::vector<VmaBudget> budgets(maxHeaps);
-        vmaGetHeapBudgets(allocator_, budgets.data());
-        return budgets;
-    }
+    [[nodiscard]] std::vector<VmaBudget> getBudgets() const;
 
     /**
      * @brief Calculate comprehensive statistics (slow, debug only)
      *
      * Traverses all internal data structures. Use sparingly.
      */
-    [[nodiscard]] VmaTotalStatistics calculateStatistics() const
-    {
-        VmaTotalStatistics stats{};
-        vmaCalculateStatistics(allocator_, &stats);
-        return stats;
-    }
+    [[nodiscard]] VmaTotalStatistics calculateStatistics() const;
 
     /**
      * @brief Dump VMA statistics as JSON string
@@ -554,14 +315,7 @@ class VmaAllocatorWrapper
      * @param detailedMap Include per-allocation details
      * @return JSON string (heap-allocated, returned by value)
      */
-    [[nodiscard]] std::string dumpStatsJson(bool detailedMap = true) const
-    {
-        char *statsString = nullptr;
-        vmaBuildStatsString(allocator_, &statsString, static_cast<VkBool32>(detailedMap ? 1 : 0));
-        std::string result(statsString);
-        vmaFreeStatsString(allocator_, statsString);
-        return result;
-    }
+    [[nodiscard]] std::string dumpStatsJson(bool detailedMap = true) const;
 
   private:
     VmaAllocator allocator_ = nullptr;

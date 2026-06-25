@@ -23,6 +23,19 @@ function(nr_escape_cpp_string input out_var)
     set(${out_var} "${escaped}" PARENT_SCOPE)
 endfunction()
 
+function(nr_read_required_positive_u32_cache_entry name out_var)
+    nr_read_cache_entry("${name}" value)
+    if(value STREQUAL "")
+        message(FATAL_ERROR "${name} must be defined by the top-level CMake configuration.")
+    endif()
+
+    if(NOT value MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "${name} must be a positive integer. Found '${value}'.")
+    endif()
+
+    set(${out_var} "${value}" PARENT_SCOPE)
+endfunction()
+
 if(NOT DEFINED NR_OUTPUT_FILE)
     message(FATAL_ERROR "NR_OUTPUT_FILE must be defined.")
 endif()
@@ -67,6 +80,9 @@ if(nr_max_threads EQUAL 0)
     set(nr_max_threads 4)
 endif()
 
+nr_read_required_positive_u32_cache_entry("NR_MAX_FRAME_IN_FLIGHT" nr_max_frame_in_flight)
+nr_read_required_positive_u32_cache_entry("NR_STATISTICS_SAMPLE_FRAME_COUNT" nr_statistics_sample_frame_count)
+
 nr_read_cache_entry("NR_SHADER_CACHE_DIR" nr_shader_cache_dir)
 if(nr_shader_cache_dir STREQUAL "")
     set(nr_shader_cache_dir "${NR_BINARY_DIR}/shader_cache/${NR_BUILD_CONFIG}")
@@ -90,6 +106,8 @@ set(content "#pragma once
 
 #define NR_IS_DEBUG_MODE ${nr_is_debug_mode}
 #define NR_MAX_THREADS ${nr_max_threads}u
+#define NR_MAX_FRAME_IN_FLIGHT ${nr_max_frame_in_flight}u
+#define NR_STATISTICS_SAMPLE_FRAME_COUNT ${nr_statistics_sample_frame_count}u
 #define NR_GLOBAL_LOG_LEVEL ${nr_global_log_level}
 #define NR_PROJECT_ROOT \"${nr_project_root_dir}\"
 #define NR_SHADER_CACHE_ROOT \"${nr_shader_cache_dir}\"

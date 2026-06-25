@@ -26,7 +26,6 @@ const nr::test::CaseRegistrar appUiCursorCase{
 
         auto layout = nr::rhi::ShaderDescriptorLayout::create(program, nr::rhi::DescriptorBindingPolicy{
             .defaultRuntimeDescriptorCount = 16,
-            .runtimeArraySetPolicy = nr::rhi::RuntimeDescriptorArraySetPolicy::RequireSemanticMultiSet,
         });
         nr::test::require(layout.valid(), "appUi descriptor layout should be valid");
 

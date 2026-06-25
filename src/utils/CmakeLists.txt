@@ -33,6 +33,11 @@ file(GLOB MODULE_UNITS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.ixx"
 )
 
+file(GLOB IMPL_SOURCES
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+)
+
 nr_add_library(utils STATIC)
 add_dependencies(utils generate_static_utils_constants_config)
 target_link_libraries(utils PUBLIC
@@ -42,11 +47,13 @@ target_include_directories(utils PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>"
 )
 target_sources(utils
+    PRIVATE
+        ${IMPL_SOURCES}
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES FILES ${MODULE_UNITS}
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
     ${MODULE_UNITS}
-    # src/${IMPL_SOURCES}
+    ${IMPL_SOURCES}
 )

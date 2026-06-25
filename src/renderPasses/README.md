@@ -4,25 +4,25 @@ This module uses the same fixed terms as renderer:
 
 - Node: top-level feature unit.
 - pass: executable unit emitted by a Node.
-- submitNode: explicit graph control node (not a business Node).
+- submitNode: debug-named graph control marker (not a business Node).
 
 Rules:
 
 - A Node may emit multiple passes.
-- EmbeddedTriangle Node targets graphics queue output, binds CPU camera uniforms, and emits a single draw-call demo pass.
+- EmbeddedTriangle Node targets graphics queue output, binds renderer global frame uniforms, and emits a single draw-call demo pass.
 - NormalBuffer Node targets graphics queue output, outputs world-space interpolated vertex normals for any scene.
-- Ui Node targets graphics queue UI composition, may emit a texture upload pass before its overlay draw pass, and keeps texture layout transitions in the render graph resource-intent path.
+- Ui Node targets graphics queue UI composition, uploads GPU-only texture pixels through the RHI upload ring before graph import, and keeps overlay texture reads in the render graph resource-intent path.
 - Present Node targets compute queue path and final present preparation.
 
 ## Binding Checklist
 
-Shader-visible bindings in this module must be reflection-led. Nodes should use `ShaderCursor` to record descriptor-backed resources and push constants into a `ShaderBindingSnapshot`, update descriptor-backed resources from the `addPass` prepare callback, and bind already-updated descriptor sets from the `addPass` record callback.
+Shader-visible bindings in this module must be reflection-led through renderer-side pass builders. Nodes should use `PipelineRuntime`, `NodeBuildContext::globalResources`, `RasterPassBuilder`, and `ComputePassBuilder` for persistent pipeline descriptor sets, renderer-owned global frame resources, static descriptor writes, push constants, dynamic descriptor snapshots, and the split prepare/record deployment path.
 
-- Allowed direct command recording: pipeline bind, vertex/index buffers, draw/dispatch, viewport/scissor/dynamic state, rendering scopes, barriers, and copy helpers.
-- Prepare-stage helper path for descriptor-backed resources: `updateResourcesForBindingSnapshot(...)`.
-- Record-stage helper path for shader-visible bindings: `bindPreparedResourcesToCommandBuffer(...)` for descriptor sets and `pushConstantsToCommandBuffer(...)` for push constants.
-- Not allowed in nodes: hand-written descriptor-set update/bind flows, direct `ShaderBindingPool::update(...)` or `resolveDescriptorWriteRequests(...)` usage, direct `CursorPipelineLayout::bindDescriptorSets(...)` for shader-visible bindings, or push-constant deployment outside the cursor snapshot helpers.
-- Persistent or bindless resources may allocate and cache `ShaderBindingSet`s, but descriptor writes and command-buffer descriptor binding still route through the split shared RHI helper path.
-- `bindResourcesToCommandBuffer(...)` remains a synchronous compatibility helper and should not be used by RDG parallel record paths.
+- Allowed direct command recording inside builder record callbacks: vertex/index buffers, draw/dispatch, scissor overrides, per-draw dynamic state, barriers, and copy helpers.
+- Direct `context.addPass(...)` remains appropriate for non-shader-visible transfer/copy passes that do not update or bind shader descriptors. CPU uploads into GPU-only resources should use the RHI upload ring instead of node-local staging passes.
+- Per-node/pass/draw scalar payloads must use push constants only when they are no larger than `nr::rhi::kMaxPushConstantBytes` (128 bytes). Larger payloads must be split into renderer global frame uniforms or buffer/texture upload resources.
+- Dynamic or bindless resources may provide a builder `dynamicBindingSnapshot(...)` callback using reflection cursors, but descriptor writes and command-buffer descriptor binding still stay inside the builder prepare/record path.
+- Scene bridge data that is consumed during deferred prepare/record work should be captured as `GraphFrameDataHandle` values from `NodeFrameParameters` and resolved through the pass context. Do not capture borrowed `SceneBridgeFrame` references or copy per-node bridge snapshots into record lambdas.
+- Not allowed in nodes: hand-written descriptor-set update/bind flows, direct `ShaderBindingPool::update(...)` or `resolveDescriptorWriteRequests(...)` usage, direct `CursorPipelineLayout::bindDescriptorSets(...)` for shader-visible bindings, direct `updateResourcesForBindingSnapshot(...)`, direct `bindPreparedResourcesToCommandBuffer(...)`, direct `pushConstantsToCommandBuffer(...)`, or `bindResourcesToCommandBuffer(...)`.
 
-Current audit note: built-in nodes update descriptor snapshots during prepare and only bind prepared descriptor sets during record. `UiNode` push constants and bindless texture descriptors follow cursor snapshots plus the shared RHI deployment helpers. The previous bindless texture bypass was node-level policy drift rather than missing RHI support.
+Current audit note: all built-in shader-visible passes use `RasterPassBuilder` or `ComputePassBuilder`. `Present.CopyToSwapchain` still uses direct `context.addPass(...)` because it is a copy graph pass without shader-visible bindings.

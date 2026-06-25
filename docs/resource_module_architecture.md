@@ -82,7 +82,7 @@ It does not store:
 - view matrix
 - runtime input/controller state
 
-Those belong to `scene` or a future viewer/app runtime layer, not `nr.resource`.
+Those belong to `scene` or the app/viewer runtime layer, not `nr.resource`.
 
 ## 4. Dependency Direction
 

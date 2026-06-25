@@ -5,27 +5,12 @@ import std;
 
 export namespace nr::load
 {
-[[nodiscard]] inline std::string normalizedExtension(const std::filesystem::path &path)
-{
-    auto extension = path.extension().string();
-    std::ranges::transform(extension, extension.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return extension;
-}
+[[nodiscard]] std::string normalizedExtension(const std::filesystem::path &path);
 
-[[nodiscard]] inline LoadError makeLoadError(LoadErrorCode code,
+[[nodiscard]] LoadError makeLoadError(LoadErrorCode code,
                                              std::string_view backend,
                                              const std::filesystem::path &sourcePath,
-                                             std::string message)
-{
-    return LoadError{
-        .code = code,
-        .backend = std::string{backend},
-        .sourcePath = sourcePath,
-        .message = std::move(message),
-    };
-}
+                                             std::string message);
 
 template <typename T>
 concept SceneImporterBackend = requires(const SceneLoadRequest &request) {

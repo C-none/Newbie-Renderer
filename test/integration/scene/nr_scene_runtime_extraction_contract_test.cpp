@@ -53,8 +53,6 @@ namespace
         .textures = {
             nr::load::MaterialTextureBinding{
                 .textureIndex = 0,
-                .uvChannel = 0,
-                .textureTypeRaw = 0,
                 .semantic = "diffuse",
             },
         },
@@ -126,7 +124,6 @@ namespace
         .domain = domain,
         .selection = nr::scene::SceneSelectionMask{.requireAll = requiredSelection},
         .requireReadyForDomain = requireReadyForDomain,
-        .requireActiveInstances = true,
     });
 }
 

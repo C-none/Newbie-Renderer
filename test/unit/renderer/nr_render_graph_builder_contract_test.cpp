@@ -14,6 +14,18 @@ namespace
            use.imageAspect.has_value();
 }
 
+[[nodiscard]] bool hasBufferFields(const nr::renderer::PassResourceUseDesc &use) noexcept
+{
+    return use.bufferUsage.has_value() &&
+           use.bufferAccess.has_value();
+}
+
+[[nodiscard]] bool hasAccelerationStructureFields(const nr::renderer::PassResourceUseDesc &use) noexcept
+{
+    return use.accelerationStructureUsage.has_value() &&
+           use.accelerationStructureAccess.has_value();
+}
+
 const nr::test::CaseRegistrar useFactoryCase{
     "render graph resource-use factories encode stable intents",
     [] {
@@ -25,21 +37,96 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(color.imageAccess == nr::renderer::ImageAccessIntent::ColorAttachmentWrite);
         nr::test::require(!color.readOnly, "color write should not be read-only");
 
+        auto colorReadWrite = nr::renderer::use::colorReadWrite(handle);
+        nr::test::require(colorReadWrite.imageUsage == nr::renderer::ImageUsageIntent::ColorAttachment);
+        nr::test::require(colorReadWrite.imageAccess == nr::renderer::ImageAccessIntent::ColorAttachmentReadWrite);
+        nr::test::require(!colorReadWrite.readOnly, "color read-write should not be read-only");
+
+        auto depthReadWrite = nr::renderer::use::depthReadWrite(handle);
+        nr::test::require(depthReadWrite.imageUsage == nr::renderer::ImageUsageIntent::DepthStencilAttachment);
+        nr::test::require(depthReadWrite.imageAccess == nr::renderer::ImageAccessIntent::DepthStencilReadWrite);
+        nr::test::require(depthReadWrite.imageAspect == nr::renderer::ImageAspectIntent::Depth);
+
         auto sampled = nr::renderer::use::sampledRead(handle);
         nr::test::require(sampled.imageUsage == nr::renderer::ImageUsageIntent::Sampled);
         nr::test::require(sampled.imageAccess == nr::renderer::ImageAccessIntent::SampledRead);
         nr::test::require(sampled.imageLayout == nr::renderer::ImageLayoutIntent::ShaderReadOnly);
         nr::test::require(sampled.readOnly, "sampled read should be read-only");
 
+        auto sampledDepth = nr::renderer::use::make<nr::renderer::use::spec::SampledRead>(
+            handle,
+            nr::renderer::use::ImageUseOptions{
+                .aspect = nr::renderer::ImageAspectIntent::Depth,
+            });
+        nr::test::require(sampledDepth.imageAspect == nr::renderer::ImageAspectIntent::Depth);
+        nr::test::require(sampledDepth.readOnly, "customized sampled read should preserve read-only intent");
+
+        auto storageReadWrite = nr::renderer::use::storageReadWrite(handle);
+        nr::test::require(storageReadWrite.imageUsage == nr::renderer::ImageUsageIntent::StorageReadWrite);
+        nr::test::require(storageReadWrite.imageAccess == nr::renderer::ImageAccessIntent::StorageReadWrite);
+        nr::test::require(!storageReadWrite.readOnly, "storage read-write should not be read-only");
+
         auto present = nr::renderer::use::presentRead(handle);
         nr::test::require(present.imageUsage == nr::renderer::ImageUsageIntent::PresentSource);
-        nr::test::require(present.ownershipDomain == nr::renderer::ResourceOwnershipDomain::Compute);
+        nr::test::require(present.ownershipDomain == nr::renderer::ResourceOwnershipDomain::Undefined);
         nr::test::require(present.readOnly, "present read should be read-only");
 
+        auto computePresent = nr::renderer::use::presentRead(handle, nr::renderer::ResourceOwnershipDomain::Compute);
+        nr::test::require(computePresent.ownershipDomain == nr::renderer::ResourceOwnershipDomain::Compute);
+
         auto uniform = nr::renderer::use::uniformRead(handle);
+        nr::test::require(hasBufferFields(uniform), "uniform read should fill buffer fields");
         nr::test::require(uniform.bufferUsage == nr::renderer::BufferUsageIntent::Uniform);
         nr::test::require(uniform.bufferAccess == nr::renderer::BufferAccessIntent::UniformRead);
         nr::test::require(uniform.readOnly, "uniform read should be read-only");
+
+        auto bufferUpload = nr::renderer::use::bufferTransferSrc(handle);
+        nr::test::require(bufferUpload.bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
+        nr::test::require(bufferUpload.bufferAccess == nr::renderer::BufferAccessIntent::TransferRead);
+        nr::test::require(bufferUpload.readOnly, "buffer transfer source should be read-only");
+
+        auto shaderBindingTable = nr::renderer::use::shaderBindingTableRead(handle);
+        nr::test::require(shaderBindingTable.bufferUsage == nr::renderer::BufferUsageIntent::ShaderBindingTable);
+        nr::test::require(shaderBindingTable.bufferAccess == nr::renderer::BufferAccessIntent::ShaderBindingTableRead);
+        nr::test::require(shaderBindingTable.readOnly, "shader binding table read should be read-only");
+
+        auto accelerationStructureTrace = nr::renderer::use::accelerationStructureTraceRead(handle);
+        nr::test::require(hasAccelerationStructureFields(accelerationStructureTrace), "AS trace read should fill acceleration-structure fields");
+        nr::test::require(accelerationStructureTrace.accelerationStructureUsage == nr::renderer::AccelerationStructureUsageIntent::TraceInput);
+        nr::test::require(accelerationStructureTrace.accelerationStructureAccess == nr::renderer::AccelerationStructureAccessIntent::TraceRead);
+        nr::test::require(accelerationStructureTrace.readOnly, "AS trace read should be read-only");
+
+        auto accelerationStructureStorage = nr::renderer::use::accelerationStructureStorageWrite(handle);
+        nr::test::require(hasBufferFields(accelerationStructureStorage), "AS storage write should remain a buffer use");
+        nr::test::require(accelerationStructureStorage.bufferUsage == nr::renderer::BufferUsageIntent::AccelerationStructureStorage);
+        nr::test::require(accelerationStructureStorage.bufferAccess == nr::renderer::BufferAccessIntent::AccelerationStructureWrite);
+    }};
+
+const nr::test::CaseRegistrar accelerationStructureResourceCase{
+    "render graph builder accepts acceleration structure resources",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("RayTracing", nr::renderer::QueueDomain::Compute);
+
+        auto tlas = builder.addResource(nr::renderer::GraphImportedAccelerationStructureDesc{
+            .debugName = "Scene.TLAS",
+            .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+            .size = 4096,
+        });
+
+        auto uses = std::array{nr::renderer::use::accelerationStructureTraceRead(tlas)};
+        auto pass = builder.addPass(
+            "RayTracing.Trace",
+            node,
+            uses,
+            [](const nr::renderer::PassRecordContext &) {});
+
+        auto frame = builder.build();
+        nr::test::require(pass.valid(), "AS pass should be valid");
+        nr::test::requireEqual(frame.resources.size(), std::size_t{1});
+        nr::test::require(std::holds_alternative<nr::renderer::GraphImportedAccelerationStructureDesc>(frame.resources.front().desc));
+        nr::test::require(frame.passes.front().resourceUses.front().accelerationStructureAccess ==
+                          nr::renderer::AccelerationStructureAccessIntent::TraceRead);
     }};
 
 const nr::test::CaseRegistrar builderFrameCase{
@@ -61,6 +148,7 @@ const nr::test::CaseRegistrar builderFrameCase{
             .usageIntents = {nr::renderer::BufferUsageIntent::Uniform},
             .memoryUsage = nr::rhi::MemoryUsage::CpuToGpu,
         });
+        auto frameData = builder.addFrameData("SceneBridgeFrame", std::string{"frame payload"});
 
         auto graphicsUses = std::array{
             nr::renderer::use::colorWrite(color),
@@ -83,9 +171,14 @@ const nr::test::CaseRegistrar builderFrameCase{
 
         auto frame = builder.build();
         nr::test::requireEqual(frame.resources.size(), std::size_t{2});
+        nr::test::requireEqual(frame.frameData.size(), std::size_t{1});
         nr::test::requireEqual(frame.nodes.size(), std::size_t{2});
         nr::test::requireEqual(frame.passes.size(), std::size_t{2});
         nr::test::requireEqual(frame.submitBoundaries.size(), std::size_t{1});
+        nr::test::requireEqual(frame.frameData.front().handle, frameData);
+        auto const framePayload = std::any_cast<std::string>(&frame.frameData.front().payload);
+        nr::test::require(framePayload != nullptr, "frame data should keep the requested payload type");
+        nr::test::requireEqual(*framePayload, std::string{"frame payload"});
         nr::test::requireEqual(frame.passes[0].handle, graphicsPass);
         nr::test::requireEqual(frame.passes[1].handle, computePass);
         nr::test::require(std::holds_alternative<nr::renderer::GraphPassHandle>(frame.executionOrder[0]));
@@ -96,6 +189,7 @@ const nr::test::CaseRegistrar builderFrameCase{
 
         builder.clear();
         nr::test::require(builder.frame().resources.empty(), "clear should remove resources");
+        nr::test::require(builder.frame().frameData.empty(), "clear should remove frame data");
         nr::test::require(builder.frame().executionOrder.empty(), "clear should remove execution order");
     }};
 } // namespace

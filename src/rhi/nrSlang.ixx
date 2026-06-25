@@ -1,6 +1,7 @@
 
 export module nr.rhi:slang;
-import dependency;
+import dependency.slang;
+import dependency.vulkan;
 
 import nr.utils;
 import std;
@@ -12,268 +13,36 @@ namespace nr::rhi::detail
     return result >= 0;
 }
 
-[[nodiscard]] std::string moduleNameToPath(std::string_view moduleName)
-{
-    std::string out(moduleName);
-    for (auto &ch : out)
-    {
-        if (ch == '.')
-        {
-            ch = '/';
-        }
-    }
-    return out;
-}
+[[nodiscard]] std::string moduleNameToPath(std::string_view moduleName);
 
-[[nodiscard]] std::string modulePathToName(std::string_view modulePath)
-{
-    std::string pathString(modulePath);
-    for (auto &ch : pathString)
-    {
-        if (ch == '\\')
-        {
-            ch = '/';
-        }
-    }
+[[nodiscard]] std::string modulePathToName(std::string_view modulePath);
 
-    if (pathString.ends_with(".slang"))
-    {
-        pathString.erase(pathString.size() - std::string(".slang").size());
-    }
+[[nodiscard]] std::string readTextFile(const std::filesystem::path &path);
 
-    while (pathString.starts_with("./"))
-    {
-        pathString.erase(0, 2);
-    }
+[[nodiscard]] std::vector<std::byte> readBinaryFile(const std::filesystem::path &path);
+[[nodiscard]] std::filesystem::path normalizePath(const std::filesystem::path &path);
 
-    for (auto &ch : pathString)
-    {
-        if (ch == '/')
-        {
-            ch = '.';
-        }
-    }
-    return pathString;
-}
+[[nodiscard]] std::string normalizeModuleNameFromSourceToken(std::string token);
 
-[[nodiscard]] std::string readTextFile(const std::filesystem::path &path)
-{
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-        return {};
+[[nodiscard]] std::optional<std::string> extractDeclaredModuleNameFromSource(std::string_view sourceText);
 
-    std::ostringstream ss;
-    ss << file.rdbuf();
-    return ss.str();
-}
+[[nodiscard]] std::optional<std::string> deriveModuleNameFromSourcePath(const std::filesystem::path &sourcePath, std::span<const std::string> searchPaths);
 
-[[nodiscard]] std::vector<std::byte> readBinaryFile(const std::filesystem::path &path)
-{
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file)
-        return {};
+[[nodiscard]] std::optional<std::string> normalizeRequestModulePath(const std::filesystem::path &requestPath);
 
-    auto const size = static_cast<std::size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
+[[nodiscard]] std::string moduleLeafName(std::string_view moduleName);
 
-    std::vector<std::byte> bytes(size);
-    if (size > 0)
-    {
-        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
-        if (!file)
-        {
-            return {};
-        }
-    }
-    return bytes;
-}
-[[nodiscard]] std::filesystem::path normalizePath(const std::filesystem::path &path)
-{
-    std::error_code ec;
-    auto canonical = std::filesystem::weakly_canonical(path, ec);
-    if (!ec)
-        return canonical;
+[[nodiscard]] std::filesystem::path resolveShaderRootPath();
 
-    auto absolute = std::filesystem::absolute(path, ec);
-    if (!ec)
-        return absolute;
-
-    return path;
-}
-
-[[nodiscard]] std::string normalizeModuleNameFromSourceToken(std::string token)
-{
-    if (token.size() >= 2 && token.front() == '"' && token.back() == '"')
-    {
-        token = token.substr(1, token.size() - 2);
-        return modulePathToName(token);
-    }
-    return token;
-}
-
-[[nodiscard]] std::optional<std::string> extractDeclaredModuleNameFromSource(std::string_view sourceText)
-{
-    static const std::regex kDeclRegex(R"((?:^|[\r\n])\s*(?:module|implementing)\s+((?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)|(?:\"[^\"]+\"))\s*;)");
-
-    std::string text(sourceText);
-    std::smatch match;
-    if (std::regex_search(text, match, kDeclRegex) && match.size() > 1)
-    {
-        auto moduleName = normalizeModuleNameFromSourceToken(match[1].str());
-        if (!moduleName.empty())
-        {
-            return moduleName;
-        }
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::string> deriveModuleNameFromSourcePath(const std::filesystem::path &sourcePath, std::span<const std::string> searchPaths)
-{
-    auto normalizedSourcePath = normalizePath(sourcePath);
-    for (auto const &searchPath : searchPaths)
-    {
-        auto normalizedSearchPath = normalizePath(searchPath);
-        std::error_code ec;
-        auto relativePath = std::filesystem::relative(normalizedSourcePath, normalizedSearchPath, ec);
-        if (ec || relativePath.empty())
-        {
-            continue;
-        }
-        auto relativeText = relativePath.generic_string();
-        if (relativeText.starts_with(".."))
-        {
-            continue;
-        }
-
-        if (relativePath.extension() == ".slang")
-        {
-            relativePath.replace_extension();
-        }
-
-        auto moduleName = modulePathToName(relativePath.generic_string());
-        if (!moduleName.empty())
-        {
-            return moduleName;
-        }
-    }
-
-    // Responsibility boundary:
-    // This function only derives module name from filesystem path relation.
-    // It must not parse shader source declarations.
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::string> normalizeRequestModulePath(const std::filesystem::path &requestPath)
-{
-    if (requestPath.empty() || requestPath.is_absolute())
-    {
-        return std::nullopt;
-    }
-
-    auto pathText = requestPath.generic_string();
-    while (pathText.starts_with("./"))
-    {
-        pathText.erase(0, 2);
-    }
-
-    if (pathText.ends_with(".slang"))
-    {
-        pathText.erase(pathText.size() - std::string{".slang"}.size());
-    }
-
-    std::filesystem::path normalizedPath(pathText);
-    normalizedPath = normalizedPath.lexically_normal();
-    if (normalizedPath.empty())
-        return std::nullopt;
-
-    auto hasParentTraversal = std::ranges::any_of(normalizedPath, [](const std::filesystem::path &part) {
-        return part == "..";
-    });
-    if (hasParentTraversal)
-        return std::nullopt;
-
-    auto normalizedModuleName = modulePathToName(normalizedPath.generic_string());
-    if (normalizedModuleName.empty())
-    {
-        return std::nullopt;
-    }
-
-    auto normalizedModulePath = moduleNameToPath(normalizedModuleName);
-    if (normalizedModulePath.empty())
-        return std::nullopt;
-        
-    return normalizedModulePath;
-}
-
-[[nodiscard]] std::string moduleLeafName(std::string_view moduleName)
-{
-    auto const pos = moduleName.rfind('.');
-    if (pos == std::string_view::npos)
-    {
-        return std::string(moduleName);
-    }
-    return std::string(moduleName.substr(pos + 1));
-}
-
-[[nodiscard]] std::filesystem::path resolveShaderRootPath()
-{
-    auto rootPath = normalizePath(std::filesystem::path(std::string(shaderRoot)));
-    std::error_code ec;
-    auto exists = std::filesystem::exists(rootPath, ec);
-    auto isDirectory = exists && std::filesystem::is_directory(rootPath, ec);
-    nrAssert(!ec && isDirectory, std::format("Invalid shader root path from CMake: '{}'.", rootPath.generic_string()));
-    return rootPath;
-}
-
-[[nodiscard]] std::filesystem::path makeModuleBinaryPath(const std::filesystem::path &cacheRoot, std::string_view moduleName)
-{
-    // Keep this path aligned with Slang's `loadModule` lookup logic:
-    // `<searchPath>/<module-path>.slang-module`.
-    return cacheRoot / (moduleNameToPath(moduleName) + ".slang-module");
-}
+[[nodiscard]] std::filesystem::path makeModuleBinaryPath(const std::filesystem::path &cacheRoot, std::string_view moduleName);
 
 [[nodiscard]] std::vector<std::filesystem::path> makeModuleSourceSuffixes(
-    std::string_view moduleName)
-{
-    // Business mapping is strict and 1:1 with `shader/` tree:
-    //   module test.utils.useFlag -> shader/test/utils/useFlag.slang
-    return {std::filesystem::path(moduleNameToPath(moduleName) + ".slang")};
-}
+    std::string_view moduleName);
 
 [[nodiscard]] std::vector<std::filesystem::path> makeModulePathCandidates(
     std::string_view moduleName,
     std::optional<std::filesystem::path> explicitSourcePath,
-    std::span<const std::string> searchPaths)
-{
-    // Module source lookup convention:
-    // - Use only configured search roots (shader root + session cache root).
-    // - Source path mirrors module path: <root>/<module-path>.slang
-
-    std::vector<std::filesystem::path> result;
-    if (explicitSourcePath.has_value())
-    {
-        result.push_back(*explicitSourcePath);
-        return result;
-    }
-
-    auto suffixes = makeModuleSourceSuffixes(moduleName);
-
-    for (auto const &searchPath : searchPaths)
-    {
-        for (auto const &suffix : suffixes)
-        {
-            if (suffix.empty())
-            {
-                continue;
-            }
-            // Normalize path to use forward slashes for consistent comparisons
-            auto candidate = std::filesystem::path(searchPath) / suffix;
-            result.push_back(normalizePath(candidate));
-        }
-    }
-    return result;
-}
+    std::span<const std::string> searchPaths);
 
 } // namespace nr::rhi::detail
 
@@ -402,12 +171,12 @@ template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t Compi
     std::int32_t richDiagnosticsEnabled) noexcept
 {
     return std::array<SlangCompilerOption, 6>{
-        SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
-        SlangCompilerOption{.name = slang::CompilerOptionName::VulkanUseEntryPointName, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
-        SlangCompilerOption{.name = slang::CompilerOptionName::UseUpToDateBinaryModule, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = 1},
-        SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = optimizationLevel},
-        SlangCompilerOption{.name = slang::CompilerOptionName::DebugInformation, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = debugInfoLevel},
-        SlangCompilerOption{.name = slang::CompilerOptionName::EnableRichDiagnostics, .kind = slang::CompilerOptionValueKind::Int, .intValue0 = richDiagnosticsEnabled},
+        SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .intValue0 = 1},
+        SlangCompilerOption{.name = slang::CompilerOptionName::VulkanUseEntryPointName, .intValue0 = 1},
+        SlangCompilerOption{.name = slang::CompilerOptionName::UseUpToDateBinaryModule, .intValue0 = 1},
+        SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .intValue0 = optimizationLevel},
+        SlangCompilerOption{.name = slang::CompilerOptionName::DebugInformation, .intValue0 = debugInfoLevel},
+        SlangCompilerOption{.name = slang::CompilerOptionName::EnableRichDiagnostics, .intValue0 = richDiagnosticsEnabled},
     };
 }
 
@@ -430,7 +199,6 @@ template <bool IsDebugModeValue>
         // input can be replayed offline via slangc --load-repro.
         options[options.size() - 2] = SlangCompilerOption{
             .name = slang::CompilerOptionName::DumpReproOnError,
-            .kind = slang::CompilerOptionValueKind::Int,
             .intValue0 = 1,
         };
         options.back() = SlangCompilerOption{
@@ -492,55 +260,22 @@ class SlangSampler
     /**
      * @brief Create a Vulkan sampler from `SlangSamplerDesc`.
      */
-    [[nodiscard]] static SlangSampler create(const vk::raii::Device &device, SlangSamplerDesc desc = {}, std::string_view debugName = {})
-    {
-        SlangSampler sampler;
-
-        vk::SamplerCreateInfo samplerInfo{};
-        samplerInfo.magFilter = desc.magFilter;
-        samplerInfo.minFilter = desc.minFilter;
-        samplerInfo.mipmapMode = desc.mipmapMode;
-        samplerInfo.addressModeU = desc.addressModeU;
-        samplerInfo.addressModeV = desc.addressModeV;
-        samplerInfo.addressModeW = desc.addressModeW;
-        samplerInfo.mipLodBias = desc.mipLodBias;
-        samplerInfo.anisotropyEnable = desc.anisotropyEnable ? vk::True : vk::False;
-        samplerInfo.maxAnisotropy = desc.maxAnisotropy;
-        samplerInfo.compareEnable = desc.compareEnable ? vk::True : vk::False;
-        samplerInfo.compareOp = desc.compareOp;
-        samplerInfo.minLod = desc.minLod;
-        samplerInfo.maxLod = desc.maxLod;
-        samplerInfo.borderColor = desc.borderColor;
-        samplerInfo.unnormalizedCoordinates = desc.unnormalizedCoordinates ? vk::True : vk::False;
-
-        sampler.sampler_ = vk::raii::Sampler(device, samplerInfo);
-        sampler.debugName_ = std::string(debugName);
-        return sampler;
-    }
+    [[nodiscard]] static SlangSampler create(const vk::raii::Device &device, SlangSamplerDesc desc = {}, std::string_view debugName = {});
 
     /**
      * @brief Return whether this sampler owns a valid Vulkan handle.
      */
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return *sampler_ != nullptr;
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
     /**
      * @brief Get the underlying RAII sampler handle, or nullptr if invalid.
      */
-    [[nodiscard]] const vk::raii::Sampler *handle() const noexcept
-    {
-        return valid() ? &sampler_ : nullptr;
-    }
+    [[nodiscard]] const vk::raii::Sampler *handle() const noexcept;
 
     /**
      * @brief Get the raw Vulkan sampler handle.
      */
-    [[nodiscard]] vk::Sampler raw() const noexcept
-    {
-        return valid() ? *sampler_ : vk::Sampler{};
-    }
+    [[nodiscard]] vk::Sampler raw() const noexcept;
 
   private:
     vk::raii::Sampler sampler_ = {nullptr};
@@ -568,10 +303,7 @@ struct SlangEntryPointData
     SlangStage stage = SLANG_STAGE_NONE;
     Slang::ComPtr<slang::IBlob> codeBlob;
 
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return !entryPointName.empty() && stage != SLANG_STAGE_NONE && codeBlob != nullptr;
-    }
+    [[nodiscard]] bool valid() const noexcept;
 };
 
 /**
@@ -586,10 +318,7 @@ struct SlangCompiledModule
     /**
      * @brief Return true when `module` is a valid Slang module handle.
      */
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return module != nullptr;
-    }
+    [[nodiscard]] bool valid() const noexcept;
 };
 
 /**
@@ -601,251 +330,54 @@ class SlangProgram
     /**
      * @brief Return whether the linked component and entrypoint blobs are available.
      */
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return linkedProgram_ != nullptr && entryPointCount() > 0;
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
     /**
      * @brief Number of linked entrypoints available in this program.
      */
-    [[nodiscard]] std::size_t entryPointCount() const noexcept
-    {
-        if (!buildEntryPointCache())
-        {
-            return 0;
-        }
-        return entryPoints_.size();
-    }
+    [[nodiscard]] std::size_t entryPointCount() const noexcept;
 
     /**
      * @brief Access all linked entrypoint payloads.
      */
-    [[nodiscard]] std::span<const SlangEntryPointData> entryPoints() const noexcept
-    {
-        if (!buildEntryPointCache())
-        {
-            return {};
-        }
-        return entryPoints_;
-    }
+    [[nodiscard]] std::span<const SlangEntryPointData> entryPoints() const noexcept;
 
     /**
      * @brief Find entrypoint payload by name.
      */
-    [[nodiscard]] const SlangEntryPointData *entryPointData(std::string_view entryPointName) const noexcept
-    {
-        if (!buildEntryPointCache())
-        {
-            return nullptr;
-        }
-
-        return findEntryPointDataCached(entryPointName);
-    }
+    [[nodiscard]] const SlangEntryPointData *entryPointData(std::string_view entryPointName) const noexcept;
 
     /**
      * @brief Get linked entrypoint reflection by name.
      */
-    [[nodiscard]] slang::EntryPointReflection *entryPointLayout(std::string_view entryPointName) const noexcept
-    {
-        if (!buildEntryPointCache())
-        {
-            return nullptr;
-        }
-
-        auto const *entryPoint = findEntryPointDataCached(entryPointName);
-        auto *layout = programLayout();
-        if (!entryPoint || !layout)
-        {
-            return nullptr;
-        }
-
-        return layout->getEntryPointByIndex(entryPoint->linkedEntryPointIndex);
-    }
+    [[nodiscard]] slang::EntryPointReflection *entryPointLayout(std::string_view entryPointName) const noexcept;
 
     /**
      * @brief Get linked entrypoint stage by name.
      */
-    [[nodiscard]] std::optional<SlangStage> entryPointStage(std::string_view entryPointName) const noexcept
-    {
-        auto const *entryPoint = entryPointData(entryPointName);
-        if (!entryPoint)
-        {
-            return std::nullopt;
-        }
-        return entryPoint->stage;
-    }
+    [[nodiscard]] std::optional<SlangStage> entryPointStage(std::string_view entryPointName) const noexcept;
 
     /**
      * @brief Get linked entrypoint code blob by name.
      */
-    [[nodiscard]] slang::IBlob *entryPointBlob(std::string_view entryPointName) const noexcept
-    {
-        auto const *entryPoint = entryPointData(entryPointName);
-        return entryPoint ? entryPoint->codeBlob.get() : nullptr;
-    }
+    [[nodiscard]] slang::IBlob *entryPointBlob(std::string_view entryPointName) const noexcept;
 
     /**
      * @brief Access the underlying linked Slang component type.
      */
-    [[nodiscard]] slang::IComponentType *componentType() const noexcept
-    {
-        return linkedProgram_.get();
-    }
+    [[nodiscard]] slang::IComponentType *componentType() const noexcept;
 
     /**
      * @brief Access the linked Slang program layout reflection.
      */
-    [[nodiscard]] slang::ProgramLayout *programLayout() const noexcept
-    {
-        if (hasQueriedProgramLayout_)
-        {
-            return cachedProgramLayout_;
-        }
-
-        hasQueriedProgramLayout_ = true;
-        if (!linkedProgram_)
-        {
-            return nullptr;
-        }
-
-        Slang::ComPtr<slang::IBlob> diagnostics;
-        cachedProgramLayout_ = linkedProgram_->getLayout(0, diagnostics.writeRef());
-        return cachedProgramLayout_;
-    }
+    [[nodiscard]] slang::ProgramLayout *programLayout() const noexcept;
 
   private:
     friend class ShaderService;
 
-    [[nodiscard]] const SlangEntryPointData *findEntryPointDataCached(std::string_view entryPointName) const noexcept
-    {
-        auto it = entryPointIndexByName_.find(std::string(entryPointName));
-        if (it == entryPointIndexByName_.end())
-        {
-            return nullptr;
-        }
+    [[nodiscard]] const SlangEntryPointData *findEntryPointDataCached(std::string_view entryPointName) const noexcept;
 
-        auto index = it->second;
-        if (index >= entryPoints_.size())
-        {
-            return nullptr;
-        }
-        return &entryPoints_[index];
-    }
-
-    [[nodiscard]] bool buildEntryPointCache() const noexcept
-    {
-        if (entryPointCacheBuilt_)
-        {
-            return true;
-        }
-
-        entryPoints_.clear();
-        entryPointIndexByName_.clear();
-
-        if (!linkedProgram_)
-        {
-            return false;
-        }
-
-        auto *layout = programLayout();
-        if (!layout)
-        {
-            return false;
-        }
-
-        auto linkedEntryPointCount = std::max<SlangUInt>(0u, layout->getEntryPointCount());
-        if (linkedEntryPointCount == 0)
-        {
-            return false;
-        }
-
-        entryPoints_.reserve(static_cast<std::size_t>(linkedEntryPointCount));
-
-        for (SlangUInt entryIndex = 0; entryIndex < linkedEntryPointCount; ++entryIndex)
-        {
-            auto *entryLayout = layout->getEntryPointByIndex(entryIndex);
-            if (!entryLayout)
-            {
-                return false;
-            }
-
-            auto entryName = std::string(entryLayout->getName() ? entryLayout->getName() : "");
-            if (entryName.empty())
-            {
-                entryName = std::format("entrypoint_{}", entryIndex);
-            }
-
-            auto reflectedStage = entryLayout->getStage();
-            if (reflectedStage == SLANG_STAGE_NONE)
-            {
-                return false;
-            }
-
-            auto *entryScopeVarLayout = entryLayout->getVarLayout();
-            auto *entryScopeTypeLayout = entryScopeVarLayout ? entryScopeVarLayout->getTypeLayout() : nullptr;
-            auto entryBindingRangeCount = entryScopeTypeLayout ? std::max<SlangInt>(0, entryScopeTypeLayout->getBindingRangeCount()) : 0;
-
-            if (entryScopeTypeLayout && entryBindingRangeCount > 0)
-            {
-                std::ranges::for_each(std::views::iota(SlangInt{0}, entryBindingRangeCount), [&](SlangInt rangeIndex) {
-                    auto bindingType = entryScopeTypeLayout->getBindingRangeType(rangeIndex);
-                    auto isStageIo = bindingType == slang::BindingType::VaryingInput || bindingType == slang::BindingType::VaryingOutput;
-                    nrAssert(
-                        isStageIo,
-                        std::format(
-                            "Entry-point descriptor binding is forbidden. Keep bindable resources in global scope only. entry='{}', rangeIndex={}, bindingType={}",
-                            entryName,
-                            rangeIndex,
-                            static_cast<std::int32_t>(bindingType)));
-                });
-            }
-
-            Slang::ComPtr<slang::IBlob> codeBlob;
-            Slang::ComPtr<slang::IBlob> diagnostics;
-            try
-            {
-                auto compileResult = linkedProgram_->getEntryPointCode(static_cast<SlangInt>(entryIndex), 0, codeBlob.writeRef(), diagnostics.writeRef());
-                if (diagnostics)
-                {
-                    auto text = std::string_view(static_cast<const char *>(diagnostics->getBufferPointer()), diagnostics->getBufferSize());
-                    if (!text.empty())
-                    {
-                        nrInfo<nr::LogLevel::warning>(std::format("[SlangProgram::buildEntryPointCache] entrypoint='{}' diagnostics:\n{}", entryName, text));
-                    }
-                }
-                if (!detail::slangSucceeded(compileResult) || !codeBlob)
-                {
-                    return false;
-                }
-            }
-            catch (...)
-            {
-                nrInfo<nr::LogLevel::error>(std::format(
-                    "[SlangProgram::buildEntryPointCache] Slang threw an internal exception during getEntryPointCode for entry='{}'. "
-                    "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                    entryName));
-                nrAssert(false, "Slang::IComponentType::getEntryPointCode threw an internal exception.");
-            }
-
-            SlangEntryPointData entryPointData{};
-            entryPointData.linkedEntryPointIndex = static_cast<std::uint32_t>(entryIndex);
-            entryPointData.entryPointName = std::move(entryName);
-            entryPointData.stage = reflectedStage;
-            entryPointData.codeBlob = std::move(codeBlob);
-
-            auto [_, inserted] = entryPointIndexByName_.try_emplace(entryPointData.entryPointName, entryPoints_.size());
-            if (!inserted)
-            {
-                return false;
-            }
-
-            entryPoints_.push_back(std::move(entryPointData));
-        }
-
-        entryPointCacheBuilt_ = true;
-        return true;
-    }
+    [[nodiscard]] bool buildEntryPointCache() const noexcept;
 
     Slang::ComPtr<slang::IComponentType> linkedProgram_;
     mutable bool hasQueriedProgramLayout_ = false;
@@ -902,11 +434,7 @@ class ShaderService
     /**
      * @brief Get the global singleton instance.
      */
-    [[nodiscard]] static ShaderService &instance()
-    {
-        static ShaderService service;
-        return service;
-    }
+    [[nodiscard]] static ShaderService &instance();
 
     /**
      * @brief Configure Slang session options and reset in-memory caches.
@@ -921,157 +449,16 @@ class ShaderService
     /**
      * @brief Configure Slang session with project default compile options.
      */
-    void configure()
-    {
-        std::scoped_lock lock(m_mutex);
-        applyCompileOptionsLocked(kDefaultSlangCompileOptions);
-    }
+    void configure();
 
-    [[nodiscard]] SlangProgram compileProgramByFile(const SlangProgramCompileFileRequest &request)
-    {
-        std::scoped_lock lock(m_mutex);
-        ensureConfiguredLocked();
-
-        SlangProgram result;
-
-        auto modulePath = detail::normalizeRequestModulePath(request.sourcePath);
-        if (!modulePath.has_value())
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] invalid request.sourcePath='{}'. expected relative module-path form like 'test/utils/useFlag'.", request.sourcePath.string()));
-            return result;
-        }
-
-        auto moduleName = resolveModuleNameLocked(*modulePath);
-        if (moduleName.empty())
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] unable to resolve module name from request.sourcePath='{}'.", request.sourcePath.string()));
-            return result;
-        }
-
-        auto rootModule = loadOrCompileModuleLocked(moduleName, modulePath);
-        if (!rootModule.valid())
-        {
-            return result;
-        }
-
-        auto definedEntryPointCount = std::max<SlangInt32>(0, rootModule.module->getDefinedEntryPointCount());
-        if (definedEntryPointCount == 0)
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] module='{}' defines no entrypoints.", moduleName));
-            return result;
-        }
-
-        std::vector<Slang::ComPtr<slang::IEntryPoint>> entryPointComponents;
-        entryPointComponents.reserve(static_cast<std::size_t>(definedEntryPointCount));
-
-        std::vector<slang::IComponentType *> components;
-        components.reserve(static_cast<std::size_t>(definedEntryPointCount) + 1);
-        components.push_back(rootModule.module.get());
-
-        for (SlangInt32 index = 0; index < definedEntryPointCount; ++index)
-        {
-            Slang::ComPtr<slang::IEntryPoint> entryPointComponent;
-            auto getEntryResult = rootModule.module->getDefinedEntryPoint(index, entryPointComponent.writeRef());
-            if (!detail::slangSucceeded(getEntryResult) || !entryPointComponent)
-            {
-                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] getDefinedEntryPoint failed: module='{}', index={}", moduleName, index));
-                return result;
-            }
-
-            components.push_back(entryPointComponent.get());
-            entryPointComponents.push_back(std::move(entryPointComponent));
-        }
-
-        Slang::ComPtr<slang::IComponentType> compositeProgram;
-        Slang::ComPtr<slang::IBlob> diagnostics;
-        try
-        {
-            auto createResult = m_session->createCompositeComponentType(
-                components.data(),
-                static_cast<SlangInt>(components.size()),
-                compositeProgram.writeRef(),
-                diagnostics.writeRef());
-            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType");
-            if (!detail::slangSucceeded(createResult) || !compositeProgram)
-            {
-                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] createCompositeComponentType failed for module='{}'.", moduleName));
-                return result;
-            }
-        }
-        catch (...)
-        {
-            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(exception-path)");
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::compileProgramByFile] Slang threw an internal exception during createCompositeComponentType for module='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                moduleName));
-            nrAssert(false, "Slang::ISession::createCompositeComponentType threw an internal exception.");
-        }
-
-        Slang::ComPtr<slang::IComponentType> linkedProgram;
-        diagnostics = nullptr;
-        try
-        {
-            auto linkResult = compositeProgram->link(linkedProgram.writeRef(), diagnostics.writeRef());
-            emitDiagnosticsLocked(diagnostics.get(), "link");
-            if (!detail::slangSucceeded(linkResult) || !linkedProgram)
-            {
-                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] link failed for module='{}'.", moduleName));
-                return result;
-            }
-        }
-        catch (...)
-        {
-            emitDiagnosticsLocked(diagnostics.get(), "link(exception-path)");
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::compileProgramByFile] Slang threw an internal exception during link for module='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                moduleName));
-            nrAssert(false, "Slang::IComponentType::link threw an internal exception.");
-        }
-
-        result.linkedProgram_ = linkedProgram;
-
-        nrInfo<>(std::format("[ShaderService::compileProgramByFile] finished: module='{}'", moduleName));
-        return result;
-    }
+    [[nodiscard]] SlangProgram compileProgramByFile(const SlangProgramCompileFileRequest &request);
 
   private:
     ShaderService() = default;
 
-    static void writeModuleCacheBlobAsync(Slang::ComPtr<slang::IModule> module, const std::filesystem::path &moduleBlobPath)
-    {
-        auto pathText = moduleBlobPath.string();
-        std::thread([module = std::move(module), pathText = std::move(pathText)]() mutable {
-            auto writeResult = module->writeToFile(pathText.c_str());
-            if (!detail::slangSucceeded(writeResult))
-            {
-                nrInfo<nr::LogLevel::warning>(std::format("[ShaderService::writeModuleCacheBlobAsync] writeToFile failed: path='{}', result={}", pathText, static_cast<std::int32_t>(writeResult)));
-                return;
-            }
-        }).detach();
-    }
+    static void writeModuleCacheBlobAsync(Slang::ComPtr<slang::IModule> module, const std::filesystem::path &moduleBlobPath);
 
-    [[nodiscard]] std::optional<std::string> validateModulePathOrganizationLocked(std::string_view moduleName, std::string_view modulePath) const
-    {
-        if (moduleName.empty())
-        {
-            return std::nullopt;
-        }
-
-        auto expectedPath = detail::moduleNameToPath(moduleName);
-        auto normalizedModulePath = detail::moduleNameToPath(detail::modulePathToName(std::string(modulePath)));
-        if (normalizedModulePath == expectedPath)
-        {
-            return std::nullopt;
-        }
-
-        return std::format(
-            "Module '{}' path '{}' violates shader organization rule. Expected exact module path '{}'.",
-            moduleName,
-            normalizedModulePath,
-            expectedPath);
-    }
+    [[nodiscard]] std::optional<std::string> validateModulePathOrganizationLocked(std::string_view moduleName, std::string_view modulePath) const;
 
     template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
     [[nodiscard]] static RuntimeSlangCompileOptions materializeRuntimeOptions(
@@ -1130,176 +517,21 @@ class ShaderService
     }
 
     // Requires m_mutex.
-    void ensureGlobalSessionLocked()
-    {
-        if (!m_globalSession)
-        {
-            try
-            {
-                auto result = slang::createGlobalSession(m_globalSession.writeRef());
-                nrAssert(detail::slangSucceeded(result), "Failed to create Slang global session.");
-            }
-            catch (...)
-            {
-                nrInfo<nr::LogLevel::error>(
-                    "[ShaderService::ensureGlobalSessionLocked] Slang threw an internal exception during createGlobalSession. "
-                    "Attach a debugger and break on Slang::InternalError to inspect the Message field.");
-                nrAssert(false, "Slang::createGlobalSession threw an internal exception.");
-            }
-        }
-    }
+    void ensureGlobalSessionLocked();
 
-    void ensureConfiguredLocked()
-    {
-        if (!m_session)
-        {
-            applyCompileOptionsLocked(kDefaultSlangCompileOptions);
-        }
-    }
+    void ensureConfiguredLocked();
 
-    [[nodiscard]] std::uint64_t computeOptionsHashValueLocked() const noexcept
-    {
-        return m_optionsHashValue;
-    }
+    [[nodiscard]] std::uint64_t computeOptionsHashValueLocked() const noexcept;
 
-    [[nodiscard]] std::string_view optionsHashLocked() const noexcept
-    {
-        return m_optionsHashHex;
-    }
+    [[nodiscard]] std::string_view optionsHashLocked() const noexcept;
 
-    [[nodiscard]] std::filesystem::path moduleCacheRootLocked() const
-    {
-        return std::filesystem::path(std::string(shaderCacheRoot)) / std::string(optionsHashLocked());
-    }
+    [[nodiscard]] std::filesystem::path moduleCacheRootLocked() const;
 
-    void invalidateStaleModuleCacheLocked(std::string_view modulePath, const std::filesystem::path &moduleBlobPath)
-    {
-        auto binaryBytes = detail::readBinaryFile(moduleBlobPath);
-        if (binaryBytes.empty())
-        {
-            return;
-        }
+    void invalidateStaleModuleCacheLocked(std::string_view modulePath, const std::filesystem::path &moduleBlobPath);
 
-        Slang::ComPtr<slang::IBlob> binaryBlob(slang_createBlob(binaryBytes.data(), binaryBytes.size()));
-        if (!binaryBlob)
-        {
-            return;
-        }
+    void recreateSessionLocked();
 
-        auto const sourceModulePath = std::string(modulePath) + ".slang";
-        if (m_session->isBinaryModuleUpToDate(sourceModulePath.c_str(), binaryBlob.get()))
-        {
-            return;
-        }
-
-        std::error_code removeEc;
-        auto removed = std::filesystem::remove(moduleBlobPath, removeEc);
-        if (removeEc)
-        {
-            nrInfo<nr::LogLevel::warning>(std::format(
-                "[ShaderService::invalidateStaleModuleCacheLocked] stale cache removal failed: path='{}', error='{}'",
-                moduleBlobPath.generic_string(),
-                removeEc.message()));
-            return;
-        }
-
-        if (removed)
-        {
-            nrInfo<>(std::format(
-                "[ShaderService::invalidateStaleModuleCacheLocked] removed stale cache blob: path='{}'",
-                moduleBlobPath.generic_string()));
-        }
-    }
-
-    void recreateSessionLocked()
-    {
-        m_session = nullptr;
-
-        m_effectiveSearchPaths.clear();
-        m_effectiveSearchPaths.reserve(2);
-        m_effectiveSearchPaths.push_back(moduleCacheRootLocked().string());
-        m_effectiveSearchPaths.push_back(m_shaderRootPath.generic_string());
-
-        m_searchPathPointers.clear();
-        m_searchPathPointers.reserve(m_effectiveSearchPaths.size());
-        for (auto const &path : m_effectiveSearchPaths)
-        {
-            m_searchPathPointers.push_back(path.c_str());
-        }
-
-        m_macroDescs.clear();
-        m_macroDescs.reserve(m_options.macros.size());
-        for (auto const &macro : m_options.macros)
-        {
-            m_macroDescs.push_back(slang::PreprocessorMacroDesc{
-                .name = macro.name.c_str(),
-                .value = macro.value.c_str(),
-            });
-        }
-
-        m_compilerOptionEntries.clear();
-        m_compilerOptionEntries.reserve(m_options.compilerOptions.size());
-        std::ranges::for_each(m_options.compilerOptions, [&](const RuntimeSlangCompilerOption &option) {
-            m_compilerOptionEntries.push_back(slang::CompilerOptionEntry{
-                .name = option.name,
-                .value = slang::CompilerOptionValue{
-                    .kind = option.kind,
-                    .intValue0 = option.intValue0,
-                    .intValue1 = option.intValue1,
-                    .stringValue0 = option.stringValue0.empty() ? nullptr : option.stringValue0.c_str(),
-                    .stringValue1 = option.stringValue1.empty() ? nullptr : option.stringValue1.c_str(),
-                },
-            });
-        });
-
-        m_targetDesc = {};
-        m_targetDesc.format = m_options.target;
-        m_targetDesc.profile = m_globalSession->findProfile(m_options.profile.c_str());
-        m_targetDesc.forceGLSLScalarBufferLayout = true;
-
-        if (m_targetDesc.profile == SLANG_PROFILE_UNKNOWN)
-        {
-            m_targetDesc.profile = m_globalSession->findProfile("SPIRV_1_6");
-        }
-
-        slang::SessionDesc sessionDesc{};
-        sessionDesc.targets = &m_targetDesc;
-        sessionDesc.targetCount = 1;
-        sessionDesc.searchPaths = m_searchPathPointers.empty() ? nullptr : m_searchPathPointers.data();
-        sessionDesc.searchPathCount = static_cast<SlangInt>(m_searchPathPointers.size());
-        sessionDesc.preprocessorMacros = m_macroDescs.empty() ? nullptr : m_macroDescs.data();
-        sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(m_macroDescs.size());
-        sessionDesc.compilerOptionEntries = m_compilerOptionEntries.empty() ? nullptr : m_compilerOptionEntries.data();
-        sessionDesc.compilerOptionEntryCount = static_cast<std::uint32_t>(m_compilerOptionEntries.size());
-
-        try
-        {
-            auto result = m_globalSession->createSession(sessionDesc, m_session.writeRef());
-            nrAssert(detail::slangSucceeded(result), "Failed to create Slang session.");
-        }
-        catch (...)
-        {
-            nrInfo<nr::LogLevel::error>(
-                "[ShaderService::recreateSessionLocked] Slang threw an internal exception during createSession. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.");
-            nrAssert(false, "Slang::IGlobalSession::createSession threw an internal exception.");
-        }
-    }
-
-    void emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string_view context) const
-    {
-        if (!diagnostics)
-        {
-            return;
-        }
-
-        auto text = std::string_view(static_cast<const char *>(diagnostics->getBufferPointer()), diagnostics->getBufferSize());
-
-        if (!text.empty())
-        {
-            nrInfo<nr::LogLevel::warning>(std::format("[Slang:{}]\n{}", context, text));
-        }
-    }
+    void emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string_view context) const;
 
     /**
      * @brief Resolve canonical dotted module name from relative module-path input.
@@ -1310,111 +542,9 @@ class ShaderService
      * - input valid, but declared module token conflicts with derived leaf token
      *   output: "" (empty, hard fail)
      */
-    [[nodiscard]] std::string resolveModuleNameLocked(std::string_view modulePath) const
-    {
-            auto derivedModuleName = detail::modulePathToName(modulePath);
-            if (derivedModuleName.empty())
-            {
-                nrInfo<nr::LogLevel::warning>(std::format("[ShaderService::resolveModuleNameLocked] unable to derive module name from modulePath='{}'.", std::string(modulePath)));
-                return {};
-            }
+    [[nodiscard]] std::string resolveModuleNameLocked(std::string_view modulePath) const;
 
-            auto sourcePath = detail::normalizePath(m_shaderRootPath / (detail::moduleNameToPath(derivedModuleName) + ".slang"));
-            auto sourceText = detail::readTextFile(sourcePath);
-            if (auto declaredInSource = detail::extractDeclaredModuleNameFromSource(sourceText); declaredInSource.has_value())
-            {
-                auto declaredModule = *declaredInSource;
-                auto expectedLeaf = detail::moduleLeafName(derivedModuleName);
-                auto declaredMatches = false;
-
-                // Slang source may use leaf declaration (`module useFlag;`) while runtime
-                // identity is full path-derived module name (`test.utils.useFlag`).
-                if (declaredModule.find('.') == std::string::npos)
-                {
-                    declaredMatches = (declaredModule == expectedLeaf);
-                }
-                else
-                {
-                    declaredMatches = (declaredModule == derivedModuleName);
-                }
-
-                if (!declaredMatches)
-                {
-                    auto message = std::format(
-                        "[ShaderService::resolveModuleNameLocked] module declaration mismatch for modulePath='{}': declared='{}', expected='{}' (leaf='{}').",
-                        std::string(modulePath),
-                        declaredModule,
-                        derivedModuleName,
-                        expectedLeaf);
-                    nrInfo<nr::LogLevel::warning>(message);
-                    return {};
-                }
-            }
-            return derivedModuleName;
-    }
-
-    SlangCompiledModule loadOrCompileModuleLocked(const std::string &moduleName, std::optional<std::string> explicitModulePath)
-    {
-        auto normalizedModuleName = moduleName;
-        auto normalizedModulePath = detail::moduleNameToPath(normalizedModuleName);
-
-        if (explicitModulePath.has_value())
-        {
-            if (auto violation = validateModulePathOrganizationLocked(normalizedModuleName, *explicitModulePath); violation.has_value())
-            {
-                nrInfo<LogLevel::warning>(std::string(violation.value()));
-                return {};
-            }
-        }
-
-        auto cacheRootPath = detail::normalizePath(moduleCacheRootLocked());
-        auto moduleBlobPath = detail::makeModuleBinaryPath(cacheRootPath, normalizedModuleName);
-        std::error_code moduleBlobEc;
-        auto sourceModulePath = normalizedModulePath + ".slang";
-
-        auto cacheExists = std::filesystem::exists(moduleBlobPath, moduleBlobEc);
-        if (!moduleBlobEc && cacheExists)
-        {
-            invalidateStaleModuleCacheLocked(normalizedModulePath, moduleBlobPath);
-        }
-
-        SlangCompiledModule result;
-        result.moduleName = normalizedModuleName;
-        result.sourcePath = std::filesystem::path(sourceModulePath);
-
-        Slang::ComPtr<slang::IBlob> diagnostics;
-        Slang::ComPtr<slang::IModule> loadedModule;
-        diagnostics = nullptr;
-        try
-        {
-            loadedModule = Slang::ComPtr<slang::IModule>(m_session->loadModule(normalizedModulePath.c_str(), diagnostics.writeRef()));
-        }
-        catch (...)
-        {
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::loadOrCompileModuleLocked] Slang threw an internal exception during loadModule for module='{}' path='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                normalizedModuleName, normalizedModulePath));
-            emitDiagnosticsLocked(diagnostics.get(), "loadModule(exception-path)");
-            nrAssert(false, "Slang::ISession::loadModule threw an internal exception.");
-        }
-        emitDiagnosticsLocked(diagnostics.get(), "loadModule(module-path)");
-
-        if (!loadedModule)
-        {
-            auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via loadModule(module-path='{}'). Expected slash form like 'test/utils/useFlag'.", normalizedModuleName, normalizedModulePath);
-            nrInfo<LogLevel::warning>(message);
-            return {};
-        }
-
-        std::error_code createDirEc;
-        std::filesystem::create_directories(moduleBlobPath.parent_path(), createDirEc);
-
-            writeModuleCacheBlobAsync(loadedModule, moduleBlobPath);
-
-        result.module = loadedModule;
-        return result;
-    }
+    SlangCompiledModule loadOrCompileModuleLocked(const std::string &moduleName, std::optional<std::string> explicitModulePath);
 
 
   public:

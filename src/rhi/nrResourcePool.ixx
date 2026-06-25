@@ -1,5 +1,5 @@
 export module nr.rhi:resourcePool;
-import dependency;
+import dependency.vulkan;
 import nr.utils;
 import :type;
 import :vk;
@@ -45,28 +45,13 @@ class ResourceFactory
     ResourceFactory(ResourceFactory &&) noexcept = default;
     ResourceFactory &operator=(ResourceFactory &&) noexcept = default;
 
-    void initialize(const MemoryAllocator &allocator, const vk::raii::Device &device)
-    {
-        allocator_ = std::cref(allocator);
-        device_ = std::cref(device);
-    }
+    void initialize(const MemoryAllocator &allocator, const vk::raii::Device &device);
 
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return device_.has_value();
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
-    [[nodiscard]] Buffer createBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const
-    {
-        nrAssert(valid(), "ResourceFactory::createBuffer: factory not initialized");
-        return Buffer::create(*allocator_, device_->get(), createInfo, name, memoryUsage, AllocationStrategy::CrossFrame);
-    }
+    [[nodiscard]] Buffer createBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
 
-    [[nodiscard]] Image createImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const
-    {
-        nrAssert(valid(), "ResourceFactory::createImage: factory not initialized");
-        return Image::create(*allocator_, device_->get(), createInfo, name, memoryUsage);
-    }
+    [[nodiscard]] Image createImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
 
   private:
     std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_{};
@@ -102,17 +87,10 @@ class ResourcePool
      * @param allocator  Initialized MemoryAllocator (must outlive this pool)
      * @param device     RAII device (must outlive this pool)
      */
-    void initialize(const MemoryAllocator &allocator, const vk::raii::Device &device)
-    {
-        allocator_ = std::cref(allocator);
-        device_ = std::cref(device);
-    }
+    void initialize(const MemoryAllocator &allocator, const vk::raii::Device &device);
 
     /// Check if initialized
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return device_.has_value();
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
     /**
      * @brief Allocate a per-frame transient buffer
@@ -126,14 +104,7 @@ class ResourcePool
      * @param name         Optional debug name for profiling tools
      * @return Non-owning reference to the allocated buffer (valid until resetFrame)
      */
-    Buffer &allocateTransientBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "")
-    {
-        nrAssert(valid(), "ResourcePool::allocateTransientBuffer: pool not initialized");
-
-        std::uint32_t idx = frameIndex % maxFrameInFlight;
-        frameBuffers_[idx].emplace_back(Buffer::create(*allocator_, device_->get(), createInfo, name, memoryUsage, AllocationStrategy::PerFrame, frameIndex));
-        return frameBuffers_[idx].back();
-    }
+    Buffer &allocateTransientBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "");
 
     /**
      * @brief Allocate a per-frame transient image
@@ -148,14 +119,7 @@ class ResourcePool
      * @param name         Optional debug name for profiling tools
      * @return Non-owning reference to the allocated image (valid until resetFrame)
      */
-    Image &allocateTransientImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "")
-    {
-        nrAssert(valid(), "ResourcePool::allocateTransientImage: pool not initialized");
-
-        std::uint32_t idx = frameIndex % maxFrameInFlight;
-        frameImages_[idx].emplace_back(Image::create(*allocator_, device_->get(), createInfo, name, memoryUsage));
-        return frameImages_[idx].back();
-    }
+    Image &allocateTransientImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "");
 
     // =====================================================================
     // Frame Lifecycle
@@ -169,14 +133,7 @@ class ResourcePool
      *
      * NOT thread-safe — caller must ensure no concurrent access to this frame.
      */
-    void resetFrame(std::uint32_t frameIndex)
-    {
-        std::uint32_t idx = frameIndex % maxFrameInFlight;
-
-        // RAII destruction cascades to VMA + ImageViews
-        frameBuffers_[idx].clear();
-        frameImages_[idx].clear();
-    }
+    void resetFrame(std::uint32_t frameIndex);
   private:
     // -----------------------------------------------------------------
     // Members

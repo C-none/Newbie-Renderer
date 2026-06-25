@@ -1,5 +1,5 @@
 export module nr.resource:light;
-import dependency;
+import dependency.math;
 
 import std;
 import :type;

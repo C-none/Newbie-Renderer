@@ -1,5 +1,5 @@
 export module nr.rhi:commandPool;
-import dependency;
+import dependency.vulkan;
 import std;
 
 export namespace nr::rhi
@@ -35,11 +35,7 @@ class CommandPool
      * @param queueFamilyIndex Queue family this pool belongs to
      * @param flags Pool creation flags (e.g., TRANSIENT, RESET_COMMAND_BUFFER)
      */
-    CommandPool(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, vk::CommandPoolCreateFlags flags = {}) : queueFamilyIndex_(queueFamilyIndex), device_(std::ref(device))
-    {
-        vk::CommandPoolCreateInfo createInfo{flags, queueFamilyIndex};
-        pool_ = vk::raii::CommandPool(device, createInfo);
-    }
+    CommandPool(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, vk::CommandPoolCreateFlags flags = {});
 
     // Move-only RAII semantics (following vulkan-hpp pattern)
     CommandPool(const CommandPool &) = delete;
@@ -52,22 +48,14 @@ class CommandPool
      * @param count Number of buffers to allocate
      * @return RAII command buffers container
      */
-    [[nodiscard]] vk::raii::CommandBuffers allocatePrimary(std::uint32_t count = 1)
-    {
-        vk::CommandBufferAllocateInfo allocInfo{*pool_, vk::CommandBufferLevel::ePrimary, count};
-        return vk::raii::CommandBuffers(device_->get(), allocInfo);
-    }
+    [[nodiscard]] vk::raii::CommandBuffers allocatePrimary(std::uint32_t count = 1);
 
     /**
      * @brief Allocate multiple secondary command buffers
      * @param count Number of buffers to allocate
      * @return RAII command buffers container
      */
-    [[nodiscard]] vk::raii::CommandBuffers allocateSecondary(std::uint32_t count = 1)
-    {
-        vk::CommandBufferAllocateInfo allocInfo{*pool_, vk::CommandBufferLevel::eSecondary, count};
-        return vk::raii::CommandBuffers(device_->get(), allocInfo);
-    }
+    [[nodiscard]] vk::raii::CommandBuffers allocateSecondary(std::uint32_t count = 1);
 
     /**
      * @brief Reset all command buffers in this pool
@@ -76,34 +64,22 @@ class CommandPool
      * Warning: Invalidates ALL command buffers allocated from this pool!
      * Only call when all submitted command buffers have finished execution.
      */
-    void reset(vk::CommandPoolResetFlags flags = {})
-    {
-        pool_.reset(flags);
-    }
+    void reset(vk::CommandPoolResetFlags flags = {});
 
     /**
      * @brief Get the underlying vk::raii::CommandPool
      */
-    [[nodiscard]] const vk::raii::CommandPool &handle() const noexcept
-    {
-        return pool_;
-    }
+    [[nodiscard]] const vk::raii::CommandPool &handle() const noexcept;
 
     /**
      * @brief Get the queue family index this pool belongs to
      */
-    [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept
-    {
-        return queueFamilyIndex_;
-    }
+    [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept;
 
     /**
      * @brief Check if pool is valid (initialized)
      */
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return device_.has_value() && *pool_ != nullptr;
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
   private:
     vk::raii::CommandPool pool_ = {nullptr};

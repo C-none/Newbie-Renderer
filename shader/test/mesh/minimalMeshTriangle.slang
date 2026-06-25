@@ -1,4 +1,5 @@
 module minimalMeshTriangle;
+import common;
 
 struct CameraData
 {

@@ -109,7 +109,7 @@ RWByteAddressBuffer rwRawBuffer;            // MutableRawBuffer -> eStorageBuffe
 
 - Shader declaration coverage example: `shader/test/main/resourceBindingReflection.slang`
 - Runtime mapping function: `src/rhi/nrDescriptor.ixx`
-- Runtime smoke coverage path: `test/app/normalBufferUiSmoke.cpp` (through `shaderCursor` + descriptor write/update + draw/dispatch binding flow)
+- Runtime smoke coverage path: `test/smoke/app/normalBufferUiSmoke.cpp` (through `shaderCursor` + descriptor write/update + draw/dispatch binding flow)
 
 ## Why this Mapping
 
@@ -130,6 +130,8 @@ So the default mapping is `ParameterBlock -> eUniformBuffer`.
 ### 3) `PushConstant` is intentionally not a descriptor
 
 Push constants are part of `VkPipelineLayout` push constant ranges and `vkCmdPushConstants`, not descriptor sets. Therefore this binding type is excluded from descriptor mapping and handled in push constant range collection.
+
+Newbie-Renderer enforces a project hard limit of 128 bytes for push constants (`nr::rhi::kMaxPushConstantBytes`). Payloads larger than that must be split into renderer global frame uniforms or buffer/texture upload resources.
 
 ## Runtime Binding Flow (Implemented)
 
@@ -162,10 +164,8 @@ Default runtime-array set convention:
 | `StorageImage` | 2 |
 | buffer and texel-buffer descriptors | 3 |
 | `AccelerationStructure` | 4 |
-| `InputAttachment` | 5 |
-| `InlineUniformBlock` | 6 |
 
-Fixed-size descriptors can still use shader-declared sets outside this convention. The convention only applies when Slang reports an unbounded/runtime-sized descriptor array.
+Fixed-size descriptors can still use shader-declared sets outside this convention. The convention only applies when Slang reports an unbounded/runtime-sized descriptor array. Runtime-sized input-attachment and inline-uniform-block arrays do not have reserved semantic sets in the current ABI; add an explicit convention only when a real pass requires that model.
 
 ### Reflection lifetime requirement
 
@@ -189,6 +189,7 @@ Fixed-size descriptors can still use shader-declared sets outside this conventio
 - Converts `DescriptorWriteRequest` payloads to Vulkan write structs
 - Calls `vkUpdateDescriptorSets` through RAII device
 - Validates set index and array element bounds
+- Logical buffer descriptors carry explicit offset and range; renderer global frame uniforms use this to bind suballocations from the renderer-owned CPU-to-GPU uniform arena.
 
 ### RAII resource adaptation
 

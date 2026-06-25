@@ -40,14 +40,12 @@ void printUsage()
             .runtime = embeddedTriangle,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "EmbeddedTriangle",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = ui,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "Ui",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
@@ -85,7 +83,6 @@ void printUsage()
     graphSpec.submitNodes = {
         nr::renderer::SubmitNodeSpec{
             .debugName = "Main.GraphicsToCompute",
-            .kind = nr::renderer::SubmitBoundaryKind::Explicit,
             .afterNodeIndex = 1,
         },
     };
@@ -130,11 +127,11 @@ void printUsage()
                     previousTick = now;
                     app.ui().beginFrame(presentation, deltaSeconds);
                     app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
-                    embeddedTriangle->input.viewProjection =
-                        app.camera().buildRendererCameraOverride().frameConstants.viewProjection;
+                    auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
                     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
                         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
+                        .cameraOverride = cameraOverride,
                         .frameServices = std::ref(frameServices),
                     });
                     if (!frameResult.rendered)

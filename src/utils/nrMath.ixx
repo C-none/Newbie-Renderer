@@ -1,5 +1,4 @@
 export module nr.utils:math;
-import dependency;
 import std;
 export namespace nr
 {

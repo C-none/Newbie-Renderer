@@ -11,6 +11,8 @@ option(NR_ENABLE_RELEASE_IPO "Enable IPO/LTO for Release builds when supported."
 option(NR_ENABLE_CLANGD_SYNC "Synchronize clangd's isolated compile database and standard module BMI during LLVM project builds." ON)
 
 set(NR_LOG_LEVEL "INFO")
+set(NR_MAX_FRAME_IN_FLIGHT "3" CACHE STRING "Number of renderer frames in flight")
+set(NR_STATISTICS_SAMPLE_FRAME_COUNT "240" CACHE STRING "Frame count used for averaged runtime statistics")
 set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache/$<CONFIG>" CACHE STRING "Runtime shader cache directory")
 set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory")
 set(NR_CLANGD_BINARY_DIR "${CMAKE_SOURCE_DIR}/build/llvm-clangd" CACHE PATH "Build directory used to generate clangd's isolated compile database and standard module BMI.")

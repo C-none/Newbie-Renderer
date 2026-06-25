@@ -1,5 +1,5 @@
 export module nr.resource:math;
-import dependency;
+import dependency.math;
 
 import std;
 

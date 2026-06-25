@@ -1,5 +1,5 @@
 export module nr.resource:particle;
-import dependency;
+import dependency.math;
 
 import std;
 import :geometry;

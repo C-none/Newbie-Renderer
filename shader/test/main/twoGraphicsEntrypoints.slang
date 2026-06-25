@@ -1,4 +1,5 @@
 module twoGraphicsEntrypoints;
+import common;
 
 struct VsOutput
 {

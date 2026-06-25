@@ -1,5 +1,5 @@
 export module nr.rhi:frameContext;
-import dependency;
+import dependency.vulkan;
 import nr.utils;
 import std;
 import :commandPool;
@@ -32,20 +32,23 @@ export namespace nr::rhi
  *
  * 2. beginFrame calls prepareSecondaryPools() on the main thread.
  *    Missing slots [0, workerCount) are created before RDG recording starts.
+ *    Slot 0 is reserved for main-thread aggregation paths; RDG worker pass
+ *    recording uses slots [1, workerCount).
  *
  * 3. The RDG executor allocates retained secondary command buffers from
- *    frame.secondary<T>(threadId) on the main thread before submitting record work.
+ *    frame.secondary<T>(secondaryPoolSlot) on the main thread before submitting
+ *    record work. The selected slot must be a worker-only slot.
  *    - No locks
  *    - No growth
  *    - O(1) index access with bounds assertions
  *
  * 4. Worker threads reset and record only command buffers from their own pool
- *    index (threadId), so command-pool operations do not contend during recording.
+ *    slot, so command-pool operations do not contend during recording.
  *
  * Usage Pattern:
  *
- *   // Main thread: allocate retained secondaries from worker-local pools.
- *   CommandPool& pool = frame.secondary<QueueRole::Graphics>(workerId);
+ *   // Main thread: allocate retained secondaries from worker-only pools.
+ *   CommandPool& pool = frame.secondary<QueueRole::Graphics>(secondaryPoolSlot);
  *   vk::raii::CommandBuffer& secondary = retainedCache.getOrAllocate(pool);
  *
  *   // Worker thread: reset and record the assigned secondary only.
@@ -65,8 +68,9 @@ export namespace nr::rhi
 class FrameContext
 {
   public:
-        /// Compile-time upper bound for worker-secondary pools on amd64 builds.
-        inline static constexpr std::uint32_t kMaxSecondaryWorkers = nr::maxThreads;
+    /// Compile-time upper bound for worker-secondary pools on amd64 builds.
+    inline static constexpr std::uint32_t kMaxSecondaryWorkers = nr::maxThreads;
+    static_assert(kMaxSecondaryWorkers > 1, "FrameContext requires slot 0 plus at least one worker-only secondary pool slot.");
 
     /**
      * @brief Configuration for per-queue command pools
@@ -86,46 +90,14 @@ class FrameContext
      * @param computeConfig Compute queue pool configuration
      * @param transferConfig Dedicated transfer queue pool configuration
      */
-    FrameContext(const vk::raii::Device &device, const PoolConfig &graphicsConfig, const PoolConfig &computeConfig, const PoolConfig &transferConfig)
-        : device_(std::ref(device)), graphicsQueueFamily_(graphicsConfig.queueFamilyIndex), computeQueueFamily_(computeConfig.queueFamilyIndex), transferQueueFamily_(transferConfig.queueFamilyIndex)
-    {
-        // Create fence (signaled initially so first frame doesn't wait)
-        vk::FenceCreateInfo fenceInfo{vk::FenceCreateFlagBits::eSignaled};
-        fence_ = vk::raii::Fence(device, fenceInfo);
-
-        // renderFinished semaphore is owned here; imageAvailable is borrowed from
-        // the PresentationContext acquire pool and injected at frame-begin.
-        vk::SemaphoreCreateInfo semaphoreInfo{};
-        renderFinished_ = vk::raii::Semaphore(device, semaphoreInfo);
-
-        // Create primary pools (one per queue type, main thread only).
-        // Primary command buffers are retained and individually reset every frame,
-        // so pools must allow vkResetCommandBuffer.
-        constexpr auto primaryPoolFlags = vk::CommandPoolCreateFlagBits::eTransient |
-                                          vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-        graphicsPrimary_ = CommandPool(device, graphicsConfig.queueFamilyIndex, primaryPoolFlags);
-
-        computePrimary_ = CommandPool(device, computeConfig.queueFamilyIndex, primaryPoolFlags);
-
-        transferPrimary_ = CommandPool(device, transferConfig.queueFamilyIndex, primaryPoolFlags);
-    }
+    FrameContext(const vk::raii::Device &device, const PoolConfig &graphicsConfig, const PoolConfig &computeConfig, const PoolConfig &transferConfig);
 
     // Move-only semantics
     FrameContext(const FrameContext &) = delete;
     FrameContext &operator=(const FrameContext &) = delete;
-    FrameContext(FrameContext &&other) noexcept
-    {
-        moveFrom(std::move(other));
-    }
+    FrameContext(FrameContext &&other) noexcept;
 
-    FrameContext &operator=(FrameContext &&other) noexcept
-    {
-        if (this != &other)
-        {
-            moveFrom(std::move(other));
-        }
-        return *this;
-    }
+    FrameContext &operator=(FrameContext &&other) noexcept;
 
     /**
      * @brief Wait for this frame's fence to be signaled
@@ -168,20 +140,7 @@ class FrameContext
      * Call from frame-begin on the main thread before worker recording starts.
      * Recording-time access (`secondary<T>()`) never grows storage or acquires locks.
      */
-    void prepareSecondaryPools(std::uint32_t graphicsWorkerCount = kMaxSecondaryWorkers, std::uint32_t computeWorkerCount = kMaxSecondaryWorkers, std::uint32_t transferWorkerCount = 0)
-    {
-        graphicsPreparedSecondaryWorkers_ = std::min(graphicsWorkerCount, kMaxSecondaryWorkers);
-        computePreparedSecondaryWorkers_ = std::min(computeWorkerCount, kMaxSecondaryWorkers);
-
-        prepareQueueSecondaryPools(graphicsSecondary_, graphicsQueueFamily_, graphicsPreparedSecondaryWorkers_);
-        prepareQueueSecondaryPools(computeSecondary_, computeQueueFamily_, computePreparedSecondaryWorkers_);
-
-        transferPreparedSecondaryWorkers_ = std::min(transferWorkerCount, kMaxSecondaryWorkers);
-        if (transferPreparedSecondaryWorkers_ > 0)
-        {
-            prepareQueueSecondaryPools(transferSecondary_, transferQueueFamily_, transferPreparedSecondaryWorkers_);
-        }
-    }
+    void prepareSecondaryPools(std::uint32_t graphicsWorkerCount = kMaxSecondaryWorkers, std::uint32_t computeWorkerCount = kMaxSecondaryWorkers, std::uint32_t transferWorkerCount = 0);
 
     /**
      * @brief Get primary command pool for queue
@@ -216,10 +175,7 @@ class FrameContext
      * @brief Get the fence for this frame
      * @return Reference to vk::raii::Fence
      */
-    [[nodiscard]] const vk::raii::Fence &fence() const noexcept
-    {
-        return fence_;
-    }
+    [[nodiscard]] const vk::raii::Fence &fence() const noexcept;
 
     /**
      * @brief Inject the pre-acquired image-available semaphore for this frame.
@@ -229,38 +185,25 @@ class FrameContext
      * holds a non-owning pointer valid until Device::beginFrame() calls
      * PresentationContext::returnAcquireSemaphore() on the next cycle.
      */
-    void setBorrowedAcquireSemaphore(const vk::raii::Semaphore *semaphore) noexcept
-    {
-        borrowedAcquireSemaphore_ = semaphore;
-    }
+    void setBorrowedAcquireSemaphore(const vk::raii::Semaphore *semaphore) noexcept;
 
     /**
      * @brief Get the image-available semaphore borrowed from the acquire pool.
      */
-    [[nodiscard]] const vk::raii::Semaphore &imageAvailable() const noexcept
-    {
-        nrAssert(borrowedAcquireSemaphore_ != nullptr, "FrameContext::imageAvailable requires a borrowed acquire semaphore (call setBorrowedAcquireSemaphore first).");
-        return *borrowedAcquireSemaphore_;
-    }
+    [[nodiscard]] const vk::raii::Semaphore &imageAvailable() const noexcept;
 
     /**
      * @brief Get render finished semaphore (signaled after rendering for present)
      * @return Reference to vk::raii::Semaphore
      */
-    [[nodiscard]] const vk::raii::Semaphore &renderFinished() const noexcept
-    {
-        return renderFinished_;
-    }
+    [[nodiscard]] const vk::raii::Semaphore &renderFinished() const noexcept;
 
     // ========== Status queries ==========
 
     /**
      * @brief Check if fence is currently signaled
      */
-    [[nodiscard]] bool isFenceSignaled() const
-    {
-        return fence_.getStatus() == vk::Result::eSuccess;
-    }
+    [[nodiscard]] bool isFenceSignaled() const;
 
     /**
      * @brief Get number of registered secondary pools
@@ -271,56 +214,14 @@ class FrameContext
     }
 
   private:
-    void moveFrom(FrameContext &&other) noexcept
-    {
-        device_ = std::move(other.device_);
-        graphicsQueueFamily_ = other.graphicsQueueFamily_;
-        computeQueueFamily_ = other.computeQueueFamily_;
-        transferQueueFamily_ = other.transferQueueFamily_;
-
-        fence_ = std::move(other.fence_);
-        borrowedAcquireSemaphore_ = other.borrowedAcquireSemaphore_;
-        other.borrowedAcquireSemaphore_ = nullptr;
-        renderFinished_ = std::move(other.renderFinished_);
-
-        graphicsPrimary_ = std::move(other.graphicsPrimary_);
-        graphicsSecondary_ = std::move(other.graphicsSecondary_);
-
-        computePrimary_ = std::move(other.computePrimary_);
-        computeSecondary_ = std::move(other.computeSecondary_);
-
-        transferPrimary_ = std::move(other.transferPrimary_);
-        transferSecondary_ = std::move(other.transferSecondary_);
-
-        graphicsPreparedSecondaryWorkers_ = other.graphicsPreparedSecondaryWorkers_;
-        computePreparedSecondaryWorkers_ = other.computePreparedSecondaryWorkers_;
-        transferPreparedSecondaryWorkers_ = other.transferPreparedSecondaryWorkers_;
-    }
+    void moveFrom(FrameContext &&other) noexcept;
 
     /**
      * @brief Ensure queue-specific secondary pool slots are materialized for [0, workerCount).
      */
-    static void resetPreparedSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t preparedWorkerCount)
-    {
-        std::ranges::for_each(slots | std::views::take(preparedWorkerCount), [](std::optional<CommandPool> &pool) {
-            if (pool.has_value())
-                pool->reset();
-        });
-    }
+    static void resetPreparedSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t preparedWorkerCount);
 
-    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t queueFamilyIndex, std::uint32_t workerCount)
-    {
-        auto slotIndices = std::views::iota(std::uint32_t{0}, workerCount);
-        std::ranges::for_each(slotIndices, [&](std::uint32_t slotIndex) {
-            if (!slots[slotIndex].has_value())
-            {
-                slots[slotIndex].emplace(
-                    device_->get(),
-                    queueFamilyIndex,
-                    vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-            }
-        });
-    }
+    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t queueFamilyIndex, std::uint32_t workerCount);
 
     template <QueueRole T> [[nodiscard]] static consteval bool isSupportedQueueRole() noexcept
     {
@@ -466,14 +367,7 @@ class FrameManager
      * @param computeConfig Compute pool configuration
      * @param transferConfig Dedicated transfer pool configuration
      */
-    FrameManager(const vk::raii::Device &device, const FrameContext::PoolConfig &graphicsConfig, const FrameContext::PoolConfig &computeConfig, const FrameContext::PoolConfig &transferConfig)
-    {
-        frames_.reserve(maxFrameInFlight);
-        auto frameIndices = std::views::iota(std::uint32_t{0}, maxFrameInFlight);
-        std::ranges::for_each(frameIndices, [&](std::uint32_t) {
-            frames_.emplace_back(device, graphicsConfig, computeConfig, transferConfig);
-        });
-    }
+    FrameManager(const vk::raii::Device &device, const FrameContext::PoolConfig &graphicsConfig, const FrameContext::PoolConfig &computeConfig, const FrameContext::PoolConfig &transferConfig);
 
     // Move-only semantics
     FrameManager(const FrameManager &) = delete;
@@ -485,18 +379,12 @@ class FrameManager
      * @brief Get the next frame context (round-robin)
      * @return Reference to next frame context
      */
-    void advanceFrame() noexcept
-    {
-        currentIndex_ = (currentIndex_ + 1) % frames_.size();
-    }
+    void advanceFrame() noexcept;
 
     /**
      * @brief Get current frame context (last acquired)
      */
-    [[nodiscard]] FrameContext &current() noexcept
-    {
-        return frames_[currentIndex_];
-    }
+    [[nodiscard]] FrameContext &current() noexcept;
 
     /**
      * @brief Get frame context by index

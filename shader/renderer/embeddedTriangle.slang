@@ -1,11 +1,5 @@
 module embeddedTriangle;
-
-struct EmbeddedTriangleFrameUniforms
-{
-    column_major float4x4 viewProjection;
-};
-
-ConstantBuffer<EmbeddedTriangleFrameUniforms> gFrame;
+import common;
 
 struct VSOutput
 {

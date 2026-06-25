@@ -2,9 +2,13 @@
 
 This document defines the enforced Slang module/file organization used by `ShaderService`.
 
+## Project Policy and Reference Docs
+
+The files under `nrslang-doc/` are Slang reference material. They are useful for API background, but they do not override this repository's shader policy. In particular, even if an upstream Slang reference discusses bindable resources as entry-point parameters, shader code consumed by `nr.rhi` must follow the global-scope binding rule below.
+
 ## Mandatory Resource Binding Scope Policy
 
-The following constraint is mandatory for all shader code consumed by `nrrhi`:
+The following constraint is mandatory for all shader code consumed by `nr.rhi`:
 
 - Bindable resources must be declared in **global scope** only.
 - Entry-point parameter lists may only contain stage IO (for example `SV_DispatchThreadID`, varyings, and non-bindable value parameters).
@@ -109,6 +113,31 @@ Example:
 - `import` must use fully qualified dotted name (`test.utils.utils`).
 
 This split is intentional and required by current Slang behavior in this repository.
+
+## Shared Common Shader Module
+
+Every project shader imports the root `common` module:
+
+```slang
+import common;
+```
+
+`shader/common.slang` is the shared shader-side ABI entry and must stay an aggregation file only. It should contain explanatory comments plus `__include` lines, while actual declarations live in the included subfiles.
+`shader/globalUniform.slang` is an `implementing common` file that declares the global frame uniform payload type and buffer:
+
+```slang
+public struct GlobalFrameUniforms { /* ... */ }
+[[vk::binding(0, 7)]]
+public ConstantBuffer<GlobalFrameUniforms> gFrame;
+```
+
+The global frame uniform reserves Vulkan descriptor set 7, binding 0. Keep set 0-6 available for the existing semantic descriptor-array conventions and local fixed bindings unless a shader-specific ABI document says otherwise.
+
+Only shaders that actually reference `gFrame` require a matching C++ descriptor binding. Pass code should bind it through the reflection-backed `shaderCursor` path, normally via renderer pass builders such as:
+
+```cpp
+.uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
+```
 
 ## End-to-End Shader Build Pipeline
 

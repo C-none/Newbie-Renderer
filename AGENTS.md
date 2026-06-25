@@ -29,17 +29,18 @@ This document outlines the development standards, architectural principles, and 
 *   **Default-Member Construction:** When an aggregate or object member already has a default member initializer, omit that member during construction if the constructed value would be identical to the default. Assign only members whose value changes from the default, unless an explicit assignment is needed to document an API boundary, disambiguate overloads, or intentionally reset an existing object after construction.
 *   **Null-Equivalent Construction:** For optional or pointer-like objects that default to an empty/null state (for example `std::optional`, nullable external API pointers, Vulkan-Hpp optional handles, or RAII handle wrappers), do not explicitly assign `std::nullopt`, `nullptr`, or an equivalent empty value during aggregate/object construction when the value would remain unchanged. Use `{}` default member initialization for stored optional-like fields that need an explicit empty default. Use explicit empty assignments only when clearing an existing object, defining an API default argument, disambiguating overloads, or passing a required null at an external API boundary.
 *   **Modules:** Use C++20 modules (`.ixx`) for internal code organization.
+*   **Large Partition Split Policy:** When a module partition grows beyond a small declaration-only surface, split it into a module interface partition (`.ixx`) and a matching module implementation unit (`.cpp`). Keep exported types, declarations, templates, `constexpr`/`consteval` logic, default arguments, and necessary tiny inline helpers in the `.ixx`; move non-template, non-`constexpr`, non-essential runtime implementation into the `.cpp`. Small declaration-only/type-only partitions may remain as a single `.ixx`.
 
 ### 2.3 Resource Management (RAII)
 
-*   **RAII Principle:** The `nrrhi` (Newbie-Renderer RHI) module must strictly adhere to **RAII (Resource Acquisition Is Initialization)** principles.
+*   **RAII Principle:** The `nr.rhi` (Newbie-Renderer RHI) module must strictly adhere to **RAII (Resource Acquisition Is Initialization)** principles.
 *   **Ownership:** Resources (buffers, images, pipelines) should be owned by objects that manage their lifecycle.
 *   **Cleanup:** Destructors must ensure proper release of Vulkan/API resources. Avoid manual `init()`/`destroy()` pairs where a constructor/destructor pair can suffice.
 
 ### 2.4 Dependency Management
 
-*   **Third-Party Libraries:** All third-party non-module libraries (legacy headers/libs) must be encapsulated and introduced through the **`dependency`** module (e.g., `src/extern` or equivalent wrapper modules).
-*   **Isolation:** Do not include raw third-party headers directly in core logic modules; use the adapted module interfaces.
+*   **Third-Party Libraries:** All third-party non-module libraries (legacy headers/libs) must be encapsulated at the `src/extern` boundary and introduced through narrow **`dependency.*`** modules (for example `dependency.vulkan`, `dependency.vma`, `dependency.window`, `dependency.math`, `dependency.ui`, `dependency.assets`, `dependency.slang`, `dependency.ecs`, and `dependency.nsight`). The top-level **`dependency`** module is a compatibility umbrella that may re-export those narrow modules.
+*   **Isolation:** Do not include raw third-party headers directly in core logic modules; import the adapted `dependency.*` module interfaces instead.
 
 ### 2.5 Platform & Hardware Targeting (RHI Scope)
 
@@ -52,7 +53,7 @@ This document outlines the development standards, architectural principles, and 
 
 ### 2.6 Vulkan Command Invocation Policy
 
-*   **No Dispatch Tables in Project Code:** Do **not** introduce custom PFN dispatch tables or per-command function-pointer caches in `nrrhi` and test/profile code.
+*   **No Dispatch Tables in Project Code:** Do **not** introduce custom PFN dispatch tables or per-command function-pointer caches in `nr.rhi` and project test code.
 *   **No Raw C API Command Calls:** Prefer Vulkan-Hpp RAII object member functions over raw `vkCmd*` / `vk*` C API entry points.
     *   *Preferred:* `vk::raii::CommandBuffer::buildAccelerationStructuresKHR(...)`, `vk::raii::CommandBuffer::traceRaysKHR(...)`.
     *   *Avoid:* manual `getProcAddr`, `dispatcher->vkCmd*`, `reinterpret_cast<PFN_vk...>`, or raw-handle `vkCmd*` calls.
@@ -88,12 +89,19 @@ This document outlines the development standards, architectural principles, and 
 ### 2.10 RenderPass Resource Binding Policy
 
 *   **RenderPasses Binding:** In `renderPasses`, except for vertex/index buffers and pipeline-fixed resources, all bindable resources (descriptor-set describable resources and push constants) must be driven by `nrslang` reflection and the binding relations recorded via `shaderCursor`.
-*   **Binding Location:** In RDG parallel execution, descriptor-backed resources must be updated from the `addPass` prepare callback by calling `updateResourcesForBindingSnapshot(...)`; the record callback must only bind already-updated descriptor sets through `bindPreparedResourcesToCommandBuffer(...)` and push constants through `pushConstantsToCommandBuffer(...)` (see `src/rhi/nrPipeline.ixx`). `bindResourcesToCommandBuffer(...)` is a legacy/synchronous helper and must not be used by parallel RDG paths.
+*   **Binding Location:** In RDG parallel execution, descriptor-backed resources must be updated in the prepare stage and only bound/pushed in the record stage. Render-pass nodes should normally use renderer-side `RasterPassBuilder` / `ComputePassBuilder`, which own the calls to `updateResourcesForBindingSnapshot(...)`, `bindPreparedResourcesToCommandBuffer(...)`, and `pushConstantsToCommandBuffer(...)` (see `src/rhi/nrPipeline.ixx`). Any lower-level shader-visible `addPass` path must preserve the same prepare/record split. `bindResourcesToCommandBuffer(...)` is a legacy/synchronous helper and must not be used by parallel RDG paths.
 *   **Avoid Manual Vulkan Binding:** Do not manually construct/update/bind Vulkan descriptor sets or push constants from `renderPasses` code outside of the `shaderCursor`-based pathway.
+
+### 2.11 GPU Upload Policy
+
+*   **Direct CPU Writes:** Direct `Buffer::writeMappedAndFlush(...)` writes are allowed only for resources intentionally allocated as CPU-writable GPU-visible memory, such as per-frame uniforms or dynamic vertex/index buffers that are directly consumed by the GPU.
+*   **Unified Staging Ring:** If the upload target is not directly CPU-writable GPU-visible memory, route CPU data through the device-level `nr::rhi::ops::UploadReadbackContext` upload ring (`uploadBuffer(...)` / `uploadImage(...)`) instead of creating node-local or module-local staging buffers.
+*   **Queue Ownership:** Uploads that use the staging ring must preserve the transfer-to-destination queue ownership handoff. The destination queue acquire barrier must complete before the resource is exposed as resident or imported for shader-visible graph use.
+*   **RenderPass Rule:** `renderPasses` code must not add persistent per-node `TransferSrc` staging buffers for GPU-only resources. Use the RHI upload ring for those uploads, while keeping truly direct CPU-visible frame resources as direct mapped writes.
 
 ## 3. Module Structure
 
-*   **`nrrhi`:** The Render Hardware Interface. Implements the abstraction over Vulkan.
+*   **`nr.rhi`:** The Render Hardware Interface. Implements the abstraction over Vulkan.
 *   **`src/extern`:** Contains wrappers and build logic for external dependencies (e.g., Slang, NVAPI, Aftermath).
 
 ## 4. Specific Agent Instructions
@@ -101,7 +109,7 @@ This document outlines the development standards, architectural principles, and 
 When generating code or refactoring:
 1.  **Check Context:** Verify if the file is a module interface (`.ixx`) or implementation (`.cpp`).
 2.  **Apply Constraints:** Ensure no raw loops are introduced if a range-based solution exists.
-3.  **Safety:** Verify RAII compliance in `nrrhi` classes.
+3.  **Safety:** Verify RAII compliance in `nr.rhi` classes.
 4.  **Language:** All code comments must be in English.
 5.  **Ownership Semantics:** Enforce Section 2.7 and avoid introducing raw-pointer ownership patterns.
 

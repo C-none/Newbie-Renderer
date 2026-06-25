@@ -47,7 +47,6 @@ const nr::test::CaseRegistrar rtShaderReflectionCase{
         nr::test::require(outputImage.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = 101,
             .debugName = "logical-output",
-            .imageLayout = vk::ImageLayout::eGeneral,
         }));
         nr::test::require(camera.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = 102,

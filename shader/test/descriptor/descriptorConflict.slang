@@ -1,4 +1,5 @@
 module descriptorConflict;
+import common;
 
 RWStructuredBuffer<uint> sharedBuffer;
 

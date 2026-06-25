@@ -1,0 +1,353 @@
+module nr.renderPasses;
+import dependency.math;
+import dependency.vulkan;
+
+import :normalBuffer;
+import nr.app;
+import nr.renderer;
+import nr.rhi;
+import nr.scene;
+import nr.resource;
+import nr.utils;
+import std;
+import :nodeType;
+
+namespace nr::renderPasses::detail
+{
+struct NormalBufferRuntimeCache
+{
+    std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>> pipeline{};
+
+    std::array<nr::rhi::Image, nr::maxFrameInFlight> normalBuffers{};
+    std::array<nr::rhi::Image, nr::maxFrameInFlight> depthBuffers{};
+};
+
+struct NormalBufferPushConstants
+{
+    glm::mat4 model{1.0f};
+};
+
+static_assert(sizeof(NormalBufferPushConstants) <= nr::rhi::kMaxPushConstantBytes, "Push constants exceed 128 bytes.");
+
+inline constexpr std::uint32_t kVertexStride = 104;
+inline constexpr std::uint32_t kOffsetPosition = 0;
+inline constexpr std::uint32_t kOffsetNormal = 12;
+
+[[nodiscard]] std::vector<vk::VertexInputBindingDescription> makeVertexBindings()
+{
+    return {
+        vk::VertexInputBindingDescription{
+            0,
+            kVertexStride,
+            vk::VertexInputRate::eVertex,
+        },
+    };
+}
+
+[[nodiscard]] std::vector<vk::VertexInputAttributeDescription> makeVertexAttributes()
+{
+    return {
+        vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat, kOffsetPosition},
+        vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat, kOffsetNormal},
+    };
+}
+
+[[nodiscard]] std::shared_ptr<NormalBufferRuntimeCache> ensureNormalBufferRuntime(
+    nr::rhi::Device& device,
+    vk::Format colorFormat,
+    vk::Format depthFormat)
+{
+    auto& shaderService = nr::rhi::ShaderService::instance();
+
+    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+        .sourcePath = std::filesystem::path("renderer/normalBuffer"),
+    });
+    nr::nrAssert(program.valid(), "NormalBuffer pass failed to compile shader module renderer/normalBuffer.");
+
+    auto pipelineDesc = nr::rhi::GraphicsPipelineDesc{};
+    pipelineDesc.entryPointNames = {"vertexMain", "fragmentMain"};
+    pipelineDesc.colorAttachmentFormats = {colorFormat};
+    pipelineDesc.depthAttachmentFormat = depthFormat;
+    pipelineDesc.depthTestEnable = true;
+    pipelineDesc.depthWriteEnable = true;
+    pipelineDesc.vertexBindings = makeVertexBindings();
+    pipelineDesc.vertexAttributes = makeVertexAttributes();
+    pipelineDesc.dynamicStates = {
+        vk::DynamicState::eViewport,
+        vk::DynamicState::eScissor,
+        vk::DynamicState::eCullMode,
+        vk::DynamicState::eFrontFace,
+        vk::DynamicState::eDepthTestEnable,
+        vk::DynamicState::eDepthWriteEnable,
+        vk::DynamicState::eDepthCompareOp,
+        vk::DynamicState::ePolygonModeEXT,
+        vk::DynamicState::eRasterizationSamplesEXT,
+        vk::DynamicState::ePrimitiveTopology,
+    };
+
+    auto runtime = std::make_shared<NormalBufferRuntimeCache>();
+    runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
+    runtime->pipeline->initialize(device.pipeline().createGraphicsPipeline(program, pipelineDesc));
+    nr::nrAssert(runtime->pipeline->valid(), "NormalBuffer pass failed to create graphics pipeline.");
+
+    return runtime;
+}
+
+void ensureNormalBufferImages(
+    nr::rhi::Device& device,
+    NormalBufferRuntimeCache& runtime,
+    vk::Extent2D extent,
+    vk::Format colorFormat,
+    vk::Format depthFormat)
+{
+    auto imageNeedsRealloc = [](const nr::rhi::Image& image, vk::Extent2D requestedExtent, vk::Format requestedFormat) {
+        if (!image.valid())
+        {
+            return true;
+        }
+
+        auto const currentExtent = image.extent();
+        return currentExtent.width < requestedExtent.width ||
+               currentExtent.height < requestedExtent.height ||
+               image.format() != requestedFormat;
+    };
+
+    const auto needsRealloc =
+        std::ranges::any_of(runtime.normalBuffers, [&](const nr::rhi::Image& image) {
+            return imageNeedsRealloc(image, extent, colorFormat);
+        }) ||
+        std::ranges::any_of(runtime.depthBuffers, [&](const nr::rhi::Image& image) {
+            return imageNeedsRealloc(image, extent, depthFormat);
+        });
+
+    if (!needsRealloc)
+    {
+        return;
+    }
+
+    auto newExtent = vk::Extent2D{
+        std::max(1u, extent.width),
+        std::max(1u, extent.height),
+    };
+    auto growToExistingExtent = [&newExtent](const nr::rhi::Image& image) {
+        if (!image.valid())
+        {
+            return;
+        }
+
+        auto const currentExtent = image.extent();
+        newExtent.width = std::max(newExtent.width, currentExtent.width);
+        newExtent.height = std::max(newExtent.height, currentExtent.height);
+    };
+
+    std::ranges::for_each(runtime.normalBuffers, growToExistingExtent);
+    std::ranges::for_each(runtime.depthBuffers, growToExistingExtent);
+
+    auto frameSlots = std::views::iota(std::size_t{0}, runtime.normalBuffers.size());
+    std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) {
+        auto const frameSlotSuffix = std::format("[{}]", frameSlot);
+        {
+            auto imageInfo = nr::rhi::makeImageCreateInfo(
+                colorFormat,
+                newExtent,
+                vk::ImageUsageFlagBits::eColorAttachment |
+                    vk::ImageUsageFlagBits::eTransferSrc |
+                    vk::ImageUsageFlagBits::eSampled);
+
+            runtime.normalBuffers[frameSlot] = device.resourceFactory.createImage(
+                imageInfo,
+                nr::rhi::MemoryUsage::GpuOnly,
+                std::format("NormalBuffer.Color{}", frameSlotSuffix));
+            nr::nrAssert(runtime.normalBuffers[frameSlot].valid(), "NormalBuffer failed to create normal buffer image.");
+        }
+
+        {
+            auto imageInfo = nr::rhi::makeImageCreateInfo(
+                depthFormat,
+                newExtent,
+                vk::ImageUsageFlagBits::eDepthStencilAttachment);
+
+            runtime.depthBuffers[frameSlot] = device.resourceFactory.createImage(
+                imageInfo,
+                nr::rhi::MemoryUsage::GpuOnly,
+                std::format("NormalBuffer.Depth{}", frameSlotSuffix));
+            nr::nrAssert(runtime.depthBuffers[frameSlot].valid(), "NormalBuffer failed to create depth buffer image.");
+        }
+    });
+}
+
+[[nodiscard]] std::optional<std::reference_wrapper<nr::app::UiSystem>> tryGetUiSystem(
+    const nr::renderer::NodeFrameParameters& frameParameters)
+{
+    if (!frameParameters.frameServices.has_value())
+    {
+        return std::nullopt;
+    }
+
+    return frameParameters.frameServices->get().tryGet<nr::app::UiSystem>();
+}
+} // namespace nr::renderPasses::detail
+
+namespace nr::renderPasses
+{
+NormalBufferNode::~NormalBufferNode() = default;
+
+NodeDescription NormalBufferNode::describe() const
+{
+    return NodeDescription{
+        .name = "NormalBuffer",
+        .outputPorts = {
+            NodePort{.name = "color"},
+            NodePort{.name = "depth"},
+        },
+    };
+}
+
+void NormalBufferNode::initialize(NodeInitContext& context)
+{
+    device_ = context.device;
+    auto colorFormat = input.colorFormat;
+    if (colorFormat == vk::Format::eUndefined)
+    {
+        colorFormat = context.device.get().presentationContext.swapchainFormat();
+    }
+    runtime_ = detail::ensureNormalBufferRuntime(context.device.get(), colorFormat, input.depthFormat);
+    nr::rhi::setPipelineDebugName(
+        context.device.get().device,
+        runtime_->pipeline->pipeline().raw(),
+        describe().name + ".Pipeline");
+
+    auto initialExtent = input.viewportExtent;
+    if (initialExtent.width <= 1 || initialExtent.height <= 1)
+    {
+        initialExtent = vk::Extent2D{1920, 1080};
+    }
+    detail::ensureNormalBufferImages(context.device.get(), *runtime_, initialExtent, colorFormat, input.depthFormat);
+}
+
+void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
+{
+    nr::nrAssert(static_cast<bool>(runtime_), "NormalBuffer build stage requires initialized runtime state.");
+    nr::nrAssert(device_.has_value(), "NormalBuffer build stage requires initialize() device reference.");
+
+    if (auto uiSystem = detail::tryGetUiSystem(frameParameters); uiSystem.has_value())
+    {
+        auto window = uiSystem->get().window("Normal Buffer");
+        if (window)
+        {
+            [[maybe_unused]] auto checkboxChanged =
+                uiSystem->get().checkbox("Display Back Faces", input.displayBackFaces);
+        }
+    }
+
+    auto viewportExtent = input.viewportExtent;
+    if (viewportExtent.width == 1 && viewportExtent.height == 1)
+    {
+        viewportExtent = frameParameters.swapchainExtent;
+    }
+
+    auto colorFormat = input.colorFormat;
+    if (colorFormat == vk::Format::eUndefined)
+    {
+        colorFormat = frameParameters.swapchainFormat;
+    }
+
+    detail::ensureNormalBufferImages(device_->get(), *runtime_, viewportExtent, colorFormat, input.depthFormat);
+
+    auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+    output.normalBuffer = context.importColor(
+        runtime_->normalBuffers[frameSlot],
+        std::format("NormalBuffer.Color[{}]", frameSlot),
+        viewportExtent,
+        colorFormat,
+        nr::renderer::ResourceLifetime::FrameLocal);
+    output.depthBuffer = context.importDepth(
+        runtime_->depthBuffers[frameSlot],
+        std::format("NormalBuffer.Depth[{}]", frameSlot),
+        viewportExtent,
+        input.depthFormat,
+        nr::renderer::ResourceLifetime::FrameLocal);
+
+    auto displayBackFaces = input.displayBackFaces;
+
+    auto sceneBridgeFrameHandle = frameParameters.sceneBridgeFrameHandle;
+
+    auto rasterPass = nr::renderer::RasterPassBuilder{
+        context,
+        "NormalBuffer.Raster",
+        runtime_->pipeline};
+    rasterPass
+        .viewport(viewportExtent)
+        .colorAttachment(
+            output.normalBuffer,
+            vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.5f, 0.5f, 1.0f, 1.0f}}})
+        .depthAttachment(output.depthBuffer)
+        .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
+        .rasterState(nr::rhi::MeshRasterState{
+            .cullMode = displayBackFaces ? vk::CullModeFlagBits::eFront : vk::CullModeFlagBits::eBack,
+            .depthTestEnable = vk::True,
+            .depthWriteEnable = vk::True,
+        })
+        .record([sceneBridgeFrameHandle](const nr::renderer::RasterPassRecordContext& rasterContext) {
+            if (!sceneBridgeFrameHandle.has_value())
+            {
+                return;
+            }
+
+            auto const& sceneBridgeFrame =
+                rasterContext.pass.frameData<nr::scene::SceneBridgeFrame>(*sceneBridgeFrameHandle);
+            auto& commandBuffer = rasterContext.commandBuffer;
+            std::ranges::for_each(sceneBridgeFrame.rasterDraws, [&](const auto& draw) {
+                if (!draw.geometry.hasVertexBuffer())
+                {
+                    return;
+                }
+
+                rasterContext.pushConstants("gPushConstants", detail::NormalBufferPushConstants{
+                    .model = draw.world,
+                });
+
+                auto vertexBuffer = draw.geometry.vertexBuffer.buffer->get().handle();
+                auto vertexOffset = draw.geometry.vertexBuffer.offset;
+                auto vertexBuffers = std::array{vertexBuffer};
+                auto vertexOffsets = std::array{vertexOffset};
+                commandBuffer.bindVertexBuffers(0, vertexBuffers, vertexOffsets);
+                commandBuffer.setFrontFace(draw.geometry.frontFace);
+
+                if (draw.geometry.hasIndexBuffer())
+                {
+                    auto indexBuffer = draw.geometry.indexBuffer.buffer->get().handle();
+                    auto indexOffset = draw.geometry.indexBuffer.offset;
+                    commandBuffer.bindIndexBuffer(indexBuffer, indexOffset, draw.geometry.indexType);
+                    commandBuffer.drawIndexed(
+                        draw.geometry.indexCount,
+                        1,
+                        draw.geometry.firstIndex,
+                        draw.geometry.vertexOffset,
+                        0);
+                    return;
+                }
+
+                commandBuffer.draw(
+                    draw.geometry.vertexCount,
+                    1,
+                    draw.geometry.firstVertex,
+                    0);
+            });
+        });
+
+    [[maybe_unused]] auto rasterPassHandle = rasterPass.build();
+
+    context.publishOutput("color", output.normalBuffer);
+    context.publishOutput("depth", output.depthBuffer);
+}
+
+void NormalBufferNode::shutdown(NodeShutdownContext&)
+{
+    if (runtime_ && runtime_->pipeline)
+    {
+        runtime_->pipeline->clearBindingSets();
+    }
+    runtime_.reset();
+}
+} // namespace nr::renderPasses

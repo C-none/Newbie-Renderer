@@ -96,14 +96,12 @@ struct RendererShutdownGuard
                 .runtime = normalBuffer,
                 .config = nr::renderer::NodeConfig{
                     .instanceName = "NormalBuffer",
-                    .queue = nr::renderer::QueueDomain::Graphics,
                 },
             },
             nr::renderer::NodeCreateInfo{
                 .runtime = ui,
                 .config = nr::renderer::NodeConfig{
                     .instanceName = "Ui",
-                    .queue = nr::renderer::QueueDomain::Graphics,
                 },
             },
             nr::renderer::NodeCreateInfo{
@@ -127,7 +125,6 @@ struct RendererShutdownGuard
         .submitNodes = {
             nr::renderer::SubmitNodeSpec{
                 .debugName = "CameraOverride.GraphicsToCompute",
-                .kind = nr::renderer::SubmitBoundaryKind::Explicit,
                 .afterNodeIndex = 1,
             },
         },

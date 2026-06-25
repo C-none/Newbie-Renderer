@@ -1,4 +1,5 @@
 module descriptorMerge;
+import common;
 
 StructuredBuffer<uint> globalIn;
 RWStructuredBuffer<uint> globalOut;

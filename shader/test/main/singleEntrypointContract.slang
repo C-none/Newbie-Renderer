@@ -1,4 +1,5 @@
 module singleEntrypointContract;
+import common;
 import test.utils.utils;
 
 struct PushConstantData

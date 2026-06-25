@@ -1,4 +1,5 @@
 module descriptorIndexingStrict;
+import common;
 
 SamplerState linearSampler;
 Texture2D<float4> colorTextures[4];

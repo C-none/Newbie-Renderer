@@ -1,5 +1,5 @@
 export module nr.resource:geometry;
-import dependency;
+import dependency.math;
 
 import std;
 import :math;
@@ -17,45 +17,15 @@ struct Aabb
     }
     ~Aabb() = default;
 
-    [[nodiscard]] bool valid() const noexcept
-    {
-         return math::finiteVec(min) &&
-             math::finiteVec(max) &&
-               glm::all(glm::lessThanEqual(min, max));
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
-    [[nodiscard]] glm::vec3 center() const noexcept
-    {
-        return (min + max) * 0.5f;
-    }
+    [[nodiscard]] glm::vec3 center() const noexcept;
 
-    [[nodiscard]] glm::vec3 extent() const noexcept
-    {
-        return max - min;
-    }
+    [[nodiscard]] glm::vec3 extent() const noexcept;
 
-    void expand(glm::vec3 p) noexcept
-    {
-        min = glm::min(min, p);
-        max = glm::max(max, p);
-    }
+    void expand(glm::vec3 p) noexcept;
 
-    void merge(const Aabb &rhs) noexcept
-    {
-        if (!rhs.valid())
-        {
-            return;
-        }
-
-        if (!valid())
-        {
-            *this = rhs;
-            return;
-        }
-
-        min = glm::min(min, rhs.min);
-        max = glm::max(max, rhs.max);
-    }
+    void merge(const Aabb &rhs) noexcept;
 };
 
 struct BoundingSphere
@@ -69,10 +39,7 @@ struct BoundingSphere
     }
     ~BoundingSphere() = default;
 
-    [[nodiscard]] bool valid(float eps = 1e-6f) const noexcept
-    {
-        return math::finiteVec(center) && math::finiteFloat(radius) && radius >= eps;
-    }
+    [[nodiscard]] bool valid(float eps = 1e-6f) const noexcept;
 };
 
 struct Triangle
@@ -87,42 +54,17 @@ struct Triangle
     }
     ~Triangle() = default;
 
-    [[nodiscard]] glm::vec3 edge01() const noexcept
-    {
-        return p1 - p0;
-    }
+    [[nodiscard]] glm::vec3 edge01() const noexcept;
 
-    [[nodiscard]] glm::vec3 edge02() const noexcept
-    {
-        return p2 - p0;
-    }
+    [[nodiscard]] glm::vec3 edge02() const noexcept;
 
-    [[nodiscard]] glm::vec3 computeFaceNormal() const noexcept
-    {
-        auto normal = glm::cross(edge01(), edge02());
-        auto length = glm::length(normal);
-        if (length <= 1e-6f)
-        {
-            return glm::vec3{0.0f};
-        }
+    [[nodiscard]] glm::vec3 computeFaceNormal() const noexcept;
 
-        return normal / length;
-    }
+    [[nodiscard]] float computeArea() const noexcept;
 
-    [[nodiscard]] float computeArea() const noexcept
-    {
-        return 0.5f * glm::length(glm::cross(edge01(), edge02()));
-    }
+    [[nodiscard]] glm::vec3 centroid() const noexcept;
 
-    [[nodiscard]] glm::vec3 centroid() const noexcept
-    {
-        return (p0 + p1 + p2) / 3.0f;
-    }
-
-    [[nodiscard]] bool isDegenerate(float eps = 1e-6f) const noexcept
-    {
-        return computeArea() <= eps;
-    }
+    [[nodiscard]] bool isDegenerate(float eps = 1e-6f) const noexcept;
 };
 
 } // namespace nr::resource

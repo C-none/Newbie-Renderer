@@ -1,4 +1,5 @@
 module minimalRtTriangle;
+import common;
 
 struct CameraData
 {

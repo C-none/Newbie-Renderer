@@ -34,6 +34,7 @@
         "CMAKE_DEFAULT_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "OFF",
         "VCPKG_TARGET_TRIPLET": "x64-mingw-clang-static",
+        "VCPKG_HOST_TRIPLET": "x64-mingw-clang-static",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/vcpkg-triplets",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/llvm/vcpkg_installed"
       }

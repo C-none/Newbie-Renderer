@@ -1,4 +1,5 @@
 module resourceBindingReflection;
+import common;
 
 struct CbData
 {

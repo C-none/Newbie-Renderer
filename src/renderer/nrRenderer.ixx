@@ -1,5 +1,6 @@
 export module nr.renderer:renderer;
-import dependency;
+import dependency.math;
+import dependency.vulkan;
 
 import nr.rhi;
 import nr.scene;
@@ -18,6 +19,7 @@ struct RendererCreateInfo
 {
     std::string appName = "NewbieRenderer";
     std::string engineName = "NewbieRenderer";
+    vk::DeviceSize frameUniformBytesPerFrame = 1024u * 1024u;
 };
 
 struct NodePort
@@ -45,7 +47,7 @@ struct NodeFrameParameters
     vk::Extent2D swapchainExtent{1, 1};
     vk::Format swapchainFormat = vk::Format::eUndefined;
 
-    std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame{};
+    std::optional<GraphFrameDataHandle> sceneBridgeFrameHandle{};
     std::optional<std::reference_wrapper<const nr::scene::ScenePacketSet>> scenePackets{};
     std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};
     std::optional<std::reference_wrapper<FrameServices>> frameServices{};
@@ -55,6 +57,27 @@ struct RendererCameraOverride
 {
     nr::scene::SceneBridgeFrameConstants frameConstants{};
     nr::scene::SceneFrustum frustum{};
+};
+
+struct RendererCpuFrameTimings
+{
+    double cpuWaitGpuMilliseconds = 0.0;
+    double frameSetupMilliseconds = 0.0;
+    double sceneMilliseconds = 0.0;
+    double buildMilliseconds = 0.0;
+    double compileMilliseconds = 0.0;
+    double prepareMilliseconds = 0.0;
+    double executeMilliseconds = 0.0;
+    double presentMilliseconds = 0.0;
+    double totalMilliseconds = 0.0;
+};
+
+struct RendererCpuStatistics
+{
+    RendererCpuFrameTimings average{};
+    std::uint32_t pendingSampleFrameCount = 0;
+    std::uint32_t averagedFrameCount = 0;
+    bool valid = false;
 };
 
 struct NodeInitContext
@@ -67,31 +90,32 @@ struct NodeShutdownContext
     std::reference_wrapper<nr::rhi::Device> device;
 };
 
+class FrameUniformArena;
+
+struct FrameUniformBinding
+{
+    GraphResourceHandle resource{};
+    vk::DeviceSize offset = 0;
+    vk::DeviceSize range = 0;
+};
+
+struct FrameGlobalResources
+{
+    FrameUniformBinding frameUniform{};
+};
+
 struct NodeBuildContext
 {
     std::reference_wrapper<RenderGraphBuilder> graphBuilder;
     GraphNodeHandle nodeHandle{};
     std::uint32_t frameIndex = 0;
-    std::function<GraphResourceHandle(std::string_view)> resolveInputPort{};
-    std::function<void(std::string_view, GraphResourceHandle)> publishOutputPort{};
+    std::reference_wrapper<const FrameGlobalResources> globalResources;
+    std::function<GraphResourceHandle(std::string_view)> resolveInputPort;
+    std::function<void(std::string_view, GraphResourceHandle)> publishOutputPort;
 
-    [[nodiscard]] GraphResourceHandle resolveInput(std::string_view portName) const
-    {
-        if (!resolveInputPort)
-        {
-            return {};
-        }
-        return resolveInputPort(portName);
-    }
+    [[nodiscard]] GraphResourceHandle resolveInput(std::string_view portName) const;
 
-    void publishOutput(std::string_view portName, GraphResourceHandle resource)
-    {
-        if (!publishOutputPort)
-        {
-            return;
-        }
-        publishOutputPort(portName, resource);
-    }
+    void publishOutput(std::string_view portName, GraphResourceHandle resource);
 
     // Node-scoped graph authoring helpers: Generic resource addition interface.
     template <typename TDesc>
@@ -100,23 +124,44 @@ struct NodeBuildContext
         return graphBuilder.get().addResource(desc);
     }
 
+    template <typename TPayload>
+    [[nodiscard]] GraphFrameDataHandle importFrameData(std::string_view debugName, TPayload&& payload)
+    {
+        return graphBuilder.get().addFrameData(debugName, std::forward<TPayload>(payload));
+    }
+
     [[nodiscard]] GraphResourceHandle transientColor(
         std::string_view debugName,
         vk::Extent2D extent,
-        vk::Format format)
-    {
-        return addResource(GraphTransientImageDesc{
-            .debugName = std::string(debugName),
-            .extent = vk::Extent3D{extent.width, extent.height, 1},
-            .format = format,
-            .usageIntents = {
-                ImageUsageIntent::ColorAttachment,
-                ImageUsageIntent::TransferSrc,
-                ImageUsageIntent::Sampled,
-            },
-            .initialLayout = ImageLayoutIntent::ColorAttachment,
-        });
-    }
+        vk::Format format);
+
+    [[nodiscard]] GraphResourceHandle importColor(
+        const nr::rhi::Image& image,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+
+    [[nodiscard]] GraphResourceHandle importStorageColor(
+        const nr::rhi::Image& image,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+
+    [[nodiscard]] GraphResourceHandle importSampledColor(
+        const nr::rhi::Image& image,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+
+    [[nodiscard]] GraphResourceHandle importDepth(
+        const nr::rhi::Image& image,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
 
     template <std::size_t FrameSlotCount>
     [[nodiscard]] GraphResourceHandle importFrameColor(
@@ -129,18 +174,12 @@ struct NodeBuildContext
         auto const& image = images[frameSlot];
         nrAssert(image.valid(), std::format("{} frame image slot {} is invalid.", debugName, frameSlot));
 
-        return addResource(GraphImportedImageDesc{
-            .debugName = indexedFrameDebugName(debugName, frameSlot),
-            .lifetime = ResourceLifetime::FrameLocal,
-            .extent = vk::Extent3D{extent.width, extent.height, 1},
-            .format = format,
-            .usageIntents = {
-                ImageUsageIntent::ColorAttachment,
-                ImageUsageIntent::TransferSrc,
-                ImageUsageIntent::Sampled,
-            },
-            .importedResource = std::cref(image),
-        });
+        return importColor(
+            image,
+            indexedFrameDebugName(debugName, frameSlot),
+            extent,
+            format,
+            ResourceLifetime::FrameLocal);
     }
 
     template <std::size_t FrameSlotCount>
@@ -154,17 +193,12 @@ struct NodeBuildContext
         auto const& image = images[frameSlot];
         nrAssert(image.valid(), std::format("{} frame storage image slot {} is invalid.", debugName, frameSlot));
 
-        return addResource(GraphImportedImageDesc{
-            .debugName = indexedFrameDebugName(debugName, frameSlot),
-            .lifetime = ResourceLifetime::FrameLocal,
-            .extent = vk::Extent3D{extent.width, extent.height, 1},
-            .format = format,
-            .usageIntents = {
-                ImageUsageIntent::StorageWrite,
-                ImageUsageIntent::TransferSrc,
-            },
-            .importedResource = std::cref(image),
-        });
+        return importStorageColor(
+            image,
+            indexedFrameDebugName(debugName, frameSlot),
+            extent,
+            format,
+            ResourceLifetime::FrameLocal);
     }
 
     template <std::size_t FrameSlotCount>
@@ -178,93 +212,429 @@ struct NodeBuildContext
         auto const& image = images[frameSlot];
         nrAssert(image.valid(), std::format("{} frame depth image slot {} is invalid.", debugName, frameSlot));
 
-        return addResource(GraphImportedImageDesc{
-            .debugName = indexedFrameDebugName(debugName, frameSlot),
-            .lifetime = ResourceLifetime::FrameLocal,
-            .extent = vk::Extent3D{extent.width, extent.height, 1},
-            .format = format,
-            .usageIntents = {
-                ImageUsageIntent::DepthStencilAttachment,
-            },
-            .aspect = ImageAspectIntent::Depth,
-            .importedResource = std::cref(image),
-        });
+        return importDepth(
+            image,
+            indexedFrameDebugName(debugName, frameSlot),
+            extent,
+            format,
+            ResourceLifetime::FrameLocal);
     }
 
-    template <typename TPayload, std::size_t FrameSlotCount>
-    [[nodiscard]] GraphResourceHandle importFrameUniform(
-        std::array<nr::rhi::Buffer, FrameSlotCount>& buffers,
+    [[nodiscard]] GraphResourceHandle importAccelerationStructure(
+        const nr::rhi::AccelerationStructureResource& accelerationStructure,
         std::string_view debugName,
-        const TPayload& value)
-    {
-        auto const frameSlot = frameSlotIndex(FrameSlotCount);
-        auto& buffer = buffers[frameSlot];
-        nrAssert(buffer.valid(), std::format("{} frame uniform buffer slot {} is invalid.", debugName, frameSlot));
-        nrAssert(buffer.size() >= sizeof(TPayload), std::format("{} frame uniform buffer slot {} is too small.", debugName, frameSlot));
-
-        buffer.writeMappedAndFlush(value);
-
-        return addResource(GraphImportedBufferDesc{
-            .debugName = indexedFrameDebugName(debugName, frameSlot),
-            .lifetime = ResourceLifetime::FrameLocal,
-            .size = static_cast<vk::DeviceSize>(sizeof(TPayload)),
-            .usageIntents = {
-                BufferUsageIntent::Uniform,
-            },
-            .importedResource = std::ref(buffer),
-        });
-    }
+        ResourceLifetime lifetime = ResourceLifetime::ScenePersistent,
+        ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined);
 
     [[nodiscard]] GraphResourceHandle importSwapchain(
         std::string_view debugName,
-        const NodeFrameParameters& frameParameters)
-    {
-        return addResource(GraphImportedSwapchainImageDesc{
-            .debugName = std::string(debugName),
-            .swapchainImageIndex = frameParameters.swapchainImageIndex,
-            .extent = vk::Extent3D{
-                frameParameters.swapchainExtent.width,
-                frameParameters.swapchainExtent.height,
-                1,
-            },
-            .format = frameParameters.swapchainFormat,
-        });
-    }
+        const NodeFrameParameters& frameParameters);
 
     [[nodiscard]] GraphPassHandle addPass(
         std::span<const PassResourceUseDesc> intentList,
         std::string_view debugName,
         PassRecordCallback executeLambda,
         PassPrepareCallback prepareCallback = nullptr,
-        bool isCopyPass = false)
-    {
-        return graphBuilder.get().addPass(
-            debugName,
-            nodeHandle,
-            intentList,
-            std::move(executeLambda),
-            std::move(prepareCallback),
-            isCopyPass);
-    }
+        bool isCopyPass = false);
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
+        std::string_view debugName);
+
+  private:
+    [[nodiscard]] GraphResourceHandle importImage(
+        const nr::rhi::Image& image,
         std::string_view debugName,
-        SubmitBoundaryKind kind = SubmitBoundaryKind::Explicit)
+        vk::Extent2D extent,
+        vk::Format format,
+        ResourceLifetime lifetime,
+        std::initializer_list<ImageUsageIntent> usageIntents,
+        ImageAspectIntent aspect = ImageAspectIntent::Color);
+
+    [[nodiscard]] std::size_t frameSlotIndex(std::size_t frameSlotCount) const;
+
+    [[nodiscard]] static std::string indexedFrameDebugName(std::string_view debugName, std::size_t frameSlot);
+};
+
+class FrameUniformArena
+{
+  public:
+    FrameUniformArena() = default;
+
+    FrameUniformArena(const FrameUniformArena&) = delete;
+    FrameUniformArena& operator=(const FrameUniformArena&) = delete;
+    FrameUniformArena(FrameUniformArena&&) noexcept = default;
+    FrameUniformArena& operator=(FrameUniformArena&&) noexcept = default;
+
+    void initialize(nr::rhi::Device& device, vk::DeviceSize bytesPerFrame, std::string_view debugName);
+
+    void beginFrame(std::uint32_t frameIndex);
+
+    [[nodiscard]] bool valid() const noexcept;
+
+    [[nodiscard]] FrameUniformBinding uploadBytes(
+        RenderGraphBuilder& graphBuilder,
+        std::string_view debugName,
+        std::span<const std::byte> bytes);
+
+    template <typename TPayload>
+    requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
+    [[nodiscard]] FrameUniformBinding upload(RenderGraphBuilder& graphBuilder, std::string_view debugName, const TPayload& value)
     {
-        return graphBuilder.get().addSubmitNode(debugName, kind);
+        auto bytes = std::as_bytes(std::span{&value, 1});
+        return uploadBytes(graphBuilder, debugName, bytes);
     }
 
   private:
-    [[nodiscard]] std::size_t frameSlotIndex(std::size_t frameSlotCount) const
+    [[nodiscard]] static vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept;
+
+    std::string debugName_{};
+    nr::rhi::Buffer buffer_{};
+    vk::DeviceSize frameSliceSize_ = 0;
+    vk::DeviceSize currentFrameBaseOffset_ = 0;
+    vk::DeviceSize currentFrameCursor_ = 0;
+    vk::DeviceSize uniformOffsetAlignment_ = 1;
+    vk::DeviceSize maxUniformBufferRange_ = std::numeric_limits<vk::DeviceSize>::max();
+};
+
+template <typename TPipeline, std::size_t FrameSlotCount = nr::maxFrameInFlight>
+class PipelineRuntime
+{
+  public:
+    PipelineRuntime() = default;
+
+    PipelineRuntime(const PipelineRuntime&) = delete;
+    PipelineRuntime& operator=(const PipelineRuntime&) = delete;
+    PipelineRuntime(PipelineRuntime&&) noexcept = default;
+    PipelineRuntime& operator=(PipelineRuntime&&) noexcept = default;
+
+    ~PipelineRuntime();
+
+    void initialize(nr::rhi::PipelineState<TPipeline> pipelineState);
+
+    void initializeDeferred(nr::rhi::PipelineState<TPipeline> pipelineState);
+
+    void clearBindingSets();
+
+    [[nodiscard]] bool valid() const noexcept;
+
+    [[nodiscard]] nr::rhi::PipelineState<TPipeline>& state() noexcept;
+
+    [[nodiscard]] const nr::rhi::PipelineState<TPipeline>& state() const noexcept;
+
+    [[nodiscard]] TPipeline& pipeline() noexcept;
+
+    [[nodiscard]] const TPipeline& pipeline() const noexcept;
+
+    [[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> bindingSetsForFrame(std::uint32_t frameIndex) const;
+
+    [[nodiscard]] bool ensureBindingSetsForFrame(
+        std::uint32_t frameIndex,
+        const std::map<std::uint32_t, std::uint32_t>& variableDescriptorCountsBySet);
+
+    [[nodiscard]] nr::rhi::ShaderCursor rootCursor() const;
+
+  private:
+    void allocateBindingSetsForFrame(
+        std::size_t frameSlot,
+        const std::map<std::uint32_t, std::uint32_t>& variableDescriptorCountsBySet);
+
+    nr::rhi::PipelineState<TPipeline> pipeline_{};
+    std::array<std::vector<nr::rhi::ShaderBindingSet>, FrameSlotCount> bindingSetsByFrame_{};
+    std::array<std::map<std::uint32_t, std::uint32_t>, FrameSlotCount> variableDescriptorCountsByFrame_{};
+};
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+PipelineRuntime<TPipeline, FrameSlotCount>::~PipelineRuntime()
+{
+    clearBindingSets();
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::initialize(nr::rhi::PipelineState<TPipeline> pipelineState)
+{
+    clearBindingSets();
+    pipeline_ = std::move(pipelineState);
+    nrAssert(pipeline_.layout.valid(), "PipelineRuntime::initialize requires a valid cursor pipeline layout.");
+
+    auto frameSlots = std::views::iota(std::size_t{0}, bindingSetsByFrame_.size());
+    std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) {
+        allocateBindingSetsForFrame(frameSlot, {});
+    });
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::initializeDeferred(nr::rhi::PipelineState<TPipeline> pipelineState)
+{
+    clearBindingSets();
+    pipeline_ = std::move(pipelineState);
+    nrAssert(pipeline_.layout.valid(), "PipelineRuntime::initializeDeferred requires a valid cursor pipeline layout.");
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::clearBindingSets()
+{
+    std::ranges::for_each(bindingSetsByFrame_, [](auto& bindingSets) {
+        bindingSets.clear();
+    });
+    std::ranges::for_each(variableDescriptorCountsByFrame_, [](auto& variableDescriptorCounts) {
+        variableDescriptorCounts.clear();
+    });
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::valid() const noexcept
+{
+    return pipeline_.pipeline.valid();
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] nr::rhi::PipelineState<TPipeline>& PipelineRuntime<TPipeline, FrameSlotCount>::state() noexcept
+{
+    return pipeline_;
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] const nr::rhi::PipelineState<TPipeline>& PipelineRuntime<TPipeline, FrameSlotCount>::state() const noexcept
+{
+    return pipeline_;
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] TPipeline& PipelineRuntime<TPipeline, FrameSlotCount>::pipeline() noexcept
+{
+    return pipeline_.pipeline;
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] const TPipeline& PipelineRuntime<TPipeline, FrameSlotCount>::pipeline() const noexcept
+{
+    return pipeline_.pipeline;
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> PipelineRuntime<TPipeline, FrameSlotCount>::bindingSetsForFrame(std::uint32_t frameIndex) const
+{
+    auto const frameSlot = static_cast<std::size_t>(frameIndex % bindingSetsByFrame_.size());
+    auto const& bindingSets = bindingSetsByFrame_[frameSlot];
+    return std::span<const nr::rhi::ShaderBindingSet>{bindingSets.data(), bindingSets.size()};
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::ensureBindingSetsForFrame(
+    std::uint32_t frameIndex,
+    const std::map<std::uint32_t, std::uint32_t>& variableDescriptorCountsBySet)
+{
+    auto const frameSlot = static_cast<std::size_t>(frameIndex % bindingSetsByFrame_.size());
+    if (!bindingSetsByFrame_[frameSlot].empty() &&
+        variableDescriptorCountsByFrame_[frameSlot] == variableDescriptorCountsBySet)
     {
-        nrAssert(frameSlotCount > 0, "NodeBuildContext frame resource helper requires at least one frame slot.");
-        return static_cast<std::size_t>(frameIndex) % frameSlotCount;
+        return false;
     }
 
-    [[nodiscard]] static std::string indexedFrameDebugName(std::string_view debugName, std::size_t frameSlot)
+    allocateBindingSetsForFrame(frameSlot, variableDescriptorCountsBySet);
+    return true;
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] nr::rhi::ShaderCursor PipelineRuntime<TPipeline, FrameSlotCount>::rootCursor() const
+{
+    return pipeline_.descriptorLayout.rootCursor();
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::allocateBindingSetsForFrame(
+    std::size_t frameSlot,
+    const std::map<std::uint32_t, std::uint32_t>& variableDescriptorCountsBySet)
+{
+    nrAssert(frameSlot < bindingSetsByFrame_.size(), "PipelineRuntime frame slot is out of range.");
+    bindingSetsByFrame_[frameSlot] = nr::rhi::allocateBindingSetsForLayout(
+        pipeline_.layout,
+        pipeline_.bindingPool,
+        variableDescriptorCountsBySet);
+    variableDescriptorCountsByFrame_[frameSlot] = variableDescriptorCountsBySet;
+}
+
+struct RasterPassRecordContext
+{
+    const PassRecordContext& pass;
+    const vk::raii::CommandBuffer& commandBuffer;
+    const nr::rhi::ShaderDescriptorLayout& descriptorLayout;
+    const nr::rhi::CursorPipelineLayout& pipelineLayout;
+    vk::Extent2D extent{1, 1};
+
+    template <typename TPayload>
+    void pushConstants(std::string_view shaderPath, const TPayload& value) const
     {
-        return std::format("{}[{}]", debugName, frameSlot);
+        auto root = descriptorLayout.rootCursor();
+        auto cursor = root.getPath(shaderPath);
+        static_cast<void>(cursor.setData(value));
+
+        auto bindingSnapshot = root.snapshot();
+        root.clearSnapshot();
+        nr::rhi::pushConstantsToCommandBuffer(commandBuffer, pipelineLayout, bindingSnapshot);
     }
+};
+
+using RasterPassRecordCallback = std::function<void(const RasterPassRecordContext&)>;
+
+struct RasterColorAttachment
+{
+    GraphResourceHandle resource{};
+    vk::AttachmentLoadOp loadOp = vk::AttachmentLoadOp::eLoad;
+    vk::AttachmentStoreOp storeOp = vk::AttachmentStoreOp::eStore;
+    vk::ClearValue clearValue{};
+};
+
+struct RasterDepthAttachment
+{
+    GraphResourceHandle resource{};
+    vk::AttachmentLoadOp loadOp = vk::AttachmentLoadOp::eLoad;
+    vk::AttachmentStoreOp storeOp = vk::AttachmentStoreOp::eStore;
+    vk::AttachmentLoadOp stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    vk::ClearDepthStencilValue clearValue{1.0f, 0u};
+};
+
+using RasterPassPrepareCallback = std::function<void(const PassPrepareContext&)>;
+using PassBindingSnapshotCallback = std::function<nr::rhi::ShaderBindingSnapshot(const PassPrepareContext&)>;
+
+struct DynamicBindingSnapshotDesc
+{
+    PassBindingSnapshotCallback snapshot{};
+    nr::rhi::LogicalDescriptorResolver resolver{};
+};
+
+class RasterPassBuilder
+{
+  public:
+    RasterPassBuilder(
+        NodeBuildContext& context,
+        std::string_view debugName,
+        std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime);
+
+    RasterPassBuilder& viewport(vk::Extent2D extent);
+
+    RasterPassBuilder& colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue);
+
+    RasterPassBuilder& depthAttachment(GraphResourceHandle resource);
+
+    RasterPassBuilder& uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
+
+    RasterPassBuilder& uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName);
+
+    RasterPassBuilder& sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
+
+    RasterPassBuilder& storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
+
+    template <typename TPayload>
+    RasterPassBuilder& pushConstants(std::string_view shaderPath, const TPayload& value)
+    {
+        auto cursor = rootCursor_.getPath(shaderPath);
+        static_cast<void>(cursor.setData(value));
+        return *this;
+    }
+
+    RasterPassBuilder& rasterState(nr::rhi::MeshRasterState state);
+
+    RasterPassBuilder& primitiveTopology(vk::PrimitiveTopology topology);
+
+    RasterPassBuilder& record(RasterPassRecordCallback callback);
+
+    RasterPassBuilder& resourceUse(PassResourceUseDesc resourceUse);
+
+    RasterPassBuilder& prepare(RasterPassPrepareCallback callback);
+
+    RasterPassBuilder& dynamicBindingSnapshot(
+        PassBindingSnapshotCallback snapshotCallback,
+        nr::rhi::LogicalDescriptorResolver resolver = {});
+
+    [[nodiscard]] GraphPassHandle build();
+
+  private:
+    [[nodiscard]] static vk::Extent2D resolveTargetExtent(
+        std::optional<vk::Extent2D> viewportExtent,
+        std::span<const PassImageResource> resolvedColors,
+        const std::optional<PassImageResource>& resolvedDepth);
+
+    std::reference_wrapper<NodeBuildContext> context_;
+    std::string debugName_{};
+    std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime_{};
+    nr::rhi::ShaderCursor rootCursor_{};
+    std::optional<vk::Extent2D> viewportExtent_{};
+    std::vector<RasterColorAttachment> colorAttachments_{};
+    std::optional<RasterDepthAttachment> depthAttachment_{};
+    std::vector<PassResourceUseDesc> resourceUses_{};
+    nr::rhi::MeshRasterState rasterState_{};
+    vk::PrimitiveTopology primitiveTopology_ = vk::PrimitiveTopology::eTriangleList;
+    RasterPassRecordCallback recordCallback_{};
+    std::vector<RasterPassPrepareCallback> prepareCallbacks_{};
+    std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots_{};
+};
+
+struct ComputePassRecordContext
+{
+    const PassRecordContext& pass;
+    const vk::raii::CommandBuffer& commandBuffer;
+    const nr::rhi::ShaderDescriptorLayout& descriptorLayout;
+    const nr::rhi::CursorPipelineLayout& pipelineLayout;
+
+    template <typename TPayload>
+    void pushConstants(std::string_view shaderPath, const TPayload& value) const
+    {
+        auto root = descriptorLayout.rootCursor();
+        auto cursor = root.getPath(shaderPath);
+        static_cast<void>(cursor.setData(value));
+
+        auto bindingSnapshot = root.snapshot();
+        root.clearSnapshot();
+        nr::rhi::pushConstantsToCommandBuffer(commandBuffer, pipelineLayout, bindingSnapshot);
+    }
+};
+
+using ComputePassRecordCallback = std::function<void(const ComputePassRecordContext&)>;
+using ComputePassPrepareCallback = std::function<void(const PassPrepareContext&)>;
+
+class ComputePassBuilder
+{
+  public:
+    ComputePassBuilder(
+        NodeBuildContext& context,
+        std::string_view debugName,
+        std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime);
+
+    ComputePassBuilder& sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
+
+    ComputePassBuilder& storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
+
+    template <typename TPayload>
+    ComputePassBuilder& pushConstants(std::string_view shaderPath, const TPayload& value)
+    {
+        auto cursor = rootCursor_.getPath(shaderPath);
+        static_cast<void>(cursor.setData(value));
+        return *this;
+    }
+
+    ComputePassBuilder& resourceUse(PassResourceUseDesc resourceUse);
+
+    ComputePassBuilder& prepare(ComputePassPrepareCallback callback);
+
+    ComputePassBuilder& dynamicBindingSnapshot(
+        PassBindingSnapshotCallback snapshotCallback,
+        nr::rhi::LogicalDescriptorResolver resolver = {});
+
+    ComputePassBuilder& record(ComputePassRecordCallback callback);
+
+    [[nodiscard]] GraphPassHandle build();
+
+  private:
+    std::reference_wrapper<NodeBuildContext> context_;
+    std::string debugName_{};
+    std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime_{};
+    nr::rhi::ShaderCursor rootCursor_{};
+    std::vector<PassResourceUseDesc> resourceUses_{};
+    ComputePassRecordCallback recordCallback_{};
+    std::vector<ComputePassPrepareCallback> prepareCallbacks_{};
+    std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots_{};
 };
 
 class NodeRuntime
@@ -276,9 +646,7 @@ class NodeRuntime
 
         // Stage 1 (initialize): create persistent node state.
         // Typical work: shader/pipeline creation and long-lived GPU allocations.
-    virtual void initialize(NodeInitContext&)
-    {
-    }
+    virtual void initialize(NodeInitContext&);
 
         // Stage 2 (build): declare per-frame intents and register execute lambdas.
         // Canonical path: context.addPass(intentList, name, executeLambda[, isCopyPass]).
@@ -286,9 +654,7 @@ class NodeRuntime
     virtual void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) = 0;
 
         // Stage 3 (shutdown): release persistent node state.
-    virtual void shutdown(NodeShutdownContext&)
-    {
-    }
+    virtual void shutdown(NodeShutdownContext&);
 };
 
 struct NodeCreateInfo
@@ -312,7 +678,6 @@ struct NodeConnection
 struct SubmitNodeSpec
 {
     std::string debugName{};
-    SubmitBoundaryKind kind = SubmitBoundaryKind::Explicit;
     std::size_t afterNodeIndex = 0;
 };
 
@@ -357,6 +722,8 @@ struct RendererFrameResult
     std::size_t sceneRasterPacketCount = 0;
     std::size_t sceneRtPacketCount = 0;
     std::size_t sceneTlasPacketCount = 0;
+    RendererCpuStatistics cpuStatistics{};
+    RendererGpuPassStatistics gpuPassStatistics{};
 };
 
 class Renderer
@@ -364,338 +731,31 @@ class Renderer
   public:
     Renderer() = default;
 
-    void initialize(const RendererCreateInfo& info = {})
-    {
-        if (device_)
-        {
-            return;
-        }
+    void initialize(const RendererCreateInfo& info = {});
 
-        auto& shaderService = nr::rhi::ShaderService::instance();
-        shaderService.configure();
+    void installGraph(const RendererGraphSpec& spec);
 
-        device_ = std::make_unique<nr::rhi::Device>();
-        device_->initialize(info.appName, info.engineName);
-        submissionTimeline_.initialize(device_->device, 0);
-    }
+    void shutdown();
 
-    void installGraph(const RendererGraphSpec& spec)
-    {
-        nrAssert(static_cast<bool>(device_), "Renderer::installGraph requires initialize() before graph installation.");
-        teardownInstalledGraph();
+    [[nodiscard]] bool initialized() const noexcept;
 
-        auto installed = std::vector<InstalledNode>{};
-        installed.reserve(spec.nodes.size());
+    [[nodiscard]] bool graphInstalled() const noexcept;
 
-        auto knownNames = std::set<std::string>{};
-        auto initContext = NodeInitContext{
-            .device = std::ref(*device_),
-        };
+    void resize();
 
-        std::ranges::for_each(spec.nodes, [&](const NodeCreateInfo& createInfo) {
-            nrAssert(static_cast<bool>(createInfo.runtime), "Renderer::installGraph requires a valid node runtime in NodeCreateInfo.");
+    [[nodiscard]] RendererFrameResult renderFrame(const RendererFrameInput& input = {});
 
-            auto description = createInfo.runtime->describe();
-            auto runtimeName = createInfo.config.instanceName.empty()
-                                   ? description.name
-                                   : createInfo.config.instanceName;
+    [[nodiscard]] nr::rhi::Device& device();
 
-            nrAssert(!runtimeName.empty(), "Renderer::installGraph requires each node to have a non-empty runtime name.");
-            auto [_, inserted] = knownNames.insert(runtimeName);
-            nrAssert(inserted, "Renderer::installGraph found duplicate node names in RendererGraphSpec.");
+    [[nodiscard]] const nr::rhi::Device& device() const;
 
-            createInfo.runtime->initialize(initContext);
+    [[nodiscard]] RenderGraphExecutor& graphExecutor() noexcept;
 
-            installed.push_back(InstalledNode{
-                .runtime = createInfo.runtime,
-                .description = std::move(description),
-                .config = createInfo.config,
-                .runtimeName = std::move(runtimeName),
-            });
-        });
+    [[nodiscard]] const RenderGraphExecutor& graphExecutor() const noexcept;
 
-        auto nodeIndexByName = std::map<std::string, std::size_t>{};
-        auto nodeOrdinals = std::views::iota(std::size_t{0}, installed.size());
-        std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
-            nodeIndexByName.emplace(installed[nodeIndex].runtimeName, nodeIndex);
-        });
+    [[nodiscard]] const RendererCpuStatistics& cpuStatistics() const noexcept;
 
-        auto connectionsByTarget = std::map<std::string, std::string>{};
-        std::ranges::for_each(spec.connections, [&](const NodeConnection& connection) {
-            auto fromNodeIt = nodeIndexByName.find(connection.from.nodeName);
-            nrAssert(fromNodeIt != nodeIndexByName.end(), "Renderer::installGraph connection references unknown source node.");
-
-            auto toNodeIt = nodeIndexByName.find(connection.to.nodeName);
-            nrAssert(toNodeIt != nodeIndexByName.end(), "Renderer::installGraph connection references unknown target node.");
-
-            nrAssert(
-                fromNodeIt->second < toNodeIt->second,
-                "Renderer::installGraph currently requires source node order before target node order.");
-
-            auto targetKey = makePortKey(connection.to.nodeName, connection.to.portName);
-            auto sourceKey = makePortKey(connection.from.nodeName, connection.from.portName);
-
-            auto [_, inserted] = connectionsByTarget.emplace(std::move(targetKey), std::move(sourceKey));
-            nrAssert(inserted, "Renderer::installGraph found multiple sources bound to the same target input port.");
-        });
-
-        auto submitNodesByAfterIndex = std::multimap<std::size_t, SubmitNodeSpec>{};
-        std::ranges::for_each(spec.submitNodes, [&](const SubmitNodeSpec& submitSpec) {
-            nrAssert(
-                submitSpec.afterNodeIndex < installed.size(),
-                "Renderer::installGraph submit node index is out of range for installed nodes.");
-            submitNodesByAfterIndex.emplace(submitSpec.afterNodeIndex, submitSpec);
-        });
-
-        installedNodes_ = std::move(installed);
-        nodeIndexByName_ = std::move(nodeIndexByName);
-        connectionsByTargetPort_ = std::move(connectionsByTarget);
-        submitNodesByAfterIndex_ = std::move(submitNodesByAfterIndex);
-        graphInstalled_ = true;
-    }
-
-    void shutdown()
-    {
-        if (!device_)
-        {
-            return;
-        }
-
-        device_->waitIdle();
-        // Release frame-local graph callbacks and retained command buffers while Device is still valid.
-        builder_.clear();
-        executor_.clearRetainedState();
-        teardownInstalledGraph();
-        submissionTimeline_ = RendererSubmissionTimeline{};
-        activeScene_.reset();
-        sceneExtractProfile_.reset();
-        device_.reset();
-    }
-
-    [[nodiscard]] bool initialized() const noexcept
-    {
-        return static_cast<bool>(device_);
-    }
-
-    [[nodiscard]] bool graphInstalled() const noexcept
-    {
-        return graphInstalled_;
-    }
-
-    void resize()
-    {
-        if (!device_)
-        {
-            return;
-        }
-        device_->presentationContext.recreate(device_->physicalDevice, device_->device, device_->queueManager);
-    }
-
-    [[nodiscard]] RendererFrameResult renderFrame(const RendererFrameInput& input = {})
-    {
-        if (!device_ || !graphInstalled_)
-        {
-            return RendererFrameResult{};
-        }
-
-
-        auto begin = device_->beginFrame(input.acquireTimeout);
-
-        auto scenePackets = std::optional<nr::scene::ScenePacketSet>{};
-        auto primaryCamera = std::optional<nr::scene::SceneResolvedCamera>{};
-        auto sceneBridgeFrame = std::optional<nr::scene::SceneBridgeFrame>{};
-        auto sceneExtractProfileCreated = false;
-        auto sceneCameraOverride = input.cameraOverride;
-
-        if (input.scene.has_value())
-        {
-            auto& scene = input.scene->get();
-            scene.beginFrame(begin.frameIndex);
-            scene.uploadPending();
-
-            auto [profile, created] = ensureSceneExtractProfile(scene);
-            sceneExtractProfileCreated = created;
-
-            auto extractInput = input.sceneExtractInput.value_or(nr::scene::SceneExtractInput{});
-            if (!extractInput.viewportExtent.has_value())
-            {
-                auto extent = device_->presentationContext.swapchainExtent();
-                extractInput.viewportExtent = glm::uvec2{extent.width, extent.height};
-            }
-
-            if (sceneCameraOverride.has_value())
-            {
-                extractInput.visibility = nr::scene::SceneVisibilityMode::customFrustum;
-                extractInput.customFrustum = sceneCameraOverride->frustum;
-            }
-
-            scenePackets = scene.extractPackets(profile, extractInput);
-            if (!sceneCameraOverride.has_value())
-            {
-                primaryCamera = scene.tryGetPrimaryCamera(extractInput.viewportExtent);
-            }
-
-            auto bridgeBuildInput = nr::scene::SceneRenderBridgeBuildInput{
-                .packetSet = std::cref(*scenePackets),
-            };
-
-            if (sceneCameraOverride.has_value())
-            {
-                bridgeBuildInput.frameConstantsOverride = sceneCameraOverride->frameConstants;
-            }
-
-            bridgeBuildInput.resolveRasterDrawGeometry =
-                [&](nr::resource::MeshHandle meshHandle, std::uint32_t submeshIndex)
-                -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
-                auto meshRecordRef = scene.tryGetMeshAsset(meshHandle);
-                if (!meshRecordRef.has_value())
-                {
-                    return std::nullopt;
-                }
-
-                auto const &meshRecord = meshRecordRef->get();
-                if (!meshRecord.cpuReady || !meshRecord.gpu.has_value())
-                {
-                    return std::nullopt;
-                }
-
-                if (!meshRecord.gpu->vertexBuffer.valid())
-                {
-                    return std::nullopt;
-                }
-
-                if (submeshIndex >= meshRecord.cpu.submeshes.size())
-                {
-                    return std::nullopt;
-                }
-
-                auto const &submesh = meshRecord.cpu.submeshes[submeshIndex];
-                auto geometry = nr::scene::SceneBridgeDrawGeometry{};
-                geometry.vertexBuffer = nr::scene::SceneBridgeBufferBinding{
-                    .buffer = std::cref(meshRecord.gpu->vertexBuffer),
-                };
-                geometry.frontFace = meshRecord.cpu.clockwiseFrontFace
-                                         ? vk::FrontFace::eClockwise
-                                         : vk::FrontFace::eCounterClockwise;
-
-                auto const indexedGeometry = meshRecord.gpu->indexBuffer.valid() && !meshRecord.cpu.indices.empty();
-                if (indexedGeometry)
-                {
-                    geometry.indexBuffer = nr::scene::SceneBridgeBufferBinding{
-                        .buffer = std::cref(meshRecord.gpu->indexBuffer),
-                    };
-                    geometry.firstIndex = submesh.firstIndex;
-                    geometry.indexCount = submesh.indexCount > 0
-                                              ? submesh.indexCount
-                                              : meshRecord.gpu->indexCount;
-                    geometry.vertexOffset = submesh.vertexOffset <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())
-                                                ? static_cast<std::int32_t>(submesh.vertexOffset)
-                                                : std::numeric_limits<std::int32_t>::max();
-                    geometry.indexType = vk::IndexType::eUint32;
-                    return geometry;
-                }
-
-                geometry.firstVertex = submesh.vertexOffset;
-                geometry.vertexCount = submesh.indexCount > 0
-                                           ? submesh.indexCount
-                                           : meshRecord.gpu->vertexCount;
-                return geometry;
-            };
-
-            if (primaryCamera.has_value())
-            {
-                bridgeBuildInput.primaryCamera = std::cref(*primaryCamera);
-            }
-
-            sceneBridgeFrame = nr::scene::SceneRenderBridge::buildFrame(bridgeBuildInput);
-        }
-
-        auto frameParameters = NodeFrameParameters{};
-        frameParameters.frameIndex = begin.frameIndex;
-        frameParameters.swapchainImageIndex = begin.swapchainImageIndex;
-        frameParameters.swapchainExtent = device_->presentationContext.swapchainExtent();
-        frameParameters.swapchainFormat = device_->presentationContext.swapchainFormat();
-        if (input.frameServices.has_value())
-        {
-            frameParameters.frameServices = input.frameServices;
-        }
-
-        if (sceneBridgeFrame.has_value())
-        {
-            frameParameters.sceneBridgeFrame = std::cref(*sceneBridgeFrame);
-        }
-
-        if (scenePackets.has_value())
-        {
-            frameParameters.scenePackets = std::cref(*scenePackets);
-        }
-
-        if (primaryCamera.has_value())
-        {
-            frameParameters.primaryCamera = std::cref(*primaryCamera);
-        }
-
-        buildInstalledGraph(frameParameters);
-
-        auto compiled = compiler_.compileConsuming(builder_.mutableFrame());
-
-        auto executeContext = RenderGraphExecutor::ExecuteContext{
-            .device = *device_,
-            .frameIndex = begin.frameIndex,
-            .swapchainImageIndex = begin.swapchainImageIndex,
-            .submissionTimeline = submissionTimeline_.valid()
-                                    ? std::optional<std::reference_wrapper<RendererSubmissionTimeline>>(std::ref(submissionTimeline_))
-                                    : std::nullopt,
-        };
-
-        auto prepared = executor_.prepareFrame(std::move(compiled), executeContext);
-
-        auto executeReport = executor_.executePrepared(prepared, executeContext);
-
-        auto present = device_->presentFrame();
-
-        return RendererFrameResult{
-            .rendered = true,
-            .frameIndex = begin.frameIndex,
-            .swapchainImageIndex = begin.swapchainImageIndex,
-            .presentResult = present.result,
-            .compiledSubmitBatchCount = prepared.compiled.submitBatches.size(),
-            .submittedBatchCount = executeReport.submittedBatchCount,
-            .invokedPassPrepareCount = executeReport.invokedPassPrepareCount,
-            .invokedPassRecordCount = executeReport.invokedPassRecordCount,
-            .appliedInPassBarrierCount = executeReport.appliedInPassBarrierCount,
-            .appliedAcquireBarrierCount = executeReport.appliedAcquireBarrierCount,
-            .appliedReleaseBarrierCount = executeReport.appliedReleaseBarrierCount,
-            .syntheticPresentBatchUsed = executeReport.plan.requiresSyntheticPresentBatch,
-            .usedScenePath = input.scene.has_value(),
-            .usedCameraOverride = sceneCameraOverride.has_value(),
-            .sceneExtractProfileCreated = sceneExtractProfileCreated,
-            .sceneBridgeDrawCount = sceneBridgeFrame.has_value() ? sceneBridgeFrame->rasterDraws.size() : 0,
-            .sceneRasterPacketCount = scenePackets.has_value() ? scenePackets->rasterDraws.size() : 0,
-            .sceneRtPacketCount = scenePackets.has_value() ? scenePackets->rtInstances.size() : 0,
-            .sceneTlasPacketCount = scenePackets.has_value() ? scenePackets->tlasBuildInputs.size() : 0,
-        };
-    }
-
-    [[nodiscard]] nr::rhi::Device& device()
-    {
-        return *device_;
-    }
-
-    [[nodiscard]] const nr::rhi::Device& device() const
-    {
-        return *device_;
-    }
-
-    [[nodiscard]] RenderGraphExecutor& graphExecutor() noexcept
-    {
-        return executor_;
-    }
-
-    [[nodiscard]] const RenderGraphExecutor& graphExecutor() const noexcept
-    {
-        return executor_;
-    }
+    [[nodiscard]] const RendererGpuPassStatistics& gpuPassStatistics() const noexcept;
 
   private:
     struct InstalledNode
@@ -706,120 +766,27 @@ class Renderer
         std::string runtimeName{};
     };
 
-    [[nodiscard]] static std::string makePortKey(std::string_view nodeName, std::string_view portName)
-    {
-        return std::format("{}::{}", nodeName, portName);
-    }
+    [[nodiscard]] static std::string makePortKey(std::string_view nodeName, std::string_view portName);
 
-    void buildInstalledGraph(const NodeFrameParameters& frameParameters)
-    {
-        nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
+    void buildInstalledGraph(
+        const NodeFrameParameters& frameParameters,
+        const nr::scene::SceneBridgeFrameConstants& frameConstants,
+        std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame);
 
-        builder_.clear();
-        auto publishedOutputs = std::map<std::string, GraphResourceHandle>{};
+    void teardownInstalledGraph();
 
-        auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
-        std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
-            auto& installedNode = installedNodes_[nodeIndex];
+    [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneExtractProfile(nr::scene::Scene& scene);
 
-            auto nodeHandle = builder_.addNode(
-                installedNode.runtimeName,
-                installedNode.config.queue);
+    void recordCpuTimingSample(const RendererCpuFrameTimings& timings) noexcept;
 
-            auto resolveInputPort = [&](std::string_view inputPortName) -> GraphResourceHandle {
-                auto targetKey = makePortKey(installedNode.runtimeName, inputPortName);
-                auto connectionIt = connectionsByTargetPort_.find(targetKey);
-                if (connectionIt == connectionsByTargetPort_.end())
-                {
-                    return {};
-                }
-
-                auto sourceIt = publishedOutputs.find(connectionIt->second);
-                if (sourceIt == publishedOutputs.end())
-                {
-                    return {};
-                }
-
-                return sourceIt->second;
-            };
-
-            auto publishOutputPort = [&](std::string_view outputPortName, GraphResourceHandle resource) {
-                nrAssert(resource.valid(), "Renderer::buildInstalledGraph output port publish requires a valid resource handle.");
-                auto outputKey = makePortKey(installedNode.runtimeName, outputPortName);
-                publishedOutputs.insert_or_assign(outputKey, resource);
-            };
-
-            auto buildContext = NodeBuildContext{
-                .graphBuilder = std::ref(builder_),
-                .nodeHandle = nodeHandle,
-                .frameIndex = frameParameters.frameIndex,
-                .resolveInputPort = resolveInputPort,
-                .publishOutputPort = publishOutputPort,
-            };
-
-            installedNode.runtime->build(buildContext, frameParameters);
-
-            auto boundaries = submitNodesByAfterIndex_.equal_range(nodeIndex);
-            std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto& entry) {
-                auto debugName = entry.second.debugName.empty()
-                                     ? std::format("Submit.After.{}", installedNode.runtimeName)
-                                     : entry.second.debugName;
-                auto submitHandle = builder_.addSubmitNode(debugName, entry.second.kind);
-                nrAssert(submitHandle.valid(), "Renderer::buildInstalledGraph failed to add a valid submit node.");
-            });
-        });
-
-    }
-
-    void teardownInstalledGraph()
-    {
-        if (device_)
-        {
-            auto shutdownContext = NodeShutdownContext{
-                .device = std::ref(*device_),
-            };
-            std::ranges::for_each(installedNodes_, [&](InstalledNode& installedNode) {
-                if (installedNode.runtime)
-                {
-                    installedNode.runtime->shutdown(shutdownContext);
-                }
-            });
-        }
-
-        installedNodes_.clear();
-        nodeIndexByName_.clear();
-        connectionsByTargetPort_.clear();
-        submitNodesByAfterIndex_.clear();
-        graphInstalled_ = false;
-    }
-
-    [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneExtractProfile(nr::scene::Scene& scene)
-    {
-        auto sameScene = activeScene_.has_value() && std::addressof(activeScene_->get()) == std::addressof(scene);
-        auto needsCreate = !sameScene || !sceneExtractProfile_.has_value() || !sceneExtractProfile_->valid();
-
-        if (needsCreate)
-        {
-            activeScene_ = std::ref(scene);
-            sceneExtractProfile_ = scene.registerExtractProfile(nr::scene::SceneExtractProfileCreateInfo{
-                .debugName = "Renderer.DefaultRasterExtract",
-                .domain = nr::scene::ScenePacketDomain::rasterDraw,
-                .selection = {},
-                .requireReadyForDomain = true,
-                .requireActiveInstances = true,
-                .enableCoarseGrouping = true,
-            });
-            return {*sceneExtractProfile_, true};
-        }
-
-        return {*sceneExtractProfile_, false};
-    }
+    void recordGpuPassTimingSample(const GpuPassTimingFrame& timings);
 
     std::unique_ptr<nr::rhi::Device> device_{};
     RenderGraphBuilder builder_{};
     RenderGraphCompiler compiler_{};
     RenderGraphExecutor executor_{};
     RendererSubmissionTimeline submissionTimeline_{};
+    FrameUniformArena frameUniformArena_{};
 
     bool graphInstalled_ = false;
     std::vector<InstalledNode> installedNodes_{};
@@ -829,5 +796,9 @@ class Renderer
 
     std::optional<std::reference_wrapper<nr::scene::Scene>> activeScene_{};
     std::optional<nr::scene::SceneExtractProfileHandle> sceneExtractProfile_{};
+    RendererCpuFrameTimings cpuTimingAccumulator_{};
+    RendererCpuStatistics cpuStatistics_{};
+    std::map<std::pair<std::uint32_t, std::string>, RendererGpuPassAverage> gpuPassTimingAccumulator_{};
+    RendererGpuPassStatistics gpuPassStatistics_{};
 };
 } // namespace nr::renderer

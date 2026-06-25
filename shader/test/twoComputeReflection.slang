@@ -1,4 +1,5 @@
 module twoComputeReflection;
+import common;
 
 RWStructuredBuffer<uint> buffer1;
 RWStructuredBuffer<uint> buffer2;

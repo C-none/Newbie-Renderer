@@ -33,8 +33,6 @@ const nr::test::CaseRegistrar runtimeDescriptorArraySetCase{
             .storageImageSet = 12,
             .bufferSet = 13,
             .accelerationStructureSet = 14,
-            .inputAttachmentSet = 15,
-            .inlineUniformBlockSet = 16,
         };
 
         nr::test::requireEqual(*nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::Sampler, convention), 10u);
@@ -43,8 +41,8 @@ const nr::test::CaseRegistrar runtimeDescriptorArraySetCase{
         nr::test::requireEqual(*nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::UniformBuffer, convention), 13u);
         nr::test::requireEqual(*nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::StorageBuffer, convention), 13u);
         nr::test::requireEqual(*nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::AccelerationStructure, convention), 14u);
-        nr::test::requireEqual(*nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::InputAttachment, convention), 15u);
-        nr::test::requireEqual(*nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::InlineUniformBlock, convention), 16u);
+        nr::test::require(!nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::InputAttachment, convention).has_value());
+        nr::test::require(!nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::InlineUniformBlock, convention).has_value());
         nr::test::require(!nr::rhi::runtimeDescriptorArraySetFor(nr::rhi::ShaderDescriptorSemantic::Unsupported, convention).has_value());
     }};
 

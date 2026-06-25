@@ -1,4 +1,5 @@
 module main;
+import common;
 import test.utils.utils;
 [shader("compute")]
 [numthreads(1, 1, 1)]

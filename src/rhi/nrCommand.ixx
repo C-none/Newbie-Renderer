@@ -1,5 +1,5 @@
 export module nr.rhi:command;
-import dependency;
+import dependency.vulkan;
 import nr.utils;
 import std;
 
@@ -33,10 +33,7 @@ public:
     static void beginPrimary(
         const vk::raii::CommandBuffer& commandBuffer,
         vk::CommandBufferUsageFlags flags = {}
-    ) {
-        vk::CommandBufferBeginInfo beginInfo{flags};
-        commandBuffer.begin(beginInfo);
-    }
+    );
 
     /**
      * @brief Begin recording secondary command buffer
@@ -51,18 +48,13 @@ public:
         const vk::raii::CommandBuffer& commandBuffer,
         const vk::CommandBufferInheritanceInfo& inheritanceInfo,
         vk::CommandBufferUsageFlags flags={}
-    ) {
-        vk::CommandBufferBeginInfo beginInfo{flags, &inheritanceInfo};
-        commandBuffer.begin(beginInfo);
-    }
+    );
 
     /**
      * @brief End command buffer recording
      * @param commandBuffer RAII command buffer to end
      */
-    static void end(const vk::raii::CommandBuffer& commandBuffer) {
-        commandBuffer.end();
-    }
+    static void end(const vk::raii::CommandBuffer& commandBuffer);
 };
 
 /**
@@ -95,10 +87,7 @@ public:
     explicit ScopedCommandBuffer(
         const vk::raii::CommandBuffer& commandBuffer,
         vk::CommandBufferUsageFlags flags = {}
-    ) : commandBuffer_(commandBuffer)
-    {
-        CommandRecorder::beginPrimary(commandBuffer, flags);
-    }
+    );
 
     /**
      * @brief Begin secondary command buffer, end on destruction
@@ -110,15 +99,9 @@ public:
         const vk::raii::CommandBuffer& commandBuffer,
         const vk::CommandBufferInheritanceInfo& inheritanceInfo,
         vk::CommandBufferUsageFlags flags={}
-    ) : commandBuffer_(commandBuffer)
-    {
-        CommandRecorder::beginSecondary(commandBuffer, inheritanceInfo, flags);
-    }
+    );
 
-    ~ScopedCommandBuffer() {
-        // Reference is always valid (bound at construction)
-        commandBuffer_.end();
-    }
+    ~ScopedCommandBuffer();
 
     // Non-copyable, non-movable (RAII lifetime bound to scope)
     ScopedCommandBuffer(const ScopedCommandBuffer&) = delete;
@@ -129,7 +112,7 @@ public:
     /**
      * @brief Get the wrapped command buffer for recording commands
      */
-    [[nodiscard]] const vk::raii::CommandBuffer& get() const noexcept { return commandBuffer_; }
+    [[nodiscard]] const vk::raii::CommandBuffer& get() const noexcept;
 
 private:
     const vk::raii::CommandBuffer& commandBuffer_;
@@ -150,26 +133,9 @@ private:
  */
 class ScopedCommandBufferDebugLabel {
 public:
-    ScopedCommandBufferDebugLabel(const vk::raii::CommandBuffer& commandBuffer, std::string_view label)
-        : commandBuffer_(std::cref(commandBuffer))
-        , label_(label)
-    {
-        if constexpr (nr::isDebugMode) {
-            if (label_.empty()) {
-                return;
-            }
+    ScopedCommandBufferDebugLabel(const vk::raii::CommandBuffer& commandBuffer, std::string_view label);
 
-            auto debugLabel = vk::DebugUtilsLabelEXT{};
-            debugLabel.pLabelName = label_.c_str();
-
-            commandBuffer_->get().beginDebugUtilsLabelEXT(debugLabel);
-            active_ = true;
-        }
-    }
-
-    ~ScopedCommandBufferDebugLabel() {
-        close();
-    }
+    ~ScopedCommandBufferDebugLabel();
 
     // Non-copyable, non-movable (RAII lifetime bound to scope)
     ScopedCommandBufferDebugLabel(const ScopedCommandBufferDebugLabel&) = delete;
@@ -177,14 +143,7 @@ public:
     ScopedCommandBufferDebugLabel(ScopedCommandBufferDebugLabel&&) = delete;
     ScopedCommandBufferDebugLabel& operator=(ScopedCommandBufferDebugLabel&&) = delete;
 
-    void close() {
-        if (!active_ || !commandBuffer_.has_value()) {
-            return;
-        }
-
-        commandBuffer_->get().endDebugUtilsLabelEXT();
-        active_ = false;
-    }
+    void close();
 
 private:
     std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer_{};

@@ -1,5 +1,5 @@
 export module nr.renderer:rendererSubmission;
-import dependency;
+import dependency.vulkan;
 
 import nr.rhi;
 import nr.utils;

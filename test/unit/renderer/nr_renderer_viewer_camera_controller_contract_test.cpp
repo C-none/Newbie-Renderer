@@ -60,7 +60,6 @@ const nr::test::CaseRegistrar rotationActivationCase{
 
         camera.applyControl(nr::renderer::ViewerCameraControlInput{
             .deltaSeconds = 1.0f / 60.0f,
-            .rotateActive = false,
             .cursorDelta = glm::vec2{160.0f, -80.0f},
         });
 
@@ -103,7 +102,6 @@ const nr::test::CaseRegistrar localAxisCase{
         camera.setPose(nr::renderer::ViewerCameraPose{
             .position = glm::vec3{0.0f},
             .yawRadians = 0.0f,
-            .pitchRadians = 0.0f,
         });
         camera.setControlConfig(nr::renderer::ViewerCameraControlConfig{
             .movementSpeed = 2.0f,

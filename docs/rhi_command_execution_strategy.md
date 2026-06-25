@@ -1,6 +1,6 @@
 # RHI Command Invocation Execution Strategy
 
-This strategy applies to `nrrhi` and `test/profile` command recording code.
+This strategy applies to `nr.rhi` and project test command-recording code.
 
 ## 1. Objective
 
@@ -34,7 +34,7 @@ For each required command:
 - No `dispatcher->vkCmd*` usage remains in migrated files.
 - No `reinterpret_cast<PFN_vk...>` remains for migrated command paths.
 - No `vkGetSemaphoreCounterValue` / `vkWaitSemaphores` C API calls remain in `src/rhi` sync path.
-- Build and run target profile tests to confirm behavior equivalence.
+- Build and run the relevant LLVM Debug tests to confirm behavior equivalence.
 
 ## 6. Compile-Time Branch Strategy in `nr.rhi:resourceOps`
 

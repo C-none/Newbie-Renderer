@@ -1,5 +1,5 @@
 export module nr.rhi:queue;
-import dependency;
+import dependency.vulkan;
 import std;
 import :commandBatch;
 import :type;
@@ -35,12 +35,7 @@ class GpuQueue
      * @param queueFamilyIndex Queue family index
      * @param type Logical queue role classification
      */
-    GpuQueue(const vk::raii::Device& device, std::uint32_t queueFamilyIndex, QueueRole type) 
-        : queue_(device.getQueue(queueFamilyIndex, queueIndex_))
-        , queueFamilyIndex_(queueFamilyIndex)
-        , type_(type)
-    {
-    }
+    GpuQueue(const vk::raii::Device& device, std::uint32_t queueFamilyIndex, QueueRole type);
 
     // Move-only semantics
     GpuQueue(const GpuQueue&) = delete;
@@ -62,18 +57,7 @@ class GpuQueue
     void submit(
         const vk::raii::CommandBuffer& commandBuffer,
         std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
-    )
-    {
-        std::array<vk::CommandBufferSubmitInfo, 1> commandBufferInfos{
-            vk::CommandBufferSubmitInfo{*commandBuffer, 0},
-        };
-
-        vk::SubmitInfo2 submitInfo{};
-        submitInfo.commandBufferInfoCount = static_cast<std::uint32_t>(commandBufferInfos.size());
-        submitInfo.pCommandBufferInfos = commandBufferInfos.data();
-
-        queue_.submit2(submitInfo, fence ? *fence.value().get() : vk::Fence{});
-    }
+    );
 
     /**
      * @param batch Command batch to submit
@@ -98,54 +82,34 @@ class GpuQueue
     void submit(
         const CommandBatch& batch,
         std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
-    )
-    {
-        auto submitPacket = batch.buildSubmitInfo2();
-        vk::Fence fenceHandle = fence ? *fence.value().get() : vk::Fence{};
-        queue_.submit2(submitPacket.info(), fenceHandle);
-    }
+    );
 
     /**
      * @brief Wait for all operations on this queue to complete
      *
      * Blocks until queue is idle. Use for synchronization points.
      */
-    void waitIdle()
-    {
-        queue_.waitIdle();
-    }
+    void waitIdle();
 
     /**
      * @brief Get the queue type classification
      */
-    [[nodiscard]] QueueRole type() const noexcept
-    {
-        return type_;
-    }
+    [[nodiscard]] QueueRole type() const noexcept;
 
     /**
      * @brief Get the queue family index
      */
-    [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept
-    {
-        return queueFamilyIndex_;
-    }
+    [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept;
 
     /**
      * @brief Get the underlying vk::raii::Queue (for direct access if needed)
      */
-    [[nodiscard]] const vk::raii::Queue& handle() const noexcept
-    {
-        return queue_;
-    }
+    [[nodiscard]] const vk::raii::Queue& handle() const noexcept;
 
     /**
      * @brief Check if queue is valid (initialized)
      */
-    [[nodiscard]] bool valid() const noexcept
-    {
-        return *queue_ != nullptr;
-    }
+    [[nodiscard]] bool valid() const noexcept;
 
   private:
     std::uint32_t queueIndex_ = 0;
@@ -178,12 +142,7 @@ class QueueManager
      * @param compute Compute queue
      * @param transfer Transfer queue
      */
-    QueueManager(GpuQueue graphics, GpuQueue compute, GpuQueue transfer) 
-        : graphics_(std::move(graphics))
-        , compute_(std::move(compute))
-        , transfer_(std::move(transfer))
-    {
-    }
+    QueueManager(GpuQueue graphics, GpuQueue compute, GpuQueue transfer);
 
     // Move-only semantics
     QueueManager(const QueueManager&) = delete;
@@ -191,14 +150,14 @@ class QueueManager
     QueueManager(QueueManager&&) noexcept = default;
     QueueManager& operator=(QueueManager&&) noexcept = default;
 
-    [[nodiscard]] GpuQueue& graphics() { return graphics_; }
-    [[nodiscard]] const GpuQueue& graphics() const { return graphics_; }
+    [[nodiscard]] GpuQueue& graphics();
+    [[nodiscard]] const GpuQueue& graphics() const;
 
-    [[nodiscard]] GpuQueue& compute() { return compute_; }
-    [[nodiscard]] const GpuQueue& compute() const { return compute_; }
+    [[nodiscard]] GpuQueue& compute();
+    [[nodiscard]] const GpuQueue& compute() const;
 
-    [[nodiscard]] GpuQueue& transfer() { return transfer_; }
-    [[nodiscard]] const GpuQueue& transfer() const { return transfer_; }
+    [[nodiscard]] GpuQueue& transfer();
+    [[nodiscard]] const GpuQueue& transfer() const;
 
     /**
      * @brief Get queue by type
@@ -233,12 +192,7 @@ class QueueManager
     /**
      * @brief Wait for all queues to become idle
      */
-    void waitAllIdle()
-    {
-        if (graphics_.valid()) graphics_.waitIdle();
-        if (compute_.valid()) compute_.waitIdle();
-        if (transfer_.valid()) transfer_.waitIdle();
-    }
+    void waitAllIdle();
 
   private:
     GpuQueue graphics_;
