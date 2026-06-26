@@ -777,7 +777,6 @@ template <std::size_t N>
             .id = "frame.status",
             .title = "Frame Status",
             .draw = drawRendererStatsSection,
-            .defaultOpen = true,
         },
     };
 }

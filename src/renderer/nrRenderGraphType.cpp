@@ -11,12 +11,49 @@ namespace nr::renderer
 {
         return stages != vk::PipelineStageFlags2{};
     }
+
+[[nodiscard]] PassParallelRecordPlan ParallelRecordPlanner::planContiguousRanges(
+        std::size_t itemCount,
+        std::uint32_t availableRecordWorkers)
+{
+        auto plan = PassParallelRecordPlan{
+            .itemCount = itemCount,
+        };
+        if (itemCount == 0 || availableRecordWorkers == 0)
+        {
+            return plan;
+        }
+
+        auto const assignedThreadCount = std::min<std::size_t>(availableRecordWorkers, itemCount);
+        plan.assignedThreadCount = static_cast<std::uint32_t>(assignedThreadCount);
+
+        auto const baseRangeSize = itemCount / assignedThreadCount;
+        auto const remainder = itemCount % assignedThreadCount;
+        auto chunkIndices = std::views::iota(std::size_t{0}, assignedThreadCount);
+        plan.ranges = chunkIndices |
+                      std::views::transform([&](std::size_t chunkIndex) {
+                          auto const begin = chunkIndex * baseRangeSize + std::min(chunkIndex, remainder);
+                          auto const rangeSize = baseRangeSize + (chunkIndex < remainder ? 1u : 0u);
+                          return ParallelRecordRange{
+                              .begin = begin,
+                              .end = begin + rangeSize,
+                          };
+                      }) |
+                      std::ranges::to<std::vector>();
+        return plan;
+    }
 } // namespace nr::renderer
 
 namespace nr::renderer
 {
 namespace use
 {
+[[nodiscard]] PassResourceUseDesc orderedAfterPrevious(PassResourceUseDesc use) noexcept
+{
+    use.requiresPreviousUseBarrier = true;
+    return use;
+}
+
 [[nodiscard]] PassResourceUseDesc colorRead(GraphResourceHandle resource) noexcept
 {
     return make<spec::ColorRead>(resource);

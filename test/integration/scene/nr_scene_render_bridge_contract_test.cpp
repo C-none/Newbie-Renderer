@@ -44,7 +44,7 @@ namespace
             nr::scene::RasterDrawPacket{
                 .mesh = meshB,
                 .material = material,
-                .submeshIndex = 1,
+                .geometryIndex = 1,
                 .world = translated,
                 .worldBounds = nr::resource::Aabb{glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{2.0f, 2.0f, 2.0f}},
                 .sortKey = 20,
@@ -73,11 +73,11 @@ const nr::test::CaseRegistrar rasterFrameCase{
             .resolveMaterialBindless = [](nr::resource::MaterialHandle handle) -> std::optional<std::uint32_t> {
                 return handle.slot + 200u;
             },
-            .resolveRasterDrawGeometry = [](nr::resource::MeshHandle handle, std::uint32_t submeshIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
+            .resolveRasterDrawGeometry = [](nr::resource::MeshHandle handle, std::uint32_t geometryIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
                 return nr::scene::SceneBridgeDrawGeometry{
                     .firstVertex = handle.slot,
-                    .vertexCount = 3u + submeshIndex,
-                    .firstIndex = submeshIndex * 3u,
+                    .vertexCount = 3u + geometryIndex,
+                    .firstIndex = geometryIndex * 3u,
                     .indexCount = 3u,
                     .frontFace = vk::FrontFace::eClockwise,
                 };
@@ -94,10 +94,42 @@ const nr::test::CaseRegistrar rasterFrameCase{
         nr::test::requireEqual(frame.rasterDraws[0].meshBindless, 103u);
         nr::test::requireEqual(frame.rasterDraws[1].meshBindless, 104u);
         nr::test::requireEqual(frame.rasterDraws[0].materialBindless, 209u);
+        nr::test::requireEqual(frame.rasterDraws[0].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::require(!frame.rasterDraws[0].materialRaster.doubleSided, "default material raster state should be single-sided");
+        nr::test::requireEqual(frame.materialGroups.front().materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::require(!frame.materialGroups.front().materialRaster.doubleSided, "material group should carry default raster state");
         nr::test::requireEqual(frame.rasterDraws[1].geometry.firstVertex, 4u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.vertexCount, 4u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.firstIndex, 3u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.frontFace, vk::FrontFace::eClockwise);
+    }};
+
+const nr::test::CaseRegistrar materialRasterStateCase{
+    "scene render bridge resolves material raster state per draw and group",
+    [] {
+        auto packetSet = makeRasterPacketSet();
+        packetSet.rasterDraws[1].material = nr::resource::MaterialHandle{10u, 2u};
+
+        auto frame = nr::scene::SceneRenderBridge::buildFrame(nr::scene::SceneRenderBridgeBuildInput{
+            .packetSet = std::cref(packetSet),
+            .resolveMaterialRasterState = [](nr::resource::MaterialHandle handle) -> std::optional<nr::scene::SceneBridgeMaterialRasterState> {
+                auto const doubleSided = handle.slot == 10u;
+                return nr::scene::SceneBridgeMaterialRasterState{
+                    .cullMode = doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack,
+                    .doubleSided = doubleSided,
+                };
+            },
+        });
+
+        nr::test::requireEqual(frame.rasterDraws.size(), std::size_t{2});
+        nr::test::requireEqual(frame.materialGroups.size(), std::size_t{2});
+        nr::test::requireEqual(frame.rasterDraws[0].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::require(!frame.rasterDraws[0].materialRaster.doubleSided, "single-sided draw should keep back-face culling");
+        nr::test::requireEqual(frame.rasterDraws[1].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eNone});
+        nr::test::require(frame.rasterDraws[1].materialRaster.doubleSided, "double-sided draw should disable culling");
+        nr::test::requireEqual(frame.materialGroups[0].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::requireEqual(frame.materialGroups[1].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eNone});
+        nr::test::require(frame.materialGroups[1].materialRaster.doubleSided, "double-sided material group should carry raster state");
     }};
 
 const nr::test::CaseRegistrar cameraPrecedenceCase{

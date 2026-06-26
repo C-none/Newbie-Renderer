@@ -127,7 +127,7 @@ struct RasterDrawPacket
     flecs::entity renderable{};
     nr::resource::MeshHandle mesh{};
     nr::resource::MaterialHandle material{};
-    std::uint32_t submeshIndex = 0;
+    std::uint32_t geometryIndex = 0;
     glm::mat4 world{1.0f};
     nr::resource::Aabb worldBounds{};
     std::uint64_t sortKey = 0;
@@ -137,7 +137,6 @@ struct RayTracingInstancePacket
 {
     flecs::entity renderable{};
     nr::resource::MeshHandle mesh{};
-    std::uint32_t submeshIndex = 0;
     glm::mat4 world{1.0f};
     std::uint32_t instanceMask = 0xFF;
     std::uint16_t tlasBucket = 0;
@@ -147,7 +146,6 @@ struct TlasBuildInputPacket
 {
     flecs::entity renderable{};
     nr::resource::MeshHandle mesh{};
-    std::uint32_t submeshIndex = 0;
     glm::mat4 world{1.0f};
     std::uint32_t instanceMask = 0xFF;
     std::uint16_t tlasBucket = 0;
@@ -210,17 +208,24 @@ struct SceneBridgeDrawGeometry
     [[nodiscard]] bool hasIndexBuffer() const noexcept;
 };
 
+struct SceneBridgeMaterialRasterState
+{
+    vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
+    bool doubleSided = false;
+};
+
 struct SceneBridgeDrawPacket
 {
     flecs::entity renderable{};
     nr::resource::MeshHandle mesh{};
     nr::resource::MaterialHandle material{};
-    std::uint32_t submeshIndex = 0;
+    std::uint32_t geometryIndex = 0;
     glm::mat4 world{1.0f};
     nr::resource::Aabb worldBounds{};
     std::uint64_t sortKey = 0;
     std::uint32_t meshBindless = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
+    SceneBridgeMaterialRasterState materialRaster{};
     SceneBridgeDrawGeometry geometry{};
 };
 
@@ -228,6 +233,7 @@ struct SceneBridgeDrawGroup
 {
     nr::resource::MaterialHandle material{};
     std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
+    SceneBridgeMaterialRasterState materialRaster{};
     std::vector<std::uint32_t> drawIndices{};
 };
 
@@ -279,7 +285,7 @@ struct RenderableBinding
 {
     nr::resource::MeshHandle mesh{};
     nr::resource::MaterialHandle material{};
-    std::uint32_t submeshCount = 0;
+    std::uint32_t geometryCount = 0;
 };
 
 struct SceneSelectionBits
@@ -369,31 +375,26 @@ namespace detail
 {
 struct MaterialGpuData
 {
-    // RGB: base color, A: opacity
+    std::uint32_t abiVersion = 2;
+    std::uint32_t featureFlags = 0;
+    std::uint32_t alphaMode = 0;
+    std::uint32_t textureSlotCount = static_cast<std::uint32_t>(nr::resource::materialTextureSlotCount);
+
     glm::vec4 baseColorFactor{1.0f};
-    
-    // RGB: emissive, F: metallic factor
-    glm::vec4 emissiveAndMetallic{0.0f, 0.0f, 0.0f, 0.0f};
-    
-    // R: roughness, G: normal scale, B: occlusion strength, A: alpha cutoff
+
+    glm::vec4 emissiveAndMetallic{0.0f, 0.0f, 0.0f, 1.0f};
+
     glm::vec4 roughnessNormalOcclusionAlpha{1.0f, 1.0f, 1.0f, 0.5f};
-    
-    // R: alpha mode, G: flags (double-sided), B: unused, A: unused
-    glm::uvec4 alphaAndFlags{0u};
-    
-    // Specular/Glossiness workflow
-    // RGB: specular factor, A: glossiness factor
-    glm::vec4 specularAndGlossiness{0.0f};
-    
-    // Anisotropy and workflow flags
-    // R: anisotropy factor, G: metallic-roughness flag, B: specular-glossiness flag, A: anisotropy flag
-    glm::uvec4 anisotropyAndWorkflow{0u};
-    
-    // Texture handles: baseColor, normal, metallicRoughness, occlusion, emissive
-    std::array<std::uint64_t, 5> textureHandles{};
-    
-    // UV sets for each texture
-    std::array<std::uint32_t, 5> uvSets{};
+
+    glm::vec4 clearcoatFactorRoughness{0.0f, 0.0f, 0.0f, 0.0f};
+
+    glm::vec4 sheenColorRoughness{0.0f, 0.0f, 0.0f, 0.0f};
+
+    glm::vec4 transmissionAnisotropy{0.0f, 0.0f, 0.0f, 0.0f};
+
+    std::array<std::uint64_t, nr::resource::materialTextureSlotCount> textureHandles{};
+
+    std::array<std::uint32_t, nr::resource::materialTextureSlotCount> uvSets{};
 };
 
 struct CameraGpuData
@@ -617,16 +618,6 @@ struct SceneStatistics
 export namespace nr::scene::detail
 {
 using SiblingNameTable = std::map<flecs::entity_t, std::map<std::string, std::uint32_t>>;
-
-enum class MaterialSemanticSlot : std::uint8_t
-{
-    baseColor,
-    normal,
-    metallicRoughness,
-    occlusion,
-    emissive,
-    unsupported,
-};
 
 struct TextureColorSpaceHint
 {

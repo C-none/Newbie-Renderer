@@ -12,15 +12,9 @@ export namespace nr::scene::detail
 {
 [[nodiscard]] std::string sanitizeEntityName(std::string_view label);
 
-[[nodiscard]] std::string normalizeSemantic(std::string_view semantic);
+[[nodiscard]] bool semanticIsColor(nr::resource::MaterialTextureSlotSemantic slot) noexcept;
 
-[[nodiscard]] MaterialSemanticSlot classifyMaterialSemantic(std::string_view semantic);
-
-[[nodiscard]] bool semanticIsColor(MaterialSemanticSlot slot) noexcept;
-
-[[nodiscard]] bool semanticIsLinear(MaterialSemanticSlot slot) noexcept;
-
-[[nodiscard]] std::string_view slotName(MaterialSemanticSlot slot) noexcept;
+[[nodiscard]] bool semanticIsLinear(nr::resource::MaterialTextureSlotSemantic slot) noexcept;
 
 [[nodiscard]] std::vector<TextureColorSpaceHint> buildTextureColorSpaceHints(const nr::load::SceneAsset &sceneAsset);
 

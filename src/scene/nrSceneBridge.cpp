@@ -171,10 +171,23 @@ namespace nr::scene
             return materialHandle.valid() ? materialHandle.slot : std::numeric_limits<std::uint32_t>::max();
         };
 
-        auto resolveRasterDrawGeometry = [&](nr::resource::MeshHandle meshHandle, std::uint32_t submeshIndex) {
+        auto resolveMaterialRasterState = [&](nr::resource::MaterialHandle materialHandle) {
+            if (input.resolveMaterialRasterState)
+            {
+                auto resolved = input.resolveMaterialRasterState(materialHandle);
+                if (resolved.has_value())
+                {
+                    return *resolved;
+                }
+            }
+
+            return SceneBridgeMaterialRasterState{};
+        };
+
+        auto resolveRasterDrawGeometry = [&](nr::resource::MeshHandle meshHandle, std::uint32_t geometryIndex) {
             if (input.resolveRasterDrawGeometry)
             {
-                auto resolved = input.resolveRasterDrawGeometry(meshHandle, submeshIndex);
+                auto resolved = input.resolveRasterDrawGeometry(meshHandle, geometryIndex);
                 if (resolved.has_value())
                 {
                     return *resolved;
@@ -190,13 +203,14 @@ namespace nr::scene
                 .renderable = packet.renderable,
                 .mesh = packet.mesh,
                 .material = packet.material,
-                .submeshIndex = packet.submeshIndex,
+                .geometryIndex = packet.geometryIndex,
                 .world = packet.world,
                 .worldBounds = packet.worldBounds,
                 .sortKey = packet.sortKey,
                 .meshBindless = resolveMeshBindless(packet.mesh),
                 .materialBindless = resolveMaterialBindless(packet.material),
-                .geometry = resolveRasterDrawGeometry(packet.mesh, packet.submeshIndex),
+                .materialRaster = resolveMaterialRasterState(packet.material),
+                .geometry = resolveRasterDrawGeometry(packet.mesh, packet.geometryIndex),
             });
         });
 
@@ -212,6 +226,7 @@ namespace nr::scene
                 frame.materialGroups.push_back(SceneBridgeDrawGroup{
                     .material = draw.material,
                     .materialBindless = draw.materialBindless,
+                    .materialRaster = draw.materialRaster,
                 });
             }
 

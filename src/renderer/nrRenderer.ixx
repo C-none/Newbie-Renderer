@@ -237,6 +237,12 @@ struct NodeBuildContext
         PassPrepareCallback prepareCallback = nullptr,
         bool isCopyPass = false);
 
+    [[nodiscard]] GraphPassHandle addPass(
+        std::span<const PassResourceUseDesc> intentList,
+        std::string_view debugName,
+        PassParallelRecordDesc parallelRecord,
+        PassPrepareCallback prepareCallback = nullptr);
+
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
 
@@ -477,6 +483,33 @@ struct RasterPassRecordContext
 
 using RasterPassRecordCallback = std::function<void(const RasterPassRecordContext&)>;
 
+struct RasterPassRangeRecordContext
+{
+    const PassRecordContext& pass;
+    const PassParallelRecordPlan& plan;
+    std::size_t chunkIndex = 0;
+    ParallelRecordRange range{};
+    const vk::raii::CommandBuffer& commandBuffer;
+    const nr::rhi::ShaderDescriptorLayout& descriptorLayout;
+    const nr::rhi::CursorPipelineLayout& pipelineLayout;
+    vk::Extent2D extent{1, 1};
+
+    template <typename TPayload>
+    void pushConstants(std::string_view shaderPath, const TPayload& value) const
+    {
+        auto root = descriptorLayout.rootCursor();
+        auto cursor = root.getPath(shaderPath);
+        static_cast<void>(cursor.setData(value));
+
+        auto bindingSnapshot = root.snapshot();
+        root.clearSnapshot();
+        nr::rhi::pushConstantsToCommandBuffer(commandBuffer, pipelineLayout, bindingSnapshot);
+    }
+};
+
+using RasterPassItemCountCallback = std::function<std::size_t(const PassRecordContext&)>;
+using RasterPassRangeRecordCallback = std::function<void(const RasterPassRangeRecordContext&)>;
+
 struct RasterColorAttachment
 {
     GraphResourceHandle resource{};
@@ -493,6 +526,12 @@ struct RasterDepthAttachment
     vk::AttachmentLoadOp stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
     vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
     vk::ClearDepthStencilValue clearValue{1.0f, 0u};
+};
+
+enum class RasterViewportYMode : std::uint8_t
+{
+    FramebufferTopLeft,
+    ClipSpaceYUp,
 };
 
 using RasterPassPrepareCallback = std::function<void(const PassPrepareContext&)>;
@@ -513,6 +552,8 @@ class RasterPassBuilder
         std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime);
 
     RasterPassBuilder& viewport(vk::Extent2D extent);
+
+    RasterPassBuilder& viewportYMode(RasterViewportYMode mode);
 
     RasterPassBuilder& colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue);
 
@@ -540,6 +581,10 @@ class RasterPassBuilder
 
     RasterPassBuilder& record(RasterPassRecordCallback callback);
 
+    RasterPassBuilder& recordParallel(
+        RasterPassItemCountCallback itemCountCallback,
+        RasterPassRangeRecordCallback rangeRecordCallback);
+
     RasterPassBuilder& resourceUse(PassResourceUseDesc resourceUse);
 
     RasterPassBuilder& prepare(RasterPassPrepareCallback callback);
@@ -551,22 +596,57 @@ class RasterPassBuilder
     [[nodiscard]] GraphPassHandle build();
 
   private:
+    struct RasterPassRenderingSetup
+    {
+        std::vector<PassImageResource> resolvedColors{};
+        std::optional<PassImageResource> resolvedDepth{};
+        vk::Extent2D targetExtent{1, 1};
+        std::vector<nr::rhi::ops::RenderingAttachmentDesc> colorAttachments{};
+        std::optional<nr::rhi::ops::RenderingDepthStencilAttachmentDesc> depthAttachment{};
+        std::optional<nr::rhi::ops::RenderingDepthStencilAttachmentDesc> stencilAttachment{};
+    };
+
     [[nodiscard]] static vk::Extent2D resolveTargetExtent(
         std::optional<vk::Extent2D> viewportExtent,
         std::span<const PassImageResource> resolvedColors,
         const std::optional<PassImageResource>& resolvedDepth);
+
+    [[nodiscard]] static RasterPassRenderingSetup makeRenderingSetup(
+        const PassRecordContext& recordContext,
+        std::span<const RasterColorAttachment> colorAttachments,
+        const std::optional<RasterDepthAttachment>& depthAttachment,
+        std::optional<vk::Extent2D> viewportExtent,
+        std::string_view debugName);
+
+    [[nodiscard]] static PassPrimaryRecordScope makeDynamicRenderingSecondaryScope(
+        const RasterPassRenderingSetup& setup,
+        const PipelineRuntime<nr::rhi::GraphicsPipeline>& runtime,
+        std::string_view debugName);
+
+    static void bindGraphicsSetup(
+        const vk::raii::CommandBuffer& commandBuffer,
+        const PipelineRuntime<nr::rhi::GraphicsPipeline>& runtime,
+        const nr::rhi::ShaderBindingSnapshot& bindingSnapshot,
+        std::uint32_t frameIndex,
+        vk::Extent2D targetExtent,
+        RasterViewportYMode viewportYMode,
+        nr::rhi::MeshRasterState rasterState,
+        vk::PrimitiveTopology primitiveTopology);
 
     std::reference_wrapper<NodeBuildContext> context_;
     std::string debugName_{};
     std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime_{};
     nr::rhi::ShaderCursor rootCursor_{};
     std::optional<vk::Extent2D> viewportExtent_{};
+    RasterViewportYMode viewportYMode_ = RasterViewportYMode::FramebufferTopLeft;
     std::vector<RasterColorAttachment> colorAttachments_{};
     std::optional<RasterDepthAttachment> depthAttachment_{};
     std::vector<PassResourceUseDesc> resourceUses_{};
     nr::rhi::MeshRasterState rasterState_{};
     vk::PrimitiveTopology primitiveTopology_ = vk::PrimitiveTopology::eTriangleList;
     RasterPassRecordCallback recordCallback_{};
+    RasterPassItemCountCallback parallelItemCountCallback_{};
+    RasterPassRangeRecordCallback parallelRangeRecordCallback_{};
     std::vector<RasterPassPrepareCallback> prepareCallbacks_{};
     std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots_{};
 };

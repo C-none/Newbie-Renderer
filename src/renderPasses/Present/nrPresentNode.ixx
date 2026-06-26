@@ -17,7 +17,7 @@ struct PresentNodeInput
 {
     vk::Extent2D viewportExtent{1, 1};
     vk::Format format = vk::Format::eR8G8B8A8Unorm;
-    bool flipY = true;
+    bool flipY = false;
     float uiOpacity = 1.0f;
 };
 

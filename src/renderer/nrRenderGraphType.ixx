@@ -157,6 +157,7 @@ struct PassResourceUseDesc
 
     ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
     bool readOnly = false;
+    bool requiresPreviousUseBarrier = false;
 };
 
 namespace use
@@ -709,6 +710,8 @@ template <AccelerationStructureUseSpec TSpec>
 
 [[nodiscard]] PassResourceUseDesc colorRead(GraphResourceHandle resource) noexcept;
 
+[[nodiscard]] PassResourceUseDesc orderedAfterPrevious(PassResourceUseDesc use) noexcept;
+
 [[nodiscard]] PassResourceUseDesc colorWrite(GraphResourceHandle resource) noexcept;
 
 [[nodiscard]] PassResourceUseDesc colorReadWrite(GraphResourceHandle resource) noexcept;
@@ -941,6 +944,112 @@ struct PassRecordContext
 
 using PassRecordCallback = std::function<void(const PassRecordContext&)>;
 
+enum class ParallelRecordReplaySemantics : std::uint8_t
+{
+    Unordered,
+};
+
+enum class PassPrimaryRecordScopeKind : std::uint8_t
+{
+    None,
+    DynamicRenderingSecondaryContents,
+};
+
+struct ParallelRecordRange
+{
+    std::size_t begin = 0;
+    std::size_t end = 0;
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return end - begin;
+    }
+};
+
+struct PassParallelRecordPlan
+{
+    std::size_t itemCount = 0;
+    std::uint32_t assignedThreadCount = 0;
+    std::vector<ParallelRecordRange> ranges{};
+};
+
+struct PassDynamicRenderingSecondaryScope
+{
+    vk::Rect2D renderArea{};
+    std::uint32_t layerCount = 1;
+    std::uint32_t viewMask = 0;
+    vk::RenderingFlags flags{};
+    std::vector<nr::rhi::ops::RenderingAttachmentDesc> colorAttachments{};
+    std::optional<nr::rhi::ops::RenderingDepthStencilAttachmentDesc> depthAttachment{};
+    std::optional<nr::rhi::ops::RenderingDepthStencilAttachmentDesc> stencilAttachment{};
+    std::vector<vk::Format> colorAttachmentFormats{};
+    vk::Format depthAttachmentFormat = vk::Format::eUndefined;
+    vk::Format stencilAttachmentFormat = vk::Format::eUndefined;
+    vk::SampleCountFlagBits rasterizationSamples = vk::SampleCountFlagBits::e1;
+
+    [[nodiscard]] nr::rhi::ops::RenderingScopeDesc renderingScope() const noexcept
+    {
+        return nr::rhi::ops::RenderingScopeDesc{
+            .renderArea = renderArea,
+            .layerCount = layerCount,
+            .viewMask = viewMask,
+            .flags = flags | vk::RenderingFlagBits::eContentsSecondaryCommandBuffers,
+            .colorAttachments = std::span<const nr::rhi::ops::RenderingAttachmentDesc>{
+                colorAttachments.data(),
+                colorAttachments.size()},
+            .depthAttachment = depthAttachment,
+            .stencilAttachment = stencilAttachment,
+        };
+    }
+
+    [[nodiscard]] vk::CommandBufferInheritanceRenderingInfo inheritanceRenderingInfo() const noexcept
+    {
+        auto info = vk::CommandBufferInheritanceRenderingInfo{};
+        info.flags = flags;
+        info.viewMask = viewMask;
+        info.colorAttachmentCount = static_cast<std::uint32_t>(colorAttachmentFormats.size());
+        info.pColorAttachmentFormats = colorAttachmentFormats.data();
+        info.depthAttachmentFormat = depthAttachmentFormat;
+        info.stencilAttachmentFormat = stencilAttachmentFormat;
+        info.rasterizationSamples = rasterizationSamples;
+        return info;
+    }
+};
+
+struct PassPrimaryRecordScope
+{
+    PassPrimaryRecordScopeKind kind = PassPrimaryRecordScopeKind::None;
+    PassDynamicRenderingSecondaryScope dynamicRendering{};
+};
+
+struct ParallelRecordPlanner
+{
+    [[nodiscard]] static PassParallelRecordPlan planContiguousRanges(
+        std::size_t itemCount,
+        std::uint32_t availableRecordWorkers);
+};
+
+struct PassRangeRecordContext
+{
+    PassRecordContext pass{};
+    std::reference_wrapper<const vk::raii::CommandBuffer> commandBuffer;
+    std::reference_wrapper<const PassParallelRecordPlan> plan;
+    std::size_t chunkIndex = 0;
+    ParallelRecordRange range{};
+};
+
+using PassParallelRecordItemCountCallback = std::function<std::size_t(const PassRecordContext&)>;
+using PassParallelRecordPrimaryScopeCallback = std::function<PassPrimaryRecordScope(const PassRecordContext&)>;
+using PassParallelRecordRangeCallback = std::function<void(const PassRangeRecordContext&)>;
+
+struct PassParallelRecordDesc
+{
+    ParallelRecordReplaySemantics replaySemantics = ParallelRecordReplaySemantics::Unordered;
+    PassParallelRecordItemCountCallback itemCount{};
+    PassParallelRecordPrimaryScopeCallback primaryScope{};
+    PassParallelRecordRangeCallback recordRange{};
+};
+
 struct GraphNodeDesc
 {
     GraphNodeHandle handle{};
@@ -958,6 +1067,7 @@ struct PassExecutionDesc
     std::vector<PassResourceUseDesc> resourceUses{};
     PassPrepareCallback prepare{};
     PassRecordCallback record{};
+    std::optional<PassParallelRecordDesc> parallelRecord{};
 };
 
 struct SubmitBoundaryDesc
@@ -1065,6 +1175,7 @@ struct CompiledPass
     std::vector<ResourceStateTransition> preBarriers{};
     PassPrepareCallback prepare{};
     PassRecordCallback record{};
+    std::optional<PassParallelRecordDesc> parallelRecord{};
 };
 
 struct CompiledSubmitBatch

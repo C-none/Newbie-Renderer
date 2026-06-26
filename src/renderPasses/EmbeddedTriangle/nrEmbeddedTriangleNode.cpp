@@ -91,6 +91,7 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
         runtime_->pipeline};
     rasterPass
         .viewport(viewportExtent)
+        .viewportYMode(nr::renderer::RasterViewportYMode::ClipSpaceYUp)
         .colorAttachment(
             output.color,
             vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}})

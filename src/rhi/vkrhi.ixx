@@ -13,7 +13,8 @@ struct RequiredQueueFamilySelection
     std::uint32_t transfer = 0;
 };
 
-[[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(const auto& queueFamilyProperties);
+[[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(
+    std::span<const vk::QueueFamilyProperties> queueFamilyProperties);
 
 [[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance);
 

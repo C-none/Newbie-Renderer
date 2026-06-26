@@ -374,6 +374,7 @@ class RenderGraphCompiler
                 .resolvedResourceIndices = std::move(resolvedResourceIndices),
                 .prepare = transferPayload<MovePassPayloads>(pass.prepare),
                 .record = transferPayload<MovePassPayloads>(pass.record),
+                .parallelRecord = transferPayload<MovePassPayloads>(pass.parallelRecord),
             });
         });
 

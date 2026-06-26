@@ -14,8 +14,11 @@ struct RecordTaskResult
 {
     std::size_t batchOrdinal = 0;
     std::size_t passOrdinal = 0;
+    std::size_t chunkIndex = 0;
+    std::size_t chunkCount = 1;
     std::uint32_t workerId = 0;
     QueueDomain queue = QueueDomain::Graphics;
+    bool parallel = false;
     vk::CommandBuffer commandBuffer{};
     std::size_t invokedPassRecordCount = 0;
     std::size_t appliedInPassBarrierCount = 0;
@@ -393,6 +396,7 @@ class RenderGraphExecutor
     {
         std::size_t batchOrdinal = 0;
         std::size_t passOrdinal = 0;
+        std::size_t chunkIndex = 0;
         std::uint32_t workerId = 0;
         std::uint32_t secondaryPoolSlot = detail::kWorkerSecondaryPoolSlotBase;
         QueueDomain queue = QueueDomain::Graphics;
@@ -403,11 +407,23 @@ class RenderGraphExecutor
         std::reference_wrapper<const CompiledResourceLookup> compiledResourceByHandle;
         std::reference_wrapper<const RuntimeBindingMap> runtimeBindings;
         std::reference_wrapper<const CompiledFrameDataLookup> frameDataByHandle;
+        bool parallel = false;
+        PassParallelRecordPlan parallelPlan{};
+        ParallelRecordRange range{};
+        PassPrimaryRecordScope primaryScope{};
+    };
+
+    struct RecordPassExecutionPlan
+    {
+        bool parallel = false;
+        PassParallelRecordPlan parallelPlan{};
+        PassPrimaryRecordScope primaryScope{};
     };
 
     struct RecordBatchTasks
     {
         std::size_t batchOrdinal = 0;
+        std::vector<RecordPassExecutionPlan> passPlans{};
         std::vector<std::future<RecordTaskResult>> futures{};
     };
 
@@ -482,33 +498,6 @@ class RenderGraphExecutor
         std::vector<GpuPassTimingSample> pendingPasses{};
     };
 
-    struct ExecuteCpuTimings
-    {
-        double retainedStateMilliseconds = 0.0;
-        double gpuTimingSetupMilliseconds = 0.0;
-        double workerSetupMilliseconds = 0.0;
-        double lookupSetupMilliseconds = 0.0;
-        double launchRecordTasksMilliseconds = 0.0;
-        double primarySetupMilliseconds = 0.0;
-        double queryResetMilliseconds = 0.0;
-        double acquireBarrierMilliseconds = 0.0;
-        double collectRecordTasksMilliseconds = 0.0;
-        double executeSecondariesMilliseconds = 0.0;
-        double releaseBarrierMilliseconds = 0.0;
-        double primaryEndMilliseconds = 0.0;
-        double submitMilliseconds = 0.0;
-        double syntheticPresentMilliseconds = 0.0;
-        double totalMilliseconds = 0.0;
-        std::size_t submittedBatchCount = 0;
-        std::size_t submittedRecordTaskCount = 0;
-    };
-
-    struct ExecuteCpuTimingAccumulator
-    {
-        ExecuteCpuTimings total{};
-        std::uint32_t sampleCount = 0;
-    };
-
     [[nodiscard]] vk::raii::CommandBuffer& primaryCommandBufferForQueue(
         const ExecuteContext& context,
         std::size_t frameSlot,
@@ -521,6 +510,7 @@ class RenderGraphExecutor
         QueueDomain queue,
         std::size_t batchOrdinal,
         std::size_t passOrdinal,
+        std::size_t chunkIndex,
         std::uint32_t secondaryPoolSlot);
 
     static void addTransitionBarrier(
@@ -532,7 +522,16 @@ class RenderGraphExecutor
         std::uint32_t srcQueueFamilyIndex,
         std::uint32_t dstQueueFamilyIndex);
 
+    [[nodiscard]] static PassRecordContext makePassRecordContext(
+        std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer,
+        std::uint32_t frameIndex,
+        nr::rhi::Device& device,
+        const RuntimeBindingMap& runtimeBindings,
+        const CompiledFrameDataLookup& frameDataByHandle);
+
     [[nodiscard]] static RecordTaskResult recordPassToSecondary(const RecordTaskDesc& desc);
+
+    [[nodiscard]] static RecordTaskResult recordPassRangeToSecondary(const RecordTaskDesc& desc);
 
     [[nodiscard]] static std::uint32_t timestampValidBitsForQueue(
         const nr::rhi::Device& device,
@@ -585,11 +584,14 @@ class RenderGraphExecutor
 
     static void executeRecordedSecondaries(
         const vk::raii::CommandBuffer& primaryCommandBuffer,
+        const CompiledSubmitBatch& batch,
+        std::span<const RecordPassExecutionPlan> passPlans,
         std::span<const RecordTaskResult> results,
         vk::QueryPool timingQueryPool,
-        std::size_t firstTimedPassIndex);
-
-    void recordExecuteCpuTimingSample(const ExecuteCpuTimings& timings, std::uint32_t frameIndex);
+        std::size_t firstTimedPassIndex,
+        const CompiledResourceLookup& compiledResourceByHandle,
+        const RuntimeBindingMap& runtimeBindings,
+        ExecuteReport& report);
 
     [[nodiscard]] static vk::ImageSubresourceLayers toSubresourceLayers(const vk::ImageSubresourceRange& range);
 
@@ -599,10 +601,10 @@ class RenderGraphExecutor
         const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings);
 
     std::vector<std::vector<CachedPrimaryCommandBuffer>> primaryCommandBuffersByFrame_{};
-    std::vector<std::vector<std::vector<CachedSecondaryCommandBuffer>>> secondaryCommandBuffersByFrame_{};
+    std::vector<std::vector<std::vector<std::vector<CachedSecondaryCommandBuffer>>>> secondaryCommandBuffersByFrame_{};
     std::vector<FrameGpuPassTimingState> gpuPassTimingStatesByFrame_{};
     detail::RenderRecordThreadPool recordThreadPool_{};
-    ExecuteCpuTimingAccumulator executeCpuTimingAccumulator_{};
     std::uint64_t nextFrameBoundaryId_ = 1;
+    std::uint64_t temporaryParallelRecordStatsFrameNumber_ = 0;
 };
 } // namespace nr::renderer

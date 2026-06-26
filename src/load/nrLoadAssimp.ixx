@@ -2,10 +2,14 @@ export module nr.load:assimp;
 
 import :type;
 import :backend;
+import nr.resource;
 import std;
 
 export namespace nr::load
 {
+[[nodiscard]] nr::resource::MaterialTextureSlotSemantic assimpTextureSlotSemantic(std::uint32_t textureTypeRaw,
+                                                                                 std::uint32_t textureSlot) noexcept;
+
 struct AssimpSceneImporter : SceneImporterBackendBase<AssimpSceneImporter>
 {
     static constexpr std::string_view kBackendName = "assimp";

@@ -1,4 +1,5 @@
 export module nr.load:type;
+import nr.resource;
 import std;
 
 export namespace nr::load
@@ -86,7 +87,8 @@ struct MaterialTextureBinding
     std::uint32_t textureIndex = invalidIndex;
     std::uint32_t uvChannel = 0;
     std::uint32_t textureTypeRaw = 0;
-    std::string semantic{};
+    nr::resource::MaterialTextureSlotSemantic semantic = nr::resource::MaterialTextureSlotSemantic::unsupported;
+    std::string sourceSemanticName{};
 };
 
 enum class MaterialAlphaModeHint : std::uint8_t
@@ -112,7 +114,7 @@ struct MaterialAsset
     std::array<float, 3> emissiveFactor{0.0f, 0.0f, 0.0f};
     
     // Authoring: Metallic/Roughness workflow
-    float metallicFactor = 0.0f;
+    float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
     
     // Authoring: Specular/Glossiness workflow
@@ -121,6 +123,14 @@ struct MaterialAsset
     
     // Authoring: Anisotropy
     std::optional<float> anisotropyFactor{};
+    std::optional<float> anisotropyRotation{};
+
+    // Authoring: PBR extension blocks
+    std::optional<float> clearcoatFactor{};
+    std::optional<float> clearcoatRoughnessFactor{};
+    std::optional<std::array<float, 3>> sheenColorFactor{};
+    std::optional<float> sheenRoughnessFactor{};
+    std::optional<float> transmissionFactor{};
     
     // Authoring: Transparency and rendering
     float opacity = 1.0f;
@@ -148,12 +158,21 @@ struct VertexAsset
     std::array<float, 4> color0{1.0f, 1.0f, 1.0f, 1.0f};
 };
 
+struct MeshGeometryAsset
+{
+    std::string name{};
+    std::uint32_t firstIndex = 0;
+    std::uint32_t indexCount = 0;
+    std::uint32_t vertexOffset = 0;
+    std::uint32_t materialIndex = invalidIndex;
+};
+
 struct MeshAsset
 {
     std::string name{};
     std::vector<VertexAsset> vertices{};
     std::vector<std::uint32_t> indices{};
-    std::uint32_t materialIndex = invalidIndex;
+    std::vector<MeshGeometryAsset> geometries{};
 };
 
 struct NodeAsset

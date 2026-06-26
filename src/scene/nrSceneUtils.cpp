@@ -29,88 +29,20 @@ namespace nr::scene::detail
     return sanitized;
 }
 
-[[nodiscard]] std::string normalizeSemantic(std::string_view semantic)
-{
-    auto normalized = std::string{};
-    normalized.reserve(semantic.size());
-
-    std::ranges::for_each(semantic, [&](char character) {
-        auto value = static_cast<unsigned char>(character);
-        if (std::isalnum(value) == 0)
-        {
-            return;
-        }
-
-        normalized.push_back(static_cast<char>(std::tolower(value)));
-    });
-
-    return normalized;
-}
-
-[[nodiscard]] MaterialSemanticSlot classifyMaterialSemantic(std::string_view semantic)
-{
-    auto normalized = normalizeSemantic(semantic);
-
-    if (normalized.empty())
-    {
-        return MaterialSemanticSlot::unsupported;
-    }
-
-    auto contains = [&](std::string_view token) {
-        return normalized.find(token) != std::string::npos;
-    };
-
-    if (contains("diffuse") || contains("basecolor") || contains("albedo") || contains("color"))
-    {
-        return MaterialSemanticSlot::baseColor;
-    }
-
-    if (contains("emissive"))
-    {
-        return MaterialSemanticSlot::emissive;
-    }
-
-    if (contains("normal") || contains("height") || contains("displacement") || contains("bump"))
-    {
-        return MaterialSemanticSlot::normal;
-    }
-
-    if (contains("lightmap") || contains("ambient") || contains("ao") || contains("occlusion"))
-    {
-        return MaterialSemanticSlot::occlusion;
-    }
-
-    if (contains("metal") || contains("rough") || contains("specular") || contains("shininess"))
-    {
-        return MaterialSemanticSlot::metallicRoughness;
-    }
-
-    return MaterialSemanticSlot::unsupported;
-}
-
-[[nodiscard]] bool semanticIsColor(MaterialSemanticSlot slot) noexcept
-{
-    return slot == MaterialSemanticSlot::baseColor || slot == MaterialSemanticSlot::emissive;
-}
-
-[[nodiscard]] bool semanticIsLinear(MaterialSemanticSlot slot) noexcept
-{
-    return slot == MaterialSemanticSlot::normal ||
-           slot == MaterialSemanticSlot::metallicRoughness ||
-           slot == MaterialSemanticSlot::occlusion;
-}
-
-[[nodiscard]] std::string_view slotName(MaterialSemanticSlot slot) noexcept
+[[nodiscard]] bool semanticIsColor(nr::resource::MaterialTextureSlotSemantic slot) noexcept
 {
     switch (slot)
     {
-    case MaterialSemanticSlot::baseColor: return "baseColor";
-    case MaterialSemanticSlot::normal: return "normal";
-    case MaterialSemanticSlot::metallicRoughness: return "metallicRoughness";
-    case MaterialSemanticSlot::occlusion: return "occlusion";
-    case MaterialSemanticSlot::emissive: return "emissive";
-    default: return "unsupported";
+    case nr::resource::MaterialTextureSlotSemantic::baseColor:
+    case nr::resource::MaterialTextureSlotSemantic::emissive:
+    case nr::resource::MaterialTextureSlotSemantic::sheenColor: return true;
+    default: return false;
     }
+}
+
+[[nodiscard]] bool semanticIsLinear(nr::resource::MaterialTextureSlotSemantic slot) noexcept
+{
+    return nr::resource::materialTextureSlotSemanticValid(slot) && !semanticIsColor(slot);
 }
 
 [[nodiscard]] std::vector<TextureColorSpaceHint> buildTextureColorSpaceHints(const nr::load::SceneAsset &sceneAsset)
@@ -124,15 +56,14 @@ namespace nr::scene::detail
                 return;
             }
 
-            auto semanticSlot = classifyMaterialSemantic(binding.semantic);
             auto &hint = hints[binding.textureIndex];
 
-            if (semanticIsColor(semanticSlot))
+            if (semanticIsColor(binding.semantic))
             {
                 hint.hasColor = true;
             }
 
-            if (semanticIsLinear(semanticSlot))
+            if (semanticIsLinear(binding.semantic))
             {
                 hint.hasLinear = true;
             }

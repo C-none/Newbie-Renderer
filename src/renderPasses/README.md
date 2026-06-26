@@ -10,7 +10,7 @@ Rules:
 
 - A Node may emit multiple passes.
 - EmbeddedTriangle Node targets graphics queue output, binds renderer global frame uniforms, and emits a single draw-call demo pass.
-- NormalBuffer Node targets graphics queue output, outputs world-space interpolated vertex normals for any scene.
+- NormalBuffer Node targets graphics queue output, outputs world-space interpolated vertex normals for any scene, and uses `RasterPassBuilder::recordParallel(...)` to record independent contiguous ranges of scene raster draws.
 - Ui Node targets graphics queue UI composition, uploads GPU-only texture pixels through the RHI upload ring before graph import, and keeps overlay texture reads in the render graph resource-intent path.
 - Present Node targets compute queue path and final present preparation.
 
@@ -23,6 +23,8 @@ Shader-visible bindings in this module must be reflection-led through renderer-s
 - Per-node/pass/draw scalar payloads must use push constants only when they are no larger than `nr::rhi::kMaxPushConstantBytes` (128 bytes). Larger payloads must be split into renderer global frame uniforms or buffer/texture upload resources.
 - Dynamic or bindless resources may provide a builder `dynamicBindingSnapshot(...)` callback using reflection cursors, but descriptor writes and command-buffer descriptor binding still stay inside the builder prepare/record path.
 - Scene bridge data that is consumed during deferred prepare/record work should be captured as `GraphFrameDataHandle` values from `NodeFrameParameters` and resolved through the pass context. Do not capture borrowed `SceneBridgeFrame` references or copy per-node bridge snapshots into record lambdas.
+- Scene/model raster passes that emit conventional clip-space Y-up positions should select `RasterViewportYMode::ClipSpaceYUp`; screen-space UI passes should keep the default framebuffer-top-left viewport mode.
+- A pass that opts into `recordParallel(...)` must treat chunk replay order as semantically unordered. If a feature needs ordered draw groups, split it into multiple ordered passes and declare resource uses at those pass boundaries; use `nr::renderer::use::orderedAfterPrevious(...)` when the next pass needs an explicit barrier despite unchanged queue/layout.
 - Not allowed in nodes: hand-written descriptor-set update/bind flows, direct `ShaderBindingPool::update(...)` or `resolveDescriptorWriteRequests(...)` usage, direct `CursorPipelineLayout::bindDescriptorSets(...)` for shader-visible bindings, direct `updateResourcesForBindingSnapshot(...)`, direct `bindPreparedResourcesToCommandBuffer(...)`, direct `pushConstantsToCommandBuffer(...)`, or `bindResourcesToCommandBuffer(...)`.
 
-Current audit note: all built-in shader-visible passes use `RasterPassBuilder` or `ComputePassBuilder`. `Present.CopyToSwapchain` still uses direct `context.addPass(...)` because it is a copy graph pass without shader-visible bindings.
+Current audit note: all built-in shader-visible passes use `RasterPassBuilder` or `ComputePassBuilder`. `NormalBuffer.Raster` is the built-in unordered parallel raster pass. `Present.CopyToSwapchain` still uses direct `context.addPass(...)` because it is a copy graph pass without shader-visible bindings.

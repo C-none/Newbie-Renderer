@@ -44,59 +44,144 @@ void registerSceneComponents(flecs::world &world)
     return world;
 }
 
+struct MetallicRoughnessFactorSet
+{
+    glm::vec4 baseColorFactor{1.0f};
+    float metallicFactor = 1.0f;
+    float roughnessFactor = 1.0f;
+};
+
+[[nodiscard]] float clamp01(float value) noexcept
+{
+    return glm::clamp(value, 0.0f, 1.0f);
+}
+
+[[nodiscard]] glm::vec3 clamp01(glm::vec3 value) noexcept
+{
+    return glm::clamp(value, 0.0f, 1.0f);
+}
+
+[[nodiscard]] float perceivedBrightness(glm::vec3 color) noexcept
+{
+    color = clamp01(color);
+    return std::sqrt(0.299f * color.r * color.r +
+                     0.587f * color.g * color.g +
+                     0.114f * color.b * color.b);
+}
+
+[[nodiscard]] float solveMetallic(float diffuseBrightness,
+                                  float specularBrightness,
+                                  float oneMinusSpecularStrength) noexcept
+{
+    constexpr auto dielectricSpecular = 0.04f;
+    auto a = dielectricSpecular;
+    auto b = diffuseBrightness * oneMinusSpecularStrength / (1.0f - dielectricSpecular) +
+             specularBrightness -
+             2.0f * dielectricSpecular;
+    auto c = dielectricSpecular - specularBrightness;
+    auto discriminant = std::max((b * b) - (4.0f * a * c), 0.0f);
+    return clamp01((-b + std::sqrt(discriminant)) / (2.0f * a));
+}
+
+[[nodiscard]] MetallicRoughnessFactorSet convertSpecularGlossinessToMetallicRoughness(
+    const nr::load::MaterialAsset &material) noexcept
+{
+    constexpr auto dielectricSpecular = 0.04f;
+    constexpr auto epsilon = 1.0e-6f;
+
+    auto diffuse = clamp01(glm::vec3{
+        material.baseColorFactor[0],
+        material.baseColorFactor[1],
+        material.baseColorFactor[2],
+    });
+    auto alpha = clamp01(material.baseColorFactor[3] * material.opacity);
+
+    auto specular = glm::vec3{1.0f};
+    if (material.specularFactor.has_value())
+    {
+        specular = clamp01(glm::vec3{
+            (*material.specularFactor)[0],
+            (*material.specularFactor)[1],
+            (*material.specularFactor)[2],
+        });
+    }
+
+    auto const glossiness = clamp01(material.glossinessFactor.value_or(1.0f));
+    auto const specularStrength = std::max({specular.r, specular.g, specular.b});
+    auto const oneMinusSpecularStrength = 1.0f - specularStrength;
+    auto const metallic = solveMetallic(
+        perceivedBrightness(diffuse),
+        perceivedBrightness(specular),
+        oneMinusSpecularStrength);
+
+    auto const oneMinusMetallic = 1.0f - metallic;
+    auto const baseColorFromDiffuse =
+        diffuse *
+        (oneMinusSpecularStrength /
+         ((1.0f - dielectricSpecular) * std::max(oneMinusMetallic, epsilon)));
+
+    auto const baseColorFromSpecular =
+        (specular - glm::vec3{dielectricSpecular * oneMinusMetallic * oneMinusMetallic}) /
+        std::max(1.0f - oneMinusMetallic * oneMinusMetallic, epsilon);
+
+    auto const baseColor = clamp01(glm::mix(baseColorFromDiffuse, baseColorFromSpecular, metallic * metallic));
+    return MetallicRoughnessFactorSet{
+        .baseColorFactor = glm::vec4{baseColor, alpha},
+        .metallicFactor = metallic,
+        .roughnessFactor = clamp01(1.0f - glossiness),
+    };
+}
+
+[[nodiscard]] bool hasSpecularGlossinessFactors(const nr::load::MaterialAsset &material) noexcept
+{
+    return material.specularFactor.has_value() || material.glossinessFactor.has_value();
+}
+
 [[nodiscard]] detail::MaterialGpuData buildMaterialGpuData(const nr::resource::Material &material)
 {
     auto data = detail::MaterialGpuData{};
-    
-    // Base color (RGB) + opacity (A)
-    data.baseColorFactor = material.baseColorFactor;
-    
-    // Emissive (RGB) + metallic (A)
-    data.emissiveAndMetallic = glm::vec4{material.emissiveFactor, material.metallicFactor};
-    
-    // Roughness (R), Normal scale (G), Occlusion (B), Alpha cutoff (A)
+    data.featureFlags = static_cast<std::uint32_t>(material.featureFlags());
+    data.alphaMode = static_cast<std::uint32_t>(material.core.alphaMode);
+    data.textureSlotCount = static_cast<std::uint32_t>(material.textureSlots.size());
+
+    data.baseColorFactor = material.core.baseColorFactor;
+    data.emissiveAndMetallic = glm::vec4{material.core.emissiveFactor, material.core.metallicFactor};
     data.roughnessNormalOcclusionAlpha = glm::vec4{
-        material.roughnessFactor,
-        material.normalScale,
-        material.occlusionStrength,
-        material.alphaCutoff,
-    };
-    
-    // Alpha mode (R) + flags (G: double-sided)
-    data.alphaAndFlags = glm::uvec4{
-        static_cast<std::uint32_t>(material.alphaMode),
-        material.doubleSided ? 1u : 0u,
-        0u,
-        0u,
-    };
-    
-    // Specular (RGB) + Glossiness (A)
-    data.specularAndGlossiness = glm::vec4{
-        material.specularFactor,
-        material.glossinessFactor,
-    };
-    
-    // Anisotropy (R) + workflow flags (GBA)
-    data.anisotropyAndWorkflow = glm::uvec4{
-        static_cast<std::uint32_t>(glm::packSnorm2x16(glm::vec2{material.anisotropyFactor, 0.0f})),
-        material.usesMetallicRoughnessWorkflow() ? 1u : 0u,
-        material.usesSpecularGlossinessWorkflow() ? 1u : 0u,
-        material.usesAnisotropy() ? 1u : 0u,
+        material.core.roughnessFactor,
+        material.core.normalScale,
+        material.core.occlusionStrength,
+        material.core.alphaCutoff,
     };
 
-    // Texture handles and UV sets
-    auto slots = std::array{
-        material.baseColor,
-        material.normal,
-        material.metallicRoughness,
-        material.occlusion,
-        material.emissive,
+    if (material.clearcoat.has_value())
+    {
+        data.clearcoatFactorRoughness = glm::vec4{
+            material.clearcoat->factor,
+            material.clearcoat->roughnessFactor,
+            0.0f,
+            0.0f,
+        };
+    }
+
+    if (material.sheen.has_value())
+    {
+        data.sheenColorRoughness = glm::vec4{
+            material.sheen->colorFactor,
+            material.sheen->roughnessFactor,
+        };
+    }
+
+    data.transmissionAnisotropy = glm::vec4{
+        material.transmission.has_value() ? material.transmission->factor : 0.0f,
+        material.anisotropy.has_value() ? material.anisotropy->factor : 0.0f,
+        material.anisotropy.has_value() ? material.anisotropy->rotation : 0.0f,
+        0.0f,
     };
 
-    auto slotIndices = std::views::iota(std::size_t{0}, slots.size());
+    auto slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
-        data.textureHandles[slotIndex] = slots[slotIndex].texture.packed();
-        data.uvSets[slotIndex] = slots[slotIndex].uvSet;
+        data.textureHandles[slotIndex] = material.textureSlots[slotIndex].texture.packed();
+        data.uvSets[slotIndex] = material.textureSlots[slotIndex].uvSet;
     });
 
     return data;
@@ -1060,15 +1145,8 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 
 [[nodiscard]] bool Scene::materialTexturesReady(const nr::resource::Material &material) const noexcept
 {
-        auto const textureHandles = std::array{
-            material.baseColor.texture,
-            material.normal.texture,
-            material.metallicRoughness.texture,
-            material.occlusion.texture,
-            material.emissive.texture,
-        };
-
-        return std::ranges::all_of(textureHandles, [&](nr::resource::TextureHandle textureHandle) {
+        return std::ranges::all_of(material.textureSlots, [&](const nr::resource::MaterialTextureSlot &slot) {
+            auto textureHandle = slot.texture;
             if (!textureHandle.valid())
             {
                 return true;
@@ -1078,6 +1156,25 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         });
     }
 
+[[nodiscard]] std::optional<nr::resource::MaterialHandle> Scene::meshGeometryMaterial(
+        nr::resource::MeshHandle meshHandle,
+        std::uint32_t geometryIndex) const noexcept
+{
+        auto const *meshRecord = meshes_.tryGet(meshHandle);
+        if (meshRecord == nullptr || !meshRecord->cpuReady || geometryIndex >= meshRecord->cpu.geometries.size())
+        {
+            return std::nullopt;
+        }
+
+        auto materialHandle = meshRecord->cpu.geometries[geometryIndex].material;
+        if (!materialHandle.valid())
+        {
+            return std::nullopt;
+        }
+
+        return materialHandle;
+    }
+
 [[nodiscard]] bool Scene::renderableReadyForRaster(const RenderableBinding &binding) const noexcept
 {
         if (!meshIsResident(binding.mesh))
@@ -1085,23 +1182,27 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             return false;
         }
 
-        if (!binding.material.valid())
+        auto const *meshRecord = meshes_.tryGet(binding.mesh);
+        if (meshRecord == nullptr || !meshRecord->cpuReady || meshRecord->cpu.geometries.empty())
         {
             return false;
         }
 
-        if (!materialIsResident(binding.material))
-        {
-            return false;
-        }
+        return std::ranges::all_of(meshRecord->cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
+            auto materialHandle = geometry.material;
+            if (!materialHandle.valid() || !materialIsResident(materialHandle))
+            {
+                return false;
+            }
 
-        auto const *materialRecord = materials_.tryGet(binding.material);
-        if (materialRecord == nullptr || !materialRecord->cpuReady)
-        {
-            return false;
-        }
+            auto const *materialRecord = materials_.tryGet(materialHandle);
+            if (materialRecord == nullptr || !materialRecord->cpuReady)
+            {
+                return false;
+            }
 
-        return materialTexturesReady(materialRecord->cpu);
+            return materialTexturesReady(materialRecord->cpu);
+        });
     }
 
 [[nodiscard]] bool Scene::renderableReadyForMeshOnlyDomain(const RenderableBinding &binding) const noexcept
@@ -1125,23 +1226,24 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
     }
 
 [[nodiscard]] std::uint64_t Scene::rasterSortKey(
-        const RenderableBinding &binding,
+        nr::resource::MeshHandle meshHandle,
+        nr::resource::MaterialHandle materialHandle,
         std::uint64_t selectionBits,
-        std::uint32_t submeshIndex,
+        std::uint32_t geometryIndex,
         flecs::entity entity) const noexcept
 {
         auto const pass = (selectionBits & sceneSelectionMask(SceneSelectionBit::rasterTransparent)) != 0 ? 1ull : 0ull;
         auto const pipelineFamily = (selectionBits & sceneSelectionMask(SceneSelectionBit::alphaTest)) != 0 ? 1ull : 0ull;
 
-        auto const materialSlot = binding.material.valid() ? static_cast<std::uint64_t>(binding.material.slot) : ((1ull << 20u) - 1u);
-        auto const meshSlot = binding.mesh.valid() ? static_cast<std::uint64_t>(binding.mesh.slot) : ((1ull << 18u) - 1u);
+        auto const materialSlot = materialHandle.valid() ? static_cast<std::uint64_t>(materialHandle.slot) : ((1ull << 20u) - 1u);
+        auto const meshSlot = meshHandle.valid() ? static_cast<std::uint64_t>(meshHandle.slot) : ((1ull << 18u) - 1u);
         auto const entityBits = static_cast<std::uint64_t>(entity.id()) & ((1ull << 10u) - 1u);
 
         return (pass << 63u) |
                (pipelineFamily << 62u) |
                ((materialSlot & ((1ull << 20u) - 1u)) << 42u) |
                ((meshSlot & ((1ull << 18u) - 1u)) << 24u) |
-               ((static_cast<std::uint64_t>(submeshIndex) & ((1ull << 14u) - 1u)) << 10u) |
+               ((static_cast<std::uint64_t>(geometryIndex) & ((1ull << 14u) - 1u)) << 10u) |
                entityBits;
     }
 
@@ -1156,14 +1258,14 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         return masked;
     }
 
-[[nodiscard]] std::uint32_t Scene::resolveRenderableSubmeshCount(const RenderableBinding &binding) const noexcept
+[[nodiscard]] std::uint32_t Scene::resolveRenderableGeometryCount(const RenderableBinding &binding) const noexcept
 {
-        if (binding.submeshCount > 0)
+        if (binding.geometryCount > 0)
         {
-            return binding.submeshCount;
+            return binding.geometryCount;
         }
 
-        auto const resolved = meshSubmeshCount(binding.mesh);
+        auto const resolved = meshGeometryCount(binding.mesh);
         if (resolved > 0)
         {
             return resolved;
@@ -2055,16 +2157,38 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset,
                          const std::vector<nr::resource::TextureHandle> &textureHandlesBySource,
                          std::vector<nr::resource::MaterialHandle> &materialHandlesBySource)
 {
-        auto selectSlot = [](nr::resource::Material &material,
-                             detail::MaterialSemanticSlot semanticSlot) -> nr::resource::MaterialTextureSlot * {
-            switch (semanticSlot)
+        auto ensureExtensionForSlot = [](nr::resource::Material &material,
+                                         nr::resource::MaterialTextureSlotSemantic semantic) {
+            switch (semantic)
             {
-            case detail::MaterialSemanticSlot::baseColor: return std::addressof(material.baseColor);
-            case detail::MaterialSemanticSlot::normal: return std::addressof(material.normal);
-            case detail::MaterialSemanticSlot::metallicRoughness: return std::addressof(material.metallicRoughness);
-            case detail::MaterialSemanticSlot::occlusion: return std::addressof(material.occlusion);
-            case detail::MaterialSemanticSlot::emissive: return std::addressof(material.emissive);
-            default: return nullptr;
+            case nr::resource::MaterialTextureSlotSemantic::clearcoat:
+            case nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness:
+            case nr::resource::MaterialTextureSlotSemantic::clearcoatNormal:
+                if (!material.clearcoat.has_value())
+                {
+                    material.clearcoat.emplace();
+                }
+                break;
+            case nr::resource::MaterialTextureSlotSemantic::sheenColor:
+            case nr::resource::MaterialTextureSlotSemantic::sheenRoughness:
+                if (!material.sheen.has_value())
+                {
+                    material.sheen.emplace();
+                }
+                break;
+            case nr::resource::MaterialTextureSlotSemantic::transmission:
+                if (!material.transmission.has_value())
+                {
+                    material.transmission.emplace();
+                }
+                break;
+            case nr::resource::MaterialTextureSlotSemantic::anisotropy:
+                if (!material.anisotropy.has_value())
+                {
+                    material.anisotropy.emplace();
+                }
+                break;
+            default: break;
             }
         };
 
@@ -2112,53 +2236,105 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset,
             auto const &sourceMaterial = sceneAsset.materials[entry.sourceIndex];
             auto material = nr::resource::Material{};
             material.name = sourceMaterial.name;
-            
-            // Base color and emissive
-            material.baseColorFactor = glm::vec4{
-                sourceMaterial.baseColorFactor[0],
-                sourceMaterial.baseColorFactor[1],
-                sourceMaterial.baseColorFactor[2],
-                sourceMaterial.baseColorFactor[3],
+
+            auto convertedFactors = detail::MetallicRoughnessFactorSet{
+                .baseColorFactor = glm::vec4{
+                    sourceMaterial.baseColorFactor[0],
+                    sourceMaterial.baseColorFactor[1],
+                    sourceMaterial.baseColorFactor[2],
+                    sourceMaterial.baseColorFactor[3] * sourceMaterial.opacity,
+                },
+                .metallicFactor = sourceMaterial.metallicFactor,
+                .roughnessFactor = sourceMaterial.roughnessFactor,
             };
-            material.emissiveFactor = glm::vec3{
+
+            if (detail::hasSpecularGlossinessFactors(sourceMaterial))
+            {
+                convertedFactors = detail::convertSpecularGlossinessToMetallicRoughness(sourceMaterial);
+                reportImport<nr::LogLevel::warning>(
+                    ImportStage::material,
+                    std::format("Material '{}' uses specular-glossiness factors; converted approximately to metallic-roughness.",
+                                material.name),
+                    entry.canonicalKey,
+                    entry.sourceIndex);
+            }
+
+            material.core.baseColorFactor = convertedFactors.baseColorFactor;
+            material.core.emissiveFactor = glm::vec3{
                 sourceMaterial.emissiveFactor[0],
                 sourceMaterial.emissiveFactor[1],
                 sourceMaterial.emissiveFactor[2],
             };
-            
-            // Metallic/Roughness workflow
-            material.metallicFactor = sourceMaterial.metallicFactor;
-            material.roughnessFactor = sourceMaterial.roughnessFactor;
-            
-            // Specular/Glossiness workflow
-            assignIfPresent(sourceMaterial.specularFactor, [&](const std::array<float, 3> &specularFactor) {
-                material.specularFactor = glm::vec3{specularFactor[0], specularFactor[1], specularFactor[2]};
-            });
-            assignIfPresent(sourceMaterial.glossinessFactor, [&](float glossinessFactor) {
-                material.glossinessFactor = glossinessFactor;
-            });
-            
-            // Anisotropy
-            assignIfPresent(sourceMaterial.anisotropyFactor, [&](float anisotropyFactor) {
-                material.anisotropyFactor = anisotropyFactor;
-            });
-            
-            // Surface properties
-            material.doubleSided = sourceMaterial.doubleSided;
+            material.core.metallicFactor = convertedFactors.metallicFactor;
+            material.core.roughnessFactor = convertedFactors.roughnessFactor;
+            material.core.doubleSided = sourceMaterial.doubleSided;
             assignIfPresent(sourceMaterial.normalScale, [&](float normalScale) {
-                material.normalScale = normalScale;
+                material.core.normalScale = normalScale;
             });
             assignIfPresent(sourceMaterial.occlusionStrength, [&](float occlusionStrength) {
-                material.occlusionStrength = occlusionStrength;
+                material.core.occlusionStrength = occlusionStrength;
             });
             assignIfPresent(sourceMaterial.alphaCutoff, [&](float alphaCutoff) {
-                material.alphaCutoff = alphaCutoff;
+                material.core.alphaCutoff = alphaCutoff;
             });
 
-            material.alphaMode = resolveMaterialAlphaMode(sourceMaterial);
+            material.core.alphaMode = resolveMaterialAlphaMode(sourceMaterial);
+
+            assignIfPresent(sourceMaterial.clearcoatFactor, [&](float clearcoatFactor) {
+                if (!material.clearcoat.has_value())
+                {
+                    material.clearcoat.emplace();
+                }
+                material.clearcoat->factor = clearcoatFactor;
+            });
+            assignIfPresent(sourceMaterial.clearcoatRoughnessFactor, [&](float clearcoatRoughnessFactor) {
+                if (!material.clearcoat.has_value())
+                {
+                    material.clearcoat.emplace();
+                }
+                material.clearcoat->roughnessFactor = clearcoatRoughnessFactor;
+            });
+            assignIfPresent(sourceMaterial.sheenColorFactor, [&](const std::array<float, 3> &sheenColorFactor) {
+                if (!material.sheen.has_value())
+                {
+                    material.sheen.emplace();
+                }
+                material.sheen->colorFactor = glm::vec3{sheenColorFactor[0], sheenColorFactor[1], sheenColorFactor[2]};
+            });
+            assignIfPresent(sourceMaterial.sheenRoughnessFactor, [&](float sheenRoughnessFactor) {
+                if (!material.sheen.has_value())
+                {
+                    material.sheen.emplace();
+                }
+                material.sheen->roughnessFactor = sheenRoughnessFactor;
+            });
+            assignIfPresent(sourceMaterial.transmissionFactor, [&](float transmissionFactor) {
+                if (!material.transmission.has_value())
+                {
+                    material.transmission.emplace();
+                }
+                material.transmission->factor = transmissionFactor;
+            });
+            assignIfPresent(sourceMaterial.anisotropyFactor, [&](float anisotropyFactor) {
+                if (!material.anisotropy.has_value())
+                {
+                    material.anisotropy.emplace();
+                }
+                material.anisotropy->factor = anisotropyFactor;
+            });
+            assignIfPresent(sourceMaterial.anisotropyRotation, [&](float anisotropyRotation) {
+                if (!material.anisotropy.has_value())
+                {
+                    material.anisotropy.emplace();
+                }
+                material.anisotropy->rotation = anisotropyRotation;
+            });
 
             auto materialHasError = false;
             std::ranges::for_each(sourceMaterial.textures, [&](const nr::load::MaterialTextureBinding &binding) {
+                auto const sourceSemantic = binding.sourceSemanticName.empty()
+                                                ? nr::resource::materialTextureSlotSemanticName(binding.semantic)
+                                                : std::string_view{binding.sourceSemanticName};
                 if (binding.textureIndex >= textureHandlesBySource.size())
                 {
                     reportImport<nr::LogLevel::error>(
@@ -2196,39 +2372,44 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset,
                     return;
                 }
 
-                auto const semanticSlot = detail::classifyMaterialSemantic(binding.semantic);
-                if (semanticSlot == detail::MaterialSemanticSlot::unsupported)
+                if (!nr::resource::materialTextureSlotSemanticValid(binding.semantic))
                 {
+                    auto const specGlossTexture =
+                        sourceSemantic == "specular" ||
+                        sourceSemantic == "shininess" ||
+                        sourceSemantic == "maya_specular" ||
+                        sourceSemantic == "maya_specular_color" ||
+                        sourceSemantic == "maya_specular_roughness";
                     reportImport<nr::LogLevel::warning>(
                         ImportStage::material,
-                        std::format("Material '{}' ignored unsupported texture semantic '{}'.",
-                                    material.name,
-                                    binding.semantic),
+                        specGlossTexture
+                            ? std::format("Material '{}' ignored specular-glossiness texture semantic '{}' because texture baking to metallic-roughness is not implemented.",
+                                          material.name,
+                                          sourceSemantic)
+                            : std::format("Material '{}' ignored unsupported texture semantic '{}'.",
+                                          material.name,
+                                          sourceSemantic),
                         entry.canonicalKey,
                         entry.sourceIndex);
                     return;
                 }
 
-                auto *slot = selectSlot(material, semanticSlot);
-                if (slot == nullptr)
-                {
-                    materialHasError = true;
-                    reportImport<nr::LogLevel::error>(
-                        ImportStage::material,
-                        std::format("Material '{}' failed to resolve slot for semantic '{}'.", material.name, binding.semantic),
-                        entry.canonicalKey,
-                        entry.sourceIndex);
-                    return;
-                }
+                ensureExtensionForSlot(material, binding.semantic);
+                auto *slot = std::addressof(material.slot(binding.semantic));
 
                 if (slot->texture.valid())
                 {
+                    if (slot->texture == textureHandle)
+                    {
+                        return;
+                    }
+
                     reportImport<nr::LogLevel::warning>(
                         ImportStage::material,
-                        std::format("Material '{}' has duplicate semantic '{}'; keeping first slot assignment for {}.",
+                        std::format("Material '{}' has duplicate semantic '{}' with a different texture; keeping first slot assignment for {}.",
                                     material.name,
-                                    binding.semantic,
-                                    detail::slotName(semanticSlot)),
+                                    sourceSemantic,
+                                    nr::resource::materialTextureSlotSemanticName(binding.semantic)),
                         entry.canonicalKey,
                         entry.sourceIndex);
                     return;
@@ -2238,15 +2419,8 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset,
                 slot->uvSet = binding.uvChannel;
             });
 
-            auto validateSlots = std::array{
-                material.baseColor.texture,
-                material.normal.texture,
-                material.metallicRoughness.texture,
-                material.occlusion.texture,
-                material.emissive.texture,
-            };
-
-            std::ranges::for_each(validateSlots, [&](nr::resource::TextureHandle textureHandle) {
+            std::ranges::for_each(material.textureSlots, [&](const nr::resource::MaterialTextureSlot &slot) {
+                auto textureHandle = slot.texture;
                 if (!textureHandle.valid())
                 {
                     return;
@@ -2286,6 +2460,46 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset,
                       const std::vector<nr::resource::MaterialHandle> &materialHandlesBySource,
                       std::vector<nr::resource::MeshHandle> &meshHandlesBySource)
 {
+        auto defaultMaterialHandle = std::optional<nr::resource::MaterialHandle>{};
+        auto ensureDefaultMaterial = [&]() -> nr::resource::MaterialHandle {
+            if (defaultMaterialHandle.has_value())
+            {
+                return *defaultMaterialHandle;
+            }
+
+            auto defaultKey = sceneAsset.sourcePath.empty()
+                                  ? std::string{"<scene>::material[default]"}
+                                  : std::format("{}::material[default]", sceneAsset.sourcePath.generic_string());
+            auto [handle, created] = materials_.getOrCreate(defaultKey, [](nr::resource::MaterialHandle newHandle, const std::string &key) {
+                return MaterialAssetRecord{
+                    .handle = newHandle,
+                    .stableKey = key,
+                };
+            });
+
+            if (created)
+            {
+                materialHandles_.push_back(handle);
+            }
+
+            auto *record = materials_.tryGet(handle);
+            if (record != nullptr && !record->cpuReady)
+            {
+                auto material = nr::resource::Material{};
+                material.name = "default_material";
+                record->cpu = std::move(material);
+                record->cpuReady = true;
+                record->uploadQueued = false;
+                if (record->cpuVersion == 0u)
+                {
+                    record->cpuVersion = 1u;
+                }
+            }
+
+            defaultMaterialHandle = handle;
+            return handle;
+        };
+
         std::ranges::for_each(plan.meshes, [&](const MeshBridgeInput &entry) {
             if (entry.sourceIndex >= sceneAsset.meshes.size())
             {
@@ -2344,59 +2558,143 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset,
 
             mesh.indices = sourceMesh.indices;
 
-            auto materialHandle = nr::resource::MaterialHandle{};
-            if (sourceMesh.materialIndex != nr::load::invalidIndex)
+            if (sourceMesh.geometries.empty())
             {
-                if (sourceMesh.materialIndex >= materialHandlesBySource.size())
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::mesh,
+                    std::format("Mesh '{}' has no geometry records.", sourceMesh.name),
+                    entry.canonicalKey,
+                    entry.sourceIndex);
+                return;
+            }
+
+            auto meshHasError = false;
+            auto resolveGeometryMaterial = [&](const nr::load::MeshGeometryAsset &sourceGeometry) {
+                if (sourceGeometry.materialIndex == nr::load::invalidIndex)
+                {
+                    auto handle = ensureDefaultMaterial();
+                    reportImport<nr::LogLevel::warning>(
+                        ImportStage::mesh,
+                        std::format("Mesh '{}' geometry '{}' has no source material; using default material.",
+                                    sourceMesh.name,
+                                    sourceGeometry.name),
+                        entry.canonicalKey,
+                        entry.sourceIndex);
+                    return handle;
+                }
+
+                if (sourceGeometry.materialIndex >= materialHandlesBySource.size())
                 {
                     reportImport<nr::LogLevel::error>(
                         ImportStage::mesh,
-                        std::format("Mesh '{}' references out-of-range material index {}.",
+                        std::format("Mesh '{}' geometry '{}' references out-of-range material index {}.",
                                     sourceMesh.name,
-                                    sourceMesh.materialIndex),
+                                    sourceGeometry.name,
+                                    sourceGeometry.materialIndex),
                         entry.canonicalKey,
                         entry.sourceIndex);
-                    return;
+                    meshHasError = true;
+                    return nr::resource::MaterialHandle{};
                 }
 
-                materialHandle = materialHandlesBySource[sourceMesh.materialIndex];
+                auto materialHandle = materialHandlesBySource[sourceGeometry.materialIndex];
                 if (!materialHandle.valid())
                 {
                     reportImport<nr::LogLevel::error>(
                         ImportStage::mesh,
-                        std::format("Mesh '{}' references unresolved material index {}.",
+                        std::format("Mesh '{}' geometry '{}' references unresolved material index {}.",
                                     sourceMesh.name,
-                                    sourceMesh.materialIndex),
+                                    sourceGeometry.name,
+                                    sourceGeometry.materialIndex),
                         entry.canonicalKey,
                         entry.sourceIndex);
-                    return;
+                    meshHasError = true;
+                    return nr::resource::MaterialHandle{};
                 }
 
                 if (materials_.tryGet(materialHandle) == nullptr)
                 {
                     reportImport<nr::LogLevel::error>(
                         ImportStage::mesh,
-                        std::format("Mesh '{}' resolved material handle (slot={}, generation={}) missing in registry.",
+                        std::format("Mesh '{}' geometry '{}' resolved material handle (slot={}, generation={}) missing in registry.",
                                     sourceMesh.name,
+                                    sourceGeometry.name,
                                     materialHandle.slot,
                                     materialHandle.generation),
                         entry.canonicalKey,
                         entry.sourceIndex);
+                    meshHasError = true;
+                    return nr::resource::MaterialHandle{};
+                }
+
+                return materialHandle;
+            };
+
+            auto buildGeometryBounds = [&](const nr::resource::MeshGeometry &geometry) {
+                auto bounds = nr::resource::Aabb{};
+                if (!mesh.indexed())
+                {
+                    auto begin = static_cast<std::size_t>(geometry.firstIndex);
+                    auto end = begin + static_cast<std::size_t>(geometry.indexCount);
+                    if (end <= mesh.vertices.size())
+                    {
+                        auto vertexRange = std::ranges::subrange(mesh.vertices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                                                  mesh.vertices.begin() + static_cast<std::ptrdiff_t>(end));
+                        std::ranges::for_each(vertexRange, [&](const nr::resource::Vertex &vertex) {
+                            bounds.expand(vertex.position);
+                        });
+                    }
+                    return bounds;
+                }
+
+                auto begin = static_cast<std::size_t>(geometry.firstIndex);
+                auto end = begin + static_cast<std::size_t>(geometry.indexCount);
+                if (end <= mesh.indices.size())
+                {
+                    auto indexRange = std::ranges::subrange(mesh.indices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                                            mesh.indices.begin() + static_cast<std::ptrdiff_t>(end));
+                    std::ranges::for_each(indexRange, [&](std::uint32_t localIndex) {
+                        auto vertexIndex = static_cast<std::uint64_t>(localIndex) + static_cast<std::uint64_t>(geometry.vertexOffset);
+                        if (vertexIndex < mesh.vertices.size())
+                        {
+                            bounds.expand(mesh.vertices[static_cast<std::size_t>(vertexIndex)].position);
+                        }
+                    });
+                }
+                return bounds;
+            };
+
+            mesh.geometries.reserve(sourceMesh.geometries.size());
+            auto geometryIndices = std::views::iota(std::size_t{0}, sourceMesh.geometries.size());
+            std::ranges::for_each(geometryIndices, [&](std::size_t geometryIndex) {
+                auto const &sourceGeometry = sourceMesh.geometries[geometryIndex];
+                auto materialHandle = resolveGeometryMaterial(sourceGeometry);
+                if (!materialHandle.valid())
+                {
                     return;
                 }
-            }
 
-            auto submesh = nr::resource::Submesh{};
-            submesh.name = sourceMesh.name.empty()
-                               ? std::format("mesh_{}_submesh_0", entry.sourceIndex)
-                               : std::format("{}_submesh_0", sourceMesh.name);
-            submesh.indexCount = static_cast<std::uint32_t>(mesh.indices.empty() ? mesh.vertices.size() : mesh.indices.size());
-            submesh.material = materialHandle;
-            mesh.submeshes.push_back(submesh);
+                auto geometry = nr::resource::MeshGeometry{};
+                geometry.name = sourceGeometry.name.empty()
+                                    ? std::format("{}_geometry_{}", sourceMesh.name.empty() ? "mesh" : sourceMesh.name, geometryIndex)
+                                    : sourceGeometry.name;
+                geometry.firstIndex = sourceGeometry.firstIndex;
+                geometry.indexCount = sourceGeometry.indexCount;
+                geometry.vertexOffset = sourceGeometry.vertexOffset;
+                geometry.material = materialHandle;
+                mesh.geometries.push_back(std::move(geometry));
+            });
+
+            if (meshHasError)
+            {
+                return;
+            }
 
             mesh.rebuildLocalBounds();
             mesh.rebuildLocalSphere();
-            mesh.submeshes.front().localBounds = mesh.localBounds;
+            std::ranges::for_each(mesh.geometries, [&](nr::resource::MeshGeometry &geometry) {
+                geometry.localBounds = buildGeometryBounds(geometry);
+            });
 
             if (!mesh.validate())
             {
@@ -2724,6 +3022,29 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset,
 
         appendHandles(meshHandles, pinSet.meshes);
         appendHandles(materialHandles, pinSet.materials);
+
+        auto geometryMaterialSeen = std::set<std::uint64_t>{};
+        std::ranges::for_each(pinSet.materials, [&](nr::resource::MaterialHandle materialHandle) {
+            if (materialHandle.valid())
+            {
+                geometryMaterialSeen.emplace(materialHandle.packed());
+            }
+        });
+        std::ranges::for_each(pinSet.meshes, [&](nr::resource::MeshHandle meshHandle) {
+            auto const *meshRecord = meshes_.tryGet(meshHandle);
+            if (meshRecord == nullptr || !meshRecord->cpuReady)
+            {
+                return;
+            }
+
+            std::ranges::for_each(meshRecord->cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
+                if (geometry.material.valid())
+                {
+                    detail::appendUniqueHandle(pinSet.materials, geometryMaterialSeen, geometry.material);
+                }
+            });
+        });
+
         appendHandles(textureHandles, pinSet.textures);
         appendHandles(cameraHandles, pinSet.cameras);
         appendHandles(lightHandles, pinSet.lights);
@@ -2816,7 +3137,7 @@ void Scene::attachHierarchyRelation(flecs::entity child, flecs::entity parent, b
         return meshRecord->cpu.localBounds;
     }
 
-[[nodiscard]] std::uint32_t Scene::meshSubmeshCount(nr::resource::MeshHandle meshHandle) const noexcept
+[[nodiscard]] std::uint32_t Scene::meshGeometryCount(nr::resource::MeshHandle meshHandle) const noexcept
 {
         auto const *meshRecord = meshes_.tryGet(meshHandle);
         if (meshRecord == nullptr || !meshRecord->cpuReady)
@@ -2824,7 +3145,7 @@ void Scene::attachHierarchyRelation(flecs::entity child, flecs::entity parent, b
             return 0;
         }
 
-        return static_cast<std::uint32_t>(meshRecord->cpu.submeshes.size());
+        return static_cast<std::uint32_t>(meshRecord->cpu.geometries.size());
     }
 
 [[nodiscard]] nr::resource::MeshHandle Scene::meshHandleForEntity(flecs::entity entity) noexcept
@@ -3050,6 +3371,8 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
         std::span<const nr::resource::CameraAssetHandle> cameraHandlesBySource,
         std::span<const nr::resource::LightAssetHandle> lightHandlesBySource)
 {
+        (void)materialHandlesBySource;
+
         templateRecord.prefabEntities.clear();
         if (templateRecord.prefabRoot.is_alive())
         {
@@ -3215,13 +3538,10 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                 }
 
                 auto materialHandle = nr::resource::MaterialHandle{};
-                if (sourceMeshIndex < sceneAsset.meshes.size())
+                auto const *meshRecord = meshes_.tryGet(meshHandle);
+                if (meshRecord != nullptr && meshRecord->cpuReady && !meshRecord->cpu.geometries.empty())
                 {
-                    auto const materialIndex = sceneAsset.meshes[sourceMeshIndex].materialIndex;
-                    if (materialIndex != nr::load::invalidIndex && materialIndex < materialHandlesBySource.size())
-                    {
-                        materialHandle = materialHandlesBySource[materialIndex];
-                    }
+                    materialHandle = meshRecord->cpu.geometries.front().material;
                 }
 
                 auto const meshEntityName = detail::makeTemplateMeshEntityName(
@@ -3244,7 +3564,7 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                 meshEntity.set(RenderableBinding{
                     .mesh = meshHandle,
                     .material = materialHandle,
-                    .submeshCount = meshSubmeshCount(meshHandle),
+                    .geometryCount = meshGeometryCount(meshHandle),
                 });
                 meshEntity.set(SceneSelectionBits{
                     .value = defaultSelectionBits(materialHandle),

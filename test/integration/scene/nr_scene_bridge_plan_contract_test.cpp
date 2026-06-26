@@ -21,7 +21,12 @@ namespace
 
     scene.meshes.push_back(nr::load::MeshAsset{
         .name = "bridge_plan_mesh",
-        .materialIndex = 0,
+        .geometries = {
+            nr::load::MeshGeometryAsset{
+                .name = "bridge_plan_geometry_0",
+                .materialIndex = 0,
+            },
+        },
     });
 
     scene.cameras.push_back(nr::load::CameraAsset{
@@ -70,7 +75,12 @@ namespace
     std::ranges::for_each(meshIndices, [&](std::uint32_t meshIndex) {
         scene.meshes.push_back(nr::load::MeshAsset{
             .name = std::format("bridge_plan_mesh_{}", meshIndex),
-            .materialIndex = meshIndex % static_cast<std::uint32_t>(scene.materials.size()),
+            .geometries = {
+                nr::load::MeshGeometryAsset{
+                    .name = std::format("bridge_plan_geometry_{}", meshIndex),
+                    .materialIndex = meshIndex % static_cast<std::uint32_t>(scene.materials.size()),
+                },
+            },
         });
     });
 

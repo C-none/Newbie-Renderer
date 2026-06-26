@@ -5,6 +5,7 @@ import :assimp;
 import :type;
 import :backend;
 import :decode;
+import nr.resource;
 import std;
 
 namespace nr::load::detail
@@ -30,6 +31,12 @@ constexpr MaterialPropertyKey kMatKeyTwoSided{"$mat.twosided", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyBumpScaling{"$mat.bumpscaling", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyEmissiveIntensity{"$mat.emissiveIntensity", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyClearcoatFactor{"$mat.clearcoat.factor", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyClearcoatRoughnessFactor{"$mat.clearcoat.roughnessFactor", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeySheenColorFactor{"$clr.sheen.factor", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeySheenRoughnessFactor{"$mat.sheen.roughnessFactor", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyTransmissionFactor{"$mat.transmission.factor", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation", 0u, 0u};
 
 [[nodiscard]] bool readMaterialColor4(const aiMaterial &material,
                                              const MaterialPropertyKey &key,
@@ -88,7 +95,7 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     return raw == nullptr ? std::string{} : std::string{raw};
 }
 
-[[nodiscard]] std::string textureTypeName(aiTextureType textureType)
+[[nodiscard]] std::string textureTypeName(aiTextureType textureType, unsigned int textureSlot)
 {
     switch (textureType)
     {
@@ -104,8 +111,83 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
     case aiTextureType_DISPLACEMENT: return "displacement";
     case aiTextureType_LIGHTMAP: return "lightmap";
     case aiTextureType_REFLECTION: return "reflection";
+    case aiTextureType_BASE_COLOR: return "base_color";
+    case aiTextureType_NORMAL_CAMERA: return "normal_camera";
+    case aiTextureType_EMISSION_COLOR: return "emission_color";
+    case aiTextureType_METALNESS: return "metalness";
+    case aiTextureType_DIFFUSE_ROUGHNESS: return "diffuse_roughness";
+    case aiTextureType_AMBIENT_OCCLUSION: return "ambient_occlusion";
     case aiTextureType_UNKNOWN: return "unknown";
+    case aiTextureType_SHEEN:
+        switch (textureSlot)
+        {
+        case 0u: return "sheen_color";
+        case 1u: return "sheen_roughness";
+        default: return std::format("sheen_{}", textureSlot);
+        }
+    case aiTextureType_CLEARCOAT:
+        switch (textureSlot)
+        {
+        case 0u: return "clearcoat";
+        case 1u: return "clearcoat_roughness";
+        case 2u: return "clearcoat_normal";
+        default: return std::format("clearcoat_{}", textureSlot);
+        }
+    case aiTextureType_TRANSMISSION:
+        switch (textureSlot)
+        {
+        case 0u: return "transmission";
+        case 1u: return "volume_thickness";
+        default: return std::format("transmission_{}", textureSlot);
+        }
+    case aiTextureType_MAYA_BASE: return "maya_base";
+    case aiTextureType_MAYA_SPECULAR: return "maya_specular";
+    case aiTextureType_MAYA_SPECULAR_COLOR: return "maya_specular_color";
+    case aiTextureType_MAYA_SPECULAR_ROUGHNESS: return "maya_specular_roughness";
+    case aiTextureType_ANISOTROPY: return "anisotropy";
+    case aiTextureType_GLTF_METALLIC_ROUGHNESS: return "gltf_metallic_roughness";
     default: return std::format("type_{}", static_cast<unsigned>(textureType));
+    }
+}
+
+[[nodiscard]] nr::resource::MaterialTextureSlotSemantic textureSlotSemantic(aiTextureType textureType,
+                                                                            unsigned int textureSlot) noexcept
+{
+    using enum nr::resource::MaterialTextureSlotSemantic;
+
+    switch (textureType)
+    {
+    case aiTextureType_DIFFUSE:
+    case aiTextureType_BASE_COLOR:
+    case aiTextureType_MAYA_BASE: return baseColor;
+    case aiTextureType_HEIGHT:
+    case aiTextureType_NORMALS:
+    case aiTextureType_DISPLACEMENT:
+    case aiTextureType_NORMAL_CAMERA: return normal;
+    case aiTextureType_AMBIENT:
+    case aiTextureType_LIGHTMAP:
+    case aiTextureType_AMBIENT_OCCLUSION: return occlusion;
+    case aiTextureType_EMISSIVE:
+    case aiTextureType_EMISSION_COLOR: return emissive;
+    case aiTextureType_GLTF_METALLIC_ROUGHNESS: return metallicRoughness;
+    case aiTextureType_CLEARCOAT:
+        switch (textureSlot)
+        {
+        case 0u: return clearcoat;
+        case 1u: return clearcoatRoughness;
+        case 2u: return clearcoatNormal;
+        default: return unsupported;
+        }
+    case aiTextureType_SHEEN:
+        switch (textureSlot)
+        {
+        case 0u: return sheenColor;
+        case 1u: return sheenRoughness;
+        default: return unsupported;
+        }
+    case aiTextureType_TRANSMISSION: return textureSlot == 0u ? transmission : unsupported;
+    case aiTextureType_ANISOTROPY: return textureSlot == 0u ? anisotropy : unsupported;
+    default: return unsupported;
     }
 }
 
@@ -380,6 +462,36 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
             materialAsset.anisotropyFactor = anisotropy;
         }
 
+        if (float anisotropyRotation; readMaterialFloat(*material, kMatKeyAnisotropyRotation, anisotropyRotation))
+        {
+            materialAsset.anisotropyRotation = anisotropyRotation;
+        }
+
+        if (float clearcoat; readMaterialFloat(*material, kMatKeyClearcoatFactor, clearcoat))
+        {
+            materialAsset.clearcoatFactor = clearcoat;
+        }
+
+        if (float clearcoatRoughness; readMaterialFloat(*material, kMatKeyClearcoatRoughnessFactor, clearcoatRoughness))
+        {
+            materialAsset.clearcoatRoughnessFactor = clearcoatRoughness;
+        }
+
+        if (aiColor3D sheenColor; readMaterialColor3(*material, kMatKeySheenColorFactor, sheenColor))
+        {
+            materialAsset.sheenColorFactor = std::array<float, 3>{sheenColor.r, sheenColor.g, sheenColor.b};
+        }
+
+        if (float sheenRoughness; readMaterialFloat(*material, kMatKeySheenRoughnessFactor, sheenRoughness))
+        {
+            materialAsset.sheenRoughnessFactor = sheenRoughness;
+        }
+
+        if (float transmission; readMaterialFloat(*material, kMatKeyTransmissionFactor, transmission))
+        {
+            materialAsset.transmissionFactor = transmission;
+        }
+
         // Read specular factor (for specular-glossiness workflow)
         if (aiColor3D specular; readMaterialColor3(*material, kMatKeySpecularFactor, specular))
         {
@@ -449,7 +561,7 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
         materialAsset.workflowFlags = classifyWorkflow();
 
         // Read texture bindings
-        auto textureTypeRange = std::views::iota(0u, static_cast<unsigned>(aiTextureType_UNKNOWN) + 1u);
+        auto textureTypeRange = std::views::iota(0u, assimpTextureTypeMax + 1u);
         for (auto textureTypeRaw : textureTypeRange)
         {
             auto textureType = static_cast<aiTextureType>(textureTypeRaw);
@@ -507,7 +619,8 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
                     .textureIndex = resolvedTextureIndex,
                     .uvChannel = uvChannel,
                     .textureTypeRaw = textureTypeRaw,
-                    .semantic = textureTypeName(textureType),
+                    .semantic = textureSlotSemantic(textureType, slotIndex),
+                    .sourceSemanticName = textureTypeName(textureType, slotIndex),
                 });
             }
         }
@@ -550,10 +663,6 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
         {
             meshAsset.name = std::format("mesh_{}", meshIndex);
         }
-
-        meshAsset.materialIndex = mesh->mMaterialIndex < assimpScene.mNumMaterials
-                                      ? mesh->mMaterialIndex
-                                      : invalidIndex;
 
         meshAsset.vertices.reserve(mesh->mNumVertices);
         auto vertexIndices = std::views::iota(0u, mesh->mNumVertices);
@@ -616,6 +725,17 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
                 meshAsset.indices.push_back(face.mIndices[localIndex]);
             }
         }
+
+        meshAsset.geometries.push_back(MeshGeometryAsset{
+            .name = meshAsset.name.empty()
+                        ? std::format("mesh_{}_geometry_0", meshIndex)
+                        : std::format("{}_geometry_0", meshAsset.name),
+            .firstIndex = 0,
+            .indexCount = static_cast<std::uint32_t>(meshAsset.indices.empty() ? meshAsset.vertices.size() : meshAsset.indices.size()),
+            .materialIndex = mesh->mMaterialIndex < assimpScene.mNumMaterials
+                                  ? mesh->mMaterialIndex
+                                  : invalidIndex,
+        });
 
         scene.meshes.push_back(std::move(meshAsset));
     }
@@ -916,6 +1036,12 @@ constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
 
 namespace nr::load
 {
+[[nodiscard]] nr::resource::MaterialTextureSlotSemantic assimpTextureSlotSemantic(std::uint32_t textureTypeRaw,
+                                                                                 std::uint32_t textureSlot) noexcept
+{
+        return detail::textureSlotSemantic(static_cast<aiTextureType>(textureTypeRaw), textureSlot);
+    }
+
 bool AssimpSceneImporter::supportsExtension(std::string_view extension)
 {
         return std::ranges::find(kSupportedExtensions, extension) != kSupportedExtensions.end();

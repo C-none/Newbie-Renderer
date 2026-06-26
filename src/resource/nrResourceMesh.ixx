@@ -41,7 +41,7 @@ struct Vertex
     void normalizeFrame(float eps = 1e-6f) noexcept;
 };
 
-struct Submesh
+struct MeshGeometry
 {
     std::string name{};
     std::uint32_t firstIndex = 0;
@@ -50,8 +50,8 @@ struct Submesh
     MaterialHandle material{};
     Aabb localBounds{};
 
-    Submesh() = default;
-    ~Submesh() = default;
+    MeshGeometry() = default;
+    ~MeshGeometry() = default;
 
     [[nodiscard]] std::uint32_t triangleCount() const noexcept;
 
@@ -63,7 +63,7 @@ struct Mesh
     std::string name{};
     std::vector<Vertex> vertices{};
     std::vector<std::uint32_t> indices{};
-    std::vector<Submesh> submeshes{};
+    std::vector<MeshGeometry> geometries{};
     Aabb localBounds{};
     BoundingSphere localSphere{};
     bool clockwiseFrontFace = false;

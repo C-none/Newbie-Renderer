@@ -18,7 +18,7 @@ void printUsage()
     std::println("  Move: W/S/A/D/Q/E");
     std::println("  Rotate: hold mouse left or right button and move cursor");
     std::println("");
-    std::println("If no model_path is provided, the default Box model is loaded.");
+    std::println("If no model_path is provided, the default Sponza model is loaded.");
 }
 
 [[nodiscard]] bool hasFlag(std::span<char*> args, std::string_view expected)
@@ -112,8 +112,9 @@ void printUsage()
         return std::filesystem::path{argView};
     }
 
-    // Default: use Box model from glTF sample assets
-    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" / "Box" / "glTF" / "Box.gltf";
+    // Default: use the Sponza scene from glTF sample assets.
+    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" / "Sponza" /
+           "glTF" / "Sponza.gltf";
 }
 
 [[nodiscard]] int runMain(const std::filesystem::path& modelPath)

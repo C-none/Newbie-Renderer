@@ -59,6 +59,18 @@ Important consequence:
 - these types may own vectors, strings, and paths
 - they must not own RHI handles or Vulkan lifetime
 
+Material-specific consequence:
+
+- `Material` is the canonical metallic-roughness CPU record: `MaterialCorePbr` owns core PBR factors, optional extension structs hold clearcoat/sheen/transmission/anisotropy data, and texture bindings live in enum-indexed `textureSlots`.
+- Specular-glossiness authoring inputs are converted by `scene` before they enter `nr.resource`; this layer does not store specular/glossiness fields.
+- `MaterialFeatureFlag` and `MaterialTextureSlotSemantic` form the stable material ABI consumed by `scene`; source importer strings stay in `load` diagnostics.
+
+Mesh-specific consequence:
+
+- `Mesh` owns shared vertex/index arrays plus `MeshGeometry` records.
+- Each `MeshGeometry` represents one source primitive / future BLAS geometry range and must carry a valid material handle.
+- A mesh is the future BLAS unit; geometry is the material-mapping and draw/build-range unit.
+
 ### 3.3 Validation stays close to the data
 
 Normalization and validation helpers such as mesh-bound rebuilding, skin-weight normalization, texture validity checks, and hierarchy validation belong here because they are properties of the data itself.

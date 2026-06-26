@@ -69,12 +69,12 @@ void Vertex::normalizeFrame(float eps) noexcept
         tangent = glm::vec4{tangentVec, handedness};
     }
 
-[[nodiscard]] std::uint32_t Submesh::triangleCount() const noexcept
+[[nodiscard]] std::uint32_t MeshGeometry::triangleCount() const noexcept
 {
         return indexCount / 3u;
     }
 
-[[nodiscard]] bool Submesh::indexed() const noexcept
+[[nodiscard]] bool MeshGeometry::indexed() const noexcept
 {
         return indexCount > 0;
     }
@@ -340,12 +340,22 @@ void Mesh::normalizeSkinWeights(float eps) noexcept
             return false;
         }
 
-        auto submeshesValid = std::ranges::all_of(submeshes, [&](const Submesh &submesh) {
-            auto begin = static_cast<std::uint64_t>(submesh.firstIndex);
-            auto count = static_cast<std::uint64_t>(submesh.indexCount);
+        if (geometries.empty())
+        {
+            return false;
+        }
+
+        auto geometriesValid = std::ranges::all_of(geometries, [&](const MeshGeometry &geometry) {
+            auto begin = static_cast<std::uint64_t>(geometry.firstIndex);
+            auto count = static_cast<std::uint64_t>(geometry.indexCount);
             auto end = begin + count;
 
-            if (!submesh.localBounds.valid())
+            if (!geometry.material.valid())
+            {
+                return false;
+            }
+
+            if (!geometry.localBounds.valid())
             {
                 return false;
             }
@@ -357,18 +367,18 @@ void Mesh::normalizeSkinWeights(float eps) noexcept
                     return false;
                 }
 
-                if ((count > 0u) && (static_cast<std::size_t>(submesh.vertexOffset) >= vertices.size()))
+                if ((count > 0u) && (static_cast<std::size_t>(geometry.vertexOffset) >= vertices.size()))
                 {
                     return false;
                 }
 
-                auto beginIndex = static_cast<std::size_t>(submesh.firstIndex);
-                auto countIndex = static_cast<std::size_t>(submesh.indexCount);
+                auto beginIndex = static_cast<std::size_t>(geometry.firstIndex);
+                auto countIndex = static_cast<std::size_t>(geometry.indexCount);
                 auto referencedVerticesValid = std::ranges::all_of(
                     std::ranges::subrange(indices.begin() + static_cast<std::ptrdiff_t>(beginIndex),
                                           indices.begin() + static_cast<std::ptrdiff_t>(beginIndex + countIndex)),
                     [&](std::uint32_t localIndex) {
-                        auto resolved = static_cast<std::uint64_t>(localIndex) + static_cast<std::uint64_t>(submesh.vertexOffset);
+                        auto resolved = static_cast<std::uint64_t>(localIndex) + static_cast<std::uint64_t>(geometry.vertexOffset);
                         return resolved < static_cast<std::uint64_t>(vertices.size());
                     });
 
@@ -378,6 +388,6 @@ void Mesh::normalizeSkinWeights(float eps) noexcept
             return (count % 3u == 0u) && (end <= static_cast<std::uint64_t>(vertices.size()));
         });
 
-        return submeshesValid;
+        return geometriesValid;
     }
 } // namespace nr::resource

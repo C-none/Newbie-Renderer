@@ -12,6 +12,7 @@ nr_add_library(nrload STATIC)
 target_link_libraries(nrload
 PUBLIC
     utils
+    nrresource
     dependency
 )
 target_sources(nrload

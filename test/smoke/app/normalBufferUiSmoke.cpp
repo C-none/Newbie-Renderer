@@ -91,7 +91,6 @@ namespace
     nr::app::AppSession& app,
     nr::scene::Scene& scene,
     nr::renderer::FrameServices& frameServices,
-    const std::shared_ptr<nr::renderPasses::NormalBufferNode>& normalBuffer,
     float deltaSeconds)
 {
     auto& renderer = app.renderer();
@@ -127,7 +126,7 @@ namespace
         frameResult.presentResult == vk::Result::eSuboptimalKHR)
     {
         renderer.resize();
-        return renderOneFrame(app, scene, frameServices, normalBuffer, deltaSeconds);
+        return renderOneFrame(app, scene, frameServices, deltaSeconds);
     }
 
     if (frameResult.presentResult != vk::Result::eSuccess)
@@ -209,20 +208,8 @@ namespace
         auto frameServices = app.makeFrameServices();
         constexpr auto deltaSeconds = 1.0f / 60.0f;
 
-        if (!renderOneFrame(app, scene, frameServices, normalBuffer, deltaSeconds))
+        if (!renderOneFrame(app, scene, frameServices, deltaSeconds))
         {
-            return false;
-        }
-
-        normalBuffer->input.displayBackFaces = true;
-        if (!renderOneFrame(app, scene, frameServices, normalBuffer, deltaSeconds))
-        {
-            return false;
-        }
-
-        if (!normalBuffer->input.displayBackFaces)
-        {
-            std::println("[error] smoke test expected displayBackFaces to stay enabled.");
             return false;
         }
 

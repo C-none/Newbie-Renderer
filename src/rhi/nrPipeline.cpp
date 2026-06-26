@@ -1083,7 +1083,9 @@ void PipelineService::bindDevice(
 
 		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
 		auto pipeline = GraphicsPipeline::create(device, layoutBundle.layout, shaderProgram, effectiveDesc, pipelineCacheOrNull());
-		return makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
+		auto state = makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
+		state.graphicsDesc = std::move(effectiveDesc);
+		return state;
 	}
 
 [[nodiscard]] PipelineState<ComputePipeline> PipelineService::createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc, std::uint32_t descriptorMaxSets, std::span<const SlangImmutableSamplerBinding> immutableSamplers) const

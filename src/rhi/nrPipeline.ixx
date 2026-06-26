@@ -302,6 +302,7 @@ struct PipelineState
 		ShaderDescriptorLayout descriptorLayout;
 		ShaderBindingPool bindingPool;
 		TPipeline pipeline;
+		std::optional<GraphicsPipelineDesc> graphicsDesc{};
 };
 
 /**

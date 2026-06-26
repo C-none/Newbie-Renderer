@@ -11,6 +11,7 @@ file(GLOB IMPL_SOURCES
 nr_add_library(nrresource STATIC)
 target_link_libraries(nrresource
 PUBLIC
+    utils
     dependency
 )
 target_sources(nrresource

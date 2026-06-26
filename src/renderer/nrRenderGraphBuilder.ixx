@@ -39,6 +39,12 @@ class RenderGraphNodeContext
         PassPrepareCallback prepareCallback = nullptr,
         bool isCopyPass = false);
 
+    [[nodiscard]] GraphPassHandle addPass(
+        std::span<const PassResourceUseDesc> intentList,
+        std::string_view debugName,
+        PassParallelRecordDesc parallelRecord,
+        PassPrepareCallback prepareCallback = nullptr);
+
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
 
@@ -106,6 +112,13 @@ class RenderGraphBuilder
         PassPrepareCallback prepareCallback = nullptr,
         bool isCopyPass = false);
 
+    [[nodiscard]] GraphPassHandle addPass(
+        std::string_view debugName,
+        GraphNodeHandle node,
+        std::span<const PassResourceUseDesc> intentList,
+        PassParallelRecordDesc parallelRecord,
+        PassPrepareCallback prepareCallback = nullptr);
+
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
 
@@ -167,6 +180,7 @@ class RenderGraphBuilder
 
     static void validatePassCallbackContract(
         const PassRecordCallback& executeLambda,
+        const std::optional<PassParallelRecordDesc>& parallelRecord,
         bool isCopyPass);
 
     static void validatePassUseReadOnlyContract(const PassResourceUseDesc& use);

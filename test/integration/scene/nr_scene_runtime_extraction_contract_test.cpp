@@ -53,7 +53,8 @@ namespace
         .textures = {
             nr::load::MaterialTextureBinding{
                 .textureIndex = 0,
-                .semantic = "diffuse",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::baseColor,
+                .sourceSemanticName = "diffuse",
             },
         },
     });
@@ -66,7 +67,13 @@ namespace
             nr::load::VertexAsset{.position = {0.0f, 0.5f, 0.0f}},
         },
         .indices = {0u, 1u, 2u},
-        .materialIndex = 0,
+        .geometries = {
+            nr::load::MeshGeometryAsset{
+                .name = "runtime_triangle_geometry_0",
+                .indexCount = 3,
+                .materialIndex = 0,
+            },
+        },
     });
 
     scene.nodes.resize(includeCamera ? 3u : 2u);
@@ -110,6 +117,207 @@ namespace
     scene.stats.indexCount = 3;
     return scene;
 }
+
+const nr::test::CaseRegistrar materialSemanticClassificationCase{
+    "scene material bridge preserves Assimp PBR texture semantics",
+    [] {
+        nr::rhi::Device device{};
+        auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
+        auto sceneAsset = makeRuntimeSceneAsset(false);
+
+        struct SemanticFixture
+        {
+            std::string_view sourceName{};
+            nr::resource::MaterialTextureSlotSemantic semantic = nr::resource::MaterialTextureSlotSemantic::unsupported;
+            std::uint32_t materialIndex = 0;
+        };
+
+        auto semantics = std::array{
+            SemanticFixture{
+                .sourceName = "base_color",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::baseColor,
+            },
+            SemanticFixture{
+                .sourceName = "normal_camera",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::normal,
+            },
+            SemanticFixture{
+                .sourceName = "emission_color",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::emissive,
+            },
+            SemanticFixture{
+                .sourceName = "ambient_occlusion",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::occlusion,
+            },
+            SemanticFixture{
+                .sourceName = "gltf_metallic_roughness",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::metallicRoughness,
+            },
+            SemanticFixture{
+                .sourceName = "clearcoat_roughness",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness,
+                .materialIndex = 1u,
+            },
+            SemanticFixture{
+                .sourceName = "sheen_color",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::sheenColor,
+                .materialIndex = 1u,
+            },
+            SemanticFixture{
+                .sourceName = "transmission",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::transmission,
+                .materialIndex = 1u,
+            },
+            SemanticFixture{
+                .sourceName = "anisotropy",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::anisotropy,
+                .materialIndex = 1u,
+            },
+            SemanticFixture{
+                .sourceName = "volume_thickness",
+                .semantic = nr::resource::MaterialTextureSlotSemantic::unsupported,
+                .materialIndex = 1u,
+            },
+        };
+
+        sceneAsset.textures.clear();
+        sceneAsset.materials[0].textures.clear();
+        sceneAsset.materials.push_back(nr::load::MaterialAsset{
+            .name = "extension_material",
+            .anisotropyFactor = 0.35f,
+            .anisotropyRotation = 0.25f,
+            .clearcoatFactor = 0.8f,
+            .sheenRoughnessFactor = 0.45f,
+            .transmissionFactor = 0.6f,
+        });
+
+        auto semanticIndices = std::views::iota(std::size_t{0}, semantics.size());
+        std::ranges::for_each(semanticIndices, [&](std::size_t semanticIndex) {
+            sceneAsset.textures.push_back(nr::load::TextureAsset{
+                .key = std::format("manual://textures/runtime/{}", semantics[semanticIndex].sourceName),
+                .decodedImage = nr::load::Image{
+                    .width = 1,
+                    .height = 1,
+                    .channels = 4,
+                    .pixels = {255u, 255u, 255u, 255u},
+                },
+            });
+
+            auto &targetMaterial = sceneAsset.materials[semantics[semanticIndex].materialIndex];
+            targetMaterial.textures.push_back(nr::load::MaterialTextureBinding{
+                .textureIndex = static_cast<std::uint32_t>(semanticIndex),
+                .semantic = semantics[semanticIndex].semantic,
+                .sourceSemanticName = std::string{semantics[semanticIndex].sourceName},
+            });
+        });
+
+        sceneAsset.materials[0].textures.push_back(nr::load::MaterialTextureBinding{
+            .textureIndex = 4u,
+            .semantic = nr::resource::MaterialTextureSlotSemantic::metallicRoughness,
+            .sourceSemanticName = "metalness",
+        });
+        sceneAsset.textures.push_back(nr::load::TextureAsset{
+            .key = "manual://textures/runtime/diffuse_roughness_conflict",
+            .decodedImage = nr::load::Image{
+                .width = 1,
+                .height = 1,
+                .channels = 4,
+                .pixels = {127u, 127u, 127u, 255u},
+            },
+        });
+        sceneAsset.materials[0].textures.push_back(nr::load::MaterialTextureBinding{
+            .textureIndex = static_cast<std::uint32_t>(sceneAsset.textures.size() - 1u),
+            .semantic = nr::resource::MaterialTextureSlotSemantic::metallicRoughness,
+            .sourceSemanticName = "diffuse_roughness",
+        });
+
+        sceneAsset.stats.textureCount = static_cast<std::uint32_t>(sceneAsset.textures.size());
+        sceneAsset.stats.materialCount = static_cast<std::uint32_t>(sceneAsset.materials.size());
+
+        auto templateHandle = scene.registerTemplate(sceneAsset);
+        nr::test::require(templateHandle.valid(), "template registration should succeed");
+
+        auto materialHandle = scene.findMaterialHandleByStableKey(nr::scene::SceneBridge::makeMaterialCanonicalKey(sceneAsset, 0));
+        nr::test::require(materialHandle.has_value(), "material handle should resolve by stable key");
+
+        auto materialRecord = scene.tryGetMaterialAsset(*materialHandle);
+        nr::test::require(materialRecord.has_value(), "material record should exist");
+        auto const &material = materialRecord->get().cpu;
+
+        auto textureHandles = std::vector<nr::resource::TextureHandle>{};
+        textureHandles.reserve(sceneAsset.textures.size());
+        auto textureIndices = std::views::iota(std::size_t{0}, sceneAsset.textures.size());
+        std::ranges::for_each(textureIndices, [&](std::size_t textureIndex) {
+            auto textureHandle = scene.findTextureHandleByStableKey(nr::scene::SceneBridge::makeTextureCanonicalKey(sceneAsset.textures[textureIndex]));
+            nr::test::require(textureHandle.has_value(), std::format("texture handle {} should resolve by stable key", textureIndex));
+            textureHandles.push_back(*textureHandle);
+        });
+
+        nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).texture == textureHandles[0],
+                          "base_color should bind baseColor slot");
+        nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::normal).texture == textureHandles[1],
+                          "normal_camera should bind normal slot");
+        nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::emissive).texture == textureHandles[2],
+                          "emission_color should bind emissive slot");
+        nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).texture == textureHandles[3],
+                          "ambient_occlusion should bind occlusion slot");
+        nr::test::require(
+            material.slot(nr::resource::MaterialTextureSlotSemantic::metallicRoughness).texture == textureHandles[4],
+            "gltf_metallic_roughness should bind metallicRoughness slot");
+        nr::test::requireEqual(material.core.metallicFactor, 1.0f);
+        nr::test::require(!material.clearcoat.has_value(), "core material should not create clearcoat extension");
+        nr::test::require(!material.sheen.has_value(), "core material should not create sheen extension");
+        nr::test::require(!material.transmission.has_value(), "core material should not create transmission extension");
+        nr::test::require(!material.anisotropy.has_value(), "core material should not create anisotropy extension");
+
+        auto extensionMaterialHandle =
+            scene.findMaterialHandleByStableKey(nr::scene::SceneBridge::makeMaterialCanonicalKey(sceneAsset, 1));
+        nr::test::require(extensionMaterialHandle.has_value(), "extension material should resolve by stable key");
+
+        auto extensionMaterialRecord = scene.tryGetMaterialAsset(*extensionMaterialHandle);
+        nr::test::require(extensionMaterialRecord.has_value(), "extension material record should exist");
+        auto const &extensionMaterial = extensionMaterialRecord->get().cpu;
+
+        nr::test::require(extensionMaterial.clearcoat.has_value(), "clearcoat texture or factor should create extension block");
+        nr::test::require(extensionMaterial.sheen.has_value(), "sheen texture or factor should create extension block");
+        nr::test::require(extensionMaterial.transmission.has_value(),
+                          "transmission texture or factor should create extension block");
+        nr::test::require(extensionMaterial.anisotropy.has_value(),
+                          "anisotropy texture or factor should create extension block");
+        nr::test::require(
+            extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness).texture == textureHandles[5],
+            "clearcoat_roughness should bind clearcoat roughness slot");
+        nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::sheenColor).texture ==
+                              textureHandles[6],
+                          "sheen_color should bind sheen color slot");
+        nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::transmission).texture ==
+                              textureHandles[7],
+                          "transmission should bind transmission slot");
+        nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::anisotropy).texture ==
+                              textureHandles[8],
+                          "anisotropy should bind anisotropy slot");
+
+        auto const extensionFlags = extensionMaterial.featureFlags();
+        nr::test::require(nr::resource::hasAnyFeature(extensionFlags, nr::resource::MaterialFeatureFlag::clearcoat),
+                          "extension flags should include clearcoat");
+        nr::test::require(nr::resource::hasAnyFeature(extensionFlags, nr::resource::MaterialFeatureFlag::sheen),
+                          "extension flags should include sheen");
+        nr::test::require(nr::resource::hasAnyFeature(extensionFlags, nr::resource::MaterialFeatureFlag::transmission),
+                          "extension flags should include transmission");
+        nr::test::require(nr::resource::hasAnyFeature(extensionFlags, nr::resource::MaterialFeatureFlag::anisotropy),
+                          "extension flags should include anisotropy");
+
+        auto const volumeThicknessBound = std::ranges::any_of(
+            extensionMaterial.textureSlots,
+            [&](const nr::resource::MaterialTextureSlot &slot) { return slot.texture == textureHandles[9]; });
+        nr::test::require(!volumeThicknessBound, "unsupported volume_thickness should not bind any material texture slot");
+
+        auto const conflictingRoughnessBound = std::ranges::any_of(
+            material.textureSlots,
+            [&](const nr::resource::MaterialTextureSlot &slot) { return slot.texture == textureHandles[10]; });
+        nr::test::require(!conflictingRoughnessBound,
+                          "different metallicRoughness alias texture should be ignored after first slot assignment");
+    }};
 
 [[nodiscard]] nr::scene::SceneExtractProfileHandle registerProfile(nr::scene::Scene &scene,
                                                                    nr::scene::ScenePacketDomain domain,

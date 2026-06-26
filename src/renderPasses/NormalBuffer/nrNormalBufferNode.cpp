@@ -3,7 +3,6 @@ import dependency.math;
 import dependency.vulkan;
 
 import :normalBuffer;
-import nr.app;
 import nr.renderer;
 import nr.rhi;
 import nr.scene;
@@ -176,16 +175,6 @@ void ensureNormalBufferImages(
     });
 }
 
-[[nodiscard]] std::optional<std::reference_wrapper<nr::app::UiSystem>> tryGetUiSystem(
-    const nr::renderer::NodeFrameParameters& frameParameters)
-{
-    if (!frameParameters.frameServices.has_value())
-    {
-        return std::nullopt;
-    }
-
-    return frameParameters.frameServices->get().tryGet<nr::app::UiSystem>();
-}
 } // namespace nr::renderPasses::detail
 
 namespace nr::renderPasses
@@ -230,18 +219,6 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
     nr::nrAssert(static_cast<bool>(runtime_), "NormalBuffer build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "NormalBuffer build stage requires initialize() device reference.");
 
-    if (auto uiSystem = detail::tryGetUiSystem(frameParameters); uiSystem.has_value())
-    {
-        uiSystem->get().queueSection(nr::app::UiSection{
-            .id = "normal.buffer",
-            .title = "Normal Buffer",
-            .draw = [this](nr::app::UiSystem& ui) {
-                [[maybe_unused]] auto checkboxChanged =
-                    ui.checkbox("Display Back Faces", input.displayBackFaces);
-            },
-        });
-    }
-
     auto viewportExtent = input.viewportExtent;
     if (viewportExtent.width == 1 && viewportExtent.height == 1)
     {
@@ -270,8 +247,6 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
         input.depthFormat,
         nr::renderer::ResourceLifetime::FrameLocal);
 
-    auto displayBackFaces = input.displayBackFaces;
-
     auto sceneBridgeFrameHandle = frameParameters.sceneBridgeFrameHandle;
 
     auto rasterPass = nr::renderer::RasterPassBuilder{
@@ -280,17 +255,28 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
         runtime_->pipeline};
     rasterPass
         .viewport(viewportExtent)
+        .viewportYMode(nr::renderer::RasterViewportYMode::ClipSpaceYUp)
         .colorAttachment(
             output.normalBuffer,
             vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.5f, 0.5f, 1.0f, 1.0f}}})
         .depthAttachment(output.depthBuffer)
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
         .rasterState(nr::rhi::MeshRasterState{
-            .cullMode = displayBackFaces ? vk::CullModeFlagBits::eFront : vk::CullModeFlagBits::eBack,
             .depthTestEnable = vk::True,
             .depthWriteEnable = vk::True,
         })
-        .record([sceneBridgeFrameHandle](const nr::renderer::RasterPassRecordContext& rasterContext) {
+        .recordParallel(
+        [sceneBridgeFrameHandle](const nr::renderer::PassRecordContext& recordContext) -> std::size_t {
+            if (!sceneBridgeFrameHandle.has_value())
+            {
+                return 0;
+            }
+
+            auto const& sceneBridgeFrame =
+                recordContext.frameData<nr::scene::SceneBridgeFrame>(*sceneBridgeFrameHandle);
+            return sceneBridgeFrame.rasterDraws.size();
+        },
+        [sceneBridgeFrameHandle](const nr::renderer::RasterPassRangeRecordContext& rasterContext) {
             if (!sceneBridgeFrameHandle.has_value())
             {
                 return;
@@ -299,10 +285,21 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
             auto const& sceneBridgeFrame =
                 rasterContext.pass.frameData<nr::scene::SceneBridgeFrame>(*sceneBridgeFrameHandle);
             auto& commandBuffer = rasterContext.commandBuffer;
-            std::ranges::for_each(sceneBridgeFrame.rasterDraws, [&](const auto& draw) {
+            auto currentCullMode = std::optional<vk::CullModeFlags>{};
+            auto currentFrontFace = std::optional<vk::FrontFace>{};
+            auto drawIndices = std::views::iota(rasterContext.range.begin, rasterContext.range.end);
+            std::ranges::for_each(drawIndices, [&](std::size_t drawIndex) {
+                auto const& draw = sceneBridgeFrame.rasterDraws[drawIndex];
                 if (!draw.geometry.hasVertexBuffer())
                 {
                     return;
+                }
+
+                auto const drawCullMode = draw.materialRaster.cullMode;
+                if (!currentCullMode.has_value() || *currentCullMode != drawCullMode)
+                {
+                    commandBuffer.setCullMode(drawCullMode);
+                    currentCullMode = drawCullMode;
                 }
 
                 rasterContext.pushConstants("gPushConstants", detail::NormalBufferPushConstants{
@@ -314,7 +311,11 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
                 auto vertexBuffers = std::array{vertexBuffer};
                 auto vertexOffsets = std::array{vertexOffset};
                 commandBuffer.bindVertexBuffers(0, vertexBuffers, vertexOffsets);
-                commandBuffer.setFrontFace(draw.geometry.frontFace);
+                if (!currentFrontFace.has_value() || *currentFrontFace != draw.geometry.frontFace)
+                {
+                    commandBuffer.setFrontFace(draw.geometry.frontFace);
+                    currentFrontFace = draw.geometry.frontFace;
+                }
 
                 if (draw.geometry.hasIndexBuffer())
                 {

@@ -1,5 +1,6 @@
 import std;
 import nr.load;
+import nr.resource;
 import nr.test;
 
 namespace
@@ -54,6 +55,61 @@ const nr::test::CaseRegistrar backendDispatchCase{
         });
         nr::test::require(imported.has_value(), "case-normalized .foo extension should dispatch");
         nr::test::requireEqual(imported->sourcePath.generic_string(), std::string{"Asset.FOO"});
+    }};
+
+const nr::test::CaseRegistrar assimpTextureSemanticCase{
+    "assimp material texture semantics map to resource slots",
+    [] {
+        using enum nr::resource::MaterialTextureSlotSemantic;
+
+        struct SemanticCase
+        {
+            std::uint32_t textureTypeRaw = 0;
+            std::uint32_t textureSlot = 0;
+            nr::resource::MaterialTextureSlotSemantic expected = unsupported;
+        };
+
+        auto cases = std::array{
+            SemanticCase{.textureTypeRaw = 1u, .expected = baseColor},
+            SemanticCase{.textureTypeRaw = 12u, .expected = baseColor},
+            SemanticCase{.textureTypeRaw = 22u, .expected = baseColor},
+            SemanticCase{.textureTypeRaw = 6u, .expected = normal},
+            SemanticCase{.textureTypeRaw = 13u, .expected = normal},
+            SemanticCase{.textureTypeRaw = 5u, .expected = normal},
+            SemanticCase{.textureTypeRaw = 9u, .expected = normal},
+            SemanticCase{.textureTypeRaw = 10u, .expected = occlusion},
+            SemanticCase{.textureTypeRaw = 3u, .expected = occlusion},
+            SemanticCase{.textureTypeRaw = 17u, .expected = occlusion},
+            SemanticCase{.textureTypeRaw = 4u, .expected = emissive},
+            SemanticCase{.textureTypeRaw = 14u, .expected = emissive},
+            SemanticCase{.textureTypeRaw = 15u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 16u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 27u, .expected = metallicRoughness},
+            SemanticCase{.textureTypeRaw = 2u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 7u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 23u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 24u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 25u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 20u, .textureSlot = 0u, .expected = clearcoat},
+            SemanticCase{.textureTypeRaw = 20u, .textureSlot = 1u, .expected = clearcoatRoughness},
+            SemanticCase{.textureTypeRaw = 20u, .textureSlot = 2u, .expected = clearcoatNormal},
+            SemanticCase{.textureTypeRaw = 19u, .textureSlot = 0u, .expected = sheenColor},
+            SemanticCase{.textureTypeRaw = 19u, .textureSlot = 1u, .expected = sheenRoughness},
+            SemanticCase{.textureTypeRaw = 21u, .textureSlot = 0u, .expected = transmission},
+            SemanticCase{.textureTypeRaw = 21u, .textureSlot = 1u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 26u, .textureSlot = 0u, .expected = anisotropy},
+            SemanticCase{.textureTypeRaw = 8u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 11u, .expected = unsupported},
+            SemanticCase{.textureTypeRaw = 18u, .expected = unsupported},
+        };
+
+        std::ranges::for_each(cases, [](SemanticCase semanticCase) {
+            nr::test::require(nr::load::assimpTextureSlotSemantic(semanticCase.textureTypeRaw, semanticCase.textureSlot) ==
+                                  semanticCase.expected,
+                              std::format("unexpected semantic mapping for Assimp type {} slot {}",
+                                          semanticCase.textureTypeRaw,
+                                          semanticCase.textureSlot));
+        });
     }};
 
 const nr::test::CaseRegistrar embeddedRawDecodeCase{

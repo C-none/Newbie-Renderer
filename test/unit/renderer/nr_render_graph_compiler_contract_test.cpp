@@ -226,6 +226,36 @@ const nr::test::CaseRegistrar compilerPassOrderCase{
         nr::test::requireEqual(compiled.submitBatches.front().passes[2].debugName, std::string{"Graphics.Third"});
     }};
 
+const nr::test::CaseRegistrar compilerOrderedUseBarrierCase{
+    "render graph compiler honors ordered previous-use barrier markers",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("Ordered", nr::renderer::QueueDomain::Graphics);
+        auto color = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Ordered.Color",
+            .extent = vk::Extent3D{32, 32, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+
+        auto firstUses = std::array{nr::renderer::use::colorWrite(color)};
+        auto secondUses = std::array{nr::renderer::use::orderedAfterPrevious(nr::renderer::use::colorWrite(color))};
+        static_cast<void>(builder.addPass("Ordered.First", node, firstUses, [](const nr::renderer::PassRecordContext&) {}));
+        static_cast<void>(builder.addPass("Ordered.Second", node, secondUses, [](const nr::renderer::PassRecordContext&) {}));
+
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(builder.build());
+        nr::test::requireEqual(compiled.submitBatches.size(), std::size_t{1});
+        nr::test::requireEqual(compiled.submitBatches.front().passes.size(), std::size_t{2});
+
+        auto const& secondPass = compiled.submitBatches.front().passes[1];
+        nr::test::requireEqual(secondPass.preBarriers.size(), std::size_t{1});
+        auto const& barrier = secondPass.preBarriers.front();
+        nr::test::requireEqual(barrier.strength, nr::renderer::DependencyStrength::BarrierRequired);
+        nr::test::requireEqual(barrier.srcQueue, nr::renderer::QueueDomain::Graphics);
+        nr::test::requireEqual(barrier.dstQueue, nr::renderer::QueueDomain::Graphics);
+        nr::test::requireEqual(barrier.oldLayout, nr::renderer::ImageLayoutIntent::ColorAttachment);
+        nr::test::requireEqual(barrier.newLayout, nr::renderer::ImageLayoutIntent::ColorAttachment);
+    }};
+
 const nr::test::CaseRegistrar compilerAccelerationStructureCase{
     "render graph compiler tracks acceleration structure resources",
     [] {
@@ -278,6 +308,7 @@ const nr::test::CaseRegistrar compilerPrepareRecordSplitCase{
         auto const& compiledPass = compiled.submitBatches.front().passes.front();
         nr::test::require(static_cast<bool>(compiledPass.prepare), "compiler should retain prepare callback");
         nr::test::require(static_cast<bool>(compiledPass.record), "compiler should retain record callback");
+        nr::test::require(!compiledPass.parallelRecord.has_value(), "serial pass should not retain a parallel record desc");
         nr::test::requireEqual(compiledPass.debugName, std::string{"Bindings.Split"});
     }};
 

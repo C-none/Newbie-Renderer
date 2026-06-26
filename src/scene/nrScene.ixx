@@ -405,6 +405,10 @@ class Scene
 
     [[nodiscard]] bool materialTexturesReady(const nr::resource::Material &material) const noexcept;
 
+    [[nodiscard]] std::optional<nr::resource::MaterialHandle> meshGeometryMaterial(
+        nr::resource::MeshHandle meshHandle,
+        std::uint32_t geometryIndex) const noexcept;
+
     [[nodiscard]] bool renderableReadyForRaster(const RenderableBinding &binding) const noexcept;
 
     [[nodiscard]] bool renderableReadyForMeshOnlyDomain(const RenderableBinding &binding) const noexcept;
@@ -413,14 +417,15 @@ class Scene
                                                 const RenderableBinding &binding) const noexcept;
 
     [[nodiscard]] std::uint64_t rasterSortKey(
-        const RenderableBinding &binding,
+        nr::resource::MeshHandle meshHandle,
+        nr::resource::MaterialHandle materialHandle,
         std::uint64_t selectionBits,
-        std::uint32_t submeshIndex,
+        std::uint32_t geometryIndex,
         flecs::entity entity) const noexcept;
 
     [[nodiscard]] static std::uint32_t makeRayTracingInstanceMask(std::uint64_t selectionBits) noexcept;
 
-    [[nodiscard]] std::uint32_t resolveRenderableSubmeshCount(const RenderableBinding &binding) const noexcept;
+    [[nodiscard]] std::uint32_t resolveRenderableGeometryCount(const RenderableBinding &binding) const noexcept;
 
     template <ScenePacketDomain Domain>
     void appendPacketsForCandidate(ScenePacketSet &packetSet,
@@ -431,44 +436,43 @@ class Scene
                                    const WorldTransform &worldTransform,
                                    const WorldBounds &worldBounds) const
     {
-        auto const submeshCount = resolveRenderableSubmeshCount(binding);
-        auto const submeshIndices = std::views::iota(std::uint32_t{0}, submeshCount);
-        std::ranges::for_each(submeshIndices, [&](std::uint32_t submeshIndex) {
-            if constexpr (Domain == ScenePacketDomain::rasterDraw)
-            {
+        if constexpr (Domain == ScenePacketDomain::rasterDraw)
+        {
+            auto const geometryCount = resolveRenderableGeometryCount(binding);
+            auto const geometryIndices = std::views::iota(std::uint32_t{0}, geometryCount);
+            std::ranges::for_each(geometryIndices, [&](std::uint32_t geometryIndex) {
+                auto const materialHandle = meshGeometryMaterial(binding.mesh, geometryIndex).value_or(binding.material);
                 packetSet.rasterDraws.push_back(RasterDrawPacket{
                     .renderable = entity,
                     .mesh = binding.mesh,
-                    .material = binding.material,
-                    .submeshIndex = submeshIndex,
+                    .material = materialHandle,
+                    .geometryIndex = geometryIndex,
                     .world = worldTransform.value,
                     .worldBounds = worldBounds.value,
-                    .sortKey = rasterSortKey(binding, selectionBits, submeshIndex, entity),
+                    .sortKey = rasterSortKey(binding.mesh, materialHandle, selectionBits, geometryIndex, entity),
                 });
-            }
-            else if constexpr (Domain == ScenePacketDomain::rayTracingInstance)
-            {
-                packetSet.rtInstances.push_back(RayTracingInstancePacket{
-                    .renderable = entity,
-                    .mesh = binding.mesh,
-                    .submeshIndex = submeshIndex,
-                    .world = worldTransform.value,
-                    .instanceMask = makeRayTracingInstanceMask(selectionBits),
-                    .tlasBucket = tlasBucketId.value,
-                });
-            }
-            else if constexpr (Domain == ScenePacketDomain::tlasBuildInput)
-            {
-                packetSet.tlasBuildInputs.push_back(TlasBuildInputPacket{
-                    .renderable = entity,
-                    .mesh = binding.mesh,
-                    .submeshIndex = submeshIndex,
-                    .world = worldTransform.value,
-                    .instanceMask = makeRayTracingInstanceMask(selectionBits),
-                    .tlasBucket = tlasBucketId.value,
-                });
-            }
-        });
+            });
+        }
+        else if constexpr (Domain == ScenePacketDomain::rayTracingInstance)
+        {
+            packetSet.rtInstances.push_back(RayTracingInstancePacket{
+                .renderable = entity,
+                .mesh = binding.mesh,
+                .world = worldTransform.value,
+                .instanceMask = makeRayTracingInstanceMask(selectionBits),
+                .tlasBucket = tlasBucketId.value,
+            });
+        }
+        else if constexpr (Domain == ScenePacketDomain::tlasBuildInput)
+        {
+            packetSet.tlasBuildInputs.push_back(TlasBuildInputPacket{
+                .renderable = entity,
+                .mesh = binding.mesh,
+                .world = worldTransform.value,
+                .instanceMask = makeRayTracingInstanceMask(selectionBits),
+                .tlasBucket = tlasBucketId.value,
+            });
+        }
     }
 
     [[nodiscard]] bool uploadContextAvailable() const noexcept;
@@ -840,7 +844,7 @@ class Scene
 
     [[nodiscard]] nr::resource::Aabb meshLocalBounds(nr::resource::MeshHandle meshHandle) const;
 
-    [[nodiscard]] std::uint32_t meshSubmeshCount(nr::resource::MeshHandle meshHandle) const noexcept;
+    [[nodiscard]] std::uint32_t meshGeometryCount(nr::resource::MeshHandle meshHandle) const noexcept;
 
     [[nodiscard]] static nr::resource::MeshHandle meshHandleForEntity(flecs::entity entity) noexcept;
 

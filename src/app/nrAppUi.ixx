@@ -31,7 +31,7 @@ struct UiSection
     std::string_view id{};
     std::string_view title{};
     UiSectionDrawCallback draw{};
-    bool defaultOpen = false;
+    bool defaultOpen = true;
 };
 
 class UiSystem
@@ -103,7 +103,7 @@ class UiSystem
   private:
     void setCurrentContext() const noexcept;
     void endWindow(bool closesWindow);
-    [[nodiscard]] bool beginSection(std::string_view id, std::string_view title, bool defaultOpen = false);
+    [[nodiscard]] bool beginSection(std::string_view id, std::string_view title, bool defaultOpen = true);
     void prepareWindowDefaults();
 
     ImGuiContext* context_ = nullptr;

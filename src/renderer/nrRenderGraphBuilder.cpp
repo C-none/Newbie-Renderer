@@ -29,6 +29,7 @@ void RenderGraphBuilder::clear()
         std::ranges::for_each(frame_.passes, [](PassExecutionDesc& pass) {
             pass.resourceUses.clear();
             pass.record = nullptr;
+            pass.parallelRecord.reset();
             pass.prepare = nullptr;
         });
 
@@ -87,7 +88,7 @@ void RenderGraphBuilder::clear()
         PassPrepareCallback prepareCallback,
         bool isCopyPass)
 {
-        validatePassCallbackContract(executeLambda, isCopyPass);
+        validatePassCallbackContract(executeLambda, std::nullopt, isCopyPass);
         validatePassResourceUses(intentList, isCopyPass);
 
         auto passHandle = addPassCore(debugName, node, isCopyPass);
@@ -98,6 +99,28 @@ void RenderGraphBuilder::clear()
         std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
         pass.prepare = std::move(prepareCallback);
         pass.record = std::move(executeLambda);
+
+        return passHandle;
+    }
+
+[[nodiscard]] GraphPassHandle RenderGraphBuilder::addPass(
+        std::string_view debugName,
+        GraphNodeHandle node,
+        std::span<const PassResourceUseDesc> intentList,
+        PassParallelRecordDesc parallelRecord,
+        PassPrepareCallback prepareCallback)
+{
+        validatePassCallbackContract(PassRecordCallback{}, parallelRecord, false);
+        validatePassResourceUses(intentList, false);
+
+        auto passHandle = addPassCore(debugName, node, false);
+        auto& pass = frame_.passes.back();
+        nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
+
+        pass.resourceUses.reserve(intentList.size());
+        std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
+        pass.prepare = std::move(prepareCallback);
+        pass.parallelRecord = std::move(parallelRecord);
 
         return passHandle;
     }
@@ -416,14 +439,29 @@ void RenderGraphBuilder::clear()
 
 void RenderGraphBuilder::validatePassCallbackContract(
         const PassRecordCallback& executeLambda,
+        const std::optional<PassParallelRecordDesc>& parallelRecord,
         bool isCopyPass)
 {
+        auto const hasRecord = static_cast<bool>(executeLambda);
+        auto const hasParallelRecord = parallelRecord.has_value();
         nrAssert(
-            isCopyPass || static_cast<bool>(executeLambda),
-            "RenderGraphBuilder::addPass requires a record callback for non-copy passes.");
+            isCopyPass || hasRecord != hasParallelRecord,
+            "RenderGraphBuilder::addPass requires exactly one record or parallel record callback for non-copy passes.");
         nrAssert(
-            !isCopyPass || !static_cast<bool>(executeLambda),
-            "RenderGraphBuilder::addPass copy passes use the implicit copy path and must not provide a record callback.");
+            !isCopyPass || (!hasRecord && !hasParallelRecord),
+            "RenderGraphBuilder::addPass copy passes use the implicit copy path and must not provide record callbacks.");
+        if (hasParallelRecord)
+        {
+            nrAssert(
+                parallelRecord->replaySemantics == ParallelRecordReplaySemantics::Unordered,
+                "RenderGraphBuilder::addPass only supports unordered parallel record replay.");
+            nrAssert(
+                static_cast<bool>(parallelRecord->itemCount),
+                "RenderGraphBuilder::addPass parallel record requires an item-count callback.");
+            nrAssert(
+                static_cast<bool>(parallelRecord->recordRange),
+                "RenderGraphBuilder::addPass parallel record requires a range-record callback.");
+        }
     }
 
 void RenderGraphBuilder::validatePassUseReadOnlyContract(const PassResourceUseDesc& use)
@@ -578,6 +616,20 @@ GraphPassHandle RenderGraphNodeContext::addPass(
         std::move(executeLambda),
         std::move(prepareCallback),
         isCopyPass);
+}
+
+GraphPassHandle RenderGraphNodeContext::addPass(
+    std::span<const PassResourceUseDesc> intentList,
+    std::string_view debugName,
+    PassParallelRecordDesc parallelRecord,
+    PassPrepareCallback prepareCallback)
+{
+    return builder_.get().addPass(
+        debugName,
+        node,
+        intentList,
+        std::move(parallelRecord),
+        std::move(prepareCallback));
 }
 
 GraphSubmitHandle RenderGraphNodeContext::addSubmitNode(

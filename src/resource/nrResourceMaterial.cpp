@@ -2,12 +2,33 @@ module nr.resource;
 import :material;
 import dependency.math;
 import dependency.vulkan;
+import nr.utils;
 import std;
 import :type;
 import :handle;
 
 namespace nr::resource
 {
+[[nodiscard]] std::string_view materialTextureSlotSemanticName(MaterialTextureSlotSemantic semantic) noexcept
+{
+        switch (semantic)
+        {
+        case MaterialTextureSlotSemantic::baseColor: return "baseColor";
+        case MaterialTextureSlotSemantic::normal: return "normal";
+        case MaterialTextureSlotSemantic::metallicRoughness: return "metallicRoughness";
+        case MaterialTextureSlotSemantic::occlusion: return "occlusion";
+        case MaterialTextureSlotSemantic::emissive: return "emissive";
+        case MaterialTextureSlotSemantic::clearcoat: return "clearcoat";
+        case MaterialTextureSlotSemantic::clearcoatRoughness: return "clearcoatRoughness";
+        case MaterialTextureSlotSemantic::clearcoatNormal: return "clearcoatNormal";
+        case MaterialTextureSlotSemantic::sheenColor: return "sheenColor";
+        case MaterialTextureSlotSemantic::sheenRoughness: return "sheenRoughness";
+        case MaterialTextureSlotSemantic::transmission: return "transmission";
+        case MaterialTextureSlotSemantic::anisotropy: return "anisotropy";
+        default: return "unsupported";
+        }
+    }
+
 [[nodiscard]] std::size_t ImageLevel::byteSize() const noexcept
 {
         return bytes.size();
@@ -65,33 +86,72 @@ namespace nr::resource
         return glm::uvec3{reduce(width), reduce(height), reduce(depth)};
     }
 
+[[nodiscard]] MaterialTextureSlot &Material::slot(MaterialTextureSlotSemantic semantic) noexcept
+{
+        nrAssert(materialTextureSlotSemanticValid(semantic), "Material::slot requires a supported texture slot semantic.");
+        return textureSlots[materialTextureSlotIndex(semantic)];
+    }
+
+[[nodiscard]] const MaterialTextureSlot &Material::slot(MaterialTextureSlotSemantic semantic) const noexcept
+{
+        nrAssert(materialTextureSlotSemanticValid(semantic), "Material::slot requires a supported texture slot semantic.");
+        return textureSlots[materialTextureSlotIndex(semantic)];
+    }
+
+[[nodiscard]] MaterialFeatureFlag Material::featureFlags() const noexcept
+{
+        auto flags = MaterialFeatureFlag::none;
+
+        if (clearcoat.has_value())
+        {
+            flags |= MaterialFeatureFlag::clearcoat;
+        }
+
+        if (sheen.has_value())
+        {
+            flags |= MaterialFeatureFlag::sheen;
+        }
+
+        if (transmission.has_value())
+        {
+            flags |= MaterialFeatureFlag::transmission;
+        }
+
+        if (anisotropy.has_value())
+        {
+            flags |= MaterialFeatureFlag::anisotropy;
+        }
+
+        if (core.doubleSided)
+        {
+            flags |= MaterialFeatureFlag::doubleSided;
+        }
+
+        if (core.alphaMode == AlphaMode::mask)
+        {
+            flags |= MaterialFeatureFlag::alphaMask;
+        }
+
+        if (core.alphaMode == AlphaMode::blend)
+        {
+            flags |= MaterialFeatureFlag::alphaBlend;
+        }
+
+        return flags;
+    }
+
 [[nodiscard]] bool Material::isOpaque() const noexcept
 {
-        return alphaMode == AlphaMode::opaque;
+        return core.alphaMode == AlphaMode::opaque;
     }
 
 [[nodiscard]] bool Material::isAlphaMasked() const noexcept
 {
-        return alphaMode == AlphaMode::mask;
+        return core.alphaMode == AlphaMode::mask;
     }
 
 [[nodiscard]] bool Material::isAlphaBlended() const noexcept
 {
-        return alphaMode == AlphaMode::blend;
-    }
-
-[[nodiscard]] bool Material::usesMetallicRoughnessWorkflow() const noexcept
-{
-        return metallicFactor > 0.0f || roughnessFactor < 1.0f || metallicRoughness.texture.valid();
-    }
-
-[[nodiscard]] bool Material::usesSpecularGlossinessWorkflow() const noexcept
-{
-        return glm::any(glm::notEqual(specularFactor, glm::vec3{0.0f})) || glossinessFactor > 0.0f;
-    }
-
-[[nodiscard]] bool Material::usesAnisotropy() const noexcept
-{
-        return anisotropyFactor > 0.0f;
+        return core.alphaMode == AlphaMode::blend;
     }
 } // namespace nr::resource

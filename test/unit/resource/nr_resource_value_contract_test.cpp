@@ -34,11 +34,12 @@ namespace
     mesh.rebuildLocalBounds();
     mesh.rebuildLocalSphere();
     mesh.rebuildVertexNormals();
-    auto submesh = nr::resource::Submesh{};
-    submesh.name = "triangle";
-    submesh.indexCount = 3;
-    submesh.localBounds = mesh.localBounds;
-    mesh.submeshes.push_back(std::move(submesh));
+    auto geometry = nr::resource::MeshGeometry{};
+    geometry.name = "triangle";
+    geometry.indexCount = 3;
+    geometry.material = nr::resource::MaterialHandle{1u, 1u};
+    geometry.localBounds = mesh.localBounds;
+    mesh.geometries.push_back(std::move(geometry));
     return mesh;
 }
 
@@ -124,14 +125,27 @@ const nr::test::CaseRegistrar textureMaterialCase{
 
         auto material = nr::resource::Material{};
         nr::test::require(material.isOpaque(), "default material should be opaque");
-        nr::test::require(!material.usesMetallicRoughnessWorkflow(), "default material should not need metallic-roughness workflow");
-        material.alphaMode = nr::resource::AlphaMode::blend;
-        material.metallicFactor = 0.5f;
-        material.specularFactor = glm::vec3{0.1f, 0.0f, 0.0f};
-        material.anisotropyFactor = 0.25f;
+        nr::test::requireEqual(material.core.metallicFactor, 1.0f);
+        nr::test::requireEqual(nr::resource::materialTextureSlotCount, std::size_t{12});
+        nr::test::require(nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::baseColor),
+                          "baseColor should be a valid material texture slot semantic");
+        nr::test::require(!nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::unsupported),
+                          "unsupported should be rejected before Material::slot access");
+
+        material.core.alphaMode = nr::resource::AlphaMode::blend;
+        material.clearcoat.emplace();
+        material.anisotropy.emplace();
+        material.anisotropy->factor = 0.25f;
+        material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet = 1u;
+
+        auto const featureFlags = material.featureFlags();
         nr::test::require(material.isAlphaBlended(), "blend material should report alpha blending");
-        nr::test::require(material.usesMetallicRoughnessWorkflow(), "metallic factor should enable metallic-roughness workflow");
-        nr::test::require(material.usesSpecularGlossinessWorkflow(), "specular factor should enable specular-glossiness workflow");
-        nr::test::require(material.usesAnisotropy(), "anisotropy factor should be reported");
+        nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::alphaBlend),
+                          "feature flags should include alpha blend");
+        nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::clearcoat),
+                          "feature flags should include clearcoat");
+        nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::anisotropy),
+                          "feature flags should include anisotropy");
+        nr::test::requireEqual(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet, 1u);
     }};
 } // namespace

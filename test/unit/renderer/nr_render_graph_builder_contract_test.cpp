@@ -26,6 +26,19 @@ namespace
            use.accelerationStructureAccess.has_value();
 }
 
+void requireContiguousCoverage(
+    const nr::renderer::PassParallelRecordPlan& plan,
+    std::size_t itemCount)
+{
+    auto expectedBegin = std::size_t{0};
+    std::ranges::for_each(plan.ranges, [&](const nr::renderer::ParallelRecordRange& range) {
+        nr::test::requireEqual(range.begin, expectedBegin, "parallel ranges should be contiguous");
+        nr::test::require(range.end >= range.begin, "parallel ranges should be non-inverted");
+        expectedBegin = range.end;
+    });
+    nr::test::requireEqual(expectedBegin, itemCount, "parallel ranges should cover the item domain exactly");
+}
+
 const nr::test::CaseRegistrar useFactoryCase{
     "render graph resource-use factories encode stable intents",
     [] {
@@ -36,6 +49,11 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(color.imageUsage == nr::renderer::ImageUsageIntent::ColorAttachment);
         nr::test::require(color.imageAccess == nr::renderer::ImageAccessIntent::ColorAttachmentWrite);
         nr::test::require(!color.readOnly, "color write should not be read-only");
+
+        auto orderedColor = nr::renderer::use::orderedAfterPrevious(color);
+        nr::test::require(orderedColor.requiresPreviousUseBarrier, "ordered use should request a previous-use barrier");
+        nr::test::requireEqual(orderedColor.resource, color.resource);
+        nr::test::require(orderedColor.imageLayout == color.imageLayout);
 
         auto colorReadWrite = nr::renderer::use::colorReadWrite(handle);
         nr::test::require(colorReadWrite.imageUsage == nr::renderer::ImageUsageIntent::ColorAttachment);
@@ -100,6 +118,42 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(hasBufferFields(accelerationStructureStorage), "AS storage write should remain a buffer use");
         nr::test::require(accelerationStructureStorage.bufferUsage == nr::renderer::BufferUsageIntent::AccelerationStructureStorage);
         nr::test::require(accelerationStructureStorage.bufferAccess == nr::renderer::BufferAccessIntent::AccelerationStructureWrite);
+    }};
+
+const nr::test::CaseRegistrar parallelPlannerCase{
+    "render graph parallel planner splits contiguous unordered ranges",
+    [] {
+        auto zero = nr::renderer::ParallelRecordPlanner::planContiguousRanges(0, 4);
+        nr::test::requireEqual(zero.itemCount, std::size_t{0});
+        nr::test::requireEqual(zero.assignedThreadCount, std::uint32_t{0});
+        nr::test::require(zero.ranges.empty(), "zero-item parallel plan should not create ranges");
+
+        auto one = nr::renderer::ParallelRecordPlanner::planContiguousRanges(1, 4);
+        nr::test::requireEqual(one.assignedThreadCount, std::uint32_t{1});
+        requireContiguousCoverage(one, 1);
+
+        auto sixtyThree = nr::renderer::ParallelRecordPlanner::planContiguousRanges(63, 4);
+        nr::test::requireEqual(sixtyThree.assignedThreadCount, std::uint32_t{4});
+        requireContiguousCoverage(sixtyThree, 63);
+
+        auto sixtyFour = nr::renderer::ParallelRecordPlanner::planContiguousRanges(64, 4);
+        nr::test::requireEqual(sixtyFour.assignedThreadCount, std::uint32_t{4});
+        requireContiguousCoverage(sixtyFour, 64);
+
+        auto sixtyFive = nr::renderer::ParallelRecordPlanner::planContiguousRanges(65, 4);
+        nr::test::requireEqual(sixtyFive.assignedThreadCount, std::uint32_t{4});
+        requireContiguousCoverage(sixtyFive, 65);
+
+        auto twenty = nr::renderer::ParallelRecordPlanner::planContiguousRanges(20, 10);
+        nr::test::requireEqual(twenty.assignedThreadCount, std::uint32_t{10});
+        nr::test::require(std::ranges::all_of(twenty.ranges, [](const nr::renderer::ParallelRecordRange& range) {
+            return range.size() == 2u;
+        }));
+        requireContiguousCoverage(twenty, 20);
+
+        auto large = nr::renderer::ParallelRecordPlanner::planContiguousRanges(1000, 4);
+        nr::test::requireEqual(large.assignedThreadCount, std::uint32_t{4});
+        requireContiguousCoverage(large, 1000);
     }};
 
 const nr::test::CaseRegistrar accelerationStructureResourceCase{
@@ -191,5 +245,37 @@ const nr::test::CaseRegistrar builderFrameCase{
         nr::test::require(builder.frame().resources.empty(), "clear should remove resources");
         nr::test::require(builder.frame().frameData.empty(), "clear should remove frame data");
         nr::test::require(builder.frame().executionOrder.empty(), "clear should remove execution order");
+    }};
+
+const nr::test::CaseRegistrar builderParallelPassCase{
+    "render graph builder accepts unordered parallel record passes",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("Parallel", nr::renderer::QueueDomain::Graphics);
+        auto color = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Parallel.Color",
+            .extent = vk::Extent3D{64, 64, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+
+        auto uses = std::array{nr::renderer::use::colorWrite(color)};
+        auto pass = builder.addPass(
+            "Parallel.Draws",
+            node,
+            uses,
+            nr::renderer::PassParallelRecordDesc{
+                .itemCount = [](const nr::renderer::PassRecordContext&) {
+                    return std::size_t{128};
+                },
+                .recordRange = [](const nr::renderer::PassRangeRecordContext&) {},
+            },
+            [](const nr::renderer::PassPrepareContext&) {});
+        nr::test::require(pass.valid(), "parallel pass should be valid");
+
+        auto frame = builder.build();
+        nr::test::requireEqual(frame.passes.size(), std::size_t{1});
+        nr::test::require(!frame.passes.front().record, "parallel pass should not retain a serial record callback");
+        nr::test::require(frame.passes.front().parallelRecord.has_value(), "parallel pass should retain a parallel record desc");
+        nr::test::require(static_cast<bool>(frame.passes.front().prepare), "parallel pass should retain prepare callback");
     }};
 } // namespace

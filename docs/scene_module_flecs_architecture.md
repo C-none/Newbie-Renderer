@@ -9,6 +9,8 @@
 它负责：
 
 - 把 `nr::load::SceneAsset` 转成项目内部可稳定引用的 canonical key 与 registry 记录
+- 把 load 层的 enum 材质 texture semantic 映射到 `nr.resource` 的 enum texture slot，并按 factor 或 texture 存在性创建可选 PBR extension block
+- 将 specular-glossiness factor 近似转换为 metallic-roughness canonical material，并对可能丢失的输入发出 warning
 - 维护 mesh / material / texture / camera / light 的 CPU registry
 - 管理 template / instance 生命周期
 - 承载 Flecs world、层级关系、活动实例过滤和 world transform 更新
@@ -80,14 +82,17 @@ nr::load::SceneAsset
 `SceneBridgeFrame` 当前已经稳定承载：
 
 - raster draw 列表
-- material grouping
+- material grouping 与材质 raster state
 - frame 常量（view / projection / viewProjection / cameraWorld / drawCount）
 - 每个 draw 的 `SceneBridgeDrawGeometry`，通过 `SceneRenderBridgeBuildInput::resolveRasterDrawGeometry` 解析成 render-pass 可直接消费的 vertex/index buffer binding、draw count、offset 与 front-face state
+- 每个 draw 的 `SceneBridgeMaterialRasterState`，通过 `SceneRenderBridgeBuildInput::resolveMaterialRasterState` 解析材质双面/剔除策略；缺失时默认单面 back-face culling
 
 这意味着：
 
 - renderer / renderPasses 不需要读取 scene 内部 registry 或 Flecs query 来绘制 mesh
-- `NormalBufferNode` 已经消费 bridge geometry contract，并记录 indexed / non-indexed 的真实 scene mesh draw call
+- raster packet 按 mesh geometry fan-out；每个 draw 的材质来自 `MeshGeometry::material`
+- ray tracing / TLAS packet 按 node mesh instance fan-out；mesh 是未来 BLAS 单元，`MeshGeometry` 是未来 BLAS geometry 与材质表映射单元
+- `NormalBufferNode` 已经消费 bridge geometry 与 material raster contract，并记录 indexed / non-indexed 的真实 scene mesh draw call
 - renderer 在 graph build 边界把 `SceneBridgeFrame` 导入为 graph-owned frame data handle；renderPasses 通过 pass context 解析该 handle，而不是持有 scene/build 阶段的借用引用
 
 ## 4. Flecs 在当前架构中的位置

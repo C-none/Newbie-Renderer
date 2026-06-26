@@ -7,7 +7,8 @@ import std;
 
 namespace nr::rhi
 {
-[[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(const auto& queueFamilyProperties)
+[[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(
+    std::span<const vk::QueueFamilyProperties> queueFamilyProperties)
 {
     const auto queueIndices = std::views::iota(std::size_t{0}, queueFamilyProperties.size());
     auto findFirst = [&](auto predicate) -> std::optional<std::size_t> {

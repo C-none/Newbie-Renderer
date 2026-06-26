@@ -45,7 +45,13 @@ struct RendererShutdownGuard
             nr::load::VertexAsset{.position = {0.0f, 0.5f, 0.0f}},
         },
         .indices = {0u, 1u, 2u},
-        .materialIndex = 0,
+        .geometries = {
+            nr::load::MeshGeometryAsset{
+                .name = "camera_override_triangle_geometry_0",
+                .indexCount = 3,
+                .materialIndex = 0,
+            },
+        },
     });
 
     scene.nodes.resize(3);

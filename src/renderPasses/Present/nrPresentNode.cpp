@@ -16,7 +16,7 @@ struct PresentConvertPushConstants
     std::uint32_t height = 0u;
     std::uint32_t swizzleBgr = 0u;
     std::uint32_t outputSrgb = 0u;
-    std::uint32_t flipY = 1u;
+    std::uint32_t flipY = 0u;
     float uiOpacity = 1.0f;
 };
 

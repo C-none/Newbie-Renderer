@@ -431,6 +431,10 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame& compil
                         {
                             strength = DependencyStrength::BarrierRequired;
                         }
+                        else if (use.requiresPreviousUseBarrier)
+                        {
+                            strength = DependencyStrength::BarrierRequired;
+                        }
                         else if (previous.layout.has_value() &&
                                  resolvedLayout.has_value() &&
                                  previous.layout != resolvedLayout)
