@@ -69,6 +69,32 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
         nr::test::requireEqual(logical.range, vk::DeviceSize{192});
     }};
 
+const nr::test::CaseRegistrar shaderServiceReloadCase{
+    "rhi shader service reload rebuilds session and preserves shader compilation",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        {
+            auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi"},
+            });
+            nr::test::require(program.valid(), "appUi shader program should compile before session reload");
+        }
+
+        auto const generationBeforeReload = shaderService.sessionGeneration();
+        shaderService.reloadSession();
+        auto const generationAfterReload = shaderService.sessionGeneration();
+        nr::test::require(
+            generationAfterReload > generationBeforeReload,
+            "session generation should increase after reload");
+
+        auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/appUi"},
+        });
+        nr::test::require(program.valid(), "appUi shader program should compile after session reload");
+    }};
+
 const nr::test::CaseRegistrar appUiCursorCase{
     "rhi shader cursor captures runtime descriptor array and push constants",
     [] {
@@ -86,15 +112,10 @@ const nr::test::CaseRegistrar appUiCursorCase{
         nr::test::require(layout.valid(), "appUi descriptor layout should be valid");
 
         auto root = layout.rootCursor();
-        auto samplerCursor = root["gUiSampler"];
-        nr::test::require(samplerCursor.valid(), "sampler cursor should resolve");
-        nr::test::require(samplerCursor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::Sampler);
-        nr::test::require(!samplerCursor.referencesRuntimeDescriptorArray(), "sampler should not be runtime-sized");
-
         auto texturesCursor = root["gUiTextures"];
         nr::test::require(texturesCursor.valid(), "runtime texture cursor should resolve");
         nr::test::require(texturesCursor.referencesRuntimeDescriptorArray(), "gUiTextures should be runtime-sized");
-        nr::test::require(texturesCursor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::SampledImage);
+        nr::test::require(texturesCursor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler);
         nr::test::requireEqual(*texturesCursor.bindingDescriptorCount(), 16u);
 
         auto textureElement = texturesCursor[5u];
@@ -119,7 +140,7 @@ const nr::test::CaseRegistrar appUiCursorCase{
         nr::test::requireEqual(snapshot.pushConstantWriteCount(), std::size_t{1});
         auto const &write = snapshot.descriptorWrites().front();
         nr::test::requireEqual(write.arrayElement, 5u);
-        nr::test::require(write.binding.descriptorType == vk::DescriptorType::eSampledImage);
+        nr::test::require(write.binding.descriptorType == vk::DescriptorType::eCombinedImageSampler);
         nr::test::require(std::holds_alternative<nr::rhi::LogicalResourceDescriptorWrite>(write.payload));
         nr::test::requireEqual(std::get<nr::rhi::LogicalResourceDescriptorWrite>(write.payload).logicalResourceId, std::uint64_t{42});
 

@@ -77,6 +77,8 @@ enum class BufferAccessIntent : std::uint8_t
     TexelReadWrite,
     AccelerationStructureRead,
     AccelerationStructureWrite,
+    AccelerationStructureBuildInputRead,
+    AccelerationStructureScratchReadWrite,
     ShaderBindingTableRead,
     HostRead,
     HostWrite,

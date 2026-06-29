@@ -23,9 +23,12 @@ struct NormalBufferRuntimeCache
 
 struct NormalBufferPushConstants
 {
-    glm::mat4 model{1.0f};
+    glm::vec4 modelRow0{};
+    glm::vec4 modelRow1{};
+    glm::vec4 modelRow2{};
 };
 
+static_assert(sizeof(NormalBufferPushConstants) == 48u, "NormalBuffer push constants must stay packed as a 3x4 matrix.");
 static_assert(sizeof(NormalBufferPushConstants) <= nr::rhi::kMaxPushConstantBytes, "Push constants exceed 128 bytes.");
 
 inline constexpr std::uint32_t kVertexStride = 104;
@@ -48,6 +51,15 @@ inline constexpr std::uint32_t kOffsetNormal = 12;
     return {
         vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat, kOffsetPosition},
         vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat, kOffsetNormal},
+    };
+}
+
+[[nodiscard]] NormalBufferPushConstants packModelMatrix3x4(const glm::mat4& model) noexcept
+{
+    return NormalBufferPushConstants{
+        .modelRow0 = glm::vec4{model[0][0], model[1][0], model[2][0], model[3][0]},
+        .modelRow1 = glm::vec4{model[0][1], model[1][1], model[2][1], model[3][1]},
+        .modelRow2 = glm::vec4{model[0][2], model[1][2], model[2][2], model[3][2]},
     };
 }
 
@@ -185,10 +197,6 @@ NodeDescription NormalBufferNode::describe() const
 {
     return NodeDescription{
         .name = "NormalBuffer",
-        .outputPorts = {
-            NodePort{.name = "color"},
-            NodePort{.name = "depth"},
-        },
     };
 }
 
@@ -234,13 +242,13 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
     detail::ensureNormalBufferImages(device_->get(), *runtime_, viewportExtent, colorFormat, input.depthFormat);
 
     auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-    output.normalBuffer = context.importColor(
+    auto normalBuffer = context.importColor(
         runtime_->normalBuffers[frameSlot],
         std::format("NormalBuffer.Color[{}]", frameSlot),
         viewportExtent,
         colorFormat,
         nr::renderer::ResourceLifetime::FrameLocal);
-    output.depthBuffer = context.importDepth(
+    auto depthBuffer = context.importDepth(
         runtime_->depthBuffers[frameSlot],
         std::format("NormalBuffer.Depth[{}]", frameSlot),
         viewportExtent,
@@ -248,6 +256,11 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
         nr::renderer::ResourceLifetime::FrameLocal);
 
     auto sceneBridgeFrameHandle = frameParameters.sceneBridgeFrameHandle;
+
+    auto const normalBufferRasterState = nr::rhi::MeshRasterState{
+        .depthTestEnable = vk::True,
+        .depthWriteEnable = vk::True,
+    };
 
     auto rasterPass = nr::renderer::RasterPassBuilder{
         context,
@@ -257,14 +270,11 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
         .viewport(viewportExtent)
         .viewportYMode(nr::renderer::RasterViewportYMode::ClipSpaceYUp)
         .colorAttachment(
-            output.normalBuffer,
+            normalBuffer,
             vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.5f, 0.5f, 1.0f, 1.0f}}})
-        .depthAttachment(output.depthBuffer)
+        .depthAttachment(depthBuffer)
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
-        .rasterState(nr::rhi::MeshRasterState{
-            .depthTestEnable = vk::True,
-            .depthWriteEnable = vk::True,
-        })
+        .rasterState(normalBufferRasterState)
         .recordParallel(
         [sceneBridgeFrameHandle](const nr::renderer::PassRecordContext& recordContext) -> std::size_t {
             if (!sceneBridgeFrameHandle.has_value())
@@ -276,7 +286,7 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
                 recordContext.frameData<nr::scene::SceneBridgeFrame>(*sceneBridgeFrameHandle);
             return sceneBridgeFrame.rasterDraws.size();
         },
-        [sceneBridgeFrameHandle](const nr::renderer::RasterPassRangeRecordContext& rasterContext) {
+        [sceneBridgeFrameHandle, normalBufferRasterState](const nr::renderer::RasterPassRangeRecordContext& rasterContext) {
             if (!sceneBridgeFrameHandle.has_value())
             {
                 return;
@@ -284,10 +294,32 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
 
             auto const& sceneBridgeFrame =
                 rasterContext.pass.frameData<nr::scene::SceneBridgeFrame>(*sceneBridgeFrameHandle);
+
             auto& commandBuffer = rasterContext.commandBuffer;
-            auto currentCullMode = std::optional<vk::CullModeFlags>{};
-            auto currentFrontFace = std::optional<vk::FrontFace>{};
+            auto const modelPushConstants = rasterContext.pushConstantLocation("gPushConstants");
+
+            auto currentCullMode = normalBufferRasterState.cullMode;
+            auto currentFrontFace = normalBufferRasterState.frontFace;
             auto drawIndices = std::views::iota(rasterContext.range.begin, rasterContext.range.end);
+            auto const& geometryBuffers = sceneBridgeFrame.geometryBuffers;
+            if (!geometryBuffers.hasVertexBuffer())
+            {
+                return;
+            }
+
+            auto vertexBuffer = geometryBuffers.vertexBuffer.buffer->get().handle();
+            auto vertexOffset = geometryBuffers.vertexBuffer.offset;
+            auto vertexBuffers = std::array{vertexBuffer};
+            auto vertexOffsets = std::array{vertexOffset};
+            commandBuffer.bindVertexBuffers(0, vertexBuffers, vertexOffsets);
+
+            if (geometryBuffers.hasIndexBuffer())
+            {
+                auto indexBuffer = geometryBuffers.indexBuffer.buffer->get().handle();
+                auto indexOffset = geometryBuffers.indexBuffer.offset;
+                commandBuffer.bindIndexBuffer(indexBuffer, indexOffset, geometryBuffers.indexType);
+            }
+
             std::ranges::for_each(drawIndices, [&](std::size_t drawIndex) {
                 auto const& draw = sceneBridgeFrame.rasterDraws[drawIndex];
                 if (!draw.geometry.hasVertexBuffer())
@@ -296,22 +328,15 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
                 }
 
                 auto const drawCullMode = draw.materialRaster.cullMode;
-                if (!currentCullMode.has_value() || *currentCullMode != drawCullMode)
+                if (currentCullMode != drawCullMode)
                 {
                     commandBuffer.setCullMode(drawCullMode);
                     currentCullMode = drawCullMode;
                 }
 
-                rasterContext.pushConstants("gPushConstants", detail::NormalBufferPushConstants{
-                    .model = draw.world,
-                });
+                rasterContext.pushConstants(modelPushConstants, detail::packModelMatrix3x4(draw.world));
 
-                auto vertexBuffer = draw.geometry.vertexBuffer.buffer->get().handle();
-                auto vertexOffset = draw.geometry.vertexBuffer.offset;
-                auto vertexBuffers = std::array{vertexBuffer};
-                auto vertexOffsets = std::array{vertexOffset};
-                commandBuffer.bindVertexBuffers(0, vertexBuffers, vertexOffsets);
-                if (!currentFrontFace.has_value() || *currentFrontFace != draw.geometry.frontFace)
+                if (currentFrontFace != draw.geometry.frontFace)
                 {
                     commandBuffer.setFrontFace(draw.geometry.frontFace);
                     currentFrontFace = draw.geometry.frontFace;
@@ -319,9 +344,10 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
 
                 if (draw.geometry.hasIndexBuffer())
                 {
-                    auto indexBuffer = draw.geometry.indexBuffer.buffer->get().handle();
-                    auto indexOffset = draw.geometry.indexBuffer.offset;
-                    commandBuffer.bindIndexBuffer(indexBuffer, indexOffset, draw.geometry.indexType);
+                    nr::nrAssert(
+                        geometryBuffers.hasIndexBuffer(),
+                        "NormalBuffer indexed draw requires a frame index atlas binding.");
+
                     commandBuffer.drawIndexed(
                         draw.geometry.indexCount,
                         1,
@@ -341,8 +367,8 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
 
     [[maybe_unused]] auto rasterPassHandle = rasterPass.build();
 
-    context.publishOutput("color", output.normalBuffer);
-    context.publishOutput("depth", output.depthBuffer);
+    context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, normalBuffer);
+    context.publishFrameResource(nr::renderer::frameResource::normalDepth, depthBuffer);
 }
 
 void NormalBufferNode::shutdown(NodeShutdownContext&)

@@ -83,17 +83,34 @@ nr::load::SceneAsset
 
 - raster draw 列表
 - material grouping 与材质 raster state
+- frame 级 scene geometry atlas vertex/index buffer binding
 - frame 常量（view / projection / viewProjection / cameraWorld / drawCount）
-- 每个 draw 的 `SceneBridgeDrawGeometry`，通过 `SceneRenderBridgeBuildInput::resolveRasterDrawGeometry` 解析成 render-pass 可直接消费的 vertex/index buffer binding、draw count、offset 与 front-face state
+- 每个 draw 的 `SceneBridgeDrawGeometry`，通过 `SceneRenderBridgeBuildInput::resolveRasterDrawGeometry` 解析成 render-pass 可直接消费的 atlas-adjusted draw count、offset 与 front-face state
 - 每个 draw 的 `SceneBridgeMaterialRasterState`，通过 `SceneRenderBridgeBuildInput::resolveMaterialRasterState` 解析材质双面/剔除策略；缺失时默认单面 back-face culling
 
 这意味着：
 
 - renderer / renderPasses 不需要读取 scene 内部 registry 或 Flecs query 来绘制 mesh
 - raster packet 按 mesh geometry fan-out；每个 draw 的材质来自 `MeshGeometry::material`
-- ray tracing / TLAS packet 按 node mesh instance fan-out；mesh 是未来 BLAS 单元，`MeshGeometry` 是未来 BLAS geometry 与材质表映射单元
-- `NormalBufferNode` 已经消费 bridge geometry 与 material raster contract，并记录 indexed / non-indexed 的真实 scene mesh draw call
+- ray tracing / TLAS packet 按 node mesh instance fan-out；mesh 是未来 BLAS 单元，`MeshGeometry` 是未来 BLAS geometry 与材质表映射单元；RT/TLAS 抽取不能使用 camera/frustum culling，必须覆盖整个 active RT scene
+- scene geometry atlas buffer 是 scene-owned GPU-only 资源；它们包含 raster vertex/index、AS build-input 和 shader-device-address usage，并在 transfer / graphics / compute queue family 不同时使用 concurrent sharing，使 graphics raster 与 compute AS build 都能消费同一份 resident geometry
+- `Scene::tryGetAccelerationStructureMesh(...)` 是 renderer AS node 的最小查询边界；它暴露 resident mesh 的 atlas binding、geometry ranges、GPU version、opaque classification，以及由 mesh winding / material double-sided 状态得到的 RT instance flags，但不把 RT build frame 放进 scene 层
+- `NormalBufferNode` 已经消费 bridge geometry atlas binding、draw geometry 与 material raster contract，并记录 indexed / non-indexed 的真实 scene mesh draw call
 - renderer 在 graph build 边界把 `SceneBridgeFrame` 导入为 graph-owned frame data handle；renderPasses 通过 pass context 解析该 handle，而不是持有 scene/build 阶段的借用引用
+
+### 3.4 RT/TLAS 可见性边界
+
+Ray tracing 的场景输入不是 raster visibility 的派生结果。RT/TLAS 抽取必须表达整个 active RT scene，不能继承 camera、frustum、viewport、raster visibility 或 viewer override culling。
+
+当前 primary ray 的三角形 facing cull 由 ray-tracing shader 的 back-face cull flag 和 TLAS instance flags 共同决定：单面 mesh 按导入的 mesh winding 剔除背面，`Mesh::clockwiseFrontFace=false` 会在 TLAS instance 上启用 Vulkan RT triangle-facing flip 以匹配 CCW front-face，clockwise mesh 保持 Vulkan RT 默认 facing；任一 geometry 使用 double-sided material 的 mesh 会在整 instance 上禁用 facing cull。TLAS 写入 instance 时还会按 world transform handedness 对 flip bit 做一次 XOR，以保持镜像实例的正反面一致性。精确到 geometry 的混合单面/双面策略需要 TLAS 按 geometry fan-out，是单独的架构变更。
+
+当前 renderer 边界要求：
+
+- raster extraction 可以使用 `SceneVisibilityMode::primaryCameraFrustum` 或 `SceneVisibilityMode::customFrustum`
+- `ScenePacketDomain::rayTracingInstance` 和 `ScenePacketDomain::tlasBuildInput` 必须使用 RT 专用 `SceneExtractInput`
+- RT 专用输入的 `visibility` 必须是 `SceneVisibilityMode::none`，且不能携带 `customFrustum`
+
+未来如果需要 RT culling、streaming、TLAS partition 或 per-light/path-specific acceleration structure，必须作为显式架构变更设计；不能通过复用 raster extraction setting 隐式引入。
 
 ## 4. Flecs 在当前架构中的位置
 

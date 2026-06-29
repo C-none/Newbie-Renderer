@@ -69,6 +69,128 @@ namespace nr::rhi::detail
     return byteCount > 0u && (byteCount % 4u) == 0u;
 }
 
+template <typename Derived, typename PayloadT>
+struct DescriptorPayloadKeyPolicyBase
+{
+    [[nodiscard]] static DescriptorWritePayloadKey make(const PayloadT &payload)
+    {
+        return Derived::make(payload);
+    }
+};
+
+struct BufferDescriptorPayloadKeyPolicy final : DescriptorPayloadKeyPolicyBase<BufferDescriptorPayloadKeyPolicy, BufferDescriptorWrite>
+{
+    [[nodiscard]] static DescriptorWritePayloadKey make(const BufferDescriptorWrite &payload)
+    {
+        return BufferDescriptorPayloadKey{
+            .buffer = payload.buffer,
+            .offset = payload.offset,
+            .range = payload.range,
+        };
+    }
+};
+
+struct TexelBufferDescriptorPayloadKeyPolicy final : DescriptorPayloadKeyPolicyBase<TexelBufferDescriptorPayloadKeyPolicy, TexelBufferDescriptorWrite>
+{
+    [[nodiscard]] static DescriptorWritePayloadKey make(const TexelBufferDescriptorWrite &payload)
+    {
+        return TexelBufferDescriptorPayloadKey{
+            .view = payload.view,
+        };
+    }
+};
+
+struct ImageDescriptorPayloadKeyPolicy final : DescriptorPayloadKeyPolicyBase<ImageDescriptorPayloadKeyPolicy, ImageDescriptorWrite>
+{
+    [[nodiscard]] static DescriptorWritePayloadKey make(const ImageDescriptorWrite &payload)
+    {
+        return ImageDescriptorPayloadKey{
+            .imageView = payload.imageView,
+            .imageLayout = payload.imageLayout,
+            .sampler = payload.sampler,
+        };
+    }
+};
+
+struct AccelerationStructureDescriptorPayloadKeyPolicy final
+    : DescriptorPayloadKeyPolicyBase<AccelerationStructureDescriptorPayloadKeyPolicy, AccelerationStructureDescriptorWrite>
+{
+    [[nodiscard]] static DescriptorWritePayloadKey make(const AccelerationStructureDescriptorWrite &payload)
+    {
+        return AccelerationStructureDescriptorPayloadKey{
+            .accelerationStructure = payload.accelerationStructure,
+        };
+    }
+};
+
+struct InlineUniformDescriptorPayloadKeyPolicy final : DescriptorPayloadKeyPolicyBase<InlineUniformDescriptorPayloadKeyPolicy, InlineUniformDescriptorWrite>
+{
+    [[nodiscard]] static DescriptorWritePayloadKey make(const InlineUniformDescriptorWrite &payload)
+    {
+        return InlineUniformDescriptorPayloadKey{
+            .data = payload.data,
+        };
+    }
+};
+
+template <typename PayloadT>
+struct DescriptorPayloadKeyPolicy;
+
+template <>
+struct DescriptorPayloadKeyPolicy<BufferDescriptorWrite>
+{
+    using Type = BufferDescriptorPayloadKeyPolicy;
+};
+
+template <>
+struct DescriptorPayloadKeyPolicy<TexelBufferDescriptorWrite>
+{
+    using Type = TexelBufferDescriptorPayloadKeyPolicy;
+};
+
+template <>
+struct DescriptorPayloadKeyPolicy<ImageDescriptorWrite>
+{
+    using Type = ImageDescriptorPayloadKeyPolicy;
+};
+
+template <>
+struct DescriptorPayloadKeyPolicy<AccelerationStructureDescriptorWrite>
+{
+    using Type = AccelerationStructureDescriptorPayloadKeyPolicy;
+};
+
+template <>
+struct DescriptorPayloadKeyPolicy<InlineUniformDescriptorWrite>
+{
+    using Type = InlineUniformDescriptorPayloadKeyPolicy;
+};
+
+template <typename PayloadT>
+[[nodiscard]] DescriptorWritePayloadKey makeDescriptorPayloadKey(const PayloadT &payload)
+{
+    return DescriptorPayloadKeyPolicy<PayloadT>::Type::make(payload);
+}
+
+[[nodiscard]] DescriptorWritePayloadKey makeDescriptorPayloadKey(const DescriptorWritePayload &payload)
+{
+    return std::visit(
+        [](const auto &typedPayload) {
+            return makeDescriptorPayloadKey(typedPayload);
+        },
+        payload);
+}
+
+[[nodiscard]] DescriptorWriteSlotKey makeDescriptorWriteSlotKey(const DescriptorWriteRequest &request) noexcept
+{
+    return DescriptorWriteSlotKey{
+        .set = request.binding.set,
+        .binding = request.binding.binding,
+        .arrayElement = request.arrayElement,
+        .descriptorType = request.binding.descriptorType,
+    };
+}
+
 [[nodiscard]] std::uint32_t sanitizePushConstantSize(std::size_t byteSize)
 {
     return sanitizeCountOrSize<std::size_t, 0u>(byteSize);
@@ -149,6 +271,51 @@ namespace nr::rhi::detail
 
 namespace nr::rhi
 {
+void DescriptorWriteCache::clear() noexcept
+{
+    payloadsBySlot_.clear();
+    ++version_;
+}
+
+[[nodiscard]] std::uint64_t DescriptorWriteCache::version() const noexcept
+{
+    return version_;
+}
+
+[[nodiscard]] std::vector<DescriptorWriteRequest> DescriptorWriteCache::filterChanged(std::span<const DescriptorWriteRequest> writeRequests)
+{
+    auto changedWrites = std::vector<DescriptorWriteRequest>{};
+    changedWrites.reserve(writeRequests.size());
+
+    std::ranges::for_each(writeRequests, [&](const DescriptorWriteRequest &request) {
+        auto slotKey = detail::makeDescriptorWriteSlotKey(request);
+        auto payloadKey = detail::makeDescriptorPayloadKey(request.payload);
+
+        auto cachedPayload = payloadsBySlot_.find(slotKey);
+        if (cachedPayload != payloadsBySlot_.end() && cachedPayload->second == payloadKey)
+        {
+            return;
+        }
+
+        payloadsBySlot_.insert_or_assign(std::move(slotKey), std::move(payloadKey));
+        changedWrites.push_back(request);
+    });
+
+    if (!changedWrites.empty())
+    {
+        ++version_;
+    }
+
+    return changedWrites;
+}
+
+[[nodiscard]] std::vector<DescriptorWriteRequest> filterChangedDescriptorWrites(
+    DescriptorWriteCache &cache,
+    std::span<const DescriptorWriteRequest> writeRequests)
+{
+    return cache.filterChanged(writeRequests);
+}
+
 [[nodiscard]] std::string_view shaderDescriptorSemanticName(ShaderDescriptorSemantic semantic) noexcept
 {
     switch (semantic)

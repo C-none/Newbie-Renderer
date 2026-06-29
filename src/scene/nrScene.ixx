@@ -266,6 +266,11 @@ class Scene
 
     [[nodiscard]] std::optional<std::reference_wrapper<const LightAssetRecord>> tryGetLightAsset(nr::resource::LightAssetHandle handle) const noexcept;
 
+    [[nodiscard]] std::optional<SceneBridgeGeometryBuffers> tryGetRasterGeometryBuffers() const noexcept;
+
+    [[nodiscard]] std::optional<SceneAccelerationStructureMesh> tryGetAccelerationStructureMesh(
+        nr::resource::MeshHandle handle) const noexcept;
+
     [[nodiscard]] std::optional<nr::resource::MeshHandle> findMeshHandleByStableKey(std::string_view stableKey) const noexcept;
 
     [[nodiscard]] std::optional<nr::resource::MaterialHandle> findMaterialHandleByStableKey(std::string_view stableKey) const noexcept;
@@ -318,6 +323,14 @@ class Scene
         nr::rhi::CommandPool commandPool{};
         std::optional<vk::raii::CommandBuffers> commandBuffers{};
         vk::raii::Fence fence{nullptr};
+    };
+
+    struct SubmittedGeometryAtlasGrowWork
+    {
+        nr::rhi::CommandPool commandPool{};
+        std::optional<vk::raii::CommandBuffers> commandBuffers{};
+        vk::raii::Fence fence{nullptr};
+        detail::RetiredSceneGeometryAtlasBuffers retiredBuffers{};
     };
 
     template <typename HandleT>
@@ -487,6 +500,40 @@ class Scene
 
     [[nodiscard]] static std::optional<std::reference_wrapper<const nr::resource::ImageLevel>>
     firstTextureLevelWithPixels(const nr::resource::Texture &texture);
+
+    [[nodiscard]] static vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept;
+
+    [[nodiscard]] static std::uint32_t checkedDeviceSizeToUint32(vk::DeviceSize value, std::string_view label);
+
+    [[nodiscard]] std::vector<std::uint32_t> makeGeometryAtlasQueueFamilyIndices() const;
+
+    [[nodiscard]] static vk::BufferCreateInfo makeGeometryAtlasBufferCreateInfo(
+        vk::DeviceSize size,
+        vk::BufferUsageFlags bindingUsage,
+        std::span<const std::uint32_t> queueFamilyIndices) noexcept;
+
+    [[nodiscard]] static vk::DeviceSize grownGeometryAtlasCapacity(
+        vk::DeviceSize currentCapacity,
+        vk::DeviceSize requiredCapacity) noexcept;
+
+    [[nodiscard]] detail::MeshGeometryAtlasAllocation reserveGeometryAtlasAllocation(
+        const nr::resource::Mesh &mesh,
+        nr::rhi::ops::UploadReadbackContext &uploadContext);
+
+    void ensureGeometryAtlasCapacity(
+        vk::DeviceSize requiredVertexBytes,
+        vk::DeviceSize requiredIndexBytes,
+        nr::rhi::ops::UploadReadbackContext &uploadContext);
+
+    void submitGeometryAtlasGrowCopy(
+        std::optional<nr::rhi::Buffer> oldVertexBuffer,
+        vk::DeviceSize oldVertexUsedBytes,
+        std::optional<nr::rhi::Buffer> oldIndexBuffer,
+        vk::DeviceSize oldIndexUsedBytes);
+
+    void retireGeometryAtlasBuffers(detail::RetiredSceneGeometryAtlasBuffers retiredBuffers);
+
+    void reapSubmittedGeometryAtlasGrowWork();
 
     template <typename RecordT>
     void markRecordUploadQueued(RecordT &record)
@@ -925,8 +972,10 @@ class Scene
         rtCandidatesQuery_{};
     flecs::query<const SceneCameraBinding, const WorldTransform> cameraCandidatesQuery_{};
     SceneFrameStamp currentFrame_{};
+    detail::SceneGeometryAtlas geometryAtlas_{};
     std::vector<PendingAcquireBatch> pendingAcquireBatches_{};
     std::vector<SubmittedAcquireWork> submittedAcquireWork_{};
+    std::vector<SubmittedGeometryAtlasGrowWork> submittedGeometryAtlasGrowWork_{};
 
     std::vector<nr::resource::MeshHandle> meshHandles_{};
     std::vector<nr::resource::MaterialHandle> materialHandles_{};
@@ -939,6 +988,7 @@ class Scene
     std::vector<detail::RetiredTextureGpuPayload> retiredTexturePayloadGraveyard_{};
     std::vector<detail::RetiredCameraGpuPayload> retiredCameraPayloadGraveyard_{};
     std::vector<detail::RetiredLightGpuPayload> retiredLightPayloadGraveyard_{};
+    std::vector<detail::RetiredSceneGeometryAtlasBuffers> retiredGeometryAtlasBuffers_{};
 
     detail::KeyedSlotMapStorage<nr::resource::MeshHandle, MeshAssetRecord> meshes_{};
     detail::KeyedSlotMapStorage<nr::resource::MaterialHandle, MaterialAssetRecord> materials_{};

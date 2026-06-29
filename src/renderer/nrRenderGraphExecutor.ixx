@@ -147,7 +147,7 @@ struct PreparedResourceBinding
 
     vk::Buffer buffer = vk::Buffer{};
     vk::DeviceSize bufferSize = 0;
-    std::optional<std::reference_wrapper<nr::rhi::Buffer>> bufferResource{};
+    std::optional<std::reference_wrapper<const nr::rhi::Buffer>> bufferResource{};
     vk::Image image = vk::Image{};
     vk::ImageView imageView = vk::ImageView{};
     std::optional<std::reference_wrapper<const nr::rhi::Image>> imageResource{};
@@ -605,6 +605,5 @@ class RenderGraphExecutor
     std::vector<FrameGpuPassTimingState> gpuPassTimingStatesByFrame_{};
     detail::RenderRecordThreadPool recordThreadPool_{};
     std::uint64_t nextFrameBoundaryId_ = 1;
-    std::uint64_t temporaryParallelRecordStatsFrameNumber_ = 0;
 };
 } // namespace nr::renderer

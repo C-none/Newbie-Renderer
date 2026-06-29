@@ -223,7 +223,7 @@ SwapChain SwapChain::createImpl(
                         }) |
                         std::ranges::to<std::vector>();
 
-    if constexpr (isDebugMode)
+    if constexpr (gpuDebugNamesEnabled)
     {
         auto imageIndices = std::views::iota(std::size_t{0}, result.swapChainImages.size());
         std::ranges::for_each(imageIndices, [&](std::size_t index) {
@@ -313,6 +313,12 @@ void PresentationContext::initialize(
     config_ = config;
     presentQueueFamily_ = presentQueueFamily;
     surface_ = Surface::create(instance, appName);
+    glfwSetWindowUserPointer(surface_.handle.get(), this);
+    glfwSetCharCallback(surface_.handle.get(), [](GLFWwindow* window, unsigned int codepoint) {
+        auto* presentation = static_cast<PresentationContext*>(glfwGetWindowUserPointer(window));
+        nrAssert(presentation != nullptr, "PresentationContext text input callback requires a window user pointer.");
+        presentation->textInputCodepoints_.push_back(static_cast<std::uint32_t>(codepoint));
+    });
     ensurePresentSupport(physicalDevice);
     swapChain_ = SwapChain::create(physicalDevice, device, surface_.surface, surface_.extent, config_);
     surface_.format = swapChain_.format;
@@ -454,6 +460,13 @@ glm::dvec2 PresentationContext::cursorPosition() const
     auto y = 0.0;
     glfwGetCursorPos(surface_.handle.get(), &x, &y);
     return glm::dvec2{x, y};
+}
+
+std::vector<std::uint32_t> PresentationContext::consumeTextInputCodepoints() const
+{
+    auto codepoints = std::move(textInputCodepoints_);
+    textInputCodepoints_.clear();
+    return codepoints;
 }
 
 bool PresentationContext::windowShouldClose() const

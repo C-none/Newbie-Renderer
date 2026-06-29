@@ -165,54 +165,69 @@ template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t Compi
     return options;
 }
 
-[[nodiscard]] consteval std::array<SlangCompilerOption, 6> makeBaseCompilerOptions(
-    std::int32_t optimizationLevel,
-    std::int32_t debugInfoLevel,
-    std::int32_t richDiagnosticsEnabled) noexcept
+static_assert(
+    shaderOptimizationLevel >= SLANG_OPTIMIZATION_LEVEL_NONE &&
+        shaderOptimizationLevel <= SLANG_OPTIMIZATION_LEVEL_MAXIMAL,
+    "shaderOptimizationLevel must map to a valid Slang optimization level.");
+static_assert(
+    shaderDebugInfoLevel >= SLANG_DEBUG_INFO_LEVEL_NONE &&
+        shaderDebugInfoLevel <= SLANG_DEBUG_INFO_LEVEL_MAXIMAL,
+    "shaderDebugInfoLevel must map to a valid Slang debug information level.");
+
+[[nodiscard]] consteval std::array<SlangCompilerOption, 6> makeBaseCompilerOptions() noexcept
 {
     return std::array<SlangCompilerOption, 6>{
         SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::VulkanUseEntryPointName, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::UseUpToDateBinaryModule, .intValue0 = 1},
-        SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .intValue0 = optimizationLevel},
-        SlangCompilerOption{.name = slang::CompilerOptionName::DebugInformation, .intValue0 = debugInfoLevel},
-        SlangCompilerOption{.name = slang::CompilerOptionName::EnableRichDiagnostics, .intValue0 = richDiagnosticsEnabled},
+        SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .intValue0 = shaderOptimizationLevel},
+        SlangCompilerOption{.name = slang::CompilerOptionName::DebugInformation, .intValue0 = shaderDebugInfoLevel},
+        SlangCompilerOption{
+            .name = slang::CompilerOptionName::EnableRichDiagnostics,
+            .intValue0 = shaderRichDiagnosticsEnabled ? 1 : 0,
+        },
     };
 }
 
-template <bool IsDebugModeValue>
+inline constexpr std::size_t kDefaultSlangCompilerOptionCount =
+    std::size_t{6} +
+    (shaderDumpReproOnError ? std::size_t{1} : std::size_t{0}) +
+    (!shaderWarningsAsErrors.empty() ? std::size_t{1} : std::size_t{0});
+
 [[nodiscard]] consteval auto defaultCompilerOptions() noexcept
-    -> std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 8>, std::array<SlangCompilerOption, 6>>
+    -> std::array<SlangCompilerOption, kDefaultSlangCompilerOptionCount>
 {
-    auto baseOptions = makeBaseCompilerOptions(
-        IsDebugModeValue ? SLANG_OPTIMIZATION_LEVEL_NONE : SLANG_OPTIMIZATION_LEVEL_MAXIMAL,
-        IsDebugModeValue ? SLANG_DEBUG_INFO_LEVEL_MAXIMAL : SLANG_DEBUG_INFO_LEVEL_NONE,
-        IsDebugModeValue ? 1 : 0);
-
-    using ResultType = std::conditional_t<IsDebugModeValue, std::array<SlangCompilerOption, 8>, std::array<SlangCompilerOption, 6>>;
-    ResultType options{};
+    auto baseOptions = makeBaseCompilerOptions();
+    auto options = std::array<SlangCompilerOption, kDefaultSlangCompilerOptionCount>{};
     std::ranges::copy(baseOptions, options.begin());
+    auto writeCursor = baseOptions.size();
 
-    if constexpr (IsDebugModeValue)
+    if constexpr (shaderDumpReproOnError)
     {
         // Dump a repro package on any compilation error so the exact failing
         // input can be replayed offline via slangc --load-repro.
-        options[options.size() - 2] = SlangCompilerOption{
+        options[writeCursor] = SlangCompilerOption{
             .name = slang::CompilerOptionName::DumpReproOnError,
             .intValue0 = 1,
         };
-        options.back() = SlangCompilerOption{
+        ++writeCursor;
+    }
+
+    if constexpr (!shaderWarningsAsErrors.empty())
+    {
+        options[writeCursor] = SlangCompilerOption{
             .name = slang::CompilerOptionName::WarningsAsErrors,
             .kind = slang::CompilerOptionValueKind::String,
-            .stringValue0 = "all",
+            .stringValue0 = shaderWarningsAsErrors,
         };
     }
 
+    static_cast<void>(writeCursor);
     return options;
 }
 
 inline constexpr auto kDefaultSlangCompileOptions = []() consteval {
-    constexpr auto compilerOptions = defaultCompilerOptions<isDebugMode>();
+    constexpr auto compilerOptions = defaultCompilerOptions();
     auto options = SlangCompileOptions<1, 0, compilerOptions.size()>{
         .searchPaths = {shaderRoot},
         .macros = {},
@@ -451,6 +466,10 @@ class ShaderService
      */
     void configure();
 
+    void reloadSession();
+
+    [[nodiscard]] std::uint64_t sessionGeneration() const;
+
     [[nodiscard]] SlangProgram compileProgramByFile(const SlangProgramCompileFileRequest &request);
 
   private:
@@ -555,6 +574,7 @@ class ShaderService
     mutable std::mutex m_mutex;
     Slang::ComPtr<slang::IGlobalSession> m_globalSession;
     Slang::ComPtr<slang::ISession> m_session;
+    std::uint64_t m_sessionGeneration = 0;
 
     RuntimeSlangCompileOptions m_options;
     std::uint64_t m_optionsHashValue = kDefaultSlangCompileOptions.hashValue;

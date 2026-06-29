@@ -63,6 +63,8 @@ const nr::test::CaseRegistrar rasterFrameCase{
             .viewProjection = glm::mat4{4.0f},
             .cameraWorld = glm::vec3{5.0f, 6.0f, 7.0f},
         };
+        auto vertexAtlas = nr::rhi::Buffer{};
+        auto indexAtlas = nr::rhi::Buffer{};
 
         auto frame = nr::scene::SceneRenderBridge::buildFrame(nr::scene::SceneRenderBridgeBuildInput{
             .packetSet = std::cref(packetSet),
@@ -73,8 +75,16 @@ const nr::test::CaseRegistrar rasterFrameCase{
             .resolveMaterialBindless = [](nr::resource::MaterialHandle handle) -> std::optional<std::uint32_t> {
                 return handle.slot + 200u;
             },
-            .resolveRasterDrawGeometry = [](nr::resource::MeshHandle handle, std::uint32_t geometryIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
+            .resolveGeometryBuffers = [&]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> {
+                return nr::scene::SceneBridgeGeometryBuffers{
+                    .vertexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(vertexAtlas)},
+                    .indexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(indexAtlas)},
+                };
+            },
+            .resolveRasterDrawGeometry = [&](nr::resource::MeshHandle handle, std::uint32_t geometryIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
                 return nr::scene::SceneBridgeDrawGeometry{
+                    .vertexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(vertexAtlas)},
+                    .indexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(indexAtlas)},
                     .firstVertex = handle.slot,
                     .vertexCount = 3u + geometryIndex,
                     .firstIndex = geometryIndex * 3u,
@@ -86,6 +96,9 @@ const nr::test::CaseRegistrar rasterFrameCase{
 
         nr::test::requireEqual(frame.domain, nr::scene::ScenePacketDomain::rasterDraw);
         nr::test::require(frame.hasPrimaryCamera, "frame constants override should mark camera data present");
+        nr::test::require(frame.geometryBuffers.hasVertexBuffer(), "raster bridge frame should carry the scene vertex atlas binding");
+        nr::test::require(frame.geometryBuffers.hasIndexBuffer(), "raster bridge frame should carry the scene index atlas binding");
+        nr::test::requireEqual(frame.geometryBuffers.indexType, vk::IndexType::eUint32);
         nr::test::requireEqual(frame.rasterDraws.size(), std::size_t{2});
         nr::test::requireEqual(frame.materialGroups.size(), std::size_t{1});
         nr::test::requireEqual(frame.materialGroups.front().drawIndices, std::vector<std::uint32_t>{0u, 1u});
@@ -102,6 +115,16 @@ const nr::test::CaseRegistrar rasterFrameCase{
         nr::test::requireEqual(frame.rasterDraws[1].geometry.vertexCount, 4u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.firstIndex, 3u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.frontFace, vk::FrontFace::eClockwise);
+        nr::test::require(
+            std::ranges::all_of(frame.rasterDraws, [&](const nr::scene::SceneBridgeDrawPacket &draw) {
+                return draw.geometry.vertexBuffer.buffer.has_value() &&
+                       draw.geometry.indexBuffer.buffer.has_value() &&
+                       std::addressof(draw.geometry.vertexBuffer.buffer->get()) ==
+                           std::addressof(frame.geometryBuffers.vertexBuffer.buffer->get()) &&
+                       std::addressof(draw.geometry.indexBuffer.buffer->get()) ==
+                           std::addressof(frame.geometryBuffers.indexBuffer.buffer->get());
+            }),
+            "all raster bridge draws should reference the shared frame geometry atlas buffers");
     }};
 
 const nr::test::CaseRegistrar materialRasterStateCase{

@@ -119,13 +119,6 @@ NodeDescription PresentNode::describe() const
 {
     return NodeDescription{
         .name = "Present",
-        .inputPorts = {
-            NodePort{.name = "sourceColor"},
-            NodePort{.name = "uiBuffer"},
-        },
-        .outputPorts = {
-            NodePort{.name = "swapchain"},
-        },
     };
 }
 
@@ -144,10 +137,8 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
     nr::nrAssert(static_cast<bool>(runtime_), "Present build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "Present build stage requires device reference from initialize stage.");
 
-    auto sourceColor = context.resolveInput("sourceColor");
-    nr::nrAssert(sourceColor.valid(), "Present node requires a valid sourceColor input from upstream graph connection.");
-    auto uiBuffer = context.resolveInput("uiBuffer");
-    nr::nrAssert(uiBuffer.valid(), "Present node requires a valid uiBuffer input from upstream graph connection.");
+    auto sourceColor = context.requireFrameResource(nr::renderer::frameResource::presentSourceColor, "Present");
+    auto uiBuffer = context.requireFrameResource(nr::renderer::frameResource::uiColor, "Present");
 
     auto viewportExtent = input.viewportExtent;
     if (viewportExtent.width == 1 && viewportExtent.height == 1)
@@ -175,8 +166,6 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
     swapchainFrameParameters.swapchainExtent = viewportExtent;
     swapchainFrameParameters.swapchainFormat = swapchainFormat;
     auto swapchainImage = context.importSwapchain("Swapchain.Image", swapchainFrameParameters);
-
-    output.swapchainImage = swapchainImage;
 
     auto conversionExtent = vk::Extent2D{
         std::max(1u, viewportExtent.width),
@@ -224,7 +213,7 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
         nullptr,
         true);
 
-    context.publishOutput("swapchain", swapchainImage);
+    context.publishFrameResource(nr::renderer::frameResource::swapchainImage, swapchainImage);
 }
 
 void PresentNode::shutdown(NodeShutdownContext&)

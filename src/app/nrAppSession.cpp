@@ -45,6 +45,7 @@ void AppSession::destroyScene()
     if (renderer_.initialized())
     {
         renderer_.device().waitIdle();
+        renderer_.resetSceneBinding();
     }
 
     scene_.reset();

@@ -159,6 +159,20 @@ const nr::test::CaseRegistrar compilerMappingCase{
                            vk::PipelineStageFlagBits2::eRayTracingShaderKHR));
         nr::test::require(accelerationStructureRead.access == vk::AccessFlagBits2::eAccelerationStructureReadKHR);
 
+        auto accelerationStructureBuildInputRead = nr::renderer::RenderGraphCompiler::mapBufferAccessIntent(
+            nr::renderer::BufferAccessIntent::AccelerationStructureBuildInputRead,
+            nr::renderer::QueueDomain::Graphics);
+        nr::test::require(accelerationStructureBuildInputRead.stages == vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR);
+        nr::test::require(accelerationStructureBuildInputRead.access == vk::AccessFlagBits2::eShaderRead);
+
+        auto accelerationStructureScratchReadWrite = nr::renderer::RenderGraphCompiler::mapBufferAccessIntent(
+            nr::renderer::BufferAccessIntent::AccelerationStructureScratchReadWrite,
+            nr::renderer::QueueDomain::Graphics);
+        nr::test::require(accelerationStructureScratchReadWrite.stages == vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR);
+        nr::test::require(accelerationStructureScratchReadWrite.access ==
+                          (vk::AccessFlagBits2::eAccelerationStructureReadKHR |
+                           vk::AccessFlagBits2::eAccelerationStructureWriteKHR));
+
         auto shaderBindingTableRead = nr::renderer::RenderGraphCompiler::mapBufferAccessIntent(
             nr::renderer::BufferAccessIntent::ShaderBindingTableRead,
             nr::renderer::QueueDomain::Compute);

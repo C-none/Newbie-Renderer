@@ -145,6 +145,14 @@ namespace nr::scene
             return frame;
         }
 
+        if (input.resolveGeometryBuffers)
+        {
+            if (auto resolved = input.resolveGeometryBuffers(); resolved.has_value())
+            {
+                frame.geometryBuffers = *resolved;
+            }
+        }
+
         auto resolveMeshBindless = [&](nr::resource::MeshHandle meshHandle) {
             if (input.resolveMeshBindless)
             {

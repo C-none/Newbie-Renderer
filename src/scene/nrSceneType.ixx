@@ -191,6 +191,17 @@ struct SceneBridgeBufferBinding
     vk::DeviceSize offset = 0;
 };
 
+struct SceneBridgeGeometryBuffers
+{
+    SceneBridgeBufferBinding vertexBuffer{};
+    SceneBridgeBufferBinding indexBuffer{};
+    vk::IndexType indexType = vk::IndexType::eUint32;
+
+    [[nodiscard]] bool hasVertexBuffer() const noexcept;
+
+    [[nodiscard]] bool hasIndexBuffer() const noexcept;
+};
+
 struct SceneBridgeDrawGeometry
 {
     SceneBridgeBufferBinding vertexBuffer{};
@@ -240,10 +251,40 @@ struct SceneBridgeDrawGroup
 struct SceneBridgeFrame
 {
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
+    SceneBridgeGeometryBuffers geometryBuffers{};
     std::vector<SceneBridgeDrawPacket> rasterDraws{};
     std::vector<SceneBridgeDrawGroup> materialGroups{};
     SceneBridgeFrameConstants frameConstants{};
     bool hasPrimaryCamera = false;
+};
+
+struct SceneAccelerationStructureGeometry
+{
+    std::uint32_t geometryIndex = 0;
+    bool indexed = false;
+    vk::DeviceSize primitiveOffset = 0;
+    std::uint32_t firstVertex = 0;
+    std::uint32_t primitiveCount = 0;
+    vk::GeometryFlagsKHR geometryFlags{};
+};
+
+struct SceneAccelerationStructureMesh
+{
+    nr::resource::MeshHandle mesh{};
+    std::uint64_t gpuVersion = 0;
+    vk::GeometryInstanceFlagsKHR instanceFlags{};
+    SceneBridgeBufferBinding vertexBuffer{};
+    SceneBridgeBufferBinding indexBuffer{};
+    vk::DeviceSize vertexByteOffset = 0;
+    vk::DeviceSize indexByteOffset = 0;
+    std::uint32_t maxVertex = 0;
+    vk::DeviceSize vertexStride = sizeof(nr::resource::Vertex);
+    vk::IndexType indexType = vk::IndexType::eUint32;
+    std::vector<SceneAccelerationStructureGeometry> geometries{};
+
+    [[nodiscard]] bool hasVertexBuffer() const noexcept;
+
+    [[nodiscard]] bool hasIndexBuffer() const noexcept;
 };
 
 enum class SceneSelectionBit : std::uint8_t
@@ -417,12 +458,19 @@ struct LightGpuData
     std::uint32_t castShadow = 0;
 };
 
-struct MeshGpuPayload
+struct MeshGeometryAtlasAllocation
 {
-    nr::rhi::Buffer vertexBuffer{};
-    nr::rhi::Buffer indexBuffer{};
+    vk::DeviceSize vertexByteOffset = 0;
+    vk::DeviceSize indexByteOffset = 0;
+    std::uint32_t vertexBase = 0;
+    std::uint32_t indexBase = 0;
     std::uint32_t vertexCount = 0;
     std::uint32_t indexCount = 0;
+};
+
+struct MeshGpuPayload
+{
+    MeshGeometryAtlasAllocation atlas{};
 };
 
 struct MaterialGpuPayload
@@ -474,6 +522,23 @@ struct RetiredCameraGpuPayload
 struct RetiredLightGpuPayload
 {
     LightGpuPayload payload{};
+    std::uint64_t retireAfterSerial = 0;
+};
+
+struct SceneGeometryAtlas
+{
+    nr::rhi::Buffer vertexBuffer{};
+    nr::rhi::Buffer indexBuffer{};
+    vk::DeviceSize vertexCapacityBytes = 0;
+    vk::DeviceSize indexCapacityBytes = 0;
+    vk::DeviceSize vertexUsedBytes = 0;
+    vk::DeviceSize indexUsedBytes = 0;
+};
+
+struct RetiredSceneGeometryAtlasBuffers
+{
+    nr::rhi::Buffer vertexBuffer{};
+    nr::rhi::Buffer indexBuffer{};
     std::uint64_t retireAfterSerial = 0;
 };
 } // namespace detail

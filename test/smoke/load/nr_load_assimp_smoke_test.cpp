@@ -32,6 +32,10 @@ void requireSceneImportValid(std::string_view label, const nr::load::SceneAsset 
                           return !mesh.indices.empty();
                       }),
                       std::format("{} should import indexed geometry", label));
+    nr::test::require(std::ranges::all_of(scene.meshes, [](const nr::load::MeshAsset &mesh) {
+                          return !mesh.clockwiseFrontFace;
+                      }),
+                      std::format("{} glTF meshes should import as counter-clockwise front-face geometry", label));
 
     auto referencedTextures = referencedTextureIndices(scene);
     auto allReferencedDecoded = std::ranges::all_of(referencedTextures, [&](std::uint32_t textureIndex) {

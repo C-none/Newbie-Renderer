@@ -176,6 +176,12 @@ struct BlasGeometriesBuildRecordInfo
     AsBuildOptions options{};
 };
 
+struct BlasBatchBuildRecordInfo
+{
+    BlasGeometriesBuildRecordInfo build;
+    vk::DeviceSize scratchSize = 0;
+};
+
 struct TlasBuildRecordInfo
 {
     const AccelerationStructureResource &dst;
@@ -346,6 +352,8 @@ export namespace nr::rhi
 // - If source buffers use VK_SHARING_MODE_EXCLUSIVE across different queue
 //   families, caller must perform queue-family release/acquire barriers.
 void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, const BlasGeometriesBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1);
+
+void recordBuildBlasBatch(const vk::raii::CommandBuffer &commandBuffer, std::span<const BlasBatchBuildRecordInfo> records, vk::DeviceSize scratchAlignment = 1);
 
 void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const BlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1);
 

@@ -22,6 +22,7 @@ namespace nr::rhi
         nrAssert(accelerationStructureSize > 0, "AccelerationStructureResource::create requires accelerationStructureSize > 0.");
         nrAssert((storageBuffer.usage() & vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR) != vk::BufferUsageFlags{},
                  "AccelerationStructureResource::create requires VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR.");
+        nrAssert((storageOffset % 256u) == 0u, "AccelerationStructureResource::create requires storageOffset to be 256-byte aligned.");
         nrAssert(storageOffset <= storageBuffer.size() && accelerationStructureSize <= (storageBuffer.size() - storageOffset),
              "AccelerationStructureResource::create requires storageOffset + accelerationStructureSize to fit inside storage buffer size.");
 
@@ -41,7 +42,7 @@ namespace nr::rhi
         createInfo.type = type;
         result.handle_ = vk::raii::AccelerationStructureKHR(device, createInfo);
 
-        if constexpr (isDebugMode)
+        if constexpr (gpuDebugNamesEnabled)
         {
             if (!result.name_.empty())
             {
@@ -299,6 +300,124 @@ namespace nr::rhi
     };
 }
 
+namespace
+{
+struct DeviceAddressRange
+{
+    vk::Buffer buffer{};
+    vk::DeviceSize begin = 0;
+    vk::DeviceSize size = 0;
+};
+
+[[nodiscard]] bool rangeEnd(vk::DeviceSize begin, vk::DeviceSize size, vk::DeviceSize &end) noexcept
+{
+    if (size > std::numeric_limits<vk::DeviceSize>::max() - begin)
+    {
+        return false;
+    }
+    end = begin + size;
+    return true;
+}
+
+[[nodiscard]] bool rangesOverlap(const DeviceAddressRange &lhs, const DeviceAddressRange &rhs) noexcept
+{
+    if (lhs.buffer != rhs.buffer)
+    {
+        return false;
+    }
+
+    auto lhsEnd = vk::DeviceSize{};
+    auto rhsEnd = vk::DeviceSize{};
+    if (!rangeEnd(lhs.begin, lhs.size, lhsEnd) || !rangeEnd(rhs.begin, rhs.size, rhsEnd))
+    {
+        return true;
+    }
+
+    return lhs.begin < rhsEnd && rhs.begin < lhsEnd;
+}
+
+[[nodiscard]] nr::rhi::detail::ValidationResult validateBuildRangeAliasFree(
+    std::span<const BlasBatchBuildRecordInfo> records,
+    vk::DeviceSize scratchAlignment)
+{
+    if (records.empty())
+    {
+        return nr::rhi::detail::validationFailure("BLAS batch build requires at least one record.");
+    }
+
+    auto invalidIt = std::ranges::find_if(records, [&](const BlasBatchBuildRecordInfo &record) {
+        auto diagnostics = nr::rhi::detail::validateAsBuildInputs(record.build, scratchAlignment);
+        return !diagnostics.isValid || record.scratchSize == 0u;
+    });
+    if (invalidIt != records.end())
+    {
+        auto diagnostics = nr::rhi::detail::validateAsBuildInputs(invalidIt->build, scratchAlignment);
+        if (!diagnostics.isValid)
+        {
+            return diagnostics;
+        }
+        return nr::rhi::detail::validationFailure("BLAS batch build requires scratchSize > 0 for every record.");
+    }
+
+    auto message = std::optional<std::string>{};
+    auto const indices = std::views::iota(std::size_t{0}, records.size());
+    std::ranges::for_each(indices, [&](std::size_t lhsIndex) {
+        if (message.has_value())
+        {
+            return;
+        }
+
+        auto const &lhs = records[lhsIndex];
+        auto const rhsIndices = indices | std::views::drop(lhsIndex + 1u);
+        std::ranges::for_each(rhsIndices, [&](std::size_t rhsIndex) {
+            if (message.has_value())
+            {
+                return;
+            }
+
+            auto const &rhs = records[rhsIndex];
+            auto const lhsScratch = DeviceAddressRange{
+                .buffer = lhs.build.scratchBuffer.handle(),
+                .begin = lhs.build.scratchAddress,
+                .size = lhs.scratchSize,
+            };
+            auto const rhsScratch = DeviceAddressRange{
+                .buffer = rhs.build.scratchBuffer.handle(),
+                .begin = rhs.build.scratchAddress,
+                .size = rhs.scratchSize,
+            };
+            if (rangesOverlap(lhsScratch, rhsScratch))
+            {
+                message = std::format("BLAS batch records {} and {} use overlapping scratch ranges.", lhsIndex, rhsIndex);
+                return;
+            }
+
+            auto const lhsStorage = DeviceAddressRange{
+                .buffer = lhs.build.dst.storageBuffer().handle(),
+                .begin = lhs.build.dst.storageOffset(),
+                .size = lhs.build.dst.size(),
+            };
+            auto const rhsStorage = DeviceAddressRange{
+                .buffer = rhs.build.dst.storageBuffer().handle(),
+                .begin = rhs.build.dst.storageOffset(),
+                .size = rhs.build.dst.size(),
+            };
+            if (rangesOverlap(lhsStorage, rhsStorage))
+            {
+                message = std::format("BLAS batch records {} and {} use overlapping destination AS storage ranges.", lhsIndex, rhsIndex);
+            }
+        });
+    });
+
+    if (message.has_value())
+    {
+        return nr::rhi::detail::validationFailure(std::move(*message));
+    }
+
+    return nr::rhi::detail::validationSuccess();
+}
+} // namespace
+
 void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, const BlasGeometriesBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildBlasGeometries requires a valid command buffer.");
@@ -324,6 +443,49 @@ void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, con
 
     auto buildInfos = std::array{buildInfo};
     auto rangeInfoPtrGroups = std::array<const vk::AccelerationStructureBuildRangeInfoKHR *, 1>{rangeInfos.data()};
+    commandBuffer.buildAccelerationStructuresKHR(buildInfos, rangeInfoPtrGroups);
+}
+
+void recordBuildBlasBatch(const vk::raii::CommandBuffer &commandBuffer, std::span<const BlasBatchBuildRecordInfo> records, vk::DeviceSize scratchAlignment)
+{
+    nrAssert(*commandBuffer != nullptr, "recordBuildBlasBatch requires a valid command buffer.");
+    auto diagnostics = validateBuildRangeAliasFree(records, scratchAlignment);
+    nrAssert(diagnostics.isValid, detail::formatMessage("recordBuildBlasBatch invalid input: {}", diagnostics.message));
+
+    auto geometryGroups = std::vector<std::vector<vk::AccelerationStructureGeometryKHR>>{};
+    auto rangeInfoGroups = std::vector<std::vector<vk::AccelerationStructureBuildRangeInfoKHR>>{};
+    auto buildInfos = std::vector<vk::AccelerationStructureBuildGeometryInfoKHR>{};
+    auto rangeInfoPtrGroups = std::vector<const vk::AccelerationStructureBuildRangeInfoKHR *>{};
+
+    geometryGroups.reserve(records.size());
+    rangeInfoGroups.reserve(records.size());
+    buildInfos.reserve(records.size());
+    rangeInfoPtrGroups.reserve(records.size());
+
+    std::ranges::for_each(records, [&](const BlasBatchBuildRecordInfo &record) {
+        auto &geometries = geometryGroups.emplace_back(
+            record.build.geometries |
+            std::views::transform([](const BlasGeometryRecord &geometryRecord) { return geometryRecord.geometry; }) |
+            std::ranges::to<std::vector>());
+        auto &rangeInfos = rangeInfoGroups.emplace_back(
+            record.build.geometries |
+            std::views::transform([](const BlasGeometryRecord &geometryRecord) { return geometryRecord.range; }) |
+            std::ranges::to<std::vector>());
+
+        vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
+        buildInfo.type = vk::AccelerationStructureTypeKHR::eBottomLevel;
+        buildInfo.flags = record.build.options.buildFlags;
+        buildInfo.mode = detail::toVkBuildMode(record.build.options.mode);
+        buildInfo.srcAccelerationStructure = record.build.src.has_value() ? record.build.src->get().raw() : vk::AccelerationStructureKHR{};
+        buildInfo.dstAccelerationStructure = record.build.dst.raw();
+        buildInfo.geometryCount = static_cast<std::uint32_t>(geometries.size());
+        buildInfo.pGeometries = geometries.data();
+        buildInfo.scratchData.deviceAddress = record.build.scratchAddress;
+
+        buildInfos.push_back(buildInfo);
+        rangeInfoPtrGroups.push_back(rangeInfos.data());
+    });
+
     commandBuffer.buildAccelerationStructuresKHR(buildInfos, rangeInfoPtrGroups);
 }
 

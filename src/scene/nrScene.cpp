@@ -547,6 +547,7 @@ void Scene::beginFrame(std::uint32_t frameSlot)
         currentFrame_.frameSerial += 1u;
         uploadBytesThisFrame_ = 0;
 
+        reapSubmittedGeometryAtlasGrowWork();
         reapRetiredGpuVersions();
         queueGpuUploadsForFrame();
     }
@@ -559,6 +560,7 @@ void Scene::uploadPending()
         }
 
         auto &uploadContext = device_.uploadReadback();
+        reapSubmittedGeometryAtlasGrowWork();
         reapSubmittedAcquireWork();
         submitReadyGraphicsAcquireBatches(uploadContext);
 
@@ -711,6 +713,145 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 [[nodiscard]] std::optional<std::reference_wrapper<const LightAssetRecord>> Scene::tryGetLightAsset(nr::resource::LightAssetHandle handle) const noexcept
 {
         return tryGetRecordRef(lights_, handle);
+    }
+
+[[nodiscard]] std::optional<SceneBridgeGeometryBuffers> Scene::tryGetRasterGeometryBuffers() const noexcept
+{
+        if (!geometryAtlas_.vertexBuffer.valid())
+        {
+            return std::nullopt;
+        }
+
+        auto buffers = SceneBridgeGeometryBuffers{
+            .vertexBuffer = SceneBridgeBufferBinding{
+                .buffer = std::cref(geometryAtlas_.vertexBuffer),
+            },
+        };
+
+        if (geometryAtlas_.indexBuffer.valid())
+        {
+            buffers.indexBuffer = SceneBridgeBufferBinding{
+                .buffer = std::cref(geometryAtlas_.indexBuffer),
+            };
+        }
+
+        return buffers;
+    }
+
+[[nodiscard]] std::optional<SceneAccelerationStructureMesh> Scene::tryGetAccelerationStructureMesh(
+        nr::resource::MeshHandle handle) const noexcept
+{
+        auto const *meshRecord = meshes_.tryGet(handle);
+        if (meshRecord == nullptr ||
+            !meshRecord->cpuReady ||
+            meshRecord->gpuState != GpuResidencyState::resident ||
+            !meshRecord->gpu.has_value() ||
+            !geometryAtlas_.vertexBuffer.valid())
+        {
+            return std::nullopt;
+        }
+
+        auto const &atlas = meshRecord->gpu->atlas;
+        if (atlas.vertexCount == 0u)
+        {
+            return std::nullopt;
+        }
+
+        auto instanceFlags = vk::GeometryInstanceFlagsKHR{};
+        if (meshRecord->cpu.clockwiseFrontFace)
+        {
+            instanceFlags = instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing;
+        }
+
+        auto mesh = SceneAccelerationStructureMesh{
+            .mesh = handle,
+            .gpuVersion = meshRecord->gpuVersion,
+            .instanceFlags = instanceFlags,
+            .vertexBuffer = SceneBridgeBufferBinding{
+                .buffer = std::cref(geometryAtlas_.vertexBuffer),
+            },
+            .vertexByteOffset = atlas.vertexByteOffset,
+            .indexByteOffset = atlas.indexByteOffset,
+            .maxVertex = atlas.vertexCount - 1u,
+        };
+
+        if (atlas.indexCount > 0u)
+        {
+            if (!geometryAtlas_.indexBuffer.valid())
+            {
+                return std::nullopt;
+            }
+            mesh.indexBuffer = SceneBridgeBufferBinding{
+                .buffer = std::cref(geometryAtlas_.indexBuffer),
+            };
+        }
+
+        auto const geometryCount = meshRecord->cpu.geometries.empty()
+                                       ? std::size_t{1}
+                                       : meshRecord->cpu.geometries.size();
+        mesh.geometries.reserve(geometryCount);
+
+        auto appendGeometry = [&](const nr::resource::MeshGeometry &geometry, std::uint32_t geometryIndex) {
+            auto const indexed = atlas.indexCount > 0u;
+            auto const primitiveElementCount = geometry.indexCount > 0u
+                                                   ? geometry.indexCount
+                                                   : (indexed ? atlas.indexCount : atlas.vertexCount);
+            auto const primitiveCount = primitiveElementCount / 3u;
+            if (primitiveCount == 0u)
+            {
+                return;
+            }
+
+            auto flags = vk::GeometryFlagsKHR{};
+            auto const materialHandle = meshGeometryMaterial(handle, geometryIndex).value_or(geometry.material);
+            if (materialHandle.valid())
+            {
+                auto const *materialRecord = materials_.tryGet(materialHandle);
+                if (materialRecord == nullptr || !materialRecord->cpuReady || materialRecord->cpu.isOpaque())
+                {
+                    flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
+                }
+                if (materialRecord != nullptr && materialRecord->cpuReady && materialRecord->cpu.core.doubleSided)
+                {
+                    mesh.instanceFlags = mesh.instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable;
+                }
+            }
+            else
+            {
+                flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
+            }
+
+            mesh.geometries.push_back(SceneAccelerationStructureGeometry{
+                .geometryIndex = geometryIndex,
+                .indexed = indexed,
+                .primitiveOffset = static_cast<vk::DeviceSize>(geometry.firstIndex) *
+                                   (indexed ? sizeof(std::uint32_t) : sizeof(nr::resource::Vertex)),
+                .firstVertex = indexed ? geometry.vertexOffset : 0u,
+                .primitiveCount = primitiveCount,
+                .geometryFlags = flags,
+            });
+        };
+
+        if (meshRecord->cpu.geometries.empty())
+        {
+            auto geometry = nr::resource::MeshGeometry{};
+            geometry.indexCount = atlas.indexCount > 0u ? atlas.indexCount : atlas.vertexCount;
+            appendGeometry(geometry, 0u);
+        }
+        else
+        {
+            auto const geometryIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(meshRecord->cpu.geometries.size()));
+            std::ranges::for_each(geometryIndices, [&](std::uint32_t geometryIndex) {
+                appendGeometry(meshRecord->cpu.geometries[geometryIndex], geometryIndex);
+            });
+        }
+
+        if (mesh.geometries.empty())
+        {
+            return std::nullopt;
+        }
+
+        return mesh;
     }
 
 [[nodiscard]] std::optional<nr::resource::MeshHandle> Scene::findMeshHandleByStableKey(std::string_view stableKey) const noexcept
@@ -1339,6 +1480,328 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         return std::cref(*withPixels);
     }
 
+[[nodiscard]] vk::DeviceSize Scene::alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept
+{
+        if (alignment <= 1u)
+        {
+            return value;
+        }
+
+        auto const remainder = value % alignment;
+        return remainder == 0u ? value : value + (alignment - remainder);
+    }
+
+[[nodiscard]] std::uint32_t Scene::checkedDeviceSizeToUint32(vk::DeviceSize value, std::string_view label)
+{
+        nrAssert(
+            value <= std::numeric_limits<std::uint32_t>::max(),
+            std::format("{} value {} exceeds uint32_t range.", label, value));
+        return static_cast<std::uint32_t>(value);
+    }
+
+[[nodiscard]] std::vector<std::uint32_t> Scene::makeGeometryAtlasQueueFamilyIndices() const
+{
+        auto families = std::vector<std::uint32_t>{
+            device_.queueManager.transfer().queueFamilyIndex(),
+            device_.queueManager.graphics().queueFamilyIndex(),
+            device_.queueManager.compute().queueFamilyIndex(),
+        };
+        std::ranges::sort(families);
+        auto uniqueTail = std::ranges::unique(families);
+        families.erase(uniqueTail.begin(), uniqueTail.end());
+        return families;
+    }
+
+[[nodiscard]] vk::BufferCreateInfo Scene::makeGeometryAtlasBufferCreateInfo(
+        vk::DeviceSize size,
+        vk::BufferUsageFlags bindingUsage,
+        std::span<const std::uint32_t> queueFamilyIndices) noexcept
+{
+        auto createInfo = vk::BufferCreateInfo{};
+        createInfo.size = size;
+        createInfo.usage = vk::BufferUsageFlagBits::eTransferDst |
+                           vk::BufferUsageFlagBits::eTransferSrc |
+                           vk::BufferUsageFlagBits::eStorageBuffer |
+                           vk::BufferUsageFlagBits::eShaderDeviceAddress |
+                           vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+                           bindingUsage;
+        if (queueFamilyIndices.size() > 1u)
+        {
+            createInfo.sharingMode = vk::SharingMode::eConcurrent;
+            createInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(queueFamilyIndices.size());
+            createInfo.pQueueFamilyIndices = queueFamilyIndices.data();
+        }
+        else
+        {
+            createInfo.sharingMode = vk::SharingMode::eExclusive;
+        }
+        return createInfo;
+    }
+
+[[nodiscard]] vk::DeviceSize Scene::grownGeometryAtlasCapacity(
+        vk::DeviceSize currentCapacity,
+        vk::DeviceSize requiredCapacity) noexcept
+{
+        constexpr auto minCapacity = vk::DeviceSize{1024u * 1024u};
+        auto const maxCapacity = std::numeric_limits<vk::DeviceSize>::max();
+        auto const doubledCapacity = currentCapacity > (maxCapacity / 2u)
+                                         ? maxCapacity
+                                         : currentCapacity * 2u;
+        return std::max({requiredCapacity, doubledCapacity, minCapacity});
+    }
+
+[[nodiscard]] detail::MeshGeometryAtlasAllocation Scene::reserveGeometryAtlasAllocation(
+        const nr::resource::Mesh &mesh,
+        nr::rhi::ops::UploadReadbackContext &uploadContext)
+{
+        auto vertexBytes = std::as_bytes(std::span{mesh.vertices});
+        auto indexBytes = std::as_bytes(std::span{mesh.indices});
+        nrAssert(!vertexBytes.empty(), "Scene geometry atlas allocation requires vertex data.");
+
+        constexpr auto vertexStride = vk::DeviceSize{sizeof(nr::resource::Vertex)};
+        constexpr auto indexStride = vk::DeviceSize{sizeof(std::uint32_t)};
+
+        auto const vertexByteOffset = alignUp(geometryAtlas_.vertexUsedBytes, vertexStride);
+        auto const indexByteOffset = indexBytes.empty()
+                                         ? vk::DeviceSize{0}
+                                         : alignUp(geometryAtlas_.indexUsedBytes, indexStride);
+        nrAssert(
+            std::numeric_limits<vk::DeviceSize>::max() - vertexByteOffset >= vertexBytes.size_bytes(),
+            "Scene geometry vertex atlas allocation overflowed.");
+        nrAssert(
+            indexBytes.empty() ||
+                std::numeric_limits<vk::DeviceSize>::max() - indexByteOffset >= indexBytes.size_bytes(),
+            "Scene geometry index atlas allocation overflowed.");
+
+        auto const requiredVertexBytes = vertexByteOffset + vertexBytes.size_bytes();
+        auto const requiredIndexBytes = indexBytes.empty()
+                                            ? geometryAtlas_.indexUsedBytes
+                                            : indexByteOffset + indexBytes.size_bytes();
+        ensureGeometryAtlasCapacity(requiredVertexBytes, requiredIndexBytes, uploadContext);
+
+        geometryAtlas_.vertexUsedBytes = requiredVertexBytes;
+        geometryAtlas_.indexUsedBytes = requiredIndexBytes;
+
+        auto allocation = detail::MeshGeometryAtlasAllocation{
+            .vertexByteOffset = vertexByteOffset,
+            .indexByteOffset = indexByteOffset,
+            .vertexBase = checkedDeviceSizeToUint32(vertexByteOffset / vertexStride, "Scene geometry atlas vertex base"),
+            .indexBase = checkedDeviceSizeToUint32(indexByteOffset / indexStride, "Scene geometry atlas index base"),
+            .vertexCount = checkedDeviceSizeToUint32(static_cast<vk::DeviceSize>(mesh.vertices.size()), "Scene mesh vertex count"),
+            .indexCount = checkedDeviceSizeToUint32(static_cast<vk::DeviceSize>(mesh.indices.size()), "Scene mesh index count"),
+        };
+        return allocation;
+    }
+
+void Scene::ensureGeometryAtlasCapacity(
+        vk::DeviceSize requiredVertexBytes,
+        vk::DeviceSize requiredIndexBytes,
+        nr::rhi::ops::UploadReadbackContext &uploadContext)
+{
+        auto const growVertex = requiredVertexBytes > geometryAtlas_.vertexCapacityBytes;
+        auto const growIndex = requiredIndexBytes > geometryAtlas_.indexCapacityBytes;
+        if (!growVertex && !growIndex)
+        {
+            return;
+        }
+
+        auto const copyExistingVertexPrefix =
+            growVertex && geometryAtlas_.vertexBuffer.valid() && geometryAtlas_.vertexUsedBytes > 0u;
+        auto const copyExistingIndexPrefix =
+            growIndex && geometryAtlas_.indexBuffer.valid() && geometryAtlas_.indexUsedBytes > 0u;
+        if ((copyExistingVertexPrefix || copyExistingIndexPrefix) && !pendingAcquireBatches_.empty())
+        {
+            pollUploadTimelineUntilAcquireBatchesReady(uploadContext);
+        }
+
+        auto oldVertexBuffer = std::optional<nr::rhi::Buffer>{};
+        auto oldIndexBuffer = std::optional<nr::rhi::Buffer>{};
+        auto oldVertexUsedBytes = vk::DeviceSize{0};
+        auto oldIndexUsedBytes = vk::DeviceSize{0};
+
+        if (growVertex)
+        {
+            oldVertexUsedBytes = geometryAtlas_.vertexUsedBytes;
+            if (geometryAtlas_.vertexBuffer.valid())
+            {
+                oldVertexBuffer.emplace(std::move(geometryAtlas_.vertexBuffer));
+            }
+
+            geometryAtlas_.vertexCapacityBytes = grownGeometryAtlasCapacity(
+                geometryAtlas_.vertexCapacityBytes,
+                requiredVertexBytes);
+            auto atlasQueueFamilies = makeGeometryAtlasQueueFamilyIndices();
+            geometryAtlas_.vertexBuffer = device_.resourceFactory.createBuffer(
+                makeGeometryAtlasBufferCreateInfo(
+                    geometryAtlas_.vertexCapacityBytes,
+                    vk::BufferUsageFlagBits::eVertexBuffer,
+                    std::span<const std::uint32_t>{atlasQueueFamilies}),
+                nr::rhi::MemoryUsage::GpuOnly,
+                "scene_geometry_vertex_atlas");
+            nrAssert(geometryAtlas_.vertexBuffer.valid(), "Scene failed to create vertex geometry atlas buffer.");
+        }
+
+        if (growIndex && requiredIndexBytes > 0u)
+        {
+            oldIndexUsedBytes = geometryAtlas_.indexUsedBytes;
+            if (geometryAtlas_.indexBuffer.valid())
+            {
+                oldIndexBuffer.emplace(std::move(geometryAtlas_.indexBuffer));
+            }
+
+            geometryAtlas_.indexCapacityBytes = grownGeometryAtlasCapacity(
+                geometryAtlas_.indexCapacityBytes,
+                requiredIndexBytes);
+            auto atlasQueueFamilies = makeGeometryAtlasQueueFamilyIndices();
+            geometryAtlas_.indexBuffer = device_.resourceFactory.createBuffer(
+                makeGeometryAtlasBufferCreateInfo(
+                    geometryAtlas_.indexCapacityBytes,
+                    vk::BufferUsageFlagBits::eIndexBuffer,
+                    std::span<const std::uint32_t>{atlasQueueFamilies}),
+                nr::rhi::MemoryUsage::GpuOnly,
+                "scene_geometry_index_atlas");
+            nrAssert(geometryAtlas_.indexBuffer.valid(), "Scene failed to create index geometry atlas buffer.");
+        }
+
+        submitGeometryAtlasGrowCopy(
+            std::move(oldVertexBuffer),
+            oldVertexUsedBytes,
+            std::move(oldIndexBuffer),
+            oldIndexUsedBytes);
+    }
+
+void Scene::submitGeometryAtlasGrowCopy(
+        std::optional<nr::rhi::Buffer> oldVertexBuffer,
+        vk::DeviceSize oldVertexUsedBytes,
+        std::optional<nr::rhi::Buffer> oldIndexBuffer,
+        vk::DeviceSize oldIndexUsedBytes)
+{
+        auto retiredBuffers = detail::RetiredSceneGeometryAtlasBuffers{};
+        if (oldVertexBuffer.has_value())
+        {
+            retiredBuffers.vertexBuffer = std::move(*oldVertexBuffer);
+        }
+        if (oldIndexBuffer.has_value())
+        {
+            retiredBuffers.indexBuffer = std::move(*oldIndexBuffer);
+        }
+
+        auto const copyVertexPrefix =
+            retiredBuffers.vertexBuffer.valid() &&
+            geometryAtlas_.vertexBuffer.valid() &&
+            oldVertexUsedBytes > 0u;
+        auto const copyIndexPrefix =
+            retiredBuffers.indexBuffer.valid() &&
+            geometryAtlas_.indexBuffer.valid() &&
+            oldIndexUsedBytes > 0u;
+
+        if (!copyVertexPrefix && !copyIndexPrefix)
+        {
+            retireGeometryAtlasBuffers(std::move(retiredBuffers));
+            return;
+        }
+
+        auto growWork = SubmittedGeometryAtlasGrowWork{};
+        growWork.retiredBuffers = std::move(retiredBuffers);
+        growWork.commandPool = nr::rhi::CommandPool{
+            device_.device,
+            device_.queueManager.graphics().queueFamilyIndex(),
+            vk::CommandPoolCreateFlagBits::eTransient,
+        };
+        growWork.commandBuffers.emplace(growWork.commandPool.allocatePrimary(1));
+        auto &commandBuffer = growWork.commandBuffers->front();
+
+        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        {
+            auto postCopyBarriers = nr::rhi::ops::BarrierBatch{};
+
+            if (copyVertexPrefix)
+            {
+                auto copyRegion = vk::BufferCopy{};
+                copyRegion.size = oldVertexUsedBytes;
+                nr::rhi::ops::copyBuffer2(
+                    commandBuffer,
+                    growWork.retiredBuffers.vertexBuffer.handle(),
+                    geometryAtlas_.vertexBuffer.handle(),
+                    nr::rhi::ops::toBufferCopy2(copyRegion));
+                postCopyBarriers.addBuffer(geometryAtlas_.vertexBuffer, vk::BufferMemoryBarrier2{
+                    vk::PipelineStageFlagBits2::eTransfer,
+                    vk::AccessFlagBits2::eTransferWrite,
+                    vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eMemoryRead,
+                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                    vk::Buffer{},
+                    0,
+                    oldVertexUsedBytes,
+                    nullptr,
+                });
+            }
+
+            if (copyIndexPrefix)
+            {
+                auto copyRegion = vk::BufferCopy{};
+                copyRegion.size = oldIndexUsedBytes;
+                nr::rhi::ops::copyBuffer2(
+                    commandBuffer,
+                    growWork.retiredBuffers.indexBuffer.handle(),
+                    geometryAtlas_.indexBuffer.handle(),
+                    nr::rhi::ops::toBufferCopy2(copyRegion));
+                postCopyBarriers.addBuffer(geometryAtlas_.indexBuffer, vk::BufferMemoryBarrier2{
+                    vk::PipelineStageFlagBits2::eTransfer,
+                    vk::AccessFlagBits2::eTransferWrite,
+                    vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eMemoryRead,
+                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                    vk::Buffer{},
+                    0,
+                    oldIndexUsedBytes,
+                    nullptr,
+                });
+            }
+
+            nr::rhi::ops::pipelineBarrier(commandBuffer, postCopyBarriers);
+        }
+        nr::rhi::CommandRecorder::end(commandBuffer);
+
+        auto growSubmission = nr::rhi::CommandBatch{};
+        growSubmission.addCommandBuffer(commandBuffer);
+
+        growWork.fence = vk::raii::Fence(device_.device, vk::FenceCreateInfo{});
+        device_.queueManager.graphics().submit(std::move(growSubmission), std::cref(growWork.fence));
+        submittedGeometryAtlasGrowWork_.push_back(std::move(growWork));
+    }
+
+void Scene::retireGeometryAtlasBuffers(detail::RetiredSceneGeometryAtlasBuffers retiredBuffers)
+{
+        if (!retiredBuffers.vertexBuffer.valid() && !retiredBuffers.indexBuffer.valid())
+        {
+            return;
+        }
+
+        retiredBuffers.retireAfterSerial = currentFrame_.frameSerial + detail::kDefaultRetireLatencySerial;
+        retiredGeometryAtlasBuffers_.push_back(std::move(retiredBuffers));
+    }
+
+void Scene::reapSubmittedGeometryAtlasGrowWork()
+{
+        std::erase_if(submittedGeometryAtlasGrowWork_, [&](SubmittedGeometryAtlasGrowWork &work) {
+            nrAssert(*work.fence != nullptr, "Scene geometry atlas grow work requires a valid fence.");
+            auto result = device_.device.waitForFences(*work.fence, vk::True, 0u);
+            nrAssert(
+                result == vk::Result::eSuccess || result == vk::Result::eTimeout,
+                "Scene failed querying geometry atlas grow fence status.");
+            if (result != vk::Result::eSuccess)
+            {
+                return false;
+            }
+
+            retireGeometryAtlasBuffers(std::move(work.retiredBuffers));
+            return true;
+        });
+    }
+
 void Scene::queueGpuUploadsForFrame()
 {
         queueUploadsFor(std::span{meshHandles_}, meshes_);
@@ -1366,6 +1829,7 @@ void Scene::reapRetiredGpuVersions()
         std::erase_if(retiredTexturePayloadGraveyard_, expired);
         std::erase_if(retiredCameraPayloadGraveyard_, expired);
         std::erase_if(retiredLightPayloadGraveyard_, expired);
+        std::erase_if(retiredGeometryAtlasBuffers_, expired);
     }
 
 [[nodiscard]] std::size_t Scene::pixelFormatByteSize(nr::resource::PixelFormat format)
@@ -1446,6 +1910,7 @@ void Scene::reapRetiredGpuVersions()
                                        nr::rhi::ops::UploadReadbackContext &uploadContext)
 {
         auto vertexBytes = std::as_bytes(std::span{record.cpu.vertices});
+        auto indexBytes = std::as_bytes(std::span{record.cpu.indices});
         if (vertexBytes.empty())
         {
             record.uploadQueued = false;
@@ -1453,53 +1918,31 @@ void Scene::reapRetiredGpuVersions()
             return false;
         }
 
-        auto ownership = makeTransferToGraphicsOwnershipPlan(
-            vk::PipelineStageFlagBits2::eAllCommands,
-            vk::AccessFlagBits2::eMemoryRead);
-
         auto payload = detail::MeshGpuPayload{};
-        payload.vertexCount = static_cast<std::uint32_t>(record.cpu.vertices.size());
-        payload.indexCount = static_cast<std::uint32_t>(record.cpu.indices.size());
-
-        auto vertexCreateInfo = vk::BufferCreateInfo{};
-        vertexCreateInfo.size = vertexBytes.size();
-        vertexCreateInfo.usage = vk::BufferUsageFlagBits::eTransferDst |
-                                 vk::BufferUsageFlagBits::eTransferSrc |
-                                 vk::BufferUsageFlagBits::eVertexBuffer |
-                                 vk::BufferUsageFlagBits::eStorageBuffer;
-        vertexCreateInfo.sharingMode = vk::SharingMode::eExclusive;
-        payload.vertexBuffer = device_.resourceFactory.createBuffer(
-            vertexCreateInfo,
-            nr::rhi::MemoryUsage::GpuOnly,
-            std::format("scene_mesh_{}_vertex", handle.slot));
+        payload.atlas = reserveGeometryAtlasAllocation(record.cpu, uploadContext);
+        nrAssert(geometryAtlas_.vertexBuffer.valid(), "Scene mesh upload requires a valid vertex geometry atlas.");
 
         auto pendingBatch = PendingAcquireBatch{};
         pendingBatch.asset = makeGpuHandleRef(handle, GpuAssetKind::mesh);
         pendingBatch.targetGpuVersion = record.cpuVersion;
 
-        auto vertexTicket = uploadContext.uploadBuffer(vertexBytes, payload.vertexBuffer, 0, ownership);
+        auto vertexTicket = uploadContext.uploadBuffer(
+            vertexBytes,
+            geometryAtlas_.vertexBuffer,
+            payload.atlas.vertexByteOffset);
         if (!vertexTicket.valid())
         {
             return false;
         }
 
         auto indexTicket = std::optional<nr::rhi::ops::BufferUploadTicket>{};
-        if (!record.cpu.indices.empty())
+        if (!indexBytes.empty())
         {
-            auto indexBytes = std::as_bytes(std::span{record.cpu.indices});
-            auto indexCreateInfo = vk::BufferCreateInfo{};
-            indexCreateInfo.size = indexBytes.size();
-            indexCreateInfo.usage = vk::BufferUsageFlagBits::eTransferDst |
-                                    vk::BufferUsageFlagBits::eTransferSrc |
-                                    vk::BufferUsageFlagBits::eIndexBuffer |
-                                    vk::BufferUsageFlagBits::eStorageBuffer;
-            indexCreateInfo.sharingMode = vk::SharingMode::eExclusive;
-            payload.indexBuffer = device_.resourceFactory.createBuffer(
-                indexCreateInfo,
-                nr::rhi::MemoryUsage::GpuOnly,
-                std::format("scene_mesh_{}_index", handle.slot));
-
-            auto uploadedIndexTicket = uploadContext.uploadBuffer(indexBytes, payload.indexBuffer, 0, ownership);
+            nrAssert(geometryAtlas_.indexBuffer.valid(), "Scene indexed mesh upload requires a valid index geometry atlas.");
+            auto uploadedIndexTicket = uploadContext.uploadBuffer(
+                indexBytes,
+                geometryAtlas_.indexBuffer,
+                payload.atlas.indexByteOffset);
             if (!uploadedIndexTicket.valid())
             {
                 return false;
@@ -1514,13 +1957,13 @@ void Scene::reapRetiredGpuVersions()
         record.gpuState = GpuResidencyState::waitingAcquire;
         record.lastUploadFrameSerial = currentFrame_.frameSerial;
 
-        // Tickets store Buffer references; rebind them to record-owned buffers after move.
-        vertexTicket.buffer = std::cref(record.gpu->vertexBuffer);
+        // Tickets store Buffer references; keep them bound to the scene-owned atlas buffers.
+        vertexTicket.buffer = std::cref(geometryAtlas_.vertexBuffer);
         pendingBatch.bufferTickets.push_back(vertexTicket);
 
-        if (indexTicket.has_value() && record.gpu->indexBuffer.valid())
+        if (indexTicket.has_value() && geometryAtlas_.indexBuffer.valid())
         {
-            indexTicket->buffer = std::cref(record.gpu->indexBuffer);
+            indexTicket->buffer = std::cref(geometryAtlas_.indexBuffer);
             pendingBatch.bufferTickets.push_back(*indexTicket);
         }
 
@@ -2544,6 +2987,7 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset,
             auto const &sourceMesh = sceneAsset.meshes[entry.sourceIndex];
             auto mesh = nr::resource::Mesh{};
             mesh.name = sourceMesh.name;
+            mesh.clockwiseFrontFace = sourceMesh.clockwiseFrontFace;
 
             mesh.vertices.reserve(sourceMesh.vertices.size());
             std::ranges::for_each(sourceMesh.vertices, [&](const nr::load::VertexAsset &sourceVertex) {

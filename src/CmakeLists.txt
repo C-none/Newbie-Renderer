@@ -10,29 +10,13 @@ add_subdirectory(rhi)
 add_subdirectory(renderer)
 add_subdirectory(renderPasses)
 add_subdirectory(app)
-
-file(GLOB IMPL_SOURCES
-    CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
-)
+add_subdirectory(pipeline)
 
 nr_add_executable(main main.cpp)
 nr_link_module_dependencies(main main.cpp PRIVATE
     utils
-    nrapp
-    nrrenderer
-    nrrenderpasses
-    nrscene
-    nrload
+    nrpipeline
     dependency
-)
-target_sources(main
-	PRIVATE
-		${IMPL_SOURCES}
-)
-
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
-    ${IMPL_SOURCES}
 )
 
 add_custom_target(run_main

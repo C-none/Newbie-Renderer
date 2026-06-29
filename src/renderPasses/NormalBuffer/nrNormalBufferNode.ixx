@@ -20,12 +20,6 @@ struct NormalBufferNodeInput
     vk::Format depthFormat = vk::Format::eD32Sfloat;
 };
 
-struct NormalBufferNodeOutput
-{
-    nr::renderer::GraphResourceHandle normalBuffer{};
-    nr::renderer::GraphResourceHandle depthBuffer{};
-};
-
 class NormalBufferNode final : public Node
 {
   public:
@@ -33,7 +27,6 @@ class NormalBufferNode final : public Node
     ~NormalBufferNode() override;
 
     NormalBufferNodeInput input{};
-    NormalBufferNodeOutput output{};
 
     [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;

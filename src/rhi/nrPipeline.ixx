@@ -177,6 +177,7 @@ std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineL
 void updateResourcesForBindingSnapshot(
 	ShaderBindingPool &pool,
 	std::span<const ShaderBindingSet> sets,
+	DescriptorWriteCache &descriptorWriteCache,
 	const ShaderBindingSnapshot &snapshot,
 	LogicalDescriptorResolver logicalResolver);
 
@@ -192,6 +193,7 @@ void bindResourcesToCommandBuffer(
 	const CursorPipelineLayout &layout,
 	ShaderBindingPool &pool,
 	std::span<const ShaderBindingSet> sets,
+	DescriptorWriteCache &descriptorWriteCache,
 	const ShaderBindingSnapshot &snapshot,
 	LogicalDescriptorResolver logicalResolver);
 
@@ -200,6 +202,7 @@ std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
 	vk::PipelineBindPoint bindPoint,
 	const CursorPipelineLayout &layout,
 	ShaderBindingPool &pool,
+	DescriptorWriteCache &descriptorWriteCache,
 	const ShaderBindingSnapshot &snapshot,
 	LogicalDescriptorResolver logicalResolver);
 
@@ -290,7 +293,7 @@ class RayTracingPipeline
 /**
  * @brief Set a VK_EXT_debug_utils name on a VkPipeline for profiler/debugger labeling.
  *
- * No-op outside debug builds. Name source is typically a node's describe().name.
+ * No-op when GPU debug names are disabled. Name source is typically a node's describe().name.
  */
 void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline, std::string_view name);
 

@@ -23,3 +23,12 @@ nr_add_contract_test(nr_scene_runtime_extraction_contract_test nr_scene_runtime_
     utils
     dependency
 )
+
+nr_add_contract_test(nr_scene_as_mesh_contract_test nr_scene_as_mesh_contract_test.cpp "gpu;window;integration;scene;rt"
+    nrscene
+    nrload
+    nrresource
+    nrrhi
+    utils
+    dependency
+)

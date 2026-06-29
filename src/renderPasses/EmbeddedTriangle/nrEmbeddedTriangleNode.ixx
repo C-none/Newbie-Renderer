@@ -18,11 +18,6 @@ struct EmbeddedTriangleNodeInput
     vk::Format colorFormat = vk::Format::eR8G8B8A8Unorm;
 };
 
-struct EmbeddedTriangleNodeOutput
-{
-    nr::renderer::GraphResourceHandle color{};
-};
-
 class EmbeddedTriangleNode final : public Node
 {
   public:
@@ -30,7 +25,6 @@ class EmbeddedTriangleNode final : public Node
     ~EmbeddedTriangleNode() override;
 
     EmbeddedTriangleNodeInput input{};
-    EmbeddedTriangleNodeOutput output{};
 
     [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;

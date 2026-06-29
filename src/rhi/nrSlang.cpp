@@ -297,6 +297,30 @@ namespace nr::rhi
 
         sampler.sampler_ = vk::raii::Sampler(device, samplerInfo);
         sampler.debugName_ = std::string(debugName);
+        if constexpr (gpuDebugNamesEnabled)
+        {
+            if (!sampler.debugName_.empty())
+            {
+                vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
+                objectNameInfo.objectType = vk::ObjectType::eSampler;
+                const auto rawHandle = *sampler.sampler_;
+                static_assert(sizeof(rawHandle) == sizeof(std::uint64_t), "vk::Sampler handle size must match std::uint64_t for debug naming.");
+                objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
+                objectNameInfo.pObjectName = sampler.debugName_.c_str();
+                try
+                {
+                    device.setDebugUtilsObjectNameEXT(objectNameInfo);
+                }
+                catch (const vk::SystemError &error)
+                {
+                    nrInfo<LogLevel::error>(std::format(
+                        "SlangSampler::create failed to set debug name '{}': {}",
+                        sampler.debugName_,
+                        error.what()));
+                    nrAssert(false, "SlangSampler::create failed to set a Vulkan debug object name.");
+                }
+            }
+        }
         return sampler;
     }
 
@@ -554,6 +578,26 @@ void ShaderService::configure()
 {
         std::scoped_lock lock(m_mutex);
         applyCompileOptionsLocked(kDefaultSlangCompileOptions);
+    }
+
+void ShaderService::reloadSession()
+{
+        std::scoped_lock lock(m_mutex);
+        if (!m_session)
+        {
+            applyCompileOptionsLocked(kDefaultSlangCompileOptions);
+            return;
+        }
+
+        ensureGlobalSessionLocked();
+        recreateSessionLocked();
+        nrInfo<>(std::format("[ShaderService::reloadSession] rebuilt Slang session generation={}", m_sessionGeneration));
+    }
+
+[[nodiscard]] std::uint64_t ShaderService::sessionGeneration() const
+{
+        std::scoped_lock lock(m_mutex);
+        return m_sessionGeneration;
     }
 
 [[nodiscard]] SlangProgram ShaderService::compileProgramByFile(const SlangProgramCompileFileRequest &request)
@@ -845,6 +889,7 @@ void ShaderService::recreateSessionLocked()
         {
             auto result = m_globalSession->createSession(sessionDesc, m_session.writeRef());
             nrAssert(detail::slangSucceeded(result), "Failed to create Slang session.");
+            ++m_sessionGeneration;
         }
         catch (...)
         {

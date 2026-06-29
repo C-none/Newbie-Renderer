@@ -57,29 +57,6 @@ void printUsage()
         },
     };
 
-    graphSpec.connections = {
-        nr::renderer::NodeConnection{
-            .from = nr::renderer::NodePortRef{
-                .nodeName = "EmbeddedTriangle",
-                .portName = "color",
-            },
-            .to = nr::renderer::NodePortRef{
-                .nodeName = "Present",
-                .portName = "sourceColor",
-            },
-        },
-        nr::renderer::NodeConnection{
-            .from = nr::renderer::NodePortRef{
-                .nodeName = "Ui",
-                .portName = "uiBuffer",
-            },
-            .to = nr::renderer::NodePortRef{
-                .nodeName = "Present",
-                .portName = "uiBuffer",
-            },
-        },
-    };
-
     graphSpec.submitNodes = {
         nr::renderer::SubmitNodeSpec{
             .debugName = "Main.GraphicsToCompute",
@@ -127,6 +104,7 @@ void printUsage()
                     previousTick = now;
                     app.ui().beginFrame(presentation, deltaSeconds);
                     app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
+                    app.ui().setCameraFrame(app.camera().frame());
                     auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
                     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{

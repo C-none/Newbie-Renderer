@@ -56,7 +56,7 @@ ScopedCommandBufferDebugLabel::ScopedCommandBufferDebugLabel(const vk::raii::Com
         : commandBuffer_(std::cref(commandBuffer))
         , label_(label)
 {
-        if constexpr (nr::isDebugMode) {
+        if constexpr (nr::gpuDebugNamesEnabled) {
             if (label_.empty()) {
                 return;
             }

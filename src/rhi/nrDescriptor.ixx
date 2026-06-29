@@ -221,6 +221,82 @@ struct DescriptorWriteRequest
     DescriptorWritePayload payload;
 };
 
+struct DescriptorWriteSlotKey
+{
+    std::uint32_t set = 0;
+    std::uint32_t binding = 0;
+    std::uint32_t arrayElement = 0;
+    vk::DescriptorType descriptorType = vk::DescriptorType::eStorageBuffer;
+
+    [[nodiscard]] friend bool operator<(const DescriptorWriteSlotKey &lhs, const DescriptorWriteSlotKey &rhs) noexcept
+    {
+        return std::tie(lhs.set, lhs.binding, lhs.arrayElement, lhs.descriptorType) <
+               std::tie(rhs.set, rhs.binding, rhs.arrayElement, rhs.descriptorType);
+    }
+
+    [[nodiscard]] friend bool operator==(const DescriptorWriteSlotKey &, const DescriptorWriteSlotKey &) noexcept = default;
+};
+
+struct BufferDescriptorPayloadKey
+{
+    vk::Buffer buffer{};
+    vk::DeviceSize offset = 0;
+    vk::DeviceSize range = detail::kWholeBufferRange;
+
+    [[nodiscard]] friend bool operator==(const BufferDescriptorPayloadKey &, const BufferDescriptorPayloadKey &) noexcept = default;
+};
+
+struct TexelBufferDescriptorPayloadKey
+{
+    vk::BufferView view{};
+
+    [[nodiscard]] friend bool operator==(const TexelBufferDescriptorPayloadKey &, const TexelBufferDescriptorPayloadKey &) noexcept = default;
+};
+
+struct ImageDescriptorPayloadKey
+{
+    vk::ImageView imageView{};
+    vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    vk::Sampler sampler{};
+
+    [[nodiscard]] friend bool operator==(const ImageDescriptorPayloadKey &, const ImageDescriptorPayloadKey &) noexcept = default;
+};
+
+struct AccelerationStructureDescriptorPayloadKey
+{
+    vk::AccelerationStructureKHR accelerationStructure{};
+
+    [[nodiscard]] friend bool operator==(const AccelerationStructureDescriptorPayloadKey &, const AccelerationStructureDescriptorPayloadKey &) noexcept = default;
+};
+
+struct InlineUniformDescriptorPayloadKey
+{
+    std::vector<std::uint8_t> data;
+
+    [[nodiscard]] friend bool operator==(const InlineUniformDescriptorPayloadKey &, const InlineUniformDescriptorPayloadKey &) noexcept = default;
+};
+
+using DescriptorWritePayloadKey =
+    std::variant<BufferDescriptorPayloadKey, TexelBufferDescriptorPayloadKey, ImageDescriptorPayloadKey, AccelerationStructureDescriptorPayloadKey, InlineUniformDescriptorPayloadKey>;
+
+class DescriptorWriteCache
+{
+  public:
+    void clear() noexcept;
+
+    [[nodiscard]] std::uint64_t version() const noexcept;
+
+    [[nodiscard]] std::vector<DescriptorWriteRequest> filterChanged(std::span<const DescriptorWriteRequest> writeRequests);
+
+  private:
+    std::map<DescriptorWriteSlotKey, DescriptorWritePayloadKey> payloadsBySlot_{};
+    std::uint64_t version_ = 0;
+};
+
+[[nodiscard]] std::vector<DescriptorWriteRequest> filterChangedDescriptorWrites(
+    DescriptorWriteCache &cache,
+    std::span<const DescriptorWriteRequest> writeRequests);
+
 class ShaderBindingSet
 {
   public:
@@ -621,6 +697,7 @@ void bindResourcesToCommandBuffer(
     const CursorPipelineLayout &layout,
     ShaderBindingPool &pool,
     std::span<const ShaderBindingSet> sets,
+    DescriptorWriteCache &descriptorWriteCache,
     const ShaderBindingSnapshot &snapshot,
     LogicalDescriptorResolver logicalResolver = {});
 
@@ -629,6 +706,7 @@ void bindResourcesToCommandBuffer(
     vk::PipelineBindPoint bindPoint,
     const CursorPipelineLayout &layout,
     ShaderBindingPool &pool,
+    DescriptorWriteCache &descriptorWriteCache,
     const ShaderBindingSnapshot &snapshot,
     LogicalDescriptorResolver logicalResolver = {});
 

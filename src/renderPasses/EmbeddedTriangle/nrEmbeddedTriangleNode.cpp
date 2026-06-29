@@ -47,9 +47,6 @@ NodeDescription EmbeddedTriangleNode::describe() const
 {
     return NodeDescription{
         .name = "EmbeddedTriangle",
-        .outputPorts = {
-            NodePort{.name = "color"},
-        },
     };
 }
 
@@ -83,7 +80,7 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
         colorFormat = frameParameters.swapchainFormat;
     }
 
-    output.color = context.transientColor("EmbeddedTriangle.Color", viewportExtent, colorFormat);
+    auto color = context.transientColor("EmbeddedTriangle.Color", viewportExtent, colorFormat);
 
     auto rasterPass = nr::renderer::RasterPassBuilder{
         context,
@@ -93,7 +90,7 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
         .viewport(viewportExtent)
         .viewportYMode(nr::renderer::RasterViewportYMode::ClipSpaceYUp)
         .colorAttachment(
-            output.color,
+            color,
             vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}})
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
         .rasterState(nr::rhi::MeshRasterState{
@@ -105,7 +102,7 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
 
     [[maybe_unused]] auto rasterPassHandle = rasterPass.build();
 
-    context.publishOutput("color", output.color);
+    context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, color);
 }
 
 void EmbeddedTriangleNode::shutdown(NodeShutdownContext&)

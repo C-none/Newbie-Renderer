@@ -495,7 +495,7 @@ void copyImageToImage(
 
 [[nodiscard]] bool BufferUploadTicket::valid() const noexcept
 {
-        return buffer.has_value() && size > 0 && signalValue > 0 && ownership.has_value();
+        return buffer.has_value() && size > 0 && signalValue > 0;
     }
 
 [[nodiscard]] bool ImageUploadTicket::valid() const noexcept
@@ -634,6 +634,7 @@ void UploadReadbackContext::waitReadbackComplete(std::uint64_t signalValue)
 [[nodiscard]] vk::BufferMemoryBarrier2 UploadReadbackContext::makeAcquireBarrier(const BufferUploadTicket& ticket) const
 {
         nrAssert(ticket.valid(), "UploadReadbackContext::makeAcquireBarrier requires a valid ticket.");
+        nrAssert(ticket.ownership.has_value(), "UploadReadbackContext::makeAcquireBarrier requires an ownership-bearing ticket.");
         return makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
             ticket.buffer->get(),
             *ticket.ownership,
@@ -643,6 +644,12 @@ void UploadReadbackContext::waitReadbackComplete(std::uint64_t signalValue)
 
 void UploadReadbackContext::recordAcquireBarrier(const vk::raii::CommandBuffer& commandBuffer, const BufferUploadTicket& ticket) const
 {
+        nrAssert(ticket.valid(), "UploadReadbackContext::recordAcquireBarrier requires a valid ticket.");
+        if (!ticket.ownership.has_value())
+        {
+            return;
+        }
+
         BarrierBatch acquireBarriers{};
         acquireBarriers.add(makeAcquireBarrier(ticket));
         pipelineBarrier(commandBuffer, acquireBarriers);
@@ -758,6 +765,68 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             .size = totalSize,
             .signalValue = lastSignalValue,
             .ownership = ownership.releaseToDestination,
+        };
+    }
+
+[[nodiscard]] BufferUploadTicket UploadReadbackContext::uploadBuffer(
+        std::span<const std::byte> data,
+        const Buffer& dst,
+        vk::DeviceSize dstOffset)
+{
+        nrAssert(valid(), "UploadReadbackContext::uploadBuffer requires a valid context.");
+        nrAssert(!data.empty(), "UploadReadbackContext::uploadBuffer requires non-empty data.");
+        nrAssert(
+            dst.sharingMode() == vk::SharingMode::eConcurrent,
+            "UploadReadbackContext::uploadBuffer without ownership is only valid for concurrent-sharing buffers.");
+
+        const auto totalSize = static_cast<vk::DeviceSize>(data.size_bytes());
+        nrAssert(dstOffset + totalSize <= dst.size(), "UploadReadbackContext::uploadBuffer destination range exceeds buffer size.");
+        nrAssert(
+            (dst.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
+            "UploadReadbackContext::uploadBuffer destination buffer must include eTransferDst usage.");
+        nrAssert(uploadRing_.mapped() != nullptr, "UploadReadbackContext::uploadBuffer requires a persistently mapped upload ring.");
+
+        auto remainingSize = totalSize;
+        auto uploadedSize = vk::DeviceSize{0};
+        auto lastSignalValue = std::uint64_t{0};
+
+        while (remainingSize > 0)
+        {
+            const auto chunkSize = std::min(remainingSize, uploadCapacity_);
+            auto allocation = reserveUpload(chunkSize, uploadTimeline_);
+
+            uploadRing_.writeMappedAndFlush(
+                std::span<const std::byte>{
+                    data.data() + static_cast<std::size_t>(uploadedSize),
+                    static_cast<std::size_t>(chunkSize),
+                },
+                allocation.offset);
+
+            auto commandBuffers = transferPool_.allocatePrimary(1);
+            auto& commandBuffer = commandBuffers.front();
+
+            CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+            {
+                vk::BufferCopy copyRegion{};
+                copyRegion.srcOffset = allocation.offset;
+                copyRegion.dstOffset = dstOffset + uploadedSize;
+                copyRegion.size = chunkSize;
+                copyBuffer2(commandBuffer, uploadRing_.handle(), dst.handle(), toBufferCopy2(copyRegion));
+            }
+            CommandRecorder::end(commandBuffer);
+
+            const auto signalValue = submitUploadCommandBuffers(std::move(commandBuffers), allocation, std::nullopt);
+
+            lastSignalValue = signalValue;
+            uploadedSize += chunkSize;
+            remainingSize -= chunkSize;
+        }
+
+        return BufferUploadTicket{
+            .buffer = std::cref(dst),
+            .dstOffset = dstOffset,
+            .size = totalSize,
+            .signalValue = lastSignalValue,
         };
     }
 

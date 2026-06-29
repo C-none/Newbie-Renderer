@@ -12,12 +12,79 @@ namespace nr::app::detail
 inline constexpr int kMouseButtonLeft = 0;
 inline constexpr int kMouseButtonRight = 1;
 inline constexpr int kMouseButtonMiddle = 2;
+inline constexpr int kKeySpace = 32;
+inline constexpr int kKeyA = 'A';
+inline constexpr int kKeyC = 'C';
+inline constexpr int kKeyV = 'V';
+inline constexpr int kKeyX = 'X';
+inline constexpr int kKeyY = 'Y';
+inline constexpr int kKeyZ = 'Z';
+inline constexpr int kKeyEscape = 256;
+inline constexpr int kKeyEnter = 257;
+inline constexpr int kKeyTab = 258;
+inline constexpr int kKeyBackspace = 259;
+inline constexpr int kKeyInsert = 260;
+inline constexpr int kKeyDelete = 261;
+inline constexpr int kKeyRight = 262;
+inline constexpr int kKeyLeft = 263;
+inline constexpr int kKeyDown = 264;
+inline constexpr int kKeyUp = 265;
+inline constexpr int kKeyPageUp = 266;
+inline constexpr int kKeyPageDown = 267;
+inline constexpr int kKeyHome = 268;
+inline constexpr int kKeyEnd = 269;
+inline constexpr int kKeyLeftShift = 340;
+inline constexpr int kKeyLeftControl = 341;
+inline constexpr int kKeyLeftAlt = 342;
+inline constexpr int kKeyLeftSuper = 343;
+inline constexpr int kKeyRightShift = 344;
+inline constexpr int kKeyRightControl = 345;
+inline constexpr int kKeyRightAlt = 346;
+inline constexpr int kKeyRightSuper = 347;
 inline constexpr float kUiWindowMargin = 16.0f;
 inline constexpr float kUiWindowDefaultWidth = 600.0f;
 inline constexpr float kUiWindowDefaultHeight = 960.0f;
 inline constexpr float kUiWindowVerticalStride = 20.0f;
 inline constexpr float kUiFontGlobalScale = 2.0f;
 inline constexpr std::string_view kUnifiedUiWindowTitle = "Renderer Controls";
+
+struct UiKeyBinding
+{
+    ImGuiKey key{};
+    int glfwKey = 0;
+};
+
+inline constexpr std::array kUiKeyBindings{
+    UiKeyBinding{.key = imgui::keyTab, .glfwKey = kKeyTab},
+    UiKeyBinding{.key = imgui::keyLeftArrow, .glfwKey = kKeyLeft},
+    UiKeyBinding{.key = imgui::keyRightArrow, .glfwKey = kKeyRight},
+    UiKeyBinding{.key = imgui::keyUpArrow, .glfwKey = kKeyUp},
+    UiKeyBinding{.key = imgui::keyDownArrow, .glfwKey = kKeyDown},
+    UiKeyBinding{.key = imgui::keyPageUp, .glfwKey = kKeyPageUp},
+    UiKeyBinding{.key = imgui::keyPageDown, .glfwKey = kKeyPageDown},
+    UiKeyBinding{.key = imgui::keyHome, .glfwKey = kKeyHome},
+    UiKeyBinding{.key = imgui::keyEnd, .glfwKey = kKeyEnd},
+    UiKeyBinding{.key = imgui::keyInsert, .glfwKey = kKeyInsert},
+    UiKeyBinding{.key = imgui::keyDelete, .glfwKey = kKeyDelete},
+    UiKeyBinding{.key = imgui::keyBackspace, .glfwKey = kKeyBackspace},
+    UiKeyBinding{.key = imgui::keySpace, .glfwKey = kKeySpace},
+    UiKeyBinding{.key = imgui::keyEnter, .glfwKey = kKeyEnter},
+    UiKeyBinding{.key = imgui::keyEscape, .glfwKey = kKeyEscape},
+    UiKeyBinding{.key = imgui::keyLeftCtrl, .glfwKey = kKeyLeftControl},
+    UiKeyBinding{.key = imgui::keyLeftShift, .glfwKey = kKeyLeftShift},
+    UiKeyBinding{.key = imgui::keyLeftAlt, .glfwKey = kKeyLeftAlt},
+    UiKeyBinding{.key = imgui::keyLeftSuper, .glfwKey = kKeyLeftSuper},
+    UiKeyBinding{.key = imgui::keyRightCtrl, .glfwKey = kKeyRightControl},
+    UiKeyBinding{.key = imgui::keyRightShift, .glfwKey = kKeyRightShift},
+    UiKeyBinding{.key = imgui::keyRightAlt, .glfwKey = kKeyRightAlt},
+    UiKeyBinding{.key = imgui::keyRightSuper, .glfwKey = kKeyRightSuper},
+    UiKeyBinding{.key = imgui::keyA, .glfwKey = kKeyA},
+    UiKeyBinding{.key = imgui::keyC, .glfwKey = kKeyC},
+    UiKeyBinding{.key = imgui::keyV, .glfwKey = kKeyV},
+    UiKeyBinding{.key = imgui::keyX, .glfwKey = kKeyX},
+    UiKeyBinding{.key = imgui::keyY, .glfwKey = kKeyY},
+    UiKeyBinding{.key = imgui::keyZ, .glfwKey = kKeyZ},
+};
 
 [[nodiscard]] float sanitizeUiDeltaSeconds(float deltaSeconds) noexcept
 {
@@ -27,6 +94,44 @@ inline constexpr std::string_view kUnifiedUiWindowTitle = "Renderer Controls";
     }
 
     return std::min(deltaSeconds, 0.5f);
+}
+
+int resizeInputTextBuffer(ImGuiInputTextCallbackData* data)
+{
+    nrAssert(data != nullptr, "resizeInputTextBuffer requires ImGui callback data.");
+    nrAssert(data->EventFlag == ImGuiInputTextFlags_CallbackResize, "resizeInputTextBuffer only handles resize callbacks.");
+
+    auto* value = static_cast<std::string*>(data->UserData);
+    nrAssert(value != nullptr, "resizeInputTextBuffer requires a string user data pointer.");
+    value->resize(static_cast<std::size_t>(data->BufTextLen));
+    data->Buf = value->data();
+    return 0;
+}
+
+void submitKeyboardInput(auto& io, const nr::rhi::PresentationContext& presentation)
+{
+    auto const controlDown = presentation.keyDown(kKeyLeftControl) ||
+                             presentation.keyDown(kKeyRightControl);
+    auto const shiftDown = presentation.keyDown(kKeyLeftShift) ||
+                           presentation.keyDown(kKeyRightShift);
+    auto const altDown = presentation.keyDown(kKeyLeftAlt) ||
+                         presentation.keyDown(kKeyRightAlt);
+    auto const superDown = presentation.keyDown(kKeyLeftSuper) ||
+                           presentation.keyDown(kKeyRightSuper);
+
+    io.AddKeyEvent(imgui::keyModCtrl, controlDown);
+    io.AddKeyEvent(imgui::keyModShift, shiftDown);
+    io.AddKeyEvent(imgui::keyModAlt, altDown);
+    io.AddKeyEvent(imgui::keyModSuper, superDown);
+
+    std::ranges::for_each(kUiKeyBindings, [&](const UiKeyBinding& binding) {
+        io.AddKeyEvent(binding.key, presentation.keyDown(binding.glfwKey));
+    });
+
+    auto codepoints = presentation.consumeTextInputCodepoints();
+    std::ranges::for_each(codepoints, [&](std::uint32_t codepoint) {
+        io.AddInputCharacter(codepoint);
+    });
 }
 } // namespace nr::app::detail
 
@@ -136,6 +241,7 @@ void UiSystem::shutdown()
     frameFinalized_ = false;
     captureState_ = {};
     frameStats_ = {};
+    cameraFrame_ = {};
     cpuStatistics_ = {};
     gpuPassStatistics_ = {};
     fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
@@ -195,6 +301,7 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, floa
     io.AddMouseButtonEvent(0, presentation.mouseButtonDown(detail::kMouseButtonLeft));
     io.AddMouseButtonEvent(1, presentation.mouseButtonDown(detail::kMouseButtonRight));
     io.AddMouseButtonEvent(2, presentation.mouseButtonDown(detail::kMouseButtonMiddle));
+    detail::submitKeyboardInput(io, presentation);
 
     ImGui::NewFrame();
     frameActive_ = true;
@@ -333,9 +440,76 @@ bool UiSystem::checkbox(std::string_view label, bool& value)
     return ImGui::Checkbox(ownedLabel.c_str(), &value);
 }
 
+bool UiSystem::button(std::string_view label)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::button requires an active UI frame.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    return ImGui::Button(ownedLabel.c_str());
+}
+
+bool UiSystem::inputText(std::string_view label, std::string& value)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputText requires an active UI frame.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    return ImGui::InputText(
+        ownedLabel.c_str(),
+        value.data(),
+        value.capacity() + 1u,
+        ImGuiInputTextFlags_CallbackResize,
+        detail::resizeInputTextBuffer,
+        std::addressof(value));
+}
+
+bool UiSystem::beginCombo(std::string_view label, std::string_view preview)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::beginCombo requires an active UI frame.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    auto const ownedPreview = std::string{preview};
+    return ImGui::BeginCombo(ownedLabel.c_str(), ownedPreview.c_str());
+}
+
+void UiSystem::endCombo()
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::endCombo requires an active UI frame.");
+    setCurrentContext();
+    ImGui::EndCombo();
+}
+
+bool UiSystem::selectable(std::string_view label, bool selected)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::selectable requires an active UI frame.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    return ImGui::Selectable(ownedLabel.c_str(), selected);
+}
+
+void UiSystem::setItemDefaultFocus()
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::setItemDefaultFocus requires an active UI frame.");
+    setCurrentContext();
+    ImGui::SetItemDefaultFocus();
+}
+
 const UiFrameStats& UiSystem::stats() const noexcept
 {
     return frameStats_;
+}
+
+void UiSystem::setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame& cameraFrame) noexcept
+{
+    cameraFrame_ = cameraFrame;
+}
+
+const nr::renderer::ViewerPerspectiveCameraFrame& UiSystem::cameraFrame() const noexcept
+{
+    return cameraFrame_;
 }
 
 void UiSystem::setCpuStatistics(const nr::renderer::RendererCpuStatistics& statistics) noexcept

@@ -663,6 +663,7 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
         {
             meshAsset.name = std::format("mesh_{}", meshIndex);
         }
+        meshAsset.clockwiseFrontFace = false;
 
         meshAsset.vertices.reserve(mesh->mNumVertices);
         auto vertexIndices = std::views::iota(0u, mesh->mNumVertices);

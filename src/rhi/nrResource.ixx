@@ -52,7 +52,7 @@ template <typename Resource>
     requires BufferLike<Resource> || ImageLike<Resource>
 void setResourceDebugName(Resource &resource)
 {
-    if constexpr (isDebugMode)
+    if constexpr (gpuDebugNamesEnabled)
     {
         nrAssert(resource.valid(), "Cannot set debug name on invalid resource");
 
@@ -101,7 +101,7 @@ template <typename Resource, typename ViewHandle>
     requires BufferLike<Resource> || ImageLike<Resource>
 void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::string &debugName)
 {
-    if constexpr (!isDebugMode)
+    if constexpr (!gpuDebugNamesEnabled)
         return;
 
     vk::ObjectType viewType;
@@ -247,7 +247,7 @@ class Buffer
      *
      * Creates a VkBufferView and stores it in the named view map.
      * If a view with the same key already exists, it is replaced.
-     * In debug mode, sets a Vulkan debug name on the view.
+     * When GPU debug names are enabled, sets a Vulkan debug name on the view.
      *
      * @param format   Texel format interpretation
      * @param offset   Byte offset into the buffer (default: 0)
@@ -455,7 +455,7 @@ class Image
      *
      * The image handle is automatically injected into the create info.
      * If a view with the same key already exists, it is replaced.
-     * In debug mode, sets a Vulkan debug name on the view.
+     * When GPU debug names are enabled, sets a Vulkan debug name on the view.
      *
      * @param viewKey  Unique view key for map lookup (also used as the Vulkan debug name)
      * @param viewInfo View creation parameters (image field is overwritten)

@@ -10,38 +10,6 @@ import :rendererSubmission;
 
 namespace nr::renderer::detail
 {
-inline constexpr std::uint32_t kTemporaryParallelRecordStatsInterval = 3000;
-
-struct TemporaryParallelPassStats
-{
-    std::uint32_t batchIndex = 0;
-    std::string debugName{};
-    std::size_t itemCount = 0;
-    std::uint32_t assignedThreadCount = 0;
-    std::size_t rangeCount = 0;
-};
-
-struct TemporaryExecuteStats
-{
-    double launchRecordTasksMilliseconds = 0.0;
-    double collectRecordTaskResultsMilliseconds = 0.0;
-    double primaryReplayMilliseconds = 0.0;
-    double submitMilliseconds = 0.0;
-    std::vector<TemporaryParallelPassStats> parallelPasses{};
-};
-
-[[nodiscard]] double elapsedMilliseconds(
-    std::chrono::steady_clock::time_point begin,
-    std::chrono::steady_clock::time_point end) noexcept
-{
-    return std::chrono::duration<double, std::milli>(end - begin).count();
-}
-
-[[nodiscard]] bool shouldLogTemporaryParallelRecordStats(std::uint64_t frameNumber) noexcept
-{
-    return frameNumber > 0u && frameNumber % kTemporaryParallelRecordStatsInterval == 0u;
-}
-
 [[nodiscard]] std::uint32_t secondaryPoolSlotForRecordWorker(std::uint32_t recordWorkerId) noexcept
 {
     return recordWorkerId + kWorkerSecondaryPoolSlotBase;
@@ -306,8 +274,6 @@ namespace nr::renderer
 [[nodiscard]] ExecuteReport RenderGraphExecutor::executePrepared(const PreparedGraphFrame& prepared, const ExecuteContext& context)
 {
         auto report = ExecuteReport{};
-        auto temporaryStats = detail::TemporaryExecuteStats{};
-        auto const temporaryStatsFrameNumber = ++temporaryParallelRecordStatsFrameNumber_;
         report.plan = prepared.plan;
         report.invokedPassPrepareCount = prepared.invokedPassPrepareCount;
 
@@ -386,7 +352,6 @@ namespace nr::renderer
                 "RenderGraphExecutor::execute requires a valid submission timeline when inserting a synthetic compute-final present batch.");
         }
 
-        auto const launchRecordTasksBegin = std::chrono::steady_clock::now();
         auto recordTasksByBatch = launchRecordTasksForAllBatches(
             context,
             frameSlot,
@@ -395,34 +360,9 @@ namespace nr::renderer
             runtimeBindings,
             frameDataByHandle,
             report);
-        temporaryStats.launchRecordTasksMilliseconds = detail::elapsedMilliseconds(
-            launchRecordTasksBegin,
-            std::chrono::steady_clock::now());
         nrAssert(
             recordTasksByBatch.size() == report.plan.batches.size(),
             "RenderGraphExecutor::execute expected one record task group per submit batch.");
-
-        auto statsBatchOrdinals = std::views::iota(std::size_t{0}, recordTasksByBatch.size());
-        std::ranges::for_each(statsBatchOrdinals, [&](std::size_t batchOrdinal) {
-            auto const& compiledBatch = compiled.submitBatches[batchOrdinal];
-            auto const& batchTasks = recordTasksByBatch[batchOrdinal];
-            auto passOrdinals = std::views::iota(std::size_t{0}, batchTasks.passPlans.size());
-            std::ranges::for_each(passOrdinals, [&](std::size_t passOrdinal) {
-                auto const& passPlan = batchTasks.passPlans[passOrdinal];
-                if (!passPlan.parallel)
-                {
-                    return;
-                }
-
-                temporaryStats.parallelPasses.push_back(detail::TemporaryParallelPassStats{
-                    .batchIndex = compiledBatch.batchIndex,
-                    .debugName = compiledBatch.passes[passOrdinal].debugName,
-                    .itemCount = passPlan.parallelPlan.itemCount,
-                    .assignedThreadCount = passPlan.parallelPlan.assignedThreadCount,
-                    .rangeCount = passPlan.parallelPlan.ranges.size(),
-                });
-            });
-        });
 
         auto previousSignalToken = RendererSubmitToken{};
         auto timedPassOffset = std::size_t{0};
@@ -510,16 +450,11 @@ namespace nr::renderer
                     }
                 }
 
-                auto const collectBegin = std::chrono::steady_clock::now();
                 auto recordResults = collectRecordTaskResults(
                     recordTasksByBatch[batchOrdinal],
                     batchOrdinal,
                     report);
-                temporaryStats.collectRecordTaskResultsMilliseconds += detail::elapsedMilliseconds(
-                    collectBegin,
-                    std::chrono::steady_clock::now());
 
-                auto const primaryReplayBegin = std::chrono::steady_clock::now();
                 executeRecordedSecondaries(
                     commandBuffer,
                     compiledBatch,
@@ -532,9 +467,6 @@ namespace nr::renderer
                     compiledResourceByHandle,
                     runtimeBindings,
                     report);
-                temporaryStats.primaryReplayMilliseconds += detail::elapsedMilliseconds(
-                    primaryReplayBegin,
-                    std::chrono::steady_clock::now());
 
                 if (!planBatch.tailReleaseTransitions.empty())
                 {
@@ -598,11 +530,7 @@ namespace nr::renderer
                                                ? imageAvailableWaitStageForBatch(compiledBatch, compiledResourceByHandle)
                                                : vk::PipelineStageFlags2{};
             attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, planBatch.signalsPresent);
-            auto const submitBegin = std::chrono::steady_clock::now();
             context.device.submitFrameBatch(std::move(submitBatch), submitRole, planBatch.signalsPresent, imageAvailableWaitStage);
-            temporaryStats.submitMilliseconds += detail::elapsedMilliseconds(
-                submitBegin,
-                std::chrono::steady_clock::now());
             ++report.submittedBatchCount;
         });
 
@@ -630,56 +558,12 @@ namespace nr::renderer
             }
 
             attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, true);
-            auto const submitBegin = std::chrono::steady_clock::now();
             context.device.submitFrameBatch(std::move(submitBatch), nr::rhi::QueueRole::Compute, true);
-            temporaryStats.submitMilliseconds += detail::elapsedMilliseconds(
-                submitBegin,
-                std::chrono::steady_clock::now());
             ++report.submittedBatchCount;
         }
 
         frameTimingState.pendingFrameIndex = context.frameIndex;
         frameTimingState.pendingPasses = std::move(currentTimingSamples);
-
-        if (detail::shouldLogTemporaryParallelRecordStats(temporaryStatsFrameNumber))
-        {
-            auto parallelPassText = std::string{};
-            if (temporaryStats.parallelPasses.empty())
-            {
-                parallelPassText = "none";
-            }
-            else
-            {
-                std::ranges::for_each(temporaryStats.parallelPasses, [&](const detail::TemporaryParallelPassStats& passStats) {
-                    if (!parallelPassText.empty())
-                    {
-                        parallelPassText += "; ";
-                    }
-                    parallelPassText += std::format(
-                        "batch={} pass={} items={} assignedThreads={} ranges={}",
-                        passStats.batchIndex,
-                        passStats.debugName,
-                        passStats.itemCount,
-                        passStats.assignedThreadCount,
-                        passStats.rangeCount);
-                });
-            }
-
-            nrInfo(std::format(
-                "RDG temporary parallel record stats frameNumber={} frameIndex={} workers={} parallelPassRecording={} submittedRecordTasks={} recordedSecondaries={} invokedRecordCallbacks={} launchTasksMs={:.3f} collectFuturesMs={:.3f} primaryReplayMs={:.3f} submitMs={:.3f} parallelPasses=[{}]",
-                temporaryStatsFrameNumber,
-                context.frameIndex,
-                report.recordWorkerCount,
-                report.parallelPassRecording ? 1 : 0,
-                report.submittedRecordTaskCount,
-                report.recordedSecondaryCommandBufferCount,
-                report.invokedPassRecordCount,
-                temporaryStats.launchRecordTasksMilliseconds,
-                temporaryStats.collectRecordTaskResultsMilliseconds,
-                temporaryStats.primaryReplayMilliseconds,
-                temporaryStats.submitMilliseconds,
-                parallelPassText));
-        }
 
         return report;
     }
@@ -895,17 +779,17 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
                         resource.debugName);
                     binding.buffer = buffer.handle();
                     binding.bufferSize = buffer.size();
-                    binding.bufferResource = std::ref(buffer);
+                    binding.bufferResource = std::cref(buffer);
                 }
                 else if (resource.importedBufferResource.has_value())
                 {
                     // Use pre-allocated imported buffer from node
-                    auto& buffer = resource.importedBufferResource->get();
+                    const auto& buffer = resource.importedBufferResource->get();
                     nrAssert(buffer.valid(),
                         "RenderGraphExecutor::resolveRuntimeResources: importedBufferResource reference is invalid for resource: " + resource.debugName);
                     binding.buffer = buffer.handle();
                     binding.bufferSize = buffer.size();
-                    binding.bufferResource = std::ref(buffer);
+                    binding.bufferResource = std::cref(buffer);
                 }
                 else
                 {
@@ -915,7 +799,7 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
                     {
                         binding.buffer = imported->second.get().handle();
                         binding.bufferSize = imported->second.get().size();
-                        binding.bufferResource = imported->second;
+                        binding.bufferResource = std::cref(imported->second.get());
                     }
                 }
             }

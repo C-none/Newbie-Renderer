@@ -43,29 +43,6 @@ namespace
         },
     };
 
-    graphSpec.connections = {
-        nr::renderer::NodeConnection{
-            .from = nr::renderer::NodePortRef{
-                .nodeName = "NormalBuffer",
-                .portName = "color",
-            },
-            .to = nr::renderer::NodePortRef{
-                .nodeName = "Present",
-                .portName = "sourceColor",
-            },
-        },
-        nr::renderer::NodeConnection{
-            .from = nr::renderer::NodePortRef{
-                .nodeName = "Ui",
-                .portName = "uiBuffer",
-            },
-            .to = nr::renderer::NodePortRef{
-                .nodeName = "Present",
-                .portName = "uiBuffer",
-            },
-        },
-    };
-
     graphSpec.submitNodes = {
         nr::renderer::SubmitNodeSpec{
             .debugName = "Smoke.GraphicsToCompute",
@@ -87,7 +64,51 @@ namespace
            "Box.gltf";
 }
 
-[[nodiscard]] bool renderOneFrame(
+[[nodiscard]] std::filesystem::path replacementModelPath()
+{
+    return std::filesystem::path{std::string{nr::projectRoot}} /
+           "assets" /
+           "glTF-Sample-Assets" /
+           "Models" /
+           "Triangle" /
+           "glTF" /
+           "Triangle.gltf";
+}
+
+[[nodiscard]] std::optional<std::reference_wrapper<nr::scene::Scene>> loadModelIntoApp(
+    nr::app::AppSession& app,
+    const std::filesystem::path& modelPath,
+    std::string_view label)
+{
+    auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
+        .sourcePath = modelPath,
+    });
+    if (!loadResult.has_value())
+    {
+        std::println("[error] smoke test failed to load {} model: {}", label, loadResult.error().message);
+        return std::nullopt;
+    }
+
+    auto& scene = app.createScene();
+    auto templateHandle = scene.registerTemplate(loadResult.value());
+    if (!templateHandle.valid())
+    {
+        std::println("[error] smoke test failed to register {} scene template.", label);
+        return std::nullopt;
+    }
+
+    auto instanceHandle = scene.instantiate(templateHandle);
+    if (!instanceHandle.valid())
+    {
+        std::println("[error] smoke test failed to instantiate {} scene.", label);
+        return std::nullopt;
+    }
+
+    app.resetCameraFromSceneOrDefault();
+    return std::ref(scene);
+}
+
+[[nodiscard]] std::optional<nr::renderer::RendererFrameResult> renderOneFrame(
     nr::app::AppSession& app,
     nr::scene::Scene& scene,
     nr::renderer::FrameServices& frameServices,
@@ -99,12 +120,13 @@ namespace
     if (!frameServices.tryGet<nr::app::UiSystem>().has_value())
     {
         std::println("[error] smoke test failed to resolve UiSystem from FrameServices.");
-        return false;
+        return std::nullopt;
     }
 
     presentation.pollEvents();
     app.ui().beginFrame(presentation, deltaSeconds);
     app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
+    app.ui().setCameraFrame(app.camera().frame());
 
     auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
@@ -119,7 +141,7 @@ namespace
     if (!frameResult.rendered)
     {
         std::println("[error] smoke test frame was not rendered.");
-        return false;
+        return std::nullopt;
     }
 
     if (frameResult.presentResult == vk::Result::eErrorOutOfDateKHR ||
@@ -132,7 +154,7 @@ namespace
     if (frameResult.presentResult != vk::Result::eSuccess)
     {
         std::println("[error] smoke test present failed with {}.", vk::to_string(frameResult.presentResult));
-        return false;
+        return std::nullopt;
     }
 
     auto drawData = app.ui().drawData();
@@ -150,7 +172,7 @@ namespace
                 drawData->get().TotalVtxCount,
                 drawData->get().TotalIdxCount);
         }
-        return false;
+        return std::nullopt;
     }
 
     if (frameResult.invokedPassRecordCount < 3u)
@@ -158,6 +180,47 @@ namespace
         std::println(
             "[error] smoke test expected at least 3 recorded passes, observed {}.",
             frameResult.invokedPassRecordCount);
+        return std::nullopt;
+    }
+
+    return frameResult;
+}
+
+[[nodiscard]] bool renderUntilSceneDraw(
+    nr::app::AppSession& app,
+    nr::scene::Scene& scene,
+    nr::renderer::FrameServices& frameServices,
+    float deltaSeconds,
+    std::string_view label)
+{
+    auto failed = false;
+    auto observedDraw = false;
+    auto const attempts = std::views::iota(0, 8);
+    std::ranges::for_each(attempts, [&](int) {
+        if (failed || observedDraw)
+        {
+            return;
+        }
+
+        auto frameResult = renderOneFrame(app, scene, frameServices, deltaSeconds);
+        if (!frameResult.has_value())
+        {
+            failed = true;
+            return;
+        }
+
+        observedDraw = frameResult->sceneRasterPacketCount > 0u &&
+                       frameResult->sceneBridgeDrawCount > 0u;
+    });
+
+    if (failed)
+    {
+        return false;
+    }
+
+    if (!observedDraw)
+    {
+        std::println("[error] smoke test did not observe a rendered scene draw for {}.", label);
         return false;
     }
 
@@ -174,32 +237,11 @@ namespace
             .engineName = "NewbieRenderer",
         });
 
-        auto modelPath = defaultModelPath();
-        auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
-            .sourcePath = modelPath,
-        });
-        if (!loadResult.has_value())
+        auto firstScene = loadModelIntoApp(app, defaultModelPath(), "initial");
+        if (!firstScene.has_value())
         {
-            std::println("[error] smoke test failed to load model: {}", loadResult.error().message);
             return false;
         }
-
-        auto& scene = app.createScene();
-        auto templateHandle = scene.registerTemplate(loadResult.value());
-        if (!templateHandle.valid())
-        {
-            std::println("[error] smoke test failed to register scene template.");
-            return false;
-        }
-
-        auto instanceHandle = scene.instantiate(templateHandle);
-        if (!instanceHandle.valid())
-        {
-            std::println("[error] smoke test failed to instantiate scene.");
-            return false;
-        }
-
-        app.resetCameraFromSceneOrDefault();
 
         auto normalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
         normalBuffer->input.colorFormat = app.renderer().device().presentationContext.swapchainFormat();
@@ -208,7 +250,18 @@ namespace
         auto frameServices = app.makeFrameServices();
         constexpr auto deltaSeconds = 1.0f / 60.0f;
 
-        if (!renderOneFrame(app, scene, frameServices, deltaSeconds))
+        if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, deltaSeconds, "initial model"))
+        {
+            return false;
+        }
+
+        auto secondScene = loadModelIntoApp(app, replacementModelPath(), "replacement");
+        if (!secondScene.has_value())
+        {
+            return false;
+        }
+
+        if (!renderUntilSceneDraw(app, secondScene->get(), frameServices, deltaSeconds, "replacement model"))
         {
             return false;
         }

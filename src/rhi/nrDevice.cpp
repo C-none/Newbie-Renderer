@@ -579,7 +579,6 @@ void Device::waitIdle()
 {
         queueManager.waitAllIdle();
         frameManager.waitAll();
-        uploadReadbackContext_.reset();
     }
 
 [[nodiscard]] PipelineService &Device::pipeline() noexcept
@@ -614,6 +613,7 @@ Device::~Device()
         if (*device != nullptr)
         {
             waitIdle();
+            uploadReadbackContext_.reset();
         }
     }
 
@@ -690,41 +690,20 @@ void Device::setupInitialFlags()
         nrAssert(glfwExt != nullptr && glfwCount > 0, "GLFW did not report Vulkan instance extensions.");
         instanceEnabledExtensions.assign(glfwExt, glfwExt + glfwCount);
 
-        if constexpr (isDebugMode)
+        if constexpr (isDebugMode || gpuDebugNamesEnabled)
         {
             auto addIfMissing = [](std::vector<std::string> &list, std::string_view item) {
                 if (std::ranges::none_of(list, [item](const auto &s) { return s == item; }))
                     list.push_back(std::string(item));
             };
 
-            auto envFlagEnabled = [](const char* name) {
-                const auto* value = std::getenv(name);
-                if (value == nullptr)
-                {
-                    return false;
-                }
-
-                auto text = std::string_view{value};
-                return text == "1" ||
-                       text == "true" ||
-                       text == "TRUE" ||
-                       text == "on" ||
-                       text == "ON" ||
-                       text == "yes" ||
-                       text == "YES";
-            };
-
-            constexpr std::string_view validationLayer = "VK_LAYER_KHRONOS_validation";
-            if (!envFlagEnabled("NR_DISABLE_VULKAN_VALIDATION"))
+            if constexpr (isDebugMode)
             {
+                constexpr std::string_view validationLayer = "VK_LAYER_KHRONOS_validation";
                 nrAssert(hasInstanceLayer(validationLayer), std::format("Debug builds require '{}'. The Vulkan loader did not enumerate this layer on the current machine. "
                                                                         "Validation layers are provided by the Vulkan SDK / validation-layer installation, not by the GPU or display driver.",
                                                                         validationLayer));
                 addIfMissing(instanceEnabledLayers, validationLayer);
-            }
-            else
-            {
-                nrInfo<LogLevel::warning>("Debug Vulkan validation layer disabled by NR_DISABLE_VULKAN_VALIDATION.");
             }
 
             if (hasInstanceExtension(vk::EXTDebugUtilsExtensionName))
@@ -733,8 +712,8 @@ void Device::setupInitialFlags()
             }
             else
             {
-                nrInfo<LogLevel::error>("VK_EXT_debug_utils is unavailable in a debug build; debug labels and object names require this extension.");
-                nrAssert(false, "Debug builds require VK_EXT_debug_utils.");
+                nrInfo<LogLevel::error>("VK_EXT_debug_utils is unavailable; validation callbacks, debug labels, and object names require this extension.");
+                nrAssert(false, "VK_EXT_debug_utils is required when validation or GPU debug names are enabled.");
             }
         }
     }

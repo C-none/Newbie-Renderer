@@ -133,6 +133,7 @@ class PresentationContext
     [[nodiscard]] bool keyDown(int glfwKeyCode) const;
     [[nodiscard]] bool mouseButtonDown(int glfwMouseButton) const;
     [[nodiscard]] glm::dvec2 cursorPosition() const;
+    [[nodiscard]] std::vector<std::uint32_t> consumeTextInputCodepoints() const;
     [[nodiscard]] bool windowShouldClose() const;
 
     void setActiveSwapchainImage(std::uint32_t imageIndex);
@@ -165,5 +166,6 @@ class PresentationContext
     AcquireSemaphorePool acquirePool_{};
     std::optional<PendingAcquire> pendingAcquire_{};
     std::array<std::optional<std::uint32_t>, maxFrameInFlight> borrowedAcquireSlotByFrame_{};
+    mutable std::vector<std::uint32_t> textInputCodepoints_{};
 };
 } // namespace nr::rhi

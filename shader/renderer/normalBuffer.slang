@@ -3,7 +3,9 @@ import common;
 
 struct NormalBufferPushConstants
 {
-    column_major float4x4 model;
+    float4 modelRow0;
+    float4 modelRow1;
+    float4 modelRow2;
 };
 
 [[vk::push_constant]]
@@ -24,12 +26,17 @@ struct VSOutput
 [shader("vertex")]
 VSOutput vertexMain(VSInput input)
 {
-    float4 worldPosition = mul(gPushConstants.model, float4(input.position, 1.0f));
+    float4 localPosition = float4(input.position, 1.0f);
+    float4 worldPosition = float4(
+        dot(gPushConstants.modelRow0, localPosition),
+        dot(gPushConstants.modelRow1, localPosition),
+        dot(gPushConstants.modelRow2, localPosition),
+        1.0f);
 
     float3x3 modelMatrix3x3 = float3x3(
-        gPushConstants.model[0].xyz,
-        gPushConstants.model[1].xyz,
-        gPushConstants.model[2].xyz
+        gPushConstants.modelRow0.xyz,
+        gPushConstants.modelRow1.xyz,
+        gPushConstants.modelRow2.xyz
     );
     float3x3 normalMatrix = transpose(modelMatrix3x3);
     float3 worldNormal = normalize(mul(normalMatrix, input.normal));

@@ -28,7 +28,7 @@ namespace nr::rhi
 
         result.vmaBuffer_ = allocator.allocateBuffer(createInfo, strategy, memoryUsage, frameIndex);
 
-        // Set Vulkan debug object name in debug mode only
+        // Set Vulkan debug object name when debugger-facing names are enabled.
         if (!name.empty())
         {
             setResourceDebugName(result);
@@ -157,7 +157,7 @@ std::reference_wrapper<const vk::raii::BufferView> Buffer::addView(
         auto [it, inserted] = bufferViews_.emplace(
             std::move(key), vk::raii::BufferView{device_->get(), viewInfo});
 
-        // Set Vulkan debug name for the view in debug mode
+        // Set Vulkan debug name for the view when debugger-facing names are enabled.
         setResourceViewDebugName(*this, static_cast<VkBufferView>(*it->second), it->first);
 
         return std::cref(it->second);
@@ -233,7 +233,7 @@ void Buffer::write(const void *data, std::size_t dataSize, std::size_t offset)
         // Create default view covering all mips and layers
         result.createDefaultView();
 
-        // Set Vulkan debug object names in debug mode only
+        // Set Vulkan debug object names when debugger-facing names are enabled.
         if (!name.empty())
         {
             setResourceDebugName(result);

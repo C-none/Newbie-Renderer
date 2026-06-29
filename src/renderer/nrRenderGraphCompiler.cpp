@@ -224,6 +224,13 @@ namespace nr::renderer
                 vk::AccessFlagBits2::eAccelerationStructureReadKHR};
         case BufferAccessIntent::AccelerationStructureWrite:
             return AccessScope{vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureWriteKHR};
+        case BufferAccessIntent::AccelerationStructureBuildInputRead:
+            return AccessScope{vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eShaderRead};
+        case BufferAccessIntent::AccelerationStructureScratchReadWrite:
+            return AccessScope{
+                vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+                vk::AccessFlagBits2::eAccelerationStructureReadKHR |
+                    vk::AccessFlagBits2::eAccelerationStructureWriteKHR};
         case BufferAccessIntent::ShaderBindingTableRead:
             return AccessScope{vk::PipelineStageFlagBits2::eRayTracingShaderKHR, vk::AccessFlagBits2::eShaderBindingTableReadKHR};
         case BufferAccessIntent::HostRead:

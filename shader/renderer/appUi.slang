@@ -9,11 +9,8 @@ struct UiPushConstants
     uint3 padding;
 };
 
-[[vk::binding(0, 0)]]
-SamplerState gUiSampler;
-
-[[vk::binding(0, 1)]] // Variable descriptor-count binding must be the largest binding number in the set.
-Texture2D<float4> gUiTextures[];
+[[vk::binding(0, 1)]]
+Sampler2D<float4> gUiTextures[];
 
 [[vk::push_constant]]
 ConstantBuffer<UiPushConstants> gUiPush;
@@ -45,5 +42,5 @@ VSOutput vertexMain(VSInput input)
 [shader("fragment")]
 float4 fragmentMain(VSOutput input) : SV_Target0
 {
-    return input.color * gUiTextures[gUiPush.textureIndex].Sample(gUiSampler, input.uv);
+    return input.color * gUiTextures[gUiPush.textureIndex].Sample(input.uv);
 }

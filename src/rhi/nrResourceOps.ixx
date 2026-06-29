@@ -1005,6 +1005,19 @@ class UploadReadbackContext
         const BufferUploadOwnershipPlan& ownership);
 
     /**
+     * @brief Upload raw bytes into a concurrently-shared destination buffer.
+     *
+     * This records transfer-queue copy work and returns a timeline ticket, but
+     * deliberately does not emit queue-family ownership barriers. Use this only
+     * for buffers created with concurrent sharing across the transfer queue and
+     * all consumer queue families.
+     */
+    [[nodiscard]] BufferUploadTicket uploadBuffer(
+        std::span<const std::byte> data,
+        const Buffer& dst,
+        vk::DeviceSize dstOffset);
+
+    /**
      * @brief Upload one image payload via staging buffer -> copyBufferToImage2.
      *
      * This path intentionally does not create a staging image. It performs:

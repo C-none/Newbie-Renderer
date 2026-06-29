@@ -100,6 +100,7 @@ struct SceneRenderBridgeBuildInput
     std::function<std::optional<std::uint32_t>(nr::resource::MeshHandle)> resolveMeshBindless{};
     std::function<std::optional<std::uint32_t>(nr::resource::MaterialHandle)> resolveMaterialBindless{};
     std::function<std::optional<SceneBridgeMaterialRasterState>(nr::resource::MaterialHandle)> resolveMaterialRasterState{};
+    std::function<std::optional<SceneBridgeGeometryBuffers>()> resolveGeometryBuffers{};
     std::function<std::optional<SceneBridgeDrawGeometry>(nr::resource::MeshHandle, std::uint32_t)> resolveRasterDrawGeometry{};
 };
 

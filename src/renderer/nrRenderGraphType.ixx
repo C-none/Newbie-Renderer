@@ -58,7 +58,7 @@ struct GraphImportedBufferDesc
     /// looking it up in the importedBuffers map. This enables nodes to pre-allocate
     /// per-frame-slot resources at initialize time and import them into the graph
     /// at build time, avoiding runtime memory allocations.
-    std::optional<std::reference_wrapper<nr::rhi::Buffer>> importedResource{};
+    std::optional<std::reference_wrapper<const nr::rhi::Buffer>> importedResource{};
 };
 
 struct GraphImportedImageDesc
@@ -503,7 +503,7 @@ struct AccelerationStructureBuildInputRead
 {
     static constexpr BufferUseSpecDesc bufferUse{
         .usage = BufferUsageIntent::AccelerationStructureBuildInput,
-        .access = BufferAccessIntent::AccelerationStructureRead,
+        .access = BufferAccessIntent::AccelerationStructureBuildInputRead,
         .readOnly = true,
     };
 };
@@ -529,7 +529,7 @@ struct AccelerationStructureScratchWrite
 {
     static constexpr BufferUseSpecDesc bufferUse{
         .usage = BufferUsageIntent::AccelerationStructureScratch,
-        .access = BufferAccessIntent::AccelerationStructureWrite,
+        .access = BufferAccessIntent::AccelerationStructureScratchReadWrite,
     };
 };
 
@@ -817,7 +817,7 @@ struct PassBufferResource
 {
     vk::Buffer buffer = vk::Buffer{};
     vk::DeviceSize size = 0;
-    std::optional<std::reference_wrapper<nr::rhi::Buffer>> resource{};
+    std::optional<std::reference_wrapper<const nr::rhi::Buffer>> resource{};
 };
 
 struct PassImageResource
@@ -1149,7 +1149,7 @@ struct CompiledResourceDesc
 
     /// Optional reference to a pre-allocated imported buffer held by the node.
     /// Populated from GraphImportedBufferDesc::importedResource during compilation.
-    std::optional<std::reference_wrapper<nr::rhi::Buffer>> importedBufferResource{};
+    std::optional<std::reference_wrapper<const nr::rhi::Buffer>> importedBufferResource{};
 
     /// Optional reference to a pre-allocated imported image held by the node.
     /// Populated from GraphImportedImageDesc::importedResource during compilation.

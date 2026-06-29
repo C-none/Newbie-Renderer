@@ -331,14 +331,46 @@ void CursorPipelineLayout::bindDescriptorSets(
 		dynamicOffsets.empty(),
 		"CursorPipelineLayout::bindDescriptorSets with multiple sets does not accept shared dynamic offsets. Bind per-set when using dynamic offsets.");
 
-	for (const auto &set : sets)
-	{
+	auto runFirstSetIndex = std::optional<std::uint32_t>{};
+	auto runDescriptorSets = std::vector<vk::DescriptorSet>{};
+	runDescriptorSets.reserve(sets.size());
+
+	auto flushRun = [&]() {
+		if (!runFirstSetIndex.has_value() || runDescriptorSets.empty())
+		{
+			return;
+		}
+
+		commandBuffer.bindDescriptorSets(bindPoint, raw(), *runFirstSetIndex, runDescriptorSets, {});
+		runFirstSetIndex.reset();
+		runDescriptorSets.clear();
+	};
+
+	std::ranges::for_each(sets, [&](const ShaderBindingSet &set) {
 		if (!set.valid())
 		{
-			continue;
+			flushRun();
+			return;
 		}
-		bindDescriptorSet(commandBuffer, bindPoint, set, {});
-	}
+
+		auto const setIndex = set.setIndex();
+		if (!runFirstSetIndex.has_value())
+		{
+			runFirstSetIndex = setIndex;
+		}
+		else
+		{
+			auto const expectedSetIndex = *runFirstSetIndex + static_cast<std::uint32_t>(runDescriptorSets.size());
+			if (setIndex != expectedSetIndex)
+			{
+				flushRun();
+				runFirstSetIndex = setIndex;
+			}
+		}
+
+		runDescriptorSets.push_back(set.raw());
+	});
+	flushRun();
 }
 
 std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
@@ -382,14 +414,16 @@ std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineL
 void updateResourcesForBindingSnapshot(
 	ShaderBindingPool &pool,
 	std::span<const ShaderBindingSet> sets,
+	DescriptorWriteCache &descriptorWriteCache,
 	const ShaderBindingSnapshot &snapshot,
 	LogicalDescriptorResolver logicalResolver)
 {
 	auto writeRequests = resolveDescriptorWriteRequests(snapshot, std::move(logicalResolver));
-	if (!writeRequests.empty())
+	auto changedWriteRequests = filterChangedDescriptorWrites(descriptorWriteCache, writeRequests);
+	if (!changedWriteRequests.empty())
 	{
 		auto requestsBySet = std::map<std::uint32_t, std::vector<DescriptorWriteRequest>>{};
-		std::ranges::for_each(writeRequests, [&](const DescriptorWriteRequest &request) {
+		std::ranges::for_each(changedWriteRequests, [&](const DescriptorWriteRequest &request) {
 			requestsBySet[request.binding.set].push_back(request);
 		});
 
@@ -436,6 +470,7 @@ void bindResourcesToCommandBuffer(
 	const CursorPipelineLayout &layout,
 	ShaderBindingPool &pool,
 	std::span<const ShaderBindingSet> sets,
+	DescriptorWriteCache &descriptorWriteCache,
 	const ShaderBindingSnapshot &snapshot,
 	LogicalDescriptorResolver logicalResolver)
 {
@@ -445,6 +480,7 @@ void bindResourcesToCommandBuffer(
 	updateResourcesForBindingSnapshot(
 		pool,
 		sets,
+		descriptorWriteCache,
 		snapshot,
 		std::move(logicalResolver));
 	bindPreparedResourcesToCommandBuffer(commandBuffer, bindPoint, layout, sets);
@@ -455,6 +491,7 @@ std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
 	vk::PipelineBindPoint bindPoint,
 	const CursorPipelineLayout &layout,
 	ShaderBindingPool &pool,
+	DescriptorWriteCache &descriptorWriteCache,
 	const ShaderBindingSnapshot &snapshot,
 	LogicalDescriptorResolver logicalResolver)
 {
@@ -465,6 +502,7 @@ std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
 		layout,
 		pool,
 		std::span<const ShaderBindingSet>{sets.data(), sets.size()},
+		descriptorWriteCache,
 		snapshot,
 		std::move(logicalResolver));
 	return sets;
@@ -938,7 +976,7 @@ void pushConstantsToCommandBuffer(
 
 void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline, std::string_view name)
 {
-	if constexpr (isDebugMode)
+	if constexpr (gpuDebugNamesEnabled)
 	{
 		if (pipeline == vk::Pipeline{} || name.empty())
 		{

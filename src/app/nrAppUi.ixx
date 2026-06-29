@@ -92,7 +92,15 @@ class UiSystem
     }
 
     [[nodiscard]] bool checkbox(std::string_view label, bool& value);
+    [[nodiscard]] bool button(std::string_view label);
+    [[nodiscard]] bool inputText(std::string_view label, std::string& value);
+    [[nodiscard]] bool beginCombo(std::string_view label, std::string_view preview);
+    void endCombo();
+    [[nodiscard]] bool selectable(std::string_view label, bool selected = false);
+    void setItemDefaultFocus();
     [[nodiscard]] const UiFrameStats& stats() const noexcept;
+    void setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame& cameraFrame) noexcept;
+    [[nodiscard]] const nr::renderer::ViewerPerspectiveCameraFrame& cameraFrame() const noexcept;
     void setCpuStatistics(const nr::renderer::RendererCpuStatistics& statistics) noexcept;
     [[nodiscard]] const nr::renderer::RendererCpuStatistics& cpuStatistics() const noexcept;
     void setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistics& statistics) noexcept;
@@ -111,6 +119,7 @@ class UiSystem
     bool frameFinalized_ = false;
     UiCaptureState captureState_{};
     UiFrameStats frameStats_{};
+    nr::renderer::ViewerPerspectiveCameraFrame cameraFrame_{};
     nr::renderer::RendererCpuStatistics cpuStatistics_{};
     nr::renderer::RendererGpuPassStatistics gpuPassStatistics_{};
     std::vector<UiSection> queuedSections_{};

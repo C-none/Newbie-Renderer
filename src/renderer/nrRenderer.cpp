@@ -22,15 +22,26 @@ struct RendererGlobalFrameUniforms
     glm::mat4 view{1.0f};
     glm::mat4 projection{1.0f};
     glm::mat4 viewProjection{1.0f};
+    glm::mat4 inverseViewProjection{1.0f};
+    glm::vec4 cameraWorld{0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 [[nodiscard]] RendererGlobalFrameUniforms makeGlobalFrameUniforms(
     const nr::scene::SceneBridgeFrameConstants& frameConstants) noexcept
 {
+    auto inverseViewProjection = glm::mat4{1.0f};
+    auto const determinant = glm::determinant(frameConstants.viewProjection);
+    if (std::isfinite(determinant) && std::abs(determinant) > std::numeric_limits<float>::epsilon())
+    {
+        inverseViewProjection = glm::inverse(frameConstants.viewProjection);
+    }
+
     return RendererGlobalFrameUniforms{
         .view = frameConstants.view,
         .projection = frameConstants.projection,
         .viewProjection = frameConstants.viewProjection,
+        .inverseViewProjection = inverseViewProjection,
+        .cameraWorld = glm::vec4{frameConstants.cameraWorld, 1.0f},
     };
 }
 
@@ -92,22 +103,32 @@ void accumulateCpuTimings(RendererCpuFrameTimings& target, const RendererCpuFram
     }
 } // namespace
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::resolveInput(std::string_view portName) const
+void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
 {
-        if (!resolveInputPort)
+        nrAssert(resource.valid(), std::format("NodeBuildContext::publishFrameResource requires a valid resource for '{}'.", key));
+        nrAssert(!key.empty(), "NodeBuildContext::publishFrameResource requires a non-empty key.");
+        frameResources.get().insert_or_assign(std::string(key), resource);
+    }
+
+[[nodiscard]] GraphResourceHandle NodeBuildContext::resolveFrameResource(std::string_view key) const
+{
+        auto const resourceIt = frameResources.get().find(std::string(key));
+        if (resourceIt == frameResources.get().end())
         {
             return {};
         }
-        return resolveInputPort(portName);
+        return resourceIt->second;
     }
 
-void NodeBuildContext::publishOutput(std::string_view portName, GraphResourceHandle resource)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::requireFrameResource(
+        std::string_view key,
+        std::string_view consumerDebugName) const
 {
-        if (!publishOutputPort)
-        {
-            return;
-        }
-        publishOutputPort(portName, resource);
+        auto resource = resolveFrameResource(key);
+        nrAssert(
+            resource.valid(),
+            std::format("{} requires frame resource '{}', but it has not been published.", consumerDebugName, key));
+        return resource;
     }
 
 [[nodiscard]] GraphResourceHandle NodeBuildContext::transientColor(
@@ -387,7 +408,7 @@ void FrameUniformArena::beginFrame(std::uint32_t frameIndex)
             .usageIntents = {
                 BufferUsageIntent::Uniform,
             },
-            .importedResource = std::ref(buffer_),
+            .importedResource = std::cref(buffer_),
         });
 
         return FrameUniformBinding{
@@ -411,13 +432,8 @@ RasterPassBuilder::RasterPassBuilder(
         NodeBuildContext& context,
         std::string_view debugName,
         std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime)
-        : context_(context)
-        , debugName_(debugName)
-        , runtime_(std::move(runtime))
+        : Base(context, debugName, std::move(runtime), "RasterPassBuilder")
 {
-        nrAssert(static_cast<bool>(runtime_), "RasterPassBuilder requires a valid PipelineRuntime shared pointer.");
-        nrAssert(runtime_->valid(), "RasterPassBuilder requires initialized PipelineRuntime state.");
-        rootCursor_ = runtime_->rootCursor();
     }
 
 RasterPassBuilder& RasterPassBuilder::viewport(vk::Extent2D extent)
@@ -440,7 +456,7 @@ RasterPassBuilder& RasterPassBuilder::colorAttachment(GraphResourceHandle resour
             .loadOp = vk::AttachmentLoadOp::eClear,
             .clearValue = clearValue,
         });
-        resourceUses_.push_back(use::colorReadWrite(resource));
+        Base::resourceUse(use::colorReadWrite(resource));
         return *this;
     }
 
@@ -451,59 +467,7 @@ RasterPassBuilder& RasterPassBuilder::depthAttachment(GraphResourceHandle resour
             .resource = resource,
             .loadOp = vk::AttachmentLoadOp::eClear,
         };
-        resourceUses_.push_back(use::depthReadWrite(resource));
-        return *this;
-    }
-
-RasterPassBuilder& RasterPassBuilder::uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
-{
-        nrAssert(resource.valid(), "RasterPassBuilder::uniform requires a valid graph resource.");
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
-            .logicalResourceId = resource.value,
-            .debugName = std::string(debugName),
-        }));
-        resourceUses_.push_back(use::uniformRead(resource));
-        return *this;
-    }
-
-RasterPassBuilder& RasterPassBuilder::uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName)
-{
-        nrAssert(binding.resource.valid(), "RasterPassBuilder::uniform requires a valid frame uniform resource.");
-        nrAssert(binding.range > 0u, "RasterPassBuilder::uniform requires a non-zero frame uniform range.");
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
-            .logicalResourceId = binding.resource.value,
-            .debugName = std::string(debugName),
-            .offset = binding.offset,
-            .range = binding.range,
-        }));
-        resourceUses_.push_back(use::uniformRead(binding.resource));
-        return *this;
-    }
-
-RasterPassBuilder& RasterPassBuilder::sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
-{
-        nrAssert(resource.valid(), "RasterPassBuilder::sampledImage requires a valid graph resource.");
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
-            .logicalResourceId = resource.value,
-            .debugName = std::string(debugName),
-            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        }));
-        resourceUses_.push_back(use::sampledRead(resource));
-        return *this;
-    }
-
-RasterPassBuilder& RasterPassBuilder::storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
-{
-        nrAssert(resource.valid(), "RasterPassBuilder::storageImage requires a valid graph resource.");
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
-            .logicalResourceId = resource.value,
-            .debugName = std::string(debugName),
-        }));
-        resourceUses_.push_back(use::storageWrite(resource));
+        Base::resourceUse(use::depthReadWrite(resource));
         return *this;
     }
 
@@ -537,31 +501,6 @@ RasterPassBuilder& RasterPassBuilder::recordParallel(
         nrAssert(!recordCallback_, "RasterPassBuilder::recordParallel conflicts with record.");
         parallelItemCountCallback_ = std::move(itemCountCallback);
         parallelRangeRecordCallback_ = std::move(rangeRecordCallback);
-        return *this;
-    }
-
-RasterPassBuilder& RasterPassBuilder::resourceUse(PassResourceUseDesc resourceUse)
-{
-        nrAssert(resourceUse.resource.valid(), "RasterPassBuilder::resourceUse requires a valid graph resource.");
-        resourceUses_.push_back(resourceUse);
-        return *this;
-    }
-
-RasterPassBuilder& RasterPassBuilder::prepare(RasterPassPrepareCallback callback)
-{
-        prepareCallbacks_.push_back(std::move(callback));
-        return *this;
-    }
-
-RasterPassBuilder& RasterPassBuilder::dynamicBindingSnapshot(
-        PassBindingSnapshotCallback snapshotCallback,
-        nr::rhi::LogicalDescriptorResolver resolver)
-{
-        nrAssert(static_cast<bool>(snapshotCallback), "RasterPassBuilder::dynamicBindingSnapshot requires a snapshot callback.");
-        dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
-            .snapshot = std::move(snapshotCallback),
-            .resolver = std::move(resolver),
-        });
         return *this;
     }
 
@@ -669,18 +608,11 @@ void RasterPassBuilder::bindGraphicsSetup(
         nr::rhi::MeshRasterState rasterState,
         vk::PrimitiveTopology primitiveTopology)
 {
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, runtime.pipeline().raw());
-
-        nr::rhi::bindPreparedResourcesToCommandBuffer(
+        Base::bindPipelinePreparedResourcesAndPushConstants(
             commandBuffer,
-            vk::PipelineBindPoint::eGraphics,
-            runtime.state().layout,
-            runtime.bindingSetsForFrame(frameIndex));
-
-        nr::rhi::pushConstantsToCommandBuffer(
-            commandBuffer,
-            runtime.state().layout,
-            bindingSnapshot);
+            runtime,
+            bindingSnapshot,
+            frameIndex);
 
         auto viewport = vk::Viewport{};
         viewport.x = 0.0f;
@@ -715,14 +647,14 @@ void RasterPassBuilder::bindGraphicsSetup(
             !hasParallelRecord || (parallelItemCountCallback_ && parallelRangeRecordCallback_),
             "RasterPassBuilder::build parallel record requires both item-count and range-record callbacks.");
 
-        auto bindingSnapshot = rootCursor_.snapshot();
-        rootCursor_.clearSnapshot();
-
-        auto resourceUses = std::move(resourceUses_);
-        auto runtime = runtime_;
+        auto common = takeCommonBuildState();
+        auto resourceUses = std::move(common.resourceUses);
+        auto runtime = std::move(common.runtime);
+        auto debugName = std::move(common.debugName);
+        auto bindingSnapshot = std::move(common.bindingSnapshot);
+        auto prepareCallback = std::move(common.prepareCallback);
         auto colorAttachments = std::move(colorAttachments_);
         auto depthAttachment = depthAttachment_;
-        auto debugName = debugName_;
         auto viewportExtent = viewportExtent_;
         auto viewportYMode = viewportYMode_;
         auto rasterState = rasterState_;
@@ -730,35 +662,6 @@ void RasterPassBuilder::bindGraphicsSetup(
         auto recordCallback = std::move(recordCallback_);
         auto parallelItemCountCallback = std::move(parallelItemCountCallback_);
         auto parallelRangeRecordCallback = std::move(parallelRangeRecordCallback_);
-        auto prepareCallbacks = std::move(prepareCallbacks_);
-        auto dynamicBindingSnapshots = std::move(dynamicBindingSnapshots_);
-        auto prepareCallback = [runtime,
-                                bindingSnapshot,
-                                prepareCallbacks,
-                                dynamicBindingSnapshots](const PassPrepareContext& prepareContext) {
-            nrAssert(static_cast<bool>(runtime), "RasterPassBuilder prepare requires initialized runtime state.");
-            std::ranges::for_each(prepareCallbacks, [&](const RasterPassPrepareCallback& callback) {
-                if (callback)
-                {
-                    callback(prepareContext);
-                }
-            });
-
-            nr::rhi::updateResourcesForBindingSnapshot(
-                runtime->state().bindingPool,
-                runtime->bindingSetsForFrame(prepareContext.frameIndex),
-                bindingSnapshot,
-                makeDefaultLogicalDescriptorResolver(prepareContext));
-
-            std::ranges::for_each(dynamicBindingSnapshots, [&](const DynamicBindingSnapshotDesc& desc) {
-                auto dynamicSnapshot = desc.snapshot(prepareContext);
-                nr::rhi::updateResourcesForBindingSnapshot(
-                    runtime->state().bindingPool,
-                    runtime->bindingSetsForFrame(prepareContext.frameIndex),
-                    dynamicSnapshot,
-                    desc.resolver);
-            });
-        };
 
         if (parallelItemCountCallback && parallelRangeRecordCallback)
         {
@@ -917,63 +820,8 @@ ComputePassBuilder::ComputePassBuilder(
         NodeBuildContext& context,
         std::string_view debugName,
         std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime)
-        : context_(context)
-        , debugName_(debugName)
-        , runtime_(std::move(runtime))
+        : Base(context, debugName, std::move(runtime), "ComputePassBuilder")
 {
-        nrAssert(static_cast<bool>(runtime_), "ComputePassBuilder requires a valid PipelineRuntime shared pointer.");
-        nrAssert(runtime_->valid(), "ComputePassBuilder requires initialized PipelineRuntime state.");
-        rootCursor_ = runtime_->rootCursor();
-    }
-
-ComputePassBuilder& ComputePassBuilder::sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
-{
-        nrAssert(resource.valid(), "ComputePassBuilder::sampledImage requires a valid graph resource.");
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
-            .logicalResourceId = resource.value,
-            .debugName = std::string(debugName),
-            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        }));
-        resourceUses_.push_back(use::sampledRead(resource));
-        return *this;
-    }
-
-ComputePassBuilder& ComputePassBuilder::storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
-{
-        nrAssert(resource.valid(), "ComputePassBuilder::storageImage requires a valid graph resource.");
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
-            .logicalResourceId = resource.value,
-            .debugName = std::string(debugName),
-        }));
-        resourceUses_.push_back(use::storageWrite(resource));
-        return *this;
-    }
-
-ComputePassBuilder& ComputePassBuilder::resourceUse(PassResourceUseDesc resourceUse)
-{
-        nrAssert(resourceUse.resource.valid(), "ComputePassBuilder::resourceUse requires a valid graph resource.");
-        resourceUses_.push_back(resourceUse);
-        return *this;
-    }
-
-ComputePassBuilder& ComputePassBuilder::prepare(ComputePassPrepareCallback callback)
-{
-        prepareCallbacks_.push_back(std::move(callback));
-        return *this;
-    }
-
-ComputePassBuilder& ComputePassBuilder::dynamicBindingSnapshot(
-        PassBindingSnapshotCallback snapshotCallback,
-        nr::rhi::LogicalDescriptorResolver resolver)
-{
-        nrAssert(static_cast<bool>(snapshotCallback), "ComputePassBuilder::dynamicBindingSnapshot requires a snapshot callback.");
-        dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
-            .snapshot = std::move(snapshotCallback),
-            .resolver = std::move(resolver),
-        });
-        return *this;
     }
 
 ComputePassBuilder& ComputePassBuilder::record(ComputePassRecordCallback callback)
@@ -986,15 +834,13 @@ ComputePassBuilder& ComputePassBuilder::record(ComputePassRecordCallback callbac
 {
         nrAssert(static_cast<bool>(recordCallback_), "ComputePassBuilder::build requires a record callback.");
 
-        auto bindingSnapshot = rootCursor_.snapshot();
-        rootCursor_.clearSnapshot();
-
-        auto resourceUses = std::move(resourceUses_);
-        auto runtime = runtime_;
-        auto debugName = debugName_;
+        auto common = takeCommonBuildState();
+        auto resourceUses = std::move(common.resourceUses);
+        auto runtime = std::move(common.runtime);
+        auto debugName = std::move(common.debugName);
+        auto bindingSnapshot = std::move(common.bindingSnapshot);
+        auto prepareCallback = std::move(common.prepareCallback);
         auto recordCallback = std::move(recordCallback_);
-        auto prepareCallbacks = std::move(prepareCallbacks_);
-        auto dynamicBindingSnapshots = std::move(dynamicBindingSnapshots_);
 
         return context_.get().addPass(
             std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
@@ -1006,18 +852,11 @@ ComputePassBuilder& ComputePassBuilder::record(ComputePassRecordCallback callbac
                 nrAssert(static_cast<bool>(runtime), "ComputePassBuilder record requires initialized runtime state.");
 
                 auto& commandBuffer = recordContext.commandBuffer->get();
-                commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, runtime->pipeline().raw());
-
-                nr::rhi::bindPreparedResourcesToCommandBuffer(
+                Base::bindPipelinePreparedResourcesAndPushConstants(
                     commandBuffer,
-                    vk::PipelineBindPoint::eCompute,
-                    runtime->state().layout,
-                    runtime->bindingSetsForFrame(recordContext.frameIndex));
-
-                nr::rhi::pushConstantsToCommandBuffer(
-                    commandBuffer,
-                    runtime->state().layout,
-                    bindingSnapshot);
+                    *runtime,
+                    bindingSnapshot,
+                    recordContext.frameIndex);
 
                 recordCallback(ComputePassRecordContext{
                     .pass = recordContext,
@@ -1026,33 +865,59 @@ ComputePassBuilder& ComputePassBuilder::record(ComputePassRecordCallback callbac
                     .pipelineLayout = runtime->state().layout,
                 });
             },
+            std::move(prepareCallback));
+    }
+
+RayTracingPassBuilder::RayTracingPassBuilder(
+        NodeBuildContext& context,
+        std::string_view debugName,
+        std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime)
+        : Base(context, debugName, std::move(runtime), "RayTracingPassBuilder")
+{
+    }
+
+RayTracingPassBuilder& RayTracingPassBuilder::record(RayTracingPassRecordCallback callback)
+{
+        recordCallback_ = std::move(callback);
+        return *this;
+    }
+
+[[nodiscard]] GraphPassHandle RayTracingPassBuilder::build()
+{
+        nrAssert(static_cast<bool>(recordCallback_), "RayTracingPassBuilder::build requires a record callback.");
+
+        auto common = takeCommonBuildState();
+        auto resourceUses = std::move(common.resourceUses);
+        auto runtime = std::move(common.runtime);
+        auto debugName = std::move(common.debugName);
+        auto bindingSnapshot = std::move(common.bindingSnapshot);
+        auto prepareCallback = std::move(common.prepareCallback);
+        auto recordCallback = std::move(recordCallback_);
+
+        return context_.get().addPass(
+            std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
+            debugName,
             [runtime,
              bindingSnapshot,
-             prepareCallbacks,
-             dynamicBindingSnapshots](const PassPrepareContext& prepareContext) {
-                nrAssert(static_cast<bool>(runtime), "ComputePassBuilder prepare requires initialized runtime state.");
-                std::ranges::for_each(prepareCallbacks, [&](const ComputePassPrepareCallback& callback) {
-                    if (callback)
-                    {
-                        callback(prepareContext);
-                    }
-                });
+             recordCallback = std::move(recordCallback)](const PassRecordContext& recordContext) {
+                nrAssert(recordContext.commandBuffer.has_value(), "RayTracingPassBuilder record requires RAII command buffer access.");
+                nrAssert(static_cast<bool>(runtime), "RayTracingPassBuilder record requires initialized runtime state.");
 
-                nr::rhi::updateResourcesForBindingSnapshot(
-                    runtime->state().bindingPool,
-                    runtime->bindingSetsForFrame(prepareContext.frameIndex),
+                auto& commandBuffer = recordContext.commandBuffer->get();
+                Base::bindPipelinePreparedResourcesAndPushConstants(
+                    commandBuffer,
+                    *runtime,
                     bindingSnapshot,
-                    makeDefaultLogicalDescriptorResolver(prepareContext));
+                    recordContext.frameIndex);
 
-                std::ranges::for_each(dynamicBindingSnapshots, [&](const DynamicBindingSnapshotDesc& desc) {
-                    auto dynamicSnapshot = desc.snapshot(prepareContext);
-                    nr::rhi::updateResourcesForBindingSnapshot(
-                        runtime->state().bindingPool,
-                        runtime->bindingSetsForFrame(prepareContext.frameIndex),
-                        dynamicSnapshot,
-                        desc.resolver);
+                recordCallback(RayTracingPassRecordContext{
+                    .pass = recordContext,
+                    .commandBuffer = commandBuffer,
+                    .descriptorLayout = runtime->state().descriptorLayout,
+                    .pipelineLayout = runtime->state().layout,
                 });
-            });
+            },
+            std::move(prepareCallback));
     }
 
 void NodeRuntime::initialize(NodeInitContext&)
@@ -1114,31 +979,6 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
             });
         });
 
-        auto nodeIndexByName = std::map<std::string, std::size_t>{};
-        auto nodeOrdinals = std::views::iota(std::size_t{0}, installed.size());
-        std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
-            nodeIndexByName.emplace(installed[nodeIndex].runtimeName, nodeIndex);
-        });
-
-        auto connectionsByTarget = std::map<std::string, std::string>{};
-        std::ranges::for_each(spec.connections, [&](const NodeConnection& connection) {
-            auto fromNodeIt = nodeIndexByName.find(connection.from.nodeName);
-            nrAssert(fromNodeIt != nodeIndexByName.end(), "Renderer::installGraph connection references unknown source node.");
-
-            auto toNodeIt = nodeIndexByName.find(connection.to.nodeName);
-            nrAssert(toNodeIt != nodeIndexByName.end(), "Renderer::installGraph connection references unknown target node.");
-
-            nrAssert(
-                fromNodeIt->second < toNodeIt->second,
-                "Renderer::installGraph currently requires source node order before target node order.");
-
-            auto targetKey = makePortKey(connection.to.nodeName, connection.to.portName);
-            auto sourceKey = makePortKey(connection.from.nodeName, connection.from.portName);
-
-            auto [_, inserted] = connectionsByTarget.emplace(std::move(targetKey), std::move(sourceKey));
-            nrAssert(inserted, "Renderer::installGraph found multiple sources bound to the same target input port.");
-        });
-
         auto submitNodesByAfterIndex = std::multimap<std::size_t, SubmitNodeSpec>{};
         std::ranges::for_each(spec.submitNodes, [&](const SubmitNodeSpec& submitSpec) {
             nrAssert(
@@ -1148,10 +988,24 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
         });
 
         installedNodes_ = std::move(installed);
-        nodeIndexByName_ = std::move(nodeIndexByName);
-        connectionsByTargetPort_ = std::move(connectionsByTarget);
         submitNodesByAfterIndex_ = std::move(submitNodesByAfterIndex);
         graphInstalled_ = true;
+    }
+
+void Renderer::uninstallGraph()
+{
+        if (device_)
+        {
+            device_->waitIdle();
+        }
+
+        builder_.clear();
+        executor_.clearRetainedState();
+        teardownInstalledGraph();
+        cpuTimingAccumulator_ = {};
+        cpuStatistics_ = {};
+        gpuPassTimingAccumulator_.clear();
+        gpuPassStatistics_ = {};
     }
 
 void Renderer::shutdown()
@@ -1168,8 +1022,7 @@ void Renderer::shutdown()
         teardownInstalledGraph();
         submissionTimeline_ = RendererSubmissionTimeline{};
         frameUniformArena_ = FrameUniformArena{};
-        activeScene_.reset();
-        sceneExtractProfile_.reset();
+        resetSceneBinding();
         cpuTimingAccumulator_ = {};
         cpuStatistics_ = {};
         gpuPassTimingAccumulator_.clear();
@@ -1196,6 +1049,13 @@ void Renderer::resize()
         device_->presentationContext.recreate(device_->physicalDevice, device_->device, device_->queueManager);
     }
 
+void Renderer::resetSceneBinding() noexcept
+{
+        activeScene_.reset();
+        sceneExtractProfile_.reset();
+        sceneTlasExtractProfile_.reset();
+    }
+
 [[nodiscard]] RendererFrameResult Renderer::renderFrame(const RendererFrameInput& input)
 {
         if (!device_ || !graphInstalled_)
@@ -1216,6 +1076,7 @@ void Renderer::resize()
         };
 
         auto scenePackets = std::optional<nr::scene::ScenePacketSet>{};
+        auto sceneTlasPackets = std::optional<nr::scene::ScenePacketSet>{};
         auto primaryCamera = std::optional<nr::scene::SceneResolvedCamera>{};
         auto sceneBridgeFrame = std::optional<nr::scene::SceneBridgeFrame>{};
         auto sceneExtractProfileCreated = false;
@@ -1230,6 +1091,8 @@ void Renderer::resize()
 
             auto [profile, created] = ensureSceneExtractProfile(scene);
             sceneExtractProfileCreated = created;
+            auto [tlasProfile, tlasProfileCreated] = ensureSceneTlasExtractProfile(scene);
+            sceneExtractProfileCreated = sceneExtractProfileCreated || tlasProfileCreated;
 
             auto extractInput = input.sceneExtractInput.value_or(nr::scene::SceneExtractInput{});
             if (!extractInput.viewportExtent.has_value())
@@ -1244,7 +1107,12 @@ void Renderer::resize()
                 extractInput.customFrustum = sceneCameraOverride->frustum;
             }
 
+            auto tlasExtractInput = extractInput;
+            tlasExtractInput.visibility = nr::scene::SceneVisibilityMode::none;
+            tlasExtractInput.customFrustum.reset();
+
             scenePackets = scene.extractPackets(profile, extractInput);
+            sceneTlasPackets = scene.extractPackets(tlasProfile, tlasExtractInput);
             if (!sceneCameraOverride.has_value())
             {
                 primaryCamera = scene.tryGetPrimaryCamera(extractInput.viewportExtent);
@@ -1252,6 +1120,11 @@ void Renderer::resize()
 
             auto bridgeBuildInput = nr::scene::SceneRenderBridgeBuildInput{
                 .packetSet = std::cref(*scenePackets),
+            };
+            auto rasterGeometryBuffers = scene.tryGetRasterGeometryBuffers();
+            bridgeBuildInput.resolveGeometryBuffers =
+                [rasterGeometryBuffers]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> {
+                return rasterGeometryBuffers;
             };
 
             if (sceneCameraOverride.has_value())
@@ -1296,7 +1169,7 @@ void Renderer::resize()
                     return std::nullopt;
                 }
 
-                if (!meshRecord.gpu->vertexBuffer.valid())
+                if (!rasterGeometryBuffers.has_value() || !rasterGeometryBuffers->hasVertexBuffer())
                 {
                     return std::nullopt;
                 }
@@ -1307,34 +1180,61 @@ void Renderer::resize()
                 }
 
                 auto const &meshGeometry = meshRecord.cpu.geometries[geometryIndex];
-                auto drawGeometry = nr::scene::SceneBridgeDrawGeometry{};
-                drawGeometry.vertexBuffer = nr::scene::SceneBridgeBufferBinding{
-                    .buffer = std::cref(meshRecord.gpu->vertexBuffer),
+                auto const &atlas = meshRecord.gpu->atlas;
+                auto checkedAddUint32 =
+                    [](std::uint32_t base, std::uint32_t offset, std::string_view label) {
+                    auto const value = static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(offset);
+                    nrAssert(
+                        value <= std::numeric_limits<std::uint32_t>::max(),
+                        std::format("{} value {} exceeds uint32_t range.", label, value));
+                    return static_cast<std::uint32_t>(value);
                 };
+                auto checkedAddInt32 =
+                    [](std::uint32_t base, std::uint32_t offset, std::string_view label) {
+                    auto const value = static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(offset);
+                    nrAssert(
+                        value <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()),
+                        std::format("{} value {} exceeds int32_t range.", label, value));
+                    return static_cast<std::int32_t>(value);
+                };
+
+                auto drawGeometry = nr::scene::SceneBridgeDrawGeometry{};
+                drawGeometry.vertexBuffer = rasterGeometryBuffers->vertexBuffer;
                 drawGeometry.frontFace = meshRecord.cpu.clockwiseFrontFace
                                              ? vk::FrontFace::eClockwise
                                              : vk::FrontFace::eCounterClockwise;
 
-                auto const indexedGeometry = meshRecord.gpu->indexBuffer.valid() && !meshRecord.cpu.indices.empty();
+                auto const indexedGeometry = atlas.indexCount > 0u;
                 if (indexedGeometry)
                 {
-                    drawGeometry.indexBuffer = nr::scene::SceneBridgeBufferBinding{
-                        .buffer = std::cref(meshRecord.gpu->indexBuffer),
-                    };
-                    drawGeometry.firstIndex = meshGeometry.firstIndex;
+                    if (!rasterGeometryBuffers->hasIndexBuffer())
+                    {
+                        return std::nullopt;
+                    }
+
+                    drawGeometry.indexBuffer = rasterGeometryBuffers->indexBuffer;
+                    drawGeometry.indexType = rasterGeometryBuffers->indexType;
+                    drawGeometry.firstIndex = checkedAddUint32(
+                        atlas.indexBase,
+                        meshGeometry.firstIndex,
+                        "Scene raster draw firstIndex");
                     drawGeometry.indexCount = meshGeometry.indexCount > 0
                                               ? meshGeometry.indexCount
-                                              : meshRecord.gpu->indexCount;
-                    drawGeometry.vertexOffset = meshGeometry.vertexOffset <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())
-                                                    ? static_cast<std::int32_t>(meshGeometry.vertexOffset)
-                                                    : std::numeric_limits<std::int32_t>::max();
+                                              : atlas.indexCount;
+                    drawGeometry.vertexOffset = checkedAddInt32(
+                        atlas.vertexBase,
+                        meshGeometry.vertexOffset,
+                        "Scene raster draw vertexOffset");
                     return drawGeometry;
                 }
 
-                drawGeometry.firstVertex = meshGeometry.firstIndex;
+                drawGeometry.firstVertex = checkedAddUint32(
+                    atlas.vertexBase,
+                    meshGeometry.firstIndex,
+                    "Scene raster draw firstVertex");
                 drawGeometry.vertexCount = meshGeometry.indexCount > 0
                                                ? meshGeometry.indexCount
-                                               : meshRecord.gpu->vertexCount;
+                                               : atlas.vertexCount;
                 return drawGeometry;
             };
 
@@ -1359,9 +1259,19 @@ void Renderer::resize()
             frameParameters.frameServices = input.frameServices;
         }
 
+        if (input.scene.has_value())
+        {
+            frameParameters.scene = std::cref(input.scene->get());
+        }
+
         if (scenePackets.has_value())
         {
             frameParameters.scenePackets = std::cref(*scenePackets);
+        }
+
+        if (sceneTlasPackets.has_value())
+        {
+            frameParameters.sceneTlasBuildInputs = std::cref(sceneTlasPackets->tlasBuildInputs);
         }
 
         if (primaryCamera.has_value())
@@ -1451,7 +1361,7 @@ void Renderer::resize()
             .sceneBridgeDrawCount = sceneBridgeFrame.has_value() ? sceneBridgeFrame->rasterDraws.size() : 0,
             .sceneRasterPacketCount = scenePackets.has_value() ? scenePackets->rasterDraws.size() : 0,
             .sceneRtPacketCount = scenePackets.has_value() ? scenePackets->rtInstances.size() : 0,
-            .sceneTlasPacketCount = scenePackets.has_value() ? scenePackets->tlasBuildInputs.size() : 0,
+            .sceneTlasPacketCount = sceneTlasPackets.has_value() ? sceneTlasPackets->tlasBuildInputs.size() : 0,
             .cpuStatistics = cpuStatistics_,
             .gpuPassStatistics = gpuPassStatistics_,
         };
@@ -1487,11 +1397,6 @@ void Renderer::resize()
         return gpuPassStatistics_;
     }
 
-[[nodiscard]] std::string Renderer::makePortKey(std::string_view nodeName, std::string_view portName)
-{
-        return std::format("{}::{}", nodeName, portName);
-    }
-
 void Renderer::buildInstalledGraph(
         const NodeFrameParameters& frameParameters,
         const nr::scene::SceneBridgeFrameConstants& frameConstants,
@@ -1512,7 +1417,7 @@ void Renderer::buildInstalledGraph(
                 builder_.addFrameData("SceneBridgeFrame", sceneBridgeFrame->get());
         }
 
-        auto publishedOutputs = std::map<std::string, GraphResourceHandle>{};
+        auto frameResources = std::map<std::string, GraphResourceHandle>{};
 
         auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
         std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
@@ -1522,36 +1427,13 @@ void Renderer::buildInstalledGraph(
                 installedNode.runtimeName,
                 installedNode.config.queue);
 
-            auto resolveInputPort = [&](std::string_view inputPortName) -> GraphResourceHandle {
-                auto targetKey = makePortKey(installedNode.runtimeName, inputPortName);
-                auto connectionIt = connectionsByTargetPort_.find(targetKey);
-                if (connectionIt == connectionsByTargetPort_.end())
-                {
-                    return {};
-                }
-
-                auto sourceIt = publishedOutputs.find(connectionIt->second);
-                if (sourceIt == publishedOutputs.end())
-                {
-                    return {};
-                }
-
-                return sourceIt->second;
-            };
-
-            auto publishOutputPort = [&](std::string_view outputPortName, GraphResourceHandle resource) {
-                nrAssert(resource.valid(), "Renderer::buildInstalledGraph output port publish requires a valid resource handle.");
-                auto outputKey = makePortKey(installedNode.runtimeName, outputPortName);
-                publishedOutputs.insert_or_assign(outputKey, resource);
-            };
-
             auto buildContext = NodeBuildContext{
                 .graphBuilder = std::ref(builder_),
                 .nodeHandle = nodeHandle,
+                .queue = installedNode.config.queue,
                 .frameIndex = frameParameters.frameIndex,
                 .globalResources = std::cref(globalResources),
-                .resolveInputPort = resolveInputPort,
-                .publishOutputPort = publishOutputPort,
+                .frameResources = std::ref(frameResources),
             };
 
             installedNode.runtime->build(buildContext, nodeFrameParameters);
@@ -1584,8 +1466,6 @@ void Renderer::teardownInstalledGraph()
         }
 
         installedNodes_.clear();
-        nodeIndexByName_.clear();
-        connectionsByTargetPort_.clear();
         submitNodesByAfterIndex_.clear();
         graphInstalled_ = false;
     }
@@ -1593,6 +1473,12 @@ void Renderer::teardownInstalledGraph()
 [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> Renderer::ensureSceneExtractProfile(nr::scene::Scene& scene)
 {
         auto sameScene = activeScene_.has_value() && std::addressof(activeScene_->get()) == std::addressof(scene);
+        if (!sameScene)
+        {
+            sceneExtractProfile_.reset();
+            sceneTlasExtractProfile_.reset();
+        }
+
         auto needsCreate = !sameScene || !sceneExtractProfile_.has_value() || !sceneExtractProfile_->valid();
 
         if (needsCreate)
@@ -1605,6 +1491,30 @@ void Renderer::teardownInstalledGraph()
         }
 
         return {*sceneExtractProfile_, false};
+    }
+
+[[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> Renderer::ensureSceneTlasExtractProfile(nr::scene::Scene& scene)
+{
+        auto sameScene = activeScene_.has_value() && std::addressof(activeScene_->get()) == std::addressof(scene);
+        if (!sameScene)
+        {
+            sceneExtractProfile_.reset();
+            sceneTlasExtractProfile_.reset();
+        }
+
+        auto needsCreate = !sameScene || !sceneTlasExtractProfile_.has_value() || !sceneTlasExtractProfile_->valid();
+
+        if (needsCreate)
+        {
+            activeScene_ = std::ref(scene);
+            sceneTlasExtractProfile_ = scene.registerExtractProfile(nr::scene::SceneExtractProfileCreateInfo{
+                .debugName = "Renderer.DefaultTlasExtract",
+                .domain = nr::scene::ScenePacketDomain::tlasBuildInput,
+            });
+            return {*sceneTlasExtractProfile_, true};
+        }
+
+        return {*sceneTlasExtractProfile_, false};
     }
 
 void Renderer::recordCpuTimingSample(const RendererCpuFrameTimings& timings) noexcept

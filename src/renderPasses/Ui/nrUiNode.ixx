@@ -18,16 +18,10 @@ struct UiNodeInput
     vk::Format bufferFormat = vk::Format::eR8G8B8A8Unorm;
 };
 
-struct UiNodeOutput
-{
-    nr::renderer::GraphResourceHandle uiBuffer{};
-};
-
 class UiNode final : public Node
 {
   public:
     UiNodeInput input{};
-    UiNodeOutput output{};
 
     UiNode() = default;
     ~UiNode() override;

@@ -4,7 +4,6 @@ import nr.renderer;
 
 export namespace nr::renderPasses
 {
-using NodePort = nr::renderer::NodePort;
 using NodeConfig = nr::renderer::NodeConfig;
 using NodeDescription = nr::renderer::NodeDescription;
 using NodeFrameParameters = nr::renderer::NodeFrameParameters;

@@ -173,6 +173,7 @@ struct MeshAsset
     std::vector<VertexAsset> vertices{};
     std::vector<std::uint32_t> indices{};
     std::vector<MeshGeometryAsset> geometries{};
+    bool clockwiseFrontFace = false;
 };
 
 struct NodeAsset

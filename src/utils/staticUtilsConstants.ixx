@@ -39,12 +39,42 @@ import std;
 #error "NR_GLOBAL_LOG_LEVEL must be defined by staticUtilsConstantsConfig.inl."
 #endif
 
+#ifndef NR_SHADER_OPTIMIZATION_LEVEL
+#error "NR_SHADER_OPTIMIZATION_LEVEL must be defined by staticUtilsConstantsConfig.inl."
+#endif
+
+#ifndef NR_SHADER_DEBUG_INFO_LEVEL
+#error "NR_SHADER_DEBUG_INFO_LEVEL must be defined by staticUtilsConstantsConfig.inl."
+#endif
+
+#ifndef NR_SHADER_ENABLE_RICH_DIAGNOSTICS
+#error "NR_SHADER_ENABLE_RICH_DIAGNOSTICS must be defined by staticUtilsConstantsConfig.inl."
+#endif
+
+#ifndef NR_SHADER_DUMP_REPRO_ON_ERROR
+#error "NR_SHADER_DUMP_REPRO_ON_ERROR must be defined by staticUtilsConstantsConfig.inl."
+#endif
+
+#ifndef NR_SHADER_WARNINGS_AS_ERRORS
+#error "NR_SHADER_WARNINGS_AS_ERRORS must be defined by staticUtilsConstantsConfig.inl."
+#endif
+
+#ifndef NR_GPU_DEBUG_NAMES_ENABLED
+#error "NR_GPU_DEBUG_NAMES_ENABLED must be defined by staticUtilsConstantsConfig.inl."
+#endif
+
 export namespace nr
 {
 inline constexpr bool isDebugMode = NR_IS_DEBUG_MODE;
 inline constexpr std::uint32_t maxThreads = NR_MAX_THREADS;
 inline constexpr std::uint32_t maxFrameInFlight = NR_MAX_FRAME_IN_FLIGHT;
 inline constexpr std::uint32_t statisticsSampleFrameCount = NR_STATISTICS_SAMPLE_FRAME_COUNT;
+inline constexpr std::int32_t shaderOptimizationLevel = NR_SHADER_OPTIMIZATION_LEVEL;
+inline constexpr std::int32_t shaderDebugInfoLevel = NR_SHADER_DEBUG_INFO_LEVEL;
+inline constexpr bool shaderRichDiagnosticsEnabled = NR_SHADER_ENABLE_RICH_DIAGNOSTICS;
+inline constexpr bool shaderDumpReproOnError = NR_SHADER_DUMP_REPRO_ON_ERROR;
+inline constexpr std::string_view shaderWarningsAsErrors = NR_SHADER_WARNINGS_AS_ERRORS;
+inline constexpr bool gpuDebugNamesEnabled = NR_GPU_DEBUG_NAMES_ENABLED;
 
 enum class LogLevel : std::uint32_t
 {

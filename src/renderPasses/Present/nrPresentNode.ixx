@@ -21,11 +21,6 @@ struct PresentNodeInput
     float uiOpacity = 1.0f;
 };
 
-struct PresentNodeOutput
-{
-    nr::renderer::GraphResourceHandle swapchainImage{};
-};
-
 class PresentNode final : public Node
 {
   public:
@@ -33,7 +28,6 @@ class PresentNode final : public Node
     ~PresentNode() override;
 
     PresentNodeInput input{};
-    PresentNodeOutput output{};
 
     [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;

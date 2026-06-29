@@ -118,16 +118,6 @@ struct RendererShutdownGuard
                 },
             },
         },
-        .connections = {
-            nr::renderer::NodeConnection{
-                .from = nr::renderer::NodePortRef{.nodeName = "NormalBuffer", .portName = "color"},
-                .to = nr::renderer::NodePortRef{.nodeName = "Present", .portName = "sourceColor"},
-            },
-            nr::renderer::NodeConnection{
-                .from = nr::renderer::NodePortRef{.nodeName = "Ui", .portName = "uiBuffer"},
-                .to = nr::renderer::NodePortRef{.nodeName = "Present", .portName = "uiBuffer"},
-            },
-        },
         .submitNodes = {
             nr::renderer::SubmitNodeSpec{
                 .debugName = "CameraOverride.GraphicsToCompute",
@@ -168,6 +158,7 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         nr::test::require(baseline.usedScenePath, "baseline should use scene path");
         nr::test::require(!baseline.usedCameraOverride, "baseline should not use camera override");
         nr::test::require(baseline.sceneBridgeDrawCount > 0u, "baseline should produce scene bridge draws");
+        nr::test::require(baseline.sceneTlasPacketCount > 0u, "baseline should produce TLAS packets");
 
         auto viewerCamera = nr::renderer::ViewerPerspectiveCamera{};
         auto extent = renderer.device().presentationContext.swapchainExtent();
@@ -196,6 +187,10 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         nr::test::require(overridden.usedCameraOverride, "override frame should report camera override usage");
         nr::test::requireEqual(overridden.sceneBridgeDrawCount, std::uint32_t{0},
                                "override custom frustum should be able to cull all bridge draws");
+        nr::test::requireEqual(
+            overridden.sceneTlasPacketCount,
+            baseline.sceneTlasPacketCount,
+            "RT/TLAS extraction must ignore camera override frustum culling");
 
         renderer.device().waitIdle();
     }};

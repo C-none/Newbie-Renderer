@@ -232,6 +232,8 @@ void RenderGraphBuilder::clear()
         case BufferAccessIntent::TexelRead:
         case BufferAccessIntent::TexelReadWrite:
         case BufferAccessIntent::AccelerationStructureRead:
+        case BufferAccessIntent::AccelerationStructureBuildInputRead:
+        case BufferAccessIntent::AccelerationStructureScratchReadWrite:
         case BufferAccessIntent::ShaderBindingTableRead:
         case BufferAccessIntent::HostRead:
             return true;
@@ -250,6 +252,7 @@ void RenderGraphBuilder::clear()
         case BufferAccessIntent::TexelWrite:
         case BufferAccessIntent::TexelReadWrite:
         case BufferAccessIntent::AccelerationStructureWrite:
+        case BufferAccessIntent::AccelerationStructureScratchReadWrite:
         case BufferAccessIntent::HostWrite:
             return true;
         default:
