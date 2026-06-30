@@ -175,6 +175,7 @@ using ::vk::KHRSwapchainExtensionName;
 using ::vk::LayerProperties;
 using ::vk::LodClampNone;
 using ::vk::MemoryBarrier2;
+using ::vk::NVCommandBufferInheritanceExtensionName;
 using ::vk::NVCooperativeVectorExtensionName;
 using ::vk::ObjectType;
 using ::vk::Offset2D;

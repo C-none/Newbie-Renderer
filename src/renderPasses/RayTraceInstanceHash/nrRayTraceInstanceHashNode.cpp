@@ -10,15 +10,6 @@ import :nodeType;
 
 namespace nr::renderPasses::detail
 {
-using GraphImportedBufferDesc = nr::renderer::GraphImportedBufferDesc;
-using GraphResourceHandle = nr::renderer::GraphResourceHandle;
-using GraphTransientImageDesc = nr::renderer::GraphTransientImageDesc;
-using ResourceLifetime = nr::renderer::ResourceLifetime;
-using BufferUsageIntent = nr::renderer::BufferUsageIntent;
-using ImageUsageIntent = nr::renderer::ImageUsageIntent;
-using ImageLayoutIntent = nr::renderer::ImageLayoutIntent;
-namespace use = nr::renderer::use;
-
 struct RayTraceInstanceHashRuntimeCache
 {
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> pipeline{};
@@ -83,57 +74,6 @@ struct RayTraceInstanceHashRuntimeCache
 
     return runtime;
 }
-
-[[nodiscard]] GraphResourceHandle importRayTraceBuffer(
-    nr::renderer::NodeBuildContext& context,
-    const nr::rhi::Buffer& buffer,
-    std::string_view debugName,
-    ResourceLifetime lifetime,
-    std::initializer_list<BufferUsageIntent> usageIntents)
-{
-    nr::nrAssert(buffer.valid(), std::format("{} buffer is invalid.", debugName));
-    return context.addResource(GraphImportedBufferDesc{
-        .debugName = std::string(debugName),
-        .lifetime = lifetime,
-        .initialOwnership = nr::renderer::ownershipDomainFromQueue(context.queue),
-        .size = buffer.size(),
-        .usageIntents = std::vector<BufferUsageIntent>{usageIntents},
-        .importedResource = std::cref(buffer),
-    });
-}
-
-[[nodiscard]] GraphResourceHandle addOutputImage(
-    nr::renderer::NodeBuildContext& context,
-    std::string_view debugName,
-    vk::Extent2D extent,
-    vk::Format format)
-{
-    return context.addResource(GraphTransientImageDesc{
-        .debugName = std::string(debugName),
-        .extent = vk::Extent3D{extent.width, extent.height, 1u},
-        .format = format,
-        .usageIntents = {
-            ImageUsageIntent::StorageWrite,
-            ImageUsageIntent::Sampled,
-            ImageUsageIntent::TransferDst,
-            ImageUsageIntent::TransferSrc,
-        },
-        .initialLayout = ImageLayoutIntent::Undefined,
-    });
-}
-
-[[nodiscard]] nr::rhi::QueueRole queueRoleFromDomain(nr::renderer::QueueDomain queue) noexcept
-{
-    if (queue == nr::renderer::QueueDomain::Graphics)
-    {
-        return nr::rhi::QueueRole::Graphics;
-    }
-    if (queue == nr::renderer::QueueDomain::Compute)
-    {
-        return nr::rhi::QueueRole::Compute;
-    }
-    return nr::rhi::QueueRole::Transfer;
-}
 } // namespace nr::renderPasses::detail
 
 namespace nr::renderPasses
@@ -170,11 +110,18 @@ void RayTraceInstanceHashNode::build(NodeBuildContext& context, const NodeFrameP
     viewportExtent.width = std::max(1u, viewportExtent.width);
     viewportExtent.height = std::max(1u, viewportExtent.height);
 
-    auto output = detail::addOutputImage(
-        context,
-        "RTInstanceHash.Output",
-        viewportExtent,
-        input.outputFormat);
+    auto output = context.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "RTInstanceHash.Output",
+        .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
+        .format = input.outputFormat,
+        .usageIntents = {
+            nr::renderer::ImageUsageIntent::StorageWrite,
+            nr::renderer::ImageUsageIntent::Sampled,
+            nr::renderer::ImageUsageIntent::TransferDst,
+            nr::renderer::ImageUsageIntent::TransferSrc,
+        },
+        .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
+    });
     context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, output);
 
     auto sceneTlas = context.resolveFrameResource(nr::renderer::frameResource::sceneTlas);
@@ -202,22 +149,22 @@ void RayTraceInstanceHashNode::build(NodeBuildContext& context, const NodeFrameP
         return;
     }
 
-    auto sbtResource = detail::importRayTraceBuffer(
-        context,
+    auto sbtResource = context.importBuffer(
         runtime_->shaderBindingTable.buffer(),
         "RTInstanceHash.SBT",
         nr::renderer::ResourceLifetime::RendererPersistent,
         {
             nr::renderer::BufferUsageIntent::ShaderBindingTable,
             nr::renderer::BufferUsageIntent::ShaderDeviceAddress,
-        });
+        },
+        nr::renderer::ownershipDomainFromQueue(context.queue));
 
     auto dimensions = nr::rhi::TraceRaysDimensions{
         .width = viewportExtent.width,
         .height = viewportExtent.height,
         .depth = 1u,
     };
-    auto queueRole = detail::queueRoleFromDomain(context.queue);
+    auto queueRole = nr::renderer::rhiQueueRoleFromDomain(context.queue);
     nr::nrAssert(queueRole != nr::rhi::QueueRole::Transfer, "RayTraceInstanceHash cannot run on the transfer queue.");
 
     auto tracePass = nr::renderer::RayTracingPassBuilder{

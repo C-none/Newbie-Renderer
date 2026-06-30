@@ -135,6 +135,9 @@ class PresentationContext
     [[nodiscard]] glm::dvec2 cursorPosition() const;
     [[nodiscard]] std::vector<std::uint32_t> consumeTextInputCodepoints() const;
     [[nodiscard]] bool windowShouldClose() const;
+    [[nodiscard]] bool borderlessFullscreenEnabled() const noexcept;
+    void setBorderlessFullscreen(bool enabled);
+    [[nodiscard]] bool consumeSwapchainRecreateRequest() noexcept;
 
     void setActiveSwapchainImage(std::uint32_t imageIndex);
     void clearActiveSwapchainImage();

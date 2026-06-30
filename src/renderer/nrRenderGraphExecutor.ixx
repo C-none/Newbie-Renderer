@@ -43,56 +43,6 @@ inline constexpr std::uint32_t kWorkerSecondaryPoolSlotBase = kMainThreadSeconda
     QueueDomain queue,
     std::string_view openedBySubmitNodeDebugName);
 
-class RenderRecordThreadPool
-{
-  public:
-    RenderRecordThreadPool() = default;
-
-    RenderRecordThreadPool(const RenderRecordThreadPool&) = delete;
-    RenderRecordThreadPool& operator=(const RenderRecordThreadPool&) = delete;
-
-    ~RenderRecordThreadPool();
-
-    void ensureWorkerCount(std::uint32_t workerCount);
-
-    [[nodiscard]] std::uint32_t workerCount() const noexcept;
-
-    template <typename Fn>
-    requires std::invocable<std::decay_t<Fn>&> &&
-             std::same_as<std::invoke_result_t<std::decay_t<Fn>&>, RecordTaskResult>
-    [[nodiscard]] std::future<RecordTaskResult> submit(std::uint32_t workerId, Fn&& fn)
-    {
-        nrAssert(workerId < workerCount(), "RenderRecordThreadPool::submit workerId is out of range.");
-        nrAssert(!stopping_.load(), "RenderRecordThreadPool::submit cannot accept tasks after stop.");
-
-        auto recordTask = std::packaged_task<RecordTaskResult()>{std::forward<Fn>(fn)};
-        auto future = recordTask.get_future();
-
-        auto& worker = workerQueues_[workerId];
-        {
-            std::scoped_lock lock(worker.mutex);
-            worker.tasks.push(std::move(recordTask));
-        }
-        worker.wake.notify_one();
-        return future;
-    }
-
-  private:
-    struct WorkerQueue
-    {
-        std::mutex mutex{};
-        std::condition_variable wake{};
-        std::queue<std::packaged_task<RecordTaskResult()>> tasks;
-    };
-
-    void stop();
-
-    void workerLoop(std::uint32_t workerId, const std::stop_token& stopToken);
-
-    std::array<WorkerQueue, nr::maxThreads> workerQueues_{};
-    std::vector<std::jthread> workers_{};
-    std::atomic_bool stopping_ = false;
-};
 } // namespace nr::renderer::detail
 
 export namespace nr::renderer
@@ -603,7 +553,7 @@ class RenderGraphExecutor
     std::vector<std::vector<CachedPrimaryCommandBuffer>> primaryCommandBuffersByFrame_{};
     std::vector<std::vector<std::vector<std::vector<CachedSecondaryCommandBuffer>>>> secondaryCommandBuffersByFrame_{};
     std::vector<FrameGpuPassTimingState> gpuPassTimingStatesByFrame_{};
-    detail::RenderRecordThreadPool recordThreadPool_{};
+    nr::threading::StaticThreadPool recordThreadPool_{};
     std::uint64_t nextFrameBoundaryId_ = 1;
 };
 } // namespace nr::renderer

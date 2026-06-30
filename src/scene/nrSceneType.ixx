@@ -268,11 +268,29 @@ struct SceneAccelerationStructureGeometry
     vk::GeometryFlagsKHR geometryFlags{};
 };
 
+struct SceneAccelerationStructureGeometrySemanticKey
+{
+    std::uint32_t geometryIndex = 0;
+    vk::GeometryFlagsKHR geometryFlags{};
+
+    [[nodiscard]] bool operator==(const SceneAccelerationStructureGeometrySemanticKey &) const = default;
+};
+
+struct SceneAccelerationStructureMeshSemanticKey
+{
+    std::uint64_t meshGpuVersion = 0;
+    vk::GeometryInstanceFlagsKHR instanceFlags{};
+    std::vector<SceneAccelerationStructureGeometrySemanticKey> geometries{};
+
+    [[nodiscard]] bool operator==(const SceneAccelerationStructureMeshSemanticKey &) const = default;
+};
+
 struct SceneAccelerationStructureMesh
 {
     nr::resource::MeshHandle mesh{};
     std::uint64_t gpuVersion = 0;
     vk::GeometryInstanceFlagsKHR instanceFlags{};
+    SceneAccelerationStructureMeshSemanticKey semanticKey{};
     SceneBridgeBufferBinding vertexBuffer{};
     SceneBridgeBufferBinding indexBuffer{};
     vk::DeviceSize vertexByteOffset = 0;

@@ -356,21 +356,6 @@ void markBindlessTextureTableDirty(UiRuntimeCache& runtime) noexcept
     return uploadBytes;
 }
 
-[[nodiscard]] nr::rhi::Image createUiTextureImage(
-    nr::rhi::Device& device,
-    vk::Extent2D textureExtent,
-    std::string_view debugName)
-{
-    auto imageCreateInfo = nr::rhi::makeImageCreateInfo(
-        vk::Format::eR8G8B8A8Unorm,
-        textureExtent,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-
-    auto image = device.resourceFactory.createImage(imageCreateInfo, nr::rhi::MemoryUsage::GpuOnly, debugName);
-    nr::nrAssert(image.valid(), std::format("UiNode failed to create texture image '{}'.", debugName));
-    return image;
-}
-
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUiTextureUploadOwnershipPlan(
     const nr::rhi::Device& device)
 {
@@ -480,11 +465,19 @@ void createOrUpdateUiTexture(
             });
         }
 
+        auto const debugName = std::format("Ui.Texture[{}:{}]", textureData.UniqueID, textureSlot);
+        auto imageCreateInfo = nr::rhi::makeImageCreateInfo(
+            vk::Format::eR8G8B8A8Unorm,
+            textureExtent,
+            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+        auto textureImage = device.resourceFactory.createImage(
+            imageCreateInfo,
+            nr::rhi::MemoryUsage::GpuOnly,
+            debugName);
+        nr::nrAssert(textureImage.valid(), std::format("UiNode failed to create texture image '{}'.", debugName));
+
         textureEntry = UiTextureEntry{
-            .image = createUiTextureImage(
-                device,
-                textureExtent,
-                std::format("Ui.Texture[{}:{}]", textureData.UniqueID, textureSlot)),
+            .image = std::move(textureImage),
             .textureKey = textureKey,
         };
         markBindlessTextureTableDirty(runtime);
@@ -694,12 +687,25 @@ void ensureFrameUploadBuffer(
     return frameParameters.frameServices->get().tryGet<nr::app::UiSystem>();
 }
 
+[[nodiscard]] std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> tryGetPresentationContext(
+    const nr::renderer::NodeFrameParameters& frameParameters)
+{
+    if (!frameParameters.frameServices.has_value())
+    {
+        return std::nullopt;
+    }
+
+    return frameParameters.frameServices->get().tryGet<nr::rhi::PresentationContext>();
+}
+
 void drawVec3StatusLine(nr::app::UiSystem& ui, std::string_view label, const glm::vec3& value)
 {
     ui.textFmt("{}: ({:.3f}, {:.3f}, {:.3f})", label, value.x, value.y, value.z);
 }
 
-void drawRendererStatsSection(nr::app::UiSystem& ui)
+void drawRendererStatsSection(
+    nr::app::UiSystem& ui,
+    std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> presentation)
 {
     auto const& stats = ui.stats();
     ui.textFmt("FPS: {:.1f}", stats.framesPerSecond);
@@ -708,6 +714,22 @@ void drawRendererStatsSection(nr::app::UiSystem& ui)
     auto const& cameraFrame = ui.cameraFrame();
     drawVec3StatusLine(ui, "Camera Position", cameraFrame.position);
     drawVec3StatusLine(ui, "Camera Forward", cameraFrame.forward);
+
+    if (!presentation.has_value())
+    {
+        return;
+    }
+
+    auto& presentationContext = presentation->get();
+    auto const fullscreenEnabled = presentationContext.borderlessFullscreenEnabled();
+    ui.separator();
+    ui.textFmt(
+        "Window Mode: {}",
+        fullscreenEnabled ? std::string_view{"Borderless Fullscreen"} : std::string_view{"Windowed"});
+    if (ui.button(fullscreenEnabled ? "Exit Borderless Fullscreen" : "Enter Borderless Fullscreen"))
+    {
+        presentationContext.setBorderlessFullscreen(!fullscreenEnabled);
+    }
 }
 
 void drawCpuTimingLine(nr::app::UiSystem& ui, std::string_view label, double milliseconds)
@@ -805,13 +827,16 @@ template <std::size_t N>
     return std::span<const nr::app::UiSection>{sections.data(), sections.size()};
 }
 
-[[nodiscard]] UiSectionArray<3> makeTrailingUiSections()
+[[nodiscard]] UiSectionArray<3> makeTrailingUiSections(
+    std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> presentation)
 {
     return {
         nr::app::UiSection{
             .id = "frame.status",
             .title = "Frame Status",
-            .draw = drawRendererStatsSection,
+            .draw = [presentation](nr::app::UiSystem& ui) {
+                drawRendererStatsSection(ui, presentation);
+            },
         },
         nr::app::UiSection{
             .id = "cpu.performance",
@@ -1058,7 +1083,7 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
         auto const currentFrameIndex = static_cast<std::uint64_t>(frameParameters.frameIndex);
         if (uiSystem.has_value())
         {
-            auto trailingSections = makeTrailingUiSections();
+            auto trailingSections = makeTrailingUiSections(tryGetPresentationContext(frameParameters));
             uiSystem->get().renderSections({}, sectionSpan(trailingSections));
             uiSystem->get().finalizeFrame();
             auto drawData = uiSystem->get().drawData();

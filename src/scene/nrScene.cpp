@@ -738,7 +738,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         return buffers;
     }
 
-[[nodiscard]] std::optional<SceneAccelerationStructureMesh> Scene::tryGetAccelerationStructureMesh(
+[[nodiscard]] std::optional<SceneAccelerationStructureMeshSemanticKey> Scene::tryGetAccelerationStructureMeshSemanticKey(
         nr::resource::MeshHandle handle) const noexcept
 {
         auto const *meshRecord = meshes_.tryGet(handle);
@@ -757,16 +757,108 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             return std::nullopt;
         }
 
-        auto instanceFlags = vk::GeometryInstanceFlagsKHR{};
+        auto semanticKey = SceneAccelerationStructureMeshSemanticKey{
+            .meshGpuVersion = meshRecord->gpuVersion,
+        };
         if (meshRecord->cpu.clockwiseFrontFace)
         {
-            instanceFlags = instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing;
+            semanticKey.instanceFlags = semanticKey.instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing;
+        }
+
+        auto const geometryCount = meshRecord->cpu.geometries.empty()
+                                       ? std::size_t{1}
+                                       : meshRecord->cpu.geometries.size();
+        semanticKey.geometries.reserve(geometryCount);
+
+        auto appendGeometryKey = [&](const nr::resource::MeshGeometry &geometry, std::uint32_t geometryIndex) {
+            auto const indexed = atlas.indexCount > 0u;
+            auto const primitiveElementCount = geometry.indexCount > 0u
+                                                   ? geometry.indexCount
+                                                   : (indexed ? atlas.indexCount : atlas.vertexCount);
+            auto const primitiveCount = primitiveElementCount / 3u;
+            if (primitiveCount == 0u)
+            {
+                return;
+            }
+
+            auto flags = vk::GeometryFlagsKHR{};
+            auto const materialHandle = meshGeometryMaterial(handle, geometryIndex).value_or(geometry.material);
+            if (materialHandle.valid())
+            {
+                auto const *materialRecord = materials_.tryGet(materialHandle);
+                if (materialRecord == nullptr || !materialRecord->cpuReady || materialRecord->cpu.isOpaque())
+                {
+                    flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
+                }
+                if (materialRecord != nullptr && materialRecord->cpuReady && materialRecord->cpu.core.doubleSided)
+                {
+                    semanticKey.instanceFlags =
+                        semanticKey.instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable;
+                }
+            }
+            else
+            {
+                flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
+            }
+
+            semanticKey.geometries.push_back(SceneAccelerationStructureGeometrySemanticKey{
+                .geometryIndex = geometryIndex,
+                .geometryFlags = flags,
+            });
+        };
+
+        if (meshRecord->cpu.geometries.empty())
+        {
+            auto geometry = nr::resource::MeshGeometry{};
+            geometry.indexCount = atlas.indexCount > 0u ? atlas.indexCount : atlas.vertexCount;
+            appendGeometryKey(geometry, 0u);
+        }
+        else
+        {
+            auto const geometryIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(meshRecord->cpu.geometries.size()));
+            std::ranges::for_each(geometryIndices, [&](std::uint32_t geometryIndex) {
+                appendGeometryKey(meshRecord->cpu.geometries[geometryIndex], geometryIndex);
+            });
+        }
+
+        if (semanticKey.geometries.empty())
+        {
+            return std::nullopt;
+        }
+
+        return semanticKey;
+    }
+
+[[nodiscard]] std::optional<SceneAccelerationStructureMesh> Scene::tryGetAccelerationStructureMesh(
+        nr::resource::MeshHandle handle) const noexcept
+{
+        auto semanticKey = tryGetAccelerationStructureMeshSemanticKey(handle);
+        if (!semanticKey.has_value())
+        {
+            return std::nullopt;
+        }
+
+        auto const *meshRecord = meshes_.tryGet(handle);
+        if (meshRecord == nullptr ||
+            !meshRecord->cpuReady ||
+            meshRecord->gpuState != GpuResidencyState::resident ||
+            !meshRecord->gpu.has_value() ||
+            !geometryAtlas_.vertexBuffer.valid())
+        {
+            return std::nullopt;
+        }
+
+        auto const &atlas = meshRecord->gpu->atlas;
+        if (atlas.vertexCount == 0u)
+        {
+            return std::nullopt;
         }
 
         auto mesh = SceneAccelerationStructureMesh{
             .mesh = handle,
             .gpuVersion = meshRecord->gpuVersion,
-            .instanceFlags = instanceFlags,
+            .instanceFlags = semanticKey->instanceFlags,
+            .semanticKey = *semanticKey,
             .vertexBuffer = SceneBridgeBufferBinding{
                 .buffer = std::cref(geometryAtlas_.vertexBuffer),
             },
@@ -810,10 +902,6 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
                 if (materialRecord == nullptr || !materialRecord->cpuReady || materialRecord->cpu.isOpaque())
                 {
                     flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
-                }
-                if (materialRecord != nullptr && materialRecord->cpuReady && materialRecord->cpu.core.doubleSided)
-                {
-                    mesh.instanceFlags = mesh.instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable;
                 }
             }
             else

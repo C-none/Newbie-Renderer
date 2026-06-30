@@ -113,7 +113,7 @@ function(nr_apply_target_settings target)
             $<$<CONFIG:Debug>:/Zi>
             $<$<CONFIG:Release>:/W4>
             $<$<CONFIG:Release>:/WX>
-            $<$<CONFIG:Release>:/Ox>
+            $<$<CONFIG:Release>:/O2>
         )
 
         target_link_options(${target} PRIVATE

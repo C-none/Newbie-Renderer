@@ -166,7 +166,6 @@ struct ViewerControlState
     renderer.installGraph(graphSpec);
 
     controls.activePipelineId = std::string{pipelineId};
-    controls.statusMessage = std::format("Pipeline: {}", pipelineDisplayName(pipeline->get()));
     return true;
 }
 

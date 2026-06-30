@@ -226,6 +226,25 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
             ImageAspectIntent::Depth);
     }
 
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importBuffer(
+        const nr::rhi::Buffer& buffer,
+        std::string_view debugName,
+        ResourceLifetime lifetime,
+        std::initializer_list<BufferUsageIntent> usageIntents,
+        ResourceOwnershipDomain initialOwnership)
+{
+        nrAssert(buffer.valid(), std::format("{} buffer is invalid.", debugName));
+
+        return addResource(GraphImportedBufferDesc{
+            .debugName = std::string(debugName),
+            .lifetime = lifetime,
+            .initialOwnership = initialOwnership,
+            .size = buffer.size(),
+            .usageIntents = std::vector<BufferUsageIntent>{usageIntents},
+            .importedResource = std::cref(buffer),
+        });
+    }
+
 [[nodiscard]] GraphResourceHandle NodeBuildContext::importAccelerationStructure(
         const nr::rhi::AccelerationStructureResource& accelerationStructure,
         std::string_view debugName,
@@ -1046,7 +1065,7 @@ void Renderer::resize()
         {
             return;
         }
-        device_->presentationContext.recreate(device_->physicalDevice, device_->device, device_->queueManager);
+        device_->recreateSwapchain();
     }
 
 void Renderer::resetSceneBinding() noexcept

@@ -6,6 +6,14 @@ import std;
 
 export namespace nr::rhi
 {
+struct WindowBounds
+{
+    int x = 0;
+    int y = 0;
+    int width = 1;
+    int height = 1;
+};
+
 struct Surface
 {
     class GlfwContext final
@@ -47,5 +55,14 @@ struct Surface
      * Width/height are clamped to at least 1 to keep swapchain creation valid.
      */
     void refreshExtentFromFramebuffer();
+
+    [[nodiscard]] bool borderlessFullscreenEnabled() const noexcept;
+    void setBorderlessFullscreen(bool enabled);
+    [[nodiscard]] bool consumeSwapchainRecreateRequest() noexcept;
+
+  private:
+    WindowBounds savedWindowedBounds_{};
+    bool borderlessFullscreenEnabled_ = false;
+    bool swapchainRecreateRequested_ = false;
 };
 } // namespace nr::rhi

@@ -1,5 +1,6 @@
 module nr.renderer;
 import :rendererType;
+import nr.rhi;
 import std;
 
 namespace nr::renderer
@@ -15,5 +16,18 @@ namespace nr::renderer
         return ResourceOwnershipDomain::Compute;
     }
     return ResourceOwnershipDomain::Transfer;
+}
+
+[[nodiscard]] nr::rhi::QueueRole rhiQueueRoleFromDomain(QueueDomain queue) noexcept
+{
+    if (queue == QueueDomain::Graphics)
+    {
+        return nr::rhi::QueueRole::Graphics;
+    }
+    if (queue == QueueDomain::Compute)
+    {
+        return nr::rhi::QueueRole::Compute;
+    }
+    return nr::rhi::QueueRole::Transfer;
 }
 } // namespace nr::renderer

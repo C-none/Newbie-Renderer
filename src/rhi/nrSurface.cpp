@@ -5,6 +5,138 @@ import dependency.vulkan;
 import nr.utils;
 import std;
 
+namespace
+{
+struct MonitorArea
+{
+    GLFWmonitor* monitor = nullptr;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+[[nodiscard]] int sanitizeWindowDimension(int value) noexcept
+{
+        return std::max(value, 1);
+    }
+
+[[nodiscard]] nr::rhi::WindowBounds readWindowBounds(GLFWwindow* window)
+{
+        nr::nrAssert(window != nullptr, "readWindowBounds requires a valid GLFW window.");
+
+        auto x = 0;
+        auto y = 0;
+        auto width = 0;
+        auto height = 0;
+        glfwGetWindowPos(window, &x, &y);
+        glfwGetWindowSize(window, &width, &height);
+        return nr::rhi::WindowBounds{
+            .x = x,
+            .y = y,
+            .width = sanitizeWindowDimension(width),
+            .height = sanitizeWindowDimension(height),
+        };
+    }
+
+[[nodiscard]] MonitorArea makeMonitorArea(GLFWmonitor* monitor)
+{
+        if (monitor == nullptr)
+        {
+            return {};
+        }
+
+        auto const* videoMode = glfwGetVideoMode(monitor);
+        if (videoMode == nullptr)
+        {
+            return {};
+        }
+
+        auto x = 0;
+        auto y = 0;
+        glfwGetMonitorPos(monitor, &x, &y);
+        return MonitorArea{
+            .monitor = monitor,
+            .x = x,
+            .y = y,
+            .width = sanitizeWindowDimension(videoMode->width),
+            .height = sanitizeWindowDimension(videoMode->height),
+        };
+    }
+
+[[nodiscard]] bool validMonitorArea(const MonitorArea& area) noexcept
+{
+        return area.monitor != nullptr && area.width > 0 && area.height > 0;
+    }
+
+[[nodiscard]] std::int64_t overlapArea(
+    const nr::rhi::WindowBounds& window,
+    const MonitorArea& monitor) noexcept
+{
+        auto const windowLeft = static_cast<std::int64_t>(window.x);
+        auto const windowTop = static_cast<std::int64_t>(window.y);
+        auto const windowRight = windowLeft + static_cast<std::int64_t>(window.width);
+        auto const windowBottom = windowTop + static_cast<std::int64_t>(window.height);
+        auto const monitorLeft = static_cast<std::int64_t>(monitor.x);
+        auto const monitorTop = static_cast<std::int64_t>(monitor.y);
+        auto const monitorRight = monitorLeft + static_cast<std::int64_t>(monitor.width);
+        auto const monitorBottom = monitorTop + static_cast<std::int64_t>(monitor.height);
+
+        auto const overlapWidth = std::max<std::int64_t>(
+            0,
+            std::min(windowRight, monitorRight) - std::max(windowLeft, monitorLeft));
+        auto const overlapHeight = std::max<std::int64_t>(
+            0,
+            std::min(windowBottom, monitorBottom) - std::max(windowTop, monitorTop));
+        return overlapWidth * overlapHeight;
+    }
+
+[[nodiscard]] std::vector<MonitorArea> enumerateMonitorAreas()
+{
+        auto monitorCount = 0;
+        auto* rawMonitors = glfwGetMonitors(&monitorCount);
+        if (rawMonitors == nullptr || monitorCount <= 0)
+        {
+            auto primary = makeMonitorArea(glfwGetPrimaryMonitor());
+            if (!validMonitorArea(primary))
+            {
+                return {};
+            }
+            return std::vector<MonitorArea>{primary};
+        }
+
+        auto monitors = std::span<GLFWmonitor*>{rawMonitors, static_cast<std::size_t>(monitorCount)};
+        return monitors |
+               std::views::transform([](GLFWmonitor* monitor) { return makeMonitorArea(monitor); }) |
+               std::views::filter(validMonitorArea) |
+               std::ranges::to<std::vector>();
+    }
+
+[[nodiscard]] MonitorArea selectTargetMonitorArea(GLFWwindow* window)
+{
+        auto monitorAreas = enumerateMonitorAreas();
+        nr::nrAssert(!monitorAreas.empty(), "Surface borderless fullscreen requires at least one GLFW monitor.");
+
+        auto const windowBounds = readWindowBounds(window);
+        auto bestMonitor = std::ranges::max_element(
+            monitorAreas,
+            {},
+            [&](const MonitorArea& area) { return overlapArea(windowBounds, area); });
+        if (bestMonitor != monitorAreas.end() && overlapArea(windowBounds, *bestMonitor) > 0)
+        {
+            return *bestMonitor;
+        }
+
+        auto primary = makeMonitorArea(glfwGetPrimaryMonitor());
+        if (validMonitorArea(primary))
+        {
+            return primary;
+        }
+
+        return monitorAreas.front();
+    }
+} // namespace
+
 namespace nr::rhi
 {
 Surface::GlfwContext::GlfwContext()
@@ -65,5 +197,49 @@ void Surface::refreshExtentFromFramebuffer()
             static_cast<std::uint32_t>(std::max(width, 1)),
             static_cast<std::uint32_t>(std::max(height, 1)),
         };
+    }
+
+bool Surface::borderlessFullscreenEnabled() const noexcept
+{
+        return borderlessFullscreenEnabled_;
+    }
+
+void Surface::setBorderlessFullscreen(bool enabled)
+{
+        nrAssert(handle != nullptr, "Surface::setBorderlessFullscreen requires a valid window handle.");
+        if (enabled == borderlessFullscreenEnabled_)
+        {
+            return;
+        }
+
+        if (enabled)
+        {
+            savedWindowedBounds_ = readWindowBounds(handle.get());
+            auto const monitorArea = selectTargetMonitorArea(handle.get());
+            glfwSetWindowAttrib(handle.get(), GLFW_DECORATED, GLFW_FALSE);
+            glfwSetWindowPos(handle.get(), monitorArea.x, monitorArea.y);
+            glfwSetWindowSize(handle.get(), monitorArea.width, monitorArea.height);
+            borderlessFullscreenEnabled_ = true;
+        }
+        else
+        {
+            glfwSetWindowAttrib(handle.get(), GLFW_DECORATED, GLFW_TRUE);
+            glfwSetWindowPos(handle.get(), savedWindowedBounds_.x, savedWindowedBounds_.y);
+            glfwSetWindowSize(
+                handle.get(),
+                sanitizeWindowDimension(savedWindowedBounds_.width),
+                sanitizeWindowDimension(savedWindowedBounds_.height));
+            borderlessFullscreenEnabled_ = false;
+        }
+
+        swapchainRecreateRequested_ = true;
+        refreshExtentFromFramebuffer();
+    }
+
+bool Surface::consumeSwapchainRecreateRequest() noexcept
+{
+        auto requested = swapchainRecreateRequested_;
+        swapchainRecreateRequested_ = false;
+        return requested;
     }
 } // namespace nr::rhi

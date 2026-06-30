@@ -49,6 +49,7 @@ function(nr_add_contract_test target_name source_file labels)
 endfunction()
 
 add_subdirectory(unit/resource)
+add_subdirectory(unit/utils)
 add_subdirectory(unit/load)
 add_subdirectory(unit/pipeline)
 add_subdirectory(unit/rhi)

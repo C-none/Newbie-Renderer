@@ -38,11 +38,12 @@ public:
     /**
      * @brief Begin recording secondary command buffer
      * @param commandBuffer RAII command buffer to begin
-     * @param inheritanceInfo Render pass inheritance information
+     * @param inheritanceInfo Render pass or dynamic rendering compatibility information
      * @param flags Begin flags provided by caller
      * 
-     * Secondary command buffers inherit state from primary and can be
-     * executed through vk::raii::CommandBuffer::executeCommands.
+     * Secondary command buffers are executed through vk::raii::CommandBuffer::executeCommands.
+     * They do not inherit ordinary graphics state such as pipeline, descriptor sets,
+     * push constants, vertex/index buffers, viewport, scissor, or dynamic raster state.
      */
     static void beginSecondary(
         const vk::raii::CommandBuffer& commandBuffer,

@@ -1,6 +1,7 @@
 module nr.load;
 import dependency.assets;
 
+import nr.utils;
 import :decode;
 import :type;
 import :backend;
@@ -8,91 +9,6 @@ import std;
 
 namespace nr::load::detail
 {
-class DecodeThreadPool
-{
-  public:
-    explicit DecodeThreadPool(std::uint32_t workerCount)
-    {
-        auto normalizedWorkers = std::max(workerCount, 1u);
-        workers.reserve(normalizedWorkers);
-
-        auto workerSlots = std::views::iota(std::uint32_t{0}, normalizedWorkers);
-        std::ranges::for_each(workerSlots, [this](std::uint32_t) {
-            workers.emplace_back([this](std::stop_token stopToken) {
-                workerLoop(stopToken);
-            });
-        });
-    }
-
-    DecodeThreadPool(const DecodeThreadPool &) = delete;
-    DecodeThreadPool &operator=(const DecodeThreadPool &) = delete;
-
-    ~DecodeThreadPool()
-    {
-        {
-            std::scoped_lock lock(mutex_);
-            stopping_ = true;
-        }
-        wake_.notify_all();
-    }
-
-    template <typename Fn>
-    requires std::invocable<Fn &>
-    [[nodiscard]] auto submit(Fn &&fn) -> std::future<std::invoke_result_t<Fn &>>
-    {
-        using Result = std::invoke_result_t<Fn &>;
-        auto task = std::make_shared<std::packaged_task<Result()>>(std::forward<Fn>(fn));
-        auto future = task->get_future();
-
-        {
-            std::scoped_lock lock(mutex_);
-            if (stopping_)
-            {
-                throw std::runtime_error("DecodeThreadPool is stopping; cannot accept new tasks.");
-            }
-
-            tasks_.emplace([task]() {
-                (*task)();
-            });
-        }
-
-        wake_.notify_one();
-        return future;
-    }
-
-  private:
-    void workerLoop(const std::stop_token &stopToken)
-    {
-        while (true)
-        {
-            auto task = std::function<void()>{};
-            {
-                std::unique_lock lock(mutex_);
-                wake_.wait(lock, [&]() {
-                    return stopping_ || stopToken.stop_requested() || !tasks_.empty();
-                });
-
-                if ((stopping_ || stopToken.stop_requested()) && tasks_.empty())
-                {
-                    return;
-                }
-
-                task = std::move(tasks_.front());
-                tasks_.pop();
-            }
-
-            task();
-        }
-    }
-
-  private:
-    std::vector<std::jthread> workers{};
-    std::mutex mutex_{};
-    std::condition_variable wake_{};
-    std::queue<std::function<void()>> tasks_{};
-    bool stopping_ = false;
-};
-
 struct TextureDecodeTaskResult
 {
     std::uint32_t textureIndex = invalidIndex;
@@ -480,24 +396,6 @@ struct TurboJpegHandleDeleter
     return ordered;
 }
 
-[[nodiscard]] std::uint32_t resolveWorkerCount(std::uint32_t requestedWorkers, std::size_t taskCount)
-{
-    if (taskCount == 0)
-    {
-        return 1;
-    }
-
-    auto autoWorkers = std::thread::hardware_concurrency();
-    if (autoWorkers == 0)
-    {
-        autoWorkers = 1;
-    }
-
-    auto normalizedRequested = requestedWorkers == 0 ? autoWorkers : requestedWorkers;
-    auto clampedToTaskCount = std::min<std::uint64_t>(normalizedRequested, taskCount);
-    return static_cast<std::uint32_t>(std::max<std::uint64_t>(1, clampedToTaskCount));
-}
-
 [[nodiscard]] std::string joinLines(const std::vector<std::string> &lines)
 {
     if (lines.empty())
@@ -529,8 +427,9 @@ std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene,
         return {};
     }
 
-    auto workerCount = detail::resolveWorkerCount(options.workerCount, decodeIndices.size());
-    auto threadPool = detail::DecodeThreadPool{workerCount};
+    auto workerCount = nr::threading::resolveWorkerCount(options.workerCount, decodeIndices.size());
+    auto threadPool = nr::threading::StaticThreadPool{};
+    threadPool.ensureWorkerCount(workerCount);
 
     auto futures = std::vector<std::future<detail::TextureDecodeTaskResult>>{};
     futures.reserve(decodeIndices.size());

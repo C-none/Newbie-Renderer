@@ -11,7 +11,8 @@ A pass that opts into `PassParallelRecordDesc` is recorded as unordered chunks:
 - `ParallelRecordReplaySemantics::Unordered` is the only supported replay semantic.
 - The pass declares `itemCount`, an optional primary scope, and `recordRange(begin, end)`.
 - The executor owns thread count, chunk count, and contiguous range assignment through
-  `ParallelRecordPlanner::planContiguousRanges(itemCount, availableRecordWorkers)`.
+  `ParallelRecordPlanner::planContiguousRanges(itemCount, availableRecordWorkers)`, which
+  adapts the shared `nr.utils:threading` contiguous range planner to renderer public types.
 - Node/renderpasses code can observe the final `PassParallelRecordPlan` in the range
   context, but cannot override assigned thread count, chunk count, or range layout.
 
@@ -26,7 +27,8 @@ transition for that edge.
 
 The executor passes `totalRecordWorkerCount - 1` as the available thread count for one
 parallel pass, with a floor of one thread. `ParallelRecordPlanner::planContiguousRanges(...)`
-then balances contiguous ranges across that count:
+then delegates to `nr::threading::planContiguousRanges(...)` to balance contiguous ranges
+across that count:
 
 - `itemCount == 0`: no ranges, `assignedThreadCount == 0`.
 - otherwise: `assignedThreadCount = min(availableRecordWorkers, itemCount)`.
@@ -96,6 +98,13 @@ The design follows these Vulkan constraints:
   `eRenderPassContinue`;
 - secondaries do not inherit pipeline, descriptor, push constant, viewport, scissor, or
   dynamic raster state.
+
+The project does not enable `VK_NV_command_buffer_inheritance` or rely on
+`VkPhysicalDeviceCommandBufferInheritanceFeaturesNV::commandBufferInheritance`.
+The `vk::CommandBufferInheritanceInfo` / `vk::CommandBufferInheritanceRenderingInfo`
+objects used when beginning secondaries are Vulkan-required compatibility metadata for
+render pass or dynamic rendering scope; they are not treated as ordinary graphics-state
+inheritance.
 
 These constraints are why parallel raster recording is executor-owned and why every
 chunk secondary repeats the graphics setup.

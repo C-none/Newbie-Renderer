@@ -17,6 +17,10 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
         nr::test::require(device.resourceFactory.valid(), "resource factory should be initialized");
         nr::test::require(device.resourcePool.valid(), "resource pool should be initialized");
         nr::test::require(device.uploadReadback().valid(), "upload/readback context should be initialized");
+        nr::test::require(device.hasEnabledDeviceExtension(vk::KHRSwapchainExtensionName),
+                          "swapchain device extension should be enabled");
+        nr::test::require(!device.hasEnabledDeviceExtension(vk::NVCommandBufferInheritanceExtensionName),
+                          "NV command buffer state inheritance must remain disabled");
 
         auto const &descriptorIndexing = device.descriptorIndexingCapabilities();
         nr::test::require(descriptorIndexing.descriptorIndexing, "descriptor indexing should be enabled");

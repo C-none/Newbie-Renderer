@@ -2,6 +2,7 @@ module nr.renderer;
 import :renderGraphType;
 import dependency.vulkan;
 import nr.rhi;
+import nr.utils;
 import std;
 import :rendererType;
 
@@ -16,31 +17,19 @@ namespace nr::renderer
         std::size_t itemCount,
         std::uint32_t availableRecordWorkers)
 {
-        auto plan = PassParallelRecordPlan{
-            .itemCount = itemCount,
-        };
-        if (itemCount == 0 || availableRecordWorkers == 0)
-        {
-            return plan;
-        }
-
-        auto const assignedThreadCount = std::min<std::size_t>(availableRecordWorkers, itemCount);
-        plan.assignedThreadCount = static_cast<std::uint32_t>(assignedThreadCount);
-
-        auto const baseRangeSize = itemCount / assignedThreadCount;
-        auto const remainder = itemCount % assignedThreadCount;
-        auto chunkIndices = std::views::iota(std::size_t{0}, assignedThreadCount);
-        plan.ranges = chunkIndices |
-                      std::views::transform([&](std::size_t chunkIndex) {
-                          auto const begin = chunkIndex * baseRangeSize + std::min(chunkIndex, remainder);
-                          auto const rangeSize = baseRangeSize + (chunkIndex < remainder ? 1u : 0u);
+        auto workPlan = nr::threading::planContiguousRanges(itemCount, availableRecordWorkers);
+        return PassParallelRecordPlan{
+            .itemCount = workPlan.itemCount,
+            .assignedThreadCount = workPlan.assignedWorkerCount,
+            .ranges = workPlan.ranges |
+                      std::views::transform([](const nr::threading::WorkRange& range) {
                           return ParallelRecordRange{
-                              .begin = begin,
-                              .end = begin + rangeSize,
+                              .begin = range.begin,
+                              .end = range.end,
                           };
                       }) |
-                      std::ranges::to<std::vector>();
-        return plan;
+                      std::ranges::to<std::vector>(),
+        };
     }
 } // namespace nr::renderer
 

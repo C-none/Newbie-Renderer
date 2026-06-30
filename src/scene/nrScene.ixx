@@ -268,6 +268,9 @@ class Scene
 
     [[nodiscard]] std::optional<SceneBridgeGeometryBuffers> tryGetRasterGeometryBuffers() const noexcept;
 
+    [[nodiscard]] std::optional<SceneAccelerationStructureMeshSemanticKey> tryGetAccelerationStructureMeshSemanticKey(
+        nr::resource::MeshHandle handle) const noexcept;
+
     [[nodiscard]] std::optional<SceneAccelerationStructureMesh> tryGetAccelerationStructureMesh(
         nr::resource::MeshHandle handle) const noexcept;
 

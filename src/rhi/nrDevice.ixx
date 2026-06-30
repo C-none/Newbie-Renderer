@@ -146,6 +146,8 @@ class Device
 
     [[nodiscard]] bool hasEnabledInstanceExtension(std::string_view extension) const;
 
+    [[nodiscard]] bool hasEnabledDeviceExtension(std::string_view extension) const;
+
     void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"});
 
     [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max());
@@ -173,6 +175,8 @@ class Device
     void initializeCommandSystem();
 
     void waitIdle();
+
+    void recreateSwapchain();
 
     [[nodiscard]] PipelineService &pipeline() noexcept;
 

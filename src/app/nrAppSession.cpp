@@ -122,6 +122,10 @@ nr::renderer::FrameServices AppSession::makeFrameServices() noexcept
 {
     auto services = nr::renderer::FrameServices{};
     services.set(std::ref(ui_));
+    if (renderer_.initialized())
+    {
+        services.set(std::ref(renderer_.device().presentationContext));
+    }
     return services;
 }
 

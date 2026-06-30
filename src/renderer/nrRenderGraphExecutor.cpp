@@ -6,6 +6,7 @@ import nr.utils;
 import std;
 import :renderGraphCompiler;
 import :renderGraphType;
+import :rendererType;
 import :rendererSubmission;
 
 namespace nr::renderer::detail
@@ -58,70 +59,6 @@ namespace nr::renderer::detail
     return std::format("Renderer.Batch.{}.{}", queueDomainLabel(queue), batchIndex);
 }
 
-RenderRecordThreadPool::~RenderRecordThreadPool()
-{
-        stop();
-    }
-
-void RenderRecordThreadPool::ensureWorkerCount(std::uint32_t workerCount)
-{
-        auto const targetWorkerCount = std::min<std::uint32_t>(std::max(workerCount, 1u), nr::maxThreads);
-        auto const currentWorkerCount = static_cast<std::uint32_t>(workers_.size());
-        if (targetWorkerCount <= currentWorkerCount)
-        {
-            return;
-        }
-
-        auto workerIds = std::views::iota(currentWorkerCount, targetWorkerCount);
-        std::ranges::for_each(workerIds, [&](std::uint32_t workerId) {
-            workers_.emplace_back([this, workerId](std::stop_token stopToken) {
-                workerLoop(workerId, stopToken);
-            });
-        });
-    }
-
-[[nodiscard]] std::uint32_t RenderRecordThreadPool::workerCount() const noexcept
-{
-        return static_cast<std::uint32_t>(workers_.size());
-    }
-
-void RenderRecordThreadPool::stop()
-{
-        if (stopping_.exchange(true))
-        {
-            return;
-        }
-
-        std::ranges::for_each(workerQueues_, [](WorkerQueue& queue) {
-            queue.wake.notify_all();
-        });
-        workers_.clear();
-    }
-
-void RenderRecordThreadPool::workerLoop(std::uint32_t workerId, const std::stop_token& stopToken)
-{
-        auto& worker = workerQueues_[workerId];
-        while (true)
-        {
-            auto task = std::packaged_task<RecordTaskResult()>{};
-            {
-                std::unique_lock lock(worker.mutex);
-                worker.wake.wait(lock, [&]() {
-                    return stopping_.load() || stopToken.stop_requested() || !worker.tasks.empty();
-                });
-
-                if ((stopping_.load() || stopToken.stop_requested()) && worker.tasks.empty())
-                {
-                    return;
-                }
-
-                task = std::move(worker.tasks.front());
-                worker.tasks.pop();
-            }
-
-            task();
-        }
-    }
 } // namespace nr::renderer::detail
 
 namespace nr::renderer
@@ -577,15 +514,7 @@ void RenderGraphExecutor::clearRetainedState()
 
 [[nodiscard]] nr::rhi::QueueRole RenderGraphExecutor::toQueueRole(QueueDomain queue)
 {
-        if (queue == QueueDomain::Graphics)
-        {
-            return nr::rhi::QueueRole::Graphics;
-        }
-        if (queue == QueueDomain::Compute)
-        {
-            return nr::rhi::QueueRole::Compute;
-        }
-        return nr::rhi::QueueRole::Transfer;
+        return rhiQueueRoleFromDomain(queue);
     }
 
 void RenderGraphExecutor::attachFrameBoundaryMetadata(
@@ -1069,9 +998,8 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
             preparedPoolSlots > detail::kWorkerSecondaryPoolSlotBase,
             "RenderGraphExecutor requires at least one worker-only secondary command pool beyond the main-thread slot before execute.");
 
-        auto hardwareWorkers = std::max(1u, std::thread::hardware_concurrency());
         auto availableRecordWorkers = preparedPoolSlots - detail::kWorkerSecondaryPoolSlotBase;
-        return std::min(nr::maxThreads, std::min(hardwareWorkers, availableRecordWorkers));
+        return nr::threading::resolveWorkerCount(0, availableRecordWorkers);
     }
 
 [[nodiscard]] vk::raii::CommandBuffer& RenderGraphExecutor::primaryCommandBufferForQueue(
@@ -1803,13 +1731,13 @@ void RenderGraphExecutor::ensureTimingQueryPool(
             std::ranges::for_each(batchTaskDescriptions, [&](RecordTaskDesc const& desc) {
                 if (desc.parallel)
                 {
-                    batchTasks.futures.push_back(recordThreadPool_.submit(desc.workerId, [desc]() {
+                    batchTasks.futures.push_back(recordThreadPool_.submitTo(desc.workerId, [desc]() {
                         return recordPassRangeToSecondary(desc);
                     }));
                 }
                 else
                 {
-                    batchTasks.futures.push_back(recordThreadPool_.submit(desc.workerId, [desc]() {
+                    batchTasks.futures.push_back(recordThreadPool_.submitTo(desc.workerId, [desc]() {
                         return recordPassToSecondary(desc);
                     }));
                 }

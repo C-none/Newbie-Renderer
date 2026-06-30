@@ -69,6 +69,11 @@ namespace
         return std::ranges::any_of(instanceEnabledExtensions, [extension](const std::string &item) { return item == extension; });
     }
 
+[[nodiscard]] bool Device::hasEnabledDeviceExtension(std::string_view extension) const
+{
+        return std::ranges::any_of(deviceEnabledExtensions, [extension](const std::string &item) { return item == extension; });
+    }
+
 void Device::initialize(std::string const &_appName, std::string const &_engineName)
 {
         appName = _appName;
@@ -154,6 +159,11 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
             std::max(minimumSecondaryPoolSlots, std::thread::hardware_concurrency()));
         frame.prepareSecondaryPools(secondaryPoolSlotCount, secondaryPoolSlotCount, secondaryPoolSlotCount);
 
+        if (presentationContext.consumeSwapchainRecreateRequest())
+        {
+            recreateSwapchain();
+        }
+
         // Consume the pre-acquired image (issued at end of previous presentFrame or initialize).
         // If the pending acquire is absent (e.g., after a recreate that failed), issue now.
         if (!presentationContext.hasPendingAcquire())
@@ -165,8 +175,7 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
 
         if (PresentationContext::needsSwapchainRecreate(acquire.result))
         {
-            presentationContext.recreate(physicalDevice, device, queueManager);
-            refreshPresentSemaphores();
+            recreateSwapchain();
             presentationContext.issueNextAcquire(acquireTimeout);
             acquire = presentationContext.consumePendingAcquire(frameIndex);
         }
@@ -285,10 +294,10 @@ void Device::submitFrame(CommandBatch&& batch, QueueRole submitRole)
         auto presentResult = presentationContext.present(queueManager, activePresentSemaphore(), presentFrameBoundaryFrameID_);
         nsightGraphics_.markFrameBoundaryAfterPresent(presentResult.result, presentImage);
 
-        if (PresentationContext::needsSwapchainRecreate(presentResult.result))
+        auto const recreateRequested = presentationContext.consumeSwapchainRecreateRequest();
+        if (PresentationContext::needsSwapchainRecreate(presentResult.result) || recreateRequested)
         {
-            presentationContext.recreate(physicalDevice, device, queueManager);
-            refreshPresentSemaphores();
+            recreateSwapchain();
             // After recreate the acquire pool was rebuilt; issue fresh acquire.
             presentationContext.issueNextAcquire();
         }
@@ -579,6 +588,12 @@ void Device::waitIdle()
 {
         queueManager.waitAllIdle();
         frameManager.waitAll();
+    }
+
+void Device::recreateSwapchain()
+{
+        presentationContext.recreate(physicalDevice, device, queueManager);
+        refreshPresentSemaphores();
     }
 
 [[nodiscard]] PipelineService &Device::pipeline() noexcept

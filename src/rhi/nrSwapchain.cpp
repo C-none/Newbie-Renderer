@@ -474,6 +474,21 @@ bool PresentationContext::windowShouldClose() const
     return surface_.handle == nullptr || glfwWindowShouldClose(surface_.handle.get()) != 0;
 }
 
+bool PresentationContext::borderlessFullscreenEnabled() const noexcept
+{
+    return surface_.borderlessFullscreenEnabled();
+}
+
+void PresentationContext::setBorderlessFullscreen(bool enabled)
+{
+    surface_.setBorderlessFullscreen(enabled);
+}
+
+bool PresentationContext::consumeSwapchainRecreateRequest() noexcept
+{
+    return surface_.consumeSwapchainRecreateRequest();
+}
+
 void PresentationContext::setActiveSwapchainImage(std::uint32_t imageIndex)
 {
     activeSwapchainImageIndex_ = imageIndex;
@@ -516,6 +531,7 @@ void PresentationContext::recreate(
     QueueManager& queueManager)
 {
     queueManager.waitAllIdle();
+    static_cast<void>(surface_.consumeSwapchainRecreateRequest());
     surface_.refreshExtentFromFramebuffer();
     ensurePresentSupport(physicalDevice);
     auto oldSwapchain = *swapChain_.swapChain;

@@ -1,5 +1,6 @@
 export module nr.renderer:rendererType;
 
+import nr.rhi;
 import std;
 
 export namespace nr::renderer
@@ -222,4 +223,6 @@ enum class DependencyStrength : std::uint8_t
 };
 
 [[nodiscard]] ResourceOwnershipDomain ownershipDomainFromQueue(QueueDomain queue) noexcept;
+
+[[nodiscard]] nr::rhi::QueueRole rhiQueueRoleFromDomain(QueueDomain queue) noexcept;
 } // namespace nr::renderer

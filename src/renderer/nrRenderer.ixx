@@ -171,6 +171,13 @@ struct NodeBuildContext
         vk::Format format,
         ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
 
+    [[nodiscard]] GraphResourceHandle importBuffer(
+        const nr::rhi::Buffer& buffer,
+        std::string_view debugName,
+        ResourceLifetime lifetime,
+        std::initializer_list<BufferUsageIntent> usageIntents,
+        ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined);
+
     template <std::size_t FrameSlotCount>
     [[nodiscard]] GraphResourceHandle importFrameColor(
         const std::array<nr::rhi::Image, FrameSlotCount>& images,

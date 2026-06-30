@@ -13,7 +13,7 @@ Scope boundary:
 - renderer owns frame-graph build/compile/execute orchestration, renderer-persistent resources, graph-transient planning, queue submit structure, and present orchestration.
 - renderer does not own scene asset lifecycle or input handling.
 - present path is compute-queue oriented.
-- RDG execution is three-stage: build/compile/prepare on the main thread, pass command recording for all submit batches on a fixed `std::jthread` worker pool into secondary command buffers, then per-batch compiled-order secondary merge, submit, and present on the main thread.
+- RDG execution is three-stage: build/compile/prepare on the main thread, pass command recording for all submit batches on the shared `nr.utils:threading` static worker pool into secondary command buffers, then per-batch compiled-order secondary merge, submit, and present on the main thread.
 - The main thread is an aggregation and submit owner during execute. Worker pass recording must use worker-only secondary pool slots; slot 0 is reserved away from RDG pass record tasks.
 - Submit batch GPU debug labels include the submitNode debug name when the batch was opened by an explicit submit marker.
 - When `VK_EXT_frame_boundary` is enabled by a capture tool, RDG submit batches for one frame share a monotonic frame-boundary ID and the final compute-present submit is marked as the frame end.

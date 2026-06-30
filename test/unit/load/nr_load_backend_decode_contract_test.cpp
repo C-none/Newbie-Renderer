@@ -139,6 +139,29 @@ const nr::test::CaseRegistrar embeddedRawDecodeCase{
         nr::test::require(!scene.textures[1].decodedImage.has_value(), "unreferenced invalid texture should not be decoded");
     }};
 
+const nr::test::CaseRegistrar embeddedRawAutoWorkerDecodeCase{
+    "load texture decode supports automatic multi-worker scheduling",
+    [] {
+        auto scene = nr::load::SceneAsset{};
+        scene.sourcePath = std::filesystem::path{"decode_auto_workers.gltf"};
+        scene.textures.push_back(rawTexture("referenced-a", 1u, 1u));
+        scene.textures.push_back(rawTexture("referenced-b", 2u, 2u));
+
+        auto material = nr::load::MaterialAsset{};
+        material.textures.push_back(nr::load::MaterialTextureBinding{.textureIndex = 0});
+        material.textures.push_back(nr::load::MaterialTextureBinding{.textureIndex = 1});
+        scene.materials.push_back(std::move(material));
+
+        auto result = nr::load::decodeSceneTextureImages(scene, nr::load::TextureDecodeOptions{});
+        nr::test::require(result.has_value(), "referenced embedded raw textures should decode with automatic workers");
+        nr::test::require(scene.textures[0].decodedImage.has_value(), "first referenced texture should receive decoded image");
+        nr::test::require(scene.textures[1].decodedImage.has_value(), "second referenced texture should receive decoded image");
+        nr::test::requireEqual(scene.textures[0].decodedImage->pixels.size(), std::size_t{4});
+        nr::test::requireEqual(scene.textures[1].decodedImage->pixels.size(), std::size_t{16});
+        nr::test::requireEqual(scene.textures[0].decodeBackend, std::string{"assimp-raw-copy"});
+        nr::test::requireEqual(scene.textures[1].decodeBackend, std::string{"assimp-raw-copy"});
+    }};
+
 const nr::test::CaseRegistrar decodeFailureCase{
     "load texture decode reports referenced payload failures",
     [] {
