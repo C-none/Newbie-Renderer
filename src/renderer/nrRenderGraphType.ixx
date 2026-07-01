@@ -780,10 +780,6 @@ template <AccelerationStructureUseSpec TSpec>
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureCopyWrite(GraphResourceHandle resource) noexcept;
 
-[[nodiscard]] PassResourceUseDesc accelerationStructureRead(GraphResourceHandle resource) noexcept;
-
-[[nodiscard]] PassResourceUseDesc accelerationStructureWrite(GraphResourceHandle resource) noexcept;
-
 [[nodiscard]] PassResourceUseDesc shaderBindingTableRead(GraphResourceHandle resource) noexcept;
 
 [[nodiscard]] PassResourceUseDesc hostUploadRead(GraphResourceHandle resource) noexcept;
@@ -793,10 +789,6 @@ template <AccelerationStructureUseSpec TSpec>
 [[nodiscard]] PassResourceUseDesc imageTransferSrc(GraphResourceHandle resource) noexcept;
 
 [[nodiscard]] PassResourceUseDesc imageTransferDst(GraphResourceHandle resource) noexcept;
-
-[[nodiscard]] PassResourceUseDesc transferSrc(GraphResourceHandle resource) noexcept;
-
-[[nodiscard]] PassResourceUseDesc transferDst(GraphResourceHandle resource) noexcept;
 
 [[nodiscard]] PassResourceUseDesc copySource(GraphResourceHandle resource) noexcept;
 

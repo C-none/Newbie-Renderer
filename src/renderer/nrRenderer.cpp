@@ -207,6 +207,30 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
             });
     }
 
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importSampledImage(
+        const nr::rhi::Image& image,
+        std::string_view debugName,
+        vk::Extent3D extent,
+        vk::Format format,
+        ResourceLifetime lifetime,
+        ResourceOwnershipDomain initialOwnership)
+{
+        nrAssert(image.valid(), std::format("{} image is invalid.", debugName));
+
+        return addResource(GraphImportedImageDesc{
+            .debugName = std::string(debugName),
+            .lifetime = lifetime,
+            .initialOwnership = initialOwnership,
+            .extent = extent,
+            .format = format,
+            .usageIntents = {
+                ImageUsageIntent::Sampled,
+            },
+            .initialLayout = ImageLayoutIntent::ShaderReadOnly,
+            .importedResource = std::cref(image),
+        });
+    }
+
 [[nodiscard]] GraphResourceHandle NodeBuildContext::importDepth(
         const nr::rhi::Image& image,
         std::string_view debugName,
@@ -947,6 +971,207 @@ void NodeRuntime::shutdown(NodeShutdownContext&)
 {
     }
 
+void Renderer::ensureSceneTextureFallback()
+{
+        nrAssert(static_cast<bool>(device_), "Renderer::ensureSceneTextureFallback requires initialized device.");
+
+        if (!sceneTextureSampler_.valid())
+        {
+            sceneTextureSampler_ = device_->pipeline().createSampler(
+                nr::rhi::SlangSamplerDesc{},
+                "Renderer.SceneTextureSampler");
+            nrAssert(sceneTextureSampler_.valid(), "Renderer failed to create scene texture sampler.");
+        }
+
+        if (sceneTextureFallback_.valid())
+        {
+            return;
+        }
+
+        auto imageInfo = nr::rhi::makeImageCreateInfo(
+            vk::Format::eR8G8B8A8Unorm,
+            vk::Extent2D{1u, 1u},
+            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+        sceneTextureFallback_ = device_->resourceFactory.createImage(
+            imageInfo,
+            nr::rhi::MemoryUsage::GpuOnly,
+            "Renderer.SceneTextureFallback.Purple");
+        nrAssert(sceneTextureFallback_.valid(), "Renderer failed to create purple scene texture fallback.");
+
+        uploadSceneTextureFallback();
+    }
+
+[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan Renderer::makeTransferToGraphicsImageUploadPlan() const
+{
+        nrAssert(static_cast<bool>(device_), "Renderer::makeTransferToGraphicsImageUploadPlan requires initialized device.");
+
+        auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
+        auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
+
+        auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{};
+        plan.releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
+            transferQueueFamily,
+            graphicsQueueFamily,
+            nr::rhi::ops::QueueAccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferWrite,
+            },
+            nr::rhi::ops::QueueAccessScope{
+                .stages = vk::PipelineStageFlagBits2::eAllCommands,
+                .access = vk::AccessFlagBits2::eShaderRead,
+            });
+        return plan;
+    }
+
+void Renderer::uploadSceneTextureFallback()
+{
+        nrAssert(static_cast<bool>(device_), "Renderer::uploadSceneTextureFallback requires initialized device.");
+        nrAssert(sceneTextureFallback_.valid(), "Renderer::uploadSceneTextureFallback requires a valid fallback image.");
+
+        auto purplePixel = std::array{
+            static_cast<std::byte>(0xFFu),
+            static_cast<std::byte>(0x00u),
+            static_cast<std::byte>(0xFFu),
+            static_cast<std::byte>(0xFFu),
+        };
+
+        auto& uploadContext = device_->uploadReadback();
+        auto const ownership = makeTransferToGraphicsImageUploadPlan();
+        auto uploadTicket = uploadContext.uploadImage(
+            std::span<const std::byte>{purplePixel},
+            sceneTextureFallback_,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eShaderReadOnlyOptimal,
+            ownership);
+        nrAssert(uploadTicket.valid(), "Renderer failed to upload purple scene texture fallback.");
+
+        auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
+        auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
+        if (transferQueueFamily == graphicsQueueFamily)
+        {
+            uploadContext.waitUploadComplete(uploadTicket.signalValue);
+            uploadContext.reclaimCompletedUploads();
+            return;
+        }
+
+        auto commandPool = nr::rhi::CommandPool{
+            device_->device,
+            graphicsQueueFamily,
+            vk::CommandPoolCreateFlagBits::eTransient,
+        };
+        auto commandBuffers = commandPool.allocatePrimary(1);
+        auto& commandBuffer = commandBuffers.front();
+        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        uploadContext.recordImageAcquireBarrier(commandBuffer, uploadTicket);
+        nr::rhi::CommandRecorder::end(commandBuffer);
+
+        auto acquireBatch = nr::rhi::CommandBatch{};
+        acquireBatch.addWait(
+            uploadContext.uploadTimelineSemaphore(),
+            vk::PipelineStageFlagBits2::eAllCommands,
+            uploadTicket.signalValue);
+        acquireBatch.addCommandBuffer(commandBuffer);
+
+        auto fence = vk::raii::Fence(device_->device, vk::FenceCreateInfo{});
+        device_->queueManager.graphics().submit(std::move(acquireBatch), std::cref(fence));
+        auto const waitResult = device_->device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
+        nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for purple scene texture fallback acquire.");
+        uploadContext.reclaimCompletedUploads();
+    }
+
+[[nodiscard]] std::map<std::uint32_t, SceneTextureDescriptorBinding> Renderer::buildSceneTextureDescriptorTable(
+        const NodeFrameParameters& frameParameters,
+        const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById)
+{
+        ensureSceneTextureFallback();
+
+        auto descriptorsById = std::map<std::uint32_t, SceneTextureDescriptorBinding>{};
+        auto descriptorKeys = std::map<std::uint32_t, SceneTextureDescriptorKey>{};
+
+        descriptorsById.insert_or_assign(
+            nr::scene::kDefaultSceneTextureId,
+            SceneTextureDescriptorBinding{
+                .descriptorIndex = nr::scene::kDefaultSceneTextureId,
+                .image = std::cref(sceneTextureFallback_),
+                .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                .gpuVersion = 1,
+            });
+        descriptorKeys.insert_or_assign(
+            nr::scene::kDefaultSceneTextureId,
+            SceneTextureDescriptorKey{
+                .gpuVersion = 1,
+            });
+
+        if (!frameParameters.scene.has_value())
+        {
+            if (descriptorKeys != sceneTextureDescriptorKeys_)
+            {
+                sceneTextureDescriptorKeys_ = std::move(descriptorKeys);
+                ++sceneTextureDescriptorVersion_;
+            }
+            return descriptorsById;
+        }
+
+        auto const& scene = frameParameters.scene->get();
+        std::ranges::for_each(sceneTextureHandlesById, [&](const auto& entry) {
+            auto const textureId = entry.first;
+            auto const textureHandle = entry.second;
+            if (textureId == nr::scene::kDefaultSceneTextureId)
+            {
+                return;
+            }
+
+            nrAssert(
+                textureId < kSceneTextureDescriptorCapacity,
+                std::format(
+                    "Scene texture descriptor id {} exceeds capacity {}.",
+                    textureId,
+                    kSceneTextureDescriptorCapacity));
+
+            auto binding = scene.tryGetSampledTextureBinding(textureHandle);
+            if (!binding.has_value())
+            {
+                return;
+            }
+
+            nrAssert(
+                binding->descriptorIndex == textureId,
+                std::format(
+                    "Scene texture binding id mismatch. expected={}, actual={}.",
+                    textureId,
+                    binding->descriptorIndex));
+            nrAssert(
+                binding->layout == vk::ImageLayout::eShaderReadOnlyOptimal,
+                std::format(
+                    "Scene texture {} must be imported from shader-read layout, got {}.",
+                    textureId,
+                    vk::to_string(binding->layout)));
+
+            descriptorsById.insert_or_assign(
+                textureId,
+                SceneTextureDescriptorBinding{
+                    .descriptorIndex = textureId,
+                    .image = binding->image,
+                    .layout = binding->layout,
+                    .gpuVersion = binding->gpuVersion,
+                });
+            descriptorKeys.insert_or_assign(
+                textureId,
+                SceneTextureDescriptorKey{
+                    .texture = textureHandle,
+                    .gpuVersion = binding->gpuVersion,
+                });
+        });
+
+        if (descriptorKeys != sceneTextureDescriptorKeys_)
+        {
+            sceneTextureDescriptorKeys_ = std::move(descriptorKeys);
+            ++sceneTextureDescriptorVersion_;
+        }
+
+        return descriptorsById;
+    }
+
 void Renderer::initialize(const RendererCreateInfo& info)
 {
         if (device_)
@@ -961,6 +1186,7 @@ void Renderer::initialize(const RendererCreateInfo& info)
         device_->initialize(info.appName, info.engineName);
         frameUniformArena_.initialize(*device_, info.frameUniformBytesPerFrame, "Renderer.FrameUniformArena");
         submissionTimeline_.initialize(device_->device, 0);
+        ensureSceneTextureFallback();
     }
 
 void Renderer::installGraph(const RendererGraphSpec& spec)
@@ -1041,6 +1267,8 @@ void Renderer::shutdown()
         teardownInstalledGraph();
         submissionTimeline_ = RendererSubmissionTimeline{};
         frameUniformArena_ = FrameUniformArena{};
+        sceneTextureSampler_ = nr::rhi::SlangSampler{};
+        sceneTextureFallback_ = nr::rhi::Image{};
         resetSceneBinding();
         cpuTimingAccumulator_ = {};
         cpuStatistics_ = {};
@@ -1098,6 +1326,7 @@ void Renderer::resetSceneBinding() noexcept
         auto sceneTlasPackets = std::optional<nr::scene::ScenePacketSet>{};
         auto primaryCamera = std::optional<nr::scene::SceneResolvedCamera>{};
         auto sceneBridgeFrame = std::optional<nr::scene::SceneBridgeFrame>{};
+        auto sceneTextureHandlesById = std::map<std::uint32_t, nr::resource::TextureHandle>{};
         auto sceneExtractProfileCreated = false;
         auto sceneCameraOverride = input.cameraOverride;
 
@@ -1144,6 +1373,55 @@ void Renderer::resetSceneBinding() noexcept
             bridgeBuildInput.resolveGeometryBuffers =
                 [rasterGeometryBuffers]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> {
                 return rasterGeometryBuffers;
+            };
+
+            bridgeBuildInput.resolveMaterialTextureIds =
+                [&](nr::resource::MaterialHandle materialHandle)
+                -> std::optional<nr::scene::SceneMaterialTextureIds> {
+                auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
+                if (!materialRecordRef.has_value())
+                {
+                    return std::nullopt;
+                }
+
+                auto const& materialRecord = materialRecordRef->get();
+                if (!materialRecord.cpuReady)
+                {
+                    return std::nullopt;
+                }
+
+                auto textureIds = nr::scene::SceneMaterialTextureIds{};
+                auto slotIndices = std::views::iota(std::size_t{0}, materialRecord.cpu.textureSlots.size());
+                std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
+                    auto textureHandle = materialRecord.cpu.textureSlots[slotIndex].texture;
+                    if (!textureHandle.valid())
+                    {
+                        return;
+                    }
+
+                    auto binding = scene.tryGetSampledTextureBinding(textureHandle);
+                    if (!binding.has_value())
+                    {
+                        return;
+                    }
+
+                    nrAssert(
+                        binding->descriptorIndex < kSceneTextureDescriptorCapacity,
+                        std::format(
+                            "Scene texture descriptor id {} exceeds capacity {}.",
+                            binding->descriptorIndex,
+                            kSceneTextureDescriptorCapacity));
+                    nrAssert(
+                        binding->descriptorIndex <= nr::scene::kMaxSceneTextureId,
+                        std::format(
+                            "Scene texture descriptor id {} exceeds packed uint16 id capacity {}.",
+                            binding->descriptorIndex,
+                            nr::scene::kMaxSceneTextureId));
+                    auto const textureId = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
+                    textureIds[slotIndex] = textureId;
+                    sceneTextureHandlesById.insert_or_assign(binding->descriptorIndex, textureHandle);
+                });
+                return textureIds;
             };
 
             if (sceneCameraOverride.has_value())
@@ -1315,7 +1593,7 @@ void Renderer::resetSceneBinding() noexcept
         }
 
         auto const buildStart = std::chrono::steady_clock::now();
-        buildInstalledGraph(frameParameters, globalFrameConstants, sceneBridgeFrameRef);
+        buildInstalledGraph(frameParameters, globalFrameConstants, sceneBridgeFrameRef, sceneTextureHandlesById);
         cpuTimings.buildMilliseconds = elapsedMilliseconds(
             buildStart,
             std::chrono::steady_clock::now());
@@ -1419,15 +1697,19 @@ void Renderer::resetSceneBinding() noexcept
 void Renderer::buildInstalledGraph(
         const NodeFrameParameters& frameParameters,
         const nr::scene::SceneBridgeFrameConstants& frameConstants,
-        std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame)
+        std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
+        const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById)
 {
         nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
         builder_.clear();
         auto const globalFrameUniforms = makeGlobalFrameUniforms(frameConstants);
-        auto const globalResources = FrameGlobalResources{
+        auto globalResources = FrameGlobalResources{
             .frameUniform = frameUniformArena_.upload(builder_, "Renderer.GlobalFrameUniforms", globalFrameUniforms),
         };
+        globalResources.sceneTextureDescriptorsById = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
+        globalResources.sceneTextureSampler = sceneTextureSampler_.raw();
+        globalResources.sceneTextureDescriptorVersion = sceneTextureDescriptorVersion_;
 
         auto nodeFrameParameters = frameParameters;
         if (sceneBridgeFrame.has_value())

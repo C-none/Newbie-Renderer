@@ -222,16 +222,6 @@ namespace use
     return make<spec::AccelerationStructureCopyWrite>(resource);
 }
 
-[[nodiscard]] PassResourceUseDesc accelerationStructureRead(GraphResourceHandle resource) noexcept
-{
-    return accelerationStructureTraceRead(resource);
-}
-
-[[nodiscard]] PassResourceUseDesc accelerationStructureWrite(GraphResourceHandle resource) noexcept
-{
-    return accelerationStructureBuildWrite(resource);
-}
-
 [[nodiscard]] PassResourceUseDesc shaderBindingTableRead(GraphResourceHandle resource) noexcept
 {
     return make<spec::ShaderBindingTableRead>(resource);
@@ -255,16 +245,6 @@ namespace use
 [[nodiscard]] PassResourceUseDesc imageTransferDst(GraphResourceHandle resource) noexcept
 {
     return make<spec::ImageTransferDst>(resource);
-}
-
-[[nodiscard]] PassResourceUseDesc transferSrc(GraphResourceHandle resource) noexcept
-{
-    return imageTransferSrc(resource);
-}
-
-[[nodiscard]] PassResourceUseDesc transferDst(GraphResourceHandle resource) noexcept
-{
-    return imageTransferDst(resource);
 }
 
 [[nodiscard]] PassResourceUseDesc copySource(GraphResourceHandle resource) noexcept

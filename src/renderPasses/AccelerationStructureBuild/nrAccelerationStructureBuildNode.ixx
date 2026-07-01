@@ -17,8 +17,6 @@ struct AccelerationStructureBuildNodeInput
 {
     std::uint64_t unusedFrameRetireLatency = 300;
     std::uint32_t hitShaderBindingTableRecordCount = 1;
-    // Set to 0 to disable periodic AS build CPU profiling logs.
-    std::uint32_t cpuProfileLogIntervalFrames = 120;
 };
 
 class AccelerationStructureBuildNode final : public Node

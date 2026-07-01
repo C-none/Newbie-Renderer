@@ -2,6 +2,7 @@ module nr.renderPasses;
 import dependency.vulkan;
 
 import :rayTraceInstanceHash;
+import :sceneTextureTableBinding;
 import nr.renderer;
 import nr.rhi;
 import nr.utils;
@@ -14,6 +15,7 @@ struct RayTraceInstanceHashRuntimeCache
 {
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> pipeline{};
     nr::rhi::ShaderBindingTable shaderBindingTable{};
+    SceneTextureTableBindingCache sceneTextureTableBinding{};
 };
 
 [[nodiscard]] std::shared_ptr<RayTraceInstanceHashRuntimeCache> ensureRayTraceInstanceHashRuntime(nr::rhi::Device& device)
@@ -45,10 +47,11 @@ struct RayTraceInstanceHashRuntimeCache
         std::move(missGroup),
         std::move(hitGroup),
     };
+    pipelineDesc.descriptorBindingPolicy.defaultRuntimeDescriptorCount = nr::renderer::kSceneTextureDescriptorCapacity;
 
     auto runtime = std::make_shared<RayTraceInstanceHashRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createRayTracingPipeline(program, pipelineDesc));
+    runtime->pipeline->initializeDeferred(device.pipeline().createRayTracingPipeline(program, pipelineDesc));
     nr::nrAssert(runtime->pipeline->valid(), "RT instance hash pass failed to create ray tracing pipeline.");
 
     runtime->shaderBindingTable = nr::rhi::ShaderBindingTable::create(
@@ -128,7 +131,7 @@ void RayTraceInstanceHashNode::build(NodeBuildContext& context, const NodeFrameP
     if (!sceneTlas.valid())
     {
         auto clearUses = std::array{
-            nr::renderer::use::transferDst(output),
+            nr::renderer::use::imageTransferDst(output),
         };
         [[maybe_unused]] auto clearPass = context.addPass(
             std::span<const nr::renderer::PassResourceUseDesc>{clearUses.data(), clearUses.size()},
@@ -166,6 +169,7 @@ void RayTraceInstanceHashNode::build(NodeBuildContext& context, const NodeFrameP
     };
     auto queueRole = nr::renderer::rhiQueueRoleFromDomain(context.queue);
     nr::nrAssert(queueRole != nr::rhi::QueueRole::Transfer, "RayTraceInstanceHash cannot run on the transfer queue.");
+    auto sceneTextureTableBinding = detail::makeSceneTextureTableBindingInput(context.globalResources.get());
 
     auto tracePass = nr::renderer::RayTracingPassBuilder{
         context,
@@ -176,6 +180,22 @@ void RayTraceInstanceHashNode::build(NodeBuildContext& context, const NodeFrameP
         .storageImage("outputImage", output, "RTInstanceHash.Output")
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
         .resourceUse(nr::renderer::use::shaderBindingTableRead(sbtResource))
+        .prepare([runtime = runtime_](const nr::renderer::PassPrepareContext& prepareContext) {
+            detail::ensureSceneTextureTableBindingSetsForFrame(
+                *runtime->pipeline,
+                runtime->sceneTextureTableBinding,
+                prepareContext.frameIndex,
+                detail::SceneTextureTableBindingRequirement::optional);
+        })
+        .dynamicBindingSnapshot(
+            [runtime = runtime_, sceneTextureTableBinding](const nr::renderer::PassPrepareContext& prepareContext) {
+                return detail::makeSceneTextureTableBindingSnapshot(
+                    *runtime->pipeline,
+                    runtime->sceneTextureTableBinding,
+                    prepareContext.frameIndex,
+                    sceneTextureTableBinding,
+                    detail::SceneTextureTableBindingRequirement::optional);
+            })
         .record([runtime = runtime_,
                  dimensions,
                  queueRole,

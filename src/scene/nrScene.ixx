@@ -262,6 +262,8 @@ class Scene
 
     [[nodiscard]] std::optional<std::reference_wrapper<const TextureAssetRecord>> tryGetTextureAsset(nr::resource::TextureHandle handle) const noexcept;
 
+    [[nodiscard]] std::optional<SceneSampledTextureBinding> tryGetSampledTextureBinding(nr::resource::TextureHandle handle) const noexcept;
+
     [[nodiscard]] std::optional<std::reference_wrapper<const CameraAssetRecord>> tryGetCameraAsset(nr::resource::CameraAssetHandle handle) const noexcept;
 
     [[nodiscard]] std::optional<std::reference_wrapper<const LightAssetRecord>> tryGetLightAsset(nr::resource::LightAssetHandle handle) const noexcept;

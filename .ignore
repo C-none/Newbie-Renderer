@@ -1,0 +1,2 @@
+# Keep routine repository discovery out of vendored third-party source.
+src/extern/

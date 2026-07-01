@@ -705,6 +705,30 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         return tryGetRecordRef(textures_, handle);
     }
 
+[[nodiscard]] std::optional<SceneSampledTextureBinding> Scene::tryGetSampledTextureBinding(nr::resource::TextureHandle handle) const noexcept
+{
+        auto const *textureRecord = textures_.tryGet(handle);
+        if (textureRecord == nullptr ||
+            textureRecord->gpuState != GpuResidencyState::resident ||
+            textureRecord->gpuVersion < textureRecord->cpuVersion ||
+            !textureRecord->gpu.has_value() ||
+            !textureRecord->gpu->image.valid())
+        {
+            return std::nullopt;
+        }
+
+        auto const &image = textureRecord->gpu->image;
+        return SceneSampledTextureBinding{
+            .texture = handle,
+            .descriptorIndex = sceneTextureId(handle),
+            .image = std::cref(image),
+            .layout = textureRecord->gpu->layout,
+            .format = image.format(),
+            .extent = image.extent(),
+            .gpuVersion = textureRecord->gpuVersion,
+        };
+    }
+
 [[nodiscard]] std::optional<std::reference_wrapper<const CameraAssetRecord>> Scene::tryGetCameraAsset(nr::resource::CameraAssetHandle handle) const noexcept
 {
         return tryGetRecordRef(cameras_, handle);

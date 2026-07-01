@@ -139,6 +139,15 @@ Only shaders that actually reference `gFrame` require a matching C++ descriptor 
 .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
 ```
 
+`shader/sceneTextures.slang` declares the global scene material texture table:
+
+```slang
+[[vk::binding(0, 1)]]
+public Sampler2D<float4> gSceneTextures[];
+```
+
+All material texture types share this single runtime descriptor array. `shader/materialTextureIds.slang` defines the common material texture slot constants and packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices.
+
 ## End-to-End Shader Build Pipeline
 
 This section describes the runtime pipeline used by `ShaderService` from source discovery to final SPIR-V generation.

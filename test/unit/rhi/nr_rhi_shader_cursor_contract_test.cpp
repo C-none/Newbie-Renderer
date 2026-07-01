@@ -34,12 +34,50 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
             }),
             "normalBuffer descriptor layout should expose set 5");
         nr::test::require(
+            std::ranges::any_of(descriptorSets, [](const nr::rhi::DescriptorSetLayoutInfo &setInfo) {
+                return setInfo.set == 1u;
+            }),
+            "normalBuffer descriptor layout should expose set 1 for scene textures");
+        nr::test::require(
             std::ranges::none_of(descriptorSets, [](const nr::rhi::DescriptorSetLayoutInfo &setInfo) {
                 return setInfo.set == 6u;
             }),
             "normalBuffer descriptor layout should not expose set 6");
 
         auto root = layout.rootCursor();
+        auto pushConstantsCursor = root["gPushConstants"];
+        nr::test::require(pushConstantsCursor.valid(), "gPushConstants cursor should resolve");
+        auto normalBufferPushRange = pushConstantsCursor.pushConstantRange();
+        nr::test::require(normalBufferPushRange.has_value(), "gPushConstants should have push constant reflection");
+        nr::test::requireEqual(normalBufferPushRange->size, 72u);
+
+        auto sceneTexturesCursor = root["gSceneTextures"];
+        nr::test::require(sceneTexturesCursor.valid(), "gSceneTextures cursor should resolve");
+        nr::test::require(sceneTexturesCursor.referencesRuntimeDescriptorArray(), "gSceneTextures should be runtime-sized");
+        nr::test::require(sceneTexturesCursor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler);
+        nr::test::requireEqual(*sceneTexturesCursor.bindingDescriptorCount(), 1024u);
+
+        auto sceneTextureBinding = sceneTexturesCursor.descriptorBinding();
+        nr::test::require(sceneTextureBinding.has_value(), "gSceneTextures should have descriptor binding reflection");
+        nr::test::requireEqual(sceneTextureBinding->set, 1u);
+        nr::test::requireEqual(sceneTextureBinding->binding, 0u);
+        nr::test::require(sceneTextureBinding->descriptorType == vk::DescriptorType::eCombinedImageSampler);
+
+        auto sceneTextureElement = sceneTexturesCursor[0u];
+        nr::test::require(sceneTextureElement.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = 11,
+            .debugName = "Renderer.SceneTexture[0]",
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        }));
+        auto sceneTextureSnapshot = root.snapshot();
+        nr::test::requireEqual(sceneTextureSnapshot.descriptorWriteCount(), std::size_t{1});
+        auto const &sceneTextureWrite = sceneTextureSnapshot.descriptorWrites().front();
+        nr::test::requireEqual(sceneTextureWrite.binding.set, 1u);
+        nr::test::requireEqual(sceneTextureWrite.binding.binding, 0u);
+        nr::test::requireEqual(sceneTextureWrite.arrayElement, 0u);
+        nr::test::require(sceneTextureWrite.binding.descriptorType == vk::DescriptorType::eCombinedImageSampler);
+        root.clearSnapshot();
+
         auto frameCursor = root["gFrame"];
         nr::test::require(frameCursor.valid(), "gFrame cursor should resolve");
         nr::test::require(frameCursor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);

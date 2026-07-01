@@ -139,44 +139,6 @@ struct PlannedInstance
     vk::AccelerationStructureInstanceKHR instance{};
 };
 
-struct AsBuildCpuProfileFrame
-{
-    double totalMilliseconds = 0.0;
-    double retireAndPruneMilliseconds = 0.0;
-    double collectMeshesMilliseconds = 0.0;
-    double dirtySelectMilliseconds = 0.0;
-    double atlasPlanMilliseconds = 0.0;
-    double atlasRepackMilliseconds = 0.0;
-    double blasEnsureMilliseconds = 0.0;
-    double instanceBuildMilliseconds = 0.0;
-    double instanceUploadMilliseconds = 0.0;
-    double blasSizeQueryMilliseconds = 0.0;
-    double tlasSizeQueryMilliseconds = 0.0;
-    double frameResourceEnsureMilliseconds = 0.0;
-    double graphImportMilliseconds = 0.0;
-    double blasPassEmitMilliseconds = 0.0;
-    double tlasPassEmitMilliseconds = 0.0;
-
-    std::uint64_t packetCount = 0;
-    std::uint64_t uniqueMeshCount = 0;
-    std::uint64_t dirtyBlasCount = 0;
-    std::uint64_t repackBlasCount = 0;
-    std::uint64_t instanceCount = 0;
-    std::uint64_t blasCacheEntryCount = 0;
-    std::uint64_t cachedBlasHitCount = 0;
-    std::uint64_t cachedBlasRefreshCount = 0;
-    std::uint64_t missingAsMeshCount = 0;
-    std::uint64_t atlasGrowFrameCount = 0;
-    std::uint64_t blasPassFrameCount = 0;
-    std::uint64_t tlasPassFrameCount = 0;
-};
-
-struct AsBuildCpuProfileAccumulator
-{
-    AsBuildCpuProfileFrame total{};
-    std::uint32_t frameCount = 0;
-};
-
 struct AccelerationStructureBuildRuntimeCache
 {
     BlasStorageAtlas blasAtlas{};
@@ -185,120 +147,7 @@ struct AccelerationStructureBuildRuntimeCache
     std::array<FrameSlotAsResources, nr::maxFrameInFlight> frameSlots{};
     nr::rhi::AsBuildLimits limits{};
     std::uint64_t frameSerial = 0;
-    AsBuildCpuProfileAccumulator cpuProfile{};
 };
-
-[[nodiscard]] double elapsedProfileMilliseconds(std::chrono::steady_clock::time_point start)
-{
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-}
-
-void addElapsedProfileMilliseconds(double &target, std::chrono::steady_clock::time_point start)
-{
-    target += elapsedProfileMilliseconds(start);
-}
-
-void accumulateAsBuildProfile(AsBuildCpuProfileAccumulator &accumulator, const AsBuildCpuProfileFrame &sample) noexcept
-{
-    auto &total = accumulator.total;
-    total.totalMilliseconds += sample.totalMilliseconds;
-    total.retireAndPruneMilliseconds += sample.retireAndPruneMilliseconds;
-    total.collectMeshesMilliseconds += sample.collectMeshesMilliseconds;
-    total.dirtySelectMilliseconds += sample.dirtySelectMilliseconds;
-    total.atlasPlanMilliseconds += sample.atlasPlanMilliseconds;
-    total.atlasRepackMilliseconds += sample.atlasRepackMilliseconds;
-    total.blasEnsureMilliseconds += sample.blasEnsureMilliseconds;
-    total.instanceBuildMilliseconds += sample.instanceBuildMilliseconds;
-    total.instanceUploadMilliseconds += sample.instanceUploadMilliseconds;
-    total.blasSizeQueryMilliseconds += sample.blasSizeQueryMilliseconds;
-    total.tlasSizeQueryMilliseconds += sample.tlasSizeQueryMilliseconds;
-    total.frameResourceEnsureMilliseconds += sample.frameResourceEnsureMilliseconds;
-    total.graphImportMilliseconds += sample.graphImportMilliseconds;
-    total.blasPassEmitMilliseconds += sample.blasPassEmitMilliseconds;
-    total.tlasPassEmitMilliseconds += sample.tlasPassEmitMilliseconds;
-
-    total.packetCount += sample.packetCount;
-    total.uniqueMeshCount += sample.uniqueMeshCount;
-    total.dirtyBlasCount += sample.dirtyBlasCount;
-    total.repackBlasCount += sample.repackBlasCount;
-    total.instanceCount += sample.instanceCount;
-    total.blasCacheEntryCount += sample.blasCacheEntryCount;
-    total.cachedBlasHitCount += sample.cachedBlasHitCount;
-    total.cachedBlasRefreshCount += sample.cachedBlasRefreshCount;
-    total.missingAsMeshCount += sample.missingAsMeshCount;
-    total.atlasGrowFrameCount += sample.atlasGrowFrameCount;
-    total.blasPassFrameCount += sample.blasPassFrameCount;
-    total.tlasPassFrameCount += sample.tlasPassFrameCount;
-    ++accumulator.frameCount;
-}
-
-void reportAsBuildProfileIfReady(
-    AccelerationStructureBuildRuntimeCache &runtime,
-    const nr::renderPasses::AccelerationStructureBuildNodeInput &input,
-    const AsBuildCpuProfileFrame &sample)
-{
-    if (input.cpuProfileLogIntervalFrames == 0u)
-    {
-        return;
-    }
-
-    accumulateAsBuildProfile(runtime.cpuProfile, sample);
-    if (runtime.cpuProfile.frameCount < input.cpuProfileLogIntervalFrames)
-    {
-        return;
-    }
-
-    auto const frameCount = runtime.cpuProfile.frameCount;
-    auto const divisor = static_cast<double>(frameCount);
-    auto const &total = runtime.cpuProfile.total;
-    auto avgMs = [divisor](double milliseconds) {
-        return milliseconds / divisor;
-    };
-    auto avgCount = [divisor](std::uint64_t count) {
-        return static_cast<double>(count) / divisor;
-    };
-
-    nrInfo(std::format(
-        "[ASBuild CPU profile avg/{} frames] total={:.3f} ms, retirePrune={:.3f}, collectMeshes={:.3f}, "
-        "dirtySelect={:.3f}, atlasPlan={:.3f}, atlasRepack={:.3f}, ensureBLAS={:.3f}, instances={:.3f}, "
-        "uploadInstances={:.3f}, blasSizeQuery={:.3f}, tlasSizeQuery={:.3f}, ensureFrameResources={:.3f}, "
-        "graphImport={:.3f}, emitBLASPass={:.3f}, emitTLASPass={:.3f}",
-        frameCount,
-        avgMs(total.totalMilliseconds),
-        avgMs(total.retireAndPruneMilliseconds),
-        avgMs(total.collectMeshesMilliseconds),
-        avgMs(total.dirtySelectMilliseconds),
-        avgMs(total.atlasPlanMilliseconds),
-        avgMs(total.atlasRepackMilliseconds),
-        avgMs(total.blasEnsureMilliseconds),
-        avgMs(total.instanceBuildMilliseconds),
-        avgMs(total.instanceUploadMilliseconds),
-        avgMs(total.blasSizeQueryMilliseconds),
-        avgMs(total.tlasSizeQueryMilliseconds),
-        avgMs(total.frameResourceEnsureMilliseconds),
-        avgMs(total.graphImportMilliseconds),
-        avgMs(total.blasPassEmitMilliseconds),
-        avgMs(total.tlasPassEmitMilliseconds)));
-    nrInfo(std::format(
-        "[ASBuild CPU profile counts avg/{} frames] packets={:.1f}, uniqueMeshes={:.1f}, dirtyBLAS={:.1f}, "
-        "repackBLAS={:.1f}, instances={:.1f}, cacheEntries={:.1f}; totals: cacheHits={}, cacheRefreshes={}, "
-        "missingMeshes={}, atlasGrowFrames={}, blasPassFrames={}, tlasPassFrames={}",
-        frameCount,
-        avgCount(total.packetCount),
-        avgCount(total.uniqueMeshCount),
-        avgCount(total.dirtyBlasCount),
-        avgCount(total.repackBlasCount),
-        avgCount(total.instanceCount),
-        avgCount(total.blasCacheEntryCount),
-        total.cachedBlasHitCount,
-        total.cachedBlasRefreshCount,
-        total.missingAsMeshCount,
-        total.atlasGrowFrameCount,
-        total.blasPassFrameCount,
-        total.tlasPassFrameCount));
-
-    runtime.cpuProfile = {};
-}
 
 [[nodiscard]] vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept
 {
@@ -514,40 +363,22 @@ struct BlasBuildDirtyContext
     const nr::scene::Scene &scene,
     nr::rhi::Device &device,
     nr::resource::MeshHandle meshHandle,
-    BlasCacheEntry &entry,
-    std::optional<std::reference_wrapper<AsBuildCpuProfileFrame>> profile = std::nullopt)
+    BlasCacheEntry &entry)
 {
     auto semanticKey = scene.tryGetAccelerationStructureMeshSemanticKey(meshHandle);
     if (!semanticKey.has_value())
     {
-        if (profile.has_value())
-        {
-            ++profile->get().missingAsMeshCount;
-        }
         return std::nullopt;
     }
 
     if (!cachedBlasBuildNeedsRefresh(entry.cachedBuild, *semanticKey))
     {
-        if (profile.has_value())
-        {
-            ++profile->get().cachedBlasHitCount;
-        }
         return std::cref(entry.cachedBuild);
-    }
-
-    if (profile.has_value())
-    {
-        ++profile->get().cachedBlasRefreshCount;
     }
 
     auto sceneMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
     if (!sceneMesh.has_value())
     {
-        if (profile.has_value())
-        {
-            ++profile->get().missingAsMeshCount;
-        }
         return std::nullopt;
     }
     nrAssert(
@@ -557,15 +388,10 @@ struct BlasBuildDirtyContext
     auto mesh = std::move(*sceneMesh);
     auto geometries = makeBlasGeometryRecords(mesh);
     auto const signature = makeBlasBuildSignature(mesh);
-    auto const queryStart = std::chrono::steady_clock::now();
     auto const sizes = nr::rhi::queryBlasBuildSizes(
         device.device,
         std::span<const nr::rhi::BlasGeometryRecord>{geometries},
         staticBlasBuildOptions());
-    if (profile.has_value())
-    {
-        addElapsedProfileMilliseconds(profile->get().blasSizeQueryMilliseconds, queryStart);
-    }
 
     entry.cachedBuild = CachedBlasBuildDesc{
         .sceneMesh = std::move(mesh),
@@ -897,22 +723,11 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
 
     auto &runtime = *runtime_;
     auto &device = device_->get();
-    auto profile = detail::AsBuildCpuProfileFrame{};
-    auto const buildProfileStart = std::chrono::steady_clock::now();
-    auto finishProfile = [&]() {
-        profile.totalMilliseconds = detail::elapsedProfileMilliseconds(buildProfileStart);
-        profile.blasCacheEntryCount = runtime.blasCache.size();
-        detail::reportAsBuildProfileIfReady(runtime, input, profile);
-    };
-
-    auto sectionStart = std::chrono::steady_clock::now();
     ++runtime.frameSerial;
     detail::reapRetiredBlas(runtime);
 
     if (!frameParameters.scene.has_value() || !frameParameters.sceneTlasBuildInputs.has_value())
     {
-        detail::addElapsedProfileMilliseconds(profile.retireAndPruneMilliseconds, sectionStart);
-        finishProfile();
         return;
     }
 
@@ -920,11 +735,8 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     auto const &packets = frameParameters.sceneTlasBuildInputs->get();
     auto const retireDelay = static_cast<std::uint64_t>(nr::maxFrameInFlight + 1u);
     detail::pruneBlasCache(runtime, scene, input.unusedFrameRetireLatency, retireDelay);
-    detail::addElapsedProfileMilliseconds(profile.retireAndPruneMilliseconds, sectionStart);
-    profile.packetCount = packets.size();
     if (packets.empty())
     {
-        finishProfile();
         return;
     }
 
@@ -932,7 +744,6 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     auto instances = std::vector<detail::PlannedInstance>{};
     instances.reserve(packets.size());
 
-    sectionStart = std::chrono::steady_clock::now();
     std::ranges::for_each(packets, [&](const nr::scene::TlasBuildInputPacket &packet) {
         if (pendingByMesh.contains(packet.mesh))
         {
@@ -942,7 +753,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
         }
 
         auto [entryIt, inserted] = runtime.blasCache.try_emplace(packet.mesh);
-        auto cachedBuild = detail::ensureCachedBlasBuild(scene, device, packet.mesh, entryIt->second, std::ref(profile));
+        auto cachedBuild = detail::ensureCachedBlasBuild(scene, device, packet.mesh, entryIt->second);
         if (!cachedBuild.has_value())
         {
             if (inserted)
@@ -958,12 +769,9 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
             .cachedBuild = *cachedBuild,
         });
     });
-    detail::addElapsedProfileMilliseconds(profile.collectMeshesMilliseconds, sectionStart);
-    profile.uniqueMeshCount = pendingByMesh.size();
 
     if (pendingByMesh.empty())
     {
-        finishProfile();
         return;
     }
 
@@ -975,7 +783,6 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
 
     auto dirtyBuilds = std::vector<std::reference_wrapper<const detail::PendingBlasBuild>>{};
     dirtyBuilds.reserve(pendingRefs.size());
-    sectionStart = std::chrono::steady_clock::now();
     std::ranges::for_each(pendingRefs, [&](std::reference_wrapper<const detail::PendingBlasBuild> pendingRef) {
         auto const &pending = pendingRef.get();
         auto &entry = runtime.blasCache.try_emplace(pending.mesh).first->second;
@@ -988,10 +795,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
             dirtyBuilds.push_back(pendingRef);
         }
     });
-    detail::addElapsedProfileMilliseconds(profile.dirtySelectMilliseconds, sectionStart);
-    profile.dirtyBlasCount = dirtyBuilds.size();
 
-    sectionStart = std::chrono::steady_clock::now();
     auto atlasCursor = runtime.blasAtlas.usedBytes;
     std::ranges::for_each(dirtyBuilds, [&](std::reference_wrapper<const detail::PendingBlasBuild> pendingRef) {
         atlasCursor = detail::alignedBlasSliceEnd(
@@ -999,13 +803,10 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
             pendingRef.get().cachedBuild.get().sizes.accelerationStructureSize);
     });
     auto const needsAtlasGrow = !runtime.blasAtlas.buffer.valid() || atlasCursor > runtime.blasAtlas.capacityBytes;
-    profile.atlasGrowFrameCount = needsAtlasGrow ? 1u : 0u;
-    detail::addElapsedProfileMilliseconds(profile.atlasPlanMilliseconds, sectionStart);
 
     auto repackBuilds = std::map<nr::resource::MeshHandle, detail::PendingBlasBuild>{};
     if (needsAtlasGrow)
     {
-        sectionStart = std::chrono::steady_clock::now();
         repackBuilds = pendingByMesh;
         std::ranges::for_each(runtime.blasCache, [&](auto &pair) {
             auto const meshHandle = pair.first;
@@ -1014,7 +815,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
                 return;
             }
 
-            auto cachedBuild = detail::ensureCachedBlasBuild(scene, device, meshHandle, pair.second, std::ref(profile));
+            auto cachedBuild = detail::ensureCachedBlasBuild(scene, device, meshHandle, pair.second);
             if (!cachedBuild.has_value())
             {
                 return;
@@ -1038,19 +839,13 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
         detail::retireCurrentBlasAtlas(runtime, retireDelay);
         detail::createBlasAtlas(runtime, device, requiredAtlasBytes);
         dirtyBuilds = std::move(repackRefs);
-        profile.repackBlasCount = repackBuilds.size();
-        profile.dirtyBlasCount = dirtyBuilds.size();
-        detail::addElapsedProfileMilliseconds(profile.atlasRepackMilliseconds, sectionStart);
     }
 
-    sectionStart = std::chrono::steady_clock::now();
     std::ranges::for_each(dirtyBuilds, [&](std::reference_wrapper<const detail::PendingBlasBuild> pendingRef) {
         auto &entry = detail::ensureBlasEntry(runtime, device, pendingRef.get(), retireDelay);
         entry.lastSeenFrameSerial = runtime.frameSerial;
     });
-    detail::addElapsedProfileMilliseconds(profile.blasEnsureMilliseconds, sectionStart);
 
-    sectionStart = std::chrono::steady_clock::now();
     std::ranges::for_each(packets, [&](const nr::scene::TlasBuildInputPacket &packet) {
         auto entryIt = runtime.blasCache.find(packet.mesh);
         if (entryIt == runtime.blasCache.end() || !entryIt->second.accelerationStructure.valid())
@@ -1072,37 +867,27 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
                 input.hitShaderBindingTableRecordCount),
         });
     });
-    detail::addElapsedProfileMilliseconds(profile.instanceBuildMilliseconds, sectionStart);
-    profile.instanceCount = instances.size();
 
     if (instances.empty())
     {
-        finishProfile();
         return;
     }
 
     auto &slot = runtime.frameSlots[context.frameIndex % runtime.frameSlots.size()];
     auto const instanceBytes = static_cast<vk::DeviceSize>(instances.size() * sizeof(vk::AccelerationStructureInstanceKHR));
-    sectionStart = std::chrono::steady_clock::now();
     detail::ensureInstanceBuffer(device, slot, instanceBytes);
-    detail::addElapsedProfileMilliseconds(profile.frameResourceEnsureMilliseconds, sectionStart);
 
-    sectionStart = std::chrono::steady_clock::now();
     auto instanceValues = instances |
                           std::views::transform([](const detail::PlannedInstance &planned) { return planned.instance; }) |
                           std::ranges::to<std::vector>();
     slot.instanceBuffer.writeMappedAndFlush(std::span<const vk::AccelerationStructureInstanceKHR>{instanceValues});
-    detail::addElapsedProfileMilliseconds(profile.instanceUploadMilliseconds, sectionStart);
 
     auto const tlasInput = nr::rhi::TlasBuildInput{
         .instancesAddress = slot.instanceBuffer.deviceAddress(),
         .instanceCount = static_cast<std::uint32_t>(instances.size()),
     };
-    sectionStart = std::chrono::steady_clock::now();
     auto const tlasSizes = nr::rhi::queryTlasBuildSizes(device.device, tlasInput, detail::tlasBuildOptions());
-    detail::addElapsedProfileMilliseconds(profile.tlasSizeQueryMilliseconds, sectionStart);
 
-    sectionStart = std::chrono::steady_clock::now();
     detail::ensureTlas(device, slot, tlasSizes, tlasInput.instanceCount);
 
     auto blasScratchBytes = vk::DeviceSize{0};
@@ -1112,12 +897,10 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     });
     auto const requiredScratchBytes = std::max(blasScratchBytes, tlasSizes.buildScratchSize);
     detail::ensureScratchBuffer(device, slot, requiredScratchBytes);
-    detail::addElapsedProfileMilliseconds(profile.frameResourceEnsureMilliseconds, sectionStart);
 
     auto importedBuffers = std::map<const nr::rhi::Buffer *, GraphResourceHandle>{};
     auto blasResourceByMesh = std::map<nr::resource::MeshHandle, GraphResourceHandle>{};
 
-    sectionStart = std::chrono::steady_clock::now();
     auto const scratchResource = context.importBuffer(
         slot.scratchBuffer,
         "ASBuild.Scratch",
@@ -1142,7 +925,6 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
         ResourceLifetime::FrameLocal,
         nr::renderer::ownershipDomainFromQueue(context.queue));
     context.publishFrameResource(nr::renderer::frameResource::sceneTlas, tlasResource);
-    detail::addElapsedProfileMilliseconds(profile.graphImportMilliseconds, sectionStart);
 
     auto importBlasResource = [&](nr::resource::MeshHandle meshHandle) {
         if (auto it = blasResourceByMesh.find(meshHandle); it != blasResourceByMesh.end())
@@ -1161,10 +943,9 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
         return resource;
     };
 
+    auto dirtyBlasResourceByMesh = std::map<nr::resource::MeshHandle, GraphResourceHandle>{};
     if (!dirtyBuilds.empty())
     {
-        sectionStart = std::chrono::steady_clock::now();
-        profile.blasPassFrameCount = 1u;
         auto blasFrameData = detail::BlasBuildFrameData{
             .scratchAlignment = runtime.limits.minScratchAlignment,
         };
@@ -1196,7 +977,9 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
             });
             scratchOffset += cached.sizes.buildScratchSize;
 
-            blasUses.push_back(use::accelerationStructureBuildWrite(importBlasResource(pending.mesh)));
+            auto const blasResource = importBlasResource(pending.mesh);
+            dirtyBlasResourceByMesh.emplace(pending.mesh, blasResource);
+            blasUses.push_back(use::accelerationStructureBuildWrite(blasResource));
 
             auto const vertexResource = detail::importBufferOnce(
                 context,
@@ -1241,23 +1024,26 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
                     std::span<const nr::rhi::BlasBatchBuildRecordInfo>{batchRecords},
                     frameData.scratchAlignment);
             });
-        detail::addElapsedProfileMilliseconds(profile.blasPassEmitMilliseconds, sectionStart);
     }
 
-    sectionStart = std::chrono::steady_clock::now();
-    profile.tlasPassFrameCount = 1u;
     auto tlasUses = std::vector<PassResourceUseDesc>{
         use::accelerationStructureBuildInputRead(instanceResource),
         use::orderedAfterPrevious(use::accelerationStructureScratchWrite(scratchResource)),
         use::accelerationStructureBuildWrite(tlasResource),
     };
-    auto blasReadResources = std::set<GraphResourceHandle>{};
-    std::ranges::for_each(instances, [&](const detail::PlannedInstance &planned) {
-        blasReadResources.insert(importBlasResource(planned.mesh));
-    });
-    std::ranges::for_each(blasReadResources, [&](GraphResourceHandle resource) {
-        tlasUses.push_back(use::orderedAfterPrevious(use::accelerationStructureBuildRead(resource)));
-    });
+    if (!dirtyBlasResourceByMesh.empty())
+    {
+        auto dirtyBlasReadResources = std::set<GraphResourceHandle>{};
+        std::ranges::for_each(instances, [&](const detail::PlannedInstance &planned) {
+            if (auto it = dirtyBlasResourceByMesh.find(planned.mesh); it != dirtyBlasResourceByMesh.end())
+            {
+                dirtyBlasReadResources.insert(it->second);
+            }
+        });
+        std::ranges::for_each(dirtyBlasReadResources, [&](GraphResourceHandle resource) {
+            tlasUses.push_back(use::orderedAfterPrevious(use::accelerationStructureBuildRead(resource)));
+        });
+    }
 
     auto const tlasFrameDataHandle = context.importFrameData(
         "ASBuild.TLAS.FrameData",
@@ -1287,7 +1073,5 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
                 },
                 frameData.scratchAlignment);
         });
-    detail::addElapsedProfileMilliseconds(profile.tlasPassEmitMilliseconds, sectionStart);
-    finishProfile();
 }
 } // namespace nr::renderPasses

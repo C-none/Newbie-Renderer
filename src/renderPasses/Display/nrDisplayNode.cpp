@@ -197,8 +197,8 @@ void DisplayNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
     [[maybe_unused]] auto convertPassHandle = convertPass.build();
 
     auto copyPassIntents = std::array{
-        nr::renderer::use::transferSrc(convertedColor),
-        nr::renderer::use::transferDst(swapchainImage),
+        nr::renderer::use::imageTransferSrc(convertedColor),
+        nr::renderer::use::imageTransferDst(swapchainImage),
         nr::renderer::use::presentRead(swapchainImage),
     };
 

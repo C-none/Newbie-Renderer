@@ -15,6 +15,11 @@ import :rendererSubmission;
 
 export namespace nr::renderer
 {
+inline constexpr std::uint32_t kSceneTextureDescriptorCapacity = 1024u;
+static_assert(
+    kSceneTextureDescriptorCapacity <= nr::scene::kMaxSceneTextureId + 1u,
+    "Scene texture descriptor capacity must fit the packed uint16 material texture id ABI.");
+
 struct RendererCreateInfo
 {
     std::string appName = "NewbieRenderer";
@@ -103,9 +108,21 @@ struct FrameUniformBinding
     vk::DeviceSize range = 0;
 };
 
+struct SceneTextureDescriptorBinding
+{
+    std::uint32_t descriptorIndex = nr::scene::kDefaultSceneTextureId;
+    std::reference_wrapper<const nr::rhi::Image> image;
+    vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    std::uint64_t gpuVersion = 0;
+};
+
 struct FrameGlobalResources
 {
     FrameUniformBinding frameUniform{};
+    std::map<std::uint32_t, SceneTextureDescriptorBinding> sceneTextureDescriptorsById{};
+    vk::Sampler sceneTextureSampler{};
+    std::uint32_t sceneTextureDescriptorCapacity = kSceneTextureDescriptorCapacity;
+    std::uint64_t sceneTextureDescriptorVersion = 0;
 };
 
 struct NodeBuildContext
@@ -163,6 +180,14 @@ struct NodeBuildContext
         vk::Extent2D extent,
         vk::Format format,
         ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+
+    [[nodiscard]] GraphResourceHandle importSampledImage(
+        const nr::rhi::Image& image,
+        std::string_view debugName,
+        vk::Extent3D extent,
+        vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent,
+        ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Graphics);
 
     [[nodiscard]] GraphResourceHandle importDepth(
         const nr::rhi::Image& image,
@@ -842,12 +867,13 @@ class ShaderVisiblePassBuilderBase
 
             std::ranges::for_each(dynamicBindingSnapshots, [&](const DynamicBindingSnapshotDesc& desc) {
                 auto dynamicSnapshot = desc.snapshot(prepareContext);
+                auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
                 nr::rhi::updateResourcesForBindingSnapshot(
                     runtime->state().bindingPool,
                     runtime->bindingSetsForFrame(prepareContext.frameIndex),
                     descriptorWriteCache,
                     dynamicSnapshot,
-                    desc.resolver);
+                    std::move(resolver));
             });
         };
     }
@@ -1203,7 +1229,8 @@ class Renderer
     void buildInstalledGraph(
         const NodeFrameParameters& frameParameters,
         const nr::scene::SceneBridgeFrameConstants& frameConstants,
-        std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame);
+        std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
+        const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById);
 
     void teardownInstalledGraph();
 
@@ -1215,12 +1242,34 @@ class Renderer
 
     void recordGpuPassTimingSample(const GpuPassTimingFrame& timings);
 
+    void ensureSceneTextureFallback();
+
+    [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeTransferToGraphicsImageUploadPlan() const;
+
+    void uploadSceneTextureFallback();
+
+    struct SceneTextureDescriptorKey
+    {
+        nr::resource::TextureHandle texture{};
+        std::uint64_t gpuVersion = 0;
+
+        [[nodiscard]] friend bool operator==(const SceneTextureDescriptorKey&, const SceneTextureDescriptorKey&) noexcept = default;
+    };
+
+    [[nodiscard]] std::map<std::uint32_t, SceneTextureDescriptorBinding> buildSceneTextureDescriptorTable(
+        const NodeFrameParameters& frameParameters,
+        const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById);
+
     std::unique_ptr<nr::rhi::Device> device_{};
     RenderGraphBuilder builder_{};
     RenderGraphCompiler compiler_{};
     RenderGraphExecutor executor_{};
     RendererSubmissionTimeline submissionTimeline_{};
     FrameUniformArena frameUniformArena_{};
+    nr::rhi::Image sceneTextureFallback_{};
+    nr::rhi::SlangSampler sceneTextureSampler_{};
+    std::map<std::uint32_t, SceneTextureDescriptorKey> sceneTextureDescriptorKeys_{};
+    std::uint64_t sceneTextureDescriptorVersion_ = 1;
 
     bool graphInstalled_ = false;
     std::vector<InstalledNode> installedNodes_{};

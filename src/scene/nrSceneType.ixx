@@ -225,6 +225,49 @@ struct SceneBridgeMaterialRasterState
     bool doubleSided = false;
 };
 
+enum class SceneMaterialTextureSlot : std::uint32_t
+{
+    baseColor = 0,
+    normal = 1,
+    metallicRoughness = 2,
+    occlusion = 3,
+    emissive = 4,
+    clearcoat = 5,
+    clearcoatRoughness = 6,
+    clearcoatNormal = 7,
+    sheenColor = 8,
+    sheenRoughness = 9,
+    transmission = 10,
+    anisotropy = 11,
+    count,
+};
+
+inline constexpr auto sceneMaterialTextureSlotCount = static_cast<std::size_t>(SceneMaterialTextureSlot::count);
+using SceneTextureId = std::uint16_t;
+inline constexpr SceneTextureId kDefaultSceneTextureId = 0u;
+inline constexpr std::uint32_t kMaxSceneTextureId = static_cast<std::uint32_t>(std::numeric_limits<SceneTextureId>::max());
+
+static_assert(sceneMaterialTextureSlotCount == nr::resource::materialTextureSlotCount);
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::baseColor) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::baseColor));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::normal) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::normal));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::metallicRoughness) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::metallicRoughness));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::occlusion) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::occlusion));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::emissive) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::emissive));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoat) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoat));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoatRoughness) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoatNormal) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoatNormal));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::sheenColor) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::sheenColor));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::sheenRoughness) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::sheenRoughness));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::transmission) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::transmission));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::anisotropy) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::anisotropy));
+
+using SceneMaterialTextureIds = std::array<SceneTextureId, sceneMaterialTextureSlotCount>;
+
+[[nodiscard]] constexpr std::uint32_t sceneTextureId(nr::resource::TextureHandle texture) noexcept
+{
+    return texture.valid() ? texture.slot + 1u : kDefaultSceneTextureId;
+}
+
 struct SceneBridgeDrawPacket
 {
     flecs::entity renderable{};
@@ -236,6 +279,7 @@ struct SceneBridgeDrawPacket
     std::uint64_t sortKey = 0;
     std::uint32_t meshBindless = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
+    SceneMaterialTextureIds materialTextureIds{};
     SceneBridgeMaterialRasterState materialRaster{};
     SceneBridgeDrawGeometry geometry{};
 };
@@ -610,6 +654,17 @@ struct TextureAssetRecord
     std::vector<detail::RetiredTextureGpuPayload> retiredGpu{};
     bool cpuReady = false;
     bool uploadQueued = false;
+};
+
+struct SceneSampledTextureBinding
+{
+    nr::resource::TextureHandle texture{};
+    std::uint32_t descriptorIndex = kDefaultSceneTextureId;
+    std::reference_wrapper<const nr::rhi::Image> image;
+    vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    vk::Format format = vk::Format::eUndefined;
+    vk::Extent3D extent{1, 1, 1};
+    std::uint64_t gpuVersion = 0;
 };
 
 struct CameraAssetRecord

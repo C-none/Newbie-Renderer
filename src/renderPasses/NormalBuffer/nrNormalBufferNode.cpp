@@ -1,8 +1,12 @@
+module;
+#include <cstddef>
+
 module nr.renderPasses;
 import dependency.math;
 import dependency.vulkan;
 
 import :normalBuffer;
+import :sceneTextureTableBinding;
 import nr.renderer;
 import nr.rhi;
 import nr.scene;
@@ -19,6 +23,7 @@ struct NormalBufferRuntimeCache
 
     std::array<nr::rhi::Image, nr::maxFrameInFlight> normalBuffers{};
     std::array<nr::rhi::Image, nr::maxFrameInFlight> depthBuffers{};
+    SceneTextureTableBindingCache sceneTextureTableBinding{};
 };
 
 struct NormalBufferPushConstants
@@ -26,14 +31,25 @@ struct NormalBufferPushConstants
     glm::vec4 modelRow0{};
     glm::vec4 modelRow1{};
     glm::vec4 modelRow2{};
+    glm::uvec4 textureIdPairs0{};
+    glm::uvec2 textureIdPairs1{};
 };
 
-static_assert(sizeof(NormalBufferPushConstants) == 48u, "NormalBuffer push constants must stay packed as a 3x4 matrix.");
+static_assert(sizeof(NormalBufferPushConstants) == 72u, "NormalBuffer push constants must stay packed as model rows plus uint16 texture id pairs.");
 static_assert(sizeof(NormalBufferPushConstants) <= nr::rhi::kMaxPushConstantBytes, "Push constants exceed 128 bytes.");
 
-inline constexpr std::uint32_t kVertexStride = 104;
-inline constexpr std::uint32_t kOffsetPosition = 0;
-inline constexpr std::uint32_t kOffsetNormal = 12;
+inline constexpr std::uint32_t kVertexStride = static_cast<std::uint32_t>(sizeof(nr::resource::Vertex));
+inline constexpr std::uint32_t kOffsetPosition = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, position));
+inline constexpr std::uint32_t kOffsetNormal = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, normal));
+inline constexpr std::uint32_t kOffsetTangent = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, tangent));
+inline constexpr std::uint32_t kOffsetTexCoord0 = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, texCoord0));
+
+[[nodiscard]] constexpr std::uint32_t packSceneTextureIdPair(
+    nr::scene::SceneTextureId low,
+    nr::scene::SceneTextureId high) noexcept
+{
+    return static_cast<std::uint32_t>(low) | (static_cast<std::uint32_t>(high) << 16u);
+}
 
 [[nodiscard]] std::vector<vk::VertexInputBindingDescription> makeVertexBindings()
 {
@@ -51,15 +67,29 @@ inline constexpr std::uint32_t kOffsetNormal = 12;
     return {
         vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat, kOffsetPosition},
         vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat, kOffsetNormal},
+        vk::VertexInputAttributeDescription{2, 0, vk::Format::eR32G32B32A32Sfloat, kOffsetTangent},
+        vk::VertexInputAttributeDescription{3, 0, vk::Format::eR32G32Sfloat, kOffsetTexCoord0},
     };
 }
 
-[[nodiscard]] NormalBufferPushConstants packModelMatrix3x4(const glm::mat4& model) noexcept
+[[nodiscard]] NormalBufferPushConstants packDrawPushConstants(
+    const glm::mat4& model,
+    const nr::scene::SceneMaterialTextureIds& textureIds) noexcept
 {
     return NormalBufferPushConstants{
         .modelRow0 = glm::vec4{model[0][0], model[1][0], model[2][0], model[3][0]},
         .modelRow1 = glm::vec4{model[0][1], model[1][1], model[2][1], model[3][1]},
         .modelRow2 = glm::vec4{model[0][2], model[1][2], model[2][2], model[3][2]},
+        .textureIdPairs0 = glm::uvec4{
+            packSceneTextureIdPair(textureIds[0], textureIds[1]),
+            packSceneTextureIdPair(textureIds[2], textureIds[3]),
+            packSceneTextureIdPair(textureIds[4], textureIds[5]),
+            packSceneTextureIdPair(textureIds[6], textureIds[7]),
+        },
+        .textureIdPairs1 = glm::uvec2{
+            packSceneTextureIdPair(textureIds[8], textureIds[9]),
+            packSceneTextureIdPair(textureIds[10], textureIds[11]),
+        },
     };
 }
 
@@ -83,6 +113,20 @@ inline constexpr std::uint32_t kOffsetNormal = 12;
     pipelineDesc.depthWriteEnable = true;
     pipelineDesc.vertexBindings = makeVertexBindings();
     pipelineDesc.vertexAttributes = makeVertexAttributes();
+    auto const& descriptorCaps = device.descriptorIndexingCapabilities();
+    nr::nrAssert(
+        descriptorCaps.maxDescriptorSetUpdateAfterBindSampledImages >= nr::renderer::kSceneTextureDescriptorCapacity,
+        std::format(
+            "NormalBuffer requires at least {} update-after-bind sampled/combined image descriptors per set; device reports {}.",
+            nr::renderer::kSceneTextureDescriptorCapacity,
+            descriptorCaps.maxDescriptorSetUpdateAfterBindSampledImages));
+    nr::nrAssert(
+        descriptorCaps.maxPerStageDescriptorUpdateAfterBindSampledImages >= nr::renderer::kSceneTextureDescriptorCapacity,
+        std::format(
+            "NormalBuffer requires at least {} update-after-bind sampled/combined image descriptors per stage; device reports {}.",
+            nr::renderer::kSceneTextureDescriptorCapacity,
+            descriptorCaps.maxPerStageDescriptorUpdateAfterBindSampledImages));
+    pipelineDesc.descriptorBindingPolicy.defaultRuntimeDescriptorCount = nr::renderer::kSceneTextureDescriptorCapacity;
     pipelineDesc.dynamicStates = {
         vk::DynamicState::eViewport,
         vk::DynamicState::eScissor,
@@ -98,7 +142,7 @@ inline constexpr std::uint32_t kOffsetNormal = 12;
 
     auto runtime = std::make_shared<NormalBufferRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createGraphicsPipeline(program, pipelineDesc));
+    runtime->pipeline->initializeDeferred(device.pipeline().createGraphicsPipeline(program, pipelineDesc));
     nr::nrAssert(runtime->pipeline->valid(), "NormalBuffer pass failed to create graphics pipeline.");
 
     return runtime;
@@ -256,6 +300,7 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
         nr::renderer::ResourceLifetime::FrameLocal);
 
     auto sceneBridgeFrameHandle = frameParameters.sceneBridgeFrameHandle;
+    auto sceneTextureTableBinding = detail::makeSceneTextureTableBindingInput(context.globalResources.get());
 
     auto const normalBufferRasterState = nr::rhi::MeshRasterState{
         .depthTestEnable = vk::True,
@@ -275,6 +320,20 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
         .depthAttachment(depthBuffer)
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
         .rasterState(normalBufferRasterState)
+        .prepare([runtime = runtime_](const nr::renderer::PassPrepareContext& prepareContext) {
+            detail::ensureSceneTextureTableBindingSetsForFrame(
+                *runtime->pipeline,
+                runtime->sceneTextureTableBinding,
+                prepareContext.frameIndex);
+        })
+        .dynamicBindingSnapshot(
+            [runtime = runtime_, sceneTextureTableBinding](const nr::renderer::PassPrepareContext& prepareContext) {
+                return detail::makeSceneTextureTableBindingSnapshot(
+                    *runtime->pipeline,
+                    runtime->sceneTextureTableBinding,
+                    prepareContext.frameIndex,
+                    sceneTextureTableBinding);
+            })
         .recordParallel(
         [sceneBridgeFrameHandle](const nr::renderer::PassRecordContext& recordContext) -> std::size_t {
             if (!sceneBridgeFrameHandle.has_value())
@@ -334,7 +393,7 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
                     currentCullMode = drawCullMode;
                 }
 
-                rasterContext.pushConstants(modelPushConstants, detail::packModelMatrix3x4(draw.world));
+                rasterContext.pushConstants(modelPushConstants, detail::packDrawPushConstants(draw.world, draw.materialTextureIds));
 
                 if (currentFrontFace != draw.geometry.frontFace)
                 {

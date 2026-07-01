@@ -111,4 +111,58 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
         nr::test::require(frameUniform.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
     }};
+
+const nr::test::CaseRegistrar rtMaterialTextureIdsReflectionCase{
+    "rt shader common material texture id helper exposes scene texture table",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"test/rt/materialTextureIdsRt"},
+        });
+        nr::test::require(program.valid(), "material texture id RT shader should compile");
+
+        auto layout = nr::rhi::ShaderDescriptorLayout::create(program, nr::rhi::DescriptorBindingPolicy{
+            .defaultRuntimeDescriptorCount = 1024,
+        });
+        nr::test::require(layout.valid(), "material texture id RT descriptor layout should be valid");
+
+        auto root = layout.rootCursor();
+        auto sceneTextures = root["gSceneTextures"];
+        nr::test::require(sceneTextures.valid(), "RT gSceneTextures cursor should resolve");
+        nr::test::require(sceneTextures.referencesRuntimeDescriptorArray(), "RT gSceneTextures should be runtime-sized");
+        nr::test::require(sceneTextures.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler);
+        nr::test::requireEqual(*sceneTextures.bindingDescriptorCount(), 1024u);
+
+        auto sceneTextureBinding = sceneTextures.descriptorBinding();
+        nr::test::require(sceneTextureBinding.has_value(), "RT gSceneTextures should expose descriptor binding reflection");
+        nr::test::requireEqual(sceneTextureBinding->set, 1u);
+        nr::test::requireEqual(sceneTextureBinding->binding, 0u);
+        nr::test::require(sceneTextureBinding->descriptorType == vk::DescriptorType::eCombinedImageSampler);
+        nr::test::require(sceneTextureBinding->supportsVariableDescriptorCount());
+
+        auto sceneTextureElement = sceneTextures[7u];
+        nr::test::require(sceneTextureElement.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = 77,
+            .debugName = "RT.SceneTexture[7]",
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        }));
+
+        auto outputImage = root["outputImage"];
+        nr::test::require(outputImage.valid(), "RT material helper output image cursor should resolve");
+        nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
+
+        auto materialTextureIds = root["gMaterialTextureIds"];
+        nr::test::require(materialTextureIds.valid(), "RT material helper push constants should resolve");
+        nr::test::require(materialTextureIds.pushConstantRange().has_value());
+
+        auto snapshot = root.snapshot();
+        nr::test::requireEqual(snapshot.descriptorWriteCount(), std::size_t{1});
+        auto const& write = snapshot.descriptorWrites().front();
+        nr::test::requireEqual(write.binding.set, 1u);
+        nr::test::requireEqual(write.binding.binding, 0u);
+        nr::test::requireEqual(write.arrayElement, 7u);
+        nr::test::require(write.binding.descriptorType == vk::DescriptorType::eCombinedImageSampler);
+    }};
 } // namespace
