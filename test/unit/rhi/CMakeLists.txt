@@ -23,6 +23,7 @@ nr_add_contract_test(nr_rhi_shader_cursor_contract_test nr_rhi_shader_cursor_con
 )
 
 nr_add_contract_test(nr_rhi_rt_shader_reflection_contract_test nr_rhi_rt_shader_reflection_contract_test.cpp "fast;cpu;unit;rhi;rt;shader"
+    nrresource
     nrrhi
     utils
     dependency

@@ -1,5 +1,8 @@
+#include <cstddef>
+
 import std;
 import dependency;
+import nr.resource;
 import nr.rhi;
 import nr.test;
 
@@ -66,7 +69,7 @@ const nr::test::CaseRegistrar rtShaderReflectionCase{
     }};
 
 const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
-    "rtobject display and RT instance hash shaders compile and expose expected bindings",
+    "rtobject display and path tracing shaders compile and expose expected bindings",
     [] {
         auto& shaderService = nr::rhi::ShaderService::instance();
         shaderService.configure();
@@ -92,24 +95,59 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(displayPushConstants.pushConstantRange().has_value());
 
         auto rtProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/rtInstanceHash"},
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
         });
-        nr::test::require(rtProgram.valid(), "rtobject RT instance hash shader should compile");
+        nr::test::require(rtProgram.valid(), "rtobject path tracing shader should compile");
 
         auto rtLayout = nr::rhi::ShaderDescriptorLayout::create(rtProgram);
-        nr::test::require(rtLayout.valid(), "rtobject RT instance hash layout should be valid");
+        nr::test::require(rtLayout.valid(), "rtobject path tracing layout should be valid");
 
         auto rtRoot = rtLayout.rootCursor();
         auto scene = rtRoot["scene"];
         auto outputImage = rtRoot["outputImage"];
         auto frameUniform = rtRoot["gFrame"];
+        auto instanceMetadata = rtRoot["rtInstanceMetadata"];
+        auto geometryMetadata = rtRoot["rtGeometryMetadata"];
+        auto materialHeaders = rtRoot["rtMaterialHeaders"];
+        auto materialLayers = rtRoot["rtMaterialLayers"];
+        auto materialTextureRefs = rtRoot["rtMaterialTextureRefs"];
+        auto vertexData = rtRoot["rtVertexData"];
+        auto indexData = rtRoot["rtIndexData"];
+        auto sceneTextures = rtRoot["gSceneTextures"];
 
-        nr::test::require(scene.valid(), "RT instance hash TLAS cursor should resolve");
-        nr::test::require(outputImage.valid(), "RT instance hash output cursor should resolve");
-        nr::test::require(frameUniform.valid(), "RT instance hash global frame uniform cursor should resolve");
+        nr::test::require(scene.valid(), "path tracing TLAS cursor should resolve");
+        nr::test::require(outputImage.valid(), "path tracing output cursor should resolve");
+        nr::test::require(frameUniform.valid(), "path tracing global frame uniform cursor should resolve");
+        nr::test::require(instanceMetadata.valid(), "RT instance metadata cursor should resolve");
+        nr::test::require(geometryMetadata.valid(), "RT geometry metadata cursor should resolve");
+        nr::test::require(materialHeaders.valid(), "RT material headers cursor should resolve");
+        nr::test::require(materialLayers.valid(), "RT material layers cursor should resolve");
+        nr::test::require(materialTextureRefs.valid(), "RT material texture refs cursor should resolve");
+        nr::test::require(vertexData.valid(), "RT vertex atlas cursor should resolve");
+        nr::test::require(indexData.valid(), "RT index atlas cursor should resolve");
+        nr::test::require(sceneTextures.valid(), "path tracing scene texture table cursor should resolve");
         nr::test::require(scene.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::AccelerationStructure);
         nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
         nr::test::require(frameUniform.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
+        nr::test::require(instanceMetadata.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(geometryMetadata.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(materialHeaders.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(materialLayers.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(materialTextureRefs.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(vertexData.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(indexData.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(sceneTextures.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler);
+    }};
+
+const nr::test::CaseRegistrar rtVertexAtlasLayoutCase{
+    "path tracing shader vertex atlas offsets match resource vertex layout",
+    [] {
+        nr::test::requireEqual(offsetof(nr::resource::Vertex, position), std::size_t{0u});
+        nr::test::requireEqual(offsetof(nr::resource::Vertex, normal), std::size_t{12u});
+        nr::test::requireEqual(offsetof(nr::resource::Vertex, tangent), std::size_t{24u});
+        nr::test::requireEqual(offsetof(nr::resource::Vertex, texCoord0), std::size_t{40u});
+        nr::test::requireEqual(offsetof(nr::resource::Vertex, texCoord1), std::size_t{48u});
+        nr::test::requireEqual(offsetof(nr::resource::Vertex, color0), std::size_t{56u});
     }};
 
 const nr::test::CaseRegistrar rtMaterialTextureIdsReflectionCase{

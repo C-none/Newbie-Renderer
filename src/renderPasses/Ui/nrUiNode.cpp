@@ -70,7 +70,6 @@ struct UiRuntimeCache
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>> pipeline{};
     nr::rhi::SlangSampler textureSampler{};
     std::uint64_t textureTableRevision = 1u;
-    std::array<std::uint64_t, nr::maxFrameInFlight> appliedTextureTableRevisionByFrame{};
     std::array<nr::rhi::Buffer, nr::maxFrameInFlight> vertexBuffers{};
     std::array<nr::rhi::Buffer, nr::maxFrameInFlight> indexBuffers{};
     // Per-frame GPU-only UI overlay images avoid cross-frame read/write overlap.
@@ -851,38 +850,10 @@ template <std::size_t N>
     };
 }
 
-void ensureBindlessTextureBindingSetsForFrame(
-    UiRuntimeCache& runtime,
-    std::size_t frameSlot)
+[[nodiscard]] std::map<std::uint32_t, nr::renderer::BindlessImageDescriptor> makeUiTextureDescriptors(
+    const UiRuntimeCache& runtime)
 {
-    auto root = runtime.pipeline->rootCursor();
-    auto textureCursor = root["gUiTextures"];
-    auto textureBinding = textureCursor.descriptorBinding();
-    nr::nrAssert(
-        textureBinding.has_value() && textureBinding->supportsVariableDescriptorCount(),
-        "UiNode requires gUiTextures to be a runtime-sized descriptor array.");
-    auto const reallocated = runtime.pipeline->ensureBindingSetsForFrame(
-        static_cast<std::uint32_t>(frameSlot),
-        {{textureBinding->set, kUiTextureDescriptorCapacity}});
-    if (reallocated)
-    {
-        runtime.appliedTextureTableRevisionByFrame[frameSlot] = 0u;
-    }
-}
-
-[[nodiscard]] nr::rhi::ShaderBindingSnapshot makeBindlessTextureBindingSnapshotForFrame(
-    UiRuntimeCache& runtime,
-    std::size_t frameSlot)
-{
-    ensureBindlessTextureBindingSetsForFrame(runtime, frameSlot);
-    if (runtime.appliedTextureTableRevisionByFrame[frameSlot] == runtime.textureTableRevision)
-    {
-        return {};
-    }
-
-    auto root = runtime.pipeline->rootCursor();
-    auto texturesCursor = root["gUiTextures"];
-
+    auto descriptorsById = std::map<std::uint32_t, nr::renderer::BindlessImageDescriptor>{};
     auto slotRange = std::views::iota(std::size_t{0}, runtime.texturesBySlot.size());
     std::ranges::for_each(slotRange, [&](std::size_t slot) {
         auto const& textureEntry = runtime.texturesBySlot[slot];
@@ -897,18 +868,61 @@ void ensureBindlessTextureBindingSetsForFrame(
                 "UiNode bindless descriptor update found slot {} beyond descriptor capacity {}.",
                 slot,
                 kUiTextureDescriptorCapacity));
-
-        auto textureElementCursor = texturesCursor[slot];
-        static_cast<void>(textureElementCursor.setObject(
-            textureEntry.image,
-            runtime.textureSampler.raw(),
-            vk::ImageLayout::eShaderReadOnlyOptimal));
+        descriptorsById.insert_or_assign(
+            static_cast<std::uint32_t>(slot),
+            nr::renderer::BindlessImageDescriptor{
+                .image = std::cref(textureEntry.image),
+                .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            });
     });
+    return descriptorsById;
+}
 
-    auto bindingSnapshot = root.snapshot();
-    root.clearSnapshot();
-    runtime.appliedTextureTableRevisionByFrame[frameSlot] = runtime.textureTableRevision;
-    return bindingSnapshot;
+[[nodiscard]] nr::renderer::BindlessImageTableRequest makeBindlessTextureTableRequest(UiRuntimeCache& runtime)
+{
+    nr::nrAssert(runtime.textureSampler.valid(), "UiNode bindless texture table requires a valid sampler.");
+
+    auto descriptorsById = makeUiTextureDescriptors(runtime);
+    auto fallbackDescriptor = std::optional<nr::renderer::BindlessImageDescriptor>{};
+    if (!descriptorsById.empty())
+    {
+        fallbackDescriptor = descriptorsById.begin()->second;
+    }
+
+    return nr::renderer::BindlessImageTableRequest{
+        .tableKey = "ui.gUiTextures",
+        .shaderSymbol = "gUiTextures",
+        .expectedSet = 1u,
+        .expectedBinding = 0u,
+        .expectedDescriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCapacity = kUiTextureDescriptorCapacity,
+        .sampler = runtime.textureSampler.raw(),
+        .tableVersion = runtime.textureTableRevision,
+        .descriptorsById = std::move(descriptorsById),
+        .fallbackDescriptor = fallbackDescriptor,
+    };
+}
+
+void prepareBindlessTextureTableForFrame(
+    UiRuntimeCache& runtime,
+    nr::renderer::BindlessImageTableCache& cache,
+    std::uint32_t frameIndex)
+{
+    cache.ensureTableForFrame(
+        *runtime.pipeline,
+        frameIndex,
+        makeBindlessTextureTableRequest(runtime));
+}
+
+[[nodiscard]] nr::rhi::ShaderBindingSnapshot makeBindlessTextureBindingSnapshotForFrame(
+    UiRuntimeCache& runtime,
+    nr::renderer::BindlessImageTableCache& cache,
+    std::uint32_t frameIndex)
+{
+    return cache.makeSnapshotForFrame(
+        *runtime.pipeline,
+        frameIndex,
+        makeBindlessTextureTableRequest(runtime));
 }
 
 [[nodiscard]] UiFrameDrawData copyUiDrawData(
@@ -1103,6 +1117,7 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
             *runtime_);
 
         auto runtime = runtime_;
+        auto& bindlessImageTableCache = context.globalResources.get().bindlessImageTableCache.get();
         auto overlayPass = nr::renderer::RasterPassBuilder{
             context,
             "Ui.Overlay",
@@ -1116,9 +1131,11 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
                 .cullMode = vk::CullModeFlagBits::eNone,
                 .depthCompareOp = vk::CompareOp::eAlways,
             })
-            .prepare([runtime, drawFrame](const nr::renderer::PassPrepareContext& prepareContext) {
+            .prepare([runtime, drawFrame, cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
                 nr::nrAssert(prepareContext.device.has_value(), "UiNode prepare stage requires device access.");
                 nr::nrAssert(static_cast<bool>(runtime), "UiNode prepare stage requires initialized runtime state.");
+
+                prepareBindlessTextureTableForFrame(*runtime, cache.get(), prepareContext.frameIndex);
 
                 auto& device = prepareContext.device->get();
                 auto const frameSlot = static_cast<std::size_t>(prepareContext.frameIndex % runtime->vertexBuffers.size());
@@ -1151,9 +1168,8 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
                     indexBuffer.writeMappedAndFlush(std::span<const ImDrawIdx>{drawFrame.indices.data(), drawFrame.indices.size()});
                 }
             })
-            .dynamicBindingSnapshot([runtime](const nr::renderer::PassPrepareContext& prepareContext) {
-                auto const frameSlot = static_cast<std::size_t>(prepareContext.frameIndex % nr::maxFrameInFlight);
-                return makeBindlessTextureBindingSnapshotForFrame(*runtime, frameSlot);
+            .dynamicBindingSnapshot([runtime, cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
+                return makeBindlessTextureBindingSnapshotForFrame(*runtime, cache.get(), prepareContext.frameIndex);
             })
             .record([runtime, drawFrame](const nr::renderer::RasterPassRecordContext& rasterContext) {
                 if (drawFrame.commands.empty())

@@ -33,3 +33,19 @@ nr_link_module_dependencies(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.c
 
 add_test(NAME nr_normal_buffer_ui_smoke_test COMMAND nr_normal_buffer_ui_smoke_test)
 set_tests_properties(nr_normal_buffer_ui_smoke_test PROPERTIES LABELS "gpu;window;smoke;app")
+
+nr_add_executable(nr_rt_object_material_smoke_test rtObjectMaterialSmoke.cpp)
+set_target_properties(nr_rt_object_material_smoke_test PROPERTIES FOLDER "Test/smoke/app")
+
+nr_link_module_dependencies(nr_rt_object_material_smoke_test rtObjectMaterialSmoke.cpp PRIVATE
+    nrapp
+    nrrenderpasses
+    nrrenderer
+    nrscene
+    nrload
+    utils
+    dependency
+)
+
+add_test(NAME nr_rt_object_material_smoke_test COMMAND nr_rt_object_material_smoke_test)
+set_tests_properties(nr_rt_object_material_smoke_test PROPERTIES LABELS "gpu;window;smoke;app;rt;assets")

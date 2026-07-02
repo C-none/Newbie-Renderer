@@ -6,5 +6,5 @@ export import :displayNode;
 export import :embeddedTriangle;
 export import :normalBuffer;
 export import :presentNode;
-export import :rayTraceInstanceHash;
+export import :pathTracing;
 export import :uiNode;

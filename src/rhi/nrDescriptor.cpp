@@ -1265,6 +1265,48 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     return fieldCursorFromLayout(*fieldLayout, fieldIndex, std::format("{}.{}", debugPath_, fieldName));
 }
 
+[[nodiscard]] bool ShaderCursor::hasField(std::string_view fieldName) const
+{
+    if (!valid() || fieldName.empty())
+    {
+        return false;
+    }
+
+    if (isRoot_)
+    {
+        return layoutRef().findRootField(fieldName).has_value();
+    }
+
+    auto kind = typeLayout_->getKind();
+    if (kind == slang::TypeReflection::Kind::ConstantBuffer || kind == slang::TypeReflection::Kind::ParameterBlock)
+    {
+        auto* elementType = typeLayout_->getElementTypeLayout();
+        if (elementType == nullptr)
+        {
+            return false;
+        }
+
+        kind = elementType->getKind();
+        if (kind != slang::TypeReflection::Kind::Struct)
+        {
+            return false;
+        }
+
+        auto fieldIndex = detail::sanitizeFieldIndex(
+            elementType->findFieldIndexByName(fieldName.data(), fieldName.data() + fieldName.size()));
+        return fieldIndex != std::numeric_limits<std::uint32_t>::max();
+    }
+
+    if (kind != slang::TypeReflection::Kind::Struct)
+    {
+        return false;
+    }
+
+    auto fieldIndex = detail::sanitizeFieldIndex(
+        typeLayout_->findFieldIndexByName(fieldName.data(), fieldName.data() + fieldName.size()));
+    return fieldIndex != std::numeric_limits<std::uint32_t>::max();
+}
+
 [[nodiscard]] ShaderCursor ShaderCursor::element(std::uint32_t index) const
 {
     assertValidCursor("ShaderCursor::element");

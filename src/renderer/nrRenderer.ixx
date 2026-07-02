@@ -11,6 +11,7 @@ import :frameServices;
 import :renderGraphBuilder;
 import :renderGraphCompiler;
 import :renderGraphExecutor;
+import :rendererCache;
 import :rendererSubmission;
 
 export namespace nr::renderer
@@ -45,6 +46,13 @@ inline constexpr std::string_view normalDepth = "normal.depth";
 inline constexpr std::string_view uiColor = "ui.color";
 inline constexpr std::string_view swapchainImage = "swapchain.image";
 inline constexpr std::string_view sceneTlas = "scene.tlas";
+inline constexpr std::string_view sceneRtInstanceMetadata = "scene.rt.instanceMetadata";
+inline constexpr std::string_view sceneRtGeometryMetadata = "scene.rt.geometryMetadata";
+inline constexpr std::string_view sceneRtMaterialHeaders = "scene.rt.materialHeaders";
+inline constexpr std::string_view sceneRtMaterialLayers = "scene.rt.materialLayers";
+inline constexpr std::string_view sceneRtMaterialTextureRefs = "scene.rt.materialTextureRefs";
+inline constexpr std::string_view sceneRtVertexAtlas = "scene.rt.vertexAtlas";
+inline constexpr std::string_view sceneRtIndexAtlas = "scene.rt.indexAtlas";
 } // namespace frameResource
 
 struct NodeFrameParameters
@@ -108,14 +116,6 @@ struct FrameUniformBinding
     vk::DeviceSize range = 0;
 };
 
-struct SceneTextureDescriptorBinding
-{
-    std::uint32_t descriptorIndex = nr::scene::kDefaultSceneTextureId;
-    std::reference_wrapper<const nr::rhi::Image> image;
-    vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    std::uint64_t gpuVersion = 0;
-};
-
 struct FrameGlobalResources
 {
     FrameUniformBinding frameUniform{};
@@ -123,6 +123,7 @@ struct FrameGlobalResources
     vk::Sampler sceneTextureSampler{};
     std::uint32_t sceneTextureDescriptorCapacity = kSceneTextureDescriptorCapacity;
     std::uint64_t sceneTextureDescriptorVersion = 0;
+    std::reference_wrapper<BindlessImageTableCache> bindlessImageTableCache;
 };
 
 struct NodeBuildContext
@@ -756,6 +757,25 @@ class ShaderVisiblePassBuilderBase
         return derived();
     }
 
+    TDerived& sampledImageGeneral(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    {
+        nrAssert(resource.valid(), std::format("{}::sampledImageGeneral requires a valid graph resource.", builderLabel_));
+        auto cursor = rootCursor_.getPath(shaderPath);
+        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = resource.value,
+            .debugName = std::string(debugName),
+            .imageLayout = vk::ImageLayout::eGeneral,
+        }));
+        resourceUses_.push_back(PassResourceUseDesc{
+            .resource = resource,
+            .imageUsage = ImageUsageIntent::Sampled,
+            .imageAccess = ImageAccessIntent::SampledRead,
+            .imageLayout = ImageLayoutIntent::General,
+            .readOnly = true,
+        });
+        return derived();
+    }
+
     TDerived& storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
     {
         nrAssert(resource.valid(), std::format("{}::storageImage requires a valid graph resource.", builderLabel_));
@@ -765,6 +785,18 @@ class ShaderVisiblePassBuilderBase
             .debugName = std::string(debugName),
         }));
         resourceUses_.push_back(use::storageWrite(resource));
+        return derived();
+    }
+
+    TDerived& storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    {
+        nrAssert(resource.valid(), std::format("{}::storageBuffer requires a valid graph resource.", builderLabel_));
+        auto cursor = rootCursor_.getPath(shaderPath);
+        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = resource.value,
+            .debugName = std::string(debugName),
+        }));
+        resourceUses_.push_back(use::storageBufferRead(resource));
         return derived();
     }
 
@@ -932,6 +964,8 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<
     using Base::pushConstants;
     using Base::resourceUse;
     using Base::sampledImage;
+    using Base::sampledImageGeneral;
+    using Base::storageBuffer;
     using Base::storageImage;
     using Base::uniform;
 
@@ -1047,6 +1081,8 @@ class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<
     using Base::pushConstants;
     using Base::resourceUse;
     using Base::sampledImage;
+    using Base::sampledImageGeneral;
+    using Base::storageBuffer;
     using Base::storageImage;
     using Base::uniform;
 
@@ -1090,6 +1126,8 @@ class RayTracingPassBuilder : public detail::ShaderVisiblePassBuilderBase<
     using Base::pushConstants;
     using Base::resourceUse;
     using Base::sampledImage;
+    using Base::sampledImageGeneral;
+    using Base::storageBuffer;
     using Base::storageImage;
     using Base::uniform;
 
@@ -1248,28 +1286,18 @@ class Renderer
 
     void uploadSceneTextureFallback();
 
-    struct SceneTextureDescriptorKey
-    {
-        nr::resource::TextureHandle texture{};
-        std::uint64_t gpuVersion = 0;
-
-        [[nodiscard]] friend bool operator==(const SceneTextureDescriptorKey&, const SceneTextureDescriptorKey&) noexcept = default;
-    };
-
-    [[nodiscard]] std::map<std::uint32_t, SceneTextureDescriptorBinding> buildSceneTextureDescriptorTable(
+    [[nodiscard]] RendererSceneTextureDescriptorTable buildSceneTextureDescriptorTable(
         const NodeFrameParameters& frameParameters,
         const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById);
 
     std::unique_ptr<nr::rhi::Device> device_{};
     RenderGraphBuilder builder_{};
-    RenderGraphCompiler compiler_{};
     RenderGraphExecutor executor_{};
+    RendererCacheSuite cacheSuite_{};
     RendererSubmissionTimeline submissionTimeline_{};
     FrameUniformArena frameUniformArena_{};
     nr::rhi::Image sceneTextureFallback_{};
     nr::rhi::SlangSampler sceneTextureSampler_{};
-    std::map<std::uint32_t, SceneTextureDescriptorKey> sceneTextureDescriptorKeys_{};
-    std::uint64_t sceneTextureDescriptorVersion_ = 1;
 
     bool graphInstalled_ = false;
     std::vector<InstalledNode> installedNodes_{};

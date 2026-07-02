@@ -6,6 +6,7 @@ import :type;
 import :backend;
 import :decode;
 import nr.resource;
+import nr.utils;
 import std;
 
 namespace nr::load::detail
@@ -95,6 +96,30 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
     return raw == nullptr ? std::string{} : std::string{raw};
 }
 
+[[nodiscard]] float dot(const aiVector3D &lhs, const aiVector3D &rhs) noexcept
+{
+    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
+}
+
+[[nodiscard]] aiVector3D cross(const aiVector3D &lhs, const aiVector3D &rhs) noexcept
+{
+    return aiVector3D{
+        lhs.y * rhs.z - lhs.z * rhs.y,
+        lhs.z * rhs.x - lhs.x * rhs.z,
+        lhs.x * rhs.y - lhs.y * rhs.x,
+    };
+}
+
+[[nodiscard]] float squaredLength(const aiVector3D &value) noexcept
+{
+    return dot(value, value);
+}
+
+[[nodiscard]] float tangentHandedness(float signSource) noexcept
+{
+    return signSource < 0.0f ? -1.0f : 1.0f;
+}
+
 [[nodiscard]] std::string textureTypeName(aiTextureType textureType, unsigned int textureSlot)
 {
     switch (textureType)
@@ -169,6 +194,8 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
     case aiTextureType_AMBIENT_OCCLUSION: return occlusion;
     case aiTextureType_EMISSIVE:
     case aiTextureType_EMISSION_COLOR: return emissive;
+    case aiTextureType_METALNESS:
+    case aiTextureType_DIFFUSE_ROUGHNESS:
     case aiTextureType_GLTF_METALLIC_ROUGHNESS: return metallicRoughness;
     case aiTextureType_CLEARCOAT:
         switch (textureSlot)
@@ -631,6 +658,8 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
     return std::nullopt;
 }
 
+[[nodiscard]] bool shouldFlipAssimpTextureCoordinateV(const std::filesystem::path &sourcePath);
+
 [[nodiscard]] std::optional<LoadError> appendMeshes(const aiScene &assimpScene,
                                                            SceneAsset &scene,
                                                            bool strict)
@@ -666,6 +695,9 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
         meshAsset.clockwiseFrontFace = false;
 
         meshAsset.vertices.reserve(mesh->mNumVertices);
+        auto const flipTextureCoordinateV = shouldFlipAssimpTextureCoordinateV(scene.sourcePath);
+        auto invalidTangentFrameCount = 0u;
+        auto firstInvalidTangentFrame = std::optional<std::string>{};
         auto vertexIndices = std::views::iota(0u, mesh->mNumVertices);
         for (auto vertexIndex : vertexIndices)
         {
@@ -680,16 +712,51 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
                 vertex.normal = {normal.x, normal.y, normal.z};
             }
 
-            if (mesh->HasTangentsAndBitangents() && mesh->mTangents != nullptr)
+            if (mesh->HasTangentsAndBitangents())
             {
+                if (mesh->mTangents == nullptr || mesh->mBitangents == nullptr || !mesh->HasNormals() || mesh->mNormals == nullptr)
+                {
+                    return makeLoadError(
+                        LoadErrorCode::invalidScene,
+                        "assimp",
+                        scene.sourcePath,
+                        std::format(
+                            "Mesh '{}' reports tangent space but is missing tangent, bitangent, or normal arrays required to preserve tangent handedness.",
+                            meshAsset.name));
+                }
+
                 auto const &tangent = mesh->mTangents[vertexIndex];
-                vertex.tangent = {tangent.x, tangent.y, tangent.z, 1.0f};
+                auto const &bitangent = mesh->mBitangents[vertexIndex];
+                auto const &normal = mesh->mNormals[vertexIndex];
+                auto const tangentFrameBitangent = cross(normal, tangent);
+                auto const tangentFrameBitangentLength2 = squaredLength(tangentFrameBitangent);
+                auto const bitangentLength2 = squaredLength(bitangent);
+                auto const signSource = dot(tangentFrameBitangent, bitangent);
+                if (tangentFrameBitangentLength2 <= 1e-12f || bitangentLength2 <= 1e-12f || !std::isfinite(signSource))
+                {
+                    ++invalidTangentFrameCount;
+                    if (!firstInvalidTangentFrame.has_value())
+                    {
+                        firstInvalidTangentFrame = std::format(
+                            "vertex {} cross(normal,tangent)^2={} bitangent^2={} signSource={}",
+                            vertexIndex,
+                            tangentFrameBitangentLength2,
+                            bitangentLength2,
+                            signSource);
+                    }
+
+                    vertex.tangent = {tangent.x, tangent.y, tangent.z, 1.0f};
+                }
+                else
+                {
+                    vertex.tangent = {tangent.x, tangent.y, tangent.z, tangentHandedness(signSource)};
+                }
             }
 
             if (mesh->HasTextureCoords(0) && mesh->mTextureCoords[0] != nullptr)
             {
                 auto const &uv = mesh->mTextureCoords[0][vertexIndex];
-                vertex.texCoord0 = {uv.x, uv.y};
+                vertex.texCoord0 = {uv.x, flipTextureCoordinateV ? 1.0f - uv.y : uv.y};
             }
 
             if (mesh->HasVertexColors(0) && mesh->mColors[0] != nullptr)
@@ -699,6 +766,15 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
             }
 
             meshAsset.vertices.push_back(vertex);
+        }
+
+        if (invalidTangentFrameCount > 0u)
+        {
+            nrInfo<LogLevel::warning>(std::format(
+                "Mesh '{}' contains {} vertices with undefined tangent handedness; using +1 tangent sign for those vertices. First invalid frame: {}.",
+                meshAsset.name,
+                invalidTangentFrameCount,
+                firstInvalidTangentFrame.value_or("unavailable")));
         }
 
         meshAsset.indices.reserve(static_cast<std::size_t>(mesh->mNumFaces) * 3u);
@@ -991,6 +1067,12 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
     });
     auto total = std::accumulate(indexSizes.begin(), indexSizes.end(), std::uint64_t{0});
     return static_cast<std::uint32_t>(std::min<std::uint64_t>(total, std::numeric_limits<std::uint32_t>::max()));
+}
+
+[[nodiscard]] bool shouldFlipAssimpTextureCoordinateV(const std::filesystem::path &sourcePath)
+{
+    auto const extension = normalizedExtension(sourcePath);
+    return extension == ".gltf" || extension == ".glb";
 }
 
 [[nodiscard]] aiPostProcessSteps buildPostProcessFlags(const SceneLoadRequest &request)

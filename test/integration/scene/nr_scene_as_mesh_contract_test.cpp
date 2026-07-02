@@ -99,8 +99,8 @@ namespace
 }
 
 [[nodiscard]] nr::resource::MeshHandle resolveMeshHandle(
-    const nr::scene::Scene &scene,
-    const nr::load::SceneAsset &sceneAsset,
+    const nr::scene::Scene& scene,
+    const nr::load::SceneAsset& sceneAsset,
     std::uint32_t meshIndex = 0u)
 {
     auto handle = scene.findMeshHandleByStableKey(nr::scene::SceneBridge::makeMeshCanonicalKey(sceneAsset, meshIndex));
@@ -109,8 +109,8 @@ namespace
 }
 
 [[nodiscard]] nr::resource::MaterialHandle resolveMaterialHandle(
-    const nr::scene::Scene &scene,
-    const nr::load::SceneAsset &sceneAsset,
+    const nr::scene::Scene& scene,
+    const nr::load::SceneAsset& sceneAsset,
     std::uint32_t materialIndex)
 {
     auto handle = scene.findMaterialHandleByStableKey(
@@ -119,7 +119,7 @@ namespace
     return *handle;
 }
 
-void uploadSceneGeometry(nr::scene::Scene &scene, nr::rhi::Device &device)
+void uploadSceneGeometry(nr::scene::Scene& scene, nr::rhi::Device& device)
 {
     scene.beginFrame(0u);
     scene.uploadPending();
@@ -144,7 +144,9 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
 
         auto importedClockwiseMesh = scene.tryGetMeshAsset(clockwiseMeshHandle);
         nr::test::require(importedClockwiseMesh.has_value(), "clockwise source mesh should import into scene mesh storage");
-        nr::test::require(importedClockwiseMesh->get().cpu.clockwiseFrontFace, "mesh bridge should preserve source clockwise front-face winding");
+        nr::test::require(
+            importedClockwiseMesh->get().cpu.clockwiseFrontFace,
+            "mesh bridge should preserve source clockwise front-face winding");
 
         auto asMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
         nr::test::require(asMesh.has_value(), "resident scene mesh should expose AS build input");
@@ -171,7 +173,7 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
         {
             auto record = scene.tryGetMaterialAsset(doubleSidedMaterial);
             nr::test::require(record.has_value(), "AS contract material record should exist");
-            auto &mutableRecord = const_cast<nr::scene::MaterialAssetRecord &>(record->get());
+            auto& mutableRecord = const_cast<nr::scene::MaterialAssetRecord&>(record->get());
             mutableRecord.cpu.core.alphaMode = nr::resource::AlphaMode::opaque;
         }
 

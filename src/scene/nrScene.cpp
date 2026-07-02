@@ -1463,6 +1463,41 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         return meshIsResident(binding.mesh);
     }
 
+[[nodiscard]] bool Scene::renderableReadyForRayTracing(const RenderableBinding &binding) const noexcept
+{
+        if (!meshIsResident(binding.mesh))
+        {
+            return false;
+        }
+
+        auto const *meshRecord = meshes_.tryGet(binding.mesh);
+        if (meshRecord == nullptr || !meshRecord->cpuReady || meshRecord->cpu.geometries.empty())
+        {
+            return false;
+        }
+
+        return std::ranges::all_of(meshRecord->cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
+            auto materialHandle = geometry.material;
+            if (!materialHandle.valid())
+            {
+                return true;
+            }
+
+            if (!materialIsResident(materialHandle))
+            {
+                return false;
+            }
+
+            auto const *materialRecord = materials_.tryGet(materialHandle);
+            if (materialRecord == nullptr || !materialRecord->cpuReady)
+            {
+                return false;
+            }
+
+            return materialTexturesReady(materialRecord->cpu);
+        });
+    }
+
 [[nodiscard]] bool Scene::renderableReadyForDomain(ScenePacketDomain domain,
                                                 const RenderableBinding &binding) const noexcept
 {
@@ -1472,7 +1507,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             return renderableReadyForRaster(binding);
         case ScenePacketDomain::rayTracingInstance:
         case ScenePacketDomain::tlasBuildInput:
-            return renderableReadyForMeshOnlyDomain(binding);
+            return renderableReadyForRayTracing(binding);
         default:
             return false;
         }

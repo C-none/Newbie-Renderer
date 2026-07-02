@@ -1,6 +1,12 @@
 module common;
 
 // Aggregation module only. Put shared declarations in included subfiles.
-__include globalUniform;
-__include sceneTextures;
-__include materialTextureIds;
+__include include.globalUniform;
+__include include.sceneTextures;
+__include include.materialTextureIds;
+__include include.rtMaterial;
+__include include.material.types;
+__include include.material.base;
+__include include.material.sampling;
+__include include.material.bsdf;
+__include include.material.gltfMultiLayer;

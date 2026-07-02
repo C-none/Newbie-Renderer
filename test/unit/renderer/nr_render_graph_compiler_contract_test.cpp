@@ -3,6 +3,7 @@ import dependency;
 import nr.rhi;
 import nr.renderer;
 import nr.test;
+import nr.utils;
 
 namespace
 {
@@ -93,6 +94,300 @@ namespace
     static_cast<void>(builder.addPass("RayTracing.Trace", node, traceUses, [](const nr::renderer::PassRecordContext&) {}));
 
     return builder.build();
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildAccelerationStructureFrameWithSize(vk::DeviceSize size)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode("RayTracing", nr::renderer::QueueDomain::Compute);
+
+    auto tlas = builder.addResource(nr::renderer::GraphImportedAccelerationStructureDesc{
+        .debugName = "Scene.TLAS",
+        .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+        .size = size,
+    });
+
+    auto uses = std::array{nr::renderer::use::accelerationStructureTraceRead(tlas)};
+    static_cast<void>(builder.addPass("RayTracing.Trace", node, uses, [](const nr::renderer::PassRecordContext&) {}));
+    return builder.build();
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildCompileCachePatchFrame(
+    std::uint32_t frameDataValue,
+    const nr::rhi::Buffer& importedBuffer,
+    std::string_view debugSuffix,
+    std::uint32_t& recordedValue)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode(std::format("Cache.Node.{}", debugSuffix), nr::renderer::QueueDomain::Graphics);
+    auto frameData = builder.addFrameData(std::format("Cache.FrameData.{}", debugSuffix), frameDataValue);
+    auto constants = builder.addResource(nr::renderer::GraphImportedBufferDesc{
+        .debugName = std::format("Cache.Constants.{}", debugSuffix),
+        .size = 256,
+        .usageIntents = {nr::renderer::BufferUsageIntent::Uniform},
+        .importedResource = std::cref(importedBuffer),
+    });
+    auto color = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = std::format("Cache.Color.{}", debugSuffix),
+        .extent = vk::Extent3D{64, 64, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+
+    auto uses = std::array{
+        nr::renderer::use::uniformRead(constants),
+        nr::renderer::use::colorWrite(color),
+    };
+    static_cast<void>(builder.addPass(
+        std::format("Cache.Pass.{}", debugSuffix),
+        node,
+        uses,
+        [frameData, &recordedValue](const nr::renderer::PassRecordContext& recordContext) {
+            recordedValue = recordContext.frameData<std::uint32_t>(frameData);
+        }));
+    return builder.build();
+}
+
+[[nodiscard]] std::optional<std::reference_wrapper<const std::any>> findFrameDataPayload(
+    const nr::renderer::CompiledGraphFrame& compiled,
+    nr::renderer::GraphFrameDataHandle handle)
+{
+    auto frameDataIt = std::ranges::find_if(
+        compiled.frameData,
+        [handle](const nr::renderer::GraphFrameDataDesc& desc) {
+            return desc.handle == handle;
+        });
+    if (frameDataIt == compiled.frameData.end())
+    {
+        return {};
+    }
+    return std::cref(frameDataIt->payload);
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildSingleImageFrame(
+    vk::Extent3D extent,
+    vk::Format format)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode("SingleImage", nr::renderer::QueueDomain::Graphics);
+    auto color = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "SingleImage.Color",
+        .extent = extent,
+        .format = format,
+    });
+    auto uses = std::array{nr::renderer::use::colorWrite(color)};
+    static_cast<void>(builder.addPass("SingleImage.Pass", node, uses, [](const nr::renderer::PassRecordContext&) {}));
+    return builder.build();
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildResourceUseFrame(bool readWrite)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode("ResourceUse", nr::renderer::QueueDomain::Graphics);
+    auto color = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "ResourceUse.Color",
+        .extent = vk::Extent3D{32, 32, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+    auto uses = std::array{readWrite ? nr::renderer::use::colorReadWrite(color) : nr::renderer::use::colorWrite(color)};
+    static_cast<void>(builder.addPass("ResourceUse.Pass", node, uses, [](const nr::renderer::PassRecordContext&) {}));
+    return builder.build();
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildPassOrderFrame(bool reversed)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode("PassOrder", nr::renderer::QueueDomain::Graphics);
+    auto first = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "PassOrder.First",
+        .extent = vk::Extent3D{32, 32, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+    auto second = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "PassOrder.Second",
+        .extent = vk::Extent3D{32, 32, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+
+    auto addFirst = [&] {
+        auto uses = std::array{nr::renderer::use::colorWrite(first)};
+        static_cast<void>(builder.addPass("PassOrder.FirstPass", node, uses, [](const nr::renderer::PassRecordContext&) {}));
+    };
+    auto addSecond = [&] {
+        auto uses = std::array{nr::renderer::use::colorWrite(second)};
+        static_cast<void>(builder.addPass("PassOrder.SecondPass", node, uses, [](const nr::renderer::PassRecordContext&) {}));
+    };
+
+    if (reversed)
+    {
+        addSecond();
+        addFirst();
+    }
+    else
+    {
+        addFirst();
+        addSecond();
+    }
+    return builder.build();
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildSubmitOrderFrame(bool submitAfterBothPasses)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode("SubmitOrder", nr::renderer::QueueDomain::Graphics);
+    auto first = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "SubmitOrder.First",
+        .extent = vk::Extent3D{32, 32, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+    auto second = builder.addResource(nr::renderer::GraphTransientImageDesc{
+        .debugName = "SubmitOrder.Second",
+        .extent = vk::Extent3D{32, 32, 1},
+        .format = vk::Format::eR8G8B8A8Unorm,
+    });
+
+    auto firstUses = std::array{nr::renderer::use::colorWrite(first)};
+    auto secondUses = std::array{nr::renderer::use::colorWrite(second)};
+    static_cast<void>(builder.addPass("SubmitOrder.FirstPass", node, firstUses, [](const nr::renderer::PassRecordContext&) {}));
+    if (!submitAfterBothPasses)
+    {
+        static_cast<void>(builder.addSubmitNode("SubmitOrder.Boundary"));
+    }
+    static_cast<void>(builder.addPass("SubmitOrder.SecondPass", node, secondUses, [](const nr::renderer::PassRecordContext&) {}));
+    if (submitAfterBothPasses)
+    {
+        static_cast<void>(builder.addSubmitNode("SubmitOrder.Boundary"));
+    }
+    return builder.build();
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildSwapchainFrame(
+    std::uint32_t swapchainImageIndex,
+    std::string_view debugSuffix)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode(std::format("Swapchain.Node.{}", debugSuffix), nr::renderer::QueueDomain::Compute);
+    auto swapchainImage = builder.addResource(nr::renderer::GraphImportedSwapchainImageDesc{
+        .debugName = std::format("Swapchain.Image.{}", debugSuffix),
+        .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
+        .swapchainImageIndex = swapchainImageIndex,
+        .extent = vk::Extent3D{128, 72, 1},
+        .format = vk::Format::eB8G8R8A8Unorm,
+    });
+    auto uses = std::array{nr::renderer::use::presentRead(swapchainImage, nr::renderer::ResourceOwnershipDomain::Compute)};
+    static_cast<void>(builder.addPass(
+        std::format("Swapchain.Pass.{}", debugSuffix),
+        node,
+        uses,
+        [](const nr::renderer::PassRecordContext&) {}));
+    return builder.build();
+}
+
+template <typename TBaseFrameBuilder, typename TVariantFrameBuilder>
+void requireCompileCacheMissForStructuralChange(
+    std::string_view label,
+    TBaseFrameBuilder baseFrameBuilder,
+    TVariantFrameBuilder variantFrameBuilder)
+{
+    auto cache = nr::renderer::RenderGraphCompileCache{};
+    auto baseFrame = baseFrameBuilder();
+    static_cast<void>(cache.compileConsumingCached(baseFrame));
+    auto variantFrame = variantFrameBuilder();
+    static_cast<void>(cache.compileConsumingCached(variantFrame));
+
+    auto stats = cache.statistics();
+    nr::test::requireEqual(stats.hitCount, std::uint64_t{0}, std::format("{} should not hit", label));
+    nr::test::requireEqual(stats.missCount, std::uint64_t{2}, std::format("{} should compile as a miss", label));
+}
+
+struct FakeBindlessPipeline
+{
+    nr::rhi::SlangProgram program{};
+    nr::rhi::ShaderDescriptorLayout descriptorLayout{};
+    std::array<std::map<std::uint32_t, std::uint32_t>, nr::maxFrameInFlight> variableCountsByFrame{};
+    bool forceReallocation = false;
+
+    [[nodiscard]] nr::rhi::ShaderCursor rootCursor() const
+    {
+        return descriptorLayout.rootCursor();
+    }
+
+    [[nodiscard]] bool ensureBindingSetsForFrame(
+        std::uint32_t frameIndex,
+        const std::map<std::uint32_t, std::uint32_t>& variableDescriptorCountsBySet)
+    {
+        auto const frameSlot = static_cast<std::size_t>(frameIndex % variableCountsByFrame.size());
+        auto const reallocated = forceReallocation ||
+                                 variableCountsByFrame[frameSlot] != variableDescriptorCountsBySet;
+        variableCountsByFrame[frameSlot] = variableDescriptorCountsBySet;
+        forceReallocation = false;
+        return reallocated;
+    }
+};
+
+[[nodiscard]] FakeBindlessPipeline makeFakeUiBindlessPipeline(std::uint32_t runtimeDescriptorCount)
+{
+    auto& shaderService = nr::rhi::ShaderService::instance();
+    shaderService.configure();
+    auto pipeline = FakeBindlessPipeline{};
+    pipeline.program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+        .sourcePath = std::filesystem::path{"renderer/appUi"},
+    });
+    nr::test::require(pipeline.program.valid(), "appUi shader program should compile for bindless cache contract tests");
+
+    pipeline.descriptorLayout = nr::rhi::ShaderDescriptorLayout::create(
+        pipeline.program,
+        nr::rhi::DescriptorBindingPolicy{
+            .defaultRuntimeDescriptorCount = runtimeDescriptorCount,
+        });
+    nr::test::require(pipeline.descriptorLayout.valid(), "appUi descriptor layout should be valid for bindless cache tests");
+    return pipeline;
+}
+
+[[nodiscard]] nr::renderer::BindlessImageDescriptor logicalTextureDescriptor(
+    std::uint64_t logicalResourceId,
+    std::string debugName)
+{
+    return nr::renderer::BindlessImageDescriptor{
+        .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        .logicalResourceId = logicalResourceId,
+        .debugName = std::move(debugName),
+    };
+}
+
+[[nodiscard]] nr::renderer::BindlessImageTableRequest makeBindlessCacheRequest(
+    std::uint64_t tableVersion,
+    std::uint32_t descriptorCapacity,
+    std::map<std::uint32_t, nr::renderer::BindlessImageDescriptor> descriptorsById,
+    std::optional<nr::renderer::BindlessImageDescriptor> fallbackDescriptor =
+        logicalTextureDescriptor(100u, "fallback"))
+{
+    return nr::renderer::BindlessImageTableRequest{
+        .tableKey = "test.gUiTextures",
+        .shaderSymbol = "gUiTextures",
+        .expectedSet = 1u,
+        .expectedBinding = 0u,
+        .expectedDescriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCapacity = descriptorCapacity,
+        .tableVersion = tableVersion,
+        .descriptorsById = std::move(descriptorsById),
+        .fallbackDescriptor = std::move(fallbackDescriptor),
+    };
+}
+
+[[nodiscard]] std::uint64_t logicalResourceIdForArrayElement(
+    const nr::rhi::ShaderBindingSnapshot& snapshot,
+    std::uint32_t arrayElement)
+{
+    auto writeIt = std::ranges::find_if(
+        snapshot.descriptorWrites(),
+        [arrayElement](const nr::rhi::ShaderBindingRecord& record) {
+            return record.arrayElement == arrayElement;
+        });
+    nr::test::require(writeIt != snapshot.descriptorWrites().end(), "expected descriptor write for requested array element");
+    nr::test::require(
+        std::holds_alternative<nr::rhi::LogicalResourceDescriptorWrite>(writeIt->payload),
+        "bindless cache test descriptors should use logical payloads");
+    return std::get<nr::rhi::LogicalResourceDescriptorWrite>(writeIt->payload).logicalResourceId;
 }
 
 const nr::test::CaseRegistrar compilerMappingCase{
@@ -367,5 +662,181 @@ const nr::test::CaseRegistrar compilerFrameDataCase{
         };
 
         nr::test::requireEqual(recordContext.frameData<std::uint32_t>(frameData), std::uint32_t{42});
+    }};
+
+const nr::test::CaseRegistrar compileCachePatchesCurrentFramePayloadCase{
+    "render graph compile cache hit patches current frame data callbacks and imports",
+    [] {
+        auto cache = nr::renderer::RenderGraphCompileCache{};
+        auto previousBuffer = nr::rhi::Buffer{};
+        auto currentBuffer = nr::rhi::Buffer{};
+        auto previousRecordedValue = std::uint32_t{0};
+        auto currentRecordedValue = std::uint32_t{0};
+
+        auto previousFrame = buildCompileCachePatchFrame(111u, previousBuffer, "previous", previousRecordedValue);
+        static_cast<void>(cache.compileConsumingCached(previousFrame));
+        auto previousStats = cache.statistics();
+        nr::test::requireEqual(previousStats.hitCount, std::uint64_t{0});
+        nr::test::requireEqual(previousStats.missCount, std::uint64_t{1});
+
+        auto currentFrame = buildCompileCachePatchFrame(222u, currentBuffer, "current", currentRecordedValue);
+        auto compiled = cache.compileConsumingCached(currentFrame);
+        auto currentStats = cache.statistics();
+        nr::test::requireEqual(currentStats.hitCount, std::uint64_t{1});
+        nr::test::requireEqual(currentStats.missCount, std::uint64_t{1});
+
+        auto importedIt = std::ranges::find_if(compiled.resources, [](const nr::renderer::CompiledResourceDesc& resource) {
+            return resource.isBuffer;
+        });
+        nr::test::require(importedIt != compiled.resources.end(), "compiled cache hit should retain imported buffer resource");
+        nr::test::require(importedIt->importedBufferResource.has_value(), "compiled imported buffer ref should be patched");
+        nr::test::require(
+            std::addressof(importedIt->importedBufferResource->get()) == std::addressof(currentBuffer),
+            "compiled cache hit should use current imported buffer ref");
+
+        auto const& compiledPass = compiled.submitBatches.front().passes.front();
+        nr::test::require(static_cast<bool>(compiledPass.record), "compiled cache hit should patch current record callback");
+        compiledPass.record(nr::renderer::PassRecordContext{
+            .resolveFrameDataPayload = [&](nr::renderer::GraphFrameDataHandle handle) {
+                return findFrameDataPayload(compiled, handle);
+            },
+        });
+        nr::test::requireEqual(currentRecordedValue, std::uint32_t{222});
+        nr::test::requireEqual(previousRecordedValue, std::uint32_t{0}, "cached callback from previous frame must not run");
+    }};
+
+const nr::test::CaseRegistrar compileCacheStructuralMissCase{
+    "render graph compile cache misses structural graph changes",
+    [] {
+        requireCompileCacheMissForStructuralChange(
+            "extent change",
+            [] { return buildSingleImageFrame(vk::Extent3D{64, 64, 1}, vk::Format::eR8G8B8A8Unorm); },
+            [] { return buildSingleImageFrame(vk::Extent3D{128, 64, 1}, vk::Format::eR8G8B8A8Unorm); });
+        requireCompileCacheMissForStructuralChange(
+            "format change",
+            [] { return buildSingleImageFrame(vk::Extent3D{64, 64, 1}, vk::Format::eR8G8B8A8Unorm); },
+            [] { return buildSingleImageFrame(vk::Extent3D{64, 64, 1}, vk::Format::eR16G16B16A16Sfloat); });
+        requireCompileCacheMissForStructuralChange(
+            "resource use change",
+            [] { return buildResourceUseFrame(false); },
+            [] { return buildResourceUseFrame(true); });
+        requireCompileCacheMissForStructuralChange(
+            "pass order change",
+            [] { return buildPassOrderFrame(false); },
+            [] { return buildPassOrderFrame(true); });
+        requireCompileCacheMissForStructuralChange(
+            "submit order change",
+            [] { return buildSubmitOrderFrame(false); },
+            [] { return buildSubmitOrderFrame(true); });
+        requireCompileCacheMissForStructuralChange(
+            "acceleration structure size change",
+            [] { return buildAccelerationStructureFrameWithSize(8192); },
+            [] { return buildAccelerationStructureFrameWithSize(16384); });
+    }};
+
+const nr::test::CaseRegistrar compileCacheDebugNameSwapchainIndexHitCase{
+    "render graph compile cache ignores debug names and swapchain image index",
+    [] {
+        auto cache = nr::renderer::RenderGraphCompileCache{};
+        auto first = buildSwapchainFrame(0u, "first");
+        static_cast<void>(cache.compileConsumingCached(first));
+        auto second = buildSwapchainFrame(2u, "second");
+        auto compiled = cache.compileConsumingCached(second);
+
+        auto stats = cache.statistics();
+        nr::test::requireEqual(stats.hitCount, std::uint64_t{1});
+        nr::test::requireEqual(stats.missCount, std::uint64_t{1});
+        nr::test::requireEqual(compiled.resources.front().debugName, std::string{"Swapchain.Image.second"});
+        nr::test::requireEqual(compiled.submitBatches.front().passes.front().debugName, std::string{"Swapchain.Pass.second"});
+    }};
+
+const nr::test::CaseRegistrar bindlessImageTableCacheCase{
+    "renderer bindless image table cache tracks versions fallback removals and reallocations",
+    [] {
+        auto pipeline = makeFakeUiBindlessPipeline(8u);
+        auto cache = nr::renderer::BindlessImageTableCache{};
+
+        auto firstSnapshot = cache.makeSnapshotForFrame(
+            pipeline,
+            0u,
+            makeBindlessCacheRequest(
+                1u,
+                4u,
+                {
+                    {1u, logicalTextureDescriptor(101u, "texture-1")},
+                }));
+        nr::test::requireEqual(firstSnapshot.descriptorWriteCount(), std::size_t{4});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(firstSnapshot, 0u), std::uint64_t{100});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(firstSnapshot, 1u), std::uint64_t{101});
+
+        auto cachedSnapshot = cache.makeSnapshotForFrame(
+            pipeline,
+            0u,
+            makeBindlessCacheRequest(
+                1u,
+                4u,
+                {
+                    {1u, logicalTextureDescriptor(101u, "texture-1")},
+                }));
+        nr::test::require(cachedSnapshot.empty(), "same bindless table version should not emit a snapshot");
+
+        auto updatedSnapshot = cache.makeSnapshotForFrame(
+            pipeline,
+            0u,
+            makeBindlessCacheRequest(
+                2u,
+                4u,
+                {
+                    {1u, logicalTextureDescriptor(111u, "texture-1-updated")},
+                    {2u, logicalTextureDescriptor(102u, "texture-2")},
+                }));
+        nr::test::requireEqual(updatedSnapshot.descriptorWriteCount(), std::size_t{2});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(updatedSnapshot, 1u), std::uint64_t{111});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(updatedSnapshot, 2u), std::uint64_t{102});
+
+        auto removedSnapshot = cache.makeSnapshotForFrame(
+            pipeline,
+            0u,
+            makeBindlessCacheRequest(
+                3u,
+                4u,
+                {
+                    {1u, logicalTextureDescriptor(111u, "texture-1-updated")},
+                }));
+        nr::test::requireEqual(removedSnapshot.descriptorWriteCount(), std::size_t{2});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(removedSnapshot, 1u), std::uint64_t{111});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(removedSnapshot, 2u), std::uint64_t{100});
+
+        pipeline.forceReallocation = true;
+        auto reallocatedSnapshot = cache.makeSnapshotForFrame(
+            pipeline,
+            0u,
+            makeBindlessCacheRequest(
+                3u,
+                6u,
+                {
+                    {1u, logicalTextureDescriptor(111u, "texture-1-updated")},
+                }));
+        nr::test::requireEqual(reallocatedSnapshot.descriptorWriteCount(), std::size_t{6});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(reallocatedSnapshot, 5u), std::uint64_t{100});
+    }};
+
+const nr::test::CaseRegistrar bindlessImageTableOptionalMissingSymbolCase{
+    "renderer bindless image table cache accepts optional missing shader symbols",
+    [] {
+        auto pipeline = makeFakeUiBindlessPipeline(4u);
+        auto cache = nr::renderer::BindlessImageTableCache{};
+        auto request = makeBindlessCacheRequest(
+            1u,
+            4u,
+            {
+                {1u, logicalTextureDescriptor(101u, "texture-1")},
+            });
+        request.tableKey = "test.missing";
+        request.shaderSymbol = "gMissingTextures";
+        request.requirement = nr::renderer::BindlessImageTableRequirement::optional;
+
+        auto snapshot = cache.makeSnapshotForFrame(pipeline, 0u, request);
+        nr::test::require(snapshot.empty(), "optional missing bindless table should produce no descriptor writes");
     }};
 } // namespace

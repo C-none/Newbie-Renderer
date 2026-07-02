@@ -6,6 +6,7 @@ export import :renderGraphType;
 export import :renderGraphBuilder;
 export import :renderGraphCompiler;
 export import :renderGraphExecutor;
+export import :rendererCache;
 export import :rendererSubmission;
 export import :renderer;
 export import :viewerCamera;

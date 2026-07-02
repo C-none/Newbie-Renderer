@@ -23,7 +23,6 @@ struct NormalBufferRuntimeCache
 
     std::array<nr::rhi::Image, nr::maxFrameInFlight> normalBuffers{};
     std::array<nr::rhi::Image, nr::maxFrameInFlight> depthBuffers{};
-    SceneTextureTableBindingCache sceneTextureTableBinding{};
 };
 
 struct NormalBufferPushConstants
@@ -301,6 +300,7 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
 
     auto sceneBridgeFrameHandle = frameParameters.sceneBridgeFrameHandle;
     auto sceneTextureTableBinding = detail::makeSceneTextureTableBindingInput(context.globalResources.get());
+    auto& bindlessImageTableCache = context.globalResources.get().bindlessImageTableCache.get();
 
     auto const normalBufferRasterState = nr::rhi::MeshRasterState{
         .depthTestEnable = vk::True,
@@ -320,17 +320,23 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
         .depthAttachment(depthBuffer)
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
         .rasterState(normalBufferRasterState)
-        .prepare([runtime = runtime_](const nr::renderer::PassPrepareContext& prepareContext) {
-            detail::ensureSceneTextureTableBindingSetsForFrame(
-                *runtime->pipeline,
-                runtime->sceneTextureTableBinding,
-                prepareContext.frameIndex);
-        })
+        .prepare(
+            [runtime = runtime_,
+             sceneTextureTableBinding,
+             cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
+                detail::prepareSceneTextureTableBindingForFrame(
+                    *runtime->pipeline,
+                    cache.get(),
+                    prepareContext.frameIndex,
+                    sceneTextureTableBinding);
+            })
         .dynamicBindingSnapshot(
-            [runtime = runtime_, sceneTextureTableBinding](const nr::renderer::PassPrepareContext& prepareContext) {
+            [runtime = runtime_,
+             sceneTextureTableBinding,
+             cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
                 return detail::makeSceneTextureTableBindingSnapshot(
                     *runtime->pipeline,
-                    runtime->sceneTextureTableBinding,
+                    cache.get(),
                     prepareContext.frameIndex,
                     sceneTextureTableBinding);
             })

@@ -431,6 +431,8 @@ class Scene
 
     [[nodiscard]] bool renderableReadyForMeshOnlyDomain(const RenderableBinding &binding) const noexcept;
 
+    [[nodiscard]] bool renderableReadyForRayTracing(const RenderableBinding &binding) const noexcept;
+
     [[nodiscard]] bool renderableReadyForDomain(ScenePacketDomain domain,
                                                 const RenderableBinding &binding) const noexcept;
 

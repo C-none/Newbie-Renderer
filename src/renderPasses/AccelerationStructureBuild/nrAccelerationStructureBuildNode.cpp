@@ -90,6 +90,21 @@ struct FrameSlotAsResources
     nr::rhi::Buffer instanceBuffer{};
     vk::DeviceSize instanceBufferSize = 0;
 
+    nr::rhi::Buffer rtInstanceMetadataBuffer{};
+    vk::DeviceSize rtInstanceMetadataBufferSize = 0;
+
+    nr::rhi::Buffer rtGeometryMetadataBuffer{};
+    vk::DeviceSize rtGeometryMetadataBufferSize = 0;
+
+    nr::rhi::Buffer rtMaterialHeaderBuffer{};
+    vk::DeviceSize rtMaterialHeaderBufferSize = 0;
+
+    nr::rhi::Buffer rtMaterialLayerBuffer{};
+    vk::DeviceSize rtMaterialLayerBufferSize = 0;
+
+    nr::rhi::Buffer rtMaterialTextureRefBuffer{};
+    vk::DeviceSize rtMaterialTextureRefBufferSize = 0;
+
     nr::rhi::Buffer scratchBuffer{};
     vk::DeviceSize scratchBufferSize = 0;
 
@@ -139,10 +154,35 @@ struct PlannedInstance
     vk::AccelerationStructureInstanceKHR instance{};
 };
 
+struct RtMetadataBuildState
+{
+    std::map<nr::resource::MaterialHandle, std::uint32_t> materialIndexByHandle{};
+    std::vector<nr::scene::RtCompiledMaterial> materials{};
+    std::vector<nr::scene::RtGeometryMetadata> geometries{};
+    std::vector<nr::scene::RtInstanceMetadata> instances{};
+};
+
+struct RtMaterialCacheKey
+{
+    nr::resource::MaterialHandle material{};
+    std::uint64_t materialCpuVersion = 0;
+    nr::scene::SceneMaterialTextureIds textureIds{};
+    std::array<std::uint64_t, nr::scene::sceneMaterialTextureSlotCount> textureGpuVersions{};
+
+    [[nodiscard]] auto operator<=>(const RtMaterialCacheKey &) const = default;
+};
+
+struct RtMaterialCacheEntry
+{
+    nr::scene::RtCompiledMaterial compiled{};
+    std::uint64_t lastSeenFrameSerial = 0;
+};
+
 struct AccelerationStructureBuildRuntimeCache
 {
     BlasStorageAtlas blasAtlas{};
     std::map<nr::resource::MeshHandle, BlasCacheEntry> blasCache{};
+    std::map<RtMaterialCacheKey, RtMaterialCacheEntry> rtMaterialCache{};
     std::vector<RetiredBlasAccelerationStructure> retiredBlas{};
     std::array<FrameSlotAsResources, nr::maxFrameInFlight> frameSlots{};
     nr::rhi::AsBuildLimits limits{};
@@ -303,6 +343,28 @@ void pruneBlasCache(
 
         retireBlasResources(runtime, it->second, retireDelay);
         it = runtime.blasCache.erase(it);
+    }
+}
+
+void pruneRtMaterialCache(
+    AccelerationStructureBuildRuntimeCache &runtime,
+    const nr::scene::Scene &scene,
+    std::uint64_t unusedFrameRetireLatency)
+{
+    auto it = runtime.rtMaterialCache.begin();
+    while (it != runtime.rtMaterialCache.end())
+    {
+        auto const unusedTooLong =
+            runtime.frameSerial > it->second.lastSeenFrameSerial &&
+            (runtime.frameSerial - it->second.lastSeenFrameSerial) > unusedFrameRetireLatency;
+        auto const materialMissing = !scene.tryGetMaterialAsset(it->first.material).has_value();
+        if (!materialMissing && !unusedTooLong)
+        {
+            ++it;
+            continue;
+        }
+
+        it = runtime.rtMaterialCache.erase(it);
     }
 }
 
@@ -545,6 +607,39 @@ void ensureInstanceBuffer(
     slot.instanceBufferSize = std::max<vk::DeviceSize>(requiredSize, 1u);
 }
 
+void ensureStorageMetadataBuffer(
+    nr::rhi::Device &device,
+    nr::rhi::Buffer &buffer,
+    vk::DeviceSize &bufferSize,
+    vk::DeviceSize requiredSize,
+    std::string_view debugName)
+{
+    if (buffer.valid() && bufferSize >= requiredSize)
+    {
+        return;
+    }
+
+    buffer = device.resourceFactory.createBuffer(
+        nr::rhi::makeBufferCreateInfo(
+            std::max<vk::DeviceSize>(requiredSize, 1u),
+            vk::BufferUsageFlagBits::eStorageBuffer),
+        nr::rhi::MemoryUsage::CpuToGpu,
+        debugName);
+    nrAssert(buffer.valid(), std::format("AccelerationStructureBuildNode failed to create {}.", debugName));
+    bufferSize = std::max<vk::DeviceSize>(requiredSize, 1u);
+}
+
+template <typename T>
+void writeMetadataBuffer(nr::rhi::Buffer &buffer, std::span<const T> values)
+{
+    if (values.empty())
+    {
+        return;
+    }
+
+    buffer.writeMappedAndFlush(values);
+}
+
 void ensureTlas(
     nr::rhi::Device &device,
     FrameSlotAsResources &slot,
@@ -615,6 +710,213 @@ void ensureTlas(
     return static_cast<std::uint32_t>(value & 0x00FF'FFFFu);
 }
 
+[[nodiscard]] std::uint32_t checkedRtMetadataUint32(vk::DeviceSize value, std::string_view label)
+{
+    nrAssert(
+        value <= std::numeric_limits<std::uint32_t>::max(),
+        std::format("{} exceeds the RT metadata uint32 ABI range.", label));
+    return static_cast<std::uint32_t>(value);
+}
+
+[[nodiscard]] std::uint32_t rtGeometryPrimitiveElementOffset(
+    const nr::scene::SceneAccelerationStructureMesh &sceneMesh,
+    const nr::scene::SceneAccelerationStructureGeometry &geometry)
+{
+    auto const elementSize = geometry.indexed ? vk::DeviceSize{sizeof(std::uint32_t)} : sceneMesh.vertexStride;
+    nrAssert(elementSize > 0u, "RT geometry metadata requires a non-zero vertex stride.");
+    nrAssert(
+        geometry.primitiveOffset % elementSize == 0u,
+        "RT geometry primitive offset must align to its indexed/non-indexed element size.");
+    return checkedRtMetadataUint32(geometry.primitiveOffset / elementSize, "RT geometry primitive element offset");
+}
+
+[[nodiscard]] std::uint32_t rtMeshVertexBase(const nr::scene::SceneAccelerationStructureMesh &sceneMesh)
+{
+    nrAssert(sceneMesh.vertexStride > 0u, "RT instance metadata requires a non-zero vertex stride.");
+    nrAssert(
+        sceneMesh.vertexByteOffset % sceneMesh.vertexStride == 0u,
+        "RT instance vertex atlas offset must align to the vertex stride.");
+    return checkedRtMetadataUint32(sceneMesh.vertexByteOffset / sceneMesh.vertexStride, "RT instance vertex base");
+}
+
+[[nodiscard]] std::uint32_t rtMeshIndexBase(const nr::scene::SceneAccelerationStructureMesh &sceneMesh)
+{
+    if (!sceneMesh.hasIndexBuffer())
+    {
+        return 0u;
+    }
+
+    nrAssert(
+        sceneMesh.indexByteOffset % sizeof(std::uint32_t) == 0u,
+        "RT instance index atlas offset must align to the uint32 index size.");
+    return checkedRtMetadataUint32(sceneMesh.indexByteOffset / sizeof(std::uint32_t), "RT instance index base");
+}
+
+[[nodiscard]] nr::resource::MaterialHandle rtGeometryMaterialHandle(
+    const nr::scene::Scene &scene,
+    nr::resource::MeshHandle meshHandle,
+    std::uint32_t geometryIndex)
+{
+    auto meshRecord = scene.tryGetMeshAsset(meshHandle);
+    if (!meshRecord.has_value() ||
+        !meshRecord->get().cpuReady ||
+        geometryIndex >= meshRecord->get().cpu.geometries.size())
+    {
+        return {};
+    }
+
+    return meshRecord->get().cpu.geometries[geometryIndex].material;
+}
+
+[[nodiscard]] RtMaterialCacheKey makeRtMaterialCacheKey(
+    const nr::scene::Scene &scene,
+    nr::resource::MaterialHandle materialHandle,
+    const nr::scene::MaterialAssetRecord &materialRecord) noexcept
+{
+    auto key = RtMaterialCacheKey{
+        .material = materialHandle,
+        .materialCpuVersion = materialRecord.cpuVersion,
+    };
+
+    auto const &material = materialRecord.cpu;
+    auto slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
+    std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
+        auto textureHandle = material.textureSlots[slotIndex].texture;
+        if (!textureHandle.valid())
+        {
+            return;
+        }
+
+        auto binding = scene.tryGetSampledTextureBinding(textureHandle);
+        if (!binding.has_value())
+        {
+            return;
+        }
+
+        nrAssert(
+            binding->descriptorIndex <= nr::scene::kMaxSceneTextureId,
+            std::format(
+                "RT material texture descriptor id {} exceeds packed uint16 id capacity {}.",
+                binding->descriptorIndex,
+                nr::scene::kMaxSceneTextureId));
+        key.textureIds[slotIndex] = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
+        key.textureGpuVersions[slotIndex] = binding->gpuVersion;
+    });
+
+    return key;
+}
+
+[[nodiscard]] const nr::scene::RtCompiledMaterial &ensureCachedRtMaterial(
+    AccelerationStructureBuildRuntimeCache &runtime,
+    const nr::scene::MaterialAssetRecord &materialRecord,
+    RtMaterialCacheKey key)
+{
+    auto [entryIt, inserted] = runtime.rtMaterialCache.try_emplace(std::move(key));
+    auto &entry = entryIt->second;
+    entry.lastSeenFrameSerial = runtime.frameSerial;
+    if (inserted)
+    {
+        entry.compiled = nr::scene::compileRtMaterial(
+            materialRecord.cpu,
+            entryIt->first.textureIds);
+    }
+    return entry.compiled;
+}
+
+void initializeRtMetadataBuildState(RtMetadataBuildState &state)
+{
+    if (!state.materials.empty())
+    {
+        return;
+    }
+
+    state.materials.push_back(nr::scene::makeFallbackRtMaterial());
+}
+
+[[nodiscard]] std::uint32_t ensureRtMaterialIndex(
+    AccelerationStructureBuildRuntimeCache &runtime,
+    RtMetadataBuildState &state,
+    const nr::scene::Scene &scene,
+    nr::resource::MaterialHandle materialHandle)
+{
+    if (!materialHandle.valid())
+    {
+        return nr::scene::kRtMaterialFallbackIndex;
+    }
+
+    if (auto found = state.materialIndexByHandle.find(materialHandle); found != state.materialIndexByHandle.end())
+    {
+        return found->second;
+    }
+
+    auto materialRecord = scene.tryGetMaterialAsset(materialHandle);
+    if (!materialRecord.has_value() || !materialRecord->get().cpuReady)
+    {
+        return nr::scene::kRtMaterialFallbackIndex;
+    }
+
+    auto const key = makeRtMaterialCacheKey(scene, materialHandle, materialRecord->get());
+    auto const &compiled = ensureCachedRtMaterial(runtime, materialRecord->get(), key);
+    auto const materialIndex = static_cast<std::uint32_t>(state.materials.size());
+    state.materials.push_back(compiled);
+    state.materialIndexByHandle.emplace(materialHandle, materialIndex);
+    return materialIndex;
+}
+
+[[nodiscard]] std::uint32_t appendRtInstanceMetadata(
+    AccelerationStructureBuildRuntimeCache &runtime,
+    RtMetadataBuildState &state,
+    const nr::scene::Scene &scene,
+    const nr::scene::TlasBuildInputPacket &packet,
+    const nr::scene::SceneAccelerationStructureMesh &sceneMesh)
+{
+    initializeRtMetadataBuildState(state);
+
+    auto const geometryOffset = checkedRtMetadataUint32(state.geometries.size(), "RT geometry metadata offset");
+    auto const geometryCount = checkedRtMetadataUint32(sceneMesh.geometries.size(), "RT instance geometry count");
+    nrAssert(
+        geometryOffset <= std::numeric_limits<std::uint32_t>::max() - geometryCount,
+        "RT geometry metadata range exceeds the uint32 ABI.");
+
+    std::ranges::for_each(sceneMesh.geometries, [&](const nr::scene::SceneAccelerationStructureGeometry &geometry) {
+        auto const materialHandle = rtGeometryMaterialHandle(scene, packet.mesh, geometry.geometryIndex);
+        state.geometries.push_back(nr::scene::RtGeometryMetadata{
+            .materialIndex = ensureRtMaterialIndex(runtime, state, scene, materialHandle),
+            .geometryIndex = geometry.geometryIndex,
+            .primitiveOffset = rtGeometryPrimitiveElementOffset(sceneMesh, geometry),
+            .firstVertex = geometry.firstVertex,
+            .primitiveCount = geometry.primitiveCount,
+            .flags = geometry.indexed ? nr::scene::kRtGeometryFlagIndexed : 0u,
+        });
+    });
+
+    auto const instanceMetadataIndex = static_cast<std::uint32_t>(state.instances.size());
+    nrAssert(
+        instanceMetadataIndex <= 0x00FF'FFFFu,
+        "RT instance metadata index must fit the 24-bit Vulkan InstanceCustomIndex field.");
+    state.instances.push_back(nr::scene::RtInstanceMetadata{
+        .geometryOffset = geometryOffset,
+        .geometryCount = geometryCount,
+        .stableInstanceId = stableTlasInstanceCustomIndex(packet),
+        .vertexBase = rtMeshVertexBase(sceneMesh),
+        .indexBase = rtMeshIndexBase(sceneMesh),
+        .vertexStride = checkedRtMetadataUint32(sceneMesh.vertexStride, "RT instance vertex stride"),
+    });
+    return instanceMetadataIndex;
+}
+
+[[nodiscard]] nr::scene::RtMaterialTable makeRtMaterialTable(const RtMetadataBuildState &state)
+{
+    auto materialRefs = state.materials |
+                        std::views::transform([](const nr::scene::RtCompiledMaterial &material) {
+                            return std::cref(material);
+                        }) |
+                        std::ranges::to<std::vector>();
+    return nr::scene::makeRtMaterialTable(std::span<const std::reference_wrapper<const nr::scene::RtCompiledMaterial>>{
+        materialRefs.data(),
+        materialRefs.size()});
+}
+
 [[nodiscard]] bool transformFlipsTriangleFacing(const glm::mat4 &world) noexcept
 {
     auto const column0 = glm::vec3{world[0]};
@@ -641,7 +943,8 @@ void ensureTlas(
     const nr::scene::TlasBuildInputPacket &packet,
     const nr::scene::SceneAccelerationStructureMesh &sceneMesh,
     const nr::rhi::AccelerationStructureResource &blas,
-    std::uint32_t hitShaderBindingTableRecordCount)
+    std::uint32_t hitShaderBindingTableRecordCount,
+    std::uint32_t instanceCustomIndex)
 {
     nrAssert(hitShaderBindingTableRecordCount > 0u, "AS build requires at least one hit SBT record.");
     nrAssert(
@@ -653,8 +956,8 @@ void ensureTlas(
 
     auto instance = vk::AccelerationStructureInstanceKHR{};
     instance.setTransform(packTransform(packet.world));
-    // InstanceCustomIndex is the shader-visible InstanceID(). Keep it independent from TLAS packet order.
-    instance.setInstanceCustomIndex(stableTlasInstanceCustomIndex(packet));
+    // InstanceCustomIndex is a dense metadata index for RT shaders. The stable debug hash is stored in RtInstanceMetadata.
+    instance.setInstanceCustomIndex(instanceCustomIndex);
     instance.setMask(packet.instanceMask & 0xFFu);
     instance.setInstanceShaderBindingTableRecordOffset(packet.tlasBucket);
     instance.setFlags(tlasInstanceFlags(packet, sceneMesh));
@@ -735,6 +1038,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     auto const &packets = frameParameters.sceneTlasBuildInputs->get();
     auto const retireDelay = static_cast<std::uint64_t>(nr::maxFrameInFlight + 1u);
     detail::pruneBlasCache(runtime, scene, input.unusedFrameRetireLatency, retireDelay);
+    detail::pruneRtMaterialCache(runtime, scene, input.unusedFrameRetireLatency);
     if (packets.empty())
     {
         return;
@@ -742,6 +1046,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
 
     auto pendingByMesh = std::map<nr::resource::MeshHandle, detail::PendingBlasBuild>{};
     auto instances = std::vector<detail::PlannedInstance>{};
+    auto rtMetadata = detail::RtMetadataBuildState{};
     instances.reserve(packets.size());
 
     std::ranges::for_each(packets, [&](const nr::scene::TlasBuildInputPacket &packet) {
@@ -858,13 +1163,20 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
             return;
         }
 
+        auto const instanceMetadataIndex = detail::appendRtInstanceMetadata(
+            runtime,
+            rtMetadata,
+            scene,
+            packet,
+            pendingIt->second.cachedBuild.get().sceneMesh);
         instances.push_back(detail::PlannedInstance{
             .mesh = packet.mesh,
             .instance = detail::makeTlasInstance(
                 packet,
                 pendingIt->second.cachedBuild.get().sceneMesh,
                 entryIt->second.accelerationStructure,
-                input.hitShaderBindingTableRecordCount),
+                input.hitShaderBindingTableRecordCount,
+                instanceMetadataIndex),
         });
     });
 
@@ -881,6 +1193,55 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
                           std::views::transform([](const detail::PlannedInstance &planned) { return planned.instance; }) |
                           std::ranges::to<std::vector>();
     slot.instanceBuffer.writeMappedAndFlush(std::span<const vk::AccelerationStructureInstanceKHR>{instanceValues});
+
+    auto rtMaterialTable = detail::makeRtMaterialTable(rtMetadata);
+
+    detail::ensureStorageMetadataBuffer(
+        device,
+        slot.rtInstanceMetadataBuffer,
+        slot.rtInstanceMetadataBufferSize,
+        static_cast<vk::DeviceSize>(rtMetadata.instances.size() * sizeof(nr::scene::RtInstanceMetadata)),
+        "ASBuild.RT.InstanceMetadata");
+    detail::ensureStorageMetadataBuffer(
+        device,
+        slot.rtGeometryMetadataBuffer,
+        slot.rtGeometryMetadataBufferSize,
+        static_cast<vk::DeviceSize>(rtMetadata.geometries.size() * sizeof(nr::scene::RtGeometryMetadata)),
+        "ASBuild.RT.GeometryMetadata");
+    detail::ensureStorageMetadataBuffer(
+        device,
+        slot.rtMaterialHeaderBuffer,
+        slot.rtMaterialHeaderBufferSize,
+        static_cast<vk::DeviceSize>(rtMaterialTable.headers.size() * sizeof(nr::scene::RtMaterialHeader)),
+        "ASBuild.RT.MaterialHeaders");
+    detail::ensureStorageMetadataBuffer(
+        device,
+        slot.rtMaterialLayerBuffer,
+        slot.rtMaterialLayerBufferSize,
+        static_cast<vk::DeviceSize>(rtMaterialTable.layers.size() * sizeof(nr::scene::RtMaterialLayerRecord)),
+        "ASBuild.RT.MaterialLayers");
+    detail::ensureStorageMetadataBuffer(
+        device,
+        slot.rtMaterialTextureRefBuffer,
+        slot.rtMaterialTextureRefBufferSize,
+        static_cast<vk::DeviceSize>(rtMaterialTable.textureRefs.size() * sizeof(nr::scene::RtMaterialTextureRef)),
+        "ASBuild.RT.MaterialTextureRefs");
+
+    detail::writeMetadataBuffer(
+        slot.rtInstanceMetadataBuffer,
+        std::span<const nr::scene::RtInstanceMetadata>{rtMetadata.instances});
+    detail::writeMetadataBuffer(
+        slot.rtGeometryMetadataBuffer,
+        std::span<const nr::scene::RtGeometryMetadata>{rtMetadata.geometries});
+    detail::writeMetadataBuffer(
+        slot.rtMaterialHeaderBuffer,
+        std::span<const nr::scene::RtMaterialHeader>{rtMaterialTable.headers});
+    detail::writeMetadataBuffer(
+        slot.rtMaterialLayerBuffer,
+        std::span<const nr::scene::RtMaterialLayerRecord>{rtMaterialTable.layers});
+    detail::writeMetadataBuffer(
+        slot.rtMaterialTextureRefBuffer,
+        std::span<const nr::scene::RtMaterialTextureRef>{rtMaterialTable.textureRefs});
 
     auto const tlasInput = nr::rhi::TlasBuildInput{
         .instancesAddress = slot.instanceBuffer.deviceAddress(),
@@ -925,6 +1286,82 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
         ResourceLifetime::FrameLocal,
         nr::renderer::ownershipDomainFromQueue(context.queue));
     context.publishFrameResource(nr::renderer::frameResource::sceneTlas, tlasResource);
+
+    auto const rtInstanceMetadataResource = context.importBuffer(
+        slot.rtInstanceMetadataBuffer,
+        "ASBuild.RT.InstanceMetadata",
+        ResourceLifetime::FrameLocal,
+        {
+            BufferUsageIntent::StorageRead,
+        },
+        nr::renderer::ownershipDomainFromQueue(context.queue));
+    auto const rtGeometryMetadataResource = context.importBuffer(
+        slot.rtGeometryMetadataBuffer,
+        "ASBuild.RT.GeometryMetadata",
+        ResourceLifetime::FrameLocal,
+        {
+            BufferUsageIntent::StorageRead,
+        },
+        nr::renderer::ownershipDomainFromQueue(context.queue));
+    auto const rtMaterialHeaderResource = context.importBuffer(
+        slot.rtMaterialHeaderBuffer,
+        "ASBuild.RT.MaterialHeaders",
+        ResourceLifetime::FrameLocal,
+        {
+            BufferUsageIntent::StorageRead,
+        },
+        nr::renderer::ownershipDomainFromQueue(context.queue));
+    auto const rtMaterialLayerResource = context.importBuffer(
+        slot.rtMaterialLayerBuffer,
+        "ASBuild.RT.MaterialLayers",
+        ResourceLifetime::FrameLocal,
+        {
+            BufferUsageIntent::StorageRead,
+        },
+        nr::renderer::ownershipDomainFromQueue(context.queue));
+    auto const rtMaterialTextureRefResource = context.importBuffer(
+        slot.rtMaterialTextureRefBuffer,
+        "ASBuild.RT.MaterialTextureRefs",
+        ResourceLifetime::FrameLocal,
+        {
+            BufferUsageIntent::StorageRead,
+        },
+        nr::renderer::ownershipDomainFromQueue(context.queue));
+    auto atlasSourceIt = std::ranges::find_if(instances, [&](const detail::PlannedInstance &planned) {
+        return pendingByMesh.contains(planned.mesh);
+    });
+    nrAssert(atlasSourceIt != instances.end(), "AS build expected a planned instance with a scene geometry atlas.");
+    auto const &rtAtlasMesh = pendingByMesh.at(atlasSourceIt->mesh).cachedBuild.get().sceneMesh;
+    nrAssert(rtAtlasMesh.hasVertexBuffer(), "AS build requires a vertex atlas for RT vertex-data binding.");
+    auto const &vertexAtlasBuffer = rtAtlasMesh.vertexBuffer.buffer->get();
+    auto const rtVertexAtlasResource = context.importBuffer(
+        vertexAtlasBuffer,
+        "ASBuild.RT.VertexAtlas",
+        ResourceLifetime::ScenePersistent,
+        {
+            BufferUsageIntent::StorageRead,
+        },
+        nr::renderer::ownershipDomainFromQueue(context.queue));
+    auto rtIndexAtlasResource = rtVertexAtlasResource;
+    if (rtAtlasMesh.hasIndexBuffer())
+    {
+        rtIndexAtlasResource = context.importBuffer(
+            rtAtlasMesh.indexBuffer.buffer->get(),
+            "ASBuild.RT.IndexAtlas",
+            ResourceLifetime::ScenePersistent,
+            {
+                BufferUsageIntent::StorageRead,
+            },
+            nr::renderer::ownershipDomainFromQueue(context.queue));
+    }
+
+    context.publishFrameResource(nr::renderer::frameResource::sceneRtInstanceMetadata, rtInstanceMetadataResource);
+    context.publishFrameResource(nr::renderer::frameResource::sceneRtGeometryMetadata, rtGeometryMetadataResource);
+    context.publishFrameResource(nr::renderer::frameResource::sceneRtMaterialHeaders, rtMaterialHeaderResource);
+    context.publishFrameResource(nr::renderer::frameResource::sceneRtMaterialLayers, rtMaterialLayerResource);
+    context.publishFrameResource(nr::renderer::frameResource::sceneRtMaterialTextureRefs, rtMaterialTextureRefResource);
+    context.publishFrameResource(nr::renderer::frameResource::sceneRtVertexAtlas, rtVertexAtlasResource);
+    context.publishFrameResource(nr::renderer::frameResource::sceneRtIndexAtlas, rtIndexAtlasResource);
 
     auto importBlasResource = [&](nr::resource::MeshHandle meshHandle) {
         if (auto it = blasResourceByMesh.find(meshHandle); it != blasResourceByMesh.end())

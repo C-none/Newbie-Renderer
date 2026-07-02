@@ -53,7 +53,7 @@ const nr::test::CaseRegistrar registryCase{
         auto rtGraph = rtObject->get().buildGraph(graphContext());
         nr::test::requireEqual(rtGraph.nodes.size(), std::size_t{4u});
         nr::test::requireEqual(rtGraph.nodes[0].config.instanceName, std::string{"ASBuild"});
-        nr::test::requireEqual(rtGraph.nodes[1].config.instanceName, std::string{"RTInstanceHash"});
+        nr::test::requireEqual(rtGraph.nodes[1].config.instanceName, std::string{"PathTracing"});
         nr::test::requireEqual(rtGraph.nodes[2].config.instanceName, std::string{"Ui"});
         nr::test::requireEqual(rtGraph.nodes[3].config.instanceName, std::string{"Present"});
         nr::test::requireEqual(rtGraph.submitNodes.size(), std::size_t{1u});

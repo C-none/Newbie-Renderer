@@ -473,13 +473,17 @@ const nr::test::CaseRegistrar readinessCase{
 
         setMeshResidentForTest(scene, handles.mesh, true);
         nr::test::require(scene.extractPackets(rasterProfile).rasterDraws.empty(), "raster should still wait for material and texture");
-        nr::test::requireEqual(scene.extractPackets(rtProfile).rtInstances.size(), std::size_t{1});
-        nr::test::requireEqual(scene.extractPackets(tlasProfile).tlasBuildInputs.size(), std::size_t{1});
+        nr::test::require(scene.extractPackets(rtProfile).rtInstances.empty(), "RT should still wait for material and texture");
+        nr::test::require(scene.extractPackets(tlasProfile).tlasBuildInputs.empty(), "TLAS should still wait for material and texture");
 
         setMaterialResidentForTest(scene, handles.material, true);
         nr::test::require(scene.extractPackets(rasterProfile).rasterDraws.empty(), "raster should still wait for texture");
+        nr::test::require(scene.extractPackets(rtProfile).rtInstances.empty(), "RT should still wait for material textures");
+        nr::test::require(scene.extractPackets(tlasProfile).tlasBuildInputs.empty(), "TLAS should still wait for material textures");
 
         setTextureResidentForTest(scene, handles.texture, true);
         nr::test::requireEqual(scene.extractPackets(rasterProfile).rasterDraws.size(), std::size_t{1});
+        nr::test::requireEqual(scene.extractPackets(rtProfile).rtInstances.size(), std::size_t{1});
+        nr::test::requireEqual(scene.extractPackets(tlasProfile).tlasBuildInputs.size(), std::size_t{1});
     }};
 } // namespace

@@ -13,12 +13,19 @@ struct PresentRuntimeCache;
 
 export namespace nr::renderPasses
 {
+struct PresentReadbackTarget
+{
+    std::reference_wrapper<const nr::rhi::Buffer> buffer;
+    vk::DeviceSize offset = 0;
+};
+
 struct PresentNodeInput
 {
     vk::Extent2D viewportExtent{1, 1};
     vk::Format format = vk::Format::eR8G8B8A8Unorm;
     bool flipY = false;
     float uiOpacity = 1.0f;
+    std::optional<PresentReadbackTarget> readback{};
 };
 
 class PresentNode final : public Node

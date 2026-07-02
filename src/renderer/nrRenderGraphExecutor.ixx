@@ -190,6 +190,37 @@ template <typename TContext>
                 resolvedRange,
                 resolvedBuffer->size));
 
+        if (binding.descriptorType == vk::DescriptorType::eStorageBuffer ||
+            binding.descriptorType == vk::DescriptorType::eStorageBufferDynamic)
+        {
+            if (resolvedBuffer->resource.has_value())
+            {
+                auto const usage = resolvedBuffer->resource->get().usage();
+                nrAssert(
+                    (usage & vk::BufferUsageFlagBits::eStorageBuffer) != vk::BufferUsageFlags{},
+                    std::format(
+                        "Storage buffer descriptor '{}' at shader path '{}' resolved to buffer without eStorageBuffer usage. usage={}",
+                        logicalResource.debugName,
+                        binding.debugPath,
+                        vk::to_string(usage)));
+            }
+
+            if (bindingContext.device.has_value())
+            {
+                auto const alignment = std::max<vk::DeviceSize>(
+                    1u,
+                    bindingContext.device->get().physicalDevice.getProperties().limits.minStorageBufferOffsetAlignment);
+                nrAssert(
+                    (logicalResource.offset % alignment) == 0u,
+                    std::format(
+                        "Storage buffer descriptor '{}' at shader path '{}' has unaligned offset {} for minStorageBufferOffsetAlignment {}.",
+                        logicalResource.debugName,
+                        binding.debugPath,
+                        logicalResource.offset,
+                        alignment));
+            }
+        }
+
         return nr::rhi::DescriptorWritePayload{
             nr::rhi::BufferDescriptorWrite{
                 .buffer = resolvedBuffer->buffer,

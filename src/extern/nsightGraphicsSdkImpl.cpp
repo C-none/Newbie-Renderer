@@ -18,6 +18,15 @@
 
 namespace
 {
+void ensureLibraryLoadFn() noexcept
+{
+    static const bool configured = [] {
+        NGFX_SetLibraryLoadFn(NGFX_LoadLib_NoVerification);
+        return true;
+    }();
+    static_cast<void>(configured);
+}
+
 [[nodiscard]] NrPlatformNsightGraphicsResult toPlatformResult(NGFX_Result result) noexcept
 {
     switch (result)
@@ -98,6 +107,8 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
 
 [[nodiscard]] NrPlatformNsightGraphicsResult resolveInstallationPath(NrPlatformNsightGraphicsInstallation& outInstallation) noexcept
 {
+    ensureLibraryLoadFn();
+
     constexpr auto maxInstallations = std::uint32_t{8};
     auto installations = std::array<NGFX_InstallationInfo, maxInstallations>{};
     auto installationCount = std::uint32_t{0};
@@ -151,6 +162,8 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
 
 [[nodiscard]] NrPlatformNsightGraphicsResult injectGraphicsCapture(const NrPlatformNsightGraphicsInjectDesc& desc, const wchar_t* installationPath) noexcept
 {
+    ensureLibraryLoadFn();
+
     auto settings = NGFX_GraphicsCapture_InjectionSettings{};
     if (auto const result = NGFX_GraphicsCapture_InjectionSettings_SetDefaults(&settings); result != NGFX_Result_Success)
     {
@@ -162,8 +175,8 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
     settings.frameCount = std::max(1u, desc.frameCount);
     settings.captureDefaultHotkey = false;
     settings.captureHotkey = nullptr;
-    settings.captureFrame = 0;
-    settings.captureCountdownTimer = 0;
+    settings.captureFrame = NGFX_INVALID_U32;
+    settings.captureCountdownTimer = NGFX_INVALID_U32;
     settings.captureUntilHotkey = false;
 
     auto params = NGFX_GraphicsCapture_Inject_Vulkan_Params{};
@@ -176,6 +189,8 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
 
 [[nodiscard]] NrPlatformNsightGraphicsResult injectGpuTrace(const NrPlatformNsightGraphicsInjectDesc& desc, const wchar_t* installationPath) noexcept
 {
+    ensureLibraryLoadFn();
+
     auto settings = NGFX_GPUTrace_InjectionSettings{};
     if (auto const result = NGFX_GPUTrace_InjectionSettings_SetDefaults(&settings); result != NGFX_Result_Success)
     {
@@ -243,6 +258,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInject(const N
 
 extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInitialize(NrPlatformNsightGraphicsActivity activity) noexcept
 {
+    ensureLibraryLoadFn();
+
     switch (activity)
     {
     case NrPlatformNsightGraphicsActivity::Capture:
@@ -265,6 +282,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInitialize(NrP
 
 extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsActivateTrace(VkQueue queue) noexcept
 {
+    ensureLibraryLoadFn();
+
     if (queue == nullptr)
     {
         return NrPlatformNsightGraphicsResult::InvalidParameter;
@@ -278,6 +297,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsActivateTrace(
 
 extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsRequestCapture(const NrPlatformNsightGraphicsCaptureRequest* request) noexcept
 {
+    ensureLibraryLoadFn();
+
     if (request == nullptr)
     {
         return NrPlatformNsightGraphicsResult::InvalidParameter;
@@ -293,6 +314,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsRequestCapture
 
 extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStartTrace() noexcept
 {
+    ensureLibraryLoadFn();
+
     auto params = NGFX_GPUTrace_StartTrace_Vulkan_Params{};
     params.version = NGFX_GPUTrace_StartTrace_Vulkan_Params_VER;
     return toPlatformResult(NGFX_GPUTrace_StartTrace_Vulkan(&params));
@@ -300,6 +323,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStartTrace() n
 
 extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStopTrace(const NrPlatformNsightGraphicsTraceStop* desc) noexcept
 {
+    ensureLibraryLoadFn();
+
     if (desc == nullptr || desc->queue == nullptr)
     {
         return NrPlatformNsightGraphicsResult::InvalidParameter;
@@ -317,6 +342,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStopTrace(cons
 
 extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsMarkFrameBoundary(const NrPlatformNsightGraphicsFrameBoundary* desc) noexcept
 {
+    ensureLibraryLoadFn();
+
     if (desc == nullptr || desc->queue == nullptr)
     {
         return NrPlatformNsightGraphicsResult::InvalidParameter;

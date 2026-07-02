@@ -122,8 +122,8 @@ Every project shader imports the root `common` module:
 import common;
 ```
 
-`shader/common.slang` is the shared shader-side ABI entry and must stay an aggregation file only. It should contain explanatory comments plus `__include` lines, while actual declarations live in the included subfiles.
-`shader/globalUniform.slang` is an `implementing common` file that declares the global frame uniform payload type and buffer:
+`shader/common.slang` is the shared shader-side ABI entry and must stay an aggregation file only. It should contain explanatory comments plus `__include` lines, while actual declarations live under `shader/include`.
+`shader/include/globalUniform.slang` is an `implementing common` file that declares the global frame uniform payload type and buffer:
 
 ```slang
 public struct GlobalFrameUniforms { /* ... */ }
@@ -139,14 +139,18 @@ Only shaders that actually reference `gFrame` require a matching C++ descriptor 
 .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
 ```
 
-`shader/sceneTextures.slang` declares the global scene material texture table:
+`shader/include/sceneTextures.slang` declares the global scene material texture table:
 
 ```slang
 [[vk::binding(0, 1)]]
 public Sampler2D<float4> gSceneTextures[];
 ```
 
-All material texture types share this single runtime descriptor array. `shader/materialTextureIds.slang` defines the common material texture slot constants and packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices.
+All material texture types share this single runtime descriptor array. `shader/include/materialTextureIds.slang` defines the common material texture slot constants and packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices.
+
+RT material shading declarations live in `shader/include/material`. `base.slang` defines the no-data `IMultiLayerMaterial` interface, and concrete material implementations such as `gltfMultiLayer.slang` receive RT material headers, layer records, texture references, and interpolated surface data explicitly.
+
+RT hit reconstruction helpers that depend on ray-tracing builtins live in importable modules under `shader/include/rt`. These modules are not included by `common`; RT shaders import them explicitly so raster and compute shaders do not inherit `InstanceID()`, `GeometryIndex()`, `PrimitiveIndex()`, or object-to-world RT helper dependencies.
 
 ## End-to-End Shader Build Pipeline
 

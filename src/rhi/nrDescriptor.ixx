@@ -446,6 +446,8 @@ class ShaderCursor
 
     [[nodiscard]] ShaderCursor field(std::string_view fieldName) const;
 
+    [[nodiscard]] bool hasField(std::string_view fieldName) const;
+
     [[nodiscard]] ShaderCursor element(std::uint32_t index) const;
 
     [[nodiscard]] ShaderCursor getPath(std::string_view path) const;

@@ -183,7 +183,7 @@ void DisplayNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
         "Display.Convert",
         runtime_->pipeline};
     convertPass
-        .sampledImage("gSourceColor", sourceColor, "Display.SourceColor")
+        .sampledImageGeneral("gSourceColor", sourceColor, "Display.SourceColor")
         .storageImage("gConvertedColor", convertedColor, "Display.ConvertedColor")
         .pushConstants("gDisplayConvert", pushConstants)
         .record([conversionExtent](const nr::renderer::ComputePassRecordContext& computeContext) {

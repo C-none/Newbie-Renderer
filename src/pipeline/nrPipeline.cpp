@@ -86,7 +86,7 @@ struct ViewerControlState
 [[nodiscard]] nr::renderer::RendererGraphSpec buildRtObjectGraph(const PipelineBuildContext& context)
 {
     auto asBuild = std::make_shared<nr::renderPasses::AccelerationStructureBuildNode>();
-    auto rayTrace = std::make_shared<nr::renderPasses::RayTraceInstanceHashNode>();
+    auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
     auto ui = std::make_shared<nr::renderPasses::UiNode>();
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
     present->input.format = context.swapchainFormat;
@@ -103,7 +103,7 @@ struct ViewerControlState
         nr::renderer::NodeCreateInfo{
             .runtime = rayTrace,
             .config = nr::renderer::NodeConfig{
-                .instanceName = "RTInstanceHash",
+                .instanceName = "PathTracing",
                 .queue = nr::renderer::QueueDomain::Graphics,
             },
         },

@@ -101,6 +101,92 @@ void accumulateCpuTimings(RendererCpuFrameTimings& target, const RendererCpuFram
         });
         return averages;
     }
+
+[[nodiscard]] std::optional<nr::scene::SceneMaterialTextureIds> collectSceneMaterialTextureIds(
+    const nr::scene::Scene& scene,
+    nr::resource::MaterialHandle materialHandle,
+    std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById)
+{
+    auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
+    nrAssert(
+        materialRecordRef.has_value(),
+        std::format(
+            "Renderer scene texture collection expected material handle (slot={}, generation={}) to resolve.",
+            materialHandle.slot,
+            materialHandle.generation));
+
+    auto const& materialRecord = materialRecordRef->get();
+    nrAssert(
+        materialRecord.cpuReady,
+        std::format(
+            "Renderer scene texture collection expected material '{}' to be CPU ready.",
+            materialRecord.cpu.name));
+
+    auto textureIds = nr::scene::SceneMaterialTextureIds{};
+    auto slotIndices = std::views::iota(std::size_t{0}, materialRecord.cpu.textureSlots.size());
+    std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
+        auto textureHandle = materialRecord.cpu.textureSlots[slotIndex].texture;
+        if (!textureHandle.valid())
+        {
+            return;
+        }
+
+        auto binding = scene.tryGetSampledTextureBinding(textureHandle);
+        nrAssert(
+            binding.has_value(),
+            std::format(
+                "Renderer scene texture collection expected resident sampled texture for material '{}' slot {}.",
+                materialRecord.cpu.name,
+                slotIndex));
+        nrAssert(
+            binding->descriptorIndex < kSceneTextureDescriptorCapacity,
+            std::format(
+                "Scene texture descriptor id {} exceeds capacity {}.",
+                binding->descriptorIndex,
+                kSceneTextureDescriptorCapacity));
+        nrAssert(
+            binding->descriptorIndex <= nr::scene::kMaxSceneTextureId,
+            std::format(
+                "Scene texture descriptor id {} exceeds packed uint16 id capacity {}.",
+                binding->descriptorIndex,
+                nr::scene::kMaxSceneTextureId));
+
+        auto const textureId = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
+        textureIds[slotIndex] = textureId;
+        sceneTextureHandlesById.insert_or_assign(binding->descriptorIndex, textureHandle);
+    });
+    return textureIds;
+}
+
+void collectTlasSceneTextureHandles(
+    const nr::scene::Scene& scene,
+    std::span<const nr::scene::TlasBuildInputPacket> tlasPackets,
+    std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById)
+{
+    std::ranges::for_each(tlasPackets, [&](const nr::scene::TlasBuildInputPacket& packet) {
+        auto meshRecordRef = scene.tryGetMeshAsset(packet.mesh);
+        nrAssert(
+            meshRecordRef.has_value(),
+            std::format(
+                "Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to resolve.",
+                packet.mesh.slot,
+                packet.mesh.generation));
+        auto const& meshRecord = meshRecordRef->get();
+        nrAssert(
+            meshRecord.cpuReady,
+            std::format(
+                "Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to be CPU ready.",
+                packet.mesh.slot,
+                packet.mesh.generation));
+
+        std::ranges::for_each(meshRecord.cpu.geometries, [&](const nr::resource::MeshGeometry& geometry) {
+            if (geometry.material.valid())
+            {
+                static_cast<void>(collectSceneMaterialTextureIds(scene, geometry.material, sceneTextureHandlesById));
+            }
+        });
+    });
+}
 } // namespace
 
 void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
@@ -1079,98 +1165,18 @@ void Renderer::uploadSceneTextureFallback()
         uploadContext.reclaimCompletedUploads();
     }
 
-[[nodiscard]] std::map<std::uint32_t, SceneTextureDescriptorBinding> Renderer::buildSceneTextureDescriptorTable(
-        const NodeFrameParameters& frameParameters,
-        const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById)
+[[nodiscard]] RendererSceneTextureDescriptorTable Renderer::buildSceneTextureDescriptorTable(
+    const NodeFrameParameters& frameParameters,
+    const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById)
 {
-        ensureSceneTextureFallback();
-
-        auto descriptorsById = std::map<std::uint32_t, SceneTextureDescriptorBinding>{};
-        auto descriptorKeys = std::map<std::uint32_t, SceneTextureDescriptorKey>{};
-
-        descriptorsById.insert_or_assign(
-            nr::scene::kDefaultSceneTextureId,
-            SceneTextureDescriptorBinding{
-                .descriptorIndex = nr::scene::kDefaultSceneTextureId,
-                .image = std::cref(sceneTextureFallback_),
-                .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
-                .gpuVersion = 1,
-            });
-        descriptorKeys.insert_or_assign(
-            nr::scene::kDefaultSceneTextureId,
-            SceneTextureDescriptorKey{
-                .gpuVersion = 1,
-            });
-
-        if (!frameParameters.scene.has_value())
-        {
-            if (descriptorKeys != sceneTextureDescriptorKeys_)
-            {
-                sceneTextureDescriptorKeys_ = std::move(descriptorKeys);
-                ++sceneTextureDescriptorVersion_;
-            }
-            return descriptorsById;
-        }
-
-        auto const& scene = frameParameters.scene->get();
-        std::ranges::for_each(sceneTextureHandlesById, [&](const auto& entry) {
-            auto const textureId = entry.first;
-            auto const textureHandle = entry.second;
-            if (textureId == nr::scene::kDefaultSceneTextureId)
-            {
-                return;
-            }
-
-            nrAssert(
-                textureId < kSceneTextureDescriptorCapacity,
-                std::format(
-                    "Scene texture descriptor id {} exceeds capacity {}.",
-                    textureId,
-                    kSceneTextureDescriptorCapacity));
-
-            auto binding = scene.tryGetSampledTextureBinding(textureHandle);
-            if (!binding.has_value())
-            {
-                return;
-            }
-
-            nrAssert(
-                binding->descriptorIndex == textureId,
-                std::format(
-                    "Scene texture binding id mismatch. expected={}, actual={}.",
-                    textureId,
-                    binding->descriptorIndex));
-            nrAssert(
-                binding->layout == vk::ImageLayout::eShaderReadOnlyOptimal,
-                std::format(
-                    "Scene texture {} must be imported from shader-read layout, got {}.",
-                    textureId,
-                    vk::to_string(binding->layout)));
-
-            descriptorsById.insert_or_assign(
-                textureId,
-                SceneTextureDescriptorBinding{
-                    .descriptorIndex = textureId,
-                    .image = binding->image,
-                    .layout = binding->layout,
-                    .gpuVersion = binding->gpuVersion,
-                });
-            descriptorKeys.insert_or_assign(
-                textureId,
-                SceneTextureDescriptorKey{
-                    .texture = textureHandle,
-                    .gpuVersion = binding->gpuVersion,
-                });
+    ensureSceneTextureFallback();
+    return cacheSuite_.globalDescriptorTableCache.buildSceneTextureDescriptorTable(
+        RendererSceneTextureDescriptorTableInput{
+            .fallbackImage = std::cref(sceneTextureFallback_),
+            .scene = frameParameters.scene,
+            .sceneTextureHandlesById = sceneTextureHandlesById,
         });
-
-        if (descriptorKeys != sceneTextureDescriptorKeys_)
-        {
-            sceneTextureDescriptorKeys_ = std::move(descriptorKeys);
-            ++sceneTextureDescriptorVersion_;
-        }
-
-        return descriptorsById;
-    }
+}
 
 void Renderer::initialize(const RendererCreateInfo& info)
 {
@@ -1193,6 +1199,7 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
 {
         nrAssert(static_cast<bool>(device_), "Renderer::installGraph requires initialize() before graph installation.");
         teardownInstalledGraph();
+        cacheSuite_.clear();
 
         auto installed = std::vector<InstalledNode>{};
         installed.reserve(spec.nodes.size());
@@ -1246,6 +1253,7 @@ void Renderer::uninstallGraph()
 
         builder_.clear();
         executor_.clearRetainedState();
+        cacheSuite_.clear();
         teardownInstalledGraph();
         cpuTimingAccumulator_ = {};
         cpuStatistics_ = {};
@@ -1264,6 +1272,7 @@ void Renderer::shutdown()
         // Release frame-local graph callbacks and retained command buffers while Device is still valid.
         builder_.clear();
         executor_.clearRetainedState();
+        cacheSuite_.clear();
         teardownInstalledGraph();
         submissionTimeline_ = RendererSubmissionTimeline{};
         frameUniformArena_ = FrameUniformArena{};
@@ -1294,6 +1303,7 @@ void Renderer::resize()
             return;
         }
         device_->recreateSwapchain();
+        cacheSuite_.clear();
     }
 
 void Renderer::resetSceneBinding() noexcept
@@ -1378,50 +1388,7 @@ void Renderer::resetSceneBinding() noexcept
             bridgeBuildInput.resolveMaterialTextureIds =
                 [&](nr::resource::MaterialHandle materialHandle)
                 -> std::optional<nr::scene::SceneMaterialTextureIds> {
-                auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
-                if (!materialRecordRef.has_value())
-                {
-                    return std::nullopt;
-                }
-
-                auto const& materialRecord = materialRecordRef->get();
-                if (!materialRecord.cpuReady)
-                {
-                    return std::nullopt;
-                }
-
-                auto textureIds = nr::scene::SceneMaterialTextureIds{};
-                auto slotIndices = std::views::iota(std::size_t{0}, materialRecord.cpu.textureSlots.size());
-                std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
-                    auto textureHandle = materialRecord.cpu.textureSlots[slotIndex].texture;
-                    if (!textureHandle.valid())
-                    {
-                        return;
-                    }
-
-                    auto binding = scene.tryGetSampledTextureBinding(textureHandle);
-                    if (!binding.has_value())
-                    {
-                        return;
-                    }
-
-                    nrAssert(
-                        binding->descriptorIndex < kSceneTextureDescriptorCapacity,
-                        std::format(
-                            "Scene texture descriptor id {} exceeds capacity {}.",
-                            binding->descriptorIndex,
-                            kSceneTextureDescriptorCapacity));
-                    nrAssert(
-                        binding->descriptorIndex <= nr::scene::kMaxSceneTextureId,
-                        std::format(
-                            "Scene texture descriptor id {} exceeds packed uint16 id capacity {}.",
-                            binding->descriptorIndex,
-                            nr::scene::kMaxSceneTextureId));
-                    auto const textureId = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
-                    textureIds[slotIndex] = textureId;
-                    sceneTextureHandlesById.insert_or_assign(binding->descriptorIndex, textureHandle);
-                });
-                return textureIds;
+                return collectSceneMaterialTextureIds(scene, materialHandle, sceneTextureHandlesById);
             };
 
             if (sceneCameraOverride.has_value())
@@ -1571,6 +1538,14 @@ void Renderer::resetSceneBinding() noexcept
             frameParameters.sceneTlasBuildInputs = std::cref(sceneTlasPackets->tlasBuildInputs);
         }
 
+        if (input.scene.has_value() && sceneTlasPackets.has_value())
+        {
+            collectTlasSceneTextureHandles(
+                input.scene->get(),
+                std::span<const nr::scene::TlasBuildInputPacket>{sceneTlasPackets->tlasBuildInputs},
+                sceneTextureHandlesById);
+        }
+
         if (primaryCamera.has_value())
         {
             frameParameters.primaryCamera = std::cref(*primaryCamera);
@@ -1599,7 +1574,7 @@ void Renderer::resetSceneBinding() noexcept
             std::chrono::steady_clock::now());
 
         auto const compileStart = std::chrono::steady_clock::now();
-        auto compiled = compiler_.compileConsuming(builder_.mutableFrame());
+        auto compiled = cacheSuite_.compileCache.compileConsumingCached(builder_.mutableFrame());
         cpuTimings.compileMilliseconds = elapsedMilliseconds(
             compileStart,
             std::chrono::steady_clock::now());
@@ -1706,10 +1681,12 @@ void Renderer::buildInstalledGraph(
         auto const globalFrameUniforms = makeGlobalFrameUniforms(frameConstants);
         auto globalResources = FrameGlobalResources{
             .frameUniform = frameUniformArena_.upload(builder_, "Renderer.GlobalFrameUniforms", globalFrameUniforms),
+            .bindlessImageTableCache = std::ref(cacheSuite_.bindlessImageTableCache),
         };
-        globalResources.sceneTextureDescriptorsById = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
+        auto sceneTextureDescriptorTable = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
+        globalResources.sceneTextureDescriptorsById = std::move(sceneTextureDescriptorTable.descriptorsById);
         globalResources.sceneTextureSampler = sceneTextureSampler_.raw();
-        globalResources.sceneTextureDescriptorVersion = sceneTextureDescriptorVersion_;
+        globalResources.sceneTextureDescriptorVersion = sceneTextureDescriptorTable.version;
 
         auto nodeFrameParameters = frameParameters;
         if (sceneBridgeFrame.has_value())

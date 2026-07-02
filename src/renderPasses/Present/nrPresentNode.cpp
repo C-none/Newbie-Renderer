@@ -86,6 +86,13 @@ struct PresentRuntimeCache
     return (value + divisor - 1u) / divisor;
 }
 
+[[nodiscard]] vk::DeviceSize presentReadbackByteSize(vk::Extent2D extent) noexcept
+{
+    return static_cast<vk::DeviceSize>(extent.width) *
+           static_cast<vk::DeviceSize>(extent.height) *
+           vk::DeviceSize{4u};
+}
+
 void ensureConvertedColorImage(
     nr::rhi::Device& device,
     PresentRuntimeCache& runtime,
@@ -199,6 +206,109 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
         });
 
     [[maybe_unused]] auto convertPassHandle = convertPass.build();
+
+    if (input.readback.has_value())
+    {
+        nr::nrAssert(
+            context.queue == nr::renderer::QueueDomain::Compute,
+            "Present readback copy must be recorded by a Present node running on the compute queue.");
+
+        auto const readbackTarget = *input.readback;
+        auto const requiredReadbackBytes = detail::presentReadbackByteSize(conversionExtent);
+        auto const& readbackBuffer = readbackTarget.buffer.get();
+        nr::nrAssert(readbackBuffer.valid(), "Present readback target requires a valid buffer.");
+        nr::nrAssert(
+            (readbackBuffer.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
+            "Present readback target buffer must include eTransferDst usage.");
+        nr::nrAssert(
+            readbackBuffer.mapped() != nullptr,
+            "Present readback target buffer must be host visible and persistently mapped.");
+        nr::nrAssert(
+            readbackTarget.offset <= readbackBuffer.size() &&
+                requiredReadbackBytes <= readbackBuffer.size() - readbackTarget.offset,
+            std::format(
+                "Present readback target range [{}..{}) exceeds buffer size {}.",
+                readbackTarget.offset,
+                readbackTarget.offset + requiredReadbackBytes,
+                readbackBuffer.size()));
+
+        auto readbackResource = context.importBuffer(
+            readbackBuffer,
+            "Present.ReadbackBuffer",
+            nr::renderer::ResourceLifetime::RendererPersistent,
+            {
+                nr::renderer::BufferUsageIntent::Readback,
+            },
+            nr::renderer::ResourceOwnershipDomain::Compute);
+
+        auto readbackPassIntents = std::array{
+            nr::renderer::use::imageTransferSrc(convertedColor),
+            nr::renderer::use::readbackWrite(readbackResource),
+        };
+
+        [[maybe_unused]] auto readbackPassHandle = context.addPass(
+            std::span<const nr::renderer::PassResourceUseDesc>{readbackPassIntents.data(), readbackPassIntents.size()},
+            "Present.CopyToReadback",
+            [convertedColor, readbackResource, readbackTarget, conversionExtent, requiredReadbackBytes](
+                const nr::renderer::PassRecordContext& recordContext) {
+                nr::nrAssert(
+                    recordContext.commandBuffer.has_value(),
+                    "Present readback copy requires RAII command buffer access.");
+                nr::nrAssert(
+                    static_cast<bool>(recordContext.resolveImage),
+                    "Present readback copy requires image resolver.");
+                nr::nrAssert(
+                    static_cast<bool>(recordContext.resolveBuffer),
+                    "Present readback copy requires buffer resolver.");
+
+                auto resolvedImage = recordContext.resolveImage(convertedColor);
+                nr::nrAssert(
+                    resolvedImage.has_value() && resolvedImage->resource.has_value(),
+                    "Present readback copy failed to resolve converted color image resource.");
+                auto resolvedBuffer = recordContext.resolveBuffer(readbackResource);
+                nr::nrAssert(
+                    resolvedBuffer.has_value() && resolvedBuffer->resource.has_value(),
+                    "Present readback copy failed to resolve readback buffer resource.");
+
+                auto copyRegion = vk::BufferImageCopy{};
+                copyRegion.bufferOffset = readbackTarget.offset;
+                copyRegion.imageSubresource = vk::ImageSubresourceLayers{
+                    vk::ImageAspectFlagBits::eColor,
+                    0u,
+                    0u,
+                    1u,
+                };
+                copyRegion.imageExtent = vk::Extent3D{
+                    conversionExtent.width,
+                    conversionExtent.height,
+                    1u,
+                };
+
+                nr::rhi::ops::copyImageToBuffer(
+                    recordContext.commandBuffer->get(),
+                    resolvedImage->resource->get(),
+                    resolvedBuffer->resource->get(),
+                    vk::ImageLayout::eTransferSrcOptimal,
+                    copyRegion);
+
+                auto hostReadBarrier = nr::rhi::ops::BarrierBatch{};
+                hostReadBarrier.add(nr::rhi::ops::makeBufferBarrier(
+                    resolvedBuffer->resource->get(),
+                    vk::BufferMemoryBarrier2{
+                        vk::PipelineStageFlagBits2::eTransfer,
+                        vk::AccessFlagBits2::eTransferWrite,
+                        vk::PipelineStageFlagBits2::eHost,
+                        vk::AccessFlagBits2::eHostRead,
+                        nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                        nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                        vk::Buffer{},
+                        readbackTarget.offset,
+                        requiredReadbackBytes,
+                        nullptr,
+                    }));
+                nr::rhi::ops::pipelineBarrier(recordContext.commandBuffer->get(), hostReadBarrier);
+            });
+    }
 
     auto copyPassIntents = std::array{
         nr::renderer::use::imageTransferSrc(convertedColor),
