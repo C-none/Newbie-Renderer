@@ -10,6 +10,13 @@ nr_add_contract_test(nr_renderer_frame_services_contract_test nr_renderer_frame_
     dependency
 )
 
+nr_add_contract_test(nr_renderer_camera_jitter_contract_test nr_renderer_camera_jitter_contract_test.cpp "fast;cpu;unit;renderer"
+    nrrenderer
+    nrscene
+    utils
+    dependency
+)
+
 nr_add_contract_test(nr_render_graph_builder_contract_test nr_render_graph_builder_contract_test.cpp "fast;cpu;unit;renderer;rdg"
     nrrenderer
     nrrhi

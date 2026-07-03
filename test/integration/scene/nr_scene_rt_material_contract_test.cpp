@@ -2,6 +2,7 @@ import std;
 import dependency.math;
 import nr.load;
 import nr.resource;
+import nr.rhi;
 import nr.scene;
 import nr.test;
 import nr.utils;
@@ -468,6 +469,49 @@ const nr::test::CaseRegistrar rtSampleAssetsCase{
                               return hasFeature(material, nr::scene::RtMaterialFeatureFlag::unsupportedAnisotropy);
                           }),
                           "AnisotropyRotationTest should be imported but marked unsupported for RT");
+    }};
+
+const nr::test::CaseRegistrar directionalLightImportCase{
+    "DirectionalLight glTF import bridges punctual light packets",
+    [] {
+        auto request = nr::load::SceneLoadRequest{};
+        request.sourcePath = projectRoot() / "assets/glTF-Sample-Assets/Models/DirectionalLight/glTF/DirectionalLight.gltf";
+        auto imported = nr::load::loadScene(request);
+        nr::test::require(imported.has_value(), "DirectionalLight should import");
+
+        nr::test::requireEqual(imported->lights.size(), std::size_t{1});
+        auto const& sourceLight = imported->lights.front();
+        nr::test::require(sourceLight.type == "directional", "DirectionalLight source light should import as directional");
+        nr::test::require(sourceLight.nodeIndex < imported->nodes.size(), "DirectionalLight source light should reference a valid node");
+        nr::test::require(sourceLight.colorDiffuse[0] > 0.0f, "DirectionalLight source light should carry positive red energy");
+
+        nr::rhi::Device device{};
+        auto runtimeScene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
+        auto templateHandle = runtimeScene.registerTemplate(*imported);
+        auto instanceHandle = runtimeScene.instantiate(templateHandle);
+        nr::test::require(templateHandle.valid(), "DirectionalLight scene template should register");
+        nr::test::require(instanceHandle.valid(), "DirectionalLight scene instance should instantiate");
+        runtimeScene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
+
+        auto lightHandle = runtimeScene.findLightHandleByStableKey(nr::scene::SceneBridge::makeLightCanonicalKey(*imported, 0u));
+        nr::test::require(lightHandle.has_value(), "DirectionalLight source light should bridge to runtime scene");
+        auto lightRecord = runtimeScene.tryGetLightAsset(*lightHandle);
+        nr::test::require(lightRecord.has_value(), "DirectionalLight runtime light record should exist");
+        nr::test::require(lightRecord->get().cpu.type == nr::resource::LightType::directional,
+                          "DirectionalLight runtime light should remain directional");
+        nr::test::require(nr::scene::sceneLightAliasEnergy(lightRecord->get().cpu.color, lightRecord->get().cpu.intensity) > 0.0f,
+                          "DirectionalLight runtime light should produce positive alias energy");
+
+        auto lightProfile = runtimeScene.registerExtractProfile(nr::scene::SceneExtractProfileCreateInfo{
+            .debugName = "directional_light_runtime",
+            .requireReadyForDomain = false,
+        });
+        auto lightPackets = runtimeScene.extractPackets(lightProfile);
+        nr::test::requireEqual(lightPackets.lights.size(), std::size_t{1});
+        auto const& lightPacket = lightPackets.lights.front();
+        nr::test::require(lightPacket.light == *lightHandle, "DirectionalLight packet should reference the runtime light");
+        nr::test::require(glm::dot(lightPacket.direction, lightPacket.direction) > 0.0f,
+                          "DirectionalLight packet should carry a non-zero direction");
     }};
 
 const nr::test::CaseRegistrar sponzaMaterialTextureImportCase{

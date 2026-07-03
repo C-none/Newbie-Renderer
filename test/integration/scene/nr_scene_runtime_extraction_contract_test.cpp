@@ -32,6 +32,16 @@ namespace
     };
 }
 
+[[nodiscard]] std::array<float, 16> translatedTransform(float x, float y, float z) noexcept
+{
+    return {
+        1.0f, 0.0f, 0.0f, x,
+        0.0f, 1.0f, 0.0f, y,
+        0.0f, 0.0f, 1.0f, z,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+}
+
 [[nodiscard]] nr::load::SceneAsset makeRuntimeSceneAsset(bool includeCamera)
 {
     auto scene = nr::load::SceneAsset{};
@@ -116,6 +126,87 @@ namespace
     scene.stats.vertexCount = 3;
     scene.stats.indexCount = 3;
     return scene;
+}
+
+[[nodiscard]] nr::load::SceneAsset makeLightSceneAsset()
+{
+    auto scene = nr::load::SceneAsset{};
+    scene.sourcePath = std::filesystem::path{"runtime_lights_scene.gltf"};
+
+    scene.nodes.resize(6u);
+    scene.rootNodeIndex = 0;
+    scene.nodes[0].name = "Root";
+    scene.nodes[0].parentIndex = nr::load::invalidIndex;
+    scene.nodes[0].childIndices = {1u, 2u, 3u, 4u, 5u};
+    scene.nodes[0].localTransform = identityTransform();
+
+    auto const nodeIndices = std::views::iota(std::uint32_t{1u}, std::uint32_t{6u});
+    std::ranges::for_each(nodeIndices, [&](std::uint32_t nodeIndex) {
+        scene.nodes[nodeIndex].parentIndex = 0u;
+    });
+    scene.nodes[1].name = "DirectionalNode";
+    scene.nodes[1].localTransform = translatedTransform(1.0f, 2.0f, 3.0f);
+    scene.nodes[2].name = "PointNode";
+    scene.nodes[2].localTransform = translatedTransform(4.0f, 5.0f, 6.0f);
+    scene.nodes[3].name = "SpotNode";
+    scene.nodes[3].localTransform = translatedTransform(7.0f, 8.0f, 9.0f);
+    scene.nodes[4].name = "AmbientNode";
+    scene.nodes[4].localTransform = translatedTransform(10.0f, 11.0f, 12.0f);
+    scene.nodes[5].name = "AreaNode";
+    scene.nodes[5].localTransform = translatedTransform(13.0f, 14.0f, 15.0f);
+
+    scene.lights = {
+        nr::load::LightAsset{
+            .name = "DirectionalLight",
+            .sourceNodeName = "DirectionalNode",
+            .nodeIndex = 1u,
+            .type = "directional",
+            .colorDiffuse = {2.0f, 1.0f, 1.0f},
+        },
+        nr::load::LightAsset{
+            .name = "PointLight",
+            .sourceNodeName = "PointNode",
+            .nodeIndex = 2u,
+            .type = "point",
+            .colorDiffuse = {1.0f, 4.0f, 1.0f},
+            .range = 12.5f,
+        },
+        nr::load::LightAsset{
+            .name = "SpotLight",
+            .sourceNodeName = "SpotNode",
+            .nodeIndex = 3u,
+            .type = "spot",
+            .colorDiffuse = {1.0f, 1.0f, 3.0f},
+            .range = 8.0f,
+            .innerCone = glm::radians(10.0f),
+            .outerCone = glm::radians(25.0f),
+        },
+        nr::load::LightAsset{
+            .name = "AmbientLight",
+            .sourceNodeName = "AmbientNode",
+            .nodeIndex = 4u,
+            .type = "ambient",
+            .colorDiffuse = {1.0f, 1.0f, 1.0f},
+        },
+        nr::load::LightAsset{
+            .name = "AreaLight",
+            .sourceNodeName = "AreaNode",
+            .nodeIndex = 5u,
+            .type = "area",
+            .colorDiffuse = {1.0f, 1.0f, 1.0f},
+        },
+    };
+
+    scene.stats.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
+    scene.stats.lightCount = static_cast<std::uint32_t>(scene.lights.size());
+    return scene;
+}
+
+[[nodiscard]] nr::scene::SceneLightGpuRecord makeAliasTableTestLight(glm::vec3 color, float intensity) noexcept
+{
+    auto record = nr::scene::SceneLightGpuRecord{};
+    record.colorIntensity = glm::vec4{color, intensity};
+    return record;
 }
 
 const nr::test::CaseRegistrar materialSemanticClassificationCase{
@@ -444,6 +535,126 @@ const nr::test::CaseRegistrar activeInstanceCase{
         scene.destroyInstance(activeInstance);
         auto afterDestroy = scene.extractPackets(rasterProfile);
         nr::test::require(afterDestroy.rasterDraws.empty(), "destroying active instance should remove raster packets");
+    }};
+
+const nr::test::CaseRegistrar lightRuntimePacketCase{
+    "scene extraction emits active directional point and spot light packets",
+    [] {
+        nr::rhi::Device device{};
+        auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
+        auto sceneAsset = makeLightSceneAsset();
+
+        auto templateHandle = scene.registerTemplate(sceneAsset);
+        auto activeInstance = scene.instantiate(templateHandle);
+        auto inactiveInstance = scene.instantiate(templateHandle, nr::scene::SceneInstantiateInfo{.activate = false});
+        nr::test::require(templateHandle.valid(), "light template registration should succeed");
+        nr::test::require(activeInstance.valid(), "active light instance should be valid");
+        nr::test::require(inactiveInstance.valid(), "inactive light instance should be valid");
+        scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
+
+        auto directionalHandle = scene.findLightHandleByStableKey(nr::scene::SceneBridge::makeLightCanonicalKey(sceneAsset, 0u));
+        auto pointHandle = scene.findLightHandleByStableKey(nr::scene::SceneBridge::makeLightCanonicalKey(sceneAsset, 1u));
+        auto spotHandle = scene.findLightHandleByStableKey(nr::scene::SceneBridge::makeLightCanonicalKey(sceneAsset, 2u));
+        auto ambientHandle = scene.findLightHandleByStableKey(nr::scene::SceneBridge::makeLightCanonicalKey(sceneAsset, 3u));
+        auto areaHandle = scene.findLightHandleByStableKey(nr::scene::SceneBridge::makeLightCanonicalKey(sceneAsset, 4u));
+        nr::test::require(directionalHandle.has_value(), "directional light should be bridged");
+        nr::test::require(pointHandle.has_value(), "point light should be bridged");
+        nr::test::require(spotHandle.has_value(), "spot light should be bridged");
+        nr::test::require(!ambientHandle.has_value(), "ambient light should be skipped");
+        nr::test::require(!areaHandle.has_value(), "area light should be skipped");
+
+        auto pointRecord = scene.tryGetLightAsset(*pointHandle);
+        auto spotRecord = scene.tryGetLightAsset(*spotHandle);
+        nr::test::require(pointRecord.has_value(), "point light record should exist");
+        nr::test::require(spotRecord.has_value(), "spot light record should exist");
+        nr::test::require(almostEqual(pointRecord->get().cpu.range, 0.0f), "point influence range should be infinite");
+        nr::test::require(almostEqual(spotRecord->get().cpu.range, 0.0f), "spot influence range should be infinite");
+        nr::test::require(almostEqual(pointRecord->get().cpu.intensity, 4.0f), "point intensity should come from color magnitude");
+        nr::test::require(almostEqual(pointRecord->get().cpu.color.g, 1.0f), "point color should be normalized by intensity");
+        nr::test::require(almostEqual(spotRecord->get().cpu.outerConeRadians, glm::radians(25.0f)),
+                          "spot outer cone should be preserved");
+
+        auto rasterProfile = registerProfile(scene, nr::scene::ScenePacketDomain::rasterDraw, false);
+        auto packets = scene.extractPackets(rasterProfile);
+        nr::test::requireEqual(packets.lights.size(), std::size_t{3});
+
+        auto packetFor = [&](nr::resource::LightAssetHandle handle) -> const nr::scene::SceneLightPacket * {
+            auto found = std::ranges::find_if(packets.lights, [&](const nr::scene::SceneLightPacket &packet) {
+                return packet.light == handle;
+            });
+            return found == packets.lights.end() ? nullptr : std::addressof(*found);
+        };
+
+        auto const *pointPacket = packetFor(*pointHandle);
+        auto const *spotPacket = packetFor(*spotHandle);
+        nr::test::require(pointPacket != nullptr, "point light packet should exist");
+        nr::test::require(spotPacket != nullptr, "spot light packet should exist");
+        nr::test::require(almostEqual(pointPacket->position.x, 4.0f), "point world position x should be extracted");
+        nr::test::require(almostEqual(pointPacket->position.y, 5.0f), "point world position y should be extracted");
+        nr::test::require(almostEqual(pointPacket->position.z, 6.0f), "point world position z should be extracted");
+        nr::test::require(almostEqual(spotPacket->direction.x, 0.0f), "spot direction x should default to node -Z");
+        nr::test::require(almostEqual(spotPacket->direction.y, 0.0f), "spot direction y should default to node -Z");
+        nr::test::require(almostEqual(spotPacket->direction.z, -1.0f), "spot direction z should default to node -Z");
+
+        scene.destroyInstance(activeInstance);
+        auto afterDestroy = scene.extractPackets(rasterProfile);
+        nr::test::require(afterDestroy.lights.empty(), "destroying active instance should remove light packets");
+    }};
+
+const nr::test::CaseRegistrar sceneLightAliasGpuAbiCase{
+    "scene light alias table gpu abi and energy weighting are stable",
+    [] {
+        nr::test::requireEqual(nr::scene::kSceneLightGpuAbiVersion, std::uint32_t{2u});
+        nr::test::requireEqual(sizeof(nr::scene::SceneLightGpuHeader), std::size_t{16u});
+        nr::test::requireEqual(sizeof(nr::scene::SceneLightGpuRecord), std::size_t{80u});
+        nr::test::requireEqual(sizeof(nr::scene::SceneLightAliasGpuRecord), std::size_t{32u});
+
+        nr::test::require(
+            almostEqual(nr::scene::sceneLightAliasEnergy(glm::vec3{1.0f}, 2.0f), 2.0f),
+            "white light alias energy should equal intensity");
+        nr::test::require(
+            almostEqual(nr::scene::sceneLightAliasEnergy(glm::vec3{0.0f, 1.0f, 0.0f}, 2.0f), 1.4304f),
+            "green light alias energy should use Rec.709 luminance");
+        nr::test::require(
+            almostEqual(nr::scene::sceneLightAliasEnergy(glm::vec3{1.0f}, -2.0f), 0.0f),
+            "negative light intensity should have zero alias energy");
+
+        auto emptyTable = nr::scene::buildSceneLightAliasTable(std::span<const nr::scene::SceneLightGpuRecord>{});
+        nr::test::requireEqual(emptyTable.aliasCount, std::uint32_t{0u});
+        nr::test::require(almostEqual(emptyTable.totalEnergy, 0.0f), "empty alias table total energy should be zero");
+        nr::test::requireEqual(emptyTable.records.size(), std::size_t{1u});
+
+        auto zeroEnergyRecords = std::array{
+            makeAliasTableTestLight(glm::vec3{1.0f}, 0.0f),
+            makeAliasTableTestLight(glm::vec3{0.0f}, 5.0f),
+        };
+        auto zeroEnergyTable = nr::scene::buildSceneLightAliasTable(zeroEnergyRecords);
+        nr::test::requireEqual(zeroEnergyTable.aliasCount, std::uint32_t{0u});
+        nr::test::require(almostEqual(zeroEnergyTable.totalEnergy, 0.0f), "zero-energy alias table total should be zero");
+        nr::test::requireEqual(zeroEnergyTable.records.size(), std::size_t{1u});
+
+        auto weightedRecords = std::array{
+            makeAliasTableTestLight(glm::vec3{1.0f}, 1.0f),
+            makeAliasTableTestLight(glm::vec3{1.0f}, 3.0f),
+        };
+        auto weightedTable = nr::scene::buildSceneLightAliasTable(weightedRecords);
+        nr::test::requireEqual(weightedTable.aliasCount, std::uint32_t{2u});
+        nr::test::require(almostEqual(weightedTable.totalEnergy, 4.0f), "weighted alias table total energy should sum weights");
+        nr::test::requireEqual(weightedTable.records.size(), std::size_t{2u});
+
+        auto const &firstAlias = weightedTable.records[0];
+        nr::test::requireEqual(firstAlias.meta.x, std::uint32_t{0u});
+        nr::test::requireEqual(firstAlias.meta.y, std::uint32_t{1u});
+        nr::test::require(almostEqual(firstAlias.probabilities.x, 0.5f), "first alias accept threshold should be 0.5");
+        nr::test::require(almostEqual(firstAlias.probabilities.y, 0.25f), "first alias primary pdf should be 0.25");
+        nr::test::require(almostEqual(firstAlias.probabilities.z, 0.75f), "first alias secondary pdf should be 0.75");
+
+        auto const &secondAlias = weightedTable.records[1];
+        nr::test::requireEqual(secondAlias.meta.x, std::uint32_t{1u});
+        nr::test::requireEqual(secondAlias.meta.y, std::uint32_t{1u});
+        nr::test::require(almostEqual(secondAlias.probabilities.x, 1.0f), "second alias should always accept primary");
+        nr::test::require(almostEqual(secondAlias.probabilities.y, 0.75f), "second alias primary pdf should be 0.75");
+        nr::test::require(almostEqual(secondAlias.probabilities.z, 0.75f), "second alias secondary pdf should be 0.75");
     }};
 
 const nr::test::CaseRegistrar readinessCase{

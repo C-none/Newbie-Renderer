@@ -233,6 +233,7 @@ struct LightAsset
     float attenuationConstant = 0.0f;
     float attenuationLinear = 0.0f;
     float attenuationQuadratic = 0.0f;
+    float range = 0.0f;
     float innerCone = 0.0f;
     float outerCone = 0.0f;
     std::array<float, 2> areaSize{};

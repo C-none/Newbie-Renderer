@@ -157,6 +157,11 @@ struct SceneCameraBinding
     bool synthetic = false;
 };
 
+struct SceneLightBinding
+{
+    nr::resource::LightAssetHandle light{};
+};
+
 struct SceneResolvedCamera
 {
     flecs::entity entity{};
@@ -168,12 +173,23 @@ struct SceneResolvedCamera
     bool fallback = false;
 };
 
+struct SceneLightPacket
+{
+    flecs::entity entity{};
+    nr::resource::LightAssetHandle light{};
+    glm::mat4 world{1.0f};
+    glm::vec3 position{0.0f};
+    glm::vec3 direction{0.0f, 0.0f, -1.0f};
+    std::uint32_t stableInstanceId = 0;
+};
+
 struct ScenePacketSet
 {
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
     std::vector<RasterDrawPacket> rasterDraws{};
     std::vector<RayTracingInstancePacket> rtInstances{};
     std::vector<TlasBuildInputPacket> tlasBuildInputs{};
+    std::vector<SceneLightPacket> lights{};
 };
 
 struct SceneBridgeFrameConstants

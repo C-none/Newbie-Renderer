@@ -1,6 +1,7 @@
 module;
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
+#include <assimp/metadata.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <stb_image.h>
@@ -29,6 +30,7 @@ export using ::aiLightSource_UNDEFINED;
 export using ::aiLightSourceType;
 export using ::aiMaterial;
 export using ::aiMatrix4x4;
+export using ::aiMetadata;
 export using ::aiNode;
 export using ::aiPostProcessSteps;
 export using ::aiProcess_CalcTangentSpace;

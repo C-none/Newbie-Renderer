@@ -38,6 +38,7 @@ constexpr MaterialPropertyKey kMatKeySheenColorFactor{"$clr.sheen.factor", 0u, 0
 constexpr MaterialPropertyKey kMatKeySheenRoughnessFactor{"$mat.sheen.roughnessFactor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyTransmissionFactor{"$mat.transmission.factor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation", 0u, 0u};
+inline constexpr const char *kAssimpGltfLightRangeMetadataKey = "PBR_LightRange";
 
 [[nodiscard]] bool readMaterialColor4(const aiMaterial &material,
                                              const MaterialPropertyKey &key,
@@ -94,6 +95,59 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
 {
     auto const *raw = value.C_Str();
     return raw == nullptr ? std::string{} : std::string{raw};
+}
+
+[[nodiscard]] std::optional<float> readMetadataFinitePositiveFloat(const aiMetadata *metadata, const char *key)
+{
+    if (metadata == nullptr || key == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    auto doubleValue = 0.0;
+    if (metadata->Get(key, doubleValue) && std::isfinite(doubleValue) && doubleValue > 0.0)
+    {
+        return static_cast<float>(doubleValue);
+    }
+
+    auto floatValue = 0.0f;
+    if (metadata->Get(key, floatValue) && std::isfinite(floatValue) && floatValue > 0.0f)
+    {
+        return floatValue;
+    }
+
+    return std::nullopt;
+}
+
+void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, float> &rangesByNodeName)
+{
+    auto const nodeName = toStdString(node.mName);
+    if (!nodeName.empty())
+    {
+        if (auto range = readMetadataFinitePositiveFloat(node.mMetaData, kAssimpGltfLightRangeMetadataKey); range.has_value())
+        {
+            rangesByNodeName.insert_or_assign(nodeName, *range);
+        }
+    }
+
+    auto const childSlots = std::views::iota(0u, node.mNumChildren);
+    std::ranges::for_each(childSlots, [&](unsigned int childSlot) {
+        auto const *child = node.mChildren[childSlot];
+        if (child != nullptr)
+        {
+            collectGltfLightRangesByNodeName(*child, rangesByNodeName);
+        }
+    });
+}
+
+[[nodiscard]] std::map<std::string, float> buildGltfLightRangesByNodeName(const aiScene &assimpScene)
+{
+    auto rangesByNodeName = std::map<std::string, float>{};
+    if (assimpScene.mRootNode != nullptr)
+    {
+        collectGltfLightRangesByNodeName(*assimpScene.mRootNode, rangesByNodeName);
+    }
+    return rangesByNodeName;
 }
 
 [[nodiscard]] float dot(const aiVector3D &lhs, const aiVector3D &rhs) noexcept
@@ -997,6 +1051,7 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
 [[nodiscard]] std::optional<LoadError> appendLights(
     const aiScene &assimpScene,
     const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
+    const std::map<std::string, float> &gltfLightRangesByNodeName,
     SceneAsset &scene,
     bool strict)
 {
@@ -1029,6 +1084,10 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
         lightAsset.attenuationConstant = light->mAttenuationConstant;
         lightAsset.attenuationLinear = light->mAttenuationLinear;
         lightAsset.attenuationQuadratic = light->mAttenuationQuadratic;
+        if (auto range = gltfLightRangesByNodeName.find(sourceNodeName); range != gltfLightRangesByNodeName.end())
+        {
+            lightAsset.range = range->second;
+        }
         lightAsset.innerCone = light->mAngleInnerCone;
         lightAsset.outerCone = light->mAngleOuterCone;
         lightAsset.areaSize = {light->mSize.x, light->mSize.y};
@@ -1211,12 +1270,13 @@ SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest& reque
         }
 
         auto nodeIndicesByName = detail::buildNodeIndicesByName(scene);
+        auto gltfLightRangesByNodeName = detail::buildGltfLightRangesByNodeName(*assimpScene);
         if (auto error = detail::appendCameras(*assimpScene, nodeIndicesByName, scene, request.strict); error.has_value())
         {
             return SceneImportResult{std::unexpected(std::move(*error))};
         }
 
-        if (auto error = detail::appendLights(*assimpScene, nodeIndicesByName, scene, request.strict); error.has_value())
+        if (auto error = detail::appendLights(*assimpScene, nodeIndicesByName, gltfLightRangesByNodeName, scene, request.strict); error.has_value())
         {
             return SceneImportResult{std::unexpected(std::move(*error))};
         }

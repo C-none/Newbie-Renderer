@@ -51,7 +51,7 @@ public struct MaterialShadingResult
     public float alpha;
 };
 
-public float3 nrSafeNormalize(float3 value, float3 fallback)
+public float3 safeNormalize(float3 value, float3 fallback)
 {
     float lengthSquared = dot(value, value);
     if (lengthSquared > 1.0e-8f)
@@ -62,13 +62,13 @@ public float3 nrSafeNormalize(float3 value, float3 fallback)
     return fallback;
 }
 
-public float2 nrMaterialUv(uint uvSet, float2 texCoord0, float2 texCoord1)
+public float2 materialUv(uint uvSet, float2 texCoord0, float2 texCoord1)
 {
     return uvSet == 1u ? texCoord1 : texCoord0;
 }
 
-public float3 nrOrthogonalTangent(float3 normal)
+public float3 orthogonalTangent(float3 normal)
 {
     float3 axis = abs(normal.z) < 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(0.0f, 1.0f, 0.0f);
-    return nrSafeNormalize(cross(axis, normal), float3(1.0f, 0.0f, 0.0f));
+    return safeNormalize(cross(axis, normal), float3(1.0f, 0.0f, 0.0f));
 }

@@ -19,11 +19,6 @@ struct LightAsset
 
     LightAsset() = default;
     ~LightAsset() = default;
-
-    [[nodiscard]] bool finiteRange() const noexcept
-    {
-        return range > 0.0f;
-    }
 };
 
 } // namespace nr::resource

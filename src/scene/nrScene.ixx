@@ -978,6 +978,7 @@ class Scene
         const WorldBounds>
         rtCandidatesQuery_{};
     flecs::query<const SceneCameraBinding, const WorldTransform> cameraCandidatesQuery_{};
+    flecs::query<const SceneLightBinding, const WorldTransform> lightCandidatesQuery_{};
     SceneFrameStamp currentFrame_{};
     detail::SceneGeometryAtlas geometryAtlas_{};
     std::vector<PendingAcquireBatch> pendingAcquireBatches_{};

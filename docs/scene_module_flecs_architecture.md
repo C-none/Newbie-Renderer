@@ -37,7 +37,7 @@ nr::load::SceneAsset
   -> Scene::instantiate(...)
   -> beginFrame / uploadPending / updateSimulation
   -> extractPackets(profile, input)
-  -> ScenePacketSet
+  -> ScenePacketSet（draw / TLAS / active light instance packets）
   -> SceneRenderBridge::buildFrame(...)
   -> SceneBridgeFrame
 ```
@@ -60,6 +60,7 @@ nr::load::SceneAsset
 - `SceneVisibilityMode::primaryCameraFrustum` 会走 scene 内部主相机解析
 - `SceneVisibilityMode::customFrustum` 已经允许上层提供自定义 frustum
 - `viewportExtent` 会影响投影矩阵与 frustum 计算
+- `ScenePacketSet` 除了 domain-specific draw/TLAS packets，也携带 active light instance packets；这些 light packets 来自 runtime `SceneLightBinding` + `WorldTransform`，表达 light handle、world position、world direction 和调试用 instance id
 
 ### 3.2 相机边界
 
@@ -92,6 +93,7 @@ nr::load::SceneAsset
 
 - renderer / renderPasses 不需要读取 scene 内部 registry 或 Flecs query 来绘制 mesh
 - raster packet 按 mesh geometry fan-out；每个 draw 的材质来自 `MeshGeometry::material`
+- light packet 按 active runtime light entity fan-out；静态光源参数仍在 `LightAsset` registry 中，unsupported light 类型不会进入 runtime packet
 - ray tracing / TLAS packet 按 node mesh instance fan-out；mesh 是未来 BLAS 单元，`MeshGeometry` 是未来 BLAS geometry 与材质表映射单元；RT/TLAS 抽取不能使用 camera/frustum culling，必须覆盖整个 active RT scene
 - scene geometry atlas buffer 是 scene-owned GPU-only 资源；它们包含 raster vertex/index、AS build-input 和 shader-device-address usage，并在 transfer / graphics / compute queue family 不同时使用 concurrent sharing，使 graphics raster 与 compute AS build 都能消费同一份 resident geometry
 - `Scene::tryGetAccelerationStructureMesh(...)` 是 renderer AS node 的最小查询边界；它暴露 resident mesh 的 atlas binding、geometry ranges、GPU version、opaque classification，以及由 mesh winding / material double-sided 状态得到的 RT instance flags，但不把 RT build frame 放进 scene 层

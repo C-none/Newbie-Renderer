@@ -114,6 +114,12 @@ Example:
 
 This split is intentional and required by current Slang behavior in this repository.
 
+### 5) Shader helper function names
+
+- Use normal lower camelCase helper names.
+- Do not add project prefixes such as `nr` to shader helper functions.
+- Keep domain context in the helper name when needed, for example `sceneLightAliasCount()` or `currentRtHitSurface()`.
+
 ## Shared Common Shader Module
 
 Every project shader imports the root `common` module:
@@ -131,7 +137,7 @@ public struct GlobalFrameUniforms { /* ... */ }
 public ConstantBuffer<GlobalFrameUniforms> gFrame;
 ```
 
-The global frame uniform uses Vulkan descriptor set 5, binding 0. Keep set 0-4 available for the existing semantic descriptor-array conventions and local fixed bindings unless a shader-specific ABI document says otherwise. Set 6 is not reserved by the common ABI.
+The global frame uniform uses Vulkan descriptor set 5, binding 0, and carries current camera matrices, previous view data for future motion-vector work, camera world position, and frame state. `frameState.xy` carries the monotonic 64-bit sample-frame ordinal used for per-frame shader sampling, while `frameState.z` preserves the resource frame slot. Keep set 0-4 available for the existing semantic descriptor-array conventions and local fixed bindings unless a shader-specific ABI document says otherwise. Set 6 is reserved by the common ABI for scene lights.
 
 Only shaders that actually reference `gFrame` require a matching C++ descriptor binding. Pass code should bind it through the reflection-backed `shaderCursor` path, normally via renderer pass builders such as:
 
@@ -148,9 +154,22 @@ public Sampler2D<float4> gSceneTextures[];
 
 All material texture types share this single runtime descriptor array. `shader/include/materialTextureIds.slang` defines the common material texture slot constants and packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices.
 
+`shader/include/sceneLights.slang` declares the global scene light buffers:
+
+```slang
+[[vk::binding(0, 6)]]
+public ConstantBuffer<SceneLightGpuHeader> gSceneLightHeader;
+[[vk::binding(1, 6)]]
+public StructuredBuffer<SceneLightGpuRecord> gSceneLights;
+[[vk::binding(2, 6)]]
+public StructuredBuffer<SceneLightAliasGpuRecord> gSceneLightAliasTable;
+```
+
+`LightPrepareNode` publishes the matching C++ buffers as `frameResource::sceneLightHeader`, `frameResource::sceneLights`, and `frameResource::sceneLightAliasTable`. It prepends a warm default directional sun before scene-authored lights, so PathTracing normally sees at least one positive-energy alias-table entry even when the loaded asset has no lights. The lower-level alias-table helper still supports a valid zero-count header plus one-record dummy list/alias buffers for direct helper use. The same include provides helpers for evaluating glTF punctual `directional`, `point`, and `spot` light energy from uploaded records and for sampling the alias table built from Rec.709 luminance times intensity; runtime influence range is infinite, so shader evaluation does not apply finite range cutoff.
+
 RT material shading declarations live in `shader/include/material`. `base.slang` defines the no-data `IMultiLayerMaterial` interface, and concrete material implementations such as `gltfMultiLayer.slang` receive RT material headers, layer records, texture references, and interpolated surface data explicitly.
 
-RT hit reconstruction helpers that depend on ray-tracing builtins live in importable modules under `shader/include/rt`. These modules are not included by `common`; RT shaders import them explicitly so raster and compute shaders do not inherit `InstanceID()`, `GeometryIndex()`, `PrimitiveIndex()`, or object-to-world RT helper dependencies.
+RT resource declarations and hit reconstruction helpers live in importable modules under `shader/include/rt`. `resources.slang` declares the shared RT scene sideband bindings consumed by RT shaders, while `hitSurface.slang` depends on ray-tracing builtins and reconstructs hit-surface data from those resources. These modules are not included by `common`; RT shaders import them explicitly so raster and compute shaders do not inherit RT sideband bindings, `InstanceID()`, `GeometryIndex()`, `PrimitiveIndex()`, or object-to-world RT helper dependencies.
 
 ## End-to-End Shader Build Pipeline
 

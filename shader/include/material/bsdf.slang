@@ -1,30 +1,30 @@
 implementing common;
 
-public float nrSchlickWeight(float cosine)
+public float schlickWeight(float cosine)
 {
     float value = saturate(1.0f - abs(cosine));
     float value2 = value * value;
     return value2 * value2 * value;
 }
 
-public float3 nrFresnelSchlick(float3 f0, float cosine)
+public float3 fresnelSchlick(float3 f0, float cosine)
 {
-    return f0 + (float3(1.0f) - f0) * nrSchlickWeight(cosine);
+    return f0 + (float3(1.0f) - f0) * schlickWeight(cosine);
 }
 
-public float nrFresnelSchlick(float f0, float cosine)
+public float fresnelSchlick(float f0, float cosine)
 {
-    return f0 + (1.0f - f0) * nrSchlickWeight(cosine);
+    return f0 + (1.0f - f0) * schlickWeight(cosine);
 }
 
-public float nrGgxDistribution(float alpha, float noH)
+public float ggxDistribution(float alpha, float noH)
 {
     float a2 = alpha * alpha;
     float d = ((noH * a2 - noH) * noH + 1.0f);
     return a2 / max(kMaterialPi * d * d, 1.0e-7f);
 }
 
-public float nrGgxSmithG1(float alpha, float noX)
+public float ggxSmithG1(float alpha, float noX)
 {
     if (noX <= 0.0f)
     {
@@ -37,12 +37,12 @@ public float nrGgxSmithG1(float alpha, float noX)
     return 2.0f / (1.0f + sqrt(1.0f + a2 * tan2));
 }
 
-public float nrSmithGGX(float alpha, float noV, float noL)
+public float smithGGX(float alpha, float noV, float noL)
 {
-    return nrGgxSmithG1(alpha, noV) * nrGgxSmithG1(alpha, noL);
+    return ggxSmithG1(alpha, noV) * ggxSmithG1(alpha, noL);
 }
 
-public float3 nrEvaluateMetallicRoughnessBsdf(
+public float3 evaluateMetallicRoughnessBsdf(
     MaterialSample material,
     float3 normal,
     float3 viewDirection,
@@ -55,23 +55,23 @@ public float3 nrEvaluateMetallicRoughnessBsdf(
         return float3(0.0f);
     }
 
-    float3 halfVector = nrSafeNormalize(viewDirection + lightDirection, normal);
+    float3 halfVector = safeNormalize(viewDirection + lightDirection, normal);
     float noH = saturate(dot(normal, halfVector));
     float voH = saturate(dot(viewDirection, halfVector));
     float alpha = material.roughness * material.roughness;
 
     float3 cDiff = material.baseColor.rgb * (1.0f - material.metallic);
     float3 f0 = lerp(float3(0.04f), material.baseColor.rgb, material.metallic);
-    float3 fresnel = nrFresnelSchlick(f0, voH);
-    float distribution = nrGgxDistribution(alpha, noH);
-    float geometry = nrSmithGGX(alpha, noV, noL);
+    float3 fresnel = fresnelSchlick(f0, voH);
+    float distribution = ggxDistribution(alpha, noH);
+    float geometry = smithGGX(alpha, noV, noL);
 
     float3 diffuse = (float3(1.0f) - fresnel) * cDiff * kMaterialInvPi;
     float3 specular = fresnel * distribution * geometry / max(4.0f * noV * noL, 1.0e-6f);
     return diffuse + specular;
 }
 
-public float nrSheenDistribution(float roughness, float noH)
+public float sheenDistribution(float roughness, float noH)
 {
     float safeRoughness = max(roughness, kMaterialMinRoughness);
     float invAlpha = 1.0f / safeRoughness;
@@ -80,7 +80,7 @@ public float nrSheenDistribution(float roughness, float noH)
     return (2.0f + invAlpha) * pow(sin2h, invAlpha * 0.5f) / (2.0f * kMaterialPi);
 }
 
-public float nrSheenL(float roughness, float x)
+public float sheenL(float roughness, float x)
 {
     float r = (1.0f - roughness) * (1.0f - roughness);
     float oneMinusR = 1.0f - r;
@@ -94,25 +94,25 @@ public float nrSheenL(float roughness, float x)
     return a / (1.0f + b * pow(x, c)) + d * x + e;
 }
 
-public float nrSheenLambda(float roughness, float cosine)
+public float sheenLambda(float roughness, float cosine)
 {
     float clampedCosine = clamp(cosine, 1.0e-4f, 1.0f);
     if (clampedCosine < 0.5f)
     {
-        return exp(nrSheenL(roughness, clampedCosine));
+        return exp(sheenL(roughness, clampedCosine));
     }
 
-    return exp(2.0f * nrSheenL(roughness, 0.5f) - nrSheenL(roughness, 1.0f - clampedCosine));
+    return exp(2.0f * sheenL(roughness, 0.5f) - sheenL(roughness, 1.0f - clampedCosine));
 }
 
-public float nrSheenVisibility(float roughness, float noV, float noL)
+public float sheenVisibility(float roughness, float noV, float noL)
 {
-    float lambdaV = nrSheenLambda(roughness, noV);
-    float lambdaL = nrSheenLambda(roughness, noL);
+    float lambdaV = sheenLambda(roughness, noV);
+    float lambdaL = sheenLambda(roughness, noL);
     return 1.0f / (1.0f + pow(lambdaV, 1.0f + 2.0f * pow(1.0f - noV, 8.0f)) + lambdaL);
 }
 
-public float3 nrEvaluateSheenBsdf(
+public float3 evaluateSheenBsdf(
     MaterialLayerStack layers,
     float3 normal,
     float3 viewDirection,
@@ -130,14 +130,14 @@ public float3 nrEvaluateSheenBsdf(
         return float3(0.0f);
     }
 
-    float3 halfVector = nrSafeNormalize(viewDirection + lightDirection, normal);
+    float3 halfVector = safeNormalize(viewDirection + lightDirection, normal);
     float noH = saturate(dot(normal, halfVector));
-    float distribution = nrSheenDistribution(layers.sheenRoughness, noH);
-    float visibility = nrSheenVisibility(layers.sheenRoughness, noV, noL);
+    float distribution = sheenDistribution(layers.sheenRoughness, noH);
+    float visibility = sheenVisibility(layers.sheenRoughness, noV, noL);
     return layers.sheenColor * distribution * visibility / max(4.0f * noV * noL, 1.0e-6f);
 }
 
-public float nrEvaluateClearcoatSpecular(
+public float evaluateClearcoatSpecular(
     float clearcoatRoughness,
     float3 normal,
     float3 viewDirection,
@@ -150,17 +150,17 @@ public float nrEvaluateClearcoatSpecular(
         return 0.0f;
     }
 
-    float3 halfVector = nrSafeNormalize(viewDirection + lightDirection, normal);
+    float3 halfVector = safeNormalize(viewDirection + lightDirection, normal);
     float noH = saturate(dot(normal, halfVector));
     float voH = saturate(dot(viewDirection, halfVector));
     float alpha = clearcoatRoughness * clearcoatRoughness;
-    float fresnel = nrFresnelSchlick(0.04f, voH);
-    float distribution = nrGgxDistribution(alpha, noH);
-    float geometry = nrSmithGGX(alpha, noV, noL);
+    float fresnel = fresnelSchlick(0.04f, voH);
+    float distribution = ggxDistribution(alpha, noH);
+    float geometry = smithGGX(alpha, noV, noL);
     return fresnel * distribution * geometry / max(4.0f * noV * noL, 1.0e-6f);
 }
 
-public float3 nrAttenuateBaseByClearcoat(
+public float3 attenuateBaseByClearcoat(
     float3 baseBsdf,
     MaterialLayerStack layers,
     float3 viewDirection)
@@ -171,11 +171,11 @@ public float3 nrAttenuateBaseByClearcoat(
     }
 
     float noV = saturate(dot(layers.clearcoatNormal, viewDirection));
-    float coatFresnel = nrFresnelSchlick(0.04f, noV) * layers.clearcoat;
+    float coatFresnel = fresnelSchlick(0.04f, noV) * layers.clearcoat;
     return baseBsdf * (1.0f - coatFresnel);
 }
 
-public float3 nrEvaluateClearcoatDirect(
+public float3 evaluateClearcoatDirect(
     MaterialLayerStack layers,
     float3 viewDirection,
     float3 lightDirection,
@@ -187,7 +187,7 @@ public float3 nrEvaluateClearcoatDirect(
     }
 
     float noL = saturate(dot(layers.clearcoatNormal, lightDirection));
-    float coatSpecular = nrEvaluateClearcoatSpecular(
+    float coatSpecular = evaluateClearcoatSpecular(
         layers.clearcoatRoughness,
         layers.clearcoatNormal,
         viewDirection,

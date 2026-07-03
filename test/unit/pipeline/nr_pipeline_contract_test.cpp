@@ -1,5 +1,6 @@
 import dependency.vulkan;
 import nr.pipeline;
+import nr.renderer;
 import nr.test;
 import nr.utils;
 import std;
@@ -51,13 +52,18 @@ const nr::test::CaseRegistrar registryCase{
         auto rtObject = registry.find(nr::pipeline::rtObjectPipelineId);
         nr::test::require(rtObject.has_value());
         auto rtGraph = rtObject->get().buildGraph(graphContext());
-        nr::test::requireEqual(rtGraph.nodes.size(), std::size_t{4u});
+        nr::test::requireEqual(rtGraph.nodes.size(), std::size_t{6u});
         nr::test::requireEqual(rtGraph.nodes[0].config.instanceName, std::string{"ASBuild"});
-        nr::test::requireEqual(rtGraph.nodes[1].config.instanceName, std::string{"PathTracing"});
-        nr::test::requireEqual(rtGraph.nodes[2].config.instanceName, std::string{"Ui"});
-        nr::test::requireEqual(rtGraph.nodes[3].config.instanceName, std::string{"Present"});
+        nr::test::requireEqual(rtGraph.nodes[1].config.instanceName, std::string{"LightPrepare"});
+        nr::test::requireEqual(rtGraph.nodes[2].config.instanceName, std::string{"PathTracing"});
+        nr::test::requireEqual(rtGraph.nodes[3].config.instanceName, std::string{"Ui"});
+        nr::test::requireEqual(rtGraph.nodes[4].config.instanceName, std::string{"Accumulate"});
+        nr::test::requireEqual(rtGraph.nodes[4].config.queue, nr::renderer::QueueDomain::Compute);
+        nr::test::requireEqual(rtGraph.nodes[5].config.instanceName, std::string{"Present"});
         nr::test::requireEqual(rtGraph.submitNodes.size(), std::size_t{1u});
-        nr::test::requireEqual(rtGraph.submitNodes[0].afterNodeIndex, std::size_t{2u});
+        nr::test::requireEqual(rtGraph.submitNodes[0].afterNodeIndex, std::size_t{3u});
+        nr::test::requireEqual(rtGraph.cameraJitter.sequence, nr::renderer::RendererCameraJitterSequence::Halton23);
+        nr::test::requireEqual(rtGraph.cameraJitter.cycleLength, nr::renderer::kRendererDefaultCameraJitterCycleLength);
     }};
 
 const nr::test::CaseRegistrar historyCase{

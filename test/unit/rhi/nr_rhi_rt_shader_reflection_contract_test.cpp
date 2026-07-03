@@ -114,6 +114,9 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         auto vertexData = rtRoot["rtVertexData"];
         auto indexData = rtRoot["rtIndexData"];
         auto sceneTextures = rtRoot["gSceneTextures"];
+        auto sceneLightHeader = rtRoot["gSceneLightHeader"];
+        auto sceneLights = rtRoot["gSceneLights"];
+        auto sceneLightAliasTable = rtRoot["gSceneLightAliasTable"];
 
         nr::test::require(scene.valid(), "path tracing TLAS cursor should resolve");
         nr::test::require(outputImage.valid(), "path tracing output cursor should resolve");
@@ -126,6 +129,9 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(vertexData.valid(), "RT vertex atlas cursor should resolve");
         nr::test::require(indexData.valid(), "RT index atlas cursor should resolve");
         nr::test::require(sceneTextures.valid(), "path tracing scene texture table cursor should resolve");
+        nr::test::require(sceneLightHeader.valid(), "path tracing scene light header cursor should resolve");
+        nr::test::require(sceneLights.valid(), "path tracing scene light list cursor should resolve");
+        nr::test::require(sceneLightAliasTable.valid(), "path tracing scene light alias table cursor should resolve");
         nr::test::require(scene.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::AccelerationStructure);
         nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
         nr::test::require(frameUniform.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
@@ -137,6 +143,22 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(vertexData.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
         nr::test::require(indexData.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
         nr::test::require(sceneTextures.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler);
+        nr::test::require(sceneLightHeader.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
+        nr::test::require(sceneLights.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(sceneLightAliasTable.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+
+        auto sceneLightHeaderBinding = sceneLightHeader.descriptorBinding();
+        auto sceneLightsBinding = sceneLights.descriptorBinding();
+        auto sceneLightAliasTableBinding = sceneLightAliasTable.descriptorBinding();
+        nr::test::require(sceneLightHeaderBinding.has_value(), "path tracing scene light header should expose binding");
+        nr::test::require(sceneLightsBinding.has_value(), "path tracing scene lights should expose binding");
+        nr::test::require(sceneLightAliasTableBinding.has_value(), "path tracing scene light alias table should expose binding");
+        nr::test::requireEqual(sceneLightHeaderBinding->set, 6u);
+        nr::test::requireEqual(sceneLightHeaderBinding->binding, 0u);
+        nr::test::requireEqual(sceneLightsBinding->set, 6u);
+        nr::test::requireEqual(sceneLightsBinding->binding, 1u);
+        nr::test::requireEqual(sceneLightAliasTableBinding->set, 6u);
+        nr::test::requireEqual(sceneLightAliasTableBinding->binding, 2u);
     }};
 
 const nr::test::CaseRegistrar rtVertexAtlasLayoutCase{

@@ -1,6 +1,6 @@
 implementing common;
 
-public float4 nrSampleMaterialTexture(
+public float4 sampleMaterialTexture(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
     uint slot,
@@ -14,10 +14,10 @@ public float4 nrSampleMaterialTexture(
         return fallback;
     }
 
-    return gSceneTextures[textureRef.textureId].SampleLevel(nrMaterialUv(textureRef.uvSet, texCoord0, texCoord1), 0.0f);
+    return gSceneTextures[textureRef.textureId].SampleLevel(materialUv(textureRef.uvSet, texCoord0, texCoord1), 0.0f);
 }
 
-public float3 nrApplyNormalMapSlot(
+public float3 applyNormalMapSlot(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
     uint normalSlot,
@@ -34,20 +34,20 @@ public float3 nrApplyNormalMapSlot(
         return normal;
     }
 
-    float3 tangentFallback = nrOrthogonalTangent(normal);
-    float3 tangent = nrSafeNormalize(worldTangent - normal * dot(normal, worldTangent), tangentFallback);
-    float3 bitangent = nrSafeNormalize(cross(normal, tangent) * tangentSign, cross(normal, tangentFallback));
-    float2 normalUv = nrMaterialUv(normalRef.uvSet, texCoord0, texCoord1);
+    float3 tangentFallback = orthogonalTangent(normal);
+    float3 tangent = safeNormalize(worldTangent - normal * dot(normal, worldTangent), tangentFallback);
+    float3 bitangent = safeNormalize(cross(normal, tangent) * tangentSign, cross(normal, tangentFallback));
+    float2 normalUv = materialUv(normalRef.uvSet, texCoord0, texCoord1);
     float3 tangentNormal = gSceneTextures[normalRef.textureId].SampleLevel(normalUv, 0.0f).xyz * 2.0f - 1.0f;
     tangentNormal.xy *= normalScale;
-    return nrSafeNormalize(
+    return safeNormalize(
         tangent * tangentNormal.x +
         bitangent * tangentNormal.y +
         normal * tangentNormal.z,
         normal);
 }
 
-public RtMaterialLayerRecord nrDefaultMaterialLayer(uint kind)
+public RtMaterialLayerRecord defaultMaterialLayer(uint kind)
 {
     RtMaterialLayerRecord layer;
     layer.kind = kind;
@@ -59,7 +59,7 @@ public RtMaterialLayerRecord nrDefaultMaterialLayer(uint kind)
     return layer;
 }
 
-public bool nrTryFindMaterialLayer(
+public bool tryFindMaterialLayer(
     StructuredBuffer<RtMaterialLayerRecord> layerRecords,
     RtMaterialHeader material,
     uint kind,
@@ -75,30 +75,30 @@ public bool nrTryFindMaterialLayer(
         }
     }
 
-    result = nrDefaultMaterialLayer(kind);
+    result = defaultMaterialLayer(kind);
     return false;
 }
 
-public MaterialSample nrSampleCoreMaterial(
+public MaterialSample sampleCoreMaterial(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
     RtSurfaceData surface)
 {
-    float4 baseColorTexture = nrSampleMaterialTexture(
+    float4 baseColorTexture = sampleMaterialTexture(
         textureRefs,
         material,
         kMaterialTextureSlotBaseColor,
         surface.texCoord0,
         surface.texCoord1,
         float4(1.0f));
-    float4 metallicRoughnessTexture = nrSampleMaterialTexture(
+    float4 metallicRoughnessTexture = sampleMaterialTexture(
         textureRefs,
         material,
         kMaterialTextureSlotMetallicRoughness,
         surface.texCoord0,
         surface.texCoord1,
         float4(1.0f));
-    float4 emissiveTexture = nrSampleMaterialTexture(
+    float4 emissiveTexture = sampleMaterialTexture(
         textureRefs,
         material,
         kMaterialTextureSlotEmissive,
@@ -115,7 +115,7 @@ public MaterialSample nrSampleCoreMaterial(
     return sample;
 }
 
-public MaterialLayerStack nrSampleMaterialLayers(
+public MaterialLayerStack sampleMaterialLayers(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     StructuredBuffer<RtMaterialLayerRecord> layerRecords,
     RtMaterialHeader material,
@@ -130,16 +130,16 @@ public MaterialLayerStack nrSampleMaterialLayers(
     sample.sheenRoughness = 0.0f;
 
     RtMaterialLayerRecord clearcoatLayer;
-    if (nrTryFindMaterialLayer(layerRecords, material, kRtMaterialLayerClearcoat, clearcoatLayer))
+    if (tryFindMaterialLayer(layerRecords, material, kRtMaterialLayerClearcoat, clearcoatLayer))
     {
-        float clearcoatTexture = nrSampleMaterialTexture(
+        float clearcoatTexture = sampleMaterialTexture(
             textureRefs,
             material,
             kMaterialTextureSlotClearcoat,
             surface.texCoord0,
             surface.texCoord1,
             float4(1.0f)).r;
-        float clearcoatRoughnessTexture = nrSampleMaterialTexture(
+        float clearcoatRoughnessTexture = sampleMaterialTexture(
             textureRefs,
             material,
             kMaterialTextureSlotClearcoatRoughness,
@@ -148,7 +148,7 @@ public MaterialLayerStack nrSampleMaterialLayers(
             float4(1.0f)).g;
         sample.clearcoat = saturate(clearcoatLayer.p0.x * clearcoatTexture);
         sample.clearcoatRoughness = clamp(clearcoatLayer.p0.y * clearcoatRoughnessTexture, kMaterialMinRoughness, 1.0f);
-        sample.clearcoatNormal = nrApplyNormalMapSlot(
+        sample.clearcoatNormal = applyNormalMapSlot(
             textureRefs,
             material,
             kMaterialTextureSlotClearcoatNormal,
@@ -161,16 +161,16 @@ public MaterialLayerStack nrSampleMaterialLayers(
     }
 
     RtMaterialLayerRecord sheenLayer;
-    if (nrTryFindMaterialLayer(layerRecords, material, kRtMaterialLayerSheen, sheenLayer))
+    if (tryFindMaterialLayer(layerRecords, material, kRtMaterialLayerSheen, sheenLayer))
     {
-        float4 sheenColorTexture = nrSampleMaterialTexture(
+        float4 sheenColorTexture = sampleMaterialTexture(
             textureRefs,
             material,
             kMaterialTextureSlotSheenColor,
             surface.texCoord0,
             surface.texCoord1,
             float4(1.0f));
-        float sheenRoughnessTexture = nrSampleMaterialTexture(
+        float sheenRoughnessTexture = sampleMaterialTexture(
             textureRefs,
             material,
             kMaterialTextureSlotSheenRoughness,

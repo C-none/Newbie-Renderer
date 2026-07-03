@@ -38,11 +38,6 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
                 return setInfo.set == 1u;
             }),
             "normalBuffer descriptor layout should expose set 1 for scene textures");
-        nr::test::require(
-            std::ranges::none_of(descriptorSets, [](const nr::rhi::DescriptorSetLayoutInfo &setInfo) {
-                return setInfo.set == 6u;
-            }),
-            "normalBuffer descriptor layout should not expose set 6");
 
         auto root = layout.rootCursor();
         auto pushConstantsCursor = root["gPushConstants"];
@@ -92,7 +87,7 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
             .logicalResourceId = 7,
             .debugName = "Renderer.GlobalFrameUniforms",
             .offset = 256,
-            .range = 192,
+            .range = 416,
         }));
 
         auto snapshot = root.snapshot();
@@ -104,7 +99,7 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
         auto const &logical = std::get<nr::rhi::LogicalResourceDescriptorWrite>(write.payload);
         nr::test::requireEqual(logical.logicalResourceId, std::uint64_t{7});
         nr::test::requireEqual(logical.offset, vk::DeviceSize{256});
-        nr::test::requireEqual(logical.range, vk::DeviceSize{192});
+        nr::test::requireEqual(logical.range, vk::DeviceSize{416});
     }};
 
 const nr::test::CaseRegistrar shaderServiceReloadCase{
@@ -131,6 +126,70 @@ const nr::test::CaseRegistrar shaderServiceReloadCase{
             .sourcePath = std::filesystem::path{"renderer/appUi"},
         });
         nr::test::require(program.valid(), "appUi shader program should compile after session reload");
+    }};
+
+const nr::test::CaseRegistrar sceneLightReflectionCase{
+    "rhi shader cursor exposes scene light set6 bindings",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"test/sceneLightReflection"},
+        });
+        nr::test::require(program.valid(), "scene light reflection shader should compile");
+
+        auto layout = nr::rhi::ShaderDescriptorLayout::create(program);
+        nr::test::require(layout.valid(), "scene light descriptor layout should be valid");
+
+        auto root = layout.rootCursor();
+        auto lightHeader = root["gSceneLightHeader"];
+        auto sceneLights = root["gSceneLights"];
+        auto sceneLightAliasTable = root["gSceneLightAliasTable"];
+        nr::test::require(lightHeader.valid(), "gSceneLightHeader cursor should resolve");
+        nr::test::require(sceneLights.valid(), "gSceneLights cursor should resolve");
+        nr::test::require(sceneLightAliasTable.valid(), "gSceneLightAliasTable cursor should resolve");
+        nr::test::require(lightHeader.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
+        nr::test::require(sceneLights.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(sceneLightAliasTable.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+
+        auto headerBinding = lightHeader.descriptorBinding();
+        auto lightsBinding = sceneLights.descriptorBinding();
+        auto aliasBinding = sceneLightAliasTable.descriptorBinding();
+        nr::test::require(headerBinding.has_value(), "gSceneLightHeader should expose descriptor binding reflection");
+        nr::test::require(lightsBinding.has_value(), "gSceneLights should expose descriptor binding reflection");
+        nr::test::require(aliasBinding.has_value(), "gSceneLightAliasTable should expose descriptor binding reflection");
+        nr::test::requireEqual(headerBinding->set, 6u);
+        nr::test::requireEqual(headerBinding->binding, 0u);
+        nr::test::requireEqual(lightsBinding->set, 6u);
+        nr::test::requireEqual(lightsBinding->binding, 1u);
+        nr::test::requireEqual(aliasBinding->set, 6u);
+        nr::test::requireEqual(aliasBinding->binding, 2u);
+
+        nr::test::require(lightHeader.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = 60u,
+            .debugName = "Renderer.SceneLightHeader",
+        }));
+        nr::test::require(sceneLights.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = 61u,
+            .debugName = "Renderer.SceneLights",
+        }));
+        nr::test::require(sceneLightAliasTable.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = 62u,
+            .debugName = "Renderer.SceneLightAliasTable",
+        }));
+
+        auto snapshot = root.snapshot();
+        nr::test::requireEqual(snapshot.descriptorWriteCount(), std::size_t{3});
+        auto const& headerWrite = snapshot.descriptorWrites()[0];
+        auto const& lightsWrite = snapshot.descriptorWrites()[1];
+        auto const& aliasWrite = snapshot.descriptorWrites()[2];
+        nr::test::requireEqual(headerWrite.binding.set, 6u);
+        nr::test::requireEqual(headerWrite.binding.binding, 0u);
+        nr::test::requireEqual(lightsWrite.binding.set, 6u);
+        nr::test::requireEqual(lightsWrite.binding.binding, 1u);
+        nr::test::requireEqual(aliasWrite.binding.set, 6u);
+        nr::test::requireEqual(aliasWrite.binding.binding, 2u);
     }};
 
 const nr::test::CaseRegistrar appUiCursorCase{

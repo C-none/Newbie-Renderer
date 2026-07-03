@@ -12,6 +12,7 @@ namespace
 [[nodiscard]] nr::renderer::RendererGraphSpec buildRtObjectGraphSpec(vk::Format swapchainFormat, vk::Extent2D extent)
 {
     auto asBuild = std::make_shared<nr::renderPasses::AccelerationStructureBuildNode>();
+    auto lightPrepare = std::make_shared<nr::renderPasses::LightPrepareNode>();
     auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
     rayTrace->input.viewportExtent = extent;
 
@@ -25,6 +26,13 @@ namespace
             .runtime = asBuild,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "ASBuild",
+                .queue = nr::renderer::QueueDomain::Graphics,
+            },
+        },
+        nr::renderer::NodeCreateInfo{
+            .runtime = lightPrepare,
+            .config = nr::renderer::NodeConfig{
+                .instanceName = "LightPrepare",
                 .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
@@ -47,7 +55,7 @@ namespace
     graphSpec.submitNodes = {
         nr::renderer::SubmitNodeSpec{
             .debugName = "RtObjectMaterialSmoke.GraphicsToCompute",
-            .afterNodeIndex = 1u,
+            .afterNodeIndex = 2u,
         },
     };
 
@@ -151,6 +159,7 @@ namespace
         }
 
         observedRtFrame = frameResult->sceneTlasPacketCount > 0u &&
+                          frameResult->invokedPassPrepareCount >= 2u &&
                           frameResult->invokedPassRecordCount >= 4u;
     });
 
@@ -161,7 +170,7 @@ namespace
 
     if (!observedRtFrame)
     {
-        std::println("[error] rtobject material smoke did not observe ready ToyCar TLAS packets and RT graph passes.");
+        std::println("[error] rtobject material smoke did not observe ready ToyCar TLAS packets, LightPrepare prepare, and RT graph passes.");
         return false;
     }
 

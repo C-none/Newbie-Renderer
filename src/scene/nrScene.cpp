@@ -27,6 +27,7 @@ void registerSceneComponents(flecs::world &world)
     world.component<StaticObject>();
     world.component<DynamicObject>();
     world.component<SceneCameraBinding>();
+    world.component<SceneLightBinding>();
 
     world.component<SceneTemplateRef>();
     world.component<SceneInstanceRef>();
@@ -204,12 +205,13 @@ struct MetallicRoughnessFactorSet
         .type = static_cast<std::uint32_t>(light.type),
         .intensity = light.intensity,
         .color = light.color,
-        .range = light.range,
+        .range = 0.0f,
         .innerConeRadians = light.innerConeRadians,
         .outerConeRadians = light.outerConeRadians,
         .castShadow = light.castShadow ? 1u : 0u,
     };
 }
+
 } // namespace nr::scene::detail
 
 namespace nr::scene
@@ -249,6 +251,13 @@ Scene::Scene(const SceneCreateInfo &createInfo)
 
         cameraCandidatesQuery_ = world_.query_builder<
                 const SceneCameraBinding,
+                const WorldTransform>()
+            .cached()
+            .without(EcsPrefab)
+            .build();
+
+        lightCandidatesQuery_ = world_.query_builder<
+                const SceneLightBinding,
                 const WorldTransform>()
             .cached()
             .without(EcsPrefab)
@@ -1331,6 +1340,45 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 
         auto const &query = candidateQueryFor(profileRecord.domain);
         query.each(appendCandidate);
+
+        lightCandidatesQuery_.each([&](flecs::entity entity,
+                                       const SceneLightBinding &binding,
+                                       const WorldTransform &worldTransform) {
+            if (profileRecord.requireActiveInstances && !belongsToActiveInstance(entity))
+            {
+                return;
+            }
+
+            if (!binding.light.valid() || !detail::finiteMat4(worldTransform.value))
+            {
+                return;
+            }
+
+            auto const position = glm::vec3{worldTransform.value[3]};
+            if (!nr::resource::math::finiteVec(position))
+            {
+                return;
+            }
+
+            auto direction = glm::vec3{worldTransform.value * glm::vec4{0.0f, 0.0f, -1.0f, 0.0f}};
+            if (!nr::resource::math::finiteVec(direction) || glm::dot(direction, direction) <= 1.0e-8f)
+            {
+                direction = glm::vec3{0.0f, 0.0f, -1.0f};
+            }
+            else
+            {
+                direction = glm::normalize(direction);
+            }
+
+            packetSet.lights.push_back(SceneLightPacket{
+                .entity = entity,
+                .light = binding.light,
+                .world = worldTransform.value,
+                .position = position,
+                .direction = direction,
+                .stableInstanceId = static_cast<std::uint32_t>(entity.id()),
+            });
+        });
 
         if (profileRecord.domain == ScenePacketDomain::rasterDraw)
         {
@@ -3549,19 +3597,16 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset,
                 }
             }
 
-            light.color = color;
-            light.intensity = std::max({color.r, color.g, color.b, 1e-3f});
-
-            if (light.type != nr::resource::LightType::directional)
+            auto intensity = std::max({color.r, color.g, color.b});
+            if (!nr::resource::math::finiteVec(color) || !std::isfinite(intensity) || intensity <= kEpsilon)
             {
-                if (std::isfinite(sourceLight.attenuationQuadratic) && sourceLight.attenuationQuadratic > kEpsilon)
-                {
-                    light.range = std::sqrt(1.0f / sourceLight.attenuationQuadratic);
-                }
-                else if (std::isfinite(sourceLight.attenuationLinear) && sourceLight.attenuationLinear > kEpsilon)
-                {
-                    light.range = 1.0f / sourceLight.attenuationLinear;
-                }
+                light.color = glm::vec3{1.0f};
+                light.intensity = 1.0f;
+            }
+            else
+            {
+                light.color = color / intensity;
+                light.intensity = intensity;
             }
 
             auto innerCone = sourceLight.innerCone;
@@ -4234,6 +4279,9 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                         .templateHandle = templateHandle,
                         .sourceNodeIndex = nodeIndex,
                         .sourceLightIndex = sourceLightIndex,
+                        .light = lightHandle,
+                    });
+                    lightEntity.set(SceneLightBinding{
                         .light = lightHandle,
                     });
                     lightEntity.set(LocalTransform{});

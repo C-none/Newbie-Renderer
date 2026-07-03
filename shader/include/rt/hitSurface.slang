@@ -1,5 +1,6 @@
 module hitSurface;
 import common;
+import include.rt.resources;
 
 public static const uint kRtVertexOffsetPosition = 0u;
 public static const uint kRtVertexOffsetNormal = 12u;
@@ -16,7 +17,7 @@ public struct RtHitSurface
     public bool geometryValid;
 };
 
-public RtGeometryMetadata nrDefaultRtGeometryMetadata()
+public RtGeometryMetadata defaultRtGeometryMetadata()
 {
     RtGeometryMetadata geometry;
     geometry.materialIndex = kRtMaterialFallbackIndex;
@@ -30,7 +31,7 @@ public RtGeometryMetadata nrDefaultRtGeometryMetadata()
     return geometry;
 }
 
-public RtSurfaceData nrDefaultRtSurface(float3 viewDirection)
+public RtSurfaceData defaultRtSurface(float3 viewDirection)
 {
     RtSurfaceData surface;
     surface.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
@@ -43,13 +44,12 @@ public RtSurfaceData nrDefaultRtSurface(float3 viewDirection)
     return surface;
 }
 
-public RtInstanceMetadata nrCurrentRtInstance(StructuredBuffer<RtInstanceMetadata> instanceMetadata)
+public RtInstanceMetadata currentRtInstance()
 {
-    return instanceMetadata[uint(InstanceID())];
+    return rtInstanceMetadata[uint(InstanceID())];
 }
 
-public RtGeometryMetadata nrCurrentRtGeometry(
-    StructuredBuffer<RtGeometryMetadata> geometryMetadata,
+public RtGeometryMetadata currentRtGeometry(
     RtInstanceMetadata instance,
     out bool geometryValid)
 {
@@ -57,34 +57,33 @@ public RtGeometryMetadata nrCurrentRtGeometry(
     geometryValid = geometryIndex < instance.geometryCount;
     if (geometryValid)
     {
-        return geometryMetadata[instance.geometryOffset + geometryIndex];
+        return rtGeometryMetadata[instance.geometryOffset + geometryIndex];
     }
 
-    return nrDefaultRtGeometryMetadata();
+    return defaultRtGeometryMetadata();
 }
 
-public float3 nrLoadRtVertexFloat3(ByteAddressBuffer vertexData, uint vertexByteOffset, uint fieldOffset)
+public float3 loadRtVertexFloat3(uint vertexByteOffset, uint fieldOffset)
 {
-    return asfloat(vertexData.Load3(vertexByteOffset + fieldOffset));
+    return asfloat(rtVertexData.Load3(vertexByteOffset + fieldOffset));
 }
 
-public float4 nrLoadRtVertexFloat4(ByteAddressBuffer vertexData, uint vertexByteOffset, uint fieldOffset)
+public float4 loadRtVertexFloat4(uint vertexByteOffset, uint fieldOffset)
 {
-    return asfloat(vertexData.Load4(vertexByteOffset + fieldOffset));
+    return asfloat(rtVertexData.Load4(vertexByteOffset + fieldOffset));
 }
 
-public float2 nrLoadRtVertexFloat2(ByteAddressBuffer vertexData, uint vertexByteOffset, uint fieldOffset)
+public float2 loadRtVertexFloat2(uint vertexByteOffset, uint fieldOffset)
 {
-    return asfloat(vertexData.Load2(vertexByteOffset + fieldOffset));
+    return asfloat(rtVertexData.Load2(vertexByteOffset + fieldOffset));
 }
 
-public uint nrRtVertexByteOffset(RtInstanceMetadata instance, uint vertexIndex)
+public uint rtVertexByteOffset(RtInstanceMetadata instance, uint vertexIndex)
 {
     return (instance.vertexBase + vertexIndex) * instance.vertexStride;
 }
 
-public uint nrLoadRtTriangleVertexIndex(
-    ByteAddressBuffer indexData,
+public uint loadRtTriangleVertexIndex(
     RtInstanceMetadata instance,
     RtGeometryMetadata geometry,
     uint primitiveIndex,
@@ -94,13 +93,13 @@ public uint nrLoadRtTriangleVertexIndex(
     if ((geometry.flags & kRtGeometryFlagIndexed) != 0u)
     {
         uint indexByteOffset = (instance.indexBase + geometry.primitiveOffset + triangleVertex) * 4u;
-        return indexData.Load(indexByteOffset) + geometry.firstVertex;
+        return rtIndexData.Load(indexByteOffset) + geometry.firstVertex;
     }
 
     return geometry.primitiveOffset + triangleVertex;
 }
 
-public float3 nrTransformRtObjectVectorToWorld(float3 objectVector)
+public float3 transformRtObjectVectorToWorld(float3 objectVector)
 {
     float3x4 objectToWorld = ObjectToWorld3x4();
     return float3(
@@ -109,7 +108,7 @@ public float3 nrTransformRtObjectVectorToWorld(float3 objectVector)
         dot(objectToWorld[2].xyz, objectVector));
 }
 
-public float3 nrTransformRtObjectPointToWorld(float3 objectPoint)
+public float3 transformRtObjectPointToWorld(float3 objectPoint)
 {
     float3x4 objectToWorld = ObjectToWorld3x4();
     return float3(
@@ -118,9 +117,7 @@ public float3 nrTransformRtObjectPointToWorld(float3 objectPoint)
         dot(objectToWorld[2].xyz, objectPoint) + objectToWorld[2].w);
 }
 
-public RtSurfaceData nrInterpolateCurrentRtSurface(
-    ByteAddressBuffer vertexData,
-    ByteAddressBuffer indexData,
+public RtSurfaceData interpolateCurrentRtSurface(
     RtInstanceMetadata instance,
     RtGeometryMetadata geometry,
     BuiltInTriangleIntersectionAttributes attributes)
@@ -130,24 +127,24 @@ public RtSurfaceData nrInterpolateCurrentRtSurface(
         attributes.barycentrics.x,
         attributes.barycentrics.y);
     uint primitiveIndex = uint(PrimitiveIndex());
-    uint vertexIndex0 = nrLoadRtTriangleVertexIndex(indexData, instance, geometry, primitiveIndex, 0u);
-    uint vertexIndex1 = nrLoadRtTriangleVertexIndex(indexData, instance, geometry, primitiveIndex, 1u);
-    uint vertexIndex2 = nrLoadRtTriangleVertexIndex(indexData, instance, geometry, primitiveIndex, 2u);
-    uint vertexOffset0 = nrRtVertexByteOffset(instance, vertexIndex0);
-    uint vertexOffset1 = nrRtVertexByteOffset(instance, vertexIndex1);
-    uint vertexOffset2 = nrRtVertexByteOffset(instance, vertexIndex2);
+    uint vertexIndex0 = loadRtTriangleVertexIndex(instance, geometry, primitiveIndex, 0u);
+    uint vertexIndex1 = loadRtTriangleVertexIndex(instance, geometry, primitiveIndex, 1u);
+    uint vertexIndex2 = loadRtTriangleVertexIndex(instance, geometry, primitiveIndex, 2u);
+    uint vertexOffset0 = rtVertexByteOffset(instance, vertexIndex0);
+    uint vertexOffset1 = rtVertexByteOffset(instance, vertexIndex1);
+    uint vertexOffset2 = rtVertexByteOffset(instance, vertexIndex2);
 
     float3 objectPosition =
-        nrLoadRtVertexFloat3(vertexData, vertexOffset0, kRtVertexOffsetPosition) * barycentrics.x +
-        nrLoadRtVertexFloat3(vertexData, vertexOffset1, kRtVertexOffsetPosition) * barycentrics.y +
-        nrLoadRtVertexFloat3(vertexData, vertexOffset2, kRtVertexOffsetPosition) * barycentrics.z;
+        loadRtVertexFloat3(vertexOffset0, kRtVertexOffsetPosition) * barycentrics.x +
+        loadRtVertexFloat3(vertexOffset1, kRtVertexOffsetPosition) * barycentrics.y +
+        loadRtVertexFloat3(vertexOffset2, kRtVertexOffsetPosition) * barycentrics.z;
     float3 objectNormal =
-        nrLoadRtVertexFloat3(vertexData, vertexOffset0, kRtVertexOffsetNormal) * barycentrics.x +
-        nrLoadRtVertexFloat3(vertexData, vertexOffset1, kRtVertexOffsetNormal) * barycentrics.y +
-        nrLoadRtVertexFloat3(vertexData, vertexOffset2, kRtVertexOffsetNormal) * barycentrics.z;
-    float4 objectTangent0 = nrLoadRtVertexFloat4(vertexData, vertexOffset0, kRtVertexOffsetTangent);
-    float4 objectTangent1 = nrLoadRtVertexFloat4(vertexData, vertexOffset1, kRtVertexOffsetTangent);
-    float4 objectTangent2 = nrLoadRtVertexFloat4(vertexData, vertexOffset2, kRtVertexOffsetTangent);
+        loadRtVertexFloat3(vertexOffset0, kRtVertexOffsetNormal) * barycentrics.x +
+        loadRtVertexFloat3(vertexOffset1, kRtVertexOffsetNormal) * barycentrics.y +
+        loadRtVertexFloat3(vertexOffset2, kRtVertexOffsetNormal) * barycentrics.z;
+    float4 objectTangent0 = loadRtVertexFloat4(vertexOffset0, kRtVertexOffsetTangent);
+    float4 objectTangent1 = loadRtVertexFloat4(vertexOffset1, kRtVertexOffsetTangent);
+    float4 objectTangent2 = loadRtVertexFloat4(vertexOffset2, kRtVertexOffsetTangent);
     float3 objectTangent =
         objectTangent0.xyz * barycentrics.x +
         objectTangent1.xyz * barycentrics.y +
@@ -158,42 +155,36 @@ public RtSurfaceData nrInterpolateCurrentRtSurface(
         objectTangent2.w * barycentrics.z;
 
     RtSurfaceData surface;
-    surface.position = nrTransformRtObjectPointToWorld(objectPosition);
-    surface.normal = nrSafeNormalize(nrTransformRtObjectVectorToWorld(objectNormal), float3(0.0f, 0.0f, 1.0f));
-    surface.tangent = nrSafeNormalize(nrTransformRtObjectVectorToWorld(objectTangent), float3(1.0f, 0.0f, 0.0f));
+    surface.position = transformRtObjectPointToWorld(objectPosition);
+    surface.normal = safeNormalize(transformRtObjectVectorToWorld(objectNormal), float3(0.0f, 0.0f, 1.0f));
+    surface.tangent = safeNormalize(transformRtObjectVectorToWorld(objectTangent), float3(1.0f, 0.0f, 0.0f));
     surface.tangentSign = tangentSign < 0.0f ? -1.0f : 1.0f;
     surface.texCoord0 =
-        nrLoadRtVertexFloat2(vertexData, vertexOffset0, kRtVertexOffsetTexCoord0) * barycentrics.x +
-        nrLoadRtVertexFloat2(vertexData, vertexOffset1, kRtVertexOffsetTexCoord0) * barycentrics.y +
-        nrLoadRtVertexFloat2(vertexData, vertexOffset2, kRtVertexOffsetTexCoord0) * barycentrics.z;
+        loadRtVertexFloat2(vertexOffset0, kRtVertexOffsetTexCoord0) * barycentrics.x +
+        loadRtVertexFloat2(vertexOffset1, kRtVertexOffsetTexCoord0) * barycentrics.y +
+        loadRtVertexFloat2(vertexOffset2, kRtVertexOffsetTexCoord0) * barycentrics.z;
     surface.texCoord1 =
-        nrLoadRtVertexFloat2(vertexData, vertexOffset0, kRtVertexOffsetTexCoord1) * barycentrics.x +
-        nrLoadRtVertexFloat2(vertexData, vertexOffset1, kRtVertexOffsetTexCoord1) * barycentrics.y +
-        nrLoadRtVertexFloat2(vertexData, vertexOffset2, kRtVertexOffsetTexCoord1) * barycentrics.z;
+        loadRtVertexFloat2(vertexOffset0, kRtVertexOffsetTexCoord1) * barycentrics.x +
+        loadRtVertexFloat2(vertexOffset1, kRtVertexOffsetTexCoord1) * barycentrics.y +
+        loadRtVertexFloat2(vertexOffset2, kRtVertexOffsetTexCoord1) * barycentrics.z;
     surface.color0 =
-        nrLoadRtVertexFloat4(vertexData, vertexOffset0, kRtVertexOffsetColor0) * barycentrics.x +
-        nrLoadRtVertexFloat4(vertexData, vertexOffset1, kRtVertexOffsetColor0) * barycentrics.y +
-        nrLoadRtVertexFloat4(vertexData, vertexOffset2, kRtVertexOffsetColor0) * barycentrics.z;
+        loadRtVertexFloat4(vertexOffset0, kRtVertexOffsetColor0) * barycentrics.x +
+        loadRtVertexFloat4(vertexOffset1, kRtVertexOffsetColor0) * barycentrics.y +
+        loadRtVertexFloat4(vertexOffset2, kRtVertexOffsetColor0) * barycentrics.z;
     return surface;
 }
 
-public RtHitSurface nrCurrentRtHitSurface(
-    StructuredBuffer<RtInstanceMetadata> instanceMetadata,
-    StructuredBuffer<RtGeometryMetadata> geometryMetadata,
-    ByteAddressBuffer vertexData,
-    ByteAddressBuffer indexData,
+public RtHitSurface currentRtHitSurface(
     BuiltInTriangleIntersectionAttributes attributes,
     float3 viewDirection)
 {
     RtHitSurface hit;
-    hit.instance = nrCurrentRtInstance(instanceMetadata);
-    hit.geometry = nrCurrentRtGeometry(geometryMetadata, hit.instance, hit.geometryValid);
-    hit.surface = nrDefaultRtSurface(viewDirection);
+    hit.instance = currentRtInstance();
+    hit.geometry = currentRtGeometry(hit.instance, hit.geometryValid);
+    hit.surface = defaultRtSurface(viewDirection);
     if (hit.geometryValid)
     {
-        hit.surface = nrInterpolateCurrentRtSurface(
-            vertexData,
-            indexData,
+        hit.surface = interpolateCurrentRtSurface(
             hit.instance,
             hit.geometry,
             attributes);
@@ -201,7 +192,7 @@ public RtHitSurface nrCurrentRtHitSurface(
     return hit;
 }
 
-public void nrOrientRtSurfaceForMaterial(inout RtSurfaceData surface, RtMaterialHeader material, float3 viewDirection)
+public void orientRtSurfaceForMaterial(inout RtSurfaceData surface, RtMaterialHeader material, float3 viewDirection)
 {
     if (hasRtMaterialFeature(material, kRtMaterialFeatureDoubleSided) && dot(surface.normal, viewDirection) < 0.0f)
     {

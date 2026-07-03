@@ -53,6 +53,9 @@ inline constexpr std::string_view sceneRtMaterialLayers = "scene.rt.materialLaye
 inline constexpr std::string_view sceneRtMaterialTextureRefs = "scene.rt.materialTextureRefs";
 inline constexpr std::string_view sceneRtVertexAtlas = "scene.rt.vertexAtlas";
 inline constexpr std::string_view sceneRtIndexAtlas = "scene.rt.indexAtlas";
+inline constexpr std::string_view sceneLightHeader = "scene.lightHeader";
+inline constexpr std::string_view sceneLights = "scene.lights";
+inline constexpr std::string_view sceneLightAliasTable = "scene.lightAliasTable";
 } // namespace frameResource
 
 struct NodeFrameParameters
@@ -116,6 +119,72 @@ struct FrameUniformBinding
     vk::DeviceSize range = 0;
 };
 
+inline constexpr std::uint32_t kRendererDefaultCameraJitterCycleLength = 256u;
+inline constexpr std::uint32_t kRendererAccumulationMaxSampleCount = 256u;
+inline constexpr float kRendererCameraStabilityEpsilon = 1.0e-5f;
+
+enum class RendererCameraJitterSequence : std::uint8_t
+{
+    None,
+    Halton23,
+};
+
+struct RendererCameraJitterConfig
+{
+    RendererCameraJitterSequence sequence = RendererCameraJitterSequence::None;
+    std::uint32_t cycleLength = kRendererDefaultCameraJitterCycleLength;
+
+    [[nodiscard]] bool enabled() const noexcept
+    {
+        return sequence != RendererCameraJitterSequence::None && cycleLength > 0u;
+    }
+};
+
+struct RendererCameraJitterSample
+{
+    std::uint32_t sampleIndex = 0u;
+    glm::vec2 pixelOffset{0.0f};
+    glm::vec2 ndcOffset{0.0f};
+};
+
+struct RendererCameraFrameState
+{
+    bool jitterEnabled = false;
+    bool accumulationReset = true;
+    std::uint64_t stableFrameOrdinal = 0u;
+    std::uint32_t historySampleCount = 0u;
+    RendererCameraJitterSample jitter{};
+    vk::Extent2D viewportExtent{1u, 1u};
+};
+
+struct RendererCameraStabilityKey
+{
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    glm::vec3 cameraWorld{0.0f};
+    vk::Extent2D viewportExtent{1u, 1u};
+};
+
+[[nodiscard]] float haltonSequenceValue(std::uint32_t index, std::uint32_t base) noexcept;
+
+[[nodiscard]] RendererCameraJitterSample makeHalton23CameraJitterSample(
+    std::uint64_t stableFrameOrdinal,
+    vk::Extent2D viewportExtent,
+    std::uint32_t cycleLength = kRendererDefaultCameraJitterCycleLength) noexcept;
+
+[[nodiscard]] glm::mat4 applyCameraProjectionJitter(
+    const glm::mat4& projection,
+    glm::vec2 ndcOffset) noexcept;
+
+[[nodiscard]] RendererCameraStabilityKey makeRendererCameraStabilityKey(
+    const nr::scene::SceneBridgeFrameConstants& frameConstants,
+    vk::Extent2D viewportExtent) noexcept;
+
+[[nodiscard]] bool rendererCameraStabilityKeysEquivalent(
+    const RendererCameraStabilityKey& left,
+    const RendererCameraStabilityKey& right,
+    float epsilon = kRendererCameraStabilityEpsilon) noexcept;
+
 struct FrameGlobalResources
 {
     FrameUniformBinding frameUniform{};
@@ -124,6 +193,7 @@ struct FrameGlobalResources
     std::uint32_t sceneTextureDescriptorCapacity = kSceneTextureDescriptorCapacity;
     std::uint64_t sceneTextureDescriptorVersion = 0;
     std::reference_wrapper<BindlessImageTableCache> bindlessImageTableCache;
+    RendererCameraFrameState cameraFrameState{};
 };
 
 struct NodeBuildContext
@@ -1180,6 +1250,7 @@ struct RendererGraphSpec
 {
     std::vector<NodeCreateInfo> nodes{};
     std::vector<SubmitNodeSpec> submitNodes{};
+    RendererCameraJitterConfig cameraJitter{};
 };
 
 struct RendererFrameInput
@@ -1267,10 +1338,18 @@ class Renderer
     void buildInstalledGraph(
         const NodeFrameParameters& frameParameters,
         const nr::scene::SceneBridgeFrameConstants& frameConstants,
+        const RendererCameraFrameState& cameraFrameState,
+        std::uint64_t sampleFrameOrdinal,
         std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
         const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById);
 
     void teardownInstalledGraph();
+
+    void resetCameraFrameTracking() noexcept;
+
+    [[nodiscard]] RendererCameraFrameState beginCameraFrameState(
+        const nr::scene::SceneBridgeFrameConstants& frameConstants,
+        vk::Extent2D viewportExtent) noexcept;
 
     [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneExtractProfile(nr::scene::Scene& scene);
 
@@ -1302,10 +1381,15 @@ class Renderer
     bool graphInstalled_ = false;
     std::vector<InstalledNode> installedNodes_{};
     std::multimap<std::size_t, SubmitNodeSpec> submitNodesByAfterIndex_{};
+    RendererCameraJitterConfig cameraJitter_{};
+    std::optional<RendererCameraStabilityKey> previousCameraStabilityKey_{};
+    std::uint64_t cameraStableFrameOrdinal_ = 0u;
+    std::uint64_t sampleFrameOrdinal_ = 0u;
 
     std::optional<std::reference_wrapper<nr::scene::Scene>> activeScene_{};
     std::optional<nr::scene::SceneExtractProfileHandle> sceneExtractProfile_{};
     std::optional<nr::scene::SceneExtractProfileHandle> sceneTlasExtractProfile_{};
+    std::optional<nr::scene::SceneBridgeFrameConstants> previousGlobalFrameConstants_{};
     RendererCpuFrameTimings cpuTimingAccumulator_{};
     RendererCpuStatistics cpuStatistics_{};
     std::map<std::pair<std::uint32_t, std::string>, RendererGpuPassAverage> gpuPassTimingAccumulator_{};

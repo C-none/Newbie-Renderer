@@ -160,25 +160,31 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
     auto rtMaterialTextureRefs = context.resolveFrameResource(nr::renderer::frameResource::sceneRtMaterialTextureRefs);
     auto rtVertexAtlas = context.resolveFrameResource(nr::renderer::frameResource::sceneRtVertexAtlas);
     auto rtIndexAtlas = context.resolveFrameResource(nr::renderer::frameResource::sceneRtIndexAtlas);
+    auto sceneLightHeader = context.resolveFrameResource(nr::renderer::frameResource::sceneLightHeader);
+    auto sceneLights = context.resolveFrameResource(nr::renderer::frameResource::sceneLights);
+    auto sceneLightAliasTable = context.resolveFrameResource(nr::renderer::frameResource::sceneLightAliasTable);
     if (!rtInstanceMetadata.valid() ||
         !rtGeometryMetadata.valid() ||
         !rtMaterialHeaders.valid() ||
         !rtMaterialLayers.valid() ||
         !rtMaterialTextureRefs.valid() ||
         !rtVertexAtlas.valid() ||
-        !rtIndexAtlas.valid())
+        !rtIndexAtlas.valid() ||
+        !sceneLightHeader.valid() ||
+        !sceneLights.valid() ||
+        !sceneLightAliasTable.valid())
     {
         auto clearUses = std::array{
             nr::renderer::use::imageTransferDst(output),
         };
         [[maybe_unused]] auto clearPass = context.addPass(
             std::span<const nr::renderer::PassResourceUseDesc>{clearUses.data(), clearUses.size()},
-            "PathTracing.ClearNoRTMaterialMetadata",
+            "PathTracing.ClearNoRTSideband",
             [output](const nr::renderer::PassRecordContext& recordContext) {
-                nr::nrAssert(recordContext.commandBuffer.has_value(), "PathTracing metadata clear requires RAII command buffer access.");
-                nr::nrAssert(static_cast<bool>(recordContext.resolveImage), "PathTracing metadata clear requires image resolver.");
+                nr::nrAssert(recordContext.commandBuffer.has_value(), "PathTracing sideband clear requires RAII command buffer access.");
+                nr::nrAssert(static_cast<bool>(recordContext.resolveImage), "PathTracing sideband clear requires image resolver.");
                 auto resolvedOutput = recordContext.resolveImage(output);
-                nr::nrAssert(resolvedOutput.has_value(), "PathTracing metadata clear failed to resolve output image.");
+                nr::nrAssert(resolvedOutput.has_value(), "PathTracing sideband clear failed to resolve output image.");
 
                 auto clearColor = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
                 recordContext.commandBuffer->get().clearColorImage(
@@ -226,6 +232,9 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
         .storageBuffer("rtIndexData", rtIndexAtlas, "PathTracing.IndexAtlas")
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
         .resourceUse(nr::renderer::use::shaderBindingTableRead(sbtResource))
+        .uniform("gSceneLightHeader", sceneLightHeader, "PathTracing.SceneLightHeader")
+        .storageBuffer("gSceneLights", sceneLights, "PathTracing.SceneLights")
+        .storageBuffer("gSceneLightAliasTable", sceneLightAliasTable, "PathTracing.SceneLightAliasTable")
         .prepare(
             [runtime = runtime_,
              sceneTextureTableBinding,

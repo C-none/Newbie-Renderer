@@ -9,10 +9,10 @@ public struct GltfMultiLayerMaterial : IMultiLayerMaterial
         RtSurfaceData surface,
         MaterialDirectLightingInput lighting)
     {
-        MaterialSample core = nrSampleCoreMaterial(textureRefs, material, surface);
-        float3 orientedNormal = nrSafeNormalize(surface.normal, lighting.viewDirection);
+        MaterialSample core = sampleCoreMaterial(textureRefs, material, surface);
+        float3 orientedNormal = safeNormalize(surface.normal, lighting.viewDirection);
         float normalScale = material.roughnessNormalOcclusionAlpha.y;
-        float3 normal = nrApplyNormalMapSlot(
+        float3 normal = applyNormalMapSlot(
             textureRefs,
             material,
             kMaterialTextureSlotNormal,
@@ -22,20 +22,27 @@ public struct GltfMultiLayerMaterial : IMultiLayerMaterial
             surface.tangentSign,
             surface.texCoord0,
             surface.texCoord1);
-        MaterialLayerStack layers = nrSampleMaterialLayers(textureRefs, layerRecords, material, surface, orientedNormal);
+        MaterialLayerStack layers = sampleMaterialLayers(textureRefs, layerRecords, material, surface, orientedNormal);
 
         float noL = saturate(dot(normal, lighting.lightDirection));
-        float3 bsdf = nrEvaluateMetallicRoughnessBsdf(core, normal, lighting.viewDirection, lighting.lightDirection);
-        bsdf += nrEvaluateSheenBsdf(layers, normal, lighting.viewDirection, lighting.lightDirection);
-        bsdf = nrAttenuateBaseByClearcoat(bsdf, layers, lighting.viewDirection);
+        float3 bsdf = evaluateMetallicRoughnessBsdf(core, normal, lighting.viewDirection, lighting.lightDirection);
+        bsdf += evaluateSheenBsdf(layers, normal, lighting.viewDirection, lighting.lightDirection);
+        bsdf = attenuateBaseByClearcoat(bsdf, layers, lighting.viewDirection);
 
         MaterialShadingResult result;
         result.radiance =
             bsdf * lighting.lightRadiance * noL +
-            nrEvaluateClearcoatDirect(layers, lighting.viewDirection, lighting.lightDirection, lighting.lightRadiance) +
-            core.emissive;
+            evaluateClearcoatDirect(layers, lighting.viewDirection, lighting.lightDirection, lighting.lightRadiance);
         result.alpha = core.alpha;
         return result;
+    }
+
+    public float3 emissive(
+        StructuredBuffer<RtMaterialTextureRef> textureRefs,
+        RtMaterialHeader material,
+        RtSurfaceData surface)
+    {
+        return sampleCoreMaterial(textureRefs, material, surface).emissive;
     }
 
     public float alpha(
@@ -43,6 +50,6 @@ public struct GltfMultiLayerMaterial : IMultiLayerMaterial
         RtMaterialHeader material,
         RtSurfaceData surface)
     {
-        return nrSampleCoreMaterial(textureRefs, material, surface).alpha;
+        return sampleCoreMaterial(textureRefs, material, surface).alpha;
     }
 }

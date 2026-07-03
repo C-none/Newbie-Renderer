@@ -23,11 +23,50 @@ struct RendererGlobalFrameUniforms
     glm::mat4 projection{1.0f};
     glm::mat4 viewProjection{1.0f};
     glm::mat4 inverseViewProjection{1.0f};
+    glm::mat4 previousView{1.0f};
+    glm::mat4 previousViewProjection{1.0f};
     glm::vec4 cameraWorld{0.0f, 0.0f, 0.0f, 1.0f};
+    glm::uvec4 frameState{0u, 0u, 0u, 0u};
 };
 
+static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrameUniforms must match shader/include/globalUniform.slang.");
+
+[[nodiscard]] vk::Extent2D sanitizeViewportExtent(vk::Extent2D extent) noexcept
+{
+    return vk::Extent2D{
+        std::max(1u, extent.width),
+        std::max(1u, extent.height),
+    };
+}
+
+[[nodiscard]] bool finiteVec3(const glm::vec3& value) noexcept
+{
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+[[nodiscard]] bool finiteVec4(const glm::vec4& value) noexcept
+{
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) && std::isfinite(value.w);
+}
+
+[[nodiscard]] bool finiteMat4(const glm::mat4& value) noexcept
+{
+    auto columns = std::views::iota(std::size_t{0}, std::size_t{4});
+    return std::ranges::all_of(columns, [&](std::size_t column) {
+        return finiteVec4(value[column]);
+    });
+}
+
+[[nodiscard]] bool nearlyEqual(float left, float right, float epsilon) noexcept
+{
+    return std::abs(left - right) <= epsilon;
+}
+
 [[nodiscard]] RendererGlobalFrameUniforms makeGlobalFrameUniforms(
-    const nr::scene::SceneBridgeFrameConstants& frameConstants) noexcept
+    const nr::scene::SceneBridgeFrameConstants& frameConstants,
+    const nr::scene::SceneBridgeFrameConstants& previousFrameConstants,
+    std::uint32_t frameIndex,
+    std::uint64_t sampleFrameOrdinal) noexcept
 {
     auto inverseViewProjection = glm::mat4{1.0f};
     auto const determinant = glm::determinant(frameConstants.viewProjection);
@@ -36,12 +75,18 @@ struct RendererGlobalFrameUniforms
         inverseViewProjection = glm::inverse(frameConstants.viewProjection);
     }
 
+    auto const sampleFrameLow = static_cast<std::uint32_t>(sampleFrameOrdinal);
+    auto const sampleFrameHigh = static_cast<std::uint32_t>(sampleFrameOrdinal >> 32u);
+
     return RendererGlobalFrameUniforms{
         .view = frameConstants.view,
         .projection = frameConstants.projection,
         .viewProjection = frameConstants.viewProjection,
         .inverseViewProjection = inverseViewProjection,
+        .previousView = previousFrameConstants.view,
+        .previousViewProjection = frameConstants.projection * previousFrameConstants.view,
         .cameraWorld = glm::vec4{frameConstants.cameraWorld, 1.0f},
+        .frameState = glm::uvec4{sampleFrameLow, sampleFrameHigh, frameIndex, 0u},
     };
 }
 
@@ -188,6 +233,107 @@ void collectTlasSceneTextureHandles(
     });
 }
 } // namespace
+
+[[nodiscard]] float haltonSequenceValue(std::uint32_t index, std::uint32_t base) noexcept
+{
+    if (base < 2u)
+    {
+        return 0.0f;
+    }
+
+    auto result = 0.0f;
+    auto fraction = 1.0f / static_cast<float>(base);
+    while (index > 0u)
+    {
+        result += fraction * static_cast<float>(index % base);
+        index /= base;
+        fraction /= static_cast<float>(base);
+    }
+    return result;
+}
+
+[[nodiscard]] RendererCameraJitterSample makeHalton23CameraJitterSample(
+    std::uint64_t stableFrameOrdinal,
+    vk::Extent2D viewportExtent,
+    std::uint32_t cycleLength) noexcept
+{
+    auto const extent = sanitizeViewportExtent(viewportExtent);
+    auto const cycle = std::max(1u, cycleLength);
+    auto const sampleIndex =
+        static_cast<std::uint32_t>(stableFrameOrdinal % static_cast<std::uint64_t>(cycle)) + 1u;
+    auto const sample = glm::vec2{
+        haltonSequenceValue(sampleIndex, 2u),
+        haltonSequenceValue(sampleIndex, 3u),
+    };
+    auto const pixelOffset = sample - glm::vec2{0.5f};
+    auto const ndcOffset = glm::vec2{
+        2.0f * pixelOffset.x / static_cast<float>(extent.width),
+        -2.0f * pixelOffset.y / static_cast<float>(extent.height),
+    };
+
+    return RendererCameraJitterSample{
+        .sampleIndex = sampleIndex,
+        .pixelOffset = pixelOffset,
+        .ndcOffset = ndcOffset,
+    };
+}
+
+[[nodiscard]] glm::mat4 applyCameraProjectionJitter(
+    const glm::mat4& projection,
+    glm::vec2 ndcOffset) noexcept
+{
+    auto result = projection;
+    result[2][0] -= ndcOffset.x;
+    result[2][1] -= ndcOffset.y;
+    return result;
+}
+
+[[nodiscard]] RendererCameraStabilityKey makeRendererCameraStabilityKey(
+    const nr::scene::SceneBridgeFrameConstants& frameConstants,
+    vk::Extent2D viewportExtent) noexcept
+{
+    return RendererCameraStabilityKey{
+        .view = frameConstants.view,
+        .projection = frameConstants.projection,
+        .cameraWorld = frameConstants.cameraWorld,
+        .viewportExtent = sanitizeViewportExtent(viewportExtent),
+    };
+}
+
+[[nodiscard]] bool rendererCameraStabilityKeysEquivalent(
+    const RendererCameraStabilityKey& left,
+    const RendererCameraStabilityKey& right,
+    float epsilon) noexcept
+{
+    if (left.viewportExtent != right.viewportExtent)
+    {
+        return false;
+    }
+
+    if (!finiteMat4(left.view) || !finiteMat4(right.view) ||
+        !finiteMat4(left.projection) || !finiteMat4(right.projection) ||
+        !finiteVec3(left.cameraWorld) || !finiteVec3(right.cameraWorld))
+    {
+        return false;
+    }
+
+    auto rows = std::views::iota(std::size_t{0}, std::size_t{4});
+    auto columns = std::views::iota(std::size_t{0}, std::size_t{4});
+    auto const matricesMatch = std::ranges::all_of(columns, [&](std::size_t column) {
+        return std::ranges::all_of(rows, [&](std::size_t row) {
+            return nearlyEqual(left.view[column][row], right.view[column][row], epsilon) &&
+                   nearlyEqual(left.projection[column][row], right.projection[column][row], epsilon);
+        });
+    });
+    if (!matricesMatch)
+    {
+        return false;
+    }
+
+    return nearlyEqual(left.cameraWorld.x, right.cameraWorld.x, epsilon) &&
+           nearlyEqual(left.cameraWorld.y, right.cameraWorld.y, epsilon) &&
+           nearlyEqual(left.cameraWorld.z, right.cameraWorld.z, epsilon);
+}
 
 void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
 {
@@ -1241,6 +1387,9 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
 
         installedNodes_ = std::move(installed);
         submitNodesByAfterIndex_ = std::move(submitNodesByAfterIndex);
+        cameraJitter_ = spec.cameraJitter;
+        resetCameraFrameTracking();
+        previousGlobalFrameConstants_.reset();
         graphInstalled_ = true;
     }
 
@@ -1259,6 +1408,8 @@ void Renderer::uninstallGraph()
         cpuStatistics_ = {};
         gpuPassTimingAccumulator_.clear();
         gpuPassStatistics_ = {};
+        resetCameraFrameTracking();
+        previousGlobalFrameConstants_.reset();
     }
 
 void Renderer::shutdown()
@@ -1304,6 +1455,8 @@ void Renderer::resize()
         }
         device_->recreateSwapchain();
         cacheSuite_.clear();
+        resetCameraFrameTracking();
+        previousGlobalFrameConstants_.reset();
     }
 
 void Renderer::resetSceneBinding() noexcept
@@ -1311,6 +1464,59 @@ void Renderer::resetSceneBinding() noexcept
         activeScene_.reset();
         sceneExtractProfile_.reset();
         sceneTlasExtractProfile_.reset();
+        resetCameraFrameTracking();
+        previousGlobalFrameConstants_.reset();
+    }
+
+void Renderer::resetCameraFrameTracking() noexcept
+{
+        previousCameraStabilityKey_.reset();
+        cameraStableFrameOrdinal_ = 0u;
+    }
+
+[[nodiscard]] RendererCameraFrameState Renderer::beginCameraFrameState(
+        const nr::scene::SceneBridgeFrameConstants& frameConstants,
+        vk::Extent2D viewportExtent) noexcept
+{
+        auto const extent = sanitizeViewportExtent(viewportExtent);
+        auto const stabilityKey = makeRendererCameraStabilityKey(frameConstants, extent);
+        auto const cameraStable = previousCameraStabilityKey_.has_value() &&
+                                  rendererCameraStabilityKeysEquivalent(*previousCameraStabilityKey_, stabilityKey);
+        if (!cameraStable)
+        {
+            cameraStableFrameOrdinal_ = 0u;
+        }
+
+        auto state = RendererCameraFrameState{
+            .jitterEnabled = cameraJitter_.enabled(),
+            .accumulationReset = !cameraStable,
+            .stableFrameOrdinal = cameraStableFrameOrdinal_,
+            .historySampleCount = static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(cameraStableFrameOrdinal_, kRendererAccumulationMaxSampleCount)),
+            .viewportExtent = extent,
+        };
+
+        if (state.jitterEnabled)
+        {
+            switch (cameraJitter_.sequence)
+            {
+            case RendererCameraJitterSequence::Halton23:
+                state.jitter = makeHalton23CameraJitterSample(
+                    state.stableFrameOrdinal,
+                    extent,
+                    cameraJitter_.cycleLength);
+                break;
+            case RendererCameraJitterSequence::None:
+                break;
+            }
+        }
+
+        previousCameraStabilityKey_ = stabilityKey;
+        if (cameraStableFrameOrdinal_ < std::numeric_limits<std::uint64_t>::max())
+        {
+            ++cameraStableFrameOrdinal_;
+        }
+        return state;
     }
 
 [[nodiscard]] RendererFrameResult Renderer::renderFrame(const RendererFrameInput& input)
@@ -1323,6 +1529,11 @@ void Renderer::resetSceneBinding() noexcept
         auto const totalStart = std::chrono::steady_clock::now();
         auto const beginFrameStart = std::chrono::steady_clock::now();
         auto begin = device_->beginFrame(input.acquireTimeout);
+        auto const sampleFrameOrdinal = sampleFrameOrdinal_;
+        if (sampleFrameOrdinal_ < std::numeric_limits<std::uint64_t>::max())
+        {
+            ++sampleFrameOrdinal_;
+        }
         frameUniformArena_.beginFrame(begin.frameIndex);
         auto cpuTimings = RendererCpuFrameTimings{
             .cpuWaitGpuMilliseconds = begin.cpuWaitGpuMilliseconds,
@@ -1567,8 +1778,24 @@ void Renderer::resetSceneBinding() noexcept
             globalFrameConstants = sceneCameraOverride->frameConstants;
         }
 
+        auto const cameraFrameState = beginCameraFrameState(globalFrameConstants, frameParameters.swapchainExtent);
+        auto renderingFrameConstants = globalFrameConstants;
+        if (cameraFrameState.jitterEnabled)
+        {
+            renderingFrameConstants.projection = applyCameraProjectionJitter(
+                globalFrameConstants.projection,
+                cameraFrameState.jitter.ndcOffset);
+            renderingFrameConstants.viewProjection = renderingFrameConstants.projection * renderingFrameConstants.view;
+        }
+
         auto const buildStart = std::chrono::steady_clock::now();
-        buildInstalledGraph(frameParameters, globalFrameConstants, sceneBridgeFrameRef, sceneTextureHandlesById);
+        buildInstalledGraph(
+            frameParameters,
+            renderingFrameConstants,
+            cameraFrameState,
+            sampleFrameOrdinal,
+            sceneBridgeFrameRef,
+            sceneTextureHandlesById);
         cpuTimings.buildMilliseconds = elapsedMilliseconds(
             buildStart,
             std::chrono::steady_clock::now());
@@ -1672,16 +1899,22 @@ void Renderer::resetSceneBinding() noexcept
 void Renderer::buildInstalledGraph(
         const NodeFrameParameters& frameParameters,
         const nr::scene::SceneBridgeFrameConstants& frameConstants,
+        const RendererCameraFrameState& cameraFrameState,
+        std::uint64_t sampleFrameOrdinal,
         std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
         const std::map<std::uint32_t, nr::resource::TextureHandle>& sceneTextureHandlesById)
 {
         nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
         builder_.clear();
-        auto const globalFrameUniforms = makeGlobalFrameUniforms(frameConstants);
+        auto const previousFrameConstants = previousGlobalFrameConstants_.value_or(frameConstants);
+        auto const globalFrameUniforms =
+            makeGlobalFrameUniforms(frameConstants, previousFrameConstants, frameParameters.frameIndex, sampleFrameOrdinal);
+        previousGlobalFrameConstants_ = frameConstants;
         auto globalResources = FrameGlobalResources{
             .frameUniform = frameUniformArena_.upload(builder_, "Renderer.GlobalFrameUniforms", globalFrameUniforms),
             .bindlessImageTableCache = std::ref(cacheSuite_.bindlessImageTableCache),
+            .cameraFrameState = cameraFrameState,
         };
         auto sceneTextureDescriptorTable = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
         globalResources.sceneTextureDescriptorsById = std::move(sceneTextureDescriptorTable.descriptorsById);
@@ -1755,6 +1988,8 @@ void Renderer::teardownInstalledGraph()
         {
             sceneExtractProfile_.reset();
             sceneTlasExtractProfile_.reset();
+            resetCameraFrameTracking();
+            previousGlobalFrameConstants_.reset();
         }
 
         auto needsCreate = !sameScene || !sceneExtractProfile_.has_value() || !sceneExtractProfile_->valid();
@@ -1778,6 +2013,8 @@ void Renderer::teardownInstalledGraph()
         {
             sceneExtractProfile_.reset();
             sceneTlasExtractProfile_.reset();
+            resetCameraFrameTracking();
+            previousGlobalFrameConstants_.reset();
         }
 
         auto needsCreate = !sameScene || !sceneTlasExtractProfile_.has_value() || !sceneTlasExtractProfile_->valid();

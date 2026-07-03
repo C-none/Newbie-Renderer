@@ -86,17 +86,30 @@ struct ViewerControlState
 [[nodiscard]] nr::renderer::RendererGraphSpec buildRtObjectGraph(const PipelineBuildContext& context)
 {
     auto asBuild = std::make_shared<nr::renderPasses::AccelerationStructureBuildNode>();
+    auto lightPrepare = std::make_shared<nr::renderPasses::LightPrepareNode>();
     auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
     auto ui = std::make_shared<nr::renderPasses::UiNode>();
+    auto accumulate = std::make_shared<nr::renderPasses::AccumulateNode>();
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
     present->input.format = context.swapchainFormat;
 
     auto graphSpec = nr::renderer::RendererGraphSpec{};
+    graphSpec.cameraJitter = nr::renderer::RendererCameraJitterConfig{
+        .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
+        .cycleLength = nr::renderer::kRendererDefaultCameraJitterCycleLength,
+    };
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
             .runtime = asBuild,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "ASBuild",
+                .queue = nr::renderer::QueueDomain::Graphics,
+            },
+        },
+        nr::renderer::NodeCreateInfo{
+            .runtime = lightPrepare,
+            .config = nr::renderer::NodeConfig{
+                .instanceName = "LightPrepare",
                 .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
@@ -115,6 +128,13 @@ struct ViewerControlState
             },
         },
         nr::renderer::NodeCreateInfo{
+            .runtime = accumulate,
+            .config = nr::renderer::NodeConfig{
+                .instanceName = "Accumulate",
+                .queue = nr::renderer::QueueDomain::Compute,
+            },
+        },
+        nr::renderer::NodeCreateInfo{
             .runtime = present,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "Present",
@@ -125,7 +145,7 @@ struct ViewerControlState
     graphSpec.submitNodes = {
         nr::renderer::SubmitNodeSpec{
             .debugName = "rtobject.GraphicsToCompute",
-            .afterNodeIndex = 2u,
+            .afterNodeIndex = 3u,
         },
     };
     return graphSpec;
@@ -619,10 +639,11 @@ void ModelHistory::trimToLimit()
     }
 
     auto message = std::format(
-        "Loaded: {} meshes, {} vertices, {} indices",
+        "Loaded: {} meshes, {} vertices, {} indices, {} lights",
         sceneAsset.stats.meshCount,
         sceneAsset.stats.vertexCount,
-        sceneAsset.stats.indexCount);
+        sceneAsset.stats.indexCount,
+        sceneAsset.stats.lightCount);
     nr::nrLog(nr::LogLevel::info, "PIPELINE", message);
     return ModelLoadReport{
         .loaded = true,

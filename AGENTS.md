@@ -120,6 +120,7 @@ When generating code or refactoring:
 *   **Default Build Preset:** Closed-loop build and test verification must use the LLVM Debug configuration (`cmake --build --preset debug`, `ctest --preset debug`, or an equivalent LLVM Debug target build).
 *   **No Release Substitute:** Do not use Release builds for verification unless the user explicitly requests Release validation.
 *   **Blocked Debug Verification:** If LLVM Debug verification is blocked by environment, toolchain, or file-lock issues, report that blocker and the affected command instead of switching to Release as a substitute.
+*   **Configure/Build Wait Policy:** After launching configure or build commands, including CMake configure and `cmake --build` tasks, do not repeatedly poll process lists, lock files, or build directories while the command is still running. Wait for the command to return and report the final result; inspect locks or processes only after the command has completed, failed, or timed out.
 
 ### 4.2 Architecture Context Maintenance Rules
 
