@@ -3,7 +3,6 @@ export module nr.renderPasses;
 export import :nodeType;
 export import :accumulateNode;
 export import :accelerationStructureBuild;
-export import :displayNode;
 export import :embeddedTriangle;
 export import :lightPrepare;
 export import :normalBuffer;

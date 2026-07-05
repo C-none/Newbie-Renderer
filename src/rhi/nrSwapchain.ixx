@@ -27,13 +27,20 @@ struct SwapChainConfig
     vk::PresentModeKHR presentMode = vk::PresentModeKHR::eImmediate;
     vk::CompositeAlphaFlagBitsKHR compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
     vk::SurfaceTransformFlagBitsKHR surfaceTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
+    bool hdrMetadataEnabled = false;
 };
+
+[[nodiscard]] bool isHdr10SwapchainColorSpace(vk::ColorSpaceKHR colorSpace) noexcept;
+[[nodiscard]] bool isScRgbSwapchainColorSpace(vk::ColorSpaceKHR colorSpace) noexcept;
+[[nodiscard]] bool isHdrSwapchainColorSpace(vk::ColorSpaceKHR colorSpace) noexcept;
+[[nodiscard]] vk::SurfaceFormatKHR chooseSwapchainSurfaceFormat(std::span<const vk::SurfaceFormatKHR> formats);
 
 struct SwapChain
 {
     vk::raii::SwapchainKHR swapChain = {nullptr};
     std::vector<vk::Image> swapChainImages;
     std::vector<vk::raii::ImageView> imageViews;
+    vk::SurfaceFormatKHR surfaceFormat{};
     vk::Format format = vk::Format::eUndefined;
     vk::Extent2D extent = {0, 0};
 
@@ -125,6 +132,8 @@ class PresentationContext
 
     [[nodiscard]] vk::Extent2D swapchainExtent() const noexcept;
     [[nodiscard]] vk::Format swapchainFormat() const noexcept;
+    [[nodiscard]] vk::ColorSpaceKHR swapchainColorSpace() const noexcept;
+    [[nodiscard]] vk::SurfaceFormatKHR swapchainSurfaceFormat() const noexcept;
     [[nodiscard]] std::uint32_t swapchainImageCount() const noexcept;
     [[nodiscard]] vk::Image swapchainImage(std::uint32_t imageIndex) const;
     [[nodiscard]] vk::ImageView swapchainImageView(std::uint32_t imageIndex) const;

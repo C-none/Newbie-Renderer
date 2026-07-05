@@ -11,37 +11,168 @@ import std;
 
 namespace nr::rhi::detail
 {
-template <vk::Result Expected>
-[[nodiscard]] bool isVulkanResult(const vk::SystemError& error) noexcept
+struct SurfaceFormatPreference
+{
+    vk::Format format = vk::Format::eUndefined;
+    vk::ColorSpaceKHR colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
+};
+
+enum class SurfaceFormatMatchMode
+{
+    exact,
+    formatOnly,
+};
+
+template <vk::Result Expected> [[nodiscard]] bool isVulkanResult(const vk::SystemError &error) noexcept
 {
     return error.code().value() == static_cast<int>(Expected);
+}
+
+template <SurfaceFormatMatchMode MatchMode> [[nodiscard]] bool matchesSurfaceFormat(const vk::SurfaceFormatKHR &candidate, SurfaceFormatPreference preference) noexcept
+{
+    if constexpr (MatchMode == SurfaceFormatMatchMode::exact)
+    {
+        return candidate.format == preference.format && candidate.colorSpace == preference.colorSpace;
+    }
+    return candidate.format == preference.format;
+}
+
+template <SurfaceFormatMatchMode MatchMode> [[nodiscard]] std::optional<vk::SurfaceFormatKHR> findPreferredSurfaceFormat(std::span<const vk::SurfaceFormatKHR> formats, std::span<const SurfaceFormatPreference> preferences)
+{
+    auto preference = std::ranges::find_if(preferences, [&](SurfaceFormatPreference item) { return std::ranges::any_of(formats, [&](const vk::SurfaceFormatKHR &format) { return matchesSurfaceFormat<MatchMode>(format, item); }); });
+    if (preference == preferences.end())
+    {
+        return std::nullopt;
+    }
+
+    auto format = std::ranges::find_if(formats, [&](const vk::SurfaceFormatKHR &item) { return matchesSurfaceFormat<MatchMode>(item, *preference); });
+    nrAssert(format != formats.end(), "findPreferredSurfaceFormat resolved a preference without a matching format.");
+    return *format;
+}
+
+[[nodiscard]] std::string formatSurfaceFormatList(std::span<const vk::SurfaceFormatKHR> formats)
+{
+    auto indices = std::views::iota(std::size_t{0}, formats.size());
+    auto lines = indices | std::views::transform([&](std::size_t index) {
+                     const auto &format = formats[index];
+                     return std::format("[{}] format={} colorSpace={}", index, vk::to_string(format.format), vk::to_string(format.colorSpace));
+                 }) |
+                 std::ranges::to<std::vector>();
+    return lines.empty() ? std::string{"<none>"} : std::views::join_with(lines, '\n') | std::ranges::to<std::string>();
+}
+
+[[nodiscard]] bool hasHdrSurfaceFormat(std::span<const vk::SurfaceFormatKHR> formats) noexcept
+{
+    return std::ranges::any_of(formats, [](const vk::SurfaceFormatKHR &format) { return isHdr10SwapchainColorSpace(format.colorSpace) || isScRgbSwapchainColorSpace(format.colorSpace); });
+}
+
+[[nodiscard]] vk::HdrMetadataEXT makeHdr10Metadata() noexcept
+{
+    return vk::HdrMetadataEXT{vk::XYColorEXT{0.708f, 0.292f}, vk::XYColorEXT{0.170f, 0.797f}, vk::XYColorEXT{0.131f, 0.046f}, vk::XYColorEXT{0.3127f, 0.3290f}, 1000.0f, 0.0001f, 1000.0f, 203.0f};
+}
+
+void applyHdrMetadataIfNeeded(const vk::raii::Device &device, vk::SwapchainKHR swapchain, vk::SurfaceFormatKHR surfaceFormat, const SwapChainConfig &config)
+{
+    if (!config.hdrMetadataEnabled || !isHdr10SwapchainColorSpace(surfaceFormat.colorSpace))
+    {
+        return;
+    }
+
+    auto swapchains = std::array{swapchain};
+    auto metadata = std::array{makeHdr10Metadata()};
+    try
+    {
+        device.setHdrMetadataEXT(std::span<const vk::SwapchainKHR>{swapchains.data(), swapchains.size()}, std::span<const vk::HdrMetadataEXT>{metadata.data(), metadata.size()});
+    }
+    catch (const vk::SystemError &error)
+    {
+        nrInfo<LogLevel::error>(std::format("SwapChain::create failed to set HDR10 metadata: {}", error.what()));
+        nrAssert(false, "SwapChain::create failed to set HDR10 metadata.");
+    }
 }
 } // namespace nr::rhi::detail
 
 namespace nr::rhi
 {
-SwapChain SwapChain::create(
-    const vk::raii::PhysicalDevice& physicalDevice,
-    const vk::raii::Device& device,
-    const vk::raii::SurfaceKHR& surface,
-    vk::Extent2D surfaceExtent,
-    const SwapChainConfig& config)
+[[nodiscard]] bool isHdr10SwapchainColorSpace(vk::ColorSpaceKHR colorSpace) noexcept
+{
+    return colorSpace == vk::ColorSpaceKHR::eHdr10St2084EXT;
+}
+
+[[nodiscard]] bool isScRgbSwapchainColorSpace(vk::ColorSpaceKHR colorSpace) noexcept
+{
+    return colorSpace == vk::ColorSpaceKHR::eExtendedSrgbLinearEXT;
+}
+
+[[nodiscard]] bool isHdrSwapchainColorSpace(vk::ColorSpaceKHR colorSpace) noexcept
+{
+    return isHdr10SwapchainColorSpace(colorSpace) || isScRgbSwapchainColorSpace(colorSpace);
+}
+
+[[nodiscard]] vk::SurfaceFormatKHR chooseSwapchainSurfaceFormat(std::span<const vk::SurfaceFormatKHR> formats)
+{
+    nrAssert(!formats.empty(), "chooseSwapchainSurfaceFormat requires at least one supported surface format.");
+
+    constexpr auto hdrPreferences = std::array{
+        detail::SurfaceFormatPreference{
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .colorSpace = vk::ColorSpaceKHR::eExtendedSrgbLinearEXT,
+        },
+        detail::SurfaceFormatPreference{
+            .format = vk::Format::eA2B10G10R10UnormPack32,
+            .colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT,
+        },
+        detail::SurfaceFormatPreference{
+            .format = vk::Format::eA2R10G10B10UnormPack32,
+            .colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT,
+        },
+    };
+    if (auto hdrFormat = detail::findPreferredSurfaceFormat<detail::SurfaceFormatMatchMode::exact>(formats, std::span{hdrPreferences}); hdrFormat.has_value())
+    {
+        return *hdrFormat;
+    }
+
+    constexpr auto sdrPreferences = std::array{
+        detail::SurfaceFormatPreference{
+            .format = vk::Format::eB8G8R8A8Srgb,
+            .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
+        },
+        detail::SurfaceFormatPreference{
+            .format = vk::Format::eR8G8B8A8Srgb,
+            .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
+        },
+        detail::SurfaceFormatPreference{
+            .format = vk::Format::eB8G8R8A8Unorm,
+            .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
+        },
+        detail::SurfaceFormatPreference{
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
+        },
+    };
+    if (auto sdrFormat = detail::findPreferredSurfaceFormat<detail::SurfaceFormatMatchMode::exact>(formats, std::span{sdrPreferences}); sdrFormat.has_value())
+    {
+        return *sdrFormat;
+    }
+
+    if (auto sdrFormatFallback = detail::findPreferredSurfaceFormat<detail::SurfaceFormatMatchMode::formatOnly>(formats, std::span{sdrPreferences}); sdrFormatFallback.has_value())
+    {
+        return *sdrFormatFallback;
+    }
+    return formats.front();
+}
+
+SwapChain SwapChain::create(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent, const SwapChainConfig &config)
 {
     return createImpl(physicalDevice, device, surface, surfaceExtent, config, vk::SwapchainKHR{});
 }
 
-SwapChain SwapChain::recreate(
-    const vk::raii::PhysicalDevice& physicalDevice,
-    const vk::raii::Device& device,
-    const vk::raii::SurfaceKHR& surface,
-    vk::Extent2D surfaceExtent,
-    vk::SwapchainKHR oldSwapchain,
-    const SwapChainConfig& config)
+SwapChain SwapChain::recreate(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent, vk::SwapchainKHR oldSwapchain, const SwapChainConfig &config)
 {
     return createImpl(physicalDevice, device, surface, surfaceExtent, config, oldSwapchain);
 }
 
-AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore& imageAvailable, std::uint64_t timeout) const
+AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore &imageAvailable, std::uint64_t timeout) const
 {
     try
     {
@@ -51,7 +182,7 @@ AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore& imageAvaila
             .result = result,
         };
     }
-    catch (const vk::SystemError& error)
+    catch (const vk::SystemError &error)
     {
         nrAssert(detail::isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::acquireNextImage failed: {}", error.what()));
         nrInfo<LogLevel::warning>(std::format("SwapChain::acquireNextImage returned eErrorOutOfDateKHR: {}", error.what()));
@@ -61,11 +192,7 @@ AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore& imageAvaila
     }
 }
 
-PresentResult SwapChain::present(
-    const vk::raii::Queue& presentQueue,
-    std::uint32_t imageIndex,
-    const vk::raii::Semaphore& waitSemaphore,
-    std::optional<std::uint64_t> frameBoundaryFrameID) const
+PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint32_t imageIndex, const vk::raii::Semaphore &waitSemaphore, std::optional<std::uint64_t> frameBoundaryFrameID) const
 {
     nrAssert(imageIndex < swapChainImages.size(), std::format("SwapChain::present image index {} is out of range for {} swapchain images.", imageIndex, swapChainImages.size()));
 
@@ -83,13 +210,7 @@ PresentResult SwapChain::present(
     if (frameBoundaryFrameID.has_value())
     {
         frameBoundaryImages[0] = swapChainImages[imageIndex];
-        frameBoundary = vk::FrameBoundaryEXT(
-            vk::FrameBoundaryFlagBitsEXT::eFrameEnd,
-            *frameBoundaryFrameID,
-            static_cast<std::uint32_t>(frameBoundaryImages.size()),
-            frameBoundaryImages.data(),
-            0,
-            nullptr);
+        frameBoundary = vk::FrameBoundaryEXT(vk::FrameBoundaryFlagBitsEXT::eFrameEnd, *frameBoundaryFrameID, static_cast<std::uint32_t>(frameBoundaryImages.size()), frameBoundaryImages.data(), 0, nullptr);
         presentInfo.pNext = std::addressof(frameBoundary);
     }
 
@@ -98,7 +219,7 @@ PresentResult SwapChain::present(
         auto result = presentQueue.presentKHR(presentInfo);
         return PresentResult{.result = result};
     }
-    catch (const vk::SystemError& error)
+    catch (const vk::SystemError &error)
     {
         nrAssert(detail::isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::present failed: {}", error.what()));
         nrInfo<LogLevel::warning>(std::format("SwapChain::present returned eErrorOutOfDateKHR: {}", error.what()));
@@ -106,31 +227,18 @@ PresentResult SwapChain::present(
     }
 }
 
-SwapChain SwapChain::createImpl(
-    const vk::raii::PhysicalDevice& physicalDevice,
-    const vk::raii::Device& device,
-    const vk::raii::SurfaceKHR& surface,
-    vk::Extent2D surfaceExtent,
-    const SwapChainConfig& config,
-    vk::SwapchainKHR oldSwapchain)
+SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent, const SwapChainConfig &config, vk::SwapchainKHR oldSwapchain)
 {
     auto formats = physicalDevice.getSurfaceFormatsKHR(surface);
     nrAssert(!formats.empty(), "SwapChain::create requires at least one supported surface format.");
+    auto surfaceFormats = std::span<const vk::SurfaceFormatKHR>{formats.data(), formats.size()};
 
-    auto selectedFormat = [&formats]() -> vk::SurfaceFormatKHR {
-        auto srgbBgra = std::ranges::find_if(formats, [](const auto& f) { return f.format == vk::Format::eB8G8R8A8Srgb; });
-        if (srgbBgra != formats.end())
-        {
-            return *srgbBgra;
-        }
+    if (!detail::hasHdrSurfaceFormat(surfaceFormats))
+    {
+        nrInfo<LogLevel::warning>("SwapChain::create did not receive any HDR10/scRGB surface format/color-space pairs from Vulkan WSI; falling back to SDR.");
+    }
 
-        auto srgbRgba = std::ranges::find_if(formats, [](const auto& f) { return f.format == vk::Format::eR8G8B8A8Srgb; });
-        if (srgbRgba != formats.end())
-        {
-            return *srgbRgba;
-        }
-        return formats.front();
-    }();
+    auto selectedFormat = chooseSwapchainSurfaceFormat(surfaceFormats);
 
     auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
     auto presentModes = physicalDevice.getSurfacePresentModesKHR(surface);
@@ -151,11 +259,7 @@ SwapChain SwapChain::createImpl(
 
     auto choosePresentMode = [&]() {
         auto requested = std::ranges::find(presentModes, config.presentMode);
-        nrAssert(
-            requested != presentModes.end(),
-            std::format(
-                "SwapChain::create requires present mode '{}'; refusing to enable a v-sync fallback.",
-                vk::to_string(config.presentMode)));
+        nrAssert(requested != presentModes.end(), std::format("SwapChain::create requires present mode '{}'; refusing to enable a v-sync fallback.", vk::to_string(config.presentMode)));
         return config.presentMode;
     };
 
@@ -170,9 +274,7 @@ SwapChain SwapChain::createImpl(
             vk::CompositeAlphaFlagBitsKHR::ePostMultiplied,
             vk::CompositeAlphaFlagBitsKHR::eInherit,
         };
-        auto it = std::ranges::find_if(preferred, [&](vk::CompositeAlphaFlagBitsKHR candidate) {
-            return (capabilities.supportedCompositeAlpha & candidate) == candidate;
-        });
+        auto it = std::ranges::find_if(preferred, [&](vk::CompositeAlphaFlagBitsKHR candidate) { return (capabilities.supportedCompositeAlpha & candidate) == candidate; });
         nrAssert(it != preferred.end(), "SwapChain::create found no supported composite alpha mode.");
         return *it;
     };
@@ -187,34 +289,19 @@ SwapChain SwapChain::createImpl(
 
     auto selectedPresentMode = choosePresentMode();
 
-    vk::SwapchainCreateInfoKHR createInfo(
-        vk::SwapchainCreateFlagsKHR{},
-        surface,
-        imageCount,
-        selectedFormat.format,
-        selectedFormat.colorSpace,
-        extent,
-        1,
-        config.imageUsage,
-        vk::SharingMode::eExclusive,
-        {},
-        chooseSurfaceTransform(),
-        chooseCompositeAlpha(),
-        selectedPresentMode,
-        vk::True,
-        oldSwapchain);
+    vk::SwapchainCreateInfoKHR createInfo(vk::SwapchainCreateFlagsKHR{}, surface, imageCount, selectedFormat.format, selectedFormat.colorSpace, extent, 1, config.imageUsage, vk::SharingMode::eExclusive, {}, chooseSurfaceTransform(), chooseCompositeAlpha(), selectedPresentMode, vk::True,
+                                          oldSwapchain);
 
     SwapChain result;
     result.swapChain = vk::raii::SwapchainKHR(device, createInfo);
     result.swapChainImages = result.swapChain.getImages();
+    result.surfaceFormat = selectedFormat;
     result.format = selectedFormat.format;
     result.extent = extent;
+    detail::applyHdrMetadataIfNeeded(device, *result.swapChain, selectedFormat, config);
 
-    nrInfo(std::format(
-        "Swapchain created: requestedPresentMode={}, selectedPresentMode={}, imageCount={}.",
-        vk::to_string(config.presentMode),
-        vk::to_string(selectedPresentMode),
-        result.swapChainImages.size()));
+    nrInfo(std::format("Swapchain created: requestedPresentMode={}, selectedPresentMode={}, format={}, colorSpace={}, hdrOutput={}, imageCount={}.", vk::to_string(config.presentMode), vk::to_string(selectedPresentMode), vk::to_string(selectedFormat.format), vk::to_string(selectedFormat.colorSpace),
+                       isHdrSwapchainColorSpace(selectedFormat.colorSpace) ? "true" : "false", result.swapChainImages.size()));
 
     vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, selectedFormat.format, {}, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
     result.imageViews = result.swapChainImages | std::views::transform([&](vk::Image image) {
@@ -248,12 +335,9 @@ SwapChain SwapChain::createImpl(
                 device.setDebugUtilsObjectNameEXT(imageNameInfo);
                 device.setDebugUtilsObjectNameEXT(viewNameInfo);
             }
-            catch (const vk::SystemError& error)
+            catch (const vk::SystemError &error)
             {
-                nrInfo<LogLevel::error>(std::format(
-                    "SwapChain::create failed to set debug names for swapchain image {}: {}",
-                    index,
-                    error.what()));
+                nrInfo<LogLevel::error>(std::format("SwapChain::create failed to set debug names for swapchain image {}: {}", index, error.what()));
                 nrAssert(false, "SwapChain::create failed to set Vulkan debug object names.");
             }
         });
@@ -262,7 +346,7 @@ SwapChain SwapChain::createImpl(
     return result;
 }
 
-void AcquireSemaphorePool::initialize(const vk::raii::Device& device, std::uint32_t capacity)
+void AcquireSemaphorePool::initialize(const vk::raii::Device &device, std::uint32_t capacity)
 {
     semaphores_.clear();
     freeSlots_.clear();
@@ -290,7 +374,7 @@ void AcquireSemaphorePool::returnSlot(std::uint32_t slot)
     freeSlots_.push_back(slot);
 }
 
-const vk::raii::Semaphore& AcquireSemaphorePool::semaphore(std::uint32_t slot) const
+const vk::raii::Semaphore &AcquireSemaphorePool::semaphore(std::uint32_t slot) const
 {
     nrAssert(slot < semaphores_.size(), "AcquireSemaphorePool::semaphore slot index out of range.");
     return semaphores_[slot];
@@ -301,21 +385,15 @@ bool AcquireSemaphorePool::empty() const noexcept
     return semaphores_.empty();
 }
 
-void PresentationContext::initialize(
-    const vk::raii::Instance& instance,
-    const vk::raii::PhysicalDevice& physicalDevice,
-    const vk::raii::Device& device,
-    std::string_view appName,
-    const SwapChainConfig& config,
-    std::uint32_t presentQueueFamily)
+void PresentationContext::initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, std::string_view appName, const SwapChainConfig &config, std::uint32_t presentQueueFamily)
 {
     device_ = std::cref(device);
     config_ = config;
     presentQueueFamily_ = presentQueueFamily;
     surface_ = Surface::create(instance, appName);
     glfwSetWindowUserPointer(surface_.handle.get(), this);
-    glfwSetCharCallback(surface_.handle.get(), [](GLFWwindow* window, unsigned int codepoint) {
-        auto* presentation = static_cast<PresentationContext*>(glfwGetWindowUserPointer(window));
+    glfwSetCharCallback(surface_.handle.get(), [](GLFWwindow *window, unsigned int codepoint) {
+        auto *presentation = static_cast<PresentationContext *>(glfwGetWindowUserPointer(window));
         nrAssert(presentation != nullptr, "PresentationContext text input callback requires a window user pointer.");
         presentation->textInputCodepoints_.push_back(static_cast<std::uint32_t>(codepoint));
     });
@@ -360,7 +438,7 @@ void PresentationContext::returnAcquireSemaphore(std::uint32_t frameSlot)
     }
 }
 
-const vk::raii::Semaphore& PresentationContext::borrowedAcquireSemaphore(std::uint32_t frameSlot) const
+const vk::raii::Semaphore &PresentationContext::borrowedAcquireSemaphore(std::uint32_t frameSlot) const
 {
     nrAssert(frameSlot < borrowedAcquireSlotByFrame_.size(), "PresentationContext::borrowedAcquireSemaphore frameSlot out of range.");
     nrAssert(borrowedAcquireSlotByFrame_[frameSlot].has_value(), "PresentationContext::borrowedAcquireSemaphore requires an active borrowed slot for the frame slot.");
@@ -372,18 +450,10 @@ bool PresentationContext::hasPendingAcquire() const noexcept
     return pendingAcquire_.has_value();
 }
 
-PresentResult PresentationContext::present(
-    const QueueManager& queueManager,
-    const vk::raii::Semaphore& waitSemaphore,
-    std::optional<std::uint64_t> frameBoundaryFrameID) const
+PresentResult PresentationContext::present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore, std::optional<std::uint64_t> frameBoundaryFrameID) const
 {
     nrAssert(activeSwapchainImageIndex_.has_value(), "PresentationContext::present requires a valid acquired swapchain image.");
-    nrAssert(
-        queueManager.compute().queueFamilyIndex() == presentQueueFamily_,
-        std::format(
-            "PresentationContext::present compute-present policy expected compute queue family {}, but got {}.",
-            presentQueueFamily_,
-            queueManager.compute().queueFamilyIndex()));
+    nrAssert(queueManager.compute().queueFamilyIndex() == presentQueueFamily_, std::format("PresentationContext::present compute-present policy expected compute queue family {}, but got {}.", presentQueueFamily_, queueManager.compute().queueFamilyIndex()));
     return swapChain_.present(queueManager.compute().handle(), *activeSwapchainImageIndex_, waitSemaphore, frameBoundaryFrameID);
 }
 
@@ -391,7 +461,7 @@ void PresentationContext::rebuildAcquirePool()
 {
     nrAssert(device_.has_value(), "PresentationContext::rebuildAcquirePool requires device reference from initialize().");
     pendingAcquire_.reset();
-    std::ranges::for_each(borrowedAcquireSlotByFrame_, [](auto& slot) { slot.reset(); });
+    std::ranges::for_each(borrowedAcquireSlotByFrame_, [](auto &slot) { slot.reset(); });
     auto poolCapacity = swapChain_.swapChainImages.size() + 1u;
     acquirePool_.initialize(device_->get(), static_cast<std::uint32_t>(poolCapacity));
 }
@@ -404,6 +474,16 @@ vk::Extent2D PresentationContext::swapchainExtent() const noexcept
 vk::Format PresentationContext::swapchainFormat() const noexcept
 {
     return swapChain_.format;
+}
+
+vk::ColorSpaceKHR PresentationContext::swapchainColorSpace() const noexcept
+{
+    return swapChain_.surfaceFormat.colorSpace;
+}
+
+vk::SurfaceFormatKHR PresentationContext::swapchainSurfaceFormat() const noexcept
+{
+    return swapChain_.surfaceFormat;
 }
 
 std::uint32_t PresentationContext::swapchainImageCount() const noexcept
@@ -525,10 +605,7 @@ bool PresentationContext::needsSwapchainRecreate(vk::Result result)
     return result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR;
 }
 
-void PresentationContext::recreate(
-    const vk::raii::PhysicalDevice& physicalDevice,
-    const vk::raii::Device& device,
-    QueueManager& queueManager)
+void PresentationContext::recreate(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, QueueManager &queueManager)
 {
     queueManager.waitAllIdle();
     static_cast<void>(surface_.consumeSwapchainRecreateRequest());
@@ -541,11 +618,9 @@ void PresentationContext::recreate(
     rebuildAcquirePool();
 }
 
-void PresentationContext::ensurePresentSupport(const vk::raii::PhysicalDevice& physicalDevice) const
+void PresentationContext::ensurePresentSupport(const vk::raii::PhysicalDevice &physicalDevice) const
 {
-    nrAssert(
-        physicalDevice.getSurfaceSupportKHR(presentQueueFamily_, surface_.surface),
-        std::format("Compute-present policy requires compute queue family {} to support present.", presentQueueFamily_));
+    nrAssert(physicalDevice.getSurfaceSupportKHR(presentQueueFamily_, surface_.surface), std::format("Compute-present policy requires compute queue family {} to support present.", presentQueueFamily_));
 }
 
 void PresentationContext::issuePendingAcquireImpl(std::uint64_t timeout)
@@ -560,9 +635,7 @@ void PresentationContext::issuePendingAcquireImpl(std::uint64_t timeout)
         return;
     }
 
-    nrAssert(
-        acquireResult.result == vk::Result::eSuccess || acquireResult.result == vk::Result::eSuboptimalKHR,
-        std::format("PresentationContext::issuePendingAcquireImpl unexpected acquire result: {}", vk::to_string(acquireResult.result)));
+    nrAssert(acquireResult.result == vk::Result::eSuccess || acquireResult.result == vk::Result::eSuboptimalKHR, std::format("PresentationContext::issuePendingAcquireImpl unexpected acquire result: {}", vk::to_string(acquireResult.result)));
 
     pendingAcquire_ = PendingAcquire{
         .semaphoreSlot = slot,

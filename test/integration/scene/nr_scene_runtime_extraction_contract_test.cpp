@@ -567,8 +567,8 @@ const nr::test::CaseRegistrar lightRuntimePacketCase{
         auto spotRecord = scene.tryGetLightAsset(*spotHandle);
         nr::test::require(pointRecord.has_value(), "point light record should exist");
         nr::test::require(spotRecord.has_value(), "spot light record should exist");
-        nr::test::require(almostEqual(pointRecord->get().cpu.range, 0.0f), "point influence range should be infinite");
-        nr::test::require(almostEqual(spotRecord->get().cpu.range, 0.0f), "spot influence range should be infinite");
+        nr::test::require(almostEqual(pointRecord->get().cpu.range, 12.5f), "point glTF source range should be preserved");
+        nr::test::require(almostEqual(spotRecord->get().cpu.range, 8.0f), "spot glTF source range should be preserved");
         nr::test::require(almostEqual(pointRecord->get().cpu.intensity, 4.0f), "point intensity should come from color magnitude");
         nr::test::require(almostEqual(pointRecord->get().cpu.color.g, 1.0f), "point color should be normalized by intensity");
         nr::test::require(almostEqual(spotRecord->get().cpu.outerConeRadians, glm::radians(25.0f)),
@@ -604,7 +604,7 @@ const nr::test::CaseRegistrar lightRuntimePacketCase{
 const nr::test::CaseRegistrar sceneLightAliasGpuAbiCase{
     "scene light alias table gpu abi and energy weighting are stable",
     [] {
-        nr::test::requireEqual(nr::scene::kSceneLightGpuAbiVersion, std::uint32_t{2u});
+        nr::test::requireEqual(nr::scene::kSceneLightGpuAbiVersion, std::uint32_t{3u});
         nr::test::requireEqual(sizeof(nr::scene::SceneLightGpuHeader), std::size_t{16u});
         nr::test::requireEqual(sizeof(nr::scene::SceneLightGpuRecord), std::size_t{80u});
         nr::test::requireEqual(sizeof(nr::scene::SceneLightAliasGpuRecord), std::size_t{32u});

@@ -46,7 +46,6 @@ struct ViewerControlState
 [[nodiscard]] nr::renderer::RendererGraphSpec buildNormalViewGraph(const PipelineBuildContext& context)
 {
     auto normalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
-    normalBuffer->input.colorFormat = context.swapchainFormat;
 
     auto ui = std::make_shared<nr::renderPasses::UiNode>();
     auto present = std::make_shared<nr::renderPasses::PresentNode>();

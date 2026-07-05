@@ -11,20 +11,60 @@ import :nodeType;
 
 namespace nr::renderPasses::detail
 {
-struct PathTracingRuntimeCache
+struct PathTracingVariantRuntime
 {
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> pipeline{};
     nr::rhi::ShaderBindingTable shaderBindingTable{};
 };
 
-[[nodiscard]] std::shared_ptr<PathTracingRuntimeCache> ensurePathTracingRuntime(nr::rhi::Device& device)
+struct PathTracingRuntimeCache
 {
-    auto& shaderService = nr::rhi::ShaderService::instance();
-    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path("renderer/pathTracing"),
-    });
-    nr::nrAssert(program.valid(), "Path tracing pass failed to compile shader module renderer/pathTracing.");
+    std::map<PathTracingVariantKey, PathTracingVariantRuntime> variants{};
+};
 
+[[nodiscard]] PathTracingVariantKey normalizePathTracingVariantKey(PathTracingVariantKey key) noexcept
+{
+    key.maxSurfaceBounces = std::clamp(
+        key.maxSurfaceBounces,
+        kPathTracingMinSurfaceBounces,
+        kPathTracingMaxSurfaceBouncesLimit);
+    return key;
+}
+
+[[nodiscard]] std::string describePathTracingVariantKey(const PathTracingVariantKey& key)
+{
+    auto normalizedKey = normalizePathTracingVariantKey(key);
+    return std::format(
+        "PathTracing[maxBounces={},russianRoulette={}]",
+        normalizedKey.maxSurfaceBounces,
+        normalizedKey.enableRussianRoulette ? "enabled" : "disabled");
+}
+
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingVariantDesc(const PathTracingVariantKey& key)
+{
+    auto normalizedKey = normalizePathTracingVariantKey(key);
+
+    auto variant = nr::rhi::SlangProgramVariantDesc{};
+    variant.debugName = describePathTracingVariantKey(normalizedKey);
+
+    variant.constants.try_emplace(
+        "kPathTracingMaxSurfaceBounces",
+        nr::rhi::SlangVariantConstant::fromUInt32(normalizedKey.maxSurfaceBounces));
+
+    variant.typeAliases.try_emplace(
+        "PathTracingRussianRoulettePolicy",
+        nr::rhi::SlangVariantTypeAlias{
+            .typeName = "PathTracingRussianRoulettePolicy",
+            .interfaceName = "IPathTracingRussianRoulettePolicy",
+            .concreteTypeName = normalizedKey.enableRussianRoulette ? "PathTracingRussianRouletteEnabledPolicy"
+                                                                    : "PathTracingRussianRouletteDisabledPolicy",
+        });
+
+    return variant;
+}
+
+[[nodiscard]] nr::rhi::RayTracingPipelineDesc makePathTracingPipelineDesc()
+{
     auto raygenGroup = nr::rhi::RayTracingShaderGroupDesc{};
     raygenGroup.generalEntryPoint = "rgMain";
 
@@ -49,16 +89,58 @@ struct PathTracingRuntimeCache
         std::move(hitGroup),
     };
     pipelineDesc.descriptorBindingPolicy.defaultRuntimeDescriptorCount = nr::renderer::kSceneTextureDescriptorCapacity;
+    return pipelineDesc;
+}
 
-    auto runtime = std::make_shared<PathTracingRuntimeCache>();
-    runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>();
-    runtime->pipeline->initializeDeferred(device.pipeline().createRayTracingPipeline(program, pipelineDesc));
-    nr::nrAssert(runtime->pipeline->valid(), "Path tracing pass failed to create ray tracing pipeline.");
+[[nodiscard]] PathTracingVariantRuntime createPathTracingVariantRuntime(nr::rhi::Device& device, const PathTracingVariantKey& key)
+{
+    auto& shaderService = nr::rhi::ShaderService::instance();
+    auto baselineVariantDesc = makePathTracingVariantDesc(PathTracingVariantKey{});
+    auto baselineProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+        .sourcePath = std::filesystem::path("renderer/pathTracing"),
+        .variant = baselineVariantDesc,
+    });
+    nr::nrAssert(baselineProgram.valid(), "Path tracing pass failed to compile baseline shader module renderer/pathTracing.");
 
-    runtime->shaderBindingTable = nr::rhi::ShaderBindingTable::create(
+    auto variantDesc = makePathTracingVariantDesc(key);
+    auto program = baselineProgram;
+    if (variantDesc.hashValue() != baselineVariantDesc.hashValue())
+    {
+        program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path("renderer/pathTracing"),
+            .variant = variantDesc,
+        });
+        nr::nrAssert(program.valid(), "Path tracing pass failed to compile variant shader module renderer/pathTracing.");
+    }
+
+    auto pipelineDesc = makePathTracingPipelineDesc();
+    if (variantDesc.hashValue() != baselineVariantDesc.hashValue())
+    {
+        nr::rhi::assertShaderLayoutAbiStable(
+            baselineProgram,
+            program,
+            pipelineDesc.descriptorBindingPolicy,
+            variantDesc.debugName);
+    }
+
+    auto runtime = PathTracingVariantRuntime{};
+    runtime.pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>();
+    auto sceneTextureImmutableSamplers = std::array{sceneTextureTableImmutableSamplerBinding()};
+    runtime.pipeline->initializeDeferred(device.pipeline().createRayTracingPipeline(
+        program,
+        pipelineDesc,
+        64u,
+        sceneTextureImmutableSamplers));
+    nr::nrAssert(runtime.pipeline->valid(), "Path tracing pass failed to create ray tracing pipeline.");
+    nr::rhi::setPipelineDebugName(
+        device.device,
+        runtime.pipeline->pipeline().raw(),
+        describePathTracingVariantKey(key) + ".Pipeline");
+
+    runtime.shaderBindingTable = nr::rhi::ShaderBindingTable::create(
         device.resourceFactory,
         nr::rhi::ShaderBindingTableBuildDesc{
-            .pipeline = runtime->pipeline->pipeline(),
+            .pipeline = runtime.pipeline->pipeline(),
             .capabilities = device.rayTracingCapabilities(),
             .raygen = nr::rhi::ShaderBindingTableSectionDesc{
                 .firstGroup = 0u,
@@ -74,9 +156,32 @@ struct PathTracingRuntimeCache
             },
             .debugName = "PathTracing.SBT",
         });
-    nr::nrAssert(runtime->shaderBindingTable.valid(), "Path tracing pass failed to create SBT.");
+    nr::nrAssert(runtime.shaderBindingTable.valid(), "Path tracing pass failed to create SBT.");
 
     return runtime;
+}
+
+[[nodiscard]] PathTracingVariantRuntime& ensurePathTracingVariantRuntime(
+    PathTracingRuntimeCache& cache,
+    nr::rhi::Device& device,
+    const PathTracingVariantKey& key)
+{
+    auto normalizedKey = normalizePathTracingVariantKey(key);
+    if (auto runtimeIt = cache.variants.find(normalizedKey); runtimeIt != cache.variants.end())
+    {
+        return runtimeIt->second;
+    }
+
+    auto [runtimeIt, inserted] = cache.variants.try_emplace(normalizedKey, createPathTracingVariantRuntime(device, normalizedKey));
+    nr::nrAssert(inserted, "Path tracing variant runtime cache insertion failed.");
+    return runtimeIt->second;
+}
+
+[[nodiscard]] std::shared_ptr<PathTracingRuntimeCache> makePathTracingRuntimeCache(nr::rhi::Device& device, const PathTracingVariantKey& initialVariant)
+{
+    auto cache = std::make_shared<PathTracingRuntimeCache>();
+    [[maybe_unused]] auto& initialRuntime = ensurePathTracingVariantRuntime(*cache, device, initialVariant);
+    return cache;
 }
 } // namespace nr::renderPasses::detail
 
@@ -94,17 +199,15 @@ NodeDescription PathTracingNode::describe() const
 void PathTracingNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
-    runtime_ = detail::ensurePathTracingRuntime(context.device.get());
-    nr::rhi::setPipelineDebugName(
-        context.device.get().device,
-        runtime_->pipeline->pipeline().raw(),
-        describe().name + ".Pipeline");
+    input.variant = detail::normalizePathTracingVariantKey(input.variant);
+    runtime_ = detail::makePathTracingRuntimeCache(context.device.get(), input.variant);
 }
 
 void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
 {
     nr::nrAssert(static_cast<bool>(runtime_), "PathTracing build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "PathTracing build stage requires device reference from initialize stage.");
+    input.variant = detail::normalizePathTracingVariantKey(input.variant);
 
     auto viewportExtent = input.viewportExtent;
     if (viewportExtent.width == 1u && viewportExtent.height == 1u)
@@ -196,8 +299,10 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
         return;
     }
 
+    auto& activeRuntime = detail::ensurePathTracingVariantRuntime(*runtime_, device_->get(), input.variant);
+
     auto sbtResource = context.importBuffer(
-        runtime_->shaderBindingTable.buffer(),
+        activeRuntime.shaderBindingTable.buffer(),
         "PathTracing.SBT",
         nr::renderer::ResourceLifetime::RendererPersistent,
         {
@@ -219,7 +324,7 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
     auto tracePass = nr::renderer::RayTracingPassBuilder{
         context,
         "PathTracing.Trace",
-        runtime_->pipeline};
+        activeRuntime.pipeline};
     tracePass
         .accelerationStructure("scene", sceneTlas, "PathTracing.SceneTLAS")
         .storageImage("outputImage", output, "PathTracing.Output")
@@ -236,36 +341,37 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
         .storageBuffer("gSceneLights", sceneLights, "PathTracing.SceneLights")
         .storageBuffer("gSceneLightAliasTable", sceneLightAliasTable, "PathTracing.SceneLightAliasTable")
         .prepare(
-            [runtime = runtime_,
+            [runtime = std::ref(activeRuntime),
              sceneTextureTableBinding,
              cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
                 detail::prepareSceneTextureTableBindingForFrame(
-                    *runtime->pipeline,
+                    *runtime.get().pipeline,
                     cache.get(),
                     prepareContext.frameIndex,
                     sceneTextureTableBinding,
                     detail::SceneTextureTableBindingRequirement::optional);
             })
         .dynamicBindingSnapshot(
-            [runtime = runtime_,
+            [runtime = std::ref(activeRuntime),
              sceneTextureTableBinding,
              cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
                 return detail::makeSceneTextureTableBindingSnapshot(
-                    *runtime->pipeline,
+                    *runtime.get().pipeline,
                     cache.get(),
                     prepareContext.frameIndex,
                     sceneTextureTableBinding,
                     detail::SceneTextureTableBindingRequirement::optional);
             })
-        .record([runtime = runtime_,
+        .record([runtime = std::ref(activeRuntime),
                  dimensions,
                  queueRole,
                  device = std::cref(device_->get())](const nr::renderer::RayTracingPassRecordContext& rayContext) {
+            auto& activeRuntime = runtime.get();
             nr::rhi::traceRays(
                 rayContext.commandBuffer,
                 nr::rhi::TraceRaysDesc{
-                    .pipeline = runtime->pipeline->pipeline(),
-                    .shaderBindingTable = runtime->shaderBindingTable,
+                    .pipeline = activeRuntime.pipeline->pipeline(),
+                    .shaderBindingTable = activeRuntime.shaderBindingTable,
                     .dimensions = dimensions,
                     .recordingQueueRole = queueRole,
                 },
@@ -275,11 +381,56 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
     [[maybe_unused]] auto tracePassHandle = tracePass.build();
 }
 
+void PathTracingNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters&)
+{
+    if (pendingVariantValid_)
+    {
+        input.variant = detail::normalizePathTracingVariantKey(pendingVariant_);
+        pendingVariantValid_ = false;
+    }
+
+    input.variant = detail::normalizePathTracingVariantKey(input.variant);
+    variantDraft_ = input.variant;
+    context.addSection(
+        context.runtimeName(),
+        [this](NodeUiWriter& ui) {
+            auto maxBounces = variantDraft_.maxSurfaceBounces;
+            if (ui.inputUInt(
+                    "Max Bounces",
+                    maxBounces,
+                    kPathTracingMinSurfaceBounces,
+                    kPathTracingMaxSurfaceBouncesLimit))
+            {
+                variantDraft_.maxSurfaceBounces = std::clamp(
+                    maxBounces,
+                    kPathTracingMinSurfaceBounces,
+                    kPathTracingMaxSurfaceBouncesLimit);
+                pendingVariant_ = detail::normalizePathTracingVariantKey(variantDraft_);
+                pendingVariantValid_ = true;
+            }
+
+            auto enableRussianRoulette = variantDraft_.enableRussianRoulette;
+            if (ui.checkbox("Russian Roulette", enableRussianRoulette))
+            {
+                variantDraft_.enableRussianRoulette = enableRussianRoulette;
+                pendingVariant_ = detail::normalizePathTracingVariantKey(variantDraft_);
+                pendingVariantValid_ = true;
+            }
+        },
+        true,
+        "controls");
+}
+
 void PathTracingNode::shutdown(NodeShutdownContext&)
 {
-    if (runtime_ && runtime_->pipeline)
+    if (runtime_)
     {
-        runtime_->pipeline->clearBindingSets();
+        std::ranges::for_each(runtime_->variants | std::views::values, [](detail::PathTracingVariantRuntime& runtime) {
+            if (runtime.pipeline)
+            {
+                runtime.pipeline->clearBindingSets();
+            }
+        });
     }
     runtime_.reset();
     device_.reset();

@@ -151,18 +151,5 @@ namespace batch
     batch.addCommandBuffer(commandBuffer);
     return batch;
 }
-
-[[nodiscard]] CommandBatch graphics(
-    const vk::raii::CommandBuffer& commandBuffer,
-    const vk::raii::Semaphore& imageAvailable,
-    const vk::raii::Semaphore& renderFinished
-)
-{
-    CommandBatch batch{};
-    batch.addCommandBuffer(commandBuffer);
-    batch.addWait(imageAvailable, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-    batch.addSignal(renderFinished);
-    return batch;
-}
 } // namespace batch
 } // namespace nr::rhi

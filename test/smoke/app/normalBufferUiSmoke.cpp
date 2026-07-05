@@ -244,7 +244,6 @@ namespace
         }
 
         auto normalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
-        normalBuffer->input.colorFormat = app.renderer().device().presentationContext.swapchainFormat();
         app.renderer().installGraph(buildNormalBufferGraphSpec(normalBuffer));
 
         auto frameServices = app.makeFrameServices();

@@ -61,6 +61,31 @@ struct GraphImportedBufferDesc
     std::optional<std::reference_wrapper<const nr::rhi::Buffer>> importedResource{};
 };
 
+/**
+ * @brief Precise sync2 stage+access scope for one side of a barrier.
+ *
+ * An empty `stages` mask marks the scope as unresolved; barrier emission then
+ * falls back to a conservative all-commands scope for that side only.
+ */
+struct AccessScope
+{
+    vk::PipelineStageFlags2 stages = vk::PipelineStageFlags2{};
+    vk::AccessFlags2 access = vk::AccessFlags2{};
+
+    [[nodiscard]] bool resolved() const noexcept;
+    [[nodiscard]] bool operator==(const AccessScope&) const = default;
+};
+
+struct RetainedImageState
+{
+    bool initialized = false;
+    ImageLayoutIntent layout = ImageLayoutIntent::Undefined;
+    ResourceOwnershipDomain ownership = ResourceOwnershipDomain::Undefined;
+    AccessScope access{};
+
+    void reset() noexcept;
+};
+
 struct GraphImportedImageDesc
 {
     std::string debugName{};
@@ -71,6 +96,7 @@ struct GraphImportedImageDesc
     vk::Format format = vk::Format::eUndefined;
     std::vector<ImageUsageIntent> usageIntents{};
     ImageLayoutIntent initialLayout = ImageLayoutIntent::Undefined;
+    AccessScope initialAccessScope{};
     ImageAspectIntent aspect = ImageAspectIntent::Color;
 
     /// Optional reference to a pre-allocated image resource held by the node.
@@ -79,6 +105,9 @@ struct GraphImportedImageDesc
     /// per-frame-slot resources at initialize time and import them into the graph
     /// at build time, avoiding runtime memory allocations.
     std::optional<std::reference_wrapper<const nr::rhi::Image>> importedResource{};
+
+    /// Optional retained state for renderer-persistent imported images reused across frames.
+    std::optional<std::reference_wrapper<RetainedImageState>> retainedState{};
 };
 
 struct GraphImportedAccelerationStructureDesc
@@ -1080,20 +1109,6 @@ struct RenderGraphFrameDescription
     std::vector<GraphExecutionStep> executionOrder{};
 };
 
-/**
- * @brief Precise sync2 stage+access scope for one side of a barrier.
- *
- * An empty `stages` mask marks the scope as unresolved; barrier emission then
- * falls back to a conservative all-commands scope for that side only.
- */
-struct AccessScope
-{
-    vk::PipelineStageFlags2 stages = vk::PipelineStageFlags2{};
-    vk::AccessFlags2 access = vk::AccessFlags2{};
-
-    [[nodiscard]] bool resolved() const noexcept;
-};
-
 struct ResourceStateTransition
 {
     GraphResourceHandle resource{};
@@ -1134,6 +1149,8 @@ struct CompiledResourceDesc
 
     ImageLayoutIntent initialLayout = ImageLayoutIntent::Undefined;
     ImageLayoutIntent finalLayout = ImageLayoutIntent::Undefined;
+    AccessScope initialAccessScope{};
+    AccessScope finalAccessScope{};
 
     ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined;
     ResourceOwnershipDomain finalOwnership = ResourceOwnershipDomain::Undefined;
@@ -1146,6 +1163,10 @@ struct CompiledResourceDesc
     /// Optional reference to a pre-allocated imported image held by the node.
     /// Populated from GraphImportedImageDesc::importedResource during compilation.
     std::optional<std::reference_wrapper<const nr::rhi::Image>> importedImageResource{};
+
+    /// Optional retained image state updated after successful submission.
+    /// Populated from GraphImportedImageDesc::retainedState during compilation.
+    std::optional<std::reference_wrapper<RetainedImageState>> retainedState{};
 
     /// Optional reference to a pre-built acceleration structure held by the node or renderer cache.
     /// Populated from GraphImportedAccelerationStructureDesc::importedResource during compilation.

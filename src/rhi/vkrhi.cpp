@@ -7,6 +7,11 @@ import std;
 
 namespace nr::rhi
 {
+namespace
+{
+constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
+} // namespace
+
 [[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(
     std::span<const vk::QueueFamilyProperties> queueFamilyProperties)
 {
@@ -236,7 +241,120 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
 
 vk::DebugUtilsMessengerCreateInfoEXT makeDebugUtilsMessengerCreateInfoEXT()
 {
+    constexpr auto severityFlags = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
+                                   vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
+                                   vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+                                   vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
+    constexpr auto messageTypeFlags = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+                                      vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+                                      vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation;
     return {
-        {}, vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError, vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation, &debugUtilsMessengerCallback};
+        {}, severityFlags, messageTypeFlags, &debugUtilsMessengerCallback};
+}
+
+DebugValidationLayerSettings::DebugValidationLayerSettings()
+{
+    settings_.reserve(64);
+
+    auto addSetting = [this](const char *settingName, vk::LayerSettingTypeEXT type, const auto &values) {
+        settings_.emplace_back(
+            validationLayerName,
+            settingName,
+            type,
+            static_cast<std::uint32_t>(values.size()),
+            values.data());
+    };
+
+    auto addBoolSetting = [&](const char *settingName, bool enabled) {
+        const auto &values = enabled ? enabledValue_ : disabledValue_;
+        addSetting(settingName, vk::LayerSettingTypeEXT::eBool32, values);
+    };
+
+    auto addBoolSettings = [&](std::initializer_list<const char *> settingNames, bool enabled) {
+        std::ranges::for_each(settingNames, [&](const char *settingName) {
+            addBoolSetting(settingName, enabled);
+        });
+    };
+
+    addBoolSettings(
+        {
+            "validate_core",
+            "check_image_layout",
+            "check_command_buffer",
+            "check_object_in_use",
+            "check_query",
+            "check_shaders",
+            "check_shaders_caching",
+            "unique_handles",
+            "object_lifetime",
+            "stateless_param",
+            "thread_safety",
+            "validate_sync",
+            "syncval_submit_time_validation",
+            "syncval_shader_accesses_heuristic",
+            "syncval_message_extra_properties",
+            "printf_enable",
+            "printf_verbose",
+            "gpuav_enable",
+            "gpuav_safe_mode",
+            "gpuav_force_on_robustness",
+            "gpuav_shader_instrumentation",
+            "gpuav_descriptor_checks",
+            "gpuav_post_process_descriptor_indexing",
+            "gpuav_buffer_address_oob",
+            "gpuav_mesh_shading",
+            "gpuav_validate_ray_query",
+            "gpuav_validate_trace_ray",
+            "gpuav_vertex_attribute_fetch_oob",
+            "gpuav_shader_sanitizer",
+            "gpuav_shared_memory_data_race",
+            "gpuav_buffers_validation",
+            "gpuav_indirect_draws_buffers",
+            "gpuav_indirect_dispatches_buffers",
+            "gpuav_indirect_trace_rays_buffers",
+            "gpuav_buffer_copies",
+            "gpuav_copy_memory_indirect",
+            "gpuav_index_buffers",
+            "gpuav_acceleration_structures_builds",
+            "gpuav_ray_tracing_buffers_consistency",
+            "validate_best_practices",
+            "validate_best_practices_nvidia",
+        },
+        true);
+
+    addBoolSettings(
+        {
+            "legacy_detection",
+            "printf_only_preset",
+            "printf_to_stdout",
+            "gpuav_select_instrumented_shaders",
+            "validate_best_practices_arm",
+            "validate_best_practices_amd",
+            "validate_best_practices_img",
+            "gpu_dump_descriptors",
+            "gpu_dump_copy_memory_indirect",
+            "gpu_dump_device_generated_commands",
+            "gpu_dump_to_stdout",
+            "gpu_dump_device_copy",
+            "enable_message_limit",
+            "message_format_json",
+        },
+        false);
+
+    addSetting("printf_buffer_size", vk::LayerSettingTypeEXT::eUint32, printfBufferSize_);
+    addSetting("gpuav_max_indices_count", vk::LayerSettingTypeEXT::eUint32, gpuavMaxIndicesCount_);
+    addSetting("debug_action", vk::LayerSettingTypeEXT::eString, debugActions_);
+    addSetting("report_flags", vk::LayerSettingTypeEXT::eString, reportFlags_);
+    addSetting("message_id_filter", vk::LayerSettingTypeEXT::eString, messageIdFilter_);
+    addSetting("log_filename", vk::LayerSettingTypeEXT::eString, logFilename_);
+}
+
+[[nodiscard]] vk::LayerSettingsCreateInfoEXT DebugValidationLayerSettings::createInfo(const void *pNext) const noexcept
+{
+    return {
+        static_cast<std::uint32_t>(settings_.size()),
+        settings_.data(),
+        pNext,
+    };
 }
 } // namespace nr::rhi

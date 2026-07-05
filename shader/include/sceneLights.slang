@@ -1,6 +1,6 @@
 implementing common;
 
-public static const uint kSceneLightAbiVersion = 2u;
+public static const uint kSceneLightAbiVersion = 3u;
 public static const uint kSceneLightTypeDirectional = 0u;
 public static const uint kSceneLightTypePoint = 1u;
 public static const uint kSceneLightTypeSpot = 2u;
@@ -11,6 +11,7 @@ public struct SceneLightGpuHeader
     public uint abiVersion;
     public uint lightCount;
     public uint aliasCount;
+    // Sampling weight sum only; not a physical energy unit.
     public float totalEnergy;
 };
 
@@ -18,7 +19,11 @@ public struct SceneLightGpuRecord
 {
     // meta.x: light type, meta.y: flags, meta.z: stable/debug instance id.
     public uint4 meta;
+    // glTF KHR_lights_punctual:
+    // rgb is the unitless linear RGB color multiplier.
+    // w is intensity: lux for directional lights, candela for point/spot lights.
     public float4 colorIntensity;
+    // xyz is point/spot world position. w is glTF range in meters; <=0 is infinite.
     public float4 positionRange;
     public float4 direction;
     public float4 spotCone;
@@ -47,6 +52,9 @@ public static const float3 kSceneLightDefaultDirection = float3(0.0f, 0.0f, -1.0
 public struct SceneLightContribution
 {
     public float3 direction;
+    // Scene-linear light value used by material BSDF evaluation. It is derived
+    // from glTF photometric units and remains HDR until the final present
+    // shader clamps and optionally applies the sRGB transfer curve for pixels.
     public float3 radiance;
 };
 
@@ -118,9 +126,18 @@ public bool sampleSceneLightAlias(float2 randomValues, out SceneLightSample samp
     return sample.lightIndex < lightCount && sample.pdf > 0.0f;
 }
 
-public float sceneLightDistanceAttenuation(float distanceSquared)
+public float sceneLightDistanceAttenuation(float distanceSquared, float rangeMeters)
 {
-    return 1.0f / max(distanceSquared, kSceneLightMinDistanceSquared);
+    float inverseSquare = 1.0f / max(distanceSquared, kSceneLightMinDistanceSquared);
+    if (rangeMeters <= 0.0f)
+    {
+        return inverseSquare;
+    }
+
+    float distance = sqrt(max(distanceSquared, kSceneLightMinDistanceSquared));
+    float rangeRatio = distance / rangeMeters;
+    float rangeAttenuation = saturate(1.0f - rangeRatio * rangeRatio * rangeRatio * rangeRatio);
+    return inverseSquare * rangeAttenuation;
 }
 
 public float sceneLightSpotConeAttenuation(SceneLightGpuRecord light, float3 lightToSurfaceDirection)
@@ -150,6 +167,8 @@ public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, ou
     if (lightType == kSceneLightTypeDirectional)
     {
         contribution.direction = sceneLightSafeNormalize(-light.direction.xyz, -kSceneLightDefaultDirection);
+        // Directional glTF intensity is illuminance in lux. The path tracer keeps
+        // color * lux as the directional incident scene-linear light value.
         contribution.radiance = color * intensity;
         return dot(contribution.radiance, contribution.radiance) > 0.0f;
     }
@@ -161,7 +180,11 @@ public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, ou
 
     float3 toLight = light.positionRange.xyz - hitPosition;
     float distanceSquared = max(dot(toLight, toLight), kSceneLightMinDistanceSquared);
-    float attenuation = sceneLightDistanceAttenuation(distanceSquared);
+    float attenuation = sceneLightDistanceAttenuation(distanceSquared, max(light.positionRange.w, 0.0f));
+    if (attenuation <= 0.0f)
+    {
+        return false;
+    }
 
     float3 surfaceToLightDirection = toLight * rsqrt(distanceSquared);
     if (lightType == kSceneLightTypeSpot)
@@ -174,6 +197,10 @@ public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, ou
     }
 
     contribution.direction = surfaceToLightDirection;
+    // Point and spot glTF intensity is luminous intensity in candela. Shading
+    // converts it to incident scene-linear light by applying inverse-square
+    // distance attenuation and the optional glTF range fade; spot lights also
+    // multiply by the cone attenuation.
     contribution.radiance = color * intensity * attenuation;
     return dot(contribution.radiance, contribution.radiance) > 0.0f;
 }

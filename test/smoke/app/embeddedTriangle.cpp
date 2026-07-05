@@ -83,7 +83,6 @@ void printUsage()
         {
             auto& presentation = renderer.device().presentationContext;
             auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
-            embeddedTriangle->input.colorFormat = presentation.swapchainFormat();
             auto defaultCameraView = nr::app::AppCameraDefaultView{};
             defaultCameraView.lens.farPlane = 100.0f;
             app.resetCameraFromSceneOrDefault(defaultCameraView);

@@ -88,7 +88,7 @@ namespace nr::rhi
 					nrAssert(
 						bindingInfo->descriptorType == vk::DescriptorType::eSampler || bindingInfo->descriptorType == vk::DescriptorType::eCombinedImageSampler,
 						std::format(
-							"CursorPipelineLayout::create immutable sampler target must be sampler/combinded-image-sampler at set={}, binding={}, descriptorType={}",
+							"CursorPipelineLayout::create immutable sampler target must be sampler/combined-image-sampler at set={}, binding={}, descriptorType={}",
 							immutableSamplerBinding.set,
 							immutableSamplerBinding.binding,
 							vk::to_string(bindingInfo->descriptorType)));
@@ -105,15 +105,12 @@ namespace nr::rhi
 					ImmutableSamplerBindingState state{};
 					state.set = immutableSamplerBinding.set;
 					state.binding = immutableSamplerBinding.binding;
-					state.samplers.reserve(immutableSamplerBinding.descriptorCount);
-					state.rawSamplers.reserve(immutableSamplerBinding.descriptorCount);
+					state.samplers.reserve(1u);
 
-					std::ranges::for_each(std::views::iota(std::uint32_t{0}, immutableSamplerBinding.descriptorCount), [&](std::uint32_t arrayIndex) {
-						auto samplerDebugName = std::format("immutable_sampler_s{}_b{}_i{}", state.set, state.binding, arrayIndex);
-						state.samplers.push_back(SlangSampler::create(device, immutableSamplerBinding.samplerDesc, samplerDebugName));
-						nrAssert(state.samplers.back().valid(), std::format("CursorPipelineLayout::create failed to create immutable sampler '{}'.", samplerDebugName));
-						state.rawSamplers.push_back(state.samplers.back().raw());
-					});
+					auto samplerDebugName = std::format("immutable_sampler_s{}_b{}", state.set, state.binding);
+					state.samplers.push_back(SlangSampler::create(device, immutableSamplerBinding.samplerDesc, samplerDebugName));
+					nrAssert(state.samplers.back().valid(), std::format("CursorPipelineLayout::create failed to create immutable sampler '{}'.", samplerDebugName));
+					state.rawSamplers.resize(immutableSamplerBinding.descriptorCount, state.samplers.back().raw());
 
 					layout.immutableSamplerBindings_.push_back(std::move(state));
 				});

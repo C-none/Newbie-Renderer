@@ -5,6 +5,8 @@ __include include.globalUniform;
 __include include.sceneTextures;
 __include include.sceneLights;
 __include include.materialTextureIds;
+__include include.pathTracing.roulette;
+__include include.pathTracing.mis;
 __include include.rtMaterial;
 __include include.material.types;
 __include include.material.base;

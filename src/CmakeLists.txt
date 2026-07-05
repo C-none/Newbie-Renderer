@@ -18,11 +18,3 @@ nr_link_module_dependencies(main main.cpp PRIVATE
     nrpipeline
     dependency
 )
-
-add_custom_target(run_main
-    COMMAND $<TARGET_FILE:main>
-    DEPENDS main
-    WORKING_DIRECTORY $<TARGET_FILE_DIR:main>
-    COMMENT "Build and run main executable"
-    USES_TERMINAL
-)

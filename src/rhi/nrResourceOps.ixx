@@ -33,6 +33,80 @@ enum class OwnershipBarrierPhase
     Acquire,
 };
 
+struct QueueFamilyTransferPolicy
+{
+    bool maintenance9 = false;
+    std::vector<std::uint32_t> optimalImageTransferToQueueFamilies{};
+
+    [[nodiscard]] bool hasUsableQueueFamilyPair(
+        std::uint32_t srcQueueFamilyIndex,
+        std::uint32_t dstQueueFamilyIndex) const noexcept
+    {
+        return maintenance9 &&
+               srcQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+               dstQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+               srcQueueFamilyIndex != dstQueueFamilyIndex;
+    }
+
+    [[nodiscard]] bool canOmitBufferQueueFamilyTransfer(
+        std::uint32_t srcQueueFamilyIndex,
+        std::uint32_t dstQueueFamilyIndex) const noexcept
+    {
+        return hasUsableQueueFamilyPair(srcQueueFamilyIndex, dstQueueFamilyIndex);
+    }
+
+    [[nodiscard]] bool canOmitImageQueueFamilyTransfer(
+        std::uint32_t srcQueueFamilyIndex,
+        std::uint32_t dstQueueFamilyIndex,
+        vk::ImageTiling tiling,
+        vk::ImageUsageFlags usage,
+        bool isSwapchain = false) const noexcept
+    {
+        if (isSwapchain || !hasUsableQueueFamilyPair(srcQueueFamilyIndex, dstQueueFamilyIndex))
+        {
+            return false;
+        }
+
+        if (tiling == vk::ImageTiling::eLinear)
+        {
+            return true;
+        }
+
+        if (tiling != vk::ImageTiling::eOptimal ||
+            srcQueueFamilyIndex >= optimalImageTransferToQueueFamilies.size() ||
+            dstQueueFamilyIndex >= std::numeric_limits<std::uint32_t>::digits)
+        {
+            return false;
+        }
+
+        constexpr auto disallowedOptimalUsage =
+            vk::ImageUsageFlagBits::eColorAttachment |
+            vk::ImageUsageFlagBits::eDepthStencilAttachment |
+            vk::ImageUsageFlagBits::eTransientAttachment |
+            vk::ImageUsageFlagBits::eInputAttachment |
+            vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT |
+            vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR;
+
+        const auto destinationMask = std::uint32_t{1u} << dstQueueFamilyIndex;
+        return (usage & disallowedOptimalUsage) == vk::ImageUsageFlags{} &&
+               (optimalImageTransferToQueueFamilies[srcQueueFamilyIndex] & destinationMask) != 0u;
+    }
+
+    [[nodiscard]] bool canOmitImageQueueFamilyTransfer(
+        const Image& image,
+        std::uint32_t srcQueueFamilyIndex,
+        std::uint32_t dstQueueFamilyIndex,
+        bool isSwapchain = false) const noexcept
+    {
+        return canOmitImageQueueFamilyTransfer(
+            srcQueueFamilyIndex,
+            dstQueueFamilyIndex,
+            image.tiling(),
+            image.usage(),
+            isSwapchain);
+    }
+};
+
 namespace detail
 {
 /**
@@ -459,8 +533,12 @@ struct QueueOwnershipTransfer
     std::optional<QueueOwnershipWait> wait = std::nullopt);
 
 /**
- * @brief Ownership plan for uploads that may need an incoming acquire to transfer
- *        and always end with a release from transfer to the destination queue.
+ * @brief Upload queue-transition plan that may need an incoming acquire to transfer
+ *        and describes the destination queue sync scope after the transfer copy.
+ *
+ * Maintenance9 may make the explicit release/acquire QFOT optional, but callers
+ * still provide this plan so upload can submit the required destination-queue wait
+ * and record any remaining acquire barrier when ownership is still required.
  */
 struct BufferUploadOwnershipPlan
 {
@@ -907,15 +985,17 @@ struct ReadbackSyncPlan
 /**
  * @brief Upload/readback helper built on persistent mapped ring buffers.
  *
- * Upload keeps using a dedicated transfer queue with explicit ownership handoff.
+ * Upload keeps using a dedicated transfer queue with timeline semaphore handoff.
+ * Maintenance9-backed transfer policy omits explicit queue-family ownership
+ * transfers when Vulkan guarantees content preservation for the resource.
  * Readback records copy work directly on the source resource queue
  * (graphics or compute only) and uses one readback ring shared by graphics/compute
  * queue families (concurrent mode only when those families differ).
  *
- * Upload path follows Vulkan's recommended queue-family transfer flow:
- *   1. source queue records a release barrier,
- *   2. a semaphore orders the queue submissions,
- *   3. destination queue records the matching acquire barrier.
+ * Upload path keeps cross-queue execution and memory ordering on semaphores.
+ * When QFOT is required it records the source release and destination acquire
+ * barriers; when QFOT is omitted, image uploads still record the required layout
+ * transition with ignored queue-family indices.
  *
  * Readback path still requires explicit synchronization:
  *   1. pre-copy barrier for producer-write -> transfer-read visibility,
@@ -929,6 +1009,7 @@ class UploadReadbackContext
         const vk::raii::Device& device,
         ResourceFactory& resourceFactory,
         QueueManager& queueManager,
+        QueueFamilyTransferPolicy queueFamilyTransferPolicy,
         vk::DeviceSize uploadRingSize = kDefaultUploadReadbackRingSize,
         vk::DeviceSize readbackRingSize = kDefaultUploadReadbackRingSize);
 
@@ -973,7 +1054,7 @@ class UploadReadbackContext
     [[nodiscard]] vk::BufferMemoryBarrier2 makeAcquireBarrier(const BufferUploadTicket& ticket) const;
 
     /**
-     * @brief Record acquire barrier from upload ticket into destination queue command buffer.
+     * @brief Record acquire barrier from upload ticket when the ticket carries ownership.
      */
     void recordAcquireBarrier(const vk::raii::CommandBuffer& commandBuffer, const BufferUploadTicket& ticket) const;
 
@@ -983,14 +1064,15 @@ class UploadReadbackContext
     [[nodiscard]] vk::ImageMemoryBarrier2 makeImageAcquireBarrier(const ImageUploadTicket& ticket) const;
 
     /**
-     * @brief Record acquire barrier from image upload ticket into destination queue command buffer.
+     * @brief Record acquire barrier from image upload ticket when the ticket carries ownership.
      */
     void recordImageAcquireBarrier(const vk::raii::CommandBuffer& commandBuffer, const ImageUploadTicket& ticket) const;
 
     /**
      * @brief Upload raw bytes into a destination buffer via transfer queue staging ring.
      *
-     * This enforces non-UBO upload policy: transfer copy + queue ownership transfer.
+     * This enforces non-UBO upload policy: transfer copy plus destination queue
+     * synchronization. Explicit QFOT is recorded only when required by policy.
      * If `ownership.acquireToTransfer` is present, the first transfer submit waits
      * on `acquireToTransfer.waitSemaphore` and records the matching acquire barrier
      * at the beginning of the transfer pipeline. If it is omitted, this upload path
@@ -1021,10 +1103,10 @@ class UploadReadbackContext
      * @brief Upload one image payload via staging buffer -> copyBufferToImage2.
      *
      * This path intentionally does not create a staging image. It performs:
-     *   1) optional acquire-to-transfer ownership barrier + wait,
+     *   1) optional acquire-to-transfer synchronization and ownership barrier,
      *   2) transition to eTransferDstOptimal,
      *   3) copyBufferToImage2 from upload ring,
-     *   4) release to destination queue with destination layout.
+     *   4) transition to destination layout and, when required, release to the destination queue.
      *
      * Note: current implementation requires payload to fit in the upload ring.
      */
@@ -1145,6 +1227,7 @@ class UploadReadbackContext
 
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     std::optional<std::reference_wrapper<QueueManager>> queueManager_{};
+    QueueFamilyTransferPolicy queueFamilyTransferPolicy_{};
 
     Buffer uploadRing_;
     Buffer readbackRing_;

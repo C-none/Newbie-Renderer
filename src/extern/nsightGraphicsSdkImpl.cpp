@@ -6,6 +6,10 @@
 #include <array>
 #include <cwchar>
 
+#if defined(__MINGW32__) && !defined(__STRSAFE__NO_INLINE)
+#define __STRSAFE__NO_INLINE
+#endif
+
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"

@@ -192,12 +192,6 @@ class FrameContext
      */
     [[nodiscard]] const vk::raii::Semaphore &imageAvailable() const noexcept;
 
-    /**
-     * @brief Get render finished semaphore (signaled after rendering for present)
-     * @return Reference to vk::raii::Semaphore
-     */
-    [[nodiscard]] const vk::raii::Semaphore &renderFinished() const noexcept;
-
     // ========== Status queries ==========
 
     /**
@@ -324,7 +318,6 @@ class FrameContext
     // Non-owning pointer to a semaphore slot in PresentationContext::acquirePool_.
     // Injected at beginFrame(), valid until returnAcquireSemaphore() at next beginFrame().
     const vk::raii::Semaphore *borrowedAcquireSemaphore_ = nullptr;
-    vk::raii::Semaphore renderFinished_ = {nullptr};
 
     // Graphics queue pools
     CommandPool graphicsPrimary_;

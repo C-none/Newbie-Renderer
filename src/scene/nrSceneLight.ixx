@@ -6,13 +6,14 @@ import std;
 
 export namespace nr::scene
 {
-inline constexpr std::uint32_t kSceneLightGpuAbiVersion = 2u;
+inline constexpr std::uint32_t kSceneLightGpuAbiVersion = 3u;
 
 struct SceneLightGpuHeader
 {
     std::uint32_t abiVersion = kSceneLightGpuAbiVersion;
     std::uint32_t lightCount = 0;
     std::uint32_t aliasCount = 0;
+    // Sampling weight sum only; not a physical energy unit.
     float totalEnergy = 0.0f;
 };
 
@@ -20,7 +21,12 @@ struct SceneLightGpuRecord
 {
     // meta.x: LightType, meta.y: flags, meta.z: stable/debug instance id, meta.w: reserved.
     glm::uvec4 meta{};
+    // colorIntensity.rgb: glTF unitless linear RGB color multiplier.
+    // colorIntensity.w: glTF intensity, in lux for directional lights and
+    // candela for point/spot lights.
     glm::vec4 colorIntensity{};
+    // positionRange.xyz: world position for point/spot lights.
+    // positionRange.w: glTF point/spot range in meters; <=0 means infinite.
     glm::vec4 positionRange{};
     glm::vec4 direction{};
     glm::vec4 spotCone{};

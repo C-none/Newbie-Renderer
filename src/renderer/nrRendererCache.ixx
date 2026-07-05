@@ -73,6 +73,7 @@ class RenderGraphCompileCache
         vk::Format format = vk::Format::eUndefined;
         std::vector<ImageUsageIntent> usageIntents{};
         ImageLayoutIntent initialLayout = ImageLayoutIntent::Undefined;
+        AccessScope initialAccessScope{};
         ImageAspectIntent aspect = ImageAspectIntent::Color;
 
         [[nodiscard]] bool operator==(const ImportedImageResourceSignature&) const = default;
@@ -245,11 +246,24 @@ struct BindlessImageTableRequest
     vk::DescriptorType expectedDescriptorType = vk::DescriptorType::eCombinedImageSampler;
     std::uint32_t descriptorCapacity = 0;
     vk::Sampler sampler{};
+    bool usesImmutableSampler = false;
     std::uint64_t tableVersion = 0;
     std::map<std::uint32_t, BindlessImageDescriptor> descriptorsById{};
     std::optional<BindlessImageDescriptor> fallbackDescriptor{};
     BindlessImageTableRequirement requirement = BindlessImageTableRequirement::required;
 };
+
+[[nodiscard]] inline bool bindlessImageTableHasDescriptors(const BindlessImageTableRequest& request)
+{
+    return request.fallbackDescriptor.has_value() || !request.descriptorsById.empty();
+}
+
+[[nodiscard]] inline bool bindlessImageTableNeedsDynamicSampler(const BindlessImageTableRequest& request)
+{
+    return bindlessImageTableHasDescriptors(request) &&
+           nr::rhi::supportsImmutableSampler(request.expectedDescriptorType) &&
+           !request.usesImmutableSampler;
+}
 
 class BindlessImageTableCache
 {
@@ -308,16 +322,12 @@ class BindlessImageTableCache
                 tableBinding->binding == request.expectedBinding &&
                 tableBinding->descriptorType == request.expectedDescriptorType,
             std::format("Bindless image table '{}' has an unexpected descriptor binding.", request.tableKey));
-        auto const usesPhysicalFallback =
-            request.fallbackDescriptor.has_value() && request.fallbackDescriptor->image.has_value();
-        auto const usesPhysicalDescriptors =
-            usesPhysicalFallback ||
-            std::ranges::any_of(request.descriptorsById, [](const auto& entry) {
-                return entry.second.image.has_value();
-            });
         nrAssert(
-            !usesPhysicalDescriptors || request.sampler != vk::Sampler{},
-            "BindlessImageTableCache requires a valid sampler for physical image descriptors.");
+            !request.usesImmutableSampler || nr::rhi::supportsImmutableSampler(request.expectedDescriptorType),
+            "BindlessImageTableCache immutable sampler mode requires a sampler-capable descriptor type.");
+        nrAssert(
+            !bindlessImageTableNeedsDynamicSampler(request) || request.sampler != vk::Sampler{},
+            "BindlessImageTableCache requires a valid sampler for dynamic sampler image descriptors.");
 
         auto const reallocated = pipeline.ensureBindingSetsForFrame(
             frameIndex,
@@ -375,16 +385,12 @@ class BindlessImageTableCache
                 tableBinding->binding == request.expectedBinding &&
                 tableBinding->descriptorType == request.expectedDescriptorType,
             std::format("Bindless image table '{}' has an unexpected descriptor binding.", request.tableKey));
-        auto const usesPhysicalFallback =
-            request.fallbackDescriptor.has_value() && request.fallbackDescriptor->image.has_value();
-        auto const usesPhysicalDescriptors =
-            usesPhysicalFallback ||
-            std::ranges::any_of(request.descriptorsById, [](const auto& entry) {
-                return entry.second.image.has_value();
-            });
         nrAssert(
-            !usesPhysicalDescriptors || request.sampler != vk::Sampler{},
-            "BindlessImageTableCache requires a valid sampler for physical image descriptors.");
+            !request.usesImmutableSampler || nr::rhi::supportsImmutableSampler(request.expectedDescriptorType),
+            "BindlessImageTableCache immutable sampler mode requires a sampler-capable descriptor type.");
+        nrAssert(
+            !bindlessImageTableNeedsDynamicSampler(request) || request.sampler != vk::Sampler{},
+            "BindlessImageTableCache requires a valid sampler for dynamic sampler image descriptors.");
 
         auto const reallocated = pipeline.ensureBindingSetsForFrame(
             frameIndex,

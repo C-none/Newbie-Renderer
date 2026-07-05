@@ -8,7 +8,8 @@ void rgMain()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;
-    runPathTracingScheduler(pixel, dimensions);
+    Scheduler scheduler;
+    scheduler.traceSample(pixel, dimensions);
 }
 
 [shader("miss")]

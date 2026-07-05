@@ -335,6 +335,79 @@ void collectTlasSceneTextureHandles(
            nearlyEqual(left.cameraWorld.z, right.cameraWorld.z, epsilon);
 }
 
+[[nodiscard]] std::optional<NodeImageResourceDesc> describeGraphImageResource(const GraphResourceDesc& resource)
+{
+    return std::visit(
+        [](const auto& desc) -> std::optional<NodeImageResourceDesc> {
+            using DescT = std::remove_cvref_t<decltype(desc)>;
+            if constexpr (std::same_as<DescT, GraphImportedImageDesc> ||
+                          std::same_as<DescT, GraphTransientImageDesc>)
+            {
+                return NodeImageResourceDesc{
+                    .debugName = desc.debugName,
+                    .extent = desc.extent,
+                    .format = desc.format,
+                    .aspect = desc.aspect,
+                };
+            }
+            else if constexpr (std::same_as<DescT, GraphImportedSwapchainImageDesc>)
+            {
+                return NodeImageResourceDesc{
+                    .debugName = desc.debugName,
+                    .extent = desc.extent,
+                    .format = desc.format,
+                };
+            }
+            else
+            {
+                return std::nullopt;
+            }
+        },
+        resource.desc);
+}
+
+NodeUiBuildContext::NodeUiBuildContext(
+    std::string_view runtimeName,
+    std::vector<NodeUiSection>& sections)
+    : runtimeName_{runtimeName},
+      sections_{sections}
+{
+    nrAssert(!runtimeName_.empty(), "NodeUiBuildContext requires a non-empty runtime name.");
+}
+
+[[nodiscard]] std::string_view NodeUiBuildContext::runtimeName() const noexcept
+{
+    return runtimeName_;
+}
+
+[[nodiscard]] std::string NodeUiBuildContext::makeSectionId(std::string_view localId) const
+{
+    nrAssert(!localId.empty(), "NodeUiBuildContext::makeSectionId requires a non-empty local id.");
+    return std::format("{}.{}", runtimeName_, localId);
+}
+
+void NodeUiBuildContext::addSection(
+    std::string_view title,
+    NodeUiSectionDrawCallback draw,
+    bool defaultOpen,
+    std::string_view localId)
+{
+    nrAssert(!title.empty(), "NodeUiBuildContext::addSection requires a non-empty title.");
+    nrAssert(static_cast<bool>(draw), "NodeUiBuildContext::addSection requires a draw callback.");
+
+    auto const sectionOrdinal = nextSectionOrdinal_++;
+    auto sectionId = localId.empty()
+                         ? std::format("{}.{}", runtimeName_, sectionOrdinal)
+                         : makeSectionId(localId);
+
+    sections_.get().push_back(NodeUiSection{
+        .id = std::move(sectionId),
+        .title = std::string{title},
+        .draw = std::move(draw),
+        .defaultOpen = defaultOpen,
+    });
+}
+
 void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
 {
         nrAssert(resource.valid(), std::format("NodeBuildContext::publishFrameResource requires a valid resource for '{}'.", key));
@@ -361,6 +434,25 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
             resource.valid(),
             std::format("{} requires frame resource '{}', but it has not been published.", consumerDebugName, key));
         return resource;
+    }
+
+[[nodiscard]] std::optional<NodeImageResourceDesc> NodeBuildContext::describeImageResource(GraphResourceHandle resource) const
+{
+        if (!resource.valid())
+        {
+            return std::nullopt;
+        }
+
+        auto const& resources = graphBuilder.get().frame().resources;
+        auto const resourceIt = std::ranges::find_if(resources, [resource](const GraphResourceDesc& desc) {
+            return desc.handle == resource;
+        });
+        if (resourceIt == resources.end())
+        {
+            return std::nullopt;
+        }
+
+        return describeGraphImageResource(*resourceIt);
     }
 
 [[nodiscard]] GraphResourceHandle NodeBuildContext::transientColor(
@@ -418,6 +510,33 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
                 ImageUsageIntent::StorageWrite,
                 ImageUsageIntent::TransferSrc,
             });
+    }
+
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importRetainedStorageColor(
+        const nr::rhi::Image& image,
+        RetainedImageState& state,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format,
+        ResourceLifetime lifetime)
+{
+        nrAssert(image.valid(), std::format("{} image is invalid.", debugName));
+
+        return addResource(GraphImportedImageDesc{
+            .debugName = std::string(debugName),
+            .lifetime = lifetime,
+            .initialOwnership = state.initialized ? state.ownership : ResourceOwnershipDomain::Undefined,
+            .extent = vk::Extent3D{extent.width, extent.height, 1},
+            .format = format,
+            .usageIntents = {
+                ImageUsageIntent::StorageWrite,
+                ImageUsageIntent::TransferSrc,
+            },
+            .initialLayout = state.initialized ? state.layout : ImageLayoutIntent::Undefined,
+            .initialAccessScope = state.initialized ? state.access : AccessScope{},
+            .importedResource = std::cref(image),
+            .retainedState = std::ref(state),
+        });
     }
 
 [[nodiscard]] GraphResourceHandle NodeBuildContext::importSampledColor(
@@ -1199,6 +1318,10 @@ void NodeRuntime::initialize(NodeInitContext&)
 {
     }
 
+void NodeRuntime::collectUi(NodeUiBuildContext&, const NodeFrameParameters&)
+{
+    }
+
 void NodeRuntime::shutdown(NodeShutdownContext&)
 {
     }
@@ -1206,14 +1329,6 @@ void NodeRuntime::shutdown(NodeShutdownContext&)
 void Renderer::ensureSceneTextureFallback()
 {
         nrAssert(static_cast<bool>(device_), "Renderer::ensureSceneTextureFallback requires initialized device.");
-
-        if (!sceneTextureSampler_.valid())
-        {
-            sceneTextureSampler_ = device_->pipeline().createSampler(
-                nr::rhi::SlangSamplerDesc{},
-                "Renderer.SceneTextureSampler");
-            nrAssert(sceneTextureSampler_.valid(), "Renderer failed to create scene texture sampler.");
-        }
 
         if (sceneTextureFallback_.valid())
         {
@@ -1233,9 +1348,9 @@ void Renderer::ensureSceneTextureFallback()
         uploadSceneTextureFallback();
     }
 
-[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan Renderer::makeTransferToGraphicsImageUploadPlan() const
+[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan Renderer::makeSceneTextureFallbackUploadPlan() const
 {
-        nrAssert(static_cast<bool>(device_), "Renderer::makeTransferToGraphicsImageUploadPlan requires initialized device.");
+        nrAssert(static_cast<bool>(device_), "Renderer::makeSceneTextureFallbackUploadPlan requires initialized device.");
 
         auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
         auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
@@ -1268,13 +1383,13 @@ void Renderer::uploadSceneTextureFallback()
         };
 
         auto& uploadContext = device_->uploadReadback();
-        auto const ownership = makeTransferToGraphicsImageUploadPlan();
+        auto const uploadPlan = makeSceneTextureFallbackUploadPlan();
         auto uploadTicket = uploadContext.uploadImage(
             std::span<const std::byte>{purplePixel},
             sceneTextureFallback_,
             vk::ImageLayout::eUndefined,
             vk::ImageLayout::eShaderReadOnlyOptimal,
-            ownership);
+            uploadPlan);
         nrAssert(uploadTicket.valid(), "Renderer failed to upload purple scene texture fallback.");
 
         auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
@@ -1293,21 +1408,22 @@ void Renderer::uploadSceneTextureFallback()
         };
         auto commandBuffers = commandPool.allocatePrimary(1);
         auto& commandBuffer = commandBuffers.front();
+
         nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         uploadContext.recordImageAcquireBarrier(commandBuffer, uploadTicket);
         nr::rhi::CommandRecorder::end(commandBuffer);
 
-        auto acquireBatch = nr::rhi::CommandBatch{};
-        acquireBatch.addWait(
+        auto syncBatch = nr::rhi::CommandBatch{};
+        syncBatch.addWait(
             uploadContext.uploadTimelineSemaphore(),
             vk::PipelineStageFlagBits2::eAllCommands,
             uploadTicket.signalValue);
-        acquireBatch.addCommandBuffer(commandBuffer);
+        syncBatch.addCommandBuffer(commandBuffer);
 
         auto fence = vk::raii::Fence(device_->device, vk::FenceCreateInfo{});
-        device_->queueManager.graphics().submit(std::move(acquireBatch), std::cref(fence));
+        device_->queueManager.graphics().submit(std::move(syncBatch), std::cref(fence));
         auto const waitResult = device_->device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
-        nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for purple scene texture fallback acquire.");
+        nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for purple scene texture fallback upload synchronization.");
         uploadContext.reclaimCompletedUploads();
     }
 
@@ -1427,7 +1543,6 @@ void Renderer::shutdown()
         teardownInstalledGraph();
         submissionTimeline_ = RendererSubmissionTimeline{};
         frameUniformArena_ = FrameUniformArena{};
-        sceneTextureSampler_ = nr::rhi::SlangSampler{};
         sceneTextureFallback_ = nr::rhi::Image{};
         resetSceneBinding();
         cpuTimingAccumulator_ = {};
@@ -1729,6 +1844,7 @@ void Renderer::resetCameraFrameTracking() noexcept
         frameParameters.swapchainImageIndex = begin.swapchainImageIndex;
         frameParameters.swapchainExtent = device_->presentationContext.swapchainExtent();
         frameParameters.swapchainFormat = device_->presentationContext.swapchainFormat();
+        frameParameters.swapchainColorSpace = device_->presentationContext.swapchainColorSpace();
         if (input.frameServices.has_value())
         {
             frameParameters.frameServices = input.frameServices;
@@ -1918,7 +2034,6 @@ void Renderer::buildInstalledGraph(
         };
         auto sceneTextureDescriptorTable = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
         globalResources.sceneTextureDescriptorsById = std::move(sceneTextureDescriptorTable.descriptorsById);
-        globalResources.sceneTextureSampler = sceneTextureSampler_.raw();
         globalResources.sceneTextureDescriptorVersion = sceneTextureDescriptorTable.version;
 
         auto nodeFrameParameters = frameParameters;
@@ -1927,6 +2042,15 @@ void Renderer::buildInstalledGraph(
             nodeFrameParameters.sceneBridgeFrameHandle =
                 builder_.addFrameData("SceneBridgeFrame", sceneBridgeFrame->get());
         }
+
+        auto nodeUiSections = std::vector<NodeUiSection>{};
+        nodeUiSections.reserve(installedNodes_.size());
+        std::ranges::for_each(installedNodes_, [&](InstalledNode& installedNode) {
+            auto uiContext = NodeUiBuildContext{installedNode.runtimeName, nodeUiSections};
+            installedNode.runtime->collectUi(uiContext, nodeFrameParameters);
+        });
+        nodeFrameParameters.nodeUiSections =
+            std::span<const NodeUiSection>{nodeUiSections.data(), nodeUiSections.size()};
 
         auto frameResources = std::map<std::string, GraphResourceHandle>{};
 

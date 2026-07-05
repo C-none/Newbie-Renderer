@@ -7,6 +7,19 @@ import nr.utils;
 
 namespace
 {
+template <typename VkHandle>
+[[nodiscard]] VkHandle fakeVkHandle(std::uintptr_t value) noexcept
+{
+    if constexpr (std::is_pointer_v<VkHandle>)
+    {
+        return reinterpret_cast<VkHandle>(value);
+    }
+    else
+    {
+        return static_cast<VkHandle>(value);
+    }
+}
+
 [[nodiscard]] nr::renderer::RenderGraphFrameDescription buildCrossQueueFrame()
 {
     auto builder = nr::renderer::RenderGraphBuilder{};
@@ -282,6 +295,41 @@ namespace
     return builder.build();
 }
 
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildRetainedStorageWriteFrame(
+    nr::renderer::RetainedImageState& state,
+    std::string_view debugSuffix)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode(std::format("Retained.Node.{}", debugSuffix), nr::renderer::QueueDomain::Compute);
+    auto retainedImage = builder.addResource(nr::renderer::GraphImportedImageDesc{
+        .debugName = std::format("Retained.Image.{}", debugSuffix),
+        .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+        .initialOwnership = state.initialized
+                                ? state.ownership
+                                : nr::renderer::ResourceOwnershipDomain::Undefined,
+        .extent = vk::Extent3D{128, 72, 1},
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .usageIntents = {
+            nr::renderer::ImageUsageIntent::StorageWrite,
+            nr::renderer::ImageUsageIntent::TransferSrc,
+        },
+        .initialLayout = state.initialized
+                             ? state.layout
+                             : nr::renderer::ImageLayoutIntent::Undefined,
+        .initialAccessScope = state.initialized
+                                  ? state.access
+                                  : nr::renderer::AccessScope{},
+        .retainedState = std::ref(state),
+    });
+    auto uses = std::array{nr::renderer::use::storageWrite(retainedImage)};
+    static_cast<void>(builder.addPass(
+        std::format("Retained.Pass.{}", debugSuffix),
+        node,
+        uses,
+        [](const nr::renderer::PassRecordContext&) {}));
+    return builder.build();
+}
+
 template <typename TBaseFrameBuilder, typename TVariantFrameBuilder>
 void requireCompileCacheMissForStructuralChange(
     std::string_view label,
@@ -368,6 +416,7 @@ struct FakeBindlessPipeline
         .expectedBinding = 0u,
         .expectedDescriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCapacity = descriptorCapacity,
+        .sampler = vk::Sampler{fakeVkHandle<vk::Sampler::CType>(0x5001u)},
         .tableVersion = tableVersion,
         .descriptorsById = std::move(descriptorsById),
         .fallbackDescriptor = std::move(fallbackDescriptor),
@@ -565,6 +614,94 @@ const nr::test::CaseRegistrar compilerOrderedUseBarrierCase{
         nr::test::requireEqual(barrier.newLayout, nr::renderer::ImageLayoutIntent::ColorAttachment);
     }};
 
+const nr::test::CaseRegistrar compilerRetainedImageInitializedCase{
+    "render graph compiler uses initialized retained image state for first-use barriers",
+    [] {
+        auto state = nr::renderer::RetainedImageState{
+            .initialized = true,
+            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
+            .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
+            .access = nr::renderer::AccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferRead,
+            },
+        };
+        auto frame = buildRetainedStorageWriteFrame(state, "initialized");
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(frame);
+
+        nr::test::requireEqual(compiled.resources.size(), std::size_t{1});
+        auto const& resource = compiled.resources.front();
+        nr::test::requireEqual(resource.initialLayout, nr::renderer::ImageLayoutIntent::TransferSrc);
+        nr::test::requireEqual(resource.initialOwnership, nr::renderer::ResourceOwnershipDomain::Compute);
+        nr::test::require(resource.initialAccessScope.stages == vk::PipelineStageFlagBits2::eTransfer);
+        nr::test::require(resource.initialAccessScope.access == vk::AccessFlagBits2::eTransferRead);
+        nr::test::requireEqual(resource.finalLayout, nr::renderer::ImageLayoutIntent::General);
+        nr::test::requireEqual(resource.finalOwnership, nr::renderer::ResourceOwnershipDomain::Compute);
+        nr::test::require(resource.finalAccessScope.stages ==
+                          (vk::PipelineStageFlagBits2::eComputeShader |
+                           vk::PipelineStageFlagBits2::eRayTracingShaderKHR));
+        nr::test::require(resource.finalAccessScope.access == vk::AccessFlagBits2::eShaderStorageWrite);
+        nr::test::require(resource.retainedState.has_value(), "compiled retained image should keep state ref");
+        nr::test::require(
+            std::addressof(resource.retainedState->get()) == std::addressof(state),
+            "compiled retained image should point at the current retained state");
+
+        auto const& pass = compiled.submitBatches.front().passes.front();
+        nr::test::requireEqual(pass.preBarriers.size(), std::size_t{1});
+        auto const& barrier = pass.preBarriers.front();
+        nr::test::requireEqual(barrier.oldLayout, nr::renderer::ImageLayoutIntent::TransferSrc);
+        nr::test::requireEqual(barrier.newLayout, nr::renderer::ImageLayoutIntent::General);
+        nr::test::require(barrier.srcScope.stages == vk::PipelineStageFlagBits2::eTransfer);
+        nr::test::require(barrier.srcScope.access == vk::AccessFlagBits2::eTransferRead);
+        nr::test::require(barrier.dstScope.stages ==
+                          (vk::PipelineStageFlagBits2::eComputeShader |
+                           vk::PipelineStageFlagBits2::eRayTracingShaderKHR));
+        nr::test::require(barrier.dstScope.access == vk::AccessFlagBits2::eShaderStorageWrite);
+    }};
+
+const nr::test::CaseRegistrar compilerRetainedImageUninitializedCase{
+    "render graph compiler treats uninitialized retained images as undefined",
+    [] {
+        auto state = nr::renderer::RetainedImageState{};
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("Retained.Uninitialized", nr::renderer::QueueDomain::Compute);
+        auto retainedImage = builder.addResource(nr::renderer::GraphImportedImageDesc{
+            .debugName = "Retained.Uninitialized.Image",
+            .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
+            .extent = vk::Extent3D{64, 64, 1},
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .usageIntents = {
+                nr::renderer::ImageUsageIntent::StorageWrite,
+                nr::renderer::ImageUsageIntent::TransferSrc,
+            },
+            .initialLayout = nr::renderer::ImageLayoutIntent::TransferSrc,
+            .initialAccessScope = nr::renderer::AccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferRead,
+            },
+            .retainedState = std::ref(state),
+        });
+        auto uses = std::array{nr::renderer::use::storageWrite(retainedImage)};
+        static_cast<void>(builder.addPass(
+            "Retained.Uninitialized.Pass",
+            node,
+            uses,
+            [](const nr::renderer::PassRecordContext&) {}));
+
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(builder.build());
+        auto const& resource = compiled.resources.front();
+        nr::test::requireEqual(resource.initialLayout, nr::renderer::ImageLayoutIntent::Undefined);
+        nr::test::requireEqual(resource.initialOwnership, nr::renderer::ResourceOwnershipDomain::Undefined);
+        nr::test::require(!resource.initialAccessScope.resolved(), "uninitialized retained source scope should stay empty");
+
+        auto const& barrier = compiled.submitBatches.front().passes.front().preBarriers.front();
+        nr::test::requireEqual(barrier.oldLayout, nr::renderer::ImageLayoutIntent::Undefined);
+        nr::test::requireEqual(barrier.newLayout, nr::renderer::ImageLayoutIntent::General);
+        nr::test::require(!barrier.srcScope.resolved(), "uninitialized retained first-use barrier should have empty source scope");
+        nr::test::require(barrier.dstScope.access == vk::AccessFlagBits2::eShaderStorageWrite);
+    }};
+
 const nr::test::CaseRegistrar compilerAccelerationStructureCase{
     "render graph compiler tracks acceleration structure resources",
     [] {
@@ -703,6 +840,49 @@ const nr::test::CaseRegistrar compileCachePatchesCurrentFramePayloadCase{
         });
         nr::test::requireEqual(currentRecordedValue, std::uint32_t{222});
         nr::test::requireEqual(previousRecordedValue, std::uint32_t{0}, "cached callback from previous frame must not run");
+    }};
+
+const nr::test::CaseRegistrar compileCachePatchesRetainedImageStateCase{
+    "render graph compile cache keys retained image access and patches current state refs",
+    [] {
+        auto cache = nr::renderer::RenderGraphCompileCache{};
+        auto previousState = nr::renderer::RetainedImageState{
+            .initialized = true,
+            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
+            .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
+            .access = nr::renderer::AccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferRead,
+            },
+        };
+        auto currentState = previousState;
+        auto changedAccessState = previousState;
+        changedAccessState.access = nr::renderer::AccessScope{
+            .stages = vk::PipelineStageFlagBits2::eTransfer,
+            .access = vk::AccessFlagBits2::eMemoryRead,
+        };
+
+        auto previousFrame = buildRetainedStorageWriteFrame(previousState, "previous");
+        static_cast<void>(cache.compileConsumingCached(previousFrame));
+        auto previousStats = cache.statistics();
+        nr::test::requireEqual(previousStats.hitCount, std::uint64_t{0});
+        nr::test::requireEqual(previousStats.missCount, std::uint64_t{1});
+
+        auto currentFrame = buildRetainedStorageWriteFrame(currentState, "current");
+        auto compiled = cache.compileConsumingCached(currentFrame);
+        auto currentStats = cache.statistics();
+        nr::test::requireEqual(currentStats.hitCount, std::uint64_t{1});
+        nr::test::requireEqual(currentStats.missCount, std::uint64_t{1});
+        nr::test::require(compiled.resources.front().retainedState.has_value(), "cache hit should keep retained state ref");
+        nr::test::require(
+            std::addressof(compiled.resources.front().retainedState->get()) == std::addressof(currentState),
+            "cache hit should patch retained state to the current frame object");
+
+        auto changedFrame = buildRetainedStorageWriteFrame(changedAccessState, "changedAccess");
+        static_cast<void>(cache.compileConsumingCached(changedFrame));
+        auto changedStats = cache.statistics();
+        nr::test::requireEqual(changedStats.hitCount, std::uint64_t{1});
+        nr::test::requireEqual(changedStats.missCount, std::uint64_t{2});
     }};
 
 const nr::test::CaseRegistrar compileCacheStructuralMissCase{

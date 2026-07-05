@@ -130,7 +130,7 @@ public void samplePathTracingDirectLighting(
             continue;
         }
 
-        contribution.radiance *= kPathTracingLightEnergyScale / lightSample.pdf;
+        contribution.radiance *= 1.0f / lightSample.pdf;
         float3 visibilityOrigin = offsetPathTracingRayOrigin(
             material.position,
             material.geometryNormal,
@@ -200,6 +200,19 @@ public void handlePathTracingHit(inout PathState path, ResolvedMaterialPayload m
     }
 
     updatePathThroughput(path, scatter.weight);
+    PathTracingRussianRoulettePolicy roulettePolicy = PathTracingRussianRoulettePolicy();
+    if (roulettePolicy.shouldApply(path.vertexIndex))
+    {
+        float survivalProbability = roulettePolicy.survivalProbability(path.throughput);
+        if (!roulettePolicy.survives(nextPathTracingRandom01(path.rngState), survivalProbability))
+        {
+            terminatePathState(path);
+            return;
+        }
+
+        path.throughput *= roulettePolicy.throughputScale(survivalProbability);
+    }
+
     path.pdf = scatter.pdf;
     path.origin = offsetPathTracingRayOrigin(material.position, material.geometryNormal, scatter.direction);
     path.direction = scatter.direction;
@@ -214,5 +227,73 @@ public void handlePathTracingMiss(inout PathState path)
 
 public void writePathTracingOutput(PathState path)
 {
+    // Path radiance is scene-linear HDR RGB. Present/Display convert this to
+    // screen pixels by clamping to [0,1], optional linear->sRGB transfer, optional
+    // BGR swizzle, and UI compositing in the Present path.
     outputImage[int2(path.pixel)] = float4(path.radiance, 1.0f);
+}
+
+public struct Pt
+{
+    public PathState path;
+
+    public bool isActive()
+    {
+        return pathStateIsActive(path);
+    }
+
+    [mutating]
+    public void traceMaterialRay(out PathTracingRayPayload payload)
+    {
+        path.vertexIndex += 1u;
+        payload = defaultPathTracingRayPayload(kPathTracingRayKindMaterial);
+
+        // TLAS instance flags encode glTF source winding, double-sided culling, and transform determinant.
+        TraceRay(
+            scene,
+            RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+            0xFF,
+            0,
+            0,
+            0,
+            pathStateRayDesc(path),
+            payload);
+    }
+
+    [mutating]
+    public void handleTraceResult(PathTracingRayPayload payload)
+    {
+        if (payload.hit != 0u)
+        {
+            handleHit(payload.material);
+        }
+        else
+        {
+            handleMiss();
+        }
+    }
+
+    [mutating]
+    public void handleHit(ResolvedMaterialPayload material)
+    {
+        handlePathTracingHit(path, material);
+    }
+
+    [mutating]
+    public void handleMiss()
+    {
+        handlePathTracingMiss(path);
+    }
+
+    public void writeOutput()
+    {
+        writePathTracingOutput(path);
+    }
+};
+
+public Pt makePathTracingPt(uint2 pixel, uint2 dimensions)
+{
+    Pt pt;
+    pt.path = generatePathTracingPath(pixel, dimensions);
+    return pt;
 }

@@ -428,6 +428,8 @@ class RenderGraphExecutor
         const CompiledSubmitBatch& batch,
         const std::map<GraphResourceHandle, std::reference_wrapper<const CompiledResourceDesc>>& compiledResourceByHandle);
 
+    static void updateRetainedImageStates(const CompiledGraphFrame& compiled);
+
     [[nodiscard]] static std::uint32_t queueFamilyIndexFor(const nr::rhi::Device& device, QueueDomain queue);
 
     [[nodiscard]] static vk::ImageSubresourceRange subresourceRangeFor(const CompiledResourceDesc& resource);
@@ -494,14 +496,15 @@ class RenderGraphExecutor
         std::size_t chunkIndex,
         std::uint32_t secondaryPoolSlot);
 
-    static void addTransitionBarrier(
+    [[nodiscard]] static bool addTransitionBarrier(
         nr::rhi::ops::BarrierBatch& barriers,
         const CompiledResourceDesc& resource,
         const PreparedResourceBinding& binding,
         const ResourceStateTransition& transition,
         TransitionPlacement placement,
         std::uint32_t srcQueueFamilyIndex,
-        std::uint32_t dstQueueFamilyIndex);
+        std::uint32_t dstQueueFamilyIndex,
+        const nr::rhi::ops::QueueFamilyTransferPolicy& queueFamilyTransferPolicy);
 
     [[nodiscard]] static PassRecordContext makePassRecordContext(
         std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer,

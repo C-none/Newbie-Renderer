@@ -13,11 +13,14 @@ struct AccumulateRuntimeCache;
 
 export namespace nr::renderPasses
 {
+inline constexpr std::uint32_t kAccumulateDefaultMaxHistorySampleCount = 1024u;
+inline constexpr std::uint32_t kAccumulateMaxHistorySampleCount = nr::renderer::kRendererAccumulationMaxSampleCount;
+
 struct AccumulateNodeInput
 {
     vk::Extent2D viewportExtent{1u, 1u};
     vk::Format historyFormat = vk::Format::eR16G16B16A16Sfloat;
-    std::uint32_t maxHistorySampleCount = nr::renderer::kRendererAccumulationMaxSampleCount;
+    std::uint32_t maxHistorySampleCount = kAccumulateDefaultMaxHistorySampleCount;
 };
 
 class AccumulateNode final : public Node
@@ -31,10 +34,14 @@ class AccumulateNode final : public Node
     [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
+    void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void shutdown(NodeShutdownContext& context) override;
 
   private:
     std::shared_ptr<detail::AccumulateRuntimeCache> runtime_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
+    std::uint32_t maxHistorySampleCountDraft_ = kAccumulateDefaultMaxHistorySampleCount;
+    std::uint32_t pendingMaxHistorySampleCount_ = kAccumulateDefaultMaxHistorySampleCount;
+    bool pendingMaxHistorySampleCountValid_ = false;
 };
 } // namespace nr::renderPasses

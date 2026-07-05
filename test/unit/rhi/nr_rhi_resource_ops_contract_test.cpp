@@ -44,6 +44,67 @@ const nr::test::CaseRegistrar ownershipTransferCase{
         nr::test::require(sameQueuePlan.valid(2u), "same queue plan should validate with matching transfer family");
     }};
 
+const nr::test::CaseRegistrar maintenance9TransferPolicyCase{
+    "rhi maintenance9 transfer policy identifies omittable queue ownership transfers",
+    [] {
+        auto policy = nr::rhi::ops::QueueFamilyTransferPolicy{
+            .maintenance9 = true,
+            .optimalImageTransferToQueueFamilies = std::vector<std::uint32_t>{1u << 2u},
+        };
+
+        nr::test::require(
+            policy.canOmitBufferQueueFamilyTransfer(0u, 2u),
+            "maintenance9 should allow buffer ownership transfer omission");
+        nr::test::require(
+            policy.canOmitImageQueueFamilyTransfer(
+                0u,
+                2u,
+                vk::ImageTiling::eLinear,
+                vk::ImageUsageFlagBits::eTransferDst),
+            "maintenance9 should allow linear image ownership transfer omission");
+        nr::test::require(
+            policy.canOmitImageQueueFamilyTransfer(
+                0u,
+                2u,
+                vk::ImageTiling::eOptimal,
+                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled),
+            "maintenance9 should allow eligible optimal sampled image ownership transfer omission");
+        nr::test::require(
+            !policy.canOmitImageQueueFamilyTransfer(
+                0u,
+                2u,
+                vk::ImageTiling::eOptimal,
+                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment),
+            "attachment images should retain explicit ownership transfer");
+        nr::test::require(
+            !policy.canOmitImageQueueFamilyTransfer(
+                0u,
+                1u,
+                vk::ImageTiling::eOptimal,
+                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled),
+            "optimal image omission should require the destination queue-family bit");
+
+        auto disabledPolicy = nr::rhi::ops::QueueFamilyTransferPolicy{};
+        nr::test::require(
+            !disabledPolicy.canOmitBufferQueueFamilyTransfer(0u, 2u),
+            "disabled maintenance9 policy should not omit buffer ownership transfer");
+        nr::test::require(
+            !disabledPolicy.canOmitImageQueueFamilyTransfer(
+                0u,
+                2u,
+                vk::ImageTiling::eOptimal,
+                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled),
+            "unknown optimal image policy should not omit ownership transfer");
+
+        auto image = nr::rhi::Image{};
+        auto ticket = nr::rhi::ops::ImageUploadTicket{
+            .image = std::cref(image),
+            .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .signalValue = 1u,
+        };
+        nr::test::require(ticket.valid(), "image upload tickets without ownership remain valid under maintenance9");
+    }};
+
 const nr::test::CaseRegistrar accelerationStructureBarrierCase{
     "rhi acceleration-structure barriers carry precise sync scopes",
     [] {

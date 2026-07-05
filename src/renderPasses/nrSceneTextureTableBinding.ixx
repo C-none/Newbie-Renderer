@@ -9,6 +9,9 @@ import std;
 
 export namespace nr::renderPasses::detail
 {
+inline constexpr std::uint32_t kSceneTextureTableSet = 1u;
+inline constexpr std::uint32_t kSceneTextureTableBinding = 0u;
+
 enum class SceneTextureTableBindingRequirement
 {
     required,
@@ -18,17 +21,34 @@ enum class SceneTextureTableBindingRequirement
 struct SceneTextureTableBindingInput
 {
     std::map<std::uint32_t, nr::renderer::SceneTextureDescriptorBinding> descriptorsById{};
-    vk::Sampler sampler{};
     std::uint32_t descriptorCapacity = nr::renderer::kSceneTextureDescriptorCapacity;
     std::uint64_t tableVersion = 0;
 };
+
+[[nodiscard]] inline nr::rhi::SlangSamplerDesc sceneTextureTableLinearSamplerDesc() noexcept
+{
+    return nr::rhi::SlangSamplerDesc{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+    };
+}
+
+[[nodiscard]] inline nr::rhi::SlangImmutableSamplerBinding sceneTextureTableImmutableSamplerBinding() noexcept
+{
+    return nr::rhi::SlangImmutableSamplerBinding{
+        .set = kSceneTextureTableSet,
+        .binding = kSceneTextureTableBinding,
+        .descriptorCount = nr::renderer::kSceneTextureDescriptorCapacity,
+        .samplerDesc = sceneTextureTableLinearSamplerDesc(),
+    };
+}
 
 [[nodiscard]] inline SceneTextureTableBindingInput makeSceneTextureTableBindingInput(
     const nr::renderer::FrameGlobalResources& globalResources)
 {
     return SceneTextureTableBindingInput{
         .descriptorsById = globalResources.sceneTextureDescriptorsById,
-        .sampler = globalResources.sceneTextureSampler,
         .descriptorCapacity = globalResources.sceneTextureDescriptorCapacity,
         .tableVersion = globalResources.sceneTextureDescriptorVersion,
     };
@@ -46,7 +66,6 @@ struct SceneTextureTableBindingInput
     const SceneTextureTableBindingInput& bindingInput,
     SceneTextureTableBindingRequirement requirement = SceneTextureTableBindingRequirement::required)
 {
-    nr::nrAssert(bindingInput.sampler != vk::Sampler{}, "Scene texture table binding requires a valid sampler.");
     nr::nrAssert(
         bindingInput.descriptorCapacity == nr::renderer::kSceneTextureDescriptorCapacity,
         "Scene texture table descriptor capacity must match renderer ABI.");
@@ -70,11 +89,11 @@ struct SceneTextureTableBindingInput
     return nr::renderer::BindlessImageTableRequest{
         .tableKey = "scene.gSceneTextures",
         .shaderSymbol = "gSceneTextures",
-        .expectedSet = 1u,
-        .expectedBinding = 0u,
+        .expectedSet = kSceneTextureTableSet,
+        .expectedBinding = kSceneTextureTableBinding,
         .expectedDescriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCapacity = bindingInput.descriptorCapacity,
-        .sampler = bindingInput.sampler,
+        .usesImmutableSampler = true,
         .tableVersion = bindingInput.tableVersion,
         .descriptorsById = std::move(descriptorsById),
         .fallbackDescriptor = nr::renderer::BindlessImageDescriptor{

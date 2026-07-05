@@ -1066,6 +1066,43 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
         return it->second;
     }
 
+[[nodiscard]] ShaderLayoutAbiSignature ShaderDescriptorLayout::abiSignature() const
+{
+        ShaderLayoutAbiSignature signature;
+
+        std::ranges::for_each(descriptorSets_, [&](const DescriptorSetLayoutInfo &setInfo) {
+            std::ranges::for_each(setInfo.bindings, [&](const DescriptorBindingInfo &bindingInfo) {
+                signature.descriptorBindings.push_back(ShaderDescriptorAbiBinding{
+                    .set = bindingInfo.set,
+                    .binding = bindingInfo.binding,
+                    .descriptorCount = bindingInfo.descriptorCount,
+                    .isRuntimeSized = bindingInfo.isRuntimeSized,
+                    .descriptorType = bindingInfo.descriptorType,
+                    .stageFlags = bindingInfo.stageFlags,
+                    .bindingFlags = bindingInfo.bindingFlags,
+                });
+            });
+        });
+
+        signature.pushConstantRanges = pushConstantRanges_ |
+                                       std::views::transform([](const PushConstantRangeInfo &rangeInfo) {
+                                           return ShaderPushConstantAbiRange{
+                                               .offset = rangeInfo.offset,
+                                               .size = rangeInfo.size,
+                                               .stageFlags = rangeInfo.stageFlags,
+                                           };
+                                       }) |
+                                       std::ranges::to<std::vector>();
+
+        std::ranges::sort(signature.descriptorBindings, [](const ShaderDescriptorAbiBinding &lhs, const ShaderDescriptorAbiBinding &rhs) {
+            return lhs < rhs;
+        });
+        std::ranges::sort(signature.pushConstantRanges, [](const ShaderPushConstantAbiRange &lhs, const ShaderPushConstantAbiRange &rhs) {
+            return lhs < rhs;
+        });
+        return signature;
+    }
+
 [[nodiscard]] std::vector<vk::PushConstantRange> ShaderDescriptorLayout::makeVkPushConstantRanges() const
 {
         return pushConstantRanges_ |
@@ -1083,6 +1120,102 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
 {
         nrAssert(valid(), "ShaderDescriptorLayout::rootCursor requires a valid descriptor layout.");
         return ShaderCursor(*this);
+    }
+
+[[nodiscard]] bool shaderLayoutAbiEquivalent(const ShaderLayoutAbiSignature &lhs, const ShaderLayoutAbiSignature &rhs) noexcept
+{
+        return lhs == rhs;
+    }
+
+namespace
+{
+[[nodiscard]] std::string describeAbiBinding(const nr::rhi::ShaderDescriptorAbiBinding &binding)
+{
+    return std::format(
+        "set={}, binding={}, type={}, count={}, runtime={}, bindingFlags=0x{:x}, stageFlags=0x{:x}",
+        binding.set,
+        binding.binding,
+        vk::to_string(binding.descriptorType),
+        binding.descriptorCount,
+        binding.isRuntimeSized,
+        static_cast<std::uint32_t>(binding.bindingFlags),
+        static_cast<std::uint32_t>(binding.stageFlags));
+}
+
+[[nodiscard]] std::string describeAbiPushConstantRange(const nr::rhi::ShaderPushConstantAbiRange &range)
+{
+    return std::format(
+        "offset={}, size={}, stageFlags=0x{:x}",
+        range.offset,
+        range.size,
+        static_cast<std::uint32_t>(range.stageFlags));
+}
+} // namespace
+
+[[nodiscard]] std::string describeShaderLayoutAbiDifference(const ShaderLayoutAbiSignature &baseline, const ShaderLayoutAbiSignature &variant)
+{
+        if (baseline.descriptorBindings.size() != variant.descriptorBindings.size())
+        {
+            return std::format(
+                "descriptor binding count differs: baseline={}, variant={}",
+                baseline.descriptorBindings.size(),
+                variant.descriptorBindings.size());
+        }
+
+        auto bindingMismatch = std::ranges::mismatch(baseline.descriptorBindings, variant.descriptorBindings);
+        if (bindingMismatch.in1 != baseline.descriptorBindings.end() && bindingMismatch.in2 != variant.descriptorBindings.end())
+        {
+            return std::format(
+                "descriptor binding differs: baseline=[{}], variant=[{}]",
+                describeAbiBinding(*bindingMismatch.in1),
+                describeAbiBinding(*bindingMismatch.in2));
+        }
+
+        if (baseline.pushConstantRanges.size() != variant.pushConstantRanges.size())
+        {
+            return std::format(
+                "push constant range count differs: baseline={}, variant={}",
+                baseline.pushConstantRanges.size(),
+                variant.pushConstantRanges.size());
+        }
+
+        auto pushConstantMismatch = std::ranges::mismatch(baseline.pushConstantRanges, variant.pushConstantRanges);
+        if (pushConstantMismatch.in1 != baseline.pushConstantRanges.end() && pushConstantMismatch.in2 != variant.pushConstantRanges.end())
+        {
+            return std::format(
+                "push constant range differs: baseline=[{}], variant=[{}]",
+                describeAbiPushConstantRange(*pushConstantMismatch.in1),
+                describeAbiPushConstantRange(*pushConstantMismatch.in2));
+        }
+
+        return {};
+    }
+
+void assertShaderLayoutAbiStable(
+    const SlangProgram &baselineProgram,
+    const SlangProgram &variantProgram,
+    DescriptorBindingPolicy policy,
+    std::string_view debugName)
+{
+        auto baselineLayout = ShaderDescriptorLayout::create(baselineProgram, policy);
+        auto variantLayout = ShaderDescriptorLayout::create(variantProgram, policy);
+        nrAssert(baselineLayout.valid(), "Shader variant ABI validation requires a valid baseline layout.");
+        nrAssert(variantLayout.valid(), "Shader variant ABI validation requires a valid variant layout.");
+
+        auto baselineSignature = baselineLayout.abiSignature();
+        auto variantSignature = variantLayout.abiSignature();
+        if (shaderLayoutAbiEquivalent(baselineSignature, variantSignature))
+        {
+            return;
+        }
+
+        auto diff = describeShaderLayoutAbiDifference(baselineSignature, variantSignature);
+        auto message = std::format(
+            "Shader variant changed descriptor/push-constant ABI. debugName='{}', difference='{}'",
+            debugName,
+            diff.empty() ? "unknown" : diff);
+        nrLog(LogLevel::error, "RHI", message, std::source_location::current(), false);
+        nrAssert(false, message);
     }
 
 [[nodiscard]] std::optional<ShaderCursor::RootField> ShaderDescriptorLayout::findRootField(std::string_view fieldName) const
@@ -1543,7 +1676,7 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
         return std::nullopt;
     }
 
-    if (address_.bindingArrayIndex != 0u || bindingInfo->isRuntimeSized)
+    if (address_.bindingArrayIndex != 0u)
     {
         return std::nullopt;
     }
@@ -1749,7 +1882,7 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
         std::format("ShaderCursor::setObject(Image) requires a valid default image view. imageLayout={}", vk::to_string(imageLayout)));
     return writeDescriptorRecord(
         ImageDescriptorWrite{.imageView = *image.view(), .imageLayout = imageLayout, .sampler = {}},
-        {vk::DescriptorType::eSampledImage, vk::DescriptorType::eInputAttachment, vk::DescriptorType::eStorageImage});
+        {vk::DescriptorType::eSampledImage, vk::DescriptorType::eInputAttachment, vk::DescriptorType::eStorageImage, vk::DescriptorType::eCombinedImageSampler});
 }
 
 [[nodiscard]] bool ShaderCursor::setObject(vk::Sampler sampler) const

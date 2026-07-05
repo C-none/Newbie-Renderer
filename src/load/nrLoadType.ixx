@@ -227,12 +227,17 @@ struct LightAsset
     std::array<float, 3> position{};
     std::array<float, 3> direction{0.0f, 0.0f, -1.0f};
     std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    // Assimp's glTF2 importer folds KHR_lights_punctual color * intensity into
+    // these color fields. The scene bridge splits that product back into a
+    // unitless linear RGB multiplier and a photometric scalar where possible.
     std::array<float, 3> colorDiffuse{};
     std::array<float, 3> colorSpecular{};
     std::array<float, 3> colorAmbient{};
     float attenuationConstant = 0.0f;
     float attenuationLinear = 0.0f;
     float attenuationQuadratic = 0.0f;
+    // glTF KHR_lights_punctual point/spot range in meters; 0 means infinite or
+    // unavailable. Assimp provides this through node metadata.
     float range = 0.0f;
     float innerCone = 0.0f;
     float outerCone = 0.0f;

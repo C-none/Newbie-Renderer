@@ -58,6 +58,7 @@ struct Vulkan14CapabilitySnapshot
     bool dynamicRenderingLocalRead = false;
     bool maintenance5 = false;
     bool maintenance6 = false;
+    bool maintenance9 = false;
     bool pipelineProtectedAccess = false;
     bool pipelineRobustness = false;
     bool hostImageCopy = false;
@@ -135,12 +136,16 @@ class Device
 
     [[nodiscard]] const Vulkan14PropertySnapshot &vulkan14Properties() const noexcept;
 
+    [[nodiscard]] const ops::QueueFamilyTransferPolicy &queueFamilyTransferPolicy() const noexcept;
+
     [[nodiscard]] static constexpr QueueRole presentSubmitRole() noexcept
     {
         return QueueRole::Compute;
     }
 
     [[nodiscard]] bool frameBoundaryEnabled() const noexcept;
+
+    [[nodiscard]] bool hdrMetadataEnabled() const noexcept;
 
     [[nodiscard]] bool nsightGraphicsEnabled() const noexcept;
 
@@ -213,14 +218,16 @@ class Device
         vk::KHRSwapchainExtensionName,          vk::KHRDeferredHostOperationsExtensionName,      vk::EXTMeshShaderExtensionName,       vk::KHRAccelerationStructureExtensionName,
         vk::KHRRayTracingPipelineExtensionName, vk::KHRRayTracingMaintenance1ExtensionName,      vk::KHRPipelineLibraryExtensionName,  vk::KHRRayQueryExtensionName,
         vk::EXTOpacityMicromapExtensionName,    vk::EXTRayTracingInvocationReorderExtensionName, vk::NVCooperativeVectorExtensionName, vk::EXTExtendedDynamicState3ExtensionName,
-        vk::EXTMemoryBudgetExtensionName,
+        vk::EXTMemoryBudgetExtensionName,       vk::KHRMaintenance9ExtensionName,
     };
     RayTracingCapabilitySnapshot rtCapabilities_{};
     DescriptorIndexingCapabilitySnapshot descriptorIndexingCapabilities_{};
     BufferDeviceAddressCapabilitySnapshot bufferDeviceAddressCapabilities_{};
     Vulkan14CapabilitySnapshot vulkan14Capabilities_{};
     Vulkan14PropertySnapshot vulkan14Properties_{};
+    ops::QueueFamilyTransferPolicy queueFamilyTransferPolicy_{};
     bool frameBoundaryEnabled_ = false;
+    bool hdrMetadataEnabled_ = false;
     NsightGraphicsFrameHelper nsightGraphics_{};
 
     std::array<std::size_t, static_cast<std::size_t>(QueueFamilyKind::size)> queueFamilyDict{};

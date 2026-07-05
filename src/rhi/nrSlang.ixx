@@ -402,11 +402,52 @@ class SlangProgram
     mutable std::map<std::string, std::size_t> entryPointIndexByName_;
 };
 
+enum class SlangVariantConstantType : std::uint8_t
+{
+    Bool,
+    Int32,
+    UInt32,
+    Float32,
+};
+
+using SlangVariantConstantValue = std::variant<bool, std::int32_t, std::uint32_t, float>;
+
+struct SlangVariantConstant
+{
+    SlangVariantConstantType type = SlangVariantConstantType::Bool;
+    SlangVariantConstantValue value = false;
+
+    [[nodiscard]] static SlangVariantConstant fromBool(bool value) noexcept;
+    [[nodiscard]] static SlangVariantConstant fromInt32(std::int32_t value) noexcept;
+    [[nodiscard]] static SlangVariantConstant fromUInt32(std::uint32_t value) noexcept;
+    [[nodiscard]] static SlangVariantConstant fromFloat32(float value) noexcept;
+};
+
+struct SlangVariantTypeAlias
+{
+    std::string typeName;
+    std::string interfaceName;
+    std::string concreteTypeName;
+};
+
+struct SlangProgramVariantDesc
+{
+    std::string debugName;
+    std::map<std::string, SlangVariantConstant> constants;
+    std::map<std::string, SlangVariantTypeAlias> typeAliases;
+
+    [[nodiscard]] bool empty() const noexcept;
+    [[nodiscard]] std::uint64_t hashValue() const noexcept;
+    [[nodiscard]] std::string hashHex() const;
+    [[nodiscard]] std::string sourceText() const;
+};
+
 struct SlangProgramCompileFileRequest
 {
     // Required input form:
     // - test/utils/useFlag
     std::filesystem::path sourcePath;
+    SlangProgramVariantDesc variant{};
 };
 
 struct RuntimeSlangMacro
@@ -525,6 +566,7 @@ class ShaderService
             return;
         }
 
+        m_linkedProgramCache.clear();
         m_options = std::move(runtimeOptions);
         m_shaderRootPath = std::move(resolvedShaderRootPath);
         m_optionsHashValue = options.hashValue;
@@ -586,6 +628,7 @@ class ShaderService
     std::vector<slang::PreprocessorMacroDesc> m_macroDescs;
     std::vector<slang::CompilerOptionEntry> m_compilerOptionEntries;
     slang::TargetDesc m_targetDesc{};
+    std::map<std::string, SlangProgram> m_linkedProgramCache;
 
 };
 

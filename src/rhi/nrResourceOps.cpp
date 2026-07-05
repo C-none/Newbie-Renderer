@@ -502,8 +502,7 @@ void copyImageToImage(
 {
         return image.has_value() &&
                layout != vk::ImageLayout::eUndefined &&
-               signalValue > 0 &&
-               ownership.has_value();
+               signalValue > 0;
     }
 
 [[nodiscard]] bool ReadbackSyncScope::valid() const noexcept
@@ -520,10 +519,12 @@ UploadReadbackContext::UploadReadbackContext(
         const vk::raii::Device& device,
         ResourceFactory& resourceFactory,
         QueueManager& queueManager,
+        QueueFamilyTransferPolicy queueFamilyTransferPolicy,
         vk::DeviceSize uploadRingSize,
         vk::DeviceSize readbackRingSize)
         : device_(std::cref(device))
         , queueManager_(std::ref(queueManager))
+        , queueFamilyTransferPolicy_(std::move(queueFamilyTransferPolicy))
         , uploadCapacity_(uploadRingSize)
         , readbackCapacity_(readbackRingSize)
         , transferPool_(device, queueManager.transfer().queueFamilyIndex(), vk::CommandPoolCreateFlagBits::eTransient)
@@ -658,6 +659,7 @@ void UploadReadbackContext::recordAcquireBarrier(const vk::raii::CommandBuffer& 
 [[nodiscard]] vk::ImageMemoryBarrier2 UploadReadbackContext::makeImageAcquireBarrier(const ImageUploadTicket& ticket) const
 {
         nrAssert(ticket.valid(), "UploadReadbackContext::makeImageAcquireBarrier requires a valid ticket.");
+        nrAssert(ticket.ownership.has_value(), "UploadReadbackContext::makeImageAcquireBarrier requires an ownership-bearing ticket.");
         return makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
             ticket.image->get(),
             vk::ImageLayout::eTransferDstOptimal,
@@ -667,6 +669,12 @@ void UploadReadbackContext::recordAcquireBarrier(const vk::raii::CommandBuffer& 
 
 void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuffer& commandBuffer, const ImageUploadTicket& ticket) const
 {
+        nrAssert(ticket.valid(), "UploadReadbackContext::recordImageAcquireBarrier requires a valid ticket.");
+        if (!ticket.ownership.has_value())
+        {
+            return;
+        }
+
         BarrierBatch acquireBarriers{};
         acquireBarriers.add(makeImageAcquireBarrier(ticket));
         pipelineBarrier(commandBuffer, acquireBarriers);
@@ -685,6 +693,16 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         nrAssert(
             ownership.valid(transferQueueFamilyIndex),
             "UploadReadbackContext::uploadBuffer requires a valid ownership plan for the transfer queue.");
+        const auto omitReleaseOwnership =
+            queueFamilyTransferPolicy_.canOmitBufferQueueFamilyTransfer(
+                ownership.releaseToDestination.srcQueueFamilyIndex,
+                ownership.releaseToDestination.dstQueueFamilyIndex);
+        const auto omitAcquireToTransferOwnership =
+            ownership.acquireToTransfer.has_value() &&
+            queueFamilyTransferPolicy_.canOmitBufferQueueFamilyTransfer(
+                ownership.acquireToTransfer->srcQueueFamilyIndex,
+                ownership.acquireToTransfer->dstQueueFamilyIndex);
+        const auto ticketCarriesOwnership = !ownership.isSameQueueFamily() && !omitReleaseOwnership;
 
         const auto totalSize = static_cast<vk::DeviceSize>(data.size_bytes());
         nrAssert(dstOffset + totalSize <= dst.size(), "UploadReadbackContext::uploadBuffer destination range exceeds buffer size.");
@@ -714,7 +732,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
 
             CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
             {
-                if (uploadedSize == 0 && ownership.acquireToTransfer.has_value())
+                if (uploadedSize == 0 && ownership.acquireToTransfer.has_value() && !omitAcquireToTransferOwnership)
                 {
                     BarrierBatch transferAcquireBarrier{};
                     transferAcquireBarrier.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
@@ -736,12 +754,33 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
                 if (remainingSize == chunkSize)
                 {
                     BarrierBatch releaseBarrier{};
-                    releaseBarrier.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
-                        dst,
-                        ownership.releaseToDestination,
-                        dstOffset,
-                        totalSize));
-                    pipelineBarrier(commandBuffer, releaseBarrier);
+                    if (ownership.isSameQueueFamily())
+                    {
+                        releaseBarrier.add(makeBufferBarrier(dst, vk::BufferMemoryBarrier2{
+                            ownership.releaseToDestination.release.stages,
+                            ownership.releaseToDestination.release.access,
+                            ownership.releaseToDestination.acquire.stages,
+                            ownership.releaseToDestination.acquire.access,
+                            kIgnoredQueueFamilyIndex,
+                            kIgnoredQueueFamilyIndex,
+                            vk::Buffer{},
+                            dstOffset,
+                            totalSize,
+                            nullptr,
+                        }));
+                    }
+                    else if (!omitReleaseOwnership)
+                    {
+                        releaseBarrier.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
+                            dst,
+                            ownership.releaseToDestination,
+                            dstOffset,
+                            totalSize));
+                    }
+                    if (!releaseBarrier.empty())
+                    {
+                        pipelineBarrier(commandBuffer, releaseBarrier);
+                    }
                 }
             }
             CommandRecorder::end(commandBuffer);
@@ -764,7 +803,8 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             .dstOffset = dstOffset,
             .size = totalSize,
             .signalValue = lastSignalValue,
-            .ownership = ownership.releaseToDestination,
+            .ownership = ticketCarriesOwnership ? std::optional<QueueOwnershipTransfer>{ownership.releaseToDestination}
+                                                : std::optional<QueueOwnershipTransfer>{},
         };
     }
 
@@ -846,6 +886,18 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         nrAssert(
             ownership.valid(transferQueueFamilyIndex),
             "UploadReadbackContext::uploadImage requires a valid ownership plan for the transfer queue.");
+        const auto omitAcquireToTransferOwnership =
+            ownership.acquireToTransfer.has_value() &&
+            queueFamilyTransferPolicy_.canOmitImageQueueFamilyTransfer(
+                dst,
+                ownership.acquireToTransfer->srcQueueFamilyIndex,
+                ownership.acquireToTransfer->dstQueueFamilyIndex);
+        const auto omitReleaseOwnership =
+            queueFamilyTransferPolicy_.canOmitImageQueueFamilyTransfer(
+                dst,
+                ownership.releaseToDestination.srcQueueFamilyIndex,
+                ownership.releaseToDestination.dstQueueFamilyIndex);
+        const auto ticketCarriesOwnership = !ownership.isSameQueueFamily() && !omitReleaseOwnership;
         nrAssert(
             (dst.usage() & vk::ImageUsageFlagBits::eTransferDst) != vk::ImageUsageFlags{},
             "UploadReadbackContext::uploadImage destination image must include eTransferDst usage.");
@@ -872,7 +924,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         auto& commandBuffer = commandBuffers.front();
         CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         {
-            if (ownership.acquireToTransfer.has_value())
+            if (ownership.acquireToTransfer.has_value() && !omitAcquireToTransferOwnership)
             {
                 BarrierBatch transferAcquireBarrier{};
                 transferAcquireBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
@@ -912,7 +964,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             BarrierBatch releaseBarrier{};
             if (ownership.isSameQueueFamily())
             {
-                // Same queue family: use simple layout transition, no ownership transfer
+                // Same queue family: use simple layout transition.
                 releaseBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
                     ownership.releaseToDestination.release.stages,
                     ownership.releaseToDestination.release.access,
@@ -927,9 +979,25 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
                     nullptr,
                 }));
             }
+            else if (omitReleaseOwnership)
+            {
+                releaseBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
+                    ownership.releaseToDestination.release.stages,
+                    ownership.releaseToDestination.release.access,
+                    vk::PipelineStageFlagBits2::eTransfer,
+                    vk::AccessFlags2{},
+                    vk::ImageLayout::eTransferDstOptimal,
+                    destinationLayout,
+                    kIgnoredQueueFamilyIndex,
+                    kIgnoredQueueFamilyIndex,
+                    vk::Image{},
+                    {},
+                    nullptr,
+                }));
+            }
             else
             {
-                // Cross-queue: use ownership transfer barrier
+                // Cross-queue with required QFOT: use ownership transfer barrier.
                 releaseBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
                     dst,
                     vk::ImageLayout::eTransferDstOptimal,
@@ -951,7 +1019,8 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             .image = std::cref(dst),
             .layout = destinationLayout,
             .signalValue = signalValue,
-            .ownership = ownership.releaseToDestination,
+            .ownership = ticketCarriesOwnership ? std::optional<QueueOwnershipTransfer>{ownership.releaseToDestination}
+                                                : std::optional<QueueOwnershipTransfer>{},
         };
     }
 
@@ -1170,7 +1239,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             batch.addWait(wait.waitSemaphore, wait.acquire.stages, wait.waitValue);
         }
         batch.addCommandBuffer(commandBuffer);
-        batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
+        batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eAllCommands);
         queueManager_->get().transfer().submit(std::move(batch));
 
         addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
@@ -1191,7 +1260,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             batch.addWait(readbackTimeline_, vk::PipelineStageFlagBits2::eTransfer, signalValue - 1);
         }
         batch.addCommandBuffer(commandBuffer);
-        batch.addSignal(readbackTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eBottomOfPipe);
+        batch.addSignal(readbackTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eAllCommands);
         readbackQueue.submit(std::move(batch));
 
         addInFlight(readbackInFlight_, allocation, signalValue, std::move(commandBuffers));

@@ -10,6 +10,12 @@ nr_add_contract_test(nr_rhi_resource_ops_contract_test nr_rhi_resource_ops_contr
     dependency
 )
 
+nr_add_contract_test(nr_rhi_swapchain_format_contract_test nr_rhi_swapchain_format_contract_test.cpp "fast;cpu;unit;rhi"
+    nrrhi
+    utils
+    dependency
+)
+
 nr_add_contract_test(nr_rhi_sbt_layout_contract_test nr_rhi_sbt_layout_contract_test.cpp "fast;cpu;unit;rhi;rt"
     nrrhi
     utils

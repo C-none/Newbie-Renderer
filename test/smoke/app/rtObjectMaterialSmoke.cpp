@@ -16,9 +16,9 @@ namespace
     auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
     rayTrace->input.viewportExtent = extent;
 
-    auto display = std::make_shared<nr::renderPasses::DisplayNode>();
-    display->input.viewportExtent = extent;
-    display->input.format = swapchainFormat;
+    auto present = std::make_shared<nr::renderPasses::PresentNode>();
+    present->input.viewportExtent = extent;
+    present->input.format = swapchainFormat;
 
     auto graphSpec = nr::renderer::RendererGraphSpec{};
     graphSpec.nodes = {
@@ -44,9 +44,9 @@ namespace
             },
         },
         nr::renderer::NodeCreateInfo{
-            .runtime = display,
+            .runtime = present,
             .config = nr::renderer::NodeConfig{
-                .instanceName = "Display",
+                .instanceName = "Present",
                 .queue = nr::renderer::QueueDomain::Compute,
             },
         },

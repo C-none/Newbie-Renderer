@@ -42,10 +42,10 @@ inline constexpr int kKeyRightControl = 345;
 inline constexpr int kKeyRightAlt = 346;
 inline constexpr int kKeyRightSuper = 347;
 inline constexpr float kUiWindowMargin = 16.0f;
-inline constexpr float kUiWindowDefaultWidth = 600.0f;
+inline constexpr float kUiWindowDefaultWidth = 720.0f;
 inline constexpr float kUiWindowDefaultHeight = 960.0f;
 inline constexpr float kUiWindowVerticalStride = 20.0f;
-inline constexpr float kUiFontGlobalScale = 2.0f;
+inline constexpr float kUiFontGlobalScale = 1.8f;
 inline constexpr std::string_view kUnifiedUiWindowTitle = "Renderer Controls";
 
 struct UiKeyBinding
@@ -94,6 +94,12 @@ inline constexpr std::array kUiKeyBindings{
     }
 
     return std::min(deltaSeconds, 0.5f);
+}
+
+[[nodiscard]] float compactUIntInputWidth(std::uint32_t maxValue)
+{
+    auto const digitCount = std::to_string(maxValue).size();
+    return std::clamp(40.0f + static_cast<float>(digitCount) * 8.0f, 64.0f, 140.0f);
 }
 
 int resizeInputTextBuffer(ImGuiInputTextCallbackData* data)
@@ -366,7 +372,11 @@ void UiSystem::queueSection(UiSection section)
 
 void UiSystem::renderSections(std::span<const UiSection> sections, ImGuiWindowFlags flags)
 {
-    renderSections(sections, {}, flags);
+    renderSections(
+        sections,
+        std::span<const nr::renderer::NodeUiSection>{},
+        std::span<const UiSection>{},
+        flags);
 }
 
 void UiSystem::renderSections(
@@ -374,10 +384,23 @@ void UiSystem::renderSections(
     std::span<const UiSection> trailingSections,
     ImGuiWindowFlags flags)
 {
+    renderSections(
+        leadingSections,
+        std::span<const nr::renderer::NodeUiSection>{},
+        trailingSections,
+        flags);
+}
+
+void UiSystem::renderSections(
+    std::span<const UiSection> leadingSections,
+    std::span<const nr::renderer::NodeUiSection> nodeSections,
+    std::span<const UiSection> trailingSections,
+    ImGuiWindowFlags flags)
+{
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::renderSections requires an active UI frame.");
     setCurrentContext();
 
-    if (leadingSections.empty() && queuedSections_.empty() && trailingSections.empty())
+    if (leadingSections.empty() && queuedSections_.empty() && nodeSections.empty() && trailingSections.empty())
     {
         return;
     }
@@ -395,7 +418,7 @@ void UiSystem::renderSections(
         return;
     }
 
-    auto drawSection = [&](const UiSection& section) {
+    auto drawAppSection = [&](const UiSection& section) {
         if (!beginSection(section.id, section.title, section.defaultOpen) || !section.draw)
         {
             return;
@@ -407,13 +430,26 @@ void UiSystem::renderSections(
         ImGui::Spacing();
     };
 
-    auto drawSections = [&](std::span<const UiSection> sectionSpan) {
-        std::ranges::for_each(sectionSpan, drawSection);
+    auto drawNodeSection = [&](const nr::renderer::NodeUiSection& section) {
+        if (!beginSection(section.id, section.title, section.defaultOpen) || !section.draw)
+        {
+            return;
+        }
+
+        ImGui::Indent();
+        section.draw(*this);
+        ImGui::Unindent();
+        ImGui::Spacing();
     };
 
-    drawSections(leadingSections);
-    std::ranges::for_each(queuedSections_, drawSection);
-    drawSections(trailingSections);
+    auto drawAppSections = [&](std::span<const UiSection> sectionSpan) {
+        std::ranges::for_each(sectionSpan, drawAppSection);
+    };
+
+    drawAppSections(leadingSections);
+    std::ranges::for_each(queuedSections_, drawAppSection);
+    std::ranges::for_each(nodeSections, drawNodeSection);
+    drawAppSections(trailingSections);
     queuedSections_.clear();
 }
 
@@ -488,6 +524,65 @@ bool UiSystem::selectable(std::string_view label, bool selected)
 
     auto const ownedLabel = std::string{label};
     return ImGui::Selectable(ownedLabel.c_str(), selected);
+}
+
+bool UiSystem::sliderFloat(std::string_view label, float& value, float minValue, float maxValue)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::sliderFloat requires an active UI frame.");
+    nrAssert(minValue <= maxValue, "UiSystem::sliderFloat requires minValue <= maxValue.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    return ImGui::SliderFloat(ownedLabel.c_str(), &value, minValue, maxValue);
+}
+
+bool UiSystem::inputUInt(
+    std::string_view label,
+    std::uint32_t& value,
+    std::uint32_t minValue,
+    std::uint32_t maxValue)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputUInt requires an active UI frame.");
+    nrAssert(minValue <= maxValue, "UiSystem::inputUInt requires minValue <= maxValue.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    auto const inputId = std::format("##{}", ownedLabel);
+    auto inputValue = std::clamp(value, minValue, maxValue);
+    ImGui::TextUnformatted(ownedLabel.data(), ownedLabel.data() + ownedLabel.size());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(detail::compactUIntInputWidth(maxValue));
+    auto const changed = ImGui::InputScalar(
+        inputId.c_str(),
+        ImGuiDataType_U32,
+        std::addressof(inputValue),
+        nullptr,
+        nullptr,
+        "%u",
+        ImGuiInputTextFlags_CharsDecimal);
+    value = std::clamp(inputValue, minValue, maxValue);
+    return changed;
+}
+
+bool UiSystem::sliderUInt(
+    std::string_view label,
+    std::uint32_t& value,
+    std::uint32_t minValue,
+    std::uint32_t maxValue)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::sliderUInt requires an active UI frame.");
+    nrAssert(minValue <= maxValue, "UiSystem::sliderUInt requires minValue <= maxValue.");
+    nrAssert(maxValue <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()),
+             "UiSystem::sliderUInt range exceeds ImGui SliderInt capacity.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    auto intValue = static_cast<int>(std::clamp(value, minValue, maxValue));
+    auto const intMin = static_cast<int>(minValue);
+    auto const intMax = static_cast<int>(maxValue);
+    auto const changed = ImGui::SliderInt(ownedLabel.c_str(), std::addressof(intValue), intMin, intMax);
+    value = static_cast<std::uint32_t>(std::clamp(intValue, intMin, intMax));
+    return changed;
 }
 
 void UiSystem::setItemDefaultFocus()

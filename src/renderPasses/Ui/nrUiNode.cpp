@@ -53,7 +53,7 @@ struct UiFrameDrawData
 struct UiTextureEntry
 {
     nr::rhi::Image image{};
-    nr::renderer::ImageLayoutIntent currentLayout = nr::renderer::ImageLayoutIntent::Undefined;
+    nr::renderer::RetainedImageState state{};
     std::uint64_t textureKey = 0u;
 };
 
@@ -355,7 +355,7 @@ void markBindlessTextureTableDirty(UiRuntimeCache& runtime) noexcept
     return uploadBytes;
 }
 
-[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUiTextureUploadOwnershipPlan(
+[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUiTextureUploadPlan(
     const nr::rhi::Device& device)
 {
     auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
@@ -379,40 +379,40 @@ void markBindlessTextureTableDirty(UiRuntimeCache& runtime) noexcept
     return plan;
 }
 
-void submitAndWaitUiTextureAcquire(
+void submitAndWaitUiTextureUploadSync(
     nr::rhi::Device& device,
     nr::rhi::ops::UploadReadbackContext& uploadContext,
     const nr::rhi::ops::ImageUploadTicket& uploadTicket)
 {
-    nr::nrAssert(uploadTicket.valid(), "UiNode texture upload acquire requires a valid upload ticket.");
+    nr::nrAssert(uploadTicket.valid(), "UiNode texture upload synchronization requires a valid upload ticket.");
 
-    auto acquirePool = nr::rhi::CommandPool{
+    auto syncPool = nr::rhi::CommandPool{
         device.device,
         device.queueManager.graphics().queueFamilyIndex(),
         vk::CommandPoolCreateFlagBits::eTransient,
     };
-    auto acquireCommandBuffers = acquirePool.allocatePrimary(1);
-    auto& acquireCommandBuffer = acquireCommandBuffers.front();
+    auto syncCommandBuffers = syncPool.allocatePrimary(1);
+    auto& syncCommandBuffer = syncCommandBuffers.front();
 
-    nr::rhi::CommandRecorder::beginPrimary(acquireCommandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    uploadContext.recordImageAcquireBarrier(acquireCommandBuffer, uploadTicket);
-    nr::rhi::CommandRecorder::end(acquireCommandBuffer);
+    nr::rhi::CommandRecorder::beginPrimary(syncCommandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    uploadContext.recordImageAcquireBarrier(syncCommandBuffer, uploadTicket);
+    nr::rhi::CommandRecorder::end(syncCommandBuffer);
 
-    auto acquireSubmission = nr::rhi::CommandBatch{};
-    acquireSubmission.addWait(
+    auto syncSubmission = nr::rhi::CommandBatch{};
+    syncSubmission.addWait(
         uploadContext.uploadTimelineSemaphore(),
         vk::PipelineStageFlagBits2::eAllCommands,
         uploadTicket.signalValue);
-    acquireSubmission.addCommandBuffer(acquireCommandBuffer);
+    syncSubmission.addCommandBuffer(syncCommandBuffer);
 
-    auto acquireFence = vk::raii::Fence{device.device, vk::FenceCreateInfo{}};
-    device.queueManager.graphics().submit(std::move(acquireSubmission), std::cref(acquireFence));
+    auto syncFence = vk::raii::Fence{device.device, vk::FenceCreateInfo{}};
+    device.queueManager.graphics().submit(std::move(syncSubmission), std::cref(syncFence));
 
     auto const waitResult = device.device.waitForFences(
-        *acquireFence,
+        *syncFence,
         vk::True,
         std::numeric_limits<std::uint64_t>::max());
-    nr::nrAssert(waitResult == vk::Result::eSuccess, "UiNode failed waiting for texture upload graphics acquire.");
+    nr::nrAssert(waitResult == vk::Result::eSuccess, "UiNode failed waiting for texture upload graphics synchronization.");
     uploadContext.reclaimCompletedUploads();
 }
 
@@ -427,8 +427,8 @@ void uploadUiTextureThroughRing(
         image,
         vk::ImageLayout::eUndefined,
         vk::ImageLayout::eShaderReadOnlyOptimal,
-        makeUiTextureUploadOwnershipPlan(device));
-    submitAndWaitUiTextureAcquire(device, uploadContext, uploadTicket);
+        makeUiTextureUploadPlan(device));
+    submitAndWaitUiTextureUploadSync(device, uploadContext, uploadTicket);
 }
 
 void createOrUpdateUiTexture(
@@ -486,7 +486,13 @@ void createOrUpdateUiTexture(
         device,
         textureEntry.image,
         std::span<const std::byte>{uploadBytes.data(), uploadBytes.size()});
-    textureEntry.currentLayout = nr::renderer::ImageLayoutIntent::ShaderReadOnly;
+    textureEntry.state.initialized = true;
+    textureEntry.state.layout = nr::renderer::ImageLayoutIntent::ShaderReadOnly;
+    textureEntry.state.ownership = nr::renderer::ResourceOwnershipDomain::Graphics;
+    textureEntry.state.access = nr::renderer::AccessScope{
+        .stages = vk::PipelineStageFlagBits2::eFragmentShader,
+        .access = vk::AccessFlagBits2::eShaderSampledRead,
+    };
 
     textureData.SetTexID(makeTextureIdFromSlot(textureSlot));
     textureData.SetStatus(ImTextureStatus_OK);
@@ -605,12 +611,12 @@ void synchronizeUiTextures(
 
 [[nodiscard]] std::map<std::uint32_t, nr::renderer::GraphResourceHandle> registerUiTextureImageResources(
     nr::renderer::NodeBuildContext& context,
-    const UiRuntimeCache& runtime)
+    UiRuntimeCache& runtime)
 {
     auto graphResourceBySlot = std::map<std::uint32_t, nr::renderer::GraphResourceHandle>{};
     auto slotRange = std::views::iota(std::size_t{0}, runtime.texturesBySlot.size());
     std::ranges::for_each(slotRange, [&](std::size_t slot) {
-        auto const& textureEntry = runtime.texturesBySlot[slot];
+        auto& textureEntry = runtime.texturesBySlot[slot];
         if (!textureEntry.image.valid())
         {
             return;
@@ -633,8 +639,14 @@ void synchronizeUiTextures(
             .usageIntents = {
                 nr::renderer::ImageUsageIntent::Sampled,
             },
-            .initialLayout = textureEntry.currentLayout,
+            .initialLayout = textureEntry.state.initialized
+                                 ? textureEntry.state.layout
+                                 : nr::renderer::ImageLayoutIntent::Undefined,
+            .initialAccessScope = textureEntry.state.initialized
+                                      ? textureEntry.state.access
+                                      : nr::renderer::AccessScope{},
             .importedResource = std::cref(textureEntry.image),
+            .retainedState = std::ref(textureEntry.state),
         });
 
         graphResourceBySlot.insert_or_assign(textureSlot, resource);
@@ -702,6 +714,19 @@ void drawVec3StatusLine(nr::app::UiSystem& ui, std::string_view label, const glm
     ui.textFmt("{}: ({:.3f}, {:.3f}, {:.3f})", label, value.x, value.y, value.z);
 }
 
+[[nodiscard]] std::string_view swapchainOutputModeLabel(vk::ColorSpaceKHR colorSpace) noexcept
+{
+    if (nr::rhi::isHdr10SwapchainColorSpace(colorSpace))
+    {
+        return "HDR10 PQ";
+    }
+    if (nr::rhi::isScRgbSwapchainColorSpace(colorSpace))
+    {
+        return "scRGB";
+    }
+    return "SDR";
+}
+
 void drawRendererStatsSection(
     nr::app::UiSystem& ui,
     std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> presentation)
@@ -720,6 +745,13 @@ void drawRendererStatsSection(
     }
 
     auto& presentationContext = presentation->get();
+    auto const swapchainFormat = presentationContext.swapchainFormat();
+    auto const swapchainColorSpace = presentationContext.swapchainColorSpace();
+    ui.separator();
+    ui.textFmt("Swapchain Format: {}", vk::to_string(swapchainFormat));
+    ui.textFmt("Color Space: {}", vk::to_string(swapchainColorSpace));
+    ui.textFmt("Output Mode: {}", swapchainOutputModeLabel(swapchainColorSpace));
+
     auto const fullscreenEnabled = presentationContext.borderlessFullscreenEnabled();
     ui.separator();
     ui.textFmt(
@@ -1098,7 +1130,10 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
         if (uiSystem.has_value())
         {
             auto trailingSections = makeTrailingUiSections(tryGetPresentationContext(frameParameters));
-            uiSystem->get().renderSections({}, sectionSpan(trailingSections));
+            uiSystem->get().renderSections(
+                std::span<const nr::app::UiSection>{},
+                frameParameters.nodeUiSections,
+                sectionSpan(trailingSections));
             uiSystem->get().finalizeFrame();
             auto drawData = uiSystem->get().drawData();
             if (drawData.has_value())

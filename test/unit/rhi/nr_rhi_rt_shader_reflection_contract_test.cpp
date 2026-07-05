@@ -16,6 +16,29 @@ struct CameraData
     glm::vec4 forward{};
 };
 
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestVariant(
+    std::uint32_t maxSurfaceBounces = 16u,
+    bool enableRussianRoulette = true)
+{
+    auto variant = nr::rhi::SlangProgramVariantDesc{};
+    variant.debugName = std::format(
+        "test.pathTracing.maxBounces{}.roulette{}",
+        maxSurfaceBounces,
+        enableRussianRoulette ? "enabled" : "disabled");
+    variant.constants.try_emplace(
+        "kPathTracingMaxSurfaceBounces",
+        nr::rhi::SlangVariantConstant::fromUInt32(maxSurfaceBounces));
+    variant.typeAliases.try_emplace(
+        "PathTracingRussianRoulettePolicy",
+        nr::rhi::SlangVariantTypeAlias{
+            .typeName = "PathTracingRussianRoulettePolicy",
+            .interfaceName = "IPathTracingRussianRoulettePolicy",
+            .concreteTypeName = enableRussianRoulette ? "PathTracingRussianRouletteEnabledPolicy"
+                                                      : "PathTracingRussianRouletteDisabledPolicy",
+        });
+    return variant;
+}
+
 const nr::test::CaseRegistrar rtShaderReflectionCase{
     "rhi rt shader reflection exposes AS image and camera bindings",
     [] {
@@ -69,33 +92,37 @@ const nr::test::CaseRegistrar rtShaderReflectionCase{
     }};
 
 const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
-    "rtobject display and path tracing shaders compile and expose expected bindings",
+    "rtobject present and path tracing shaders compile and expose expected bindings",
     [] {
         auto& shaderService = nr::rhi::ShaderService::instance();
         shaderService.configure();
 
-        auto displayProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/displayConvert"},
+        auto presentProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/presentConvert"},
         });
-        nr::test::require(displayProgram.valid(), "rtobject display conversion shader should compile");
+        nr::test::require(presentProgram.valid(), "rtobject present conversion shader should compile");
 
-        auto displayLayout = nr::rhi::ShaderDescriptorLayout::create(displayProgram);
-        nr::test::require(displayLayout.valid(), "rtobject display conversion layout should be valid");
+        auto presentLayout = nr::rhi::ShaderDescriptorLayout::create(presentProgram);
+        nr::test::require(presentLayout.valid(), "rtobject present conversion layout should be valid");
 
-        auto displayRoot = displayLayout.rootCursor();
-        auto sourceColor = displayRoot["gSourceColor"];
-        auto convertedColor = displayRoot["gConvertedColor"];
-        auto displayPushConstants = displayRoot["gDisplayConvert"];
+        auto presentRoot = presentLayout.rootCursor();
+        auto sourceColor = presentRoot["gSourceColor"];
+        auto uiColor = presentRoot["gUiColor"];
+        auto convertedColor = presentRoot["gConvertedColor"];
+        auto presentPushConstants = presentRoot["gPresentConvert"];
 
-        nr::test::require(sourceColor.valid(), "display source color cursor should resolve");
-        nr::test::require(convertedColor.valid(), "display converted color cursor should resolve");
-        nr::test::require(displayPushConstants.valid(), "display push constant cursor should resolve");
+        nr::test::require(sourceColor.valid(), "present source color cursor should resolve");
+        nr::test::require(uiColor.valid(), "present UI color cursor should resolve");
+        nr::test::require(convertedColor.valid(), "present converted color cursor should resolve");
+        nr::test::require(presentPushConstants.valid(), "present push constant cursor should resolve");
         nr::test::require(sourceColor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::SampledImage);
+        nr::test::require(uiColor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::SampledImage);
         nr::test::require(convertedColor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
-        nr::test::require(displayPushConstants.pushConstantRange().has_value());
+        nr::test::require(presentPushConstants.pushConstantRange().has_value());
 
         auto rtProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = makePathTracingTestVariant(),
         });
         nr::test::require(rtProgram.valid(), "rtobject path tracing shader should compile");
 
@@ -161,6 +188,75 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::requireEqual(sceneLightAliasTableBinding->binding, 2u);
     }};
 
+const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
+    "path tracing link-time variants compile and keep shader layout ABI",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto baselineVariant = makePathTracingTestVariant();
+        auto baselineProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = baselineVariant,
+        });
+        nr::test::require(baselineProgram.valid(), "path tracing baseline shader should compile");
+
+        auto constantVariant = makePathTracingTestVariant(2u);
+
+        auto constantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = constantVariant,
+        });
+        nr::test::require(constantProgram.valid(), "path tracing constant variant should compile");
+
+        auto typeVariant = makePathTracingTestVariant(16u, false);
+
+        auto typeProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = typeVariant,
+        });
+        nr::test::require(typeProgram.valid(), "path tracing type alias variant should compile");
+
+        auto descriptorPolicy = nr::rhi::DescriptorBindingPolicy{
+            .defaultRuntimeDescriptorCount = 1024u,
+        };
+        auto baselineLayout = nr::rhi::ShaderDescriptorLayout::create(baselineProgram, descriptorPolicy);
+        auto constantLayout = nr::rhi::ShaderDescriptorLayout::create(constantProgram, descriptorPolicy);
+        auto typeLayout = nr::rhi::ShaderDescriptorLayout::create(typeProgram, descriptorPolicy);
+        nr::test::require(baselineLayout.valid(), "path tracing baseline layout should be valid");
+        nr::test::require(constantLayout.valid(), "path tracing constant variant layout should be valid");
+        nr::test::require(typeLayout.valid(), "path tracing type variant layout should be valid");
+        nr::test::require(
+            nr::rhi::shaderLayoutAbiEquivalent(baselineLayout.abiSignature(), constantLayout.abiSignature()),
+            "path tracing constant variant should keep descriptor/push ABI");
+        nr::test::require(
+            nr::rhi::shaderLayoutAbiEquivalent(baselineLayout.abiSignature(), typeLayout.abiSignature()),
+            "path tracing type variant should keep descriptor/push ABI");
+
+        auto presentProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/presentConvert"},
+        });
+        nr::test::require(presentProgram.valid(), "present shader should compile for ABI difference check");
+        auto presentLayout = nr::rhi::ShaderDescriptorLayout::create(presentProgram, descriptorPolicy);
+        nr::test::require(presentLayout.valid(), "present shader layout should be valid for ABI difference check");
+        auto abiDiff = nr::rhi::describeShaderLayoutAbiDifference(
+            baselineLayout.abiSignature(),
+            presentLayout.abiSignature());
+        nr::test::require(!abiDiff.empty(), "ABI difference diagnostics should describe a mismatched layout");
+
+        auto const generationBeforeReload = shaderService.sessionGeneration();
+        shaderService.reloadSession();
+        nr::test::require(
+            shaderService.sessionGeneration() > generationBeforeReload,
+            "shader service reload should advance session generation for variant cache invalidation");
+
+        auto reloadedVariantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = constantVariant,
+        });
+        nr::test::require(reloadedVariantProgram.valid(), "path tracing variant should compile after session reload");
+    }};
+
 const nr::test::CaseRegistrar rtVertexAtlasLayoutCase{
     "path tracing shader vertex atlas offsets match resource vertex layout",
     [] {
@@ -201,6 +297,12 @@ const nr::test::CaseRegistrar rtMaterialTextureIdsReflectionCase{
         nr::test::requireEqual(sceneTextureBinding->binding, 0u);
         nr::test::require(sceneTextureBinding->descriptorType == vk::DescriptorType::eCombinedImageSampler);
         nr::test::require(sceneTextureBinding->supportsVariableDescriptorCount());
+
+        auto sceneTextureImmutableSampler = sceneTextures.makeImmutableSamplerBinding(nr::rhi::SlangSamplerDesc{});
+        nr::test::require(sceneTextureImmutableSampler.has_value(), "RT gSceneTextures should allow immutable sampler binding");
+        nr::test::requireEqual(sceneTextureImmutableSampler->set, 1u);
+        nr::test::requireEqual(sceneTextureImmutableSampler->binding, 0u);
+        nr::test::requireEqual(sceneTextureImmutableSampler->descriptorCount, 1024u);
 
         auto sceneTextureElement = sceneTextures[7u];
         nr::test::require(sceneTextureElement.setObject(nr::rhi::LogicalResourceDescriptorWrite{

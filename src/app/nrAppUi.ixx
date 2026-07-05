@@ -34,7 +34,7 @@ struct UiSection
     bool defaultOpen = true;
 };
 
-class UiSystem
+class UiSystem : public nr::renderer::NodeUiWriter
 {
   public:
     class WindowScope
@@ -66,7 +66,7 @@ class UiSystem
     UiSystem(UiSystem&&) = delete;
     UiSystem& operator=(UiSystem&&) = delete;
 
-    ~UiSystem();
+    ~UiSystem() override;
 
     void initialize();
     void shutdown();
@@ -82,8 +82,13 @@ class UiSystem
         std::span<const UiSection> leadingSections,
         std::span<const UiSection> trailingSections,
         ImGuiWindowFlags flags = 0);
-    void separator();
-    void text(std::string_view content);
+    void renderSections(
+        std::span<const UiSection> leadingSections,
+        std::span<const nr::renderer::NodeUiSection> nodeSections,
+        std::span<const UiSection> trailingSections,
+        ImGuiWindowFlags flags = 0);
+    void separator() override;
+    void text(std::string_view content) override;
 
     template <typename... TArgs>
     void textFmt(std::format_string<TArgs...> format, TArgs&&... args)
@@ -91,12 +96,23 @@ class UiSystem
         text(std::format(format, std::forward<TArgs>(args)...));
     }
 
-    [[nodiscard]] bool checkbox(std::string_view label, bool& value);
-    [[nodiscard]] bool button(std::string_view label);
+    [[nodiscard]] bool checkbox(std::string_view label, bool& value) override;
+    [[nodiscard]] bool button(std::string_view label) override;
     [[nodiscard]] bool inputText(std::string_view label, std::string& value);
-    [[nodiscard]] bool beginCombo(std::string_view label, std::string_view preview);
-    void endCombo();
-    [[nodiscard]] bool selectable(std::string_view label, bool selected = false);
+    [[nodiscard]] bool beginCombo(std::string_view label, std::string_view preview) override;
+    void endCombo() override;
+    [[nodiscard]] bool selectable(std::string_view label, bool selected = false) override;
+    [[nodiscard]] bool sliderFloat(std::string_view label, float& value, float minValue, float maxValue) override;
+    [[nodiscard]] bool inputUInt(
+        std::string_view label,
+        std::uint32_t& value,
+        std::uint32_t minValue,
+        std::uint32_t maxValue) override;
+    [[nodiscard]] bool sliderUInt(
+        std::string_view label,
+        std::uint32_t& value,
+        std::uint32_t minValue,
+        std::uint32_t maxValue) override;
     void setItemDefaultFocus();
     [[nodiscard]] const UiFrameStats& stats() const noexcept;
     void setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame& cameraFrame) noexcept;

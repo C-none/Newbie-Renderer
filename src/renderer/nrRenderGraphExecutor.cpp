@@ -369,16 +369,20 @@ namespace nr::renderer
                             bindingIt != runtimeBindings.end(),
                             "RenderGraphExecutor::execute acquire transition cannot resolve runtime resource binding.");
 
-                        addTransitionBarrier(
+                        auto const addedBarrier = addTransitionBarrier(
                             barriers,
                             resourceIt->second.get(),
                             bindingIt->second,
                             transition,
                             TransitionPlacement::Acquire,
                             queueFamilyIndexFor(context.device, transition.srcQueue),
-                            queueFamilyIndexFor(context.device, transition.dstQueue));
+                            queueFamilyIndexFor(context.device, transition.dstQueue),
+                            context.device.queueFamilyTransferPolicy());
 
-                        ++report.appliedAcquireBarrierCount;
+                        if (addedBarrier)
+                        {
+                            ++report.appliedAcquireBarrierCount;
+                        }
                     });
 
                     if (!barriers.empty())
@@ -419,16 +423,20 @@ namespace nr::renderer
                             bindingIt != runtimeBindings.end(),
                             "RenderGraphExecutor::execute release transition cannot resolve runtime resource binding.");
 
-                        addTransitionBarrier(
+                        auto const addedBarrier = addTransitionBarrier(
                             barriers,
                             resourceIt->second.get(),
                             bindingIt->second,
                             transition,
                             TransitionPlacement::Release,
                             queueFamilyIndexFor(context.device, transition.srcQueue),
-                            queueFamilyIndexFor(context.device, transition.dstQueue));
+                            queueFamilyIndexFor(context.device, transition.dstQueue),
+                            context.device.queueFamilyTransferPolicy());
 
-                        ++report.appliedReleaseBarrierCount;
+                        if (addedBarrier)
+                        {
+                            ++report.appliedReleaseBarrierCount;
+                        }
                     });
 
                     if (!barriers.empty())
@@ -499,6 +507,8 @@ namespace nr::renderer
             ++report.submittedBatchCount;
         }
 
+        updateRetainedImageStates(compiled);
+
         frameTimingState.pendingFrameIndex = context.frameIndex;
         frameTimingState.pendingPasses = std::move(currentTimingSamples);
 
@@ -515,6 +525,22 @@ void RenderGraphExecutor::clearRetainedState()
 [[nodiscard]] nr::rhi::QueueRole RenderGraphExecutor::toQueueRole(QueueDomain queue)
 {
         return rhiQueueRoleFromDomain(queue);
+    }
+
+void RenderGraphExecutor::updateRetainedImageStates(const CompiledGraphFrame& compiled)
+{
+        std::ranges::for_each(compiled.resources, [](const CompiledResourceDesc& resource) {
+            if (!resource.isImage || !resource.retainedState.has_value() || !resource.finalAccessScope.resolved())
+            {
+                return;
+            }
+
+            auto& state = resource.retainedState->get();
+            state.initialized = true;
+            state.layout = resource.finalLayout;
+            state.ownership = resource.finalOwnership;
+            state.access = resource.finalAccessScope;
+        });
     }
 
 void RenderGraphExecutor::attachFrameBoundaryMetadata(
@@ -1075,16 +1101,32 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
         return cached.buffers.front();
     }
 
-void RenderGraphExecutor::addTransitionBarrier(
+bool RenderGraphExecutor::addTransitionBarrier(
         nr::rhi::ops::BarrierBatch& barriers,
         const CompiledResourceDesc& resource,
         const PreparedResourceBinding& binding,
         const ResourceStateTransition& transition,
         TransitionPlacement placement,
         std::uint32_t srcQueueFamilyIndex,
-        std::uint32_t dstQueueFamilyIndex)
+        std::uint32_t dstQueueFamilyIndex,
+        const nr::rhi::ops::QueueFamilyTransferPolicy& queueFamilyTransferPolicy)
 {
         constexpr auto kReadWriteAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
+        const auto isOwnershipPlacement = placement != TransitionPlacement::InPass;
+        const auto canOmitBufferOwnership =
+            isOwnershipPlacement &&
+            queueFamilyTransferPolicy.canOmitBufferQueueFamilyTransfer(
+                srcQueueFamilyIndex,
+                dstQueueFamilyIndex);
+        const auto canOmitImageOwnership =
+            isOwnershipPlacement &&
+            resource.isImage &&
+            binding.imageResource.has_value() &&
+            queueFamilyTransferPolicy.canOmitImageQueueFamilyTransfer(
+                binding.imageResource->get(),
+                srcQueueFamilyIndex,
+                dstQueueFamilyIndex,
+                resource.isSwapchain);
 
         // Resolve each side from the precise declared scope when available, falling
         // back to a conservative all-commands scope only for unresolved sides so
@@ -1105,8 +1147,13 @@ void RenderGraphExecutor::addTransitionBarrier(
         if (resource.isImage && transition.oldLayout == ImageLayoutIntent::Undefined)
         {
             // Undefined old layout discards prior image contents; there is no
-            // producer-side access to make visible for the transition.
-            srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
+            // producer-side access to make visible for the transition. Swapchain
+            // acquire still requires an execution dependency from the semaphore
+            // wait stage into the first layout transition, so keep the source
+            // stage aligned with the consumer side for presentable images.
+            srcStageMask = resource.isSwapchain
+                               ? dstStageMask
+                               : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eTopOfPipe};
             srcAccessMask = vk::AccessFlags2{};
         }
 
@@ -1127,11 +1174,16 @@ void RenderGraphExecutor::addTransitionBarrier(
                                    ? nr::rhi::ops::kIgnoredQueueFamilyIndex
                                    : srcQueueFamilyIndex;
         auto barrierDstQueue = placement == TransitionPlacement::InPass
-                                   ? nr::rhi::ops::kIgnoredQueueFamilyIndex
-                                   : dstQueueFamilyIndex;
+                                    ? nr::rhi::ops::kIgnoredQueueFamilyIndex
+                                    : dstQueueFamilyIndex;
 
         if (resource.isBuffer)
         {
+            if (canOmitBufferOwnership)
+            {
+                return false;
+            }
+
             nrAssert(binding.buffer != vk::Buffer{}, "RenderGraphExecutor::addTransitionBarrier requires a valid buffer binding.");
             barriers.add(vk::BufferMemoryBarrier2{
                 srcStageMask,
@@ -1145,11 +1197,16 @@ void RenderGraphExecutor::addTransitionBarrier(
                 std::numeric_limits<vk::DeviceSize>::max(),
                 nullptr,
             });
-            return;
+            return true;
         }
 
         if (resource.isAccelerationStructure)
         {
+            if (canOmitBufferOwnership)
+            {
+                return false;
+            }
+
             nrAssert(
                 binding.accelerationStructureStorageBuffer != vk::Buffer{},
                 "RenderGraphExecutor::addTransitionBarrier requires a valid acceleration-structure storage buffer binding.");
@@ -1168,11 +1225,23 @@ void RenderGraphExecutor::addTransitionBarrier(
                 barrierSize,
                 nullptr,
             });
-            return;
+            return true;
         }
 
         if (resource.isImage)
         {
+            if (canOmitImageOwnership)
+            {
+                if (placement == TransitionPlacement::Acquire ||
+                    transition.oldLayout == transition.newLayout)
+                {
+                    return false;
+                }
+
+                barrierSrcQueue = nr::rhi::ops::kIgnoredQueueFamilyIndex;
+                barrierDstQueue = nr::rhi::ops::kIgnoredQueueFamilyIndex;
+            }
+
             nrAssert(binding.image != vk::Image{}, "RenderGraphExecutor::addTransitionBarrier requires a valid image binding.");
             barriers.add(vk::ImageMemoryBarrier2{
                 srcStageMask,
@@ -1187,7 +1256,10 @@ void RenderGraphExecutor::addTransitionBarrier(
                 binding.subresourceRange,
                 nullptr,
             });
+            return true;
         }
+
+        return false;
     }
 
 [[nodiscard]] PassRecordContext RenderGraphExecutor::makePassRecordContext(
@@ -1313,16 +1385,20 @@ void RenderGraphExecutor::addTransitionBarrier(
                     bindingIt != runtimeBindings.end(),
                     "RenderGraphExecutor::recordPassToSecondary pass barrier cannot resolve runtime resource binding.");
 
-                addTransitionBarrier(
+                auto const addedBarrier = addTransitionBarrier(
                     inPassBarriers,
                     resourceIt->second.get(),
                     bindingIt->second,
                     transition,
                     TransitionPlacement::InPass,
                     nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                    nr::rhi::ops::kIgnoredQueueFamilyIndex);
+                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                    nr::rhi::ops::QueueFamilyTransferPolicy{});
 
-                ++result.appliedInPassBarrierCount;
+                if (addedBarrier)
+                {
+                    ++result.appliedInPassBarrierCount;
+                }
             });
 
             if (!inPassBarriers.empty())
@@ -1851,16 +1927,20 @@ void RenderGraphExecutor::executeRecordedSecondaries(
                         bindingIt != runtimeBindings.end(),
                         "RenderGraphExecutor::executeRecordedSecondaries pass barrier cannot resolve runtime resource binding.");
 
-                    addTransitionBarrier(
+                    auto const addedBarrier = addTransitionBarrier(
                         inPassBarriers,
                         resourceIt->second.get(),
                         bindingIt->second,
                         transition,
                         TransitionPlacement::InPass,
                         nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                        nr::rhi::ops::kIgnoredQueueFamilyIndex);
+                        nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                        nr::rhi::ops::QueueFamilyTransferPolicy{});
 
-                    ++report.appliedInPassBarrierCount;
+                    if (addedBarrier)
+                    {
+                        ++report.appliedInPassBarrierCount;
+                    }
                 });
 
                 if (!inPassBarriers.empty())

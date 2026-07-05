@@ -8,14 +8,6 @@ export namespace nr::rhi::sync
 {
 
 /**
- * @brief Create a binary semaphore.
- */
-[[nodiscard]] inline vk::raii::Semaphore createSemaphore(const vk::raii::Device& device)
-{
-    return vk::raii::Semaphore(device, vk::SemaphoreCreateInfo{});
-}
-
-/**
  * @brief Create a timeline semaphore with an initial counter value.
  *
  * Recommended for cross-queue pipelines such as:

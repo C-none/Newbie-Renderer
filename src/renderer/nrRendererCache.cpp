@@ -56,6 +56,7 @@ namespace
                     .format = desc.format,
                     .usageIntents = desc.usageIntents,
                     .initialLayout = desc.initialLayout,
+                    .initialAccessScope = desc.initialAccessScope,
                     .aspect = desc.aspect,
                 };
             }
@@ -214,6 +215,7 @@ namespace
         resource.debugName.clear();
         resource.importedBufferResource.reset();
         resource.importedImageResource.reset();
+        resource.retainedState.reset();
         resource.importedAccelerationStructureResource.reset();
     });
 
@@ -249,6 +251,7 @@ void RenderGraphCompileCache::patchCompiledResources(
         compiledResource.debugName = resourceDebugName(frameResource);
         compiledResource.importedBufferResource.reset();
         compiledResource.importedImageResource.reset();
+        compiledResource.retainedState.reset();
         compiledResource.importedAccelerationStructureResource.reset();
 
         std::visit(
@@ -261,6 +264,7 @@ void RenderGraphCompileCache::patchCompiledResources(
                 else if constexpr (std::same_as<DescT, GraphImportedImageDesc>)
                 {
                     compiledResource.importedImageResource = desc.importedResource;
+                    compiledResource.retainedState = desc.retainedState;
                 }
                 else if constexpr (std::same_as<DescT, GraphImportedAccelerationStructureDesc>)
                 {
@@ -442,6 +446,14 @@ void BindlessImageTableCache::invalidateTableForFrame(
         auto elementCursor = tableCursor[descriptorId];
         if (descriptor.image.has_value())
         {
+            if (request.usesImmutableSampler)
+            {
+                static_cast<void>(elementCursor.setObject(
+                    descriptor.image->get(),
+                    descriptor.layout));
+                return;
+            }
+
             static_cast<void>(elementCursor.setObject(
                 descriptor.image->get(),
                 request.sampler,
@@ -452,11 +464,16 @@ void BindlessImageTableCache::invalidateTableForFrame(
         nrAssert(
             descriptor.logicalResourceId != 0u || !descriptor.debugName.empty(),
             std::format("Bindless image table '{}' logical descriptor requires an id or debug name.", request.tableKey));
-        static_cast<void>(elementCursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+        auto logicalWrite = nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = descriptor.logicalResourceId,
             .debugName = descriptor.debugName,
             .imageLayout = descriptor.layout,
-        }));
+        };
+        if (!request.usesImmutableSampler)
+        {
+            logicalWrite.sampler = request.sampler;
+        }
+        static_cast<void>(elementCursor.setObject(logicalWrite));
     };
 
     if (request.fallbackDescriptor.has_value())

@@ -16,7 +16,7 @@ struct AccumulatePushConstants
     std::uint32_t height = 0u;
     std::uint32_t resetHistory = 1u;
     std::uint32_t historySampleCount = 0u;
-    std::uint32_t maxHistorySampleCount = nr::renderer::kRendererAccumulationMaxSampleCount;
+    std::uint32_t maxHistorySampleCount = kAccumulateDefaultMaxHistorySampleCount;
 };
 
 static_assert(sizeof(AccumulatePushConstants) <= nr::rhi::kMaxPushConstantBytes);
@@ -25,6 +25,7 @@ struct AccumulateRuntimeCache
 {
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> pipeline{};
     std::array<nr::rhi::Image, 2u> historyImages{};
+    std::array<nr::renderer::RetainedImageState, 2u> historyStates{};
     vk::Extent2D allocatedExtent{0u, 0u};
     vk::Format allocatedFormat = vk::Format::eUndefined;
     bool historyValid = false;
@@ -84,6 +85,7 @@ struct AccumulateRuntimeCache
             nr::rhi::MemoryUsage::GpuOnly,
             std::format("Accumulate.History[{}]", slot));
         nr::nrAssert(runtime.historyImages[slot].valid(), "Accumulate failed to allocate history image.");
+        runtime.historyStates[slot].reset();
     });
 
     runtime.allocatedExtent = extent;
@@ -96,10 +98,10 @@ struct AccumulateRuntimeCache
 [[nodiscard]] nr::renderer::GraphResourceHandle importHistoryImage(
     nr::renderer::NodeBuildContext& context,
     const nr::rhi::Image& image,
+    nr::renderer::RetainedImageState& state,
     std::string_view debugName,
     vk::Extent2D extent,
     vk::Format format,
-    nr::renderer::ImageLayoutIntent initialLayout,
     std::initializer_list<nr::renderer::ImageUsageIntent> usageIntents)
 {
     nr::nrAssert(image.valid(), std::format("{} image is invalid.", debugName));
@@ -107,12 +109,18 @@ struct AccumulateRuntimeCache
     return context.addResource(nr::renderer::GraphImportedImageDesc{
         .debugName = std::string(debugName),
         .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-        .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
+        .initialOwnership = state.initialized
+                                ? state.ownership
+                                : nr::renderer::ResourceOwnershipDomain::Undefined,
         .extent = vk::Extent3D{extent.width, extent.height, 1u},
         .format = format,
         .usageIntents = std::vector<nr::renderer::ImageUsageIntent>(usageIntents),
-        .initialLayout = initialLayout,
+        .initialLayout = state.initialized
+                             ? state.layout
+                             : nr::renderer::ImageLayoutIntent::Undefined,
+        .initialAccessScope = state.initialized ? state.access : nr::renderer::AccessScope{},
         .importedResource = std::cref(image),
+        .retainedState = std::ref(state),
     });
 }
 } // namespace nr::renderPasses::detail
@@ -172,29 +180,27 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
     auto previousHistory = detail::importHistoryImage(
         context,
         runtime_->historyImages[previousSlot],
+        runtime_->historyStates[previousSlot],
         std::format("Accumulate.HistoryRead[{}]", previousSlot),
         viewportExtent,
         historyFormat,
-        runtime_->historyValid
-            ? nr::renderer::ImageLayoutIntent::ShaderReadOnly
-            : nr::renderer::ImageLayoutIntent::Undefined,
         {
             nr::renderer::ImageUsageIntent::Sampled,
         });
     auto outputHistory = detail::importHistoryImage(
         context,
         runtime_->historyImages[currentSlot],
+        runtime_->historyStates[currentSlot],
         std::format("Accumulate.HistoryWrite[{}]", currentSlot),
         viewportExtent,
         historyFormat,
-        nr::renderer::ImageLayoutIntent::Undefined,
         {
             nr::renderer::ImageUsageIntent::StorageWrite,
             nr::renderer::ImageUsageIntent::Sampled,
             nr::renderer::ImageUsageIntent::TransferSrc,
         });
 
-    auto const maxHistorySampleCount = std::max(1u, input.maxHistorySampleCount);
+    auto const maxHistorySampleCount = std::clamp(input.maxHistorySampleCount, 1u, kAccumulateMaxHistorySampleCount);
     auto pushConstants = detail::AccumulatePushConstants{
         .width = viewportExtent.width,
         .height = viewportExtent.height,
@@ -225,6 +231,39 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
     runtime_->lastWrittenSlot = currentSlot;
     runtime_->historyValid = true;
     context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, outputHistory);
+}
+
+void AccumulateNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters&)
+{
+    if (pendingMaxHistorySampleCountValid_)
+    {
+        input.maxHistorySampleCount = std::clamp(
+            pendingMaxHistorySampleCount_,
+            1u,
+            kAccumulateMaxHistorySampleCount);
+        pendingMaxHistorySampleCountValid_ = false;
+    }
+
+    maxHistorySampleCountDraft_ = std::clamp(
+        input.maxHistorySampleCount,
+        1u,
+        kAccumulateMaxHistorySampleCount);
+    context.addSection(
+        context.runtimeName(),
+        [this](NodeUiWriter& ui) {
+            auto value = maxHistorySampleCountDraft_;
+            if (ui.inputUInt("History Samples", value, 1u, kAccumulateMaxHistorySampleCount))
+            {
+                maxHistorySampleCountDraft_ = std::clamp(
+                    value,
+                    1u,
+                    kAccumulateMaxHistorySampleCount);
+                pendingMaxHistorySampleCount_ = maxHistorySampleCountDraft_;
+                pendingMaxHistorySampleCountValid_ = true;
+            }
+        },
+        true,
+        "controls");
 }
 
 void AccumulateNode::shutdown(NodeShutdownContext&)

@@ -824,11 +824,14 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
 
         if (invalidTangentFrameCount > 0u)
         {
-            nrInfo<LogLevel::warning>(std::format(
-                "Mesh '{}' contains {} vertices with undefined tangent handedness; using +1 tangent sign for those vertices. First invalid frame: {}.",
-                meshAsset.name,
-                invalidTangentFrameCount,
-                firstInvalidTangentFrame.value_or("unavailable")));
+            nr::nrLog(
+                nr::LogLevel::warning,
+                "LOAD",
+                std::format(
+                    "Mesh '{}' contains {} vertices with undefined tangent handedness; using +1 tangent sign for those vertices. First invalid frame: {}.",
+                    meshAsset.name,
+                    invalidTangentFrameCount,
+                    firstInvalidTangentFrame.value_or("unavailable")));
         }
 
         meshAsset.indices.reserve(static_cast<std::size_t>(mesh->mNumFaces) * 3u);

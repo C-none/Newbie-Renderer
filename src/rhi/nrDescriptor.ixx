@@ -167,6 +167,72 @@ struct PushConstantRangeInfo
     [[nodiscard]] bool hasPhase(ShaderBindingPhase phase) const noexcept;
 };
 
+struct ShaderDescriptorAbiBinding
+{
+    std::uint32_t set = 0;
+    std::uint32_t binding = 0;
+    std::uint32_t descriptorCount = 1;
+    bool isRuntimeSized = false;
+    vk::DescriptorType descriptorType = vk::DescriptorType::eStorageBuffer;
+    vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
+    vk::DescriptorBindingFlags bindingFlags{};
+
+    [[nodiscard]] friend bool operator<(const ShaderDescriptorAbiBinding &lhs, const ShaderDescriptorAbiBinding &rhs) noexcept
+    {
+        return std::tuple{
+                   lhs.set,
+                   lhs.binding,
+                   lhs.descriptorCount,
+                   lhs.isRuntimeSized,
+                   lhs.descriptorType,
+                   lhs.stageFlags,
+                   lhs.bindingFlags,
+               } <
+               std::tuple{
+                   rhs.set,
+                   rhs.binding,
+                   rhs.descriptorCount,
+                   rhs.isRuntimeSized,
+                   rhs.descriptorType,
+                   rhs.stageFlags,
+                   rhs.bindingFlags,
+               };
+    }
+
+    [[nodiscard]] friend bool operator==(const ShaderDescriptorAbiBinding &, const ShaderDescriptorAbiBinding &) noexcept = default;
+};
+
+struct ShaderPushConstantAbiRange
+{
+    std::uint32_t offset = 0;
+    std::uint32_t size = 0;
+    vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
+
+    [[nodiscard]] friend bool operator<(const ShaderPushConstantAbiRange &lhs, const ShaderPushConstantAbiRange &rhs) noexcept
+    {
+        return std::tuple{
+                   lhs.offset,
+                   lhs.size,
+                   lhs.stageFlags,
+               } <
+               std::tuple{
+                   rhs.offset,
+                   rhs.size,
+                   rhs.stageFlags,
+               };
+    }
+
+    [[nodiscard]] friend bool operator==(const ShaderPushConstantAbiRange &, const ShaderPushConstantAbiRange &) noexcept = default;
+};
+
+struct ShaderLayoutAbiSignature
+{
+    std::vector<ShaderDescriptorAbiBinding> descriptorBindings;
+    std::vector<ShaderPushConstantAbiRange> pushConstantRanges;
+
+    [[nodiscard]] friend bool operator==(const ShaderLayoutAbiSignature &, const ShaderLayoutAbiSignature &) noexcept = default;
+};
+
 struct ShaderBindingReflection
 {
     ShaderBindingKind kind = ShaderBindingKind::None;
@@ -665,6 +731,8 @@ class ShaderDescriptorLayout
 
     [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange(const ShaderCursor &cursor) const;
 
+    [[nodiscard]] ShaderLayoutAbiSignature abiSignature() const;
+
     [[nodiscard]] std::vector<vk::PushConstantRange> makeVkPushConstantRanges() const;
 
     [[nodiscard]] ShaderCursor rootCursor() const;
@@ -685,6 +753,16 @@ class ShaderDescriptorLayout
     std::vector<DescriptorSetLayoutInfo> descriptorSets_;
     std::vector<PushConstantRangeInfo> pushConstantRanges_;
 };
+
+[[nodiscard]] bool shaderLayoutAbiEquivalent(const ShaderLayoutAbiSignature &lhs, const ShaderLayoutAbiSignature &rhs) noexcept;
+
+[[nodiscard]] std::string describeShaderLayoutAbiDifference(const ShaderLayoutAbiSignature &baseline, const ShaderLayoutAbiSignature &variant);
+
+void assertShaderLayoutAbiStable(
+    const SlangProgram &baselineProgram,
+    const SlangProgram &variantProgram,
+    DescriptorBindingPolicy policy = {},
+    std::string_view debugName = {});
 
 [[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout, ShaderBindingPool &pool);
 

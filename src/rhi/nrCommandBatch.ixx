@@ -19,9 +19,9 @@ export namespace nr::rhi
  * Usage Pattern:
  *   CommandBatch batch{};
  *   batch.addCommandBuffer(primaryCB);
- *   batch.addWait(imageAvailable, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
- *   batch.addSignal(renderFinished);
- *   queue.submit(std::move(batch), &fence);
+ *   batch.addWait(waitSemaphore, vk::PipelineStageFlagBits2::eAllCommands, waitValue);
+ *   batch.addSignal(signalSemaphore, signalValue);
+ *   queue.submit(std::move(batch), std::cref(fence));
  */
 class CommandBatch {
 public:
@@ -61,9 +61,9 @@ public:
         * wait at `eAccelerationStructureBuildKHR`, is normally sufficient to make
         * the transfer writes visible to AS build reads.
         *
-        * This does not replace queue-family ownership transfer barriers for
-        * VK_SHARING_MODE_EXCLUSIVE resources, and does not perform image layout
-        * transitions.
+        * This does not perform image layout transitions. Queue-family ownership
+        * barriers are still required unless the device transfer policy, such as
+        * VK_KHR_maintenance9, makes the specific transfer optional.
      */
     void addWait(const vk::raii::Semaphore& semaphore, vk::PipelineStageFlags2 stage, std::uint64_t value = 0, std::uint32_t deviceIndex = 0);
 
@@ -172,18 +172,6 @@ namespace batch {
  */
 [[nodiscard]] CommandBatch single(
     const vk::raii::CommandBuffer& commandBuffer
-);
-
-/**
- * @brief Create graphics batch with typical present sync
- * @param commandBuffer RAII graphics command buffer
- * @param imageAvailable RAII semaphore from swapchain acquire
- * @param renderFinished RAII semaphore to signal for present
- */
-[[nodiscard]] CommandBatch graphics(
-    const vk::raii::CommandBuffer& commandBuffer,
-    const vk::raii::Semaphore& imageAvailable,
-    const vk::raii::Semaphore& renderFinished
 );
 
 } // namespace batch

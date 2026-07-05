@@ -10,14 +10,6 @@ nr_link_module_dependencies(embeddedTriangle embeddedTriangle.cpp PRIVATE
     dependency
 )
 
-add_custom_target(run_embeddedTriangle
-    COMMAND $<TARGET_FILE:embeddedTriangle>
-    DEPENDS embeddedTriangle
-    WORKING_DIRECTORY $<TARGET_FILE_DIR:embeddedTriangle>
-    COMMENT "Build and run embeddedTriangle smoke sample"
-    USES_TERMINAL
-)
-
 nr_add_executable(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp)
 set_target_properties(nr_normal_buffer_ui_smoke_test PROPERTIES FOLDER "Test/smoke/app")
 

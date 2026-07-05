@@ -141,7 +141,12 @@ inline constexpr std::uint32_t kOffsetTexCoord0 = static_cast<std::uint32_t>(off
 
     auto runtime = std::make_shared<NormalBufferRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
-    runtime->pipeline->initializeDeferred(device.pipeline().createGraphicsPipeline(program, pipelineDesc));
+    auto sceneTextureImmutableSamplers = std::array{sceneTextureTableImmutableSamplerBinding()};
+    runtime->pipeline->initializeDeferred(device.pipeline().createGraphicsPipeline(
+        program,
+        pipelineDesc,
+        64u,
+        sceneTextureImmutableSamplers));
     nr::nrAssert(runtime->pipeline->valid(), "NormalBuffer pass failed to create graphics pipeline.");
 
     return runtime;

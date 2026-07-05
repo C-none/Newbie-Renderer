@@ -315,7 +315,7 @@ class Scene
         std::uint32_t generation = 0;
     };
 
-    struct PendingAcquireBatch
+    struct PendingGraphicsSyncBatch
     {
         GpuAssetHandleRef asset{};
         std::uint64_t targetGpuVersion = 0;
@@ -323,7 +323,7 @@ class Scene
         std::vector<nr::rhi::ops::ImageUploadTicket> imageTickets{};
     };
 
-    struct SubmittedAcquireWork
+    struct SubmittedGraphicsSyncWork
     {
         nr::rhi::CommandPool commandPool{};
         std::optional<vk::raii::CommandBuffers> commandBuffers{};
@@ -497,7 +497,7 @@ class Scene
 
     [[nodiscard]] bool uploadContextAvailable() const noexcept;
 
-    [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeTransferToGraphicsOwnershipPlan(
+    [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeTransferToGraphicsUploadPlan(
         vk::PipelineStageFlags2 acquireStages,
         vk::AccessFlags2 acquireAccess) const;
 
@@ -554,7 +554,7 @@ class Scene
     {
         return record.cpuReady &&
                !record.uploadQueued &&
-               record.gpuState != GpuResidencyState::waitingAcquire;
+               record.gpuState != GpuResidencyState::waitingGraphicsSync;
     }
 
     template <typename RecordT>
@@ -657,15 +657,15 @@ class Scene
     void uploadQueuedTextureAssets(nr::rhi::ops::UploadReadbackContext &uploadContext,
                                    std::size_t &uploadBudgetRemaining);
 
-    void markAcquireBatchResident(const PendingAcquireBatch &batch);
+    void markGraphicsSyncBatchResident(const PendingGraphicsSyncBatch &batch);
 
-    [[nodiscard]] static std::uint64_t maxUploadSignalValue(const PendingAcquireBatch &batch) noexcept;
+    [[nodiscard]] static std::uint64_t maxUploadSignalValue(const PendingGraphicsSyncBatch &batch) noexcept;
 
-    void reapSubmittedAcquireWork();
+    void reapSubmittedGraphicsSyncWork();
 
-    void submitReadyGraphicsAcquireBatches(nr::rhi::ops::UploadReadbackContext &uploadContext);
+    void submitReadyGraphicsSyncBatches(nr::rhi::ops::UploadReadbackContext &uploadContext);
 
-    void pollUploadTimelineUntilAcquireBatchesReady(nr::rhi::ops::UploadReadbackContext &uploadContext);
+    void pollUploadTimelineUntilGraphicsSyncBatchesReady(nr::rhi::ops::UploadReadbackContext &uploadContext);
 
     [[nodiscard]] static constexpr std::string_view importStageName(ImportStage stage) noexcept
     {
@@ -981,8 +981,8 @@ class Scene
     flecs::query<const SceneLightBinding, const WorldTransform> lightCandidatesQuery_{};
     SceneFrameStamp currentFrame_{};
     detail::SceneGeometryAtlas geometryAtlas_{};
-    std::vector<PendingAcquireBatch> pendingAcquireBatches_{};
-    std::vector<SubmittedAcquireWork> submittedAcquireWork_{};
+    std::vector<PendingGraphicsSyncBatch> pendingGraphicsSyncBatches_{};
+    std::vector<SubmittedGraphicsSyncWork> submittedGraphicsSyncWork_{};
     std::vector<SubmittedGeometryAtlasGrowWork> submittedGeometryAtlasGrowWork_{};
 
     std::vector<nr::resource::MeshHandle> meshHandles_{};

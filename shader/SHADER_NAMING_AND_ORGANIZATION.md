@@ -129,6 +129,11 @@ import common;
 ```
 
 `shader/common.slang` is the shared shader-side ABI entry and must stay an aggregation file only. It should contain explanatory comments plus `__include` lines, while actual declarations live under `shader/include`.
+
+Link-time type variant declarations must also live under `shader/include` and be made visible through `shader/common.slang`. Generated specialization modules are intentionally narrow: they may only `import common;` and then export type aliases such as `export struct T : I = Concrete;`. Type policy implementations must be pure shader logic and must not declare new global bindable resources. Variant resources must come from the existing ABI or be passed as ordinary values.
+
+Shader-side `extern` values used as link-time variant constants must never specify default values. The owning C++ compile path must always populate the matching `SlangProgramVariantDesc`, including the project default variant. Default values belong in C++ constants and UI/input state, not in Slang `extern` declarations. An empty variant compile is only valid for shaders that do not declare required variant `extern` values.
+
 `shader/include/globalUniform.slang` is an `implementing common` file that declares the global frame uniform payload type and buffer:
 
 ```slang
@@ -152,7 +157,7 @@ Only shaders that actually reference `gFrame` require a matching C++ descriptor 
 public Sampler2D<float4> gSceneTextures[];
 ```
 
-All material texture types share this single runtime descriptor array. `shader/include/materialTextureIds.slang` defines the common material texture slot constants and packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices.
+All material texture types share this single runtime descriptor array. `shader/include/materialTextureIds.slang` defines the common material texture slot constants and packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices. PSOs that consume this table install a linear immutable sampler during pipeline layout creation, so per-frame descriptor updates provide only image views and layouts.
 
 `shader/include/sceneLights.slang` declares the global scene light buffers:
 
@@ -165,7 +170,7 @@ public StructuredBuffer<SceneLightGpuRecord> gSceneLights;
 public StructuredBuffer<SceneLightAliasGpuRecord> gSceneLightAliasTable;
 ```
 
-`LightPrepareNode` publishes the matching C++ buffers as `frameResource::sceneLightHeader`, `frameResource::sceneLights`, and `frameResource::sceneLightAliasTable`. It prepends a warm default directional sun before scene-authored lights, so PathTracing normally sees at least one positive-energy alias-table entry even when the loaded asset has no lights. The lower-level alias-table helper still supports a valid zero-count header plus one-record dummy list/alias buffers for direct helper use. The same include provides helpers for evaluating glTF punctual `directional`, `point`, and `spot` light energy from uploaded records and for sampling the alias table built from Rec.709 luminance times intensity; runtime influence range is infinite, so shader evaluation does not apply finite range cutoff.
+`LightPrepareNode` publishes the matching C++ buffers as `frameResource::sceneLightHeader`, `frameResource::sceneLights`, and `frameResource::sceneLightAliasTable`. It prepends a warm default directional sun before scene-authored lights, so PathTracing normally sees at least one positive-energy alias-table entry even when the loaded asset has no lights. The lower-level alias-table helper still supports a valid zero-count header plus one-record dummy list/alias buffers for direct helper use. The same include provides helpers for evaluating glTF punctual `directional`, `point`, and `spot` light values from uploaded photometric records and for sampling the alias table built from Rec.709 luminance times glTF intensity. Point/spot shader evaluation applies inverse-square attenuation and the optional glTF range fade.
 
 RT material shading declarations live in `shader/include/material`. `base.slang` defines the no-data `IMultiLayerMaterial` interface, and concrete material implementations such as `gltfMultiLayer.slang` receive RT material headers, layer records, texture references, and interpolated surface data explicitly.
 
@@ -206,8 +211,9 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 
 ### 5) Program composition and link
 
-- Resolve entry point via `IModule::findAndCheckEntryPoint(...)`.
-- Build component array `[module, entryPoint]`.
+- Resolve entry points from the root module.
+- Build component array `[module, entryPoint...]`.
+- For non-empty link-time variants, generate a deterministic synthetic component from sorted constants/type aliases, then append it to the component array.
 - Create composite program with `ISession::createCompositeComponentType(...)`.
 - Link with `IComponentType::link(...)` to produce a linked program.
 
@@ -225,6 +231,7 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 - Every module path segment must be lower camelCase (`useFlag`) and cannot contain `_` or `-`.
 - Cache artifact path must be the normalized module path with `.slang-module` suffix.
 - Search-path order is authoritative for cache-vs-source precedence.
+- Linked program variants are process-memory cache entries keyed by session generation, compile options hash, module path, and variant hash. They are invalidated by `ShaderService::reloadSession()` and session reconfiguration.
 
 ## Cache Layout Rule
 

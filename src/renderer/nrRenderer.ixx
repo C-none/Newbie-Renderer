@@ -39,6 +39,60 @@ struct NodeDescription
     std::string name{};
 };
 
+class NodeUiWriter
+{
+  public:
+    virtual ~NodeUiWriter() = default;
+
+    virtual void text(std::string_view content) = 0;
+    virtual void separator() = 0;
+    [[nodiscard]] virtual bool checkbox(std::string_view label, bool& value) = 0;
+    [[nodiscard]] virtual bool button(std::string_view label) = 0;
+    [[nodiscard]] virtual bool beginCombo(std::string_view label, std::string_view preview) = 0;
+    virtual void endCombo() = 0;
+    [[nodiscard]] virtual bool selectable(std::string_view label, bool selected = false) = 0;
+    [[nodiscard]] virtual bool sliderFloat(std::string_view label, float& value, float minValue, float maxValue) = 0;
+    [[nodiscard]] virtual bool inputUInt(
+        std::string_view label,
+        std::uint32_t& value,
+        std::uint32_t minValue,
+        std::uint32_t maxValue) = 0;
+    [[nodiscard]] virtual bool sliderUInt(
+        std::string_view label,
+        std::uint32_t& value,
+        std::uint32_t minValue,
+        std::uint32_t maxValue) = 0;
+};
+
+using NodeUiSectionDrawCallback = std::function<void(NodeUiWriter&)>;
+
+struct NodeUiSection
+{
+    std::string id{};
+    std::string title{};
+    NodeUiSectionDrawCallback draw{};
+    bool defaultOpen = true;
+};
+
+class NodeUiBuildContext
+{
+  public:
+    NodeUiBuildContext(std::string_view runtimeName, std::vector<NodeUiSection>& sections);
+
+    [[nodiscard]] std::string_view runtimeName() const noexcept;
+    [[nodiscard]] std::string makeSectionId(std::string_view localId) const;
+    void addSection(
+        std::string_view title,
+        NodeUiSectionDrawCallback draw,
+        bool defaultOpen = true,
+        std::string_view localId = {});
+
+  private:
+    std::string runtimeName_{};
+    std::reference_wrapper<std::vector<NodeUiSection>> sections_;
+    std::size_t nextSectionOrdinal_ = 0u;
+};
+
 namespace frameResource
 {
 inline constexpr std::string_view presentSourceColor = "present.sourceColor";
@@ -64,6 +118,7 @@ struct NodeFrameParameters
     std::uint32_t swapchainImageIndex = 0;
     vk::Extent2D swapchainExtent{1, 1};
     vk::Format swapchainFormat = vk::Format::eUndefined;
+    vk::ColorSpaceKHR swapchainColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
 
     std::optional<GraphFrameDataHandle> sceneBridgeFrameHandle{};
     std::optional<std::reference_wrapper<const nr::scene::Scene>> scene{};
@@ -71,6 +126,7 @@ struct NodeFrameParameters
     std::optional<std::reference_wrapper<const std::vector<nr::scene::TlasBuildInputPacket>>> sceneTlasBuildInputs{};
     std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};
     std::optional<std::reference_wrapper<FrameServices>> frameServices{};
+    std::span<const NodeUiSection> nodeUiSections{};
 };
 
 struct RendererCameraOverride
@@ -120,7 +176,7 @@ struct FrameUniformBinding
 };
 
 inline constexpr std::uint32_t kRendererDefaultCameraJitterCycleLength = 256u;
-inline constexpr std::uint32_t kRendererAccumulationMaxSampleCount = 256u;
+inline constexpr std::uint32_t kRendererAccumulationMaxSampleCount = 4096u;
 inline constexpr float kRendererCameraStabilityEpsilon = 1.0e-5f;
 
 enum class RendererCameraJitterSequence : std::uint8_t
@@ -189,11 +245,18 @@ struct FrameGlobalResources
 {
     FrameUniformBinding frameUniform{};
     std::map<std::uint32_t, SceneTextureDescriptorBinding> sceneTextureDescriptorsById{};
-    vk::Sampler sceneTextureSampler{};
     std::uint32_t sceneTextureDescriptorCapacity = kSceneTextureDescriptorCapacity;
     std::uint64_t sceneTextureDescriptorVersion = 0;
     std::reference_wrapper<BindlessImageTableCache> bindlessImageTableCache;
     RendererCameraFrameState cameraFrameState{};
+};
+
+struct NodeImageResourceDesc
+{
+    std::string debugName{};
+    vk::Extent3D extent{1, 1, 1};
+    vk::Format format = vk::Format::eUndefined;
+    ImageAspectIntent aspect = ImageAspectIntent::Color;
 };
 
 struct NodeBuildContext
@@ -212,6 +275,8 @@ struct NodeBuildContext
     [[nodiscard]] GraphResourceHandle requireFrameResource(
         std::string_view key,
         std::string_view consumerDebugName) const;
+
+    [[nodiscard]] std::optional<NodeImageResourceDesc> describeImageResource(GraphResourceHandle resource) const;
 
     // Node-scoped graph authoring helpers: Generic resource addition interface.
     template <typename TDesc>
@@ -240,6 +305,14 @@ struct NodeBuildContext
 
     [[nodiscard]] GraphResourceHandle importStorageColor(
         const nr::rhi::Image& image,
+        std::string_view debugName,
+        vk::Extent2D extent,
+        vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+
+    [[nodiscard]] GraphResourceHandle importRetainedStorageColor(
+        const nr::rhi::Image& image,
+        RetainedImageState& state,
         std::string_view debugName,
         vk::Extent2D extent,
         vk::Format format,
@@ -1230,6 +1303,10 @@ class NodeRuntime
         // Build should capture stable per-pass snapshots used later by execute lambdas.
     virtual void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) = 0;
 
+        // Stage 2 UI collection: optionally publish frame-local UI sections.
+        // Draw callbacks may update node-owned staged UI state, applied by that node on the next frame.
+    virtual void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters);
+
         // Stage 3 (shutdown): release persistent node state.
     virtual void shutdown(NodeShutdownContext&);
 };
@@ -1361,7 +1438,7 @@ class Renderer
 
     void ensureSceneTextureFallback();
 
-    [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeTransferToGraphicsImageUploadPlan() const;
+    [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeSceneTextureFallbackUploadPlan() const;
 
     void uploadSceneTextureFallback();
 
@@ -1376,7 +1453,6 @@ class Renderer
     RendererSubmissionTimeline submissionTimeline_{};
     FrameUniformArena frameUniformArena_{};
     nr::rhi::Image sceneTextureFallback_{};
-    nr::rhi::SlangSampler sceneTextureSampler_{};
 
     bool graphInstalled_ = false;
     std::vector<InstalledNode> installedNodes_{};

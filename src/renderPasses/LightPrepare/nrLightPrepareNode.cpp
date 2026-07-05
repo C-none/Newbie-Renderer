@@ -122,6 +122,8 @@ void ensureAliasBuffer(
 
 [[nodiscard]] nr::scene::SceneLightGpuRecord makeDefaultSunLightRecord() noexcept
 {
+    // Synthetic default directional light follows glTF directional semantics:
+    // intensity is illuminance in lux and color is a unitless linear RGB filter.
     return nr::scene::SceneLightGpuRecord{
         .meta = glm::uvec4{
             nr::scene::sceneLightGpuType(nr::resource::LightType::directional),
@@ -129,7 +131,7 @@ void ensureAliasBuffer(
             std::numeric_limits<std::uint32_t>::max(),
             0u,
         },
-        .colorIntensity = glm::vec4{glm::vec3{1.0f, 0.92f, 0.72f}, 3.0f},
+        .colorIntensity = glm::vec4{glm::vec3{1.0f, 0.92f, 0.72f}, 256.0f},
         .direction = glm::vec4{normalizedDirection(glm::vec3{0.482f, -0.704f, -0.522f}), 0.0f},
     };
 }
@@ -145,6 +147,11 @@ void ensureAliasBuffer(
                                ? light.outerConeRadians
                                : innerCone;
     auto const intensity = std::isfinite(light.intensity) && light.intensity > 0.0f ? light.intensity : 0.0f;
+    auto const hasFiniteRange =
+        light.type != nr::resource::LightType::directional &&
+        std::isfinite(light.range) &&
+        light.range > 0.0f;
+    auto const range = hasFiniteRange ? light.range : 0.0f;
     auto const flags = light.castShadow ? nr::scene::kSceneLightGpuFlagCastShadow : 0u;
 
     return nr::scene::SceneLightGpuRecord{
@@ -155,7 +162,7 @@ void ensureAliasBuffer(
             0u,
         },
         .colorIntensity = glm::vec4{light.color, intensity},
-        .positionRange = glm::vec4{packet.position, 0.0f},
+        .positionRange = glm::vec4{packet.position, range},
         .direction = glm::vec4{normalizedDirection(packet.direction), 0.0f},
         .spotCone = glm::vec4{
             innerCone,

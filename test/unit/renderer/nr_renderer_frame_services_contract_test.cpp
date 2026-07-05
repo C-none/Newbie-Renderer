@@ -39,4 +39,23 @@ const nr::test::CaseRegistrar frameServicesCase{
         nr::test::require(!services.tryGet<ServiceA>().has_value(), "clear should remove services");
         nr::test::require(!std::as_const(services).tryGet<ServiceB>().has_value(), "clear should remove const services");
     }};
+
+const nr::test::CaseRegistrar nodeUiBuildContextCase{
+    "renderer node ui build context creates ordered stable section ids",
+    [] {
+        auto sections = std::vector<nr::renderer::NodeUiSection>{};
+        auto context = nr::renderer::NodeUiBuildContext{"Present", sections};
+
+        context.addSection("Present", [](nr::renderer::NodeUiWriter&) {});
+        context.addSection("Advanced", [](nr::renderer::NodeUiWriter&) {}, false, "advanced");
+
+        nr::test::requireEqual(sections.size(), std::size_t{2u});
+        nr::test::requireEqual(sections[0].id, std::string{"Present.0"});
+        nr::test::requireEqual(sections[0].title, std::string{"Present"});
+        nr::test::require(sections[0].defaultOpen);
+        nr::test::requireEqual(sections[1].id, std::string{"Present.advanced"});
+        nr::test::requireEqual(sections[1].title, std::string{"Advanced"});
+        nr::test::require(!sections[1].defaultOpen);
+        nr::test::requireEqual(context.makeSectionId("stats"), std::string{"Present.stats"});
+    }};
 } // namespace

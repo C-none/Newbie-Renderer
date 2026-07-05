@@ -484,7 +484,7 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame& compil
                                     .oldLayout = oldLayout,
                                     .newLayout = newLayout,
                                     .strength = DependencyStrength::BarrierRequired,
-                                    .srcScope = AccessScope{},
+                                    .srcScope = resourceIt->second.get().initialAccessScope,
                                     .dstScope = currentScope,
                                 });
                             }
@@ -518,6 +518,7 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame& compil
             {
                 resource.finalLayout = *pair.second.layout;
             }
+            resource.finalAccessScope = pair.second.scope;
         });
 
         std::ranges::for_each(compiled.resources, [](CompiledResourceDesc& resource) {

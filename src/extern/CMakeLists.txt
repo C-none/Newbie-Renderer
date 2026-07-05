@@ -23,6 +23,10 @@ if(NOT TARGET slang::slang)
 endif()
 
 find_package(flecs CONFIG REQUIRED)
+find_package(OpenEXR CONFIG REQUIRED)
+if(NOT TARGET OpenEXR::OpenEXR)
+    message(FATAL_ERROR "find_package(OpenEXR) did not provide the expected OpenEXR::OpenEXR target.")
+endif()
 
 option(NR_ENABLE_NSIGHT_GRAPHICS_SDK "Enable Nsight Graphics SDK integration wrappers." ON)
 set(NR_NSIGHT_GRAPHICS_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/NsightGraphics/0.9.0")
@@ -59,6 +63,7 @@ PUBLIC
     GPUOpen::VulkanMemoryAllocator
     Tracy::TracyClient
     assimp::assimp
+    OpenEXR::OpenEXR
     $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
 )
 target_include_directories(dependency

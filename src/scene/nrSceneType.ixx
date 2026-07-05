@@ -45,7 +45,7 @@ enum class GpuResidencyState : std::uint8_t
 {
     none,
     uploadQueued,
-    waitingAcquire,
+    waitingGraphicsSync,
     resident,
     evictQueued,
 };

@@ -4,7 +4,13 @@ module;
 #include <assimp/metadata.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <Imath/half.h>
+#include <OpenEXR/ImfChannelList.h>
+#include <OpenEXR/ImfFrameBuffer.h>
+#include <OpenEXR/ImfHeader.h>
+#include <OpenEXR/ImfOutputFile.h>
 #include <stb_image.h>
+#include <stb_image_write.h>
 #include <turbojpeg.h>
 
 export module dependency.assets;
@@ -13,6 +19,24 @@ export namespace Assimp
 {
 using ::Assimp::Importer;
 } // namespace Assimp
+
+export namespace nr::dependency::openexr
+{
+using Channel = ::OPENEXR_IMF_NAMESPACE::Channel;
+using FrameBuffer = ::OPENEXR_IMF_NAMESPACE::FrameBuffer;
+using Header = ::OPENEXR_IMF_NAMESPACE::Header;
+using OutputFile = ::OPENEXR_IMF_NAMESPACE::OutputFile;
+using PixelType = ::OPENEXR_IMF_NAMESPACE::PixelType;
+using Slice = ::OPENEXR_IMF_NAMESPACE::Slice;
+
+inline constexpr PixelType halfPixelType = ::OPENEXR_IMF_NAMESPACE::HALF;
+inline constexpr PixelType floatPixelType = ::OPENEXR_IMF_NAMESPACE::FLOAT;
+} // namespace nr::dependency::openexr
+
+export namespace nr::dependency::imath
+{
+using Half = ::IMATH_NAMESPACE::half;
+} // namespace nr::dependency::imath
 
 
 export using ::ai_real;
@@ -83,6 +107,7 @@ export using ::stbi_failure_reason;
 export using ::stbi_image_free;
 export using ::stbi_load_from_memory;
 export using ::stbi_uc;
+export using ::stbi_write_png;
 export using ::tjDecompress2;
 export using ::tjDecompressHeader3;
 export using ::tjDestroy;

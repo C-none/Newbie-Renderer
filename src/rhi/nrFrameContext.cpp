@@ -15,11 +15,6 @@ FrameContext::FrameContext(const vk::raii::Device &device, const PoolConfig &gra
         vk::FenceCreateInfo fenceInfo{vk::FenceCreateFlagBits::eSignaled};
         fence_ = vk::raii::Fence(device, fenceInfo);
 
-        // renderFinished semaphore is owned here; imageAvailable is borrowed from
-        // the PresentationContext acquire pool and injected at frame-begin.
-        vk::SemaphoreCreateInfo semaphoreInfo{};
-        renderFinished_ = vk::raii::Semaphore(device, semaphoreInfo);
-
         // Create primary pools (one per queue type, main thread only).
         // Primary command buffers are retained and individually reset every frame,
         // so pools must allow vkResetCommandBuffer.
@@ -77,11 +72,6 @@ void FrameContext::setBorrowedAcquireSemaphore(const vk::raii::Semaphore *semaph
         return *borrowedAcquireSemaphore_;
     }
 
-[[nodiscard]] const vk::raii::Semaphore &FrameContext::renderFinished() const noexcept
-{
-        return renderFinished_;
-    }
-
 [[nodiscard]] bool FrameContext::isFenceSignaled() const
 {
         return fence_.getStatus() == vk::Result::eSuccess;
@@ -97,7 +87,6 @@ void FrameContext::moveFrom(FrameContext &&other) noexcept
         fence_ = std::move(other.fence_);
         borrowedAcquireSemaphore_ = other.borrowedAcquireSemaphore_;
         other.borrowedAcquireSemaphore_ = nullptr;
-        renderFinished_ = std::move(other.renderFinished_);
 
         graphicsPrimary_ = std::move(other.graphicsPrimary_);
         graphicsSecondary_ = std::move(other.graphicsSecondary_);

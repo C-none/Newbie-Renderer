@@ -174,9 +174,31 @@ class RenderGraphCompiler
                         compiledResource.resolvedFormat = desc.format;
                         compiledResource.resolvedAspect = desc.aspect;
                         compiledResource.initialLayout = desc.initialLayout;
-                        compiledResource.finalLayout = desc.initialLayout;
+                        compiledResource.initialAccessScope = desc.initialAccessScope;
                         compiledResource.initialOwnership = desc.initialOwnership;
+                        compiledResource.retainedState = desc.retainedState;
+                        if (desc.retainedState.has_value())
+                        {
+                            const auto& retainedState = desc.retainedState->get();
+                            if (retainedState.initialized)
+                            {
+                                compiledResource.initialLayout = retainedState.layout;
+                                compiledResource.initialOwnership = retainedState.ownership;
+                                compiledResource.initialAccessScope = retainedState.access;
+                            }
+                            else
+                            {
+                                compiledResource.initialLayout = ImageLayoutIntent::Undefined;
+                                compiledResource.initialOwnership = ResourceOwnershipDomain::Undefined;
+                                compiledResource.initialAccessScope = {};
+                            }
+                        }
+                        compiledResource.finalLayout = compiledResource.initialLayout;
                         compiledResource.finalOwnership = desc.initialOwnership;
+                        if (desc.retainedState.has_value())
+                        {
+                            compiledResource.finalOwnership = compiledResource.initialOwnership;
+                        }
                         compiledResource.importedImageResource = desc.importedResource;
                         mergeUsageIntents(compiledResource, desc.usageIntents);
                     }
