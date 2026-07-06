@@ -112,6 +112,11 @@ inline constexpr std::string_view sceneLights = "scene.lights";
 inline constexpr std::string_view sceneLightAliasTable = "scene.lightAliasTable";
 } // namespace frameResource
 
+namespace frameData
+{
+inline constexpr std::string_view sceneRtHitSbtPlan = "scene.rt.hitSbtPlan";
+} // namespace frameData
+
 struct NodeFrameParameters
 {
     std::uint32_t frameIndex = 0;
@@ -267,6 +272,7 @@ struct NodeBuildContext
     std::uint32_t frameIndex = 0;
     std::reference_wrapper<const FrameGlobalResources> globalResources;
     std::reference_wrapper<std::map<std::string, GraphResourceHandle>> frameResources;
+    std::reference_wrapper<std::map<std::string, GraphFrameDataHandle>> frameDataResources;
 
     void publishFrameResource(std::string_view key, GraphResourceHandle resource) const;
 
@@ -275,6 +281,49 @@ struct NodeBuildContext
     [[nodiscard]] GraphResourceHandle requireFrameResource(
         std::string_view key,
         std::string_view consumerDebugName) const;
+
+    void publishFrameData(std::string_view key, GraphFrameDataHandle frameData) const;
+
+    [[nodiscard]] GraphFrameDataHandle resolveFrameData(std::string_view key) const;
+
+    [[nodiscard]] GraphFrameDataHandle requireFrameData(
+        std::string_view key,
+        std::string_view consumerDebugName) const;
+
+    [[nodiscard]] std::optional<std::reference_wrapper<const std::any>> resolveFrameDataPayload(
+        GraphFrameDataHandle handle) const;
+
+    template <typename TPayload>
+    [[nodiscard]] std::optional<std::reference_wrapper<const std::remove_cvref_t<TPayload>>> resolveBuildFrameData(
+        GraphFrameDataHandle handle) const
+    {
+        using Payload = std::remove_cvref_t<TPayload>;
+
+        nrAssert(handle.valid(), "NodeBuildContext::resolveBuildFrameData requires a valid frame data handle.");
+        auto payload = resolveFrameDataPayload(handle);
+        if (!payload.has_value())
+        {
+            return {};
+        }
+
+        auto const typedPayload = std::any_cast<Payload>(&payload->get());
+        nrAssert(
+            typedPayload != nullptr,
+            std::format(
+                "NodeBuildContext::resolveBuildFrameData resolved unexpected payload type for frame data handle {}.",
+                handle.value));
+        return std::cref(*typedPayload);
+    }
+
+    template <typename TPayload>
+    [[nodiscard]] const std::remove_cvref_t<TPayload>& buildFrameData(GraphFrameDataHandle handle) const
+    {
+        auto resolved = resolveBuildFrameData<TPayload>(handle);
+        nrAssert(
+            resolved.has_value(),
+            std::format("NodeBuildContext::buildFrameData failed to resolve frame data handle {}.", handle.value));
+        return resolved->get();
+    }
 
     [[nodiscard]] std::optional<NodeImageResourceDesc> describeImageResource(GraphResourceHandle resource) const;
 

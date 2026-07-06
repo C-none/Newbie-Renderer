@@ -19,6 +19,11 @@ namespace
     return (material.header.featureFlags & static_cast<std::uint32_t>(flag)) != 0u;
 }
 
+[[nodiscard]] bool nearlyEqual(float lhs, float rhs, float epsilon = 1.0e-6f) noexcept
+{
+    return std::abs(lhs - rhs) <= epsilon;
+}
+
 [[nodiscard]] nr::resource::AlphaMode alphaModeFromHint(nr::load::MaterialAlphaModeHint hint) noexcept
 {
     switch (hint)
@@ -534,6 +539,28 @@ const nr::test::CaseRegistrar sponzaMaterialTextureImportCase{
         nr::test::requireEqual(
             materialTextureSemanticCount(*imported, nr::resource::MaterialTextureSlotSemantic::metallicRoughness),
             std::size_t{24});
+
+        auto const alphaMaskMaterialCount = std::ranges::count_if(imported->materials, [](const nr::load::MaterialAsset& material) {
+            return material.alphaModeHint == nr::load::MaterialAlphaModeHint::mask;
+        });
+        nr::test::requireEqual(static_cast<std::size_t>(alphaMaskMaterialCount), std::size_t{3});
+        std::ranges::for_each(imported->materials, [](const nr::load::MaterialAsset& material) {
+            if (material.alphaModeHint != nr::load::MaterialAlphaModeHint::mask)
+            {
+                return;
+            }
+
+            nr::test::require(material.alphaCutoff.has_value(), "Sponza alpha-mask material should preserve glTF alphaCutoff");
+            nr::test::require(nearlyEqual(*material.alphaCutoff, 0.5f), "Sponza alpha-mask material should keep alphaCutoff=0.5");
+
+            auto runtimeMaterial = convertImportedMaterial(material);
+            auto compiled = nr::scene::compileRtMaterial(
+                runtimeMaterial,
+                makeTextureIds(runtimeMaterial));
+            nr::test::require(
+                hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::alphaMask),
+                "Sponza alpha-mask material should compile to RT alpha-mask feature");
+        });
 
         auto const archMaterialIndex = requireUniqueMaterialIndexByTextureFilenames(
             *imported,

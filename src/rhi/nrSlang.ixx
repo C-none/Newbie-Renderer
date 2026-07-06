@@ -448,6 +448,17 @@ struct SlangProgramCompileFileRequest
     // - test/utils/useFlag
     std::filesystem::path sourcePath;
     SlangProgramVariantDesc variant{};
+    std::vector<SlangProgramVariantDesc> linkVariants{};
+};
+
+struct SlangProgramCompileSourceRequest
+{
+    // Stable synthetic module namespace. The implementation adds a source hash to
+    // the loaded Slang module identity so callers can reuse this name safely.
+    std::string moduleName;
+    std::string sourceText;
+    SlangProgramVariantDesc variant{};
+    std::vector<SlangProgramVariantDesc> linkVariants{};
 };
 
 struct RuntimeSlangMacro
@@ -512,6 +523,8 @@ class ShaderService
     [[nodiscard]] std::uint64_t sessionGeneration() const;
 
     [[nodiscard]] SlangProgram compileProgramByFile(const SlangProgramCompileFileRequest &request);
+
+    [[nodiscard]] SlangProgram compileProgramFromSource(const SlangProgramCompileSourceRequest &request);
 
   private:
     ShaderService() = default;

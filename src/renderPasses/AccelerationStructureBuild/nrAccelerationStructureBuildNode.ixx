@@ -16,7 +16,6 @@ export namespace nr::renderPasses
 struct AccelerationStructureBuildNodeInput
 {
     std::uint64_t unusedFrameRetireLatency = 300;
-    std::uint32_t hitShaderBindingTableRecordCount = 1;
 };
 
 class AccelerationStructureBuildNode final : public Node

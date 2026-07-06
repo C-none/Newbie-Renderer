@@ -254,7 +254,7 @@ public struct Pt
             RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             0xFF,
             0,
-            0,
+            1,
             0,
             pathStateRayDesc(path),
             payload);

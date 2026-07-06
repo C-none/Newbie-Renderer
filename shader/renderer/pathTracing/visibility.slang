@@ -18,7 +18,7 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
         RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
         0xFF,
         0,
-        0,
+        1,
         0,
         ray,
         payload);

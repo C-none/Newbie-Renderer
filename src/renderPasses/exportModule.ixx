@@ -8,4 +8,5 @@ export import :lightPrepare;
 export import :normalBuffer;
 export import :presentNode;
 export import :pathTracing;
+export import :rtHitSbtPlan;
 export import :uiNode;

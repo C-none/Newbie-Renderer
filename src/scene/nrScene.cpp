@@ -820,7 +820,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             if (materialHandle.valid())
             {
                 auto const *materialRecord = materials_.tryGet(materialHandle);
-                if (materialRecord == nullptr || !materialRecord->cpuReady || materialRecord->cpu.isOpaque())
+                if (materialRecord == nullptr || !materialRecord->cpuReady || !materialRecord->cpu.isAlphaMasked())
                 {
                     flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
                 }
@@ -933,7 +933,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             if (materialHandle.valid())
             {
                 auto const *materialRecord = materials_.tryGet(materialHandle);
-                if (materialRecord == nullptr || !materialRecord->cpuReady || materialRecord->cpu.isOpaque())
+                if (materialRecord == nullptr || !materialRecord->cpuReady || !materialRecord->cpu.isAlphaMasked())
                 {
                     flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
                 }

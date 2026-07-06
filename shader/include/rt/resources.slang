@@ -1,5 +1,4 @@
-module resources;
-import common;
+implementing common;
 
 public StructuredBuffer<RtInstanceMetadata> rtInstanceMetadata;
 public StructuredBuffer<RtGeometryMetadata> rtGeometryMetadata;

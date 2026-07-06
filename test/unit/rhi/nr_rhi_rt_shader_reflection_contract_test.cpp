@@ -39,6 +39,129 @@ struct CameraData
     return variant;
 }
 
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestChsVariant(
+    std::uint32_t featureMask = 0u,
+    std::uint32_t alphaPolicy = 0u)
+{
+    auto variant = nr::rhi::SlangProgramVariantDesc{};
+    variant.debugName = std::format("test.pathTracing.chs.features{}.alpha{}", featureMask, alphaPolicy);
+    variant.typeAliases.try_emplace(
+        "CHS",
+        nr::rhi::SlangVariantTypeAlias{
+            .typeName = "CHS",
+            .interfaceName = "ICHS",
+            .concreteTypeName = std::format("DefaultLitCHS<{}u, {}u>", featureMask, alphaPolicy),
+        });
+    return variant;
+}
+
+[[nodiscard]] std::vector<std::string> effectiveShaderLines(std::string_view source)
+{
+    auto result = std::vector<std::string>{};
+    auto stream = std::istringstream{std::string{source}};
+    auto line = std::string{};
+    while (std::getline(stream, line))
+    {
+        if (line.empty() || line.starts_with("//"))
+        {
+            continue;
+        }
+        result.push_back(line);
+    }
+    return result;
+}
+
+const nr::test::CaseRegistrar syntheticSourceCompileCase{
+    "rhi shader service compiles synthetic source roots with link-time constants",
+    [] {
+        auto &shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto variant = nr::rhi::SlangProgramVariantDesc{};
+        variant.debugName = "test.syntheticSource";
+        variant.constants.try_emplace(
+            "kSyntheticSourceValue",
+            nr::rhi::SlangVariantConstant::fromUInt32(7u));
+
+        auto program = shaderService.compileProgramFromSource(nr::rhi::SlangProgramCompileSourceRequest{
+            .moduleName = "test.syntheticSourceRoot",
+            .sourceText = R"(
+public extern static const uint kSyntheticSourceValue;
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void csMain()
+{
+    uint value = kSyntheticSourceValue;
+}
+)",
+            .variant = variant,
+        });
+        nr::test::require(program.valid(), "synthetic source shader should compile");
+        nr::test::require(program.entryPointData("csMain") != nullptr, "synthetic source shader should expose csMain");
+    }};
+
+const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
+    "rhi shader service compiles path tracing CHS link-time generic type aliases",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto chsVariant = makePathTracingTestChsVariant();
+        auto chsSource = chsVariant.sourceText();
+        auto effectiveLines = effectiveShaderLines(chsSource);
+        nr::test::requireEqual(effectiveLines.size(), std::size_t{2u});
+        nr::test::requireEqual(effectiveLines[0], std::string{"import common;"});
+        nr::test::requireEqual(effectiveLines[1], std::string{"export struct CHS : ICHS = DefaultLitCHS<0u, 0u>;"});
+
+        auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = makePathTracingTestVariant(),
+            .linkVariants = {chsVariant},
+        });
+        nr::test::require(program.valid(), "path tracing shader should compile with a CHS link-time type");
+        nr::test::require(program.entryPointData("chMain") != nullptr, "path tracing shader should expose fixed chMain");
+    }};
+
+const nr::test::CaseRegistrar rtPipelineStageSelectionCase{
+    "rhi rt stage selections can give specialized chMain stages distinct logical names",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto opaqueProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = makePathTracingTestVariant(),
+            .linkVariants = {makePathTracingTestChsVariant()},
+        });
+        nr::test::require(opaqueProgram.valid(), "opaque CHS path tracing shader should compile");
+
+        auto alphaMaskProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = makePathTracingTestVariant(),
+            .linkVariants = {makePathTracingTestChsVariant(8u, 1u)},
+        });
+        nr::test::require(alphaMaskProgram.valid(), "alpha-mask CHS path tracing shader should compile");
+
+        auto selectedStages = std::array{
+            nr::rhi::RayTracingPipelineStageSelection{
+                .program = std::cref(opaqueProgram),
+                .entryPointName = "chMain",
+                .logicalEntryPointName = "ch_opaque",
+            },
+            nr::rhi::RayTracingPipelineStageSelection{
+                .program = std::cref(alphaMaskProgram),
+                .entryPointName = "chMain",
+                .logicalEntryPointName = "ch_alphaMask",
+            },
+        };
+
+        nr::test::require(selectedStages[0].program.get().entryPointData(selectedStages[0].entryPointName) != nullptr);
+        nr::test::require(selectedStages[1].program.get().entryPointData(selectedStages[1].entryPointName) != nullptr);
+        nr::test::requireEqual(selectedStages[0].entryPointName, selectedStages[1].entryPointName);
+        nr::test::require(selectedStages[0].logicalEntryPointName != selectedStages[1].logicalEntryPointName);
+    }};
+
 const nr::test::CaseRegistrar rtShaderReflectionCase{
     "rhi rt shader reflection exposes AS image and camera bindings",
     [] {
@@ -123,6 +246,7 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         auto rtProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = makePathTracingTestVariant(),
+            .linkVariants = {makePathTracingTestChsVariant()},
         });
         nr::test::require(rtProgram.valid(), "rtobject path tracing shader should compile");
 
@@ -198,6 +322,7 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
         auto baselineProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = baselineVariant,
+            .linkVariants = {makePathTracingTestChsVariant()},
         });
         nr::test::require(baselineProgram.valid(), "path tracing baseline shader should compile");
 
@@ -206,6 +331,7 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
         auto constantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = constantVariant,
+            .linkVariants = {makePathTracingTestChsVariant()},
         });
         nr::test::require(constantProgram.valid(), "path tracing constant variant should compile");
 
@@ -214,6 +340,7 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
         auto typeProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = typeVariant,
+            .linkVariants = {makePathTracingTestChsVariant()},
         });
         nr::test::require(typeProgram.valid(), "path tracing type alias variant should compile");
 
@@ -253,6 +380,7 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
         auto reloadedVariantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = constantVariant,
+            .linkVariants = {makePathTracingTestChsVariant(8u, 1u)},
         });
         nr::test::require(reloadedVariantProgram.valid(), "path tracing variant should compile after session reload");
     }};

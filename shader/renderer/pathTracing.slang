@@ -1,4 +1,6 @@
 module pathTracing;
+import common;
+import renderer.pathTracing.params;
 import renderer.pathTracing.pathState;
 import renderer.pathTracing.scheduler;
 import renderer.pathTracing.hitShaders;
@@ -19,7 +21,7 @@ void msMain(inout PathTracingRayPayload payload)
 }
 
 [shader("anyhit")]
-void ahMain(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
+void ahAlphaMask(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
     handlePathTracingAnyHit(payload, attributes);
 }
@@ -27,5 +29,13 @@ void ahMain(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttr
 [shader("closesthit")]
 void chMain(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
-    handlePathTracingClosestHit(payload, attributes);
+    if (payload.rayKind != kPathTracingRayKindMaterial)
+    {
+        return;
+    }
+
+    CHS chs = CHS();
+    PathTracingClosestHitResult result = chs.handleClosestHit(makePathTracingClosestHitInput(attributes));
+    payload.hit = result.hit;
+    payload.material = result.material;
 }

@@ -753,7 +753,6 @@ void PresentationContext::releaseFullScreenExclusiveIfNeeded() noexcept
     try
     {
         swapChain_.swapChain.releaseFullScreenExclusiveModeEXT();
-        nrInfo("VK_EXT_full_screen_exclusive released application-controlled exclusive mode.");
     }
     catch (const vk::SystemError &error)
     {

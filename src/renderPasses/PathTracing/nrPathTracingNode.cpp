@@ -2,6 +2,7 @@ module nr.renderPasses;
 import dependency.vulkan;
 
 import :pathTracing;
+import :rtHitSbtPlan;
 import :sceneTextureTableBinding;
 import nr.renderer;
 import nr.rhi;
@@ -17,9 +18,22 @@ struct PathTracingVariantRuntime
     nr::rhi::ShaderBindingTable shaderBindingTable{};
 };
 
+struct PathTracingRuntimeKey
+{
+    PathTracingVariantKey variant{};
+    std::uint64_t hitPermutationSetHash = 0u;
+    std::uint64_t hitRecordPlanHash = 0u;
+
+    [[nodiscard]] friend bool operator<(const PathTracingRuntimeKey& lhs, const PathTracingRuntimeKey& rhs) noexcept
+    {
+        return std::tie(lhs.variant, lhs.hitPermutationSetHash, lhs.hitRecordPlanHash) <
+               std::tie(rhs.variant, rhs.hitPermutationSetHash, rhs.hitRecordPlanHash);
+    }
+};
+
 struct PathTracingRuntimeCache
 {
-    std::map<PathTracingVariantKey, PathTracingVariantRuntime> variants{};
+    std::map<PathTracingRuntimeKey, PathTracingVariantRuntime> variants{};
 };
 
 [[nodiscard]] PathTracingVariantKey normalizePathTracingVariantKey(PathTracingVariantKey key) noexcept
@@ -38,6 +52,21 @@ struct PathTracingRuntimeCache
         "PathTracing[maxBounces={},russianRoulette={}]",
         normalizedKey.maxSurfaceBounces,
         normalizedKey.enableRussianRoulette ? "enabled" : "disabled");
+}
+
+[[nodiscard]] std::string pathTracingHashHex(std::uint64_t value)
+{
+    auto chars = nr::hash::toHexChars(value);
+    return std::string(nr::hash::toHexView(chars));
+}
+
+[[nodiscard]] std::string describePathTracingRuntimeKey(const PathTracingRuntimeKey& key)
+{
+    return std::format(
+        "{},hitPermutations={},hitRecords={}",
+        describePathTracingVariantKey(key.variant),
+        pathTracingHashHex(key.hitPermutationSetHash),
+        pathTracingHashHex(key.hitRecordPlanHash));
 }
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingVariantDesc(const PathTracingVariantKey& key)
@@ -63,7 +92,31 @@ struct PathTracingRuntimeCache
     return variant;
 }
 
-[[nodiscard]] nr::rhi::RayTracingPipelineDesc makePathTracingPipelineDesc()
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingChsVariantDesc(const RtHitPermutationKey& key)
+{
+    nr::nrAssert(
+        key.shadingModel == RtHitShadingModel::gltfPbr,
+        "PathTracing CHS v1 only supports glTF PBR hit permutations.");
+
+    auto variant = nr::rhi::SlangProgramVariantDesc{};
+    variant.debugName = std::format(
+        "PathTracing.CHS[features={},alpha={}]",
+        key.materialFeatureMask,
+        static_cast<std::uint32_t>(key.alphaPolicy));
+    variant.typeAliases.try_emplace(
+        "CHS",
+        nr::rhi::SlangVariantTypeAlias{
+            .typeName = "CHS",
+            .interfaceName = "ICHS",
+            .concreteTypeName = std::format(
+                "DefaultLitCHS<{}u, {}u>",
+                key.materialFeatureMask,
+                static_cast<std::uint32_t>(key.alphaPolicy)),
+        });
+    return variant;
+}
+
+[[nodiscard]] nr::rhi::RayTracingPipelineDesc makePathTracingPipelineDesc(const SceneRtHitSbtPlan& hitSbtPlan)
 {
     auto raygenGroup = nr::rhi::RayTracingShaderGroupDesc{};
     raygenGroup.generalEntryPoint = "rgMain";
@@ -71,63 +124,143 @@ struct PathTracingRuntimeCache
     auto missGroup = nr::rhi::RayTracingShaderGroupDesc{};
     missGroup.generalEntryPoint = "msMain";
 
-    auto hitGroup = nr::rhi::RayTracingShaderGroupDesc{};
-    hitGroup.type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup;
-    hitGroup.closestHitEntryPoint = "chMain";
-    hitGroup.anyHitEntryPoint = "ahMain";
-
     auto pipelineDesc = nr::rhi::RayTracingPipelineDesc{};
     pipelineDesc.entryPointNames = {
         "rgMain",
         "msMain",
-        "chMain",
-        "ahMain",
     };
-    pipelineDesc.groups = {
-        std::move(raygenGroup),
-        std::move(missGroup),
-        std::move(hitGroup),
-    };
+    auto const usesAnyHit = std::ranges::any_of(hitSbtPlan.permutations, [](const SceneRtHitSbtPermutation& permutation) {
+        return rtHitPermutationUsesAnyHit(permutation.key);
+    });
+    if (usesAnyHit)
+    {
+        pipelineDesc.entryPointNames.push_back("ahAlphaMask");
+    }
+
+    pipelineDesc.groups.reserve(2u + hitSbtPlan.permutations.size());
+    pipelineDesc.groups.push_back(std::move(raygenGroup));
+    pipelineDesc.groups.push_back(std::move(missGroup));
+    std::ranges::for_each(hitSbtPlan.permutations, [&](const SceneRtHitSbtPermutation& permutation) {
+        auto hitGroup = nr::rhi::RayTracingShaderGroupDesc{};
+        hitGroup.type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup;
+        hitGroup.closestHitEntryPoint = rtHitClosestHitEntryPointName(permutation.key);
+        if (rtHitPermutationUsesAnyHit(permutation.key))
+        {
+            hitGroup.anyHitEntryPoint = "ahAlphaMask";
+        }
+        pipelineDesc.entryPointNames.push_back(hitGroup.closestHitEntryPoint);
+        pipelineDesc.groups.push_back(std::move(hitGroup));
+    });
     pipelineDesc.descriptorBindingPolicy.defaultRuntimeDescriptorCount = nr::renderer::kSceneTextureDescriptorCapacity;
     return pipelineDesc;
 }
 
-[[nodiscard]] PathTracingVariantRuntime createPathTracingVariantRuntime(nr::rhi::Device& device, const PathTracingVariantKey& key)
+[[nodiscard]] std::vector<nr::rhi::RayTracingPipelineStageSelection> makePathTracingPipelineStageSelections(
+    const nr::rhi::SlangProgram& rootProgram,
+    const SceneRtHitSbtPlan& hitSbtPlan,
+    std::span<const nr::rhi::SlangProgram> hitPrograms)
+{
+    auto const usesAnyHit = std::ranges::any_of(hitSbtPlan.permutations, [](const SceneRtHitSbtPermutation& permutation) {
+        return rtHitPermutationUsesAnyHit(permutation.key);
+    });
+
+    auto selections = std::vector<nr::rhi::RayTracingPipelineStageSelection>{};
+    selections.reserve(2u + (usesAnyHit ? 1u : 0u) + hitSbtPlan.permutations.size());
+    selections.push_back(nr::rhi::RayTracingPipelineStageSelection{
+        .program = std::cref(rootProgram),
+        .entryPointName = "rgMain",
+        .logicalEntryPointName = "rgMain",
+    });
+    selections.push_back(nr::rhi::RayTracingPipelineStageSelection{
+        .program = std::cref(rootProgram),
+        .entryPointName = "msMain",
+        .logicalEntryPointName = "msMain",
+    });
+    if (usesAnyHit)
+    {
+        selections.push_back(nr::rhi::RayTracingPipelineStageSelection{
+            .program = std::cref(rootProgram),
+            .entryPointName = "ahAlphaMask",
+            .logicalEntryPointName = "ahAlphaMask",
+        });
+    }
+
+    std::ranges::for_each(hitSbtPlan.permutations, [&](const SceneRtHitSbtPermutation& permutation) {
+        nr::nrAssert(permutation.permutationIndex < hitPrograms.size(), "PathTracing CHS program index is out of range.");
+        selections.push_back(nr::rhi::RayTracingPipelineStageSelection{
+            .program = std::cref(hitPrograms[permutation.permutationIndex]),
+            .entryPointName = "chMain",
+            .logicalEntryPointName = rtHitClosestHitEntryPointName(permutation.key),
+        });
+    });
+    return selections;
+}
+
+[[nodiscard]] PathTracingVariantRuntime createPathTracingVariantRuntime(
+    nr::rhi::Device& device,
+    const PathTracingRuntimeKey& runtimeKey,
+    const SceneRtHitSbtPlan& hitSbtPlan)
 {
     auto& shaderService = nr::rhi::ShaderService::instance();
     auto baselineVariantDesc = makePathTracingVariantDesc(PathTracingVariantKey{});
+    auto baselineChsVariantDesc = makePathTracingChsVariantDesc(RtHitPermutationKey{});
     auto baselineProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path("renderer/pathTracing"),
+        .sourcePath = std::filesystem::path{"renderer/pathTracing"},
         .variant = baselineVariantDesc,
+        .linkVariants = {baselineChsVariantDesc},
     });
-    nr::nrAssert(baselineProgram.valid(), "Path tracing pass failed to compile baseline shader module renderer/pathTracing.");
+    nr::nrAssert(baselineProgram.valid(), "Path tracing pass failed to compile baseline shader module.");
 
-    auto variantDesc = makePathTracingVariantDesc(key);
-    auto program = baselineProgram;
+    auto variantDesc = makePathTracingVariantDesc(runtimeKey.variant);
+    auto rootProgram = baselineProgram;
     if (variantDesc.hashValue() != baselineVariantDesc.hashValue())
     {
-        program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path("renderer/pathTracing"),
+        rootProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = variantDesc,
+            .linkVariants = {baselineChsVariantDesc},
         });
-        nr::nrAssert(program.valid(), "Path tracing pass failed to compile variant shader module renderer/pathTracing.");
+        nr::nrAssert(rootProgram.valid(), "Path tracing pass failed to compile variant shader module.");
     }
 
-    auto pipelineDesc = makePathTracingPipelineDesc();
+    auto pipelineDesc = makePathTracingPipelineDesc(hitSbtPlan);
     if (variantDesc.hashValue() != baselineVariantDesc.hashValue())
     {
         nr::rhi::assertShaderLayoutAbiStable(
             baselineProgram,
-            program,
+            rootProgram,
             pipelineDesc.descriptorBindingPolicy,
             variantDesc.debugName);
     }
+
+    auto hitPrograms = std::vector<nr::rhi::SlangProgram>{};
+    hitPrograms.reserve(hitSbtPlan.permutations.size());
+    std::ranges::for_each(hitSbtPlan.permutations, [&](const SceneRtHitSbtPermutation& permutation) {
+        auto chsVariantDesc = makePathTracingChsVariantDesc(permutation.key);
+        auto chsProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = variantDesc,
+            .linkVariants = {chsVariantDesc},
+        });
+        nr::nrAssert(chsProgram.valid(), "Path tracing pass failed to compile CHS-specialized shader module.");
+        if (chsVariantDesc.hashValue() != baselineChsVariantDesc.hashValue())
+        {
+            nr::rhi::assertShaderLayoutAbiStable(
+                rootProgram,
+                chsProgram,
+                pipelineDesc.descriptorBindingPolicy,
+                chsVariantDesc.debugName);
+        }
+        hitPrograms.push_back(std::move(chsProgram));
+    });
+    auto pipelineStageSelections = makePathTracingPipelineStageSelections(rootProgram, hitSbtPlan, hitPrograms);
 
     auto runtime = PathTracingVariantRuntime{};
     runtime.pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>();
     auto sceneTextureImmutableSamplers = std::array{sceneTextureTableImmutableSamplerBinding()};
     runtime.pipeline->initializeDeferred(device.pipeline().createRayTracingPipeline(
-        program,
+        rootProgram,
+        pipelineStageSelections,
         pipelineDesc,
         64u,
         sceneTextureImmutableSamplers));
@@ -135,7 +268,15 @@ struct PathTracingRuntimeCache
     nr::rhi::setPipelineDebugName(
         device.device,
         runtime.pipeline->pipeline().raw(),
-        describePathTracingVariantKey(key) + ".Pipeline");
+        describePathTracingRuntimeKey(runtimeKey) + ".Pipeline");
+
+    auto hitRecords = hitSbtPlan.records |
+                      std::views::transform([](const SceneRtHitSbtRecord& record) {
+                          return nr::rhi::ShaderBindingTableRecordDesc{
+                              .groupIndex = 2u + record.permutationIndex,
+                          };
+                      }) |
+                      std::ranges::to<std::vector>();
 
     runtime.shaderBindingTable = nr::rhi::ShaderBindingTable::create(
         device.resourceFactory,
@@ -151,8 +292,7 @@ struct PathTracingRuntimeCache
                 .groupCount = 1u,
             },
             .hit = nr::rhi::ShaderBindingTableSectionDesc{
-                .firstGroup = 2u,
-                .groupCount = 1u,
+                .records = std::span<const nr::rhi::ShaderBindingTableRecordDesc>{hitRecords.data(), hitRecords.size()},
             },
             .debugName = "PathTracing.SBT",
         });
@@ -164,23 +304,29 @@ struct PathTracingRuntimeCache
 [[nodiscard]] PathTracingVariantRuntime& ensurePathTracingVariantRuntime(
     PathTracingRuntimeCache& cache,
     nr::rhi::Device& device,
-    const PathTracingVariantKey& key)
+    const PathTracingVariantKey& key,
+    const SceneRtHitSbtPlan& hitSbtPlan)
 {
-    auto normalizedKey = normalizePathTracingVariantKey(key);
-    if (auto runtimeIt = cache.variants.find(normalizedKey); runtimeIt != cache.variants.end())
+    auto runtimeKey = PathTracingRuntimeKey{
+        .variant = normalizePathTracingVariantKey(key),
+        .hitPermutationSetHash = hitSbtPlan.permutationSetHash,
+        .hitRecordPlanHash = hitSbtPlan.recordPlanHash,
+    };
+    if (auto runtimeIt = cache.variants.find(runtimeKey); runtimeIt != cache.variants.end())
     {
         return runtimeIt->second;
     }
 
-    auto [runtimeIt, inserted] = cache.variants.try_emplace(normalizedKey, createPathTracingVariantRuntime(device, normalizedKey));
+    auto [runtimeIt, inserted] = cache.variants.try_emplace(
+        runtimeKey,
+        createPathTracingVariantRuntime(device, runtimeKey, hitSbtPlan));
     nr::nrAssert(inserted, "Path tracing variant runtime cache insertion failed.");
     return runtimeIt->second;
 }
 
-[[nodiscard]] std::shared_ptr<PathTracingRuntimeCache> makePathTracingRuntimeCache(nr::rhi::Device& device, const PathTracingVariantKey& initialVariant)
+[[nodiscard]] std::shared_ptr<PathTracingRuntimeCache> makePathTracingRuntimeCache()
 {
     auto cache = std::make_shared<PathTracingRuntimeCache>();
-    [[maybe_unused]] auto& initialRuntime = ensurePathTracingVariantRuntime(*cache, device, initialVariant);
     return cache;
 }
 } // namespace nr::renderPasses::detail
@@ -200,7 +346,7 @@ void PathTracingNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
     input.variant = detail::normalizePathTracingVariantKey(input.variant);
-    runtime_ = detail::makePathTracingRuntimeCache(context.device.get(), input.variant);
+    runtime_ = detail::makePathTracingRuntimeCache();
 }
 
 void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
@@ -266,6 +412,7 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
     auto sceneLightHeader = context.resolveFrameResource(nr::renderer::frameResource::sceneLightHeader);
     auto sceneLights = context.resolveFrameResource(nr::renderer::frameResource::sceneLights);
     auto sceneLightAliasTable = context.resolveFrameResource(nr::renderer::frameResource::sceneLightAliasTable);
+    auto rtHitSbtPlanHandle = context.resolveFrameData(nr::renderer::frameData::sceneRtHitSbtPlan);
     if (!rtInstanceMetadata.valid() ||
         !rtGeometryMetadata.valid() ||
         !rtMaterialHeaders.valid() ||
@@ -275,7 +422,8 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
         !rtIndexAtlas.valid() ||
         !sceneLightHeader.valid() ||
         !sceneLights.valid() ||
-        !sceneLightAliasTable.valid())
+        !sceneLightAliasTable.valid() ||
+        !rtHitSbtPlanHandle.valid())
     {
         auto clearUses = std::array{
             nr::renderer::use::imageTransferDst(output),
@@ -299,7 +447,32 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
         return;
     }
 
-    auto& activeRuntime = detail::ensurePathTracingVariantRuntime(*runtime_, device_->get(), input.variant);
+    auto const& rtHitSbtPlan = context.buildFrameData<SceneRtHitSbtPlan>(rtHitSbtPlanHandle);
+    if (!rtHitSbtPlan.valid())
+    {
+        auto clearUses = std::array{
+            nr::renderer::use::imageTransferDst(output),
+        };
+        [[maybe_unused]] auto clearPass = context.addPass(
+            std::span<const nr::renderer::PassResourceUseDesc>{clearUses.data(), clearUses.size()},
+            "PathTracing.ClearInvalidHitSbtPlan",
+            [output](const nr::renderer::PassRecordContext& recordContext) {
+                nr::nrAssert(recordContext.commandBuffer.has_value(), "PathTracing hit SBT plan clear requires RAII command buffer access.");
+                nr::nrAssert(static_cast<bool>(recordContext.resolveImage), "PathTracing hit SBT plan clear requires image resolver.");
+                auto resolvedOutput = recordContext.resolveImage(output);
+                nr::nrAssert(resolvedOutput.has_value(), "PathTracing hit SBT plan clear failed to resolve output image.");
+
+                auto clearColor = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
+                recordContext.commandBuffer->get().clearColorImage(
+                    resolvedOutput->image,
+                    vk::ImageLayout::eTransferDstOptimal,
+                    clearColor,
+                    resolvedOutput->subresourceRange);
+            });
+        return;
+    }
+
+    auto& activeRuntime = detail::ensurePathTracingVariantRuntime(*runtime_, device_->get(), input.variant, rtHitSbtPlan);
 
     auto sbtResource = context.importBuffer(
         activeRuntime.shaderBindingTable.buffer(),

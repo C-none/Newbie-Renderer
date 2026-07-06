@@ -74,6 +74,13 @@ struct RayTracingPipelineDesc
 		std::optional<std::reference_wrapper<const vk::raii::DeferredOperationKHR>> deferredOperation{};
 };
 
+struct RayTracingPipelineStageSelection
+{
+		std::reference_wrapper<const SlangProgram> program;
+		std::string entryPointName;
+		std::string logicalEntryPointName;
+};
+
 [[nodiscard]] std::optional<std::string> validateRayTracingPipelineDesc(const RayTracingPipelineDesc &desc);
 
 namespace detail
@@ -196,6 +203,7 @@ class VkShaderProgram
 {
 	public:
 		[[nodiscard]] static VkShaderProgram create(const vk::raii::Device &device, std::span<const SlangEntryPointData *const> selectedEntryPoints);
+		[[nodiscard]] static VkShaderProgram create(const vk::raii::Device &device, std::span<const RayTracingPipelineStageSelection> selectedEntryPoints);
 
 		[[nodiscard]] bool valid() const noexcept;
 		[[nodiscard]] const vk::PipelineShaderStageCreateInfo &stageCreateInfo(std::uint32_t index) const noexcept;
@@ -204,6 +212,7 @@ class VkShaderProgram
 
 	private:
 		std::vector<vk::raii::ShaderModule> modules_;
+		std::vector<std::string> shaderEntryPointNames_;
 		std::vector<std::string> entryPointNames_;
 		std::vector<SlangStage> stages_;
 		std::vector<vk::PipelineShaderStageCreateInfo> stageCreateInfos_;
@@ -347,6 +356,13 @@ class PipelineService
 	[[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
 
 	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(const SlangProgram &slangProgram, const RayTracingPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
+
+	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(
+		const SlangProgram &reflectionProgram,
+		std::span<const RayTracingPipelineStageSelection> selectedEntryPoints,
+		const RayTracingPipelineDesc &desc = {},
+		std::uint32_t descriptorMaxSets = 64,
+		std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
 
   private:
 	std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};

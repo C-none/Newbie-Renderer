@@ -436,6 +436,53 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
         return resource;
     }
 
+void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHandle frameData) const
+{
+        nrAssert(frameData.valid(), std::format("NodeBuildContext::publishFrameData requires valid frame data for '{}'.", key));
+        nrAssert(!key.empty(), "NodeBuildContext::publishFrameData requires a non-empty key.");
+        frameDataResources.get().insert_or_assign(std::string(key), frameData);
+    }
+
+[[nodiscard]] GraphFrameDataHandle NodeBuildContext::resolveFrameData(std::string_view key) const
+{
+        auto const frameDataIt = frameDataResources.get().find(std::string(key));
+        if (frameDataIt == frameDataResources.get().end())
+        {
+            return {};
+        }
+        return frameDataIt->second;
+    }
+
+[[nodiscard]] GraphFrameDataHandle NodeBuildContext::requireFrameData(
+        std::string_view key,
+        std::string_view consumerDebugName) const
+{
+        auto frameData = resolveFrameData(key);
+        nrAssert(
+            frameData.valid(),
+            std::format("{} requires frame data '{}', but it has not been published.", consumerDebugName, key));
+        return frameData;
+    }
+
+[[nodiscard]] std::optional<std::reference_wrapper<const std::any>> NodeBuildContext::resolveFrameDataPayload(
+        GraphFrameDataHandle handle) const
+{
+        if (!handle.valid())
+        {
+            return {};
+        }
+
+        auto const& frameData = graphBuilder.get().frame().frameData;
+        auto const frameDataIt = std::ranges::find_if(frameData, [handle](const GraphFrameDataDesc& desc) {
+            return desc.handle == handle;
+        });
+        if (frameDataIt == frameData.end())
+        {
+            return {};
+        }
+        return std::cref(frameDataIt->payload);
+    }
+
 [[nodiscard]] std::optional<NodeImageResourceDesc> NodeBuildContext::describeImageResource(GraphResourceHandle resource) const
 {
         if (!resource.valid())
@@ -2064,6 +2111,7 @@ void Renderer::buildInstalledGraph(
             std::span<const NodeUiSection>{nodeUiSections.data(), nodeUiSections.size()};
 
         auto frameResources = std::map<std::string, GraphResourceHandle>{};
+        auto frameDataResources = std::map<std::string, GraphFrameDataHandle>{};
 
         auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
         std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
@@ -2080,6 +2128,7 @@ void Renderer::buildInstalledGraph(
                 .frameIndex = frameParameters.frameIndex,
                 .globalResources = std::cref(globalResources),
                 .frameResources = std::ref(frameResources),
+                .frameDataResources = std::ref(frameDataResources),
             };
 
             installedNode.runtime->build(buildContext, nodeFrameParameters);

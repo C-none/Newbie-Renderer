@@ -61,4 +61,29 @@ const nr::test::CaseRegistrar sbtPlanCase{
         nr::test::requireEqual(plan.hit.section.stride, 32u);
         nr::test::requireEqual(plan.totalSize, vk::DeviceSize{256});
     }};
+
+const nr::test::CaseRegistrar sbtRepeatedGroupRecordsCase{
+    "rhi rt SBT explicit records preserve repeated shader group indices",
+    [] {
+        auto hitRecords = std::array{
+            nr::rhi::ShaderBindingTableRecordDesc{.groupIndex = 2},
+            nr::rhi::ShaderBindingTableRecordDesc{.groupIndex = 2},
+            nr::rhi::ShaderBindingTableRecordDesc{.groupIndex = 3},
+        };
+
+        auto desc = nr::rhi::ShaderBindingTableLayoutDesc{
+            .capabilities = testCapabilities(),
+            .pipelineGroupCount = 4,
+            .raygen = nr::rhi::ShaderBindingTableSectionDesc{.groupCount = 1},
+            .hit = nr::rhi::ShaderBindingTableSectionDesc{.records = hitRecords},
+        };
+
+        auto plan = nr::rhi::makeShaderBindingTableBuildPlan(desc);
+        nr::test::requireEqual(plan.hit.section.records.size(), std::size_t{3u});
+        nr::test::requireEqual(plan.hit.section.records[0].groupIndex, 2u);
+        nr::test::requireEqual(plan.hit.section.records[1].groupIndex, 2u);
+        nr::test::requireEqual(plan.hit.section.records[2].groupIndex, 3u);
+        nr::test::requireEqual(plan.hit.section.stride, 32u);
+        nr::test::requireEqual(plan.hit.size, vk::DeviceSize{96});
+    }};
 } // namespace

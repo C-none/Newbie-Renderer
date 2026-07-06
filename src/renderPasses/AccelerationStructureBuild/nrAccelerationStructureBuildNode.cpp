@@ -10,6 +10,7 @@ import nr.resource;
 import nr.utils;
 import std;
 import :nodeType;
+import :rtHitSbtPlan;
 
 namespace nr::renderPasses::detail
 {
@@ -152,6 +153,12 @@ struct PlannedInstance
 {
     nr::resource::MeshHandle mesh{};
     vk::AccelerationStructureInstanceKHR instance{};
+};
+
+struct AppendedRtInstanceMetadata
+{
+    std::uint32_t instanceMetadataIndex = 0u;
+    std::uint32_t hitRecordBase = 0u;
 };
 
 struct RtMetadataBuildState
@@ -863,9 +870,11 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     return materialIndex;
 }
 
-[[nodiscard]] std::uint32_t appendRtInstanceMetadata(
+[[nodiscard]] AppendedRtInstanceMetadata appendRtInstanceMetadata(
     AccelerationStructureBuildRuntimeCache &runtime,
     RtMetadataBuildState &state,
+    SceneRtHitSbtPlan &hitSbtPlan,
+    std::map<RtHitPermutationKey, std::uint32_t> &hitPermutationLookup,
     const nr::scene::Scene &scene,
     const nr::scene::TlasBuildInputPacket &packet,
     const nr::scene::SceneAccelerationStructureMesh &sceneMesh)
@@ -878,10 +887,15 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         geometryOffset <= std::numeric_limits<std::uint32_t>::max() - geometryCount,
         "RT geometry metadata range exceeds the uint32 ABI.");
 
+    auto geometryMaterialFeatureMasks = std::vector<std::uint32_t>{};
+    geometryMaterialFeatureMasks.reserve(sceneMesh.geometries.size());
     std::ranges::for_each(sceneMesh.geometries, [&](const nr::scene::SceneAccelerationStructureGeometry &geometry) {
         auto const materialHandle = rtGeometryMaterialHandle(scene, packet.mesh, geometry.geometryIndex);
+        auto const materialIndex = ensureRtMaterialIndex(runtime, state, scene, materialHandle);
+        nrAssert(materialIndex < state.materials.size(), "RT material index must resolve before building hit SBT plan.");
+        geometryMaterialFeatureMasks.push_back(state.materials[materialIndex].header.featureFlags);
         state.geometries.push_back(nr::scene::RtGeometryMetadata{
-            .materialIndex = ensureRtMaterialIndex(runtime, state, scene, materialHandle),
+            .materialIndex = materialIndex,
             .geometryIndex = geometry.geometryIndex,
             .primitiveOffset = rtGeometryPrimitiveElementOffset(sceneMesh, geometry),
             .firstVertex = geometry.firstVertex,
@@ -902,7 +916,16 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         .indexBase = rtMeshIndexBase(sceneMesh),
         .vertexStride = checkedRtMetadataUint32(sceneMesh.vertexStride, "RT instance vertex stride"),
     });
-    return instanceMetadataIndex;
+
+    auto const hitRecordBase = appendRtHitSbtPlanInstance(
+        hitSbtPlan,
+        hitPermutationLookup,
+        instanceMetadataIndex,
+        std::span<const std::uint32_t>{geometryMaterialFeatureMasks.data(), geometryMaterialFeatureMasks.size()});
+    return AppendedRtInstanceMetadata{
+        .instanceMetadataIndex = instanceMetadataIndex,
+        .hitRecordBase = hitRecordBase,
+    };
 }
 
 [[nodiscard]] nr::scene::RtMaterialTable makeRtMaterialTable(const RtMetadataBuildState &state)
@@ -943,23 +966,27 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     const nr::scene::TlasBuildInputPacket &packet,
     const nr::scene::SceneAccelerationStructureMesh &sceneMesh,
     const nr::rhi::AccelerationStructureResource &blas,
-    std::uint32_t hitShaderBindingTableRecordCount,
+    std::uint32_t hitRecordBase,
+    std::uint32_t hitRecordCount,
     std::uint32_t instanceCustomIndex)
 {
-    nrAssert(hitShaderBindingTableRecordCount > 0u, "AS build requires at least one hit SBT record.");
+    nrAssert(hitRecordCount > 0u, "AS build requires at least one hit SBT record.");
     nrAssert(
-        packet.tlasBucket < hitShaderBindingTableRecordCount,
+        hitRecordBase < hitRecordCount,
         std::format(
-            "TLAS packet bucket {} exceeds hit SBT record count {}.",
-            packet.tlasBucket,
-            hitShaderBindingTableRecordCount));
+            "TLAS hit SBT record base {} exceeds hit SBT record count {}.",
+            hitRecordBase,
+            hitRecordCount));
+    nrAssert(
+        hitRecordBase <= 0x00FF'FFFFu,
+        "TLAS hit SBT record base must fit the 24-bit Vulkan instanceShaderBindingTableRecordOffset field.");
 
     auto instance = vk::AccelerationStructureInstanceKHR{};
     instance.setTransform(packTransform(packet.world));
     // InstanceCustomIndex is a dense metadata index for RT shaders. The stable debug hash is stored in RtInstanceMetadata.
     instance.setInstanceCustomIndex(instanceCustomIndex);
     instance.setMask(packet.instanceMask & 0xFFu);
-    instance.setInstanceShaderBindingTableRecordOffset(packet.tlasBucket);
+    instance.setInstanceShaderBindingTableRecordOffset(hitRecordBase);
     instance.setFlags(tlasInstanceFlags(packet, sceneMesh));
     instance.setAccelerationStructureReference(blas.deviceAddress());
     return instance;
@@ -1047,6 +1074,8 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     auto pendingByMesh = std::map<nr::resource::MeshHandle, detail::PendingBlasBuild>{};
     auto instances = std::vector<detail::PlannedInstance>{};
     auto rtMetadata = detail::RtMetadataBuildState{};
+    auto hitSbtPlan = SceneRtHitSbtPlan{};
+    auto hitPermutationLookup = std::map<RtHitPermutationKey, std::uint32_t>{};
     instances.reserve(packets.size());
 
     std::ranges::for_each(packets, [&](const nr::scene::TlasBuildInputPacket &packet) {
@@ -1163,9 +1192,11 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
             return;
         }
 
-        auto const instanceMetadataIndex = detail::appendRtInstanceMetadata(
+        auto const appendedRtMetadata = detail::appendRtInstanceMetadata(
             runtime,
             rtMetadata,
+            hitSbtPlan,
+            hitPermutationLookup,
             scene,
             packet,
             pendingIt->second.cachedBuild.get().sceneMesh);
@@ -1175,8 +1206,9 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
                 packet,
                 pendingIt->second.cachedBuild.get().sceneMesh,
                 entryIt->second.accelerationStructure,
-                input.hitShaderBindingTableRecordCount,
-                instanceMetadataIndex),
+                appendedRtMetadata.hitRecordBase,
+                static_cast<std::uint32_t>(hitSbtPlan.records.size()),
+                appendedRtMetadata.instanceMetadataIndex),
         });
     });
 
@@ -1184,6 +1216,8 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     {
         return;
     }
+    finalizeSceneRtHitSbtPlan(hitSbtPlan);
+    nrAssert(hitSbtPlan.valid(), "AS build generated an invalid RT hit SBT plan.");
 
     auto &slot = runtime.frameSlots[context.frameIndex % runtime.frameSlots.size()];
     auto const instanceBytes = static_cast<vk::DeviceSize>(instances.size() * sizeof(vk::AccelerationStructureInstanceKHR));
@@ -1362,6 +1396,8 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     context.publishFrameResource(nr::renderer::frameResource::sceneRtMaterialTextureRefs, rtMaterialTextureRefResource);
     context.publishFrameResource(nr::renderer::frameResource::sceneRtVertexAtlas, rtVertexAtlasResource);
     context.publishFrameResource(nr::renderer::frameResource::sceneRtIndexAtlas, rtIndexAtlasResource);
+    auto const rtHitSbtPlanFrameData = context.importFrameData("ASBuild.RT.HitSbtPlan", std::move(hitSbtPlan));
+    context.publishFrameData(nr::renderer::frameData::sceneRtHitSbtPlan, rtHitSbtPlanFrameData);
 
     auto importBlasResource = [&](nr::resource::MeshHandle meshHandle) {
         if (auto it = blasResourceByMesh.find(meshHandle); it != blasResourceByMesh.end())

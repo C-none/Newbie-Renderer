@@ -1,6 +1,5 @@
 module hitSurface;
 import common;
-import include.rt.resources;
 
 public static const uint kRtVertexOffsetPosition = 0u;
 public static const uint kRtVertexOffsetNormal = 12u;

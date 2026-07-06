@@ -1,6 +1,5 @@
 module hitShaders;
 import common;
-import include.rt.resources;
 import include.rt.hitSurface;
 import renderer.pathTracing.params;
 import renderer.pathTracing.pathState;
@@ -52,33 +51,26 @@ public void handlePathTracingAnyHit(
     }
 }
 
-public void handlePathTracingClosestHit(
-    inout PathTracingRayPayload payload,
+public PathTracingClosestHitInput makePathTracingClosestHitInput(
     BuiltInTriangleIntersectionAttributes attributes)
 {
-    if (payload.rayKind != kPathTracingRayKindMaterial)
-    {
-        return;
-    }
-
     float3 viewDirection = normalize(-WorldRayDirection());
+    PathTracingClosestHitInput input = defaultPathTracingClosestHitInput();
+    input.viewDirection = viewDirection;
+    input.hitT = RayTCurrent();
+
     RtHitSurface hit = currentRtHitSurface(attributes, viewDirection);
+    input.geometryValid = hit.geometryValid;
+    input.materialIndex = hit.geometry.materialIndex;
+    input.surface = hit.surface;
     if (!hit.geometryValid)
     {
-        payload.hit = 0u;
-        payload.material = defaultResolvedMaterialPayload();
-        return;
+        return input;
     }
 
     RtMaterialHeader material = rtMaterialHeaders[hit.geometry.materialIndex];
     orientRtSurfaceForMaterial(hit.surface, material, viewDirection);
-    payload.hit = 1u;
-    payload.material = resolveRtMaterialPayload(
-        rtMaterialTextureRefs,
-        rtMaterialLayers,
-        material,
-        hit.surface,
-        viewDirection,
-        RayTCurrent(),
-        hit.geometry.materialIndex);
+    input.material = material;
+    input.surface = hit.surface;
+    return input;
 }

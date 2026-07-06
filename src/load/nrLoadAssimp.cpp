@@ -28,6 +28,8 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyFactor{"$mat.anisotropyFactor", 0
 constexpr MaterialPropertyKey kMatKeySpecularFactor{"$mat.specularFactor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyGlossinessFactor{"$mat.glossinessFactor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyOpacity{"$mat.opacity", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyGltfAlphaMode{"$mat.gltf.alphaMode", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyGltfAlphaCutoff{"$mat.gltf.alphaCutoff", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyTwoSided{"$mat.twosided", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyBumpScaling{"$mat.bumpscaling", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyEmissiveIntensity{"$mat.emissiveIntensity", 0u, 0u};
@@ -91,10 +93,40 @@ inline constexpr const char *kAssimpGltfLightRangeMetadataKey = "PBR_LightRange"
     return true;
 }
 
+[[nodiscard]] bool readMaterialString(const aiMaterial &material,
+                                      const MaterialPropertyKey &key,
+                                      std::string &value)
+{
+    auto raw = aiString{};
+    if (aiGetMaterialString(&material, key.name, key.type, key.index, &raw) != aiReturn_SUCCESS)
+    {
+        return false;
+    }
+
+    auto const *text = raw.C_Str();
+    value = text == nullptr ? std::string{} : std::string{text};
+    return !value.empty();
+}
+
 [[nodiscard]] std::string toStdString(const aiString &value)
 {
     auto const *raw = value.C_Str();
     return raw == nullptr ? std::string{} : std::string{raw};
+}
+
+[[nodiscard]] MaterialAlphaModeHint gltfAlphaModeHint(std::string_view value) noexcept
+{
+    if (value == "MASK" || value == "mask")
+    {
+        return MaterialAlphaModeHint::mask;
+    }
+
+    if (value == "BLEND" || value == "blend")
+    {
+        return MaterialAlphaModeHint::blend;
+    }
+
+    return MaterialAlphaModeHint::opaque;
 }
 
 [[nodiscard]] std::optional<float> readMetadataFinitePositiveFloat(const aiMetadata *metadata, const char *key)
@@ -591,6 +623,17 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
             materialAsset.opacity = opacity;
         }
 
+        auto hasExplicitGltfAlphaMode = false;
+        if (std::string alphaMode; readMaterialString(*material, kMatKeyGltfAlphaMode, alphaMode))
+        {
+            materialAsset.alphaModeHint = gltfAlphaModeHint(alphaMode);
+            hasExplicitGltfAlphaMode = true;
+        }
+        if (float alphaCutoff; readMaterialFloat(*material, kMatKeyGltfAlphaCutoff, alphaCutoff))
+        {
+            materialAsset.alphaCutoff = alphaCutoff;
+        }
+
         // Read two-sided flag
         if (int twoSided; readMaterialInteger(*material, kMatKeyTwoSided, twoSided))
         {
@@ -609,13 +652,17 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
             materialAsset.occlusionStrength = aoIntensity;
         }
 
-        // Classify alpha mode from blend function (if available)
-        if (int blendFunc; readMaterialInteger(*material, kMatKeyBlendFunc, blendFunc))
+        // Classify legacy alpha mode from blend function when glTF did not provide an explicit mode.
+        if (!hasExplicitGltfAlphaMode)
         {
-            // Check if material has transparency-related properties
-            if (materialAsset.opacity < 1.0f)
+            if (int blendFunc; readMaterialInteger(*material, kMatKeyBlendFunc, blendFunc))
             {
-                materialAsset.alphaModeHint = MaterialAlphaModeHint::blend;
+                (void)blendFunc;
+                // Check if material has transparency-related properties
+                if (materialAsset.opacity < 1.0f)
+                {
+                    materialAsset.alphaModeHint = MaterialAlphaModeHint::blend;
+                }
             }
         }
 

@@ -32,6 +32,11 @@ namespace
         .alphaModeHint = nr::load::MaterialAlphaModeHint::blend,
         .doubleSided = true,
     });
+    scene.materials.push_back(nr::load::MaterialAsset{
+        .name = "mask_single_sided",
+        .alphaModeHint = nr::load::MaterialAlphaModeHint::mask,
+        .alphaCutoff = 0.5f,
+    });
 
     auto makeMesh = [](std::string name, bool clockwiseFrontFace) {
         return nr::load::MeshAsset{
@@ -43,7 +48,7 @@ namespace
                 nr::load::VertexAsset{.position = {1.0f, -1.0f, 0.0f}},
                 nr::load::VertexAsset{.position = {1.0f, 1.0f, 0.0f}},
             },
-            .indices = {0u, 1u, 2u, 1u, 3u, 4u},
+            .indices = {0u, 1u, 2u, 1u, 3u, 4u, 0u, 2u, 4u},
             .geometries = {
                 nr::load::MeshGeometryAsset{
                     .name = "opaque_geometry",
@@ -56,6 +61,12 @@ namespace
                     .firstIndex = 3u,
                     .indexCount = 3u,
                     .materialIndex = 1u,
+                },
+                nr::load::MeshGeometryAsset{
+                    .name = "mask_single_sided_geometry",
+                    .firstIndex = 6u,
+                    .indexCount = 3u,
+                    .materialIndex = 2u,
                 },
             },
             .clockwiseFrontFace = clockwiseFrontFace,
@@ -80,7 +91,7 @@ namespace
     scene.stats.meshCount = static_cast<std::uint32_t>(scene.meshes.size());
     scene.stats.materialCount = static_cast<std::uint32_t>(scene.materials.size());
     scene.stats.vertexCount = 10u;
-    scene.stats.indexCount = 12u;
+    scene.stats.indexCount = 18u;
     return scene;
 }
 
@@ -139,7 +150,7 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
 
         auto meshHandle = resolveMeshHandle(scene, sceneAsset, 0u);
         auto clockwiseMeshHandle = resolveMeshHandle(scene, sceneAsset, 1u);
-        auto doubleSidedMaterial = resolveMaterialHandle(scene, sceneAsset, 1u);
+        auto alphaMaskMaterial = resolveMaterialHandle(scene, sceneAsset, 2u);
         uploadSceneGeometry(scene, device);
 
         auto importedClockwiseMesh = scene.tryGetMeshAsset(clockwiseMeshHandle);
@@ -150,7 +161,7 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
 
         auto asMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
         nr::test::require(asMesh.has_value(), "resident scene mesh should expose AS build input");
-        nr::test::requireEqual(asMesh->geometries.size(), std::size_t{2u});
+        nr::test::requireEqual(asMesh->geometries.size(), std::size_t{3u});
         nr::test::require(
             !hasInstanceFlag(asMesh->instanceFlags, vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing),
             "default CCW mesh should keep Vulkan RT triangle facing unflipped");
@@ -161,8 +172,11 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
             hasGeometryFlag(asMesh->geometries[0].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
             "opaque material should mark AS geometry opaque");
         nr::test::require(
-            !hasGeometryFlag(asMesh->geometries[1].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
-            "alpha-blended material should keep AS geometry non-opaque");
+            hasGeometryFlag(asMesh->geometries[1].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
+            "alpha-blended material should still mark AS geometry opaque for RT traversal");
+        nr::test::require(
+            !hasGeometryFlag(asMesh->geometries[2].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
+            "alpha-mask material should keep AS geometry non-opaque for any-hit alpha testing");
 
         auto clockwiseAsMesh = scene.tryGetAccelerationStructureMesh(clockwiseMeshHandle);
         nr::test::require(clockwiseAsMesh.has_value(), "clockwise mesh should still expose AS build input");
@@ -171,7 +185,7 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
             "clockwise mesh should flip Vulkan RT triangle facing to preserve clockwise front-face");
 
         {
-            auto record = scene.tryGetMaterialAsset(doubleSidedMaterial);
+            auto record = scene.tryGetMaterialAsset(alphaMaskMaterial);
             nr::test::require(record.has_value(), "AS contract material record should exist");
             auto& mutableRecord = const_cast<nr::scene::MaterialAssetRecord&>(record->get());
             mutableRecord.cpu.core.alphaMode = nr::resource::AlphaMode::opaque;
@@ -180,7 +194,7 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
         auto opaqueAsMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
         nr::test::require(opaqueAsMesh.has_value(), "material flag mutation should keep AS build input available");
         nr::test::require(
-            hasGeometryFlag(opaqueAsMesh->geometries[1].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
+            hasGeometryFlag(opaqueAsMesh->geometries[2].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
             "material opacity changes should update AS geometry flags and therefore BLAS build signatures");
 
         device.waitIdle();

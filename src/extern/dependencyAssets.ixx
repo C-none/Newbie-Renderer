@@ -45,6 +45,7 @@ export using ::aiColor4D;
 export using ::aiGetMaterialColor;
 export using ::aiGetMaterialFloatArray;
 export using ::aiGetMaterialIntegerArray;
+export using ::aiGetMaterialString;
 export using ::aiLightSource_AMBIENT;
 export using ::aiLightSource_AREA;
 export using ::aiLightSource_DIRECTIONAL;

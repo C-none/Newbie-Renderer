@@ -124,8 +124,8 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             "PathTracing variant key should expose the Russian roulette toggle");
         requirePresent(
             pathTracing,
-            "std::map<PathTracingVariantKey, PathTracingVariantRuntime>",
-            "PathTracing should keep per-variant PSO runtimes in the node runtime cache");
+            "std::map<PathTracingRuntimeKey, PathTracingVariantRuntime>",
+            "PathTracing should keep per-variant and per-hit-plan PSO runtimes in the node runtime cache");
         requirePresent(
             pathTracing,
             "ensurePathTracingVariantRuntime",
@@ -366,13 +366,21 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         auto pathState = readProjectFile("shader/renderer/pathTracing/pathState.slang");
         auto random = readProjectFile("shader/renderer/pathTracing/random.slang");
         auto scheduler = readProjectFile("shader/renderer/pathTracing/scheduler.slang");
+        auto visibility = readProjectFile("shader/renderer/pathTracing/visibility.slang");
         auto hitShaders = readProjectFile("shader/renderer/pathTracing/hitShaders.slang");
         auto materialPayload = readProjectFile("shader/include/material/payload.slang");
         auto roulette = readProjectFile("shader/include/pathTracing/roulette.slang");
+        auto chs = readProjectFile("shader/include/pathTracing/chs.slang");
+        auto pathTracingNode = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
+        auto rhiPipelineHeader = readProjectFile("src/rhi/nrPipeline.ixx");
+        auto rhiPipelineSource = readProjectFile("src/rhi/nrPipeline.cpp");
 
         requirePresent(entry, "Scheduler scheduler;", "PathTracing entry should construct the raygen scheduler");
         requirePresent(entry, "scheduler.traceSample(pixel, dimensions);", "PathTracing entry should delegate raygen work to the scheduler");
-        requirePresent(entry, "handlePathTracingClosestHit", "PathTracing entry should delegate closest-hit material resolution");
+        requirePresent(entry, "CHS chs = CHS();", "PathTracing closest-hit entry should construct the link-time CHS type");
+        requirePresent(entry, "chs.handleClosestHit", "PathTracing closest-hit entry should delegate to CHS");
+        requirePresent(entry, "ahAlphaMask", "PathTracing any-hit entry should use the alpha-mask-only ABI name");
+        requireAbsent(entry, "ahMain", "PathTracing should not keep the old universal any-hit entry name");
         requireAbsent(entry, "evaluateSceneLightAt", "PathTracing entry should not own lighting logic");
         requireAbsent(entry, "resolveRtMaterialPayload", "PathTracing entry should not own material payload decoding");
 
@@ -403,6 +411,10 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(core, "public PathState path", "Pt should hold the per-path state");
         requirePresent(core, "public bool isActive()", "Pt should expose active-state testing");
         requirePresent(core, "public void traceMaterialRay", "Pt should own material TraceRay scheduling");
+        requirePresent(
+            core,
+            "RAY_FLAG_CULL_BACK_FACING_TRIANGLES,\n            0xFF,\n            0,\n            1,\n            0,",
+            "material rays should use hit SBT offset/stride 0/1");
         requirePresent(core, "public void handleTraceResult", "Pt should own hit or miss dispatch");
         requirePresent(core, "public void handleHit", "Pt should expose hit handling");
         requirePresent(core, "public void handleMiss", "Pt should expose miss handling");
@@ -459,11 +471,29 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
             pathState,
             "sampleIndex",
             "PathTracing path state must not carry camera sample state in fixed 1spp mode");
+        requirePresent(
+            visibility,
+            "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,\n        0xFF,\n        0,\n        1,\n        0,",
+            "visibility rays should use the same hit SBT offset/stride 0/1");
 
         requirePresent(hitShaders, "resolveRtMaterialPayload", "PathTracing closest-hit should resolve material payloads");
+        requirePresent(hitShaders, "makePathTracingClosestHitInput", "PathTracing hit shaders should prepare CHS closest-hit inputs");
+        requireAbsent(hitShaders, "handlePathTracingClosestHitWithPolicy", "PathTracing should not keep wrapper-policy closest-hit contract");
+        requirePresent(chs, "kPathTracingRtHitAlphaMask", "PathTracing hit policy should expose the alpha-mask policy");
         requireAbsent(hitShaders, "samplePathTracingDirectLighting", "PathTracing hit shaders must not own direct lighting");
         requireAbsent(hitShaders, "evaluateResolvedMaterialDirect", "PathTracing hit shaders must not shade direct light");
         requireAbsent(hitShaders, "outputImage", "PathTracing hit shaders must not write the output image");
+        requirePresent(chs, "public interface ICHS", "PathTracing CHS contract should define the closest-hit interface");
+        requirePresent(chs, "public struct DefaultLitCHS<let FeatureMask : uint, let AlphaPolicy : uint> : ICHS", "PathTracing CHS contract should expose the default lit specialization target");
+        requirePresent(chs, "public extern struct CHS : ICHS;", "PathTracing CHS contract should require C++ link-time type binding");
+        requirePresent(chs, "resolveRtMaterialPayload", "DefaultLitCHS should own material payload resolution");
+        requireAbsent(pathTracingNode, "makePathTracingSyntheticRootSource", "PathTracing node should no longer generate synthetic closest-hit wrappers");
+        requireAbsent(pathTracingNode, "RtHitPolicy_", "PathTracing node should no longer generate shader-side policy structs");
+        requirePresent(pathTracingNode, ".linkVariants = {chsVariantDesc}", "PathTracing node should compile per-permutation CHS link variants");
+        requirePresent(rhiPipelineHeader, "struct RayTracingPipelineStageSelection", "RHI should expose explicit RT stage selection records");
+        requirePresent(rhiPipelineHeader, "logicalEntryPointName", "RHI RT stage selections should carry logical names for shader group lookup");
+        requirePresent(rhiPipelineSource, "result.entryPointNames_.push_back(std::move(logicalEntryPointName));", "RHI RT shader program should store logical names for group lookup");
+        requirePresent(rhiPipelineSource, "stageInfo.pName = result.shaderEntryPointNames_.back().c_str();", "RHI Vulkan shader stages should still use actual entry point names");
 
         requirePresent(materialPayload, "ResolvedMaterialPayload", "Common material payload helper should define resolved hit material data");
         requirePresent(materialPayload, "evaluateResolvedMaterialDirect", "Common material payload helper should expose direct lighting evaluation");
