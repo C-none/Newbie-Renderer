@@ -187,25 +187,6 @@ void bindPreparedResourcesToCommandBuffer(
 	const CursorPipelineLayout &layout,
 	std::span<const ShaderBindingSet> sets);
 
-void bindResourcesToCommandBuffer(
-	const vk::raii::CommandBuffer &commandBuffer,
-	vk::PipelineBindPoint bindPoint,
-	const CursorPipelineLayout &layout,
-	ShaderBindingPool &pool,
-	std::span<const ShaderBindingSet> sets,
-	DescriptorWriteCache &descriptorWriteCache,
-	const ShaderBindingSnapshot &snapshot,
-	LogicalDescriptorResolver logicalResolver);
-
-std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
-	const vk::raii::CommandBuffer &commandBuffer,
-	vk::PipelineBindPoint bindPoint,
-	const CursorPipelineLayout &layout,
-	ShaderBindingPool &pool,
-	DescriptorWriteCache &descriptorWriteCache,
-	const ShaderBindingSnapshot &snapshot,
-	LogicalDescriptorResolver logicalResolver);
-
 void pushConstantsToCommandBuffer(
 	const vk::raii::CommandBuffer &commandBuffer,
 	const CursorPipelineLayout &layout,

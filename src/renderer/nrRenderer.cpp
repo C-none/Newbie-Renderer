@@ -659,7 +659,8 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
         std::string_view debugName,
         PassRecordCallback executeLambda,
         PassPrepareCallback prepareCallback,
-        bool isCopyPass)
+        bool isCopyPass,
+        vk::PipelineStageFlags2 shaderStages)
 {
         return graphBuilder.get().addPass(
             debugName,
@@ -667,21 +668,24 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
             intentList,
             std::move(executeLambda),
             std::move(prepareCallback),
-            isCopyPass);
+            isCopyPass,
+            shaderStages);
     }
 
 [[nodiscard]] GraphPassHandle NodeBuildContext::addPass(
         std::span<const PassResourceUseDesc> intentList,
         std::string_view debugName,
         PassParallelRecordDesc parallelRecord,
-        PassPrepareCallback prepareCallback)
+        PassPrepareCallback prepareCallback,
+        vk::PipelineStageFlags2 shaderStages)
 {
         return graphBuilder.get().addPass(
             debugName,
             nodeHandle,
             intentList,
             std::move(parallelRecord),
-            std::move(prepareCallback));
+            std::move(prepareCallback),
+            shaderStages);
     }
 
 [[nodiscard]] GraphSubmitHandle NodeBuildContext::addSubmitNode(
@@ -1122,7 +1126,8 @@ void RasterPassBuilder::bindGraphicsSetup(
                 std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
                 debugName,
                 std::move(parallelRecord),
-                std::move(prepareCallback));
+                std::move(prepareCallback),
+                vk::PipelineStageFlagBits2::eAllGraphics);
         }
 
         return context_.get().addPass(
@@ -1177,7 +1182,9 @@ void RasterPassBuilder::bindGraphicsSetup(
                     .extent = setup.targetExtent,
                 });
             },
-            std::move(prepareCallback));
+            std::move(prepareCallback),
+            false,
+            vk::PipelineStageFlagBits2::eAllGraphics);
     }
 
 [[nodiscard]] vk::Extent2D RasterPassBuilder::resolveTargetExtent(
@@ -1259,7 +1266,9 @@ ComputePassBuilder& ComputePassBuilder::record(ComputePassRecordCallback callbac
                     .pipelineLayout = runtime->state().layout,
                 });
             },
-            std::move(prepareCallback));
+            std::move(prepareCallback),
+            false,
+            vk::PipelineStageFlagBits2::eComputeShader);
     }
 
 RayTracingPassBuilder::RayTracingPassBuilder(
@@ -1311,7 +1320,9 @@ RayTracingPassBuilder& RayTracingPassBuilder::record(RayTracingPassRecordCallbac
                     .pipelineLayout = runtime->state().layout,
                 });
             },
-            std::move(prepareCallback));
+            std::move(prepareCallback),
+            false,
+            vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
     }
 
 void NodeRuntime::initialize(NodeInitContext&)

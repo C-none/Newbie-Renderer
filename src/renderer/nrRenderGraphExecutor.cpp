@@ -600,7 +600,8 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
 
 [[nodiscard]] vk::PipelineStageFlags2 RenderGraphExecutor::imageAccessWaitStage(
         QueueDomain queue,
-        const PassResourceUseDesc& use)
+        const PassResourceUseDesc& use,
+        vk::PipelineStageFlags2 passShaderStages)
 {
         if (use.imageAccess == ImageAccessIntent::TransferRead ||
             use.imageAccess == ImageAccessIntent::TransferWrite ||
@@ -641,6 +642,14 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
             use.imageUsage == ImageUsageIntent::StorageReadWrite ||
             use.imageUsage == ImageUsageIntent::InputAttachment)
         {
+            if (use.shaderStages != vk::PipelineStageFlags2{})
+            {
+                return use.shaderStages;
+            }
+            if (passShaderStages != vk::PipelineStageFlags2{})
+            {
+                return passShaderStages;
+            }
             return shaderWaitStageForQueue(queue);
         }
 
@@ -660,7 +669,7 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
                 {
                     return;
                 }
-                stages |= imageAccessWaitStage(pass.queue, use);
+                stages |= imageAccessWaitStage(pass.queue, use, pass.shaderStages);
             });
         });
 
@@ -746,17 +755,6 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
                     binding.bufferSize = buffer.size();
                     binding.bufferResource = std::cref(buffer);
                 }
-                else
-                {
-                    // Fallback to legacy imported buffers map
-                    auto imported = context.importedBuffers.find(resource.handle);
-                    if (imported != context.importedBuffers.end())
-                    {
-                        binding.buffer = imported->second.get().handle();
-                        binding.bufferSize = imported->second.get().size();
-                        binding.bufferResource = std::cref(imported->second.get());
-                    }
-                }
             }
 
             if (resource.isAccelerationStructure)
@@ -777,14 +775,6 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
                 if (resource.importedAccelerationStructureResource.has_value())
                 {
                     resolveImportedAccelerationStructure(resource.importedAccelerationStructureResource->get());
-                }
-                else
-                {
-                    auto imported = context.importedAccelerationStructures.find(resource.handle);
-                    if (imported != context.importedAccelerationStructures.end())
-                    {
-                        resolveImportedAccelerationStructure(imported->second.get());
-                    }
                 }
             }
 
@@ -843,15 +833,6 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
                         // image extent (which may be larger due to pre-allocation strategies).
                         // The descriptor extent represents the valid region for rendering.
                         binding.extent = resource.resolvedExtent;
-                    }
-                    else
-                    {
-                        // Fallback to legacy imported images map
-                        auto imported = context.importedImages.find(resource.handle);
-                        if (imported != context.importedImages.end())
-                        {
-                            binding.image = imported->second;
-                        }
                     }
                 }
             }

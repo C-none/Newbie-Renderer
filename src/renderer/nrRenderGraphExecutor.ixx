@@ -343,10 +343,6 @@ class RenderGraphExecutor
         std::uint32_t frameIndex = 0;
         std::optional<std::uint32_t> swapchainImageIndex{};
         std::optional<std::reference_wrapper<RendererSubmissionTimeline>> submissionTimeline{};
-
-        std::map<GraphResourceHandle, std::reference_wrapper<nr::rhi::Buffer>> importedBuffers{};
-        std::map<GraphResourceHandle, vk::Image> importedImages{};
-        std::map<GraphResourceHandle, std::reference_wrapper<const nr::rhi::AccelerationStructureResource>> importedAccelerationStructures{};
     };
 
     [[nodiscard]] ExecutorPlan buildPlan(const CompiledGraphFrame& compiled) const;
@@ -422,7 +418,8 @@ class RenderGraphExecutor
 
     [[nodiscard]] static vk::PipelineStageFlags2 imageAccessWaitStage(
         QueueDomain queue,
-        const PassResourceUseDesc& use);
+        const PassResourceUseDesc& use,
+        vk::PipelineStageFlags2 passShaderStages);
 
     [[nodiscard]] static vk::PipelineStageFlags2 imageAvailableWaitStageForBatch(
         const CompiledSubmitBatch& batch,

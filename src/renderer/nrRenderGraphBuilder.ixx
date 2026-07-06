@@ -1,5 +1,6 @@
 export module nr.renderer:renderGraphBuilder;
 
+import dependency.vulkan;
 import nr.utils;
 import std;
 import :renderGraphType;
@@ -37,13 +38,15 @@ class RenderGraphNodeContext
         std::string_view debugName,
         PassRecordCallback executeLambda,
         PassPrepareCallback prepareCallback = nullptr,
-        bool isCopyPass = false);
+        bool isCopyPass = false,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphPassHandle addPass(
         std::span<const PassResourceUseDesc> intentList,
         std::string_view debugName,
         PassParallelRecordDesc parallelRecord,
-        PassPrepareCallback prepareCallback = nullptr);
+        PassPrepareCallback prepareCallback = nullptr,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
@@ -110,14 +113,16 @@ class RenderGraphBuilder
         std::span<const PassResourceUseDesc> intentList,
         PassRecordCallback executeLambda,
         PassPrepareCallback prepareCallback = nullptr,
-        bool isCopyPass = false);
+        bool isCopyPass = false,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphPassHandle addPass(
         std::string_view debugName,
         GraphNodeHandle node,
         std::span<const PassResourceUseDesc> intentList,
         PassParallelRecordDesc parallelRecord,
-        PassPrepareCallback prepareCallback = nullptr);
+        PassPrepareCallback prepareCallback = nullptr,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
@@ -132,7 +137,8 @@ class RenderGraphBuilder
     [[nodiscard]] GraphPassHandle addPassCore(
         std::string_view debugName,
         GraphNodeHandle node,
-        bool isCopyPass);
+        bool isCopyPass,
+        vk::PipelineStageFlags2 shaderStages);
 
     [[nodiscard]] std::vector<PassExecutionDesc>::iterator findPass(GraphPassHandle handle);
 
@@ -155,6 +161,10 @@ class RenderGraphBuilder
     [[nodiscard]] static bool imageAccessReads(ImageAccessIntent intent) noexcept;
 
     [[nodiscard]] static bool imageAccessWrites(ImageAccessIntent intent) noexcept;
+
+    [[nodiscard]] static bool bufferAccessUsesShaderStages(BufferAccessIntent intent) noexcept;
+
+    [[nodiscard]] static bool imageAccessUsesShaderStages(ImageAccessIntent intent) noexcept;
 
     [[nodiscard]] static bool accelerationStructureAccessReads(AccelerationStructureAccessIntent intent) noexcept;
 

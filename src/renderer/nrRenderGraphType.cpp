@@ -45,6 +45,64 @@ namespace nr::renderer
 {
 namespace use
 {
+[[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(ShaderStageIntent intent) noexcept
+{
+    switch (intent)
+    {
+    case ShaderStageIntent::Vertex:
+        return vk::PipelineStageFlagBits2::eVertexShader;
+    case ShaderStageIntent::Fragment:
+        return vk::PipelineStageFlagBits2::eFragmentShader;
+    case ShaderStageIntent::Compute:
+        return vk::PipelineStageFlagBits2::eComputeShader;
+    case ShaderStageIntent::Task:
+        return vk::PipelineStageFlagBits2::eTaskShaderEXT;
+    case ShaderStageIntent::Mesh:
+        return vk::PipelineStageFlagBits2::eMeshShaderEXT;
+    case ShaderStageIntent::RayGen:
+    case ShaderStageIntent::AnyHit:
+    case ShaderStageIntent::ClosestHit:
+    case ShaderStageIntent::Miss:
+    case ShaderStageIntent::Intersection:
+    case ShaderStageIntent::Callable:
+        return vk::PipelineStageFlagBits2::eRayTracingShaderKHR;
+    }
+    return vk::PipelineStageFlags2{};
+}
+
+[[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(std::span<const ShaderStageIntent> intents) noexcept
+{
+    auto stages = vk::PipelineStageFlags2{};
+    std::ranges::for_each(intents, [&](ShaderStageIntent intent) {
+        stages |= shaderStageScope(intent);
+    });
+    return stages;
+}
+
+[[nodiscard]] PassResourceUseDesc withShaderStages(
+    PassResourceUseDesc use,
+    vk::PipelineStageFlags2 stages) noexcept
+{
+    use.shaderStages = stages;
+    return use;
+}
+
+[[nodiscard]] PassResourceUseDesc withShaderStages(
+    PassResourceUseDesc use,
+    ShaderStageIntent stage) noexcept
+{
+    return withShaderStages(use, shaderStageScope(stage));
+}
+
+[[nodiscard]] PassResourceUseDesc withShaderStages(
+    PassResourceUseDesc use,
+    std::initializer_list<ShaderStageIntent> stages) noexcept
+{
+    return withShaderStages(
+        use,
+        shaderStageScope(std::span<const ShaderStageIntent>{stages.begin(), stages.size()}));
+}
+
 [[nodiscard]] PassResourceUseDesc orderedAfterPrevious(PassResourceUseDesc use) noexcept
 {
     use.requiresPreviousUseBarrier = true;

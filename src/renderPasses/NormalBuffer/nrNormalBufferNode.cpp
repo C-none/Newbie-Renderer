@@ -323,7 +323,11 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
             normalBuffer,
             vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.5f, 0.5f, 1.0f, 1.0f}}})
         .depthAttachment(depthBuffer)
-        .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
+        .uniform(
+            "gFrame",
+            context.globalResources.get().frameUniform,
+            "Renderer.GlobalFrameUniforms",
+            nr::renderer::ShaderStageIntent::Vertex)
         .rasterState(normalBufferRasterState)
         .prepare(
             [runtime = runtime_,

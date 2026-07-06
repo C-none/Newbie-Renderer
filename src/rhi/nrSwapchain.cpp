@@ -28,6 +28,19 @@ template <vk::Result Expected> [[nodiscard]] bool isVulkanResult(const vk::Syste
     return error.code().value() == static_cast<int>(Expected);
 }
 
+[[nodiscard]] std::optional<vk::Result> swapchainRecreateResultFrom(const vk::SystemError &error) noexcept
+{
+    if (isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error))
+    {
+        return vk::Result::eErrorOutOfDateKHR;
+    }
+    if (isVulkanResult<vk::Result::eErrorFullScreenExclusiveModeLostEXT>(error))
+    {
+        return vk::Result::eErrorFullScreenExclusiveModeLostEXT;
+    }
+    return std::nullopt;
+}
+
 template <SurfaceFormatMatchMode MatchMode> [[nodiscard]] bool matchesSurfaceFormat(const vk::SurfaceFormatKHR &candidate, SurfaceFormatPreference preference) noexcept
 {
     if constexpr (MatchMode == SurfaceFormatMatchMode::exact)
@@ -184,10 +197,15 @@ AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore &imageAvaila
     }
     catch (const vk::SystemError &error)
     {
-        nrAssert(detail::isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::acquireNextImage failed: {}", error.what()));
-        nrInfo<LogLevel::warning>(std::format("SwapChain::acquireNextImage returned eErrorOutOfDateKHR: {}", error.what()));
+        auto recreateResult = detail::swapchainRecreateResultFrom(error);
+        if (!recreateResult.has_value())
+        {
+            nrAssert(false, std::format("SwapChain::acquireNextImage failed: {}", error.what()));
+            return AcquireResult{.result = vk::Result::eErrorOutOfDateKHR};
+        }
+        nrInfo<LogLevel::warning>(std::format("SwapChain::acquireNextImage returned {}: {}", vk::to_string(*recreateResult), error.what()));
         return AcquireResult{
-            .result = vk::Result::eErrorOutOfDateKHR,
+            .result = *recreateResult,
         };
     }
 }
@@ -221,9 +239,14 @@ PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint3
     }
     catch (const vk::SystemError &error)
     {
-        nrAssert(detail::isVulkanResult<vk::Result::eErrorOutOfDateKHR>(error), std::format("SwapChain::present failed: {}", error.what()));
-        nrInfo<LogLevel::warning>(std::format("SwapChain::present returned eErrorOutOfDateKHR: {}", error.what()));
-        return PresentResult{.result = vk::Result::eErrorOutOfDateKHR};
+        auto recreateResult = detail::swapchainRecreateResultFrom(error);
+        if (!recreateResult.has_value())
+        {
+            nrAssert(false, std::format("SwapChain::present failed: {}", error.what()));
+            return PresentResult{.result = vk::Result::eErrorOutOfDateKHR};
+        }
+        nrInfo<LogLevel::warning>(std::format("SwapChain::present returned {}: {}", vk::to_string(*recreateResult), error.what()));
+        return PresentResult{.result = *recreateResult};
     }
 }
 
@@ -289,8 +312,24 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
 
     auto selectedPresentMode = choosePresentMode();
 
+    vk::SurfaceFullScreenExclusiveWin32InfoEXT fullScreenExclusiveWin32Info{};
+    vk::SurfaceFullScreenExclusiveInfoEXT fullScreenExclusiveInfo{};
+    auto fullScreenExclusivePolicy = std::string_view{"Default"};
+    if (config.fullScreenExclusiveApplicationControlled)
+    {
+        nrAssert(config.fullScreenExclusiveMonitor != 0, "VK_EXT_full_screen_exclusive requires a valid Win32 monitor handle.");
+        fullScreenExclusiveWin32Info.hmonitor = reinterpret_cast<decltype(fullScreenExclusiveWin32Info.hmonitor)>(config.fullScreenExclusiveMonitor);
+        fullScreenExclusiveInfo.fullScreenExclusive = vk::FullScreenExclusiveEXT::eApplicationControlled;
+        fullScreenExclusiveInfo.pNext = std::addressof(fullScreenExclusiveWin32Info);
+        fullScreenExclusivePolicy = "ApplicationControlled";
+    }
+
     vk::SwapchainCreateInfoKHR createInfo(vk::SwapchainCreateFlagsKHR{}, surface, imageCount, selectedFormat.format, selectedFormat.colorSpace, extent, 1, config.imageUsage, vk::SharingMode::eExclusive, {}, chooseSurfaceTransform(), chooseCompositeAlpha(), selectedPresentMode, vk::True,
                                           oldSwapchain);
+    if (config.fullScreenExclusiveApplicationControlled)
+    {
+        createInfo.pNext = std::addressof(fullScreenExclusiveInfo);
+    }
 
     SwapChain result;
     result.swapChain = vk::raii::SwapchainKHR(device, createInfo);
@@ -300,8 +339,8 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
     result.extent = extent;
     detail::applyHdrMetadataIfNeeded(device, *result.swapChain, selectedFormat, config);
 
-    nrInfo(std::format("Swapchain created: requestedPresentMode={}, selectedPresentMode={}, format={}, colorSpace={}, hdrOutput={}, imageCount={}.", vk::to_string(config.presentMode), vk::to_string(selectedPresentMode), vk::to_string(selectedFormat.format), vk::to_string(selectedFormat.colorSpace),
-                       isHdrSwapchainColorSpace(selectedFormat.colorSpace) ? "true" : "false", result.swapChainImages.size()));
+    nrInfo(std::format("Swapchain created: requestedPresentMode={}, selectedPresentMode={}, format={}, colorSpace={}, hdrOutput={}, fullScreenExclusivePolicy={}, imageCount={}.", vk::to_string(config.presentMode), vk::to_string(selectedPresentMode), vk::to_string(selectedFormat.format), vk::to_string(selectedFormat.colorSpace),
+                       isHdrSwapchainColorSpace(selectedFormat.colorSpace) ? "true" : "false", fullScreenExclusivePolicy, result.swapChainImages.size()));
 
     vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, selectedFormat.format, {}, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
     result.imageViews = result.swapChainImages | std::views::transform([&](vk::Image image) {
@@ -385,6 +424,11 @@ bool AcquireSemaphorePool::empty() const noexcept
     return semaphores_.empty();
 }
 
+PresentationContext::~PresentationContext()
+{
+    releaseFullScreenExclusiveIfNeeded();
+}
+
 void PresentationContext::initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, std::string_view appName, const SwapChainConfig &config, std::uint32_t presentQueueFamily)
 {
     device_ = std::cref(device);
@@ -398,8 +442,11 @@ void PresentationContext::initialize(const vk::raii::Instance &instance, const v
         presentation->textInputCodepoints_.push_back(static_cast<std::uint32_t>(codepoint));
     });
     ensurePresentSupport(physicalDevice);
+    refreshFullScreenExclusiveMonitor();
+    ensureFullScreenExclusiveSupport(physicalDevice);
     swapChain_ = SwapChain::create(physicalDevice, device, surface_.surface, surface_.extent, config_);
     surface_.format = swapChain_.format;
+    acquireFullScreenExclusiveIfNeeded();
 
     auto poolCapacity = swapChain_.swapChainImages.size() + 1u;
     acquirePool_.initialize(device, static_cast<std::uint32_t>(poolCapacity));
@@ -554,14 +601,20 @@ bool PresentationContext::windowShouldClose() const
     return surface_.handle == nullptr || glfwWindowShouldClose(surface_.handle.get()) != 0;
 }
 
-bool PresentationContext::borderlessFullscreenEnabled() const noexcept
+bool PresentationContext::framebufferAvailable() const noexcept
 {
-    return surface_.borderlessFullscreenEnabled();
+    return surface_.framebufferAvailable();
 }
 
-void PresentationContext::setBorderlessFullscreen(bool enabled)
+bool PresentationContext::fullscreenEnabled() const noexcept
 {
-    surface_.setBorderlessFullscreen(enabled);
+    return surface_.fullscreenEnabled();
+}
+
+void PresentationContext::setFullscreen(bool enabled)
+{
+    surface_.setFullscreen(enabled);
+    refreshFullScreenExclusiveMonitor();
 }
 
 bool PresentationContext::consumeSwapchainRecreateRequest() noexcept
@@ -602,20 +655,26 @@ bool PresentationContext::hasSubmittedCurrentFrame() const
 
 bool PresentationContext::needsSwapchainRecreate(vk::Result result)
 {
-    return result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR;
+    return result == vk::Result::eErrorOutOfDateKHR ||
+           result == vk::Result::eSuboptimalKHR ||
+           result == vk::Result::eErrorFullScreenExclusiveModeLostEXT;
 }
 
 void PresentationContext::recreate(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device, QueueManager &queueManager)
 {
     queueManager.waitAllIdle();
+    releaseFullScreenExclusiveIfNeeded();
     static_cast<void>(surface_.consumeSwapchainRecreateRequest());
     surface_.refreshExtentFromFramebuffer();
+    refreshFullScreenExclusiveMonitor();
     ensurePresentSupport(physicalDevice);
+    ensureFullScreenExclusiveSupport(physicalDevice);
     auto oldSwapchain = *swapChain_.swapChain;
     auto rebuilt = SwapChain::recreate(physicalDevice, device, surface_.surface, surface_.extent, oldSwapchain, config_);
     surface_.format = rebuilt.format;
     swapChain_ = std::move(rebuilt);
     rebuildAcquirePool();
+    acquireFullScreenExclusiveIfNeeded();
 }
 
 void PresentationContext::ensurePresentSupport(const vk::raii::PhysicalDevice &physicalDevice) const
@@ -623,15 +682,101 @@ void PresentationContext::ensurePresentSupport(const vk::raii::PhysicalDevice &p
     nrAssert(physicalDevice.getSurfaceSupportKHR(presentQueueFamily_, surface_.surface), std::format("Compute-present policy requires compute queue family {} to support present.", presentQueueFamily_));
 }
 
+void PresentationContext::ensureFullScreenExclusiveSupport(const vk::raii::PhysicalDevice &physicalDevice) const
+{
+    if (!config_.fullScreenExclusiveApplicationControlled)
+    {
+        return;
+    }
+
+    nrAssert(config_.fullScreenExclusiveMonitor != 0, "VK_EXT_full_screen_exclusive requires a valid Win32 monitor handle before surface capability query.");
+    auto win32Info = vk::SurfaceFullScreenExclusiveWin32InfoEXT{};
+    win32Info.hmonitor = reinterpret_cast<decltype(win32Info.hmonitor)>(config_.fullScreenExclusiveMonitor);
+
+    auto exclusiveInfo = vk::SurfaceFullScreenExclusiveInfoEXT{};
+    exclusiveInfo.fullScreenExclusive = vk::FullScreenExclusiveEXT::eApplicationControlled;
+    exclusiveInfo.pNext = std::addressof(win32Info);
+
+    auto surfaceInfo = vk::PhysicalDeviceSurfaceInfo2KHR{};
+    surfaceInfo.surface = *surface_.surface;
+    surfaceInfo.pNext = std::addressof(exclusiveInfo);
+
+    auto capabilities = physicalDevice.getSurfaceCapabilities2KHR<
+        vk::SurfaceCapabilities2KHR,
+        vk::SurfaceCapabilitiesFullScreenExclusiveEXT>(surfaceInfo);
+    auto const &exclusiveCapabilities = capabilities.get<vk::SurfaceCapabilitiesFullScreenExclusiveEXT>();
+    nrAssert(
+        exclusiveCapabilities.fullScreenExclusiveSupported == vk::True,
+        "VK_EXT_full_screen_exclusive reports that application-controlled exclusive mode is not supported for the current surface/monitor.");
+}
+
+void PresentationContext::refreshFullScreenExclusiveMonitor() noexcept
+{
+    config_.fullScreenExclusiveMonitor = surface_.fullscreenExclusiveMonitor();
+    config_.fullScreenExclusiveApplicationControlled = config_.fullScreenExclusiveEnabled && surface_.fullscreenEnabled();
+}
+
+void PresentationContext::acquireFullScreenExclusiveIfNeeded()
+{
+    if (!config_.fullScreenExclusiveApplicationControlled || fullScreenExclusiveAcquired_)
+    {
+        return;
+    }
+
+    try
+    {
+        swapChain_.swapChain.acquireFullScreenExclusiveModeEXT();
+        fullScreenExclusiveAcquired_ = true;
+        nrInfo("VK_EXT_full_screen_exclusive acquired application-controlled exclusive mode.");
+    }
+    catch (const vk::SystemError &error)
+    {
+        if (detail::isVulkanResult<vk::Result::eErrorInitializationFailed>(error))
+        {
+            nrInfo<LogLevel::warning>(std::format("Full-screen exclusive acquire was deferred because exclusive access is not currently available: {}", error.what()));
+            return;
+        }
+
+        nrInfo<LogLevel::error>(std::format("PresentationContext failed to acquire full-screen exclusive mode: {}", error.what()));
+        nrAssert(false, "PresentationContext failed to acquire VK_EXT_full_screen_exclusive mode.");
+    }
+}
+
+void PresentationContext::releaseFullScreenExclusiveIfNeeded() noexcept
+{
+    if (!config_.fullScreenExclusiveEnabled || !fullScreenExclusiveAcquired_)
+    {
+        return;
+    }
+
+    fullScreenExclusiveAcquired_ = false;
+    try
+    {
+        swapChain_.swapChain.releaseFullScreenExclusiveModeEXT();
+        nrInfo("VK_EXT_full_screen_exclusive released application-controlled exclusive mode.");
+    }
+    catch (const vk::SystemError &error)
+    {
+        if (detail::isVulkanResult<vk::Result::eErrorFullScreenExclusiveModeLostEXT>(error))
+        {
+            nrInfo<LogLevel::warning>(std::format("Full-screen exclusive mode was already lost before release: {}", error.what()));
+            return;
+        }
+
+        nrInfo<LogLevel::error>(std::format("PresentationContext failed to release full-screen exclusive mode: {}", error.what()));
+        nrAssert(false, "PresentationContext failed to release VK_EXT_full_screen_exclusive mode.");
+    }
+}
+
 void PresentationContext::issuePendingAcquireImpl(std::uint64_t timeout)
 {
     auto slot = acquirePool_.borrow();
     auto acquireResult = swapChain_.acquireNextImage(acquirePool_.semaphore(slot), timeout);
 
-    if (acquireResult.result == vk::Result::eErrorOutOfDateKHR)
+    if (needsSwapchainRecreate(acquireResult.result) && acquireResult.result != vk::Result::eSuboptimalKHR)
     {
         acquirePool_.returnSlot(slot);
-        nrInfo<LogLevel::warning>("PresentationContext::issuePendingAcquireImpl got eErrorOutOfDateKHR; caller must recreate.");
+        nrInfo<LogLevel::warning>(std::format("PresentationContext::issuePendingAcquireImpl got {}; caller must recreate.", vk::to_string(acquireResult.result)));
         return;
     }
 

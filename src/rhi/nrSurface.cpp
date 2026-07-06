@@ -14,6 +14,7 @@ struct MonitorArea
     int y = 0;
     int width = 0;
     int height = 0;
+    int refreshRate = 0;
 };
 
 [[nodiscard]] int sanitizeWindowDimension(int value) noexcept
@@ -61,6 +62,7 @@ struct MonitorArea
             .y = y,
             .width = sanitizeWindowDimension(videoMode->width),
             .height = sanitizeWindowDimension(videoMode->height),
+            .refreshRate = videoMode->refreshRate,
         };
     }
 
@@ -115,7 +117,7 @@ struct MonitorArea
 [[nodiscard]] MonitorArea selectTargetMonitorArea(GLFWwindow* window)
 {
         auto monitorAreas = enumerateMonitorAreas();
-        nr::nrAssert(!monitorAreas.empty(), "Surface borderless fullscreen requires at least one GLFW monitor.");
+        nr::nrAssert(!monitorAreas.empty(), "Surface fullscreen requires at least one GLFW monitor.");
 
         auto const windowBounds = readWindowBounds(window);
         auto bestMonitor = std::ranges::max_element(
@@ -199,15 +201,33 @@ void Surface::refreshExtentFromFramebuffer()
         };
     }
 
-bool Surface::borderlessFullscreenEnabled() const noexcept
+bool Surface::framebufferAvailable() const noexcept
 {
-        return borderlessFullscreenEnabled_;
+        if (handle == nullptr)
+        {
+            return false;
+        }
+
+        int width = 0;
+        int height = 0;
+        glfwGetFramebufferSize(handle.get(), &width, &height);
+        return width > 0 && height > 0;
     }
 
-void Surface::setBorderlessFullscreen(bool enabled)
+bool Surface::fullscreenEnabled() const noexcept
 {
-        nrAssert(handle != nullptr, "Surface::setBorderlessFullscreen requires a valid window handle.");
-        if (enabled == borderlessFullscreenEnabled_)
+        return handle != nullptr && glfwGetWindowMonitor(handle.get()) != nullptr;
+    }
+
+std::uintptr_t Surface::fullscreenExclusiveMonitor() const noexcept
+{
+        return handle == nullptr ? 0 : glfw::nativeMonitorFromWindow(handle.get());
+    }
+
+void Surface::setFullscreen(bool enabled)
+{
+        nrAssert(handle != nullptr, "Surface::setFullscreen requires a valid window handle.");
+        if (enabled == fullscreenEnabled())
         {
             return;
         }
@@ -216,22 +236,28 @@ void Surface::setBorderlessFullscreen(bool enabled)
         {
             savedWindowedBounds_ = readWindowBounds(handle.get());
             auto const monitorArea = selectTargetMonitorArea(handle.get());
-            glfwSetWindowAttrib(handle.get(), GLFW_DECORATED, GLFW_FALSE);
-            glfwSetWindowPos(handle.get(), monitorArea.x, monitorArea.y);
-            glfwSetWindowSize(handle.get(), monitorArea.width, monitorArea.height);
-            borderlessFullscreenEnabled_ = true;
+            glfwSetWindowMonitor(
+                handle.get(),
+                monitorArea.monitor,
+                0,
+                0,
+                monitorArea.width,
+                monitorArea.height,
+                monitorArea.refreshRate);
         }
         else
         {
-            glfwSetWindowAttrib(handle.get(), GLFW_DECORATED, GLFW_TRUE);
-            glfwSetWindowPos(handle.get(), savedWindowedBounds_.x, savedWindowedBounds_.y);
-            glfwSetWindowSize(
+            glfwSetWindowMonitor(
                 handle.get(),
+                nullptr,
+                savedWindowedBounds_.x,
+                savedWindowedBounds_.y,
                 sanitizeWindowDimension(savedWindowedBounds_.width),
-                sanitizeWindowDimension(savedWindowedBounds_.height));
-            borderlessFullscreenEnabled_ = false;
+                sanitizeWindowDimension(savedWindowedBounds_.height),
+                0);
         }
 
+        nrAssert(fullscreenEnabled() == enabled, "Surface::setFullscreen failed to update GLFW window monitor.");
         swapchainRecreateRequested_ = true;
         refreshExtentFromFramebuffer();
     }

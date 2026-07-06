@@ -461,11 +461,15 @@ const nr::test::CaseRegistrar compilerMappingCase{
 
         auto computeSample = nr::renderer::RenderGraphCompiler::mapImageAccessIntent(
             nr::renderer::ImageAccessIntent::SampledRead,
-            nr::renderer::QueueDomain::Compute);
-        nr::test::require(computeSample.stages ==
-                          (vk::PipelineStageFlagBits2::eComputeShader |
-                           vk::PipelineStageFlagBits2::eRayTracingShaderKHR));
+            vk::PipelineStageFlagBits2::eComputeShader);
+        nr::test::require(computeSample.stages == vk::PipelineStageFlagBits2::eComputeShader);
         nr::test::require(computeSample.access == vk::AccessFlagBits2::eShaderSampledRead);
+
+        auto rayTracingUniform = nr::renderer::RenderGraphCompiler::mapBufferAccessIntent(
+            nr::renderer::BufferAccessIntent::UniformRead,
+            vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
+        nr::test::require(rayTracingUniform.stages == vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
+        nr::test::require(rayTracingUniform.access == vk::AccessFlagBits2::eUniformRead);
 
         auto colorReadWrite = nr::renderer::RenderGraphCompiler::mapImageAccessIntent(
             nr::renderer::ImageAccessIntent::ColorAttachmentReadWrite,
@@ -487,10 +491,8 @@ const nr::test::CaseRegistrar compilerMappingCase{
 
         auto storageBufferReadWrite = nr::renderer::RenderGraphCompiler::mapBufferAccessIntent(
             nr::renderer::BufferAccessIntent::ShaderStorageReadWrite,
-            nr::renderer::QueueDomain::Compute);
-        nr::test::require(storageBufferReadWrite.stages ==
-                          (vk::PipelineStageFlagBits2::eComputeShader |
-                           vk::PipelineStageFlagBits2::eRayTracingShaderKHR));
+            vk::PipelineStageFlagBits2::eComputeShader);
+        nr::test::require(storageBufferReadWrite.stages == vk::PipelineStageFlagBits2::eComputeShader);
         nr::test::require(storageBufferReadWrite.access ==
                           (vk::AccessFlagBits2::eShaderStorageRead |
                            vk::AccessFlagBits2::eShaderStorageWrite));
@@ -537,6 +539,106 @@ const nr::test::CaseRegistrar compilerMappingCase{
             nr::renderer::AccelerationStructureAccessIntent::CopyWrite);
         nr::test::require(asCopyWrite.stages == vk::PipelineStageFlagBits2::eAccelerationStructureCopyKHR);
         nr::test::require(asCopyWrite.access == vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
+    }};
+
+const nr::test::CaseRegistrar compilerPassShaderScopeCase{
+    "render graph compiler uses pass shader scope for shader access",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto computeNode = builder.addNode("Compute.Typed", nr::renderer::QueueDomain::Compute);
+        auto rtNode = builder.addNode("RayTracing.Typed", nr::renderer::QueueDomain::Compute);
+
+        auto storageImage = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Compute.StorageImage",
+            .extent = vk::Extent3D{32, 32, 1},
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .usageIntents = {nr::renderer::ImageUsageIntent::StorageWrite},
+        });
+        auto uniformBuffer = builder.addResource(nr::renderer::GraphTransientBufferDesc{
+            .debugName = "RayTracing.UniformBuffer",
+            .size = 256,
+            .usageIntents = {nr::renderer::BufferUsageIntent::Uniform},
+        });
+
+        auto computeUses = std::array{nr::renderer::use::storageWrite(storageImage)};
+        static_cast<void>(builder.addPass(
+            "Compute.Typed.StorageWrite",
+            computeNode,
+            computeUses,
+            [](const nr::renderer::PassRecordContext&) {},
+            nullptr,
+            false,
+            vk::PipelineStageFlagBits2::eComputeShader));
+
+        auto rtUses = std::array{nr::renderer::use::uniformRead(uniformBuffer)};
+        static_cast<void>(builder.addPass(
+            "RayTracing.Typed.UniformRead",
+            rtNode,
+            rtUses,
+            [](const nr::renderer::PassRecordContext&) {},
+            nullptr,
+            false,
+            vk::PipelineStageFlagBits2::eRayTracingShaderKHR));
+
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(builder.build());
+        auto resourceByHandle = [&](nr::renderer::GraphResourceHandle handle) -> const nr::renderer::CompiledResourceDesc& {
+            auto it = std::ranges::find_if(compiled.resources, [handle](const nr::renderer::CompiledResourceDesc& resource) {
+                return resource.handle == handle;
+            });
+            nr::test::require(it != compiled.resources.end(), "expected compiled resource by handle");
+            return *it;
+        };
+
+        nr::test::require(resourceByHandle(storageImage).finalAccessScope.stages == vk::PipelineStageFlagBits2::eComputeShader);
+        nr::test::require(resourceByHandle(uniformBuffer).finalAccessScope.stages == vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
+    }};
+
+const nr::test::CaseRegistrar compilerResourceShaderOverrideCase{
+    "render graph compiler honors resource shader stage overrides",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("Raster.Typed", nr::renderer::QueueDomain::Graphics);
+
+        auto uniformBuffer = builder.addResource(nr::renderer::GraphTransientBufferDesc{
+            .debugName = "Raster.VertexUniform",
+            .size = 256,
+            .usageIntents = {nr::renderer::BufferUsageIntent::Uniform},
+        });
+        auto sampledImage = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Raster.FragmentSampled",
+            .extent = vk::Extent3D{16, 16, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .usageIntents = {nr::renderer::ImageUsageIntent::Sampled},
+        });
+
+        auto uses = std::array{
+            nr::renderer::use::withShaderStages(
+                nr::renderer::use::uniformRead(uniformBuffer),
+                nr::renderer::ShaderStageIntent::Vertex),
+            nr::renderer::use::withShaderStages(
+                nr::renderer::use::sampledRead(sampledImage),
+                nr::renderer::ShaderStageIntent::Fragment),
+        };
+        static_cast<void>(builder.addPass(
+            "Raster.Typed.Resources",
+            node,
+            uses,
+            [](const nr::renderer::PassRecordContext&) {},
+            nullptr,
+            false,
+            vk::PipelineStageFlagBits2::eAllGraphics));
+
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(builder.build());
+        auto resourceByHandle = [&](nr::renderer::GraphResourceHandle handle) -> const nr::renderer::CompiledResourceDesc& {
+            auto it = std::ranges::find_if(compiled.resources, [handle](const nr::renderer::CompiledResourceDesc& resource) {
+                return resource.handle == handle;
+            });
+            nr::test::require(it != compiled.resources.end(), "expected compiled resource by handle");
+            return *it;
+        };
+
+        nr::test::require(resourceByHandle(uniformBuffer).finalAccessScope.stages == vk::PipelineStageFlagBits2::eVertexShader);
+        nr::test::require(resourceByHandle(sampledImage).finalAccessScope.stages == vk::PipelineStageFlagBits2::eFragmentShader);
     }};
 
 const nr::test::CaseRegistrar compilerCrossQueueCase{

@@ -430,6 +430,14 @@ struct DynamicObject
 {
 };
 
+// Tag applied to every entity that belongs to an active scene instance.
+// Added/removed when an instance's runtime state is (re)initialized so that
+// active-instance membership is an O(1) archetype-level fact instead of an
+// O(hierarchy-depth) parent-chain walk during per-frame extraction.
+struct ActiveInstanceTag
+{
+};
+
 struct SceneTemplateRef
 {
     SceneTemplateHandle handle{};

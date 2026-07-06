@@ -238,6 +238,10 @@ function(nr_ensure_bundled_slang_package)
     endif()
 
     set(slang_env_args)
+    # Only stable inputs may feed the package signature below. The full PATH is
+    # volatile across shells and IDEs, so it must stay out of the signature to
+    # avoid spurious full rebuilds of the bundled Slang package.
+    set(slang_env_signature "")
     if(WIN32)
         nr_find_visual_studio_dumpbin(nr_slang_dumpbin_executable)
         if(nr_slang_dumpbin_executable)
@@ -245,6 +249,7 @@ function(nr_ensure_bundled_slang_package)
             set(nr_slang_env_path "${nr_slang_dumpbin_dir};$ENV{PATH}")
             string(REPLACE ";" "\\;" nr_slang_env_path "${nr_slang_env_path}")
             list(APPEND slang_env_args "PATH=${nr_slang_env_path}")
+            set(slang_env_signature "dumpbin=${nr_slang_dumpbin_dir}")
         else()
             message(STATUS "dumpbin.exe was not found; bundled Slang proxy DLL generation may fail.")
         endif()
@@ -279,7 +284,7 @@ function(nr_ensure_bundled_slang_package)
     set(package_targets_file "${NR_SLANG_INSTALL_DIR}/cmake/slangTargets.cmake")
     set(package_signature_file "${NR_SLANG_INSTALL_DIR}/.nr-bundled-slang-package.signature")
     string(REPLACE ";" "\n" package_signature_input
-        "${configure_args};${slang_options};env=${slang_env_args};configs=${build_configs};source=${slang_source_revision};script=6"
+        "${configure_args};${slang_options};env=${slang_env_signature};configs=${build_configs};source=${slang_source_revision};script=7"
     )
     string(SHA256 package_signature "${package_signature_input}")
 

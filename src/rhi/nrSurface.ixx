@@ -56,13 +56,14 @@ struct Surface
      */
     void refreshExtentFromFramebuffer();
 
-    [[nodiscard]] bool borderlessFullscreenEnabled() const noexcept;
-    void setBorderlessFullscreen(bool enabled);
+    [[nodiscard]] bool framebufferAvailable() const noexcept;
+    [[nodiscard]] bool fullscreenEnabled() const noexcept;
+    [[nodiscard]] std::uintptr_t fullscreenExclusiveMonitor() const noexcept;
+    void setFullscreen(bool enabled);
     [[nodiscard]] bool consumeSwapchainRecreateRequest() noexcept;
 
   private:
     WindowBounds savedWindowedBounds_{};
-    bool borderlessFullscreenEnabled_ = false;
     bool swapchainRecreateRequested_ = false;
 };
 } // namespace nr::rhi

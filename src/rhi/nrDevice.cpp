@@ -134,6 +134,7 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
         uploadReadbackContext_.emplace(device, resourceFactory, queueManager, queueFamilyTransferPolicy_);
 
         swapChainConfig_.hdrMetadataEnabled = hdrMetadataEnabled_;
+        swapChainConfig_.fullScreenExclusiveEnabled = true;
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
         refreshPresentSemaphores();
         pipelineService.bindDevice(device, std::cref(rtCapabilities_));
@@ -180,6 +181,11 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
         if (!presentationContext.hasPendingAcquire())
         {
             presentationContext.issueNextAcquire(acquireTimeout);
+            if (!presentationContext.hasPendingAcquire())
+            {
+                recreateSwapchain();
+                presentationContext.issueNextAcquire(acquireTimeout);
+            }
         }
 
         auto acquire = presentationContext.consumePendingAcquire(frameIndex);
@@ -191,7 +197,7 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
             acquire = presentationContext.consumePendingAcquire(frameIndex);
         }
 
-        nrAssert(acquire.result != vk::Result::eErrorOutOfDateKHR, "Device::beginFrame failed to acquire a valid swapchain image after recreation.");
+        nrAssert(!PresentationContext::needsSwapchainRecreate(acquire.result), "Device::beginFrame failed to acquire a valid swapchain image after recreation.");
 
         // Inject the borrowed semaphore into the current frame context for use in submitFrameBatch.
         frame.setBorrowedAcquireSemaphore(&presentationContext.borrowedAcquireSemaphore(frameIndex));
@@ -308,11 +314,14 @@ void Device::submitFrame(CommandBatch&& batch, QueueRole submitRole)
         auto const recreateRequested = presentationContext.consumeSwapchainRecreateRequest();
         if (PresentationContext::needsSwapchainRecreate(presentResult.result) || recreateRequested)
         {
-            recreateSwapchain();
-            // After recreate the acquire pool was rebuilt; issue fresh acquire.
-            presentationContext.issueNextAcquire();
+            if (presentationContext.framebufferAvailable())
+            {
+                recreateSwapchain();
+                // After recreate the acquire pool was rebuilt; issue fresh acquire.
+                presentationContext.issueNextAcquire();
+            }
         }
-        else
+        else if (presentationContext.framebufferAvailable())
         {
             // Issue next frame's acquire immediately while GPU is busy rendering.
             presentationContext.issueNextAcquire();
@@ -353,12 +362,15 @@ vk::raii::Instance Device::makeInstance(std::uint32_t apiVersion) const
             DebugValidationLayerSettings validationLayerSettings;
             auto validationLayerSettingsCreateInfo = validationLayerSettings.createInfo(debugPNext);
             instanceCreateInfo.pNext = &validationLayerSettingsCreateInfo;
-            nrInfo(
+            nrInfo(std::format(
                 "Debug Vulkan validation layer settings enabled programmatically: "
-                "Core, Sync Validation, GPU-AV shader instrumentation, TraceRay/RayQuery, "
-                "Best Practices, NVIDIA Best Practices, Debug Printf, GPU-AV descriptor checks, "
+                "Core, Sync Validation, GPU-AV={}, DebugPrintf={}, "
                 "report_flags=verbose/error/perf/info/warn, "
-                "message_id_filter=BestPractices-Pipeline-SortAndBind, duplicate message limit disabled.");
+                "debug_action=none (routed through nrVulkan callback), "
+                "duplicate message limit disabled. "
+                "GPU-assisted validation and debug printf are enabled by default.",
+                validationLayerSettings.gpuAssistedValidationEnabled() ? "on" : "off",
+                validationLayerSettings.debugPrintfEnabled() ? "on" : "off"));
             return vk::raii::Instance(context, instanceCreateInfo);
         }
         return vk::raii::Instance(context, instanceCreateInfo);
@@ -432,6 +444,8 @@ vk::raii::Device Device::makeDevice()
                 reason = "ray tracing opacity micromap support";
             if (extensionName == vk::KHRMaintenance9ExtensionName)
                 reason = "maintenance9 queue-family ownership transfer rules";
+            if (extensionName == vk::EXTFullScreenExclusiveExtensionName)
+                reason = "application-controlled fullscreen exclusive swapchain ownership";
             enableExtension(extensionName, reason);
         });
 
@@ -771,6 +785,11 @@ void Device::setupInitialFlags()
         {
             nrInfo("VK_EXT_swapchain_colorspace is unavailable; swapchain format selection is limited to core color spaces.");
         }
+
+        nrAssert(
+            hasInstanceExtension(vk::KHRGetSurfaceCapabilities2ExtensionName),
+            "VK_KHR_get_surface_capabilities2 is required for VK_EXT_full_screen_exclusive surface capability queries.");
+        addIfMissing(instanceEnabledExtensions, vk::KHRGetSurfaceCapabilities2ExtensionName);
 
         if constexpr (isDebugMode || gpuDebugNamesEnabled)
         {

@@ -40,17 +40,26 @@ struct DebugValidationLayerSettings
     DebugValidationLayerSettings(DebugValidationLayerSettings &&) = delete;
     DebugValidationLayerSettings &operator=(DebugValidationLayerSettings &&) = delete;
 
+    [[nodiscard]] bool gpuAssistedValidationEnabled() const noexcept
+    {
+        return gpuAssistedValidationEnabled_;
+    }
+
+    [[nodiscard]] bool debugPrintfEnabled() const noexcept
+    {
+        return debugPrintfEnabled_;
+    }
+
     [[nodiscard]] vk::LayerSettingsCreateInfoEXT createInfo(const void *pNext = nullptr) const noexcept;
 
 private:
+    bool gpuAssistedValidationEnabled_ = true;
+    bool debugPrintfEnabled_ = true;
     std::array<vk::Bool32, 1> enabledValue_{vk::True};
     std::array<vk::Bool32, 1> disabledValue_{vk::False};
     std::array<std::uint32_t, 1> printfBufferSize_{8192u};
     std::array<std::uint32_t, 1> gpuavMaxIndicesCount_{8192u};
-    std::array<const char *, 2> debugActions_{"VK_DBG_LAYER_ACTION_LOG_MSG", "VK_DBG_LAYER_ACTION_DEBUG_OUTPUT"};
     std::array<const char *, 5> reportFlags_{"verbose", "error", "perf", "info", "warn"};
-    std::array<const char *, 1> messageIdFilter_{"BestPractices-Pipeline-SortAndBind"};
-    std::array<const char *, 1> logFilename_{"stdout"};
     std::vector<vk::LayerSettingEXT> settings_;
 };
 

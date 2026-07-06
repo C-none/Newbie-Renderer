@@ -22,12 +22,10 @@ class RenderGraphCompiler
     [[nodiscard]] static vk::ImageAspectFlags mapImageAspectIntent(ImageAspectIntent intent);
 
     /**
-     * @brief Resolve the shader pipeline stages a given queue may issue a descriptor/buffer access from.
+     * @brief Conservative fallback shader stages for direct passes that do not declare a pass shader scope.
      *
-     * Access intents do not carry per-shader-stage granularity, so graphics-queue
-     * shader access widens to all graphics stages to stay correct for vertex-stage
-     * reads (for example camera uniforms). Compute-domain shader work also covers
-     * ray tracing dispatches; AS build operations use explicit AS access intents.
+     * Specialized pass builders declare tighter pass scopes; this queue fallback
+     * exists for low-level addPass callers that have not provided one.
      */
     [[nodiscard]] static vk::PipelineStageFlags2 shaderStagesForQueue(QueueDomain queue);
 
@@ -37,6 +35,10 @@ class RenderGraphCompiler
      * Mapping follows the declared intent exactly; it does not widen writes to
      * include implicit reads. An unset/None intent yields an unresolved scope.
      */
+    [[nodiscard]] static AccessScope mapBufferAccessIntent(
+        BufferAccessIntent intent,
+        vk::PipelineStageFlags2 shaderStages);
+
     [[nodiscard]] static AccessScope mapBufferAccessIntent(BufferAccessIntent intent, QueueDomain queue);
 
     /**
@@ -46,6 +48,10 @@ class RenderGraphCompiler
      * to include implicit reads. `PresentRead` maps to the bottom-of-pipe boundary
      * with no access, since presentation is ordered by semaphore, not a barrier.
      */
+    [[nodiscard]] static AccessScope mapImageAccessIntent(
+        ImageAccessIntent intent,
+        vk::PipelineStageFlags2 shaderStages);
+
     [[nodiscard]] static AccessScope mapImageAccessIntent(ImageAccessIntent intent, QueueDomain queue);
 
     [[nodiscard]] static AccessScope mapAccelerationStructureAccessIntent(AccelerationStructureAccessIntent intent);
@@ -57,7 +63,10 @@ class RenderGraphCompiler
      * on the use. Returns an unresolved scope when no access intent is set,
      * leaving conservative fallback to the barrier emitter.
      */
-    [[nodiscard]] static AccessScope resolveUseAccessScope(const PassResourceUseDesc& use, QueueDomain queue);
+    [[nodiscard]] static AccessScope resolveUseAccessScope(
+        const PassResourceUseDesc& use,
+        QueueDomain queue,
+        vk::PipelineStageFlags2 passShaderStages);
 
     [[nodiscard]] CompiledGraphFrame compile(const RenderGraphFrameDescription& frame) const;
 
@@ -392,6 +401,7 @@ class RenderGraphCompiler
                 .isCopyPass = pass.isCopyPass,
                 .queue = pass.queue,
                 .submitBatchIndex = currentBatch->batchIndex,
+                .shaderStages = pass.shaderStages,
                 .resourceUses = transferPayload<MovePassPayloads>(pass.resourceUses),
                 .resolvedResourceIndices = std::move(resolvedResourceIndices),
                 .prepare = transferPayload<MovePassPayloads>(pass.prepare),

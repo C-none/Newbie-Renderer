@@ -265,6 +265,15 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
             values.data());
     };
 
+    auto addEmptyStringSetting = [this](const char *settingName) {
+        settings_.emplace_back(
+            validationLayerName,
+            settingName,
+            vk::LayerSettingTypeEXT::eString,
+            0u,
+            nullptr);
+    };
+
     auto addBoolSetting = [&](const char *settingName, bool enabled) {
         const auto &values = enabled ? enabledValue_ : disabledValue_;
         addSetting(settingName, vk::LayerSettingTypeEXT::eBool32, values);
@@ -293,8 +302,18 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
             "syncval_submit_time_validation",
             "syncval_shader_accesses_heuristic",
             "syncval_message_extra_properties",
+        },
+        true);
+
+    addBoolSettings(
+        {
             "printf_enable",
             "printf_verbose",
+        },
+        debugPrintfEnabled_);
+
+    addBoolSettings(
+        {
             "gpuav_enable",
             "gpuav_safe_mode",
             "gpuav_force_on_robustness",
@@ -317,10 +336,8 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
             "gpuav_index_buffers",
             "gpuav_acceleration_structures_builds",
             "gpuav_ray_tracing_buffers_consistency",
-            "validate_best_practices",
-            "validate_best_practices_nvidia",
         },
-        true);
+        gpuAssistedValidationEnabled_);
 
     addBoolSettings(
         {
@@ -328,9 +345,6 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
             "printf_only_preset",
             "printf_to_stdout",
             "gpuav_select_instrumented_shaders",
-            "validate_best_practices_arm",
-            "validate_best_practices_amd",
-            "validate_best_practices_img",
             "gpu_dump_descriptors",
             "gpu_dump_copy_memory_indirect",
             "gpu_dump_device_generated_commands",
@@ -343,10 +357,8 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
 
     addSetting("printf_buffer_size", vk::LayerSettingTypeEXT::eUint32, printfBufferSize_);
     addSetting("gpuav_max_indices_count", vk::LayerSettingTypeEXT::eUint32, gpuavMaxIndicesCount_);
-    addSetting("debug_action", vk::LayerSettingTypeEXT::eString, debugActions_);
+    addEmptyStringSetting("debug_action");
     addSetting("report_flags", vk::LayerSettingTypeEXT::eString, reportFlags_);
-    addSetting("message_id_filter", vk::LayerSettingTypeEXT::eString, messageIdFilter_);
-    addSetting("log_filename", vk::LayerSettingTypeEXT::eString, logFilename_);
 }
 
 [[nodiscard]] vk::LayerSettingsCreateInfoEXT DebugValidationLayerSettings::createInfo(const void *pNext) const noexcept

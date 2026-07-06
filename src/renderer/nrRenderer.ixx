@@ -419,13 +419,15 @@ struct NodeBuildContext
         std::string_view debugName,
         PassRecordCallback executeLambda,
         PassPrepareCallback prepareCallback = nullptr,
-        bool isCopyPass = false);
+        bool isCopyPass = false,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphPassHandle addPass(
         std::span<const PassResourceUseDesc> intentList,
         std::string_view debugName,
         PassParallelRecordDesc parallelRecord,
-        PassPrepareCallback prepareCallback = nullptr);
+        PassPrepareCallback prepareCallback = nullptr,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
@@ -860,7 +862,11 @@ class ShaderVisiblePassBuilderBase
         rootCursor_ = runtime_->rootCursor();
     }
 
-    TDerived& uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    TDerived& uniform(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::uniform requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -868,11 +874,24 @@ class ShaderVisiblePassBuilderBase
             .logicalResourceId = resource.value,
             .debugName = std::string(debugName),
         }));
-        resourceUses_.push_back(use::uniformRead(resource));
+        resourceUses_.push_back(withOptionalShaderStages(use::uniformRead(resource), shaderStages));
         return derived();
     }
 
-    TDerived& uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName)
+    TDerived& uniform(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        ShaderStageIntent shaderStage)
+    {
+        return uniform(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
+    }
+
+    TDerived& uniform(
+        std::string_view shaderPath,
+        FrameUniformBinding binding,
+        std::string_view debugName,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(binding.resource.valid(), std::format("{}::uniform requires a valid frame uniform resource.", builderLabel_));
         nrAssert(binding.range > 0u, std::format("{}::uniform requires a non-zero frame uniform range.", builderLabel_));
@@ -883,11 +902,24 @@ class ShaderVisiblePassBuilderBase
             .offset = binding.offset,
             .range = binding.range,
         }));
-        resourceUses_.push_back(use::uniformRead(binding.resource));
+        resourceUses_.push_back(withOptionalShaderStages(use::uniformRead(binding.resource), shaderStages));
         return derived();
     }
 
-    TDerived& sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    TDerived& uniform(
+        std::string_view shaderPath,
+        FrameUniformBinding binding,
+        std::string_view debugName,
+        ShaderStageIntent shaderStage)
+    {
+        return uniform(shaderPath, binding, debugName, use::shaderStageScope(shaderStage));
+    }
+
+    TDerived& sampledImage(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::sampledImage requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -896,11 +928,24 @@ class ShaderVisiblePassBuilderBase
             .debugName = std::string(debugName),
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         }));
-        resourceUses_.push_back(use::sampledRead(resource));
+        resourceUses_.push_back(withOptionalShaderStages(use::sampledRead(resource), shaderStages));
         return derived();
     }
 
-    TDerived& sampledImageGeneral(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    TDerived& sampledImage(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        ShaderStageIntent shaderStage)
+    {
+        return sampledImage(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
+    }
+
+    TDerived& sampledImageGeneral(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::sampledImageGeneral requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -909,17 +954,31 @@ class ShaderVisiblePassBuilderBase
             .debugName = std::string(debugName),
             .imageLayout = vk::ImageLayout::eGeneral,
         }));
-        resourceUses_.push_back(PassResourceUseDesc{
+        auto resourceUse = PassResourceUseDesc{
             .resource = resource,
             .imageUsage = ImageUsageIntent::Sampled,
             .imageAccess = ImageAccessIntent::SampledRead,
             .imageLayout = ImageLayoutIntent::General,
             .readOnly = true,
-        });
+        };
+        resourceUses_.push_back(withOptionalShaderStages(std::move(resourceUse), shaderStages));
         return derived();
     }
 
-    TDerived& storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    TDerived& sampledImageGeneral(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        ShaderStageIntent shaderStage)
+    {
+        return sampledImageGeneral(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
+    }
+
+    TDerived& storageImage(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::storageImage requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -927,11 +986,24 @@ class ShaderVisiblePassBuilderBase
             .logicalResourceId = resource.value,
             .debugName = std::string(debugName),
         }));
-        resourceUses_.push_back(use::storageWrite(resource));
+        resourceUses_.push_back(withOptionalShaderStages(use::storageWrite(resource), shaderStages));
         return derived();
     }
 
-    TDerived& storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    TDerived& storageImage(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        ShaderStageIntent shaderStage)
+    {
+        return storageImage(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
+    }
+
+    TDerived& storageBuffer(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::storageBuffer requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -939,8 +1011,17 @@ class ShaderVisiblePassBuilderBase
             .logicalResourceId = resource.value,
             .debugName = std::string(debugName),
         }));
-        resourceUses_.push_back(use::storageBufferRead(resource));
+        resourceUses_.push_back(withOptionalShaderStages(use::storageBufferRead(resource), shaderStages));
         return derived();
+    }
+
+    TDerived& storageBuffer(
+        std::string_view shaderPath,
+        GraphResourceHandle resource,
+        std::string_view debugName,
+        ShaderStageIntent shaderStage)
+    {
+        return storageBuffer(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
     }
 
     TDerived& accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
@@ -1076,6 +1157,17 @@ class ShaderVisiblePassBuilderBase
     std::reference_wrapper<NodeBuildContext> context_;
 
   private:
+    [[nodiscard]] static PassResourceUseDesc withOptionalShaderStages(
+        PassResourceUseDesc resourceUse,
+        vk::PipelineStageFlags2 shaderStages) noexcept
+    {
+        if (shaderStages != vk::PipelineStageFlags2{})
+        {
+            resourceUse.shaderStages = shaderStages;
+        }
+        return resourceUse;
+    }
+
     [[nodiscard]] TDerived& derived() noexcept
     {
         return static_cast<TDerived&>(*this);

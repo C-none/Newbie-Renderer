@@ -185,8 +185,13 @@ namespace nr::renderer
         return vk::PipelineStageFlagBits2::eAllCommands;
     }
 
-[[nodiscard]] AccessScope RenderGraphCompiler::mapBufferAccessIntent(BufferAccessIntent intent, QueueDomain queue)
+[[nodiscard]] AccessScope RenderGraphCompiler::mapBufferAccessIntent(
+        BufferAccessIntent intent,
+        vk::PipelineStageFlags2 shaderStages)
 {
+        auto const effectiveShaderStages = shaderStages != vk::PipelineStageFlags2{}
+                                              ? shaderStages
+                                              : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
         switch (intent)
         {
         case BufferAccessIntent::None:
@@ -196,19 +201,19 @@ namespace nr::renderer
         case BufferAccessIntent::TransferWrite:
             return AccessScope{vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite};
         case BufferAccessIntent::UniformRead:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eUniformRead};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eUniformRead};
         case BufferAccessIntent::ShaderSampleRead:
         case BufferAccessIntent::TexelRead:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderSampledRead};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eShaderSampledRead};
         case BufferAccessIntent::ShaderStorageRead:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageRead};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eShaderStorageRead};
         case BufferAccessIntent::ShaderStorageWrite:
         case BufferAccessIntent::TexelWrite:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageWrite};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eShaderStorageWrite};
         case BufferAccessIntent::ShaderStorageReadWrite:
         case BufferAccessIntent::TexelReadWrite:
             return AccessScope{
-                shaderStagesForQueue(queue),
+                effectiveShaderStages,
                 vk::AccessFlagBits2::eShaderStorageRead |
                     vk::AccessFlagBits2::eShaderStorageWrite};
         case BufferAccessIntent::VertexRead:
@@ -241,8 +246,18 @@ namespace nr::renderer
         return AccessScope{};
     }
 
-[[nodiscard]] AccessScope RenderGraphCompiler::mapImageAccessIntent(ImageAccessIntent intent, QueueDomain queue)
+[[nodiscard]] AccessScope RenderGraphCompiler::mapBufferAccessIntent(BufferAccessIntent intent, QueueDomain queue)
 {
+        return mapBufferAccessIntent(intent, shaderStagesForQueue(queue));
+    }
+
+[[nodiscard]] AccessScope RenderGraphCompiler::mapImageAccessIntent(
+        ImageAccessIntent intent,
+        vk::PipelineStageFlags2 shaderStages)
+{
+        auto const effectiveShaderStages = shaderStages != vk::PipelineStageFlags2{}
+                                              ? shaderStages
+                                              : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
         switch (intent)
         {
         case ImageAccessIntent::None:
@@ -252,13 +267,13 @@ namespace nr::renderer
         case ImageAccessIntent::TransferWrite:
             return AccessScope{vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite};
         case ImageAccessIntent::SampledRead:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderSampledRead};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eShaderSampledRead};
         case ImageAccessIntent::StorageRead:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageRead};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eShaderStorageRead};
         case ImageAccessIntent::StorageWrite:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageWrite};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eShaderStorageWrite};
         case ImageAccessIntent::StorageReadWrite:
-            return AccessScope{shaderStagesForQueue(queue), vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};
+            return AccessScope{effectiveShaderStages, vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite};
         case ImageAccessIntent::ColorAttachmentRead:
             return AccessScope{vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eColorAttachmentRead};
         case ImageAccessIntent::ColorAttachmentWrite:
@@ -284,6 +299,11 @@ namespace nr::renderer
             return AccessScope{vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlags2{}};
         }
         return AccessScope{};
+    }
+
+[[nodiscard]] AccessScope RenderGraphCompiler::mapImageAccessIntent(ImageAccessIntent intent, QueueDomain queue)
+{
+        return mapImageAccessIntent(intent, shaderStagesForQueue(queue));
     }
 
 [[nodiscard]] AccessScope RenderGraphCompiler::mapAccelerationStructureAccessIntent(AccelerationStructureAccessIntent intent)
@@ -316,15 +336,23 @@ namespace nr::renderer
         return AccessScope{};
     }
 
-[[nodiscard]] AccessScope RenderGraphCompiler::resolveUseAccessScope(const PassResourceUseDesc& use, QueueDomain queue)
+[[nodiscard]] AccessScope RenderGraphCompiler::resolveUseAccessScope(
+        const PassResourceUseDesc& use,
+        QueueDomain queue,
+        vk::PipelineStageFlags2 passShaderStages)
 {
+        auto const shaderStages = use.shaderStages != vk::PipelineStageFlags2{}
+                                      ? use.shaderStages
+                                      : passShaderStages != vk::PipelineStageFlags2{}
+                                            ? passShaderStages
+                                            : shaderStagesForQueue(queue);
         if (use.bufferAccess.has_value())
         {
-            return mapBufferAccessIntent(*use.bufferAccess, queue);
+            return mapBufferAccessIntent(*use.bufferAccess, shaderStages);
         }
         if (use.imageAccess.has_value())
         {
-            return mapImageAccessIntent(*use.imageAccess, queue);
+            return mapImageAccessIntent(*use.imageAccess, shaderStages);
         }
         if (use.accelerationStructureAccess.has_value())
         {
@@ -424,7 +452,7 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame& compil
                         use.imageLayout,
                         previousUse.has_value() ? std::addressof(previousUse->get()) : nullptr);
 
-                    auto currentScope = resolveUseAccessScope(use, pass.queue);
+                    auto currentScope = resolveUseAccessScope(use, pass.queue, pass.shaderStages);
 
                     if (previousUse.has_value() && !previousFromSamePass)
                     {

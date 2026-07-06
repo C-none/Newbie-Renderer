@@ -1,4 +1,7 @@
 module;
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+#define VK_USE_PLATFORM_WIN32_KHR
+#endif
 #include <vulkan/vulkan_raii.hpp>
 
 export module dependency.vulkan;
@@ -124,6 +127,7 @@ using ::vk::Extent2D;
 using ::vk::Extent3D;
 using ::vk::EXTExtendedDynamicState3ExtensionName;
 using ::vk::EXTFrameBoundaryExtensionName;
+using ::vk::EXTFullScreenExclusiveExtensionName;
 using ::vk::EXTMemoryBudgetExtensionName;
 using ::vk::EXTMeshShaderExtensionName;
 using ::vk::EXTOpacityMicromapExtensionName;
@@ -139,6 +143,7 @@ using ::vk::FrameBoundaryEXT;
 using ::vk::FrameBoundaryFlagBitsEXT;
 using ::vk::FrameBoundaryFlagsEXT;
 using ::vk::FrontFace;
+using ::vk::FullScreenExclusiveEXT;
 using ::vk::GeometryFlagBitsKHR;
 using ::vk::GeometryFlagsKHR;
 using ::vk::GeometryInstanceFlagBitsKHR;
@@ -169,6 +174,7 @@ using ::vk::IndexType;
 using ::vk::InstanceCreateInfo;
 using ::vk::KHRAccelerationStructureExtensionName;
 using ::vk::KHRDeferredHostOperationsExtensionName;
+using ::vk::KHRGetSurfaceCapabilities2ExtensionName;
 using ::vk::KHRPipelineLibraryExtensionName;
 using ::vk::KHRRayQueryExtensionName;
 using ::vk::KHRRayTracingMaintenance1ExtensionName;
@@ -200,6 +206,7 @@ using ::vk::PhysicalDeviceMeshShaderFeaturesEXT;
 using ::vk::PhysicalDeviceOpacityMicromapFeaturesEXT;
 using ::vk::PhysicalDeviceProperties;
 using ::vk::PhysicalDeviceProperties2;
+using ::vk::PhysicalDeviceSurfaceInfo2KHR;
 using ::vk::PhysicalDeviceRayQueryFeaturesKHR;
 using ::vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV;
 using ::vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR;
@@ -278,6 +285,10 @@ using ::vk::SharingMode;
 using ::vk::StridedDeviceAddressRegionKHR;
 using ::vk::SubmitInfo2;
 using ::vk::SurfaceFormatKHR;
+using ::vk::SurfaceCapabilities2KHR;
+using ::vk::SurfaceCapabilitiesFullScreenExclusiveEXT;
+using ::vk::SurfaceFullScreenExclusiveInfoEXT;
+using ::vk::SurfaceFullScreenExclusiveWin32InfoEXT;
 using ::vk::SurfaceTransformFlagBitsKHR;
 using ::vk::SwapchainCreateFlagsKHR;
 using ::vk::SwapchainCreateInfoKHR;

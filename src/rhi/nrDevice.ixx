@@ -218,7 +218,7 @@ class Device
         vk::KHRSwapchainExtensionName,          vk::KHRDeferredHostOperationsExtensionName,      vk::EXTMeshShaderExtensionName,       vk::KHRAccelerationStructureExtensionName,
         vk::KHRRayTracingPipelineExtensionName, vk::KHRRayTracingMaintenance1ExtensionName,      vk::KHRPipelineLibraryExtensionName,  vk::KHRRayQueryExtensionName,
         vk::EXTOpacityMicromapExtensionName,    vk::EXTRayTracingInvocationReorderExtensionName, vk::NVCooperativeVectorExtensionName, vk::EXTExtendedDynamicState3ExtensionName,
-        vk::EXTMemoryBudgetExtensionName,       vk::KHRMaintenance9ExtensionName,
+        vk::EXTMemoryBudgetExtensionName,       vk::KHRMaintenance9ExtensionName,                 vk::EXTFullScreenExclusiveExtensionName,
     };
     RayTracingCapabilitySnapshot rtCapabilities_{};
     DescriptorIndexingCapabilitySnapshot descriptorIndexingCapabilities_{};

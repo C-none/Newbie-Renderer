@@ -461,50 +461,6 @@ void bindPreparedResourcesToCommandBuffer(
 	}
 }
 
-void bindResourcesToCommandBuffer(
-	const vk::raii::CommandBuffer &commandBuffer,
-	vk::PipelineBindPoint bindPoint,
-	const CursorPipelineLayout &layout,
-	ShaderBindingPool &pool,
-	std::span<const ShaderBindingSet> sets,
-	DescriptorWriteCache &descriptorWriteCache,
-	const ShaderBindingSnapshot &snapshot,
-	LogicalDescriptorResolver logicalResolver)
-{
-	nrAssert(layout.valid(), "bindResourcesToCommandBuffer requires a valid cursor pipeline layout.");
-	nrAssert(*commandBuffer != nullptr, "bindResourcesToCommandBuffer requires a valid command buffer.");
-
-	updateResourcesForBindingSnapshot(
-		pool,
-		sets,
-		descriptorWriteCache,
-		snapshot,
-		std::move(logicalResolver));
-	bindPreparedResourcesToCommandBuffer(commandBuffer, bindPoint, layout, sets);
-}
-
-std::vector<ShaderBindingSet> bindResourcesToCommandBuffer(
-	const vk::raii::CommandBuffer &commandBuffer,
-	vk::PipelineBindPoint bindPoint,
-	const CursorPipelineLayout &layout,
-	ShaderBindingPool &pool,
-	DescriptorWriteCache &descriptorWriteCache,
-	const ShaderBindingSnapshot &snapshot,
-	LogicalDescriptorResolver logicalResolver)
-{
-	auto sets = allocateBindingSetsForLayout(layout, pool);
-	bindResourcesToCommandBuffer(
-		commandBuffer,
-		bindPoint,
-		layout,
-		pool,
-		std::span<const ShaderBindingSet>{sets.data(), sets.size()},
-		descriptorWriteCache,
-		snapshot,
-		std::move(logicalResolver));
-	return sets;
-}
-
 void pushConstantsToCommandBuffer(
 	const vk::raii::CommandBuffer &commandBuffer,
 	const CursorPipelineLayout &layout,

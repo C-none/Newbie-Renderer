@@ -310,10 +310,13 @@ void queueViewerControls(
 [[nodiscard]] bool handlePresentResult(nr::app::AppSession& app, vk::Result presentResult)
 {
     auto& renderer = app.renderer();
-    if (presentResult == vk::Result::eErrorOutOfDateKHR ||
-        presentResult == vk::Result::eSuboptimalKHR)
+    if (nr::rhi::PresentationContext::needsSwapchainRecreate(presentResult))
     {
-        renderer.resize();
+        auto& presentation = renderer.device().presentationContext;
+        if (presentation.framebufferAvailable() && !presentation.hasPendingAcquire())
+        {
+            renderer.resize();
+        }
         return true;
     }
 
@@ -779,6 +782,7 @@ void printViewerUsage(std::string_view executableName)
     auto& presentation = app.renderer().device().presentationContext;
     auto previousTick = std::chrono::steady_clock::now();
     auto exitCode = 0;
+    auto framebufferWasUnavailable = false;
 
     while (!presentation.windowShouldClose())
     {
@@ -788,6 +792,19 @@ void printViewerUsage(std::string_view executableName)
         auto now = std::chrono::steady_clock::now();
         auto deltaSeconds = std::chrono::duration<float>(now - previousTick).count();
         previousTick = now;
+
+        if (!presentation.framebufferAvailable())
+        {
+            framebufferWasUnavailable = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds{16});
+            continue;
+        }
+
+        if (framebufferWasUnavailable)
+        {
+            app.renderer().resize();
+            framebufferWasUnavailable = false;
+        }
 
         app.ui().beginFrame(presentation, deltaSeconds);
         queueViewerControls(app.ui(), registry, history, controls);

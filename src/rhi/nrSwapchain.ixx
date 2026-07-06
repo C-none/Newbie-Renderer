@@ -28,6 +28,9 @@ struct SwapChainConfig
     vk::CompositeAlphaFlagBitsKHR compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
     vk::SurfaceTransformFlagBitsKHR surfaceTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
     bool hdrMetadataEnabled = false;
+    bool fullScreenExclusiveEnabled = false;
+    bool fullScreenExclusiveApplicationControlled = false;
+    std::uintptr_t fullScreenExclusiveMonitor = 0;
 };
 
 [[nodiscard]] bool isHdr10SwapchainColorSpace(vk::ColorSpaceKHR colorSpace) noexcept;
@@ -108,6 +111,8 @@ struct PendingAcquire
 class PresentationContext
 {
   public:
+    ~PresentationContext();
+
     void initialize(
         const vk::raii::Instance& instance,
         const vk::raii::PhysicalDevice& physicalDevice,
@@ -144,8 +149,9 @@ class PresentationContext
     [[nodiscard]] glm::dvec2 cursorPosition() const;
     [[nodiscard]] std::vector<std::uint32_t> consumeTextInputCodepoints() const;
     [[nodiscard]] bool windowShouldClose() const;
-    [[nodiscard]] bool borderlessFullscreenEnabled() const noexcept;
-    void setBorderlessFullscreen(bool enabled);
+    [[nodiscard]] bool framebufferAvailable() const noexcept;
+    [[nodiscard]] bool fullscreenEnabled() const noexcept;
+    void setFullscreen(bool enabled);
     [[nodiscard]] bool consumeSwapchainRecreateRequest() noexcept;
 
     void setActiveSwapchainImage(std::uint32_t imageIndex);
@@ -165,7 +171,11 @@ class PresentationContext
 
   private:
     void ensurePresentSupport(const vk::raii::PhysicalDevice& physicalDevice) const;
+    void ensureFullScreenExclusiveSupport(const vk::raii::PhysicalDevice& physicalDevice) const;
     void issuePendingAcquireImpl(std::uint64_t timeout);
+    void refreshFullScreenExclusiveMonitor() noexcept;
+    void acquireFullScreenExclusiveIfNeeded();
+    void releaseFullScreenExclusiveIfNeeded() noexcept;
 
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     Surface surface_;
@@ -174,6 +184,7 @@ class PresentationContext
     std::uint32_t presentQueueFamily_ = 0;
     std::optional<std::uint32_t> activeSwapchainImageIndex_{};
     bool hasSubmittedCurrentFrame_ = false;
+    bool fullScreenExclusiveAcquired_ = false;
 
     AcquireSemaphorePool acquirePool_{};
     std::optional<PendingAcquire> pendingAcquire_{};

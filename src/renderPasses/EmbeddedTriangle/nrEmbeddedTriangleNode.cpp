@@ -92,7 +92,11 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
         .colorAttachment(
             color,
             vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}})
-        .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
+        .uniform(
+            "gFrame",
+            context.globalResources.get().frameUniform,
+            "Renderer.GlobalFrameUniforms",
+            nr::renderer::ShaderStageIntent::Vertex)
         .rasterState(nr::rhi::MeshRasterState{
             .cullMode = vk::CullModeFlagBits::eNone,
         })

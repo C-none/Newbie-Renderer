@@ -46,6 +46,7 @@ class RenderGraphCompileCache
         std::optional<ImageAccessIntent> imageAccess{};
         std::optional<ImageLayoutIntent> imageLayout{};
         std::optional<ImageAspectIntent> imageAspect{};
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
         ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
         bool readOnly = false;
         bool requiresPreviousUseBarrier = false;
@@ -154,6 +155,7 @@ class RenderGraphCompileCache
         GraphNodeHandle node{};
         bool isCopyPass = false;
         QueueDomain queue = QueueDomain::Graphics;
+        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
         std::vector<ResourceUseSignature> resourceUses{};
         bool hasPrepare = false;
         bool hasRecord = false;

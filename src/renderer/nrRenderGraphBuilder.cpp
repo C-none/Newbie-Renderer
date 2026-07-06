@@ -1,5 +1,6 @@
 module nr.renderer;
 import :renderGraphBuilder;
+import dependency.vulkan;
 import nr.utils;
 import std;
 import :renderGraphType;
@@ -7,6 +8,23 @@ import :rendererType;
 
 namespace nr::renderer
 {
+namespace
+{
+[[nodiscard]] vk::PipelineStageFlags2 defaultShaderStagesForQueue(QueueDomain queue) noexcept
+{
+    if (queue == QueueDomain::Compute)
+    {
+        return vk::PipelineStageFlagBits2::eComputeShader |
+               vk::PipelineStageFlagBits2::eRayTracingShaderKHR;
+    }
+    if (queue == QueueDomain::Graphics)
+    {
+        return vk::PipelineStageFlagBits2::eAllGraphics;
+    }
+    return vk::PipelineStageFlagBits2::eAllCommands;
+}
+} // namespace
+
 RenderGraphNodeContext::RenderGraphNodeContext(RenderGraphBuilder& builder, GraphNodeHandle node) noexcept
         : builder_(builder)
         , node(node)
@@ -86,12 +104,13 @@ void RenderGraphBuilder::clear()
         std::span<const PassResourceUseDesc> intentList,
         PassRecordCallback executeLambda,
         PassPrepareCallback prepareCallback,
-        bool isCopyPass)
+        bool isCopyPass,
+        vk::PipelineStageFlags2 shaderStages)
 {
         validatePassCallbackContract(executeLambda, std::nullopt, isCopyPass);
         validatePassResourceUses(intentList, isCopyPass);
 
-        auto passHandle = addPassCore(debugName, node, isCopyPass);
+        auto passHandle = addPassCore(debugName, node, isCopyPass, shaderStages);
         auto& pass = frame_.passes.back();
         nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
 
@@ -108,12 +127,13 @@ void RenderGraphBuilder::clear()
         GraphNodeHandle node,
         std::span<const PassResourceUseDesc> intentList,
         PassParallelRecordDesc parallelRecord,
-        PassPrepareCallback prepareCallback)
+        PassPrepareCallback prepareCallback,
+        vk::PipelineStageFlags2 shaderStages)
 {
         validatePassCallbackContract(PassRecordCallback{}, parallelRecord, false);
         validatePassResourceUses(intentList, false);
 
-        auto passHandle = addPassCore(debugName, node, false);
+        auto passHandle = addPassCore(debugName, node, false, shaderStages);
         auto& pass = frame_.passes.back();
         nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
 
@@ -155,7 +175,8 @@ void RenderGraphBuilder::clear()
 [[nodiscard]] GraphPassHandle RenderGraphBuilder::addPassCore(
         std::string_view debugName,
         GraphNodeHandle node,
-        bool isCopyPass)
+        bool isCopyPass,
+        vk::PipelineStageFlags2 shaderStages)
 {
         nrAssert(node.valid(), "RenderGraphBuilder::addPass requires a valid node handle.");
 
@@ -169,6 +190,9 @@ void RenderGraphBuilder::clear()
             .debugName = std::string(debugName),
             .isCopyPass = isCopyPass,
             .queue = nodeIt->queue,
+            .shaderStages = shaderStages != vk::PipelineStageFlags2{}
+                                ? shaderStages
+                                : defaultShaderStagesForQueue(nodeIt->queue),
         });
         frame_.executionOrder.push_back(handle);
         return handle;
@@ -291,6 +315,38 @@ void RenderGraphBuilder::clear()
         case ImageAccessIntent::ColorAttachmentReadWrite:
         case ImageAccessIntent::DepthStencilWrite:
         case ImageAccessIntent::DepthStencilReadWrite:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+[[nodiscard]] bool RenderGraphBuilder::bufferAccessUsesShaderStages(BufferAccessIntent intent) noexcept
+{
+        switch (intent)
+        {
+        case BufferAccessIntent::UniformRead:
+        case BufferAccessIntent::ShaderSampleRead:
+        case BufferAccessIntent::ShaderStorageRead:
+        case BufferAccessIntent::ShaderStorageWrite:
+        case BufferAccessIntent::ShaderStorageReadWrite:
+        case BufferAccessIntent::TexelRead:
+        case BufferAccessIntent::TexelWrite:
+        case BufferAccessIntent::TexelReadWrite:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+[[nodiscard]] bool RenderGraphBuilder::imageAccessUsesShaderStages(ImageAccessIntent intent) noexcept
+{
+        switch (intent)
+        {
+        case ImageAccessIntent::SampledRead:
+        case ImageAccessIntent::StorageRead:
+        case ImageAccessIntent::StorageWrite:
+        case ImageAccessIntent::StorageReadWrite:
             return true;
         default:
             return false;
@@ -552,6 +608,16 @@ void RenderGraphBuilder::validatePassResourceUse(const PassResourceUseDesc& use)
             !hasImageFields || isImageResourceDesc(resource),
             "RenderGraphBuilder::addPass image intent targets a non-image resource.");
 
+        if (use.shaderStages != vk::PipelineStageFlags2{})
+        {
+            auto const shaderStageCompatible =
+                (use.bufferAccess.has_value() && bufferAccessUsesShaderStages(*use.bufferAccess)) ||
+                (use.imageAccess.has_value() && imageAccessUsesShaderStages(*use.imageAccess));
+            nrAssert(
+                shaderStageCompatible,
+                "RenderGraphBuilder::addPass shader stage override requires a buffer/image shader access intent.");
+        }
+
         validatePassUseReadOnlyContract(use);
     }
 
@@ -610,7 +676,8 @@ GraphPassHandle RenderGraphNodeContext::addPass(
     std::string_view debugName,
     PassRecordCallback executeLambda,
     PassPrepareCallback prepareCallback,
-    bool isCopyPass)
+    bool isCopyPass,
+    vk::PipelineStageFlags2 shaderStages)
 {
     return builder_.get().addPass(
         debugName,
@@ -618,21 +685,24 @@ GraphPassHandle RenderGraphNodeContext::addPass(
         intentList,
         std::move(executeLambda),
         std::move(prepareCallback),
-        isCopyPass);
+        isCopyPass,
+        shaderStages);
 }
 
 GraphPassHandle RenderGraphNodeContext::addPass(
     std::span<const PassResourceUseDesc> intentList,
     std::string_view debugName,
     PassParallelRecordDesc parallelRecord,
-    PassPrepareCallback prepareCallback)
+    PassPrepareCallback prepareCallback,
+    vk::PipelineStageFlags2 shaderStages)
 {
     return builder_.get().addPass(
         debugName,
         node,
         intentList,
         std::move(parallelRecord),
-        std::move(prepareCallback));
+        std::move(prepareCallback),
+        shaderStages);
 }
 
 GraphSubmitHandle RenderGraphNodeContext::addSubmitNode(

@@ -20,6 +20,7 @@ namespace
         .imageAccess = use.imageAccess,
         .imageLayout = use.imageLayout,
         .imageAspect = use.imageAspect,
+        .shaderStages = use.shaderStages,
         .ownershipDomain = use.ownershipDomain,
         .readOnly = use.readOnly,
         .requiresPreviousUseBarrier = use.requiresPreviousUseBarrier,
@@ -175,6 +176,7 @@ namespace
             .node = pass.node,
             .isCopyPass = pass.isCopyPass,
             .queue = pass.queue,
+            .shaderStages = pass.shaderStages,
             .resourceUses = std::move(resourceUses),
             .hasPrepare = static_cast<bool>(pass.prepare),
             .hasRecord = static_cast<bool>(pass.record),
@@ -298,6 +300,7 @@ void RenderGraphCompileCache::patchCompiledPasses(
             auto& framePass = passIt->second.get();
 
             compiledPass.debugName = std::move(framePass.debugName);
+            compiledPass.shaderStages = framePass.shaderStages;
             compiledPass.resourceUses = std::move(framePass.resourceUses);
             compiledPass.prepare = std::move(framePass.prepare);
             compiledPass.record = std::move(framePass.record);

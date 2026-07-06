@@ -71,6 +71,21 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(sampled.imageLayout == nr::renderer::ImageLayoutIntent::ShaderReadOnly);
         nr::test::require(sampled.readOnly, "sampled read should be read-only");
 
+        auto fragmentSampled = nr::renderer::use::withShaderStages(
+            sampled,
+            nr::renderer::ShaderStageIntent::Fragment);
+        nr::test::require(fragmentSampled.shaderStages == vk::PipelineStageFlagBits2::eFragmentShader);
+        nr::test::require(fragmentSampled.imageAccess == sampled.imageAccess);
+
+        auto graphicsStageIntents = std::array{
+            nr::renderer::ShaderStageIntent::Vertex,
+            nr::renderer::ShaderStageIntent::Fragment,
+        };
+        auto graphicsShaderStages = nr::renderer::use::shaderStageScope(graphicsStageIntents);
+        nr::test::require(graphicsShaderStages ==
+                          (vk::PipelineStageFlagBits2::eVertexShader |
+                           vk::PipelineStageFlagBits2::eFragmentShader));
+
         auto sampledDepth = nr::renderer::use::make<nr::renderer::use::spec::SampledRead>(
             handle,
             nr::renderer::use::ImageUseOptions{

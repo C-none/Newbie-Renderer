@@ -714,19 +714,6 @@ void drawVec3StatusLine(nr::app::UiSystem& ui, std::string_view label, const glm
     ui.textFmt("{}: ({:.3f}, {:.3f}, {:.3f})", label, value.x, value.y, value.z);
 }
 
-[[nodiscard]] std::string_view swapchainOutputModeLabel(vk::ColorSpaceKHR colorSpace) noexcept
-{
-    if (nr::rhi::isHdr10SwapchainColorSpace(colorSpace))
-    {
-        return "HDR10 PQ";
-    }
-    if (nr::rhi::isScRgbSwapchainColorSpace(colorSpace))
-    {
-        return "scRGB";
-    }
-    return "SDR";
-}
-
 void drawRendererStatsSection(
     nr::app::UiSystem& ui,
     std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> presentation)
@@ -750,16 +737,15 @@ void drawRendererStatsSection(
     ui.separator();
     ui.textFmt("Swapchain Format: {}", vk::to_string(swapchainFormat));
     ui.textFmt("Color Space: {}", vk::to_string(swapchainColorSpace));
-    ui.textFmt("Output Mode: {}", swapchainOutputModeLabel(swapchainColorSpace));
 
-    auto const fullscreenEnabled = presentationContext.borderlessFullscreenEnabled();
+    auto const fullscreenEnabled = presentationContext.fullscreenEnabled();
     ui.separator();
     ui.textFmt(
         "Window Mode: {}",
-        fullscreenEnabled ? std::string_view{"Borderless Fullscreen"} : std::string_view{"Windowed"});
-    if (ui.button(fullscreenEnabled ? "Exit Borderless Fullscreen" : "Enter Borderless Fullscreen"))
+        fullscreenEnabled ? std::string_view{"Exclusive Fullscreen"} : std::string_view{"Windowed"});
+    if (ui.button(fullscreenEnabled ? "Exit Fullscreen" : "Enter Fullscreen"))
     {
-        presentationContext.setBorderlessFullscreen(!fullscreenEnabled);
+        presentationContext.setFullscreen(!fullscreenEnabled);
     }
 }
 
@@ -1261,7 +1247,9 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
             });
 
         std::ranges::for_each(graphResourceBySlot, [&](const auto& pair) {
-            overlayPass.resourceUse(nr::renderer::use::sampledRead(pair.second));
+            overlayPass.resourceUse(nr::renderer::use::withShaderStages(
+                nr::renderer::use::sampledRead(pair.second),
+                nr::renderer::ShaderStageIntent::Fragment));
         });
 
         [[maybe_unused]] auto overlayPassHandle = overlayPass.build();

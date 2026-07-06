@@ -54,10 +54,10 @@ struct GraphImportedBufferDesc
     std::vector<BufferUsageIntent> usageIntents{};
 
     /// Optional reference to a pre-allocated buffer resource held by the node.
-    /// When set, the render graph executor will use this buffer directly instead of
-    /// looking it up in the importedBuffers map. This enables nodes to pre-allocate
-    /// per-frame-slot resources at initialize time and import them into the graph
-    /// at build time, avoiding runtime memory allocations.
+    /// When set, the render graph executor resolves this buffer directly at prepare
+    /// time. This enables nodes to pre-allocate per-frame-slot resources at
+    /// initialize time and import them into the graph at build time, avoiding
+    /// runtime memory allocations.
     std::optional<std::reference_wrapper<const nr::rhi::Buffer>> importedResource{};
 };
 
@@ -100,10 +100,10 @@ struct GraphImportedImageDesc
     ImageAspectIntent aspect = ImageAspectIntent::Color;
 
     /// Optional reference to a pre-allocated image resource held by the node.
-    /// When set, the render graph executor will use this image directly instead of
-    /// looking it up in the importedImages map. This enables nodes to pre-allocate
-    /// per-frame-slot resources at initialize time and import them into the graph
-    /// at build time, avoiding runtime memory allocations.
+    /// When set, the render graph executor resolves this image directly at prepare
+    /// time. This enables nodes to pre-allocate per-frame-slot resources at
+    /// initialize time and import them into the graph at build time, avoiding
+    /// runtime memory allocations.
     std::optional<std::reference_wrapper<const nr::rhi::Image>> importedResource{};
 
     /// Optional retained state for renderer-persistent imported images reused across frames.
@@ -184,6 +184,7 @@ struct PassResourceUseDesc
     std::optional<ImageLayoutIntent> imageLayout{};
     std::optional<ImageAspectIntent> imageAspect{};
 
+    vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
     ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
     bool readOnly = false;
     bool requiresPreviousUseBarrier = false;
@@ -191,6 +192,22 @@ struct PassResourceUseDesc
 
 namespace use
 {
+[[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(ShaderStageIntent intent) noexcept;
+
+[[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(std::span<const ShaderStageIntent> intents) noexcept;
+
+[[nodiscard]] PassResourceUseDesc withShaderStages(
+    PassResourceUseDesc use,
+    vk::PipelineStageFlags2 stages) noexcept;
+
+[[nodiscard]] PassResourceUseDesc withShaderStages(
+    PassResourceUseDesc use,
+    ShaderStageIntent stage) noexcept;
+
+[[nodiscard]] PassResourceUseDesc withShaderStages(
+    PassResourceUseDesc use,
+    std::initializer_list<ShaderStageIntent> stages) noexcept;
+
 struct ImageUseSpecDesc
 {
     ImageUsageIntent usage;
@@ -1085,6 +1102,7 @@ struct PassExecutionDesc
     std::string debugName{};
     bool isCopyPass = false;
     QueueDomain queue = QueueDomain::Graphics;
+    vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
     std::vector<PassResourceUseDesc> resourceUses{};
     PassPrepareCallback prepare{};
     PassRecordCallback record{};
@@ -1182,6 +1200,7 @@ struct CompiledPass
     bool isCopyPass = false;
     QueueDomain queue = QueueDomain::Graphics;
     std::uint32_t submitBatchIndex = 0;
+    vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
 
     std::vector<PassResourceUseDesc> resourceUses{};
     std::vector<std::size_t> resolvedResourceIndices{};

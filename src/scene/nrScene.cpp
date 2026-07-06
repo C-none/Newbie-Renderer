@@ -26,6 +26,7 @@ void registerSceneComponents(flecs::world &world)
     world.component<TlasBucketId>();
     world.component<StaticObject>();
     world.component<DynamicObject>();
+    world.component<ActiveInstanceTag>();
     world.component<SceneCameraBinding>();
     world.component<SceneLightBinding>();
 
@@ -1269,6 +1270,11 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         packetSet.domain = profileRecord.domain;
 
         auto selectedFrustum = resolveExtractFrustum(input);
+        // Domain readiness only depends on the candidate's mesh (and its material/
+        // texture residency), so memoize per mesh within this extraction to avoid
+        // repeating the deep material/texture residency walk for every instance that
+        // shares a mesh. Residency is read live, preserving the extract-time contract.
+        auto readinessMemo = std::map<nr::resource::MeshHandle, bool>{};
         auto appendCandidate = [&](flecs::entity entity,
                                    const RenderableBinding &binding,
                                    const SceneSelectionBits &selectionBits,
@@ -1291,10 +1297,18 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
                 return;
             }
 
-            if (profileRecord.requireReadyForDomain &&
-                !renderableReadyForDomain(profileRecord.domain, binding))
+            if (profileRecord.requireReadyForDomain)
             {
-                return;
+                auto [memoIt, inserted] = readinessMemo.try_emplace(binding.mesh, false);
+                if (inserted)
+                {
+                    memoIt->second = renderableReadyForDomain(profileRecord.domain, binding);
+                }
+
+                if (!memoIt->second)
+                {
+                    return;
+                }
             }
 
             if (selectedFrustum.has_value() && !intersectsFrustum(worldBounds.value, *selectedFrustum))
@@ -1392,20 +1406,10 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 
 [[nodiscard]] bool Scene::belongsToActiveInstance(flecs::entity entity) const
 {
-        auto currentId = entity.id();
-        while (currentId != 0)
-        {
-            auto current = flecs::entity{world_.c_ptr(), currentId};
-            if (auto instanceRef = current.try_get<SceneInstanceRef>(); instanceRef != nullptr)
-            {
-                auto *instanceRecord = instances_.tryGet(instanceRef->handle);
-                return instanceRecord != nullptr && instanceRecord->active;
-            }
-
-            currentId = ecs_get_parent(world_.c_ptr(), currentId);
-        }
-
-        return false;
+        // Active-instance membership is materialized as ActiveInstanceTag on every
+        // entity of an active instance (see initializeInstanceRuntimeState), so this
+        // is an O(1) archetype-level check instead of an O(depth) parent-chain walk.
+        return entity.has<ActiveInstanceTag>();
     }
 
 [[nodiscard]] bool Scene::meshIsResident(nr::resource::MeshHandle meshHandle) const noexcept
@@ -3879,6 +3883,19 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
         instanceRecord.root.set(WorldTransform{});
         instanceRecord.root.set(WorldBounds{});
 
+        auto applyActiveTag = [active = instanceRecord.active](flecs::entity entity) {
+            if (active)
+            {
+                entity.add<ActiveInstanceTag>();
+            }
+            else
+            {
+                entity.remove<ActiveInstanceTag>();
+            }
+        };
+
+        applyActiveTag(instanceRecord.root);
+
         auto initializeChildren = [&](auto &&self, flecs::entity parent) -> void {
             auto childIterator = ecs_children(world_.c_ptr(), parent.id());
             while (ecs_children_next(&childIterator))
@@ -3886,6 +3903,15 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
                 auto const indices = std::views::iota(0, childIterator.count);
                 std::ranges::for_each(indices, [&](int index) {
                     auto child = flecs::entity{world_.c_ptr(), childIterator.entities[index]};
+
+                    if (child.has<SceneInstanceRef>())
+                    {
+                        // Nested instance root: it owns its own runtime state and
+                        // active-instance tagging via its own initialization pass.
+                        return;
+                    }
+
+                    applyActiveTag(child);
 
                     if (auto templateTransform = child.try_get<SceneTemplateNodeTransform>(); templateTransform != nullptr)
                     {

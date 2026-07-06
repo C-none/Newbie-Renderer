@@ -77,6 +77,7 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
     "renderpasses no longer own renderer/RDG descriptor table cache state",
     [] {
         auto normalBuffer = readProjectFile("src/renderPasses/NormalBuffer/nrNormalBufferNode.cpp");
+        auto embeddedTriangle = readProjectFile("src/renderPasses/EmbeddedTriangle/nrEmbeddedTriangleNode.cpp");
         auto pathTracing = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
         auto pathTracingInterface = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.ixx");
         auto accumulate = readProjectFile("src/renderPasses/Accumulate/nrAccumulateNode.cpp");
@@ -145,6 +146,34 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             rendererImplementation,
             "SceneTextureSampler",
             "Renderer should not create a separate scene texture sampler for gSceneTextures");
+        requirePresent(
+            rendererImplementation,
+            "vk::PipelineStageFlagBits2::eAllGraphics);",
+            "RasterPassBuilder should stamp raster passes with a graphics shader scope");
+        requirePresent(
+            rendererImplementation,
+            "vk::PipelineStageFlagBits2::eComputeShader);",
+            "ComputePassBuilder should stamp compute passes with compute shader scope");
+        requirePresent(
+            rendererImplementation,
+            "vk::PipelineStageFlagBits2::eRayTracingShaderKHR);",
+            "RayTracingPassBuilder should stamp RT passes with ray tracing shader scope");
+        requirePresent(
+            rendererInterface,
+            "withOptionalShaderStages",
+            "Shader-visible pass builders should support per-resource shader stage overrides");
+        requirePresent(
+            embeddedTriangle,
+            "ShaderStageIntent::Vertex",
+            "EmbeddedTriangle frame uniform should be scoped to vertex shader access");
+        requirePresent(
+            normalBuffer,
+            "ShaderStageIntent::Vertex",
+            "NormalBuffer frame uniform should be scoped to vertex shader access");
+        requirePresent(
+            ui,
+            "ShaderStageIntent::Fragment",
+            "Ui texture samples should be scoped to fragment shader access");
         requirePresent(
             accumulate,
             "ComputePassBuilder",
