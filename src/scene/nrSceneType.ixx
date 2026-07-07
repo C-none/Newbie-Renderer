@@ -2,6 +2,7 @@
 export module nr.scene:type;
 import dependency.math;
 import dependency.ecs;
+import dependency.shaderShare;
 import dependency.vulkan;
 
 import nr.load;
@@ -241,23 +242,7 @@ struct SceneBridgeMaterialRasterState
     bool doubleSided = false;
 };
 
-enum class SceneMaterialTextureSlot : std::uint32_t
-{
-    baseColor = 0,
-    normal = 1,
-    metallicRoughness = 2,
-    occlusion = 3,
-    emissive = 4,
-    clearcoat = 5,
-    clearcoatRoughness = 6,
-    clearcoatNormal = 7,
-    sheenColor = 8,
-    sheenRoughness = 9,
-    transmission = 10,
-    anisotropy = 11,
-    count,
-};
-
+using SceneMaterialTextureSlot = nr::shader::share::MaterialTextureSlot;
 inline constexpr auto sceneMaterialTextureSlotCount = static_cast<std::size_t>(SceneMaterialTextureSlot::count);
 using SceneTextureId = std::uint16_t;
 inline constexpr SceneTextureId kDefaultSceneTextureId = 0u;

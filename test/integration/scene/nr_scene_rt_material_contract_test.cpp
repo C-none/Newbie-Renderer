@@ -16,7 +16,7 @@ namespace
 
 [[nodiscard]] bool hasFeature(const nr::scene::RtCompiledMaterial &material, nr::scene::RtMaterialFeatureFlag flag) noexcept
 {
-    return (material.header.featureFlags & static_cast<std::uint32_t>(flag)) != 0u;
+    return nr::scene::hasAnyRtMaterialFeature(material.header.featureFlags, flag);
 }
 
 [[nodiscard]] bool nearlyEqual(float lhs, float rhs, float epsilon = 1.0e-6f) noexcept
@@ -372,7 +372,8 @@ void requireRtTextureRef(
     const nr::scene::RtCompiledMaterial& material,
     nr::resource::MaterialTextureSlotSemantic semantic)
 {
-    auto const slot = static_cast<std::uint32_t>(nr::resource::materialTextureSlotIndex(semantic));
+    auto const slot = static_cast<nr::scene::MaterialTextureSlot>(
+        static_cast<std::uint32_t>(nr::resource::materialTextureSlotIndex(semantic)));
     auto refIt = std::ranges::find_if(material.textureRefs, [&](const nr::scene::RtMaterialTextureRef& textureRef) {
         return textureRef.slot == slot;
     });
@@ -440,13 +441,13 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::transmission));
         nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::unsupportedAnisotropy));
         nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
-        nr::test::requireEqual(compiled.layers[0].kind, static_cast<std::uint32_t>(nr::scene::RtMaterialLayerKind::clearcoat));
-        nr::test::requireEqual(compiled.layers[1].kind, static_cast<std::uint32_t>(nr::scene::RtMaterialLayerKind::sheen));
-        nr::test::requireEqual(compiled.layers[2].kind, static_cast<std::uint32_t>(nr::scene::RtMaterialLayerKind::baseSurface));
-        nr::test::requireEqual(compiled.layers[3].kind, static_cast<std::uint32_t>(nr::scene::RtMaterialLayerKind::transmission));
+        nr::test::requireEqual(compiled.layers[0].kind, nr::scene::RtMaterialLayerKind::clearcoat);
+        nr::test::requireEqual(compiled.layers[1].kind, nr::scene::RtMaterialLayerKind::sheen);
+        nr::test::requireEqual(compiled.layers[2].kind, nr::scene::RtMaterialLayerKind::baseSurface);
+        nr::test::requireEqual(compiled.layers[3].kind, nr::scene::RtMaterialLayerKind::transmission);
         nr::test::require(
             std::ranges::none_of(compiled.layers, [](const nr::scene::RtMaterialLayerRecord &layer) {
-                return layer.kind > static_cast<std::uint32_t>(nr::scene::RtMaterialLayerKind::transmission);
+                return layer.kind > nr::scene::RtMaterialLayerKind::transmission;
             }),
             "unsupported features must not create RT layers");
         nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{2});
@@ -611,7 +612,7 @@ const nr::test::CaseRegistrar unsupportedExtensionAssetCase{
             nr::test::require(
                 std::ranges::all_of(compiled, [](const nr::scene::RtCompiledMaterial &material) {
                     return std::ranges::all_of(material.layers, [](const nr::scene::RtMaterialLayerRecord &layer) {
-                        return layer.kind <= static_cast<std::uint32_t>(nr::scene::RtMaterialLayerKind::transmission);
+                        return layer.kind <= nr::scene::RtMaterialLayerKind::transmission;
                     });
                 }),
                 std::format("{} should not create unsupported RT layer kinds", asset.second));

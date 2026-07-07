@@ -3,7 +3,7 @@ implementing common;
 public float4 sampleMaterialTexture(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
-    uint slot,
+    MaterialTextureSlot slot,
     float2 texCoord0,
     float2 texCoord1,
     float4 fallback)
@@ -20,7 +20,7 @@ public float4 sampleMaterialTexture(
 public float3 applyNormalMapSlot(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
-    uint normalSlot,
+    MaterialTextureSlot normalSlot,
     float normalScale,
     float3 normal,
     float3 worldTangent,
@@ -47,22 +47,10 @@ public float3 applyNormalMapSlot(
         normal);
 }
 
-public RtMaterialLayerRecord defaultMaterialLayer(uint kind)
-{
-    RtMaterialLayerRecord layer;
-    layer.kind = kind;
-    layer.textureMask = 0u;
-    layer.aux0 = 0u;
-    layer.aux1 = 0u;
-    layer.p0 = float4(0.0f);
-    layer.p1 = float4(0.0f);
-    return layer;
-}
-
 public bool tryFindMaterialLayer(
     StructuredBuffer<RtMaterialLayerRecord> layerRecords,
     RtMaterialHeader material,
-    uint kind,
+    RtMaterialLayerKind kind,
     out RtMaterialLayerRecord result)
 {
     for (uint layerIndex = 0u; layerIndex < material.layerCount; ++layerIndex)
@@ -75,7 +63,8 @@ public bool tryFindMaterialLayer(
         }
     }
 
-    result = defaultMaterialLayer(kind);
+    result = {};
+    result.kind = kind;
     return false;
 }
 
@@ -87,21 +76,21 @@ public MaterialSample sampleCoreMaterial(
     float4 baseColorTexture = sampleMaterialTexture(
         textureRefs,
         material,
-        kMaterialTextureSlotBaseColor,
+        MaterialTextureSlot.baseColor,
         surface.texCoord0,
         surface.texCoord1,
         float4(1.0f));
     float4 metallicRoughnessTexture = sampleMaterialTexture(
         textureRefs,
         material,
-        kMaterialTextureSlotMetallicRoughness,
+        MaterialTextureSlot.metallicRoughness,
         surface.texCoord0,
         surface.texCoord1,
         float4(1.0f));
     float4 emissiveTexture = sampleMaterialTexture(
         textureRefs,
         material,
-        kMaterialTextureSlotEmissive,
+        MaterialTextureSlot.emissive,
         surface.texCoord0,
         surface.texCoord1,
         float4(1.0f));
@@ -122,27 +111,23 @@ public MaterialLayerStack sampleMaterialLayers(
     RtSurfaceData surface,
     float3 orientedNormal)
 {
-    MaterialLayerStack sample;
-    sample.clearcoat = 0.0f;
-    sample.clearcoatRoughness = 0.0f;
+    MaterialLayerStack sample = {};
     sample.clearcoatNormal = orientedNormal;
-    sample.sheenColor = float3(0.0f);
-    sample.sheenRoughness = 0.0f;
 
     RtMaterialLayerRecord clearcoatLayer;
-    if (tryFindMaterialLayer(layerRecords, material, kRtMaterialLayerClearcoat, clearcoatLayer))
+    if (tryFindMaterialLayer(layerRecords, material, RtMaterialLayerKind.clearcoat, clearcoatLayer))
     {
         float clearcoatTexture = sampleMaterialTexture(
             textureRefs,
             material,
-            kMaterialTextureSlotClearcoat,
+            MaterialTextureSlot.clearcoat,
             surface.texCoord0,
             surface.texCoord1,
             float4(1.0f)).r;
         float clearcoatRoughnessTexture = sampleMaterialTexture(
             textureRefs,
             material,
-            kMaterialTextureSlotClearcoatRoughness,
+            MaterialTextureSlot.clearcoatRoughness,
             surface.texCoord0,
             surface.texCoord1,
             float4(1.0f)).g;
@@ -151,7 +136,7 @@ public MaterialLayerStack sampleMaterialLayers(
         sample.clearcoatNormal = applyNormalMapSlot(
             textureRefs,
             material,
-            kMaterialTextureSlotClearcoatNormal,
+            MaterialTextureSlot.clearcoatNormal,
             1.0f,
             orientedNormal,
             surface.tangent,
@@ -161,19 +146,19 @@ public MaterialLayerStack sampleMaterialLayers(
     }
 
     RtMaterialLayerRecord sheenLayer;
-    if (tryFindMaterialLayer(layerRecords, material, kRtMaterialLayerSheen, sheenLayer))
+    if (tryFindMaterialLayer(layerRecords, material, RtMaterialLayerKind.sheen, sheenLayer))
     {
         float4 sheenColorTexture = sampleMaterialTexture(
             textureRefs,
             material,
-            kMaterialTextureSlotSheenColor,
+            MaterialTextureSlot.sheenColor,
             surface.texCoord0,
             surface.texCoord1,
             float4(1.0f));
         float sheenRoughnessTexture = sampleMaterialTexture(
             textureRefs,
             material,
-            kMaterialTextureSlotSheenRoughness,
+            MaterialTextureSlot.sheenRoughness,
             surface.texCoord0,
             surface.texCoord1,
             float4(1.0f)).a;

@@ -1,9 +1,5 @@
 implementing common;
 
-public static const uint kAlphaModeOpaque = 0u;
-public static const uint kAlphaModeMask = 1u;
-public static const uint kAlphaModeBlend = 2u;
-
 public static const float kMaterialPi = 3.14159265358979323846f;
 public static const float kMaterialInvPi = 0.31830988618379067154f;
 public static const float kMaterialMinRoughness = 0.045f;
@@ -11,44 +7,44 @@ public static const float kMaterialMinCosTheta = 1.0e-5f;
 
 public struct RtSurfaceData
 {
-    public float3 position;
-    public float3 normal;
-    public float3 tangent;
-    public float tangentSign;
-    public float2 texCoord0;
-    public float2 texCoord1;
-    public float4 color0;
+    public float3 position = float3(0.0f);
+    public float3 normal = float3(0.0f, 1.0f, 0.0f);
+    public float3 tangent = float3(1.0f, 0.0f, 0.0f);
+    public float tangentSign = 1.0f;
+    public float2 texCoord0 = float2(0.0f);
+    public float2 texCoord1 = float2(0.0f);
+    public float4 color0 = float4(1.0f);
 };
 
 public struct MaterialSample
 {
-    public float4 baseColor;
-    public float metallic;
-    public float roughness;
-    public float3 emissive;
-    public float alpha;
+    public float4 baseColor = float4(1.0f);
+    public float metallic = 0.0f;
+    public float roughness = 1.0f;
+    public float3 emissive = float3(0.0f);
+    public float alpha = 1.0f;
 };
 
 public struct MaterialLayerStack
 {
-    public float clearcoat;
-    public float clearcoatRoughness;
-    public float3 clearcoatNormal;
-    public float3 sheenColor;
-    public float sheenRoughness;
+    public float clearcoat = 0.0f;
+    public float clearcoatRoughness = 0.0f;
+    public float3 clearcoatNormal = float3(0.0f, 1.0f, 0.0f);
+    public float3 sheenColor = float3(0.0f);
+    public float sheenRoughness = 0.0f;
 };
 
 public struct MaterialDirectLightingInput
 {
-    public float3 viewDirection;
-    public float3 lightDirection;
-    public float3 lightRadiance;
+    public float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
+    public float3 lightDirection = float3(0.0f, 1.0f, 0.0f);
+    public float3 lightRadiance = float3(0.0f);
 };
 
 public struct MaterialShadingResult
 {
-    public float3 radiance;
-    public float alpha;
+    public float3 radiance = float3(0.0f);
+    public float alpha = 1.0f;
 };
 
 public float3 safeNormalize(float3 value, float3 fallback)

@@ -50,7 +50,10 @@ struct CameraData
         nr::rhi::SlangVariantTypeAlias{
             .typeName = "CHS",
             .interfaceName = "ICHS",
-            .concreteTypeName = std::format("DefaultLitCHS<{}u, {}u>", featureMask, alphaPolicy),
+            .concreteTypeName = std::format(
+                "DefaultLitCHS<RtMaterialFeatureFlag({}u), PathTracingRtHitAlphaPolicy.{}>",
+                featureMask,
+                alphaPolicy == 1u ? "alphaMask" : "opaqueLike"),
         });
     return variant;
 }
@@ -112,7 +115,9 @@ const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
         auto effectiveLines = effectiveShaderLines(chsSource);
         nr::test::requireEqual(effectiveLines.size(), std::size_t{2u});
         nr::test::requireEqual(effectiveLines[0], std::string{"import common;"});
-        nr::test::requireEqual(effectiveLines[1], std::string{"export struct CHS : ICHS = DefaultLitCHS<0u, 0u>;"});
+        nr::test::requireEqual(
+            effectiveLines[1],
+            std::string{"export struct CHS : ICHS = DefaultLitCHS<RtMaterialFeatureFlag(0u), PathTracingRtHitAlphaPolicy.opaqueLike>;"});
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},

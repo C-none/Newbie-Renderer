@@ -29,7 +29,7 @@ void ahAlphaMask(inout PathTracingRayPayload payload, BuiltInTriangleIntersectio
 [shader("closesthit")]
 void chMain(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
-    if (payload.rayKind != kPathTracingRayKindMaterial)
+    if (payload.rayKind != PathTracingRayKind.material)
     {
         return;
     }

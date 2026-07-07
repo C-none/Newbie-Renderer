@@ -11,7 +11,7 @@ public bool shouldIgnorePathTracingAlphaMaskedHit(
     float hitT,
     uint materialIndex)
 {
-    if (!hasRtMaterialFeature(material, kRtMaterialFeatureAlphaMask))
+    if (!hasRtMaterialFeature(material, RtMaterialFeatureFlag.alphaMask))
     {
         return false;
     }
@@ -55,7 +55,7 @@ public PathTracingClosestHitInput makePathTracingClosestHitInput(
     BuiltInTriangleIntersectionAttributes attributes)
 {
     float3 viewDirection = normalize(-WorldRayDirection());
-    PathTracingClosestHitInput input = defaultPathTracingClosestHitInput();
+    PathTracingClosestHitInput input = {};
     input.viewDirection = viewDirection;
     input.hitT = RayTCurrent();
 

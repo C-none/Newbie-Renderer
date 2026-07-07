@@ -12,7 +12,9 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
     ray.TMin = kPathTracingRayEpsilon;
     ray.TMax = max(kPathTracingRayEpsilon, maxDistance - kPathTracingRayEpsilon);
 
-    PathTracingRayPayload payload = defaultVisibilityRayPayload();
+    PathTracingRayPayload payload = {};
+    payload.rayKind = PathTracingRayKind.visibility;
+    payload.hit = 1u;
     TraceRay(
         scene,
         RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,

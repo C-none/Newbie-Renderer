@@ -1,12 +1,20 @@
 module presentConvert;
 import common;
 
+enum PresentOutputEncoding : uint
+{
+    linear = 0u,
+    srgb = 1u,
+    hdr10Pq = 2u,
+    scRgb = 3u,
+}
+
 struct PresentConvertPushConstants
 {
     uint width;
     uint height;
     uint swizzleBgr;
-    uint outputEncoding;
+    PresentOutputEncoding outputEncoding;
     uint flipY;
     float uiOpacity;
 };
@@ -18,9 +26,6 @@ RWTexture2D<float4> gConvertedColor;
 [[vk::push_constant]]
 ConstantBuffer<PresentConvertPushConstants> gPresentConvert;
 
-static const uint kOutputEncodingSrgb = 1u;
-static const uint kOutputEncodingHdr10Pq = 2u;
-static const uint kOutputEncodingScRgb = 3u;
 static const float kHdr10ReferenceWhiteNits = 203.0f;
 static const float kHdr10MaxOutputNits = 1000.0f;
 
@@ -62,17 +67,17 @@ float3 linearToHdr10Pq(float3 linearColor)
     return nitsToSt2084Pq(nits);
 }
 
-float3 encodePresentOutput(float3 linearColor, uint outputEncoding)
+float3 encodePresentOutput(float3 linearColor, PresentOutputEncoding outputEncoding)
 {
-    if (outputEncoding == kOutputEncodingSrgb)
+    if (outputEncoding == PresentOutputEncoding.srgb)
     {
         return linearToSrgb(linearColor);
     }
-    if (outputEncoding == kOutputEncodingHdr10Pq)
+    if (outputEncoding == PresentOutputEncoding.hdr10Pq)
     {
         return linearToHdr10Pq(linearColor);
     }
-    if (outputEncoding == kOutputEncodingScRgb)
+    if (outputEncoding == PresentOutputEncoding.scRgb)
     {
         return max(linearColor, 0.0f);
     }

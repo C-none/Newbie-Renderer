@@ -15,7 +15,7 @@ public struct GltfMultiLayerMaterial : IMultiLayerMaterial
         float3 normal = applyNormalMapSlot(
             textureRefs,
             material,
-            kMaterialTextureSlotNormal,
+            MaterialTextureSlot.normal,
             normalScale,
             orientedNormal,
             surface.tangent,

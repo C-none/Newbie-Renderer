@@ -1,18 +1,28 @@
 implementing common;
 
 public static const uint kSceneLightAbiVersion = 3u;
-public static const uint kSceneLightTypeDirectional = 0u;
-public static const uint kSceneLightTypePoint = 1u;
-public static const uint kSceneLightTypeSpot = 2u;
-public static const uint kSceneLightFlagCastShadow = 1u << 0u;
+
+public enum SceneLightType : uint
+{
+    directional = 0u,
+    point = 1u,
+    spot = 2u,
+}
+
+[Flags]
+public enum SceneLightFlag : uint
+{
+    none = 0u,
+    castShadow = 1u << 0u,
+}
 
 public struct SceneLightGpuHeader
 {
-    public uint abiVersion;
-    public uint lightCount;
-    public uint aliasCount;
+    public uint abiVersion = kSceneLightAbiVersion;
+    public uint lightCount = 0u;
+    public uint aliasCount = 0u;
     // Sampling weight sum only; not a physical energy unit.
-    public float totalEnergy;
+    public float totalEnergy = 0.0f;
 };
 
 public struct SceneLightGpuRecord
@@ -51,17 +61,17 @@ public static const float3 kSceneLightDefaultDirection = float3(0.0f, 0.0f, -1.0
 
 public struct SceneLightContribution
 {
-    public float3 direction;
+    public float3 direction = float3(0.0f, 1.0f, 0.0f);
     // Scene-linear light value used by material BSDF evaluation. It is derived
     // from glTF photometric units and remains HDR until the final present
     // shader clamps and optionally applies the sRGB transfer curve for pixels.
-    public float3 radiance;
+    public float3 radiance = float3(0.0f);
 };
 
 public struct SceneLightSample
 {
-    public uint lightIndex;
-    public float pdf;
+    public uint lightIndex = 0u;
+    public float pdf = 0.0f;
 };
 
 public float3 sceneLightSafeNormalize(float3 value, float3 fallback)
@@ -73,14 +83,6 @@ public float3 sceneLightSafeNormalize(float3 value, float3 fallback)
     }
 
     return fallback;
-}
-
-public SceneLightContribution sceneLightContributionZero()
-{
-    SceneLightContribution contribution;
-    contribution.direction = float3(0.0f, 1.0f, 0.0f);
-    contribution.radiance = float3(0.0f);
-    return contribution;
 }
 
 public bool sceneLightHeaderValid()
@@ -98,17 +100,9 @@ public uint sceneLightAliasCount()
     return sceneLightHeaderValid() ? gSceneLightHeader.aliasCount : 0u;
 }
 
-public SceneLightSample sceneLightSampleZero()
-{
-    SceneLightSample sample;
-    sample.lightIndex = 0u;
-    sample.pdf = 0.0f;
-    return sample;
-}
-
 public bool sampleSceneLightAlias(float2 randomValues, out SceneLightSample sample)
 {
-    sample = sceneLightSampleZero();
+    sample = {};
 
     uint aliasCount = sceneLightAliasCount();
     uint lightCount = sceneLightCount();
@@ -154,7 +148,7 @@ public float sceneLightSpotConeAttenuation(SceneLightGpuRecord light, float3 lig
 
 public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, out SceneLightContribution contribution)
 {
-    contribution = sceneLightContributionZero();
+    contribution = {};
 
     float3 color = max(light.colorIntensity.rgb, float3(0.0f));
     float intensity = max(light.colorIntensity.w, 0.0f);
@@ -163,8 +157,8 @@ public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, ou
         return false;
     }
 
-    uint lightType = light.meta.x;
-    if (lightType == kSceneLightTypeDirectional)
+    SceneLightType lightType = SceneLightType(light.meta.x);
+    if (lightType == SceneLightType.directional)
     {
         contribution.direction = sceneLightSafeNormalize(-light.direction.xyz, -kSceneLightDefaultDirection);
         // Directional glTF intensity is illuminance in lux. The path tracer keeps
@@ -173,7 +167,7 @@ public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, ou
         return dot(contribution.radiance, contribution.radiance) > 0.0f;
     }
 
-    if (lightType != kSceneLightTypePoint && lightType != kSceneLightTypeSpot)
+    if (lightType != SceneLightType.point && lightType != SceneLightType.spot)
     {
         return false;
     }
@@ -187,7 +181,7 @@ public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, ou
     }
 
     float3 surfaceToLightDirection = toLight * rsqrt(distanceSquared);
-    if (lightType == kSceneLightTypeSpot)
+    if (lightType == SceneLightType.spot)
     {
         attenuation *= sceneLightSpotConeAttenuation(light, -surfaceToLightDirection);
         if (attenuation <= 0.0f)
@@ -207,7 +201,7 @@ public bool evaluateSceneLight(SceneLightGpuRecord light, float3 hitPosition, ou
 
 public bool evaluateSceneLightAt(uint lightIndex, float3 hitPosition, out SceneLightContribution contribution)
 {
-    contribution = sceneLightContributionZero();
+    contribution = {};
     if (lightIndex >= sceneLightCount())
     {
         return false;

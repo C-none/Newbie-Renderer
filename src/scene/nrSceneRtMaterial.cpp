@@ -9,11 +9,6 @@ namespace nr::scene
 {
 namespace
 {
-[[nodiscard]] constexpr std::uint32_t toMask(RtMaterialFeatureFlag flags) noexcept
-{
-    return static_cast<std::uint32_t>(flags);
-}
-
 [[nodiscard]] bool slotHasTexture(
     const nr::resource::Material& material,
     nr::resource::MaterialTextureSlotSemantic semantic) noexcept
@@ -26,11 +21,11 @@ namespace
     return material.slot(semantic).texture.valid();
 }
 
-[[nodiscard]] std::uint32_t layerTextureMask(
+[[nodiscard]] MaterialTextureSlotFlag layerTextureMask(
     const nr::resource::Material& material,
     std::initializer_list<nr::resource::MaterialTextureSlotSemantic> slots) noexcept
 {
-    auto mask = 0u;
+    auto mask = MaterialTextureSlotFlag::none;
     std::ranges::for_each(slots, [&](nr::resource::MaterialTextureSlotSemantic semantic) {
         if (slotHasTexture(material, semantic))
         {
@@ -99,10 +94,22 @@ namespace
     return flags;
 }
 
+[[nodiscard]] constexpr AlphaMode toRtAlphaMode(nr::resource::AlphaMode mode) noexcept
+{
+    switch (mode)
+    {
+    case nr::resource::AlphaMode::opaque: return AlphaMode::opaque;
+    case nr::resource::AlphaMode::mask: return AlphaMode::mask;
+    case nr::resource::AlphaMode::blend: return AlphaMode::blend;
+    }
+
+    return AlphaMode::opaque;
+}
+
 [[nodiscard]] RtMaterialLayerRecord makeBaseLayer(const nr::resource::Material& material) noexcept
 {
     return RtMaterialLayerRecord{
-        .kind = static_cast<std::uint32_t>(RtMaterialLayerKind::baseSurface),
+        .kind = RtMaterialLayerKind::baseSurface,
         .textureMask = layerTextureMask(
             material,
             {
@@ -131,7 +138,7 @@ namespace
     }
 
     return RtMaterialLayerRecord{
-        .kind = static_cast<std::uint32_t>(RtMaterialLayerKind::clearcoat),
+        .kind = RtMaterialLayerKind::clearcoat,
         .textureMask = layerTextureMask(
             material,
             {
@@ -154,7 +161,7 @@ namespace
     }
 
     return RtMaterialLayerRecord{
-        .kind = static_cast<std::uint32_t>(RtMaterialLayerKind::sheen),
+        .kind = RtMaterialLayerKind::sheen,
         .textureMask = layerTextureMask(
             material,
             {
@@ -169,7 +176,7 @@ namespace
 {
     auto factor = material.transmission.has_value() ? material.transmission->factor : 0.0f;
     return RtMaterialLayerRecord{
-        .kind = static_cast<std::uint32_t>(RtMaterialLayerKind::transmission),
+        .kind = RtMaterialLayerKind::transmission,
         .textureMask = layerTextureMask(
             material,
             {
@@ -180,14 +187,14 @@ namespace
 }
 } // namespace
 
-[[nodiscard]] std::uint32_t rtMaterialTextureMask(nr::resource::MaterialTextureSlotSemantic semantic) noexcept
+[[nodiscard]] MaterialTextureSlotFlag rtMaterialTextureMask(nr::resource::MaterialTextureSlotSemantic semantic) noexcept
 {
     if (!nr::resource::materialTextureSlotSemanticValid(semantic))
     {
-        return 0u;
+        return MaterialTextureSlotFlag::none;
     }
 
-    return 1u << static_cast<std::uint32_t>(semantic);
+    return static_cast<MaterialTextureSlotFlag>(1u << static_cast<std::uint32_t>(semantic));
 }
 
 [[nodiscard]] RtCompiledMaterial compileRtMaterial(
@@ -204,8 +211,9 @@ namespace
                               : 0.0f;
 
     compiled.header = RtMaterialHeader{
-        .featureFlags = toMask(flags),
-        .alphaMode = static_cast<std::uint32_t>(material.core.alphaMode),
+        .abiVersion = kRtMaterialAbiVersion,
+        .featureFlags = flags,
+        .alphaMode = toRtAlphaMode(material.core.alphaMode),
         .alphaCutoff = material.core.alphaCutoff,
         .baseColorFactor = material.core.baseColorFactor,
         .emissiveAndMetallic = glm::vec4{material.core.emissiveFactor, material.core.metallicFactor},
@@ -248,7 +256,7 @@ namespace
         }
 
         compiled.textureRefs.push_back(RtMaterialTextureRef{
-            .slot = static_cast<std::uint32_t>(slotIndex),
+            .slot = static_cast<MaterialTextureSlot>(static_cast<std::uint32_t>(slotIndex)),
             .textureId = textureIds[slotIndex],
             .uvSet = slot.uvSet,
         });

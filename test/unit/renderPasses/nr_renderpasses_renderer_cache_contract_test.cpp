@@ -539,12 +539,12 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(hitShaders, "resolveRtMaterialPayload", "PathTracing closest-hit should resolve material payloads");
         requirePresent(hitShaders, "makePathTracingClosestHitInput", "PathTracing hit shaders should prepare CHS closest-hit inputs");
         requireAbsent(hitShaders, "handlePathTracingClosestHitWithPolicy", "PathTracing should not keep wrapper-policy closest-hit contract");
-        requirePresent(chs, "kPathTracingRtHitAlphaMask", "PathTracing hit policy should expose the alpha-mask policy");
+        requirePresent(chs, "PathTracingRtHitAlphaPolicy.alphaMask", "PathTracing hit policy should expose the alpha-mask policy");
         requireAbsent(hitShaders, "samplePathTracingDirectLighting", "PathTracing hit shaders must not own direct lighting");
         requireAbsent(hitShaders, "evaluateResolvedMaterialDirect", "PathTracing hit shaders must not shade direct light");
         requireAbsent(hitShaders, "outputImage", "PathTracing hit shaders must not write the output image");
         requirePresent(chs, "public interface ICHS", "PathTracing CHS contract should define the closest-hit interface");
-        requirePresent(chs, "public struct DefaultLitCHS<let FeatureMask : uint, let AlphaPolicy : uint> : ICHS", "PathTracing CHS contract should expose the default lit specialization target");
+        requirePresent(chs, "public struct DefaultLitCHS<let FeatureMask : RtMaterialFeatureFlag, let AlphaPolicy : PathTracingRtHitAlphaPolicy> : ICHS", "PathTracing CHS contract should expose the default lit specialization target");
         requirePresent(chs, "public extern struct CHS : ICHS;", "PathTracing CHS contract should require C++ link-time type binding");
         requirePresent(chs, "resolveRtMaterialPayload", "DefaultLitCHS should own material payload resolution");
         requireAbsent(pathTracingNode, "makePathTracingSyntheticRootSource", "PathTracing node should no longer generate synthetic closest-hit wrappers");

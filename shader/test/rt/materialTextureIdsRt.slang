@@ -24,7 +24,7 @@ void rgMain()
     uint baseColorTextureId = materialTextureId(
         gMaterialTextureIds.textureIdPairs0,
         gMaterialTextureIds.textureIdPairs1,
-        kMaterialTextureSlotBaseColor);
+        MaterialTextureSlot.baseColor);
 
     float4 sampled = gSceneTextures[baseColorTextureId].SampleLevel(float2(0.5f, 0.5f), 0.0f);
     outputImage[int2(pixel)] = sampled;

@@ -10,38 +10,11 @@ public static const uint kRtVertexOffsetColor0 = 56u;
 
 public struct RtHitSurface
 {
-    public RtInstanceMetadata instance;
-    public RtGeometryMetadata geometry;
-    public RtSurfaceData surface;
-    public bool geometryValid;
+    public RtInstanceMetadata instance = {};
+    public RtGeometryMetadata geometry = {};
+    public RtSurfaceData surface = {};
+    public bool geometryValid = false;
 };
-
-public RtGeometryMetadata defaultRtGeometryMetadata()
-{
-    RtGeometryMetadata geometry;
-    geometry.materialIndex = kRtMaterialFallbackIndex;
-    geometry.geometryIndex = 0u;
-    geometry.primitiveOffset = 0u;
-    geometry.firstVertex = 0u;
-    geometry.primitiveCount = 0u;
-    geometry.flags = 0u;
-    geometry.reserved0 = 0u;
-    geometry.reserved1 = 0u;
-    return geometry;
-}
-
-public RtSurfaceData defaultRtSurface(float3 viewDirection)
-{
-    RtSurfaceData surface;
-    surface.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    surface.normal = viewDirection;
-    surface.tangent = float3(1.0f, 0.0f, 0.0f);
-    surface.tangentSign = 1.0f;
-    surface.texCoord0 = float2(0.5f, 0.5f);
-    surface.texCoord1 = surface.texCoord0;
-    surface.color0 = float4(1.0f);
-    return surface;
-}
 
 public RtInstanceMetadata currentRtInstance()
 {
@@ -59,7 +32,7 @@ public RtGeometryMetadata currentRtGeometry(
         return rtGeometryMetadata[instance.geometryOffset + geometryIndex];
     }
 
-    return defaultRtGeometryMetadata();
+    return {};
 }
 
 public float3 loadRtVertexFloat3(uint vertexByteOffset, uint fieldOffset)
@@ -89,7 +62,7 @@ public uint loadRtTriangleVertexIndex(
     uint lane)
 {
     uint triangleVertex = primitiveIndex * 3u + lane;
-    if ((geometry.flags & kRtGeometryFlagIndexed) != 0u)
+    if (uint(geometry.flags & RtGeometryFlag.indexed) != 0u)
     {
         uint indexByteOffset = (instance.indexBase + geometry.primitiveOffset + triangleVertex) * 4u;
         return rtIndexData.Load(indexByteOffset) + geometry.firstVertex;
@@ -153,7 +126,7 @@ public RtSurfaceData interpolateCurrentRtSurface(
         objectTangent1.w * barycentrics.y +
         objectTangent2.w * barycentrics.z;
 
-    RtSurfaceData surface;
+    RtSurfaceData surface = {};
     surface.position = transformRtObjectPointToWorld(objectPosition);
     surface.normal = safeNormalize(transformRtObjectVectorToWorld(objectNormal), float3(0.0f, 0.0f, 1.0f));
     surface.tangent = safeNormalize(transformRtObjectVectorToWorld(objectTangent), float3(1.0f, 0.0f, 0.0f));
@@ -177,10 +150,13 @@ public RtHitSurface currentRtHitSurface(
     BuiltInTriangleIntersectionAttributes attributes,
     float3 viewDirection)
 {
-    RtHitSurface hit;
+    RtHitSurface hit = {};
     hit.instance = currentRtInstance();
     hit.geometry = currentRtGeometry(hit.instance, hit.geometryValid);
-    hit.surface = defaultRtSurface(viewDirection);
+    hit.surface.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    hit.surface.normal = viewDirection;
+    hit.surface.texCoord0 = float2(0.5f, 0.5f);
+    hit.surface.texCoord1 = hit.surface.texCoord0;
     if (hit.geometryValid)
     {
         hit.surface = interpolateCurrentRtSurface(
@@ -193,7 +169,7 @@ public RtHitSurface currentRtHitSurface(
 
 public void orientRtSurfaceForMaterial(inout RtSurfaceData surface, RtMaterialHeader material, float3 viewDirection)
 {
-    if (hasRtMaterialFeature(material, kRtMaterialFeatureDoubleSided) && dot(surface.normal, viewDirection) < 0.0f)
+    if (hasRtMaterialFeature(material, RtMaterialFeatureFlag.doubleSided) && dot(surface.normal, viewDirection) < 0.0f)
     {
         surface.normal = -surface.normal;
         surface.tangentSign = -surface.tangentSign;

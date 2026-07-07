@@ -43,19 +43,13 @@ public PathState generatePathTracingPath(uint2 pixel, uint2 dimensions)
         directionVector = farWorld - nearWorld;
     }
 
-    PathState path;
+    PathState path = {};
     path.pixel = pixel;
     path.dimensions = dimensions;
-    path.flags = kPathTracingPathFlagActive;
-    path.vertexIndex = 0u;
-    path.diffuseBounces = 0u;
-    path.specularBounces = 0u;
+    path.flags = PathTracingPathFlag.active;
     path.rngState = makePathTracingSeed(pixel, dimensions, gFrame.frameState.xy);
     path.origin = origin;
     path.direction = safeNormalize(directionVector, float3(0.0f, 0.0f, -1.0f));
-    path.throughput = float3(1.0f);
-    path.radiance = float3(0.0f);
-    path.pdf = 1.0f;
     return path;
 }
 
@@ -76,7 +70,7 @@ public float pathTracingLightVisibilityDistance(uint lightIndex, float3 hitPosit
     }
 
     SceneLightGpuRecord light = gSceneLights[lightIndex];
-    if (light.meta.x == kSceneLightTypeDirectional)
+    if (SceneLightType(light.meta.x) == SceneLightType.directional)
     {
         return kPathTracingRayTMax;
     }
@@ -160,7 +154,7 @@ public void handlePathTracingHit(inout PathState path, ResolvedMaterialPayload m
     pathStateSetHit(path, true);
     float3 viewDirection = safeNormalize(-path.direction, material.geometryNormal);
 
-    float hitAlpha = material.alphaMode == kAlphaModeBlend ? material.alpha : 1.0f;
+    float hitAlpha = material.alphaMode == AlphaMode.blend ? material.alpha : 1.0f;
     if (path.vertexIndex == 1u && hitAlpha < 1.0f)
     {
         addPathContribution(path, kPathTracingMissRadiance * (1.0f - hitAlpha));
@@ -190,7 +184,7 @@ public void handlePathTracingHit(inout PathState path, ResolvedMaterialPayload m
         return;
     }
 
-    if (scatter.kind == kResolvedMaterialScatterSpecular)
+    if (scatter.kind == ResolvedMaterialScatterKind.specular)
     {
         path.specularBounces += 1u;
     }
@@ -246,7 +240,8 @@ public struct Pt
     public void traceMaterialRay(out PathTracingRayPayload payload)
     {
         path.vertexIndex += 1u;
-        payload = defaultPathTracingRayPayload(kPathTracingRayKindMaterial);
+        payload = {};
+        payload.rayKind = PathTracingRayKind.material;
 
         // TLAS instance flags encode glTF source winding, double-sided culling, and transform determinant.
         TraceRay(

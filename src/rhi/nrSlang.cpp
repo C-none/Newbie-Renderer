@@ -432,7 +432,11 @@ namespace nr::rhi::detail
 
     static const std::regex kRestrictedGenericTypeRegex(
         R"([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*<\s*(0|[1-9][0-9]*)([uU])?\s*,\s*(0|[1-9][0-9]*)([uU])?\s*>)");
-    return std::regex_match(std::string(value), kRestrictedGenericTypeRegex);
+    static const std::regex kRestrictedTypedGenericTypeRegex(
+        R"([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*<\s*[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\(\s*(0|[1-9][0-9]*)([uU])?\s*\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.[A-Za-z_][A-Za-z0-9_]*\s*>)");
+    auto expression = std::string(value);
+    return std::regex_match(expression, kRestrictedGenericTypeRegex) ||
+           std::regex_match(expression, kRestrictedTypedGenericTypeRegex);
 }
 
 [[nodiscard]] bool isSlangVariantConcreteTypeExpression(std::string_view value)

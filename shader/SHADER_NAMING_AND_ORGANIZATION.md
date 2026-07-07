@@ -130,6 +130,8 @@ import common;
 
 `shader/common.slang` is the shared shader-side ABI entry and must stay an aggregation file only. It should contain explanatory comments plus `__include` lines, while actual declarations live under `shader/include`.
 
+Declarations that must be shared as a stable Slang/C++ ABI live under `shader/include/share`. These files are data-only: they may contain only `public static const` values, `enum : uint` declarations, and plain ABI `struct` declarations. They must not declare functions, resources, mutable globals, generics, interfaces/classes/extensions, nested namespaces, arrays, matrices, `bool`, `half`, or resource-typed fields. The dependency build runs `nr_shader_share_codegen` over `shader/common.slang`, reflects declarations whose source path is under `shader/include/share`, and emits the generated C++26 module `dependency.shaderShare` in namespace `nr::shader::share`.
+
 Link-time type variant declarations must also live under `shader/include` and be made visible through `shader/common.slang`. Generated specialization modules are intentionally narrow: they may only `import common;` and then export type aliases such as `export struct T : I = Concrete;`. Type policy implementations must be pure shader logic and must not declare new global bindable resources. Variant resources must come from the existing ABI or be passed as ordinary values.
 
 Shader-side `extern` values used as link-time variant constants must never specify default values. The owning C++ compile path must always populate the matching `SlangProgramVariantDesc`, including the project default variant. Default values belong in C++ constants and UI/input state, not in Slang `extern` declarations. An empty variant compile is only valid for shaders that do not declare required variant `extern` values.
@@ -157,7 +159,7 @@ Only shaders that actually reference `gFrame` require a matching C++ descriptor 
 public Sampler2D<float4> gSceneTextures[];
 ```
 
-All material texture types share this single runtime descriptor array. `shader/include/materialTextureIds.slang` defines the common material texture slot constants and packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices. PSOs that consume this table install a linear immutable sampler during pipeline layout creation, so per-frame descriptor updates provide only image views and layouts.
+All material texture types share this single runtime descriptor array. `shader/include/share/materialTextureIds.slang` defines the common `MaterialTextureSlot` enum and flags, while `shader/include/materialTextureIds.slang` defines packed `uint16` ID unpack helpers used by raster, GBuffer, and RT shaders. Texture ID 0 is the renderer-owned purple fallback; resident scene texture IDs are renderer-assigned descriptor indices. PSOs that consume this table install a linear immutable sampler during pipeline layout creation, so per-frame descriptor updates provide only image views and layouts.
 
 `shader/include/sceneLights.slang` declares the global scene light buffers:
 

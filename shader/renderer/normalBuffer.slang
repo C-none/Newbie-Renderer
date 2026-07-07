@@ -65,7 +65,7 @@ float4 fragmentMain(VSOutput input) : SV_Target0
     uint normalTextureId = materialTextureId(
         gPushConstants.textureIdPairs0,
         gPushConstants.textureIdPairs1,
-        kMaterialTextureSlotNormal);
+        MaterialTextureSlot.normal);
     if (normalTextureId != 0u)
     {
         float3 tangent = normalize(input.worldTangent - normal * dot(normal, input.worldTangent));

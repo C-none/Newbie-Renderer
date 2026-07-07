@@ -1,58 +1,37 @@
 implementing common;
 
-public static const uint kResolvedMaterialScatterDiffuse = 0u;
-public static const uint kResolvedMaterialScatterSpecular = 1u;
+public enum ResolvedMaterialScatterKind : uint
+{
+    diffuse = 0u,
+    specular = 1u,
+}
 
 public struct ResolvedMaterialPayload
 {
-    public uint materialIndex;
-    public uint featureFlags;
-    public uint alphaMode;
-    public float alphaCutoff;
-    public float hitT;
-    public float3 position;
-    public float3 geometryNormal;
-    public float3 shadingNormal;
-    public float4 baseColor;
-    public float metallic;
-    public float roughness;
-    public float3 emissive;
-    public float alpha;
-    public MaterialLayerStack layers;
+    public uint materialIndex = kRtMaterialFallbackIndex;
+    public RtMaterialFeatureFlag featureFlags = RtMaterialFeatureFlag.none;
+    public AlphaMode alphaMode = AlphaMode.opaque;
+    public float alphaCutoff = 0.5f;
+    public float hitT = 0.0f;
+    public float3 position = float3(0.0f);
+    public float3 geometryNormal = float3(0.0f, 1.0f, 0.0f);
+    public float3 shadingNormal = float3(0.0f, 1.0f, 0.0f);
+    public float4 baseColor = float4(1.0f);
+    public float metallic = 0.0f;
+    public float roughness = 1.0f;
+    public float3 emissive = float3(0.0f);
+    public float alpha = 1.0f;
+    public MaterialLayerStack layers = {};
 };
 
 public struct ResolvedMaterialScatter
 {
-    public uint valid;
-    public uint kind;
-    public float3 direction;
-    public float3 weight;
-    public float pdf;
+    public uint valid = 0u;
+    public ResolvedMaterialScatterKind kind = ResolvedMaterialScatterKind.diffuse;
+    public float3 direction = float3(0.0f, 1.0f, 0.0f);
+    public float3 weight = float3(0.0f);
+    public float pdf = 0.0f;
 };
-
-public ResolvedMaterialPayload defaultResolvedMaterialPayload()
-{
-    ResolvedMaterialPayload payload;
-    payload.materialIndex = kRtMaterialFallbackIndex;
-    payload.featureFlags = 0u;
-    payload.alphaMode = kAlphaModeOpaque;
-    payload.alphaCutoff = 0.5f;
-    payload.hitT = 0.0f;
-    payload.position = float3(0.0f);
-    payload.geometryNormal = float3(0.0f, 1.0f, 0.0f);
-    payload.shadingNormal = payload.geometryNormal;
-    payload.baseColor = float4(1.0f);
-    payload.metallic = 0.0f;
-    payload.roughness = 1.0f;
-    payload.emissive = float3(0.0f);
-    payload.alpha = 1.0f;
-    payload.layers.clearcoat = 0.0f;
-    payload.layers.clearcoatRoughness = 0.0f;
-    payload.layers.clearcoatNormal = payload.geometryNormal;
-    payload.layers.sheenColor = float3(0.0f);
-    payload.layers.sheenRoughness = 0.0f;
-    return payload;
-}
 
 public MaterialSample materialSampleFromResolvedPayload(ResolvedMaterialPayload payload)
 {
@@ -63,17 +42,6 @@ public MaterialSample materialSampleFromResolvedPayload(ResolvedMaterialPayload 
     sample.emissive = payload.emissive;
     sample.alpha = payload.alpha;
     return sample;
-}
-
-public ResolvedMaterialScatter defaultResolvedMaterialScatter()
-{
-    ResolvedMaterialScatter scatter;
-    scatter.valid = 0u;
-    scatter.kind = kResolvedMaterialScatterDiffuse;
-    scatter.direction = float3(0.0f, 1.0f, 0.0f);
-    scatter.weight = float3(0.0f);
-    scatter.pdf = 0.0f;
-    return scatter;
 }
 
 public ResolvedMaterialPayload resolveRtMaterialPayload(
@@ -91,7 +59,7 @@ public ResolvedMaterialPayload resolveRtMaterialPayload(
     float3 shadingNormal = applyNormalMapSlot(
         textureRefs,
         material,
-        kMaterialTextureSlotNormal,
+        MaterialTextureSlot.normal,
         normalScale,
         orientedNormal,
         surface.tangent,
@@ -117,14 +85,14 @@ public ResolvedMaterialPayload resolveRtMaterialPayload(
     return payload;
 }
 
-public bool resolvedMaterialHasFeature(ResolvedMaterialPayload payload, uint mask)
+public bool resolvedMaterialHasFeature(ResolvedMaterialPayload payload, RtMaterialFeatureFlag mask)
 {
-    return (payload.featureFlags & mask) != 0u;
+    return uint(payload.featureFlags & mask) != 0u;
 }
 
 public bool resolvedMaterialFailsAlphaMask(ResolvedMaterialPayload payload)
 {
-    return resolvedMaterialHasFeature(payload, kRtMaterialFeatureAlphaMask) && payload.alpha < payload.alphaCutoff;
+    return resolvedMaterialHasFeature(payload, RtMaterialFeatureFlag.alphaMask) && payload.alpha < payload.alphaCutoff;
 }
 
 public MaterialShadingResult evaluateResolvedMaterialDirect(
@@ -228,7 +196,7 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatter(
     float3 viewDirection,
     float3 randomValues)
 {
-    ResolvedMaterialScatter scatter = defaultResolvedMaterialScatter();
+    ResolvedMaterialScatter scatter = {};
     float3 normal = safeNormalize(payload.shadingNormal, payload.geometryNormal);
 
     float3 diffuseReflectance = payload.baseColor.rgb * (1.0f - payload.metallic);
@@ -245,13 +213,13 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatter(
         float2 sampleValues = float2(randomValues.y, randomValues.z);
         float3 halfVector = sampleMaterialPayloadGgxHalfVector(sampleValues, payload.roughness, normal);
         scatter.direction = safeNormalize(reflect(-viewDirection, halfVector), normal);
-        scatter.kind = kResolvedMaterialScatterSpecular;
+        scatter.kind = ResolvedMaterialScatterKind.specular;
     }
     else
     {
         float2 sampleValues = float2(randomValues.y, randomValues.z);
         scatter.direction = sampleMaterialPayloadCosineHemisphere(sampleValues, normal);
-        scatter.kind = kResolvedMaterialScatterDiffuse;
+        scatter.kind = ResolvedMaterialScatterKind.diffuse;
     }
 
     float noL = saturate(dot(normal, scatter.direction));

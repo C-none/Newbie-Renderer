@@ -1,32 +1,40 @@
 implementing common;
 
-public static const uint kPathTracingRtHitShadingModelGltfPbr = 0u;
-public static const uint kPathTracingRtHitAlphaOpaqueLike = 0u;
-public static const uint kPathTracingRtHitAlphaMask = 1u;
-public static const uint kPathTracingKnownRtMaterialFeatureMask =
-    kRtMaterialFeatureClearcoat |
-    kRtMaterialFeatureSheen |
-    kRtMaterialFeatureTransmission |
-    kRtMaterialFeatureAlphaMask |
-    kRtMaterialFeatureAlphaBlend |
-    kRtMaterialFeatureDoubleSided |
-    kRtMaterialFeatureEmissive |
-    kRtMaterialFeatureUnsupportedAnisotropy;
+public enum PathTracingRtHitShadingModel : uint
+{
+    gltfPbr = 0u,
+}
+
+public enum PathTracingRtHitAlphaPolicy : uint
+{
+    opaqueLike = 0u,
+    alphaMask = 1u,
+}
+
+public static const RtMaterialFeatureFlag kPathTracingKnownRtMaterialFeatureMask =
+    RtMaterialFeatureFlag.clearcoat |
+    RtMaterialFeatureFlag.sheen |
+    RtMaterialFeatureFlag.transmission |
+    RtMaterialFeatureFlag.alphaMask |
+    RtMaterialFeatureFlag.alphaBlend |
+    RtMaterialFeatureFlag.doubleSided |
+    RtMaterialFeatureFlag.emissive |
+    RtMaterialFeatureFlag.unsupportedAnisotropy;
 
 public struct PathTracingClosestHitInput
 {
-    public bool geometryValid;
-    public RtMaterialHeader material;
-    public RtSurfaceData surface;
-    public float3 viewDirection;
-    public float hitT;
-    public uint materialIndex;
+    public bool geometryValid = false;
+    public RtMaterialHeader material = {};
+    public RtSurfaceData surface = {};
+    public float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
+    public float hitT = 0.0f;
+    public uint materialIndex = kRtMaterialFallbackIndex;
 };
 
 public struct PathTracingClosestHitResult
 {
-    public uint hit;
-    public ResolvedMaterialPayload material;
+    public uint hit = 0u;
+    public ResolvedMaterialPayload material = {};
 };
 
 public interface ICHS
@@ -34,56 +42,23 @@ public interface ICHS
     PathTracingClosestHitResult handleClosestHit(PathTracingClosestHitInput input);
 }
 
-public bool pathTracingHitPolicySupported(uint policyFeatureFlags, uint policyAlphaPolicy, uint policyShadingModel)
+public bool pathTracingHitPolicySupported(
+    RtMaterialFeatureFlag policyFeatureFlags,
+    PathTracingRtHitAlphaPolicy policyAlphaPolicy,
+    PathTracingRtHitShadingModel policyShadingModel)
 {
-    return policyShadingModel == kPathTracingRtHitShadingModelGltfPbr &&
-        (policyAlphaPolicy == kPathTracingRtHitAlphaOpaqueLike || policyAlphaPolicy == kPathTracingRtHitAlphaMask) &&
-        (policyFeatureFlags & ~kPathTracingKnownRtMaterialFeatureMask) == 0u;
+    return policyShadingModel == PathTracingRtHitShadingModel.gltfPbr &&
+        (policyAlphaPolicy == PathTracingRtHitAlphaPolicy.opaqueLike ||
+            policyAlphaPolicy == PathTracingRtHitAlphaPolicy.alphaMask) &&
+        (uint(policyFeatureFlags) & ~uint(kPathTracingKnownRtMaterialFeatureMask)) == 0u;
 }
 
-public PathTracingClosestHitInput defaultPathTracingClosestHitInput()
-{
-    PathTracingClosestHitInput input;
-    input.geometryValid = false;
-    input.material.abiVersion = kRtMaterialAbiVersion;
-    input.material.featureFlags = 0u;
-    input.material.layerOffset = 0u;
-    input.material.layerCount = 0u;
-    input.material.textureRefOffset = 0u;
-    input.material.textureRefCount = 0u;
-    input.material.alphaMode = kAlphaModeOpaque;
-    input.material.alphaCutoff = 0.5f;
-    input.material.baseColorFactor = float4(1.0f);
-    input.material.emissiveAndMetallic = float4(0.0f);
-    input.material.roughnessNormalOcclusionAlpha = float4(1.0f, 1.0f, 1.0f, 1.0f);
-    input.material.transmissionClearcoatSheen = float4(0.0f);
-    input.surface.position = float3(0.0f);
-    input.surface.normal = float3(0.0f, 1.0f, 0.0f);
-    input.surface.tangent = float3(1.0f, 0.0f, 0.0f);
-    input.surface.tangentSign = 1.0f;
-    input.surface.texCoord0 = float2(0.0f);
-    input.surface.texCoord1 = float2(0.0f);
-    input.surface.color0 = float4(1.0f);
-    input.viewDirection = float3(0.0f, 1.0f, 0.0f);
-    input.hitT = 0.0f;
-    input.materialIndex = kRtMaterialFallbackIndex;
-    return input;
-}
-
-public PathTracingClosestHitResult defaultPathTracingClosestHitResult()
-{
-    PathTracingClosestHitResult result;
-    result.hit = 0u;
-    result.material = defaultResolvedMaterialPayload();
-    return result;
-}
-
-public struct DefaultLitCHS<let FeatureMask : uint, let AlphaPolicy : uint> : ICHS
+public struct DefaultLitCHS<let FeatureMask : RtMaterialFeatureFlag, let AlphaPolicy : PathTracingRtHitAlphaPolicy> : ICHS
 {
     public PathTracingClosestHitResult handleClosestHit(PathTracingClosestHitInput input)
     {
-        PathTracingClosestHitResult result = defaultPathTracingClosestHitResult();
-        if (!pathTracingHitPolicySupported(FeatureMask, AlphaPolicy, kPathTracingRtHitShadingModelGltfPbr) ||
+        PathTracingClosestHitResult result = {};
+        if (!pathTracingHitPolicySupported(FeatureMask, AlphaPolicy, PathTracingRtHitShadingModel.gltfPbr) ||
             !input.geometryValid)
         {
             return result;

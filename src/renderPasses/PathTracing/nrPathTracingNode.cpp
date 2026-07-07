@@ -142,6 +142,20 @@ struct PathTracingRuntimeCache
         valueSet);
 }
 
+[[nodiscard]] std::string_view pathTracingRtHitAlphaPolicyLiteral(RtHitAlphaPolicy policy)
+{
+    switch (policy)
+    {
+    case RtHitAlphaPolicy::opaqueLike:
+        return "PathTracingRtHitAlphaPolicy.opaqueLike";
+    case RtHitAlphaPolicy::alphaMask:
+        return "PathTracingRtHitAlphaPolicy.alphaMask";
+    }
+
+    nr::nrAssert(false, "Unsupported PathTracing RT hit alpha policy.");
+    return "PathTracingRtHitAlphaPolicy.opaqueLike";
+}
+
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingChsVariantDesc(const RtHitPermutationKey& key)
 {
     nr::nrAssert(
@@ -159,9 +173,9 @@ struct PathTracingRuntimeCache
             .typeName = "CHS",
             .interfaceName = "ICHS",
             .concreteTypeName = std::format(
-                "DefaultLitCHS<{}u, {}u>",
+                "DefaultLitCHS<RtMaterialFeatureFlag({}u), {}>",
                 key.materialFeatureMask,
-                static_cast<std::uint32_t>(key.alphaPolicy)),
+                pathTracingRtHitAlphaPolicyLiteral(key.alphaPolicy)),
         });
     return variant;
 }

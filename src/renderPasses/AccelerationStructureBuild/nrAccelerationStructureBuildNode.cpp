@@ -893,14 +893,14 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         auto const materialHandle = rtGeometryMaterialHandle(scene, packet.mesh, geometry.geometryIndex);
         auto const materialIndex = ensureRtMaterialIndex(runtime, state, scene, materialHandle);
         nrAssert(materialIndex < state.materials.size(), "RT material index must resolve before building hit SBT plan.");
-        geometryMaterialFeatureMasks.push_back(state.materials[materialIndex].header.featureFlags);
+        geometryMaterialFeatureMasks.push_back(static_cast<std::uint32_t>(state.materials[materialIndex].header.featureFlags));
         state.geometries.push_back(nr::scene::RtGeometryMetadata{
             .materialIndex = materialIndex,
             .geometryIndex = geometry.geometryIndex,
             .primitiveOffset = rtGeometryPrimitiveElementOffset(sceneMesh, geometry),
             .firstVertex = geometry.firstVertex,
             .primitiveCount = geometry.primitiveCount,
-            .flags = geometry.indexed ? nr::scene::kRtGeometryFlagIndexed : 0u,
+            .flags = geometry.indexed ? nr::scene::kRtGeometryFlagIndexed : nr::scene::RtGeometryFlag::none,
         });
     });
 
