@@ -285,6 +285,7 @@ struct DescriptorWriteRequest
     DescriptorBindingInfo binding;
     std::uint32_t arrayElement = 0;
     DescriptorWritePayload payload;
+    bool forceWrite = false;
 };
 
 struct DescriptorWriteSlotKey
@@ -352,7 +353,9 @@ class DescriptorWriteCache
 
     [[nodiscard]] std::uint64_t version() const noexcept;
 
-    [[nodiscard]] std::vector<DescriptorWriteRequest> filterChanged(std::span<const DescriptorWriteRequest> writeRequests);
+    [[nodiscard]] std::vector<DescriptorWriteRequest> filterChanged(std::span<const DescriptorWriteRequest> writeRequests) const;
+
+    void commit(std::span<const DescriptorWriteRequest> writeRequests);
 
   private:
     std::map<DescriptorWriteSlotKey, DescriptorWritePayloadKey> payloadsBySlot_{};
@@ -360,6 +363,10 @@ class DescriptorWriteCache
 };
 
 [[nodiscard]] std::vector<DescriptorWriteRequest> filterChangedDescriptorWrites(
+    DescriptorWriteCache &cache,
+    std::span<const DescriptorWriteRequest> writeRequests);
+
+void commitDescriptorWrites(
     DescriptorWriteCache &cache,
     std::span<const DescriptorWriteRequest> writeRequests);
 
@@ -452,6 +459,7 @@ struct ShaderBindingRecord
     DescriptorBindingInfo binding;
     std::uint32_t arrayElement = 0;
     ShaderBindingRecordPayload payload;
+    bool forceWrite = false;
 };
 
 struct PushConstantWriteRecord
@@ -473,6 +481,8 @@ class ShaderBindingSnapshot
     [[nodiscard]] std::span<const ShaderBindingRecord> descriptorWrites() const noexcept;
 
     [[nodiscard]] std::span<const PushConstantWriteRecord> pushConstantWrites() const noexcept;
+
+    void forceDescriptorWrites() noexcept;
 
   private:
     friend class ShaderCursor;

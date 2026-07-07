@@ -536,6 +536,51 @@ bool UiSystem::sliderFloat(std::string_view label, float& value, float minValue,
     return ImGui::SliderFloat(ownedLabel.c_str(), &value, minValue, maxValue);
 }
 
+bool UiSystem::inputFloat(std::string_view label, float& value, float minValue, float maxValue)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputFloat requires an active UI frame.");
+    nrAssert(minValue <= maxValue, "UiSystem::inputFloat requires minValue <= maxValue.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    auto const inputId = std::format("##{}", ownedLabel);
+    auto inputValue = std::clamp(value, minValue, maxValue);
+    ImGui::TextUnformatted(ownedLabel.data(), ownedLabel.data() + ownedLabel.size());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(96.0f);
+    auto const changed = ImGui::InputFloat(inputId.c_str(), std::addressof(inputValue));
+    value = std::clamp(inputValue, minValue, maxValue);
+    return changed;
+}
+
+bool UiSystem::inputInt32(
+    std::string_view label,
+    std::int32_t& value,
+    std::int32_t minValue,
+    std::int32_t maxValue)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputInt32 requires an active UI frame.");
+    nrAssert(minValue <= maxValue, "UiSystem::inputInt32 requires minValue <= maxValue.");
+    setCurrentContext();
+
+    auto const ownedLabel = std::string{label};
+    auto const inputId = std::format("##{}", ownedLabel);
+    auto inputValue = std::clamp(value, minValue, maxValue);
+    ImGui::TextUnformatted(ownedLabel.data(), ownedLabel.data() + ownedLabel.size());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(96.0f);
+    auto const changed = ImGui::InputScalar(
+        inputId.c_str(),
+        ImGuiDataType_S32,
+        std::addressof(inputValue),
+        nullptr,
+        nullptr,
+        "%d",
+        ImGuiInputTextFlags_CharsDecimal);
+    value = std::clamp(inputValue, minValue, maxValue);
+    return changed;
+}
+
 bool UiSystem::inputUInt(
     std::string_view label,
     std::uint32_t& value,

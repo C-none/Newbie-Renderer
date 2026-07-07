@@ -269,6 +269,23 @@ void markBindlessTextureTableDirty(UiRuntimeCache& runtime) noexcept
     }
 }
 
+[[nodiscard]] void* uiTextureBackendMarker(UiRuntimeCache& runtime) noexcept
+{
+    return std::addressof(runtime);
+}
+
+[[nodiscard]] const void* uiTextureBackendMarker(const UiRuntimeCache& runtime) noexcept
+{
+    return std::addressof(runtime);
+}
+
+[[nodiscard]] bool textureOwnedByRuntime(
+    const UiRuntimeCache& runtime,
+    const ImTextureData& textureData) noexcept
+{
+    return static_cast<const void*>(textureData.BackendUserData) == uiTextureBackendMarker(runtime);
+}
+
 [[nodiscard]] std::uint32_t acquireUiTextureSlot(
     UiRuntimeCache& runtime,
     std::uint64_t textureKey)
@@ -437,7 +454,9 @@ void createOrUpdateUiTexture(
     ImTextureData& textureData,
     std::uint64_t currentFrameIndex)
 {
+    auto const wasOwnedByRuntime = textureOwnedByRuntime(runtime, textureData);
     auto const textureKey = makeManagedTextureKey(textureData);
+    auto const hadRuntimeSlot = runtime.textureSlotByKey.contains(textureKey);
     auto const textureSlot = acquireUiTextureSlot(runtime, textureKey);
     auto const textureExtent = makeTextureExtent(textureData);
     auto uploadBytes = makeTextureUploadBytes(textureData);
@@ -494,6 +513,11 @@ void createOrUpdateUiTexture(
         .access = vk::AccessFlagBits2::eShaderSampledRead,
     };
 
+    if (!wasOwnedByRuntime && hadRuntimeSlot)
+    {
+        markBindlessTextureTableDirty(runtime);
+    }
+    textureData.BackendUserData = uiTextureBackendMarker(runtime);
     textureData.SetTexID(makeTextureIdFromSlot(textureSlot));
     textureData.SetStatus(ImTextureStatus_OK);
 }
@@ -503,6 +527,7 @@ void destroyUiTexture(
     ImTextureData& textureData,
     std::uint64_t currentFrameIndex)
 {
+    auto const ownedByRuntime = textureOwnedByRuntime(runtime, textureData);
     auto const textureKey = makeManagedTextureKey(textureData);
     auto slotIt = runtime.textureSlotByKey.find(textureKey);
     if (slotIt != runtime.textureSlotByKey.end())
@@ -524,15 +549,23 @@ void destroyUiTexture(
         runtime.textureSlotByKey.erase(slotIt);
         markBindlessTextureTableDirty(runtime);
     }
-    textureData.BackendUserData = nullptr;
-    textureData.SetTexID(ImTextureID{});
-    textureData.SetStatus(ImTextureStatus_Destroyed);
+    if (ownedByRuntime)
+    {
+        textureData.BackendUserData = nullptr;
+        textureData.SetTexID(ImTextureID{});
+        textureData.SetStatus(ImTextureStatus_Destroyed);
+    }
 }
 
 [[nodiscard]] bool runtimeHasValidTextureFor(
     const UiRuntimeCache& runtime,
     const ImTextureData& textureData) noexcept
 {
+    if (!textureOwnedByRuntime(runtime, textureData))
+    {
+        return false;
+    }
+
     auto const textureKey = makeManagedTextureKey(textureData);
     auto const slotIt = runtime.textureSlotByKey.find(textureKey);
     if (slotIt == runtime.textureSlotByKey.end())
@@ -916,6 +949,7 @@ template <std::size_t N>
         .descriptorCapacity = kUiTextureDescriptorCapacity,
         .sampler = runtime.textureSampler.raw(),
         .tableVersion = runtime.textureTableRevision,
+        .refreshActiveDescriptorsOnCacheHit = true,
         .descriptorsById = std::move(descriptorsById),
         .fallbackDescriptor = fallbackDescriptor,
     };
@@ -926,6 +960,8 @@ void prepareBindlessTextureTableForFrame(
     nr::renderer::BindlessImageTableCache& cache,
     std::uint32_t frameIndex)
 {
+    nr::nrAssert(static_cast<bool>(runtime.pipeline), "UiNode bindless texture table requires an initialized pipeline runtime.");
+
     cache.ensureTableForFrame(
         *runtime.pipeline,
         frameIndex,

@@ -153,7 +153,10 @@ class Device
 
     [[nodiscard]] bool hasEnabledDeviceExtension(std::string_view extension) const;
 
-    void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"});
+    void initialize(
+        std::string const &_appName = {"DefaultApp"},
+        std::string const &_engineName = {"DefaultEngine"},
+        PipelineCacheConfig pipelineCache = {});
 
     [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max());
 

@@ -282,11 +282,30 @@ void DescriptorWriteCache::clear() noexcept
     return version_;
 }
 
-[[nodiscard]] std::vector<DescriptorWriteRequest> DescriptorWriteCache::filterChanged(std::span<const DescriptorWriteRequest> writeRequests)
+[[nodiscard]] std::vector<DescriptorWriteRequest> DescriptorWriteCache::filterChanged(std::span<const DescriptorWriteRequest> writeRequests) const
 {
     auto changedWrites = std::vector<DescriptorWriteRequest>{};
     changedWrites.reserve(writeRequests.size());
 
+    std::ranges::for_each(writeRequests, [&](const DescriptorWriteRequest &request) {
+        auto slotKey = detail::makeDescriptorWriteSlotKey(request);
+        auto payloadKey = detail::makeDescriptorPayloadKey(request.payload);
+
+        auto cachedPayload = payloadsBySlot_.find(slotKey);
+        if (!request.forceWrite && cachedPayload != payloadsBySlot_.end() && cachedPayload->second == payloadKey)
+        {
+            return;
+        }
+
+        changedWrites.push_back(request);
+    });
+
+    return changedWrites;
+}
+
+void DescriptorWriteCache::commit(std::span<const DescriptorWriteRequest> writeRequests)
+{
+    auto committedAny = false;
     std::ranges::for_each(writeRequests, [&](const DescriptorWriteRequest &request) {
         auto slotKey = detail::makeDescriptorWriteSlotKey(request);
         auto payloadKey = detail::makeDescriptorPayloadKey(request.payload);
@@ -298,15 +317,13 @@ void DescriptorWriteCache::clear() noexcept
         }
 
         payloadsBySlot_.insert_or_assign(std::move(slotKey), std::move(payloadKey));
-        changedWrites.push_back(request);
+        committedAny = true;
     });
 
-    if (!changedWrites.empty())
+    if (committedAny)
     {
         ++version_;
     }
-
-    return changedWrites;
 }
 
 [[nodiscard]] std::vector<DescriptorWriteRequest> filterChangedDescriptorWrites(
@@ -314,6 +331,13 @@ void DescriptorWriteCache::clear() noexcept
     std::span<const DescriptorWriteRequest> writeRequests)
 {
     return cache.filterChanged(writeRequests);
+}
+
+void commitDescriptorWrites(
+    DescriptorWriteCache &cache,
+    std::span<const DescriptorWriteRequest> writeRequests)
+{
+    cache.commit(writeRequests);
 }
 
 [[nodiscard]] std::string_view shaderDescriptorSemanticName(ShaderDescriptorSemantic semantic) noexcept
@@ -569,6 +593,13 @@ void DescriptorWriteCache::clear() noexcept
 [[nodiscard]] std::span<const PushConstantWriteRecord> ShaderBindingSnapshot::pushConstantWrites() const noexcept
 {
         return pushConstantWrites_;
+    }
+
+void ShaderBindingSnapshot::forceDescriptorWrites() noexcept
+{
+        std::ranges::for_each(descriptorWrites_, [](ShaderBindingRecord &record) {
+            record.forceWrite = true;
+        });
     }
 
 [[nodiscard]] bool ShaderCursor::valid() const noexcept
@@ -2213,6 +2244,7 @@ void ShaderCursor::clearSnapshot() const
     allocateInfo.pSetLayouts = &descriptorSetLayout;
 
     vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo{};
+    auto resolvedVariableDescriptorCount = std::optional<std::uint32_t>{};
     if (auto setIt = variableDescriptorCapBySetAndBinding_.find(setIndex); setIt != variableDescriptorCapBySetAndBinding_.end())
     {
         nrAssert(
@@ -2223,11 +2255,11 @@ void ShaderCursor::clearSnapshot() const
                 setIt->second.size()));
         auto const [bindingIndex, cap] = *setIt->second.begin();
         const auto requestedCount = variableDescriptorCount.value_or(cap);
-        const auto resolvedCount = std::clamp(requestedCount, 1u, cap);
+        resolvedVariableDescriptorCount = std::clamp(requestedCount, 1u, cap);
         variableCountInfo.descriptorSetCount = 1;
-        variableCountInfo.pDescriptorCounts = &resolvedCount;
+        variableCountInfo.pDescriptorCounts = std::addressof(*resolvedVariableDescriptorCount);
         allocateInfo.pNext = &variableCountInfo;
-        set.allocatedDescriptorCountByBinding_.insert_or_assign(bindingIndex, resolvedCount);
+        set.allocatedDescriptorCountByBinding_.insert_or_assign(bindingIndex, *resolvedVariableDescriptorCount);
     }
 
     auto allocatedSets = device_->get().allocateDescriptorSets(allocateInfo);
@@ -2436,6 +2468,7 @@ void ShaderBindingPool::update(const ShaderBindingSet &set, const DescriptorWrit
             .binding = record.binding,
             .arrayElement = record.arrayElement,
             .payload = std::move(resolvedPayload),
+            .forceWrite = record.forceWrite,
         });
     });
 

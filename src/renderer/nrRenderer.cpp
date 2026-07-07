@@ -408,6 +408,154 @@ void NodeUiBuildContext::addSection(
     });
 }
 
+namespace
+{
+template <typename TValue>
+[[nodiscard]] TValue variantSnapshotValueOr(
+    const VariantItemSnapshot& snapshot,
+    TValue fallback)
+{
+    auto const* value = std::get_if<TValue>(std::addressof(snapshot.value));
+    return value != nullptr ? *value : fallback;
+}
+
+[[nodiscard]] std::string variantChoicePreview(const VariantItemSnapshot& snapshot)
+{
+    auto const value = variantSnapshotValueOr<std::string>(snapshot, {});
+    auto choiceIt = std::ranges::find_if(snapshot.desc.shader.stringChoices, [&](const nr::rhi::ShaderVariantStringChoice& choice) {
+        return choice.value == value;
+    });
+    if (choiceIt == std::ranges::end(snapshot.desc.shader.stringChoices))
+    {
+        return value;
+    }
+    return choiceIt->label.empty() ? choiceIt->value : choiceIt->label;
+}
+
+void drawVariantSnapshot(
+    VariantStateRegistry& variants,
+    std::string_view runtimeName,
+    const VariantItemSnapshot& snapshot,
+    NodeUiWriter& ui)
+{
+    auto const& shader = snapshot.desc.shader;
+    auto const label = shader.label.empty() ? shader.id : shader.label;
+    switch (shader.kind)
+    {
+    case nr::rhi::ShaderVariantValueKind::Bool:
+    {
+        auto value = variantSnapshotValueOr<bool>(snapshot, false);
+        if (ui.checkbox(label, value))
+        {
+            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
+        }
+        return;
+    }
+    case nr::rhi::ShaderVariantValueKind::Int32:
+    {
+        auto value = variantSnapshotValueOr<std::int32_t>(snapshot, {});
+        auto const minValue = shader.numericRange.bounded
+                                  ? static_cast<std::int32_t>(shader.numericRange.minValue)
+                                  : std::numeric_limits<std::int32_t>::lowest();
+        auto const maxValue = shader.numericRange.bounded
+                                  ? static_cast<std::int32_t>(shader.numericRange.maxValue)
+                                  : std::numeric_limits<std::int32_t>::max();
+        if (ui.inputInt32(label, value, minValue, maxValue))
+        {
+            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
+        }
+        return;
+    }
+    case nr::rhi::ShaderVariantValueKind::UInt32:
+    {
+        auto value = variantSnapshotValueOr<std::uint32_t>(snapshot, {});
+        auto const minValue = shader.numericRange.bounded
+                                  ? static_cast<std::uint32_t>(std::max(0.0, shader.numericRange.minValue))
+                                  : std::uint32_t{0};
+        auto const maxValue = shader.numericRange.bounded
+                                  ? static_cast<std::uint32_t>(std::max(0.0, shader.numericRange.maxValue))
+                                  : std::numeric_limits<std::uint32_t>::max();
+        auto const changed = snapshot.desc.effect != VariantItemEffect::RuntimeOnly &&
+                             shader.numericRange.bounded &&
+                             maxValue <= static_cast<std::uint32_t>(std::numeric_limits<int>::max())
+                                 ? ui.sliderUInt(label, value, minValue, maxValue)
+                                 : ui.inputUInt(label, value, minValue, maxValue);
+        if (changed)
+        {
+            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
+        }
+        return;
+    }
+    case nr::rhi::ShaderVariantValueKind::Float32:
+    {
+        auto value = variantSnapshotValueOr<float>(snapshot, {});
+        auto const minValue = shader.numericRange.bounded
+                                  ? static_cast<float>(shader.numericRange.minValue)
+                                  : std::numeric_limits<float>::lowest();
+        auto const maxValue = shader.numericRange.bounded
+                                  ? static_cast<float>(shader.numericRange.maxValue)
+                                  : std::numeric_limits<float>::max();
+        auto const changed = shader.numericRange.bounded
+                                 ? ui.sliderFloat(label, value, minValue, maxValue)
+                                 : ui.inputFloat(label, value, minValue, maxValue);
+        if (changed)
+        {
+            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
+        }
+        return;
+    }
+    case nr::rhi::ShaderVariantValueKind::String:
+    {
+        auto current = variantSnapshotValueOr<std::string>(snapshot, {});
+        if (!ui.beginCombo(label, variantChoicePreview(snapshot)))
+        {
+            return;
+        }
+        std::ranges::for_each(shader.stringChoices, [&](const nr::rhi::ShaderVariantStringChoice& choice) {
+            auto const choiceLabel = choice.label.empty() ? choice.value : choice.label;
+            auto const selected = choice.value == current;
+            if (ui.selectable(choiceLabel, selected))
+            {
+                current = choice.value;
+                static_cast<void>(variants.submitPatch(runtimeName, shader.id, current, VariantWriteSource::Ui));
+            }
+        });
+        ui.endCombo();
+        return;
+    }
+    }
+}
+
+void collectVariantUiSections(
+    VariantStateRegistry& variants,
+    std::string_view runtimeName,
+    NodeUiBuildContext& context)
+{
+    auto snapshots = variants.snapshot(runtimeName);
+    std::erase_if(snapshots, [](const VariantItemSnapshot& snapshot) {
+        return !snapshot.desc.uiVisible;
+    });
+    if (snapshots.empty())
+    {
+        return;
+    }
+
+    context.addSection(
+        runtimeName,
+        [runtimeName = std::string{runtimeName}, &variants](NodeUiWriter& ui) {
+            auto currentSnapshots = variants.snapshot(runtimeName);
+            std::erase_if(currentSnapshots, [](const VariantItemSnapshot& snapshot) {
+                return !snapshot.desc.uiVisible;
+            });
+            std::ranges::for_each(currentSnapshots, [&](const VariantItemSnapshot& snapshot) {
+                drawVariantSnapshot(variants, runtimeName, snapshot, ui);
+            });
+        },
+        true,
+        "variants");
+}
+} // namespace
+
 void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
 {
         nrAssert(resource.valid(), std::format("NodeBuildContext::publishFrameResource requires a valid resource for '{}'.", key));
@@ -1509,7 +1657,7 @@ void Renderer::initialize(const RendererCreateInfo& info)
         shaderService.configure();
 
         device_ = std::make_unique<nr::rhi::Device>();
-        device_->initialize(info.appName, info.engineName);
+        device_->initialize(info.appName, info.engineName, info.pipelineCache);
         frameUniformArena_.initialize(*device_, info.frameUniformBytesPerFrame, "Renderer.FrameUniformArena");
         submissionTimeline_.initialize(device_->device, 0);
         ensureSceneTextureFallback();
@@ -1525,9 +1673,6 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
         installed.reserve(spec.nodes.size());
 
         auto knownNames = std::set<std::string>{};
-        auto initContext = NodeInitContext{
-            .device = std::ref(*device_),
-        };
 
         std::ranges::for_each(spec.nodes, [&](const NodeCreateInfo& createInfo) {
             nrAssert(static_cast<bool>(createInfo.runtime), "Renderer::installGraph requires a valid node runtime in NodeCreateInfo.");
@@ -1541,6 +1686,12 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
             auto [_, inserted] = knownNames.insert(runtimeName);
             nrAssert(inserted, "Renderer::installGraph found duplicate node names in RendererGraphSpec.");
 
+            cacheSuite_.variantRegistry.clearRuntime(runtimeName);
+            auto initContext = NodeInitContext{
+                .device = std::ref(*device_),
+                .variants = std::ref(cacheSuite_.variantRegistry),
+                .runtimeName = runtimeName,
+            };
             createInfo.runtime->initialize(initContext);
 
             installed.push_back(InstalledNode{
@@ -2080,6 +2231,7 @@ void Renderer::buildInstalledGraph(
 {
         nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
+        cacheSuite_.variantRegistry.commitFramePatches();
         builder_.clear();
         auto const previousFrameConstants = previousGlobalFrameConstants_.value_or(frameConstants);
         auto const globalFrameUniforms =
@@ -2106,6 +2258,7 @@ void Renderer::buildInstalledGraph(
         std::ranges::for_each(installedNodes_, [&](InstalledNode& installedNode) {
             auto uiContext = NodeUiBuildContext{installedNode.runtimeName, nodeUiSections};
             installedNode.runtime->collectUi(uiContext, nodeFrameParameters);
+            collectVariantUiSections(cacheSuite_.variantRegistry, installedNode.runtimeName, uiContext);
         });
         nodeFrameParameters.nodeUiSections =
             std::span<const NodeUiSection>{nodeUiSections.data(), nodeUiSections.size()};
@@ -2126,9 +2279,11 @@ void Renderer::buildInstalledGraph(
                 .nodeHandle = nodeHandle,
                 .queue = installedNode.config.queue,
                 .frameIndex = frameParameters.frameIndex,
+                .runtimeName = installedNode.runtimeName,
                 .globalResources = std::cref(globalResources),
                 .frameResources = std::ref(frameResources),
                 .frameDataResources = std::ref(frameDataResources),
+                .variants = std::ref(cacheSuite_.variantRegistry),
             };
 
             installedNode.runtime->build(buildContext, nodeFrameParameters);

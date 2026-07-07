@@ -443,6 +443,7 @@ void updateResourcesForBindingSnapshot(
 		nrAssert(
 			requestsBySet.empty(),
 			"updateResourcesForBindingSnapshot could not find descriptor sets for one or more snapshot writes.");
+		commitDescriptorWrites(descriptorWriteCache, changedWriteRequests);
 	}
 }
 
@@ -483,6 +484,47 @@ void pushConstantsToCommandBuffer(
 	});
 }
 
+void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::ShaderModule &shaderModule, std::string_view name)
+{
+	if constexpr (gpuDebugNamesEnabled)
+	{
+		if (name.empty())
+		{
+			return;
+		}
+
+		auto debugName = std::string{name};
+		vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
+		objectNameInfo.objectType = vk::ObjectType::eShaderModule;
+		const auto rawHandle = *shaderModule;
+		static_assert(sizeof(rawHandle) == sizeof(std::uint64_t), "VkShaderModule handle size must match std::uint64_t for debug naming.");
+		objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
+		objectNameInfo.pObjectName = debugName.c_str();
+		try
+		{
+			device.setDebugUtilsObjectNameEXT(objectNameInfo);
+		}
+		catch (const vk::SystemError &error)
+		{
+			auto errorText = std::string_view{error.what()};
+			nrInfo<LogLevel::error>(std::vformat(
+				"setShaderModuleDebugName failed to set debug name '{}': {}",
+				std::make_format_args(debugName, errorText)));
+			nrAssert(false, "setShaderModuleDebugName failed to set a Vulkan debug object name.");
+		}
+	}
+}
+
+[[nodiscard]] std::string makeShaderModuleDebugName(const SlangEntryPointData &entryPoint)
+{
+	if (entryPoint.debugName.empty())
+	{
+		return entryPoint.entryPointName.empty() ? std::string{"shader"} : entryPoint.entryPointName;
+	}
+
+	return entryPoint.debugName;
+}
+
 [[nodiscard]] VkShaderProgram VkShaderProgram::create(const vk::raii::Device &device, std::span<const SlangEntryPointData *const> selectedEntryPoints)
 {
 				nrAssert(!selectedEntryPoints.empty(), "VkShaderProgram::create requires at least one selected entrypoint.");
@@ -508,6 +550,7 @@ void pushConstantsToCommandBuffer(
 					moduleInfo.codeSize = codeSize;
 					moduleInfo.pCode = static_cast<const std::uint32_t *>(entryPoint->codeBlob->getBufferPointer());
 					result.modules_.emplace_back(device, moduleInfo);
+					setShaderModuleDebugName(device, result.modules_.back(), makeShaderModuleDebugName(*entryPoint));
 
 					result.shaderEntryPointNames_.push_back(entryPoint->entryPointName.empty() ? "main" : entryPoint->entryPointName);
 					result.entryPointNames_.push_back(result.shaderEntryPointNames_.back());
@@ -558,6 +601,7 @@ void pushConstantsToCommandBuffer(
 					moduleInfo.codeSize = codeSize;
 					moduleInfo.pCode = static_cast<const std::uint32_t *>(entryPoint->codeBlob->getBufferPointer());
 					result.modules_.emplace_back(device, moduleInfo);
+					setShaderModuleDebugName(device, result.modules_.back(), makeShaderModuleDebugName(*entryPoint));
 
 					result.shaderEntryPointNames_.push_back(entryPoint->entryPointName.empty() ? "main" : entryPoint->entryPointName);
 					result.entryPointNames_.push_back(std::move(logicalEntryPointName));
@@ -1010,11 +1054,126 @@ void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline,
 	}
 }
 
+namespace
+{
+[[nodiscard]] std::filesystem::path pipelineCachePath(const PipelineCacheConfig &config)
+{
+	if (!config.persistent())
+	{
+		return {};
+	}
+	return config.directory / config.fileName;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> readPipelineCacheBlob(const PipelineCacheConfig &config)
+{
+	auto const path = pipelineCachePath(config);
+	if (path.empty())
+	{
+		return {};
+	}
+
+	auto error = std::error_code{};
+	if (!std::filesystem::exists(path, error))
+	{
+		return {};
+	}
+	if (error)
+	{
+		nrInfo<LogLevel::warning>(std::format(
+			"PipelineService failed to query pipeline cache path '{}': {}",
+			path.string(),
+			error.message()));
+		return {};
+	}
+
+	if (std::filesystem::is_directory(path, error))
+	{
+		nrInfo<LogLevel::warning>(std::format(
+			"PipelineService ignored pipeline cache path '{}' because it is a directory.",
+			path.string()));
+		return {};
+	}
+
+	auto stream = std::ifstream{path, std::ios::binary | std::ios::ate};
+	if (!stream)
+	{
+		nrInfo<LogLevel::warning>(std::format(
+			"PipelineService failed to open pipeline cache file '{}'.",
+			path.string()));
+		return {};
+	}
+
+	auto const size = stream.tellg();
+	if (size <= std::streampos{0})
+	{
+		return {};
+	}
+
+	auto data = std::vector<std::uint8_t>(static_cast<std::size_t>(size));
+	stream.seekg(0, std::ios::beg);
+	stream.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size()));
+	if (!stream)
+	{
+		nrInfo<LogLevel::warning>(std::format(
+			"PipelineService failed to read pipeline cache file '{}'.",
+			path.string()));
+		return {};
+	}
+
+	return data;
+}
+
+[[nodiscard]] bool writePipelineCacheBlob(
+	const PipelineCacheConfig &config,
+	std::span<const std::uint8_t> data)
+{
+	auto const path = pipelineCachePath(config);
+	if (path.empty() || data.empty())
+	{
+		return false;
+	}
+
+	auto error = std::error_code{};
+	std::filesystem::create_directories(path.parent_path(), error);
+	if (error)
+	{
+		nrInfo<LogLevel::warning>(std::format(
+			"PipelineService failed to create pipeline cache directory '{}': {}",
+			path.parent_path().string(),
+			error.message()));
+		return false;
+	}
+
+	auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
+	if (!stream)
+	{
+		nrInfo<LogLevel::warning>(std::format(
+			"PipelineService failed to open pipeline cache file '{}' for writing.",
+			path.string()));
+		return false;
+	}
+
+	stream.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size()));
+	if (!stream)
+	{
+		nrInfo<LogLevel::warning>(std::format(
+			"PipelineService failed to write pipeline cache file '{}'.",
+			path.string()));
+		return false;
+	}
+
+	return true;
+}
+} // namespace
+
 void PipelineService::bindDevice(
 		const vk::raii::Device &device,
-		std::optional<std::reference_wrapper<const RayTracingCapabilitySnapshot>> rtCapabilities)
+		std::optional<std::reference_wrapper<const RayTracingCapabilitySnapshot>> rtCapabilities,
+		PipelineCacheConfig cacheConfig)
 {
 		device_ = std::cref(device);
+		cacheConfig_ = std::move(cacheConfig);
 		if (rtCapabilities.has_value())
 		{
 			rtCapabilities_ = rtCapabilities->get();
@@ -1023,8 +1182,39 @@ void PipelineService::bindDevice(
 		{
 			rtCapabilities_.reset();
 		}
+		auto cacheBlob = readPipelineCacheBlob(cacheConfig_);
 		vk::PipelineCacheCreateInfo cacheCreateInfo{};
-		pipelineCache_ = vk::raii::PipelineCache(device, cacheCreateInfo);
+		if (cacheConfig_.enabled && !cacheBlob.empty())
+		{
+			cacheCreateInfo.initialDataSize = cacheBlob.size();
+			cacheCreateInfo.pInitialData = cacheBlob.data();
+		}
+		pipelineCache_ = cacheConfig_.enabled
+			? vk::raii::PipelineCache(device, cacheCreateInfo)
+			: vk::raii::PipelineCache{nullptr};
+	}
+
+[[nodiscard]] bool PipelineService::savePipelineCache() const
+{
+		if (!cacheConfig_.saveOnIdle || !cacheConfig_.persistent() || *pipelineCache_ == nullptr)
+		{
+			return false;
+		}
+
+		auto data = std::vector<std::uint8_t>{};
+		try
+		{
+			data = pipelineCache_.getData();
+		}
+		catch (const vk::SystemError &error)
+		{
+			nrInfo<LogLevel::warning>(std::format(
+				"PipelineService failed to export Vulkan pipeline cache data: {}",
+				error.what()));
+			return false;
+		}
+
+		return writePipelineCacheBlob(cacheConfig_, data);
 	}
 
 [[nodiscard]] ShaderBindingPool PipelineService::createBindingPool(const ShaderDescriptorLayout &descriptorLayout, ShaderBindingPoolConfig config) const

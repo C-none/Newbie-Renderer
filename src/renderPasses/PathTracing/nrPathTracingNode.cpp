@@ -36,6 +36,58 @@ struct PathTracingRuntimeCache
     std::map<PathTracingRuntimeKey, PathTracingVariantRuntime> variants{};
 };
 
+[[nodiscard]] PathTracingVariantKey normalizePathTracingVariantKey(PathTracingVariantKey key) noexcept;
+
+[[nodiscard]] std::array<nr::renderer::VariantItemDesc, 2> makePathTracingVariantItems(
+    PathTracingVariantKey defaults)
+{
+    defaults = normalizePathTracingVariantKey(defaults);
+    return std::array{
+        nr::renderer::VariantItemDesc{
+            .shader = nr::rhi::ShaderVariantItemDesc{
+                .id = "maxSurfaceBounces",
+                .label = "Max Bounces",
+                .kind = nr::rhi::ShaderVariantValueKind::UInt32,
+                .defaultValue = defaults.maxSurfaceBounces,
+                .numericRange = nr::rhi::ShaderVariantNumericRange{
+                    .minValue = static_cast<double>(kPathTracingMinSurfaceBounces),
+                    .maxValue = static_cast<double>(kPathTracingMaxSurfaceBouncesLimit),
+                    .step = 1.0,
+                    .bounded = true,
+                },
+                .slangBinding = nr::rhi::ShaderVariantSlangBinding{
+                    .kind = nr::rhi::ShaderVariantSlangBindingKind::Constant,
+                    .constant = nr::rhi::ShaderVariantSlangConstantBinding{
+                        .name = "kPathTracingMaxSurfaceBounces",
+                        .type = nr::rhi::SlangVariantConstantType::UInt32,
+                    },
+                },
+            },
+            .effect = nr::renderer::VariantItemEffect::SlangLinkTime,
+        },
+        nr::renderer::VariantItemDesc{
+            .shader = nr::rhi::ShaderVariantItemDesc{
+                .id = "enableRussianRoulette",
+                .label = "Russian Roulette",
+                .kind = nr::rhi::ShaderVariantValueKind::Bool,
+                .defaultValue = defaults.enableRussianRoulette,
+                .slangBinding = nr::rhi::ShaderVariantSlangBinding{
+                    .kind = nr::rhi::ShaderVariantSlangBindingKind::TypeAlias,
+                    .typeAlias = nr::rhi::ShaderVariantSlangTypeAliasBinding{
+                        .exportedTypeName = "PathTracingRussianRoulettePolicy",
+                        .interfaceName = "IPathTracingRussianRoulettePolicy",
+                        .concreteTypeNameByChoice = {
+                            {"true", "PathTracingRussianRouletteEnabledPolicy"},
+                            {"false", "PathTracingRussianRouletteDisabledPolicy"},
+                        },
+                    },
+                },
+            },
+            .effect = nr::renderer::VariantItemEffect::SlangLinkTime,
+        },
+    };
+}
+
 [[nodiscard]] PathTracingVariantKey normalizePathTracingVariantKey(PathTracingVariantKey key) noexcept
 {
     key.maxSurfaceBounces = std::clamp(
@@ -72,24 +124,22 @@ struct PathTracingRuntimeCache
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingVariantDesc(const PathTracingVariantKey& key)
 {
     auto normalizedKey = normalizePathTracingVariantKey(key);
-
-    auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.debugName = describePathTracingVariantKey(normalizedKey);
-
-    variant.constants.try_emplace(
-        "kPathTracingMaxSurfaceBounces",
-        nr::rhi::SlangVariantConstant::fromUInt32(normalizedKey.maxSurfaceBounces));
-
-    variant.typeAliases.try_emplace(
-        "PathTracingRussianRoulettePolicy",
-        nr::rhi::SlangVariantTypeAlias{
-            .typeName = "PathTracingRussianRoulettePolicy",
-            .interfaceName = "IPathTracingRussianRoulettePolicy",
-            .concreteTypeName = normalizedKey.enableRussianRoulette ? "PathTracingRussianRouletteEnabledPolicy"
-                                                                    : "PathTracingRussianRouletteDisabledPolicy",
-        });
-
-    return variant;
+    auto items = makePathTracingVariantItems(PathTracingVariantKey{});
+    auto valueSet = nr::rhi::ShaderVariantValueSet{
+        .values = {
+            {"maxSurfaceBounces", normalizedKey.maxSurfaceBounces},
+            {"enableRussianRoulette", normalizedKey.enableRussianRoulette},
+        },
+    };
+    auto shaderItems = items |
+                       std::views::transform([](const nr::renderer::VariantItemDesc& item) {
+                           return item.shader;
+                       }) |
+                       std::ranges::to<std::vector>();
+    return nr::rhi::makeSlangProgramVariantDesc(
+        describePathTracingVariantKey(normalizedKey),
+        std::span<const nr::rhi::ShaderVariantItemDesc>{shaderItems.data(), shaderItems.size()},
+        valueSet);
 }
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingChsVariantDesc(const RtHitPermutationKey& key)
@@ -324,6 +374,24 @@ struct PathTracingRuntimeCache
     return runtimeIt->second;
 }
 
+[[nodiscard]] PathTracingVariantKey pathTracingVariantKeyFromRegistry(
+    const nr::renderer::VariantStateRegistry& variants,
+    std::string_view runtimeName,
+    PathTracingVariantKey fallback)
+{
+    fallback = normalizePathTracingVariantKey(fallback);
+    return normalizePathTracingVariantKey(PathTracingVariantKey{
+        .maxSurfaceBounces = variants.valueOr<std::uint32_t>(
+            runtimeName,
+            "maxSurfaceBounces",
+            fallback.maxSurfaceBounces),
+        .enableRussianRoulette = variants.valueOr<bool>(
+            runtimeName,
+            "enableRussianRoulette",
+            fallback.enableRussianRoulette),
+    });
+}
+
 [[nodiscard]] std::shared_ptr<PathTracingRuntimeCache> makePathTracingRuntimeCache()
 {
     auto cache = std::make_shared<PathTracingRuntimeCache>();
@@ -346,6 +414,10 @@ void PathTracingNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
     input.variant = detail::normalizePathTracingVariantKey(input.variant);
+    auto items = detail::makePathTracingVariantItems(input.variant);
+    context.variants.get().registerItems(
+        context.runtimeName,
+        std::span<const nr::renderer::VariantItemDesc>{items.data(), items.size()});
     runtime_ = detail::makePathTracingRuntimeCache();
 }
 
@@ -353,7 +425,10 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
 {
     nr::nrAssert(static_cast<bool>(runtime_), "PathTracing build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "PathTracing build stage requires device reference from initialize stage.");
-    input.variant = detail::normalizePathTracingVariantKey(input.variant);
+    input.variant = detail::pathTracingVariantKeyFromRegistry(
+        context.variants.get(),
+        context.runtimeName,
+        input.variant);
 
     auto viewportExtent = input.viewportExtent;
     if (viewportExtent.width == 1u && viewportExtent.height == 1u)
@@ -472,7 +547,11 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
         return;
     }
 
-    auto& activeRuntime = detail::ensurePathTracingVariantRuntime(*runtime_, device_->get(), input.variant, rtHitSbtPlan);
+    auto& activeRuntime = detail::ensurePathTracingVariantRuntime(
+        *runtime_,
+        device_->get(),
+        input.variant,
+        rtHitSbtPlan);
 
     auto sbtResource = context.importBuffer(
         activeRuntime.shaderBindingTable.buffer(),
@@ -552,46 +631,6 @@ void PathTracingNode::build(NodeBuildContext& context, const NodeFrameParameters
         });
 
     [[maybe_unused]] auto tracePassHandle = tracePass.build();
-}
-
-void PathTracingNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters&)
-{
-    if (pendingVariantValid_)
-    {
-        input.variant = detail::normalizePathTracingVariantKey(pendingVariant_);
-        pendingVariantValid_ = false;
-    }
-
-    input.variant = detail::normalizePathTracingVariantKey(input.variant);
-    variantDraft_ = input.variant;
-    context.addSection(
-        context.runtimeName(),
-        [this](NodeUiWriter& ui) {
-            auto maxBounces = variantDraft_.maxSurfaceBounces;
-            if (ui.inputUInt(
-                    "Max Bounces",
-                    maxBounces,
-                    kPathTracingMinSurfaceBounces,
-                    kPathTracingMaxSurfaceBouncesLimit))
-            {
-                variantDraft_.maxSurfaceBounces = std::clamp(
-                    maxBounces,
-                    kPathTracingMinSurfaceBounces,
-                    kPathTracingMaxSurfaceBouncesLimit);
-                pendingVariant_ = detail::normalizePathTracingVariantKey(variantDraft_);
-                pendingVariantValid_ = true;
-            }
-
-            auto enableRussianRoulette = variantDraft_.enableRussianRoulette;
-            if (ui.checkbox("Russian Roulette", enableRussianRoulette))
-            {
-                variantDraft_.enableRussianRoulette = enableRussianRoulette;
-                pendingVariant_ = detail::normalizePathTracingVariantKey(variantDraft_);
-                pendingVariantValid_ = true;
-            }
-        },
-        true,
-        "controls");
 }
 
 void PathTracingNode::shutdown(NodeShutdownContext&)

@@ -1,4 +1,5 @@
 import std;
+import nr.rhi;
 import nr.renderer;
 import nr.renderPasses;
 import nr.test;
@@ -34,6 +35,18 @@ struct StagingTestUiWriter final : nr::renderer::NodeUiWriter
     [[nodiscard]] bool sliderFloat(std::string_view, float& value, float, float) override
     {
         value = nextFloat;
+        return true;
+    }
+
+    [[nodiscard]] bool inputFloat(std::string_view, float& value, float, float) override
+    {
+        value = nextFloat;
+        return true;
+    }
+
+    [[nodiscard]] bool inputInt32(std::string_view, std::int32_t& value, std::int32_t, std::int32_t) override
+    {
+        value = 0;
         return true;
     }
 
@@ -84,6 +97,7 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
         auto ui = readProjectFile("src/renderPasses/Ui/nrUiNode.cpp");
         auto sceneTextureBinding = readProjectFile("src/renderPasses/nrSceneTextureTableBinding.ixx");
         auto rendererInterface = readProjectFile("src/renderer/nrRenderer.ixx");
+        auto rendererCacheInterface = readProjectFile("src/renderer/nrRendererCache.ixx");
         auto rendererImplementation = readProjectFile("src/renderer/nrRenderer.cpp");
 
         requireAbsent(
@@ -102,6 +116,18 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             ui,
             "ensureBindlessTextureBindingSetsForFrame",
             "Ui texture table binding-set allocation should be owned by renderer bindless cache");
+        requireAbsent(
+            ui,
+            "if (tablePrepare.requiresDescriptorCacheInvalidation)",
+            "Ui must not clear descriptor write cache based on bindless table prepare state");
+        requirePresent(
+            ui,
+            ".refreshActiveDescriptorsOnCacheHit = true",
+            "Ui GPU-AV descriptor refresh should request active descriptor writes on bindless cache hits");
+        requireAbsent(
+            ui,
+            ".forceDescriptorWritesOnCacheHit = true",
+            "Ui GPU-AV descriptor refresh should use one cache-hit refresh option");
         requireAbsent(
             sceneTextureBinding,
             "resetSceneTextureTableFrameCache",
@@ -130,6 +156,22 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             pathTracing,
             "ensurePathTracingVariantRuntime",
             "PathTracing should lazily create independent PSO runtimes per variant key");
+        requirePresent(
+            pathTracing,
+            "context.variants.get().registerItems",
+            "PathTracing compile variants should be registered through the renderer variant registry");
+        requirePresent(
+            pathTracing,
+            "createPathTracingVariantRuntime(device, runtimeKey, hitSbtPlan)",
+            "PathTracing compile variant misses should rebuild the PSO runtime synchronously on the build thread");
+        requireAbsent(
+            pathTracingInterface,
+            "void collectUi",
+            "PathTracing controls should come from registry-generated variant UI instead of node-local staging UI");
+        requirePresent(
+            rendererImplementation,
+            "commitFramePatches",
+            "Renderer should commit staged variant patches once per frame before node build");
         requireAbsent(
             pathTracing,
             "RendererCacheSuite",
@@ -162,6 +204,22 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             rendererInterface,
             "withOptionalShaderStages",
             "Shader-visible pass builders should support per-resource shader stage overrides");
+        requireAbsent(
+            rendererInterface,
+            "descriptorCacheOwnerId()",
+            "PipelineRuntime should not expose a cache owner id for bindless tables");
+        requireAbsent(
+            rendererInterface,
+            "bindingSetGenerationForFrame",
+            "PipelineRuntime should not expose per-frame binding-set generations for bindless table cache");
+        requireAbsent(
+            rendererCacheInterface,
+            "bindingSetGenerations",
+            "BindlessImageTableCache should not track binding-set generations for this UI GPU-AV workaround");
+        requirePresent(
+            rendererCacheInterface,
+            "reinterpret_cast<std::uintptr_t>",
+            "BindlessImageTableCache should key table ownership by pipeline runtime object address within the cache lifetime");
         requirePresent(
             embeddedTriangle,
             "ShaderStageIntent::Vertex",
@@ -192,12 +250,12 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             "Renderer camera history count should support the Accumulate 4096-sample cap");
         requirePresent(
             accumulate,
-            "ui.inputUInt(\"History Samples\"",
-            "Accumulate max history samples should use a direct uint input");
-        requireAbsent(
-            accumulate,
-            "ui.sliderUInt(\"Max Samples\"",
-            "Accumulate max history samples should no longer use a slider");
+            "VariantItemEffect::RuntimeOnly",
+            "Accumulate max history samples should be registered as a runtime-only variant item");
+        requirePresent(
+            rendererImplementation,
+            "snapshot.desc.effect != VariantItemEffect::RuntimeOnly",
+            "Runtime-only uint variants should use direct input instead of the compile-variant slider path");
     }};
 
 const nr::test::CaseRegistrar presentLinearExrScreenshotCase{
@@ -284,77 +342,79 @@ const nr::test::CaseRegistrar renderPassNodeUiStagingCase{
             std::ranges::find(nextPresentWriter.textCalls, "Screenshot queued") != nextPresentWriter.textCalls.end(),
             "Present screenshot button should stage a next-frame queued status");
 
-        auto accumulate = nr::renderPasses::AccumulateNode{};
-        accumulate.input.maxHistorySampleCount = nr::renderPasses::kAccumulateDefaultMaxHistorySampleCount;
-        auto accumulateSections = std::vector<nr::renderer::NodeUiSection>{};
-        auto accumulateUiContext = nr::renderer::NodeUiBuildContext{"Accumulate", accumulateSections};
-        accumulate.collectUi(accumulateUiContext, frameParameters);
-        nr::test::requireEqual(accumulateSections.size(), std::size_t{1u});
-
-        auto accumulateWriter = StagingTestUiWriter{};
-        accumulateWriter.nextUInt = 64u;
-        accumulateSections[0].draw(accumulateWriter);
-        nr::test::requireEqual(accumulateWriter.inputUIntCallCount, 1u);
-        nr::test::requireEqual(accumulateWriter.sliderUIntCallCount, 0u);
+        auto variants = nr::renderer::VariantStateRegistry{};
+        auto pathTracingVariantItems = std::array{
+            nr::renderer::VariantItemDesc{
+                .shader = nr::rhi::ShaderVariantItemDesc{
+                    .id = "maxSurfaceBounces",
+                    .label = "Max Bounces",
+                    .kind = nr::rhi::ShaderVariantValueKind::UInt32,
+                    .defaultValue = nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces,
+                    .numericRange = nr::rhi::ShaderVariantNumericRange{
+                        .minValue = static_cast<double>(nr::renderPasses::kPathTracingMinSurfaceBounces),
+                        .maxValue = static_cast<double>(nr::renderPasses::kPathTracingMaxSurfaceBouncesLimit),
+                        .step = 1.0,
+                        .bounded = true,
+                    },
+                },
+                .effect = nr::renderer::VariantItemEffect::SlangLinkTime,
+            },
+            nr::renderer::VariantItemDesc{
+                .shader = nr::rhi::ShaderVariantItemDesc{
+                    .id = "enableRussianRoulette",
+                    .label = "Russian Roulette",
+                    .kind = nr::rhi::ShaderVariantValueKind::Bool,
+                    .defaultValue = true,
+                },
+                .effect = nr::renderer::VariantItemEffect::SlangLinkTime,
+            },
+        };
+        variants.registerItems("PathTracing", pathTracingVariantItems);
+        static_cast<void>(variants.submitPatch(
+            "PathTracing",
+            "maxSurfaceBounces",
+            std::uint32_t{0},
+            nr::renderer::VariantWriteSource::Ui));
+        static_cast<void>(variants.submitPatch(
+            "PathTracing",
+            "enableRussianRoulette",
+            false,
+            nr::renderer::VariantWriteSource::Ui));
         nr::test::requireEqual(
-            accumulate.input.maxHistorySampleCount,
-            nr::renderPasses::kAccumulateDefaultMaxHistorySampleCount);
-
-        auto nextAccumulateSections = std::vector<nr::renderer::NodeUiSection>{};
-        auto nextAccumulateUiContext = nr::renderer::NodeUiBuildContext{"Accumulate", nextAccumulateSections};
-        accumulate.collectUi(nextAccumulateUiContext, frameParameters);
-        nr::test::requireEqual(accumulate.input.maxHistorySampleCount, 64u);
-
-        auto clampAccumulateWriter = StagingTestUiWriter{};
-        clampAccumulateWriter.nextUInt = nr::renderPasses::kAccumulateMaxHistorySampleCount + 256u;
-        nextAccumulateSections[0].draw(clampAccumulateWriter);
-
-        auto finalAccumulateSections = std::vector<nr::renderer::NodeUiSection>{};
-        auto finalAccumulateUiContext = nr::renderer::NodeUiBuildContext{"Accumulate", finalAccumulateSections};
-        accumulate.collectUi(finalAccumulateUiContext, frameParameters);
-        nr::test::requireEqual(
-            accumulate.input.maxHistorySampleCount,
-            nr::renderPasses::kAccumulateMaxHistorySampleCount);
-
-        auto pathTracing = nr::renderPasses::PathTracingNode{};
-        pathTracing.input.variant.maxSurfaceBounces = nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces;
-        pathTracing.input.variant.enableRussianRoulette = true;
-        auto pathTracingSections = std::vector<nr::renderer::NodeUiSection>{};
-        auto pathTracingUiContext = nr::renderer::NodeUiBuildContext{"PathTracing", pathTracingSections};
-        pathTracing.collectUi(pathTracingUiContext, frameParameters);
-        nr::test::requireEqual(pathTracingSections.size(), std::size_t{1u});
-
-        auto pathTracingWriter = StagingTestUiWriter{};
-        pathTracingWriter.nextUInt = 0u;
-        pathTracingWriter.nextBool = false;
-        pathTracingSections[0].draw(pathTracingWriter);
-        nr::test::requireEqual(pathTracingWriter.inputUIntCallCount, 1u);
-        nr::test::requireEqual(pathTracingWriter.sliderUIntCallCount, 0u);
-        nr::test::requireEqual(
-            pathTracing.input.variant.maxSurfaceBounces,
+            variants.valueOr<std::uint32_t>(
+                "PathTracing",
+                "maxSurfaceBounces",
+                std::uint32_t{}),
             nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces);
-        nr::test::require(pathTracing.input.variant.enableRussianRoulette);
+        nr::test::require(variants.valueOr<bool>("PathTracing", "enableRussianRoulette", false));
 
-        auto nextPathTracingSections = std::vector<nr::renderer::NodeUiSection>{};
-        auto nextPathTracingUiContext = nr::renderer::NodeUiBuildContext{"PathTracing", nextPathTracingSections};
-        pathTracing.collectUi(nextPathTracingUiContext, frameParameters);
+        variants.commitFramePatches();
         nr::test::requireEqual(
-            pathTracing.input.variant.maxSurfaceBounces,
+            variants.valueOr<std::uint32_t>(
+                "PathTracing",
+                "maxSurfaceBounces",
+                std::uint32_t{}),
             nr::renderPasses::kPathTracingMinSurfaceBounces);
-        nr::test::require(!pathTracing.input.variant.enableRussianRoulette);
+        nr::test::require(!variants.valueOr<bool>("PathTracing", "enableRussianRoulette", true));
 
-        auto upperClampWriter = StagingTestUiWriter{};
-        upperClampWriter.nextUInt = nr::renderPasses::kPathTracingMaxSurfaceBouncesLimit + 128u;
-        upperClampWriter.nextBool = true;
-        nextPathTracingSections[0].draw(upperClampWriter);
-
-        auto finalPathTracingSections = std::vector<nr::renderer::NodeUiSection>{};
-        auto finalPathTracingUiContext = nr::renderer::NodeUiBuildContext{"PathTracing", finalPathTracingSections};
-        pathTracing.collectUi(finalPathTracingUiContext, frameParameters);
+        static_cast<void>(variants.submitPatch(
+            "PathTracing",
+            "maxSurfaceBounces",
+            nr::renderPasses::kPathTracingMaxSurfaceBouncesLimit + 128u,
+            nr::renderer::VariantWriteSource::Ui));
+        static_cast<void>(variants.submitPatch(
+            "PathTracing",
+            "enableRussianRoulette",
+            true,
+            nr::renderer::VariantWriteSource::Ui));
+        variants.commitFramePatches();
         nr::test::requireEqual(
-            pathTracing.input.variant.maxSurfaceBounces,
+            variants.valueOr<std::uint32_t>(
+                "PathTracing",
+                "maxSurfaceBounces",
+                std::uint32_t{}),
             nr::renderPasses::kPathTracingMaxSurfaceBouncesLimit);
-        nr::test::require(pathTracing.input.variant.enableRussianRoulette);
+        nr::test::require(variants.valueOr<bool>("PathTracing", "enableRussianRoulette", false));
     }};
 
 const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{

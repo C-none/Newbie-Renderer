@@ -139,6 +139,27 @@ NodeDescription AccumulateNode::describe() const
 void AccumulateNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
+    auto maxHistorySampleCount = std::clamp(
+        input.maxHistorySampleCount,
+        1u,
+        kAccumulateMaxHistorySampleCount);
+    context.variants.get().registerItem(
+        context.runtimeName,
+        nr::renderer::VariantItemDesc{
+            .shader = nr::rhi::ShaderVariantItemDesc{
+                .id = "maxHistorySampleCount",
+                .label = "History Samples",
+                .kind = nr::rhi::ShaderVariantValueKind::UInt32,
+                .defaultValue = maxHistorySampleCount,
+                .numericRange = nr::rhi::ShaderVariantNumericRange{
+                    .minValue = 1.0,
+                    .maxValue = static_cast<double>(kAccumulateMaxHistorySampleCount),
+                    .step = 1.0,
+                    .bounded = true,
+                },
+            },
+            .effect = nr::renderer::VariantItemEffect::RuntimeOnly,
+        });
     runtime_ = detail::ensureAccumulateRuntime(context.device.get());
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
@@ -150,6 +171,10 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
 {
     nr::nrAssert(static_cast<bool>(runtime_), "Accumulate build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "Accumulate build stage requires device reference from initialize stage.");
+    input.maxHistorySampleCount = context.variants.get().valueOr<std::uint32_t>(
+        context.runtimeName,
+        "maxHistorySampleCount",
+        std::clamp(input.maxHistorySampleCount, 1u, kAccumulateMaxHistorySampleCount));
 
     auto sourceColor = context.requireFrameResource(nr::renderer::frameResource::presentSourceColor, "Accumulate");
 
@@ -231,39 +256,6 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
     runtime_->lastWrittenSlot = currentSlot;
     runtime_->historyValid = true;
     context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, outputHistory);
-}
-
-void AccumulateNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters&)
-{
-    if (pendingMaxHistorySampleCountValid_)
-    {
-        input.maxHistorySampleCount = std::clamp(
-            pendingMaxHistorySampleCount_,
-            1u,
-            kAccumulateMaxHistorySampleCount);
-        pendingMaxHistorySampleCountValid_ = false;
-    }
-
-    maxHistorySampleCountDraft_ = std::clamp(
-        input.maxHistorySampleCount,
-        1u,
-        kAccumulateMaxHistorySampleCount);
-    context.addSection(
-        context.runtimeName(),
-        [this](NodeUiWriter& ui) {
-            auto value = maxHistorySampleCountDraft_;
-            if (ui.inputUInt("History Samples", value, 1u, kAccumulateMaxHistorySampleCount))
-            {
-                maxHistorySampleCountDraft_ = std::clamp(
-                    value,
-                    1u,
-                    kAccumulateMaxHistorySampleCount);
-                pendingMaxHistorySampleCount_ = maxHistorySampleCountDraft_;
-                pendingMaxHistorySampleCountValid_ = true;
-            }
-        },
-        true,
-        "controls");
 }
 
 void AccumulateNode::shutdown(NodeShutdownContext&)

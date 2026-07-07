@@ -81,6 +81,19 @@ struct RayTracingPipelineStageSelection
 		std::string logicalEntryPointName;
 };
 
+struct PipelineCacheConfig
+{
+		bool enabled = true;
+		std::filesystem::path directory{};
+		std::string fileName = "vulkan-pipeline-cache.bin";
+		bool saveOnIdle = true;
+
+		[[nodiscard]] bool persistent() const noexcept
+		{
+			return enabled && !directory.empty() && !fileName.empty();
+		}
+};
+
 [[nodiscard]] std::optional<std::string> validateRayTracingPipelineDesc(const RayTracingPipelineDesc &desc);
 
 namespace detail
@@ -309,7 +322,10 @@ class PipelineService
   public:
 	void bindDevice(
 		const vk::raii::Device &device,
-		std::optional<std::reference_wrapper<const RayTracingCapabilitySnapshot>> rtCapabilities = std::nullopt);
+		std::optional<std::reference_wrapper<const RayTracingCapabilitySnapshot>> rtCapabilities = std::nullopt,
+		PipelineCacheConfig cacheConfig = {});
+
+	[[nodiscard]] bool savePipelineCache() const;
 
 	[[nodiscard]] ShaderBindingPool createBindingPool(const ShaderDescriptorLayout &descriptorLayout, ShaderBindingPoolConfig config = {}) const;
 
@@ -364,9 +380,10 @@ class PipelineService
 		std::uint32_t descriptorMaxSets = 64,
 		std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
 
-  private:
+ private:
 	std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 	std::optional<RayTracingCapabilitySnapshot> rtCapabilities_{};
+	PipelineCacheConfig cacheConfig_{};
 	vk::raii::PipelineCache pipelineCache_ = {nullptr};
 };
 

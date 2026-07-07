@@ -49,14 +49,10 @@ class PathTracingNode final : public Node
     [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
-    void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void shutdown(NodeShutdownContext& context) override;
 
   private:
     std::shared_ptr<detail::PathTracingRuntimeCache> runtime_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
-    PathTracingVariantKey variantDraft_{};
-    PathTracingVariantKey pendingVariant_{};
-    bool pendingVariantValid_ = false;
 };
 } // namespace nr::renderPasses

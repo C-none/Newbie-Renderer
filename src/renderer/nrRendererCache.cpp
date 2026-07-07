@@ -428,7 +428,8 @@ void BindlessImageTableCache::invalidateTableForFrame(
     auto& cachedVersion = tableState.versions[frameSlot];
     auto& previousDescriptorIds = tableState.descriptorIdsByFrame[frameSlot];
 
-    if (initialized && cachedVersion == request.tableVersion)
+    auto const cacheHit = initialized && cachedVersion == request.tableVersion;
+    if (cacheHit && !request.refreshActiveDescriptorsOnCacheHit)
     {
         return {};
     }
@@ -504,6 +505,10 @@ void BindlessImageTableCache::invalidateTableForFrame(
     });
 
     auto snapshot = root.snapshot();
+    if (cacheHit && request.refreshActiveDescriptorsOnCacheHit)
+    {
+        snapshot.forceDescriptorWrites();
+    }
     root.clearSnapshot();
     initialized = true;
     cachedVersion = request.tableVersion;
@@ -608,6 +613,7 @@ void RendererGlobalDescriptorTableCache::clear() noexcept
 
 void RendererCacheSuite::clear() noexcept
 {
+    variantRegistry.clear();
     compileCache.clear();
     bindlessImageTableCache.clear();
     globalDescriptorTableCache.clear();

@@ -84,7 +84,10 @@ namespace
         return std::ranges::any_of(deviceEnabledExtensions, [extension](const std::string &item) { return item == extension; });
     }
 
-void Device::initialize(std::string const &_appName, std::string const &_engineName)
+void Device::initialize(
+    std::string const &_appName,
+    std::string const &_engineName,
+    PipelineCacheConfig pipelineCache)
 {
         appName = _appName;
         engineName = _engineName;
@@ -137,7 +140,7 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
         swapChainConfig_.fullScreenExclusiveEnabled = true;
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
         refreshPresentSemaphores();
-        pipelineService.bindDevice(device, std::cref(rtCapabilities_));
+        pipelineService.bindDevice(device, std::cref(rtCapabilities_), std::move(pipelineCache));
 
         // Prime the first frame's acquire so beginFrame() can immediately consume it.
         presentationContext.issueFirstAcquire();
@@ -655,6 +658,10 @@ void Device::waitIdle()
 {
         queueManager.waitAllIdle();
         frameManager.waitAll();
+        if (pipelineService.savePipelineCache())
+        {
+            nrInfo<>("Saved Vulkan pipeline cache.");
+        }
     }
 
 void Device::recreateSwapchain()

@@ -1,5 +1,4 @@
 module appUi;
-import common;
 
 struct UiPushConstants
 {

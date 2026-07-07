@@ -13,6 +13,7 @@ import :renderGraphCompiler;
 import :renderGraphExecutor;
 import :rendererCache;
 import :rendererSubmission;
+import :variantRegistry;
 
 export namespace nr::renderer
 {
@@ -26,6 +27,7 @@ struct RendererCreateInfo
     std::string appName = "NewbieRenderer";
     std::string engineName = "NewbieRenderer";
     vk::DeviceSize frameUniformBytesPerFrame = 1024u * 1024u;
+    nr::rhi::PipelineCacheConfig pipelineCache{};
 };
 
 struct NodeConfig
@@ -52,6 +54,12 @@ class NodeUiWriter
     virtual void endCombo() = 0;
     [[nodiscard]] virtual bool selectable(std::string_view label, bool selected = false) = 0;
     [[nodiscard]] virtual bool sliderFloat(std::string_view label, float& value, float minValue, float maxValue) = 0;
+    [[nodiscard]] virtual bool inputFloat(std::string_view label, float& value, float minValue, float maxValue) = 0;
+    [[nodiscard]] virtual bool inputInt32(
+        std::string_view label,
+        std::int32_t& value,
+        std::int32_t minValue,
+        std::int32_t maxValue) = 0;
     [[nodiscard]] virtual bool inputUInt(
         std::string_view label,
         std::uint32_t& value,
@@ -164,6 +172,8 @@ struct RendererCpuStatistics
 struct NodeInitContext
 {
     std::reference_wrapper<nr::rhi::Device> device;
+    std::reference_wrapper<VariantStateRegistry> variants;
+    std::string runtimeName{};
 };
 
 struct NodeShutdownContext
@@ -270,9 +280,11 @@ struct NodeBuildContext
     GraphNodeHandle nodeHandle{};
     QueueDomain queue = QueueDomain::Graphics;
     std::uint32_t frameIndex = 0;
+    std::string runtimeName{};
     std::reference_wrapper<const FrameGlobalResources> globalResources;
     std::reference_wrapper<std::map<std::string, GraphResourceHandle>> frameResources;
     std::reference_wrapper<std::map<std::string, GraphFrameDataHandle>> frameDataResources;
+    std::reference_wrapper<VariantStateRegistry> variants;
 
     void publishFrameResource(std::string_view key, GraphResourceHandle resource) const;
 

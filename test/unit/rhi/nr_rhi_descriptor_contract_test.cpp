@@ -120,7 +120,9 @@ const nr::test::CaseRegistrar descriptorWriteCacheBufferCase{
 
         auto changed = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&write, 1u});
         nr::test::requireEqual(changed.size(), std::size_t{1});
-        nr::test::require(cache.version() == initialVersion + 1u, "first changed write should advance cache version");
+        nr::test::require(cache.version() == initialVersion, "filtering should not advance cache version before update commit");
+        nr::rhi::commitDescriptorWrites(cache, changed);
+        nr::test::require(cache.version() == initialVersion + 1u, "committed first changed write should advance cache version");
 
         changed = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&write, 1u});
         nr::test::require(changed.empty(), "identical buffer write should be skipped");
@@ -129,7 +131,9 @@ const nr::test::CaseRegistrar descriptorWriteCacheBufferCase{
         auto offsetChanged = makeBufferWrite(0u, 2u, 0u, 96u, 128u);
         changed = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&offsetChanged, 1u});
         nr::test::requireEqual(changed.size(), std::size_t{1});
-        nr::test::require(cache.version() == initialVersion + 2u, "changed buffer offset should advance cache version");
+        nr::test::require(cache.version() == initialVersion + 1u, "changed buffer offset should not advance cache version before commit");
+        nr::rhi::commitDescriptorWrites(cache, changed);
+        nr::test::require(cache.version() == initialVersion + 2u, "committed buffer offset should advance cache version");
 
         auto otherSlot = makeBufferWrite(0u, 2u, 1u, 96u, 128u);
         changed = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&otherSlot, 1u});
@@ -141,6 +145,42 @@ const nr::test::CaseRegistrar descriptorWriteCacheBufferCase{
 
         changed = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&offsetChanged, 1u});
         nr::test::requireEqual(changed.size(), std::size_t{1}, "write after clear should be changed again");
+    }};
+
+const nr::test::CaseRegistrar descriptorWriteCacheTwoPhaseCase{
+    "rhi descriptor write cache does not commit during filtering",
+    [] {
+        auto cache = nr::rhi::DescriptorWriteCache{};
+        auto write = makeBufferWrite(0u, 2u, 0u, 64u, 128u);
+
+        auto changed = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&write, 1u});
+        nr::test::requireEqual(changed.size(), std::size_t{1});
+        nr::test::requireEqual(cache.version(), std::uint64_t{0});
+
+        auto changedAgain = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&write, 1u});
+        nr::test::requireEqual(changedAgain.size(), std::size_t{1}, "same payload should remain changed until update commit");
+
+        nr::rhi::commitDescriptorWrites(cache, changed);
+        auto skipped = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&write, 1u});
+        nr::test::require(skipped.empty(), "same payload should be skipped after commit");
+    }};
+
+const nr::test::CaseRegistrar descriptorWriteCacheForceWriteCase{
+    "rhi descriptor write cache accepts explicit forced writes",
+    [] {
+        auto cache = nr::rhi::DescriptorWriteCache{};
+        auto write = makeBufferWrite(0u, 2u, 0u, 64u, 128u);
+
+        auto changed = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&write, 1u});
+        nr::rhi::commitDescriptorWrites(cache, changed);
+
+        auto skipped = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&write, 1u});
+        nr::test::require(skipped.empty(), "same payload should still be skipped without forceWrite");
+
+        auto forcedWrite = write;
+        forcedWrite.forceWrite = true;
+        auto forced = nr::rhi::filterChangedDescriptorWrites(cache, std::span<const nr::rhi::DescriptorWriteRequest>{&forcedWrite, 1u});
+        nr::test::requireEqual(forced.size(), std::size_t{1}, "forceWrite should bypass descriptor payload cache filtering");
     }};
 
 const nr::test::CaseRegistrar descriptorWriteCachePayloadCase{
@@ -177,6 +217,7 @@ const nr::test::CaseRegistrar descriptorWriteCachePayloadCase{
 
         auto changed = nr::rhi::filterChangedDescriptorWrites(cache, writes);
         nr::test::requireEqual(changed.size(), writes.size());
+        nr::rhi::commitDescriptorWrites(cache, changed);
 
         changed = nr::rhi::filterChangedDescriptorWrites(cache, writes);
         nr::test::require(changed.empty(), "unchanged descriptor payload families should be skipped");
@@ -191,4 +232,5 @@ const nr::test::CaseRegistrar descriptorWriteCachePayloadCase{
         changed = nr::rhi::filterChangedDescriptorWrites(cache, modifiedWrites);
         nr::test::requireEqual(changed.size(), modifiedWrites.size(), "field changes in every payload family should be detected");
     }};
+
 } // namespace

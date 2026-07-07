@@ -14,6 +14,7 @@ export import :resource;
 export import :resourceCreateInfo;
 export import :resourceOps;
 export import :resourcePool;
+export import :shaderVariant;
 export import :slang;
 export import :sync;
 export import :surface;

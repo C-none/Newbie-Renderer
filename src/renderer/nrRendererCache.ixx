@@ -8,6 +8,7 @@ import nr.utils;
 import std;
 import :renderGraphCompiler;
 import :renderGraphType;
+import :variantRegistry;
 
 export namespace nr::renderer
 {
@@ -250,6 +251,7 @@ struct BindlessImageTableRequest
     vk::Sampler sampler{};
     bool usesImmutableSampler = false;
     std::uint64_t tableVersion = 0;
+    bool refreshActiveDescriptorsOnCacheHit = false;
     std::map<std::uint32_t, BindlessImageDescriptor> descriptorsById{};
     std::optional<BindlessImageDescriptor> fallbackDescriptor{};
     BindlessImageTableRequirement requirement = BindlessImageTableRequirement::required;
@@ -475,6 +477,7 @@ struct RendererCacheSuite
     RenderGraphCompileCache compileCache{};
     BindlessImageTableCache bindlessImageTableCache{};
     RendererGlobalDescriptorTableCache globalDescriptorTableCache{};
+    VariantStateRegistry variantRegistry{};
 
     void clear() noexcept;
 };

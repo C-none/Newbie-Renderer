@@ -103,6 +103,12 @@ class UiSystem : public nr::renderer::NodeUiWriter
     void endCombo() override;
     [[nodiscard]] bool selectable(std::string_view label, bool selected = false) override;
     [[nodiscard]] bool sliderFloat(std::string_view label, float& value, float minValue, float maxValue) override;
+    [[nodiscard]] bool inputFloat(std::string_view label, float& value, float minValue, float maxValue) override;
+    [[nodiscard]] bool inputInt32(
+        std::string_view label,
+        std::int32_t& value,
+        std::int32_t minValue,
+        std::int32_t maxValue) override;
     [[nodiscard]] bool inputUInt(
         std::string_view label,
         std::uint32_t& value,

@@ -3,6 +3,7 @@ import dependency;
 import nr.app;
 import nr.renderer;
 import nr.renderPasses;
+import nr.rhi;
 import nr.scene;
 import nr.load;
 import nr.utils;
@@ -250,6 +251,16 @@ namespace
         constexpr auto deltaSeconds = 1.0f / 60.0f;
 
         if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, deltaSeconds, "initial model"))
+        {
+            return false;
+        }
+
+        app.renderer().uninstallGraph();
+        nr::rhi::ShaderService::instance().reloadSession();
+        auto switchedNormalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
+        app.renderer().installGraph(buildNormalBufferGraphSpec(switchedNormalBuffer));
+
+        if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, deltaSeconds, "pipeline switch"))
         {
             return false;
         }

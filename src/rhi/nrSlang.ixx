@@ -315,6 +315,7 @@ struct SlangEntryPointData
 {
     std::uint32_t linkedEntryPointIndex = 0;
     std::string entryPointName;
+    std::string debugName;
     SlangStage stage = SLANG_STAGE_NONE;
     Slang::ComPtr<slang::IBlob> codeBlob;
 
@@ -395,6 +396,7 @@ class SlangProgram
     [[nodiscard]] bool buildEntryPointCache() const noexcept;
 
     Slang::ComPtr<slang::IComponentType> linkedProgram_;
+    std::string debugNamePrefix_;
     mutable bool hasQueriedProgramLayout_ = false;
     mutable slang::ProgramLayout *cachedProgramLayout_ = nullptr;
     mutable bool entryPointCacheBuilt_ = false;

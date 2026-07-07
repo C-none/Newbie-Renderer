@@ -493,6 +493,108 @@ namespace nr::rhi::detail
     return true;
 }
 
+inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
+
+[[nodiscard]] bool isAsciiAlphaNumeric(char value) noexcept
+{
+    return (value >= 'A' && value <= 'Z') ||
+           (value >= 'a' && value <= 'z') ||
+           (value >= '0' && value <= '9');
+}
+
+[[nodiscard]] bool isAsciiWhitespace(char value) noexcept
+{
+    return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f' || value == '\v';
+}
+
+[[nodiscard]] std::string withoutAsciiWhitespace(std::string_view value)
+{
+    std::string result;
+    result.reserve(value.size());
+    std::ranges::for_each(value, [&](char ch) {
+        if (!isAsciiWhitespace(ch))
+        {
+            result.push_back(ch);
+        }
+    });
+    return result;
+}
+
+[[nodiscard]] std::string joinDebugNameParts(const std::vector<std::string> &parts, char separator)
+{
+    std::ostringstream output;
+    auto isFirst = true;
+    std::ranges::for_each(parts, [&](const std::string &part) {
+        if (!isFirst)
+        {
+            output << separator;
+        }
+        output << part;
+        isFirst = false;
+    });
+    return output.str();
+}
+
+[[nodiscard]] std::string compactSlangVariantDebugLabel(const SlangProgramVariantDesc &variant)
+{
+    if (!variant.debugName.empty())
+    {
+        return variant.debugName;
+    }
+    if (variant.empty())
+    {
+        return "default";
+    }
+
+    std::vector<std::string> parts;
+    parts.reserve(variant.constants.size() + variant.typeAliases.size());
+
+    std::ranges::for_each(variant.constants, [&](auto const &entry) {
+        auto const &[name, constant] = entry;
+        parts.push_back(std::format(
+            "{}={}",
+            moduleLeafName(name),
+            slangVariantConstantLiteral(constant)));
+    });
+
+    std::ranges::for_each(variant.typeAliases, [&](auto const &entry) {
+        auto const &[name, alias] = entry;
+        (void)name;
+        parts.push_back(std::format(
+            "{}={}",
+            moduleLeafName(alias.typeName),
+            withoutAsciiWhitespace(alias.concreteTypeName)));
+    });
+
+    return joinDebugNameParts(parts, ',');
+}
+
+[[nodiscard]] std::string sanitizeSlangIdentifierFragment(std::string_view value)
+{
+    std::string result;
+    result.reserve(std::min(value.size(), kMaxSyntheticVariantLabelLength));
+    std::ranges::for_each(value, [&](char ch) {
+        if (result.size() >= kMaxSyntheticVariantLabelLength)
+        {
+            return;
+        }
+
+        auto const output = isAsciiAlphaNumeric(ch) ? ch : '_';
+        if (output == '_' && (result.empty() || result.back() == '_'))
+        {
+            return;
+        }
+        result.push_back(output);
+    });
+
+    while (!result.empty() && result.back() == '_')
+    {
+        result.pop_back();
+    }
+
+    return result.empty() ? std::string{"variant"} : result;
+}
+
 [[nodiscard]] std::uint64_t hashSlangLinkVariants(std::span<const SlangProgramVariantDesc> linkVariants) noexcept
 {
     auto state = hash::fnv1a64OffsetBasis;
@@ -510,14 +612,46 @@ namespace nr::rhi::detail
     return std::string(hash::toHexView(hashChars));
 }
 
-[[nodiscard]] std::string makeSlangVariantSyntheticModuleName(std::string_view hashHex)
+[[nodiscard]] std::string makeSlangVariantSyntheticModuleName(std::string_view variantLabel)
 {
-    return std::format("nr_variant_{}", hashHex);
+    return std::format("variant_{}", sanitizeSlangIdentifierFragment(variantLabel));
 }
 
-[[nodiscard]] std::string makeSlangVariantSyntheticPath(std::string_view hashHex)
+[[nodiscard]] std::string makeSlangVariantSyntheticPath(std::string_view syntheticModuleName)
 {
-    return std::format("generated/nr_variant_{}.slang", hashHex);
+    return std::format("generated/{}.slang", syntheticModuleName);
+}
+
+[[nodiscard]] std::string makeSlangProgramDebugNamePrefix(
+    std::string_view baseName,
+    const SlangProgramVariantDesc &variant,
+    std::span<const SlangProgramVariantDesc> linkVariants)
+{
+    auto normalizedBaseName = baseName.empty() ? std::string{"shader"} : std::string{baseName};
+
+    std::vector<std::string> parts;
+    parts.reserve(1u + linkVariants.size());
+    if (!variant.empty())
+    {
+        parts.push_back(compactSlangVariantDebugLabel(variant));
+    }
+
+    std::ranges::for_each(linkVariants, [&](const SlangProgramVariantDesc &linkVariant) {
+        if (!linkVariant.empty())
+        {
+            parts.push_back(compactSlangVariantDebugLabel(linkVariant));
+        }
+    });
+
+    if (parts.empty())
+    {
+        return normalizedBaseName;
+    }
+
+    return std::format(
+        "{}[{}]",
+        normalizedBaseName,
+        joinDebugNameParts(parts, '+'));
 }
 
 [[nodiscard]] std::string makeSlangProgramCacheKey(
@@ -581,11 +715,11 @@ namespace nr::rhi::detail
 [[nodiscard]] std::string describeSlangVariantForLog(const SlangProgramVariantDesc &variant)
 {
     auto hashHex = variant.hashHex();
-    if (variant.debugName.empty())
+    if (variant.empty())
     {
-        return variant.empty() ? std::format("default/{}", hashHex) : hashHex;
+        return std::format("default/{}", hashHex);
     }
-    return std::format("{}/{}", variant.debugName, hashHex);
+    return std::format("{}/{}", compactSlangVariantDebugLabel(variant), hashHex);
 }
 } // namespace nr::rhi::detail
 
@@ -969,6 +1103,7 @@ namespace nr::rhi
             SlangEntryPointData entryPointData{};
             entryPointData.linkedEntryPointIndex = static_cast<std::uint32_t>(entryIndex);
             entryPointData.entryPointName = std::move(entryName);
+            entryPointData.debugName = debugNamePrefix_;
             entryPointData.stage = reflectedStage;
             entryPointData.codeBlob = std::move(codeBlob);
 
@@ -1109,9 +1244,9 @@ void ShaderService::reloadSession()
 
         auto loadVariantModule = [&](const SlangProgramVariantDesc &variant, std::string_view role) -> Slang::ComPtr<slang::IModule> {
             auto variantSource = variant.sourceText();
-            auto currentVariantHashHex = variant.hashHex();
-            auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(currentVariantHashHex);
-            auto syntheticPath = detail::makeSlangVariantSyntheticPath(currentVariantHashHex);
+            auto currentVariantLabel = detail::compactSlangVariantDebugLabel(variant);
+            auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(currentVariantLabel);
+            auto syntheticPath = detail::makeSlangVariantSyntheticPath(syntheticModuleName);
             auto currentVariantLogLabel = detail::describeSlangVariantForLog(variant);
             Slang::ComPtr<slang::IBlob> diagnostics;
             Slang::ComPtr<slang::IModule> loadedVariantModule;
@@ -1229,7 +1364,12 @@ void ShaderService::reloadSession()
             nrAssert(false, "Slang::IComponentType::link threw an internal exception.");
         }
 
+        auto programDebugNamePrefix = detail::makeSlangProgramDebugNamePrefix(
+            std::filesystem::path(*modulePath).stem().string(),
+            request.variant,
+            request.linkVariants);
         result.linkedProgram_ = linkedProgram;
+        result.debugNamePrefix_ = std::move(programDebugNamePrefix);
         m_linkedProgramCache.insert_or_assign(cacheKey, result);
 
         nrInfo<>(std::format(
@@ -1366,9 +1506,9 @@ void ShaderService::reloadSession()
 
         auto loadVariantModule = [&](const SlangProgramVariantDesc &variant, std::string_view role) -> Slang::ComPtr<slang::IModule> {
             auto variantSource = variant.sourceText();
-            auto currentVariantHashHex = variant.hashHex();
-            auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(currentVariantHashHex);
-            auto variantSyntheticPath = detail::makeSlangVariantSyntheticPath(currentVariantHashHex);
+            auto currentVariantLabel = detail::compactSlangVariantDebugLabel(variant);
+            auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(currentVariantLabel);
+            auto variantSyntheticPath = detail::makeSlangVariantSyntheticPath(syntheticModuleName);
             auto currentVariantLogLabel = detail::describeSlangVariantForLog(variant);
             diagnostics = nullptr;
             Slang::ComPtr<slang::IModule> loadedVariantModule;
@@ -1486,7 +1626,12 @@ void ShaderService::reloadSession()
             nrAssert(false, "Slang::IComponentType::link threw an internal exception.");
         }
 
+        auto programDebugNamePrefix = detail::makeSlangProgramDebugNamePrefix(
+            request.moduleName,
+            request.variant,
+            request.linkVariants);
         result.linkedProgram_ = linkedProgram;
+        result.debugNamePrefix_ = std::move(programDebugNamePrefix);
         m_linkedProgramCache.insert_or_assign(cacheKey, result);
 
         nrInfo<>(std::format(

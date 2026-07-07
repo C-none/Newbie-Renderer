@@ -5,6 +5,19 @@ import nr.test;
 
 namespace
 {
+template <typename VkHandle>
+[[nodiscard]] VkHandle fakeVkHandle(std::uintptr_t value) noexcept
+{
+    if constexpr (std::is_pointer_v<VkHandle>)
+    {
+        return reinterpret_cast<VkHandle>(value);
+    }
+    else
+    {
+        return static_cast<VkHandle>(value);
+    }
+}
+
 struct UiPushConstants
 {
     glm::vec2 scale{};
@@ -209,6 +222,7 @@ const nr::test::CaseRegistrar appUiCursorCase{
         nr::test::require(layout.valid(), "appUi descriptor layout should be valid");
 
         auto root = layout.rootCursor();
+        nr::test::require(!root.hasField("gSceneTextures"), "appUi shader must not inherit the scene texture table from common");
         auto texturesCursor = root["gUiTextures"];
         nr::test::require(texturesCursor.valid(), "runtime texture cursor should resolve");
         nr::test::require(texturesCursor.referencesRuntimeDescriptorArray(), "gUiTextures should be runtime-sized");
@@ -240,6 +254,20 @@ const nr::test::CaseRegistrar appUiCursorCase{
         nr::test::require(write.binding.descriptorType == vk::DescriptorType::eCombinedImageSampler);
         nr::test::require(std::holds_alternative<nr::rhi::LogicalResourceDescriptorWrite>(write.payload));
         nr::test::requireEqual(std::get<nr::rhi::LogicalResourceDescriptorWrite>(write.payload).logicalResourceId, std::uint64_t{42});
+
+        auto resolvedWrites = nr::rhi::resolveDescriptorWriteRequests(
+            snapshot,
+            [](const nr::rhi::LogicalResourceDescriptorWrite& logicalResource,
+               const nr::rhi::DescriptorBindingInfo&,
+               std::uint32_t) -> std::optional<nr::rhi::DescriptorWritePayload> {
+                nr::test::requireEqual(logicalResource.logicalResourceId, std::uint64_t{42});
+                return nr::rhi::DescriptorWritePayload{
+                    nr::rhi::ImageDescriptorWrite{
+                        .imageView = vk::ImageView{fakeVkHandle<VkImageView>(0x2001u)},
+                        .imageLayout = logicalResource.imageLayout,
+                    }};
+            });
+        nr::test::requireEqual(resolvedWrites.size(), std::size_t{1});
 
         root.clearSnapshot();
         nr::test::require(root.snapshot().empty(), "clearSnapshot should remove descriptor and push writes");

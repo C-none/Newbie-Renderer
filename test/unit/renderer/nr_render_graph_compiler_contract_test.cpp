@@ -439,6 +439,19 @@ struct FakeBindlessPipeline
     return std::get<nr::rhi::LogicalResourceDescriptorWrite>(writeIt->payload).logicalResourceId;
 }
 
+[[nodiscard]] bool forceWriteForArrayElement(
+    const nr::rhi::ShaderBindingSnapshot& snapshot,
+    std::uint32_t arrayElement)
+{
+    auto writeIt = std::ranges::find_if(
+        snapshot.descriptorWrites(),
+        [arrayElement](const nr::rhi::ShaderBindingRecord& record) {
+            return record.arrayElement == arrayElement;
+        });
+    nr::test::require(writeIt != snapshot.descriptorWrites().end(), "expected descriptor write for requested array element");
+    return writeIt->forceWrite;
+}
+
 const nr::test::CaseRegistrar compilerMappingCase{
     "render graph compiler maps usage and access intents",
     [] {
@@ -1062,6 +1075,18 @@ const nr::test::CaseRegistrar bindlessImageTableCacheCase{
                 }));
         nr::test::require(cachedSnapshot.empty(), "same bindless table version should not emit a snapshot");
 
+        auto refreshedRequest = makeBindlessCacheRequest(
+            1u,
+            4u,
+            {
+                {1u, logicalTextureDescriptor(101u, "texture-1")},
+        });
+        refreshedRequest.refreshActiveDescriptorsOnCacheHit = true;
+        auto refreshedSnapshot = cache.makeSnapshotForFrame(pipeline, 0u, refreshedRequest);
+        nr::test::requireEqual(refreshedSnapshot.descriptorWriteCount(), std::size_t{1});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(refreshedSnapshot, 1u), std::uint64_t{101});
+        nr::test::require(forceWriteForArrayElement(refreshedSnapshot, 1u), "cache-hit active descriptor refresh should force descriptor writes");
+
         auto updatedSnapshot = cache.makeSnapshotForFrame(
             pipeline,
             0u,
@@ -1121,4 +1146,5 @@ const nr::test::CaseRegistrar bindlessImageTableOptionalMissingSymbolCase{
         auto snapshot = cache.makeSnapshotForFrame(pipeline, 0u, request);
         nr::test::require(snapshot.empty(), "optional missing bindless table should produce no descriptor writes");
     }};
+
 } // namespace
