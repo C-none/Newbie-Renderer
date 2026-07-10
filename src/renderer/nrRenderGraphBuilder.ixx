@@ -48,6 +48,10 @@ class RenderGraphNodeContext
         PassPrepareCallback prepareCallback = nullptr,
         vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
+    [[nodiscard]] GraphPassHandle addCopyPass(
+        std::string_view debugName,
+        CopyPassDesc copy);
+
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
 
@@ -124,6 +128,11 @@ class RenderGraphBuilder
         PassPrepareCallback prepareCallback = nullptr,
         vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
+    [[nodiscard]] GraphPassHandle addCopyPass(
+        std::string_view debugName,
+        GraphNodeHandle node,
+        CopyPassDesc copy);
+
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
         std::string_view debugName);
 
@@ -141,6 +150,15 @@ class RenderGraphBuilder
         vk::PipelineStageFlags2 shaderStages);
 
     [[nodiscard]] std::vector<PassExecutionDesc>::iterator findPass(GraphPassHandle handle);
+
+    [[nodiscard]] const GraphResourceDesc& resourceDesc(GraphResourceHandle handle) const;
+
+    [[nodiscard]] ImageAspectIntent imageAspectFor(
+        GraphResourceHandle resource,
+        std::optional<ImageAspectIntent> requestedAspect,
+        vk::ImageAspectFlags regionAspect = vk::ImageAspectFlags{}) const;
+
+    [[nodiscard]] std::vector<PassResourceUseDesc> makeCopyPassResourceUses(const CopyPassDesc& copy) const;
 
     [[nodiscard]] static bool isBufferResourceDesc(const GraphResourceDesc& desc) noexcept;
 
@@ -187,6 +205,8 @@ class RenderGraphBuilder
     [[nodiscard]] static bool isCopyDestinationUse(const PassResourceUseDesc& use) noexcept;
 
     [[nodiscard]] static bool isPresentUse(const PassResourceUseDesc& use) noexcept;
+
+    [[nodiscard]] static bool isImageCopyDestinationUse(const PassResourceUseDesc& use) noexcept;
 
     static void validatePassCallbackContract(
         const PassRecordCallback& executeLambda,

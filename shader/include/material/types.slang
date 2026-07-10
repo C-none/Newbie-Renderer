@@ -32,6 +32,7 @@ public struct MaterialLayerStack
     public float3 clearcoatNormal = float3(0.0f, 1.0f, 0.0f);
     public float3 sheenColor = float3(0.0f);
     public float sheenRoughness = 0.0f;
+    public float transmission = 0.0f;
 };
 
 public struct MaterialDirectLightingInput

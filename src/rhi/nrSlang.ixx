@@ -404,43 +404,25 @@ class SlangProgram
     mutable std::map<std::string, std::size_t> entryPointIndexByName_;
 };
 
-enum class SlangVariantConstantType : std::uint8_t
+using SlangVariantAssignmentValue = std::variant<bool, std::int32_t, std::uint32_t, float, std::string>;
+
+struct SlangVariantAssignment
 {
-    Bool,
-    Int32,
-    UInt32,
-    Float32,
-};
-
-using SlangVariantConstantValue = std::variant<bool, std::int32_t, std::uint32_t, float>;
-
-struct SlangVariantConstant
-{
-    SlangVariantConstantType type = SlangVariantConstantType::Bool;
-    SlangVariantConstantValue value = false;
-
-    [[nodiscard]] static SlangVariantConstant fromBool(bool value) noexcept;
-    [[nodiscard]] static SlangVariantConstant fromInt32(std::int32_t value) noexcept;
-    [[nodiscard]] static SlangVariantConstant fromUInt32(std::uint32_t value) noexcept;
-    [[nodiscard]] static SlangVariantConstant fromFloat32(float value) noexcept;
-};
-
-struct SlangVariantTypeAlias
-{
-    std::string typeName;
-    std::string interfaceName;
-    std::string concreteTypeName;
+    std::string type{};
+    SlangVariantAssignmentValue value = false;
 };
 
 struct SlangProgramVariantDesc
 {
-    std::string debugName;
-    std::map<std::string, SlangVariantConstant> constants;
-    std::map<std::string, SlangVariantTypeAlias> typeAliases;
+    std::map<std::string, SlangVariantAssignment> assignments{};
+
+    SlangProgramVariantDesc& assign(
+        std::string_view name,
+        std::string_view type,
+        SlangVariantAssignmentValue value);
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::uint64_t hashValue() const noexcept;
-    [[nodiscard]] std::string hashHex() const;
     [[nodiscard]] std::string sourceText() const;
 };
 
@@ -575,7 +557,7 @@ class ShaderService
         auto resolvedShaderRootPath = detail::resolveShaderRootPath();
         runtimeOptions.searchPaths = {resolvedShaderRootPath.generic_string()};
 
-        auto hashHex = std::string(hash::toHexView(options.hashHex));
+        auto hashHex = hash::toHexString(options.hashHex);
         if (m_session && m_optionsHashHex == hashHex)
         {
             return;
@@ -635,7 +617,7 @@ class ShaderService
 
     RuntimeSlangCompileOptions m_options;
     std::uint64_t m_optionsHashValue = kDefaultSlangCompileOptions.hashValue;
-    std::string m_optionsHashHex = std::string(hash::toHexView(kDefaultSlangCompileOptions.hashHex));
+    std::string m_optionsHashHex = hash::toHexString(kDefaultSlangCompileOptions.hashHex);
     std::filesystem::path m_shaderRootPath = detail::resolveShaderRootPath();
 
     std::vector<std::string> m_effectiveSearchPaths;

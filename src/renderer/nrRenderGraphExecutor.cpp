@@ -1979,7 +1979,7 @@ void RenderGraphExecutor::executeRecordedSecondaries(
             "RenderGraphExecutor::executeRecordedSecondaries received trailing task results after replaying all passes.");
     }
 
-[[nodiscard]] vk::ImageSubresourceLayers RenderGraphExecutor::toSubresourceLayers(const vk::ImageSubresourceRange& range)
+[[nodiscard]] vk::ImageSubresourceLayers subresourceLayersFromRange(const vk::ImageSubresourceRange& range)
 {
         return vk::ImageSubresourceLayers{
             range.aspectMask,
@@ -1989,6 +1989,373 @@ void RenderGraphExecutor::executeRecordedSecondaries(
         };
     }
 
+[[nodiscard]] const PreparedResourceBinding& requireBinding(
+        const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings,
+        GraphResourceHandle resource,
+        std::string_view operation)
+{
+        auto bindingIt = runtimeBindings.find(resource);
+        nrAssert(
+            bindingIt != runtimeBindings.end(),
+            std::format("{} failed to resolve graph resource {}.", operation, resource.value));
+        return bindingIt->second;
+    }
+
+[[nodiscard]] const PreparedResourceBinding& requireBufferBinding(
+        const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings,
+        GraphResourceHandle resource,
+        std::string_view operation)
+{
+        auto const& binding = requireBinding(runtimeBindings, resource, operation);
+        nrAssert(
+            binding.isBuffer && binding.buffer != vk::Buffer{},
+            std::format("{} requires graph resource {} to resolve to a buffer.", operation, resource.value));
+        return binding;
+    }
+
+[[nodiscard]] const PreparedResourceBinding& requireImageBinding(
+        const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings,
+        GraphResourceHandle resource,
+        std::string_view operation)
+{
+        auto const& binding = requireBinding(runtimeBindings, resource, operation);
+        nrAssert(
+            binding.isImage && binding.image != vk::Image{},
+            std::format("{} requires graph resource {} to resolve to an image.", operation, resource.value));
+        return binding;
+    }
+
+[[nodiscard]] vk::DeviceSize remainingBufferBytes(
+        const PreparedResourceBinding& binding,
+        vk::DeviceSize offset,
+        std::string_view operation)
+{
+        nrAssert(
+            offset <= binding.bufferSize,
+            std::format("{} buffer offset {} exceeds buffer size {}.", operation, offset, binding.bufferSize));
+        return binding.bufferSize - offset;
+    }
+
+[[nodiscard]] vk::DeviceSize normalizeBufferCopySize(
+        vk::DeviceSize requestedSize,
+        const PreparedResourceBinding& source,
+        vk::DeviceSize sourceOffset,
+        const PreparedResourceBinding& destination,
+        vk::DeviceSize destinationOffset)
+{
+        auto const sourceRemaining = remainingBufferBytes(source, sourceOffset, "RDG copy-buffer");
+        auto const destinationRemaining = remainingBufferBytes(destination, destinationOffset, "RDG copy-buffer");
+        auto const maxCopySize = std::min(sourceRemaining, destinationRemaining);
+        auto const size = (requestedSize == 0 || requestedSize == vk::WholeSize)
+                              ? maxCopySize
+                              : requestedSize;
+        nrAssert(
+            size <= maxCopySize,
+            std::format(
+                "RDG copy-buffer size {} exceeds available source/destination range {}.",
+                size,
+                maxCopySize));
+        return size;
+    }
+
+[[nodiscard]] vk::BufferCopy normalizeBufferCopyRegion(
+        vk::BufferCopy region,
+        const PreparedResourceBinding& source,
+        const PreparedResourceBinding& destination)
+{
+        region.size = normalizeBufferCopySize(
+            region.size,
+            source,
+            region.srcOffset,
+            destination,
+            region.dstOffset);
+        return region;
+    }
+
+[[nodiscard]] vk::BufferImageCopy normalizeBufferImageCopyRegion(
+        vk::BufferImageCopy region,
+        const PreparedResourceBinding& image,
+        vk::ImageAspectFlags aspectOverride = vk::ImageAspectFlags{})
+{
+        auto const fullLayers = subresourceLayersFromRange(image.subresourceRange);
+        auto effectiveLayers = fullLayers;
+        if (aspectOverride != vk::ImageAspectFlags{})
+        {
+            effectiveLayers.aspectMask = aspectOverride;
+        }
+
+        if (region.imageSubresource.aspectMask == vk::ImageAspectFlags{})
+        {
+            region.imageSubresource = effectiveLayers;
+        }
+        else if (region.imageSubresource.layerCount == 0u)
+        {
+            region.imageSubresource.layerCount = fullLayers.layerCount;
+        }
+
+        if (region.imageExtent == vk::Extent3D{})
+        {
+            region.imageExtent = image.extent;
+        }
+
+        return region;
+    }
+
+template <typename TPredicate>
+[[nodiscard]] vk::ImageLayout imageLayoutForUse(
+        const CompiledPass& pass,
+        GraphResourceHandle resource,
+        TPredicate predicate,
+        vk::ImageLayout fallback)
+{
+        auto useIt = std::ranges::find_if(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+            return use.resource == resource && predicate(use);
+        });
+        if (useIt == pass.resourceUses.end() || !useIt->imageLayout.has_value())
+        {
+            return fallback;
+        }
+        return RenderGraphCompiler::mapImageLayoutIntent(*useIt->imageLayout);
+    }
+
+template <typename TPredicate>
+[[nodiscard]] vk::ImageAspectFlags imageAspectForUse(
+        const CompiledPass& pass,
+        GraphResourceHandle resource,
+        TPredicate predicate,
+        vk::ImageAspectFlags fallback)
+{
+        auto useIt = std::ranges::find_if(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+            return use.resource == resource && predicate(use);
+        });
+        if (useIt == pass.resourceUses.end() || !useIt->imageAspect.has_value())
+        {
+            return fallback;
+        }
+        return RenderGraphCompiler::mapImageAspectIntent(*useIt->imageAspect);
+    }
+
+void recordHostReadBarrier(
+        const vk::raii::CommandBuffer& commandBuffer,
+        const PreparedResourceBinding& destination,
+        vk::DeviceSize offset,
+        vk::DeviceSize size)
+{
+        auto const barrierSize = size == 0 || size == vk::WholeSize
+                                     ? remainingBufferBytes(destination, offset, "RDG readback copy")
+                                     : size;
+        nrAssert(
+            barrierSize <= remainingBufferBytes(destination, offset, "RDG readback copy"),
+            "RDG readback copy host-read barrier range exceeds destination buffer size.");
+
+        auto hostReadBarrier = nr::rhi::ops::BarrierBatch{};
+        hostReadBarrier.add(vk::BufferMemoryBarrier2{
+            vk::PipelineStageFlagBits2::eTransfer,
+            vk::AccessFlagBits2::eTransferWrite,
+            vk::PipelineStageFlagBits2::eHost,
+            vk::AccessFlagBits2::eHostRead,
+            nr::rhi::ops::kIgnoredQueueFamilyIndex,
+            nr::rhi::ops::kIgnoredQueueFamilyIndex,
+            destination.buffer,
+            offset,
+            barrierSize,
+            nullptr,
+        });
+        nr::rhi::ops::pipelineBarrier(commandBuffer, hostReadBarrier);
+    }
+
+void recordPresentTransitionIfNeeded(
+        const CompiledPass& pass,
+        GraphResourceHandle destination,
+        const PreparedResourceBinding& destinationBinding,
+        vk::ImageLayout copyDestinationLayout,
+        const vk::raii::CommandBuffer& commandBuffer)
+{
+        auto presentUse = std::ranges::find_if(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+            return use.resource == destination && use.imageUsage == ImageUsageIntent::PresentSource;
+        });
+        if (presentUse == pass.resourceUses.end())
+        {
+            return;
+        }
+
+        auto presentLayout = presentUse->imageLayout.has_value()
+                                 ? RenderGraphCompiler::mapImageLayoutIntent(*presentUse->imageLayout)
+                                 : vk::ImageLayout::ePresentSrcKHR;
+        if (copyDestinationLayout == presentLayout)
+        {
+            return;
+        }
+
+        auto postCopyBarriers = nr::rhi::ops::BarrierBatch{};
+        postCopyBarriers.add(vk::ImageMemoryBarrier2{
+            vk::PipelineStageFlagBits2::eTransfer,
+            vk::AccessFlagBits2::eTransferWrite,
+            vk::PipelineStageFlagBits2::eBottomOfPipe,
+            vk::AccessFlags2{},
+            copyDestinationLayout,
+            presentLayout,
+            nr::rhi::ops::kIgnoredQueueFamilyIndex,
+            nr::rhi::ops::kIgnoredQueueFamilyIndex,
+            destinationBinding.image,
+            destinationBinding.subresourceRange,
+            nullptr,
+        });
+
+        nr::rhi::ops::pipelineBarrier(commandBuffer, postCopyBarriers);
+    }
+
+void recordCopyPassDesc(
+        const CopyPassDesc& copy,
+        const CompiledPass& pass,
+        const vk::raii::CommandBuffer& commandBuffer,
+        const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings)
+{
+        std::visit(
+            [&](const auto& desc) {
+                using DescT = std::remove_cvref_t<decltype(desc)>;
+                if constexpr (std::same_as<DescT, CopyBufferToBufferPassDesc>)
+                {
+                    auto const& source = requireBufferBinding(runtimeBindings, desc.source, "RDG copy-buffer");
+                    auto const& destination = requireBufferBinding(runtimeBindings, desc.destination, "RDG copy-buffer");
+                    auto const region = normalizeBufferCopyRegion(desc.region, source, destination);
+                    nr::rhi::ops::copyBuffer2(
+                        commandBuffer,
+                        source.buffer,
+                        destination.buffer,
+                        nr::rhi::ops::toBufferCopy2(region));
+                    if (desc.destinationIntent == CopyBufferDestinationIntent::Readback)
+                    {
+                        recordHostReadBarrier(commandBuffer, destination, region.dstOffset, region.size);
+                    }
+                }
+                else if constexpr (std::same_as<DescT, CopyBufferToImagePassDesc>)
+                {
+                    auto const& source = requireBufferBinding(runtimeBindings, desc.sourceBuffer, "RDG copy-buffer-to-image");
+                    auto const& destination = requireImageBinding(runtimeBindings, desc.destinationImage, "RDG copy-buffer-to-image");
+                    auto const destinationAspect = imageAspectForUse(
+                        pass,
+                        desc.destinationImage,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferDst ||
+                                   use.imageUsage == ImageUsageIntent::CopyDestination;
+                        },
+                        destination.subresourceRange.aspectMask);
+                    auto const region = normalizeBufferImageCopyRegion(desc.region, destination, destinationAspect);
+                    auto const dstLayout = imageLayoutForUse(
+                        pass,
+                        desc.destinationImage,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferDst ||
+                                   use.imageUsage == ImageUsageIntent::CopyDestination;
+                        },
+                        vk::ImageLayout::eTransferDstOptimal);
+                    nr::rhi::ops::copyBufferToImage2(
+                        commandBuffer,
+                        source.buffer,
+                        destination.image,
+                        dstLayout,
+                        nr::rhi::ops::toBufferImageCopy2(region));
+                }
+                else if constexpr (std::same_as<DescT, CopyImageToBufferPassDesc>)
+                {
+                    auto const& source = requireImageBinding(runtimeBindings, desc.sourceImage, "RDG copy-image-to-buffer");
+                    auto const& destination = requireBufferBinding(runtimeBindings, desc.destinationBuffer, "RDG copy-image-to-buffer");
+                    auto const sourceAspect = imageAspectForUse(
+                        pass,
+                        desc.sourceImage,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                                   use.imageUsage == ImageUsageIntent::CopySource;
+                        },
+                        source.subresourceRange.aspectMask);
+                    auto const region = normalizeBufferImageCopyRegion(desc.region, source, sourceAspect);
+                    auto const srcLayout = imageLayoutForUse(
+                        pass,
+                        desc.sourceImage,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                                   use.imageUsage == ImageUsageIntent::CopySource;
+                        },
+                        vk::ImageLayout::eTransferSrcOptimal);
+                    nr::rhi::ops::copyImageToBuffer2(
+                        commandBuffer,
+                        source.image,
+                        srcLayout,
+                        destination.buffer,
+                        nr::rhi::ops::toBufferImageCopy2(region));
+                    if (desc.destinationIntent == CopyBufferDestinationIntent::Readback)
+                    {
+                        recordHostReadBarrier(
+                            commandBuffer,
+                            destination,
+                            region.bufferOffset,
+                            desc.destinationBufferRangeSize);
+                    }
+                }
+                else
+                {
+                    auto const& source = requireImageBinding(runtimeBindings, desc.source, "RDG copy-image-to-image");
+                    auto const& destination = requireImageBinding(runtimeBindings, desc.destination, "RDG copy-image-to-image");
+                    auto const sourceAspect = imageAspectForUse(
+                        pass,
+                        desc.source,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                                   use.imageUsage == ImageUsageIntent::CopySource;
+                        },
+                        source.subresourceRange.aspectMask);
+                    auto const destinationAspect = imageAspectForUse(
+                        pass,
+                        desc.destination,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferDst ||
+                                   use.imageUsage == ImageUsageIntent::CopyDestination;
+                        },
+                        destination.subresourceRange.aspectMask);
+                    auto const srcLayout = imageLayoutForUse(
+                        pass,
+                        desc.source,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                                   use.imageUsage == ImageUsageIntent::CopySource;
+                        },
+                        vk::ImageLayout::eTransferSrcOptimal);
+                    auto const dstLayout = imageLayoutForUse(
+                        pass,
+                        desc.destination,
+                        [](const PassResourceUseDesc& use) {
+                            return use.imageUsage == ImageUsageIntent::TransferDst ||
+                                   use.imageUsage == ImageUsageIntent::CopyDestination;
+                        },
+                        vk::ImageLayout::eTransferDstOptimal);
+                    nr::rhi::ops::copyImageToImage(
+                        commandBuffer,
+                        source.image,
+                        source.extent,
+                        sourceAspect,
+                        destination.image,
+                        destination.extent,
+                        destinationAspect,
+                        srcLayout,
+                        dstLayout,
+                        desc.region);
+                    recordPresentTransitionIfNeeded(
+                        pass,
+                        desc.destination,
+                        destination,
+                        dstLayout,
+                        commandBuffer);
+                }
+            },
+            copy);
+    }
+
+[[nodiscard]] vk::ImageSubresourceLayers RenderGraphExecutor::toSubresourceLayers(const vk::ImageSubresourceRange& range)
+{
+        return subresourceLayersFromRange(range);
+    }
+
 void RenderGraphExecutor::recordImplicitCopyPass(
         const CompiledPass& pass,
         const vk::raii::CommandBuffer& commandBuffer,
@@ -1996,6 +2363,12 @@ void RenderGraphExecutor::recordImplicitCopyPass(
 {
         if (!pass.isCopyPass)
         {
+            return;
+        }
+
+        if (pass.copy.has_value())
+        {
+            recordCopyPassDesc(*pass.copy, pass, commandBuffer, runtimeBindings);
             return;
         }
 

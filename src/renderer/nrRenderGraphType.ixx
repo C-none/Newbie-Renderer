@@ -190,6 +190,62 @@ struct PassResourceUseDesc
     bool requiresPreviousUseBarrier = false;
 };
 
+enum class CopyBufferDestinationIntent : std::uint8_t
+{
+    TransferDst,
+    Readback,
+};
+
+struct CopyBufferToBufferPassDesc
+{
+    GraphResourceHandle source{};
+    GraphResourceHandle destination{};
+    vk::BufferCopy region{};
+    CopyBufferDestinationIntent destinationIntent = CopyBufferDestinationIntent::TransferDst;
+
+    [[nodiscard]] bool operator==(const CopyBufferToBufferPassDesc&) const = default;
+};
+
+struct CopyBufferToImagePassDesc
+{
+    GraphResourceHandle sourceBuffer{};
+    GraphResourceHandle destinationImage{};
+    vk::BufferImageCopy region{};
+    std::optional<ImageAspectIntent> imageAspect{};
+
+    [[nodiscard]] bool operator==(const CopyBufferToImagePassDesc&) const = default;
+};
+
+struct CopyImageToBufferPassDesc
+{
+    GraphResourceHandle sourceImage{};
+    GraphResourceHandle destinationBuffer{};
+    vk::BufferImageCopy region{};
+    std::optional<ImageAspectIntent> imageAspect{};
+    CopyBufferDestinationIntent destinationIntent = CopyBufferDestinationIntent::TransferDst;
+    vk::DeviceSize destinationBufferRangeSize = 0;
+
+    [[nodiscard]] bool operator==(const CopyImageToBufferPassDesc&) const = default;
+};
+
+struct CopyImageToImagePassDesc
+{
+    GraphResourceHandle source{};
+    GraphResourceHandle destination{};
+    vk::ImageCopy region{};
+    std::optional<ImageAspectIntent> sourceAspect{};
+    std::optional<ImageAspectIntent> destinationAspect{};
+    bool presentDestination = false;
+
+    [[nodiscard]] bool operator==(const CopyImageToImagePassDesc&) const = default;
+};
+
+using CopyPassDesc = std::variant<
+    CopyBufferToBufferPassDesc,
+    CopyBufferToImagePassDesc,
+    CopyImageToBufferPassDesc,
+    CopyImageToImagePassDesc>;
+
 namespace use
 {
 [[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(ShaderStageIntent intent) noexcept;
@@ -1103,6 +1159,7 @@ struct PassExecutionDesc
     bool isCopyPass = false;
     QueueDomain queue = QueueDomain::Graphics;
     vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
+    std::optional<CopyPassDesc> copy{};
     std::vector<PassResourceUseDesc> resourceUses{};
     PassPrepareCallback prepare{};
     PassRecordCallback record{};
@@ -1202,6 +1259,7 @@ struct CompiledPass
     std::uint32_t submitBatchIndex = 0;
     vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
 
+    std::optional<CopyPassDesc> copy{};
     std::vector<PassResourceUseDesc> resourceUses{};
     std::vector<std::size_t> resolvedResourceIndices{};
     std::vector<ResourceStateTransition> preBarriers{};

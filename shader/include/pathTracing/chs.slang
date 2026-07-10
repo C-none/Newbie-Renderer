@@ -1,71 +1,69 @@
 implementing common;
 
-public enum PathTracingRtHitShadingModel : uint
-{
-    gltfPbr = 0u,
-}
+// Layer mask validates the 4 layer bits (and the "non-zero implies baseSurface" invariant on the CPU
+// side). Feature mask validates only non-layer runtime behavior. The two are intentionally disjoint.
+public static const RtMaterialLayerFlag kKnownRtMaterialLayerMask =
+    RtMaterialLayerFlag.baseSurface |
+    RtMaterialLayerFlag.clearcoat |
+    RtMaterialLayerFlag.sheen |
+    RtMaterialLayerFlag.transmission;
 
-public enum PathTracingRtHitAlphaPolicy : uint
-{
-    opaqueLike = 0u,
-    alphaMask = 1u,
-}
-
-public static const RtMaterialFeatureFlag kPathTracingKnownRtMaterialFeatureMask =
-    RtMaterialFeatureFlag.clearcoat |
-    RtMaterialFeatureFlag.sheen |
-    RtMaterialFeatureFlag.transmission |
+public static const RtMaterialFeatureFlag kKnownRtMaterialFeatureMask =
     RtMaterialFeatureFlag.alphaMask |
     RtMaterialFeatureFlag.alphaBlend |
     RtMaterialFeatureFlag.doubleSided |
     RtMaterialFeatureFlag.emissive |
     RtMaterialFeatureFlag.unsupportedAnisotropy;
 
-public struct PathTracingClosestHitInput
+public struct ClosestHitInput
 {
     public bool geometryValid = false;
     public RtMaterialHeader material = {};
     public RtSurfaceData surface = {};
     public float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
+    public float3 scatterRandomValues = float3(0.0f);
     public float hitT = 0.0f;
     public uint materialIndex = kRtMaterialFallbackIndex;
 };
 
-public struct PathTracingClosestHitResult
+public struct ClosestHitResult
 {
     public uint hit = 0u;
     public ResolvedMaterialPayload material = {};
+    public ResolvedMaterialScatter scatter = {};
 };
 
 public interface ICHS
 {
-    PathTracingClosestHitResult handleClosestHit(PathTracingClosestHitInput input);
+    ClosestHitResult handleClosestHit(ClosestHitInput input);
 }
 
-public bool pathTracingHitPolicySupported(
-    RtMaterialFeatureFlag policyFeatureFlags,
-    PathTracingRtHitAlphaPolicy policyAlphaPolicy,
-    PathTracingRtHitShadingModel policyShadingModel)
+public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
 {
-    return policyShadingModel == PathTracingRtHitShadingModel.gltfPbr &&
-        (policyAlphaPolicy == PathTracingRtHitAlphaPolicy.opaqueLike ||
-            policyAlphaPolicy == PathTracingRtHitAlphaPolicy.alphaMask) &&
-        (uint(policyFeatureFlags) & ~uint(kPathTracingKnownRtMaterialFeatureMask)) == 0u;
-}
-
-public struct DefaultLitCHS<let FeatureMask : RtMaterialFeatureFlag, let AlphaPolicy : PathTracingRtHitAlphaPolicy> : ICHS
-{
-    public PathTracingClosestHitResult handleClosestHit(PathTracingClosestHitInput input)
+    public ClosestHitResult handleClosestHit(ClosestHitInput input)
     {
-        PathTracingClosestHitResult result = {};
-        if (!pathTracingHitPolicySupported(FeatureMask, AlphaPolicy, PathTracingRtHitShadingModel.gltfPbr) ||
-            !input.geometryValid)
+        ClosestHitResult result = {};
+        if (!input.geometryValid)
         {
             return result;
         }
 
         result.hit = 1u;
-        result.material = resolveRtMaterialPayload(
+        if (LayerFlags == RtMaterialLayerFlag.none)
+        {
+            // Unlit (KHR_materials_unlit): base color coverage only, no PBR resolve and no scatter.
+            // Raygen treats layerFlags == none as terminal surface radiance.
+            result.material = resolveUnlitMaterialPayload(
+                rtMaterialTextureRefs,
+                input.material,
+                input.surface,
+                input.viewDirection,
+                input.hitT,
+                input.materialIndex);
+            return result;
+        }
+
+        result.material = resolveLitMaterialPayloadVariant<LayerFlags>(
             rtMaterialTextureRefs,
             rtMaterialLayers,
             input.material,
@@ -73,6 +71,10 @@ public struct DefaultLitCHS<let FeatureMask : RtMaterialFeatureFlag, let AlphaPo
             input.viewDirection,
             input.hitT,
             input.materialIndex);
+        result.scatter = sampleResolvedMaterialScatterVariant<LayerFlags>(
+            result.material,
+            input.viewDirection,
+            input.scatterRandomValues);
         return result;
     }
 }

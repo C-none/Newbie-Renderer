@@ -1,16 +1,6 @@
 implementing common;
 
-public interface IMultiLayerMaterial
-{
-    MaterialShadingResult evaluateDirect(
-        StructuredBuffer<RtMaterialTextureRef> textureRefs,
-        StructuredBuffer<RtMaterialLayerRecord> layerRecords,
-        RtMaterialHeader material,
-        RtSurfaceData surface,
-        MaterialDirectLightingInput lighting);
-
-    float alpha(
-        StructuredBuffer<RtMaterialTextureRef> textureRefs,
-        RtMaterialHeader material,
-        RtSurfaceData surface);
-}
+// The legacy IMultiLayerMaterial interface and its GltfMultiLayerMaterial implementation were removed
+// in favor of the layer-flag specialized resolver/BSDF path (resolveLitMaterialPayloadVariant and the
+// sampleResolvedMaterialScatterVariant family). This file is intentionally empty and no longer included
+// by common.slang.

@@ -1,36 +1,37 @@
 export module nr.renderPasses:rtHitSbtPlan;
 
+import dependency.shaderShare;
+
 import nr.scene;
 import nr.utils;
 import std;
 
 export namespace nr::renderPasses
 {
-enum class RtHitShadingModel : std::uint8_t
+using nr::shader::share::RtHitAlphaPolicy;
+
+// CHS variants are keyed solely by the combined RtMaterialLayerFlag mask (9 valid combinations: unlit
+// plus baseSurface with any subset of clearcoat/sheen/transmission). Alpha policy doubles the hit-group
+// space (opaque-like vs alpha-mask any-hit).
+inline constexpr std::uint32_t kRtBsdfVariantHardUpperBound = 9u;
+inline constexpr std::uint32_t kRtHitGroupVariantHardUpperBound = kRtBsdfVariantHardUpperBound * 2u;
+
+struct RtBsdfVariantKey
 {
-    gltfPbr = 0u,
+    nr::scene::RtMaterialLayerFlag layerFlags = nr::scene::RtMaterialLayerFlag::none;
+
+    [[nodiscard]] friend auto operator<=>(const RtBsdfVariantKey&, const RtBsdfVariantKey&) noexcept = default;
 };
 
-enum class RtHitAlphaPolicy : std::uint8_t
+struct RtHitGroupKey
 {
-    opaqueLike = 0u,
-    alphaMask = 1u,
-};
-
-struct RtHitPermutationKey
-{
-    RtHitShadingModel shadingModel = RtHitShadingModel::gltfPbr;
-    std::uint32_t materialFeatureMask = 0u;
+    RtBsdfVariantKey bsdf{};
     RtHitAlphaPolicy alphaPolicy = RtHitAlphaPolicy::opaqueLike;
 
-    [[nodiscard]] friend bool operator<(const RtHitPermutationKey& lhs, const RtHitPermutationKey& rhs) noexcept
-    {
-        return std::tie(lhs.shadingModel, lhs.materialFeatureMask, lhs.alphaPolicy) <
-               std::tie(rhs.shadingModel, rhs.materialFeatureMask, rhs.alphaPolicy);
-    }
-
-    [[nodiscard]] friend bool operator==(const RtHitPermutationKey&, const RtHitPermutationKey&) noexcept = default;
+    [[nodiscard]] friend auto operator<=>(const RtHitGroupKey&, const RtHitGroupKey&) noexcept = default;
 };
+
+using RtHitPermutationKey = RtHitGroupKey;
 
 struct SceneRtHitSbtPermutation
 {
@@ -97,36 +98,58 @@ struct SceneRtHitSbtPlan
     return key.alphaPolicy == RtHitAlphaPolicy::alphaMask;
 }
 
-[[nodiscard]] inline RtHitPermutationKey makeRtHitPermutationKey(std::uint32_t materialFeatureMask) noexcept
+[[nodiscard]] inline RtBsdfVariantKey makeRtBsdfVariantKey(nr::scene::RtMaterialLayerFlag layerFlags) noexcept
+{
+    return RtBsdfVariantKey{
+        .layerFlags = layerFlags,
+    };
+}
+
+[[nodiscard]] inline RtHitGroupKey makeRtHitGroupKey(
+    nr::scene::RtMaterialLayerFlag layerFlags,
+    nr::scene::RtMaterialFeatureFlag featureFlags) noexcept
 {
     auto const alphaMaskFeature = static_cast<std::uint32_t>(nr::scene::RtMaterialFeatureFlag::alphaMask);
-    return RtHitPermutationKey{
-        .materialFeatureMask = materialFeatureMask,
-        .alphaPolicy = (materialFeatureMask & alphaMaskFeature) != 0u
+    return RtHitGroupKey{
+        .bsdf = makeRtBsdfVariantKey(layerFlags),
+        .alphaPolicy = (static_cast<std::uint32_t>(featureFlags) & alphaMaskFeature) != 0u
                            ? RtHitAlphaPolicy::alphaMask
                            : RtHitAlphaPolicy::opaqueLike,
     };
 }
 
+[[nodiscard]] inline RtHitPermutationKey makeRtHitPermutationKey(
+    nr::scene::RtMaterialLayerFlag layerFlags,
+    nr::scene::RtMaterialFeatureFlag featureFlags) noexcept
+{
+    return makeRtHitGroupKey(layerFlags, featureFlags);
+}
+
+[[nodiscard]] inline std::uint64_t hashRtBsdfVariantKey(const RtBsdfVariantKey& key) noexcept
+{
+    auto state = nr::hash::fnv1a64OffsetBasis;
+    nr::hash::hashAppendString(state, "RtBsdfVariantKey.v2");
+    nr::hash::hashAppend(state, static_cast<std::uint32_t>(key.layerFlags));
+    return state;
+}
+
 [[nodiscard]] inline std::uint64_t hashRtHitPermutationKey(const RtHitPermutationKey& key) noexcept
 {
     auto state = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(state, "RtHitPermutationKey.v1");
-    nr::hash::hashAppend(state, key.shadingModel);
-    nr::hash::hashAppend(state, key.materialFeatureMask);
+    nr::hash::hashAppendString(state, "RtHitGroupKey.v1");
+    nr::hash::hashAppend(state, hashRtBsdfVariantKey(key.bsdf));
     nr::hash::hashAppend(state, key.alphaPolicy);
     return state;
 }
 
-[[nodiscard]] inline std::string rtHitPermutationHashHex(const RtHitPermutationKey& key)
+[[nodiscard]] inline std::string rtHitClosestHitEntryPointName(const RtBsdfVariantKey& key)
 {
-    auto chars = nr::hash::toHexChars(hashRtHitPermutationKey(key));
-    return std::string(nr::hash::toHexView(chars));
+    return std::format("ch_{}", nr::hash::toHexString(hashRtBsdfVariantKey(key)));
 }
 
 [[nodiscard]] inline std::string rtHitClosestHitEntryPointName(const RtHitPermutationKey& key)
 {
-    return std::format("ch_{}", rtHitPermutationHashHex(key));
+    return rtHitClosestHitEntryPointName(key.bsdf);
 }
 
 [[nodiscard]] inline std::uint32_t ensureRtHitPermutation(
@@ -142,6 +165,9 @@ struct SceneRtHitSbtPlan
     nrAssert(
         plan.permutations.size() < static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
         "RT hit permutation count exceeds uint32 ABI.");
+    nrAssert(
+        plan.permutations.size() < static_cast<std::size_t>(kRtHitGroupVariantHardUpperBound),
+        "RT hit permutation count exceeds the current BSDF-feature/alpha-policy key space.");
     auto const permutationIndex = static_cast<std::uint32_t>(plan.permutations.size());
     plan.permutations.push_back(SceneRtHitSbtPermutation{
         .key = key,
@@ -155,9 +181,9 @@ struct SceneRtHitSbtPlan
     SceneRtHitSbtPlan& plan,
     std::map<RtHitPermutationKey, std::uint32_t>& permutationLookup,
     std::uint32_t instanceMetadataIndex,
-    std::span<const std::uint32_t> geometryMaterialFeatureMasks)
+    std::span<const RtHitPermutationKey> geometryPermutationKeys)
 {
-    nrAssert(!geometryMaterialFeatureMasks.empty(), "RT hit SBT plan instance requires at least one geometry.");
+    nrAssert(!geometryPermutationKeys.empty(), "RT hit SBT plan instance requires at least one geometry.");
     nrAssert(
         plan.records.size() <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
         "RT hit SBT record base exceeds uint32 ABI.");
@@ -165,12 +191,12 @@ struct SceneRtHitSbtPlan
         plan.instances.size() < static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
         "RT hit SBT instance record count exceeds uint32 ABI.");
     nrAssert(
-        geometryMaterialFeatureMasks.size() <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
+        geometryPermutationKeys.size() <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
         "RT hit SBT geometry count exceeds uint32 ABI.");
 
     auto const hitRecordBase = static_cast<std::uint32_t>(plan.records.size());
     auto const instanceRecordIndex = static_cast<std::uint32_t>(plan.instances.size());
-    auto const geometryCount = static_cast<std::uint32_t>(geometryMaterialFeatureMasks.size());
+    auto const geometryCount = static_cast<std::uint32_t>(geometryPermutationKeys.size());
     nrAssert(
         plan.records.size() <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max() - geometryCount),
         "RT hit SBT record range exceeds uint32 ABI.");
@@ -182,8 +208,7 @@ struct SceneRtHitSbtPlan
 
     auto const geometryIndices = std::views::iota(std::uint32_t{0}, geometryCount);
     std::ranges::for_each(geometryIndices, [&](std::uint32_t geometryIndex) {
-        auto const key = makeRtHitPermutationKey(geometryMaterialFeatureMasks[geometryIndex]);
-        auto const permutationIndex = ensureRtHitPermutation(plan, permutationLookup, key);
+        auto const permutationIndex = ensureRtHitPermutation(plan, permutationLookup, geometryPermutationKeys[geometryIndex]);
         plan.records.push_back(SceneRtHitSbtRecord{
             .permutationIndex = permutationIndex,
             .instanceRecordIndex = instanceRecordIndex,

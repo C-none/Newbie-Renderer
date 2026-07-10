@@ -3,3 +3,4 @@ export import :errorHandle;
 export import :staticUtils;
 export import :math;
 export import :threading;
+export import :statistics;

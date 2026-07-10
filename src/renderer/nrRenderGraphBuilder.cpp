@@ -23,6 +23,44 @@ namespace
     }
     return vk::PipelineStageFlagBits2::eAllCommands;
 }
+
+[[nodiscard]] std::optional<ImageAspectIntent> imageAspectFromMask(vk::ImageAspectFlags aspectMask) noexcept
+{
+    if (aspectMask == vk::ImageAspectFlags{})
+    {
+        return std::nullopt;
+    }
+
+    auto const hasDepth = (aspectMask & vk::ImageAspectFlagBits::eDepth) != vk::ImageAspectFlags{};
+    auto const hasStencil = (aspectMask & vk::ImageAspectFlagBits::eStencil) != vk::ImageAspectFlags{};
+    if (hasDepth && hasStencil)
+    {
+        return ImageAspectIntent::DepthStencil;
+    }
+    if (hasDepth)
+    {
+        return ImageAspectIntent::Depth;
+    }
+    if (hasStencil)
+    {
+        return ImageAspectIntent::Stencil;
+    }
+    return ImageAspectIntent::Color;
+}
+
+[[nodiscard]] PassResourceUseDesc imageCopySourceUse(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
+{
+    return use::make<use::spec::CopySource>(resource, use::ImageUseOptions{
+                                                          .aspect = aspect,
+                                                      });
+}
+
+[[nodiscard]] PassResourceUseDesc imageCopyDestinationUse(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
+{
+    return use::make<use::spec::CopyDestination>(resource, use::ImageUseOptions{
+                                                               .aspect = aspect,
+                                                           });
+}
 } // namespace
 
 RenderGraphNodeContext::RenderGraphNodeContext(RenderGraphBuilder& builder, GraphNodeHandle node) noexcept
@@ -46,6 +84,7 @@ void RenderGraphBuilder::clear()
         // Release per-pass payload before clearing the top-level pass list.
         std::ranges::for_each(frame_.passes, [](PassExecutionDesc& pass) {
             pass.resourceUses.clear();
+            pass.copy.reset();
             pass.record = nullptr;
             pass.parallelRecord.reset();
             pass.prepare = nullptr;
@@ -145,6 +184,31 @@ void RenderGraphBuilder::clear()
         return passHandle;
     }
 
+[[nodiscard]] GraphPassHandle RenderGraphBuilder::addCopyPass(
+        std::string_view debugName,
+        GraphNodeHandle node,
+        CopyPassDesc copy)
+{
+        auto resourceUses = makeCopyPassResourceUses(copy);
+        validatePassCallbackContract(PassRecordCallback{}, std::nullopt, true);
+        validatePassResourceUses(
+            std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
+            true);
+
+        auto passHandle = addPassCore(
+            debugName,
+            node,
+            true,
+            vk::PipelineStageFlagBits2::eTransfer);
+        auto& pass = frame_.passes.back();
+        nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addCopyPass pass insertion invariant failed.");
+
+        pass.copy = std::move(copy);
+        pass.resourceUses = std::move(resourceUses);
+
+        return passHandle;
+    }
+
 [[nodiscard]] GraphSubmitHandle RenderGraphBuilder::addSubmitNode(
         std::string_view debugName)
 {
@@ -203,6 +267,114 @@ void RenderGraphBuilder::clear()
         return std::ranges::find_if(frame_.passes, [handle](const PassExecutionDesc& desc) {
             return desc.handle == handle;
         });
+    }
+
+[[nodiscard]] const GraphResourceDesc& RenderGraphBuilder::resourceDesc(GraphResourceHandle handle) const
+{
+        nrAssert(handle.valid(), "RenderGraphBuilder::resourceDesc requires a valid resource handle.");
+        auto resourceIt = resourceIndexByHandle_.find(handle);
+        nrAssert(resourceIt != resourceIndexByHandle_.end(), "RenderGraphBuilder::resourceDesc resource handle validation failed.");
+        nrAssert(resourceIt->second < frame_.resources.size(), "RenderGraphBuilder::resourceDesc resource index cache is out of range.");
+        auto const& resource = frame_.resources[resourceIt->second];
+        nrAssert(resource.handle == handle, "RenderGraphBuilder::resourceDesc resource index cache is stale.");
+        return resource;
+    }
+
+[[nodiscard]] ImageAspectIntent RenderGraphBuilder::imageAspectFor(
+        GraphResourceHandle resource,
+        std::optional<ImageAspectIntent> requestedAspect,
+        vk::ImageAspectFlags regionAspect) const
+{
+        if (requestedAspect.has_value())
+        {
+            return *requestedAspect;
+        }
+
+        auto maskedAspect = imageAspectFromMask(regionAspect);
+        if (maskedAspect.has_value())
+        {
+            return *maskedAspect;
+        }
+
+        return std::visit(
+            [](const auto& desc) {
+                using DescT = std::remove_cvref_t<decltype(desc)>;
+                if constexpr (std::same_as<DescT, GraphImportedImageDesc> ||
+                              std::same_as<DescT, GraphTransientImageDesc>)
+                {
+                    return desc.aspect;
+                }
+                else
+                {
+                    return ImageAspectIntent::Color;
+                }
+            },
+            resourceDesc(resource).desc);
+    }
+
+[[nodiscard]] std::vector<PassResourceUseDesc> RenderGraphBuilder::makeCopyPassResourceUses(
+        const CopyPassDesc& copy) const
+{
+        return std::visit(
+            [&](const auto& desc) -> std::vector<PassResourceUseDesc> {
+                using DescT = std::remove_cvref_t<decltype(desc)>;
+                if constexpr (std::same_as<DescT, CopyBufferToBufferPassDesc>)
+                {
+                    auto destinationUse = desc.destinationIntent == CopyBufferDestinationIntent::Readback
+                                              ? use::readbackWrite(desc.destination)
+                                              : use::bufferTransferDst(desc.destination);
+                    return {
+                        use::bufferTransferSrc(desc.source),
+                        destinationUse,
+                    };
+                }
+                else if constexpr (std::same_as<DescT, CopyBufferToImagePassDesc>)
+                {
+                    auto aspect = imageAspectFor(
+                        desc.destinationImage,
+                        desc.imageAspect,
+                        desc.region.imageSubresource.aspectMask);
+                    return {
+                        use::bufferTransferSrc(desc.sourceBuffer),
+                        imageCopyDestinationUse(desc.destinationImage, aspect),
+                    };
+                }
+                else if constexpr (std::same_as<DescT, CopyImageToBufferPassDesc>)
+                {
+                    auto aspect = imageAspectFor(
+                        desc.sourceImage,
+                        desc.imageAspect,
+                        desc.region.imageSubresource.aspectMask);
+                    auto destinationUse = desc.destinationIntent == CopyBufferDestinationIntent::Readback
+                                              ? use::readbackWrite(desc.destinationBuffer)
+                                              : use::bufferTransferDst(desc.destinationBuffer);
+                    return {
+                        imageCopySourceUse(desc.sourceImage, aspect),
+                        destinationUse,
+                    };
+                }
+                else
+                {
+                    auto sourceAspect = imageAspectFor(
+                        desc.source,
+                        desc.sourceAspect,
+                        desc.region.srcSubresource.aspectMask);
+                    auto destinationAspect = imageAspectFor(
+                        desc.destination,
+                        desc.destinationAspect,
+                        desc.region.dstSubresource.aspectMask);
+                    auto result = std::vector<PassResourceUseDesc>{
+                        imageCopySourceUse(desc.source, sourceAspect),
+                        imageCopyDestinationUse(desc.destination, destinationAspect),
+                    };
+                    if (desc.presentDestination)
+                    {
+                        result.push_back(use::presentRead(desc.destination));
+                    }
+                    return result;
+                }
+            },
+            copy);
     }
 
 [[nodiscard]] bool RenderGraphBuilder::isBufferResourceDesc(const GraphResourceDesc& desc) noexcept
@@ -481,11 +653,21 @@ void RenderGraphBuilder::clear()
 
 [[nodiscard]] bool RenderGraphBuilder::isCopySourceUse(const PassResourceUseDesc& use) noexcept
 {
-        return use.imageUsage == ImageUsageIntent::TransferSrc ||
+        return use.bufferUsage == BufferUsageIntent::TransferSrc ||
+               use.bufferUsage == BufferUsageIntent::HostUpload ||
+               use.imageUsage == ImageUsageIntent::TransferSrc ||
                use.imageUsage == ImageUsageIntent::CopySource;
     }
 
 [[nodiscard]] bool RenderGraphBuilder::isCopyDestinationUse(const PassResourceUseDesc& use) noexcept
+{
+        return use.bufferUsage == BufferUsageIntent::TransferDst ||
+               use.bufferUsage == BufferUsageIntent::Readback ||
+               use.imageUsage == ImageUsageIntent::TransferDst ||
+               use.imageUsage == ImageUsageIntent::CopyDestination;
+    }
+
+[[nodiscard]] bool RenderGraphBuilder::isImageCopyDestinationUse(const PassResourceUseDesc& use) noexcept
 {
         return use.imageUsage == ImageUsageIntent::TransferDst ||
                use.imageUsage == ImageUsageIntent::CopyDestination;
@@ -636,8 +818,8 @@ void RenderGraphBuilder::validatePassResourceUses(
 
         auto hasSource = std::ranges::any_of(intentList, isCopySourceUse);
         auto hasDestination = std::ranges::any_of(intentList, isCopyDestinationUse);
-        nrAssert(hasSource, "RenderGraphBuilder::addPass copy pass requires a source image intent.");
-        nrAssert(hasDestination, "RenderGraphBuilder::addPass copy pass requires a destination image intent.");
+        nrAssert(hasSource, "RenderGraphBuilder::addPass copy pass requires a source copy intent.");
+        nrAssert(hasDestination, "RenderGraphBuilder::addPass copy pass requires a destination copy intent.");
 
         auto presentTargetsDestination = std::ranges::all_of(intentList, [&](const PassResourceUseDesc& use) {
             if (!isPresentUse(use))
@@ -646,7 +828,7 @@ void RenderGraphBuilder::validatePassResourceUses(
             }
 
             return std::ranges::any_of(intentList, [&](const PassResourceUseDesc& dstUse) {
-                return isCopyDestinationUse(dstUse) && dstUse.resource == use.resource;
+                return isImageCopyDestinationUse(dstUse) && dstUse.resource == use.resource;
             });
         });
         nrAssert(
@@ -703,6 +885,16 @@ GraphPassHandle RenderGraphNodeContext::addPass(
         std::move(parallelRecord),
         std::move(prepareCallback),
         shaderStages);
+}
+
+GraphPassHandle RenderGraphNodeContext::addCopyPass(
+    std::string_view debugName,
+    CopyPassDesc copy)
+{
+    return builder_.get().addCopyPass(
+        debugName,
+        node,
+        std::move(copy));
 }
 
 GraphSubmitHandle RenderGraphNodeContext::addSubmitNode(

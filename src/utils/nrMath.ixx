@@ -73,6 +73,16 @@ constexpr void hashAppendString(std::uint64_t &state, const TString &value) noex
     return std::string_view{value.data(), value.size()};
 }
 
+[[nodiscard]] constexpr std::string toHexString(const std::array<char, 16> &value)
+{
+    return std::string(toHexView(value));
+}
+
+[[nodiscard]] constexpr std::string toHexString(std::uint64_t value)
+{
+    return toHexString(toHexChars(value));
+}
+
 template <typename T>
 [[nodiscard]] consteval std::uint64_t hashValue(const T &value) noexcept
 {

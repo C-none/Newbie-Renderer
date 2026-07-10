@@ -17,12 +17,6 @@ struct SurfaceFormatPreference
     vk::ColorSpaceKHR colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
 };
 
-enum class SurfaceFormatMatchMode
-{
-    exact,
-    formatOnly,
-};
-
 template <vk::Result Expected> [[nodiscard]] bool isVulkanResult(const vk::SystemError &error) noexcept
 {
     return error.code().value() == static_cast<int>(Expected);
@@ -41,24 +35,20 @@ template <vk::Result Expected> [[nodiscard]] bool isVulkanResult(const vk::Syste
     return std::nullopt;
 }
 
-template <SurfaceFormatMatchMode MatchMode> [[nodiscard]] bool matchesSurfaceFormat(const vk::SurfaceFormatKHR &candidate, SurfaceFormatPreference preference) noexcept
+[[nodiscard]] bool matchesSurfaceFormat(const vk::SurfaceFormatKHR &candidate, SurfaceFormatPreference preference) noexcept
 {
-    if constexpr (MatchMode == SurfaceFormatMatchMode::exact)
-    {
-        return candidate.format == preference.format && candidate.colorSpace == preference.colorSpace;
-    }
-    return candidate.format == preference.format;
+    return candidate.format == preference.format && candidate.colorSpace == preference.colorSpace;
 }
 
-template <SurfaceFormatMatchMode MatchMode> [[nodiscard]] std::optional<vk::SurfaceFormatKHR> findPreferredSurfaceFormat(std::span<const vk::SurfaceFormatKHR> formats, std::span<const SurfaceFormatPreference> preferences)
+[[nodiscard]] std::optional<vk::SurfaceFormatKHR> findPreferredSurfaceFormat(std::span<const vk::SurfaceFormatKHR> formats, std::span<const SurfaceFormatPreference> preferences)
 {
-    auto preference = std::ranges::find_if(preferences, [&](SurfaceFormatPreference item) { return std::ranges::any_of(formats, [&](const vk::SurfaceFormatKHR &format) { return matchesSurfaceFormat<MatchMode>(format, item); }); });
+    auto preference = std::ranges::find_if(preferences, [&](SurfaceFormatPreference item) { return std::ranges::any_of(formats, [&](const vk::SurfaceFormatKHR &format) { return matchesSurfaceFormat(format, item); }); });
     if (preference == preferences.end())
     {
         return std::nullopt;
     }
 
-    auto format = std::ranges::find_if(formats, [&](const vk::SurfaceFormatKHR &item) { return matchesSurfaceFormat<MatchMode>(item, *preference); });
+    auto format = std::ranges::find_if(formats, [&](const vk::SurfaceFormatKHR &item) { return matchesSurfaceFormat(item, *preference); });
     nrAssert(format != formats.end(), "findPreferredSurfaceFormat resolved a preference without a matching format.");
     return *format;
 }
@@ -126,7 +116,10 @@ namespace nr::rhi
 {
     nrAssert(!formats.empty(), "chooseSwapchainSurfaceFormat requires at least one supported surface format.");
 
-    constexpr auto hdrPreferences = std::array{
+    // The project only outputs to three color spaces: scRGB extended-linear, HDR10 ST2084, and SDR sRGB.
+    // Preference order keeps HDR paths ahead of SDR; each entry is matched by exact format+color-space pair
+    // so an unsupported gamut can never be selected. Fail fast if none of the supported pairs is available.
+    constexpr auto preferences = std::array{
         detail::SurfaceFormatPreference{
             .format = vk::Format::eR16G16B16A16Sfloat,
             .colorSpace = vk::ColorSpaceKHR::eExtendedSrgbLinearEXT,
@@ -139,13 +132,6 @@ namespace nr::rhi
             .format = vk::Format::eA2R10G10B10UnormPack32,
             .colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT,
         },
-    };
-    if (auto hdrFormat = detail::findPreferredSurfaceFormat<detail::SurfaceFormatMatchMode::exact>(formats, std::span{hdrPreferences}); hdrFormat.has_value())
-    {
-        return *hdrFormat;
-    }
-
-    constexpr auto sdrPreferences = std::array{
         detail::SurfaceFormatPreference{
             .format = vk::Format::eB8G8R8A8Srgb,
             .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
@@ -163,15 +149,12 @@ namespace nr::rhi
             .colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
         },
     };
-    if (auto sdrFormat = detail::findPreferredSurfaceFormat<detail::SurfaceFormatMatchMode::exact>(formats, std::span{sdrPreferences}); sdrFormat.has_value())
+    if (auto selectedFormat = detail::findPreferredSurfaceFormat(formats, std::span{preferences}); selectedFormat.has_value())
     {
-        return *sdrFormat;
+        return *selectedFormat;
     }
 
-    if (auto sdrFormatFallback = detail::findPreferredSurfaceFormat<detail::SurfaceFormatMatchMode::formatOnly>(formats, std::span{sdrPreferences}); sdrFormatFallback.has_value())
-    {
-        return *sdrFormatFallback;
-    }
+    nrAssert(false, std::format("chooseSwapchainSurfaceFormat found none of the supported scRGB / HDR10 ST2084 / SDR sRGB format-color-space pairs. Available surface formats:\n{}", detail::formatSurfaceFormatList(formats)));
     return formats.front();
 }
 

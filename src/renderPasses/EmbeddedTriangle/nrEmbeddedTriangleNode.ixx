@@ -14,7 +14,6 @@ export namespace nr::renderPasses
 {
 struct EmbeddedTriangleNodeInput
 {
-    vk::Extent2D viewportExtent{1, 1};
     vk::Format colorFormat = vk::Format::eR8G8B8A8Unorm;
 };
 

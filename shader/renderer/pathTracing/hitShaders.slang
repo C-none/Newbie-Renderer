@@ -4,7 +4,7 @@ import include.rt.hitSurface;
 import renderer.pathTracing.params;
 import renderer.pathTracing.pathState;
 
-public bool shouldIgnorePathTracingAlphaMaskedHit(
+public bool shouldIgnoreAlphaMaskedHit(
     RtMaterialHeader material,
     RtSurfaceData surface,
     float3 viewDirection,
@@ -16,19 +16,14 @@ public bool shouldIgnorePathTracingAlphaMaskedHit(
         return false;
     }
 
-    ResolvedMaterialPayload resolved = resolveRtMaterialPayload(
-        rtMaterialTextureRefs,
-        rtMaterialLayers,
-        material,
-        surface,
-        viewDirection,
-        hitT,
-        materialIndex);
-    return resolvedMaterialFailsAlphaMask(resolved);
+    // Alpha coverage only: base color factor x base color texture x vertex color. No normal,
+    // metallic-roughness, emissive or layer records are resolved for the any-hit test.
+    float alpha = resolveAlphaCoverage(rtMaterialTextureRefs, material, surface);
+    return alpha < material.alphaCutoff;
 }
 
-public void handlePathTracingAnyHit(
-    inout PathTracingRayPayload payload,
+public void handleAnyHit(
+    inout RayPayload payload,
     BuiltInTriangleIntersectionAttributes attributes)
 {
     float3 viewDirection = normalize(-WorldRayDirection());
@@ -40,7 +35,7 @@ public void handlePathTracingAnyHit(
 
     RtMaterialHeader material = rtMaterialHeaders[hit.geometry.materialIndex];
     orientRtSurfaceForMaterial(hit.surface, material, viewDirection);
-    if (shouldIgnorePathTracingAlphaMaskedHit(
+    if (shouldIgnoreAlphaMaskedHit(
         material,
         hit.surface,
         viewDirection,
@@ -51,11 +46,11 @@ public void handlePathTracingAnyHit(
     }
 }
 
-public PathTracingClosestHitInput makePathTracingClosestHitInput(
+public ClosestHitInput makeClosestHitInput(
     BuiltInTriangleIntersectionAttributes attributes)
 {
     float3 viewDirection = normalize(-WorldRayDirection());
-    PathTracingClosestHitInput input = {};
+    ClosestHitInput input = {};
     input.viewDirection = viewDirection;
     input.hitT = RayTCurrent();
 

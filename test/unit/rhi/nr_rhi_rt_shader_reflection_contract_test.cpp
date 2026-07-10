@@ -21,40 +21,30 @@ struct CameraData
     bool enableRussianRoulette = true)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.debugName = std::format(
-        "test.pathTracing.maxBounces{}.roulette{}",
-        maxSurfaceBounces,
-        enableRussianRoulette ? "enabled" : "disabled");
-    variant.constants.try_emplace(
-        "kPathTracingMaxSurfaceBounces",
-        nr::rhi::SlangVariantConstant::fromUInt32(maxSurfaceBounces));
-    variant.typeAliases.try_emplace(
-        "PathTracingRussianRoulettePolicy",
-        nr::rhi::SlangVariantTypeAlias{
-            .typeName = "PathTracingRussianRoulettePolicy",
-            .interfaceName = "IPathTracingRussianRoulettePolicy",
-            .concreteTypeName = enableRussianRoulette ? "PathTracingRussianRouletteEnabledPolicy"
-                                                      : "PathTracingRussianRouletteDisabledPolicy",
-        });
+    variant
+        .assign(
+            "kMaxSurfaceBounces",
+            "uint",
+            maxSurfaceBounces)
+        .assign(
+            "RussianRoulettePolicy",
+            "IRussianRoulettePolicy",
+            std::string{
+                enableRussianRoulette ? "RussianRouletteEnabledPolicy"
+                                      : "RussianRouletteDisabledPolicy"});
     return variant;
 }
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestChsVariant(
-    std::uint32_t featureMask = 0u,
-    std::uint32_t alphaPolicy = 0u)
+    std::uint32_t layerMask = 0u)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.debugName = std::format("test.pathTracing.chs.features{}.alpha{}", featureMask, alphaPolicy);
-    variant.typeAliases.try_emplace(
+    variant.assign(
         "CHS",
-        nr::rhi::SlangVariantTypeAlias{
-            .typeName = "CHS",
-            .interfaceName = "ICHS",
-            .concreteTypeName = std::format(
-                "DefaultLitCHS<RtMaterialFeatureFlag({}u), PathTracingRtHitAlphaPolicy.{}>",
-                featureMask,
-                alphaPolicy == 1u ? "alphaMask" : "opaqueLike"),
-        });
+        "ICHS",
+        std::format(
+            "MaterialCHS<RtMaterialLayerFlag({}u)>",
+            layerMask));
     return variant;
 }
 
@@ -74,6 +64,47 @@ struct CameraData
     return result;
 }
 
+const nr::test::CaseRegistrar variantAssignmentSourceTextCase{
+    "rhi shader variants generate deterministic assignment source",
+    [] {
+        auto constants = nr::rhi::SlangProgramVariantDesc{};
+        constants
+            .assign("kUIntValue", "uint", 7u)
+            .assign("kBoolValue", "bool", true)
+            .assign("kFloatValue", "float", 1.5f)
+            .assign("kIntValue", "int", std::int32_t{-3});
+
+        auto constantLines = effectiveShaderLines(constants.sourceText());
+        nr::test::requireEqual(constantLines.size(), std::size_t{4u});
+        nr::test::requireEqual(constantLines[0], std::string{"export static const bool kBoolValue = true;"});
+        nr::test::requireEqual(constantLines[1], std::string{"export static const float kFloatValue = 1.5f;"});
+        nr::test::requireEqual(constantLines[2], std::string{"export static const int kIntValue = -3;"});
+        nr::test::requireEqual(constantLines[3], std::string{"export static const uint kUIntValue = 7u;"});
+
+        auto alias = nr::rhi::SlangProgramVariantDesc{};
+        alias.assign(
+            "Policy",
+            "IPolicy",
+            std::string{"ConcretePolicy<1u, SomeEnum.value>"});
+
+        auto aliasLines = effectiveShaderLines(alias.sourceText());
+        nr::test::requireEqual(aliasLines.size(), std::size_t{2u});
+        nr::test::requireEqual(aliasLines[0], std::string{"import common;"});
+        nr::test::requireEqual(
+            aliasLines[1],
+            std::string{"export struct Policy : IPolicy = ConcretePolicy<1u, SomeEnum.value>;"});
+
+        auto constantsReordered = nr::rhi::SlangProgramVariantDesc{};
+        constantsReordered
+            .assign("kIntValue", "int", std::int32_t{-3})
+            .assign("kUIntValue", "uint", 7u)
+            .assign("kBoolValue", "bool", true)
+            .assign("kFloatValue", "float", 1.5f);
+
+        nr::test::requireEqual(constantsReordered.hashValue(), constants.hashValue());
+        nr::test::requireEqual(constantsReordered.sourceText(), constants.sourceText());
+    }};
+
 const nr::test::CaseRegistrar syntheticSourceCompileCase{
     "rhi shader service compiles synthetic source roots with link-time constants",
     [] {
@@ -81,10 +112,7 @@ const nr::test::CaseRegistrar syntheticSourceCompileCase{
         shaderService.configure();
 
         auto variant = nr::rhi::SlangProgramVariantDesc{};
-        variant.debugName = "test.syntheticSource";
-        variant.constants.try_emplace(
-            "kSyntheticSourceValue",
-            nr::rhi::SlangVariantConstant::fromUInt32(7u));
+        variant.assign("kSyntheticSourceValue", "uint", 7u);
 
         auto program = shaderService.compileProgramFromSource(nr::rhi::SlangProgramCompileSourceRequest{
             .moduleName = "test.syntheticSourceRoot",
@@ -117,7 +145,7 @@ const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
         nr::test::requireEqual(effectiveLines[0], std::string{"import common;"});
         nr::test::requireEqual(
             effectiveLines[1],
-            std::string{"export struct CHS : ICHS = DefaultLitCHS<RtMaterialFeatureFlag(0u), PathTracingRtHitAlphaPolicy.opaqueLike>;"});
+            std::string{"export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u)>;"});
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
@@ -144,9 +172,9 @@ const nr::test::CaseRegistrar rtPipelineStageSelectionCase{
         auto alphaMaskProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = makePathTracingTestVariant(),
-            .linkVariants = {makePathTracingTestChsVariant(8u, 1u)},
+            .linkVariants = {makePathTracingTestChsVariant()},
         });
-        nr::test::require(alphaMaskProgram.valid(), "alpha-mask CHS path tracing shader should compile");
+        nr::test::require(alphaMaskProgram.valid(), "reused alpha-mask CHS path tracing shader should compile");
 
         auto selectedStages = std::array{
             nr::rhi::RayTracingPipelineStageSelection{
@@ -385,7 +413,7 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
         auto reloadedVariantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = constantVariant,
-            .linkVariants = {makePathTracingTestChsVariant(8u, 1u)},
+            .linkVariants = {makePathTracingTestChsVariant(4u)},
         });
         nr::test::require(reloadedVariantProgram.valid(), "path tracing variant should compile after session reload");
     }};

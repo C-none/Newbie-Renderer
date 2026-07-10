@@ -5,23 +5,19 @@ public bool hasRtMaterialFeature(RtMaterialHeader material, RtMaterialFeatureFla
     return uint(material.featureFlags & mask) != 0u;
 }
 
+public bool hasRtMaterialLayer(RtMaterialHeader material, RtMaterialLayerFlag mask)
+{
+    return uint(material.layerFlags & mask) != 0u;
+}
+
 public RtMaterialTextureRef rtMaterialTextureRef(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
     MaterialTextureSlot slot)
 {
-    for (uint index = 0u; index < material.textureRefCount; ++index)
-    {
-        RtMaterialTextureRef textureRef = textureRefs[material.textureRefOffset + index];
-        if (textureRef.slot == slot)
-        {
-            return textureRef;
-        }
-    }
-
-    RtMaterialTextureRef fallback = {};
-    fallback.slot = slot;
-    return fallback;
+    // Texture refs are dense: one entry per MaterialTextureSlot in slot order. Unauthored slots hold
+    // texture id 0 (neutral default), so a direct index replaces the previous slot scan.
+    return textureRefs[material.textureRefOffset + uint(slot)];
 }
 
 public uint rtMaterialTextureId(
@@ -36,15 +32,15 @@ public float3 rtMaterialFeaturePreviewColor(RtMaterialHeader material)
 {
     float3 color = max(material.baseColorFactor.rgb, float3(0.02f));
 
-    if (hasRtMaterialFeature(material, RtMaterialFeatureFlag.transmission))
+    if (hasRtMaterialLayer(material, RtMaterialLayerFlag.transmission))
     {
         color = lerp(color, float3(0.35f, 0.85f, 1.0f), 0.45f);
     }
-    if (hasRtMaterialFeature(material, RtMaterialFeatureFlag.sheen))
+    if (hasRtMaterialLayer(material, RtMaterialLayerFlag.sheen))
     {
         color = lerp(color, float3(1.0f, 0.35f, 0.85f), 0.35f);
     }
-    if (hasRtMaterialFeature(material, RtMaterialFeatureFlag.clearcoat))
+    if (hasRtMaterialLayer(material, RtMaterialLayerFlag.clearcoat))
     {
         color = lerp(color, float3(0.78f, 0.95f, 1.0f), 0.25f);
     }

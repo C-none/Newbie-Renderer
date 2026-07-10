@@ -408,154 +408,6 @@ void NodeUiBuildContext::addSection(
     });
 }
 
-namespace
-{
-template <typename TValue>
-[[nodiscard]] TValue variantSnapshotValueOr(
-    const VariantItemSnapshot& snapshot,
-    TValue fallback)
-{
-    auto const* value = std::get_if<TValue>(std::addressof(snapshot.value));
-    return value != nullptr ? *value : fallback;
-}
-
-[[nodiscard]] std::string variantChoicePreview(const VariantItemSnapshot& snapshot)
-{
-    auto const value = variantSnapshotValueOr<std::string>(snapshot, {});
-    auto choiceIt = std::ranges::find_if(snapshot.desc.shader.stringChoices, [&](const nr::rhi::ShaderVariantStringChoice& choice) {
-        return choice.value == value;
-    });
-    if (choiceIt == std::ranges::end(snapshot.desc.shader.stringChoices))
-    {
-        return value;
-    }
-    return choiceIt->label.empty() ? choiceIt->value : choiceIt->label;
-}
-
-void drawVariantSnapshot(
-    VariantStateRegistry& variants,
-    std::string_view runtimeName,
-    const VariantItemSnapshot& snapshot,
-    NodeUiWriter& ui)
-{
-    auto const& shader = snapshot.desc.shader;
-    auto const label = shader.label.empty() ? shader.id : shader.label;
-    switch (shader.kind)
-    {
-    case nr::rhi::ShaderVariantValueKind::Bool:
-    {
-        auto value = variantSnapshotValueOr<bool>(snapshot, false);
-        if (ui.checkbox(label, value))
-        {
-            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
-        }
-        return;
-    }
-    case nr::rhi::ShaderVariantValueKind::Int32:
-    {
-        auto value = variantSnapshotValueOr<std::int32_t>(snapshot, {});
-        auto const minValue = shader.numericRange.bounded
-                                  ? static_cast<std::int32_t>(shader.numericRange.minValue)
-                                  : std::numeric_limits<std::int32_t>::lowest();
-        auto const maxValue = shader.numericRange.bounded
-                                  ? static_cast<std::int32_t>(shader.numericRange.maxValue)
-                                  : std::numeric_limits<std::int32_t>::max();
-        if (ui.inputInt32(label, value, minValue, maxValue))
-        {
-            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
-        }
-        return;
-    }
-    case nr::rhi::ShaderVariantValueKind::UInt32:
-    {
-        auto value = variantSnapshotValueOr<std::uint32_t>(snapshot, {});
-        auto const minValue = shader.numericRange.bounded
-                                  ? static_cast<std::uint32_t>(std::max(0.0, shader.numericRange.minValue))
-                                  : std::uint32_t{0};
-        auto const maxValue = shader.numericRange.bounded
-                                  ? static_cast<std::uint32_t>(std::max(0.0, shader.numericRange.maxValue))
-                                  : std::numeric_limits<std::uint32_t>::max();
-        auto const changed = snapshot.desc.effect != VariantItemEffect::RuntimeOnly &&
-                             shader.numericRange.bounded &&
-                             maxValue <= static_cast<std::uint32_t>(std::numeric_limits<int>::max())
-                                 ? ui.sliderUInt(label, value, minValue, maxValue)
-                                 : ui.inputUInt(label, value, minValue, maxValue);
-        if (changed)
-        {
-            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
-        }
-        return;
-    }
-    case nr::rhi::ShaderVariantValueKind::Float32:
-    {
-        auto value = variantSnapshotValueOr<float>(snapshot, {});
-        auto const minValue = shader.numericRange.bounded
-                                  ? static_cast<float>(shader.numericRange.minValue)
-                                  : std::numeric_limits<float>::lowest();
-        auto const maxValue = shader.numericRange.bounded
-                                  ? static_cast<float>(shader.numericRange.maxValue)
-                                  : std::numeric_limits<float>::max();
-        auto const changed = shader.numericRange.bounded
-                                 ? ui.sliderFloat(label, value, minValue, maxValue)
-                                 : ui.inputFloat(label, value, minValue, maxValue);
-        if (changed)
-        {
-            static_cast<void>(variants.submitPatch(runtimeName, shader.id, value, VariantWriteSource::Ui));
-        }
-        return;
-    }
-    case nr::rhi::ShaderVariantValueKind::String:
-    {
-        auto current = variantSnapshotValueOr<std::string>(snapshot, {});
-        if (!ui.beginCombo(label, variantChoicePreview(snapshot)))
-        {
-            return;
-        }
-        std::ranges::for_each(shader.stringChoices, [&](const nr::rhi::ShaderVariantStringChoice& choice) {
-            auto const choiceLabel = choice.label.empty() ? choice.value : choice.label;
-            auto const selected = choice.value == current;
-            if (ui.selectable(choiceLabel, selected))
-            {
-                current = choice.value;
-                static_cast<void>(variants.submitPatch(runtimeName, shader.id, current, VariantWriteSource::Ui));
-            }
-        });
-        ui.endCombo();
-        return;
-    }
-    }
-}
-
-void collectVariantUiSections(
-    VariantStateRegistry& variants,
-    std::string_view runtimeName,
-    NodeUiBuildContext& context)
-{
-    auto snapshots = variants.snapshot(runtimeName);
-    std::erase_if(snapshots, [](const VariantItemSnapshot& snapshot) {
-        return !snapshot.desc.uiVisible;
-    });
-    if (snapshots.empty())
-    {
-        return;
-    }
-
-    context.addSection(
-        runtimeName,
-        [runtimeName = std::string{runtimeName}, &variants](NodeUiWriter& ui) {
-            auto currentSnapshots = variants.snapshot(runtimeName);
-            std::erase_if(currentSnapshots, [](const VariantItemSnapshot& snapshot) {
-                return !snapshot.desc.uiVisible;
-            });
-            std::ranges::for_each(currentSnapshots, [&](const VariantItemSnapshot& snapshot) {
-                drawVariantSnapshot(variants, runtimeName, snapshot, ui);
-            });
-        },
-        true,
-        "variants");
-}
-} // namespace
-
 void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
 {
         nrAssert(resource.valid(), std::format("NodeBuildContext::publishFrameResource requires a valid resource for '{}'.", key));
@@ -1548,8 +1400,8 @@ void Renderer::ensureSceneTextureFallback()
         sceneTextureFallback_ = device_->resourceFactory.createImage(
             imageInfo,
             nr::rhi::MemoryUsage::GpuOnly,
-            "Renderer.SceneTextureFallback.Purple");
-        nrAssert(sceneTextureFallback_.valid(), "Renderer failed to create purple scene texture fallback.");
+            "Renderer.SceneTextureFallback.Neutral");
+        nrAssert(sceneTextureFallback_.valid(), "Renderer failed to create neutral scene texture fallback.");
 
         uploadSceneTextureFallback();
     }
@@ -1581,9 +1433,13 @@ void Renderer::uploadSceneTextureFallback()
         nrAssert(static_cast<bool>(device_), "Renderer::uploadSceneTextureFallback requires initialized device.");
         nrAssert(sceneTextureFallback_.valid(), "Renderer::uploadSceneTextureFallback requires a valid fallback image.");
 
-        auto purplePixel = std::array{
+        // Scene texture id 0 is the neutral default sampled for every unauthored material slot. It is
+        // 1x1 linear white RGBA(1,1,1,1) so multiplicative sampling (base color, metallic-roughness,
+        // emissive, clearcoat, sheen, transmission) resolves to a neutral factor of 1 instead of a
+        // debug color. Genuinely invalid texture references are reported at load/scene residency.
+        auto neutralPixel = std::array{
             static_cast<std::byte>(0xFFu),
-            static_cast<std::byte>(0x00u),
+            static_cast<std::byte>(0xFFu),
             static_cast<std::byte>(0xFFu),
             static_cast<std::byte>(0xFFu),
         };
@@ -1591,12 +1447,12 @@ void Renderer::uploadSceneTextureFallback()
         auto& uploadContext = device_->uploadReadback();
         auto const uploadPlan = makeSceneTextureFallbackUploadPlan();
         auto uploadTicket = uploadContext.uploadImage(
-            std::span<const std::byte>{purplePixel},
+            std::span<const std::byte>{neutralPixel},
             sceneTextureFallback_,
             vk::ImageLayout::eUndefined,
             vk::ImageLayout::eShaderReadOnlyOptimal,
             uploadPlan);
-        nrAssert(uploadTicket.valid(), "Renderer failed to upload purple scene texture fallback.");
+        nrAssert(uploadTicket.valid(), "Renderer failed to upload neutral scene texture fallback.");
 
         auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
         auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
@@ -1629,7 +1485,7 @@ void Renderer::uploadSceneTextureFallback()
         auto fence = vk::raii::Fence(device_->device, vk::FenceCreateInfo{});
         device_->queueManager.graphics().submit(std::move(syncBatch), std::cref(fence));
         auto const waitResult = device_->device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
-        nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for purple scene texture fallback upload synchronization.");
+        nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for neutral scene texture fallback upload synchronization.");
         uploadContext.reclaimCompletedUploads();
     }
 
@@ -1686,10 +1542,8 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
             auto [_, inserted] = knownNames.insert(runtimeName);
             nrAssert(inserted, "Renderer::installGraph found duplicate node names in RendererGraphSpec.");
 
-            cacheSuite_.variantRegistry.clearRuntime(runtimeName);
             auto initContext = NodeInitContext{
                 .device = std::ref(*device_),
-                .variants = std::ref(cacheSuite_.variantRegistry),
                 .runtimeName = runtimeName,
             };
             createInfo.runtime->initialize(initContext);
@@ -2231,7 +2085,6 @@ void Renderer::buildInstalledGraph(
 {
         nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
-        cacheSuite_.variantRegistry.commitFramePatches();
         builder_.clear();
         auto const previousFrameConstants = previousGlobalFrameConstants_.value_or(frameConstants);
         auto const globalFrameUniforms =
@@ -2256,9 +2109,10 @@ void Renderer::buildInstalledGraph(
         auto nodeUiSections = std::vector<NodeUiSection>{};
         nodeUiSections.reserve(installedNodes_.size());
         std::ranges::for_each(installedNodes_, [&](InstalledNode& installedNode) {
-            auto uiContext = NodeUiBuildContext{installedNode.runtimeName, nodeUiSections};
+            auto uiContext = NodeUiBuildContext{
+                installedNode.runtimeName,
+                nodeUiSections};
             installedNode.runtime->collectUi(uiContext, nodeFrameParameters);
-            collectVariantUiSections(cacheSuite_.variantRegistry, installedNode.runtimeName, uiContext);
         });
         nodeFrameParameters.nodeUiSections =
             std::span<const NodeUiSection>{nodeUiSections.data(), nodeUiSections.size()};
@@ -2283,7 +2137,6 @@ void Renderer::buildInstalledGraph(
                 .globalResources = std::cref(globalResources),
                 .frameResources = std::ref(frameResources),
                 .frameDataResources = std::ref(frameDataResources),
-                .variants = std::ref(cacheSuite_.variantRegistry),
             };
 
             installedNode.runtime->build(buildContext, nodeFrameParameters);
@@ -2376,7 +2229,7 @@ void Renderer::recordCpuTimingSample(const RendererCpuFrameTimings& timings) noe
         accumulateCpuTimings(cpuTimingAccumulator_, timings);
         ++cpuStatistics_.pendingSampleFrameCount;
 
-        if (cpuStatistics_.pendingSampleFrameCount < nr::statisticsSampleFrameCount)
+        if (cpuStatistics_.pendingSampleFrameCount < nr::statistics::sampleFrameCount())
         {
             return;
         }
@@ -2408,7 +2261,7 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame& timings)
         });
 
         ++gpuPassStatistics_.pendingSampleFrameCount;
-        if (gpuPassStatistics_.pendingSampleFrameCount < nr::statisticsSampleFrameCount)
+        if (gpuPassStatistics_.pendingSampleFrameCount < nr::statistics::sampleFrameCount())
         {
             return;
         }

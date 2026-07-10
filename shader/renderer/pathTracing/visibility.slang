@@ -9,11 +9,11 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = direction;
-    ray.TMin = kPathTracingRayEpsilon;
-    ray.TMax = max(kPathTracingRayEpsilon, maxDistance - kPathTracingRayEpsilon);
+    ray.TMin = kRayEpsilon;
+    ray.TMax = max(kRayEpsilon, maxDistance - kRayEpsilon);
 
-    PathTracingRayPayload payload = {};
-    payload.rayKind = PathTracingRayKind.visibility;
+    RayPayload payload = {};
+    payload.rayKind = RayKind.visibility;
     payload.hit = 1u;
     TraceRay(
         scene,
@@ -29,5 +29,5 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
 
 public bool tracePathVisibilityRayToLight(float3 origin, SceneLightContribution contribution)
 {
-    return tracePathVisibilityRay(origin, contribution.direction, kPathTracingRayTMax);
+    return tracePathVisibilityRay(origin, contribution.direction, kRayTMax);
 }

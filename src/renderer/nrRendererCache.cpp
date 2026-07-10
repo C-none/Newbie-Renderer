@@ -177,6 +177,7 @@ namespace
             .isCopyPass = pass.isCopyPass,
             .queue = pass.queue,
             .shaderStages = pass.shaderStages,
+            .copy = pass.copy,
             .resourceUses = std::move(resourceUses),
             .hasPrepare = static_cast<bool>(pass.prepare),
             .hasRecord = static_cast<bool>(pass.record),
@@ -301,6 +302,7 @@ void RenderGraphCompileCache::patchCompiledPasses(
 
             compiledPass.debugName = std::move(framePass.debugName);
             compiledPass.shaderStages = framePass.shaderStages;
+            compiledPass.copy = std::move(framePass.copy);
             compiledPass.resourceUses = std::move(framePass.resourceUses);
             compiledPass.prepare = std::move(framePass.prepare);
             compiledPass.record = std::move(framePass.record);
@@ -613,7 +615,6 @@ void RendererGlobalDescriptorTableCache::clear() noexcept
 
 void RendererCacheSuite::clear() noexcept
 {
-    variantRegistry.clear();
     compileCache.clear();
     bindlessImageTableCache.clear();
     globalDescriptorTableCache.clear();

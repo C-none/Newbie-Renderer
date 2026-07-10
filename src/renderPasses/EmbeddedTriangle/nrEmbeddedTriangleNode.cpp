@@ -68,11 +68,7 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
 {
     nr::nrAssert(static_cast<bool>(runtime_), "EmbeddedTriangle build stage requires initialized runtime state.");
 
-    auto viewportExtent = input.viewportExtent;
-    if (viewportExtent.width == 1 && viewportExtent.height == 1)
-    {
-        viewportExtent = frameParameters.swapchainExtent;
-    }
+    auto viewportExtent = frameParameters.swapchainExtent;
 
     auto colorFormat = input.colorFormat;
     if (colorFormat == vk::Format::eUndefined)

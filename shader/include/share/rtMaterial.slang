@@ -1,6 +1,5 @@
 implementing common;
 
-public static const uint kRtMaterialAbiVersion = 1u;
 public static const uint kRtMaterialFallbackIndex = 0u;
 
 [Flags]
@@ -17,30 +16,29 @@ public enum RtInstanceFlag : uint
 }
 
 [Flags]
+public enum RtMaterialLayerFlag : uint
+{
+    none         = 0u,
+    baseSurface  = 1u << 0u,
+    clearcoat    = 1u << 1u,
+    sheen        = 1u << 2u,
+    transmission = 1u << 3u,
+}
+
+[Flags]
 public enum RtMaterialFeatureFlag : uint
 {
     none = 0u,
-    clearcoat = 1u << 0u,
-    sheen = 1u << 1u,
-    transmission = 1u << 2u,
-    alphaMask = 1u << 3u,
-    alphaBlend = 1u << 4u,
-    doubleSided = 1u << 5u,
-    emissive = 1u << 6u,
+    alphaMask = 1u << 0u,
+    alphaBlend = 1u << 1u,
+    doubleSided = 1u << 2u,
+    emissive = 1u << 3u,
     unsupportedAnisotropy = 1u << 31u,
-}
-
-public enum RtMaterialLayerKind : uint
-{
-    baseSurface = 0u,
-    clearcoat = 1u,
-    sheen = 2u,
-    transmission = 3u,
 }
 
 public struct RtMaterialHeader
 {
-    public uint abiVersion = kRtMaterialAbiVersion;
+    public RtMaterialLayerFlag layerFlags = RtMaterialLayerFlag.none;
     public RtMaterialFeatureFlag featureFlags = RtMaterialFeatureFlag.none;
     public uint layerOffset = 0u;
     public uint layerCount = 0u;
@@ -56,8 +54,7 @@ public struct RtMaterialHeader
 
 public struct RtMaterialLayerRecord
 {
-    public RtMaterialLayerKind kind = RtMaterialLayerKind.baseSurface;
-    public MaterialTextureSlotFlag textureMask = MaterialTextureSlotFlag.none;
+    public RtMaterialLayerFlag layer = RtMaterialLayerFlag.baseSurface;
     public uint aux0 = 0u;
     public uint aux1 = 0u;
     public float4 p0 = float4(0.0f);
@@ -69,7 +66,6 @@ public struct RtMaterialTextureRef
     public MaterialTextureSlot slot = MaterialTextureSlot.baseColor;
     public uint textureId = 0u;
     public uint uvSet = 0u;
-    public MaterialTextureSlotFlag flags = MaterialTextureSlotFlag.none;
 };
 
 public struct RtGeometryMetadata

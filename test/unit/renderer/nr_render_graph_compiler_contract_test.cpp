@@ -1045,6 +1045,54 @@ const nr::test::CaseRegistrar compileCacheDebugNameSwapchainIndexHitCase{
         nr::test::requireEqual(compiled.submitBatches.front().passes.front().debugName, std::string{"Swapchain.Pass.second"});
     }};
 
+const nr::test::CaseRegistrar compileCacheCopyPayloadPatchCase{
+    "render graph compile cache patches copy pass payloads on cache hit",
+    [] {
+        auto makeCopyFrame = [](std::string_view debugSuffix, vk::DeviceSize sourceOffset) {
+            auto builder = nr::renderer::RenderGraphBuilder{};
+            auto node = builder.addNode(std::format("Copy.Node.{}", debugSuffix), nr::renderer::QueueDomain::Compute);
+            auto source = builder.addResource(nr::renderer::GraphTransientBufferDesc{
+                .debugName = std::format("Copy.Source.{}", debugSuffix),
+                .size = 256,
+            });
+            auto destination = builder.addResource(nr::renderer::GraphTransientBufferDesc{
+                .debugName = std::format("Copy.Destination.{}", debugSuffix),
+                .size = 256,
+            });
+            static_cast<void>(builder.addCopyPass(
+                std::format("Copy.Pass.{}", debugSuffix),
+                node,
+                nr::renderer::CopyBufferToBufferPassDesc{
+                    .source = source,
+                    .destination = destination,
+                    .region = vk::BufferCopy{sourceOffset, 0, 64},
+                }));
+            return builder.build();
+        };
+
+        auto cache = nr::renderer::RenderGraphCompileCache{};
+        auto first = makeCopyFrame("first", 0);
+        static_cast<void>(cache.compileConsumingCached(first));
+
+        auto second = makeCopyFrame("second", 0);
+        auto compiledHit = cache.compileConsumingCached(second);
+        auto statsAfterHit = cache.statistics();
+        nr::test::requireEqual(statsAfterHit.hitCount, std::uint64_t{1});
+        nr::test::requireEqual(statsAfterHit.missCount, std::uint64_t{1});
+        auto const& hitPass = compiledHit.submitBatches.front().passes.front();
+        nr::test::requireEqual(hitPass.debugName, std::string{"Copy.Pass.second"});
+        nr::test::require(hitPass.copy.has_value(), "cached copy pass should keep current copy metadata");
+        auto const* hitCopy = std::get_if<nr::renderer::CopyBufferToBufferPassDesc>(&*hitPass.copy);
+        nr::test::require(hitCopy != nullptr, "cached copy payload should retain buffer-to-buffer type");
+        nr::test::requireEqual(hitCopy->region.size, vk::DeviceSize{64});
+
+        auto changedRegion = makeCopyFrame("changed", 16);
+        static_cast<void>(cache.compileConsumingCached(changedRegion));
+        auto statsAfterMiss = cache.statistics();
+        nr::test::requireEqual(statsAfterMiss.hitCount, std::uint64_t{1});
+        nr::test::requireEqual(statsAfterMiss.missCount, std::uint64_t{2});
+    }};
+
 const nr::test::CaseRegistrar bindlessImageTableCacheCase{
     "renderer bindless image table cache tracks versions fallback removals and reallocations",
     [] {

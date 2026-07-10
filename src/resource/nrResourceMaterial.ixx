@@ -199,6 +199,7 @@ struct Material
     std::optional<MaterialSheenExtension> sheen{};
     std::optional<MaterialTransmissionExtension> transmission{};
     std::optional<MaterialAnisotropyExtension> anisotropy{};
+    bool unlit = false;
     std::array<MaterialTextureSlot, materialTextureSlotCount> textureSlots{};
 
     Material() = default;

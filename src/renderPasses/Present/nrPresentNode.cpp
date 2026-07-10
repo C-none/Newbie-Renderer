@@ -17,6 +17,7 @@ struct PresentConvertPushConstants
     std::uint32_t height = 0u;
     std::uint32_t swizzleBgr = 0u;
     std::uint32_t outputEncoding = 0u;
+    std::uint32_t toneMapping = 0u;
     std::uint32_t flipY = 0u;
     float uiOpacity = 1.0f;
 };
@@ -27,6 +28,44 @@ inline constexpr std::uint32_t kOutputEncodingLinear = 0u;
 inline constexpr std::uint32_t kOutputEncodingSrgb = 1u;
 inline constexpr std::uint32_t kOutputEncodingHdr10Pq = 2u;
 inline constexpr std::uint32_t kOutputEncodingScRgb = 3u;
+
+inline constexpr std::uint32_t kToneMappingNone = 0u;
+inline constexpr std::uint32_t kToneMappingReinhard = 1u;
+inline constexpr std::uint32_t kToneMappingAcesFilmic = 2u;
+inline constexpr std::uint32_t kToneMappingBt2390 = 3u;
+
+// Selection index 0 keeps the per-gamut default; entries 1..N map to explicit methods (index - 1).
+inline constexpr std::array<std::string_view, 5u> kToneMappingSelectionLabels = {
+    "Auto",
+    "None",
+    "Reinhard",
+    "ACES Filmic",
+    "BT.2390 EETF",
+};
+
+// Defaults follow the color-space research: SDR sRGB -> ACES filmic, HDR10 ST2084 -> BT.2390 EETF,
+// scRGB extended-linear -> None (preserve the scene-referred signal for the compositor).
+[[nodiscard]] std::uint32_t defaultToneMappingForColorSpace(vk::ColorSpaceKHR colorSpace) noexcept
+{
+    if (nr::rhi::isHdr10SwapchainColorSpace(colorSpace))
+    {
+        return kToneMappingBt2390;
+    }
+    if (nr::rhi::isScRgbSwapchainColorSpace(colorSpace))
+    {
+        return kToneMappingNone;
+    }
+    return kToneMappingAcesFilmic;
+}
+
+[[nodiscard]] std::uint32_t resolveToneMappingMethod(std::uint32_t selection, vk::ColorSpaceKHR colorSpace) noexcept
+{
+    if (selection == 0u)
+    {
+        return defaultToneMappingForColorSpace(colorSpace);
+    }
+    return selection - 1u;
+}
 
 struct PresentFormatConversion
 {
@@ -45,17 +84,6 @@ struct PresentRuntimeCache
     vk::Format allocatedFormat = vk::Format::eUndefined;
 };
 
-[[nodiscard]] std::uint32_t resolvePresentSdrOutputEncoding(vk::Format format, vk::ColorSpaceKHR colorSpace) noexcept
-{
-    if (format == vk::Format::eB8G8R8A8Srgb ||
-        format == vk::Format::eR8G8B8A8Srgb ||
-        colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-    {
-        return kOutputEncodingSrgb;
-    }
-    return kOutputEncodingLinear;
-}
-
 [[nodiscard]] std::optional<PresentFormatConversion> resolvePresentFormatConversion(
     vk::Format format,
     vk::ColorSpaceKHR colorSpace)
@@ -66,12 +94,12 @@ struct PresentRuntimeCache
     case vk::Format::eB8G8R8A8Unorm:
         return PresentFormatConversion{
             .swizzleBgr = true,
-            .outputEncoding = resolvePresentSdrOutputEncoding(format, colorSpace),
+            .outputEncoding = kOutputEncodingSrgb,
         };
     case vk::Format::eR8G8B8A8Srgb:
     case vk::Format::eR8G8B8A8Unorm:
         return PresentFormatConversion{
-            .outputEncoding = resolvePresentSdrOutputEncoding(format, colorSpace),
+            .outputEncoding = kOutputEncodingSrgb,
         };
     case vk::Format::eA2B10G10R10UnormPack32:
     case vk::Format::eA2R10G10B10UnormPack32:
@@ -199,31 +227,12 @@ struct PresentRuntimeCache
         },
     });
 
-    auto clearUses = std::array{
-        nr::renderer::use::imageTransferDst(fallback),
-    };
-    [[maybe_unused]] auto clearPassHandle = context.addPass(
-        std::span<const nr::renderer::PassResourceUseDesc>{clearUses.data(), clearUses.size()},
+    [[maybe_unused]] auto clearPassHandle = nr::renderer::ops::clearColorImage(
+        context,
         "Present.ClearTransparentUiFallback",
-        [fallback](const nr::renderer::PassRecordContext& recordContext) {
-            nr::nrAssert(
-                recordContext.commandBuffer.has_value(),
-                "Present transparent UI fallback clear requires RAII command buffer access.");
-            nr::nrAssert(
-                static_cast<bool>(recordContext.resolveImage),
-                "Present transparent UI fallback clear requires image resolver.");
-
-            auto resolvedFallback = recordContext.resolveImage(fallback);
-            nr::nrAssert(
-                resolvedFallback.has_value(),
-                "Present transparent UI fallback clear failed to resolve fallback image.");
-
-            auto clearColor = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}};
-            recordContext.commandBuffer->get().clearColorImage(
-                resolvedFallback->image,
-                vk::ImageLayout::eTransferDstOptimal,
-                clearColor,
-                resolvedFallback->subresourceRange);
+        nr::renderer::ops::ClearColorImagePassDesc{
+            .image = fallback,
+            .value = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}},
         });
 
     return fallback;
@@ -318,72 +327,30 @@ void addPresentReadbackCopyPass(
         },
         nr::renderer::ResourceOwnershipDomain::Compute);
 
-    auto readbackPassIntents = std::array{
-        nr::renderer::use::imageTransferSrc(sourceImage),
-        nr::renderer::use::readbackWrite(readbackResource),
+    auto copyRegion = vk::BufferImageCopy{};
+    copyRegion.bufferOffset = readbackTarget.offset;
+    copyRegion.imageSubresource = vk::ImageSubresourceLayers{
+        vk::ImageAspectFlagBits::eColor,
+        0u,
+        0u,
+        1u,
+    };
+    copyRegion.imageExtent = vk::Extent3D{
+        extent.width,
+        extent.height,
+        1u,
     };
 
-    [[maybe_unused]] auto readbackPassHandle = context.addPass(
-        std::span<const nr::renderer::PassResourceUseDesc>{readbackPassIntents.data(), readbackPassIntents.size()},
+    [[maybe_unused]] auto readbackPassHandle = nr::renderer::ops::copyImageToBuffer(
+        context,
         passDebugName,
-        [sourceImage, readbackResource, readbackTarget, extent, requiredReadbackBytes](
-            const nr::renderer::PassRecordContext& recordContext) {
-            nr::nrAssert(
-                recordContext.commandBuffer.has_value(),
-                "Present readback copy requires RAII command buffer access.");
-            nr::nrAssert(
-                static_cast<bool>(recordContext.resolveImage),
-                "Present readback copy requires image resolver.");
-            nr::nrAssert(
-                static_cast<bool>(recordContext.resolveBuffer),
-                "Present readback copy requires buffer resolver.");
-
-            auto resolvedImage = recordContext.resolveImage(sourceImage);
-            nr::nrAssert(
-                resolvedImage.has_value() && resolvedImage->resource.has_value(),
-                "Present readback copy failed to resolve source image resource.");
-            auto resolvedBuffer = recordContext.resolveBuffer(readbackResource);
-            nr::nrAssert(
-                resolvedBuffer.has_value() && resolvedBuffer->resource.has_value(),
-                "Present readback copy failed to resolve readback buffer resource.");
-
-            auto copyRegion = vk::BufferImageCopy{};
-            copyRegion.bufferOffset = readbackTarget.offset;
-            copyRegion.imageSubresource = vk::ImageSubresourceLayers{
-                vk::ImageAspectFlagBits::eColor,
-                0u,
-                0u,
-                1u,
-            };
-            copyRegion.imageExtent = vk::Extent3D{
-                extent.width,
-                extent.height,
-                1u,
-            };
-
-            nr::rhi::ops::copyImageToBuffer(
-                recordContext.commandBuffer->get(),
-                resolvedImage->resource->get(),
-                resolvedBuffer->resource->get(),
-                vk::ImageLayout::eTransferSrcOptimal,
-                copyRegion);
-
-            auto hostReadBarrier = nr::rhi::ops::BarrierBatch{};
-            hostReadBarrier.add(nr::rhi::ops::makeBufferBarrier(
-                resolvedBuffer->resource->get(),
-                vk::BufferMemoryBarrier2{
-                    vk::PipelineStageFlagBits2::eTransfer,
-                    vk::AccessFlagBits2::eTransferWrite,
-                    vk::PipelineStageFlagBits2::eHost,
-                    vk::AccessFlagBits2::eHostRead,
-                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                    vk::Buffer{},
-                    readbackTarget.offset,
-                    requiredReadbackBytes,
-                    nullptr,
-                }));
-            nr::rhi::ops::pipelineBarrier(recordContext.commandBuffer->get(), hostReadBarrier);
+        nr::renderer::CopyImageToBufferPassDesc{
+            .sourceImage = sourceImage,
+            .destinationBuffer = readbackResource,
+            .region = copyRegion,
+            .imageAspect = nr::renderer::ImageAspectIntent::Color,
+            .destinationIntent = nr::renderer::CopyBufferDestinationIntent::Readback,
+            .destinationBufferRangeSize = requiredReadbackBytes,
         });
 }
 
@@ -708,11 +675,7 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
 
     auto sourceColor = context.requireFrameResource(nr::renderer::frameResource::presentSourceColor, "Present");
 
-    auto viewportExtent = input.viewportExtent;
-    if (viewportExtent.width == 1 && viewportExtent.height == 1)
-    {
-        viewportExtent = frameParameters.swapchainExtent;
-    }
+    auto viewportExtent = frameParameters.swapchainExtent;
 
     auto swapchainFormat = frameParameters.swapchainFormat == vk::Format::eUndefined
                                ? input.format
@@ -757,6 +720,7 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
         .height = conversionExtent.height,
         .swizzleBgr = formatConversion->swizzleBgr ? 1u : 0u,
         .outputEncoding = formatConversion->outputEncoding,
+        .toneMapping = detail::resolveToneMappingMethod(toneMappingSelection_, swapchainColorSpace),
         .flipY = input.flipY ? 1u : 0u,
         .uiOpacity = hasUiBuffer ? std::clamp(input.uiOpacity, 0.0f, 1.0f) : 0.0f,
     };
@@ -844,23 +808,19 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
             "Present.CopyToReadback");
     }
 
-    auto copyPassIntents = std::array{
-        nr::renderer::use::imageTransferSrc(convertedColor),
-        nr::renderer::use::imageTransferDst(swapchainImage),
-        nr::renderer::use::presentRead(swapchainImage),
-    };
-
-    [[maybe_unused]] auto copyPassHandle = context.addPass(
-        std::span<const nr::renderer::PassResourceUseDesc>{copyPassIntents.data(), copyPassIntents.size()},
+    [[maybe_unused]] auto copyPassHandle = nr::renderer::ops::copyImageToImage(
+        context,
         "Present.CopyToSwapchain",
-        nullptr,
-        nullptr,
-        true);
+        nr::renderer::CopyImageToImagePassDesc{
+            .source = convertedColor,
+            .destination = swapchainImage,
+            .presentDestination = true,
+        });
 
     context.publishFrameResource(nr::renderer::frameResource::swapchainImage, swapchainImage);
 }
 
-void PresentNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters&)
+void PresentNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters)
 {
     if (pendingScreenshotRequestCount_ > 0u)
     {
@@ -875,10 +835,41 @@ void PresentNode::collectUi(NodeUiBuildContext& context, const NodeFrameParamete
         pendingUiOpacityValid_ = false;
     }
 
+    if (pendingToneMappingSelectionValid_)
+    {
+        toneMappingSelection_ = std::min(
+            pendingToneMappingSelection_,
+            static_cast<std::uint32_t>(detail::kToneMappingSelectionLabels.size() - 1u));
+        pendingToneMappingSelectionValid_ = false;
+    }
+
+    auto const autoMethod = detail::defaultToneMappingForColorSpace(frameParameters.swapchainColorSpace);
+
     uiOpacityDraft_ = std::clamp(input.uiOpacity, 0.0f, 1.0f);
     context.addSection(
         context.runtimeName(),
-        [this](NodeUiWriter& ui) {
+        [this, autoMethod](NodeUiWriter& ui) {
+            auto const selection = toneMappingSelection_;
+            auto const autoLabel = detail::kToneMappingSelectionLabels[autoMethod + 1u];
+            auto const previewText = selection == 0u
+                                         ? std::format("Auto ({})", autoLabel)
+                                         : std::string(detail::kToneMappingSelectionLabels[selection]);
+            if (ui.beginCombo("Tone Mapping", previewText))
+            {
+                auto indices = std::views::iota(std::size_t{0}, detail::kToneMappingSelectionLabels.size());
+                std::ranges::for_each(indices, [&](std::size_t index) {
+                    auto const optionLabel = index == 0u
+                                                 ? std::format("Auto ({})", autoLabel)
+                                                 : std::string(detail::kToneMappingSelectionLabels[index]);
+                    if (ui.selectable(optionLabel, index == static_cast<std::size_t>(selection)))
+                    {
+                        pendingToneMappingSelection_ = static_cast<std::uint32_t>(index);
+                        pendingToneMappingSelectionValid_ = true;
+                    }
+                });
+                ui.endCombo();
+            }
+
             auto value = uiOpacityDraft_;
             if (ui.sliderFloat("UI Opacity", value, 0.0f, 1.0f))
             {

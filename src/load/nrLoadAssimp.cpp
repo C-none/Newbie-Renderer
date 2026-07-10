@@ -40,6 +40,7 @@ constexpr MaterialPropertyKey kMatKeySheenColorFactor{"$clr.sheen.factor", 0u, 0
 constexpr MaterialPropertyKey kMatKeySheenRoughnessFactor{"$mat.sheen.roughnessFactor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyTransmissionFactor{"$mat.transmission.factor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyShadingModel{"$mat.shadingm", 0u, 0u};
 inline constexpr const char *kAssimpGltfLightRangeMetadataKey = "PBR_LightRange";
 
 [[nodiscard]] bool readMaterialColor4(const aiMaterial &material,
@@ -650,6 +651,12 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
         if (float aoIntensity; readMaterialFloat(*material, kMatKeyEmissiveIntensity, aoIntensity))
         {
             materialAsset.occlusionStrength = aoIntensity;
+        }
+
+        // Classify KHR_materials_unlit: Assimp maps the extension to no-shading mode.
+        if (int shadingMode; readMaterialInteger(*material, kMatKeyShadingModel, shadingMode))
+        {
+            materialAsset.unlit = shadingMode == assimpShadingModeUnlit;
         }
 
         // Classify legacy alpha mode from blend function when glTF did not provide an explicit mode.

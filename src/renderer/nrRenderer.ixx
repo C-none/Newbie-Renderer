@@ -13,7 +13,6 @@ import :renderGraphCompiler;
 import :renderGraphExecutor;
 import :rendererCache;
 import :rendererSubmission;
-import :variantRegistry;
 
 export namespace nr::renderer
 {
@@ -85,7 +84,9 @@ struct NodeUiSection
 class NodeUiBuildContext
 {
   public:
-    NodeUiBuildContext(std::string_view runtimeName, std::vector<NodeUiSection>& sections);
+    NodeUiBuildContext(
+        std::string_view runtimeName,
+        std::vector<NodeUiSection>& sections);
 
     [[nodiscard]] std::string_view runtimeName() const noexcept;
     [[nodiscard]] std::string makeSectionId(std::string_view localId) const;
@@ -172,7 +173,6 @@ struct RendererCpuStatistics
 struct NodeInitContext
 {
     std::reference_wrapper<nr::rhi::Device> device;
-    std::reference_wrapper<VariantStateRegistry> variants;
     std::string runtimeName{};
 };
 
@@ -284,7 +284,6 @@ struct NodeBuildContext
     std::reference_wrapper<const FrameGlobalResources> globalResources;
     std::reference_wrapper<std::map<std::string, GraphResourceHandle>> frameResources;
     std::reference_wrapper<std::map<std::string, GraphFrameDataHandle>> frameDataResources;
-    std::reference_wrapper<VariantStateRegistry> variants;
 
     void publishFrameResource(std::string_view key, GraphResourceHandle resource) const;
 

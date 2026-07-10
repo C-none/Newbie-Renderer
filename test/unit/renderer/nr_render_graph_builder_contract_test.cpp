@@ -293,4 +293,150 @@ const nr::test::CaseRegistrar builderParallelPassCase{
         nr::test::require(frame.passes.front().parallelRecord.has_value(), "parallel pass should retain a parallel record desc");
         nr::test::require(static_cast<bool>(frame.passes.front().prepare), "parallel pass should retain prepare callback");
     }};
+
+const nr::test::CaseRegistrar transferOpsClearCase{
+    "renderer transfer clear helpers encode stable pass uses",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("TransferOps", nr::renderer::QueueDomain::Compute);
+        auto bindlessCache = nr::renderer::BindlessImageTableCache{};
+        auto globals = nr::renderer::FrameGlobalResources{
+            .bindlessImageTableCache = std::ref(bindlessCache),
+        };
+        auto frameResources = std::map<std::string, nr::renderer::GraphResourceHandle>{};
+        auto frameDataResources = std::map<std::string, nr::renderer::GraphFrameDataHandle>{};
+        auto context = nr::renderer::NodeBuildContext{
+            .graphBuilder = std::ref(builder),
+            .nodeHandle = node,
+            .queue = nr::renderer::QueueDomain::Compute,
+            .runtimeName = "TransferOps",
+            .globalResources = std::cref(globals),
+            .frameResources = std::ref(frameResources),
+            .frameDataResources = std::ref(frameDataResources),
+        };
+
+        auto buffer = context.addResource(nr::renderer::GraphTransientBufferDesc{
+            .debugName = "Clear.Buffer",
+            .size = 256,
+        });
+        auto color = context.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Clear.Color",
+            .extent = vk::Extent3D{32, 16, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+        auto depthStencil = context.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Clear.DepthStencil",
+            .extent = vk::Extent3D{32, 16, 1},
+            .format = vk::Format::eD32SfloatS8Uint,
+            .aspect = nr::renderer::ImageAspectIntent::DepthStencil,
+        });
+
+        static_cast<void>(nr::renderer::ops::clearBuffer(
+            context,
+            "Clear.Buffer",
+            nr::renderer::ops::ClearBufferPassDesc{.buffer = buffer}));
+        static_cast<void>(nr::renderer::ops::clearColorImage(
+            context,
+            "Clear.Color",
+            nr::renderer::ops::ClearColorImagePassDesc{.image = color}));
+        static_cast<void>(nr::renderer::ops::clearDepthStencilImage(
+            context,
+            "Clear.DepthStencil",
+            nr::renderer::ops::ClearDepthStencilImagePassDesc{.image = depthStencil}));
+
+        auto frame = builder.build();
+        nr::test::requireEqual(frame.passes.size(), std::size_t{3});
+        nr::test::require(!frame.passes[0].isCopyPass, "clear buffer should be a recorded transfer pass");
+        nr::test::require(static_cast<bool>(frame.passes[0].record), "clear buffer should retain record callback");
+        nr::test::require(frame.passes[0].resourceUses.front().bufferUsage == nr::renderer::BufferUsageIntent::TransferDst);
+        nr::test::require(frame.passes[1].resourceUses.front().imageUsage == nr::renderer::ImageUsageIntent::TransferDst);
+        nr::test::require(frame.passes[1].resourceUses.front().imageAspect == nr::renderer::ImageAspectIntent::Color);
+        nr::test::require(frame.passes[2].resourceUses.front().imageUsage == nr::renderer::ImageUsageIntent::TransferDst);
+        nr::test::require(frame.passes[2].resourceUses.front().imageAspect == nr::renderer::ImageAspectIntent::DepthStencil);
+    }};
+
+const nr::test::CaseRegistrar transferOpsCopyCase{
+    "renderer transfer copy helpers encode buffer image combinations",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("TransferOps", nr::renderer::QueueDomain::Compute);
+        auto bindlessCache = nr::renderer::BindlessImageTableCache{};
+        auto globals = nr::renderer::FrameGlobalResources{
+            .bindlessImageTableCache = std::ref(bindlessCache),
+        };
+        auto frameResources = std::map<std::string, nr::renderer::GraphResourceHandle>{};
+        auto frameDataResources = std::map<std::string, nr::renderer::GraphFrameDataHandle>{};
+        auto context = nr::renderer::NodeBuildContext{
+            .graphBuilder = std::ref(builder),
+            .nodeHandle = node,
+            .queue = nr::renderer::QueueDomain::Compute,
+            .runtimeName = "TransferOps",
+            .globalResources = std::cref(globals),
+            .frameResources = std::ref(frameResources),
+            .frameDataResources = std::ref(frameDataResources),
+        };
+
+        auto sourceBuffer = context.addResource(nr::renderer::GraphTransientBufferDesc{.debugName = "Copy.SourceBuffer", .size = 256});
+        auto destinationBuffer = context.addResource(nr::renderer::GraphTransientBufferDesc{.debugName = "Copy.DestinationBuffer", .size = 256});
+        auto sourceImage = context.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Copy.SourceImage",
+            .extent = vk::Extent3D{32, 16, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+        auto depthStencilImage = context.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Copy.DepthStencilImage",
+            .extent = vk::Extent3D{32, 16, 1},
+            .format = vk::Format::eD32SfloatS8Uint,
+            .aspect = nr::renderer::ImageAspectIntent::DepthStencil,
+        });
+        auto destinationImage = context.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Copy.DestinationImage",
+            .extent = vk::Extent3D{32, 16, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+
+        static_cast<void>(nr::renderer::ops::copyBufferToBuffer(
+            context,
+            "Copy.BufferToBuffer",
+            nr::renderer::CopyBufferToBufferPassDesc{.source = sourceBuffer, .destination = destinationBuffer}));
+        static_cast<void>(nr::renderer::ops::copyBufferToImage(
+            context,
+            "Copy.BufferToImage",
+            nr::renderer::CopyBufferToImagePassDesc{.sourceBuffer = sourceBuffer, .destinationImage = destinationImage}));
+        static_cast<void>(nr::renderer::ops::copyImageToBuffer(
+            context,
+            "Copy.ImageToReadback",
+            nr::renderer::CopyImageToBufferPassDesc{
+                .sourceImage = depthStencilImage,
+                .destinationBuffer = destinationBuffer,
+                .imageAspect = nr::renderer::ImageAspectIntent::Depth,
+                .destinationIntent = nr::renderer::CopyBufferDestinationIntent::Readback,
+                .destinationBufferRangeSize = 128,
+            }));
+        static_cast<void>(nr::renderer::ops::copyImageToImage(
+            context,
+            "Copy.ImageToPresent",
+            nr::renderer::CopyImageToImagePassDesc{
+                .source = sourceImage,
+                .destination = destinationImage,
+                .presentDestination = true,
+            }));
+
+        auto frame = builder.build();
+        nr::test::requireEqual(frame.passes.size(), std::size_t{4});
+        nr::test::require(std::ranges::all_of(frame.passes, [](const nr::renderer::PassExecutionDesc& pass) {
+            return pass.isCopyPass && pass.copy.has_value() && !pass.record;
+        }), "copy helpers should emit implicit copy passes");
+        nr::test::require(frame.passes[0].resourceUses[0].bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
+        nr::test::require(frame.passes[0].resourceUses[1].bufferUsage == nr::renderer::BufferUsageIntent::TransferDst);
+        nr::test::require(frame.passes[1].resourceUses[0].bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
+        nr::test::require(frame.passes[1].resourceUses[1].imageUsage == nr::renderer::ImageUsageIntent::CopyDestination);
+        nr::test::require(frame.passes[1].resourceUses[1].imageAspect == nr::renderer::ImageAspectIntent::Color);
+        nr::test::require(frame.passes[2].resourceUses[0].imageUsage == nr::renderer::ImageUsageIntent::CopySource);
+        nr::test::require(frame.passes[2].resourceUses[0].imageAspect == nr::renderer::ImageAspectIntent::Depth);
+        nr::test::require(frame.passes[2].resourceUses[1].bufferUsage == nr::renderer::BufferUsageIntent::Readback);
+        nr::test::require(frame.passes[3].resourceUses.size() == 3u, "present image copy should add present use");
+        nr::test::require(frame.passes[3].resourceUses[2].imageUsage == nr::renderer::ImageUsageIntent::PresentSource);
+        nr::test::require(std::holds_alternative<nr::renderer::CopyImageToImagePassDesc>(*frame.passes[3].copy));
+    }};
 } // namespace

@@ -177,29 +177,7 @@ struct ShaderDescriptorAbiBinding
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
     vk::DescriptorBindingFlags bindingFlags{};
 
-    [[nodiscard]] friend bool operator<(const ShaderDescriptorAbiBinding &lhs, const ShaderDescriptorAbiBinding &rhs) noexcept
-    {
-        return std::tuple{
-                   lhs.set,
-                   lhs.binding,
-                   lhs.descriptorCount,
-                   lhs.isRuntimeSized,
-                   lhs.descriptorType,
-                   lhs.stageFlags,
-                   lhs.bindingFlags,
-               } <
-               std::tuple{
-                   rhs.set,
-                   rhs.binding,
-                   rhs.descriptorCount,
-                   rhs.isRuntimeSized,
-                   rhs.descriptorType,
-                   rhs.stageFlags,
-                   rhs.bindingFlags,
-               };
-    }
-
-    [[nodiscard]] friend bool operator==(const ShaderDescriptorAbiBinding &, const ShaderDescriptorAbiBinding &) noexcept = default;
+    [[nodiscard]] friend auto operator<=>(const ShaderDescriptorAbiBinding &, const ShaderDescriptorAbiBinding &) noexcept = default;
 };
 
 struct ShaderPushConstantAbiRange
@@ -208,21 +186,7 @@ struct ShaderPushConstantAbiRange
     std::uint32_t size = 0;
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
 
-    [[nodiscard]] friend bool operator<(const ShaderPushConstantAbiRange &lhs, const ShaderPushConstantAbiRange &rhs) noexcept
-    {
-        return std::tuple{
-                   lhs.offset,
-                   lhs.size,
-                   lhs.stageFlags,
-               } <
-               std::tuple{
-                   rhs.offset,
-                   rhs.size,
-                   rhs.stageFlags,
-               };
-    }
-
-    [[nodiscard]] friend bool operator==(const ShaderPushConstantAbiRange &, const ShaderPushConstantAbiRange &) noexcept = default;
+    [[nodiscard]] friend auto operator<=>(const ShaderPushConstantAbiRange &, const ShaderPushConstantAbiRange &) noexcept = default;
 };
 
 struct ShaderLayoutAbiSignature
@@ -295,13 +259,7 @@ struct DescriptorWriteSlotKey
     std::uint32_t arrayElement = 0;
     vk::DescriptorType descriptorType = vk::DescriptorType::eStorageBuffer;
 
-    [[nodiscard]] friend bool operator<(const DescriptorWriteSlotKey &lhs, const DescriptorWriteSlotKey &rhs) noexcept
-    {
-        return std::tie(lhs.set, lhs.binding, lhs.arrayElement, lhs.descriptorType) <
-               std::tie(rhs.set, rhs.binding, rhs.arrayElement, rhs.descriptorType);
-    }
-
-    [[nodiscard]] friend bool operator==(const DescriptorWriteSlotKey &, const DescriptorWriteSlotKey &) noexcept = default;
+    [[nodiscard]] friend auto operator<=>(const DescriptorWriteSlotKey &, const DescriptorWriteSlotKey &) noexcept = default;
 };
 
 struct BufferDescriptorPayloadKey

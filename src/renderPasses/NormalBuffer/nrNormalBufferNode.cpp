@@ -262,11 +262,7 @@ void NormalBufferNode::initialize(NodeInitContext& context)
         runtime_->pipeline->pipeline().raw(),
         describe().name + ".Pipeline");
 
-    auto initialExtent = input.viewportExtent;
-    if (initialExtent.width <= 1 || initialExtent.height <= 1)
-    {
-        initialExtent = vk::Extent2D{1920, 1080};
-    }
+    auto const initialExtent = context.device.get().presentationContext.swapchainExtent();
     detail::ensureNormalBufferImages(context.device.get(), *runtime_, initialExtent, colorFormat, input.depthFormat);
 }
 
@@ -275,11 +271,7 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
     nr::nrAssert(static_cast<bool>(runtime_), "NormalBuffer build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "NormalBuffer build stage requires initialize() device reference.");
 
-    auto viewportExtent = input.viewportExtent;
-    if (viewportExtent.width == 1 && viewportExtent.height == 1)
-    {
-        viewportExtent = frameParameters.swapchainExtent;
-    }
+    auto viewportExtent = frameParameters.swapchainExtent;
 
     auto colorFormat = input.colorFormat;
     if (colorFormat == vk::Format::eUndefined)

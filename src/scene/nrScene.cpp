@@ -2908,6 +2908,7 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset,
             material.core.metallicFactor = convertedFactors.metallicFactor;
             material.core.roughnessFactor = convertedFactors.roughnessFactor;
             material.core.doubleSided = sourceMaterial.doubleSided;
+            material.unlit = sourceMaterial.unlit;
             assignIfPresent(sourceMaterial.normalScale, [&](float normalScale) {
                 material.core.normalScale = normalScale;
             });

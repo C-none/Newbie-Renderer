@@ -277,7 +277,7 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, floa
     frameStats_.deltaSeconds = sanitizedDelta;
     fpsSampleAccumulatedDeltaSeconds_ += sanitizedDelta;
     ++fpsSampleFrameCount_;
-    if (fpsSampleFrameCount_ >= nr::statisticsSampleFrameCount)
+    if (fpsSampleFrameCount_ >= nr::statistics::sampleFrameCount())
     {
         auto const averagedDeltaSeconds =
             fpsSampleAccumulatedDeltaSeconds_ / static_cast<float>(fpsSampleFrameCount_);
@@ -286,6 +286,7 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, floa
         frameStats_.framesPerSecond = averagedDeltaSeconds > 0.0f
                                           ? 1.0f / averagedDeltaSeconds
                                           : 0.0f;
+        nr::statistics::refreshSampleFrameCount(frameStats_.framesPerSecond);
         fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
         fpsSampleFrameCount_ = 0u;
     }

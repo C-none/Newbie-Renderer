@@ -150,28 +150,72 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             "PathTracing variant key should expose the Russian roulette toggle");
         requirePresent(
             pathTracing,
-            "std::map<PathTracingRuntimeKey, PathTracingVariantRuntime>",
-            "PathTracing should keep per-variant and per-hit-plan PSO runtimes in the node runtime cache");
+            "std::map<PathTracingPipelineKey, std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>>",
+            "PathTracing should cache RT pipelines by root variant and CHS permutation set");
         requirePresent(
             pathTracing,
-            "ensurePathTracingVariantRuntime",
-            "PathTracing should lazily create independent PSO runtimes per variant key");
+            "std::map<PathTracingSbtKey, nr::rhi::ShaderBindingTable>",
+            "PathTracing should cache SBTs separately from pipeline runtimes");
         requirePresent(
             pathTracing,
-            "context.variants.get().registerItems",
-            "PathTracing compile variants should be registered through the renderer variant registry");
+            "std::uint64_t chsPermutationSetHash",
+            "PathTracing pipeline keys should include the CHS permutation set");
         requirePresent(
             pathTracing,
-            "createPathTracingVariantRuntime(device, runtimeKey, hitSbtPlan)",
-            "PathTracing compile variant misses should rebuild the PSO runtime synchronously on the build thread");
+            "std::uint64_t hitRecordPlanHash",
+            "PathTracing SBT keys should include the hit record plan");
+        requirePresent(
+            pathTracing,
+            "ensurePathTracingFrameRuntime",
+            "PathTracing should compose the current frame pipeline and SBT from separate node-owned caches");
         requireAbsent(
+            pathTracing,
+            "PathTracingRuntimeKey",
+            "PathTracing should not merge root variants, CHS permutations, and SBT records into one runtime key");
+        requireAbsent(
+            pathTracing,
+            "PathTracingVariantRuntime",
+            "PathTracing should keep pipeline and SBT runtime state in separate caches");
+        requirePresent(
+            pathTracingInterface,
+            "PathTracingVariantKey variantUiDraft_",
+            "PathTracing UI state should be node-owned");
+        requirePresent(
+            pathTracingInterface,
+            "std::optional<PathTracingVariantKey> pendingVariant_",
+            "PathTracing variant UI edits should be staged by the node");
+        requireAbsent(
+            pathTracing,
+            "context.variants",
+            "PathTracing should not access renderer-owned variant state");
+        requirePresent(
+            pathTracing,
+            "createPathTracingPipelineRuntime(device, pipelineKey, hitSbtPlan)",
+            "PathTracing pipeline cache misses should rebuild the PSO synchronously on the build thread");
+        requirePresent(
+            pathTracing,
+            "createPathTracingShaderBindingTable(device, pipelineRuntime, sbtKey, hitSbtPlan)",
+            "PathTracing SBT cache misses should rebuild only the SBT for the active record plan");
+        requirePresent(
             pathTracingInterface,
             "void collectUi",
-            "PathTracing controls should come from registry-generated variant UI instead of node-local staging UI");
-        requirePresent(
+            "PathTracing controls should be node-local UI that stages link-time variant assignments");
+        requireAbsent(
+            rendererInterface,
+            "VariantStateRegistry",
+            "Renderer interfaces should not expose a shared variant registry");
+        requireAbsent(
+            rendererCacheInterface,
+            "variantRegistry",
+            "Renderer cache suite should not own node variant state");
+        requireAbsent(
             rendererImplementation,
             "commitFramePatches",
-            "Renderer should commit staged variant patches once per frame before node build");
+            "Renderer should not commit shader variant patches");
+        requireAbsent(
+            rendererImplementation,
+            "collectVariantUiSections",
+            "Renderer should not append registry-generated variant UI sections");
         requireAbsent(
             pathTracing,
             "RendererCacheSuite",
@@ -248,14 +292,18 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             rendererInterface,
             "kRendererAccumulationMaxSampleCount = 4096u",
             "Renderer camera history count should support the Accumulate 4096-sample cap");
-        requirePresent(
+        requireAbsent(
             accumulate,
             "VariantItemEffect::RuntimeOnly",
-            "Accumulate max history samples should be registered as a runtime-only variant item");
+            "Accumulate max history samples should not be registered as a runtime-only variant item");
         requirePresent(
+            accumulate,
+            "void AccumulateNode::collectUi",
+            "Accumulate max history samples should be staged by node-local UI");
+        requireAbsent(
             rendererImplementation,
             "snapshot.desc.effect != VariantItemEffect::RuntimeOnly",
-            "Runtime-only uint variants should use direct input instead of the compile-variant slider path");
+            "Renderer should not contain generated runtime-only variant UI branching");
     }};
 
 const nr::test::CaseRegistrar presentLinearExrScreenshotCase{
@@ -342,79 +390,57 @@ const nr::test::CaseRegistrar renderPassNodeUiStagingCase{
             std::ranges::find(nextPresentWriter.textCalls, "Screenshot queued") != nextPresentWriter.textCalls.end(),
             "Present screenshot button should stage a next-frame queued status");
 
-        auto variants = nr::renderer::VariantStateRegistry{};
-        auto pathTracingVariantItems = std::array{
-            nr::renderer::VariantItemDesc{
-                .shader = nr::rhi::ShaderVariantItemDesc{
-                    .id = "maxSurfaceBounces",
-                    .label = "Max Bounces",
-                    .kind = nr::rhi::ShaderVariantValueKind::UInt32,
-                    .defaultValue = nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces,
-                    .numericRange = nr::rhi::ShaderVariantNumericRange{
-                        .minValue = static_cast<double>(nr::renderPasses::kPathTracingMinSurfaceBounces),
-                        .maxValue = static_cast<double>(nr::renderPasses::kPathTracingMaxSurfaceBouncesLimit),
-                        .step = 1.0,
-                        .bounded = true,
-                    },
-                },
-                .effect = nr::renderer::VariantItemEffect::SlangLinkTime,
-            },
-            nr::renderer::VariantItemDesc{
-                .shader = nr::rhi::ShaderVariantItemDesc{
-                    .id = "enableRussianRoulette",
-                    .label = "Russian Roulette",
-                    .kind = nr::rhi::ShaderVariantValueKind::Bool,
-                    .defaultValue = true,
-                },
-                .effect = nr::renderer::VariantItemEffect::SlangLinkTime,
-            },
-        };
-        variants.registerItems("PathTracing", pathTracingVariantItems);
-        static_cast<void>(variants.submitPatch(
-            "PathTracing",
-            "maxSurfaceBounces",
-            std::uint32_t{0},
-            nr::renderer::VariantWriteSource::Ui));
-        static_cast<void>(variants.submitPatch(
-            "PathTracing",
-            "enableRussianRoulette",
-            false,
-            nr::renderer::VariantWriteSource::Ui));
-        nr::test::requireEqual(
-            variants.valueOr<std::uint32_t>(
-                "PathTracing",
-                "maxSurfaceBounces",
-                std::uint32_t{}),
-            nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces);
-        nr::test::require(variants.valueOr<bool>("PathTracing", "enableRussianRoulette", false));
+        auto accumulate = nr::renderPasses::AccumulateNode{};
+        accumulate.input.maxHistorySampleCount = nr::renderPasses::kAccumulateDefaultMaxHistorySampleCount;
+        auto accumulateSections = std::vector<nr::renderer::NodeUiSection>{};
+        auto accumulateUiContext = nr::renderer::NodeUiBuildContext{"Accumulate", accumulateSections};
+        accumulate.collectUi(accumulateUiContext, frameParameters);
+        nr::test::requireEqual(accumulateSections.size(), std::size_t{1u});
 
-        variants.commitFramePatches();
+        auto accumulateWriter = StagingTestUiWriter{};
+        accumulateWriter.nextUInt = nr::renderPasses::kAccumulateMaxHistorySampleCount + 128u;
+        accumulateSections[0].draw(accumulateWriter);
         nr::test::requireEqual(
-            variants.valueOr<std::uint32_t>(
-                "PathTracing",
-                "maxSurfaceBounces",
-                std::uint32_t{}),
-            nr::renderPasses::kPathTracingMinSurfaceBounces);
-        nr::test::require(!variants.valueOr<bool>("PathTracing", "enableRussianRoulette", true));
+            accumulate.input.maxHistorySampleCount,
+            nr::renderPasses::kAccumulateDefaultMaxHistorySampleCount,
+            "Accumulate UI edits should be staged for the next frame");
 
-        static_cast<void>(variants.submitPatch(
-            "PathTracing",
-            "maxSurfaceBounces",
-            nr::renderPasses::kPathTracingMaxSurfaceBouncesLimit + 128u,
-            nr::renderer::VariantWriteSource::Ui));
-        static_cast<void>(variants.submitPatch(
-            "PathTracing",
-            "enableRussianRoulette",
-            true,
-            nr::renderer::VariantWriteSource::Ui));
-        variants.commitFramePatches();
+        auto nextAccumulateSections = std::vector<nr::renderer::NodeUiSection>{};
+        auto nextAccumulateUiContext = nr::renderer::NodeUiBuildContext{"Accumulate", nextAccumulateSections};
+        accumulate.collectUi(nextAccumulateUiContext, frameParameters);
         nr::test::requireEqual(
-            variants.valueOr<std::uint32_t>(
-                "PathTracing",
-                "maxSurfaceBounces",
-                std::uint32_t{}),
-            nr::renderPasses::kPathTracingMaxSurfaceBouncesLimit);
-        nr::test::require(variants.valueOr<bool>("PathTracing", "enableRussianRoulette", false));
+            accumulate.input.maxHistorySampleCount,
+            nr::renderPasses::kAccumulateMaxHistorySampleCount,
+            "Accumulate node should clamp its staged history sample count internally");
+
+        auto pathTracing = nr::renderPasses::PathTracingNode{};
+        pathTracing.input.variant.maxSurfaceBounces = nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces;
+        pathTracing.input.variant.enableRussianRoulette = true;
+        auto pathTracingSections = std::vector<nr::renderer::NodeUiSection>{};
+        auto pathTracingUiContext = nr::renderer::NodeUiBuildContext{"PathTracing", pathTracingSections};
+        pathTracing.collectUi(pathTracingUiContext, frameParameters);
+        nr::test::requireEqual(pathTracingSections.size(), std::size_t{1u});
+
+        auto pathTracingWriter = StagingTestUiWriter{};
+        pathTracingWriter.nextUInt = 0u;
+        pathTracingWriter.nextBool = false;
+        pathTracingSections[0].draw(pathTracingWriter);
+        nr::test::requireEqual(
+            pathTracing.input.variant.maxSurfaceBounces,
+            nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces,
+            "PathTracing UI edits should not affect the current frame variant");
+        nr::test::require(pathTracing.input.variant.enableRussianRoulette);
+
+        auto nextPathTracingSections = std::vector<nr::renderer::NodeUiSection>{};
+        auto nextPathTracingUiContext = nr::renderer::NodeUiBuildContext{"PathTracing", nextPathTracingSections};
+        pathTracing.collectUi(nextPathTracingUiContext, frameParameters);
+        nr::test::requireEqual(
+            pathTracing.input.variant.maxSurfaceBounces,
+            nr::renderPasses::kPathTracingMinSurfaceBounces,
+            "PathTracing node should clamp its staged max-bounce UI input internally");
+        nr::test::require(
+            !pathTracing.input.variant.enableRussianRoulette,
+            "PathTracing node should apply the staged Russian roulette toggle internally");
     }};
 
 const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
@@ -424,7 +450,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         auto core = readProjectFile("shader/renderer/pathTracing/core.slang");
         auto params = readProjectFile("shader/renderer/pathTracing/params.slang");
         auto pathState = readProjectFile("shader/renderer/pathTracing/pathState.slang");
-        auto random = readProjectFile("shader/renderer/pathTracing/random.slang");
+        auto random = readProjectFile("shader/include/pathTracing/random.slang");
         auto scheduler = readProjectFile("shader/renderer/pathTracing/scheduler.slang");
         auto visibility = readProjectFile("shader/renderer/pathTracing/visibility.slang");
         auto hitShaders = readProjectFile("shader/renderer/pathTracing/hitShaders.slang");
@@ -445,7 +471,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requireAbsent(entry, "resolveRtMaterialPayload", "PathTracing entry should not own material payload decoding");
 
         requirePresent(scheduler, "public struct Scheduler", "PathTracing scheduler should be a shader-side struct");
-        requirePresent(scheduler, "Pt pt = makePathTracingPt(pixel, dimensions);", "PathTracing scheduler should construct the PT path object");
+        requirePresent(scheduler, "Pt pt = makePt(pixel, dimensions);", "PathTracing scheduler should construct the PT path object");
         requirePresent(scheduler, "while (pt.isActive())", "PathTracing scheduler should own the raygen path loop");
         requirePresent(
             scheduler,
@@ -461,7 +487,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
             "PathTracing scheduler should run exactly one camera sample per pixel");
         requireAbsent(
             scheduler,
-            "kPathTracingSamplesPerPixel",
+            "kSamplesPerPixel",
             "PathTracing scheduler must not expose a samples-per-pixel loop");
         requireAbsent(
             scheduler,
@@ -479,33 +505,33 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(core, "public void handleHit", "Pt should expose hit handling");
         requirePresent(core, "public void handleMiss", "Pt should expose miss handling");
         requirePresent(core, "public void writeOutput", "Pt should expose output writing");
-        requirePresent(core, "makePathTracingPt", "PathTracing core should provide Pt construction");
-        requirePresent(core, "handlePathTracingHit", "PathTracing core should own hit shading");
-        requirePresent(core, "samplePathTracingDirectLighting", "PathTracing core should own direct lighting");
-        requirePresent(core, "writePathTracingOutput", "PathTracing core should own output writes");
+        requirePresent(core, "makePt", "PathTracing core should provide Pt construction");
+        requirePresent(core, "handleHit", "PathTracing core should own hit shading");
+        requirePresent(core, "sampleDirectLighting", "PathTracing core should own direct lighting");
+        requirePresent(core, "writeOutput", "PathTracing core should own output writes");
         requirePresent(
             core,
-            "makePathTracingSeed(pixel, dimensions, gFrame.frameState.xy)",
+            "makeSeed(pixel, dimensions, gFrame.frameState.xy)",
             "PathTracing core should perturb per-thread RNG with the monotonic sample-frame ordinal");
         requireAbsent(
             params,
-            "kPathTracingSamplesPerPixel",
+            "kSamplesPerPixel",
             "PathTracing params must not expose configurable camera samples per pixel");
         requirePresent(
             params,
-            "public extern static const uint kPathTracingMaxSurfaceBounces;",
+            "public extern static const uint kMaxSurfaceBounces;",
             "PathTracing max bounce variant must be provided by C++ VariantDesc");
         requireAbsent(
             params,
-            "kPathTracingMaxSurfaceBounces =",
+            "kMaxSurfaceBounces =",
             "PathTracing max bounce variant must not have a shader-side default");
         requirePresent(
             roulette,
-            "public extern struct PathTracingRussianRoulettePolicy : IPathTracingRussianRoulettePolicy;",
+            "public extern struct RussianRoulettePolicy : IRussianRoulettePolicy;",
             "PathTracing roulette policy variant must be provided by C++ VariantDesc");
         requireAbsent(
             roulette,
-            "PathTracingRussianRoulettePolicy : IPathTracingRussianRoulettePolicy =",
+            "RussianRoulettePolicy : IRussianRoulettePolicy =",
             "PathTracing roulette policy variant must not rely on a shader-side default");
         requirePresent(
             random,
@@ -536,26 +562,33 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
             "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,\n        0xFF,\n        0,\n        1,\n        0,",
             "visibility rays should use the same hit SBT offset/stride 0/1");
 
-        requirePresent(hitShaders, "resolveRtMaterialPayload", "PathTracing closest-hit should resolve material payloads");
-        requirePresent(hitShaders, "makePathTracingClosestHitInput", "PathTracing hit shaders should prepare CHS closest-hit inputs");
-        requireAbsent(hitShaders, "handlePathTracingClosestHitWithPolicy", "PathTracing should not keep wrapper-policy closest-hit contract");
-        requirePresent(chs, "PathTracingRtHitAlphaPolicy.alphaMask", "PathTracing hit policy should expose the alpha-mask policy");
-        requireAbsent(hitShaders, "samplePathTracingDirectLighting", "PathTracing hit shaders must not own direct lighting");
+        requirePresent(hitShaders, "resolveAlphaCoverage", "PathTracing any-hit should resolve only alpha coverage");
+        requirePresent(hitShaders, "makeClosestHitInput", "PathTracing hit shaders should prepare CHS closest-hit inputs");
+        requireAbsent(hitShaders, "handleClosestHitWithPolicy", "PathTracing should not keep wrapper-policy closest-hit contract");
+        requireAbsent(chs, "RtHitAlphaPolicy", "PathTracing CHS variants should not specialize alpha policy");
+        requireAbsent(hitShaders, "sampleDirectLighting", "PathTracing hit shaders must not own direct lighting");
         requireAbsent(hitShaders, "evaluateResolvedMaterialDirect", "PathTracing hit shaders must not shade direct light");
         requireAbsent(hitShaders, "outputImage", "PathTracing hit shaders must not write the output image");
         requirePresent(chs, "public interface ICHS", "PathTracing CHS contract should define the closest-hit interface");
-        requirePresent(chs, "public struct DefaultLitCHS<let FeatureMask : RtMaterialFeatureFlag, let AlphaPolicy : PathTracingRtHitAlphaPolicy> : ICHS", "PathTracing CHS contract should expose the default lit specialization target");
+        requirePresent(chs, "public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS", "PathTracing CHS contract should expose the layer-flag material specialization target");
         requirePresent(chs, "public extern struct CHS : ICHS;", "PathTracing CHS contract should require C++ link-time type binding");
-        requirePresent(chs, "resolveRtMaterialPayload", "DefaultLitCHS should own material payload resolution");
+        requirePresent(chs, "resolveLitMaterialPayloadVariant", "MaterialCHS should resolve lit material payloads through the layer-flag variant");
         requireAbsent(pathTracingNode, "makePathTracingSyntheticRootSource", "PathTracing node should no longer generate synthetic closest-hit wrappers");
         requireAbsent(pathTracingNode, "RtHitPolicy_", "PathTracing node should no longer generate shader-side policy structs");
-        requirePresent(pathTracingNode, ".linkVariants = {chsVariantDesc}", "PathTracing node should compile per-permutation CHS link variants");
+        requirePresent(pathTracingNode, ".linkVariants = {chsVariantDesc}", "PathTracing node should compile BSDF-key CHS link variants");
+        requirePresent(pathTracingNode, "permutation.key.bsdf", "PathTracing node should derive CHS variants from BSDF keys, not full hit-group keys");
+        requirePresent(pathTracingNode, "hitSbtPlan.permutations.front().key.bsdf", "PathTracing node should seed reflection with an active BSDF key");
         requirePresent(rhiPipelineHeader, "struct RayTracingPipelineStageSelection", "RHI should expose explicit RT stage selection records");
         requirePresent(rhiPipelineHeader, "logicalEntryPointName", "RHI RT stage selections should carry logical names for shader group lookup");
         requirePresent(rhiPipelineSource, "result.entryPointNames_.push_back(std::move(logicalEntryPointName));", "RHI RT shader program should store logical names for group lookup");
         requirePresent(rhiPipelineSource, "stageInfo.pName = result.shaderEntryPointNames_.back().c_str();", "RHI Vulkan shader stages should still use actual entry point names");
 
         requirePresent(materialPayload, "ResolvedMaterialPayload", "Common material payload helper should define resolved hit material data");
+        requirePresent(materialPayload, "public interface IBsdfLobe", "Common material payload helper should define the BSDF lobe interface");
+        requirePresent(materialPayload, "public uint delta", "Common material scatter should carry an explicit delta-lobe flag");
+        requirePresent(materialPayload, "scatter.delta != 0u", "Common material scatter sampling should keep delta lobes out of continuous PDF mixing");
+        requirePresent(materialPayload, "sampleResolvedMaterialScatterVariant", "Common material payload helper should expose variant-aware scatter sampling");
+        requirePresent(materialPayload, "resolvedMaterialCombinedPdfVariant", "Common material payload helper should expose variant-aware combined PDFs");
         requirePresent(materialPayload, "evaluateResolvedMaterialDirect", "Common material payload helper should expose direct lighting evaluation");
         requirePresent(materialPayload, "sampleResolvedMaterialScatter", "Common material payload helper should expose v1 scatter sampling");
     }};

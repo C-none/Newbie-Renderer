@@ -273,7 +273,7 @@ namespace nr::rhi::detail
 
 [[nodiscard]] std::string makeSlangFloatLiteral(float value)
 {
-    nrAssert(std::isfinite(value), "Slang float32 variant constants must be finite.");
+    nrAssert(std::isfinite(value), "Slang float32 variant assignments must be finite.");
 
     std::array<char, 64> buffer{};
     auto [ptr, ec] = std::to_chars(
@@ -282,7 +282,7 @@ namespace nr::rhi::detail
         value,
         std::chars_format::general,
         std::numeric_limits<float>::max_digits10);
-    nrAssert(ec == std::errc{}, "Failed to serialize Slang float32 variant constant.");
+    nrAssert(ec == std::errc{}, "Failed to serialize Slang float32 variant assignment.");
 
     auto literal = std::string(buffer.data(), ptr);
     auto hasDecimalSyntax = literal.find('.') != std::string::npos ||
@@ -296,120 +296,96 @@ namespace nr::rhi::detail
     return literal;
 }
 
-[[nodiscard]] std::string slangVariantConstantTypeName(SlangVariantConstantType type)
+[[nodiscard]] bool isSlangVariantScalarType(std::string_view type) noexcept
 {
-    switch (type)
-    {
-    case SlangVariantConstantType::Bool:
-        return "bool";
-    case SlangVariantConstantType::Int32:
-        return "int";
-    case SlangVariantConstantType::UInt32:
-        return "uint";
-    case SlangVariantConstantType::Float32:
-        return "float";
-    }
-    return "bool";
+    return type == "bool" || type == "int" || type == "uint" || type == "float";
 }
 
-[[nodiscard]] std::string slangVariantConstantLiteral(const SlangVariantConstant &constant)
+[[nodiscard]] bool slangVariantAssignmentValueMatchesType(const SlangVariantAssignment &assignment) noexcept
 {
-    switch (constant.type)
-    {
-    case SlangVariantConstantType::Bool:
-        if (auto const *value = std::get_if<bool>(&constant.value))
-        {
-            return *value ? "true" : "false";
-        }
-        return "false";
-    case SlangVariantConstantType::Int32:
-        if (auto const *value = std::get_if<std::int32_t>(&constant.value))
-        {
-            return std::to_string(*value);
-        }
-        return "0";
-    case SlangVariantConstantType::UInt32:
-        if (auto const *value = std::get_if<std::uint32_t>(&constant.value))
-        {
-            return std::format("{}u", *value);
-        }
-        return "0u";
-    case SlangVariantConstantType::Float32:
-        if (auto const *value = std::get_if<float>(&constant.value))
-        {
-            return makeSlangFloatLiteral(*value);
-        }
-        return "0.0f";
-    }
-    return "false";
+    return std::visit(
+        [&](const auto &value) noexcept {
+            using ValueT = std::remove_cvref_t<decltype(value)>;
+            if constexpr (std::same_as<ValueT, bool>)
+            {
+                return assignment.type == "bool";
+            }
+            else if constexpr (std::same_as<ValueT, std::int32_t>)
+            {
+                return assignment.type == "int";
+            }
+            else if constexpr (std::same_as<ValueT, std::uint32_t>)
+            {
+                return assignment.type == "uint";
+            }
+            else if constexpr (std::same_as<ValueT, float>)
+            {
+                return assignment.type == "float";
+            }
+            else
+            {
+                return !assignment.type.empty() && !isSlangVariantScalarType(assignment.type);
+            }
+        },
+        assignment.value);
 }
 
-[[nodiscard]] std::uint64_t hashSlangVariantConstantValue(const SlangVariantConstant &constant) noexcept
+[[nodiscard]] bool slangVariantAssignmentIsTypeAlias(const SlangVariantAssignment &assignment) noexcept
 {
-    std::uint64_t state = hash::fnv1a64OffsetBasis;
-    hash::hashAppend(state, constant.type);
-
-    switch (constant.type)
-    {
-    case SlangVariantConstantType::Bool:
-    {
-        auto value = false;
-        if (auto const *storedValue = std::get_if<bool>(&constant.value))
-        {
-            value = *storedValue;
-        }
-        hash::hashAppend(state, value);
-        break;
-    }
-    case SlangVariantConstantType::Int32:
-    {
-        auto value = std::int32_t{};
-        if (auto const *storedValue = std::get_if<std::int32_t>(&constant.value))
-        {
-            value = *storedValue;
-        }
-        hash::hashAppend(state, value);
-        break;
-    }
-    case SlangVariantConstantType::UInt32:
-    {
-        auto value = std::uint32_t{};
-        if (auto const *storedValue = std::get_if<std::uint32_t>(&constant.value))
-        {
-            value = *storedValue;
-        }
-        hash::hashAppend(state, value);
-        break;
-    }
-    case SlangVariantConstantType::Float32:
-    {
-        auto bits = std::uint32_t{};
-        if (auto const *storedValue = std::get_if<float>(&constant.value))
-        {
-            bits = std::bit_cast<std::uint32_t>(*storedValue);
-        }
-        hash::hashAppend(state, bits);
-        break;
-    }
-    }
-
-    return state;
+    return std::holds_alternative<std::string>(assignment.value);
 }
 
-[[nodiscard]] bool slangVariantConstantValueMatchesType(const SlangVariantConstant &constant) noexcept
+[[nodiscard]] std::string slangVariantAssignmentValueLiteral(const SlangVariantAssignmentValue &value)
 {
-    switch (constant.type)
-    {
-    case SlangVariantConstantType::Bool:
-        return std::holds_alternative<bool>(constant.value);
-    case SlangVariantConstantType::Int32:
-        return std::holds_alternative<std::int32_t>(constant.value);
-    case SlangVariantConstantType::UInt32:
-        return std::holds_alternative<std::uint32_t>(constant.value);
-    case SlangVariantConstantType::Float32:
-        return std::holds_alternative<float>(constant.value);
-    }
-    return false;
+    return std::visit(
+        [](const auto &typedValue) {
+            using ValueT = std::remove_cvref_t<decltype(typedValue)>;
+            if constexpr (std::same_as<ValueT, bool>)
+            {
+                return typedValue ? std::string{"true"} : std::string{"false"};
+            }
+            else if constexpr (std::same_as<ValueT, std::int32_t>)
+            {
+                return std::to_string(typedValue);
+            }
+            else if constexpr (std::same_as<ValueT, std::uint32_t>)
+            {
+                return std::format("{}u", typedValue);
+            }
+            else if constexpr (std::same_as<ValueT, float>)
+            {
+                return makeSlangFloatLiteral(typedValue);
+            }
+            else
+            {
+                return typedValue;
+            }
+        },
+        value);
+}
+
+void hashAppendSlangVariantAssignmentValue(
+    std::uint64_t &state,
+    const SlangVariantAssignmentValue &value) noexcept
+{
+    hash::hashAppend(state, static_cast<std::uint32_t>(value.index()));
+    std::visit(
+        [&](const auto &typedValue) noexcept {
+            using ValueT = std::remove_cvref_t<decltype(typedValue)>;
+            if constexpr (std::same_as<ValueT, std::string>)
+            {
+                hash::hashAppendString(state, typedValue);
+            }
+            else if constexpr (std::same_as<ValueT, float>)
+            {
+                hash::hashAppend(state, std::bit_cast<std::uint32_t>(typedValue));
+            }
+            else
+            {
+                hash::hashAppend(state, typedValue);
+            }
+        },
+        value);
 }
 
 [[nodiscard]] bool isSlangQualifiedIdentifier(std::string_view value)
@@ -423,74 +399,44 @@ namespace nr::rhi::detail
     return std::regex_match(std::string(value), kIdentifierRegex);
 }
 
-[[nodiscard]] bool isSlangRestrictedGenericTypeExpression(std::string_view value)
-{
-    if (value.empty())
-    {
-        return false;
-    }
-
-    static const std::regex kRestrictedGenericTypeRegex(
-        R"([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*<\s*(0|[1-9][0-9]*)([uU])?\s*,\s*(0|[1-9][0-9]*)([uU])?\s*>)");
-    static const std::regex kRestrictedTypedGenericTypeRegex(
-        R"([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*<\s*[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\(\s*(0|[1-9][0-9]*)([uU])?\s*\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.[A-Za-z_][A-Za-z0-9_]*\s*>)");
-    auto expression = std::string(value);
-    return std::regex_match(expression, kRestrictedGenericTypeRegex) ||
-           std::regex_match(expression, kRestrictedTypedGenericTypeRegex);
-}
-
-[[nodiscard]] bool isSlangVariantConcreteTypeExpression(std::string_view value)
-{
-    return isSlangQualifiedIdentifier(value) || isSlangRestrictedGenericTypeExpression(value);
-}
-
 [[nodiscard]] bool validateSlangVariantDesc(const SlangProgramVariantDesc &variant, std::string_view moduleName)
 {
-    for (auto const &[name, constant] : variant.constants)
+    for (auto const &[name, assignment] : variant.assignments)
     {
-        (void)constant;
         if (!isSlangQualifiedIdentifier(name))
         {
             nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramByFile] invalid link-time constant name='{}' for module='{}'.",
+                "[ShaderService::compileProgramByFile] invalid link-time variant name='{}' for module='{}'.",
                 name,
                 moduleName));
             return false;
         }
 
-        if (!slangVariantConstantValueMatchesType(constant))
+        if (!slangVariantAssignmentValueMatchesType(assignment))
         {
             nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramByFile] link-time constant value type mismatch: module='{}', name='{}'.",
-                moduleName,
-                name));
-            return false;
-        }
-    }
-
-    for (auto const &[name, alias] : variant.typeAliases)
-    {
-        if (alias.typeName != name)
-        {
-            nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramByFile] type alias key/name mismatch for module='{}': key='{}', typeName='{}'.",
+                "[ShaderService::compileProgramByFile] link-time variant value type mismatch: module='{}', name='{}', type='{}'.",
                 moduleName,
                 name,
-                alias.typeName));
+                assignment.type));
             return false;
         }
 
-        if (!isSlangQualifiedIdentifier(alias.typeName) ||
-            !isSlangQualifiedIdentifier(alias.interfaceName) ||
-            !isSlangVariantConcreteTypeExpression(alias.concreteTypeName))
+        if (slangVariantAssignmentIsTypeAlias(assignment))
         {
-            nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramByFile] invalid link-time type alias for module='{}': type='{}', interface='{}', concrete='{}'.",
-                moduleName,
-                alias.typeName,
-                alias.interfaceName,
-                alias.concreteTypeName));
-            return false;
+            auto const *concreteTypeName = std::get_if<std::string>(&assignment.value);
+            if (!isSlangQualifiedIdentifier(assignment.type) ||
+                concreteTypeName == nullptr ||
+                concreteTypeName->empty())
+            {
+                nrInfo<LogLevel::warning>(std::format(
+                    "[ShaderService::compileProgramByFile] invalid link-time type alias for module='{}': name='{}', interface='{}', concrete='{}'.",
+                    moduleName,
+                    name,
+                    assignment.type,
+                    concreteTypeName != nullptr ? *concreteTypeName : std::string{}));
+                return false;
+            }
         }
     }
 
@@ -541,33 +487,25 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
 
 [[nodiscard]] std::string compactSlangVariantDebugLabel(const SlangProgramVariantDesc &variant)
 {
-    if (!variant.debugName.empty())
-    {
-        return variant.debugName;
-    }
     if (variant.empty())
     {
         return "default";
     }
 
     std::vector<std::string> parts;
-    parts.reserve(variant.constants.size() + variant.typeAliases.size());
+    parts.reserve(variant.assignments.size());
 
-    std::ranges::for_each(variant.constants, [&](auto const &entry) {
-        auto const &[name, constant] = entry;
+    std::ranges::for_each(variant.assignments, [&](auto const &entry) {
+        auto const &[name, assignment] = entry;
+        auto value = slangVariantAssignmentValueLiteral(assignment.value);
+        if (slangVariantAssignmentIsTypeAlias(assignment))
+        {
+            value = withoutAsciiWhitespace(value);
+        }
         parts.push_back(std::format(
             "{}={}",
             moduleLeafName(name),
-            slangVariantConstantLiteral(constant)));
-    });
-
-    std::ranges::for_each(variant.typeAliases, [&](auto const &entry) {
-        auto const &[name, alias] = entry;
-        (void)name;
-        parts.push_back(std::format(
-            "{}={}",
-            moduleLeafName(alias.typeName),
-            withoutAsciiWhitespace(alias.concreteTypeName)));
+            value));
     });
 
     return joinDebugNameParts(parts, ',');
@@ -610,15 +548,19 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
     return state;
 }
 
-[[nodiscard]] std::string slangLinkVariantsHashHex(std::span<const SlangProgramVariantDesc> linkVariants)
-{
-    auto hashChars = hash::toHexChars(hashSlangLinkVariants(linkVariants));
-    return std::string(hash::toHexView(hashChars));
-}
-
 [[nodiscard]] std::string makeSlangVariantSyntheticModuleName(std::string_view variantLabel)
 {
-    return std::format("variant_{}", sanitizeSlangIdentifierFragment(variantLabel));
+    // Append a hash of the full (untruncated) label so distinct variants never collapse to the same
+    // synthetic module name after the readable fragment is truncated to kMaxSyntheticVariantLabelLength.
+    // A name collision makes Slang reject the second variant in a session with E38202 "module already
+    // loaded with different source" (observed for path-tracing kMaxSurfaceBounces variants on a cold
+    // cache, where both variants take the loadModuleFromSourceString path in one session).
+    auto labelHash = hash::fnv1a64OffsetBasis;
+    hash::hashAppendString(labelHash, variantLabel);
+    return std::format(
+        "variant_{}_{}",
+        sanitizeSlangIdentifierFragment(variantLabel),
+        nr::hash::toHexString(labelHash));
 }
 
 [[nodiscard]] std::string makeSlangVariantSyntheticPath(std::string_view syntheticModuleName)
@@ -682,12 +624,6 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
     return state;
 }
 
-[[nodiscard]] std::string sourceHashHex(std::string_view sourceText)
-{
-    auto hashChars = hash::toHexChars(hashSourceText(sourceText));
-    return std::string(hash::toHexView(hashChars));
-}
-
 [[nodiscard]] std::string makeSlangSourceProgramCacheKey(
     std::uint64_t sessionGeneration,
     std::string_view optionsHash,
@@ -718,7 +654,7 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
 
 [[nodiscard]] std::string describeSlangVariantForLog(const SlangProgramVariantDesc &variant)
 {
-    auto hashHex = variant.hashHex();
+    auto hashHex = nr::hash::toHexString(variant.hashValue());
     if (variant.empty())
     {
         return std::format("default/{}", hashHex);
@@ -729,105 +665,83 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
 
 namespace nr::rhi
 {
-[[nodiscard]] SlangVariantConstant SlangVariantConstant::fromBool(bool value) noexcept
+SlangProgramVariantDesc& SlangProgramVariantDesc::assign(
+    std::string_view name,
+    std::string_view type,
+    SlangVariantAssignmentValue value)
 {
-        return SlangVariantConstant{
-            .type = SlangVariantConstantType::Bool,
-            .value = value,
-        };
-    }
+    nrAssert(!name.empty(), "SlangProgramVariantDesc::assign requires a non-empty name.");
+    nrAssert(!type.empty(), std::format("SlangProgramVariantDesc assignment '{}' requires a non-empty type.", name));
 
-[[nodiscard]] SlangVariantConstant SlangVariantConstant::fromInt32(std::int32_t value) noexcept
-{
-        return SlangVariantConstant{
-            .type = SlangVariantConstantType::Int32,
-            .value = value,
-        };
-    }
-
-[[nodiscard]] SlangVariantConstant SlangVariantConstant::fromUInt32(std::uint32_t value) noexcept
-{
-        return SlangVariantConstant{
-            .type = SlangVariantConstantType::UInt32,
-            .value = value,
-        };
-    }
-
-[[nodiscard]] SlangVariantConstant SlangVariantConstant::fromFloat32(float value) noexcept
-{
-        return SlangVariantConstant{
-            .type = SlangVariantConstantType::Float32,
-            .value = value,
-        };
-    }
+    auto const nameString = std::string{name};
+    auto [assignmentIt, inserted] = assignments.try_emplace(
+        nameString,
+        SlangVariantAssignment{
+            .type = std::string{type},
+            .value = std::move(value),
+        });
+    (void)assignmentIt;
+    nrAssert(inserted, std::format("SlangProgramVariantDesc assignment '{}' is already defined.", nameString));
+    return *this;
+}
 
 [[nodiscard]] bool SlangProgramVariantDesc::empty() const noexcept
 {
-        return constants.empty() && typeAliases.empty();
-    }
+    return assignments.empty();
+}
 
 [[nodiscard]] std::uint64_t SlangProgramVariantDesc::hashValue() const noexcept
 {
-        std::uint64_t state = hash::fnv1a64OffsetBasis;
-        hash::hashAppendString(state, "SlangProgramVariantDesc.v1");
+    std::uint64_t state = hash::fnv1a64OffsetBasis;
+    hash::hashAppendString(state, "SlangProgramVariantDesc.v2");
 
-        std::ranges::for_each(constants, [&](auto const &entry) {
-            auto const &[name, constant] = entry;
-            hash::hashAppendString(state, name);
-            hash::hashAppend(state, detail::hashSlangVariantConstantValue(constant));
-        });
+    std::ranges::for_each(assignments, [&](auto const &entry) {
+        auto const &[name, assignment] = entry;
+        hash::hashAppendString(state, name);
+        hash::hashAppendString(state, assignment.type);
+        detail::hashAppendSlangVariantAssignmentValue(state, assignment.value);
+    });
 
-        std::ranges::for_each(typeAliases, [&](auto const &entry) {
-            auto const &[name, alias] = entry;
-            hash::hashAppendString(state, name);
-            hash::hashAppendString(state, alias.typeName);
-            hash::hashAppendString(state, alias.interfaceName);
-            hash::hashAppendString(state, alias.concreteTypeName);
-        });
-
-        return state;
-    }
-
-[[nodiscard]] std::string SlangProgramVariantDesc::hashHex() const
-{
-        auto hashChars = hash::toHexChars(hashValue());
-        return std::string(hash::toHexView(hashChars));
-    }
+    return state;
+}
 
 [[nodiscard]] std::string SlangProgramVariantDesc::sourceText() const
 {
-        std::ostringstream source;
-        source << "// Generated by Newbie Renderer ShaderService. Do not edit.\n";
-        if (!typeAliases.empty())
+    std::ostringstream source;
+    source << "// Generated by Newbie Renderer ShaderService. Do not edit.\n";
+    auto hasTypeAlias = std::ranges::any_of(assignments, [](auto const &entry) {
+        return detail::slangVariantAssignmentIsTypeAlias(entry.second);
+    });
+    if (hasTypeAlias)
+    {
+        source << "import common;\n";
+    }
+
+    std::ranges::for_each(assignments, [&](auto const &entry) {
+        auto const &[name, assignment] = entry;
+        if (detail::slangVariantAssignmentIsTypeAlias(assignment))
         {
-            source << "import common;\n";
+            source << "export struct "
+                   << name
+                   << " : "
+                   << assignment.type
+                   << " = "
+                   << detail::slangVariantAssignmentValueLiteral(assignment.value)
+                   << ";\n";
+            return;
         }
 
-        std::ranges::for_each(constants, [&](auto const &entry) {
-            auto const &[name, constant] = entry;
-            source << "export static const "
-                   << detail::slangVariantConstantTypeName(constant.type)
-                   << " "
-                   << name
-                   << " = "
-                   << detail::slangVariantConstantLiteral(constant)
-                   << ";\n";
-        });
+        source << "export static const "
+               << assignment.type
+               << " "
+               << name
+               << " = "
+               << detail::slangVariantAssignmentValueLiteral(assignment.value)
+               << ";\n";
+    });
 
-        std::ranges::for_each(typeAliases, [&](auto const &entry) {
-            auto const &[name, alias] = entry;
-            (void)name;
-            source << "export struct "
-                   << alias.typeName
-                   << " : "
-                   << alias.interfaceName
-                   << " = "
-                   << alias.concreteTypeName
-                   << ";\n";
-        });
-
-        return source.str();
-    }
+    return source.str();
+}
 
 [[nodiscard]] SlangSampler SlangSampler::create(const vk::raii::Device &device, SlangSamplerDesc desc, std::string_view debugName)
 {
@@ -1177,8 +1091,8 @@ void ShaderService::reloadSession()
             return result;
         }
 
-        auto variantHashHex = request.variant.hashHex();
-        auto linkVariantsHashHex = detail::slangLinkVariantsHashHex(request.linkVariants);
+        auto variantHashHex = nr::hash::toHexString(request.variant.hashValue());
+        auto linkVariantsHashHex = nr::hash::toHexString(detail::hashSlangLinkVariants(request.linkVariants));
         auto variantLogLabel = detail::describeSlangVariantForLog(request.variant);
         if (!detail::validateSlangVariantDesc(request.variant, moduleName))
         {
@@ -1404,8 +1318,8 @@ void ShaderService::reloadSession()
             return result;
         }
 
-        auto variantHashHex = request.variant.hashHex();
-        auto linkVariantsHashHex = detail::slangLinkVariantsHashHex(request.linkVariants);
+        auto variantHashHex = nr::hash::toHexString(request.variant.hashValue());
+        auto linkVariantsHashHex = nr::hash::toHexString(detail::hashSlangLinkVariants(request.linkVariants));
         auto variantLogLabel = detail::describeSlangVariantForLog(request.variant);
         if (!detail::validateSlangVariantDesc(request.variant, request.moduleName))
         {
@@ -1421,7 +1335,7 @@ void ShaderService::reloadSession()
             }
         }
 
-        auto sourceHash = detail::sourceHashHex(request.sourceText);
+        auto sourceHash = nr::hash::toHexString(detail::hashSourceText(request.sourceText));
         auto sourceLoadModuleName = detail::makeSlangSourceLoadModuleName(request.moduleName, sourceHash);
         auto syntheticPath = detail::makeSlangSourceSyntheticPath(request.moduleName, sourceHash);
         auto cacheKey = detail::makeSlangSourceProgramCacheKey(

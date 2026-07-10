@@ -42,7 +42,34 @@ public float smithGGX(float alpha, float noV, float noL)
     return ggxSmithG1(alpha, noV) * ggxSmithG1(alpha, noL);
 }
 
-public float3 evaluateMetallicRoughnessBsdf(
+public float3 metallicRoughnessF0(MaterialSample material)
+{
+    return lerp(float3(0.04f), material.baseColor.rgb, material.metallic);
+}
+
+public float3 evaluateMetallicRoughnessDiffuse(
+    MaterialSample material,
+    float3 normal,
+    float3 viewDirection,
+    float3 lightDirection)
+{
+    float noV = saturate(dot(normal, viewDirection));
+    float noL = saturate(dot(normal, lightDirection));
+    if (noV <= kMaterialMinCosTheta || noL <= kMaterialMinCosTheta)
+    {
+        return float3(0.0f);
+    }
+
+    float3 halfVector = safeNormalize(viewDirection + lightDirection, normal);
+    float voH = saturate(dot(viewDirection, halfVector));
+
+    float3 cDiff = material.baseColor.rgb * (1.0f - material.metallic);
+    float3 f0 = metallicRoughnessF0(material);
+    float3 fresnel = fresnelSchlick(f0, voH);
+    return (float3(1.0f) - fresnel) * cDiff * kMaterialInvPi;
+}
+
+public float3 evaluateMetallicRoughnessSpecular(
     MaterialSample material,
     float3 normal,
     float3 viewDirection,
@@ -60,15 +87,21 @@ public float3 evaluateMetallicRoughnessBsdf(
     float voH = saturate(dot(viewDirection, halfVector));
     float alpha = material.roughness * material.roughness;
 
-    float3 cDiff = material.baseColor.rgb * (1.0f - material.metallic);
-    float3 f0 = lerp(float3(0.04f), material.baseColor.rgb, material.metallic);
+    float3 f0 = metallicRoughnessF0(material);
     float3 fresnel = fresnelSchlick(f0, voH);
     float distribution = ggxDistribution(alpha, noH);
     float geometry = smithGGX(alpha, noV, noL);
+    return fresnel * distribution * geometry / max(4.0f * noV * noL, 1.0e-6f);
+}
 
-    float3 diffuse = (float3(1.0f) - fresnel) * cDiff * kMaterialInvPi;
-    float3 specular = fresnel * distribution * geometry / max(4.0f * noV * noL, 1.0e-6f);
-    return diffuse + specular;
+public float3 evaluateMetallicRoughnessBsdf(
+    MaterialSample material,
+    float3 normal,
+    float3 viewDirection,
+    float3 lightDirection)
+{
+    return evaluateMetallicRoughnessDiffuse(material, normal, viewDirection, lightDirection) +
+        evaluateMetallicRoughnessSpecular(material, normal, viewDirection, lightDirection);
 }
 
 public float sheenDistribution(float roughness, float noH)

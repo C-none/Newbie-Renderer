@@ -1,6 +1,6 @@
 implementing common;
 
-public float pathTracingMisWeightedPdf(uint sampleCount, float pdf)
+public float misWeightedPdf(uint sampleCount, float pdf)
 {
     if (sampleCount == 0u || pdf <= 0.0f)
     {
@@ -10,7 +10,7 @@ public float pathTracingMisWeightedPdf(uint sampleCount, float pdf)
     return float(sampleCount) * pdf;
 }
 
-public float pathTracingMisBalanceHeuristicFromWeights(float selectedWeight, float otherWeight)
+public float misBalanceHeuristicFromWeights(float selectedWeight, float otherWeight)
 {
     float sum = selectedWeight + otherWeight;
     if (sum <= 0.0f)
@@ -21,25 +21,25 @@ public float pathTracingMisBalanceHeuristicFromWeights(float selectedWeight, flo
     return selectedWeight / sum;
 }
 
-public float pathTracingMisBalanceHeuristic(float selectedPdf, float otherPdf)
+public float misBalanceHeuristic(float selectedPdf, float otherPdf)
 {
-    return pathTracingMisBalanceHeuristicFromWeights(
-        pathTracingMisWeightedPdf(1u, selectedPdf),
-        pathTracingMisWeightedPdf(1u, otherPdf));
+    return misBalanceHeuristicFromWeights(
+        misWeightedPdf(1u, selectedPdf),
+        misWeightedPdf(1u, otherPdf));
 }
 
-public float pathTracingMisBalanceHeuristic(
+public float misBalanceHeuristic(
     uint selectedSampleCount,
     float selectedPdf,
     uint otherSampleCount,
     float otherPdf)
 {
-    return pathTracingMisBalanceHeuristicFromWeights(
-        pathTracingMisWeightedPdf(selectedSampleCount, selectedPdf),
-        pathTracingMisWeightedPdf(otherSampleCount, otherPdf));
+    return misBalanceHeuristicFromWeights(
+        misWeightedPdf(selectedSampleCount, selectedPdf),
+        misWeightedPdf(otherSampleCount, otherPdf));
 }
 
-public float pathTracingMisPowerHeuristicFromWeights(float selectedWeight, float otherWeight)
+public float misPowerHeuristicFromWeights(float selectedWeight, float otherWeight)
 {
     float selectedWeight2 = selectedWeight * selectedWeight;
     float otherWeight2 = otherWeight * otherWeight;
@@ -52,20 +52,20 @@ public float pathTracingMisPowerHeuristicFromWeights(float selectedWeight, float
     return selectedWeight2 / sum;
 }
 
-public float pathTracingMisPowerHeuristic(float selectedPdf, float otherPdf)
+public float misPowerHeuristic(float selectedPdf, float otherPdf)
 {
-    return pathTracingMisPowerHeuristicFromWeights(
-        pathTracingMisWeightedPdf(1u, selectedPdf),
-        pathTracingMisWeightedPdf(1u, otherPdf));
+    return misPowerHeuristicFromWeights(
+        misWeightedPdf(1u, selectedPdf),
+        misWeightedPdf(1u, otherPdf));
 }
 
-public float pathTracingMisPowerHeuristic(
+public float misPowerHeuristic(
     uint selectedSampleCount,
     float selectedPdf,
     uint otherSampleCount,
     float otherPdf)
 {
-    return pathTracingMisPowerHeuristicFromWeights(
-        pathTracingMisWeightedPdf(selectedSampleCount, selectedPdf),
-        pathTracingMisWeightedPdf(otherSampleCount, otherPdf));
+    return misPowerHeuristicFromWeights(
+        misWeightedPdf(selectedSampleCount, selectedPdf),
+        misWeightedPdf(otherSampleCount, otherPdf));
 }

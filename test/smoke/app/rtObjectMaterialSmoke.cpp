@@ -9,15 +9,13 @@ import nr.utils;
 
 namespace
 {
-[[nodiscard]] nr::renderer::RendererGraphSpec buildRtObjectGraphSpec(vk::Format swapchainFormat, vk::Extent2D extent)
+[[nodiscard]] nr::renderer::RendererGraphSpec buildRtObjectGraphSpec(vk::Format swapchainFormat)
 {
     auto asBuild = std::make_shared<nr::renderPasses::AccelerationStructureBuildNode>();
     auto lightPrepare = std::make_shared<nr::renderPasses::LightPrepareNode>();
     auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
-    rayTrace->input.viewportExtent = extent;
 
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
-    present->input.viewportExtent = extent;
     present->input.format = swapchainFormat;
 
     auto graphSpec = nr::renderer::RendererGraphSpec{};
@@ -193,7 +191,7 @@ namespace
         }
 
         auto& presentation = app.renderer().device().presentationContext;
-        auto graphSpec = buildRtObjectGraphSpec(presentation.swapchainFormat(), presentation.swapchainExtent());
+        auto graphSpec = buildRtObjectGraphSpec(presentation.swapchainFormat());
         app.renderer().installGraph(graphSpec);
 
         return renderUntilRtSceneReady(app, scene->get());

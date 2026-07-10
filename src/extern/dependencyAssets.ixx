@@ -69,6 +69,7 @@ export using ::aiProcess_Triangulate;
 export using ::aiProcess_ValidateDataStructure;
 export using ::aiReturn_SUCCESS;
 export using ::aiScene;
+export using ::aiShadingMode;
 export using ::aiString;
 export using ::aiTexture;
 export using ::aiTextureType;
@@ -103,6 +104,11 @@ export using ::aiTextureType_UNKNOWN;
 export using ::aiVector3D;
 
 export inline constexpr unsigned int assimpTextureTypeMax = static_cast<unsigned int>(AI_TEXTURE_TYPE_MAX);
+
+// KHR_materials_unlit maps to Assimp's no-shading mode (aiShadingMode_Unlit alias). Exported as a
+// project-named integer constant so the load boundary can classify unlit materials without spreading
+// AI_MATKEY_* macros or raw Assimp headers into engine modules.
+export inline constexpr int assimpShadingModeUnlit = static_cast<int>(aiShadingMode_NoShading);
 
 export using ::stbi_failure_reason;
 export using ::stbi_image_free;

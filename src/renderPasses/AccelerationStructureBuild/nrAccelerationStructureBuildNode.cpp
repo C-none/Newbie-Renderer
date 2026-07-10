@@ -887,13 +887,14 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         geometryOffset <= std::numeric_limits<std::uint32_t>::max() - geometryCount,
         "RT geometry metadata range exceeds the uint32 ABI.");
 
-    auto geometryMaterialFeatureMasks = std::vector<std::uint32_t>{};
-    geometryMaterialFeatureMasks.reserve(sceneMesh.geometries.size());
+    auto geometryPermutationKeys = std::vector<RtHitPermutationKey>{};
+    geometryPermutationKeys.reserve(sceneMesh.geometries.size());
     std::ranges::for_each(sceneMesh.geometries, [&](const nr::scene::SceneAccelerationStructureGeometry &geometry) {
         auto const materialHandle = rtGeometryMaterialHandle(scene, packet.mesh, geometry.geometryIndex);
         auto const materialIndex = ensureRtMaterialIndex(runtime, state, scene, materialHandle);
         nrAssert(materialIndex < state.materials.size(), "RT material index must resolve before building hit SBT plan.");
-        geometryMaterialFeatureMasks.push_back(static_cast<std::uint32_t>(state.materials[materialIndex].header.featureFlags));
+        auto const &materialHeader = state.materials[materialIndex].header;
+        geometryPermutationKeys.push_back(makeRtHitPermutationKey(materialHeader.layerFlags, materialHeader.featureFlags));
         state.geometries.push_back(nr::scene::RtGeometryMetadata{
             .materialIndex = materialIndex,
             .geometryIndex = geometry.geometryIndex,
@@ -921,7 +922,7 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         hitSbtPlan,
         hitPermutationLookup,
         instanceMetadataIndex,
-        std::span<const std::uint32_t>{geometryMaterialFeatureMasks.data(), geometryMaterialFeatureMasks.size()});
+        std::span<const RtHitPermutationKey>{geometryPermutationKeys.data(), geometryPermutationKeys.size()});
     return AppendedRtInstanceMetadata{
         .instanceMetadataIndex = instanceMetadataIndex,
         .hitRecordBase = hitRecordBase,

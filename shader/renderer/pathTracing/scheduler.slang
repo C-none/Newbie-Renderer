@@ -7,10 +7,10 @@ public struct Scheduler
 {
     public void traceSample(uint2 pixel, uint2 dimensions)
     {
-        Pt pt = makePathTracingPt(pixel, dimensions);
+        Pt pt = makePt(pixel, dimensions);
         while (pt.isActive())
         {
-            PathTracingRayPayload payload;
+            RayPayload payload;
             pt.traceMaterialRay(payload);
             pt.handleTraceResult(payload);
         }

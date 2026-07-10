@@ -15,7 +15,6 @@ export namespace nr::renderPasses
 {
 struct NormalBufferNodeInput
 {
-    vk::Extent2D viewportExtent{1, 1};
     vk::Format colorFormat = vk::Format::eR8G8B8A8Unorm;
     vk::Format depthFormat = vk::Format::eD32Sfloat;
 };

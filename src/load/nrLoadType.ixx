@@ -139,6 +139,7 @@ struct MaterialAsset
     
     // Authoring: Surface properties
     bool doubleSided = false;
+    bool unlit = false;
     std::optional<float> normalScale{};
     std::optional<float> occlusionStrength{};
     

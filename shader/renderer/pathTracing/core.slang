@@ -1,12 +1,11 @@
 module core;
 import common;
 import renderer.pathTracing.params;
-import renderer.pathTracing.random;
 import renderer.pathTracing.pathState;
 import renderer.pathTracing.resources;
 import renderer.pathTracing.visibility;
 
-public float safePathTracingDivideW(float w)
+public float safeDivideW(float w)
 {
     if (abs(w) > 1.0e-6f)
     {
@@ -15,26 +14,26 @@ public float safePathTracingDivideW(float w)
     return w < 0.0f ? -1.0e-6f : 1.0e-6f;
 }
 
-public float3 pathTracingHomogeneousToWorld(float4 value)
+public float3 homogeneousToWorld(float4 value)
 {
-    return value.xyz / safePathTracingDivideW(value.w);
+    return value.xyz / safeDivideW(value.w);
 }
 
-public float3 offsetPathTracingRayOrigin(float3 position, float3 normal, float3 direction)
+public float3 offsetRayOrigin(float3 position, float3 normal, float3 direction)
 {
     float3 orientedNormal = dot(normal, direction) >= 0.0f ? normal : -normal;
-    return position + orientedNormal * kPathTracingRayEpsilon;
+    return position + orientedNormal * kRayEpsilon;
 }
 
-public PathState generatePathTracingPath(uint2 pixel, uint2 dimensions)
+public PathState generatePath(uint2 pixel, uint2 dimensions)
 {
     float2 uv = (float2(pixel) + 0.5f) / float2(dimensions);
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
 
     float4 nearClip = float4(ndc, 0.0f, 1.0f);
     float4 farClip = float4(ndc, 1.0f, 1.0f);
-    float3 nearWorld = pathTracingHomogeneousToWorld(mul(gFrame.inverseViewProjection, nearClip));
-    float3 farWorld = pathTracingHomogeneousToWorld(mul(gFrame.inverseViewProjection, farClip));
+    float3 nearWorld = homogeneousToWorld(mul(gFrame.inverseViewProjection, nearClip));
+    float3 farWorld = homogeneousToWorld(mul(gFrame.inverseViewProjection, farClip));
 
     float3 origin = gFrame.cameraWorld.xyz;
     float3 directionVector = farWorld - origin;
@@ -46,14 +45,14 @@ public PathState generatePathTracingPath(uint2 pixel, uint2 dimensions)
     PathState path = {};
     path.pixel = pixel;
     path.dimensions = dimensions;
-    path.flags = PathTracingPathFlag.active;
-    path.rngState = makePathTracingSeed(pixel, dimensions, gFrame.frameState.xy);
+    path.flags = PathFlag.active;
+    path.rng = makeErrorDiffusionSequence(pixel, gFrame.frameState.x);
     path.origin = origin;
     path.direction = safeNormalize(directionVector, float3(0.0f, 0.0f, -1.0f));
     return path;
 }
 
-public MaterialDirectLightingInput makePathTracingLighting(float3 viewDirection, SceneLightContribution contribution)
+public MaterialDirectLightingInput makeLighting(float3 viewDirection, SceneLightContribution contribution)
 {
     MaterialDirectLightingInput lighting;
     lighting.viewDirection = viewDirection;
@@ -62,24 +61,24 @@ public MaterialDirectLightingInput makePathTracingLighting(float3 viewDirection,
     return lighting;
 }
 
-public float pathTracingLightVisibilityDistance(uint lightIndex, float3 hitPosition)
+public float lightVisibilityDistance(uint lightIndex, float3 hitPosition)
 {
     if (lightIndex >= sceneLightCount())
     {
-        return kPathTracingRayTMax;
+        return kRayTMax;
     }
 
     SceneLightGpuRecord light = gSceneLights[lightIndex];
     if (SceneLightType(light.meta.x) == SceneLightType.directional)
     {
-        return kPathTracingRayTMax;
+        return kRayTMax;
     }
 
     float3 toLight = light.positionRange.xyz - hitPosition;
     return sqrt(max(dot(toLight, toLight), kSceneLightMinDistanceSquared));
 }
 
-public float2 makePathTracingAliasLightSample(float2 baseSample, uint sampleIndex)
+public float2 makeAliasLightSample(float2 baseSample, uint sampleIndex)
 {
     if (sampleIndex == 0u)
     {
@@ -94,11 +93,33 @@ public float2 makePathTracingAliasLightSample(float2 baseSample, uint sampleInde
         (sampleIndex * 747796405u) ^
         2891336453u;
     return float2(
-        pathTracingRandom01FromHash(seed ^ 1597334677u),
-        pathTracingRandom01FromHash(seed ^ 3812015801u));
+        random01FromHash(seed ^ 1597334677u),
+        random01FromHash(seed ^ 3812015801u));
 }
 
-public void samplePathTracingDirectLighting(
+// Direct lighting is evaluated after CHS returns, so the CHS link-time LayerFlags is not a raygen
+// compile-time constant. This runtime switch maps the resolved layerFlags to the concrete static
+// evaluator so each invocation runs only its active-layer math. The root raygen SPIR-V contains every
+// valid lit case; that is the accepted boundary of the current single-raygen architecture.
+public MaterialShadingResult dispatchEvaluateResolvedMaterialDirect(
+    ResolvedMaterialPayload material,
+    MaterialDirectLightingInput lighting)
+{
+    switch (uint(material.layerFlags))
+    {
+    case 1u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    case 3u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(3u)>(material, lighting);
+    case 5u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(5u)>(material, lighting);
+    case 7u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(7u)>(material, lighting);
+    case 9u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(9u)>(material, lighting);
+    case 11u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(11u)>(material, lighting);
+    case 13u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(13u)>(material, lighting);
+    case 15u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(15u)>(material, lighting);
+    default: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    }
+}
+
+public void sampleDirectLighting(
     inout PathState path,
     ResolvedMaterialPayload material,
     float3 viewDirection)
@@ -108,12 +129,12 @@ public void samplePathTracingDirectLighting(
         return;
     }
 
-    float2 lightSampleBase = nextPathTracingRandom02(path.rngState);
-    float sampleWeight = 1.0f / float(kPathTracingDirectLightSampleCount);
-    for (uint sampleIndex = 0u; sampleIndex < kPathTracingDirectLightSampleCount; ++sampleIndex)
+    float2 lightSampleBase = path.rng.get2D();
+    float sampleWeight = 1.0f / float(kDirectLightSampleCount);
+    for (uint sampleIndex = 0u; sampleIndex < kDirectLightSampleCount; ++sampleIndex)
     {
         SceneLightSample lightSample;
-        if (!sampleSceneLightAlias(makePathTracingAliasLightSample(lightSampleBase, sampleIndex), lightSample))
+        if (!sampleSceneLightAlias(makeAliasLightSample(lightSampleBase, sampleIndex), lightSample))
         {
             continue;
         }
@@ -125,31 +146,31 @@ public void samplePathTracingDirectLighting(
         }
 
         contribution.radiance *= 1.0f / lightSample.pdf;
-        float3 visibilityOrigin = offsetPathTracingRayOrigin(
+        float3 visibilityOrigin = offsetRayOrigin(
             material.position,
             material.geometryNormal,
             contribution.direction);
         if (!tracePathVisibilityRay(
             visibilityOrigin,
             contribution.direction,
-            pathTracingLightVisibilityDistance(lightSample.lightIndex, material.position)))
+            lightVisibilityDistance(lightSample.lightIndex, material.position)))
         {
             continue;
         }
 
-        MaterialShadingResult direct = evaluateResolvedMaterialDirect(
+        MaterialShadingResult direct = dispatchEvaluateResolvedMaterialDirect(
             material,
-            makePathTracingLighting(viewDirection, contribution));
+            makeLighting(viewDirection, contribution));
         addPathContribution(path, direct.radiance * sampleWeight);
     }
 }
 
-public bool pathTracingReachedBounceLimit(PathState path)
+public bool reachedBounceLimit(PathState path)
 {
-    return path.vertexIndex >= kPathTracingMaxSurfaceBounces;
+    return path.vertexIndex >= kMaxSurfaceBounces;
 }
 
-public void handlePathTracingHit(inout PathState path, ResolvedMaterialPayload material)
+public void handleHit(inout PathState path, ResolvedMaterialPayload material, ResolvedMaterialScatter scatter)
 {
     pathStateSetHit(path, true);
     float3 viewDirection = safeNormalize(-path.direction, material.geometryNormal);
@@ -157,34 +178,41 @@ public void handlePathTracingHit(inout PathState path, ResolvedMaterialPayload m
     float hitAlpha = material.alphaMode == AlphaMode.blend ? material.alpha : 1.0f;
     if (path.vertexIndex == 1u && hitAlpha < 1.0f)
     {
-        addPathContribution(path, kPathTracingMissRadiance * (1.0f - hitAlpha));
+        addPathContribution(path, kMissRadiance * (1.0f - hitAlpha));
         path.throughput *= hitAlpha;
+    }
+
+    // Unlit (KHR_materials_unlit): base color RGB is terminal surface radiance. Skip emissive, direct
+    // lighting and scatter; the path ends at this hit.
+    if (material.layerFlags == RtMaterialLayerFlag.none)
+    {
+        addPathContribution(path, material.baseColor.rgb);
+        terminatePathState(path);
+        return;
     }
 
     addPathContribution(path, material.emissive);
 
-    if (!pathTracingReachedBounceLimit(path))
+    if (!reachedBounceLimit(path))
     {
-        samplePathTracingDirectLighting(path, material, viewDirection);
+        sampleDirectLighting(path, material, viewDirection);
     }
 
-    if (pathTracingReachedBounceLimit(path))
+    if (reachedBounceLimit(path))
     {
         terminatePathState(path);
         return;
     }
 
-    ResolvedMaterialScatter scatter = sampleResolvedMaterialScatter(
-        material,
-        viewDirection,
-        nextPathTracingRandom03(path.rngState));
     if (scatter.valid == 0u)
     {
         terminatePathState(path);
         return;
     }
 
-    if (scatter.kind == ResolvedMaterialScatterKind.specular)
+    if (scatter.kind == ResolvedMaterialScatterKind.specular ||
+        scatter.kind == ResolvedMaterialScatterKind.clearcoat ||
+        scatter.kind == ResolvedMaterialScatterKind.transmission)
     {
         path.specularBounces += 1u;
     }
@@ -194,11 +222,11 @@ public void handlePathTracingHit(inout PathState path, ResolvedMaterialPayload m
     }
 
     updatePathThroughput(path, scatter.weight);
-    PathTracingRussianRoulettePolicy roulettePolicy = PathTracingRussianRoulettePolicy();
+    RussianRoulettePolicy roulettePolicy = RussianRoulettePolicy();
     if (roulettePolicy.shouldApply(path.vertexIndex))
     {
         float survivalProbability = roulettePolicy.survivalProbability(path.throughput);
-        if (!roulettePolicy.survives(nextPathTracingRandom01(path.rngState), survivalProbability))
+        if (!roulettePolicy.survives(path.rng.get1D(), survivalProbability))
         {
             terminatePathState(path);
             return;
@@ -208,18 +236,18 @@ public void handlePathTracingHit(inout PathState path, ResolvedMaterialPayload m
     }
 
     path.pdf = scatter.pdf;
-    path.origin = offsetPathTracingRayOrigin(material.position, material.geometryNormal, scatter.direction);
+    path.origin = offsetRayOrigin(material.position, material.geometryNormal, scatter.direction);
     path.direction = scatter.direction;
 }
 
-public void handlePathTracingMiss(inout PathState path)
+public void handleMiss(inout PathState path)
 {
     pathStateSetHit(path, false);
-    addPathContribution(path, kPathTracingMissRadiance);
+    addPathContribution(path, kMissRadiance);
     terminatePathState(path);
 }
 
-public void writePathTracingOutput(PathState path)
+public void writeOutput(PathState path)
 {
     // Path radiance is scene-linear HDR RGB. Present/Display convert this to
     // screen pixels by clamping to [0,1], optional linear->sRGB transfer, optional
@@ -237,11 +265,12 @@ public struct Pt
     }
 
     [mutating]
-    public void traceMaterialRay(out PathTracingRayPayload payload)
+    public void traceMaterialRay(out RayPayload payload)
     {
         path.vertexIndex += 1u;
         payload = {};
-        payload.rayKind = PathTracingRayKind.material;
+        payload.rayKind = RayKind.material;
+        payload.scatterRandomValues = path.rng.get3D();
 
         // TLAS instance flags encode glTF source winding, double-sided culling, and transform determinant.
         TraceRay(
@@ -256,11 +285,11 @@ public struct Pt
     }
 
     [mutating]
-    public void handleTraceResult(PathTracingRayPayload payload)
+    public void handleTraceResult(RayPayload payload)
     {
         if (payload.hit != 0u)
         {
-            handleHit(payload.material);
+            handleHit(payload.material, payload.scatter);
         }
         else
         {
@@ -269,26 +298,26 @@ public struct Pt
     }
 
     [mutating]
-    public void handleHit(ResolvedMaterialPayload material)
+    public void handleHit(ResolvedMaterialPayload material, ResolvedMaterialScatter scatter)
     {
-        handlePathTracingHit(path, material);
+        handleHit(path, material, scatter);
     }
 
     [mutating]
     public void handleMiss()
     {
-        handlePathTracingMiss(path);
+        handleMiss(path);
     }
 
     public void writeOutput()
     {
-        writePathTracingOutput(path);
+        writeOutput(path);
     }
 };
 
-public Pt makePathTracingPt(uint2 pixel, uint2 dimensions)
+public Pt makePt(uint2 pixel, uint2 dimensions)
 {
     Pt pt;
-    pt.path = generatePathTracingPath(pixel, dimensions);
+    pt.path = generatePath(pixel, dimensions);
     return pt;
 }

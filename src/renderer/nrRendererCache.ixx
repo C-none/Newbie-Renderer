@@ -8,7 +8,6 @@ import nr.utils;
 import std;
 import :renderGraphCompiler;
 import :renderGraphType;
-import :variantRegistry;
 
 export namespace nr::renderer
 {
@@ -157,6 +156,7 @@ class RenderGraphCompileCache
         bool isCopyPass = false;
         QueueDomain queue = QueueDomain::Graphics;
         vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
+        std::optional<CopyPassDesc> copy{};
         std::vector<ResourceUseSignature> resourceUses{};
         bool hasPrepare = false;
         bool hasRecord = false;
@@ -477,7 +477,6 @@ struct RendererCacheSuite
     RenderGraphCompileCache compileCache{};
     BindlessImageTableCache bindlessImageTableCache{};
     RendererGlobalDescriptorTableCache globalDescriptorTableCache{};
-    VariantStateRegistry variantRegistry{};
 
     void clear() noexcept;
 };

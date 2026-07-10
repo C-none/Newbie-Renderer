@@ -37,7 +37,6 @@ struct PresentReadbackTarget
 
 struct PresentNodeInput
 {
-    vk::Extent2D viewportExtent{1, 1};
     vk::Format format = vk::Format::eR8G8B8A8Unorm;
     bool flipY = false;
     float uiOpacity = 1.0f;
@@ -73,6 +72,9 @@ class PresentNode final : public Node
     float uiOpacityDraft_ = 1.0f;
     float pendingUiOpacity_ = 1.0f;
     bool pendingUiOpacityValid_ = false;
+    std::uint32_t toneMappingSelection_ = 0u;
+    std::uint32_t pendingToneMappingSelection_ = 0u;
+    bool pendingToneMappingSelectionValid_ = false;
     std::string screenshotStatus_{};
 };
 } // namespace nr::renderPasses

@@ -8,12 +8,10 @@ public float4 sampleMaterialTexture(
     float2 texCoord1,
     float4 fallback)
 {
+    // Always sample. Unauthored slots hold texture id 0 (neutral white RGBA(1,1,1,1)), so a missing
+    // texture yields a neutral multiplier without a texture-presence branch. `fallback` is retained for
+    // source compatibility and stays neutral now that id 0 provides the default.
     RtMaterialTextureRef textureRef = rtMaterialTextureRef(textureRefs, material, slot);
-    if (textureRef.textureId == 0u)
-    {
-        return fallback;
-    }
-
     return gSceneTextures[textureRef.textureId].SampleLevel(materialUv(textureRef.uvSet, texCoord0, texCoord1), 0.0f);
 }
 
@@ -28,12 +26,10 @@ public float3 applyNormalMapSlot(
     float2 texCoord0,
     float2 texCoord1)
 {
+    // Always sample the normal slot. Unauthored normals hold texture id 0 (neutral white) and their
+    // effective normalScale is 0, so the decoded tangent normal collapses to (0,0,1) and the shading
+    // normal equals the incoming geometric/interpolated normal without a texture-presence branch.
     RtMaterialTextureRef normalRef = rtMaterialTextureRef(textureRefs, material, normalSlot);
-    if (normalRef.textureId == 0u)
-    {
-        return normal;
-    }
-
     float3 tangentFallback = orthogonalTangent(normal);
     float3 tangent = safeNormalize(worldTangent - normal * dot(normal, worldTangent), tangentFallback);
     float3 bitangent = safeNormalize(cross(normal, tangent) * tangentSign, cross(normal, tangentFallback));
@@ -45,27 +41,6 @@ public float3 applyNormalMapSlot(
         bitangent * tangentNormal.y +
         normal * tangentNormal.z,
         normal);
-}
-
-public bool tryFindMaterialLayer(
-    StructuredBuffer<RtMaterialLayerRecord> layerRecords,
-    RtMaterialHeader material,
-    RtMaterialLayerKind kind,
-    out RtMaterialLayerRecord result)
-{
-    for (uint layerIndex = 0u; layerIndex < material.layerCount; ++layerIndex)
-    {
-        RtMaterialLayerRecord layer = layerRecords[material.layerOffset + layerIndex];
-        if (layer.kind == kind)
-        {
-            result = layer;
-            return true;
-        }
-    }
-
-    result = {};
-    result.kind = kind;
-    return false;
 }
 
 public MaterialSample sampleCoreMaterial(
@@ -104,7 +79,11 @@ public MaterialSample sampleCoreMaterial(
     return sample;
 }
 
-public MaterialLayerStack sampleMaterialLayers(
+// Canonical layer-record parser. Records are compact in bit order (base -> clearcoat -> sheen ->
+// transmission); base surface data lives in the header, so optional records start at layerOffset + 1.
+// Each optional layer reads its record and textures inside an `if (LayerFlags & flag)` static block, so
+// link specialization removes the record read and texture samples for inactive layers.
+public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMaterialLayerFlag>(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     StructuredBuffer<RtMaterialLayerRecord> layerRecords,
     RtMaterialHeader material,
@@ -114,9 +93,12 @@ public MaterialLayerStack sampleMaterialLayers(
     MaterialLayerStack sample = {};
     sample.clearcoatNormal = orientedNormal;
 
-    RtMaterialLayerRecord clearcoatLayer;
-    if (tryFindMaterialLayer(layerRecords, material, RtMaterialLayerKind.clearcoat, clearcoatLayer))
+    uint layerRecordIndex = material.layerOffset + 1u;
+
+    if (uint(LayerFlags & RtMaterialLayerFlag.clearcoat) != 0u)
     {
+        RtMaterialLayerRecord clearcoatLayer = layerRecords[layerRecordIndex];
+        layerRecordIndex += 1u;
         float clearcoatTexture = sampleMaterialTexture(
             textureRefs,
             material,
@@ -137,7 +119,7 @@ public MaterialLayerStack sampleMaterialLayers(
             textureRefs,
             material,
             MaterialTextureSlot.clearcoatNormal,
-            1.0f,
+            clearcoatLayer.p0.z,
             orientedNormal,
             surface.tangent,
             surface.tangentSign,
@@ -145,9 +127,10 @@ public MaterialLayerStack sampleMaterialLayers(
             surface.texCoord1);
     }
 
-    RtMaterialLayerRecord sheenLayer;
-    if (tryFindMaterialLayer(layerRecords, material, RtMaterialLayerKind.sheen, sheenLayer))
+    if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
     {
+        RtMaterialLayerRecord sheenLayer = layerRecords[layerRecordIndex];
+        layerRecordIndex += 1u;
         float4 sheenColorTexture = sampleMaterialTexture(
             textureRefs,
             material,
@@ -164,6 +147,20 @@ public MaterialLayerStack sampleMaterialLayers(
             float4(1.0f)).a;
         sample.sheenColor = saturate(sheenLayer.p0.rgb * sheenColorTexture.rgb);
         sample.sheenRoughness = clamp(sheenLayer.p0.w * sheenRoughnessTexture, kMaterialMinRoughness, 1.0f);
+    }
+
+    if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
+    {
+        RtMaterialLayerRecord transmissionLayer = layerRecords[layerRecordIndex];
+        layerRecordIndex += 1u;
+        float transmissionTexture = sampleMaterialTexture(
+            textureRefs,
+            material,
+            MaterialTextureSlot.transmission,
+            surface.texCoord0,
+            surface.texCoord1,
+            float4(1.0f)).r;
+        sample.transmission = saturate(transmissionLayer.p0.x * transmissionTexture);
     }
 
     return sample;

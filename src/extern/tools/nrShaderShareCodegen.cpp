@@ -1012,24 +1012,36 @@ void emitEnum(std::ostream& output, const EnumInfo& info)
     }
     output << "};\n\n";
 
+    // Enumerator-name metadata consumed by the generic slangEnumLiteral template. Emitted for every
+    // shared enum so any translated enum can be turned into its Slang literal spelling without a
+    // hand-written switch. Codegen stopgap until C++26 static reflection is available (see prelude).
+    output << "template<>\n";
+    output << "struct SlangEnumMeta<" << info.name << ">\n";
+    output << "{\n";
+    output << "    static constexpr std::string_view slangTypeName = \"" << info.name << "\";\n\n";
+    output << "    [[nodiscard]] static constexpr std::string_view enumeratorName(" << info.name << " value) noexcept\n";
+    output << "    {\n";
+    output << "        switch (value)\n";
+    output << "        {\n";
+    for (auto const& enumCase : info.cases)
+    {
+        output << "        case " << info.name << "::" << enumCase.name << ":\n";
+        output << "            return \"" << enumCase.name << "\";\n";
+    }
+    output << "        }\n";
+    output << "        return {};\n";
+    output << "    }\n";
+    output << "};\n\n";
+
     if (!info.flags)
     {
         return;
     }
 
-    output << "[[nodiscard]] constexpr " << info.name << " operator|(" << info.name << " lhs, " << info.name << " rhs) noexcept\n";
-    output << "{\n";
-    output << "    return static_cast<" << info.name << ">(static_cast<std::uint32_t>(lhs) | static_cast<std::uint32_t>(rhs));\n";
-    output << "}\n\n";
-    output << "[[nodiscard]] constexpr " << info.name << " operator&(" << info.name << " lhs, " << info.name << " rhs) noexcept\n";
-    output << "{\n";
-    output << "    return static_cast<" << info.name << ">(static_cast<std::uint32_t>(lhs) & static_cast<std::uint32_t>(rhs));\n";
-    output << "}\n\n";
-    output << "constexpr " << info.name << "& operator|=(" << info.name << "& lhs, " << info.name << " rhs) noexcept\n";
-    output << "{\n";
-    output << "    lhs = lhs | rhs;\n";
-    output << "    return lhs;\n";
-    output << "}\n\n";
+    // Opt-in marker consumed by the FlagEnum concept in the prelude. The concept finds this tag via
+    // ADL on the enum's namespace, so the templated |, &, |= operators apply automatically without
+    // duplicating an operator set per flagged enum.
+    output << "constexpr void flagEnumTag(" << info.name << ") noexcept {}\n\n";
 }
 
 void emitStruct(std::ostream& output, const StructInfo& info)
@@ -1074,6 +1086,53 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
     output << "import std;\n\n";
     output << "export namespace " << options.namespaceName << "\n";
     output << "{\n";
+
+    if (!model.enums.empty())
+    {
+        // Enumerator-name reflection used to build Slang-side enum literals such as
+        // "RtHitAlphaPolicy.opaqueLike". The per-enum SlangEnumMeta specializations emitted by
+        // emitEnum are a codegen stopgap: they exist only because the LLVM/clang toolchain does not
+        // yet implement C++26 static reflection (P2996, <meta>). Once static reflection is
+        // available, drop the generated SlangEnumMeta specializations and derive both slangTypeName
+        // and enumeratorName directly via std::meta::identifier_of, so slangEnumLiteral no longer
+        // depends on generated metadata. See docs/architecture and AGENTS.md C++26 policy.
+        output << "// Enumerator-name reflection for Slang-side enum literals (e.g. \"Type.enumerator\").\n";
+        output << "// TODO(C++26 reflection): once LLVM/clang ship P2996 static reflection, delete the generated\n";
+        output << "// SlangEnumMeta specializations and derive names via std::meta::identifier_of instead.\n";
+        output << "template<class Enum>\n";
+        output << "struct SlangEnumMeta;\n\n";
+        output << "template<class Enum>\n";
+        output << "[[nodiscard]] std::string slangEnumLiteral(Enum value)\n";
+        output << "{\n";
+        output << "    return std::format(\"{}.{}\", SlangEnumMeta<Enum>::slangTypeName, SlangEnumMeta<Enum>::enumeratorName(value));\n";
+        output << "}\n\n";
+    }
+
+    if (std::ranges::any_of(model.enums, [](const EnumInfo& info) { return info.flags; }))
+    {
+        // Bitmask operators for flagged shared enums. A flagged enum opts in by declaring a
+        // flagEnumTag overload (emitted by emitEnum); the FlagEnum concept finds it via ADL, so
+        // these operators are defined once here instead of being duplicated per enum.
+        output << "// Bitmask operators shared by every flagged enum (opt-in via a flagEnumTag overload).\n";
+        output << "template<class Enum>\n";
+        output << "concept FlagEnum = std::is_scoped_enum_v<Enum> && requires(Enum e) { flagEnumTag(e); };\n\n";
+        output << "template<FlagEnum Enum>\n";
+        output << "[[nodiscard]] constexpr Enum operator|(Enum lhs, Enum rhs) noexcept\n";
+        output << "{\n";
+        output << "    return static_cast<Enum>(static_cast<std::underlying_type_t<Enum>>(lhs) | static_cast<std::underlying_type_t<Enum>>(rhs));\n";
+        output << "}\n\n";
+        output << "template<FlagEnum Enum>\n";
+        output << "[[nodiscard]] constexpr Enum operator&(Enum lhs, Enum rhs) noexcept\n";
+        output << "{\n";
+        output << "    return static_cast<Enum>(static_cast<std::underlying_type_t<Enum>>(lhs) & static_cast<std::underlying_type_t<Enum>>(rhs));\n";
+        output << "}\n\n";
+        output << "template<FlagEnum Enum>\n";
+        output << "constexpr Enum& operator|=(Enum& lhs, Enum rhs) noexcept\n";
+        output << "{\n";
+        output << "    lhs = lhs | rhs;\n";
+        output << "    return lhs;\n";
+        output << "}\n\n";
+    }
 
     for (auto const& shareDecl : model.declarations)
     {

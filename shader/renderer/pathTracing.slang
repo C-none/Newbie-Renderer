@@ -15,27 +15,30 @@ void rgMain()
 }
 
 [shader("miss")]
-void msMain(inout PathTracingRayPayload payload)
+void msMain(inout RayPayload payload)
 {
     payload.hit = 0u;
 }
 
 [shader("anyhit")]
-void ahAlphaMask(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
+void ahAlphaMask(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
-    handlePathTracingAnyHit(payload, attributes);
+    handleAnyHit(payload, attributes);
 }
 
 [shader("closesthit")]
-void chMain(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
+void chMain(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
-    if (payload.rayKind != PathTracingRayKind.material)
+    if (payload.rayKind != RayKind.material)
     {
         return;
     }
 
     CHS chs = CHS();
-    PathTracingClosestHitResult result = chs.handleClosestHit(makePathTracingClosestHitInput(attributes));
+    ClosestHitInput input = makeClosestHitInput(attributes);
+    input.scatterRandomValues = payload.scatterRandomValues;
+    ClosestHitResult result = chs.handleClosestHit(input);
     payload.hit = result.hit;
     payload.material = result.material;
+    payload.scatter = result.scatter;
 }

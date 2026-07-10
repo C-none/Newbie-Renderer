@@ -19,6 +19,11 @@ namespace
     return nr::scene::hasAnyRtMaterialFeature(material.header.featureFlags, flag);
 }
 
+[[nodiscard]] bool hasLayer(const nr::scene::RtCompiledMaterial &material, nr::scene::RtMaterialLayerFlag flag) noexcept
+{
+    return nr::scene::hasRtMaterialLayer(material.header.layerFlags, flag);
+}
+
 [[nodiscard]] bool nearlyEqual(float lhs, float rhs, float epsilon = 1.0e-6f) noexcept
 {
     return std::abs(lhs - rhs) <= epsilon;
@@ -436,21 +441,142 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
 
         auto compiled = nr::scene::compileRtMaterial(material, textureIds);
 
-        nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::clearcoat));
-        nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::sheen));
-        nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::transmission));
+        nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::clearcoat));
+        nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::sheen));
+        nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::transmission));
         nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::unsupportedAnisotropy));
         nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
-        nr::test::requireEqual(compiled.layers[0].kind, nr::scene::RtMaterialLayerKind::clearcoat);
-        nr::test::requireEqual(compiled.layers[1].kind, nr::scene::RtMaterialLayerKind::sheen);
-        nr::test::requireEqual(compiled.layers[2].kind, nr::scene::RtMaterialLayerKind::baseSurface);
-        nr::test::requireEqual(compiled.layers[3].kind, nr::scene::RtMaterialLayerKind::transmission);
+        nr::test::requireEqual(compiled.layers[0].layer, nr::scene::RtMaterialLayerFlag::baseSurface);
+        nr::test::requireEqual(compiled.layers[1].layer, nr::scene::RtMaterialLayerFlag::clearcoat);
+        nr::test::requireEqual(compiled.layers[2].layer, nr::scene::RtMaterialLayerFlag::sheen);
+        nr::test::requireEqual(compiled.layers[3].layer, nr::scene::RtMaterialLayerFlag::transmission);
         nr::test::require(
             std::ranges::none_of(compiled.layers, [](const nr::scene::RtMaterialLayerRecord &layer) {
-                return layer.kind > nr::scene::RtMaterialLayerKind::transmission;
+                return layer.layer > nr::scene::RtMaterialLayerFlag::transmission;
             }),
             "unsupported features must not create RT layers");
-        nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{2});
+        nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
+    }};
+
+const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
+    "scene RT material layer-flag matrix covers unlit, lit combinations, dense refs and default normals",
+    [] {
+        using MaterialTextureSlotSemantic = nr::resource::MaterialTextureSlotSemantic;
+        using Layer = nr::scene::RtMaterialLayerFlag;
+
+        // unlit -> layerFlags none, no layer records; authored PBR extension data is ignored.
+        {
+            auto material = nr::resource::Material{};
+            material.unlit = true;
+            material.clearcoat.emplace();
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::requireEqual(compiled.header.layerFlags, Layer::none);
+            nr::test::requireEqual(compiled.header.layerCount, 0u);
+            nr::test::requireEqual(compiled.layers.size(), std::size_t{0});
+            nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
+        }
+
+        // plain metallic-roughness -> baseSurface only; layer info must not leak into featureFlags;
+        // absent base normal writes effective normal scale 0.
+        {
+            auto material = nr::resource::Material{};
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::requireEqual(compiled.header.layerFlags, Layer::baseSurface);
+            nr::test::requireEqual(compiled.layers.size(), std::size_t{1});
+            nr::test::requireEqual(compiled.layers[0].layer, Layer::baseSurface);
+            nr::test::requireEqual(static_cast<std::uint32_t>(compiled.header.featureFlags), 0u,
+                                   "layer classification must not leak into RtMaterialFeatureFlag");
+            nr::test::require(nearlyEqual(compiled.header.roughnessNormalOcclusionAlpha.y, 0.0f),
+                              "absent base normal must write effective normal scale 0");
+        }
+
+        // base + single clearcoat; absent clearcoat normal -> clearcoat effective normal scale 0 (p0.z).
+        {
+            auto material = nr::resource::Material{};
+            material.clearcoat.emplace();
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(hasLayer(compiled, Layer::baseSurface));
+            nr::test::require(hasLayer(compiled, Layer::clearcoat));
+            nr::test::require(!hasLayer(compiled, Layer::sheen));
+            nr::test::require(!hasLayer(compiled, Layer::transmission));
+            nr::test::requireEqual(compiled.layers.size(), std::size_t{2});
+            nr::test::requireEqual(compiled.layers[0].layer, Layer::baseSurface);
+            nr::test::requireEqual(compiled.layers[1].layer, Layer::clearcoat);
+            nr::test::require(nearlyEqual(compiled.layers[1].p0.z, 0.0f),
+                              "absent clearcoat normal must write effective normal scale 0");
+        }
+
+        // base + single sheen.
+        {
+            auto material = nr::resource::Material{};
+            material.sheen.emplace();
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(hasLayer(compiled, Layer::sheen));
+            nr::test::requireEqual(compiled.layers.size(), std::size_t{2});
+            nr::test::requireEqual(compiled.layers[1].layer, Layer::sheen);
+        }
+
+        // base + single transmission.
+        {
+            auto material = nr::resource::Material{};
+            material.transmission.emplace();
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(hasLayer(compiled, Layer::transmission));
+            nr::test::requireEqual(compiled.layers.size(), std::size_t{2});
+            nr::test::requireEqual(compiled.layers[1].layer, Layer::transmission);
+        }
+
+        // base + all three optional layers -> canonical order base -> clearcoat -> sheen -> transmission.
+        {
+            auto material = nr::resource::Material{};
+            material.clearcoat.emplace();
+            material.sheen.emplace();
+            material.transmission.emplace();
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
+            nr::test::requireEqual(compiled.layers[0].layer, Layer::baseSurface);
+            nr::test::requireEqual(compiled.layers[1].layer, Layer::clearcoat);
+            nr::test::requireEqual(compiled.layers[2].layer, Layer::sheen);
+            nr::test::requireEqual(compiled.layers[3].layer, Layer::transmission);
+        }
+
+        // fallback RT material must be lit (baseSurface), never unlit.
+        {
+            auto fallback = nr::scene::makeFallbackRtMaterial();
+            nr::test::requireEqual(fallback.header.layerFlags, Layer::baseSurface);
+            nr::test::require(fallback.header.layerFlags != Layer::none,
+                              "fallback RT material must not be unlit");
+        }
+
+        // dense texture refs: fixed 12 entries in slot order; authored -> id, absent -> id 0; authored
+        // base normal preserves the real normal scale.
+        {
+            auto material = nr::resource::Material{};
+            material.core.normalScale = 0.5f;
+            material.slot(MaterialTextureSlotSemantic::baseColor).texture = nr::resource::TextureHandle{2u, 1u};
+            material.slot(MaterialTextureSlotSemantic::normal).texture = nr::resource::TextureHandle{3u, 1u};
+            auto ids = nr::scene::SceneMaterialTextureIds{};
+            ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)] = 7u;
+            ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::normal)] = 9u;
+            auto compiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
+            auto slotIndices = std::views::iota(std::size_t{0}, compiled.textureRefs.size());
+            std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
+                nr::test::requireEqual(
+                    compiled.textureRefs[slotIndex].slot,
+                    static_cast<nr::scene::MaterialTextureSlot>(static_cast<std::uint32_t>(slotIndex)),
+                    "dense texture refs must follow MaterialTextureSlot order");
+            });
+            nr::test::requireEqual(
+                compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)].textureId,
+                7u);
+            nr::test::requireEqual(
+                compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::metallicRoughness)].textureId,
+                0u,
+                "absent texture slot must resolve to id 0");
+            nr::test::require(nearlyEqual(compiled.header.roughnessNormalOcclusionAlpha.y, 0.5f),
+                              "authored base normal must preserve the real normal scale");
+        }
     }};
 
 const nr::test::CaseRegistrar rtSampleAssetsCase{
@@ -458,15 +584,15 @@ const nr::test::CaseRegistrar rtSampleAssetsCase{
     [] {
         auto toyCar = compileAssetMaterials("assets/glTF-Sample-Assets/Models/ToyCar/glTF/ToyCar.gltf");
         nr::test::require(std::ranges::any_of(toyCar, [](const nr::scene::RtCompiledMaterial &material) {
-                              return hasFeature(material, nr::scene::RtMaterialFeatureFlag::clearcoat);
+                              return hasLayer(material, nr::scene::RtMaterialLayerFlag::clearcoat);
                           }),
                           "ToyCar should produce at least one RT clearcoat material");
         nr::test::require(std::ranges::any_of(toyCar, [](const nr::scene::RtCompiledMaterial &material) {
-                              return hasFeature(material, nr::scene::RtMaterialFeatureFlag::sheen);
+                              return hasLayer(material, nr::scene::RtMaterialLayerFlag::sheen);
                           }),
                           "ToyCar should produce at least one RT sheen material");
         nr::test::require(std::ranges::any_of(toyCar, [](const nr::scene::RtCompiledMaterial &material) {
-                              return hasFeature(material, nr::scene::RtMaterialFeatureFlag::transmission);
+                              return hasLayer(material, nr::scene::RtMaterialLayerFlag::transmission);
                           }),
                           "ToyCar should produce at least one RT transmission material");
 
@@ -612,7 +738,7 @@ const nr::test::CaseRegistrar unsupportedExtensionAssetCase{
             nr::test::require(
                 std::ranges::all_of(compiled, [](const nr::scene::RtCompiledMaterial &material) {
                     return std::ranges::all_of(material.layers, [](const nr::scene::RtMaterialLayerRecord &layer) {
-                        return layer.kind <= nr::scene::RtMaterialLayerKind::transmission;
+                        return layer.layer <= nr::scene::RtMaterialLayerFlag::transmission;
                     });
                 }),
                 std::format("{} should not create unsupported RT layer kinds", asset.second));

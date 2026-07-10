@@ -1,10 +1,10 @@
 implementing common;
 
-public static const uint kPathTracingRussianRouletteStartVertexIndex = 1u;
-public static const float kPathTracingRussianRouletteMinSurvivalProbability = 0.05f;
-public static const float kPathTracingRussianRouletteMaxSurvivalProbability = 0.95f;
+public static const uint kRussianRouletteStartVertexIndex = 1u;
+public static const float kRussianRouletteMinSurvivalProbability = 0.05f;
+public static const float kRussianRouletteMaxSurvivalProbability = 0.95f;
 
-public interface IPathTracingRussianRoulettePolicy
+public interface IRussianRoulettePolicy
 {
     bool shouldApply(uint vertexIndex);
     float survivalProbability(float3 throughput);
@@ -12,11 +12,11 @@ public interface IPathTracingRussianRoulettePolicy
     float throughputScale(float survivalProbability);
 }
 
-public struct PathTracingRussianRouletteEnabledPolicy : IPathTracingRussianRoulettePolicy
+public struct RussianRouletteEnabledPolicy : IRussianRoulettePolicy
 {
     public bool shouldApply(uint vertexIndex)
     {
-        return vertexIndex >= kPathTracingRussianRouletteStartVertexIndex;
+        return vertexIndex >= kRussianRouletteStartVertexIndex;
     }
 
     public float survivalProbability(float3 throughput)
@@ -29,8 +29,8 @@ public struct PathTracingRussianRouletteEnabledPolicy : IPathTracingRussianRoule
 
         return clamp(
             probability,
-            kPathTracingRussianRouletteMinSurvivalProbability,
-            kPathTracingRussianRouletteMaxSurvivalProbability);
+            kRussianRouletteMinSurvivalProbability,
+            kRussianRouletteMaxSurvivalProbability);
     }
 
     public bool survives(float randomValue, float survivalProbability)
@@ -44,7 +44,7 @@ public struct PathTracingRussianRouletteEnabledPolicy : IPathTracingRussianRoule
     }
 }
 
-public struct PathTracingRussianRouletteDisabledPolicy : IPathTracingRussianRoulettePolicy
+public struct RussianRouletteDisabledPolicy : IRussianRoulettePolicy
 {
     public bool shouldApply(uint vertexIndex)
     {
@@ -67,4 +67,4 @@ public struct PathTracingRussianRouletteDisabledPolicy : IPathTracingRussianRoul
     }
 }
 
-public extern struct PathTracingRussianRoulettePolicy : IPathTracingRussianRoulettePolicy;
+public extern struct RussianRoulettePolicy : IRussianRoulettePolicy;

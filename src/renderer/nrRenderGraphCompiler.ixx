@@ -402,6 +402,7 @@ class RenderGraphCompiler
                 .queue = pass.queue,
                 .submitBatchIndex = currentBatch->batchIndex,
                 .shaderStages = pass.shaderStages,
+                .copy = transferPayload<MovePassPayloads>(pass.copy),
                 .resourceUses = transferPayload<MovePassPayloads>(pass.resourceUses),
                 .resolvedResourceIndices = std::move(resolvedResourceIndices),
                 .prepare = transferPayload<MovePassPayloads>(pass.prepare),
