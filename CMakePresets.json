@@ -35,8 +35,10 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "OFF",
         "VCPKG_TARGET_TRIPLET": "x64-mingw-clang-static",
         "VCPKG_HOST_TRIPLET": "x64-mingw-clang-static",
+        "VCPKG_TARGET_ARCHITECTURE": "x64",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/vcpkg-triplets",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/llvm/vcpkg_installed"
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/llvm/vcpkg_installed",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/msys2-clangxx.cmake"
       }
     },
     {

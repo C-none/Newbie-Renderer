@@ -575,7 +575,7 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
 {
         if (queue == QueueDomain::Graphics)
         {
-            return vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+            return vk::PipelineStageFlagBits2::eAllCommands;
         }
         if (queue == QueueDomain::Compute)
         {

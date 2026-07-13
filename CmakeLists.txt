@@ -1,8 +1,8 @@
-cmake_minimum_required(VERSION 4.3.3)
+cmake_minimum_required(VERSION 4.4)
 
-# CMake 4.3.3 still gates `import std;` behind an experimental opt-in that
-# must be visible before the CXX language is enabled.
-set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+# CMake still gates `import std;` behind an experimental opt-in that must be
+# visible before the CXX language is enabled. The UUID changed across versions.
+set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "f35a9ac6-8463-4d38-8eec-5d6008153e7d")
 
 project(NewbieRenderer LANGUAGES CXX)
 
@@ -14,6 +14,7 @@ set(NR_LOG_LEVEL "INFO" CACHE STRING "Global log level: INFO, WARNING, or ERROR.
 set_property(CACHE NR_LOG_LEVEL PROPERTY STRINGS INFO WARNING ERROR)
 set(NR_MAX_FRAME_IN_FLIGHT "3" CACHE STRING "Number of renderer frames in flight" FORCE)
 set(NR_STATISTICS_SAMPLE_FRAME_COUNT "240" CACHE STRING "Frame count used for averaged runtime statistics" FORCE)
+set(NR_ENABLE_BUNDLED_SLANGD ON CACHE BOOL "Build Slang language server (slangd) in bundled Slang package." FORCE)
 set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache/$<CONFIG>" CACHE STRING "Runtime shader cache directory" FORCE)
 set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory" FORCE)
 
@@ -135,6 +136,7 @@ function(nr_apply_target_settings target)
             -Wall
             -Wextra
             -Werror
+            -Wno-error=reserved-module-identifier
             $<$<CONFIG:Debug>:-Og>
             $<$<CONFIG:Debug>:-g3>
             $<$<CONFIG:Debug>:-fno-omit-frame-pointer>

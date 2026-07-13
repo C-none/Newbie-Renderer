@@ -193,10 +193,9 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 
     addPathContribution(path, material.emissive);
 
-    if (!reachedBounceLimit(path))
-    {
-        sampleDirectLighting(path, material, viewDirection);
-    }
+    // NEE is a single-segment shadow connection that does not consume a bounce, so it must run at
+    // every surface vertex including the terminal one. The bounce limit only gates BSDF continuation.
+    sampleDirectLighting(path, material, viewDirection);
 
     if (reachedBounceLimit(path))
     {

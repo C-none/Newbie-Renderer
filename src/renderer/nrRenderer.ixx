@@ -35,11 +35,6 @@ struct NodeConfig
     QueueDomain queue = QueueDomain::Graphics;
 };
 
-struct NodeDescription
-{
-    std::string name{};
-};
-
 class NodeUiWriter
 {
   public:
@@ -1444,8 +1439,6 @@ class NodeRuntime
   public:
     virtual ~NodeRuntime() = default;
 
-    [[nodiscard]] virtual NodeDescription describe() const = 0;
-
         // Stage 1 (initialize): create persistent node state.
         // Typical work: shader/pipeline creation and long-lived GPU allocations.
     virtual void initialize(NodeInitContext&);
@@ -1559,9 +1552,7 @@ class Renderer
     struct InstalledNode
     {
         std::shared_ptr<NodeRuntime> runtime{};
-        NodeDescription description{};
         NodeConfig config{};
-        std::string runtimeName{};
     };
 
     void buildInstalledGraph(

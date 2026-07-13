@@ -29,6 +29,145 @@ namespace nr::rhi
 	return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::string> validateRayTracingProgramAssemblyDesc(const RayTracingProgramAssemblyDesc &desc)
+{
+	if (desc.stages.empty())
+	{
+		return std::string{"RayTracingProgramAssemblyDesc requires at least one shader stage."};
+	}
+	if (desc.groups.empty())
+	{
+		return std::string{"RayTracingProgramAssemblyDesc requires at least one shader group."};
+	}
+
+	auto logicalEntryPointNames = std::set<std::string>{};
+	auto logicalEntryPointStages = std::map<std::string, SlangStage>{};
+	auto stageValidation = std::optional<std::string>{};
+	std::ranges::for_each(desc.stages, [&](const RayTracingPipelineStageSelection &stage) {
+		if (stageValidation.has_value())
+		{
+			return;
+		}
+		if (stage.entryPointName.empty() || stage.logicalEntryPointName.empty())
+		{
+			stageValidation = "RayTracingProgramAssemblyDesc stages require non-empty actual and logical entry-point names.";
+			return;
+		}
+		if (!logicalEntryPointNames.insert(stage.logicalEntryPointName).second)
+		{
+			stageValidation = std::format("RayTracingProgramAssemblyDesc has duplicate logical entry point '{}'.", stage.logicalEntryPointName);
+			return;
+		}
+		auto const *entryPointData = stage.program.get().entryPointData(stage.entryPointName);
+		if (entryPointData == nullptr)
+		{
+			stageValidation = std::format("RayTracingProgramAssemblyDesc has unknown actual entry point '{}'.", stage.entryPointName);
+			return;
+		}
+		if (!detail::isRayTracingStage(entryPointData->stage))
+		{
+			stageValidation = std::format("RayTracingProgramAssemblyDesc entry point '{}' is not a ray-tracing stage.", stage.entryPointName);
+			return;
+		}
+		logicalEntryPointStages.emplace(stage.logicalEntryPointName, entryPointData->stage);
+	});
+	if (stageValidation.has_value())
+	{
+		return stageValidation;
+	}
+
+	auto groupNames = std::set<std::string>{};
+	auto groupValidation = std::optional<std::string>{};
+	std::ranges::for_each(desc.groups, [&](const RayTracingShaderGroupDesc &group) {
+		if (groupValidation.has_value())
+		{
+			return;
+		}
+		if (group.name.empty())
+		{
+			groupValidation = "RayTracingProgramAssemblyDesc groups require non-empty names.";
+			return;
+		}
+		if (!groupNames.insert(group.name).second)
+		{
+			groupValidation = std::format("RayTracingProgramAssemblyDesc has duplicate group '{}'.", group.name);
+			return;
+		}
+
+		auto validateEntryPointStage = [&](
+			std::string_view entryPointName,
+			std::initializer_list<SlangStage> expectedStages,
+			std::string_view role) -> std::optional<std::string> {
+			if (entryPointName.empty())
+			{
+				return std::nullopt;
+			}
+			auto const found = logicalEntryPointStages.find(std::string{entryPointName});
+			if (found == logicalEntryPointStages.end())
+			{
+				return std::format(
+					"RayTracingProgramAssemblyDesc group '{}' references unknown logical entry point '{}'.",
+					group.name,
+					entryPointName);
+			}
+			if (std::ranges::none_of(expectedStages, [&](SlangStage stage) { return stage == found->second; }))
+			{
+				return std::format(
+					"RayTracingProgramAssemblyDesc group '{}' {} entry point '{}' has an incompatible shader stage.",
+					group.name,
+					role,
+					entryPointName);
+			}
+			return std::nullopt;
+		};
+
+		auto validateGroupShape = [&]() -> std::optional<std::string> {
+			switch (group.type)
+			{
+			case vk::RayTracingShaderGroupTypeKHR::eGeneral:
+				if (group.generalEntryPoint.empty() || !group.closestHitEntryPoint.empty() || !group.anyHitEntryPoint.empty() || !group.intersectionEntryPoint.empty())
+				{
+					return std::format("RayTracingProgramAssemblyDesc general group '{}' must contain only a general entry point.", group.name);
+				}
+				return validateEntryPointStage(group.generalEntryPoint, {SLANG_STAGE_RAY_GENERATION, SLANG_STAGE_MISS, SLANG_STAGE_CALLABLE}, "general");
+			case vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup:
+				if (!group.generalEntryPoint.empty() || !group.intersectionEntryPoint.empty() || (group.closestHitEntryPoint.empty() && group.anyHitEntryPoint.empty()))
+				{
+					return std::format("RayTracingProgramAssemblyDesc triangles hit group '{}' requires closest-hit and/or any-hit stages only.", group.name);
+				}
+				if (auto validation = validateEntryPointStage(group.closestHitEntryPoint, {SLANG_STAGE_CLOSEST_HIT}, "closest-hit"); validation.has_value())
+				{
+					return validation;
+				}
+				return validateEntryPointStage(group.anyHitEntryPoint, {SLANG_STAGE_ANY_HIT}, "any-hit");
+			case vk::RayTracingShaderGroupTypeKHR::eProceduralHitGroup:
+				if (!group.generalEntryPoint.empty() || group.intersectionEntryPoint.empty())
+				{
+					return std::format("RayTracingProgramAssemblyDesc procedural hit group '{}' requires an intersection stage and no general stage.", group.name);
+				}
+				if (auto validation = validateEntryPointStage(group.closestHitEntryPoint, {SLANG_STAGE_CLOSEST_HIT}, "closest-hit"); validation.has_value())
+				{
+					return validation;
+				}
+				if (auto validation = validateEntryPointStage(group.anyHitEntryPoint, {SLANG_STAGE_ANY_HIT}, "any-hit"); validation.has_value())
+				{
+					return validation;
+				}
+				return validateEntryPointStage(group.intersectionEntryPoint, {SLANG_STAGE_INTERSECTION}, "intersection");
+			default:
+				return std::format("RayTracingProgramAssemblyDesc group '{}' has an unsupported shader group type.", group.name);
+			}
+		};
+		groupValidation = validateGroupShape();
+	});
+	if (groupValidation.has_value())
+	{
+		return groupValidation;
+	}
+
+	return std::nullopt;
+}
+
 [[nodiscard]] CursorPipelineLayout CursorPipelineLayout::create(
 				const vk::raii::Device &device,
 				const ShaderDescriptorLayout &descriptorLayout,
@@ -820,11 +959,16 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 				const CursorPipelineLayout &layout,
 				const VkShaderProgram &shaderProgram,
 				const RayTracingPipelineDesc &desc,
+				std::span<const RayTracingShaderGroupDesc> groupDescs,
 				const vk::raii::PipelineCache *pipelineCache)
 {
 				nrAssert(layout.valid(), "RayTracingPipeline::create requires a valid pipeline layout.");
 				nrAssert(shaderProgram.valid(), "RayTracingPipeline::create requires a valid shader program.");
 				nrAssert(desc.maxRayRecursionDepth > 0u, "RayTracingPipeline::create requires maxRayRecursionDepth > 0.");
+				nrAssert(!groupDescs.empty(), "RayTracingPipeline::create requires at least one named shader group.");
+				nrAssert(
+					groupDescs.size() <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
+					"RayTracingPipeline::create shader group count exceeds uint32 ABI.");
 				auto descValidation = validateRayTracingPipelineDesc(desc);
 				nrAssert(!descValidation.has_value(), std::format("RayTracingPipeline::create invalid desc: {}", descValidation.value_or(std::string{})));
 
@@ -834,7 +978,7 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 					createFlags |= vk::PipelineCreateFlags{VK_PIPELINE_CREATE_LIBRARY_BIT_KHR};
 				}
 
-				auto hasCaptureReplayHandles = std::ranges::any_of(desc.groups, [](const RayTracingShaderGroupDesc &groupDesc) {
+				auto hasCaptureReplayHandles = std::ranges::any_of(groupDescs, [](const RayTracingShaderGroupDesc &groupDesc) {
 					return !groupDesc.captureReplayHandle.empty();
 				});
 				if (hasCaptureReplayHandles)
@@ -871,64 +1015,20 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 					return static_cast<std::uint32_t>(std::distance(std::ranges::begin(rtStageIndices), localIt));
 				};
 
-				if (desc.groups.empty())
-				{
-					groups.reserve(stageCreateInfos.size());
-					for (std::uint32_t localIndex = 0; localIndex < static_cast<std::uint32_t>(rtStageIndices.size()); ++localIndex)
+				groups.reserve(groupDescs.size());
+				std::ranges::for_each(groupDescs, [&](const RayTracingShaderGroupDesc &groupDesc) {
+					vk::RayTracingShaderGroupCreateInfoKHR group{};
+					group.type = groupDesc.type;
+					group.generalShader = findLocalStageIndex(groupDesc.generalEntryPoint, {SLANG_STAGE_RAY_GENERATION, SLANG_STAGE_MISS, SLANG_STAGE_CALLABLE});
+					group.closestHitShader = findLocalStageIndex(groupDesc.closestHitEntryPoint, {SLANG_STAGE_CLOSEST_HIT});
+					group.anyHitShader = findLocalStageIndex(groupDesc.anyHitEntryPoint, {SLANG_STAGE_ANY_HIT});
+					group.intersectionShader = findLocalStageIndex(groupDesc.intersectionEntryPoint, {SLANG_STAGE_INTERSECTION});
+					if (!groupDesc.captureReplayHandle.empty())
 					{
-						auto stage = shaderProgram.stages()[rtStageIndices[localIndex]];
-						vk::RayTracingShaderGroupCreateInfoKHR group{};
-						group.generalShader = shaderUnused;
-						group.closestHitShader = shaderUnused;
-						group.anyHitShader = shaderUnused;
-						group.intersectionShader = shaderUnused;
-
-						switch (stage)
-						{
-						case SLANG_STAGE_RAY_GENERATION:
-						case SLANG_STAGE_MISS:
-						case SLANG_STAGE_CALLABLE:
-							group.type = vk::RayTracingShaderGroupTypeKHR::eGeneral;
-							group.generalShader = localIndex;
-							break;
-						case SLANG_STAGE_CLOSEST_HIT:
-							group.type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup;
-							group.closestHitShader = localIndex;
-							break;
-						case SLANG_STAGE_ANY_HIT:
-							group.type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup;
-							group.anyHitShader = localIndex;
-							break;
-						case SLANG_STAGE_INTERSECTION:
-							group.type = vk::RayTracingShaderGroupTypeKHR::eProceduralHitGroup;
-							group.intersectionShader = localIndex;
-							break;
-						default:
-							nrAssert(false, "Unexpected non-ray-tracing stage found during RT pipeline assembly.");
-							break;
-						}
-
-						groups.push_back(group);
+						group.pShaderGroupCaptureReplayHandle = groupDesc.captureReplayHandle.data();
 					}
-				}
-				else
-				{
-					groups.reserve(desc.groups.size());
-					for (const auto &groupDesc : desc.groups)
-					{
-						vk::RayTracingShaderGroupCreateInfoKHR group{};
-						group.type = groupDesc.type;
-						group.generalShader = findLocalStageIndex(groupDesc.generalEntryPoint, {SLANG_STAGE_RAY_GENERATION, SLANG_STAGE_MISS, SLANG_STAGE_CALLABLE});
-						group.closestHitShader = findLocalStageIndex(groupDesc.closestHitEntryPoint, {SLANG_STAGE_CLOSEST_HIT});
-						group.anyHitShader = findLocalStageIndex(groupDesc.anyHitEntryPoint, {SLANG_STAGE_ANY_HIT});
-						group.intersectionShader = findLocalStageIndex(groupDesc.intersectionEntryPoint, {SLANG_STAGE_INTERSECTION});
-						if (!groupDesc.captureReplayHandle.empty())
-						{
-							group.pShaderGroupCaptureReplayHandle = groupDesc.captureReplayHandle.data();
-						}
-						groups.push_back(group);
-					}
-				}
+					groups.push_back(group);
+				});
 
 				auto dynamicStates = std::array{vk::DynamicState::eRayTracingPipelineStackSizeKHR};
 				vk::PipelineDynamicStateCreateInfo dynamicStateInfo{};
@@ -973,6 +1073,16 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 				pipeline.pipeline_ = vk::raii::Pipeline(device, deferredOperation, pipelineCacheOptional, createInfo);
 				pipeline.device_ = std::cref(device);
 				pipeline.shaderGroupCount_ = static_cast<std::uint32_t>(groups.size());
+				auto groupIndices = std::views::iota(std::size_t{0u}, groupDescs.size());
+				std::ranges::for_each(groupIndices, [&](std::size_t groupIndex) {
+					nrAssert(
+						groupIndex <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
+						"RayTracingPipeline::create group index exceeds uint32 ABI.");
+					auto const [_, inserted] = pipeline.shaderGroupIndices_.emplace(
+						groupDescs[groupIndex].name,
+						static_cast<std::uint32_t>(groupIndex));
+					nrAssert(inserted, "RayTracingPipeline::create requires unique shader group names.");
+				});
 				pipeline.dynamicPipelineStackSize_ = desc.dynamicPipelineStackSize;
 				return pipeline;
 		}
@@ -985,6 +1095,15 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 
 [[nodiscard]] std::uint32_t RayTracingPipeline::shaderGroupCount() const noexcept
 { return shaderGroupCount_; }
+
+[[nodiscard]] std::uint32_t RayTracingPipeline::shaderGroupIndex(std::string_view name) const
+{
+			auto const found = shaderGroupIndices_.find(std::string{name});
+			nrAssert(
+				found != shaderGroupIndices_.end(),
+				std::format("RayTracingPipeline::shaderGroupIndex unknown group '{}'.", name));
+			return found->second;
+}
 
 [[nodiscard]] bool RayTracingPipeline::dynamicPipelineStackSize() const noexcept
 { return dynamicPipelineStackSize_; }
@@ -1349,78 +1468,40 @@ void PipelineService::bindDevice(
 		return makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
 	}
 
-[[nodiscard]] PipelineState<RayTracingPipeline> PipelineService::createRayTracingPipeline(const SlangProgram &slangProgram, const RayTracingPipelineDesc &desc, std::uint32_t descriptorMaxSets, std::span<const SlangImmutableSamplerBinding> immutableSamplers) const
-{
-		nrAssert(device_.has_value(), "PipelineService::createRayTracingPipeline requires a bound logical device.");
-		nrAssert(slangProgram.valid(), "PipelineService::createRayTracingPipeline requires a valid SlangProgram.");
-
-		auto selectedEntryPoints = std::vector<RayTracingPipelineStageSelection>{};
-		if (!desc.entryPointNames.empty())
-		{
-			selectedEntryPoints.reserve(desc.entryPointNames.size());
-			std::ranges::for_each(desc.entryPointNames, [&](const std::string &entryPointName) {
-				auto const *entryPointData = slangProgram.entryPointData(entryPointName);
-				nrAssert(entryPointData != nullptr, std::format("PipelineService::createRayTracingPipeline unknown entrypoint '{}'.", entryPointName));
-				nrAssert(detail::isRayTracingStage(entryPointData->stage), std::format("PipelineService::createRayTracingPipeline entrypoint '{}' is not a ray-tracing stage.", entryPointName));
-				selectedEntryPoints.push_back(RayTracingPipelineStageSelection{
-					.program = std::cref(slangProgram),
-					.entryPointName = entryPointName,
-					.logicalEntryPointName = entryPointName,
-				});
-			});
-		}
-		else
-		{
-			selectedEntryPoints = slangProgram.entryPoints() |
-			                      std::views::filter([](const SlangEntryPointData &entryPoint) { return detail::isRayTracingStage(entryPoint.stage); }) |
-			                      std::views::transform([&](const SlangEntryPointData &entryPoint) {
-									  return RayTracingPipelineStageSelection{
-										  .program = std::cref(slangProgram),
-										  .entryPointName = entryPoint.entryPointName,
-										  .logicalEntryPointName = entryPoint.entryPointName,
-									  };
-								  }) |
-			                      std::ranges::to<std::vector>();
-		}
-		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createRayTracingPipeline requires at least one selected ray-tracing entrypoint.");
-
-		return createRayTracingPipeline(slangProgram, selectedEntryPoints, desc, descriptorMaxSets, immutableSamplers);
-	}
-
 [[nodiscard]] PipelineState<RayTracingPipeline> PipelineService::createRayTracingPipeline(
 	const SlangProgram &reflectionProgram,
-	std::span<const RayTracingPipelineStageSelection> selectedEntryPoints,
+	const RayTracingProgramAssemblyDesc &assembly,
 	const RayTracingPipelineDesc &desc,
 	std::uint32_t descriptorMaxSets,
 	std::span<const SlangImmutableSamplerBinding> immutableSamplers) const
 {
 		nrAssert(device_.has_value(), "PipelineService::createRayTracingPipeline requires a bound logical device.");
 		nrAssert(reflectionProgram.valid(), "PipelineService::createRayTracingPipeline requires a valid reflection SlangProgram.");
-		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createRayTracingPipeline requires at least one selected ray-tracing entrypoint.");
+		auto assemblyValidation = validateRayTracingProgramAssemblyDesc(assembly);
+		nrAssert(
+			!assemblyValidation.has_value(),
+			std::format(
+				"PipelineService::createRayTracingPipeline invalid program assembly: {}",
+				assemblyValidation.value_or(std::string{})));
 
 		const auto &device = device_->get();
 		auto layoutBundle = createPipelineLayoutBundle(reflectionProgram, desc.descriptorBindingPolicy, immutableSamplers);
 
-		auto effectiveDesc = desc;
-		auto hasCaptureReplayHandles = std::ranges::any_of(effectiveDesc.groups, [](const RayTracingShaderGroupDesc &groupDesc) {
+		auto hasCaptureReplayHandles = std::ranges::any_of(assembly.groups, [](const RayTracingShaderGroupDesc &groupDesc) {
 			return !groupDesc.captureReplayHandle.empty();
 		});
-		if (hasCaptureReplayHandles)
-		{
-			effectiveDesc.flags |= vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR;
-		}
 		if (rtCapabilities_.has_value())
 		{
 			nrAssert(
-				effectiveDesc.maxRayRecursionDepth <= rtCapabilities_->maxRayRecursionDepth,
+				desc.maxRayRecursionDepth <= rtCapabilities_->maxRayRecursionDepth,
 				std::format(
 					"PipelineService::createRayTracingPipeline recursion depth {} exceeds device max {}.",
-					effectiveDesc.maxRayRecursionDepth,
+					desc.maxRayRecursionDepth,
 					rtCapabilities_->maxRayRecursionDepth));
 
 			auto wantsCaptureReplay =
 				hasCaptureReplayHandles ||
-				((effectiveDesc.flags & vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR) != vk::PipelineCreateFlags{});
+				((desc.flags & vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR) != vk::PipelineCreateFlags{});
 			if (wantsCaptureReplay)
 			{
 				nrAssert(
@@ -1434,19 +1515,19 @@ void PipelineService::bindDevice(
 					rtCapabilities_->shaderGroupHandleCaptureReplaySize > 0,
 					"PipelineService::createRayTracingPipeline requires a non-zero shaderGroupHandleCaptureReplaySize.");
 
-				auto invalidHandleIt = std::ranges::find_if(effectiveDesc.groups, [&](const RayTracingShaderGroupDesc &groupDesc) {
+				auto invalidHandleIt = std::ranges::find_if(assembly.groups, [&](const RayTracingShaderGroupDesc &groupDesc) {
 					return !groupDesc.captureReplayHandle.empty() &&
 					       groupDesc.captureReplayHandle.size() != static_cast<std::size_t>(rtCapabilities_->shaderGroupHandleCaptureReplaySize);
 				});
 				nrAssert(
-					invalidHandleIt == std::ranges::end(effectiveDesc.groups),
+					invalidHandleIt == std::ranges::end(assembly.groups),
 					std::format(
 						"PipelineService::createRayTracingPipeline capture replay handles must be {} bytes.",
 						rtCapabilities_->shaderGroupHandleCaptureReplaySize));
 			}
 		}
 
-		std::ranges::for_each(selectedEntryPoints, [](const RayTracingPipelineStageSelection &selection) {
+		std::ranges::for_each(assembly.stages, [](const RayTracingPipelineStageSelection &selection) {
 			auto const *entryPointData = selection.program.get().entryPointData(selection.entryPointName);
 			nrAssert(entryPointData != nullptr, std::format("PipelineService::createRayTracingPipeline unknown entrypoint '{}'.", selection.entryPointName));
 			nrAssert(
@@ -1454,8 +1535,14 @@ void PipelineService::bindDevice(
 				std::format("PipelineService::createRayTracingPipeline entrypoint '{}' is not a ray-tracing stage.", selection.entryPointName));
 		});
 
-		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
-		auto pipeline = RayTracingPipeline::create(device, layoutBundle.layout, shaderProgram, effectiveDesc, pipelineCacheOrNull());
+		auto shaderProgram = VkShaderProgram::create(device, assembly.stages);
+		auto pipeline = RayTracingPipeline::create(
+			device,
+			layoutBundle.layout,
+			shaderProgram,
+			desc,
+			assembly.groups,
+			pipelineCacheOrNull());
 		return makePipelineState(reflectionProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
 	}
 } // namespace nr::rhi

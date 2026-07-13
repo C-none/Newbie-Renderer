@@ -30,7 +30,6 @@ class AccumulateNode final : public Node
 
     AccumulateNodeInput input{};
 
-    [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;
     void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;

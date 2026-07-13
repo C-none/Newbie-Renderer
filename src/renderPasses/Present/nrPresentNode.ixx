@@ -17,7 +17,6 @@ struct PresentScreenshotPendingSave
     vk::DeviceSize byteSize = 0;
     std::filesystem::path path{};
     std::uint32_t frameSlot = 0;
-    bool flipY = false;
 };
 } // namespace nr::renderPasses::detail
 
@@ -38,7 +37,6 @@ struct PresentReadbackTarget
 struct PresentNodeInput
 {
     vk::Format format = vk::Format::eR8G8B8A8Unorm;
-    bool flipY = false;
     float uiOpacity = 1.0f;
     std::optional<PresentReadbackTarget> readback{};
     PresentScreenshotConfig screenshot{};
@@ -52,7 +50,6 @@ class PresentNode final : public Node
 
     PresentNodeInput input{};
 
-    [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;

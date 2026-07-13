@@ -16,8 +16,9 @@
     "cwd": "${workspaceFolder}",
     "stopOnEntry": false
   },
-  "slang.searchInAllWorkspaceDirectories": false,
+  "slang.searchInAllWorkspaceDirectories": true,
   "slang.additionalSearchPaths": ["${workspaceFolder}/shader"],
+  "slang.slangdLocation": "${workspaceFolder}/build/llvm/_packages/slang/install/bin/slangd.exe",
   "files.watcherExclude": {
     "**/build/**": true
   },

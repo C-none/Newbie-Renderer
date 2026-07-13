@@ -23,22 +23,19 @@ namespace
         nr::renderer::NodeCreateInfo{
             .runtime = asBuild,
             .config = nr::renderer::NodeConfig{
-                .instanceName = "ASBuild",
-                .queue = nr::renderer::QueueDomain::Graphics,
+                .instanceName = "AccelerationStructureBuild",
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = lightPrepare,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "LightPrepare",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = rayTrace,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "PathTracing",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{

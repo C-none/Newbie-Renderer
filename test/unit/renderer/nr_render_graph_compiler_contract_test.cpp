@@ -90,7 +90,8 @@ template <typename VkHandle>
 [[nodiscard]] nr::renderer::RenderGraphFrameDescription buildAccelerationStructureFrame()
 {
     auto builder = nr::renderer::RenderGraphBuilder{};
-    auto node = builder.addNode("RayTracing", nr::renderer::QueueDomain::Compute);
+    auto buildNode = builder.addNode("AccelerationStructureBuild", nr::renderer::QueueDomain::Compute);
+    auto traceNode = builder.addNode("PathTracing", nr::renderer::QueueDomain::Graphics);
 
     auto tlas = builder.addResource(nr::renderer::GraphImportedAccelerationStructureDesc{
         .debugName = "Scene.TLAS",
@@ -99,12 +100,12 @@ template <typename VkHandle>
     });
 
     auto buildUses = std::array{nr::renderer::use::accelerationStructureBuildWrite(tlas)};
-    static_cast<void>(builder.addPass("RayTracing.BuildTlas", node, buildUses, [](const nr::renderer::PassRecordContext&) {}));
+    static_cast<void>(builder.addPass("AccelerationStructureBuild.Tlas", buildNode, buildUses, [](const nr::renderer::PassRecordContext&) {}));
 
-    static_cast<void>(builder.addSubmitNode("BuildToTrace"));
+    static_cast<void>(builder.addSubmitNode("rtobject.ComputeToGraphics"));
 
     auto traceUses = std::array{nr::renderer::use::accelerationStructureTraceRead(tlas)};
-    static_cast<void>(builder.addPass("RayTracing.Trace", node, traceUses, [](const nr::renderer::PassRecordContext&) {}));
+    static_cast<void>(builder.addPass("PathTracing.Trace", traceNode, traceUses, [](const nr::renderer::PassRecordContext&) {}));
 
     return builder.build();
 }
@@ -827,15 +828,22 @@ const nr::test::CaseRegistrar compilerAccelerationStructureCase{
         nr::test::require(compiled.resources.front().isAccelerationStructure, "TLAS should compile as an AS resource");
         nr::test::requireEqual(compiled.resources.front().resolvedAccelerationStructureSize, vk::DeviceSize{8192});
         nr::test::requireEqual(compiled.submitBatches.size(), std::size_t{2});
+        nr::test::requireEqual(compiled.submitBatches[0].queue, nr::renderer::QueueDomain::Compute);
+        nr::test::requireEqual(compiled.submitBatches[1].queue, nr::renderer::QueueDomain::Graphics);
+        nr::test::require(compiled.submitBatches[1].openedBySubmitNode.has_value(), "graphics RT batch should be opened by the explicit submit boundary");
+        nr::test::requireEqual(compiled.submitBatches[1].openedBySubmitNodeDebugName, std::string{"rtobject.ComputeToGraphics"});
 
         auto const& tracePass = compiled.submitBatches[1].passes.front();
         nr::test::requireEqual(tracePass.preBarriers.size(), std::size_t{1});
         auto const& barrier = tracePass.preBarriers.front();
-        nr::test::requireEqual(barrier.strength, nr::renderer::DependencyStrength::BarrierRequired);
+        nr::test::requireEqual(barrier.strength, nr::renderer::DependencyStrength::ReleaseAcquireRequired);
+        nr::test::requireEqual(barrier.srcQueue, nr::renderer::QueueDomain::Compute);
+        nr::test::requireEqual(barrier.dstQueue, nr::renderer::QueueDomain::Graphics);
         nr::test::require(barrier.srcScope.stages == vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR);
         nr::test::require(barrier.srcScope.access == vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
         nr::test::require(barrier.dstScope.stages == vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
         nr::test::require(barrier.dstScope.access == vk::AccessFlagBits2::eAccelerationStructureReadKHR);
+        nr::test::requireEqual(compiled.ownershipTransitions.size(), std::size_t{1});
         nr::test::require(
             compiled.debugView.find("type=AccelerationStructure") != std::string::npos,
             "debug view should identify AS resources");

@@ -24,7 +24,6 @@ struct PresentConvertPushConstants
     uint swizzleBgr;
     PresentOutputEncoding outputEncoding;
     PresentToneMappingMethod toneMapping;
-    uint flipY;
     float uiOpacity;
 };
 
@@ -224,10 +223,7 @@ void presentConvertMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     int2 pixelCoord = int2(dispatchThreadID.xy);
-    int sourceY = gPresentConvert.flipY != 0u
-                      ? int(gPresentConvert.height - 1u - dispatchThreadID.y)
-                      : pixelCoord.y;
-    float4 sourceColor = gSourceColor.Load(int3(pixelCoord.x, sourceY, 0));
+    float4 sourceColor = gSourceColor.Load(int3(pixelCoord.x, pixelCoord.y, 0));
 
     // Tone map the scene before compositing UI so the UI stays display-referred SDR reference white.
     float3 displayLinear = applyToneMapping(sourceColor.rgb, gPresentConvert.toneMapping, gPresentConvert.outputEncoding);

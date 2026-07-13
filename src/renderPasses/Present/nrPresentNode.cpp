@@ -18,7 +18,6 @@ struct PresentConvertPushConstants
     std::uint32_t swizzleBgr = 0u;
     std::uint32_t outputEncoding = 0u;
     std::uint32_t toneMapping = 0u;
-    std::uint32_t flipY = 0u;
     float uiOpacity = 1.0f;
 };
 
@@ -562,7 +561,6 @@ template <typename Pixel, typename LoadPixel>
     std::span<const std::byte> bytes,
     vk::Extent2D extent,
     vk::DeviceSize bytesPerPixel,
-    bool flipY,
     LoadPixel loadPixel)
 {
     auto const width = static_cast<std::size_t>(extent.width);
@@ -570,13 +568,11 @@ template <typename Pixel, typename LoadPixel>
 
     auto rows = std::views::iota(std::uint32_t{0}, extent.height);
     std::ranges::for_each(rows, [&](std::uint32_t y) {
-        auto const sourceY = flipY ? extent.height - 1u - y : y;
         auto columns = std::views::iota(std::uint32_t{0}, extent.width);
         std::ranges::for_each(columns, [&](std::uint32_t x) {
-            auto const destinationIndex = static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x);
-            auto const sourceIndex = static_cast<std::size_t>(sourceY) * width + static_cast<std::size_t>(x);
-            auto const sourceOffset = sourceIndex * static_cast<std::size_t>(bytesPerPixel);
-            pixels[destinationIndex] = loadPixel(bytes, sourceOffset);
+            auto const index = static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x);
+            auto const sourceOffset = index * static_cast<std::size_t>(bytesPerPixel);
+            pixels[index] = loadPixel(bytes, sourceOffset);
         });
     });
 
@@ -587,8 +583,7 @@ template <typename Pixel, typename LoadPixel>
     const std::filesystem::path& path,
     vk::Extent2D extent,
     vk::Format format,
-    std::span<const std::byte> bytes,
-    bool flipY)
+    std::span<const std::byte> bytes)
 {
     nr::nrAssert(extent.width > 0u && extent.height > 0u, "Present EXR screenshot requires a non-empty extent.");
     auto const expectedByteSize = presentReadbackByteSize(extent, format);
@@ -604,7 +599,6 @@ template <typename Pixel, typename LoadPixel>
             bytes,
             extent,
             presentReadbackBytesPerPixel(format),
-            flipY,
             [](std::span<const std::byte> payload, std::size_t offset) {
                 return loadHalfRgba16(payload, offset);
             });
@@ -616,7 +610,6 @@ template <typename Pixel, typename LoadPixel>
             bytes,
             extent,
             presentReadbackBytesPerPixel(format),
-            flipY,
             [](std::span<const std::byte> payload, std::size_t offset) {
                 return loadFloatRgba32(payload, offset);
             });
@@ -631,7 +624,6 @@ template <typename Pixel, typename LoadPixel>
             bytes,
             extent,
             presentReadbackBytesPerPixel(format),
-            flipY,
             [format](std::span<const std::byte> payload, std::size_t offset) {
                 return loadUnorm8Rgba(payload, offset, format);
             });
@@ -650,13 +642,6 @@ namespace nr::renderPasses
 {
 PresentNode::~PresentNode() = default;
 
-NodeDescription PresentNode::describe() const
-{
-    return NodeDescription{
-        .name = "Present",
-    };
-}
-
 void PresentNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
@@ -664,7 +649,7 @@ void PresentNode::initialize(NodeInitContext& context)
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),
-        describe().name + ".Pipeline");
+        context.runtimeName + ".Pipeline");
 }
 
 void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
@@ -721,7 +706,6 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
         .swizzleBgr = formatConversion->swizzleBgr ? 1u : 0u,
         .outputEncoding = formatConversion->outputEncoding,
         .toneMapping = detail::resolveToneMappingMethod(toneMappingSelection_, swapchainColorSpace),
-        .flipY = input.flipY ? 1u : 0u,
         .uiOpacity = hasUiBuffer ? std::clamp(input.uiOpacity, 0.0f, 1.0f) : 0.0f,
     };
 
@@ -771,7 +755,6 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
                 .byteSize = screenshotByteSize,
                 .path = detail::makeScreenshotPath(input.screenshot, screenshotSequence_),
                 .frameSlot = frameParameters.frameIndex,
-                .flipY = input.flipY,
             };
             screenshotStatus_ = std::format("Saving {}", screenshotPendingSave_->path.generic_string());
         }
@@ -952,8 +935,7 @@ void PresentNode::savePendingScreenshot()
         pending.path,
         pending.extent,
         pending.format,
-        bytes,
-        pending.flipY);
+        bytes);
     if (!writeResult)
     {
         screenshotStatus_ = "Screenshot failed";

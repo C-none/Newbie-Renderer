@@ -46,12 +46,13 @@ struct ComputePipelineDesc
 
 struct RayTracingShaderGroupDesc
 {
+		std::string name{};
 		vk::RayTracingShaderGroupTypeKHR type = vk::RayTracingShaderGroupTypeKHR::eGeneral;
-		std::string generalEntryPoint;
-		std::string closestHitEntryPoint;
-		std::string anyHitEntryPoint;
-		std::string intersectionEntryPoint;
-		std::vector<std::uint8_t> captureReplayHandle;
+		std::string generalEntryPoint{};
+		std::string closestHitEntryPoint{};
+		std::string anyHitEntryPoint{};
+		std::string intersectionEntryPoint{};
+		std::vector<std::uint8_t> captureReplayHandle{};
 };
 
 struct RayTracingPipelineLibraryInterfaceDesc
@@ -62,9 +63,7 @@ struct RayTracingPipelineLibraryInterfaceDesc
 
 struct RayTracingPipelineDesc
 {
-		std::vector<std::string> entryPointNames;
 		std::uint32_t maxRayRecursionDepth = 1;
-		std::vector<RayTracingShaderGroupDesc> groups;
 		DescriptorBindingPolicy descriptorBindingPolicy{};
 		vk::PipelineCreateFlags flags = {};
 		bool createAsLibrary = false;
@@ -81,6 +80,12 @@ struct RayTracingPipelineStageSelection
 		std::string logicalEntryPointName;
 };
 
+struct RayTracingProgramAssemblyDesc
+{
+		std::vector<RayTracingPipelineStageSelection> stages;
+		std::vector<RayTracingShaderGroupDesc> groups;
+};
+
 struct PipelineCacheConfig
 {
 		bool enabled = true;
@@ -95,6 +100,8 @@ struct PipelineCacheConfig
 };
 
 [[nodiscard]] std::optional<std::string> validateRayTracingPipelineDesc(const RayTracingPipelineDesc &desc);
+
+[[nodiscard]] std::optional<std::string> validateRayTracingProgramAssemblyDesc(const RayTracingProgramAssemblyDesc &desc);
 
 namespace detail
 {
@@ -273,11 +280,13 @@ class RayTracingPipeline
 				const CursorPipelineLayout &layout,
 				const VkShaderProgram &shaderProgram,
 				const RayTracingPipelineDesc &desc = {},
+				std::span<const RayTracingShaderGroupDesc> groups = {},
 				const vk::raii::PipelineCache *pipelineCache = nullptr);
 
 		[[nodiscard]] bool valid() const noexcept;
 		[[nodiscard]] vk::Pipeline raw() const noexcept;
 		[[nodiscard]] std::uint32_t shaderGroupCount() const noexcept;
+		[[nodiscard]] std::uint32_t shaderGroupIndex(std::string_view name) const;
 		[[nodiscard]] bool dynamicPipelineStackSize() const noexcept;
 
 		[[nodiscard]] std::vector<std::uint8_t> shaderGroupHandles(std::uint32_t firstGroup, std::uint32_t groupCount, std::uint32_t handleSize) const;
@@ -289,6 +298,7 @@ class RayTracingPipeline
 	private:
 		std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 		std::uint32_t shaderGroupCount_ = 0;
+		std::map<std::string, std::uint32_t> shaderGroupIndices_{};
 		bool dynamicPipelineStackSize_ = false;
 		vk::raii::Pipeline pipeline_ = {nullptr};
 };
@@ -296,7 +306,7 @@ class RayTracingPipeline
 /**
  * @brief Set a VK_EXT_debug_utils name on a VkPipeline for profiler/debugger labeling.
  *
- * No-op when GPU debug names are disabled. Name source is typically a node's describe().name.
+ * No-op when GPU debug names are disabled. Name source is typically a node runtime name.
  */
 void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline, std::string_view name);
 
@@ -371,11 +381,9 @@ class PipelineService
 
 	[[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
 
-	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(const SlangProgram &slangProgram, const RayTracingPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
-
 	[[nodiscard]] PipelineState<RayTracingPipeline> createRayTracingPipeline(
 		const SlangProgram &reflectionProgram,
-		std::span<const RayTracingPipelineStageSelection> selectedEntryPoints,
+		const RayTracingProgramAssemblyDesc &assembly,
 		const RayTracingPipelineDesc &desc = {},
 		std::uint32_t descriptorMaxSets = 64,
 		std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;

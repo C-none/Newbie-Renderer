@@ -179,6 +179,7 @@ function(nr_ensure_bundled_slang_package)
         VCPKG_CHAINLOAD_TOOLCHAIN_FILE
         VCPKG_FEATURE_FLAGS
         VCPKG_INSTALL_OPTIONS
+        VCPKG_TARGET_ARCHITECTURE
         VCPKG_TARGET_TRIPLET
         VCPKG_OVERLAY_TRIPLETS
         VCPKG_INSTALLED_DIR
@@ -190,6 +191,10 @@ function(nr_ensure_bundled_slang_package)
 
     if(MSVC AND CMAKE_MSVC_RUNTIME_LIBRARY)
         nr_append_cmake_cache_arg(configure_args CMAKE_MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+    endif()
+
+    if(NOT DEFINED NR_ENABLE_BUNDLED_SLANGD)
+        set(NR_ENABLE_BUNDLED_SLANGD OFF)
     endif()
 
     set(slang_options
@@ -204,7 +209,7 @@ function(nr_ensure_bundled_slang_package)
         SLANG_ENABLE_SLANG_RHI=OFF
         SLANG_ENABLE_SLANGRT=OFF
         SLANG_ENABLE_SLANG_GLSLANG=OFF
-        SLANG_ENABLE_SLANGD=OFF
+        SLANG_ENABLE_SLANGD=${NR_ENABLE_BUNDLED_SLANGD}
         SLANG_ENABLE_SLANGI=OFF
         SLANG_ENABLE_SLANGC=OFF
         SLANG_ENABLE_REPLAYER=OFF

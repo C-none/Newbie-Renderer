@@ -243,13 +243,6 @@ namespace nr::renderPasses
 {
 LightPrepareNode::~LightPrepareNode() = default;
 
-NodeDescription LightPrepareNode::describe() const
-{
-    return NodeDescription{
-        .name = "LightPrepare",
-    };
-}
-
 void LightPrepareNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;

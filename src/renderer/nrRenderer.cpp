@@ -1533,26 +1533,19 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
         std::ranges::for_each(spec.nodes, [&](const NodeCreateInfo& createInfo) {
             nrAssert(static_cast<bool>(createInfo.runtime), "Renderer::installGraph requires a valid node runtime in NodeCreateInfo.");
 
-            auto description = createInfo.runtime->describe();
-            auto runtimeName = createInfo.config.instanceName.empty()
-                                   ? description.name
-                                   : createInfo.config.instanceName;
-
-            nrAssert(!runtimeName.empty(), "Renderer::installGraph requires each node to have a non-empty runtime name.");
-            auto [_, inserted] = knownNames.insert(runtimeName);
+            nrAssert(!createInfo.config.instanceName.empty(), "Renderer::installGraph requires each node to have a non-empty NodeConfig.instanceName.");
+            auto [_, inserted] = knownNames.insert(createInfo.config.instanceName);
             nrAssert(inserted, "Renderer::installGraph found duplicate node names in RendererGraphSpec.");
 
             auto initContext = NodeInitContext{
                 .device = std::ref(*device_),
-                .runtimeName = runtimeName,
+                .runtimeName = createInfo.config.instanceName,
             };
             createInfo.runtime->initialize(initContext);
 
             installed.push_back(InstalledNode{
                 .runtime = createInfo.runtime,
-                .description = std::move(description),
                 .config = createInfo.config,
-                .runtimeName = std::move(runtimeName),
             });
         });
 
@@ -2110,7 +2103,7 @@ void Renderer::buildInstalledGraph(
         nodeUiSections.reserve(installedNodes_.size());
         std::ranges::for_each(installedNodes_, [&](InstalledNode& installedNode) {
             auto uiContext = NodeUiBuildContext{
-                installedNode.runtimeName,
+                installedNode.config.instanceName,
                 nodeUiSections};
             installedNode.runtime->collectUi(uiContext, nodeFrameParameters);
         });
@@ -2125,7 +2118,7 @@ void Renderer::buildInstalledGraph(
             auto& installedNode = installedNodes_[nodeIndex];
 
             auto nodeHandle = builder_.addNode(
-                installedNode.runtimeName,
+                installedNode.config.instanceName,
                 installedNode.config.queue);
 
             auto buildContext = NodeBuildContext{
@@ -2133,7 +2126,7 @@ void Renderer::buildInstalledGraph(
                 .nodeHandle = nodeHandle,
                 .queue = installedNode.config.queue,
                 .frameIndex = frameParameters.frameIndex,
-                .runtimeName = installedNode.runtimeName,
+                .runtimeName = installedNode.config.instanceName,
                 .globalResources = std::cref(globalResources),
                 .frameResources = std::ref(frameResources),
                 .frameDataResources = std::ref(frameDataResources),
@@ -2144,7 +2137,7 @@ void Renderer::buildInstalledGraph(
             auto boundaries = submitNodesByAfterIndex_.equal_range(nodeIndex);
             std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto& entry) {
                 auto debugName = entry.second.debugName.empty()
-                                     ? std::format("Submit.After.{}", installedNode.runtimeName)
+                                     ? std::format("Submit.After.{}", installedNode.config.instanceName)
                                      : entry.second.debugName;
                 auto submitHandle = builder_.addSubmitNode(debugName);
                 nrAssert(submitHandle.valid(), "Renderer::buildInstalledGraph failed to add a valid submit node.");

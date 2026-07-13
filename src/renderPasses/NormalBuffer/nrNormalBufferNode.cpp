@@ -241,13 +241,6 @@ namespace nr::renderPasses
 {
 NormalBufferNode::~NormalBufferNode() = default;
 
-NodeDescription NormalBufferNode::describe() const
-{
-    return NodeDescription{
-        .name = "NormalBuffer",
-    };
-}
-
 void NormalBufferNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
@@ -260,7 +253,7 @@ void NormalBufferNode::initialize(NodeInitContext& context)
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),
-        describe().name + ".Pipeline");
+        context.runtimeName + ".Pipeline");
 
     auto const initialExtent = context.device.get().presentationContext.swapchainExtent();
     detail::ensureNormalBufferImages(context.device.get(), *runtime_, initialExtent, colorFormat, input.depthFormat);

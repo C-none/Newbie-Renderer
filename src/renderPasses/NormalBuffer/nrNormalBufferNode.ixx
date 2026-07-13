@@ -27,7 +27,6 @@ class NormalBufferNode final : public Node
 
     NormalBufferNodeInput input{};
 
-    [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void shutdown(NodeShutdownContext& context) override;

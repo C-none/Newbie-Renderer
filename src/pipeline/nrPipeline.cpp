@@ -101,29 +101,26 @@ struct ViewerControlState
         nr::renderer::NodeCreateInfo{
             .runtime = asBuild,
             .config = nr::renderer::NodeConfig{
-                .instanceName = "ASBuild",
-                .queue = nr::renderer::QueueDomain::Graphics,
+                .instanceName = "AccelerationStructureBuild",
+                .queue = nr::renderer::QueueDomain::Compute,
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = lightPrepare,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "LightPrepare",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = rayTrace,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "PathTracing",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = ui,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "Ui",
-                .queue = nr::renderer::QueueDomain::Graphics,
             },
         },
         nr::renderer::NodeCreateInfo{
@@ -142,6 +139,10 @@ struct ViewerControlState
         },
     };
     graphSpec.submitNodes = {
+        nr::renderer::SubmitNodeSpec{
+            .debugName = "rtobject.ComputeToGraphics",
+            .afterNodeIndex = 0u,
+        },
         nr::renderer::SubmitNodeSpec{
             .debugName = "rtobject.GraphicsToCompute",
             .afterNodeIndex = 3u,

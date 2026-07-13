@@ -5,7 +5,6 @@ import nr.renderer;
 export namespace nr::renderPasses
 {
 using NodeConfig = nr::renderer::NodeConfig;
-using NodeDescription = nr::renderer::NodeDescription;
 using NodeFrameParameters = nr::renderer::NodeFrameParameters;
 using NodeInitContext = nr::renderer::NodeInitContext;
 using NodeShutdownContext = nr::renderer::NodeShutdownContext;

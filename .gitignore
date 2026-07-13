@@ -3,3 +3,7 @@
 !.vscode/extensions.json
 build/
 .github/
+
+# Keep screenshots folder but ignore its content
+screenshots/*
+!screenshots/.gitkeep

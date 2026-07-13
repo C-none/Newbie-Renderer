@@ -1027,13 +1027,6 @@ namespace use = nr::renderer::use;
 
 AccelerationStructureBuildNode::~AccelerationStructureBuildNode() = default;
 
-[[nodiscard]] NodeDescription AccelerationStructureBuildNode::describe() const
-{
-    return NodeDescription{
-        .name = "AccelerationStructureBuild",
-    };
-}
-
 void AccelerationStructureBuildNode::initialize(NodeInitContext &context)
 {
     device_ = context.device;

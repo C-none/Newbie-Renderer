@@ -39,7 +39,6 @@ class PathTracingNode final : public Node
 
     PathTracingNodeInput input{};
 
-    [[nodiscard]] NodeDescription describe() const override;
     void initialize(NodeInitContext& context) override;
     void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;

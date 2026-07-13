@@ -43,13 +43,6 @@ namespace nr::renderPasses
 {
 EmbeddedTriangleNode::~EmbeddedTriangleNode() = default;
 
-NodeDescription EmbeddedTriangleNode::describe() const
-{
-    return NodeDescription{
-        .name = "EmbeddedTriangle",
-    };
-}
-
 void EmbeddedTriangleNode::initialize(NodeInitContext& context)
 {
     auto colorFormat = input.colorFormat;
@@ -61,7 +54,7 @@ void EmbeddedTriangleNode::initialize(NodeInitContext& context)
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),
-        describe().name + ".Pipeline");
+        context.runtimeName + ".Pipeline");
 }
 
 void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)

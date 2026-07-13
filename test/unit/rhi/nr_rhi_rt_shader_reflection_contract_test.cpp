@@ -193,6 +193,37 @@ const nr::test::CaseRegistrar rtPipelineStageSelectionCase{
         nr::test::require(selectedStages[1].program.get().entryPointData(selectedStages[1].entryPointName) != nullptr);
         nr::test::requireEqual(selectedStages[0].entryPointName, selectedStages[1].entryPointName);
         nr::test::require(selectedStages[0].logicalEntryPointName != selectedStages[1].logicalEntryPointName);
+
+        auto assembly = nr::rhi::RayTracingProgramAssemblyDesc{
+            .stages = selectedStages | std::ranges::to<std::vector>(),
+            .groups = {
+                nr::rhi::RayTracingShaderGroupDesc{
+                    .name = "opaque",
+                    .type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup,
+                    .closestHitEntryPoint = "ch_opaque",
+                },
+                nr::rhi::RayTracingShaderGroupDesc{
+                    .name = "alphaMask",
+                    .type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup,
+                    .closestHitEntryPoint = "ch_alphaMask",
+                },
+            },
+        };
+        nr::test::require(
+            !nr::rhi::validateRayTracingProgramAssemblyDesc(assembly).has_value(),
+            "named RT program assembly should accept distinct logical CHS stages");
+
+        auto duplicateGroupAssembly = assembly;
+        duplicateGroupAssembly.groups[1].name = duplicateGroupAssembly.groups[0].name;
+        nr::test::require(
+            nr::rhi::validateRayTracingProgramAssemblyDesc(duplicateGroupAssembly).has_value(),
+            "RT program assembly should reject duplicate group names");
+
+        auto unknownEntryAssembly = assembly;
+        unknownEntryAssembly.groups[0].closestHitEntryPoint = "ch_missing";
+        nr::test::require(
+            nr::rhi::validateRayTracingProgramAssemblyDesc(unknownEntryAssembly).has_value(),
+            "RT program assembly should reject unknown logical entry points");
     }};
 
 const nr::test::CaseRegistrar rtShaderReflectionCase{

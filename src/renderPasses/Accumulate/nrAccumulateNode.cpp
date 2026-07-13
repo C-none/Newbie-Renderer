@@ -129,13 +129,6 @@ namespace nr::renderPasses
 {
 AccumulateNode::~AccumulateNode() = default;
 
-NodeDescription AccumulateNode::describe() const
-{
-    return NodeDescription{
-        .name = "Accumulate",
-    };
-}
-
 void AccumulateNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
@@ -147,7 +140,7 @@ void AccumulateNode::initialize(NodeInitContext& context)
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),
-        describe().name + ".Pipeline");
+        context.runtimeName + ".Pipeline");
 }
 
 void AccumulateNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters&)

@@ -24,7 +24,6 @@ class LightPrepareNode final : public Node
 
     ~LightPrepareNode() override;
 
-    [[nodiscard]] NodeDescription describe() const override;
 
     void initialize(NodeInitContext& context) override;
 

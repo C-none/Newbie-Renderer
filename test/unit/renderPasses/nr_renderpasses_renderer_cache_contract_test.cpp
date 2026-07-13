@@ -216,6 +216,10 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             rendererImplementation,
             "collectVariantUiSections",
             "Renderer should not append registry-generated variant UI sections");
+        requirePresent(
+            rendererImplementation,
+            "non-empty NodeConfig.instanceName",
+            "Renderer graph installation should require NodeConfig as the node-name source");
         requireAbsent(
             pathTracing,
             "RendererCacheSuite",
@@ -353,10 +357,6 @@ const nr::test::CaseRegistrar presentLinearExrScreenshotCase{
             "vk::Format format = vk::Format::eUndefined",
             "Pending screenshot save should carry the source format across the frame fence");
         requirePresent(
-            presentInterface,
-            "bool flipY = false",
-            "Pending screenshot save should carry flip state for EXR row order");
-        requirePresent(
             present,
             "writeLinearScreenshotExr",
             "Present should save the readback payload through the EXR writer");
@@ -441,6 +441,45 @@ const nr::test::CaseRegistrar renderPassNodeUiStagingCase{
         nr::test::require(
             !pathTracing.input.variant.enableRussianRoulette,
             "PathTracing node should apply the staged Russian roulette toggle internally");
+    }};
+
+const nr::test::CaseRegistrar pathTracingNodeAssemblyCase{
+    "path tracing node resolves typed inputs and uses named RT assembly groups",
+    [] {
+        auto pathTracingNode = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
+        auto rhiPipelineHeader = readProjectFile("src/rhi/nrPipeline.ixx");
+        auto rhiPipelineSource = readProjectFile("src/rhi/nrPipeline.cpp");
+
+        requirePresent(pathTracingNode, "PathTracingFrameInputs", "PathTracing should resolve its scene inputs through one typed bundle");
+        requirePresent(pathTracingNode, "clearUnavailableOutput", "PathTracing unavailable inputs should use one fallback clear helper");
+        requirePresent(pathTracingNode, "PathTracing.ClearUnavailable.", "PathTracing fallback clears should preserve their reason in the debug name");
+        requirePresent(pathTracingNode, "makePathTracingProgramAssembly", "PathTracing should assemble RT stages and shader groups from one description");
+        requirePresent(pathTracingNode, "shaderGroupIndex", "PathTracing SBT records should resolve named RT shader groups");
+        requireAbsent(pathTracingNode, "2u + record.permutationIndex", "PathTracing SBT records must not depend on hard-coded RT shader group indices");
+        requirePresent(rhiPipelineHeader, "struct RayTracingPipelineStageSelection", "RHI should expose explicit RT stage selection records");
+        requirePresent(rhiPipelineHeader, "struct RayTracingProgramAssemblyDesc", "RHI should expose one RT program assembly description");
+        requirePresent(rhiPipelineHeader, "shaderGroupIndex", "RHI RT pipelines should expose named shader group lookup");
+        requirePresent(rhiPipelineHeader, "logicalEntryPointName", "RHI RT stage selections should carry logical names for shader group lookup");
+        requirePresent(rhiPipelineSource, "result.entryPointNames_.push_back(std::move(logicalEntryPointName));", "RHI RT shader program should store logical names for group lookup");
+        requirePresent(rhiPipelineSource, "stageInfo.pName = result.shaderEntryPointNames_.back().c_str();", "RHI Vulkan shader stages should still use actual entry point names");
+    }};
+
+const nr::test::CaseRegistrar rendererSubmissionTimelineCase{
+    "renderer submission batches share one monotonic timeline with all-command graphics waits",
+    [] {
+        auto executor = readProjectFile("src/renderer/nrRenderGraphExecutor.cpp");
+        auto timeline = readProjectFile("src/renderer/nrRendererSubmission.ixx");
+        auto waitStageBegin = executor.find("RenderGraphExecutor::submissionWaitStage");
+        auto waitStageEnd = executor.find("RenderGraphExecutor::shaderWaitStageForQueue", waitStageBegin);
+        nr::test::require(waitStageBegin != std::string::npos && waitStageEnd != std::string::npos, "executor should define a bounded submission wait-stage helper");
+        auto waitStageFunction = executor.substr(waitStageBegin, waitStageEnd - waitStageBegin);
+
+        requirePresent(waitStageFunction, "queue == QueueDomain::Graphics", "executor should select the graphics submission wait scope explicitly");
+        requirePresent(waitStageFunction, "vk::PipelineStageFlagBits2::eAllCommands", "graphics submission waits should cover batch-head acquire and RT shader work");
+        requireAbsent(waitStageFunction, "vk::PipelineStageFlagBits2::eColorAttachmentOutput", "graphics submission waits must not be limited to color attachment output");
+        requirePresent(executor, "timeline->get().semaphore()", "adjacent RDG batches should wait and signal through the renderer submission timeline semaphore");
+        requirePresent(executor, "timeline->get().acquireSignalToken()", "each inter-batch signal should acquire the next monotonic timeline value");
+        requirePresent(timeline, "++nextSignalValue_", "renderer submission timeline values should remain strictly increasing across frames");
     }};
 
 const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
@@ -578,11 +617,6 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(pathTracingNode, ".linkVariants = {chsVariantDesc}", "PathTracing node should compile BSDF-key CHS link variants");
         requirePresent(pathTracingNode, "permutation.key.bsdf", "PathTracing node should derive CHS variants from BSDF keys, not full hit-group keys");
         requirePresent(pathTracingNode, "hitSbtPlan.permutations.front().key.bsdf", "PathTracing node should seed reflection with an active BSDF key");
-        requirePresent(rhiPipelineHeader, "struct RayTracingPipelineStageSelection", "RHI should expose explicit RT stage selection records");
-        requirePresent(rhiPipelineHeader, "logicalEntryPointName", "RHI RT stage selections should carry logical names for shader group lookup");
-        requirePresent(rhiPipelineSource, "result.entryPointNames_.push_back(std::move(logicalEntryPointName));", "RHI RT shader program should store logical names for group lookup");
-        requirePresent(rhiPipelineSource, "stageInfo.pName = result.shaderEntryPointNames_.back().c_str();", "RHI Vulkan shader stages should still use actual entry point names");
-
         requirePresent(materialPayload, "ResolvedMaterialPayload", "Common material payload helper should define resolved hit material data");
         requirePresent(materialPayload, "public interface IBsdfLobe", "Common material payload helper should define the BSDF lobe interface");
         requirePresent(materialPayload, "public uint delta", "Common material scatter should carry an explicit delta-lobe flag");

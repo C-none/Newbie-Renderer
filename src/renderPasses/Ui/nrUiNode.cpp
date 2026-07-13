@@ -1098,13 +1098,6 @@ using namespace detail;
 
 UiNode::~UiNode() = default;
 
-[[nodiscard]] NodeDescription UiNode::describe() const
-{
-        return NodeDescription{
-            .name = "Ui",
-        };
-    }
-
 void UiNode::initialize(NodeInitContext& context)
 {
         device_ = context.device;
@@ -1117,7 +1110,7 @@ void UiNode::initialize(NodeInitContext& context)
         nr::rhi::setPipelineDebugName(
             context.device.get().device,
             runtime_->pipeline->pipeline().raw(),
-            describe().name + ".Pipeline");
+            context.runtimeName + ".Pipeline");
     }
 
 void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
