@@ -10,6 +10,7 @@ import :nodeType;
 namespace nr::renderPasses::detail
 {
 struct DlssRayReconstructionRuntime;
+struct DlssRayReconstructionResolutionControllerImpl;
 }
 
 export namespace nr::renderPasses::detail
@@ -59,6 +60,46 @@ struct DlssRayReconstructionNodeInput
     std::string outputAlphaKey{std::string{kDlssRayReconstructionOutputAlphaKey}};
 };
 
+struct DlssRayReconstructionResolutionRequest
+{
+    bool enabled = false;
+    nr::rhi::DlssQuality quality = nr::rhi::DlssQuality::Quality;
+    bool bypass = false;
+
+    [[nodiscard]] friend bool operator==(const DlssRayReconstructionResolutionRequest&, const DlssRayReconstructionResolutionRequest&) noexcept = default;
+};
+
+struct DlssRayReconstructionResolutionSnapshot
+{
+    DlssRayReconstructionResolutionRequest request{};
+    nr::renderer::FrameResolutionPlan plan{};
+    std::optional<nr::rhi::DlssOptimalSettings> optimalSettings{};
+};
+
+class DlssRayReconstructionResolutionController final
+{
+  public:
+    using OptimalSettingsQuery = std::function<nr::rhi::DlssOptimalSettings(nr::rhi::DlssDimensions, nr::rhi::DlssQuality)>;
+
+    DlssRayReconstructionResolutionController();
+    ~DlssRayReconstructionResolutionController();
+
+    DlssRayReconstructionResolutionController(const DlssRayReconstructionResolutionController&) = delete;
+    DlssRayReconstructionResolutionController& operator=(const DlssRayReconstructionResolutionController&) = delete;
+    DlssRayReconstructionResolutionController(DlssRayReconstructionResolutionController&&) noexcept;
+    DlssRayReconstructionResolutionController& operator=(DlssRayReconstructionResolutionController&&) noexcept;
+
+    [[nodiscard]] nr::renderer::FrameResolutionPlan resolve(
+        DlssRayReconstructionResolutionRequest request,
+        vk::Extent2D displayExtent,
+        const OptimalSettingsQuery& optimalSettingsQuery);
+
+    [[nodiscard]] std::optional<DlssRayReconstructionResolutionSnapshot> snapshot() const;
+
+  private:
+    std::unique_ptr<detail::DlssRayReconstructionResolutionControllerImpl> impl_{};
+};
+
 [[nodiscard]] DlssRayReconstructionNodeInput makeDefaultDlssRayReconstructionNodeInput();
 
 [[nodiscard]] bool dlssRayReconstructionResourceRequired(
@@ -74,6 +115,9 @@ class DlssRayReconstructionNode final : public Node
 
     DlssRayReconstructionNodeInput input{};
 
+    void setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController>& controller) noexcept;
+    [[nodiscard]] DlssRayReconstructionResolutionRequest effectiveResolutionRequest() const noexcept;
+
     void initialize(NodeInitContext& context) override;
     void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
@@ -83,6 +127,7 @@ class DlssRayReconstructionNode final : public Node
     void stageUiDraft();
 
     std::shared_ptr<detail::DlssRayReconstructionRuntime> runtime_{};
+    std::weak_ptr<DlssRayReconstructionResolutionController> resolutionController_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
     DlssRayReconstructionNodeInput uiDraft_{};
     std::optional<DlssRayReconstructionNodeInput> pendingInput_{};

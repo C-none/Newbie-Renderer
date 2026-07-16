@@ -55,21 +55,23 @@ const nr::test::CaseRegistrar projectionJitterCase{
     }};
 
 const nr::test::CaseRegistrar frameStateCase{
-    "renderer camera reset stays false and Halton phase follows frame ordinal",
+    "renderer camera jitter uses render extent and propagates resolution reset",
     [] {
-        auto const extent = vk::Extent2D{1600u, 900u};
+        auto const renderExtent = vk::Extent2D{800u, 450u};
         auto const jitterConfig = nr::renderer::RendererCameraJitterConfig{
             .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
         };
-        auto const frame41 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 41u, extent);
-        auto const frame42 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 42u, extent);
+        auto const frame41 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 41u, renderExtent);
+        auto const frame42 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 42u, renderExtent, true);
 
         nr::test::require(frame41.jitterEnabled);
         nr::test::require(!frame41.reset);
-        nr::test::require(!frame42.reset);
+        nr::test::require(frame42.reset);
         nr::test::requireEqual(frame41.jitter.sampleIndex, 42u);
         nr::test::requireEqual(frame42.jitter.sampleIndex, 43u);
-        nr::test::requireEqual(frame42.viewportExtent, extent);
+        nr::test::requireEqual(frame42.viewportExtent, renderExtent);
+        nr::test::require(nearlyEqual(frame42.jitter.ndcOffset.x, 2.0f * frame42.jitter.pixelOffset.x / static_cast<float>(renderExtent.width)));
+        nr::test::require(nearlyEqual(frame42.jitter.ndcOffset.y, -2.0f * frame42.jitter.pixelOffset.y / static_cast<float>(renderExtent.height)));
 
         auto const disabled = nr::renderer::makeRendererCameraFrameState(
             nr::renderer::RendererCameraJitterConfig{},

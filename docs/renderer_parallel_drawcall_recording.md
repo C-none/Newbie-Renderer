@@ -45,7 +45,10 @@ authority.
 During `executePrepared(...)`, the executor launches record tasks for the current submit
 batch immediately before that batch's ordered primary assembly. This keeps worker recording
 parallel within a batch while allowing pre-acquire batches to be submitted before the CPU
-reaches a potentially blocking swapchain-acquire boundary.
+reaches a potentially blocking swapchain-acquire boundary. Graphs with a non-empty frame
+resolution resolver are the explicit exception: renderer pre-acquires before graph build so
+resolution-dependent work sees the post-acquire display extent, and the executor later reuses
+that image at the same compiled binding/submission boundary.
 
 For a serial pass, the existing path remains: one worker records one secondary and the
 primary executes that one command buffer for the pass.

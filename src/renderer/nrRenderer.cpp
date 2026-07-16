@@ -268,11 +268,13 @@ void collectTlasSceneTextureHandles(
 [[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(
     const RendererCameraJitterConfig& jitterConfig,
     std::uint64_t frameOrdinal,
-    vk::Extent2D viewportExtent) noexcept
+    vk::Extent2D viewportExtent,
+    bool reset) noexcept
 {
     auto const extent = sanitizeViewportExtent(viewportExtent);
     auto state = RendererCameraFrameState{
         .jitterEnabled = jitterConfig.enabled(),
+        .reset = reset,
         .viewportExtent = extent,
     };
     if (!state.jitterEnabled)
@@ -1524,6 +1526,7 @@ void Renderer::installGraph(const RendererGraphSpec& spec)
         installedNodes_ = std::move(installed);
         submitNodesByAfterIndex_ = std::move(submitNodesByAfterIndex);
         cameraJitter_ = spec.cameraJitter;
+        frameResolutionResolver_ = spec.frameResolutionResolver;
         previousGlobalFrameConstants_.reset();
         graphInstalled_ = true;
     }
@@ -1609,6 +1612,33 @@ void Renderer::resetSceneBinding() noexcept
         auto const totalStart = std::chrono::steady_clock::now();
         auto const beginFrameStart = std::chrono::steady_clock::now();
         auto begin = device_->beginFrame();
+        auto const hasFrameResolutionResolver =
+            frameResolutionResolver_.has_value() && static_cast<bool>(*frameResolutionResolver_);
+        auto preAcquiredFrameImage = std::optional<nr::rhi::Device::FrameAcquireResult>{};
+        if (hasFrameResolutionResolver)
+        {
+            preAcquiredFrameImage = device_->acquireFrameImage(input.acquireTimeout);
+        }
+        auto const currentDisplayExtent = device_->presentationContext.swapchainExtent();
+        nrAssert(
+            currentDisplayExtent.width > 0u && currentDisplayExtent.height > 0u,
+            "Renderer::renderFrame requires a non-zero display extent after beginFrame().");
+        auto const displayExtent = sanitizeViewportExtent(currentDisplayExtent);
+        auto resolutionPlan = FrameResolutionPlan{
+            .displayExtent = displayExtent,
+            .renderExtent = displayExtent,
+        };
+        if (hasFrameResolutionResolver)
+        {
+            resolutionPlan = (*frameResolutionResolver_)(*device_, displayExtent);
+        }
+        nrAssert(
+            resolutionPlan.displayExtent.width > 0u && resolutionPlan.displayExtent.height > 0u &&
+                resolutionPlan.renderExtent.width > 0u && resolutionPlan.renderExtent.height > 0u,
+            "Renderer::renderFrame resolution resolver returned a zero display or render extent.");
+        nrAssert(
+            resolutionPlan.displayExtent == displayExtent,
+            "Renderer::renderFrame resolution resolver display extent does not match the current presentation extent.");
         auto const sampleFrameOrdinal = sampleFrameOrdinal_;
         if (sampleFrameOrdinal_ < std::numeric_limits<std::uint64_t>::max())
         {
@@ -1646,8 +1676,7 @@ void Renderer::resetSceneBinding() noexcept
             auto extractInput = input.sceneExtractInput.value_or(nr::scene::SceneExtractInput{});
             if (!extractInput.viewportExtent.has_value())
             {
-                auto extent = device_->presentationContext.swapchainExtent();
-                extractInput.viewportExtent = glm::uvec2{extent.width, extent.height};
+                extractInput.viewportExtent = glm::uvec2{displayExtent.width, displayExtent.height};
             }
 
             if (sceneCameraOverride.has_value())
@@ -1806,7 +1835,8 @@ void Renderer::resetSceneBinding() noexcept
 
         auto frameParameters = NodeFrameParameters{};
         frameParameters.frameIndex = begin.frameIndex;
-        frameParameters.swapchainExtent = device_->presentationContext.swapchainExtent();
+        frameParameters.swapchainExtent = displayExtent;
+        frameParameters.resolutionPlan = resolutionPlan;
         frameParameters.swapchainFormat = device_->presentationContext.swapchainFormat();
         frameParameters.swapchainColorSpace = device_->presentationContext.swapchainColorSpace();
         if (input.frameServices.has_value())
@@ -1862,7 +1892,8 @@ void Renderer::resetSceneBinding() noexcept
         auto const cameraFrameState = makeRendererCameraFrameState(
             cameraJitter_,
             sampleFrameOrdinal,
-            frameParameters.swapchainExtent);
+            frameParameters.resolutionPlan.renderExtent,
+            frameParameters.resolutionPlan.resetHistory);
         auto renderingFrameConstants = globalFrameConstants;
         if (cameraFrameState.jitterEnabled)
         {
@@ -1894,6 +1925,7 @@ void Renderer::resetSceneBinding() noexcept
             .device = *device_,
             .frameIndex = begin.frameIndex,
             .acquireTimeout = input.acquireTimeout,
+            .preAcquiredFrameImage = preAcquiredFrameImage,
             .submissionTimelines = submissionTimelines_.valid()
                                      ? std::optional<std::reference_wrapper<RendererSubmissionTimelines>>(std::ref(submissionTimelines_))
                                      : std::nullopt,
@@ -2078,6 +2110,7 @@ void Renderer::teardownInstalledGraph()
 
         installedNodes_.clear();
         submitNodesByAfterIndex_.clear();
+        frameResolutionResolver_.reset();
         graphInstalled_ = false;
     }
 

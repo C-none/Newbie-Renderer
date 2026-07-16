@@ -51,6 +51,7 @@ const nr::test::CaseRegistrar registryCase{
         nr::test::requireEqual(normalGraph.nodes[2].config.queue, nr::renderer::QueueDomain::Compute);
         nr::test::requireEqual(normalGraph.submitNodes.size(), std::size_t{1u});
         nr::test::requireEqual(normalGraph.submitNodes[0].afterNodeIndex, std::size_t{1u});
+        nr::test::require(!normalGraph.frameResolutionResolver.has_value());
 
         auto rtObject = registry.find(nr::pipeline::rtObjectPipelineId);
         nr::test::require(rtObject.has_value());
@@ -73,6 +74,13 @@ const nr::test::CaseRegistrar registryCase{
         nr::test::requireEqual(rtGraph.submitNodes[0].debugName, std::string{"rtobject.GraphicsToCompute"});
         nr::test::requireEqual(rtGraph.cameraJitter.sequence, nr::renderer::RendererCameraJitterSequence::Halton23);
         nr::test::requireEqual(rtGraph.cameraJitter.cycleLength, nr::renderer::kRendererDefaultCameraJitterCycleLength);
+        nr::test::require(rtGraph.frameResolutionResolver.has_value());
+
+        auto accumulateContext = graphContext();
+        accumulateContext.rtPostProcessingMode = nr::pipeline::RtPostProcessingMode::accumulate;
+        auto accumulateGraph = rtObject->get().buildGraph(accumulateContext);
+        nr::test::requireEqual(accumulateGraph.nodes[4].config.instanceName, std::string{"Accumulate"});
+        nr::test::require(!accumulateGraph.frameResolutionResolver.has_value());
     }};
 
 const nr::test::CaseRegistrar historyCase{

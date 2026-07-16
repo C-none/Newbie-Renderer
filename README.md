@@ -11,7 +11,13 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 
 - **Shader Reflection:** Slang reflection is already used to inspect shader parameters, validate resource layouts, build descriptor bindings, and keep host/shader contracts synchronized with less manual bookkeeping.
 
-- **Neural Materials(todo):** A long-term goal is to build a neural material system on top of Slang, so learned BRDF/BSDF evaluation, latent material storage, and neural texture representations can live inside the normal shader and resource pipeline instead of as an isolated prototype.
+- **Scene-Driven Ray Tracing:** Scene data drives cached BLAS rebuilds, per-frame TLAS construction, and the RT metadata and SBT plan consumed by ray-tracing passes.
+
+- **Path Tracing + DLSS Ray Reconstruction:** Path tracing produces a fixed 1spp seven-resource RR input set. DLSS quality selects render resolution; DLAA renders at display resolution and is the only mode that permits output bypass.
+
+- **Multi-Queue Render Graph:** RDG schedules graphics, compute, and transfer batches with timeline semaphores, queue-ownership transitions, and an explicit swapchain-acquire boundary.
+
+- **UI and HDR Presentation:** ImGui tooling integrates with SDR, HDR10, and scRGB presentation conversion, selectable tone mapping, screenshots, and readback.
 
 ## Todo List
 
@@ -19,18 +25,19 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 2. [x] Slang compilation and reflection pipeline for reusable shader/module workflows.
 3. [x] flecs integration as the scene-layer ECS runtime.
 4. [x] Asset import and decode foundation for glTF-oriented content ingestion.
-5. [x] Asynchronous GPU physical queue submission and synchronization framework with timeline semaphores and CPU/GPU sync primitives.
-6. [ ] Scene-driven BLAS/TLAS build and update flow for ray tracing.
+5. [x] Multi-queue RDG execution and asynchronous queue submission.
+6. [x] Scene-driven cached BLAS rebuilds with per-frame TLAS construction and RT metadata.
 7.  [ ] Light BVH / Many-Light Sampling. Suggested reference: [Dynamic Many-Light Sampling for Real-Time Ray Tracing](https://research.nvidia.com/sites/default/files/pubs/2019-07_Dynamic-Many-Light-Sampling//MPC19.pdf)
 8.  [ ] Neural Material System. Suggested reference: [Real-Time Neural Appearance Models](https://research.nvidia.com/labs/rtr/neural_appearance_models/)
 9.  [ ] NTC. Suggested reference: [Random-Access Neural Compression of Material Textures](https://research.nvidia.com/labs/rtr/neural_texture_compression/)
 10. [ ] Neural Radiance Caching. Suggested reference: [Real-time Neural Radiance Caching for Path Tracing](https://research.nvidia.com/publication/2021-06_real-time-neural-radiance-caching-path-tracing)
 11. [ ] Filter After Shading. Suggested reference: [Filtering After Shading with Stochastic Texture Filtering](https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/)
-12. [ ] Sample-Reuse Texture Filtering. Suggested reference: [Collaborative Texture Filtering with ReSTIR and Sample Reuse](https://research.nvidia.com/labs/rtr/publication/akeninemoller2025collaborative/collaborative_texfilt.pdf)
-13. [x] DLSS Ray Reconstruction integration. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
-14. [ ] Ray-Cones and Texture LOD. Suggested reference: [Improved Shader and Texture Level of Detail Using Ray Cones](https://research.nvidia.com/publication/2021-04_improved-shader-and-texture-level-detail-using-ray-cones)
-15. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
-
+12. [x] DLSS Ray Reconstruction with quality-driven render resolution and DLAA-only output bypass. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
+13. [ ] Ray-Cones and Texture LOD. Suggested reference: [Improved Shader and Texture Level of Detail Using Ray Cones](https://research.nvidia.com/publication/2021-04_improved-shader-and-texture-level-detail-using-ray-cones)
+14. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
+15. [ ] NeuSample / neural material importance sampling. Suggested reference: [NeuSample: Importance Sampling for Neural Materials](https://cseweb.ucsd.edu/~viscomp/projects/neusample/)
+16. [ ] Neural shading optimization stability. Suggested reference: [Taming Optimization Variance in Compact Neural Shading Networks](https://research.nvidia.com/labs/rtr/publication/bitterli2026taming/)
+17. [ ] Comprehensive neural materials. Suggested reference: [Towards Comprehensive Neural Materials: Dynamic Structure-Preserving Synthesis with Accurate Silhouette at Instant Inference Speed](https://dl.acm.org/doi/full/10.1145/3721238.3730626)
 
 ## Prerequisites
 

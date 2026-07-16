@@ -105,6 +105,8 @@ class AcquireSemaphorePool
 class PresentationContext
 {
   public:
+    using AcquireOutOfDateTestHook = std::function<bool()>;
+
     ~PresentationContext();
 
     void initialize(
@@ -118,6 +120,8 @@ class PresentationContext
     [[nodiscard]] AcquireResult acquireNextImage(
         std::uint32_t frameSlot,
         std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max());
+    void setAcquireOutOfDateTestHook(AcquireOutOfDateTestHook hook);
+    void clearAcquireOutOfDateTestHook() noexcept;
     void returnAcquireSemaphore(std::uint32_t frameSlot);
     [[nodiscard]] const vk::raii::Semaphore& borrowedAcquireSemaphore(std::uint32_t frameSlot) const;
 
@@ -180,6 +184,7 @@ class PresentationContext
 
     AcquireSemaphorePool acquirePool_{};
     std::array<std::optional<std::uint32_t>, maxFrameInFlight> borrowedAcquireSlotByFrame_{};
+    AcquireOutOfDateTestHook acquireOutOfDateTestHook_{};
     mutable std::vector<std::uint32_t> textInputCodepoints_{};
 };
 } // namespace nr::rhi

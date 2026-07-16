@@ -34,6 +34,40 @@ struct DlssRayReconstructionRuntime
     std::string status{"Disabled; NGX has not been initialized."};
 };
 
+struct DlssRayReconstructionResolutionControllerImpl
+{
+    static constexpr auto qualityCount = static_cast<std::size_t>(nr::rhi::DlssQuality::Count);
+
+    std::array<std::optional<nr::rhi::DlssOptimalSettings>, qualityCount> optimalSettingsByQuality{};
+    std::optional<vk::Extent2D> cacheDisplayExtent{};
+    std::optional<DlssRayReconstructionResolutionSnapshot> snapshot{};
+};
+
+void validateDlssOptimalSettings(
+    const nr::rhi::DlssOptimalSettings& settings,
+    nr::rhi::DlssDimensions targetSize,
+    nr::rhi::DlssQuality quality)
+{
+    nr::nrAssert(settings.status.success(), std::format("DLSS RR optimal-settings query failed: {}", settings.status.message));
+    nr::nrAssert(
+        settings.optimalRenderSize.valid() && settings.minimumRenderSize.valid() && settings.maximumRenderSize.valid(),
+        "DLSS RR optimal-settings query returned zero dimensions.");
+    nr::nrAssert(
+        settings.minimumRenderSize.width <= settings.optimalRenderSize.width &&
+            settings.minimumRenderSize.height <= settings.optimalRenderSize.height &&
+            settings.optimalRenderSize.width <= settings.maximumRenderSize.width &&
+            settings.optimalRenderSize.height <= settings.maximumRenderSize.height &&
+            settings.maximumRenderSize.width <= targetSize.width &&
+            settings.maximumRenderSize.height <= targetSize.height,
+        "DLSS RR optimal-settings query returned inconsistent dimensions or bounds outside the target size.");
+    if (quality == nr::rhi::DlssQuality::Dlaa)
+    {
+        nr::nrAssert(
+            settings.optimalRenderSize == targetSize,
+            "DLSS RR DLAA optimal render size must equal the target size.");
+    }
+}
+
 [[nodiscard]] constexpr std::size_t slotIndex(nr::rhi::DlssRayReconstructionResourceSlot slot) noexcept
 {
     return static_cast<std::size_t>(slot);
@@ -211,6 +245,89 @@ template <typename TEnum, std::size_t Count, typename TName> [[nodiscard]] bool 
 
 namespace nr::renderPasses
 {
+DlssRayReconstructionResolutionController::DlssRayReconstructionResolutionController()
+    : impl_(std::make_unique<detail::DlssRayReconstructionResolutionControllerImpl>())
+{
+}
+
+DlssRayReconstructionResolutionController::~DlssRayReconstructionResolutionController() = default;
+DlssRayReconstructionResolutionController::DlssRayReconstructionResolutionController(DlssRayReconstructionResolutionController&&) noexcept = default;
+DlssRayReconstructionResolutionController& DlssRayReconstructionResolutionController::operator=(DlssRayReconstructionResolutionController&&) noexcept = default;
+
+nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::resolve(
+    DlssRayReconstructionResolutionRequest request,
+    vk::Extent2D displayExtent,
+    const OptimalSettingsQuery& optimalSettingsQuery)
+{
+    nrAssert(static_cast<bool>(impl_), "DLSS RR resolution controller requires valid implementation state.");
+    nrAssert(displayExtent.width > 0u && displayExtent.height > 0u, "DLSS RR resolution controller requires a non-zero display extent.");
+
+    auto const qualityIndex = static_cast<std::size_t>(request.quality);
+    nrAssert(qualityIndex < detail::DlssRayReconstructionResolutionControllerImpl::qualityCount, "DLSS RR resolution controller received an invalid quality mode.");
+    if (request.enabled)
+    {
+        nrAssert(!request.bypass || request.quality == nr::rhi::DlssQuality::Dlaa, "DLSS RR bypass is available only in DLAA mode.");
+    }
+
+    if (!impl_->cacheDisplayExtent.has_value() || *impl_->cacheDisplayExtent != displayExtent)
+    {
+        std::ranges::fill(impl_->optimalSettingsByQuality, std::nullopt);
+        impl_->cacheDisplayExtent = displayExtent;
+    }
+
+    auto plan = nr::renderer::FrameResolutionPlan{
+        .displayExtent = displayExtent,
+        .renderExtent = displayExtent,
+    };
+    auto optimalSettings = std::optional<nr::rhi::DlssOptimalSettings>{};
+    if (request.enabled)
+    {
+        nrAssert(static_cast<bool>(optimalSettingsQuery), "DLSS RR enabled resolution requires an optimal-settings query.");
+        auto& cachedSettings = impl_->optimalSettingsByQuality[qualityIndex];
+        if (!cachedSettings.has_value())
+        {
+            cachedSettings = optimalSettingsQuery(
+                nr::rhi::DlssDimensions{displayExtent.width, displayExtent.height},
+                request.quality);
+        }
+
+        auto const& settings = *cachedSettings;
+        detail::validateDlssOptimalSettings(
+            settings,
+            nr::rhi::DlssDimensions{displayExtent.width, displayExtent.height},
+            request.quality);
+
+        plan.renderExtent = vk::Extent2D{settings.optimalRenderSize.width, settings.optimalRenderSize.height};
+        optimalSettings = settings;
+    }
+
+    if (impl_->snapshot.has_value())
+    {
+        auto const& previous = *impl_->snapshot;
+        plan.resetHistory = previous.request.enabled != request.enabled ||
+                            previous.request.quality != request.quality ||
+                            previous.plan.displayExtent != plan.displayExtent ||
+                            previous.plan.renderExtent != plan.renderExtent;
+    }
+    else
+    {
+        plan.resetHistory = request.enabled;
+    }
+
+    impl_->snapshot = DlssRayReconstructionResolutionSnapshot{
+        .request = request,
+        .plan = plan,
+        .optimalSettings = std::move(optimalSettings),
+    };
+    return plan;
+}
+
+std::optional<DlssRayReconstructionResolutionSnapshot> DlssRayReconstructionResolutionController::snapshot() const
+{
+    nrAssert(static_cast<bool>(impl_), "DLSS RR resolution controller requires valid implementation state.");
+    return impl_->snapshot;
+}
+
 DlssRayReconstructionNodeInput makeDefaultDlssRayReconstructionNodeInput()
 {
     auto result = DlssRayReconstructionNodeInput{};
@@ -253,6 +370,21 @@ DlssRayReconstructionNode::DlssRayReconstructionNode() : input(makeDefaultDlssRa
 
 DlssRayReconstructionNode::~DlssRayReconstructionNode() = default;
 
+void DlssRayReconstructionNode::setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController>& controller) noexcept
+{
+    resolutionController_ = controller;
+}
+
+DlssRayReconstructionResolutionRequest DlssRayReconstructionNode::effectiveResolutionRequest() const noexcept
+{
+    auto const& effectiveInput = pendingInput_.has_value() ? *pendingInput_ : input;
+    return DlssRayReconstructionResolutionRequest{
+        .enabled = effectiveInput.enabled,
+        .quality = effectiveInput.create.quality,
+        .bypass = effectiveInput.bypass,
+    };
+}
+
 void DlssRayReconstructionNode::initialize(NodeInitContext &context)
 {
     device_ = context.device;
@@ -285,7 +417,6 @@ void DlssRayReconstructionNode::collectUi(NodeUiBuildContext &context, const Nod
         [this, runtime = runtime_](NodeUiWriter &ui) {
             auto changed = false;
             changed |= ui.checkbox("Enable", uiDraft_.enabled);
-            changed |= ui.checkbox("Bypass Output (show PathTracing color)", uiDraft_.bypass);
 
             constexpr auto qualities = std::array{
                 nr::rhi::DlssQuality::Performance, nr::rhi::DlssQuality::Balanced, nr::rhi::DlssQuality::Quality, nr::rhi::DlssQuality::UltraPerformance, nr::rhi::DlssQuality::Dlaa,
@@ -304,86 +435,29 @@ void DlssRayReconstructionNode::collectUi(NodeUiBuildContext &context, const Nod
             });
             ui.text("Preset E is required when the Depth of Field guide is included.");
 
-            constexpr auto roughnessModes = std::array{
-                nr::rhi::DlssRoughnessMode::Packed,
-                nr::rhi::DlssRoughnessMode::Unpacked,
-            };
-            changed |= detail::enumCombo(ui, "Roughness", uiDraft_.create.roughnessMode, roughnessModes, [](nr::rhi::DlssRoughnessMode value) { return value == nr::rhi::DlssRoughnessMode::Packed ? std::string_view{"Packed in normals.w"} : std::string_view{"Unpacked texture"}; });
-            constexpr auto depthTypes = std::array{
-                nr::rhi::DlssDepthType::Linear,
-                nr::rhi::DlssDepthType::Hardware,
-            };
-            changed |= detail::enumCombo(ui, "Depth Type", uiDraft_.create.depthType, depthTypes, [](nr::rhi::DlssDepthType value) { return value == nr::rhi::DlssDepthType::Linear ? std::string_view{"Linear"} : std::string_view{"Hardware"}; });
+            if (uiDraft_.create.quality == nr::rhi::DlssQuality::Dlaa)
+            {
+                changed |= ui.checkbox("Bypass Output (show PathTracing color)", uiDraft_.bypass);
+            }
+            else
+            {
+                if (uiDraft_.bypass)
+                {
+                    uiDraft_.bypass = false;
+                    changed = true;
+                }
+                ui.text("Bypass is available only in DLAA.");
+            }
 
-            changed |= ui.checkbox("Override Render Size", uiDraft_.overrideRenderSize);
-            if (uiDraft_.overrideRenderSize)
-            {
-                changed |= ui.inputUInt("Render Width", uiDraft_.renderSizeOverride.width, 1u, 16384u);
-                changed |= ui.inputUInt("Render Height", uiDraft_.renderSizeOverride.height, 1u, 16384u);
-            }
-            changed |= ui.checkbox("Override Target Size", uiDraft_.overrideTargetSize);
-            if (uiDraft_.overrideTargetSize)
-            {
-                changed |= ui.inputUInt("Target Width", uiDraft_.targetSizeOverride.width, 1u, 16384u);
-                changed |= ui.inputUInt("Target Height", uiDraft_.targetSizeOverride.height, 1u, 16384u);
-            }
-            changed |= ui.checkbox("Automatic Jitter", uiDraft_.evaluate.automaticJitter);
-            if (!uiDraft_.evaluate.automaticJitter)
-            {
-                changed |= ui.inputFloat("Jitter X", uiDraft_.evaluate.manualJitter[0], -0.5f, 0.5f);
-                changed |= ui.inputFloat("Jitter Y", uiDraft_.evaluate.manualJitter[1], -0.5f, 0.5f);
-            }
-            changed |= ui.inputFloat("MV Scale X", uiDraft_.evaluate.motionVectorScale[0], -16.0f, 16.0f);
-            changed |= ui.inputFloat("MV Scale Y", uiDraft_.evaluate.motionVectorScale[1], -16.0f, 16.0f);
             changed |= ui.checkbox("Visualize Motion Vectors", uiDraft_.evaluate.visualizeMotionVectors);
             if (uiDraft_.evaluate.visualizeMotionVectors)
             {
                 ui.text("MV debug: neutral=(0.5, 0.5), R=X, G=Y; pixel motion is logarithmically amplified.");
             }
-            changed |= ui.inputFloat("Pre Exposure", uiDraft_.evaluate.preExposure, 0.0001f, 65536.0f);
-            changed |= ui.inputFloat("Exposure Scale", uiDraft_.evaluate.exposureScale, 0.0001f, 65536.0f);
-            changed |= ui.checkbox("Automatic Camera Matrices", uiDraft_.evaluate.automaticMatrices);
-            if (!uiDraft_.evaluate.automaticMatrices)
-            {
-                ui.text("Manual row-major matrices are supplied through DlssRayReconstructionNodeInput.");
-            }
-            changed |= ui.checkbox("Automatic Frame Delta", uiDraft_.evaluate.automaticFrameTimeDelta);
-            if (!uiDraft_.evaluate.automaticFrameTimeDelta)
-            {
-                changed |= ui.inputFloat("Frame Delta (ms)", uiDraft_.evaluate.manualFrameTimeDeltaMilliseconds, 0.01f, 1000.0f);
-            }
-            changed |= ui.checkbox("Indicator Invert X", uiDraft_.evaluate.indicatorInvertXAxis);
-            changed |= ui.checkbox("Indicator Invert Y", uiDraft_.evaluate.indicatorInvertYAxis);
-
-            constexpr auto toneMappers = std::array{
-                nr::rhi::DlssToneMapper::String,
-                nr::rhi::DlssToneMapper::Reinhard,
-                nr::rhi::DlssToneMapper::OneOverLuma,
-                nr::rhi::DlssToneMapper::Aces,
-            };
-            changed |= detail::enumCombo(ui, "Tone Mapper", uiDraft_.evaluate.toneMapper, toneMappers, [](nr::rhi::DlssToneMapper value) {
-                constexpr auto names = std::array{
-                    std::string_view{"String"},
-                    std::string_view{"Reinhard"},
-                    std::string_view{"One Over Luma"},
-                    std::string_view{"ACES"},
-                };
-                return names[static_cast<std::size_t>(value)];
-            });
             if (ui.button("Reset History Next Frame"))
             {
                 pendingOneShotReset_ = true;
             }
-
-            ui.separator();
-            ui.text("Flags");
-            changed |= ui.checkbox("HDR (required by RR)", uiDraft_.create.flags.hdr);
-            changed |= ui.checkbox("Low-resolution Motion Vectors", uiDraft_.create.flags.motionVectorsLowResolution);
-            changed |= ui.checkbox("Motion Vectors Include Jitter", uiDraft_.create.flags.motionVectorsJittered);
-            changed |= ui.checkbox("Depth Inverted", uiDraft_.create.flags.depthInverted);
-            changed |= ui.checkbox("Auto Exposure (RR ignores/unsupported)", uiDraft_.create.flags.autoExposure);
-            changed |= ui.checkbox("Alpha Upscaling", uiDraft_.create.flags.alphaUpscaling);
-            ui.text("Sharpening and reserved SDK flags are intentionally not exposed.");
 
             ui.separator();
             ui.text("Status");
@@ -410,6 +484,22 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
 {
     nrAssert(static_cast<bool>(runtime_), "DLSS RR build requires initialized runtime state.");
     nrAssert(device_.has_value(), "DLSS RR build requires a device reference.");
+    auto const resolutionController = resolutionController_.lock();
+    auto resolutionSnapshot = std::optional<DlssRayReconstructionResolutionSnapshot>{};
+    if (resolutionController)
+    {
+        nrAssert(!input.overrideRenderSize && !input.overrideTargetSize, "Coordinated DLSS RR resolution forbids node-local render and target size overrides.");
+        resolutionSnapshot = resolutionController->snapshot();
+        nrAssert(resolutionSnapshot.has_value(), "Coordinated DLSS RR build requires an early resolution snapshot.");
+        auto const activeRequest = DlssRayReconstructionResolutionRequest{
+            .enabled = input.enabled,
+            .quality = input.create.quality,
+            .bypass = input.bypass,
+        };
+        nrAssert(resolutionSnapshot->request == activeRequest, "Coordinated DLSS RR request does not match the node's active staged configuration.");
+        nrAssert(resolutionSnapshot->plan == frameParameters.resolutionPlan, "Coordinated DLSS RR snapshot does not match the renderer frame resolution plan.");
+        nrAssert(frameParameters.resolutionPlan.displayExtent == frameParameters.swapchainExtent, "Coordinated DLSS RR display extent does not match the renderer swapchain extent.");
+    }
     if (!input.enabled)
     {
         previousBuildTime_ = {};
@@ -419,6 +509,7 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
     }
 
     nrAssert(nr::rhi::dlssSdkCompiled(), "DLSS RR was enabled, but the validated NGX bridge could not be loaded.");
+    nrAssert(!input.bypass || input.create.quality == nr::rhi::DlssQuality::Dlaa, "DLSS RR bypass is available only in DLAA mode.");
     nrAssert(input.create.flags.hdr, "DLSS RR requires the HDR feature flag.");
     nrAssert(!input.outputColorKey.empty(), "DLSS RR output color key must not be empty.");
     nrAssert(input.outputColorFormat != vk::Format::eUndefined, "DLSS RR output color format must not be undefined.");
@@ -452,8 +543,26 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
     auto const colorIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::Color);
     nrAssert(descriptions[colorIndex].has_value(), "DLSS RR requires the noisy input color image.");
     auto createDesc = input.create;
-    createDesc.renderSize = input.overrideRenderSize ? input.renderSizeOverride : nr::rhi::DlssDimensions{descriptions[colorIndex]->extent.width, descriptions[colorIndex]->extent.height};
-    createDesc.targetSize = input.overrideTargetSize ? input.targetSizeOverride : nr::rhi::DlssDimensions{frameParameters.swapchainExtent.width, frameParameters.swapchainExtent.height};
+    if (resolutionSnapshot.has_value())
+    {
+        createDesc.renderSize = nr::rhi::DlssDimensions{
+            frameParameters.resolutionPlan.renderExtent.width,
+            frameParameters.resolutionPlan.renderExtent.height,
+        };
+        createDesc.targetSize = nr::rhi::DlssDimensions{
+            frameParameters.resolutionPlan.displayExtent.width,
+            frameParameters.resolutionPlan.displayExtent.height,
+        };
+        nrAssert(
+            descriptions[colorIndex]->extent.width == createDesc.renderSize.width && descriptions[colorIndex]->extent.height == createDesc.renderSize.height,
+            "Coordinated DLSS RR input color extent does not match the renderer render extent.");
+        nrAssert(resolutionSnapshot->optimalSettings.has_value(), "Coordinated enabled DLSS RR build requires cached optimal settings.");
+    }
+    else
+    {
+        createDesc.renderSize = input.overrideRenderSize ? input.renderSizeOverride : nr::rhi::DlssDimensions{descriptions[colorIndex]->extent.width, descriptions[colorIndex]->extent.height};
+        createDesc.targetSize = input.overrideTargetSize ? input.targetSizeOverride : nr::rhi::DlssDimensions{frameParameters.swapchainExtent.width, frameParameters.swapchainExtent.height};
+    }
     nrAssert(createDesc.renderSize.valid() && createDesc.targetSize.valid(), "DLSS RR requires non-zero render and target sizes.");
     nrAssert(createDesc.quality != nr::rhi::DlssQuality::Count, "DLSS RR quality value is invalid.");
     if (createDesc.quality == nr::rhi::DlssQuality::Dlaa)
@@ -565,14 +674,23 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
         intents.push_back(nr::renderer::use::sampledRead(handles[index], descriptions[index]->aspect));
     });
 
-    auto prepare = [runtime = runtime_, createDesc](const nr::renderer::PassPrepareContext &prepareContext) {
+    auto coordinatedOptimalSettings = resolutionSnapshot.has_value() ? resolutionSnapshot->optimalSettings : std::nullopt;
+    auto prepare = [runtime = runtime_, createDesc, coordinatedOptimalSettings](const nr::renderer::PassPrepareContext &prepareContext) {
         nrAssert(prepareContext.device.has_value(), "DLSS RR prepare requires the active RHI device.");
         std::scoped_lock lock(runtime->mutex);
         auto &device = prepareContext.device->get();
         if (!runtime->feature || runtime->activeCreateDesc != createDesc)
         {
-            auto context = device.dlssContext();
-            runtime->optimalSettings = context->optimalSettings(createDesc.targetSize, createDesc.quality);
+            if (coordinatedOptimalSettings.has_value())
+            {
+                runtime->optimalSettings = *coordinatedOptimalSettings;
+            }
+            else
+            {
+                auto dlssContext = device.dlssContext();
+                runtime->optimalSettings = dlssContext->optimalSettings(createDesc.targetSize, createDesc.quality);
+            }
+            detail::validateDlssOptimalSettings(runtime->optimalSettings, createDesc.targetSize, createDesc.quality);
             runtime->optimalSettingsQueried = true;
             auto replacement = device.createDlssRayReconstructionFeature(createDesc);
             runtime->feature = std::move(replacement);
@@ -668,6 +786,7 @@ void DlssRayReconstructionNode::shutdown(NodeShutdownContext &context)
         runtime_->status = "Shut down.";
     }
     runtime_.reset();
+    resolutionController_.reset();
     device_.reset();
 }
 } // namespace nr::renderPasses

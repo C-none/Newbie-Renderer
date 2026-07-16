@@ -121,10 +121,22 @@ namespace frameData
 inline constexpr std::string_view sceneRtHitSbtPlan = "scene.rt.hitSbtPlan";
 } // namespace frameData
 
+struct FrameResolutionPlan
+{
+    vk::Extent2D displayExtent{1u, 1u};
+    vk::Extent2D renderExtent{1u, 1u};
+    bool resetHistory = false;
+
+    [[nodiscard]] friend bool operator==(const FrameResolutionPlan&, const FrameResolutionPlan&) noexcept = default;
+};
+
+using FrameResolutionResolver = std::function<FrameResolutionPlan(nr::rhi::Device&, vk::Extent2D)>;
+
 struct NodeFrameParameters
 {
     std::uint32_t frameIndex = 0;
     vk::Extent2D swapchainExtent{1, 1};
+    FrameResolutionPlan resolutionPlan{};
     vk::Format swapchainFormat = vk::Format::eUndefined;
     vk::ColorSpaceKHR swapchainColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
 
@@ -233,7 +245,8 @@ struct RendererCameraFrameState
 [[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(
     const RendererCameraJitterConfig& jitterConfig,
     std::uint64_t frameOrdinal,
-    vk::Extent2D viewportExtent) noexcept;
+    vk::Extent2D viewportExtent,
+    bool reset = false) noexcept;
 
 struct FrameGlobalResources
 {
@@ -1460,6 +1473,7 @@ struct RendererGraphSpec
     std::vector<NodeCreateInfo> nodes{};
     std::vector<SubmitNodeSpec> submitNodes{};
     RendererCameraJitterConfig cameraJitter{};
+    std::optional<FrameResolutionResolver> frameResolutionResolver{};
 };
 
 struct RendererFrameInput
@@ -1582,6 +1596,7 @@ class Renderer
     std::vector<InstalledNode> installedNodes_{};
     std::multimap<std::size_t, SubmitNodeSpec> submitNodesByAfterIndex_{};
     RendererCameraJitterConfig cameraJitter_{};
+    std::optional<FrameResolutionResolver> frameResolutionResolver_{};
     std::uint64_t sampleFrameOrdinal_ = 0u;
 
     std::optional<std::reference_wrapper<nr::scene::Scene>> activeScene_{};

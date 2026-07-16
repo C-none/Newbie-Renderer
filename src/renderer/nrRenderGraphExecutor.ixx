@@ -349,6 +349,7 @@ class RenderGraphExecutor
         nr::rhi::Device& device;
         std::uint32_t frameIndex = 0;
         std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max();
+        std::optional<nr::rhi::Device::FrameAcquireResult> preAcquiredFrameImage{};
         std::optional<std::reference_wrapper<RendererSubmissionTimelines>> submissionTimelines{};
     };
 

@@ -71,6 +71,8 @@ struct PathTracingGuideFrameSlot
 {
     std::array<nr::rhi::Image, kPathTracingGuideResourceCount> images{};
     std::array<nr::renderer::RetainedImageState, kPathTracingGuideResourceCount> states{};
+    vk::Extent2D allocatedExtent{};
+    vk::Format allocatedColorFormat = vk::Format::eUndefined;
 };
 
 struct PathTracingRuntimeCache
@@ -78,8 +80,6 @@ struct PathTracingRuntimeCache
     std::map<PathTracingPipelineKey, std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>> pipelines{};
     std::map<PathTracingSbtKey, nr::rhi::ShaderBindingTable> shaderBindingTables{};
     std::array<PathTracingGuideFrameSlot, nr::maxFrameInFlight> guideFrameSlots{};
-    vk::Extent2D allocatedGuideExtent{};
-    vk::Format allocatedColorFormat = vk::Format::eUndefined;
 };
 
 [[nodiscard]] constexpr std::size_t guideIndex(PathTracingGuideResource resource) noexcept
@@ -477,7 +477,8 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
 
 void ensurePathTracingGuideImages(
     nr::rhi::Device& device,
-    PathTracingRuntimeCache& runtime,
+    PathTracingGuideFrameSlot& frameSlot,
+    std::size_t frameSlotIndex,
     vk::Extent2D requestedExtent,
     vk::Format colorFormat)
 {
@@ -488,48 +489,42 @@ void ensurePathTracingGuideImages(
     auto specs = makePathTracingGuideSpecs(colorFormat);
     auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
     auto resourcesValid = std::ranges::all_of(
-        runtime.guideFrameSlots,
-        [&](const PathTracingGuideFrameSlot& frameSlot) {
-            return std::ranges::all_of(guideIndices, [&](std::size_t index) {
-                return frameSlot.images[index].valid() &&
-                       frameSlot.images[index].format() == specs[index].format;
-            });
+        guideIndices,
+        [&](std::size_t index) {
+            return frameSlot.images[index].valid() &&
+                   frameSlot.images[index].format() == specs[index].format;
         });
-    auto extentFits = runtime.allocatedGuideExtent.width >= requestedExtent.width &&
-                      runtime.allocatedGuideExtent.height >= requestedExtent.height;
-    if (resourcesValid && extentFits && runtime.allocatedColorFormat == colorFormat)
+    auto extentFits = frameSlot.allocatedExtent.width >= requestedExtent.width &&
+                      frameSlot.allocatedExtent.height >= requestedExtent.height;
+    if (resourcesValid && extentFits && frameSlot.allocatedColorFormat == colorFormat)
     {
         return;
     }
 
     auto allocatedExtent = vk::Extent2D{
-        std::max(requestedExtent.width, runtime.allocatedGuideExtent.width),
-        std::max(requestedExtent.height, runtime.allocatedGuideExtent.height),
+        std::max(requestedExtent.width, frameSlot.allocatedExtent.width),
+        std::max(requestedExtent.height, frameSlot.allocatedExtent.height),
     };
     auto imageUsage = vk::ImageUsageFlagBits::eStorage |
                       vk::ImageUsageFlagBits::eSampled |
                       vk::ImageUsageFlagBits::eTransferDst |
                       vk::ImageUsageFlagBits::eTransferSrc;
 
-    auto frameSlotIndices = std::views::iota(std::size_t{0u}, runtime.guideFrameSlots.size());
-    std::ranges::for_each(frameSlotIndices, [&](std::size_t frameSlotIndex) {
-        auto& frameSlot = runtime.guideFrameSlots[frameSlotIndex];
-        std::ranges::for_each(guideIndices, [&](std::size_t guideResourceIndex) {
-            auto const& spec = specs[guideResourceIndex];
-            auto imageInfo = nr::rhi::makeImageCreateInfo(spec.format, allocatedExtent, imageUsage);
-            frameSlot.images[guideResourceIndex] = device.resourceFactory.createImage(
-                imageInfo,
-                nr::rhi::MemoryUsage::GpuOnly,
-                std::format("PathTracing.{}[{}]", spec.debugName, frameSlotIndex));
-            nr::nrAssert(
-                frameSlot.images[guideResourceIndex].valid(),
-                std::format("PathTracing failed to allocate {} guide for frame slot {}.", spec.debugName, frameSlotIndex));
-            frameSlot.states[guideResourceIndex].reset();
-        });
+    std::ranges::for_each(guideIndices, [&](std::size_t guideResourceIndex) {
+        auto const& spec = specs[guideResourceIndex];
+        auto imageInfo = nr::rhi::makeImageCreateInfo(spec.format, allocatedExtent, imageUsage);
+        frameSlot.images[guideResourceIndex] = device.resourceFactory.createImage(
+            imageInfo,
+            nr::rhi::MemoryUsage::GpuOnly,
+            std::format("PathTracing.{}[{}]", spec.debugName, frameSlotIndex));
+        nr::nrAssert(
+            frameSlot.images[guideResourceIndex].valid(),
+            std::format("PathTracing failed to allocate {} guide for frame slot {}.", spec.debugName, frameSlotIndex));
+        frameSlot.states[guideResourceIndex].reset();
     });
 
-    runtime.allocatedGuideExtent = allocatedExtent;
-    runtime.allocatedColorFormat = colorFormat;
+    frameSlot.allocatedExtent = allocatedExtent;
+    frameSlot.allocatedColorFormat = colorFormat;
 }
 
 [[nodiscard]] std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount>
@@ -703,11 +698,6 @@ void PathTracingNode::initialize(NodeInitContext &context)
     variantUiDraft_ = input.variant;
     pendingVariant_.reset();
     runtime_ = detail::makePathTracingRuntimeCache();
-    detail::ensurePathTracingGuideImages(
-        device_->get(),
-        *runtime_,
-        device_->get().presentationContext.swapchainExtent(),
-        input.outputFormat);
 }
 
 void PathTracingNode::collectUi(NodeUiBuildContext &context, const NodeFrameParameters &)
@@ -753,17 +743,17 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
     nr::nrAssert(device_.has_value(), "PathTracing build stage requires device reference from initialize stage.");
     input.variant = detail::normalizePathTracingVariantKey(input.variant);
 
-    auto viewportExtent = frameParameters.swapchainExtent;
-    viewportExtent.width = std::max(1u, viewportExtent.width);
-    viewportExtent.height = std::max(1u, viewportExtent.height);
+    auto const renderExtent = frameParameters.resolutionPlan.renderExtent;
+    nr::nrAssert(renderExtent.width > 0u && renderExtent.height > 0u, "PathTracing requires a non-zero renderer frame render extent.");
 
-    detail::ensurePathTracingGuideImages(device_->get(), *runtime_, viewportExtent, input.outputFormat);
-    auto guideSpecs = detail::makePathTracingGuideSpecs(input.outputFormat);
     auto frameSlotIndex = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+    auto& guideFrameSlot = runtime_->guideFrameSlots[frameSlotIndex];
+    detail::ensurePathTracingGuideImages(device_->get(), guideFrameSlot, frameSlotIndex, renderExtent, input.outputFormat);
+    auto guideSpecs = detail::makePathTracingGuideSpecs(input.outputFormat);
     auto guideResources = detail::importPathTracingGuides(
         context,
-        runtime_->guideFrameSlots[frameSlotIndex],
-        viewportExtent,
+        guideFrameSlot,
+        renderExtent,
         guideSpecs,
         frameSlotIndex);
     detail::publishPathTracingGuides(context, guideResources, guideSpecs);
@@ -785,8 +775,8 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
                                             nr::renderer::ownershipDomainFromQueue(context.queue));
 
     auto dimensions = nr::rhi::TraceRaysDimensions{
-        .width = viewportExtent.width,
-        .height = viewportExtent.height,
+        .width = renderExtent.width,
+        .height = renderExtent.height,
         .depth = 1u,
     };
     auto queueRole = nr::renderer::rhiQueueRoleFromDomain(context.queue);

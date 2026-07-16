@@ -1,5 +1,6 @@
 import std;
 import dependency.math;
+import dependency.vulkan;
 import nr.renderPasses;
 import nr.rhi;
 import nr.test;
@@ -41,6 +42,41 @@ void requireOrdered(std::string_view contents, std::string_view first, std::stri
     nr::test::require(firstPosition != std::string_view::npos && secondPosition != std::string_view::npos && firstPosition < secondPosition, std::string{message});
 }
 
+[[nodiscard]] nr::rhi::DlssOptimalSettings makeOptimalSettings(
+    nr::rhi::DlssDimensions targetSize,
+    nr::rhi::DlssQuality quality)
+{
+    auto divisor = std::uint32_t{2u};
+    switch (quality)
+    {
+    case nr::rhi::DlssQuality::Performance:
+        divisor = 4u;
+        break;
+    case nr::rhi::DlssQuality::Balanced:
+        divisor = 3u;
+        break;
+    case nr::rhi::DlssQuality::Quality:
+        divisor = 2u;
+        break;
+    case nr::rhi::DlssQuality::UltraPerformance:
+        divisor = 5u;
+        break;
+    case nr::rhi::DlssQuality::Dlaa:
+        divisor = 1u;
+        break;
+    case nr::rhi::DlssQuality::Count:
+        std::unreachable();
+    }
+    return nr::rhi::DlssOptimalSettings{
+        .optimalRenderSize = nr::rhi::DlssDimensions{
+            targetSize.width / divisor,
+            targetSize.height / divisor,
+        },
+        .minimumRenderSize = nr::rhi::DlssDimensions{1u, 1u},
+        .maximumRenderSize = targetSize,
+    };
+}
+
 const nr::test::CaseRegistrar dlssRrPublicContractCase{"renderpasses DLSS RR keeps its complete disabled-by-default contract", [] {
                                                            auto input = nr::renderPasses::makeDefaultDlssRayReconstructionNodeInput();
                                                            nr::test::require(!input.enabled, "DLSS RR must be disabled by default");
@@ -65,6 +101,80 @@ const nr::test::CaseRegistrar dlssRrPublicContractCase{"renderpasses DLSS RR kee
                                                            nr::test::require(nr::renderPasses::dlssRayReconstructionResourceRequired(nr::rhi::DlssRayReconstructionResourceSlot::Roughness, nr::rhi::DlssRoughnessMode::Unpacked, false), "unpacked roughness must require a separate texture");
                                                        }};
 
+const nr::test::CaseRegistrar dlssRrResolutionControllerCase{"renderpasses DLSS RR resolution controller caches quality queries and resets temporal history on extent transitions", [] {
+                                                                  auto controller = nr::renderPasses::DlssRayReconstructionResolutionController{};
+                                                                  auto queryCount = std::size_t{0u};
+                                                                  auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{
+                                                                      [&](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) {
+                                                                          ++queryCount;
+                                                                          return makeOptimalSettings(targetSize, quality);
+                                                                      }};
+
+                                                                  auto const display = vk::Extent2D{1600u, 900u};
+                                                                  auto disabled = controller.resolve({}, display, query);
+                                                                  nr::test::requireEqual(disabled.displayExtent, display);
+                                                                  nr::test::requireEqual(disabled.renderExtent, display);
+                                                                  nr::test::require(!disabled.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{0u});
+
+                                                                  auto qualityRequest = nr::renderPasses::DlssRayReconstructionResolutionRequest{
+                                                                      .enabled = true,
+                                                                      .quality = nr::rhi::DlssQuality::Quality,
+                                                                  };
+                                                                  auto quality = controller.resolve(qualityRequest, display, query);
+                                                                  nr::test::requireEqual(quality.renderExtent, vk::Extent2D{800u, 450u});
+                                                                  nr::test::require(quality.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{1u});
+
+                                                                  auto qualityCacheHit = controller.resolve(qualityRequest, display, query);
+                                                                  nr::test::require(!qualityCacheHit.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{1u});
+
+                                                                  auto performanceRequest = qualityRequest;
+                                                                  performanceRequest.quality = nr::rhi::DlssQuality::Performance;
+                                                                  auto performance = controller.resolve(performanceRequest, display, query);
+                                                                  nr::test::requireEqual(performance.renderExtent, vk::Extent2D{400u, 225u});
+                                                                  nr::test::require(performance.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{2u});
+
+                                                                  auto qualityRoundTrip = controller.resolve(qualityRequest, display, query);
+                                                                  nr::test::requireEqual(qualityRoundTrip.renderExtent, quality.renderExtent);
+                                                                  nr::test::require(qualityRoundTrip.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{2u});
+
+                                                                  auto const resizedDisplay = vk::Extent2D{2000u, 1000u};
+                                                                  auto resized = controller.resolve(qualityRequest, resizedDisplay, query);
+                                                                  nr::test::requireEqual(resized.renderExtent, vk::Extent2D{1000u, 500u});
+                                                                  nr::test::require(resized.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{3u});
+
+                                                                  auto disabledAfterActive = controller.resolve({}, resizedDisplay, query);
+                                                                  nr::test::requireEqual(disabledAfterActive.renderExtent, resizedDisplay);
+                                                                  nr::test::require(disabledAfterActive.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{3u});
+                                                                  auto disabledCacheHit = controller.resolve({}, resizedDisplay, query);
+                                                                  nr::test::require(!disabledCacheHit.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{3u});
+
+                                                                  auto dlaaRequest = nr::renderPasses::DlssRayReconstructionResolutionRequest{
+                                                                      .enabled = true,
+                                                                      .quality = nr::rhi::DlssQuality::Dlaa,
+                                                                  };
+                                                                  auto dlaa = controller.resolve(dlaaRequest, resizedDisplay, query);
+                                                                  nr::test::requireEqual(dlaa.renderExtent, resizedDisplay);
+                                                                  nr::test::require(dlaa.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{4u});
+                                                                  dlaaRequest.bypass = true;
+                                                                  auto dlaaBypass = controller.resolve(dlaaRequest, resizedDisplay, query);
+                                                                  nr::test::require(!dlaaBypass.resetHistory);
+                                                                  nr::test::requireEqual(queryCount, std::size_t{4u});
+
+                                                                  auto snapshot = controller.snapshot();
+                                                                  nr::test::require(snapshot.has_value());
+                                                                  nr::test::requireEqual(snapshot->request, dlaaRequest);
+                                                                  nr::test::require(snapshot->optimalSettings.has_value());
+                                                              }};
+
 const nr::test::CaseRegistrar dlssRrMatrixConventionCase{"renderpasses DLSS RR converts GLM transforms to NGX row-vector matrices", [] {
                                                              auto transform = glm::mat4{1.0f};
                                                              transform[0] = glm::vec4{0.0f, 1.0f, 0.0f, 0.0f};
@@ -86,11 +196,14 @@ const nr::test::CaseRegistrar dlssRrMatrixConventionCase{"renderpasses DLSS RR c
 const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{"renderpasses DLSS RR is exported, staged, and explicitly installed in rtobject", [] {
                                                            auto const node = readProjectFile("src/renderPasses/DlssRayReconstruction/nrDlssRayReconstructionNode.cpp");
                                                            auto const nodeInterface = readProjectFile("src/renderPasses/DlssRayReconstruction/nrDlssRayReconstructionNode.ixx");
+                                                           auto const pathTracing = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
                                                            auto const debugShader = readProjectFile("shader/renderer/dlssRayReconstructionDebug.slang");
                                                            auto const renderPassExport = readProjectFile("src/renderPasses/exportModule.ixx");
                                                            auto const pipeline = readProjectFile("src/pipeline/nrPipeline.cpp");
                                                            auto const rendererInterface = readProjectFile("src/renderer/nrRenderer.ixx");
                                                            auto const rendererImplementation = readProjectFile("src/renderer/nrRenderer.cpp");
+                                                           auto const executorInterface = readProjectFile("src/renderer/nrRenderGraphExecutor.ixx");
+                                                           auto const executorImplementation = readProjectFile("src/renderer/nrRenderGraphExecutor.cpp");
                                                            auto const dependencyInterface = readProjectFile("src/extern/dependencyDlss.ixx");
                                                            auto const dependencyImplementation = readProjectFile("src/extern/dependencyDlss.cpp");
                                                            auto const bridgeInterface = readProjectFile("src/extern/dlssBridge/include/nrDlssBridge.h");
@@ -102,18 +215,83 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{"renderpasses DLSS RR is 
                                                            requirePresent(renderPassExport, "export import :dlssRayReconstruction;", "nr.renderPasses must export the RR node");
                                                            nr::test::requireEqual(countOccurrences(node, "context.addSection("), std::size_t{1u}, "RR must expose all controls and status through one node UI session");
                                                            requirePresent(node, "\"dlss-rr\"", "RR must use one stable UI session id");
-                                                           requirePresent(node, "uiDraft_.evaluate.manualJitter[0], -0.5f, 0.5f", "RR manual jitter X must stay within the SDK pixel-offset range");
-                                                           requirePresent(node, "uiDraft_.evaluate.manualJitter[1], -0.5f, 0.5f", "RR manual jitter Y must stay within the SDK pixel-offset range");
-                                                           requirePresent(node, "Visualize Motion Vectors", "RR must expose motion-vector visualization in its existing UI session");
+                                                           requirePresent(node, "ui.checkbox(\"Enable\"", "RR UI must retain its enable control");
+                                                           requirePresent(node, "ui.checkbox(\"Bypass Output (show PathTracing color)\"", "RR UI must retain its output-bypass control");
+                                                           requirePresent(node, "uiDraft_.create.quality == nr::rhi::DlssQuality::Dlaa", "RR UI must expose bypass only for DLAA");
+                                                           requirePresent(node, "uiDraft_.bypass = false", "RR UI must clear a staged bypass when quality leaves DLAA");
+                                                           requirePresent(node, "ui.text(\"Bypass is available only in DLAA.\")", "RR UI must explain the DLAA-only bypass constraint");
+                                                           requirePresent(node, "detail::enumCombo(ui, \"Quality\"", "RR UI must retain its quality control");
+                                                           requirePresent(node, "std::ranges::for_each(qualities", "RR UI must retain one preset control for every quality mode");
+                                                           requirePresent(node, "std::format(\"{} Preset\"", "RR UI must label each quality mode's preset control");
+                                                           requirePresent(node, "ui.text(\"Preset E is required when the Depth of Field guide is included.\")", "RR UI must retain its Preset E guidance");
+                                                           requirePresent(node, "ui.checkbox(\"Visualize Motion Vectors\"", "RR UI must retain motion-vector visualization");
+                                                           requirePresent(node, "ui.text(\"MV debug: neutral=(0.5, 0.5), R=X, G=Y; pixel motion is logarithmically amplified.\")", "RR UI must retain the conditional motion-vector legend");
+                                                           requirePresent(node, "ui.button(\"Reset History Next Frame\")", "RR UI must retain its one-shot history reset");
+                                                           requirePresent(node, "ui.text(\"Status\")", "RR UI must retain runtime status");
+                                                           requireAbsent(node, "detail::enumCombo(ui, \"Roughness\"", "RR roughness mode must remain programmatic-only");
+                                                           requireAbsent(node, "detail::enumCombo(ui, \"Depth Type\"", "RR depth type must remain programmatic-only");
+                                                           requireAbsent(node, "ui.checkbox(\"Override Render Size\"", "RR render-size override must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputUInt(\"Render Width\"", "RR render width must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputUInt(\"Render Height\"", "RR render height must remain programmatic-only");
+                                                           requireAbsent(node, "ui.checkbox(\"Override Target Size\"", "RR target-size override must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputUInt(\"Target Width\"", "RR target width must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputUInt(\"Target Height\"", "RR target height must remain programmatic-only");
+                                                           requireAbsent(node, "ui.checkbox(\"Automatic Jitter\"", "RR jitter selection must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputFloat(\"Jitter X\"", "RR manual jitter X must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputFloat(\"Jitter Y\"", "RR manual jitter Y must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputFloat(\"MV Scale X\"", "RR motion-vector scale X must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputFloat(\"MV Scale Y\"", "RR motion-vector scale Y must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputFloat(\"Pre Exposure\"", "RR pre-exposure must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputFloat(\"Exposure Scale\"", "RR exposure scale must remain programmatic-only");
+                                                           requireAbsent(node, "ui.checkbox(\"Automatic Camera Matrices\"", "RR matrix selection must remain programmatic-only");
+                                                           requireAbsent(node, "ui.text(\"Manual row-major matrices are supplied through DlssRayReconstructionNodeInput.\")", "RR UI must not retain manual-matrix guidance");
+                                                           requireAbsent(node, "ui.checkbox(\"Automatic Frame Delta\"", "RR frame-delta selection must remain programmatic-only");
+                                                           requireAbsent(node, "ui.inputFloat(\"Frame Delta (ms)\"", "RR manual frame delta must remain programmatic-only");
+                                                           requireAbsent(node, "ui.checkbox(\"Indicator Invert X\"", "RR indicator X inversion must remain programmatic-only");
+                                                           requireAbsent(node, "ui.checkbox(\"Indicator Invert Y\"", "RR indicator Y inversion must remain programmatic-only");
+                                                           requireAbsent(node, "detail::enumCombo(ui, \"Tone Mapper\"", "RR tone mapper must remain programmatic-only");
+                                                           requireAbsent(node, "ui.text(\"Flags\")", "RR create flags must remain programmatic-only");
+                                                           requireAbsent(node, "HDR (required by RR)", "RR HDR creation flag must not be editable in the UI");
+                                                           requireAbsent(node, "Sharpening and reserved SDK flags are intentionally not exposed.", "RR UI must not retain the removed creation-flag note");
                                                            requirePresent(node, "pendingInput_", "RR UI edits must be staged to the next frame");
+                                                           requirePresent(node, "pendingInput_.has_value() ? *pendingInput_ : input", "RR early resolution request must observe pending UI state before collectUi commits it");
                                                            requirePresent(node, "pendingOneShotReset_", "RR UI reset must be a staged one-shot");
                                                            requirePresent(node, "activeCreateDesc != createDesc", "only create-config changes should recreate the feature");
                                                            requirePresent(node, "evalDesc.reset = consumeOneShotReset_", "evaluation reset should consume the one-shot state");
                                                            requirePresent(rendererImplementation, "cameraJitter_ = spec.cameraJitter", "installed graphs must retain their configured camera jitter");
                                                            requirePresent(node, "cameraFrameState.jitter.pixelOffset", "automatic RR jitter must use the renderer's current pixel-space offset");
                                                            requirePresent(node, "input.evaluate.automaticJitter", "RR evaluation must preserve automatic versus manual jitter selection");
+                                                           requirePresent(node, ": input.evaluate.manualJitter", "RR evaluation must forward programmatic manual jitter");
+                                                           requirePresent(node, "auto createDesc = input.create", "RR creation must retain programmatic roughness, depth, flags, and presets");
+                                                           requirePresent(node, "createDesc.renderSize = input.overrideRenderSize ? input.renderSizeOverride", "RR creation must retain programmatic render-size overrides");
+                                                           requirePresent(node, "createDesc.targetSize = input.overrideTargetSize ? input.targetSizeOverride", "RR creation must retain programmatic target-size overrides");
+                                                           requirePresent(node, "evalDesc.motionVectorScale = input.evaluate.motionVectorScale", "RR evaluation must forward programmatic motion-vector scale");
+                                                           requirePresent(node, "evalDesc.preExposure = input.evaluate.preExposure", "RR evaluation must forward programmatic pre-exposure");
+                                                           requirePresent(node, "evalDesc.exposureScale = input.evaluate.exposureScale", "RR evaluation must forward programmatic exposure scale");
+                                                           requirePresent(node, "evalDesc.indicatorInvertXAxis = input.evaluate.indicatorInvertXAxis", "RR evaluation must forward programmatic indicator X inversion");
+                                                           requirePresent(node, "evalDesc.indicatorInvertYAxis = input.evaluate.indicatorInvertYAxis", "RR evaluation must forward programmatic indicator Y inversion");
+                                                           requirePresent(node, "evalDesc.toneMapper = input.evaluate.toneMapper", "RR evaluation must forward the programmatic tone mapper unchanged");
+                                                           requirePresent(node, "evalDesc.worldToViewRowMajor = input.evaluate.worldToViewRowMajor", "RR evaluation must forward programmatic world-to-view matrices");
+                                                           requirePresent(node, "evalDesc.viewToClipRowMajor = input.evaluate.viewToClipRowMajor", "RR evaluation must forward programmatic view-to-clip matrices");
+                                                           requirePresent(node, "input.evaluate.automaticFrameTimeDelta ? std::clamp(measuredDelta, 0.01f, 1000.0f) : input.evaluate.manualFrameTimeDeltaMilliseconds", "RR evaluation must preserve automatic and programmatic manual frame delta");
+                                                           requirePresent(node, "!input.bypass || input.create.quality == nr::rhi::DlssQuality::Dlaa", "RR runtime must enforce DLAA-only bypass");
+                                                           requirePresent(node, "!input.overrideRenderSize && !input.overrideTargetSize", "coordinated RR must forbid node-local size overrides");
+                                                           requirePresent(node, "frameParameters.resolutionPlan.renderExtent", "coordinated RR must consume the renderer render extent");
+                                                           requirePresent(node, "frameParameters.resolutionPlan.displayExtent", "coordinated RR must consume the renderer display extent");
+                                                           requirePresent(node, "resolutionSnapshot->request == activeRequest", "coordinated RR must match the early request to active staged input");
                                                            requireAbsent(node, "DLSS always receives a zero jitter offset", "RR must not force jitter off");
-                                                           requirePresent(rendererInterface, "bool reset = false", "renderer camera reset should remain false until a camera-mutation interface exists");
+                                                           requirePresent(rendererInterface, "bool reset = false", "renderer camera-state construction must retain a false reset default");
+                                                           requirePresent(rendererInterface, "struct FrameResolutionPlan", "renderer must expose the generic display/render resolution plan");
+                                                           requirePresent(rendererInterface, "std::optional<FrameResolutionResolver> frameResolutionResolver", "renderer graph specs must optionally inject a generic frame resolution resolver");
+                                                           requirePresent(rendererImplementation, "frameParameters.resolutionPlan = resolutionPlan", "renderer must publish the resolved plan to node frame parameters");
+                                                           requirePresent(rendererImplementation, "frameParameters.resolutionPlan.renderExtent", "renderer camera jitter must use the resolved render extent");
+                                                           requirePresent(rendererImplementation, "frameParameters.resolutionPlan.resetHistory", "renderer camera state must consume the plan history-reset flag");
+                                                           requirePresent(rendererImplementation, "frameResolutionResolver_.has_value() && static_cast<bool>(*frameResolutionResolver_)", "renderer must early-acquire only for a non-empty resolution resolver");
+                                                           requireOrdered(rendererImplementation, "preAcquiredFrameImage = device_->acquireFrameImage(input.acquireTimeout)", "auto const currentDisplayExtent", "resolver graphs must acquire before snapshotting display extent");
+                                                           requirePresent(executorInterface, "std::optional<nr::rhi::Device::FrameAcquireResult> preAcquiredFrameImage{}", "executor contexts must optionally carry a pre-acquired frame image");
+                                                           requirePresent(executorImplementation, "context.preAcquiredFrameImage.has_value()", "executor must recognize a pre-acquired frame image");
+                                                           requirePresent(executorImplementation, "activeSwapchainImageIndex() == acquire.swapchainImageIndex", "executor must validate the pre-acquired image remains active");
+                                                           requireOrdered(executorImplementation, "? *context.preAcquiredFrameImage", "resolveSwapchainRuntimeResources(", "executor must reuse the pre-acquired result before resolving the swapchain binding");
                                                            requirePresent(node, "cameraFrameState.reset", "RR evaluation should consume the renderer-owned camera reset flag");
                                                            requireAbsent(node, "cameraFrameState.accumulationReset", "RR must not consume the standalone Accumulate node's history policy");
                                                            requirePresent(rendererImplementation, "makeRendererCameraFrameState(\n            cameraJitter_,\n            sampleFrameOrdinal,", "renderer jitter should follow the monotonic sample-frame ordinal");
@@ -143,8 +321,19 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{"renderpasses DLSS RR is 
                                                            requirePresent(node, "input.outputColorFormat != vk::Format::eUndefined", "RR color output format must fail fast when undefined");
                                                            requirePresent(node, "input.outputAlphaFormat != vk::Format::eUndefined", "RR alpha output format must fail fast when undefined");
                                                            requirePresent(node, "input.outputAlphaKey != input.outputColorKey", "RR output keys must remain distinct");
-                                                           requireOrdered(node, "if (!runtime->feature || runtime->activeCreateDesc != createDesc)", "runtime->optimalSettings = context->optimalSettings", "RR optimal settings must be queried only inside the create/recreate branch");
-                                                           requireOrdered(node, "runtime->optimalSettings = context->optimalSettings", "auto replacement = device.createDlssRayReconstructionFeature", "RR optimal settings must be queried before feature creation");
+                                                           requirePresent(node, "if (coordinatedOptimalSettings.has_value())", "coordinated RR must reuse the early controller optimal-settings snapshot");
+                                                           requirePresent(node, "dlssContext->optimalSettings(createDesc.targetSize, createDesc.quality)", "standalone RR must retain its late optimal-settings query");
+                                                           requirePresent(node, "detail::validateDlssOptimalSettings(\n            settings", "coordinated resolution must use the shared optimal-settings validation");
+                                                           requirePresent(node, "validateDlssOptimalSettings(runtime->optimalSettings, createDesc.targetSize, createDesc.quality)", "standalone and coordinated prepare must validate optimal settings");
+                                                           requirePresent(node, "settings.status.success()", "optimal-settings validation must reject failed queries");
+                                                           requirePresent(node, "settings.optimalRenderSize.valid() && settings.minimumRenderSize.valid() && settings.maximumRenderSize.valid()", "optimal-settings validation must reject zero dimensions");
+                                                           requirePresent(node, "settings.maximumRenderSize.width <= targetSize.width", "optimal-settings validation must reject ranges outside the target width");
+                                                           requirePresent(node, "settings.maximumRenderSize.height <= targetSize.height", "optimal-settings validation must reject ranges outside the target height");
+                                                           requirePresent(node, "settings.optimalRenderSize == targetSize", "optimal-settings validation must enforce DLAA target equality");
+                                                           nr::test::requireEqual(countOccurrences(node, "dlssContext->optimalSettings("), std::size_t{1u}, "RR build must not duplicate the standalone NGX optimal-settings query");
+                                                           requireOrdered(node, "if (!runtime->feature || runtime->activeCreateDesc != createDesc)", "auto replacement = device.createDlssRayReconstructionFeature", "RR feature creation must remain inside the create/recreate branch");
+                                                           requireOrdered(node, "if (coordinatedOptimalSettings.has_value())", "auto replacement = device.createDlssRayReconstructionFeature", "RR optimal settings must be selected before feature creation");
+                                                           requireOrdered(node, "validateDlssOptimalSettings(runtime->optimalSettings, createDesc.targetSize, createDesc.quality)", "auto replacement = device.createDlssRayReconstructionFeature", "RR optimal settings must be validated before feature creation");
                                                            requirePresent(node, "ImageUsageIntent::StorageWrite", "RR output must declare storage-write intent");
                                                            requirePresent(node, "ImageUsageIntent::Sampled", "RR inputs/output must retain sampled intent");
                                                            requirePresent(node, "DLSS.RayReconstruction.VisualizeMotionVectors", "RR must emit the optional post-evaluation MV visualization pass");
@@ -166,6 +355,9 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{"renderpasses DLSS RR is 
                                                            requirePresent(pipeline, "DlssQuality::Dlaa", "rtobject should begin with full-resolution DLAA reconstruction");
                                                            requirePresent(pipeline, "DlssDepthType::Hardware", "rtobject should declare its clip-depth guide as hardware depth");
                                                            requirePresent(pipeline, "input.outputColorKey = std::string{nr::renderer::frameResource::presentSourceColor}", "rtobject should explicitly route RR output to presentation");
+                                                           requirePresent(pipeline, "setResolutionController(dlssResolutionController)", "rtobject RR must attach the shared resolution controller to its node");
+                                                           requirePresent(pipeline, "graphSpec.frameResolutionResolver", "rtobject RR must install the generic renderer resolution resolver");
+                                                           requirePresent(pipeline, "activeNode->effectiveResolutionRequest()", "rtobject RR resolver must read the node's sole staged configuration authority");
                                                            requirePresent(pipeline, "switch (context.rtPostProcessingMode)", "rtobject should select exactly one post-processing implementation");
                                                            requirePresent(pipeline, ".runtime = postProcessing", "rtobject should install the selected Accumulate or RR implementation into one graph slot");
                                                            requireOrdered(pipeline, ".instanceName = \"PathTracing\"", ".runtime = postProcessing", "selected post-processing must consume PathTracing output after it is published");
@@ -214,5 +406,13 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{"renderpasses DLSS RR is 
                                                            requireOrdered(deviceImplementation, "instanceExtensionQuery.status.success()", "instanceExtensionQuery.names", "Device must fail fast before consuming instance-extension names");
                                                            requireOrdered(rhiImplementation, "feature_.reset();", "context_.reset();", "RR move assignment must release the old feature before its context");
                                                            requireOrdered(rhiImplementation, "context_.reset();", "context_ = std::move(other.context_);", "RR move assignment must release the old context before replacing it");
+                                                           requireAbsent(pathTracing, "presentationContext.swapchainExtent()", "PathTracing initialization must not eagerly allocate display-sized guides");
+                                                           requirePresent(pathTracing, "frameParameters.resolutionPlan.renderExtent", "PathTracing must consume the renderer render extent");
+                                                           requirePresent(pathTracing, "vk::Extent2D allocatedExtent{}", "each PathTracing frame slot must own independent guide allocation metadata");
+                                                           requirePresent(pathTracing, "auto& guideFrameSlot = runtime_->guideFrameSlots[frameSlotIndex]", "PathTracing must select only the completed current frame slot for guide growth");
+                                                           requirePresent(pathTracing, "ensurePathTracingGuideImages(device_->get(), guideFrameSlot, frameSlotIndex, renderExtent", "PathTracing guide allocation must grow only the current frame slot at renderer render extent");
+                                                           requireAbsent(pathTracing, "std::ranges::all_of(\n        runtime.guideFrameSlots", "PathTracing guide growth must not inspect and replace every in-flight frame slot");
+                                                           requirePresent(pathTracing, ".width = renderExtent.width", "PathTracing trace width must use the renderer render extent");
+                                                           requirePresent(pathTracing, ".height = renderExtent.height", "PathTracing trace height must use the renderer render extent");
                                                        }};
 } // namespace

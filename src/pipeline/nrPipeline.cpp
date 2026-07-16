@@ -144,6 +144,8 @@ struct ViewerControlState
     auto ui = std::make_shared<nr::renderPasses::UiNode>();
     auto postProcessing = std::shared_ptr<nr::renderer::NodeRuntime>{};
     auto postProcessingName = std::string{};
+    auto dlssResolutionController = std::shared_ptr<nr::renderPasses::DlssRayReconstructionResolutionController>{};
+    auto dlssRayReconstructionNode = std::weak_ptr<nr::renderPasses::DlssRayReconstructionNode>{};
     switch (context.rtPostProcessingMode)
     {
     case RtPostProcessingMode::accumulate:
@@ -153,10 +155,13 @@ struct ViewerControlState
     case RtPostProcessingMode::dlssRayReconstruction:
     {
         auto dlssRayReconstruction = std::make_shared<nr::renderPasses::DlssRayReconstructionNode>();
+        dlssResolutionController = std::make_shared<nr::renderPasses::DlssRayReconstructionResolutionController>();
+        dlssRayReconstruction->setResolutionController(dlssResolutionController);
         dlssRayReconstruction->input.enabled = true;
         dlssRayReconstruction->input.create.quality = nr::rhi::DlssQuality::Dlaa;
         dlssRayReconstruction->input.create.depthType = nr::rhi::DlssDepthType::Hardware;
         dlssRayReconstruction->input.outputColorKey = std::string{nr::renderer::frameResource::presentSourceColor};
+        dlssRayReconstructionNode = dlssRayReconstruction;
         postProcessing = std::move(dlssRayReconstruction);
         postProcessingName = "DlssRayReconstruction";
         break;
@@ -170,6 +175,18 @@ struct ViewerControlState
         .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
         .cycleLength = nr::renderer::kRendererDefaultCameraJitterCycleLength,
     };
+    if (dlssResolutionController)
+    {
+        graphSpec.frameResolutionResolver = [controller = dlssResolutionController, node = dlssRayReconstructionNode](nr::rhi::Device& device, vk::Extent2D displayExtent) {
+            auto activeNode = node.lock();
+            nr::nrAssert(static_cast<bool>(activeNode), "rtobject DLSS RR resolution resolver lost its node.");
+            auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{
+                [&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) {
+                    return device.dlssContext()->optimalSettings(targetSize, quality);
+                }};
+            return controller->resolve(activeNode->effectiveResolutionRequest(), displayExtent, query);
+        };
+    }
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
             .runtime = asBuild,

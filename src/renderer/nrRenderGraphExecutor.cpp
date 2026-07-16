@@ -361,6 +361,12 @@ namespace nr::renderer
         nrAssert(
             acquireBoundaryCount <= 1u,
             "RenderGraphExecutor::execute supports at most one swapchain-acquire boundary per frame.");
+        if (context.preAcquiredFrameImage.has_value())
+        {
+            nrAssert(
+                swapchainResourceCount > 0u && acquireBoundaryCount == 1u,
+                "RenderGraphExecutor::execute requires one compiled swapchain acquire boundary when a frame image was pre-acquired.");
+        }
         if (swapchainResourceCount > 0u)
         {
             auto firstSwapchainBatch = std::ranges::find_if(
@@ -496,7 +502,18 @@ namespace nr::renderer
                 nrAssert(
                     !report.swapchainImageIndex.has_value(),
                     "RenderGraphExecutor::execute encountered more than one swapchain acquire.");
-                auto acquire = context.device.acquireFrameImage(context.acquireTimeout);
+                auto acquire = context.preAcquiredFrameImage.has_value()
+                                   ? *context.preAcquiredFrameImage
+                                   : context.device.acquireFrameImage(context.acquireTimeout);
+                if (context.preAcquiredFrameImage.has_value())
+                {
+                    nrAssert(
+                        context.device.presentationContext.hasActiveSwapchainImage(),
+                        "RenderGraphExecutor::execute pre-acquired swapchain image is no longer active.");
+                    nrAssert(
+                        context.device.presentationContext.activeSwapchainImageIndex() == acquire.swapchainImageIndex,
+                        "RenderGraphExecutor::execute pre-acquired swapchain image index no longer matches the active image.");
+                }
                 report.swapchainImageIndex = acquire.swapchainImageIndex;
                 report.swapchainAcquireResult = acquire.swapchainResult;
                 resolveSwapchainRuntimeResources(
@@ -1034,9 +1051,19 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(
             nrAssert(
                 resource.resolvedFormat == currentFormat,
                 std::format(
-                    "RenderGraphExecutor swapchain format changed between graph build and late acquire: compiled={} acquired={}.",
+                    "RenderGraphExecutor swapchain format changed between graph build and acquire boundary: compiled={} acquired={}.",
                     vk::to_string(resource.resolvedFormat),
                     vk::to_string(currentFormat)));
+            nrAssert(
+                resource.resolvedExtent.width == std::max(1u, currentExtent.width) &&
+                    resource.resolvedExtent.height == std::max(1u, currentExtent.height) &&
+                    resource.resolvedExtent.depth == 1u,
+                std::format(
+                    "RenderGraphExecutor swapchain extent changed between graph build and acquire boundary: compiled={}x{} acquired={}x{}.",
+                    resource.resolvedExtent.width,
+                    resource.resolvedExtent.height,
+                    currentExtent.width,
+                    currentExtent.height));
 
             auto binding = PreparedResourceBinding{};
             binding.isImage = true;

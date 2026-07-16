@@ -443,7 +443,18 @@ AcquireResult PresentationContext::acquireNextImage(
     nrAssert(!borrowedAcquireSlotByFrame_[frameSlot].has_value(), "PresentationContext::acquireNextImage frame slot still holds an un-returned acquire semaphore.");
 
     auto slot = acquirePool_.borrow();
-    auto acquireResult = swapChain_.acquireNextImage(acquirePool_.semaphore(slot), timeout);
+    auto acquireResult = [&]() {
+        if constexpr (nr::isDebugMode)
+        {
+            if (acquireOutOfDateTestHook_ && acquireOutOfDateTestHook_())
+            {
+                return AcquireResult{
+                    .result = vk::Result::eErrorOutOfDateKHR,
+                };
+            }
+        }
+        return swapChain_.acquireNextImage(acquirePool_.semaphore(slot), timeout);
+    }();
     if (needsSwapchainRecreate(acquireResult.result) && acquireResult.result != vk::Result::eSuboptimalKHR)
     {
         acquirePool_.returnSlot(slot);
@@ -458,6 +469,27 @@ AcquireResult PresentationContext::acquireNextImage(
         std::format("PresentationContext::acquireNextImage unexpected acquire result: {}", vk::to_string(acquireResult.result)));
     borrowedAcquireSlotByFrame_[frameSlot] = slot;
     return acquireResult;
+}
+
+void PresentationContext::setAcquireOutOfDateTestHook(AcquireOutOfDateTestHook hook)
+{
+    nrAssert(static_cast<bool>(hook), "PresentationContext::setAcquireOutOfDateTestHook requires a non-empty hook.");
+    if constexpr (nr::isDebugMode)
+    {
+        acquireOutOfDateTestHook_ = std::move(hook);
+    }
+    else
+    {
+        nrAssert(false, "PresentationContext acquire out-of-date test hooks are available only in Debug builds.");
+    }
+}
+
+void PresentationContext::clearAcquireOutOfDateTestHook() noexcept
+{
+    if constexpr (nr::isDebugMode)
+    {
+        acquireOutOfDateTestHook_ = {};
+    }
 }
 
 void PresentationContext::returnAcquireSemaphore(std::uint32_t frameSlot)
