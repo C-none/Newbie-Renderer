@@ -46,7 +46,14 @@ template <typename VkHandle>
         nr::renderer::use::sampledRead(color),
         nr::renderer::use::storageWrite(output),
     };
-    auto computePass = builder.addPass("Resolve.Compose", computeNode, computeUses, [](const nr::renderer::PassRecordContext &) {});
+    auto computePass = builder.addPass(
+        "Resolve.Compose",
+        computeNode,
+        computeUses,
+        [](const nr::renderer::PassRecordContext&) {},
+        nullptr,
+        false,
+        vk::PipelineStageFlagBits2::eComputeShader);
 
     nr::test::require(graphicsPass.valid(), "graphics pass should be valid");
     nr::test::require(submit.valid(), "submit boundary should be valid");
@@ -275,7 +282,6 @@ template <typename VkHandle>
 }
 
 [[nodiscard]] nr::renderer::RenderGraphFrameDescription buildSwapchainFrame(
-    std::uint32_t swapchainImageIndex,
     std::string_view debugSuffix)
 {
     auto builder = nr::renderer::RenderGraphBuilder{};
@@ -283,7 +289,6 @@ template <typename VkHandle>
     auto swapchainImage = builder.addResource(nr::renderer::GraphImportedSwapchainImageDesc{
         .debugName = std::format("Swapchain.Image.{}", debugSuffix),
         .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
-        .swapchainImageIndex = swapchainImageIndex,
         .extent = vk::Extent3D{128, 72, 1},
         .format = vk::Format::eB8G8R8A8Unorm,
     });
@@ -685,6 +690,114 @@ const nr::test::CaseRegistrar compilerCrossQueueCase{
                           "debug view should include ownership transition diagnostics");
         nr::test::require(compiled.debugView.find("GeometryToResolve") != std::string::npos,
                           "debug view should include submit boundary names");
+
+        auto plan = nr::renderer::RenderGraphExecutor{}.buildPlan(compiled);
+        nr::test::requireEqual(plan.batches.size(), std::size_t{2});
+        nr::test::require(
+            plan.batches[1].waitStageMask == vk::PipelineStageFlagBits2::eComputeShader,
+            "graphics-to-compute wait should begin at the actual compute shader consumer stage");
+    }};
+
+const nr::test::CaseRegistrar executorSwapchainAcquireBoundaryCase{
+    "render graph executor acquires swapchain immediately before the transfer copy batch",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto computeNode = builder.addNode("Present", nr::renderer::QueueDomain::Compute);
+        auto convertedColor = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Present.ConvertedColor",
+            .extent = vk::Extent3D{128, 72, 1},
+            .format = vk::Format::eB8G8R8A8Unorm,
+        });
+        auto swapchainImage = builder.addResource(nr::renderer::GraphImportedSwapchainImageDesc{
+            .debugName = "Swapchain.Image",
+            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
+            .extent = vk::Extent3D{128, 72, 1},
+            .format = vk::Format::eB8G8R8A8Unorm,
+        });
+
+        auto convertUses = std::array{nr::renderer::use::storageWrite(convertedColor)};
+        static_cast<void>(builder.addPass(
+            "Present.Convert",
+            computeNode,
+            convertUses,
+            [](const nr::renderer::PassRecordContext&) {},
+            nullptr,
+            false,
+            vk::PipelineStageFlagBits2::eComputeShader));
+        static_cast<void>(builder.addSubmitNode(
+            "Present.AcquireSwapchainImage",
+            nr::renderer::SubmitBoundaryKind::SwapchainAcquire));
+        static_cast<void>(builder.addCopyPass(
+            "Present.CopyToSwapchain",
+            computeNode,
+            nr::renderer::CopyImageToImagePassDesc{
+                .source = convertedColor,
+                .destination = swapchainImage,
+                .presentDestination = true,
+            }));
+
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(builder.build());
+        auto plan = nr::renderer::RenderGraphExecutor{}.buildPlan(compiled);
+        nr::test::requireEqual(compiled.submitBatches.size(), std::size_t{2});
+        nr::test::requireEqual(
+            compiled.submitBatches[1].openedBySubmitNodeKind,
+            nr::renderer::SubmitBoundaryKind::SwapchainAcquire);
+        nr::test::require(plan.batches[1].acquiresSwapchainBeforeSubmit);
+        nr::test::require(plan.batches[1].waitStageMask == vk::PipelineStageFlagBits2::eTransfer);
+        nr::test::require(plan.batches[1].signalsPresent);
+    }};
+
+const nr::test::CaseRegistrar executorCrossQueueWaitUnionCase{
+    "render graph executor unions exact cross-batch consumer wait stages",
+    [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto graphicsNode = builder.addNode("Graphics", nr::renderer::QueueDomain::Graphics);
+        auto computeNode = builder.addNode("Compute", nr::renderer::QueueDomain::Compute);
+        auto transferSource = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Graphics.TransferSource",
+            .extent = vk::Extent3D{32, 32, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+        auto shaderSource = builder.addResource(nr::renderer::GraphTransientImageDesc{
+            .debugName = "Graphics.ShaderSource",
+            .extent = vk::Extent3D{32, 32, 1},
+            .format = vk::Format::eR8G8B8A8Unorm,
+        });
+
+        auto graphicsUses = std::array{
+            nr::renderer::use::colorWrite(transferSource),
+            nr::renderer::use::colorWrite(shaderSource),
+        };
+        static_cast<void>(builder.addPass(
+            "Graphics.Write",
+            graphicsNode,
+            graphicsUses,
+            [](const nr::renderer::PassRecordContext&) {}));
+        static_cast<void>(builder.addSubmitNode("GraphicsToCompute"));
+
+        auto transferUses = std::array{nr::renderer::use::imageTransferSrc(transferSource)};
+        static_cast<void>(builder.addPass(
+            "Compute.Copy",
+            computeNode,
+            transferUses,
+            [](const nr::renderer::PassRecordContext&) {}));
+        auto computeUses = std::array{nr::renderer::use::sampledRead(shaderSource)};
+        static_cast<void>(builder.addPass(
+            "Compute.Read",
+            computeNode,
+            computeUses,
+            [](const nr::renderer::PassRecordContext&) {},
+            nullptr,
+            false,
+            vk::PipelineStageFlagBits2::eComputeShader));
+
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(builder.build());
+        auto plan = nr::renderer::RenderGraphExecutor{}.buildPlan(compiled);
+        auto expected = vk::PipelineStageFlagBits2::eTransfer | vk::PipelineStageFlagBits2::eComputeShader;
+        nr::test::requireEqual(plan.batches.size(), std::size_t{2});
+        nr::test::require(
+            plan.batches[1].waitStageMask == expected,
+            "cross-batch wait should include both transfer and compute consumers");
     }};
 
 const nr::test::CaseRegistrar compilerPassOrderCase{
@@ -775,6 +888,64 @@ const nr::test::CaseRegistrar compilerRetainedImageInitializedCase{
         nr::test::require(barrier.dstScope.access == vk::AccessFlagBits2::eShaderStorageWrite);
     }};
 
+const nr::test::CaseRegistrar compilerRetainedImageInitialOwnershipCase{
+    "render graph compiler transfers initialized retained image ownership before first use",
+    [] {
+        auto state = nr::renderer::RetainedImageState{
+            .initialized = true,
+            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
+            .ownership = nr::renderer::ResourceOwnershipDomain::Graphics,
+            .access = nr::renderer::AccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferRead,
+            },
+        };
+        auto frame = buildRetainedStorageWriteFrame(state, "initial-ownership");
+        auto compiled = nr::renderer::RenderGraphCompiler{}.compile(frame);
+
+        auto const& resource = compiled.resources.front();
+        nr::test::requireEqual(
+            resource.initialOwnership,
+            nr::renderer::ResourceOwnershipDomain::Graphics);
+        nr::test::requireEqual(
+            resource.finalOwnership,
+            nr::renderer::ResourceOwnershipDomain::Compute);
+
+        auto const& pass = compiled.submitBatches.front().passes.front();
+        nr::test::requireEqual(pass.preBarriers.size(), std::size_t{1});
+        auto const& transition = pass.preBarriers.front();
+        nr::test::requireEqual(
+            transition.strength,
+            nr::renderer::DependencyStrength::ReleaseAcquireRequired);
+        nr::test::requireEqual(transition.srcQueue, nr::renderer::QueueDomain::Graphics);
+        nr::test::requireEqual(transition.dstQueue, nr::renderer::QueueDomain::Compute);
+        nr::test::requireEqual(
+            transition.oldLayout,
+            nr::renderer::ImageLayoutIntent::TransferSrc);
+        nr::test::requireEqual(
+            transition.newLayout,
+            nr::renderer::ImageLayoutIntent::General);
+        nr::test::requireEqual(compiled.ownershipTransitions.size(), std::size_t{1});
+
+        auto plan = nr::renderer::RenderGraphExecutor{}.buildPlan(compiled);
+        nr::test::requireEqual(plan.initialReleaseBatches.size(), std::size_t{1});
+        auto const& initialRelease = plan.initialReleaseBatches.front();
+        nr::test::requireEqual(initialRelease.queue, nr::renderer::QueueDomain::Graphics);
+        nr::test::requireEqual(initialRelease.tailReleaseTransitions.size(), std::size_t{1});
+        nr::test::require(!initialRelease.waitsForPreviousBatch, "first synthetic release should not wait");
+        nr::test::require(initialRelease.signalsNextBatch, "synthetic release should signal its consumer chain");
+
+        nr::test::requireEqual(plan.batches.size(), std::size_t{1});
+        auto const& consumerBatch = plan.batches.front();
+        nr::test::requireEqual(consumerBatch.headAcquireTransitions.size(), std::size_t{1});
+        nr::test::require(consumerBatch.waitsForPreviousBatch, "first-use consumer should wait for the synthetic release");
+        nr::test::require(
+            consumerBatch.waitStageMask ==
+                (vk::PipelineStageFlagBits2::eComputeShader |
+                 vk::PipelineStageFlagBits2::eRayTracingShaderKHR),
+            "first-use acquire should wait at the retained resource consumer stages");
+    }};
+
 const nr::test::CaseRegistrar compilerRetainedImageUninitializedCase{
     "render graph compiler treats uninitialized retained images as undefined",
     [] {
@@ -844,6 +1015,10 @@ const nr::test::CaseRegistrar compilerAccelerationStructureCase{
         nr::test::require(barrier.dstScope.stages == vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
         nr::test::require(barrier.dstScope.access == vk::AccessFlagBits2::eAccelerationStructureReadKHR);
         nr::test::requireEqual(compiled.ownershipTransitions.size(), std::size_t{1});
+        auto plan = nr::renderer::RenderGraphExecutor{}.buildPlan(compiled);
+        nr::test::require(
+            plan.batches[1].waitStageMask == vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+            "AS-to-RT wait should begin at the ray tracing shader consumer stage");
         nr::test::require(
             compiled.debugView.find("type=AccelerationStructure") != std::string::npos,
             "debug view should identify AS resources");
@@ -1038,12 +1213,12 @@ const nr::test::CaseRegistrar compileCacheStructuralMissCase{
     }};
 
 const nr::test::CaseRegistrar compileCacheDebugNameSwapchainIndexHitCase{
-    "render graph compile cache ignores debug names and swapchain image index",
+    "render graph compile cache ignores debug names for late-bound swapchain resources",
     [] {
         auto cache = nr::renderer::RenderGraphCompileCache{};
-        auto first = buildSwapchainFrame(0u, "first");
+        auto first = buildSwapchainFrame("first");
         static_cast<void>(cache.compileConsumingCached(first));
-        auto second = buildSwapchainFrame(2u, "second");
+        auto second = buildSwapchainFrame("second");
         auto compiled = cache.compileConsumingCached(second);
 
         auto stats = cache.statistics();

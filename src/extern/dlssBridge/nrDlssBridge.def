@@ -1,0 +1,3 @@
+LIBRARY nr_dlss_bridge
+EXPORTS
+    nrDlssBridgeGetApi

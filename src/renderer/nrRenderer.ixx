@@ -124,7 +124,6 @@ inline constexpr std::string_view sceneRtHitSbtPlan = "scene.rt.hitSbtPlan";
 struct NodeFrameParameters
 {
     std::uint32_t frameIndex = 0;
-    std::uint32_t swapchainImageIndex = 0;
     vk::Extent2D swapchainExtent{1, 1};
     vk::Format swapchainFormat = vk::Format::eUndefined;
     vk::ColorSpaceKHR swapchainColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
@@ -134,6 +133,7 @@ struct NodeFrameParameters
     std::optional<std::reference_wrapper<const nr::scene::ScenePacketSet>> scenePackets{};
     std::optional<std::reference_wrapper<const std::vector<nr::scene::TlasBuildInputPacket>>> sceneTlasBuildInputs{};
     std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};
+    nr::scene::SceneBridgeFrameConstants renderCameraConstants{};
     std::optional<std::reference_wrapper<FrameServices>> frameServices{};
     std::span<const NodeUiSection> nodeUiSections{};
 };
@@ -186,8 +186,6 @@ struct FrameUniformBinding
 };
 
 inline constexpr std::uint32_t kRendererDefaultCameraJitterCycleLength = 256u;
-inline constexpr std::uint32_t kRendererAccumulationMaxSampleCount = 4096u;
-inline constexpr float kRendererCameraStabilityEpsilon = 1.0e-5f;
 
 enum class RendererCameraJitterSequence : std::uint8_t
 {
@@ -216,25 +214,15 @@ struct RendererCameraJitterSample
 struct RendererCameraFrameState
 {
     bool jitterEnabled = false;
-    bool accumulationReset = true;
-    std::uint64_t stableFrameOrdinal = 0u;
-    std::uint32_t historySampleCount = 0u;
+    bool reset = false;
     RendererCameraJitterSample jitter{};
-    vk::Extent2D viewportExtent{1u, 1u};
-};
-
-struct RendererCameraStabilityKey
-{
-    glm::mat4 view{1.0f};
-    glm::mat4 projection{1.0f};
-    glm::vec3 cameraWorld{0.0f};
     vk::Extent2D viewportExtent{1u, 1u};
 };
 
 [[nodiscard]] float haltonSequenceValue(std::uint32_t index, std::uint32_t base) noexcept;
 
 [[nodiscard]] RendererCameraJitterSample makeHalton23CameraJitterSample(
-    std::uint64_t stableFrameOrdinal,
+    std::uint64_t frameOrdinal,
     vk::Extent2D viewportExtent,
     std::uint32_t cycleLength = kRendererDefaultCameraJitterCycleLength) noexcept;
 
@@ -242,14 +230,10 @@ struct RendererCameraStabilityKey
     const glm::mat4& projection,
     glm::vec2 ndcOffset) noexcept;
 
-[[nodiscard]] RendererCameraStabilityKey makeRendererCameraStabilityKey(
-    const nr::scene::SceneBridgeFrameConstants& frameConstants,
+[[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(
+    const RendererCameraJitterConfig& jitterConfig,
+    std::uint64_t frameOrdinal,
     vk::Extent2D viewportExtent) noexcept;
-
-[[nodiscard]] bool rendererCameraStabilityKeysEquivalent(
-    const RendererCameraStabilityKey& left,
-    const RendererCameraStabilityKey& right,
-    float epsilon = kRendererCameraStabilityEpsilon) noexcept;
 
 struct FrameGlobalResources
 {
@@ -485,6 +469,9 @@ struct NodeBuildContext
         vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
+        std::string_view debugName);
+
+    [[nodiscard]] GraphSubmitHandle addSwapchainAcquireNode(
         std::string_view debugName);
 
   private:
@@ -1565,12 +1552,6 @@ class Renderer
 
     void teardownInstalledGraph();
 
-    void resetCameraFrameTracking() noexcept;
-
-    [[nodiscard]] RendererCameraFrameState beginCameraFrameState(
-        const nr::scene::SceneBridgeFrameConstants& frameConstants,
-        vk::Extent2D viewportExtent) noexcept;
-
     [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneExtractProfile(nr::scene::Scene& scene);
 
     [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneTlasExtractProfile(nr::scene::Scene& scene);
@@ -1593,7 +1574,7 @@ class Renderer
     RenderGraphBuilder builder_{};
     RenderGraphExecutor executor_{};
     RendererCacheSuite cacheSuite_{};
-    RendererSubmissionTimeline submissionTimeline_{};
+    RendererSubmissionTimelines submissionTimelines_{};
     FrameUniformArena frameUniformArena_{};
     nr::rhi::Image sceneTextureFallback_{};
 
@@ -1601,8 +1582,6 @@ class Renderer
     std::vector<InstalledNode> installedNodes_{};
     std::multimap<std::size_t, SubmitNodeSpec> submitNodesByAfterIndex_{};
     RendererCameraJitterConfig cameraJitter_{};
-    std::optional<RendererCameraStabilityKey> previousCameraStabilityKey_{};
-    std::uint64_t cameraStableFrameOrdinal_ = 0u;
     std::uint64_t sampleFrameOrdinal_ = 0u;
 
     std::optional<std::reference_wrapper<nr::scene::Scene>> activeScene_{};

@@ -102,12 +102,6 @@ class AcquireSemaphorePool
     std::vector<std::uint32_t> freeSlots_;
 };
 
-struct PendingAcquire
-{
-    std::uint32_t semaphoreSlot = 0;
-    std::uint32_t imageIndex = 0;
-};
-
 class PresentationContext
 {
   public:
@@ -121,12 +115,11 @@ class PresentationContext
         const SwapChainConfig& config,
         std::uint32_t presentQueueFamily);
 
-    void issueFirstAcquire(std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max());
-    void issueNextAcquire(std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max());
-    [[nodiscard]] AcquireResult consumePendingAcquire(std::uint32_t frameSlot);
+    [[nodiscard]] AcquireResult acquireNextImage(
+        std::uint32_t frameSlot,
+        std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max());
     void returnAcquireSemaphore(std::uint32_t frameSlot);
     [[nodiscard]] const vk::raii::Semaphore& borrowedAcquireSemaphore(std::uint32_t frameSlot) const;
-    [[nodiscard]] bool hasPendingAcquire() const noexcept;
 
     [[nodiscard]] PresentResult present(
         const QueueManager& queueManager,
@@ -172,7 +165,6 @@ class PresentationContext
   private:
     void ensurePresentSupport(const vk::raii::PhysicalDevice& physicalDevice) const;
     void ensureFullScreenExclusiveSupport(const vk::raii::PhysicalDevice& physicalDevice) const;
-    void issuePendingAcquireImpl(std::uint64_t timeout);
     void refreshFullScreenExclusiveMonitor() noexcept;
     void acquireFullScreenExclusiveIfNeeded();
     void releaseFullScreenExclusiveIfNeeded() noexcept;
@@ -187,7 +179,6 @@ class PresentationContext
     bool fullScreenExclusiveAcquired_ = false;
 
     AcquireSemaphorePool acquirePool_{};
-    std::optional<PendingAcquire> pendingAcquire_{};
     std::array<std::optional<std::uint32_t>, maxFrameInFlight> borrowedAcquireSlotByFrame_{};
     mutable std::vector<std::uint32_t> textInputCodepoints_{};
 };

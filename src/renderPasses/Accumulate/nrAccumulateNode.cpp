@@ -1,4 +1,5 @@
 module nr.renderPasses;
+import dependency.math;
 import dependency.vulkan;
 
 import :accumulateNode;
@@ -21,6 +22,32 @@ struct AccumulatePushConstants
 
 static_assert(sizeof(AccumulatePushConstants) <= nr::rhi::kMaxPushConstantBytes);
 
+struct AccumulateCameraTransform
+{
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+};
+
+[[nodiscard]] bool accumulateMatricesEquivalent(
+    const glm::mat4& left,
+    const glm::mat4& right) noexcept
+{
+    auto elements = std::views::iota(std::size_t{0}, std::size_t{16});
+    return std::ranges::all_of(elements, [&](std::size_t element) {
+        auto const column = element / 4u;
+        auto const row = element % 4u;
+        return left[column][row] == right[column][row];
+    });
+}
+
+[[nodiscard]] bool accumulateCameraTransformsEquivalent(
+    const AccumulateCameraTransform& left,
+    const AccumulateCameraTransform& right) noexcept
+{
+    return accumulateMatricesEquivalent(left.view, right.view) &&
+           accumulateMatricesEquivalent(left.projection, right.projection);
+}
+
 struct AccumulateRuntimeCache
 {
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> pipeline{};
@@ -28,6 +55,8 @@ struct AccumulateRuntimeCache
     std::array<nr::renderer::RetainedImageState, 2u> historyStates{};
     vk::Extent2D allocatedExtent{0u, 0u};
     vk::Format allocatedFormat = vk::Format::eUndefined;
+    std::optional<AccumulateCameraTransform> previousCameraTransform{};
+    std::uint32_t historySampleCount = 0u;
     bool historyValid = false;
     std::uint32_t lastWrittenSlot = 1u;
 };
@@ -90,6 +119,7 @@ struct AccumulateRuntimeCache
 
     runtime.allocatedExtent = extent;
     runtime.allocatedFormat = format;
+    runtime.historySampleCount = 0u;
     runtime.historyValid = false;
     runtime.lastWrittenSlot = 1u;
     return true;
@@ -196,6 +226,13 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
                                    ? vk::Format::eR16G16B16A16Sfloat
                                    : input.historyFormat;
     auto const reallocated = detail::ensureHistoryImages(device_->get(), *runtime_, viewportExtent, historyFormat);
+    auto const currentCameraTransform = detail::AccumulateCameraTransform{
+        .view = frameParameters.renderCameraConstants.view,
+        .projection = frameParameters.renderCameraConstants.projection,
+    };
+    auto const cameraReset =
+        !runtime_->previousCameraTransform.has_value() ||
+        !detail::accumulateCameraTransformsEquivalent(*runtime_->previousCameraTransform, currentCameraTransform);
 
     auto const currentSlot = runtime_->historyValid
                                  ? 1u - runtime_->lastWrittenSlot
@@ -203,10 +240,7 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
     auto const previousSlot = runtime_->historyValid
                                   ? runtime_->lastWrittenSlot
                                   : 1u - currentSlot;
-    auto const resetHistory =
-        context.globalResources.get().cameraFrameState.accumulationReset ||
-        reallocated ||
-        !runtime_->historyValid;
+    auto const resetHistory = cameraReset || reallocated || !runtime_->historyValid;
 
     auto previousHistory = detail::importHistoryImage(
         context,
@@ -236,7 +270,7 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
         .width = viewportExtent.width,
         .height = viewportExtent.height,
         .resetHistory = resetHistory ? 1u : 0u,
-        .historySampleCount = context.globalResources.get().cameraFrameState.historySampleCount,
+        .historySampleCount = resetHistory ? 0u : runtime_->historySampleCount,
         .maxHistorySampleCount = maxHistorySampleCount,
     };
 
@@ -259,6 +293,15 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
 
     [[maybe_unused]] auto accumulatePassHandle = accumulatePass.build();
 
+    runtime_->previousCameraTransform = currentCameraTransform;
+    if (resetHistory)
+    {
+        runtime_->historySampleCount = 1u;
+    }
+    else if (runtime_->historySampleCount < kAccumulateMaxHistorySampleCount)
+    {
+        ++runtime_->historySampleCount;
+    }
     runtime_->lastWrittenSlot = currentSlot;
     runtime_->historyValid = true;
     context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, outputHistory);

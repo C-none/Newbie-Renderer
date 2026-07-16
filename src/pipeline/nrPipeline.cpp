@@ -18,20 +18,74 @@ struct ViewerPendingRequests
 {
     std::optional<std::string> pipelineId{};
     std::optional<std::filesystem::path> modelPath{};
+    std::optional<RtPostProcessingMode> rtPostProcessingMode{};
+};
+
+struct PipelineUiComponent
+{
+    std::function<std::vector<nr::app::UiSection>()> buildSections{};
 };
 
 struct ViewerControlState
 {
-    std::string activePipelineId{std::string{normalViewPipelineId}};
+    std::string activePipelineId{std::string{defaultPipelineId}};
     std::filesystem::path activeModelPath{};
     std::string modelInput{};
     std::string statusMessage{};
+    RtPostProcessingMode rtPostProcessingMode = RtPostProcessingMode::dlssRayReconstruction;
+    std::optional<PipelineUiComponent> activePipelineUi{};
     ViewerPendingRequests pending{};
 };
 
 [[nodiscard]] std::string pipelineDisplayName(const RenderPipelineDesc& desc)
 {
     return desc.displayName.empty() ? desc.id : desc.displayName;
+}
+
+[[nodiscard]] constexpr std::string_view rtPostProcessingModeName(RtPostProcessingMode mode) noexcept
+{
+    switch (mode)
+    {
+    case RtPostProcessingMode::accumulate:
+        return "Accumulate";
+    case RtPostProcessingMode::dlssRayReconstruction:
+        return "DLSS Ray Reconstruction";
+    }
+    std::unreachable();
+}
+
+[[nodiscard]] std::vector<nr::app::UiSection> buildRtObjectUi(ViewerControlState& controls)
+{
+    return {
+        nr::app::UiSection{
+            .id = "rtobject.postprocessing",
+            .title = "Post Processing",
+            .draw = [&controls](nr::app::UiSystem& ui) {
+                auto const activeLabel = rtPostProcessingModeName(controls.rtPostProcessingMode);
+                if (!ui.beginCombo("Mode", activeLabel))
+                {
+                    return;
+                }
+
+                constexpr auto modes = std::array{
+                    RtPostProcessingMode::accumulate,
+                    RtPostProcessingMode::dlssRayReconstruction,
+                };
+                std::ranges::for_each(modes, [&](RtPostProcessingMode mode) {
+                    auto const selected = mode == controls.rtPostProcessingMode;
+                    if (ui.selectable(rtPostProcessingModeName(mode), selected))
+                    {
+                        controls.pending.rtPostProcessingMode = mode;
+                    }
+                    if (selected)
+                    {
+                        ui.setItemDefaultFocus();
+                    }
+                });
+                ui.endCombo();
+            },
+        },
+    };
 }
 
 [[nodiscard]] std::string pathStorageKey(const std::filesystem::path& path)
@@ -88,7 +142,26 @@ struct ViewerControlState
     auto lightPrepare = std::make_shared<nr::renderPasses::LightPrepareNode>();
     auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
     auto ui = std::make_shared<nr::renderPasses::UiNode>();
-    auto accumulate = std::make_shared<nr::renderPasses::AccumulateNode>();
+    auto postProcessing = std::shared_ptr<nr::renderer::NodeRuntime>{};
+    auto postProcessingName = std::string{};
+    switch (context.rtPostProcessingMode)
+    {
+    case RtPostProcessingMode::accumulate:
+        postProcessing = std::make_shared<nr::renderPasses::AccumulateNode>();
+        postProcessingName = "Accumulate";
+        break;
+    case RtPostProcessingMode::dlssRayReconstruction:
+    {
+        auto dlssRayReconstruction = std::make_shared<nr::renderPasses::DlssRayReconstructionNode>();
+        dlssRayReconstruction->input.enabled = true;
+        dlssRayReconstruction->input.create.quality = nr::rhi::DlssQuality::Dlaa;
+        dlssRayReconstruction->input.create.depthType = nr::rhi::DlssDepthType::Hardware;
+        dlssRayReconstruction->input.outputColorKey = std::string{nr::renderer::frameResource::presentSourceColor};
+        postProcessing = std::move(dlssRayReconstruction);
+        postProcessingName = "DlssRayReconstruction";
+        break;
+    }
+    }
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
     present->input.format = context.swapchainFormat;
 
@@ -102,7 +175,6 @@ struct ViewerControlState
             .runtime = asBuild,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "AccelerationStructureBuild",
-                .queue = nr::renderer::QueueDomain::Compute,
             },
         },
         nr::renderer::NodeCreateInfo{
@@ -124,9 +196,9 @@ struct ViewerControlState
             },
         },
         nr::renderer::NodeCreateInfo{
-            .runtime = accumulate,
+            .runtime = postProcessing,
             .config = nr::renderer::NodeConfig{
-                .instanceName = "Accumulate",
+                .instanceName = std::move(postProcessingName),
                 .queue = nr::renderer::QueueDomain::Compute,
             },
         },
@@ -139,10 +211,6 @@ struct ViewerControlState
         },
     };
     graphSpec.submitNodes = {
-        nr::renderer::SubmitNodeSpec{
-            .debugName = "rtobject.ComputeToGraphics",
-            .afterNodeIndex = 0u,
-        },
         nr::renderer::SubmitNodeSpec{
             .debugName = "rtobject.GraphicsToCompute",
             .afterNodeIndex = 3u,
@@ -169,6 +237,7 @@ struct ViewerControlState
     auto graphSpec = pipeline->get().buildGraph(PipelineBuildContext{
         .swapchainFormat = presentation.swapchainFormat(),
         .swapchainExtent = presentation.swapchainExtent(),
+        .rtPostProcessingMode = controls.rtPostProcessingMode,
     });
     if (graphSpec.nodes.empty())
     {
@@ -186,6 +255,18 @@ struct ViewerControlState
     renderer.installGraph(graphSpec);
 
     controls.activePipelineId = std::string{pipelineId};
+    if (pipelineId == rtObjectPipelineId)
+    {
+        controls.activePipelineUi = PipelineUiComponent{
+            .buildSections = [&controls] {
+                return buildRtObjectUi(controls);
+            },
+        };
+    }
+    else
+    {
+        controls.activePipelineUi.reset();
+    }
     return true;
 }
 
@@ -273,6 +354,14 @@ void queueViewerControls(
             }
         },
     });
+
+    if (controls.activePipelineUi.has_value() && controls.activePipelineUi->buildSections)
+    {
+        auto sections = controls.activePipelineUi->buildSections();
+        std::ranges::for_each(sections, [&](nr::app::UiSection& section) {
+            ui.queueSection(std::move(section));
+        });
+    }
 }
 
 [[nodiscard]] bool processPendingRequests(
@@ -292,6 +381,22 @@ void queueViewerControls(
         controls.pending.pipelineId.reset();
     }
 
+    if (controls.pending.rtPostProcessingMode.has_value())
+    {
+        auto const requestedMode = *controls.pending.rtPostProcessingMode;
+        controls.pending.rtPostProcessingMode.reset();
+        if (controls.activePipelineId == rtObjectPipelineId && requestedMode != controls.rtPostProcessingMode)
+        {
+            auto const previousMode = controls.rtPostProcessingMode;
+            controls.rtPostProcessingMode = requestedMode;
+            if (!installPipeline(app.renderer(), registry, rtObjectPipelineId, controls))
+            {
+                controls.rtPostProcessingMode = previousMode;
+                success = false;
+            }
+        }
+    }
+
     if (controls.pending.modelPath.has_value())
     {
         auto report = modelController.loadModel(app, *controls.pending.modelPath, std::ref(history));
@@ -308,16 +413,10 @@ void queueViewerControls(
     return success;
 }
 
-[[nodiscard]] bool handlePresentResult(nr::app::AppSession& app, vk::Result presentResult)
+[[nodiscard]] bool handlePresentResult(vk::Result presentResult)
 {
-    auto& renderer = app.renderer();
     if (nr::rhi::PresentationContext::needsSwapchainRecreate(presentResult))
     {
-        auto& presentation = renderer.device().presentationContext;
-        if (presentation.framebufferAvailable() && !presentation.hasPendingAcquire())
-        {
-            renderer.resize();
-        }
         return true;
     }
 
@@ -838,7 +937,7 @@ void printViewerUsage(std::string_view executableName)
             break;
         }
 
-        if (!handlePresentResult(app, frameResult.presentResult))
+        if (!handlePresentResult(frameResult.presentResult))
         {
             exitCode = 1;
             break;

@@ -1,6 +1,7 @@
 export module nr.rhi:device;
 import dependency.window;
 import dependency.nsight;
+import dependency.dlss;
 import dependency.vulkan;
 
 import :vk;
@@ -14,6 +15,7 @@ import :nsightGraphics;
 import :resourcePool;
 import :pipeline;
 import :resourceOps;
+import :dlss;
 import nr.utils;
 import std;
 
@@ -58,6 +60,7 @@ struct Vulkan14CapabilitySnapshot
     bool dynamicRenderingLocalRead = false;
     bool maintenance5 = false;
     bool maintenance6 = false;
+    bool maintenance8 = false;
     bool maintenance9 = false;
     bool pipelineProtectedAccess = false;
     bool pipelineRobustness = false;
@@ -98,9 +101,14 @@ class Device
     struct FrameBeginResult
     {
         std::uint32_t frameIndex = 0;
+        double cpuWaitGpuMilliseconds = 0.0;
+    };
+
+    struct FrameAcquireResult
+    {
         std::uint32_t swapchainImageIndex = 0;
         vk::Result swapchainResult = vk::Result::eSuccess;
-        double cpuWaitGpuMilliseconds = 0.0;
+        bool recreatedSwapchain = false;
     };
 
     std::string appName;
@@ -158,7 +166,10 @@ class Device
         std::string const &_engineName = {"DefaultEngine"},
         PipelineCacheConfig pipelineCache = {});
 
-    [[nodiscard]] FrameBeginResult beginFrame(std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max());
+    [[nodiscard]] FrameBeginResult beginFrame();
+
+    [[nodiscard]] FrameAcquireResult acquireFrameImage(
+        std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max());
 
     void submitFrameBatch(CommandBatch&& batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage);
 
@@ -196,6 +207,11 @@ class Device
 
     [[nodiscard]] const ops::UploadReadbackContext &uploadReadback() const noexcept;
 
+    [[nodiscard]] std::shared_ptr<DlssContext> dlssContext();
+
+    [[nodiscard]] std::unique_ptr<DlssRayReconstructionFeature> createDlssRayReconstructionFeature(
+        const DlssRayReconstructionCreateDesc& desc);
+
     ~Device();
 
   protected:
@@ -221,7 +237,8 @@ class Device
         vk::KHRSwapchainExtensionName,          vk::KHRDeferredHostOperationsExtensionName,      vk::EXTMeshShaderExtensionName,       vk::KHRAccelerationStructureExtensionName,
         vk::KHRRayTracingPipelineExtensionName, vk::KHRRayTracingMaintenance1ExtensionName,      vk::KHRPipelineLibraryExtensionName,  vk::KHRRayQueryExtensionName,
         vk::EXTOpacityMicromapExtensionName,    vk::EXTRayTracingInvocationReorderExtensionName, vk::NVCooperativeVectorExtensionName, vk::EXTExtendedDynamicState3ExtensionName,
-        vk::EXTMemoryBudgetExtensionName,       vk::KHRMaintenance9ExtensionName,                 vk::EXTFullScreenExclusiveExtensionName,
+        vk::EXTMemoryBudgetExtensionName,       vk::KHRMaintenance8ExtensionName,                 vk::KHRMaintenance9ExtensionName,
+        vk::EXTFullScreenExclusiveExtensionName,
     };
     RayTracingCapabilitySnapshot rtCapabilities_{};
     DescriptorIndexingCapabilitySnapshot descriptorIndexingCapabilities_{};
@@ -232,12 +249,14 @@ class Device
     bool frameBoundaryEnabled_ = false;
     bool hdrMetadataEnabled_ = false;
     NsightGraphicsFrameHelper nsightGraphics_{};
+    std::shared_ptr<DlssContext> dlssContext_{};
 
     std::array<std::size_t, static_cast<std::size_t>(QueueFamilyKind::size)> queueFamilyDict{};
     SwapChainConfig swapChainConfig_{};
     std::uint32_t frameSubmitCount_ = 0;
     std::optional<QueueRole> frameFinalSubmitRole_{};
     std::optional<std::uint64_t> presentFrameBoundaryFrameID_{};
+    bool frameAcquireRequiresRecreate_ = false;
     std::vector<vk::raii::Semaphore> presentSemaphoresByImage_{};
 };
 

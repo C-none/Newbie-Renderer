@@ -19,6 +19,8 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
         nr::test::require(device.uploadReadback().valid(), "upload/readback context should be initialized");
         nr::test::require(device.hasEnabledDeviceExtension(vk::KHRSwapchainExtensionName),
                           "swapchain device extension should be enabled");
+        nr::test::require(device.hasEnabledDeviceExtension(vk::KHRMaintenance8ExtensionName),
+                          "maintenance8 device extension should be enabled");
         nr::test::require(device.hasEnabledDeviceExtension(vk::KHRMaintenance9ExtensionName),
                           "maintenance9 device extension should be enabled");
         nr::test::require(!device.hasEnabledDeviceExtension(vk::NVCommandBufferInheritanceExtensionName),
@@ -38,6 +40,7 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
         auto const &vulkan14 = device.vulkan14Capabilities();
         nr::test::require(vulkan14.maintenance5, "Vulkan 1.4 maintenance5 should be enabled on the target profile");
         nr::test::require(vulkan14.maintenance6, "Vulkan 1.4 maintenance6 should be enabled on the target profile");
+        nr::test::require(vulkan14.maintenance8, "VK_KHR_maintenance8 should be enabled on the target profile");
         nr::test::require(vulkan14.maintenance9, "VK_KHR_maintenance9 should be enabled on the target profile");
         nr::test::require(
             device.queueFamilyTransferPolicy().maintenance9,

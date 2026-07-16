@@ -1,0 +1,57 @@
+if(NOT DEFINED NR_PUBLISH_CONFIG OR NOT NR_PUBLISH_CONFIG STREQUAL "Release")
+    message(FATAL_ERROR "nr_publish_dlss_bridge is restricted to the Release configuration; Debug artifacts cannot be published.")
+endif()
+if(NOT DEFINED NR_PUBLISH_COMPILER_ID OR NOT NR_PUBLISH_COMPILER_ID STREQUAL "MSVC")
+    message(FATAL_ERROR "nr_publish_dlss_bridge requires the MSVC compiler and ABI.")
+endif()
+foreach(required_variable IN ITEMS
+    NR_BRIDGE_SOURCE_DIR
+    NR_DLSS_SDK_DIR
+    NR_BRIDGE_BUILD_DLL
+    NR_BRIDGE_ARTIFACT_DIR
+    NR_ARTIFACT_HELPER
+)
+    if(NOT DEFINED ${required_variable})
+        message(FATAL_ERROR "Publish input '${required_variable}' was not provided.")
+    endif()
+endforeach()
+if(NOT EXISTS "${NR_BRIDGE_BUILD_DLL}")
+    message(FATAL_ERROR "The MSVC Release bridge DLL is missing: ${NR_BRIDGE_BUILD_DLL}")
+endif()
+
+include("${NR_ARTIFACT_HELPER}")
+nr_compute_dlss_bridge_fingerprints("${NR_BRIDGE_SOURCE_DIR}" "${NR_DLSS_SDK_DIR}" publish)
+file(SHA256 "${NR_BRIDGE_BUILD_DLL}" bridge_dll_sha256)
+
+file(MAKE_DIRECTORY "${NR_BRIDGE_ARTIFACT_DIR}")
+set(destination_dll "${NR_BRIDGE_ARTIFACT_DIR}/nr_dlss_bridge.dll")
+set(destination_manifest "${NR_BRIDGE_ARTIFACT_DIR}/manifest.json")
+set(temporary_dll "${destination_dll}.tmp")
+set(temporary_manifest "${destination_manifest}.tmp")
+file(REMOVE "${temporary_dll}" "${temporary_manifest}")
+file(COPY_FILE "${NR_BRIDGE_BUILD_DLL}" "${temporary_dll}" ONLY_IF_DIFFERENT)
+file(WRITE "${temporary_manifest}" "{\n")
+file(APPEND "${temporary_manifest}" "  \"schemaVersion\": 1,\n")
+file(APPEND "${temporary_manifest}" "  \"bridgeAbi\": 1,\n")
+file(APPEND "${temporary_manifest}" "  \"sdkVersion\": \"310.7.0\",\n")
+file(APPEND "${temporary_manifest}" "  \"platform\": \"windows\",\n")
+file(APPEND "${temporary_manifest}" "  \"architecture\": \"x86_64\",\n")
+file(APPEND "${temporary_manifest}" "  \"configuration\": \"Release\",\n")
+file(APPEND "${temporary_manifest}" "  \"runtime\": \"MT\",\n")
+file(APPEND "${temporary_manifest}" "  \"apiHeaderSha256\": \"${publish_HEADER_SHA256}\",\n")
+file(APPEND "${temporary_manifest}" "  \"bridgeInputsSha256\": \"${publish_INPUTS_SHA256}\",\n")
+file(APPEND "${temporary_manifest}" "  \"ngxLoaderSha256\": \"${publish_LOADER_SHA256}\",\n")
+file(APPEND "${temporary_manifest}" "  \"dllSha256\": \"${bridge_dll_sha256}\",\n")
+file(APPEND "${temporary_manifest}" "  \"export\": \"nrDlssBridgeGetApi\"\n")
+file(APPEND "${temporary_manifest}" "}\n")
+
+file(RENAME "${temporary_dll}" "${destination_dll}" RESULT rename_dll_result)
+if(NOT rename_dll_result STREQUAL "0")
+    message(FATAL_ERROR "Could not atomically publish the DLSS bridge DLL: ${rename_dll_result}")
+endif()
+file(RENAME "${temporary_manifest}" "${destination_manifest}" RESULT rename_manifest_result)
+if(NOT rename_manifest_result STREQUAL "0")
+    message(FATAL_ERROR "Could not atomically publish the DLSS bridge manifest: ${rename_manifest_result}")
+endif()
+
+message(STATUS "Published the MSVC Release DLSS bridge to ${NR_BRIDGE_ARTIFACT_DIR}")

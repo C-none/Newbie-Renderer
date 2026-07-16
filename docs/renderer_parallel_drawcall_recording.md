@@ -42,8 +42,10 @@ authority.
 
 ## Executor Flow
 
-During `executePrepared(...)`, the executor launches record tasks for all submit batches
-before the ordered primary assembly loop.
+During `executePrepared(...)`, the executor launches record tasks for the current submit
+batch immediately before that batch's ordered primary assembly. This keeps worker recording
+parallel within a batch while allowing pre-acquire batches to be submitted before the CPU
+reaches a potentially blocking swapchain-acquire boundary.
 
 For a serial pass, the existing path remains: one worker records one secondary and the
 primary executes that one command buffer for the pass.

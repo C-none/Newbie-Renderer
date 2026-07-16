@@ -57,22 +57,20 @@ const nr::test::CaseRegistrar registryCase{
         auto rtGraph = rtObject->get().buildGraph(graphContext());
         nr::test::requireEqual(rtGraph.nodes.size(), std::size_t{6u});
         nr::test::requireEqual(rtGraph.nodes[0].config.instanceName, std::string{"AccelerationStructureBuild"});
-        nr::test::requireEqual(rtGraph.nodes[0].config.queue, nr::renderer::QueueDomain::Compute);
+        nr::test::requireEqual(rtGraph.nodes[0].config.queue, nr::renderer::QueueDomain::Graphics);
         nr::test::requireEqual(rtGraph.nodes[1].config.instanceName, std::string{"LightPrepare"});
         nr::test::requireEqual(rtGraph.nodes[1].config.queue, nr::renderer::QueueDomain::Graphics);
         nr::test::requireEqual(rtGraph.nodes[2].config.instanceName, std::string{"PathTracing"});
         nr::test::requireEqual(rtGraph.nodes[2].config.queue, nr::renderer::QueueDomain::Graphics);
         nr::test::requireEqual(rtGraph.nodes[3].config.instanceName, std::string{"Ui"});
         nr::test::requireEqual(rtGraph.nodes[3].config.queue, nr::renderer::QueueDomain::Graphics);
-        nr::test::requireEqual(rtGraph.nodes[4].config.instanceName, std::string{"Accumulate"});
+        nr::test::requireEqual(rtGraph.nodes[4].config.instanceName, std::string{"DlssRayReconstruction"});
         nr::test::requireEqual(rtGraph.nodes[4].config.queue, nr::renderer::QueueDomain::Compute);
         nr::test::requireEqual(rtGraph.nodes[5].config.instanceName, std::string{"Present"});
         nr::test::requireEqual(rtGraph.nodes[5].config.queue, nr::renderer::QueueDomain::Compute);
-        nr::test::requireEqual(rtGraph.submitNodes.size(), std::size_t{2u});
-        nr::test::requireEqual(rtGraph.submitNodes[0].afterNodeIndex, std::size_t{0u});
-        nr::test::requireEqual(rtGraph.submitNodes[0].debugName, std::string{"rtobject.ComputeToGraphics"});
-        nr::test::requireEqual(rtGraph.submitNodes[1].afterNodeIndex, std::size_t{3u});
-        nr::test::requireEqual(rtGraph.submitNodes[1].debugName, std::string{"rtobject.GraphicsToCompute"});
+        nr::test::requireEqual(rtGraph.submitNodes.size(), std::size_t{1u});
+        nr::test::requireEqual(rtGraph.submitNodes[0].afterNodeIndex, std::size_t{3u});
+        nr::test::requireEqual(rtGraph.submitNodes[0].debugName, std::string{"rtobject.GraphicsToCompute"});
         nr::test::requireEqual(rtGraph.cameraJitter.sequence, nr::renderer::RendererCameraJitterSequence::Halton23);
         nr::test::requireEqual(rtGraph.cameraJitter.cycleLength, nr::renderer::kRendererDefaultCameraJitterCycleLength);
     }};
@@ -117,6 +115,9 @@ const nr::test::CaseRegistrar displayCase{
 const nr::test::CaseRegistrar cliCase{
     "viewer command line parses model path and pipeline",
     [] {
+        auto defaultOptions = nr::pipeline::parseViewerCommandLine({});
+        nr::test::requireEqual(defaultOptions.pipelineId, std::string{"rtobject"});
+
         auto values = std::vector<std::string>{
             "assets/Box.gltf",
             "--pipeline",

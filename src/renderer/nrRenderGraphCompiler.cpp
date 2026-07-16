@@ -8,6 +8,26 @@ import :rendererType;
 
 namespace nr::renderer
 {
+namespace
+{
+[[nodiscard]] std::optional<QueueDomain> queueDomainFromOwnership(
+    ResourceOwnershipDomain ownership) noexcept
+{
+    switch (ownership)
+    {
+    case ResourceOwnershipDomain::Undefined:
+        return std::nullopt;
+    case ResourceOwnershipDomain::Graphics:
+        return QueueDomain::Graphics;
+    case ResourceOwnershipDomain::Compute:
+        return QueueDomain::Compute;
+    case ResourceOwnershipDomain::Transfer:
+        return QueueDomain::Transfer;
+    }
+    std::unreachable();
+}
+} // namespace
+
 [[nodiscard]] bool RenderGraphCompiler::hasExplicitSubmitBoundariesForQueueTransitions(const RenderGraphFrameDescription& frame)
 {
         auto passQueueByHandle = std::map<GraphPassHandle, QueueDomain>{};
@@ -499,22 +519,33 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame& compil
                     else if (!previousUse.has_value())
                     {
                         auto resourceIt = resourceByHandle.find(use.resource);
-                        if (resourceIt != resourceByHandle.end() && resourceIt->second.get().isImage)
+                        if (resourceIt != resourceByHandle.end())
                         {
-                            auto oldLayout = resourceIt->second.get().initialLayout;
+                            const auto& resource = resourceIt->second.get();
+                            auto oldLayout = resource.initialLayout;
                             auto newLayout = resolvedLayout.value_or(oldLayout);
-                            if (oldLayout != newLayout)
+                            auto initialQueue = queueDomainFromOwnership(resource.initialOwnership);
+                            auto ownershipChanges = initialQueue.has_value() && *initialQueue != pass.queue;
+                            auto layoutChanges = resource.isImage && oldLayout != newLayout;
+                            if (ownershipChanges || layoutChanges)
                             {
-                                pass.preBarriers.push_back(ResourceStateTransition{
+                                auto transition = ResourceStateTransition{
                                     .resource = use.resource,
-                                    .srcQueue = pass.queue,
+                                    .srcQueue = initialQueue.value_or(pass.queue),
                                     .dstQueue = pass.queue,
                                     .oldLayout = oldLayout,
                                     .newLayout = newLayout,
-                                    .strength = DependencyStrength::BarrierRequired,
-                                    .srcScope = resourceIt->second.get().initialAccessScope,
+                                    .strength = ownershipChanges
+                                                    ? DependencyStrength::ReleaseAcquireRequired
+                                                    : DependencyStrength::BarrierRequired,
+                                    .srcScope = resource.initialAccessScope,
                                     .dstScope = currentScope,
-                                });
+                                };
+                                pass.preBarriers.push_back(transition);
+                                if (ownershipChanges)
+                                {
+                                    compiled.ownershipTransitions.push_back(transition);
+                                }
                             }
                         }
                     }

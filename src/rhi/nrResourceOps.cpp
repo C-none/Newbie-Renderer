@@ -276,6 +276,7 @@ namespace nr::rhi::ops
 
 void BarrierBatch::clear()
 {
+        dependencyFlags_ = {};
         memoryBarriers_.clear();
         bufferBarriers_.clear();
         imageBarriers_.clear();
@@ -284,6 +285,11 @@ void BarrierBatch::clear()
 [[nodiscard]] bool BarrierBatch::empty() const noexcept
 {
         return memoryBarriers_.empty() && bufferBarriers_.empty() && imageBarriers_.empty();
+    }
+
+void BarrierBatch::addDependencyFlags(vk::DependencyFlags flags) noexcept
+{
+        dependencyFlags_ |= flags;
     }
 
 void BarrierBatch::addBuffer(const Buffer& buffer, vk::BufferMemoryBarrier2 barrier)
@@ -304,6 +310,7 @@ void BarrierBatch::addImage(const Image& image, vk::ImageMemoryBarrier2 barrier)
         packet.imageBarriers = imageBarriers_;
 
         packet.info = vk::DependencyInfo{};
+        packet.info.dependencyFlags = dependencyFlags_;
         packet.info.memoryBarrierCount = static_cast<std::uint32_t>(packet.memoryBarriers.size());
         packet.info.pMemoryBarriers = packet.memoryBarriers.data();
         packet.info.bufferMemoryBarrierCount = static_cast<std::uint32_t>(packet.bufferBarriers.size());

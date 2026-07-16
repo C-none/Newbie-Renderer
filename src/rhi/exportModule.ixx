@@ -4,6 +4,7 @@ export import :command;
 export import :commandBatch;
 export import :commandPool;
 export import :descriptor;
+export import :dlss;
 export import :device;
 export import :frameContext;
 export import :memoryAllocator;

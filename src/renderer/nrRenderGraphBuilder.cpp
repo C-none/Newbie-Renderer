@@ -210,12 +210,14 @@ void RenderGraphBuilder::clear()
     }
 
 [[nodiscard]] GraphSubmitHandle RenderGraphBuilder::addSubmitNode(
-        std::string_view debugName)
+        std::string_view debugName,
+        SubmitBoundaryKind kind)
 {
         auto handle = GraphSubmitHandle{nextSubmit_++};
         frame_.submitBoundaries.push_back(SubmitBoundaryDesc{
             .handle = handle,
             .debugName = std::string(debugName),
+            .kind = kind,
         });
         frame_.executionOrder.push_back(handle);
         return handle;
@@ -898,8 +900,9 @@ GraphPassHandle RenderGraphNodeContext::addCopyPass(
 }
 
 GraphSubmitHandle RenderGraphNodeContext::addSubmitNode(
-    std::string_view debugName)
+    std::string_view debugName,
+    SubmitBoundaryKind kind)
 {
-    return builder_.get().addSubmitNode(debugName);
+    return builder_.get().addSubmitNode(debugName, kind);
 }
 } // namespace nr::renderer

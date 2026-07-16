@@ -53,7 +53,8 @@ class RenderGraphNodeContext
         CopyPassDesc copy);
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
-        std::string_view debugName);
+        std::string_view debugName,
+        SubmitBoundaryKind kind = SubmitBoundaryKind::QueueSubmission);
 
   private:
     std::reference_wrapper<RenderGraphBuilder> builder_;
@@ -134,7 +135,8 @@ class RenderGraphBuilder
         CopyPassDesc copy);
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(
-        std::string_view debugName);
+        std::string_view debugName,
+        SubmitBoundaryKind kind = SubmitBoundaryKind::QueueSubmission);
 
     [[nodiscard]] const RenderGraphFrameDescription& frame() const noexcept;
 

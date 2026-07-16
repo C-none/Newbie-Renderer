@@ -388,6 +388,7 @@ class RenderGraphCompiler
                         "RenderGraphCompiler::compileSubmitBatches pending submit boundary disappeared.");
                     batch.openedBySubmitNode = pendingBoundary;
                     batch.openedBySubmitNodeDebugName = boundaryIt->second.get().debugName;
+                    batch.openedBySubmitNodeKind = boundaryIt->second.get().kind;
                 }
                 currentBatch = std::move(batch);
                 pendingBoundary.reset();

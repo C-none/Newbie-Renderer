@@ -27,7 +27,7 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 10. [ ] Neural Radiance Caching. Suggested reference: [Real-time Neural Radiance Caching for Path Tracing](https://research.nvidia.com/publication/2021-06_real-time-neural-radiance-caching-path-tracing)
 11. [ ] Filter After Shading. Suggested reference: [Filtering After Shading with Stochastic Texture Filtering](https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/)
 12. [ ] Sample-Reuse Texture Filtering. Suggested reference: [Collaborative Texture Filtering with ReSTIR and Sample Reuse](https://research.nvidia.com/labs/rtr/publication/akeninemoller2025collaborative/collaborative_texfilt.pdf)
-13. [ ] DLSS Integration. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
+13. [x] DLSS Ray Reconstruction integration. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
 14. [ ] Ray-Cones and Texture LOD. Suggested reference: [Improved Shader and Texture Level of Detail Using Ray Cones](https://research.nvidia.com/publication/2021-04_improved-shader-and-texture-level-detail-using-ray-cones)
 15. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
 
@@ -39,7 +39,7 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 - Vulkan SDK 1.4.341 or newer
 - CMake 4.3.3 or newer
 - Vcpkg with `VCPKG_ROOT` configured
-- Git submodules initialized with `--recurse-submodules` for Slang and assets
+- Git submodules initialized recursively for Slang, DLSS, and sample assets
 
 Optional MSVC toolchains:
 
@@ -52,8 +52,14 @@ Optional MSVC toolchains:
 1. Clone the repository
 
    ```bash
-   git clone https://github.com/C-none/Newbie-Renderer.git --recurse-submodules
+   git clone --recurse-submodules https://github.com/C-none/Newbie-Renderer.git
    cd Newbie-Renderer
+   ```
+
+   For an existing non-recursive checkout, initialize every nested submodule before configuring:
+
+   ```bash
+   git submodule update --init --recursive
    ```
 
 2. Configure
@@ -93,6 +99,26 @@ cmake --preset msvc-vs
 cmake --build --preset debug-msvc --target main
 ```
 
+MSVC also owns the project-local NGX bridge build. Debug builds create a local
+`nr_dlss_bridge.dll` in the build tree, but Debug artifacts are never publishable.
+Only the dedicated MSVC Release preset may refresh the Git-tracked bridge:
+
+```bash
+cmake --preset msvc-dlss-bridge
+cmake --build --preset publish-dlss-bridge-msvc
+```
+
+The publish target updates only
+`src/extern/dlssBridge/artifacts/windows-x86_64/release/nr_dlss_bridge.dll`
+and its manifest. It never writes generated files into the DLSS submodule.
+
+The normal LLVM clang++/libc++ presets do not require Visual Studio or the MSVC
+Redistributable. They validate and deploy that tracked, statically linked Release
+bridge, while `nvngx_dlssd.dll` comes from the recursively cloned DLSS submodule.
+Both Debug and Release LLVM builds use the same Release bridge/feature-DLL pair.
+Configuration fails if the bridge is missing, tampered with, or stale relative to
+its C ABI, source, or bundled NGX SDK inputs.
+
 `compile_commands.json` for clangd is generated in the isolated `build/llvm-clangd` tree. The main LLVM build tree intentionally keeps `CMAKE_EXPORT_COMPILE_COMMANDS=OFF`, and `.clangd` points clangd at `build/llvm-clangd`.
 
 The LLVM presets keep vcpkg `buildtrees` and temporary `packages` staging under `build/vcpkg`, while source downloads and compiled binary packages use vcpkg's default global caches. Installed dependencies remain under `build/llvm/vcpkg_installed`.
@@ -122,6 +148,7 @@ app.shutdown();
 | --- | --- | --- |
 | Slang | `v2026.10.2` | Shader language, compilation, reflection, SPIR-V generation |
 | glTF-Sample-Assets | `2bac6f8c` | Sample assets for import, testing, and regression cases |
+| NVIDIA DLSS SDK | `310.7.0` | NGX headers, static loader input for MSVC bridge publication, and the Release Ray Reconstruction feature DLL |
 | Nsight Aftermath SDK `R590` | bundled under `src/extern/Aftermath` | Future GPU crash diagnostics and shader crash analysis |
 | Nsight Graphics SDK `0.9.0` | bundled under `src/extern/NsightGraphics/0.9.0` | Env-driven Graphics Capture, GPU Trace, and SDK frame boundaries |
 

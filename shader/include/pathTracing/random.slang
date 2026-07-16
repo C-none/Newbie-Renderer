@@ -15,10 +15,12 @@ implementing common;
 //          (frame << 2*tileBits, i.e. frame * 65536 for tileBits == 8) so
 //          successive frames step far along the sequence and fastOwenScrambling
 //          shatters that stride into decorrelated (white) cross-frame samples.
-//    * The scrambling seed is shared across the whole frame (starts at 0), which
-//      preserves the spatial blue-noise structure; it is evolved per draw (the
-//      increment counter) via an LCG so each dimension/bounce picks a fresh Owen
-//      scramble -> cross-draw values are decorrelated (white).
+//    * The scrambling seed is shared across the whole frame. It stays at 0 while
+//      the frame ordinal fits beside the spatial bits in the 32-bit Sobol' index,
+//      then changes once per frame era so the pattern does not repeat on wrap.
+//      The seed is evolved per draw (the increment counter) via an LCG so each
+//      dimension/bounce picks a fresh Owen scramble -> cross-draw values are
+//      decorrelated (white).
 //
 //  The whole sampler is pure ALU: no lookup textures or extra GPU resources.
 // ============================================================================
@@ -243,20 +245,37 @@ public struct RandomSequence : IRandomSequence
 
 // Blue-noise error-diffusion initialisation (UE-aligned, one sample per frame).
 //   dispatch : per-thread 2D position (e.g. DispatchRaysIndex().xy)
-//   frameId  : monotonic frame index (added to the Sobol' index as a stride)
-//   tileBits : Hilbert tile size = 2^tileBits per axis (pattern tiles beyond it)
-public RandomSequence makeErrorDiffusionSequence(uint2 dispatch, uint frameId, int tileBits = 8)
+//   sampleFrameOrdinal : monotonic 64-bit frame ordinal as low/high uint lanes
+//   tileBits           : Hilbert tile size = 2^tileBits per axis (1..15)
+public RandomSequence makeErrorDiffusionSequence(
+    uint2 dispatch,
+    uint2 sampleFrameOrdinal,
+    int tileBits = 8)
 {
     RandomSequence seq;
     // Spatial low discrepancy: encode dispatch.xy along a Hilbert curve so that
-    // neighbouring pixels are adjacent in the Sobol' index. The frame index is
-    // added above the tile bits (frame * 65536 when tileBits == 8) as a large
-    // stride that fastOwenScrambling shatters into white cross-frame noise.
+    // neighbouring pixels are adjacent in the Sobol' index. The low ordinal bits
+    // are added above the tile bits (frame * 65536 when tileBits == 8) as a large
+    // stride that fastOwenScrambling shatters into white cross-frame noise. The
+    // 1..15 tileBits contract keeps every shift strictly below 32 bits.
+    uint spatialBitCount = uint(2 * tileBits);
+    uint frameBitCount = 32u - spatialBitCount;
+    uint frameInEraMask = 0xffffffffu >> spatialBitCount;
+    uint frameInEra = sampleFrameOrdinal.x & frameInEraMask;
     uint tileId = hilbertSFCInverse(dispatch.x, dispatch.y, tileBits);
-    tileId += frameId << uint(2 * tileBits);
+    tileId += frameInEra << spatialBitCount;
     seq.sampleIndex = reversebits(tileId);
-    // Seed shared across the frame (evolved only per draw) keeps the spatial
-    // blue-noise structure intact.
-    seq.sampleSeed = 0u;
+
+    // Fold the ordinal bits that do not fit in the Sobol' index into a frame-era
+    // seed. It is independent of dispatch, preserving the spatial error-diffusion
+    // structure. Era zero deliberately retains the old zero seed, so tileBits=8
+    // produces exactly the previous sequence for the first 65,536 frames.
+    uint2 frameEra = uint2(
+        (sampleFrameOrdinal.x >> frameBitCount) |
+            (sampleFrameOrdinal.y << spatialBitCount),
+        sampleFrameOrdinal.y >> frameBitCount);
+    // strongIntegerHash(0u) == 0u, so frame era zero naturally keeps the legacy
+    // seed while every nonzero era is mixed without a special-case branch.
+    seq.sampleSeed = strongIntegerHash(frameEra.x ^ strongIntegerHash(frameEra.y));
     return seq;
 }

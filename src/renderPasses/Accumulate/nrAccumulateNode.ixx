@@ -14,7 +14,7 @@ struct AccumulateRuntimeCache;
 export namespace nr::renderPasses
 {
 inline constexpr std::uint32_t kAccumulateDefaultMaxHistorySampleCount = 1024u;
-inline constexpr std::uint32_t kAccumulateMaxHistorySampleCount = nr::renderer::kRendererAccumulationMaxSampleCount;
+inline constexpr std::uint32_t kAccumulateMaxHistorySampleCount = 4096u;
 
 struct AccumulateNodeInput
 {

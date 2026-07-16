@@ -23,6 +23,25 @@ const nr::test::CaseRegistrar ownershipTransferCase{
         nr::test::require(transfer.valid(), "cross queue transfer should validate");
         nr::test::require(!transfer.hasWait(), "plain transfer should not carry a wait");
 
+        auto buffer = nr::rhi::Buffer{};
+        auto releaseBarrier = nr::rhi::ops::makeBufferOwnershipTransferBarrier<
+            nr::rhi::ops::OwnershipBarrierPhase::Release>(buffer, transfer);
+        nr::test::require(
+            releaseBarrier.srcStageMask == vk::PipelineStageFlagBits2::eTransfer &&
+                releaseBarrier.dstStageMask == vk::PipelineStageFlagBits2::eTransfer,
+            "maintenance8 release should use the producer stage in both scopes");
+        nr::test::require(releaseBarrier.srcAccessMask == vk::AccessFlagBits2::eTransferWrite);
+        nr::test::require(releaseBarrier.dstAccessMask == vk::AccessFlags2{});
+
+        auto acquireBarrier = nr::rhi::ops::makeBufferOwnershipTransferBarrier<
+            nr::rhi::ops::OwnershipBarrierPhase::Acquire>(buffer, transfer);
+        nr::test::require(
+            acquireBarrier.srcStageMask == vk::PipelineStageFlagBits2::eVertexAttributeInput &&
+                acquireBarrier.dstStageMask == vk::PipelineStageFlagBits2::eVertexAttributeInput,
+            "maintenance8 acquire should use the consumer stage in both scopes");
+        nr::test::require(acquireBarrier.srcAccessMask == vk::AccessFlags2{});
+        nr::test::require(acquireBarrier.dstAccessMask == vk::AccessFlagBits2::eVertexAttributeRead);
+
         auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{.releaseToDestination = transfer};
         nr::test::require(plan.valid(2u), "plan should validate against transfer queue family");
         nr::test::require(!plan.valid(1u), "plan should reject the wrong transfer queue family");
@@ -131,17 +150,35 @@ const nr::test::CaseRegistrar barrierBatchCase{
             vk::PipelineStageFlagBits2::eComputeShader,
             vk::AccessFlagBits2::eShaderRead,
         });
+        batch.add(vk::BufferMemoryBarrier2{
+            vk::PipelineStageFlagBits2::eTransfer,
+            vk::AccessFlagBits2::eTransferWrite,
+            vk::PipelineStageFlagBits2::eComputeShader,
+            vk::AccessFlagBits2::eShaderRead,
+            0u,
+            1u,
+            vk::Buffer{},
+            0u,
+            16u,
+        });
         nr::test::require(!batch.empty(), "barrier batch should become non-empty");
 
         auto packet = batch.buildDependencyInfo();
         nr::test::requireEqual(packet.memoryBarriers.size(), std::size_t{1});
-        nr::test::requireEqual(packet.bufferBarriers.size(), std::size_t{0});
+        nr::test::requireEqual(packet.bufferBarriers.size(), std::size_t{1});
         nr::test::requireEqual(packet.imageBarriers.size(), std::size_t{0});
         nr::test::requireEqual(packet.dependencyInfo().memoryBarrierCount, 1u);
         nr::test::require(packet.dependencyInfo().pMemoryBarriers == packet.memoryBarriers.data(), "dependency info should point at packet-owned memory");
+        nr::test::require(
+            (packet.dependencyInfo().dependencyFlags &
+             vk::DependencyFlagBits::eQueueFamilyOwnershipTransferUseAllStagesKHR) != vk::DependencyFlags{},
+            "dependency info should preserve maintenance8 QFOT stage semantics");
 
         batch.clear();
         nr::test::require(batch.empty(), "clear should empty all barrier arrays");
+        nr::test::require(
+            batch.buildDependencyInfo().dependencyInfo().dependencyFlags == vk::DependencyFlags{},
+            "clear should reset dependency flags");
     }};
 
 const nr::test::CaseRegistrar commandBatchFrameBoundaryCase{

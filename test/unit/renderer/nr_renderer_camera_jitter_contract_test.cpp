@@ -1,6 +1,5 @@
 import dependency;
 import nr.renderer;
-import nr.scene;
 import nr.test;
 import std;
 
@@ -55,41 +54,30 @@ const nr::test::CaseRegistrar projectionJitterCase{
         nr::test::require(nearlyEqual(jitteredNdc.y - baseNdc.y, ndcOffset.y));
     }};
 
-const nr::test::CaseRegistrar stabilityCase{
-    "renderer camera stability key ignores jitter-only changes",
+const nr::test::CaseRegistrar frameStateCase{
+    "renderer camera reset stays false and Halton phase follows frame ordinal",
     [] {
-        auto constants = nr::scene::SceneBridgeFrameConstants{};
-        constants.view = glm::lookAtRH(
-            glm::vec3{2.0f, 1.0f, 4.0f},
-            glm::vec3{0.0f},
-            glm::vec3{0.0f, 1.0f, 0.0f});
-        constants.projection = glm::perspectiveRH_ZO(
-            glm::radians(70.0f),
-            16.0f / 9.0f,
-            0.2f,
-            500.0f);
-        constants.viewProjection = constants.projection * constants.view;
-        constants.cameraWorld = glm::vec3{2.0f, 1.0f, 4.0f};
-
         auto const extent = vk::Extent2D{1600u, 900u};
-        auto const key = nr::renderer::makeRendererCameraStabilityKey(constants, extent);
-        auto const sameUnjitteredKey = nr::renderer::makeRendererCameraStabilityKey(constants, extent);
-        nr::test::require(nr::renderer::rendererCameraStabilityKeysEquivalent(key, sameUnjitteredKey));
+        auto const jitterConfig = nr::renderer::RendererCameraJitterConfig{
+            .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
+        };
+        auto const frame41 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 41u, extent);
+        auto const frame42 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 42u, extent);
 
-        auto jitteredKey = key;
-        jitteredKey.projection = nr::renderer::applyCameraProjectionJitter(
-            constants.projection,
-            nr::renderer::makeHalton23CameraJitterSample(7u, extent).ndcOffset);
-        nr::test::require(
-            !nr::renderer::rendererCameraStabilityKeysEquivalent(key, jitteredKey),
-            "stability comparison would reject jittered projection keys, so renderer must key unjittered projection");
+        nr::test::require(frame41.jitterEnabled);
+        nr::test::require(!frame41.reset);
+        nr::test::require(!frame42.reset);
+        nr::test::requireEqual(frame41.jitter.sampleIndex, 42u);
+        nr::test::requireEqual(frame42.jitter.sampleIndex, 43u);
+        nr::test::requireEqual(frame42.viewportExtent, extent);
 
-        auto movedKey = key;
-        movedKey.cameraWorld.x += 0.01f;
-        nr::test::require(!nr::renderer::rendererCameraStabilityKeysEquivalent(key, movedKey));
-
-        auto resizedKey = key;
-        resizedKey.viewportExtent.width += 1u;
-        nr::test::require(!nr::renderer::rendererCameraStabilityKeysEquivalent(key, resizedKey));
+        auto const disabled = nr::renderer::makeRendererCameraFrameState(
+            nr::renderer::RendererCameraJitterConfig{},
+            99u,
+            vk::Extent2D{0u, 0u});
+        nr::test::require(!disabled.jitterEnabled);
+        nr::test::require(!disabled.reset);
+        nr::test::requireEqual(disabled.jitter.sampleIndex, 0u);
+        nr::test::requireEqual(disabled.viewportExtent, vk::Extent2D{1u, 1u});
     }};
 } // namespace

@@ -58,13 +58,16 @@ struct ExecutorBatchPlan
     std::vector<ResourceStateTransition> headAcquireTransitions{};
     std::vector<ResourceStateTransition> tailReleaseTransitions{};
 
+    vk::PipelineStageFlags2 waitStageMask = vk::PipelineStageFlagBits2::eAllCommands;
     bool waitsForPreviousBatch = false;
     bool signalsNextBatch = false;
     bool signalsPresent = false;
+    bool acquiresSwapchainBeforeSubmit = false;
 };
 
 struct ExecutorPlan
 {
+    std::vector<ExecutorBatchPlan> initialReleaseBatches{};
     std::vector<ExecutorBatchPlan> batches{};
     std::size_t totalPassCount = 0;
     std::size_t totalInPassBarrierCount = 0;
@@ -75,6 +78,9 @@ struct ExecutorPlan
 struct ExecuteReport
 {
     ExecutorPlan plan{};
+
+    std::optional<std::uint32_t> swapchainImageIndex{};
+    vk::Result swapchainAcquireResult = vk::Result::eSuccess;
 
     std::size_t invokedPassPrepareCount = 0;
     std::size_t invokedPassRecordCount = 0;
@@ -124,6 +130,7 @@ struct PreparedGraphFrame
     ExecutorPlan plan{};
     std::map<GraphResourceHandle, PreparedResourceBinding> runtimeBindings{};
     std::size_t invokedPassPrepareCount = 0;
+    std::optional<std::size_t> firstDeferredPrepareBatch{};
 };
 
 template <typename TContext>
@@ -341,8 +348,8 @@ class RenderGraphExecutor
     {
         nr::rhi::Device& device;
         std::uint32_t frameIndex = 0;
-        std::optional<std::uint32_t> swapchainImageIndex{};
-        std::optional<std::reference_wrapper<RendererSubmissionTimeline>> submissionTimeline{};
+        std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max();
+        std::optional<std::reference_wrapper<RendererSubmissionTimelines>> submissionTimelines{};
     };
 
     [[nodiscard]] ExecutorPlan buildPlan(const CompiledGraphFrame& compiled) const;
@@ -410,7 +417,8 @@ class RenderGraphExecutor
         nr::rhi::CommandBatch& submitBatch,
         const ExecuteContext& context,
         std::uint64_t frameBoundaryFrameID,
-        bool isFrameEnd);
+        bool isFrameEnd,
+        std::optional<std::uint32_t> swapchainImageIndex);
 
     [[nodiscard]] static vk::PipelineStageFlags2 submissionWaitStage(QueueDomain queue);
 
@@ -435,10 +443,18 @@ class RenderGraphExecutor
         const CompiledGraphFrame& compiled,
         const ExecuteContext& context);
 
-    [[nodiscard]] static std::size_t invokePassPrepareCallbacks(
-        CompiledGraphFrame& compiled,
+    static void resolveSwapchainRuntimeResources(
+        const CompiledGraphFrame& compiled,
         const ExecuteContext& context,
-        const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings);
+        std::uint32_t swapchainImageIndex,
+        RuntimeBindingMap& runtimeBindings);
+
+    [[nodiscard]] static std::size_t invokePassPrepareCallbacks(
+        const CompiledGraphFrame& compiled,
+        const ExecuteContext& context,
+        const RuntimeBindingMap& runtimeBindings,
+        std::size_t firstBatchOrdinal,
+        std::size_t lastBatchOrdinal);
 
     [[nodiscard]] static nr::rhi::CommandPool& primaryPoolForQueue(nr::rhi::FrameContext& frame, QueueDomain queue);
 
@@ -500,8 +516,7 @@ class RenderGraphExecutor
         const ResourceStateTransition& transition,
         TransitionPlacement placement,
         std::uint32_t srcQueueFamilyIndex,
-        std::uint32_t dstQueueFamilyIndex,
-        const nr::rhi::ops::QueueFamilyTransferPolicy& queueFamilyTransferPolicy);
+        std::uint32_t dstQueueFamilyIndex);
 
     [[nodiscard]] static PassRecordContext makePassRecordContext(
         std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer,
@@ -549,9 +564,10 @@ class RenderGraphExecutor
         const nr::rhi::Device& device,
         FrameGpuPassTimingState& state);
 
-    [[nodiscard]] std::vector<RecordBatchTasks> launchRecordTasksForAllBatches(
+    [[nodiscard]] RecordBatchTasks launchRecordTasksForBatch(
         const ExecuteContext& context,
         std::size_t frameSlot,
+        std::size_t batchOrdinal,
         const CompiledGraphFrame& compiled,
         const CompiledResourceLookup& compiledResourceByHandle,
         const RuntimeBindingMap& runtimeBindings,

@@ -2,6 +2,7 @@ module nr.rhi;
 import :device;
 import dependency.window;
 import dependency.nsight;
+import dependency.dlss;
 import dependency.vulkan;
 import :vk;
 import :surface;
@@ -9,11 +10,14 @@ import :swapchain;
 import :type;
 import :queue;
 import :frameContext;
+import :command;
+import :commandPool;
 import :memoryAllocator;
 import :nsightGraphics;
 import :resourcePool;
 import :pipeline;
 import :resourceOps;
+import :dlss;
 import nr.utils;
 import std;
 
@@ -107,6 +111,25 @@ void Device::initialize(
             auto gpuProps = physicalDevice.getProperties();
             nrInfo<>(std::format("Selected GPU: {}", gpuProps.deviceName.data()));
         }
+        if (nr::dependency::dlss::sdkCompiled())
+        {
+            auto const deviceExtensionQuery = nr::dependency::dlss::rayReconstructionDeviceExtensions(
+                *instance,
+                *physicalDevice);
+            nrAssert(
+                deviceExtensionQuery.status.success(),
+                std::format(
+                    "DLSS RR Vulkan device-extension discovery failed: {} (native code {}).",
+                    deviceExtensionQuery.status.message,
+                    deviceExtensionQuery.status.nativeCode));
+            auto addDeviceExtensionIfMissing = [&](std::string_view extension) {
+                if (std::ranges::none_of(deviceEnabledExtensions, [extension](const std::string& item) { return item == extension; }))
+                {
+                    deviceEnabledExtensions.emplace_back(extension);
+                }
+            };
+            std::ranges::for_each(deviceExtensionQuery.names, addDeviceExtensionIfMissing);
+        }
         try
         {
             device = makeDevice();
@@ -141,12 +164,9 @@ void Device::initialize(
         presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_, presentQueueFamilyIndex());
         refreshPresentSemaphores();
         pipelineService.bindDevice(device, std::cref(rtCapabilities_), std::move(pipelineCache));
-
-        // Prime the first frame's acquire so beginFrame() can immediately consume it.
-        presentationContext.issueFirstAcquire();
     }
 
-[[nodiscard]] Device::FrameBeginResult Device::beginFrame(std::uint64_t acquireTimeout)
+[[nodiscard]] Device::FrameBeginResult Device::beginFrame()
 {
         auto &frame = frameManager.current();
         const auto frameIndex = static_cast<std::uint32_t>(frameManager.currentIndex());
@@ -179,54 +199,58 @@ void Device::initialize(
             recreateSwapchain();
         }
 
-        // Consume the pre-acquired image (issued at end of previous presentFrame or initialize).
-        // If the pending acquire is absent (e.g., after a recreate that failed), issue now.
-        if (!presentationContext.hasPendingAcquire())
-        {
-            presentationContext.issueNextAcquire(acquireTimeout);
-            if (!presentationContext.hasPendingAcquire())
-            {
-                recreateSwapchain();
-                presentationContext.issueNextAcquire(acquireTimeout);
-            }
-        }
-
-        auto acquire = presentationContext.consumePendingAcquire(frameIndex);
-
-        if (PresentationContext::needsSwapchainRecreate(acquire.result))
-        {
-            recreateSwapchain();
-            presentationContext.issueNextAcquire(acquireTimeout);
-            acquire = presentationContext.consumePendingAcquire(frameIndex);
-        }
-
-        nrAssert(!PresentationContext::needsSwapchainRecreate(acquire.result), "Device::beginFrame failed to acquire a valid swapchain image after recreation.");
-
-        // Inject the borrowed semaphore into the current frame context for use in submitFrameBatch.
-        frame.setBorrowedAcquireSemaphore(&presentationContext.borrowedAcquireSemaphore(frameIndex));
-
-        presentationContext.setActiveSwapchainImage(acquire.imageIndex);
+        nrAssert(!presentationContext.hasActiveSwapchainImage(), "Device::beginFrame requires the previous frame's active swapchain image to be cleared.");
         presentationContext.setFrameSubmitted(false);
         frameSubmitCount_ = 0;
         frameFinalSubmitRole_.reset();
         presentFrameBoundaryFrameID_.reset();
+        frameAcquireRequiresRecreate_ = false;
         nsightGraphics_.beginFrame(frameBoundaryEnabled_);
 
         return FrameBeginResult{
             .frameIndex = frameIndex,
+            .cpuWaitGpuMilliseconds = cpuWaitGpuMilliseconds,
+        };
+    }
+
+[[nodiscard]] Device::FrameAcquireResult Device::acquireFrameImage(std::uint64_t acquireTimeout)
+{
+        nrAssert(!presentationContext.hasActiveSwapchainImage(), "Device::acquireFrameImage can only acquire once per frame.");
+
+        auto const frameIndex = static_cast<std::uint32_t>(frameManager.currentIndex());
+        auto acquire = presentationContext.acquireNextImage(frameIndex, acquireTimeout);
+        auto recreatedSwapchain = false;
+        if (PresentationContext::needsSwapchainRecreate(acquire.result) &&
+            acquire.result != vk::Result::eSuboptimalKHR)
+        {
+            recreateSwapchain();
+            recreatedSwapchain = true;
+            acquire = presentationContext.acquireNextImage(frameIndex, acquireTimeout);
+        }
+
+        nrAssert(
+            acquire.result == vk::Result::eSuccess || acquire.result == vk::Result::eSuboptimalKHR,
+            "Device::acquireFrameImage failed to acquire a valid swapchain image after recreation.");
+
+        auto& frame = frameManager.current();
+        frame.setBorrowedAcquireSemaphore(&presentationContext.borrowedAcquireSemaphore(frameIndex));
+        presentationContext.setActiveSwapchainImage(acquire.imageIndex);
+        frameAcquireRequiresRecreate_ = PresentationContext::needsSwapchainRecreate(acquire.result);
+
+        return FrameAcquireResult{
             .swapchainImageIndex = acquire.imageIndex,
             .swapchainResult = acquire.result,
-            .cpuWaitGpuMilliseconds = cpuWaitGpuMilliseconds,
+            .recreatedSwapchain = recreatedSwapchain,
         };
     }
 
 void Device::submitFrameBatch(CommandBatch&& batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage)
 {
-        nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrameBatch requires beginFrame() before submission.");
         nrAssert(!(frameFinalSubmitRole_.has_value() && !signalForPresent), "Device::submitFrameBatch cannot submit additional batches after final present-signaling submit.");
 
         if (signalForPresent)
         {
+            nrAssert(presentationContext.hasActiveSwapchainImage(), "Device::submitFrameBatch final submission requires acquireFrameImage().");
             nrAssert(!frameFinalSubmitRole_.has_value(), "Device::submitFrameBatch final present-signaling submit can only happen once per frame.");
             nrAssert(submitRole == presentSubmitRole(), "Device::submitFrameBatch compute-present policy requires the compute queue when signalForPresent=true.");
         }
@@ -315,19 +339,14 @@ void Device::submitFrame(CommandBatch&& batch, QueueRole submitRole)
         nsightGraphics_.markFrameBoundaryAfterPresent(presentResult.result, presentImage);
 
         auto const recreateRequested = presentationContext.consumeSwapchainRecreateRequest();
-        if (PresentationContext::needsSwapchainRecreate(presentResult.result) || recreateRequested)
+        if (frameAcquireRequiresRecreate_ ||
+            PresentationContext::needsSwapchainRecreate(presentResult.result) ||
+            recreateRequested)
         {
             if (presentationContext.framebufferAvailable())
             {
                 recreateSwapchain();
-                // After recreate the acquire pool was rebuilt; issue fresh acquire.
-                presentationContext.issueNextAcquire();
             }
-        }
-        else if (presentationContext.framebufferAvailable())
-        {
-            // Issue next frame's acquire immediately while GPU is busy rendering.
-            presentationContext.issueNextAcquire();
         }
 
         frameManager.advanceFrame();
@@ -336,6 +355,7 @@ void Device::submitFrame(CommandBatch&& batch, QueueRole submitRole)
         frameSubmitCount_ = 0;
         frameFinalSubmitRole_.reset();
         presentFrameBoundaryFrameID_.reset();
+        frameAcquireRequiresRecreate_ = false;
 
         return presentResult;
     }
@@ -445,6 +465,8 @@ vk::raii::Device Device::makeDevice()
                 reason = "extended dynamic pipeline state v3";
             if (extensionName == vk::EXTOpacityMicromapExtensionName)
                 reason = "ray tracing opacity micromap support";
+            if (extensionName == vk::KHRMaintenance8ExtensionName)
+                reason = "precise queue-family ownership transfer synchronization scopes";
             if (extensionName == vk::KHRMaintenance9ExtensionName)
                 reason = "maintenance9 queue-family ownership transfer rules";
             if (extensionName == vk::EXTFullScreenExclusiveExtensionName)
@@ -462,7 +484,7 @@ vk::raii::Device Device::makeDevice()
             frameBoundaryFeatureSupported = frameBoundaryFeatures.frameBoundary == vk::True;
         }
 
-        auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMaintenance9FeaturesKHR, vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
+        auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR, vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
                                                      vk::PhysicalDeviceCooperativeVectorFeaturesNV, vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
                                                      vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR, vk::PhysicalDeviceRayQueryFeaturesKHR, vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
 
@@ -471,6 +493,7 @@ vk::raii::Device Device::makeDevice()
         auto &vulkan12Features = features2.get<vk::PhysicalDeviceVulkan12Features>();
         auto &vulkan13Features = features2.get<vk::PhysicalDeviceVulkan13Features>();
         auto &vulkan14Features = features2.get<vk::PhysicalDeviceVulkan14Features>();
+        auto &maintenance8Features = features2.get<vk::PhysicalDeviceMaintenance8FeaturesKHR>();
         auto &maintenance9Features = features2.get<vk::PhysicalDeviceMaintenance9FeaturesKHR>();
         auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
         auto &cooperativeVectorFeatures = features2.get<vk::PhysicalDeviceCooperativeVectorFeaturesNV>();
@@ -505,6 +528,7 @@ vk::raii::Device Device::makeDevice()
         REQUIRE_FEATURE(vulkan13Features.inlineUniformBlock, "inlineUniformBlock");
         REQUIRE_FEATURE(vulkan13Features.dynamicRendering, "dynamicRendering");
         REQUIRE_FEATURE(vulkan13Features.synchronization2, "synchronization2");
+        REQUIRE_FEATURE(maintenance8Features.maintenance8, "maintenance8");
         REQUIRE_FEATURE(maintenance9Features.maintenance9, "maintenance9");
         REQUIRE_FEATURE(extendedDynamicState3Features.extendedDynamicState3PolygonMode, "extendedDynamicState3PolygonMode");
         REQUIRE_FEATURE(extendedDynamicState3Features.extendedDynamicState3RasterizationSamples, "extendedDynamicState3RasterizationSamples");
@@ -554,6 +578,7 @@ vk::raii::Device Device::makeDevice()
             .dynamicRenderingLocalRead = vulkan14Features.dynamicRenderingLocalRead == vk::True,
             .maintenance5 = vulkan14Features.maintenance5 == vk::True,
             .maintenance6 = vulkan14Features.maintenance6 == vk::True,
+            .maintenance8 = maintenance8Features.maintenance8 == vk::True,
             .maintenance9 = maintenance9Features.maintenance9 == vk::True,
             .pipelineProtectedAccess = vulkan14Features.pipelineProtectedAccess == vk::True,
             .pipelineRobustness = vulkan14Features.pipelineRobustness == vk::True,
@@ -697,11 +722,71 @@ void Device::recreateSwapchain()
         return *uploadReadbackContext_;
     }
 
+[[nodiscard]] std::shared_ptr<DlssContext> Device::dlssContext()
+{
+        nrAssert(
+            dlssSdkCompiled(),
+            "DLSS execution was requested, but the deployed NGX bridge is unavailable. Configure with NR_ENABLE_DLSS_NGX_SDK=ON and deploy the validated bridge artifact.");
+        if (!dlssContext_)
+        {
+            auto pathError = std::error_code{};
+            auto applicationDataPath = std::filesystem::current_path(pathError);
+            nrAssert(
+                !pathError,
+                std::format("DLSS NGX application-data path resolution failed: {}", pathError.message()));
+            applicationDataPath /= "ngx";
+            dlssContext_ = std::make_shared<DlssContext>(
+                static_cast<vk::Instance>(*instance),
+                static_cast<vk::PhysicalDevice>(*physicalDevice),
+                static_cast<vk::Device>(*device),
+                std::move(applicationDataPath));
+            nrAssert(
+                dlssContext_->valid(),
+                std::format("DLSS NGX context initialization failed: {}", dlssContext_->status().message));
+        }
+        return dlssContext_;
+}
+
+[[nodiscard]] std::unique_ptr<DlssRayReconstructionFeature> Device::createDlssRayReconstructionFeature(
+    const DlssRayReconstructionCreateDesc& desc)
+{
+        auto sharedContext = dlssContext();
+        // Prepare runs after beginFrame(), whose current fence is intentionally
+        // unsignaled. Wait only for queues here; waiting every frame fence would
+        // deadlock before the current frame has been submitted.
+        queueManager.waitAllIdle();
+
+        auto commandPool = CommandPool{
+            device,
+            queueManager.compute().queueFamilyIndex(),
+            vk::CommandPoolCreateFlagBits::eTransient};
+        auto commandBuffers = commandPool.allocatePrimary();
+        nrAssert(!commandBuffers.empty(), "DLSS RR feature creation failed to allocate a command buffer.");
+
+        std::unique_ptr<DlssRayReconstructionFeature> feature{};
+        {
+            auto recording = ScopedCommandBuffer{
+                commandBuffers.front(),
+                vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+            feature = std::make_unique<DlssRayReconstructionFeature>(
+                std::move(sharedContext),
+                recording.get(),
+                desc);
+        }
+        nrAssert(
+            feature->valid(),
+            std::format("DLSS RR feature creation failed: {}", feature->status().message));
+        queueManager.compute().submit(commandBuffers.front());
+        queueManager.compute().waitIdle();
+        return feature;
+}
+
 Device::~Device()
 {
         if (*device != nullptr)
         {
             waitIdle();
+            dlssContext_.reset();
             uploadReadbackContext_.reset();
         }
     }
@@ -783,6 +868,20 @@ void Device::setupInitialFlags()
             if (std::ranges::none_of(list, [item](const auto &s) { return s == item; }))
                 list.push_back(std::string(item));
         };
+
+        if (nr::dependency::dlss::sdkCompiled())
+        {
+            auto const instanceExtensionQuery = nr::dependency::dlss::rayReconstructionInstanceExtensions();
+            nrAssert(
+                instanceExtensionQuery.status.success(),
+                std::format(
+                    "DLSS RR Vulkan instance-extension discovery failed: {} (native code {}).",
+                    instanceExtensionQuery.status.message,
+                    instanceExtensionQuery.status.nativeCode));
+            std::ranges::for_each(
+                instanceExtensionQuery.names,
+                [&](std::string_view extension) { addIfMissing(instanceEnabledExtensions, extension); });
+        }
 
         if (hasInstanceExtension(vk::EXTSwapchainColorSpaceExtensionName))
         {

@@ -1,6 +1,7 @@
 module pathState;
 import common;
 import renderer.pathTracing.params;
+import renderer.pathTracing.guides;
 
 [Flags]
 public enum PathFlag : uint
@@ -30,9 +31,12 @@ public struct PathState
     public RandomSequence rng = {};
     public float3 origin = float3(0.0f);
     public float3 direction = float3(0.0f, 0.0f, -1.0f);
-    public float3 throughput = float3(1.0f);
-    public float3 radiance = float3(0.0f);
+    public float3 specularThroughput = float3(0.0f);
+    public float3 diffuseThroughput = float3(1.0f);
+    public float3 specularRadiance = float3(0.0f);
+    public float3 diffuseRadiance = float3(0.0f);
     public float pdf = 1.0f;
+    public PathTracingGuideState guides = {};
 };
 
 public bool pathStateIsActive(PathState path)
@@ -80,14 +84,50 @@ public void terminatePathState(inout PathState path)
     pathStateSetActive(path, false);
 }
 
+public float3 pathCombinedThroughput(PathState path)
+{
+    return path.specularThroughput + path.diffuseThroughput;
+}
+
+public float3 pathCombinedRadiance(PathState path)
+{
+    return path.specularRadiance + path.diffuseRadiance;
+}
+
 public void addPathContribution(inout PathState path, float3 radiance)
 {
-    path.radiance += path.throughput * radiance;
+    path.specularRadiance += path.specularThroughput * radiance;
+    path.diffuseRadiance += path.diffuseThroughput * radiance;
+}
+
+public void addDiffusePathContribution(inout PathState path, float3 radiance)
+{
+    path.diffuseRadiance += path.diffuseThroughput * radiance;
+}
+
+public void addPrimaryPathContribution(
+    inout PathState path,
+    float3 specularRadiance,
+    float3 diffuseRadiance)
+{
+    path.specularRadiance += path.diffuseThroughput * specularRadiance;
+    path.diffuseRadiance += path.diffuseThroughput * diffuseRadiance;
 }
 
 public void updatePathThroughput(inout PathState path, float3 weight)
 {
-    path.throughput *= weight;
+    path.specularThroughput *= weight;
+    path.diffuseThroughput *= weight;
+}
+
+public void initializePrimaryPathThroughput(
+    inout PathState path,
+    float3 specularWeight,
+    float3 diffuseWeight)
+{
+    float3 prefixThroughput = path.diffuseThroughput;
+    path.specularThroughput = prefixThroughput * specularWeight;
+    path.diffuseThroughput = prefixThroughput * diffuseWeight;
 }
 
 public RayDesc pathStateRayDesc(PathState path)

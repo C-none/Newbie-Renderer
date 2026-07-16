@@ -38,6 +38,18 @@ public struct ResolvedMaterialScatter
     public uint delta = 0u;
 };
 
+public struct ResolvedMaterialBsdfComponents
+{
+    public float3 diffuse = float3(0.0f);
+    public float3 specular = float3(0.0f);
+};
+
+public struct ResolvedMaterialDirectComponents
+{
+    public float3 diffuseRadiance = float3(0.0f);
+    public float3 specularRadiance = float3(0.0f);
+};
+
 public MaterialSample materialSampleFromResolvedPayload(ResolvedMaterialPayload payload)
 {
     MaterialSample sample;
@@ -151,9 +163,7 @@ public ResolvedMaterialPayload resolveLitMaterialPayloadVariant<let LayerFlags :
     return payload;
 }
 
-// Direct lighting specialized by concrete LayerFlags. Sheen and clearcoat contributions live in
-// `if (LayerFlags & flag)` static blocks so raygen's per-case dispatch executes only active-layer math.
-public MaterialShadingResult evaluateResolvedMaterialDirectVariant<let LayerFlags : RtMaterialLayerFlag>(
+public ResolvedMaterialDirectComponents evaluateResolvedMaterialDirectComponentsVariant<let LayerFlags : RtMaterialLayerFlag>(
     ResolvedMaterialPayload payload,
     MaterialDirectLightingInput lighting)
 {
@@ -161,26 +171,59 @@ public MaterialShadingResult evaluateResolvedMaterialDirectVariant<let LayerFlag
     float3 normal = safeNormalize(payload.shadingNormal, payload.geometryNormal);
     float noL = saturate(dot(normal, lighting.lightDirection));
 
-    float3 bsdf = evaluateMetallicRoughnessBsdf(core, normal, lighting.viewDirection, lighting.lightDirection);
+    ResolvedMaterialBsdfComponents bsdf = {};
+    bsdf.diffuse = evaluateMetallicRoughnessDiffuse(
+        core,
+        normal,
+        lighting.viewDirection,
+        lighting.lightDirection);
+    bsdf.specular = evaluateMetallicRoughnessSpecular(
+        core,
+        normal,
+        lighting.viewDirection,
+        lighting.lightDirection);
     if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
     {
-        bsdf += evaluateSheenBsdf(payload.layers, normal, lighting.viewDirection, lighting.lightDirection);
+        bsdf.diffuse += evaluateSheenBsdf(
+            payload.layers,
+            normal,
+            lighting.viewDirection,
+            lighting.lightDirection);
     }
 
-    float3 radiance;
+    ResolvedMaterialDirectComponents result = {};
     if (uint(LayerFlags & RtMaterialLayerFlag.clearcoat) != 0u)
     {
-        bsdf = attenuateBaseByClearcoat(bsdf, payload.layers, lighting.viewDirection);
-        radiance = bsdf * lighting.lightRadiance * noL +
-            evaluateClearcoatDirect(payload.layers, lighting.viewDirection, lighting.lightDirection, lighting.lightRadiance);
+        bsdf.diffuse = attenuateBaseByClearcoat(bsdf.diffuse, payload.layers, lighting.viewDirection);
+        bsdf.specular = attenuateBaseByClearcoat(bsdf.specular, payload.layers, lighting.viewDirection);
+        result.specularRadiance =
+            bsdf.specular * lighting.lightRadiance * noL +
+            evaluateClearcoatDirect(
+                payload.layers,
+                lighting.viewDirection,
+                lighting.lightDirection,
+                lighting.lightRadiance);
     }
     else
     {
-        radiance = bsdf * lighting.lightRadiance * noL;
+        result.specularRadiance = bsdf.specular * lighting.lightRadiance * noL;
     }
 
+    result.diffuseRadiance = bsdf.diffuse * lighting.lightRadiance * noL;
+    return result;
+}
+
+// Direct lighting specialized by concrete LayerFlags. Sheen and clearcoat contributions live in
+// `if (LayerFlags & flag)` static blocks so raygen's per-case dispatch executes only active-layer math.
+public MaterialShadingResult evaluateResolvedMaterialDirectVariant<let LayerFlags : RtMaterialLayerFlag>(
+    ResolvedMaterialPayload payload,
+    MaterialDirectLightingInput lighting)
+{
+    ResolvedMaterialDirectComponents components =
+        evaluateResolvedMaterialDirectComponentsVariant<LayerFlags>(payload, lighting);
+
     MaterialShadingResult result;
-    result.radiance = radiance;
+    result.radiance = components.diffuseRadiance + components.specularRadiance;
     result.alpha = payload.alpha;
     return result;
 }
@@ -464,35 +507,44 @@ public struct TransmissionBsdfLobe : IBsdfLobe
     }
 };
 
+public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVariant<let LayerFlags : RtMaterialLayerFlag>(
+    ResolvedMaterialPayload payload,
+    float3 viewDirection,
+    float3 lightDirection)
+{
+    ResolvedMaterialBsdfComponents result = {};
+    if (uint(LayerFlags & RtMaterialLayerFlag.baseSurface) != 0u)
+    {
+        DiffuseBsdfLobe diffuse;
+        SpecularGgxBsdfLobe specular;
+        result.diffuse = diffuse.evaluate(payload, viewDirection, lightDirection);
+        result.specular = specular.evaluate(payload, viewDirection, lightDirection);
+    }
+    if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
+    {
+        SheenBsdfLobe sheen;
+        result.diffuse += sheen.evaluate(payload, viewDirection, lightDirection);
+    }
+
+    if (uint(LayerFlags & RtMaterialLayerFlag.clearcoat) != 0u)
+    {
+        ClearcoatBsdfLobe clearcoat;
+        result.diffuse = attenuateBaseByClearcoat(result.diffuse, payload.layers, viewDirection);
+        result.specular = attenuateBaseByClearcoat(result.specular, payload.layers, viewDirection) +
+            clearcoat.evaluate(payload, viewDirection, lightDirection);
+    }
+
+    return result;
+}
+
 public float3 evaluateResolvedMaterialBsdfVariant<let LayerFlags : RtMaterialLayerFlag>(
     ResolvedMaterialPayload payload,
     float3 viewDirection,
     float3 lightDirection)
 {
-    float3 baseBsdf = float3(0.0f);
-    if (uint(LayerFlags & RtMaterialLayerFlag.baseSurface) != 0u)
-    {
-        DiffuseBsdfLobe diffuse;
-        SpecularGgxBsdfLobe specular;
-        baseBsdf =
-            diffuse.evaluate(payload, viewDirection, lightDirection) +
-            specular.evaluate(payload, viewDirection, lightDirection);
-    }
-    if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
-    {
-        SheenBsdfLobe sheen;
-        baseBsdf += sheen.evaluate(payload, viewDirection, lightDirection);
-    }
-
-    float3 result = baseBsdf;
-    if (uint(LayerFlags & RtMaterialLayerFlag.clearcoat) != 0u)
-    {
-        ClearcoatBsdfLobe clearcoat;
-        result = attenuateBaseByClearcoat(baseBsdf, payload.layers, viewDirection) +
-            clearcoat.evaluate(payload, viewDirection, lightDirection);
-    }
-
-    return result;
+    ResolvedMaterialBsdfComponents components =
+        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags>(payload, viewDirection, lightDirection);
+    return components.diffuse + components.specular;
 }
 
 public float resolvedMaterialCombinedPdfVariant<let LayerFlags : RtMaterialLayerFlag>(

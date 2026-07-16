@@ -194,6 +194,7 @@ namespace
     std::ranges::for_each(frame.submitBoundaries, [&](const SubmitBoundaryDesc& submit) {
         signature.submitBoundaries.push_back(SubmitBoundarySignature{
             .handle = submit.handle,
+            .kind = submit.kind,
         });
     });
 
@@ -325,6 +326,7 @@ void RenderGraphCompileCache::patchCompiledSubmitDebugNames(
         auto submitIt = submitByHandle.find(*batch.openedBySubmitNode);
         nrAssert(submitIt != submitByHandle.end(), "RenderGraphCompileCache cached submit node is missing in current frame.");
         batch.openedBySubmitNodeDebugName = submitIt->second.get().debugName;
+        batch.openedBySubmitNodeKind = submitIt->second.get().kind;
     });
 }
 

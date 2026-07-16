@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "bridgeAbi": 1,
+  "sdkVersion": "310.7.0",
+  "platform": "windows",
+  "architecture": "x86_64",
+  "configuration": "Release",
+  "runtime": "MT",
+  "apiHeaderSha256": "20ee666a2c41b88faea7652a3c58c804f3f633e29d11a709f68b5d34750a4334",
+  "bridgeInputsSha256": "5d5127dc68b254035af65bdc1c87e3cd4dcebbf8a49c357f29efeffa2c4325ea",
+  "ngxLoaderSha256": "36eab29264c2a06456ba8415f20086aea36f0cbb314d020085cb288cc06bb9ae",
+  "dllSha256": "27fc1afcfe2b52ee69f56fa72f1e1cc96e78d76d1f822d83c98fe95c0eea36bf",
+  "export": "nrDlssBridgeGetApi"
+}

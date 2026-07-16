@@ -80,6 +80,15 @@ public float3 transformRtObjectVectorToWorld(float3 objectVector)
         dot(objectToWorld[2].xyz, objectVector));
 }
 
+public float3 transformRtObjectNormalToWorld(float3 objectNormal)
+{
+    float3x4 worldToObject = WorldToObject3x4();
+    return float3(
+        dot(float3(worldToObject[0].x, worldToObject[1].x, worldToObject[2].x), objectNormal),
+        dot(float3(worldToObject[0].y, worldToObject[1].y, worldToObject[2].y), objectNormal),
+        dot(float3(worldToObject[0].z, worldToObject[1].z, worldToObject[2].z), objectNormal));
+}
+
 public float3 transformRtObjectPointToWorld(float3 objectPoint)
 {
     float3x4 objectToWorld = ObjectToWorld3x4();
@@ -128,7 +137,7 @@ public RtSurfaceData interpolateCurrentRtSurface(
 
     RtSurfaceData surface = {};
     surface.position = transformRtObjectPointToWorld(objectPosition);
-    surface.normal = safeNormalize(transformRtObjectVectorToWorld(objectNormal), float3(0.0f, 0.0f, 1.0f));
+    surface.normal = safeNormalize(transformRtObjectNormalToWorld(objectNormal), float3(0.0f, 0.0f, 1.0f));
     surface.tangent = safeNormalize(transformRtObjectVectorToWorld(objectTangent), float3(1.0f, 0.0f, 0.0f));
     surface.tangentSign = tangentSign < 0.0f ? -1.0f : 1.0f;
     surface.texCoord0 =

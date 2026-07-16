@@ -169,6 +169,7 @@ class RenderGraphCompileCache
     struct SubmitBoundarySignature
     {
         GraphSubmitHandle handle{};
+        SubmitBoundaryKind kind = SubmitBoundaryKind::QueueSubmission;
 
         [[nodiscard]] bool operator==(const SubmitBoundarySignature&) const = default;
     };

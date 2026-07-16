@@ -10,3 +10,4 @@ export import dependency.slang;
 export import dependency.shaderShare;
 export import dependency.ecs;
 export import dependency.nsight;
+export import dependency.dlss;

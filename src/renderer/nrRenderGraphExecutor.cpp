@@ -101,25 +101,44 @@ namespace nr::renderer
 
         auto releaseByBatch = std::map<std::uint32_t, std::vector<ResourceStateTransition>>{};
         auto acquireByBatch = std::map<std::uint32_t, std::vector<ResourceStateTransition>>{};
+        auto initialReleaseByQueue = std::map<QueueDomain, std::vector<ResourceStateTransition>>{};
+        auto waitStagesByBatch = std::map<std::uint32_t, vk::PipelineStageFlags2>{};
         auto dedupe = std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>>{};
         auto lastUse = std::map<GraphResourceHandle, LastResourceUse>{};
 
         std::ranges::for_each(compiled.submitBatches, [&](const CompiledSubmitBatch& batch) {
             std::ranges::for_each(batch.passes, [&](const CompiledPass& pass) {
                 std::ranges::for_each(pass.preBarriers, [&](const ResourceStateTransition& transition) {
-                    if (transition.strength != DependencyStrength::ReleaseAcquireRequired)
-                    {
-                        return;
-                    }
-
                     auto previousUse = lastUse.find(transition.resource);
                     if (previousUse == lastUse.end())
                     {
+                        if (transition.strength == DependencyStrength::ReleaseAcquireRequired)
+                        {
+                            auto dstBatchIndex = pass.submitBatchIndex;
+                            auto waitStages = transition.dstScope.stages != vk::PipelineStageFlags2{}
+                                                  ? transition.dstScope.stages
+                                                  : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+                            waitStagesByBatch[dstBatchIndex] |= waitStages;
+                            initialReleaseByQueue[transition.srcQueue].push_back(transition);
+                            acquireByBatch[dstBatchIndex].push_back(transition);
+                        }
                         return;
                     }
 
                     auto srcBatchIndex = previousUse->second.batchIndex;
                     auto dstBatchIndex = pass.submitBatchIndex;
+                    if (srcBatchIndex != dstBatchIndex)
+                    {
+                        auto waitStages = transition.dstScope.stages != vk::PipelineStageFlags2{}
+                                              ? transition.dstScope.stages
+                                              : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+                        waitStagesByBatch[dstBatchIndex] |= waitStages;
+                    }
+
+                    if (transition.strength != DependencyStrength::ReleaseAcquireRequired)
+                    {
+                        return;
+                    }
 
                     auto key = std::tuple{
                         transition.resource.value,
@@ -149,6 +168,17 @@ namespace nr::renderer
             });
         });
 
+        auto initialReleaseBatchIndex = static_cast<std::uint32_t>(compiled.submitBatches.size());
+        std::ranges::for_each(initialReleaseByQueue, [&](auto& pair) {
+            plan.initialReleaseBatches.push_back(ExecutorBatchPlan{
+                .batchIndex = initialReleaseBatchIndex++,
+                .queue = pair.first,
+                .tailReleaseTransitions = std::move(pair.second),
+                .waitsForPreviousBatch = !plan.initialReleaseBatches.empty(),
+                .signalsNextBatch = true,
+            });
+        });
+
         auto batchIndices = std::views::iota(std::size_t{0}, compiled.submitBatches.size());
         std::ranges::for_each(batchIndices, [&](std::size_t batchOrdinal) {
             const auto& batch = compiled.submitBatches[batchOrdinal];
@@ -161,10 +191,14 @@ namespace nr::renderer
                     }));
             });
 
-            auto waitsForPreviousBatch = batchOrdinal > 0;
+            auto waitsForPreviousBatch = batchOrdinal > 0 || !plan.initialReleaseBatches.empty();
             auto isLastBatch = batchOrdinal + 1 == compiled.submitBatches.size();
             auto signalsPresent = isLastBatch && batch.queue == QueueDomain::Compute;
             auto signalsNextBatch = !signalsPresent;
+            auto waitStageIt = waitStagesByBatch.find(batch.batchIndex);
+            auto waitStageMask = waitStageIt != waitStagesByBatch.end()
+                                     ? waitStageIt->second
+                                     : submissionWaitStage(batch.queue);
 
             plan.totalPassCount += batch.passes.size();
             plan.totalInPassBarrierCount += inPassBarrierCount;
@@ -176,9 +210,12 @@ namespace nr::renderer
                 .inPassBarrierCount = inPassBarrierCount,
                 .headAcquireTransitions = acquireByBatch[batch.batchIndex],
                 .tailReleaseTransitions = releaseByBatch[batch.batchIndex],
+                .waitStageMask = waitStageMask,
                 .waitsForPreviousBatch = waitsForPreviousBatch,
                 .signalsNextBatch = signalsNextBatch,
                 .signalsPresent = signalsPresent,
+                .acquiresSwapchainBeforeSubmit =
+                    batch.openedBySubmitNodeKind == SubmitBoundaryKind::SwapchainAcquire,
             });
         });
 
@@ -197,7 +234,21 @@ namespace nr::renderer
         auto prepared = PreparedGraphFrame{};
         prepared.plan = buildPlan(compiled);
         prepared.runtimeBindings = resolveRuntimeResources(compiled, context);
-        prepared.invokedPassPrepareCount = invokePassPrepareCallbacks(compiled, context, prepared.runtimeBindings);
+        auto acquireBatch = std::ranges::find_if(compiled.submitBatches, [](const CompiledSubmitBatch& batch) {
+            return batch.openedBySubmitNodeKind == SubmitBoundaryKind::SwapchainAcquire;
+        });
+        if (acquireBatch != compiled.submitBatches.end())
+        {
+            prepared.firstDeferredPrepareBatch = static_cast<std::size_t>(
+                std::ranges::distance(compiled.submitBatches.begin(), acquireBatch));
+        }
+        auto const immediatePrepareBatchCount = prepared.firstDeferredPrepareBatch.value_or(compiled.submitBatches.size());
+        prepared.invokedPassPrepareCount = invokePassPrepareCallbacks(
+            compiled,
+            context,
+            prepared.runtimeBindings,
+            0u,
+            immediatePrepareBatchCount);
         prepared.compiled = std::move(compiled);
         return prepared;
     }
@@ -215,7 +266,7 @@ namespace nr::renderer
         report.invokedPassPrepareCount = prepared.invokedPassPrepareCount;
 
         auto const& compiled = prepared.compiled;
-        auto const& runtimeBindings = prepared.runtimeBindings;
+        auto runtimeBindings = prepared.runtimeBindings;
         auto const frameBoundaryFrameID = context.device.frameBoundaryEnabled() ? nextFrameBoundaryId_++ : std::uint64_t{0};
 
         auto frameCount = context.device.frameManager.frameCount();
@@ -270,39 +321,167 @@ namespace nr::renderer
             frameDataByHandle.emplace(frameData.handle, std::cref(frameData));
         });
 
-        auto timeline = context.submissionTimeline.has_value()
-                            ? std::optional<std::reference_wrapper<RendererSubmissionTimeline>>(context.submissionTimeline->get())
-                            : std::nullopt;
-        auto timelineValid = timeline.has_value() && timeline->get().valid();
+        auto timelines = context.submissionTimelines.has_value()
+                             ? std::optional<std::reference_wrapper<RendererSubmissionTimelines>>(context.submissionTimelines->get())
+                             : std::nullopt;
+        auto timelinesValid = timelines.has_value() && timelines->get().valid();
 
         if (report.plan.batches.size() > 1)
         {
             nrAssert(
-                timelineValid,
-                "RenderGraphExecutor::execute requires a valid submission timeline when more than one submit batch exists.");
+                timelinesValid,
+                "RenderGraphExecutor::execute requires valid per-queue submission timelines when more than one submit batch exists.");
+        }
+
+        if (!report.plan.initialReleaseBatches.empty())
+        {
+            nrAssert(
+                timelinesValid,
+                "RenderGraphExecutor::execute requires valid per-queue submission timelines for retained-resource initial ownership transfers.");
         }
 
         if (report.plan.requiresSyntheticPresentBatch && !report.plan.batches.empty())
         {
             nrAssert(
-                timelineValid,
-                "RenderGraphExecutor::execute requires a valid submission timeline when inserting a synthetic compute-final present batch.");
+                timelinesValid,
+                "RenderGraphExecutor::execute requires valid per-queue submission timelines when inserting a synthetic compute-final present batch.");
         }
 
-        auto recordTasksByBatch = launchRecordTasksForAllBatches(
-            context,
-            frameSlot,
-            compiled,
-            compiledResourceByHandle,
-            runtimeBindings,
-            frameDataByHandle,
-            report);
+        auto const swapchainResourceCount = static_cast<std::size_t>(
+            std::ranges::count_if(compiled.resources, [](const CompiledResourceDesc& resource) {
+                return resource.isSwapchain;
+            }));
+        auto const acquireBoundaryCount = static_cast<std::size_t>(
+            std::ranges::count_if(report.plan.batches, [](const ExecutorBatchPlan& batch) {
+                return batch.acquiresSwapchainBeforeSubmit;
+            }));
         nrAssert(
-            recordTasksByBatch.size() == report.plan.batches.size(),
-            "RenderGraphExecutor::execute expected one record task group per submit batch.");
+            swapchainResourceCount == 0u || acquireBoundaryCount == 1u,
+            "RenderGraphExecutor::execute requires exactly one swapchain-acquire boundary when swapchain resources are present.");
+        nrAssert(
+            acquireBoundaryCount <= 1u,
+            "RenderGraphExecutor::execute supports at most one swapchain-acquire boundary per frame.");
+        if (swapchainResourceCount > 0u)
+        {
+            auto firstSwapchainBatch = std::ranges::find_if(
+                compiled.submitBatches,
+                [&](const CompiledSubmitBatch& batch) {
+                    return std::ranges::any_of(batch.passes, [&](const CompiledPass& pass) {
+                        return std::ranges::any_of(pass.resolvedResourceIndices, [&](std::size_t resourceIndex) {
+                            nrAssert(
+                                resourceIndex < compiled.resources.size(),
+                                "RenderGraphExecutor::execute pass resource index is out of range.");
+                            return compiled.resources[resourceIndex].isSwapchain;
+                        });
+                    });
+                });
+            nrAssert(
+                firstSwapchainBatch != compiled.submitBatches.end(),
+                "RenderGraphExecutor::execute compiled a swapchain resource that no pass accesses.");
+            auto const firstSwapchainBatchOrdinal = static_cast<std::size_t>(
+                std::ranges::distance(compiled.submitBatches.begin(), firstSwapchainBatch));
+            nrAssert(
+                report.plan.batches[firstSwapchainBatchOrdinal].acquiresSwapchainBeforeSubmit,
+                "RenderGraphExecutor::execute requires the swapchain acquire boundary immediately before the first swapchain access.");
+        }
 
         auto previousSignalToken = RendererSubmitToken{};
         auto timedPassOffset = std::size_t{0};
+        auto deferredPrepareInvoked = false;
+
+        auto recordOwnershipTransitions = [&](
+            const vk::raii::CommandBuffer& commandBuffer,
+            const std::vector<ResourceStateTransition>& transitions,
+            TransitionPlacement placement) {
+            auto barriers = nr::rhi::ops::BarrierBatch{};
+            auto appliedBarrierCount = std::size_t{0};
+            std::ranges::for_each(transitions, [&](const ResourceStateTransition& transition) {
+                auto resourceIt = compiledResourceByHandle.find(transition.resource);
+                nrAssert(
+                    resourceIt != compiledResourceByHandle.end(),
+                    "RenderGraphExecutor::execute ownership transition references an unknown resource handle.");
+
+                auto bindingIt = runtimeBindings.find(transition.resource);
+                nrAssert(
+                    bindingIt != runtimeBindings.end(),
+                    "RenderGraphExecutor::execute ownership transition cannot resolve runtime resource binding.");
+
+                auto const addedBarrier = addTransitionBarrier(
+                    barriers,
+                    resourceIt->second.get(),
+                    bindingIt->second,
+                    transition,
+                    placement,
+                    queueFamilyIndexFor(context.device, transition.srcQueue),
+                    queueFamilyIndexFor(context.device, transition.dstQueue));
+                appliedBarrierCount += static_cast<std::size_t>(addedBarrier);
+            });
+
+            if (!barriers.empty())
+            {
+                nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
+            }
+            return appliedBarrierCount;
+        };
+
+        auto initialReleaseOrdinals = std::views::iota(
+            std::size_t{0},
+            report.plan.initialReleaseBatches.size());
+        std::ranges::for_each(initialReleaseOrdinals, [&](std::size_t initialReleaseOrdinal) {
+            const auto& planBatch = report.plan.initialReleaseBatches[initialReleaseOrdinal];
+            auto commandBufferOrdinal = report.plan.batches.size() + initialReleaseOrdinal;
+            auto& commandBuffer = primaryCommandBufferForQueue(
+                context,
+                frameSlot,
+                planBatch.queue,
+                commandBufferOrdinal);
+
+            commandBuffer.reset();
+            nr::rhi::CommandRecorder::beginPrimary(
+                commandBuffer,
+                vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+            {
+                auto debugLabelScope = detail::ScopedCommandBufferDebugLabel{
+                    commandBuffer,
+                    "Renderer.InitialOwnershipRelease",
+                };
+                report.appliedReleaseBarrierCount += recordOwnershipTransitions(
+                    commandBuffer,
+                    planBatch.tailReleaseTransitions,
+                    TransitionPlacement::Release);
+            }
+            nr::rhi::CommandRecorder::end(commandBuffer);
+
+            auto submitBatch = nr::rhi::CommandBatch{};
+            submitBatch.addCommandBuffer(commandBuffer);
+            if (planBatch.waitsForPreviousBatch && previousSignalToken.valid())
+            {
+                submitBatch.addWait(
+                    timelines->get().semaphore(previousSignalToken.queue),
+                    planBatch.waitStageMask,
+                    previousSignalToken.value);
+            }
+
+            auto signalToken = timelines->get().acquireSignalToken(planBatch.queue);
+            submitBatch.addSignal(
+                timelines->get().semaphore(signalToken.queue),
+                signalToken.value,
+                0,
+                vk::PipelineStageFlagBits2::eAllCommands);
+            previousSignalToken = signalToken;
+
+            attachFrameBoundaryMetadata(
+                submitBatch,
+                context,
+                frameBoundaryFrameID,
+                false,
+                {});
+            context.device.submitFrameBatch(
+                std::move(submitBatch),
+                toQueueRole(planBatch.queue),
+                false);
+            ++report.submittedBatchCount;
+        });
 
         auto batchOrdinals = std::views::iota(std::size_t{0}, report.plan.batches.size());
         std::ranges::for_each(batchOrdinals, [&](std::size_t batchOrdinal) {
@@ -311,6 +490,43 @@ namespace nr::renderer
             auto const batchTimedPassOffset = timedPassOffset;
             auto const batchTimedPassCount = compiledBatch.passes.size();
             timedPassOffset += batchTimedPassCount;
+
+            if (planBatch.acquiresSwapchainBeforeSubmit)
+            {
+                nrAssert(
+                    !report.swapchainImageIndex.has_value(),
+                    "RenderGraphExecutor::execute encountered more than one swapchain acquire.");
+                auto acquire = context.device.acquireFrameImage(context.acquireTimeout);
+                report.swapchainImageIndex = acquire.swapchainImageIndex;
+                report.swapchainAcquireResult = acquire.swapchainResult;
+                resolveSwapchainRuntimeResources(
+                    compiled,
+                    context,
+                    acquire.swapchainImageIndex,
+                    runtimeBindings);
+
+                nrAssert(
+                    !prepared.firstDeferredPrepareBatch.has_value() ||
+                        *prepared.firstDeferredPrepareBatch == batchOrdinal,
+                    "RenderGraphExecutor::execute deferred prepare boundary does not match the swapchain acquire batch.");
+                report.invokedPassPrepareCount += invokePassPrepareCallbacks(
+                    compiled,
+                    context,
+                    runtimeBindings,
+                    batchOrdinal,
+                    compiled.submitBatches.size());
+                deferredPrepareInvoked = true;
+            }
+
+            auto recordTasks = launchRecordTasksForBatch(
+                context,
+                frameSlot,
+                batchOrdinal,
+                compiled,
+                compiledResourceByHandle,
+                runtimeBindings,
+                frameDataByHandle,
+                report);
 
             auto& commandBuffer = primaryCommandBufferForQueue(context, frameSlot, planBatch.queue, batchOrdinal);
 
@@ -357,42 +573,14 @@ namespace nr::renderer
 
                 if (!planBatch.headAcquireTransitions.empty())
                 {
-                    auto barriers = nr::rhi::ops::BarrierBatch{};
-                    std::ranges::for_each(planBatch.headAcquireTransitions, [&](const ResourceStateTransition& transition) {
-                        auto resourceIt = compiledResourceByHandle.find(transition.resource);
-                        nrAssert(
-                            resourceIt != compiledResourceByHandle.end(),
-                            "RenderGraphExecutor::execute acquire transition references an unknown resource handle.");
-
-                        auto bindingIt = runtimeBindings.find(transition.resource);
-                        nrAssert(
-                            bindingIt != runtimeBindings.end(),
-                            "RenderGraphExecutor::execute acquire transition cannot resolve runtime resource binding.");
-
-                        auto const addedBarrier = addTransitionBarrier(
-                            barriers,
-                            resourceIt->second.get(),
-                            bindingIt->second,
-                            transition,
-                            TransitionPlacement::Acquire,
-                            queueFamilyIndexFor(context.device, transition.srcQueue),
-                            queueFamilyIndexFor(context.device, transition.dstQueue),
-                            context.device.queueFamilyTransferPolicy());
-
-                        if (addedBarrier)
-                        {
-                            ++report.appliedAcquireBarrierCount;
-                        }
-                    });
-
-                    if (!barriers.empty())
-                    {
-                        nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
-                    }
+                    report.appliedAcquireBarrierCount += recordOwnershipTransitions(
+                        commandBuffer,
+                        planBatch.headAcquireTransitions,
+                        TransitionPlacement::Acquire);
                 }
 
                 auto recordResults = collectRecordTaskResults(
-                    recordTasksByBatch[batchOrdinal],
+                    recordTasks,
                     batchOrdinal,
                     report);
 
@@ -400,8 +588,8 @@ namespace nr::renderer
                     commandBuffer,
                     compiledBatch,
                     std::span<const RecordPassExecutionPlan>{
-                        recordTasksByBatch[batchOrdinal].passPlans.data(),
-                        recordTasksByBatch[batchOrdinal].passPlans.size()},
+                        recordTasks.passPlans.data(),
+                        recordTasks.passPlans.size()},
                     std::span<const RecordTaskResult>{recordResults.data(), recordResults.size()},
                     *frameTimingState.queryPool,
                     batchTimedPassOffset,
@@ -411,38 +599,10 @@ namespace nr::renderer
 
                 if (!planBatch.tailReleaseTransitions.empty())
                 {
-                    auto barriers = nr::rhi::ops::BarrierBatch{};
-                    std::ranges::for_each(planBatch.tailReleaseTransitions, [&](const ResourceStateTransition& transition) {
-                        auto resourceIt = compiledResourceByHandle.find(transition.resource);
-                        nrAssert(
-                            resourceIt != compiledResourceByHandle.end(),
-                            "RenderGraphExecutor::execute release transition references an unknown resource handle.");
-
-                        auto bindingIt = runtimeBindings.find(transition.resource);
-                        nrAssert(
-                            bindingIt != runtimeBindings.end(),
-                            "RenderGraphExecutor::execute release transition cannot resolve runtime resource binding.");
-
-                        auto const addedBarrier = addTransitionBarrier(
-                            barriers,
-                            resourceIt->second.get(),
-                            bindingIt->second,
-                            transition,
-                            TransitionPlacement::Release,
-                            queueFamilyIndexFor(context.device, transition.srcQueue),
-                            queueFamilyIndexFor(context.device, transition.dstQueue),
-                            context.device.queueFamilyTransferPolicy());
-
-                        if (addedBarrier)
-                        {
-                            ++report.appliedReleaseBarrierCount;
-                        }
-                    });
-
-                    if (!barriers.empty())
-                    {
-                        nr::rhi::ops::pipelineBarrier(commandBuffer, barriers);
-                    }
+                    report.appliedReleaseBarrierCount += recordOwnershipTransitions(
+                        commandBuffer,
+                        planBatch.tailReleaseTransitions,
+                        TransitionPlacement::Release);
                 }
             }
 
@@ -451,19 +611,19 @@ namespace nr::renderer
             auto submitBatch = nr::rhi::CommandBatch{};
             submitBatch.addCommandBuffer(commandBuffer);
 
-            if (timelineValid && planBatch.waitsForPreviousBatch && previousSignalToken.valid())
+            if (timelinesValid && planBatch.waitsForPreviousBatch && previousSignalToken.valid())
             {
                 submitBatch.addWait(
-                    timeline->get().semaphore(),
-                    submissionWaitStage(planBatch.queue),
+                    timelines->get().semaphore(previousSignalToken.queue),
+                    planBatch.waitStageMask,
                     previousSignalToken.value);
             }
 
-            if (timelineValid && planBatch.signalsNextBatch)
+            if (timelinesValid && planBatch.signalsNextBatch)
             {
-                auto signalToken = timeline->get().acquireSignalToken();
+                auto signalToken = timelines->get().acquireSignalToken(planBatch.queue);
                 submitBatch.addSignal(
-                    timeline->get().semaphore(),
+                    timelines->get().semaphore(signalToken.queue),
                     signalToken.value,
                     0,
                     vk::PipelineStageFlagBits2::eAllCommands);
@@ -474,7 +634,12 @@ namespace nr::renderer
             auto imageAvailableWaitStage = planBatch.signalsPresent
                                                ? imageAvailableWaitStageForBatch(compiledBatch, compiledResourceByHandle)
                                                : vk::PipelineStageFlags2{};
-            attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, planBatch.signalsPresent);
+            attachFrameBoundaryMetadata(
+                submitBatch,
+                context,
+                frameBoundaryFrameID,
+                planBatch.signalsPresent,
+                report.swapchainImageIndex);
             context.device.submitFrameBatch(std::move(submitBatch), submitRole, planBatch.signalsPresent, imageAvailableWaitStage);
             ++report.submittedBatchCount;
         });
@@ -485,7 +650,7 @@ namespace nr::renderer
                 context,
                 frameSlot,
                 QueueDomain::Compute,
-                report.plan.batches.size());
+                report.plan.batches.size() + report.plan.initialReleaseBatches.size());
 
             commandBuffer.reset();
             nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
@@ -494,20 +659,29 @@ namespace nr::renderer
             auto submitBatch = nr::rhi::CommandBatch{};
             submitBatch.addCommandBuffer(commandBuffer);
 
-            if (timelineValid && previousSignalToken.valid())
+            if (timelinesValid && previousSignalToken.valid())
             {
                 submitBatch.addWait(
-                    timeline->get().semaphore(),
+                    timelines->get().semaphore(previousSignalToken.queue),
                     submissionWaitStage(QueueDomain::Compute),
                     previousSignalToken.value);
             }
 
-            attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, true);
+            attachFrameBoundaryMetadata(
+                submitBatch,
+                context,
+                frameBoundaryFrameID,
+                true,
+                report.swapchainImageIndex);
             context.device.submitFrameBatch(std::move(submitBatch), nr::rhi::QueueRole::Compute, true);
             ++report.submittedBatchCount;
         }
 
         updateRetainedImageStates(compiled);
+
+        nrAssert(
+            !prepared.firstDeferredPrepareBatch.has_value() || deferredPrepareInvoked,
+            "RenderGraphExecutor::execute did not reach the deferred swapchain prepare boundary.");
 
         frameTimingState.pendingFrameIndex = context.frameIndex;
         frameTimingState.pendingPasses = std::move(currentTimingSamples);
@@ -547,7 +721,8 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
         nr::rhi::CommandBatch& submitBatch,
         const ExecuteContext& context,
         std::uint64_t frameBoundaryFrameID,
-        bool isFrameEnd)
+        bool isFrameEnd,
+        std::optional<std::uint32_t> swapchainImageIndex)
 {
         if (!context.device.frameBoundaryEnabled())
         {
@@ -562,9 +737,9 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
 
         auto swapchainImages = std::array<vk::Image, 1>{};
         auto imageSpan = std::span<const vk::Image>{};
-        if (isFrameEnd && context.swapchainImageIndex.has_value())
+        if (isFrameEnd && swapchainImageIndex.has_value())
         {
-            swapchainImages[0] = context.device.presentationContext.swapchainImage(*context.swapchainImageIndex);
+            swapchainImages[0] = context.device.presentationContext.swapchainImage(*swapchainImageIndex);
             imageSpan = std::span<const vk::Image>{swapchainImages.data(), swapchainImages.size()};
         }
 
@@ -660,24 +835,27 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
         const CompiledSubmitBatch& batch,
         const std::map<GraphResourceHandle, std::reference_wrapper<const CompiledResourceDesc>>& compiledResourceByHandle)
 {
-        auto stages = vk::PipelineStageFlags2{};
-
-        std::ranges::for_each(batch.passes, [&](const CompiledPass& pass) {
-            std::ranges::for_each(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+        auto firstPass = std::ranges::find_if(batch.passes, [&](const CompiledPass& pass) {
+            return std::ranges::any_of(pass.resourceUses, [&](const PassResourceUseDesc& use) {
                 auto resourceIt = compiledResourceByHandle.find(use.resource);
-                if (resourceIt == compiledResourceByHandle.end() || !resourceIt->second.get().isSwapchain)
-                {
-                    return;
-                }
-                stages |= imageAccessWaitStage(pass.queue, use, pass.shaderStages);
+                return resourceIt != compiledResourceByHandle.end() && resourceIt->second.get().isSwapchain;
             });
         });
-
-        if (stages == vk::PipelineStageFlags2{})
+        if (firstPass == batch.passes.end())
         {
             return vk::PipelineStageFlagBits2::eAllCommands;
         }
-        return stages;
+
+        auto firstUse = std::ranges::find_if(firstPass->resourceUses, [&](const PassResourceUseDesc& use) {
+            auto resourceIt = compiledResourceByHandle.find(use.resource);
+            return resourceIt != compiledResourceByHandle.end() && resourceIt->second.get().isSwapchain;
+        });
+        nrAssert(firstUse != firstPass->resourceUses.end(), "RenderGraphExecutor failed to resolve the first swapchain image use.");
+
+        auto stages = imageAccessWaitStage(firstPass->queue, *firstUse, firstPass->shaderStages);
+        return stages != vk::PipelineStageFlags2{}
+                   ? stages
+                   : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
     }
 
 [[nodiscard]] std::uint32_t RenderGraphExecutor::queueFamilyIndexFor(const nr::rhi::Device& device, QueueDomain queue)
@@ -782,11 +960,7 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
             {
                 if (resource.isSwapchain)
                 {
-                    nrAssert(
-                        context.swapchainImageIndex.has_value(),
-                        "RenderGraphExecutor::prepareFrame requires swapchainImageIndex in ExecuteContext when swapchain resources are present.");
-                    binding.image = context.device.presentationContext.swapchainImage(*context.swapchainImageIndex);
-                    binding.imageView = context.device.presentationContext.swapchainImageView(*context.swapchainImageIndex);
+                    return;
                 }
                 else
                 {
@@ -843,11 +1017,51 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
         return bindings;
     }
 
-[[nodiscard]] std::size_t RenderGraphExecutor::invokePassPrepareCallbacks(
-        CompiledGraphFrame& compiled,
+void RenderGraphExecutor::resolveSwapchainRuntimeResources(
+        const CompiledGraphFrame& compiled,
         const ExecuteContext& context,
-        const std::map<GraphResourceHandle, PreparedResourceBinding>& runtimeBindings)
+        std::uint32_t swapchainImageIndex,
+        RuntimeBindingMap& runtimeBindings)
 {
+        auto const currentExtent = context.device.presentationContext.swapchainExtent();
+        auto const currentFormat = context.device.presentationContext.swapchainFormat();
+        std::ranges::for_each(compiled.resources, [&](const CompiledResourceDesc& resource) {
+            if (!resource.isSwapchain)
+            {
+                return;
+            }
+
+            nrAssert(
+                resource.resolvedFormat == currentFormat,
+                std::format(
+                    "RenderGraphExecutor swapchain format changed between graph build and late acquire: compiled={} acquired={}.",
+                    vk::to_string(resource.resolvedFormat),
+                    vk::to_string(currentFormat)));
+
+            auto binding = PreparedResourceBinding{};
+            binding.isImage = true;
+            binding.image = context.device.presentationContext.swapchainImage(swapchainImageIndex);
+            binding.imageView = context.device.presentationContext.swapchainImageView(swapchainImageIndex);
+            binding.extent = vk::Extent3D{
+                std::max(1u, currentExtent.width),
+                std::max(1u, currentExtent.height),
+                1u,
+            };
+            binding.subresourceRange = subresourceRangeFor(resource);
+            runtimeBindings.insert_or_assign(resource.handle, binding);
+        });
+    }
+
+[[nodiscard]] std::size_t RenderGraphExecutor::invokePassPrepareCallbacks(
+        const CompiledGraphFrame& compiled,
+        const ExecuteContext& context,
+        const RuntimeBindingMap& runtimeBindings,
+        std::size_t firstBatchOrdinal,
+        std::size_t lastBatchOrdinal)
+{
+        nrAssert(
+            firstBatchOrdinal <= lastBatchOrdinal && lastBatchOrdinal <= compiled.submitBatches.size(),
+            "RenderGraphExecutor::invokePassPrepareCallbacks received an invalid submit-batch range.");
         auto resolveBuffer = [&](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
             auto bindingIt = runtimeBindings.find(handle);
             if (bindingIt == runtimeBindings.end() || !bindingIt->second.isBuffer)
@@ -911,7 +1125,9 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
         };
 
         auto invokedPrepareCount = std::size_t{0};
-        std::ranges::for_each(compiled.submitBatches, [&](const CompiledSubmitBatch& batch) {
+        auto batchOrdinals = std::views::iota(firstBatchOrdinal, lastBatchOrdinal);
+        std::ranges::for_each(batchOrdinals, [&](std::size_t batchOrdinal) {
+            auto const& batch = compiled.submitBatches[batchOrdinal];
             std::ranges::for_each(batch.passes, [&](const CompiledPass& pass) {
                 if (!pass.prepare)
                 {
@@ -1089,25 +1305,11 @@ bool RenderGraphExecutor::addTransitionBarrier(
         const ResourceStateTransition& transition,
         TransitionPlacement placement,
         std::uint32_t srcQueueFamilyIndex,
-        std::uint32_t dstQueueFamilyIndex,
-        const nr::rhi::ops::QueueFamilyTransferPolicy& queueFamilyTransferPolicy)
+        std::uint32_t dstQueueFamilyIndex)
 {
         constexpr auto kReadWriteAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
         const auto isOwnershipPlacement = placement != TransitionPlacement::InPass;
-        const auto canOmitBufferOwnership =
-            isOwnershipPlacement &&
-            queueFamilyTransferPolicy.canOmitBufferQueueFamilyTransfer(
-                srcQueueFamilyIndex,
-                dstQueueFamilyIndex);
-        const auto canOmitImageOwnership =
-            isOwnershipPlacement &&
-            resource.isImage &&
-            binding.imageResource.has_value() &&
-            queueFamilyTransferPolicy.canOmitImageQueueFamilyTransfer(
-                binding.imageResource->get(),
-                srcQueueFamilyIndex,
-                dstQueueFamilyIndex,
-                resource.isSwapchain);
+        const auto sameQueueFamily = isOwnershipPlacement && srcQueueFamilyIndex == dstQueueFamilyIndex;
 
         // Resolve each side from the precise declared scope when available, falling
         // back to a conservative all-commands scope only for unresolved sides so
@@ -1140,14 +1342,17 @@ bool RenderGraphExecutor::addTransitionBarrier(
 
         if (placement == TransitionPlacement::Release)
         {
-            // Queue-release half: the destination side is the release boundary.
-            dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe;
+            // Maintenance8 makes both QFOT synchronization scopes meaningful. Keep
+            // the release operation at the producer stage while leaving only the
+            // producer access scope populated.
+            dstStageMask = srcStageMask;
             dstAccessMask = vk::AccessFlags2{};
         }
         else if (placement == TransitionPlacement::Acquire)
         {
-            // Queue-acquire half: the source side is the acquire boundary.
-            srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
+            // Keep the acquire operation at the consumer stage so the submission
+            // semaphore can wait at the same precise stage.
+            srcStageMask = dstStageMask;
             srcAccessMask = vk::AccessFlags2{};
         }
 
@@ -1158,9 +1363,15 @@ bool RenderGraphExecutor::addTransitionBarrier(
                                     ? nr::rhi::ops::kIgnoredQueueFamilyIndex
                                     : dstQueueFamilyIndex;
 
+        if (isOwnershipPlacement && !sameQueueFamily)
+        {
+            barriers.addDependencyFlags(
+                vk::DependencyFlagBits::eQueueFamilyOwnershipTransferUseAllStagesKHR);
+        }
+
         if (resource.isBuffer)
         {
-            if (canOmitBufferOwnership)
+            if (sameQueueFamily)
             {
                 return false;
             }
@@ -1183,7 +1394,7 @@ bool RenderGraphExecutor::addTransitionBarrier(
 
         if (resource.isAccelerationStructure)
         {
-            if (canOmitBufferOwnership)
+            if (sameQueueFamily)
             {
                 return false;
             }
@@ -1211,7 +1422,7 @@ bool RenderGraphExecutor::addTransitionBarrier(
 
         if (resource.isImage)
         {
-            if (canOmitImageOwnership)
+            if (sameQueueFamily)
             {
                 if (placement == TransitionPlacement::Acquire ||
                     transition.oldLayout == transition.newLayout)
@@ -1373,8 +1584,7 @@ bool RenderGraphExecutor::addTransitionBarrier(
                     transition,
                     TransitionPlacement::InPass,
                     nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                    nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                    nr::rhi::ops::QueueFamilyTransferPolicy{});
+                    nr::rhi::ops::kIgnoredQueueFamilyIndex);
 
                 if (addedBarrier)
                 {
@@ -1642,9 +1852,10 @@ void RenderGraphExecutor::ensureTimingQueryPool(
         return frame;
     }
 
-[[nodiscard]] std::vector<RenderGraphExecutor::RecordBatchTasks> RenderGraphExecutor::launchRecordTasksForAllBatches(
+[[nodiscard]] RenderGraphExecutor::RecordBatchTasks RenderGraphExecutor::launchRecordTasksForBatch(
         const ExecuteContext& context,
         std::size_t frameSlot,
+        std::size_t batchOrdinal,
         const CompiledGraphFrame& compiled,
         const CompiledResourceLookup& compiledResourceByHandle,
         const RuntimeBindingMap& runtimeBindings,
@@ -1653,16 +1864,15 @@ void RenderGraphExecutor::ensureTimingQueryPool(
 {
         nrAssert(
             report.plan.batches.size() == compiled.submitBatches.size(),
-            "RenderGraphExecutor::launchRecordTasksForAllBatches requires plan and compiled batch counts to match.");
+            "RenderGraphExecutor::launchRecordTasksForBatch requires plan and compiled batch counts to match.");
+        nrAssert(
+            batchOrdinal < compiled.submitBatches.size(),
+            "RenderGraphExecutor::launchRecordTasksForBatch batch ordinal is out of range.");
 
         auto& frame = context.device.frameManager.current();
-        auto tasksByBatch = std::vector<RecordBatchTasks>{};
-        tasksByBatch.reserve(compiled.submitBatches.size());
         auto usedWorkerIds = std::set<std::uint32_t>{};
         auto recordTaskOrdinal = std::size_t{0};
 
-        auto batchOrdinals = std::views::iota(std::size_t{0}, compiled.submitBatches.size());
-        std::ranges::for_each(batchOrdinals, [&](std::size_t batchOrdinal) {
             const auto& planBatch = report.plan.batches[batchOrdinal];
             const auto& compiledBatch = compiled.submitBatches[batchOrdinal];
 
@@ -1680,7 +1890,7 @@ void RenderGraphExecutor::ensureTimingQueryPool(
                     preparedRecordWorkerCountForQueue(frame, planBatch.queue));
                 nrAssert(
                     queueWorkerCount > 0,
-                    "RenderGraphExecutor::launchRecordTasksForAllBatches requires at least one worker-only secondary command pool for the batch queue.");
+                    "RenderGraphExecutor::launchRecordTasksForBatch requires at least one worker-only secondary command pool for the batch queue.");
 
                 auto passOrdinals = std::views::iota(std::size_t{0}, compiledBatch.passes.size());
                 std::ranges::for_each(passOrdinals, [&](std::size_t passOrdinal) {
@@ -1801,11 +2011,8 @@ void RenderGraphExecutor::ensureTimingQueryPool(
                 ++report.submittedRecordTaskCount;
             });
 
-            tasksByBatch.push_back(std::move(batchTasks));
-        });
-
-        report.parallelPassRecording = usedWorkerIds.size() > 1u;
-        return tasksByBatch;
+        report.parallelPassRecording = report.parallelPassRecording || usedWorkerIds.size() > 1u;
+        return batchTasks;
     }
 
 [[nodiscard]] std::vector<RecordTaskResult> RenderGraphExecutor::collectRecordTaskResults(
@@ -1915,8 +2122,7 @@ void RenderGraphExecutor::executeRecordedSecondaries(
                         transition,
                         TransitionPlacement::InPass,
                         nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                        nr::rhi::ops::kIgnoredQueueFamilyIndex,
-                        nr::rhi::ops::QueueFamilyTransferPolicy{});
+                        nr::rhi::ops::kIgnoredQueueFamilyIndex);
 
                     if (addedBarrier)
                     {

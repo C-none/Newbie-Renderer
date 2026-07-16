@@ -180,9 +180,9 @@ class FrameContext
     /**
      * @brief Inject the pre-acquired image-available semaphore for this frame.
      *
-     * Called by Device::beginFrame() after consuming the pending acquire from
-     * PresentationContext. The semaphore is owned by the acquire pool; this frame
-     * holds a non-owning pointer valid until Device::beginFrame() calls
+     * Called by Device::acquireFrameImage() at the graph's swapchain-acquire boundary.
+     * The semaphore is owned by the acquire pool; this frame holds a non-owning
+     * pointer valid until Device::beginFrame() calls
      * PresentationContext::returnAcquireSemaphore() on the next cycle.
      */
     void setBorrowedAcquireSemaphore(const vk::raii::Semaphore *semaphore) noexcept;
@@ -316,7 +316,7 @@ class FrameContext
     // Synchronization primitives
     vk::raii::Fence fence_ = {nullptr};
     // Non-owning pointer to a semaphore slot in PresentationContext::acquirePool_.
-    // Injected at beginFrame(), valid until returnAcquireSemaphore() at next beginFrame().
+    // Injected at acquireFrameImage(), valid until returnAcquireSemaphore() at next beginFrame().
     const vk::raii::Semaphore *borrowedAcquireSemaphore_ = nullptr;
 
     // Graphics queue pools

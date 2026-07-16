@@ -791,6 +791,9 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
             "Present.CopyToReadback");
     }
 
+    [[maybe_unused]] auto acquireNodeHandle = context.addSwapchainAcquireNode(
+        "Present.AcquireSwapchainImage");
+
     [[maybe_unused]] auto copyPassHandle = nr::renderer::ops::copyImageToImage(
         context,
         "Present.CopyToSwapchain",

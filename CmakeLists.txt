@@ -6,6 +6,64 @@ set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "f35a9ac6-8463-4d38-8eec-5d6008153e7d")
 
 project(NewbieRenderer LANGUAGES CXX)
 
+include("${CMAKE_SOURCE_DIR}/cmake/NrDlssBridgeArtifact.cmake")
+
+if(WIN32)
+    set(NR_DLSS_NGX_SDK_DEFAULT ON)
+else()
+    set(NR_DLSS_NGX_SDK_DEFAULT OFF)
+endif()
+option(
+    NR_ENABLE_DLSS_NGX_SDK
+    "Enable the bundled DLSS NGX 310.7.0 Vulkan runtime through the project DLSS bridge."
+    ${NR_DLSS_NGX_SDK_DEFAULT}
+)
+set(NR_DLSS_NGX_SDK_OPERATIONAL OFF)
+set(NR_DLSS_BRIDGE_SOURCE_DIR "${CMAKE_SOURCE_DIR}/src/extern/dlssBridge")
+set(NR_DLSS_BRIDGE_ARTIFACT_DIR "${NR_DLSS_BRIDGE_SOURCE_DIR}/artifacts/windows-x86_64/release")
+set(NR_DLSS_NGX_SDK_DIR "${CMAKE_SOURCE_DIR}/src/extern/DLSS")
+set(NR_DLSS_RELEASE_FEATURE_RUNTIME_DLL "${NR_DLSS_NGX_SDK_DIR}/lib/Windows_x86_64/rel/nvngx_dlssd.dll")
+set(NR_DLSS_DEVELOPMENT_FEATURE_RUNTIME_DLL "${NR_DLSS_NGX_SDK_DIR}/lib/Windows_x86_64/dev/nvngx_dlssd.dll")
+if(NR_ENABLE_DLSS_NGX_SDK)
+    if(NOT WIN32)
+        message(FATAL_ERROR "The DLSS NGX bridge currently supports Windows x86_64 only.")
+    endif()
+    if(NOT EXISTS "${NR_DLSS_NGX_SDK_DIR}/include/nvsdk_ngx.h" OR
+       NOT EXISTS "${NR_DLSS_RELEASE_FEATURE_RUNTIME_DLL}" OR
+       (MSVC AND NOT EXISTS "${NR_DLSS_DEVELOPMENT_FEATURE_RUNTIME_DLL}"))
+        message(FATAL_ERROR
+            "The bundled DLSS SDK is incomplete. Clone with --recurse-submodules, or run "
+            "'git submodule update --init --recursive' in an existing checkout."
+        )
+    endif()
+
+    set(NR_DLSS_NGX_SDK_OPERATIONAL ON)
+    if(MSVC)
+        set(NR_DLSS_BRIDGE_RUNTIME_DLL "$<TARGET_FILE:nr_dlss_bridge>")
+        set(NR_DLSS_FEATURE_RUNTIME_DLL
+            "$<IF:$<CONFIG:Debug>,${NR_DLSS_DEVELOPMENT_FEATURE_RUNTIME_DLL},${NR_DLSS_RELEASE_FEATURE_RUNTIME_DLL}>"
+        )
+    else()
+        nr_validate_dlss_bridge_artifact(
+            "${NR_DLSS_BRIDGE_SOURCE_DIR}"
+            "${NR_DLSS_NGX_SDK_DIR}"
+            "${NR_DLSS_BRIDGE_ARTIFACT_DIR}"
+        )
+        set(NR_DLSS_BRIDGE_RUNTIME_DLL "${NR_VALIDATED_DLSS_BRIDGE_DLL}")
+        set(NR_DLSS_FEATURE_RUNTIME_DLL "${NR_DLSS_RELEASE_FEATURE_RUNTIME_DLL}")
+    endif()
+endif()
+
+option(NR_DLSS_BRIDGE_ONLY "Configure only the MSVC DLSS bridge publication project." OFF)
+if(NR_DLSS_BRIDGE_ONLY)
+    if(NOT MSVC OR NOT NR_DLSS_NGX_SDK_OPERATIONAL)
+        message(FATAL_ERROR "NR_DLSS_BRIDGE_ONLY requires MSVC with NR_ENABLE_DLSS_NGX_SDK=ON.")
+    endif()
+    find_package(Vulkan REQUIRED)
+    add_subdirectory(src/extern/dlssBridge)
+    return()
+endif()
+
 set(NR_BUILD_TESTS ON CACHE BOOL "Build unit tests" FORCE)
 set(NR_ENABLE_RELEASE_IPO ON CACHE BOOL "Enable IPO/LTO for Release builds when supported." FORCE)
 set(NR_ENABLE_CLANGD_SYNC ON CACHE BOOL "Synchronize clangd's isolated compile database and standard module BMI during LLVM project builds." FORCE)
@@ -198,6 +256,21 @@ function(nr_add_executable target)
         set_target_properties(${target} PROPERTIES CXX_MODULE_STD ON)
     endif()
     nr_add_slang_runtime_dependency(${target})
+    if(NR_DLSS_NGX_SDK_OPERATIONAL)
+        if(TARGET nr_dlss_bridge)
+            add_dependencies(${target} nr_dlss_bridge)
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NR_DLSS_BRIDGE_RUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:${target}>/nr_dlss_bridge.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NR_DLSS_FEATURE_RUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:${target}>/nvngx_dlssd.dll"
+            COMMENT "Copying the DLSS bridge and Ray Reconstruction runtime for ${target}"
+            VERBATIM
+        )
+    endif()
     nr_apply_target_settings(${target})
 endfunction()
 

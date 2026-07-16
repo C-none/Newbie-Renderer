@@ -13,3 +13,11 @@ nr_add_contract_test(nr_renderpasses_renderer_cache_contract_test nr_renderpasse
     utils
     dependency
 )
+
+nr_add_contract_test(nr_renderpasses_dlss_rr_contract_test nr_renderpasses_dlss_rr_contract_test.cpp "fast;cpu;unit;renderpasses;dlss;rr"
+    nrrenderpasses
+    nrrenderer
+    nrrhi
+    utils
+    dependency
+)

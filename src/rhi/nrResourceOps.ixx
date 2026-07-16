@@ -133,25 +133,23 @@ struct QueueOwnershipBarrierConfig
 
 /**
  * @brief Build queue-ownership barrier for Buffer/Image with one strongly-typed template path.
- * @tparam TOwnershipPhase Compile-time phase selector: `Release` writes source-side
- *         scopes and pins the ignored destination side to `eBottomOfPipe`; `Acquire`
- *         writes destination-side scopes and pins the ignored source side to
- *         `eTopOfPipe`.
+ * @tparam TOwnershipPhase Compile-time phase selector: `Release` populates only
+ *         the source access scope and `Acquire` populates only the destination
+ *         access scope. Maintenance8 keeps both stage scopes equal to the active
+ *         phase stage so queue-family operations participate in precise sync.
  * @tparam TResourceKind Resource category (`Buffer` or `Image`) that determines barrier type/layout fields.
  */
 template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourceKind>
 [[nodiscard]] inline auto makeQueueOwnershipBarrier(const TResourceKind& resource, const QueueOwnershipBarrierConfig& config)
 {
     constexpr bool kIsRelease = TOwnershipPhase == OwnershipBarrierPhase::Release;
-    constexpr auto kAcquireBoundaryStage = vk::PipelineStageFlagBits2::eTopOfPipe;
-    constexpr auto kReleaseBoundaryStage = vk::PipelineStageFlagBits2::eBottomOfPipe;
 
     if constexpr (std::same_as<std::remove_cvref_t<TResourceKind>, Buffer>)
     {
         return vk::BufferMemoryBarrier2{
-            kIsRelease ? config.stages : kAcquireBoundaryStage,
+            config.stages,
             kIsRelease ? config.access : vk::AccessFlags2{},
-            kIsRelease ? kReleaseBoundaryStage : config.stages,
+            config.stages,
             kIsRelease ? vk::AccessFlags2{} : config.access,
             config.srcQueueFamilyIndex,
             config.dstQueueFamilyIndex,
@@ -164,9 +162,9 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
     else
     {
         return vk::ImageMemoryBarrier2{
-            kIsRelease ? config.stages : kAcquireBoundaryStage,
+            config.stages,
             kIsRelease ? config.access : vk::AccessFlags2{},
-            kIsRelease ? kReleaseBoundaryStage : config.stages,
+            config.stages,
             kIsRelease ? vk::AccessFlags2{} : config.access,
             config.oldLayout,
             config.newLayout,
@@ -556,10 +554,9 @@ struct BufferUploadOwnershipPlan
 /**
  * @brief Generic buffer queue-ownership barrier (sync2).
  *
- * `TOwnershipPhase = OwnershipBarrierPhase::Release` emits source-side
- * stage/access scopes and pins destination side to `eBottomOfPipe`.
- * `TOwnershipPhase = OwnershipBarrierPhase::Acquire` emits destination-side
- * stage/access scopes and pins source side to `eTopOfPipe`.
+ * `TOwnershipPhase = OwnershipBarrierPhase::Release` emits the phase stage on
+ * both sides and populates only the source access scope. `Acquire` emits its
+ * phase stage on both sides and populates only the destination access scope.
  */
 template <OwnershipBarrierPhase TOwnershipPhase>
 [[nodiscard]] inline vk::BufferMemoryBarrier2 makeBufferOwnershipBarrier(
@@ -683,7 +680,9 @@ struct DependencyInfoPacket
 /**
  * @brief Lightweight collector for sync2 barriers.
  *
- * The batch is intentionally state-light and non-owning for resources.
+ * The batch is intentionally state-light and non-owning for resources. Adding
+ * an explicit cross-family buffer/image barrier automatically enables the
+ * maintenance8 all-stage QFOT dependency flag for the resulting packet.
  */
 class BarrierBatch
 {
@@ -691,6 +690,8 @@ class BarrierBatch
     void clear();
 
     [[nodiscard]] bool empty() const noexcept;
+
+    void addDependencyFlags(vk::DependencyFlags flags) noexcept;
 
     template <Barrier2Like TBarrier>
     void add(TBarrier&& barrier)
@@ -700,13 +701,25 @@ class BarrierBatch
         {
             memoryBarriers_.push_back(std::forward<TBarrier>(barrier));
         }
-        else if constexpr (std::same_as<BarrierT, vk::BufferMemoryBarrier2>)
+        else if constexpr (std::same_as<BarrierT, vk::BufferMemoryBarrier2> ||
+                           std::same_as<BarrierT, vk::ImageMemoryBarrier2>)
         {
-            bufferBarriers_.push_back(std::forward<TBarrier>(barrier));
-        }
-        else if constexpr (std::same_as<BarrierT, vk::ImageMemoryBarrier2>)
-        {
-            imageBarriers_.push_back(std::forward<TBarrier>(barrier));
+            if (barrier.srcQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+                barrier.dstQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
+                barrier.srcQueueFamilyIndex != barrier.dstQueueFamilyIndex)
+            {
+                dependencyFlags_ |=
+                    vk::DependencyFlagBits::eQueueFamilyOwnershipTransferUseAllStagesKHR;
+            }
+
+            if constexpr (std::same_as<BarrierT, vk::BufferMemoryBarrier2>)
+            {
+                bufferBarriers_.push_back(std::forward<TBarrier>(barrier));
+            }
+            else
+            {
+                imageBarriers_.push_back(std::forward<TBarrier>(barrier));
+            }
         }
         else
         {
@@ -721,6 +734,7 @@ class BarrierBatch
     [[nodiscard]] DependencyInfoPacket buildDependencyInfo() const;
 
   private:
+    vk::DependencyFlags dependencyFlags_{};
     std::vector<vk::MemoryBarrier2> memoryBarriers_;
     std::vector<vk::BufferMemoryBarrier2> bufferBarriers_;
     std::vector<vk::ImageMemoryBarrier2> imageBarriers_;

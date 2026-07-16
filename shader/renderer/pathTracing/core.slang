@@ -3,6 +3,7 @@ import common;
 import renderer.pathTracing.params;
 import renderer.pathTracing.pathState;
 import renderer.pathTracing.resources;
+import renderer.pathTracing.guides;
 import renderer.pathTracing.visibility;
 
 public float safeDivideW(float w)
@@ -46,9 +47,10 @@ public PathState generatePath(uint2 pixel, uint2 dimensions)
     path.pixel = pixel;
     path.dimensions = dimensions;
     path.flags = PathFlag.active;
-    path.rng = makeErrorDiffusionSequence(pixel, gFrame.frameState.x);
+    path.rng = makeErrorDiffusionSequence(pixel, gFrame.frameState.xy);
     path.origin = origin;
     path.direction = safeNormalize(directionVector, float3(0.0f, 0.0f, -1.0f));
+    initializePathTracingSkyGuides(path.guides, path.direction, dimensions);
     return path;
 }
 
@@ -101,21 +103,40 @@ public float2 makeAliasLightSample(float2 baseSample, uint sampleIndex)
 // compile-time constant. This runtime switch maps the resolved layerFlags to the concrete static
 // evaluator so each invocation runs only its active-layer math. The root raygen SPIR-V contains every
 // valid lit case; that is the accepted boundary of the current single-raygen architecture.
-public MaterialShadingResult dispatchEvaluateResolvedMaterialDirect(
+public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponents(
     ResolvedMaterialPayload material,
     MaterialDirectLightingInput lighting)
 {
     switch (uint(material.layerFlags))
     {
-    case 1u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(1u)>(material, lighting);
-    case 3u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(3u)>(material, lighting);
-    case 5u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(5u)>(material, lighting);
-    case 7u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(7u)>(material, lighting);
-    case 9u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(9u)>(material, lighting);
-    case 11u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(11u)>(material, lighting);
-    case 13u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(13u)>(material, lighting);
-    case 15u: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(15u)>(material, lighting);
-    default: return evaluateResolvedMaterialDirectVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    case 1u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    case 3u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(3u)>(material, lighting);
+    case 5u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(5u)>(material, lighting);
+    case 7u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(7u)>(material, lighting);
+    case 9u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(9u)>(material, lighting);
+    case 11u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(11u)>(material, lighting);
+    case 13u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(13u)>(material, lighting);
+    case 15u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(15u)>(material, lighting);
+    default: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    }
+}
+
+public ResolvedMaterialBsdfComponents dispatchEvaluateResolvedMaterialBsdfComponents(
+    ResolvedMaterialPayload material,
+    float3 viewDirection,
+    float3 lightDirection)
+{
+    switch (uint(material.layerFlags))
+    {
+    case 1u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(1u)>(material, viewDirection, lightDirection);
+    case 3u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(3u)>(material, viewDirection, lightDirection);
+    case 5u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(5u)>(material, viewDirection, lightDirection);
+    case 7u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(7u)>(material, viewDirection, lightDirection);
+    case 9u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(9u)>(material, viewDirection, lightDirection);
+    case 11u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(11u)>(material, viewDirection, lightDirection);
+    case 13u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(13u)>(material, viewDirection, lightDirection);
+    case 15u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(15u)>(material, viewDirection, lightDirection);
+    default: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(1u)>(material, viewDirection, lightDirection);
     }
 }
 
@@ -158,10 +179,22 @@ public void sampleDirectLighting(
             continue;
         }
 
-        MaterialShadingResult direct = dispatchEvaluateResolvedMaterialDirect(
+        ResolvedMaterialDirectComponents direct = dispatchEvaluateResolvedMaterialDirectComponents(
             material,
             makeLighting(viewDirection, contribution));
-        addPathContribution(path, direct.radiance * sampleWeight);
+        if (path.vertexIndex == 1u)
+        {
+            addPrimaryPathContribution(
+                path,
+                direct.specularRadiance * sampleWeight,
+                direct.diffuseRadiance * sampleWeight);
+        }
+        else
+        {
+            addPathContribution(
+                path,
+                (direct.specularRadiance + direct.diffuseRadiance) * sampleWeight);
+        }
     }
 }
 
@@ -175,23 +208,50 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     pathStateSetHit(path, true);
     float3 viewDirection = safeNormalize(-path.direction, material.geometryNormal);
 
+    if (path.vertexIndex == 1u)
+    {
+        capturePathTracingPrimarySurfaceGuides(
+            path.guides,
+            material,
+            viewDirection,
+            path.dimensions);
+    }
+    else if (path.vertexIndex == 2u)
+    {
+        resolvePathTracingSpecularHit(path.guides, material.position);
+    }
+
     float hitAlpha = material.alphaMode == AlphaMode.blend ? material.alpha : 1.0f;
     if (path.vertexIndex == 1u && hitAlpha < 1.0f)
     {
-        addPathContribution(path, kMissRadiance * (1.0f - hitAlpha));
-        path.throughput *= hitAlpha;
+        addDiffusePathContribution(path, kMissRadiance * (1.0f - hitAlpha));
+        updatePathThroughput(path, float3(hitAlpha));
     }
 
     // Unlit (KHR_materials_unlit): base color RGB is terminal surface radiance. Skip emissive, direct
     // lighting and scatter; the path ends at this hit.
     if (material.layerFlags == RtMaterialLayerFlag.none)
     {
-        addPathContribution(path, material.baseColor.rgb);
+        if (path.vertexIndex == 1u)
+        {
+            addDiffusePathContribution(path, material.baseColor.rgb);
+        }
+        else
+        {
+            addPathContribution(path, material.baseColor.rgb);
+        }
         terminatePathState(path);
         return;
     }
 
-    addPathContribution(path, material.emissive);
+    if (path.vertexIndex == 1u)
+    {
+        addDiffusePathContribution(path, material.emissive);
+    }
+    else
+    {
+        addPathContribution(path, material.emissive);
+    }
 
     // NEE is a single-segment shadow connection that does not consume a bounce, so it must run at
     // every surface vertex including the terminal one. The bounce limit only gates BSDF continuation.
@@ -220,21 +280,43 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
         path.diffuseBounces += 1u;
     }
 
-    updatePathThroughput(path, scatter.weight);
+    if (path.vertexIndex == 1u)
+    {
+        float3 normal = safeNormalize(material.shadingNormal, material.geometryNormal);
+        float noL = saturate(dot(normal, scatter.direction));
+        ResolvedMaterialBsdfComponents bsdf = dispatchEvaluateResolvedMaterialBsdfComponents(
+            material,
+            viewDirection,
+            scatter.direction);
+        float inversePdf = 1.0f / scatter.pdf;
+        initializePrimaryPathThroughput(
+            path,
+            bsdf.specular * noL * inversePdf,
+            bsdf.diffuse * noL * inversePdf);
+    }
+    else
+    {
+        updatePathThroughput(path, scatter.weight);
+    }
+
     RussianRoulettePolicy roulettePolicy = RussianRoulettePolicy();
     if (roulettePolicy.shouldApply(path.vertexIndex))
     {
-        float survivalProbability = roulettePolicy.survivalProbability(path.throughput);
+        float survivalProbability = roulettePolicy.survivalProbability(pathCombinedThroughput(path));
         if (!roulettePolicy.survives(path.rng.get1D(), survivalProbability))
         {
             terminatePathState(path);
             return;
         }
 
-        path.throughput *= roulettePolicy.throughputScale(survivalProbability);
+        updatePathThroughput(path, float3(roulettePolicy.throughputScale(survivalProbability)));
     }
 
     path.pdf = scatter.pdf;
+    if (path.vertexIndex == 1u)
+    {
+        beginPathTracingSpecularHitTracking(path.guides, scatter.kind);
+    }
     path.origin = offsetRayOrigin(material.position, material.geometryNormal, scatter.direction);
     path.direction = scatter.direction;
 }
@@ -242,7 +324,18 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 public void handleMiss(inout PathState path)
 {
     pathStateSetHit(path, false);
-    addPathContribution(path, kMissRadiance);
+    if (path.vertexIndex == 2u)
+    {
+        resolvePathTracingSpecularMiss(path.guides);
+    }
+    if (path.vertexIndex == 1u)
+    {
+        addDiffusePathContribution(path, kMissRadiance);
+    }
+    else
+    {
+        addPathContribution(path, kMissRadiance);
+    }
     terminatePathState(path);
 }
 
@@ -251,7 +344,8 @@ public void writeOutput(PathState path)
     // Path radiance is scene-linear HDR RGB. Present/Display convert this to
     // screen pixels by clamping to [0,1], optional linear->sRGB transfer, optional
     // BGR swizzle, and UI compositing in the Present path.
-    outputImage[int2(path.pixel)] = float4(path.radiance, 1.0f);
+    outputImage[int2(path.pixel)] = float4(pathCombinedRadiance(path), 1.0f);
+    writePathTracingGuides(path.pixel, path.guides);
 }
 
 public struct Pt

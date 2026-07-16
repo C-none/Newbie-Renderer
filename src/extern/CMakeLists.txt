@@ -28,6 +28,8 @@ if(NOT TARGET OpenEXR::OpenEXR)
     message(FATAL_ERROR "find_package(OpenEXR) did not provide the expected OpenEXR::OpenEXR target.")
 endif()
 
+add_subdirectory(dlssBridge)
+
 option(NR_ENABLE_NSIGHT_GRAPHICS_SDK "Enable Nsight Graphics SDK integration wrappers." ON)
 set(NR_NSIGHT_GRAPHICS_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/NsightGraphics/0.9.0")
 if(NR_ENABLE_NSIGHT_GRAPHICS_SDK AND NOT EXISTS "${NR_NSIGHT_GRAPHICS_SDK_DIR}/include/NGFX_GraphicsCapture_Vulkan.h")
@@ -45,6 +47,7 @@ set(DEPENDENCY_IMPLEMENTATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/nsightGraphicsSdkImpl.cpp"
 )
 set(DEPENDENCY_MODULE_IMPLEMENTATION_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyDlss.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyNsight.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyWindow.cpp"
 )
@@ -101,6 +104,7 @@ PUBLIC
     ${Stb_INCLUDE_DIR}
 PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dlssBridge/include"
 )
 if(NR_ENABLE_NSIGHT_GRAPHICS_SDK)
     target_include_directories(dependency
@@ -110,6 +114,7 @@ if(NR_ENABLE_NSIGHT_GRAPHICS_SDK)
 endif()
 target_compile_definitions(dependency
     PRIVATE
+        NR_DLSS_BRIDGE_ENABLED=$<BOOL:${NR_DLSS_NGX_SDK_OPERATIONAL}>
         NR_ENABLE_NSIGHT_GRAPHICS_SDK=$<BOOL:${NR_ENABLE_NSIGHT_GRAPHICS_SDK}>
 )
 if(MSVC)

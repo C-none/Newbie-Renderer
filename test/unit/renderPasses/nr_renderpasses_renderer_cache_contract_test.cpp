@@ -94,6 +94,7 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
         auto pathTracing = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
         auto pathTracingInterface = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.ixx");
         auto accumulate = readProjectFile("src/renderPasses/Accumulate/nrAccumulateNode.cpp");
+        auto accumulateInterface = readProjectFile("src/renderPasses/Accumulate/nrAccumulateNode.ixx");
         auto ui = readProjectFile("src/renderPasses/Ui/nrUiNode.cpp");
         auto sceneTextureBinding = readProjectFile("src/renderPasses/nrSceneTextureTableBinding.ixx");
         auto rendererInterface = readProjectFile("src/renderer/nrRenderer.ixx");
@@ -286,16 +287,32 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             "Accumulate must use renderer-side compute pass builder descriptor handling");
         requirePresent(
             accumulate,
-            "cameraFrameState.historySampleCount",
-            "Accumulate must drive history weight from renderer camera frame state");
+            "std::optional<AccumulateCameraTransform> previousCameraTransform{}",
+            "Accumulate must own its previous unjittered camera transform");
         requirePresent(
             accumulate,
-            "cameraFrameState.accumulationReset",
-            "Accumulate must reset history from renderer camera stability state");
+            "frameParameters.renderCameraConstants.view",
+            "Accumulate must compare the unjittered render-camera view matrix");
         requirePresent(
-            rendererInterface,
-            "kRendererAccumulationMaxSampleCount = 4096u",
-            "Renderer camera history count should support the Accumulate 4096-sample cap");
+            accumulate,
+            "frameParameters.renderCameraConstants.projection",
+            "Accumulate must compare the unjittered render-camera projection matrix");
+        requirePresent(
+            accumulate,
+            "accumulateCameraTransformsEquivalent",
+            "Accumulate must derive its reset from its node-local camera transform snapshot");
+        requirePresent(
+            accumulate,
+            "std::uint32_t historySampleCount = 0u",
+            "Accumulate must own its history sample count");
+        requirePresent(
+            accumulateInterface,
+            "kAccumulateMaxHistorySampleCount = 4096u",
+            "Accumulate should own its 4096-sample implementation cap");
+        requireAbsent(
+            accumulate,
+            "cameraFrameState",
+            "Accumulate history reset and weighting must not depend on renderer or other nodes");
         requireAbsent(
             accumulate,
             "VariantItemEffect::RuntimeOnly",
@@ -451,7 +468,11 @@ const nr::test::CaseRegistrar pathTracingNodeAssemblyCase{
         auto rhiPipelineSource = readProjectFile("src/rhi/nrPipeline.cpp");
 
         requirePresent(pathTracingNode, "PathTracingFrameInputs", "PathTracing should resolve its scene inputs through one typed bundle");
-        requirePresent(pathTracingNode, "clearUnavailableOutput", "PathTracing unavailable inputs should use one fallback clear helper");
+        requirePresent(pathTracingNode, "clearUnavailableGuides", "PathTracing unavailable inputs should clear the complete guide set");
+        requirePresent(pathTracingNode, "kPathTracingGuideResourceCount", "PathTracing should define one fixed guide resource count");
+        requirePresent(pathTracingNode, "guideFrameSlots", "PathTracing guides should be isolated by resource frame slot");
+        requirePresent(pathTracingNode, "nr::maxFrameInFlight", "PathTracing should retain one guide set per frame in flight");
+        requirePresent(pathTracingNode, "publishPathTracingGuides", "PathTracing should publish its guide set through frame resources");
         requirePresent(pathTracingNode, "PathTracing.ClearUnavailable.", "PathTracing fallback clears should preserve their reason in the debug name");
         requirePresent(pathTracingNode, "makePathTracingProgramAssembly", "PathTracing should assemble RT stages and shader groups from one description");
         requirePresent(pathTracingNode, "shaderGroupIndex", "PathTracing SBT records should resolve named RT shader groups");
@@ -464,8 +485,8 @@ const nr::test::CaseRegistrar pathTracingNodeAssemblyCase{
         requirePresent(rhiPipelineSource, "stageInfo.pName = result.shaderEntryPointNames_.back().c_str();", "RHI Vulkan shader stages should still use actual entry point names");
     }};
 
-const nr::test::CaseRegistrar rendererSubmissionTimelineCase{
-    "renderer submission batches share one monotonic timeline with all-command graphics waits",
+const nr::test::CaseRegistrar rendererSubmissionTimelinesCase{
+    "renderer submission batches use producer-owned per-queue timelines",
     [] {
         auto executor = readProjectFile("src/renderer/nrRenderGraphExecutor.cpp");
         auto timeline = readProjectFile("src/renderer/nrRendererSubmission.ixx");
@@ -477,9 +498,15 @@ const nr::test::CaseRegistrar rendererSubmissionTimelineCase{
         requirePresent(waitStageFunction, "queue == QueueDomain::Graphics", "executor should select the graphics submission wait scope explicitly");
         requirePresent(waitStageFunction, "vk::PipelineStageFlagBits2::eAllCommands", "graphics submission waits should cover batch-head acquire and RT shader work");
         requireAbsent(waitStageFunction, "vk::PipelineStageFlagBits2::eColorAttachmentOutput", "graphics submission waits must not be limited to color attachment output");
-        requirePresent(executor, "timeline->get().semaphore()", "adjacent RDG batches should wait and signal through the renderer submission timeline semaphore");
-        requirePresent(executor, "timeline->get().acquireSignalToken()", "each inter-batch signal should acquire the next monotonic timeline value");
-        requirePresent(timeline, "++nextSignalValue_", "renderer submission timeline values should remain strictly increasing across frames");
+        requirePresent(executor, "timelines->get().semaphore(previousSignalToken.queue)", "adjacent RDG batches should wait on the producer queue timeline semaphore");
+        requirePresent(executor, "timelines->get().acquireSignalToken(planBatch.queue)", "each inter-batch signal should acquire a token from its queue timeline");
+        requirePresent(executor, "eQueueFamilyOwnershipTransferUseAllStagesKHR", "explicit QFOT barriers should opt into maintenance8 stage semantics");
+        requirePresent(executor, "dstStageMask = srcStageMask", "maintenance8 release barriers should keep both scopes at the producer stage");
+        requirePresent(executor, "srcStageMask = dstStageMask", "maintenance8 acquire barriers should keep both scopes at the consumer stage");
+        requirePresent(executor, "initialReleaseBatches", "retained initial ownership changes should schedule source-queue release batches");
+        requirePresent(timeline, "std::array<QueueTimeline, timelineCount> timelines_", "renderer should retain one timeline state per queue domain");
+        requirePresent(timeline, ".queue = queue", "renderer submission tokens should identify their producer queue");
+        requirePresent(timeline, "++timeline.nextSignalValue", "each queue timeline value should remain strictly increasing across frames");
     }};
 
 const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
@@ -487,13 +514,16 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
     [] {
         auto entry = readProjectFile("shader/renderer/pathTracing.slang");
         auto core = readProjectFile("shader/renderer/pathTracing/core.slang");
+        auto guides = readProjectFile("shader/renderer/pathTracing/guides.slang");
         auto params = readProjectFile("shader/renderer/pathTracing/params.slang");
         auto pathState = readProjectFile("shader/renderer/pathTracing/pathState.slang");
+        auto resources = readProjectFile("shader/renderer/pathTracing/resources.slang");
         auto random = readProjectFile("shader/include/pathTracing/random.slang");
         auto scheduler = readProjectFile("shader/renderer/pathTracing/scheduler.slang");
         auto visibility = readProjectFile("shader/renderer/pathTracing/visibility.slang");
         auto hitShaders = readProjectFile("shader/renderer/pathTracing/hitShaders.slang");
         auto materialPayload = readProjectFile("shader/include/material/payload.slang");
+        auto hitSurface = readProjectFile("shader/include/rt/hitSurface.slang");
         auto roulette = readProjectFile("shader/include/pathTracing/roulette.slang");
         auto chs = readProjectFile("shader/include/pathTracing/chs.slang");
         auto pathTracingNode = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
@@ -550,8 +580,12 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(core, "writeOutput", "PathTracing core should own output writes");
         requirePresent(
             core,
-            "makeSeed(pixel, dimensions, gFrame.frameState.xy)",
-            "PathTracing core should perturb per-thread RNG with the monotonic sample-frame ordinal");
+            "makeErrorDiffusionSequence(pixel, gFrame.frameState.xy)",
+            "PathTracing core should seed error-diffusion sampling from the complete 64-bit sample-frame ordinal");
+        requireAbsent(
+            core,
+            "makeErrorDiffusionSequence(pixel, gFrame.frameState.x)",
+            "PathTracing core must not truncate the sample-frame ordinal to its low lane");
         requireAbsent(
             params,
             "kSamplesPerPixel",
@@ -575,27 +609,119 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(
             random,
             "uint2 sampleFrameOrdinal",
-            "PathTracing random seed should receive the 64-bit sample-frame ordinal lanes");
+            "PathTracing random sequence should receive both lanes of the 64-bit sample-frame ordinal");
         requirePresent(
             random,
-            "sampleFrameOrdinal.x",
-            "PathTracing random seed should mix the low sample-frame ordinal lane");
+            "sampleFrameOrdinal.x & frameInEraMask",
+            "PathTracing random sequence should preserve the low ordinal bits in its Sobol index");
         requirePresent(
             random,
-            "sampleFrameOrdinal.y",
-            "PathTracing random seed should mix the high sample-frame ordinal lane");
+            "sampleFrameOrdinal.y << spatialBitCount",
+            "PathTracing random sequence should fold the high ordinal lane into the frame era");
+        requirePresent(
+            random,
+            "sampleFrameOrdinal.y >> frameBitCount",
+            "PathTracing random sequence should consume all remaining high-lane era bits");
+        requirePresent(
+            random,
+            "seq.sampleSeed = strongIntegerHash(frameEra.x ^ strongIntegerHash(frameEra.y));",
+            "PathTracing random sequence should derive a frame-shared scramble seed from the complete era while preserving hash zero");
         requirePresent(
             pathState,
-            "public uint4 rngState",
-            "PathTracing path state should keep a per-pixel/per-frame RNG stream state");
-        requireAbsent(
-            random,
-            "sampleIndex",
-            "PathTracing random seed must not keep a configurable camera sample dimension");
+            "public RandomSequence rng = {};",
+            "PathTracing path state should keep a per-pixel/per-frame random sequence");
         requireAbsent(
             pathState,
             "sampleIndex",
             "PathTracing path state must not carry camera sample state in fixed 1spp mode");
+        requirePresent(
+            pathState,
+            "public float3 specularThroughput",
+            "PathTracing path state should track primary-specular throughput independently");
+        requirePresent(
+            pathState,
+            "public float3 diffuseThroughput",
+            "PathTracing path state should track primary-diffuse throughput independently");
+        requirePresent(
+            pathState,
+            "public float3 specularRadiance",
+            "PathTracing path state should accumulate primary-specular radiance independently");
+        requirePresent(
+            pathState,
+            "public float3 diffuseRadiance",
+            "PathTracing path state should accumulate primary-diffuse radiance independently");
+        requirePresent(
+            core,
+            "roulettePolicy.survivalProbability(pathCombinedThroughput(path))",
+            "PathTracing roulette should use the combined split throughput");
+        requirePresent(
+            core,
+            "initializePrimaryPathThroughput",
+            "PathTracing should split primary continuation throughput by BSDF component");
+        requirePresent(
+            core,
+            "pathCombinedRadiance(path)",
+            "PathTracing should merge split radiance only at output");
+        requirePresent(
+            core,
+            "writePathTracingGuides(path.pixel, path.guides)",
+            "PathTracing should write all RR guides with the noisy color");
+        requirePresent(
+            pathState,
+            "public PathTracingGuideState guides = {};",
+            "PathTracing should carry guide state with its camera path");
+        requirePresent(resources, "RWTexture2D<float4> outputImage", "RR noisy color should use RGBA float storage");
+        requirePresent(resources, "RWTexture2D<float> depthImage", "RR depth should use one float channel");
+        requirePresent(resources, "RWTexture2D<float4> diffuseAlbedoImage", "RR diffuse albedo should use linear float storage");
+        requirePresent(resources, "RWTexture2D<float4> specularAlbedoImage", "RR specular albedo should use linear float storage");
+        requirePresent(resources, "RWTexture2D<float4> normalRoughnessImage", "RR normal and roughness should share one packed texture");
+        requirePresent(resources, "RWTexture2D<float2> motionVectorsImage", "RR dense motion vectors should use two float channels");
+        requirePresent(resources, "RWTexture2D<float> specularHitDistanceImage", "RR specular hit distance should use one float channel");
+        requireAbsent(resources, "disocclusion", "PathTracing must not generate a disocclusion guide");
+        requireAbsent(resources, "motionVectors3D", "PathTracing must not generate experimental 3D motion vectors");
+        requireAbsent(resources, "rayDirection", "PathTracing must not generate experimental ray-direction guides");
+        requirePresent(guides, "gFrame.previousViewProjection", "RR motion vectors should use the jitter-decoupled previous transform");
+        requirePresent(
+            hitSurface,
+            "float3x4 worldToObject = WorldToObject3x4()",
+            "RT normal reconstruction should start from the inverse object transform");
+        requirePresent(
+            hitSurface,
+            "transformRtObjectNormalToWorld(objectNormal)",
+            "RT normals should use inverse-transpose transformation under non-uniform instance scaling");
+        requireAbsent(
+            hitSurface,
+            "transformRtObjectVectorToWorld(objectNormal)",
+            "RT normals must not use the direct object-to-world vector transform");
+        requirePresent(guides, "guides.depth = saturate(clip.z", "RR hardware depth should remain in Vulkan clip depth range");
+        requirePresent(
+            guides,
+            "guides.normalRoughness = float4(normal, saturate(material.roughness))",
+            "RR should pack linear roughness in normal alpha");
+        requirePresent(
+            guides,
+            "pathTracingGuideEnvBrdfApprox2",
+            "RR specular albedo should use NVIDIA's view-dependent EnvBRDF approximation");
+        requirePresent(
+            guides,
+            "length(hitPosition - guides.primaryPosition)",
+            "RR specular hit distance should be measured in world space from the primary surface");
+        requirePresent(
+            materialPayload,
+            "evaluateResolvedMaterialBsdfComponentsVariant",
+            "Material payload should expose variant-aware BSDF component evaluation");
+        requirePresent(
+            materialPayload,
+            "evaluateResolvedMaterialDirectComponentsVariant",
+            "Material payload should expose variant-aware direct-light component evaluation");
+        requireAbsent(
+            core,
+            "path.throughput",
+            "PathTracing core must not keep the old monolithic throughput path");
+        requireAbsent(
+            core,
+            "path.radiance",
+            "PathTracing core must not keep the old monolithic radiance path");
         requirePresent(
             visibility,
             "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,\n        0xFF,\n        0,\n        1,\n        0,",
@@ -656,6 +782,7 @@ const nr::test::CaseRegistrar retainedImportedImageStateCase{
     [] {
         auto present = readProjectFile("src/renderPasses/Present/nrPresentNode.cpp");
         auto accumulate = readProjectFile("src/renderPasses/Accumulate/nrAccumulateNode.cpp");
+        auto pathTracing = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
         auto ui = readProjectFile("src/renderPasses/Ui/nrUiNode.cpp");
         auto rendererInterface = readProjectFile("src/renderer/nrRenderer.ixx");
 
@@ -683,6 +810,18 @@ const nr::test::CaseRegistrar retainedImportedImageStateCase{
             accumulate,
             "runtime.historyStates[slot].reset()",
             "Accumulate should reset retained history state on image recreation");
+        requirePresent(
+            pathTracing,
+            "std::array<PathTracingGuideFrameSlot, nr::maxFrameInFlight> guideFrameSlots{}",
+            "PathTracing should own one complete RR guide set per frame in flight");
+        requirePresent(
+            pathTracing,
+            ".retainedState = std::ref(state)",
+            "PathTracing persistent guides should attach retained layout and ownership state");
+        requirePresent(
+            pathTracing,
+            "frameSlot.states[guideResourceIndex].reset()",
+            "PathTracing should reset retained guide state when images are recreated");
         requirePresent(
             ui,
             "nr::renderer::RetainedImageState state{}",

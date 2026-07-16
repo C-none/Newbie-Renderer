@@ -130,7 +130,6 @@ struct GraphImportedSwapchainImageDesc
     ResourceLifetime lifetime = ResourceLifetime::SwapchainRelative;
     ResourceResidency residency = ResourceResidency::Swapchain;
     ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Compute;
-    std::uint32_t swapchainImageIndex = 0;
     vk::Extent3D extent{1, 1, 1};
     vk::Format format = vk::Format::eUndefined;
 };
@@ -1166,10 +1165,17 @@ struct PassExecutionDesc
     std::optional<PassParallelRecordDesc> parallelRecord{};
 };
 
+enum class SubmitBoundaryKind : std::uint8_t
+{
+    QueueSubmission,
+    SwapchainAcquire,
+};
+
 struct SubmitBoundaryDesc
 {
     GraphSubmitHandle handle{};
     std::string debugName{};
+    SubmitBoundaryKind kind = SubmitBoundaryKind::QueueSubmission;
 };
 
 using GraphExecutionStep = std::variant<GraphPassHandle, GraphSubmitHandle>;
@@ -1274,6 +1280,7 @@ struct CompiledSubmitBatch
     QueueDomain queue = QueueDomain::Graphics;
     std::optional<GraphSubmitHandle> openedBySubmitNode{};
     std::string openedBySubmitNodeDebugName{};
+    SubmitBoundaryKind openedBySubmitNodeKind = SubmitBoundaryKind::QueueSubmission;
     std::vector<CompiledPass> passes{};
 };
 

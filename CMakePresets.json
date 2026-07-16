@@ -55,6 +55,20 @@
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "OFF"
       }
+    },
+    {
+      "name": "msvc-dlss-bridge",
+      "displayName": "MSVC DLSS Bridge Publisher",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/build/msvc-dlss-bridge",
+      "architecture": {
+        "value": "x64"
+      },
+      "cacheVariables": {
+        "NR_DLSS_BRIDGE_ONLY": "ON",
+        "NR_ENABLE_DLSS_NGX_SDK": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -86,6 +100,15 @@
       "inherits": "build-base",
       "configurePreset": "msvc-vs",
       "configuration": "Release"
+    },
+    {
+      "name": "publish-dlss-bridge-msvc",
+      "inherits": "build-base",
+      "configurePreset": "msvc-dlss-bridge",
+      "configuration": "Release",
+      "targets": [
+        "nr_publish_dlss_bridge"
+      ]
     }
   ],
   "testPresets": [

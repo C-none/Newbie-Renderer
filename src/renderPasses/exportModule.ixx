@@ -4,6 +4,7 @@ export import :nodeType;
 export import :accumulateNode;
 export import :accelerationStructureBuild;
 export import :embeddedTriangle;
+export import :dlssRayReconstruction;
 export import :lightPrepare;
 export import :normalBuffer;
 export import :presentNode;

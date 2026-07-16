@@ -43,11 +43,104 @@ struct PathTracingFrameRuntime
     std::reference_wrapper<nr::rhi::ShaderBindingTable> shaderBindingTable;
 };
 
+enum class PathTracingGuideResource : std::size_t
+{
+    color,
+    depth,
+    diffuseAlbedo,
+    specularAlbedo,
+    normalRoughness,
+    motionVectors,
+    specularHitDistance,
+    count,
+};
+
+inline constexpr auto kPathTracingGuideResourceCount =
+    static_cast<std::size_t>(PathTracingGuideResource::count);
+
+struct PathTracingGuideSpec
+{
+    std::string_view debugName{};
+    std::string_view shaderBinding{};
+    vk::Format format = vk::Format::eUndefined;
+    nr::rhi::DlssRayReconstructionResourceSlot dlssSlot{};
+    std::array<float, 4u> unavailableClear{};
+};
+
+struct PathTracingGuideFrameSlot
+{
+    std::array<nr::rhi::Image, kPathTracingGuideResourceCount> images{};
+    std::array<nr::renderer::RetainedImageState, kPathTracingGuideResourceCount> states{};
+};
+
 struct PathTracingRuntimeCache
 {
     std::map<PathTracingPipelineKey, std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>> pipelines{};
     std::map<PathTracingSbtKey, nr::rhi::ShaderBindingTable> shaderBindingTables{};
+    std::array<PathTracingGuideFrameSlot, nr::maxFrameInFlight> guideFrameSlots{};
+    vk::Extent2D allocatedGuideExtent{};
+    vk::Format allocatedColorFormat = vk::Format::eUndefined;
 };
+
+[[nodiscard]] constexpr std::size_t guideIndex(PathTracingGuideResource resource) noexcept
+{
+    return static_cast<std::size_t>(resource);
+}
+
+[[nodiscard]] std::array<PathTracingGuideSpec, kPathTracingGuideResourceCount> makePathTracingGuideSpecs(
+    vk::Format colorFormat)
+{
+    using DlssSlot = nr::rhi::DlssRayReconstructionResourceSlot;
+    return {
+        PathTracingGuideSpec{
+            .debugName = "Color",
+            .shaderBinding = "outputImage",
+            .format = colorFormat,
+            .dlssSlot = DlssSlot::Color,
+            .unavailableClear = {0.0f, 0.0f, 0.0f, 1.0f},
+        },
+        PathTracingGuideSpec{
+            .debugName = "Depth",
+            .shaderBinding = "depthImage",
+            .format = vk::Format::eR32Sfloat,
+            .dlssSlot = DlssSlot::Depth,
+            .unavailableClear = {1.0f, 0.0f, 0.0f, 0.0f},
+        },
+        PathTracingGuideSpec{
+            .debugName = "DiffuseAlbedo",
+            .shaderBinding = "diffuseAlbedoImage",
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .dlssSlot = DlssSlot::DiffuseAlbedo,
+            .unavailableClear = {0.0f, 0.0f, 0.0f, 1.0f},
+        },
+        PathTracingGuideSpec{
+            .debugName = "SpecularAlbedo",
+            .shaderBinding = "specularAlbedoImage",
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .dlssSlot = DlssSlot::SpecularAlbedo,
+            .unavailableClear = {0.5f, 0.5f, 0.5f, 1.0f},
+        },
+        PathTracingGuideSpec{
+            .debugName = "NormalRoughness",
+            .shaderBinding = "normalRoughnessImage",
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .dlssSlot = DlssSlot::Normals,
+            .unavailableClear = {0.0f, 0.0f, 1.0f, 1.0f},
+        },
+        PathTracingGuideSpec{
+            .debugName = "MotionVectors",
+            .shaderBinding = "motionVectorsImage",
+            .format = vk::Format::eR16G16Sfloat,
+            .dlssSlot = DlssSlot::MotionVectors,
+        },
+        PathTracingGuideSpec{
+            .debugName = "SpecularHitDistance",
+            .shaderBinding = "specularHitDistanceImage",
+            .format = vk::Format::eR16Sfloat,
+            .dlssSlot = DlssSlot::SpecularHitDistance,
+        },
+    };
+}
 
 enum class PathTracingUnavailableReason
 {
@@ -382,6 +475,116 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     };
 }
 
+void ensurePathTracingGuideImages(
+    nr::rhi::Device& device,
+    PathTracingRuntimeCache& runtime,
+    vk::Extent2D requestedExtent,
+    vk::Format colorFormat)
+{
+    nr::nrAssert(colorFormat != vk::Format::eUndefined, "PathTracing guide color format must be defined.");
+    requestedExtent.width = std::max(1u, requestedExtent.width);
+    requestedExtent.height = std::max(1u, requestedExtent.height);
+
+    auto specs = makePathTracingGuideSpecs(colorFormat);
+    auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
+    auto resourcesValid = std::ranges::all_of(
+        runtime.guideFrameSlots,
+        [&](const PathTracingGuideFrameSlot& frameSlot) {
+            return std::ranges::all_of(guideIndices, [&](std::size_t index) {
+                return frameSlot.images[index].valid() &&
+                       frameSlot.images[index].format() == specs[index].format;
+            });
+        });
+    auto extentFits = runtime.allocatedGuideExtent.width >= requestedExtent.width &&
+                      runtime.allocatedGuideExtent.height >= requestedExtent.height;
+    if (resourcesValid && extentFits && runtime.allocatedColorFormat == colorFormat)
+    {
+        return;
+    }
+
+    auto allocatedExtent = vk::Extent2D{
+        std::max(requestedExtent.width, runtime.allocatedGuideExtent.width),
+        std::max(requestedExtent.height, runtime.allocatedGuideExtent.height),
+    };
+    auto imageUsage = vk::ImageUsageFlagBits::eStorage |
+                      vk::ImageUsageFlagBits::eSampled |
+                      vk::ImageUsageFlagBits::eTransferDst |
+                      vk::ImageUsageFlagBits::eTransferSrc;
+
+    auto frameSlotIndices = std::views::iota(std::size_t{0u}, runtime.guideFrameSlots.size());
+    std::ranges::for_each(frameSlotIndices, [&](std::size_t frameSlotIndex) {
+        auto& frameSlot = runtime.guideFrameSlots[frameSlotIndex];
+        std::ranges::for_each(guideIndices, [&](std::size_t guideResourceIndex) {
+            auto const& spec = specs[guideResourceIndex];
+            auto imageInfo = nr::rhi::makeImageCreateInfo(spec.format, allocatedExtent, imageUsage);
+            frameSlot.images[guideResourceIndex] = device.resourceFactory.createImage(
+                imageInfo,
+                nr::rhi::MemoryUsage::GpuOnly,
+                std::format("PathTracing.{}[{}]", spec.debugName, frameSlotIndex));
+            nr::nrAssert(
+                frameSlot.images[guideResourceIndex].valid(),
+                std::format("PathTracing failed to allocate {} guide for frame slot {}.", spec.debugName, frameSlotIndex));
+            frameSlot.states[guideResourceIndex].reset();
+        });
+    });
+
+    runtime.allocatedGuideExtent = allocatedExtent;
+    runtime.allocatedColorFormat = colorFormat;
+}
+
+[[nodiscard]] std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount>
+importPathTracingGuides(
+    NodeBuildContext& context,
+    PathTracingGuideFrameSlot& frameSlot,
+    vk::Extent2D extent,
+    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs,
+    std::size_t frameSlotIndex)
+{
+    auto resources = std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount>{};
+    auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
+    std::ranges::for_each(guideIndices, [&](std::size_t index) {
+        auto& state = frameSlot.states[index];
+        resources[index] = context.addResource(nr::renderer::GraphImportedImageDesc{
+            .debugName = std::format("PathTracing.{}[{}]", specs[index].debugName, frameSlotIndex),
+            .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+            .initialOwnership = state.initialized
+                                    ? state.ownership
+                                    : nr::renderer::ResourceOwnershipDomain::Undefined,
+            .extent = vk::Extent3D{extent.width, extent.height, 1u},
+            .format = specs[index].format,
+            .usageIntents = {
+                nr::renderer::ImageUsageIntent::StorageWrite,
+                nr::renderer::ImageUsageIntent::Sampled,
+                nr::renderer::ImageUsageIntent::TransferDst,
+                nr::renderer::ImageUsageIntent::TransferSrc,
+            },
+            .initialLayout = state.initialized
+                                 ? state.layout
+                                 : nr::renderer::ImageLayoutIntent::Undefined,
+            .initialAccessScope = state.initialized ? state.access : nr::renderer::AccessScope{},
+            .importedResource = std::cref(frameSlot.images[index]),
+            .retainedState = std::ref(state),
+        });
+    });
+    return resources;
+}
+
+void publishPathTracingGuides(
+    NodeBuildContext& context,
+    std::span<const nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> resources,
+    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs)
+{
+    auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
+    std::ranges::for_each(guideIndices, [&](std::size_t index) {
+        context.publishFrameResource(
+            std::format("dlss.rr.input.{}", nr::rhi::dlssResourceSlotName(specs[index].dlssSlot)),
+            resources[index]);
+    });
+    context.publishFrameResource(
+        nr::renderer::frameResource::presentSourceColor,
+        resources[guideIndex(PathTracingGuideResource::color)]);
+}
+
 [[nodiscard]] std::shared_ptr<PathTracingRuntimeCache> makePathTracingRuntimeCache()
 {
     auto cache = std::make_shared<PathTracingRuntimeCache>();
@@ -466,17 +669,24 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     };
 }
 
-void clearUnavailableOutput(
+void clearUnavailableGuides(
     NodeBuildContext &context,
-    nr::renderer::GraphResourceHandle output,
+    std::span<const nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> resources,
+    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs,
     PathTracingUnavailableReason reason)
 {
-    [[maybe_unused]] auto clearPass = nr::renderer::ops::clearColorImage(
-        context,
-        std::format("PathTracing.ClearUnavailable.{}", pathTracingUnavailableReasonName(reason)),
-        nr::renderer::ops::ClearColorImagePassDesc{
-            .image = output,
-            .value = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}},
+    auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
+    std::ranges::for_each(guideIndices, [&](std::size_t index) {
+        [[maybe_unused]] auto clearPass = nr::renderer::ops::clearColorImage(
+            context,
+            std::format(
+                "PathTracing.ClearUnavailable.{}.{}",
+                pathTracingUnavailableReasonName(reason),
+                specs[index].debugName),
+            nr::renderer::ops::ClearColorImagePassDesc{
+                .image = resources[index],
+                .value = vk::ClearColorValue{specs[index].unavailableClear},
+            });
         });
 }
 } // namespace nr::renderPasses::detail
@@ -488,10 +698,16 @@ PathTracingNode::~PathTracingNode() = default;
 void PathTracingNode::initialize(NodeInitContext &context)
 {
     device_ = context.device;
+    nr::nrAssert(input.outputFormat != vk::Format::eUndefined, "PathTracing output format must be defined.");
     input.variant = detail::normalizePathTracingVariantKey(input.variant);
     variantUiDraft_ = input.variant;
     pendingVariant_.reset();
     runtime_ = detail::makePathTracingRuntimeCache();
+    detail::ensurePathTracingGuideImages(
+        device_->get(),
+        *runtime_,
+        device_->get().presentationContext.swapchainExtent(),
+        input.outputFormat);
 }
 
 void PathTracingNode::collectUi(NodeUiBuildContext &context, const NodeFrameParameters &)
@@ -541,25 +757,21 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
     viewportExtent.width = std::max(1u, viewportExtent.width);
     viewportExtent.height = std::max(1u, viewportExtent.height);
 
-    auto output = context.addResource(nr::renderer::GraphTransientImageDesc{
-        .debugName = "PathTracing.Output",
-        .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
-        .format = input.outputFormat,
-        .usageIntents =
-            {
-                nr::renderer::ImageUsageIntent::StorageWrite,
-                nr::renderer::ImageUsageIntent::Sampled,
-                nr::renderer::ImageUsageIntent::TransferDst,
-                nr::renderer::ImageUsageIntent::TransferSrc,
-            },
-        .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
-    });
-    context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, output);
+    detail::ensurePathTracingGuideImages(device_->get(), *runtime_, viewportExtent, input.outputFormat);
+    auto guideSpecs = detail::makePathTracingGuideSpecs(input.outputFormat);
+    auto frameSlotIndex = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+    auto guideResources = detail::importPathTracingGuides(
+        context,
+        runtime_->guideFrameSlots[frameSlotIndex],
+        viewportExtent,
+        guideSpecs,
+        frameSlotIndex);
+    detail::publishPathTracingGuides(context, guideResources, guideSpecs);
 
     auto frameInputs = detail::resolvePathTracingFrameInputs(context);
     if (!frameInputs.has_value())
     {
-        detail::clearUnavailableOutput(context, output, frameInputs.error());
+        detail::clearUnavailableGuides(context, guideResources, guideSpecs, frameInputs.error());
         return;
     }
     auto const &inputs = *frameInputs;
@@ -583,8 +795,15 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
     auto &bindlessImageTableCache = context.globalResources.get().bindlessImageTableCache.get();
 
     auto tracePass = nr::renderer::RayTracingPassBuilder{context, "PathTracing.Trace", activeRuntime.pipeline};
-    tracePass.accelerationStructure("scene", inputs.sceneTlas, "PathTracing.SceneTLAS")
-        .storageImage("outputImage", output, "PathTracing.Output")
+    tracePass.accelerationStructure("scene", inputs.sceneTlas, "PathTracing.SceneTLAS");
+    auto guideIndices = std::views::iota(std::size_t{0u}, detail::kPathTracingGuideResourceCount);
+    std::ranges::for_each(guideIndices, [&](std::size_t index) {
+        tracePass.storageImage(
+            guideSpecs[index].shaderBinding,
+            guideResources[index],
+            std::format("PathTracing.{}", guideSpecs[index].debugName));
+    });
+    tracePass
         .storageBuffer("rtInstanceMetadata", inputs.rtInstanceMetadata, "PathTracing.InstanceMetadata")
         .storageBuffer("rtGeometryMetadata", inputs.rtGeometryMetadata, "PathTracing.GeometryMetadata")
         .storageBuffer("rtMaterialHeaders", inputs.rtMaterialHeaders, "PathTracing.MaterialHeaders")

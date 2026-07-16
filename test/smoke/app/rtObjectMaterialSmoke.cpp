@@ -4,6 +4,7 @@ import nr.app;
 import nr.load;
 import nr.renderer;
 import nr.renderPasses;
+import nr.rhi;
 import nr.scene;
 import nr.utils;
 
@@ -14,11 +15,21 @@ namespace
     auto asBuild = std::make_shared<nr::renderPasses::AccelerationStructureBuildNode>();
     auto lightPrepare = std::make_shared<nr::renderPasses::LightPrepareNode>();
     auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
+    auto dlssRayReconstruction = std::make_shared<nr::renderPasses::DlssRayReconstructionNode>();
+    dlssRayReconstruction->input.enabled = true;
+    dlssRayReconstruction->input.create.quality = nr::rhi::DlssQuality::Dlaa;
+    dlssRayReconstruction->input.create.depthType = nr::rhi::DlssDepthType::Hardware;
+    dlssRayReconstruction->input.evaluate.visualizeMotionVectors = true;
+    dlssRayReconstruction->input.outputColorKey = std::string{nr::renderer::frameResource::presentSourceColor};
 
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
     present->input.format = swapchainFormat;
 
     auto graphSpec = nr::renderer::RendererGraphSpec{};
+    graphSpec.cameraJitter = nr::renderer::RendererCameraJitterConfig{
+        .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
+        .cycleLength = nr::renderer::kRendererDefaultCameraJitterCycleLength,
+    };
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
             .runtime = asBuild,
@@ -36,6 +47,13 @@ namespace
             .runtime = rayTrace,
             .config = nr::renderer::NodeConfig{
                 .instanceName = "PathTracing",
+            },
+        },
+        nr::renderer::NodeCreateInfo{
+            .runtime = dlssRayReconstruction,
+            .config = nr::renderer::NodeConfig{
+                .instanceName = "DlssRayReconstruction",
+                .queue = nr::renderer::QueueDomain::Compute,
             },
         },
         nr::renderer::NodeCreateInfo{
@@ -154,8 +172,8 @@ namespace
         }
 
         observedRtFrame = frameResult->sceneTlasPacketCount > 0u &&
-                          frameResult->invokedPassPrepareCount >= 2u &&
-                          frameResult->invokedPassRecordCount >= 4u;
+                          frameResult->invokedPassPrepareCount >= 3u &&
+                          frameResult->invokedPassRecordCount >= 6u;
     });
 
     if (failed)
@@ -165,10 +183,38 @@ namespace
 
     if (!observedRtFrame)
     {
-        std::println("[error] rtobject material smoke did not observe ready ToyCar TLAS packets, LightPrepare prepare, and RT graph passes.");
+        std::println("[error] rtobject material smoke did not observe ready ToyCar TLAS packets, LightPrepare prepare, and RT/MV-debug graph passes.");
         return false;
     }
 
+    return true;
+}
+
+[[nodiscard]] bool renderCameraMotionFrames(nr::app::AppSession& app, nr::scene::Scene& scene)
+{
+    auto const previousPosition = app.camera().frame().position;
+    app.camera().viewer().applyControl(nr::renderer::ViewerCameraControlInput{
+        .deltaSeconds = 1.0f / 30.0f,
+        .moveRight = true,
+    });
+    auto const movedPosition = app.camera().frame().position;
+    if (glm::length(movedPosition - previousPosition) <= std::numeric_limits<float>::epsilon())
+    {
+        std::println("[error] rtobject material smoke failed to move the test camera.");
+        return false;
+    }
+
+    if (!renderOneFrame(app, scene).has_value())
+    {
+        std::println("[error] rtobject material smoke failed while rendering camera motion.");
+        return false;
+    }
+
+    if (!renderOneFrame(app, scene).has_value())
+    {
+        std::println("[error] rtobject material smoke failed on the stationary frame after camera motion.");
+        return false;
+    }
     return true;
 }
 
@@ -191,7 +237,8 @@ namespace
         auto graphSpec = buildRtObjectGraphSpec(presentation.swapchainFormat());
         app.renderer().installGraph(graphSpec);
 
-        return renderUntilRtSceneReady(app, scene->get());
+        return renderUntilRtSceneReady(app, scene->get()) &&
+               renderCameraMotionFrames(app, scene->get());
     }();
 
     app.shutdown();

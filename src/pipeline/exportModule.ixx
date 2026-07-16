@@ -10,12 +10,20 @@ export namespace nr::pipeline
 {
 inline constexpr std::string_view normalViewPipelineId = "normalview";
 inline constexpr std::string_view rtObjectPipelineId = "rtobject";
+inline constexpr std::string_view defaultPipelineId = rtObjectPipelineId;
 inline constexpr std::size_t defaultModelHistoryLimit = 32u;
+
+enum class RtPostProcessingMode : std::uint8_t
+{
+    accumulate,
+    dlssRayReconstruction,
+};
 
 struct PipelineBuildContext
 {
     vk::Format swapchainFormat = vk::Format::eUndefined;
     vk::Extent2D swapchainExtent{1u, 1u};
+    RtPostProcessingMode rtPostProcessingMode = RtPostProcessingMode::dlssRayReconstruction;
 };
 
 using PipelineGraphFactory = std::function<nr::renderer::RendererGraphSpec(const PipelineBuildContext&)>;
@@ -98,14 +106,14 @@ struct ViewerCommandLineOptions
 {
     bool showHelp = false;
     std::filesystem::path modelPath{};
-    std::string pipelineId{std::string{normalViewPipelineId}};
+    std::string pipelineId{std::string{defaultPipelineId}};
     std::string errorMessage{};
 };
 
 struct ViewerRunConfig
 {
     std::filesystem::path initialModelPath{};
-    std::string initialPipelineId{std::string{normalViewPipelineId}};
+    std::string initialPipelineId{std::string{defaultPipelineId}};
     std::string appName{"NewbieRenderer"};
     std::string engineName{"NewbieRenderer"};
 };
