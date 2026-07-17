@@ -19,6 +19,7 @@ void RetainedImageState::reset() noexcept
         layout = ImageLayoutIntent::Undefined;
         ownership = ResourceOwnershipDomain::Undefined;
         access = {};
+        lastSubmissionTimelineValue = 0;
     }
 
 [[nodiscard]] PassParallelRecordPlan ParallelRecordPlanner::planContiguousRanges(

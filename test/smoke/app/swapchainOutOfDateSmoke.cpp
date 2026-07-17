@@ -3,9 +3,41 @@ import dependency;
 import nr.app;
 import nr.renderer;
 import nr.renderPasses;
+import nr.rhi;
 
 namespace
 {
+class AcquireOutOfDateHookCleanupGuard
+{
+  public:
+    explicit AcquireOutOfDateHookCleanupGuard(nr::rhi::PresentationContext& presentation) noexcept
+        : presentation_(presentation)
+    {
+    }
+
+    ~AcquireOutOfDateHookCleanupGuard() noexcept
+    {
+        if (active_)
+        {
+            presentation_.clearAcquireOutOfDateTestHook();
+        }
+    }
+
+    AcquireOutOfDateHookCleanupGuard(const AcquireOutOfDateHookCleanupGuard&) = delete;
+    AcquireOutOfDateHookCleanupGuard& operator=(const AcquireOutOfDateHookCleanupGuard&) = delete;
+    AcquireOutOfDateHookCleanupGuard(AcquireOutOfDateHookCleanupGuard&&) = delete;
+    AcquireOutOfDateHookCleanupGuard& operator=(AcquireOutOfDateHookCleanupGuard&&) = delete;
+
+    void release() noexcept
+    {
+        active_ = false;
+    }
+
+  private:
+    nr::rhi::PresentationContext& presentation_;
+    bool active_ = true;
+};
+
 struct AcquireObservations
 {
     std::uint32_t attempts = 0;
@@ -115,9 +147,7 @@ struct ResolverObservations
         ++acquire.nativePassThrough;
         return false;
     });
-    auto hookCleanup = std::scope_exit([&presentation]() {
-        presentation.clearAcquireOutOfDateTestHook();
-    });
+    auto hookCleanup = AcquireOutOfDateHookCleanupGuard{presentation};
 
     auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
     renderer.installGraph(buildGraphSpec(embeddedTriangle, acquire, resolver));

@@ -146,4 +146,16 @@ const nr::test::CaseRegistrar cliCase{
             std::span<char*>{badArgv.data(), badArgv.size()});
         nr::test::require(!badOptions.errorMessage.empty());
     }};
+
+const nr::test::CaseRegistrar defaultEnvironmentCase{
+    "viewer default environment selects the staged studio OpenEXR asset",
+    [] {
+        auto const path = nr::pipeline::defaultEnvironmentMapPath();
+        nr::test::requireEqual(path.filename().string(), std::string{"studio_small_09_8k.exr"});
+        nr::test::requireEqual(path.parent_path().filename().string(), std::string{"envMap"});
+        auto statusError = std::error_code{};
+        nr::test::require(
+            std::filesystem::is_regular_file(path, statusError) && !statusError,
+            "viewer default environment asset should exist");
+    }};
 } // namespace

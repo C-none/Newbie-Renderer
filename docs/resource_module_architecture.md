@@ -30,6 +30,7 @@ The current exported partitions are:
 - `:geometry`
 - `:mesh`
 - `:material`
+- `:environment`
 - `:camera`
 - `:light`
 - `:skeletalAnimation`
@@ -52,7 +53,7 @@ Important consequence:
 
 ### 3.2 Resource records stay value-oriented
 
-`Mesh`, `Material`, `Texture`, `CameraAsset`, `LightAsset`, `Skeleton`, `AnimationClip`, and `FluidParticleSet` are CPU-side data records.
+`Mesh`, `Material`, `Texture`, `EnvironmentMap`, `CameraAsset`, `LightAsset`, `Skeleton`, `AnimationClip`, and `FluidParticleSet` are CPU-side data records.
 
 Important consequence:
 
@@ -64,6 +65,12 @@ Material-specific consequence:
 - `Material` is the canonical metallic-roughness CPU record: `MaterialCorePbr` owns core PBR factors, optional extension structs hold clearcoat/sheen/transmission/anisotropy data, and texture bindings live in enum-indexed `textureSlots`.
 - Specular-glossiness authoring inputs are converted by `scene` before they enter `nr.resource`; this layer does not store specular/glossiness fields.
 - `MaterialFeatureFlag` and `MaterialTextureSlotSemantic` form the stable material ABI consumed by `scene`; source importer strings stay in `load` diagnostics.
+
+Environment-specific consequence:
+
+- `EnvironmentMap` owns one mipless RGBA16F `Texture` plus explicit latitude-longitude projection, linear-sRGB color-space, radiance decode scale, intensity, and yaw metadata.
+- The HALF payload is a storage encoding rather than a clamped lighting result: `load` chooses `radianceDecodeScale`, and the shader restores it before applying intensity.
+- This record does not imply scene-light registration or importance sampling; the current renderer hands it directly to PathTracing for material-ray miss contribution only.
 
 Mesh-specific consequence:
 
@@ -100,7 +107,13 @@ Those belong to `scene` or the app/viewer runtime layer, not `nr.resource`.
 
 The current direction is:
 
+Scene resources follow:
+
 `load` authoring data -> `scene` bridge -> `nr.resource` canonical CPU records -> `scene` runtime registries -> `renderer` / `renderPasses` bridged runtime data -> `rhi`
+
+The app-global environment is the explicit scene-independent branch:
+
+`load:exr` -> `nr.resource:environment` -> renderer-global GPU residency -> PathTracing miss sampling
 
 Important consequence:
 
@@ -113,6 +126,7 @@ Belongs in `load`:
 
 - Assimp-specific import logic
 - texture decode backends
+- OpenEXR environment decode, validation, and HALF scaling policy
 - source-file-specific authoring quirks
 
 Belongs in `scene`:
@@ -138,5 +152,6 @@ Belongs in app-side runtime code:
 - Handle family: [../src/resource/nrResourceHandle.ixx](../src/resource/nrResourceHandle.ixx)
 - Mesh data model: [../src/resource/nrResourceMesh.ixx](../src/resource/nrResourceMesh.ixx)
 - Material and texture data model: [../src/resource/nrResourceMaterial.ixx](../src/resource/nrResourceMaterial.ixx)
+- Environment data model: [../src/resource/nrResourceEnvironment.ixx](../src/resource/nrResourceEnvironment.ixx)
 - Camera data model: [../src/resource/nrResourceCamera.ixx](../src/resource/nrResourceCamera.ixx)
 - Geometry helpers: [../src/resource/nrResourceGeometry.ixx](../src/resource/nrResourceGeometry.ixx)

@@ -503,7 +503,13 @@ const nr::test::CaseRegistrar rendererSubmissionTimelinesCase{
         requirePresent(executor, "eQueueFamilyOwnershipTransferUseAllStagesKHR", "explicit QFOT barriers should opt into maintenance8 stage semantics");
         requirePresent(executor, "dstStageMask = srcStageMask", "maintenance8 release barriers should keep both scopes at the producer stage");
         requirePresent(executor, "srcStageMask = dstStageMask", "maintenance8 acquire barriers should keep both scopes at the consumer stage");
-        requirePresent(executor, "initialReleaseBatches", "retained initial ownership changes should schedule source-queue release batches");
+        requirePresent(executor, "applyQueueFamilyTransferPolicy(compiled, context.device);", "executor preparation should specialize ownership transitions from the runtime device policy");
+        requirePresent(executor, "policy.canOmitBufferQueueFamilyTransfer", "renderer buffers and acceleration structures should consult maintenance9 before explicit QFOT");
+        requirePresent(executor, "policy.canOmitImageQueueFamilyTransfer", "renderer images should consult maintenance9 before explicit QFOT");
+        requirePresent(executor, "transition.strength = needsLayoutTransition", "omitted image QFOT should retain any required consumer-side layout transition");
+        requirePresent(executor, "remainingOwnershipTransitions", "prepared ownership diagnostics should exclude omitted QFOTs");
+        requirePresent(executor, "signalTokenByBatch.insert_or_assign", "normal graph submits should retain their queue timeline token for cross-frame resources");
+        requirePresent(executor, "initialReleaseBatches", "non-omittable retained initial ownership changes should preserve the source-queue release fallback");
         requirePresent(timeline, "std::array<QueueTimeline, timelineCount> timelines_", "renderer should retain one timeline state per queue domain");
         requirePresent(timeline, ".queue = queue", "renderer submission tokens should identify their producer queue");
         requirePresent(timeline, "++timeline.nextSignalValue", "each queue timeline value should remain strictly increasing across frames");
@@ -518,6 +524,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         auto params = readProjectFile("shader/renderer/pathTracing/params.slang");
         auto pathState = readProjectFile("shader/renderer/pathTracing/pathState.slang");
         auto resources = readProjectFile("shader/renderer/pathTracing/resources.slang");
+        auto environment = readProjectFile("shader/renderer/pathTracing/environment.slang");
         auto random = readProjectFile("shader/include/pathTracing/random.slang");
         auto scheduler = readProjectFile("shader/renderer/pathTracing/scheduler.slang");
         auto visibility = readProjectFile("shader/renderer/pathTracing/visibility.slang");
@@ -538,6 +545,14 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requireAbsent(entry, "ahMain", "PathTracing should not keep the old universal any-hit entry name");
         requireAbsent(entry, "evaluateSceneLightAt", "PathTracing entry should not own lighting logic");
         requireAbsent(entry, "resolveRtMaterialPayload", "PathTracing entry should not own material payload decoding");
+        requirePresent(
+            entry,
+            "payload.missRadiance = sampleEnvironment(WorldRayDirection());",
+            "material-ray miss should sample the environment in miss shader");
+        requirePresent(
+            entry,
+            "payload.rayKind == RayKind.material",
+            "visibility-ray misses should skip environment sampling");
 
         requirePresent(scheduler, "public struct Scheduler", "PathTracing scheduler should be a shader-side struct");
         requirePresent(scheduler, "Pt pt = makePt(pixel, dimensions);", "PathTracing scheduler should construct the PT path object");
@@ -573,6 +588,14 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(core, "public void handleTraceResult", "Pt should own hit or miss dispatch");
         requirePresent(core, "public void handleHit", "Pt should expose hit handling");
         requirePresent(core, "public void handleMiss", "Pt should expose miss handling");
+        requirePresent(
+            core,
+            "handleMiss(inout PathState path, float3 missRadiance)",
+            "PathTracing miss handling should consume the miss shader's environment radiance");
+        requirePresent(
+            core,
+            "sampleEnvironment(path.direction) * (1.0f - hitAlpha)",
+            "primary alpha blend should use the same directional environment background");
         requirePresent(core, "public void writeOutput", "Pt should expose output writing");
         requirePresent(core, "makePt", "PathTracing core should provide Pt construction");
         requirePresent(core, "handleHit", "PathTracing core should own hit shading");
@@ -598,6 +621,16 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
             params,
             "kMaxSurfaceBounces =",
             "PathTracing max bounce variant must not have a shader-side default");
+        requireAbsent(
+            params,
+            "kMissRadiance",
+            "PathTracing should not retain a constant miss radiance after environment integration");
+        requirePresent(environment, "Sampler2D<float4> gEnvironmentMap", "environment should use a dedicated combined sampler");
+        requirePresent(environment, "ConstantBuffer<EnvironmentMapParameters> gEnvironment", "environment decode controls should use push constants");
+        requirePresent(environment, "SampleLevel(uv, 0.0f)", "mipless environment sampling should explicitly use level zero");
+        requirePresent(environment, "gEnvironment.radianceDecodeScale", "environment sampling should restore scaled source radiance");
+        requirePresent(environment, "gEnvironment.intensity", "environment sampling should apply independent user intensity");
+        requireAbsent(visibility, "sampleEnvironment", "visibility rays must not evaluate environment radiance");
         requirePresent(
             roulette,
             "public extern struct RussianRoulettePolicy : IRussianRoulettePolicy;",
@@ -743,6 +776,17 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(pathTracingNode, ".linkVariants = {chsVariantDesc}", "PathTracing node should compile BSDF-key CHS link variants");
         requirePresent(pathTracingNode, "permutation.key.bsdf", "PathTracing node should derive CHS variants from BSDF keys, not full hit-group keys");
         requirePresent(pathTracingNode, "hitSbtPlan.permutations.front().key.bsdf", "PathTracing node should seed reflection with an active BSDF key");
+        requirePresent(pathTracingNode, ".sampledImage(\"gEnvironmentMap\"", "PathTracing should bind the renderer-global environment through reflection");
+        requirePresent(pathTracingNode, ".pushConstants(\"gEnvironment\"", "PathTracing should bind environment parameters through reflection");
+        requirePresent(pathTracingNode, "addressModeU = vk::SamplerAddressMode::eRepeat", "lat-long environment longitude should repeat");
+        requirePresent(pathTracingNode, "addressModeV = vk::SamplerAddressMode::eClampToEdge", "lat-long environment latitude should clamp at poles");
+        auto const missingInputs = pathTracingNode.find("if (!frameInputs.has_value())");
+        auto const environmentBinding = pathTracingNode.find("auto const environmentMap", missingInputs);
+        nr::test::require(
+            missingInputs != std::string::npos &&
+                environmentBinding != std::string::npos &&
+                missingInputs < environmentBinding,
+            "missing TLAS/sideband should retain the clear path before environment binding");
         requirePresent(materialPayload, "ResolvedMaterialPayload", "Common material payload helper should define resolved hit material data");
         requirePresent(materialPayload, "public interface IBsdfLobe", "Common material payload helper should define the BSDF lobe interface");
         requirePresent(materialPayload, "public uint delta", "Common material scatter should carry an explicit delta-lobe flag");

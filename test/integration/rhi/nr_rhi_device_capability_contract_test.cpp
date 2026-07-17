@@ -49,6 +49,28 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
             !device.queueFamilyTransferPolicy().optimalImageTransferToQueueFamilies.empty(),
             "maintenance9 queue family ownership transfer masks should be populated");
 
+        auto const graphicsQueueFamilyIndex = device.queueManager.graphics().queueFamilyIndex();
+        auto const computeQueueFamilyIndex = device.queueManager.compute().queueFamilyIndex();
+        auto const pathTracingGuideUsage = vk::ImageUsageFlagBits::eStorage |
+                                           vk::ImageUsageFlagBits::eSampled |
+                                           vk::ImageUsageFlagBits::eTransferDst |
+                                           vk::ImageUsageFlagBits::eTransferSrc;
+        auto const canImplicitlyAcquirePathTracingGuides = [&](std::uint32_t srcQueueFamilyIndex,
+                                                               std::uint32_t dstQueueFamilyIndex) {
+            return srcQueueFamilyIndex == dstQueueFamilyIndex ||
+                   device.queueFamilyTransferPolicy().canOmitImageQueueFamilyTransfer(
+                       srcQueueFamilyIndex,
+                       dstQueueFamilyIndex,
+                       vk::ImageTiling::eOptimal,
+                       pathTracingGuideUsage);
+        };
+        nr::test::require(
+            canImplicitlyAcquirePathTracingGuides(graphicsQueueFamilyIndex, computeQueueFamilyIndex),
+            "target GPU should preserve PathTracing guides from graphics to compute without an explicit ownership transfer");
+        nr::test::require(
+            canImplicitlyAcquirePathTracingGuides(computeQueueFamilyIndex, graphicsQueueFamilyIndex),
+            "target GPU should preserve retained PathTracing guides from compute to graphics without an explicit ownership transfer");
+
         auto const &rt = device.rayTracingCapabilities();
         nr::test::require(rt.rayTracingMaintenance1, "ray tracing maintenance1 should be enabled");
         nr::test::require(rt.rayTracingPipelineTraceRaysIndirect, "traceRaysIndirect should be enabled");

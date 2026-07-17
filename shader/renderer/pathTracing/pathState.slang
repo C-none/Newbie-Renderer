@@ -15,6 +15,7 @@ public struct RayPayload
 {
     public RayKind rayKind = RayKind.material;
     public uint hit = 0u;
+    public float3 missRadiance = float3(0.0f);
     public float3 scatterRandomValues = float3(0.0f);
     public ResolvedMaterialPayload material = {};
     public ResolvedMaterialScatter scatter = {};

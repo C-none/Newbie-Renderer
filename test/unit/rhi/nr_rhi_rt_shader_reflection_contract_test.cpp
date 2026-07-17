@@ -332,6 +332,8 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         auto sceneLightHeader = rtRoot["gSceneLightHeader"];
         auto sceneLights = rtRoot["gSceneLights"];
         auto sceneLightAliasTable = rtRoot["gSceneLightAliasTable"];
+        auto environmentMap = rtRoot["gEnvironmentMap"];
+        auto environmentParameters = rtRoot["gEnvironment"];
 
         nr::test::require(scene.valid(), "path tracing TLAS cursor should resolve");
         nr::test::require(outputImage.valid(), "path tracing output cursor should resolve");
@@ -347,6 +349,8 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(sceneLightHeader.valid(), "path tracing scene light header cursor should resolve");
         nr::test::require(sceneLights.valid(), "path tracing scene light list cursor should resolve");
         nr::test::require(sceneLightAliasTable.valid(), "path tracing scene light alias table cursor should resolve");
+        nr::test::require(environmentMap.valid(), "path tracing environment map cursor should resolve");
+        nr::test::require(environmentParameters.valid(), "path tracing environment parameters should resolve");
         nr::test::require(scene.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::AccelerationStructure);
         nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
         nr::test::require(frameUniform.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
@@ -361,6 +365,15 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(sceneLightHeader.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
         nr::test::require(sceneLights.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
         nr::test::require(sceneLightAliasTable.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(
+            environmentMap.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler,
+            "path tracing environment map should use a combined image sampler");
+        auto environmentPushRange = environmentParameters.pushConstantRange();
+        nr::test::require(environmentPushRange.has_value(), "path tracing environment parameters should use push constants");
+        nr::test::requireEqual(environmentPushRange->size, 16u);
+        nr::test::require(
+            environmentMap.makeImmutableSamplerBinding(nr::rhi::SlangSamplerDesc{}).has_value(),
+            "path tracing environment map should support an immutable sampler");
 
         auto sceneLightHeaderBinding = sceneLightHeader.descriptorBinding();
         auto sceneLightsBinding = sceneLights.descriptorBinding();

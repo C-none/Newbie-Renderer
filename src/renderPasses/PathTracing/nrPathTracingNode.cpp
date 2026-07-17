@@ -382,9 +382,29 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
         hitSbtPlan);
     auto programAssembly = makePathTracingProgramAssembly(rootProgram, hitSbtPlan, hitPrograms);
 
+    auto descriptorLayout = nr::rhi::ShaderDescriptorLayout::create(
+        rootProgram,
+        pipelineDesc.descriptorBindingPolicy);
+    nr::nrAssert(descriptorLayout.valid(), "Path tracing environment sampler reflection failed.");
+    auto environmentSampler = descriptorLayout.rootCursor()["gEnvironmentMap"].makeImmutableSamplerBinding(
+        nr::rhi::SlangSamplerDesc{
+            .magFilter = vk::Filter::eLinear,
+            .minFilter = vk::Filter::eLinear,
+            .mipmapMode = vk::SamplerMipmapMode::eLinear,
+            .addressModeU = vk::SamplerAddressMode::eRepeat,
+            .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+            .minLod = 0.0f,
+            .maxLod = 0.0f,
+        });
+    nr::nrAssert(environmentSampler.has_value(), "Path tracing gEnvironmentMap must support an immutable sampler.");
+
     auto pipelineRuntime = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>();
-    auto sceneTextureImmutableSamplers = std::array{sceneTextureTableImmutableSamplerBinding()};
-    pipelineRuntime->initializeDeferred(device.pipeline().createRayTracingPipeline(rootProgram, programAssembly, pipelineDesc, 64u, sceneTextureImmutableSamplers));
+    auto immutableSamplers = std::array{
+        sceneTextureTableImmutableSamplerBinding(),
+        *environmentSampler,
+    };
+    pipelineRuntime->initializeDeferred(device.pipeline().createRayTracingPipeline(rootProgram, programAssembly, pipelineDesc, 64u, immutableSamplers));
     nr::nrAssert(pipelineRuntime->valid(), "Path tracing pass failed to create ray tracing pipeline.");
     nr::rhi::setPipelineDebugName(device.device, pipelineRuntime->pipeline().raw(), describePathTracingPipelineKey(pipelineKey) + ".Pipeline");
 
@@ -783,6 +803,9 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
     nr::nrAssert(queueRole != nr::rhi::QueueRole::Transfer, "PathTracing cannot run on the transfer queue.");
     auto sceneTextureTableBinding = detail::makeSceneTextureTableBindingInput(context.globalResources.get());
     auto &bindlessImageTableCache = context.globalResources.get().bindlessImageTableCache.get();
+    auto const environmentMap = context.globalResources.get().environmentMap;
+    auto const environmentParameters = context.globalResources.get().environmentMapParameters;
+    nr::nrAssert(environmentMap.valid(), "PathTracing requires the renderer-global environment map.");
 
     auto tracePass = nr::renderer::RayTracingPassBuilder{context, "PathTracing.Trace", activeRuntime.pipeline};
     tracePass.accelerationStructure("scene", inputs.sceneTlas, "PathTracing.SceneTLAS");
@@ -801,7 +824,9 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
         .storageBuffer("rtMaterialTextureRefs", inputs.rtMaterialTextureRefs, "PathTracing.MaterialTextureRefs")
         .storageBuffer("rtVertexData", inputs.rtVertexAtlas, "PathTracing.VertexAtlas")
         .storageBuffer("rtIndexData", inputs.rtIndexAtlas, "PathTracing.IndexAtlas")
+        .sampledImage("gEnvironmentMap", environmentMap, "Renderer.EnvironmentMap")
         .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms")
+        .pushConstants("gEnvironment", environmentParameters)
         .resourceUse(nr::renderer::use::shaderBindingTableRead(sbtResource))
         .uniform("gSceneLightHeader", inputs.sceneLightHeader, "PathTracing.SceneLightHeader")
         .storageBuffer("gSceneLights", inputs.sceneLights, "PathTracing.SceneLights")

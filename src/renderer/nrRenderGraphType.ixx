@@ -82,6 +82,7 @@ struct RetainedImageState
     ImageLayoutIntent layout = ImageLayoutIntent::Undefined;
     ResourceOwnershipDomain ownership = ResourceOwnershipDomain::Undefined;
     AccessScope access{};
+    std::uint64_t lastSubmissionTimelineValue = 0;
 
     void reset() noexcept;
 };
@@ -1203,6 +1204,9 @@ struct ResourceStateTransition
     AccessScope srcScope{};
     /// Consumer-side scope (first access after the transition).
     AccessScope dstScope{};
+
+    /// Prior-frame source-queue timeline value used by an implicit initial acquire.
+    std::uint64_t sourceSubmissionTimelineValue = 0;
 };
 
 struct CompiledResourceDesc

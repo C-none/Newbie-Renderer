@@ -88,6 +88,22 @@ const nr::test::CaseRegistrar maintenance9TransferPolicyCase{
                 vk::ImageTiling::eOptimal,
                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled),
             "maintenance9 should allow eligible optimal sampled image ownership transfer omission");
+
+        auto pathTracingGuidePolicy = nr::rhi::ops::QueueFamilyTransferPolicy{
+            .maintenance9 = true,
+            .optimalImageTransferToQueueFamilies = std::vector<std::uint32_t>{0u, 0u, 1u << 0u},
+        };
+        auto const pathTracingGuideUsage = vk::ImageUsageFlagBits::eStorage |
+                                           vk::ImageUsageFlagBits::eSampled |
+                                           vk::ImageUsageFlagBits::eTransferDst |
+                                           vk::ImageUsageFlagBits::eTransferSrc;
+        nr::test::require(
+            pathTracingGuidePolicy.canOmitImageQueueFamilyTransfer(
+                2u,
+                0u,
+                vk::ImageTiling::eOptimal,
+                pathTracingGuideUsage),
+            "maintenance9 should allow the retained PathTracing guide transfer from compute to graphics");
         nr::test::require(
             !policy.canOmitImageQueueFamilyTransfer(
                 0u,
@@ -231,5 +247,99 @@ const nr::test::CaseRegistrar readbackSyncPlanCase{
             .access = vk::AccessFlagBits2::eShaderRead,
         };
         nr::test::require(plan.valid(), "filled readback plan should be valid");
+    }};
+
+const nr::test::CaseRegistrar linearImageUploadChunkCase{
+    "rhi linear image uploads split into ring-sized row chunks",
+    [] {
+        auto region = vk::BufferImageCopy{};
+        region.imageSubresource = vk::ImageSubresourceLayers{
+            vk::ImageAspectFlagBits::eColor,
+            0u,
+            0u,
+            1u,
+        };
+        region.imageExtent = vk::Extent3D{8u, 5u, 1u};
+
+        auto const chunks = nr::rhi::ops::planLinearImageUploadChunks(region, 4u, 64u);
+        nr::test::requireEqual(chunks.size(), std::size_t{3u});
+
+        nr::test::requireEqual(chunks[0].sourceOffset, vk::DeviceSize{0u});
+        nr::test::requireEqual(chunks[0].byteSize, vk::DeviceSize{64u});
+        nr::test::requireEqual(chunks[0].copyRegion.imageOffset.y, 0);
+        nr::test::requireEqual(chunks[0].copyRegion.imageExtent.height, 2u);
+
+        nr::test::requireEqual(chunks[1].sourceOffset, vk::DeviceSize{64u});
+        nr::test::requireEqual(chunks[1].byteSize, vk::DeviceSize{64u});
+        nr::test::requireEqual(chunks[1].copyRegion.imageOffset.y, 2);
+        nr::test::requireEqual(chunks[1].copyRegion.imageExtent.height, 2u);
+
+        nr::test::requireEqual(chunks[2].sourceOffset, vk::DeviceSize{128u});
+        nr::test::requireEqual(chunks[2].byteSize, vk::DeviceSize{32u});
+        nr::test::requireEqual(chunks[2].copyRegion.imageOffset.y, 4);
+        nr::test::requireEqual(chunks[2].copyRegion.imageExtent.height, 1u);
+    }};
+
+const nr::test::CaseRegistrar paddedLinearImageUploadChunkCase{
+    "rhi linear image upload chunks preserve padded slice offsets",
+    [] {
+        auto region = vk::BufferImageCopy{};
+        region.bufferRowLength = 4u;
+        region.bufferImageHeight = 4u;
+        region.imageSubresource = vk::ImageSubresourceLayers{
+            vk::ImageAspectFlagBits::eColor,
+            0u,
+            3u,
+            2u,
+        };
+        region.imageExtent = vk::Extent3D{3u, 3u, 2u};
+
+        auto const chunks = nr::rhi::ops::planLinearImageUploadChunks(region, 2u, 16u);
+        nr::test::requireEqual(chunks.size(), std::size_t{8u});
+
+        nr::test::requireEqual(chunks[0].sourceOffset, vk::DeviceSize{0u});
+        nr::test::requireEqual(chunks[1].sourceOffset, vk::DeviceSize{16u});
+        nr::test::requireEqual(chunks[2].sourceOffset, vk::DeviceSize{32u});
+        nr::test::requireEqual(chunks[4].sourceOffset, vk::DeviceSize{64u});
+        nr::test::requireEqual(chunks[7].sourceOffset, vk::DeviceSize{112u});
+
+        nr::test::requireEqual(chunks[2].copyRegion.imageOffset.z, 1);
+        nr::test::requireEqual(chunks[4].copyRegion.imageSubresource.baseArrayLayer, 4u);
+        nr::test::requireEqual(chunks[7].copyRegion.imageSubresource.baseArrayLayer, 4u);
+        nr::test::requireEqual(chunks[7].copyRegion.imageOffset.y, 2);
+        nr::test::requireEqual(chunks[7].copyRegion.imageOffset.z, 1);
+        nr::test::requireEqual(chunks[7].copyRegion.imageExtent.height, 1u);
+        nr::test::requireEqual(chunks[7].copyRegion.imageExtent.depth, 1u);
+        nr::test::requireEqual(chunks[7].copyRegion.bufferRowLength, 4u);
+        nr::test::requireEqual(chunks[7].copyRegion.bufferImageHeight, 0u);
+    }};
+
+const nr::test::CaseRegistrar eightKEnvironmentUploadChunkCase{
+    "rhi 8K RGBA16F environment upload fits the default ring in two row chunks",
+    [] {
+        auto region = vk::BufferImageCopy{};
+        region.imageSubresource = vk::ImageSubresourceLayers{
+            vk::ImageAspectFlagBits::eColor,
+            0u,
+            0u,
+            1u,
+        };
+        region.imageExtent = vk::Extent3D{8192u, 4096u, 1u};
+
+        constexpr auto defaultRingSize = vk::DeviceSize{128u * 1024u * 1024u};
+        auto const chunks = nr::rhi::ops::planLinearImageUploadChunks(
+            region,
+            4u * sizeof(std::uint16_t),
+            defaultRingSize);
+
+        nr::test::requireEqual(chunks.size(), std::size_t{2u});
+        nr::test::requireEqual(chunks[0].sourceOffset, vk::DeviceSize{0u});
+        nr::test::requireEqual(chunks[0].byteSize, defaultRingSize);
+        nr::test::requireEqual(chunks[0].copyRegion.imageOffset.y, 0);
+        nr::test::requireEqual(chunks[0].copyRegion.imageExtent.height, 2048u);
+        nr::test::requireEqual(chunks[1].sourceOffset, defaultRingSize);
+        nr::test::requireEqual(chunks[1].byteSize, defaultRingSize);
+        nr::test::requireEqual(chunks[1].copyRegion.imageOffset.y, 2048);
+        nr::test::requireEqual(chunks[1].copyRegion.imageExtent.height, 2048u);
     }};
 } // namespace

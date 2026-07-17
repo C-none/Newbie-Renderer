@@ -1,4 +1,6 @@
 module;
+#include <cstddef>
+#include <cstdint>
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
 #include <assimp/metadata.h>
@@ -8,7 +10,9 @@ module;
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
+#include <OpenEXR/ImfInputFile.h>
 #include <OpenEXR/ImfOutputFile.h>
+#include <OpenEXR/ImfTestFile.h>
 #include <stb_image.h>
 #include <stb_image_write.h>
 #include <turbojpeg.h>
@@ -25,12 +29,47 @@ export namespace nr::dependency::openexr
 using Channel = ::OPENEXR_IMF_NAMESPACE::Channel;
 using FrameBuffer = ::OPENEXR_IMF_NAMESPACE::FrameBuffer;
 using Header = ::OPENEXR_IMF_NAMESPACE::Header;
+using InputFile = ::OPENEXR_IMF_NAMESPACE::InputFile;
 using OutputFile = ::OPENEXR_IMF_NAMESPACE::OutputFile;
 using PixelType = ::OPENEXR_IMF_NAMESPACE::PixelType;
 using Slice = ::OPENEXR_IMF_NAMESPACE::Slice;
 
 inline constexpr PixelType halfPixelType = ::OPENEXR_IMF_NAMESPACE::HALF;
 inline constexpr PixelType floatPixelType = ::OPENEXR_IMF_NAMESPACE::FLOAT;
+inline constexpr PixelType uintPixelType = ::OPENEXR_IMF_NAMESPACE::UINT;
+
+inline bool inspectFile(
+    const char* fileName,
+    bool& tiled,
+    bool& deep,
+    bool& multiPart)
+{
+    return ::OPENEXR_IMF_NAMESPACE::isOpenExrFile(fileName, tiled, deep, multiPart);
+}
+
+inline Slice makeSlice(
+    PixelType type,
+    const void* pixels,
+    int originX,
+    int originY,
+    std::int64_t width,
+    std::int64_t height,
+    std::size_t xStride,
+    std::size_t yStride,
+    double fillValue = 0.0)
+{
+    return Slice::Make(
+        type,
+        pixels,
+        IMATH_NAMESPACE::V2i{originX, originY},
+        width,
+        height,
+        xStride,
+        yStride,
+        1,
+        1,
+        fillValue);
+}
 } // namespace nr::dependency::openexr
 
 export namespace nr::dependency::imath

@@ -53,6 +53,7 @@ void registerDefaultPipelines(RenderPipelineRegistry& registry);
 [[nodiscard]] RenderPipelineRegistry makeDefaultPipelineRegistry();
 
 [[nodiscard]] std::filesystem::path defaultModelPath();
+[[nodiscard]] std::filesystem::path defaultEnvironmentMapPath();
 [[nodiscard]] std::filesystem::path modelHistoryFilePath();
 [[nodiscard]] std::filesystem::path normalizeModelPathForStorage(const std::filesystem::path& path);
 [[nodiscard]] std::string displayPathLeafFirst(const std::filesystem::path& path);
@@ -113,6 +114,7 @@ struct ViewerCommandLineOptions
 struct ViewerRunConfig
 {
     std::filesystem::path initialModelPath{};
+    std::filesystem::path initialEnvironmentMapPath{};
     std::string initialPipelineId{std::string{defaultPipelineId}};
     std::string appName{"NewbieRenderer"};
     std::string engineName{"NewbieRenderer"};
@@ -123,3 +125,18 @@ void printViewerUsage(std::string_view executableName = "main");
 [[nodiscard]] int runViewer(ViewerRunConfig config);
 [[nodiscard]] int runViewerFromCommandLine(std::span<char*> args);
 } // namespace nr::pipeline
+
+namespace nr::pipeline::detail
+{
+void registerNormalViewPipeline(RenderPipelineRegistry& registry);
+void registerRtObjectPipeline(RenderPipelineRegistry& registry);
+
+[[nodiscard]] std::string normalizedModelPathKey(const std::filesystem::path& path);
+[[nodiscard]] std::vector<nr::app::UiSection> buildRtObjectUi(
+    RtPostProcessingMode& mode,
+    std::optional<RtPostProcessingMode>& pendingMode);
+
+[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(
+    nr::renderer::Renderer& renderer,
+    const std::filesystem::path& sourcePath);
+} // namespace nr::pipeline::detail

@@ -47,6 +47,12 @@ inline constexpr std::uint32_t kWorkerSecondaryPoolSlotBase = kMainThreadSeconda
 
 export namespace nr::renderer
 {
+struct ExecutorTimelineWait
+{
+    RendererSubmitToken token{};
+    vk::PipelineStageFlags2 stageMask = vk::PipelineStageFlagBits2::eAllCommands;
+};
+
 struct ExecutorBatchPlan
 {
     std::uint32_t batchIndex = 0;
@@ -57,6 +63,7 @@ struct ExecutorBatchPlan
 
     std::vector<ResourceStateTransition> headAcquireTransitions{};
     std::vector<ResourceStateTransition> tailReleaseTransitions{};
+    std::vector<ExecutorTimelineWait> initialResourceWaits{};
 
     vk::PipelineStageFlags2 waitStageMask = vk::PipelineStageFlagBits2::eAllCommands;
     bool waitsForPreviousBatch = false;
@@ -434,9 +441,20 @@ class RenderGraphExecutor
         const CompiledSubmitBatch& batch,
         const std::map<GraphResourceHandle, std::reference_wrapper<const CompiledResourceDesc>>& compiledResourceByHandle);
 
-    static void updateRetainedImageStates(const CompiledGraphFrame& compiled);
+    static void updateRetainedImageStates(
+        const CompiledGraphFrame& compiled,
+        const std::map<std::uint32_t, RendererSubmitToken>& signalTokenByBatch);
 
     [[nodiscard]] static std::uint32_t queueFamilyIndexFor(const nr::rhi::Device& device, QueueDomain queue);
+
+    [[nodiscard]] static bool canOmitQueueFamilyOwnershipTransfer(
+        const CompiledResourceDesc& resource,
+        const ResourceStateTransition& transition,
+        const nr::rhi::Device& device);
+
+    static void applyQueueFamilyTransferPolicy(
+        CompiledGraphFrame& compiled,
+        const nr::rhi::Device& device);
 
     [[nodiscard]] static vk::ImageSubresourceRange subresourceRangeFor(const CompiledResourceDesc& resource);
 

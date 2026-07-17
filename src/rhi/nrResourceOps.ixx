@@ -794,6 +794,26 @@ void copyBuffer(const vk::raii::CommandBuffer& commandBuffer, const Buffer& src,
 
 [[nodiscard]] vk::DeviceSize linearBufferImageCopySize(const vk::BufferImageCopy& region, vk::DeviceSize elementSize);
 
+struct LinearImageUploadChunk
+{
+    vk::DeviceSize sourceOffset = 0;
+    vk::DeviceSize byteSize = 0;
+    vk::BufferImageCopy copyRegion{};
+};
+
+/**
+ * @brief Split one linear buffer-image payload into ring-sized row chunks.
+ *
+ * Each chunk addresses exactly one array-layer/depth slice and a contiguous
+ * row range. Source padding expressed by bufferRowLength/bufferImageHeight is
+ * preserved when calculating source offsets, while each emitted copy uses a
+ * tightly scoped image extent suitable for an independent transfer submit.
+ */
+[[nodiscard]] std::vector<LinearImageUploadChunk> planLinearImageUploadChunks(
+    const vk::BufferImageCopy& region,
+    vk::DeviceSize elementSize,
+    vk::DeviceSize ringCapacity);
+
 /**
  * @brief Copy buffer data into an image.
  */
@@ -1122,7 +1142,9 @@ class UploadReadbackContext
      *   3) copyBufferToImage2 from upload ring,
      *   4) transition to destination layout and, when required, release to the destination queue.
      *
-     * Note: current implementation requires payload to fit in the upload ring.
+     * Payloads larger than the upload ring are split by array layer, depth
+     * slice, and row range. The first submit performs the transfer-layout
+     * acquire/transition and the final submit performs the destination release.
      */
     [[nodiscard]] ImageUploadTicket uploadImage(
         std::span<const std::byte> data,

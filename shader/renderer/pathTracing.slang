@@ -2,6 +2,7 @@ module pathTracing;
 import common;
 import renderer.pathTracing.params;
 import renderer.pathTracing.pathState;
+import renderer.pathTracing.environment;
 import renderer.pathTracing.scheduler;
 import renderer.pathTracing.hitShaders;
 
@@ -18,6 +19,10 @@ void rgMain()
 void msMain(inout RayPayload payload)
 {
     payload.hit = 0u;
+    if (payload.rayKind == RayKind.material)
+    {
+        payload.missRadiance = sampleEnvironment(WorldRayDirection());
+    }
 }
 
 [shader("anyhit")]

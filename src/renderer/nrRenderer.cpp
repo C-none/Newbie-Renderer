@@ -1,5 +1,6 @@
 module nr.renderer;
 import :renderer;
+import dependency.assets;
 import dependency.math;
 import dependency.vulkan;
 import nr.rhi;
@@ -1372,9 +1373,44 @@ void Renderer::ensureSceneTextureFallback()
         uploadSceneTextureFallback();
     }
 
-[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan Renderer::makeSceneTextureFallbackUploadPlan() const
+void Renderer::ensureEnvironmentMapFallback()
 {
-        nrAssert(static_cast<bool>(device_), "Renderer::makeSceneTextureFallbackUploadPlan requires initialized device.");
+        nrAssert(static_cast<bool>(device_), "Renderer::ensureEnvironmentMapFallback requires initialized device.");
+        if (environmentMapImage_.valid())
+        {
+            return;
+        }
+
+        auto const fallbackPixel = std::array<nr::dependency::imath::Half, 4u>{
+            nr::dependency::imath::Half{0.015f},
+            nr::dependency::imath::Half{0.018f},
+            nr::dependency::imath::Half{0.022f},
+            nr::dependency::imath::Half{1.0f},
+        };
+        auto fallbackBytes = std::vector<std::byte>(sizeof(fallbackPixel));
+        std::memcpy(fallbackBytes.data(), fallbackPixel.data(), sizeof(fallbackPixel));
+
+        auto level = nr::resource::ImageLevel{};
+        level.width = 1u;
+        level.height = 1u;
+        level.bytes = std::move(fallbackBytes);
+
+        auto texture = nr::resource::Texture{};
+        texture.name = "Renderer.EnvironmentMapFallback";
+        texture.format = vk::Format::eR16G16B16A16Sfloat;
+        texture.width = 1u;
+        texture.height = 1u;
+        texture.srgb = false;
+        texture.levels.push_back(std::move(level));
+
+        auto environment = nr::resource::EnvironmentMap{};
+        environment.radiance = std::move(texture);
+        setEnvironmentMap(std::move(environment));
+    }
+
+[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan Renderer::makeSampledImageUploadPlan() const
+{
+        nrAssert(static_cast<bool>(device_), "Renderer::makeSampledImageUploadPlan requires initialized device.");
 
         auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
         auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
@@ -1389,37 +1425,19 @@ void Renderer::ensureSceneTextureFallback()
             },
             nr::rhi::ops::QueueAccessScope{
                 .stages = vk::PipelineStageFlagBits2::eAllCommands,
-                .access = vk::AccessFlagBits2::eShaderRead,
+                .access = vk::AccessFlagBits2::eShaderSampledRead,
             });
         return plan;
     }
 
-void Renderer::uploadSceneTextureFallback()
+void Renderer::synchronizeSampledImageUpload(
+        const nr::rhi::ops::ImageUploadTicket& uploadTicket,
+        std::string_view debugName)
 {
-        nrAssert(static_cast<bool>(device_), "Renderer::uploadSceneTextureFallback requires initialized device.");
-        nrAssert(sceneTextureFallback_.valid(), "Renderer::uploadSceneTextureFallback requires a valid fallback image.");
-
-        // Scene texture id 0 is the neutral default sampled for every unauthored material slot. It is
-        // 1x1 linear white RGBA(1,1,1,1) so multiplicative sampling (base color, metallic-roughness,
-        // emissive, clearcoat, sheen, transmission) resolves to a neutral factor of 1 instead of a
-        // debug color. Genuinely invalid texture references are reported at load/scene residency.
-        auto neutralPixel = std::array{
-            static_cast<std::byte>(0xFFu),
-            static_cast<std::byte>(0xFFu),
-            static_cast<std::byte>(0xFFu),
-            static_cast<std::byte>(0xFFu),
-        };
+        nrAssert(static_cast<bool>(device_), "Renderer::synchronizeSampledImageUpload requires initialized device.");
+        nrAssert(uploadTicket.valid(), std::format("{} upload ticket is invalid.", debugName));
 
         auto& uploadContext = device_->uploadReadback();
-        auto const uploadPlan = makeSceneTextureFallbackUploadPlan();
-        auto uploadTicket = uploadContext.uploadImage(
-            std::span<const std::byte>{neutralPixel},
-            sceneTextureFallback_,
-            vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eShaderReadOnlyOptimal,
-            uploadPlan);
-        nrAssert(uploadTicket.valid(), "Renderer failed to upload neutral scene texture fallback.");
-
         auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
         auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
         if (transferQueueFamily == graphicsQueueFamily)
@@ -1450,9 +1468,42 @@ void Renderer::uploadSceneTextureFallback()
 
         auto fence = vk::raii::Fence(device_->device, vk::FenceCreateInfo{});
         device_->queueManager.graphics().submit(std::move(syncBatch), std::cref(fence));
-        auto const waitResult = device_->device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
-        nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for neutral scene texture fallback upload synchronization.");
+        auto const waitResult = device_->device.waitForFences(
+            *fence,
+            vk::True,
+            std::numeric_limits<std::uint64_t>::max());
+        nrAssert(
+            waitResult == vk::Result::eSuccess,
+            std::format("Renderer failed waiting for {} upload synchronization.", debugName));
         uploadContext.reclaimCompletedUploads();
+    }
+
+void Renderer::uploadSceneTextureFallback()
+{
+        nrAssert(static_cast<bool>(device_), "Renderer::uploadSceneTextureFallback requires initialized device.");
+        nrAssert(sceneTextureFallback_.valid(), "Renderer::uploadSceneTextureFallback requires a valid fallback image.");
+
+        // Scene texture id 0 is the neutral default sampled for every unauthored material slot. It is
+        // 1x1 linear white RGBA(1,1,1,1) so multiplicative sampling (base color, metallic-roughness,
+        // emissive, clearcoat, sheen, transmission) resolves to a neutral factor of 1 instead of a
+        // debug color. Genuinely invalid texture references are reported at load/scene residency.
+        auto neutralPixel = std::array{
+            static_cast<std::byte>(0xFFu),
+            static_cast<std::byte>(0xFFu),
+            static_cast<std::byte>(0xFFu),
+            static_cast<std::byte>(0xFFu),
+        };
+
+        auto& uploadContext = device_->uploadReadback();
+        auto const uploadPlan = makeSampledImageUploadPlan();
+        auto uploadTicket = uploadContext.uploadImage(
+            std::span<const std::byte>{neutralPixel},
+            sceneTextureFallback_,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eShaderReadOnlyOptimal,
+            uploadPlan);
+        nrAssert(uploadTicket.valid(), "Renderer failed to upload neutral scene texture fallback.");
+        synchronizeSampledImageUpload(uploadTicket, "neutral scene texture fallback");
     }
 
 [[nodiscard]] RendererSceneTextureDescriptorTable Renderer::buildSceneTextureDescriptorTable(
@@ -1483,6 +1534,53 @@ void Renderer::initialize(const RendererCreateInfo& info)
         frameUniformArena_.initialize(*device_, info.frameUniformBytesPerFrame, "Renderer.FrameUniformArena");
         submissionTimelines_.initialize(device_->device, 0);
         ensureSceneTextureFallback();
+        ensureEnvironmentMapFallback();
+    }
+
+void Renderer::setEnvironmentMap(nr::resource::EnvironmentMap environment)
+{
+        nrAssert(static_cast<bool>(device_), "Renderer::setEnvironmentMap requires initialize() first.");
+        nrAssert(environment.valid(), "Renderer::setEnvironmentMap requires a valid RGBA16F environment resource.");
+
+        device_->waitIdle();
+        builder_.clear();
+        executor_.clearRetainedState();
+        cacheSuite_.clear();
+        auto const& texture = environment.radiance;
+        auto imageInfo = nr::rhi::makeImageCreateInfo(
+            texture.format,
+            vk::Extent2D{texture.width, texture.height},
+            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+        auto image = device_->resourceFactory.createImage(
+            imageInfo,
+            nr::rhi::MemoryUsage::GpuOnly,
+            std::format("Renderer.EnvironmentMap.{}", texture.name));
+        nrAssert(image.valid(), "Renderer::setEnvironmentMap failed to create the GPU image.");
+
+        auto& uploadContext = device_->uploadReadback();
+        auto uploadTicket = uploadContext.uploadImage(
+            texture.levels.front().bytes,
+            image,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eShaderReadOnlyOptimal,
+            makeSampledImageUploadPlan());
+        synchronizeSampledImageUpload(uploadTicket, "environment map");
+
+        environmentMapImage_ = std::move(image);
+        environmentMapParameters_ = EnvironmentMapParameters{
+            .radianceDecodeScale = environment.radianceDecodeScale,
+            .intensity = environment.intensity,
+            .yawRadians = environment.yawRadians,
+        };
+        environmentMapState_ = RetainedImageState{
+            .initialized = true,
+            .layout = ImageLayoutIntent::ShaderReadOnly,
+            .ownership = ResourceOwnershipDomain::Graphics,
+            .access = AccessScope{
+                .stages = vk::PipelineStageFlagBits2::eAllCommands,
+                .access = vk::AccessFlagBits2::eShaderSampledRead,
+            },
+        };
     }
 
 void Renderer::installGraph(const RendererGraphSpec& spec)
@@ -1565,6 +1663,9 @@ void Renderer::shutdown()
         submissionTimelines_ = RendererSubmissionTimelines{};
         frameUniformArena_ = FrameUniformArena{};
         sceneTextureFallback_ = nr::rhi::Image{};
+        environmentMapImage_ = nr::rhi::Image{};
+        environmentMapState_.reset();
+        environmentMapParameters_ = EnvironmentMapParameters{};
         resetSceneBinding();
         cpuTimingAccumulator_ = {};
         cpuStatistics_ = {};
@@ -2030,8 +2131,25 @@ void Renderer::buildInstalledGraph(
         auto const globalFrameUniforms =
             makeGlobalFrameUniforms(frameConstants, previousFrameConstants, frameParameters.frameIndex, sampleFrameOrdinal);
         previousGlobalFrameConstants_ = frameConstants;
+        nrAssert(
+            environmentMapImage_.valid() && environmentMapState_.initialized,
+            "Renderer::buildInstalledGraph requires a resident environment map.");
+        auto const environmentMap = builder_.addResource(GraphImportedImageDesc{
+            .debugName = "Renderer.EnvironmentMap",
+            .lifetime = ResourceLifetime::RendererPersistent,
+            .initialOwnership = environmentMapState_.ownership,
+            .extent = environmentMapImage_.extent(),
+            .format = environmentMapImage_.format(),
+            .usageIntents = {ImageUsageIntent::Sampled},
+            .initialLayout = environmentMapState_.layout,
+            .initialAccessScope = environmentMapState_.access,
+            .importedResource = std::cref(environmentMapImage_),
+            .retainedState = std::ref(environmentMapState_),
+        });
         auto globalResources = FrameGlobalResources{
             .frameUniform = frameUniformArena_.upload(builder_, "Renderer.GlobalFrameUniforms", globalFrameUniforms),
+            .environmentMap = environmentMap,
+            .environmentMapParameters = environmentMapParameters_,
             .bindlessImageTableCache = std::ref(cacheSuite_.bindlessImageTableCache),
             .cameraFrameState = cameraFrameState,
         };

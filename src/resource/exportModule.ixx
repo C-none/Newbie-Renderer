@@ -6,6 +6,7 @@ export import :math;
 export import :geometry;
 export import :mesh;
 export import :material;
+export import :environment;
 export import :camera;
 export import :light;
 export import :skeletalAnimation;

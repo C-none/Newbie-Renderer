@@ -248,9 +248,21 @@ struct RendererCameraFrameState
     vk::Extent2D viewportExtent,
     bool reset = false) noexcept;
 
+struct alignas(16) EnvironmentMapParameters
+{
+    float radianceDecodeScale = 1.0f;
+    float intensity = 1.0f;
+    float yawRadians = 0.0f;
+    float padding = 0.0f;
+};
+
+static_assert(sizeof(EnvironmentMapParameters) == 16u);
+
 struct FrameGlobalResources
 {
     FrameUniformBinding frameUniform{};
+    GraphResourceHandle environmentMap{};
+    EnvironmentMapParameters environmentMapParameters{};
     std::map<std::uint32_t, SceneTextureDescriptorBinding> sceneTextureDescriptorsById{};
     std::uint32_t sceneTextureDescriptorCapacity = kSceneTextureDescriptorCapacity;
     std::uint64_t sceneTextureDescriptorVersion = 0;
@@ -1527,6 +1539,8 @@ class Renderer
 
     void shutdown();
 
+    void setEnvironmentMap(nr::resource::EnvironmentMap environment);
+
     [[nodiscard]] bool initialized() const noexcept;
 
     [[nodiscard]] bool graphInstalled() const noexcept;
@@ -1576,7 +1590,13 @@ class Renderer
 
     void ensureSceneTextureFallback();
 
-    [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeSceneTextureFallbackUploadPlan() const;
+    void ensureEnvironmentMapFallback();
+
+    [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeSampledImageUploadPlan() const;
+
+    void synchronizeSampledImageUpload(
+        const nr::rhi::ops::ImageUploadTicket& uploadTicket,
+        std::string_view debugName);
 
     void uploadSceneTextureFallback();
 
@@ -1591,6 +1611,9 @@ class Renderer
     RendererSubmissionTimelines submissionTimelines_{};
     FrameUniformArena frameUniformArena_{};
     nr::rhi::Image sceneTextureFallback_{};
+    nr::rhi::Image environmentMapImage_{};
+    RetainedImageState environmentMapState_{};
+    EnvironmentMapParameters environmentMapParameters_{};
 
     bool graphInstalled_ = false;
     std::vector<InstalledNode> installedNodes_{};

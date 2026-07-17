@@ -3,6 +3,7 @@ import common;
 import renderer.pathTracing.params;
 import renderer.pathTracing.pathState;
 import renderer.pathTracing.resources;
+import renderer.pathTracing.environment;
 import renderer.pathTracing.guides;
 import renderer.pathTracing.visibility;
 
@@ -224,7 +225,7 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     float hitAlpha = material.alphaMode == AlphaMode.blend ? material.alpha : 1.0f;
     if (path.vertexIndex == 1u && hitAlpha < 1.0f)
     {
-        addDiffusePathContribution(path, kMissRadiance * (1.0f - hitAlpha));
+        addDiffusePathContribution(path, sampleEnvironment(path.direction) * (1.0f - hitAlpha));
         updatePathThroughput(path, float3(hitAlpha));
     }
 
@@ -321,7 +322,7 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     path.direction = scatter.direction;
 }
 
-public void handleMiss(inout PathState path)
+public void handleMiss(inout PathState path, float3 missRadiance)
 {
     pathStateSetHit(path, false);
     if (path.vertexIndex == 2u)
@@ -330,11 +331,11 @@ public void handleMiss(inout PathState path)
     }
     if (path.vertexIndex == 1u)
     {
-        addDiffusePathContribution(path, kMissRadiance);
+        addDiffusePathContribution(path, missRadiance);
     }
     else
     {
-        addPathContribution(path, kMissRadiance);
+        addPathContribution(path, missRadiance);
     }
     terminatePathState(path);
 }
@@ -386,7 +387,7 @@ public struct Pt
         }
         else
         {
-            handleMiss();
+            handleMiss(payload.missRadiance);
         }
     }
 
@@ -397,9 +398,9 @@ public struct Pt
     }
 
     [mutating]
-    public void handleMiss()
+    public void handleMiss(float3 missRadiance)
     {
-        handleMiss(path);
+        handleMiss(path, missRadiance);
     }
 
     public void writeOutput()

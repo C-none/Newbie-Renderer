@@ -99,9 +99,16 @@ namespace nr::renderer
             QueueDomain queue = QueueDomain::Graphics;
         };
 
+        struct PendingTimelineWait
+        {
+            std::uint64_t value = 0;
+            vk::PipelineStageFlags2 stages{};
+        };
+
         auto releaseByBatch = std::map<std::uint32_t, std::vector<ResourceStateTransition>>{};
         auto acquireByBatch = std::map<std::uint32_t, std::vector<ResourceStateTransition>>{};
         auto initialReleaseByQueue = std::map<QueueDomain, std::vector<ResourceStateTransition>>{};
+        auto initialResourceWaitsByBatch = std::map<std::uint32_t, std::map<QueueDomain, PendingTimelineWait>>{};
         auto waitStagesByBatch = std::map<std::uint32_t, vk::PipelineStageFlags2>{};
         auto dedupe = std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>>{};
         auto lastUse = std::map<GraphResourceHandle, LastResourceUse>{};
@@ -112,12 +119,21 @@ namespace nr::renderer
                     auto previousUse = lastUse.find(transition.resource);
                     if (previousUse == lastUse.end())
                     {
+                        auto dstBatchIndex = pass.submitBatchIndex;
+                        auto waitStages = transition.dstScope.stages != vk::PipelineStageFlags2{}
+                                              ? transition.dstScope.stages
+                                              : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+                        if (transition.sourceSubmissionTimelineValue > 0)
+                        {
+                            auto& pendingWait = initialResourceWaitsByBatch[dstBatchIndex][transition.srcQueue];
+                            pendingWait.value = std::max(
+                                pendingWait.value,
+                                transition.sourceSubmissionTimelineValue);
+                            pendingWait.stages |= waitStages;
+                        }
+
                         if (transition.strength == DependencyStrength::ReleaseAcquireRequired)
                         {
-                            auto dstBatchIndex = pass.submitBatchIndex;
-                            auto waitStages = transition.dstScope.stages != vk::PipelineStageFlags2{}
-                                                  ? transition.dstScope.stages
-                                                  : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
                             waitStagesByBatch[dstBatchIndex] |= waitStages;
                             initialReleaseByQueue[transition.srcQueue].push_back(transition);
                             acquireByBatch[dstBatchIndex].push_back(transition);
@@ -199,6 +215,22 @@ namespace nr::renderer
             auto waitStageMask = waitStageIt != waitStagesByBatch.end()
                                      ? waitStageIt->second
                                      : submissionWaitStage(batch.queue);
+            auto initialResourceWaits = std::vector<ExecutorTimelineWait>{};
+            auto initialResourceWaitIt = initialResourceWaitsByBatch.find(batch.batchIndex);
+            if (initialResourceWaitIt != initialResourceWaitsByBatch.end())
+            {
+                initialResourceWaits = initialResourceWaitIt->second |
+                                       std::views::transform([](const auto& pair) {
+                                           return ExecutorTimelineWait{
+                                               .token = RendererSubmitToken{
+                                                   .queue = pair.first,
+                                                   .value = pair.second.value,
+                                               },
+                                               .stageMask = pair.second.stages,
+                                           };
+                                       }) |
+                                       std::ranges::to<std::vector>();
+            }
 
             plan.totalPassCount += batch.passes.size();
             plan.totalInPassBarrierCount += inPassBarrierCount;
@@ -210,6 +242,7 @@ namespace nr::renderer
                 .inPassBarrierCount = inPassBarrierCount,
                 .headAcquireTransitions = acquireByBatch[batch.batchIndex],
                 .tailReleaseTransitions = releaseByBatch[batch.batchIndex],
+                .initialResourceWaits = std::move(initialResourceWaits),
                 .waitStageMask = waitStageMask,
                 .waitsForPreviousBatch = waitsForPreviousBatch,
                 .signalsNextBatch = signalsNextBatch,
@@ -231,6 +264,8 @@ namespace nr::renderer
 
 [[nodiscard]] PreparedGraphFrame RenderGraphExecutor::prepareFrame(CompiledGraphFrame&& compiled, const ExecuteContext& context) const
 {
+        applyQueueFamilyTransferPolicy(compiled, context.device);
+
         auto prepared = PreparedGraphFrame{};
         prepared.plan = buildPlan(compiled);
         prepared.runtimeBindings = resolveRuntimeResources(compiled, context);
@@ -340,6 +375,15 @@ namespace nr::renderer
                 "RenderGraphExecutor::execute requires valid per-queue submission timelines for retained-resource initial ownership transfers.");
         }
 
+        if (std::ranges::any_of(report.plan.batches, [](const ExecutorBatchPlan& batch) {
+                return !batch.initialResourceWaits.empty();
+            }))
+        {
+            nrAssert(
+                timelinesValid,
+                "RenderGraphExecutor::execute requires valid per-queue submission timelines for implicit retained-resource acquisition.");
+        }
+
         if (report.plan.requiresSyntheticPresentBatch && !report.plan.batches.empty())
         {
             nrAssert(
@@ -392,6 +436,7 @@ namespace nr::renderer
         }
 
         auto previousSignalToken = RendererSubmitToken{};
+        auto signalTokenByBatch = std::map<std::uint32_t, RendererSubmitToken>{};
         auto timedPassOffset = std::size_t{0};
         auto deferredPrepareInvoked = false;
 
@@ -628,23 +673,46 @@ namespace nr::renderer
             auto submitBatch = nr::rhi::CommandBatch{};
             submitBatch.addCommandBuffer(commandBuffer);
 
-            if (timelinesValid && planBatch.waitsForPreviousBatch && previousSignalToken.valid())
+            if (timelinesValid)
             {
-                submitBatch.addWait(
-                    timelines->get().semaphore(previousSignalToken.queue),
-                    planBatch.waitStageMask,
-                    previousSignalToken.value);
-            }
+                struct PendingSubmitWait
+                {
+                    std::uint64_t value = 0;
+                    vk::PipelineStageFlags2 stages{};
+                };
 
-            if (timelinesValid && planBatch.signalsNextBatch)
-            {
+                auto pendingWaits = std::map<QueueDomain, PendingSubmitWait>{};
+                auto mergeWait = [&](RendererSubmitToken token, vk::PipelineStageFlags2 stages) {
+                    auto& pendingWait = pendingWaits[token.queue];
+                    pendingWait.value = std::max(pendingWait.value, token.value);
+                    pendingWait.stages |= stages;
+                };
+
+                std::ranges::for_each(planBatch.initialResourceWaits, [&](const ExecutorTimelineWait& wait) {
+                    mergeWait(wait.token, wait.stageMask);
+                });
+                if (planBatch.waitsForPreviousBatch && previousSignalToken.valid())
+                {
+                    mergeWait(previousSignalToken, planBatch.waitStageMask);
+                }
+                std::ranges::for_each(pendingWaits, [&](const auto& pair) {
+                    submitBatch.addWait(
+                        timelines->get().semaphore(pair.first),
+                        pair.second.stages,
+                        pair.second.value);
+                });
+
                 auto signalToken = timelines->get().acquireSignalToken(planBatch.queue);
                 submitBatch.addSignal(
                     timelines->get().semaphore(signalToken.queue),
                     signalToken.value,
                     0,
                     vk::PipelineStageFlagBits2::eAllCommands);
-                previousSignalToken = signalToken;
+                signalTokenByBatch.insert_or_assign(compiledBatch.batchIndex, signalToken);
+                if (planBatch.signalsNextBatch)
+                {
+                    previousSignalToken = signalToken;
+                }
             }
 
             auto submitRole = toQueueRole(planBatch.queue);
@@ -694,7 +762,7 @@ namespace nr::renderer
             ++report.submittedBatchCount;
         }
 
-        updateRetainedImageStates(compiled);
+        updateRetainedImageStates(compiled, signalTokenByBatch);
 
         nrAssert(
             !prepared.firstDeferredPrepareBatch.has_value() || deferredPrepareInvoked,
@@ -718,9 +786,20 @@ void RenderGraphExecutor::clearRetainedState()
         return rhiQueueRoleFromDomain(queue);
     }
 
-void RenderGraphExecutor::updateRetainedImageStates(const CompiledGraphFrame& compiled)
+void RenderGraphExecutor::updateRetainedImageStates(
+        const CompiledGraphFrame& compiled,
+        const std::map<std::uint32_t, RendererSubmitToken>& signalTokenByBatch)
 {
-        std::ranges::for_each(compiled.resources, [](const CompiledResourceDesc& resource) {
+        auto finalBatchByResource = std::map<GraphResourceHandle, std::uint32_t>{};
+        std::ranges::for_each(compiled.submitBatches, [&](const CompiledSubmitBatch& batch) {
+            std::ranges::for_each(batch.passes, [&](const CompiledPass& pass) {
+                std::ranges::for_each(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+                    finalBatchByResource.insert_or_assign(use.resource, batch.batchIndex);
+                });
+            });
+        });
+
+        std::ranges::for_each(compiled.resources, [&](const CompiledResourceDesc& resource) {
             if (!resource.isImage || !resource.retainedState.has_value() || !resource.finalAccessScope.resolved())
             {
                 return;
@@ -731,6 +810,24 @@ void RenderGraphExecutor::updateRetainedImageStates(const CompiledGraphFrame& co
             state.layout = resource.finalLayout;
             state.ownership = resource.finalOwnership;
             state.access = resource.finalAccessScope;
+            state.lastSubmissionTimelineValue = 0;
+
+            auto finalBatchIt = finalBatchByResource.find(resource.handle);
+            if (finalBatchIt == finalBatchByResource.end())
+            {
+                return;
+            }
+
+            auto signalTokenIt = signalTokenByBatch.find(finalBatchIt->second);
+            if (signalTokenIt == signalTokenByBatch.end())
+            {
+                return;
+            }
+
+            nrAssert(
+                ownershipDomainFromQueue(signalTokenIt->second.queue) == resource.finalOwnership,
+                "RenderGraphExecutor retained image final ownership must match its final submit queue.");
+            state.lastSubmissionTimelineValue = signalTokenIt->second.value;
         });
     }
 
@@ -886,6 +983,166 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(
             return device.queueManager.compute().queueFamilyIndex();
         }
         return device.queueManager.transfer().queueFamilyIndex();
+    }
+
+[[nodiscard]] bool RenderGraphExecutor::canOmitQueueFamilyOwnershipTransfer(
+        const CompiledResourceDesc& resource,
+        const ResourceStateTransition& transition,
+        const nr::rhi::Device& device)
+{
+        auto const srcQueueFamilyIndex = queueFamilyIndexFor(device, transition.srcQueue);
+        auto const dstQueueFamilyIndex = queueFamilyIndexFor(device, transition.dstQueue);
+        if (srcQueueFamilyIndex == dstQueueFamilyIndex)
+        {
+            return true;
+        }
+
+        auto const& policy = device.queueFamilyTransferPolicy();
+        if (resource.isBuffer)
+        {
+            if (resource.importedBufferResource.has_value() &&
+                resource.importedBufferResource->get().sharingMode() == vk::SharingMode::eConcurrent)
+            {
+                return true;
+            }
+
+            return policy.canOmitBufferQueueFamilyTransfer(
+                srcQueueFamilyIndex,
+                dstQueueFamilyIndex);
+        }
+
+        if (resource.isAccelerationStructure)
+        {
+            if (resource.importedAccelerationStructureResource.has_value() &&
+                resource.importedAccelerationStructureResource->get().storageBuffer().sharingMode() ==
+                    vk::SharingMode::eConcurrent)
+            {
+                return true;
+            }
+
+            return policy.canOmitBufferQueueFamilyTransfer(
+                srcQueueFamilyIndex,
+                dstQueueFamilyIndex);
+        }
+
+        if (!resource.isImage)
+        {
+            return false;
+        }
+
+        if (resource.importedImageResource.has_value())
+        {
+            auto const& image = resource.importedImageResource->get();
+            if (image.sharingMode() == vk::SharingMode::eConcurrent)
+            {
+                return true;
+            }
+
+            return policy.canOmitImageQueueFamilyTransfer(
+                image,
+                srcQueueFamilyIndex,
+                dstQueueFamilyIndex,
+                resource.isSwapchain);
+        }
+
+        auto const isManagedTransient = resource.lifetime == ResourceLifetime::GraphTransient &&
+                                        resource.residency == ResourceResidency::Managed;
+        if (!isManagedTransient || resource.isSwapchain)
+        {
+            return false;
+        }
+
+        return policy.canOmitImageQueueFamilyTransfer(
+            srcQueueFamilyIndex,
+            dstQueueFamilyIndex,
+            vk::ImageTiling::eOptimal,
+            resource.resolvedImageUsage);
+    }
+
+void RenderGraphExecutor::applyQueueFamilyTransferPolicy(
+        CompiledGraphFrame& compiled,
+        const nr::rhi::Device& device)
+{
+        auto resourceByHandle = compiled.resources |
+                                std::views::transform([](const CompiledResourceDesc& resource) {
+                                    return std::pair{resource.handle, std::cref(resource)};
+                                }) |
+                                std::ranges::to<CompiledResourceLookup>();
+
+        auto canOmit = [&](const ResourceStateTransition& transition) {
+            if (transition.strength != DependencyStrength::ReleaseAcquireRequired)
+            {
+                return false;
+            }
+
+            auto resourceIt = resourceByHandle.find(transition.resource);
+            nrAssert(
+                resourceIt != resourceByHandle.end(),
+                "RenderGraphExecutor::applyQueueFamilyTransferPolicy transition references an unknown resource handle.");
+            return canOmitQueueFamilyOwnershipTransfer(
+                resourceIt->second.get(),
+                transition,
+                device);
+        };
+
+        auto seenResourceUses = std::set<GraphResourceHandle>{};
+        std::ranges::for_each(compiled.submitBatches, [&](CompiledSubmitBatch& batch) {
+            std::ranges::for_each(batch.passes, [&](CompiledPass& pass) {
+                std::ranges::for_each(pass.preBarriers, [&](ResourceStateTransition& transition) {
+                    if (!canOmit(transition))
+                    {
+                        return;
+                    }
+
+                    auto const& resource = resourceByHandle.at(transition.resource).get();
+                    auto const isInitialTransition = !seenResourceUses.contains(transition.resource);
+                    if (isInitialTransition)
+                    {
+                        auto const sourceSubmissionTimelineValue = resource.retainedState.has_value()
+                                                                       ? resource.retainedState->get().lastSubmissionTimelineValue
+                                                                       : std::uint64_t{0};
+                        if (sourceSubmissionTimelineValue == 0)
+                        {
+                            return;
+                        }
+                        transition.sourceSubmissionTimelineValue = sourceSubmissionTimelineValue;
+                    }
+
+                    auto const needsLayoutTransition = resource.isImage &&
+                                                       transition.oldLayout != transition.newLayout;
+                    transition.strength = needsLayoutTransition
+                                              ? DependencyStrength::BarrierRequired
+                                              : DependencyStrength::InOrder;
+                    if (needsLayoutTransition)
+                    {
+                        // Submission timeline waits provide the cross-queue memory
+                        // dependency. Keep only the consumer-side layout transition.
+                        transition.srcScope = AccessScope{
+                            .stages = transition.dstScope.resolved()
+                                          ? transition.dstScope.stages
+                                          : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands},
+                        };
+                    }
+                });
+
+                std::ranges::for_each(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+                    seenResourceUses.insert(use.resource);
+                });
+            });
+        });
+
+        auto remainingOwnershipTransitions = std::vector<ResourceStateTransition>{};
+        std::ranges::for_each(compiled.submitBatches, [&](const CompiledSubmitBatch& batch) {
+            std::ranges::for_each(batch.passes, [&](const CompiledPass& pass) {
+                std::ranges::copy_if(
+                    pass.preBarriers,
+                    std::back_inserter(remainingOwnershipTransitions),
+                    [](const ResourceStateTransition& transition) {
+                        return transition.strength == DependencyStrength::ReleaseAcquireRequired;
+                    });
+            });
+        });
+        compiled.ownershipTransitions = std::move(remainingOwnershipTransitions);
     }
 
 [[nodiscard]] vk::ImageSubresourceRange RenderGraphExecutor::subresourceRangeFor(const CompiledResourceDesc& resource)

@@ -420,6 +420,92 @@ void copyBuffer(const vk::raii::CommandBuffer& commandBuffer, const Buffer& src,
             elementSize);
 }
 
+[[nodiscard]] std::vector<LinearImageUploadChunk> planLinearImageUploadChunks(
+    const vk::BufferImageCopy& region,
+    vk::DeviceSize elementSize,
+    vk::DeviceSize ringCapacity)
+{
+    nrAssert(region.bufferOffset == 0u,
+             "planLinearImageUploadChunks requires payload-relative bufferOffset 0.");
+    nrAssert(elementSize > 0u, "planLinearImageUploadChunks requires a non-zero element size.");
+    nrAssert(ringCapacity > 0u, "planLinearImageUploadChunks requires a non-zero ring capacity.");
+    nrAssert(region.imageExtent.width > 0u &&
+                 region.imageExtent.height > 0u &&
+                 region.imageExtent.depth > 0u,
+             "planLinearImageUploadChunks requires a non-empty image extent.");
+    nrAssert(region.imageSubresource.layerCount > 0u,
+             "planLinearImageUploadChunks requires at least one image layer.");
+
+    auto const rowLength = region.bufferRowLength > 0u
+                               ? region.bufferRowLength
+                               : region.imageExtent.width;
+    auto const imageHeight = region.bufferImageHeight > 0u
+                                 ? region.bufferImageHeight
+                                 : region.imageExtent.height;
+    nrAssert(rowLength >= region.imageExtent.width,
+             "planLinearImageUploadChunks bufferRowLength must cover the copied image width.");
+    nrAssert(imageHeight >= region.imageExtent.height,
+             "planLinearImageUploadChunks bufferImageHeight must cover the copied image height.");
+    nrAssert(
+        static_cast<vk::DeviceSize>(rowLength) <=
+            std::numeric_limits<vk::DeviceSize>::max() / elementSize,
+        "planLinearImageUploadChunks row byte size overflows vk::DeviceSize.");
+
+    auto const rowStride = static_cast<vk::DeviceSize>(rowLength) * elementSize;
+    nrAssert(
+        rowStride <= ringCapacity,
+        std::format(
+            "planLinearImageUploadChunks row size ({} bytes) exceeds upload ring capacity ({} bytes).",
+            rowStride,
+            ringCapacity));
+
+    auto const rowsPerChunk = static_cast<std::uint32_t>(std::min<vk::DeviceSize>(
+        region.imageExtent.height,
+        std::max<vk::DeviceSize>(1u, ringCapacity / rowStride)));
+    auto const chunksPerSlice =
+        (region.imageExtent.height + rowsPerChunk - 1u) / rowsPerChunk;
+    auto const sliceCount =
+        static_cast<std::size_t>(region.imageSubresource.layerCount) *
+        static_cast<std::size_t>(region.imageExtent.depth);
+    auto chunks = std::vector<LinearImageUploadChunk>{};
+    chunks.reserve(sliceCount * static_cast<std::size_t>(chunksPerSlice));
+
+    auto const layers = std::views::iota(std::uint32_t{0u}, region.imageSubresource.layerCount);
+    std::ranges::for_each(layers, [&](std::uint32_t layerIndex) {
+        auto const depthSlices = std::views::iota(std::uint32_t{0u}, region.imageExtent.depth);
+        std::ranges::for_each(depthSlices, [&](std::uint32_t depthIndex) {
+            auto const chunkIndices = std::views::iota(std::uint32_t{0u}, chunksPerSlice);
+            std::ranges::for_each(chunkIndices, [&](std::uint32_t chunkIndex) {
+                auto const firstRow = chunkIndex * rowsPerChunk;
+                auto const rowCount = std::min(rowsPerChunk, region.imageExtent.height - firstRow);
+                auto const linearSliceIndex =
+                    static_cast<vk::DeviceSize>(layerIndex) * region.imageExtent.depth + depthIndex;
+                auto const sourceRowIndex =
+                    linearSliceIndex * imageHeight + firstRow;
+                auto const sourceOffset = sourceRowIndex * rowStride;
+                auto const byteSize = static_cast<vk::DeviceSize>(rowCount) * rowStride;
+
+                auto copyRegion = region;
+                copyRegion.bufferOffset = 0u;
+                copyRegion.bufferImageHeight = 0u;
+                copyRegion.imageSubresource.baseArrayLayer += layerIndex;
+                copyRegion.imageSubresource.layerCount = 1u;
+                copyRegion.imageOffset.y += static_cast<std::int32_t>(firstRow);
+                copyRegion.imageOffset.z += static_cast<std::int32_t>(depthIndex);
+                copyRegion.imageExtent.height = rowCount;
+                copyRegion.imageExtent.depth = 1u;
+
+                chunks.push_back(LinearImageUploadChunk{
+                    .sourceOffset = sourceOffset,
+                    .byteSize = byteSize,
+                    .copyRegion = copyRegion,
+                });
+            });
+        });
+    });
+    return chunks;
+}
+
 void copyBufferToImage(const vk::raii::CommandBuffer& commandBuffer, const Buffer& src, const Image& dst, vk::ImageLayout dstLayout, const vk::BufferImageCopy& region)
 {
     auto effectiveRegion = normalizeBufferImageCopyRegion(dst, region);
@@ -919,108 +1005,132 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
                 "UploadReadbackContext::uploadImage payload size mismatch: data={} bytes, expected={} bytes.",
                 static_cast<vk::DeviceSize>(data.size_bytes()),
                 payloadSize));
-        nrAssert(payloadSize <= uploadCapacity_, 
-            std::format("UploadReadbackContext::uploadImage payload size ({} bytes) exceeds upload ring capacity ({} bytes). "
-                        "Consider increasing ring buffer size for large textures.",
-                        payloadSize, uploadCapacity_));
+        auto const chunks = planLinearImageUploadChunks(
+            effectiveRegion,
+            bytesPerPixel(dst.format()),
+            uploadCapacity_);
+        nrAssert(!chunks.empty(), "UploadReadbackContext::uploadImage requires at least one upload chunk.");
 
-        auto allocation = reserveUpload(payloadSize, uploadTimeline_);
-        uploadRing_.writeMappedAndFlush(data, allocation.offset);
+        auto signalValue = std::uint64_t{0u};
+        auto const chunkIndices = std::views::iota(std::size_t{0u}, chunks.size());
+        std::ranges::for_each(chunkIndices, [&](std::size_t chunkIndex) {
+            auto const& chunk = chunks[chunkIndex];
+            nrAssert(
+                chunk.sourceOffset <= payloadSize &&
+                    chunk.byteSize <= payloadSize - chunk.sourceOffset,
+                "UploadReadbackContext::uploadImage chunk exceeds the source payload.");
 
-        auto commandBuffers = transferPool_.allocatePrimary(1);
-        auto& commandBuffer = commandBuffers.front();
-        CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-        {
-            if (ownership.acquireToTransfer.has_value() && !omitAcquireToTransferOwnership)
+            auto allocation = reserveUpload(chunk.byteSize, uploadTimeline_);
+            uploadRing_.writeMappedAndFlush(
+                data.subspan(
+                    static_cast<std::size_t>(chunk.sourceOffset),
+                    static_cast<std::size_t>(chunk.byteSize)),
+                allocation.offset);
+
+            auto commandBuffers = transferPool_.allocatePrimary(1);
+            auto& commandBuffer = commandBuffers.front();
+            CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+
+            auto const isFirstChunk = chunkIndex == 0u;
+            auto const isLastChunk = chunkIndex + 1u == chunks.size();
+            if (isFirstChunk)
             {
-                BarrierBatch transferAcquireBarrier{};
-                transferAcquireBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
-                    dst,
-                    sourceLayout,
-                    vk::ImageLayout::eTransferDstOptimal,
-                    *ownership.acquireToTransfer));
-                pipelineBarrier(commandBuffer, transferAcquireBarrier);
-            }
-            else
-            {
-                BarrierBatch toTransferDstBarrier{};
-                toTransferDstBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
-                    vk::PipelineStageFlagBits2::eTopOfPipe,
-                    vk::AccessFlags2{},
-                    vk::PipelineStageFlagBits2::eTransfer,
-                    vk::AccessFlagBits2::eTransferWrite,
-                    sourceLayout,
-                    vk::ImageLayout::eTransferDstOptimal,
-                    kIgnoredQueueFamilyIndex,
-                    kIgnoredQueueFamilyIndex,
-                    vk::Image{},
-                    {},
-                    nullptr,
-                }));
-                pipelineBarrier(commandBuffer, toTransferDstBarrier);
+                if (ownership.acquireToTransfer.has_value() && !omitAcquireToTransferOwnership)
+                {
+                    BarrierBatch transferAcquireBarrier{};
+                    transferAcquireBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
+                        dst,
+                        sourceLayout,
+                        vk::ImageLayout::eTransferDstOptimal,
+                        *ownership.acquireToTransfer));
+                    pipelineBarrier(commandBuffer, transferAcquireBarrier);
+                }
+                else
+                {
+                    BarrierBatch toTransferDstBarrier{};
+                    toTransferDstBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
+                        vk::PipelineStageFlagBits2::eTopOfPipe,
+                        vk::AccessFlags2{},
+                        vk::PipelineStageFlagBits2::eTransfer,
+                        vk::AccessFlagBits2::eTransferWrite,
+                        sourceLayout,
+                        vk::ImageLayout::eTransferDstOptimal,
+                        kIgnoredQueueFamilyIndex,
+                        kIgnoredQueueFamilyIndex,
+                        vk::Image{},
+                        {},
+                        nullptr,
+                    }));
+                    pipelineBarrier(commandBuffer, toTransferDstBarrier);
+                }
             }
 
-            effectiveRegion.bufferOffset += allocation.offset;
+            auto copyRegion = chunk.copyRegion;
+            copyRegion.bufferOffset = allocation.offset;
             copyBufferToImage2(
                 commandBuffer,
                 uploadRing_.handle(),
                 dst.handle(),
                 vk::ImageLayout::eTransferDstOptimal,
-                toBufferImageCopy2(effectiveRegion));
+                toBufferImageCopy2(copyRegion));
 
-            BarrierBatch releaseBarrier{};
-            if (ownership.isSameQueueFamily())
+            if (isLastChunk)
             {
-                // Same queue family: use simple layout transition.
-                releaseBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
-                    ownership.releaseToDestination.release.stages,
-                    ownership.releaseToDestination.release.access,
-                    ownership.releaseToDestination.acquire.stages,
-                    ownership.releaseToDestination.acquire.access,
-                    vk::ImageLayout::eTransferDstOptimal,
-                    destinationLayout,
-                    kIgnoredQueueFamilyIndex,
-                    kIgnoredQueueFamilyIndex,
-                    vk::Image{},
-                    {},
-                    nullptr,
-                }));
+                BarrierBatch releaseBarrier{};
+                if (ownership.isSameQueueFamily())
+                {
+                    releaseBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
+                        ownership.releaseToDestination.release.stages,
+                        ownership.releaseToDestination.release.access,
+                        ownership.releaseToDestination.acquire.stages,
+                        ownership.releaseToDestination.acquire.access,
+                        vk::ImageLayout::eTransferDstOptimal,
+                        destinationLayout,
+                        kIgnoredQueueFamilyIndex,
+                        kIgnoredQueueFamilyIndex,
+                        vk::Image{},
+                        {},
+                        nullptr,
+                    }));
+                }
+                else if (omitReleaseOwnership)
+                {
+                    releaseBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
+                        ownership.releaseToDestination.release.stages,
+                        ownership.releaseToDestination.release.access,
+                        vk::PipelineStageFlagBits2::eTransfer,
+                        vk::AccessFlags2{},
+                        vk::ImageLayout::eTransferDstOptimal,
+                        destinationLayout,
+                        kIgnoredQueueFamilyIndex,
+                        kIgnoredQueueFamilyIndex,
+                        vk::Image{},
+                        {},
+                        nullptr,
+                    }));
+                }
+                else
+                {
+                    releaseBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
+                        dst,
+                        vk::ImageLayout::eTransferDstOptimal,
+                        destinationLayout,
+                        ownership.releaseToDestination));
+                }
+                pipelineBarrier(commandBuffer, releaseBarrier);
             }
-            else if (omitReleaseOwnership)
-            {
-                releaseBarrier.add(makeImageBarrier(dst, vk::ImageMemoryBarrier2{
-                    ownership.releaseToDestination.release.stages,
-                    ownership.releaseToDestination.release.access,
-                    vk::PipelineStageFlagBits2::eTransfer,
-                    vk::AccessFlags2{},
-                    vk::ImageLayout::eTransferDstOptimal,
-                    destinationLayout,
-                    kIgnoredQueueFamilyIndex,
-                    kIgnoredQueueFamilyIndex,
-                    vk::Image{},
-                    {},
-                    nullptr,
-                }));
-            }
-            else
-            {
-                // Cross-queue with required QFOT: use ownership transfer barrier.
-                releaseBarrier.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
-                    dst,
-                    vk::ImageLayout::eTransferDstOptimal,
-                    destinationLayout,
-                    ownership.releaseToDestination));
-            }
-            pipelineBarrier(commandBuffer, releaseBarrier);
-        }
-        CommandRecorder::end(commandBuffer);
+            CommandRecorder::end(commandBuffer);
 
-        auto acquireToTransferWait = std::optional<std::reference_wrapper<const QueueOwnershipTransfer>>{};
-        if (ownership.acquireToTransfer.has_value())
-        {
-            acquireToTransferWait = std::cref(*ownership.acquireToTransfer);
-        }
-        const auto signalValue = submitUploadCommandBuffers(std::move(commandBuffers), allocation, acquireToTransferWait);
+            auto acquireToTransferWait = std::optional<std::reference_wrapper<const QueueOwnershipTransfer>>{};
+            if (isFirstChunk && ownership.acquireToTransfer.has_value())
+            {
+                acquireToTransferWait = std::cref(*ownership.acquireToTransfer);
+            }
+            signalValue = submitUploadCommandBuffers(
+                std::move(commandBuffers),
+                allocation,
+                acquireToTransferWait);
+        });
 
         return ImageUploadTicket{
             .image = std::cref(dst),
