@@ -104,6 +104,7 @@ struct RayTracingCapabilitySnapshot
     bool rayTracingPipelineShaderGroupHandleCaptureReplay = false;
     bool rayTracingPipelineShaderGroupHandleCaptureReplayMixed = false;
     bool rayTraversalPrimitiveCulling = false;
+    bool rayTracingInvocationReorder = false;
     bool opacityMicromap = false;
     bool opacityMicromapCaptureReplay = false;
     bool opacityMicromapHostCommands = false;
@@ -116,6 +117,7 @@ struct RayTracingCapabilitySnapshot
     std::uint32_t maxRayDispatchInvocationCount = 0;
     std::uint32_t maxRayRecursionDepth = 0;
     std::uint32_t maxRayHitAttributeSize = 0;
+    std::uint32_t maxShaderBindingTableRecordIndex = 0;
 
     std::array<std::uint64_t, 3> maxDispatchDimensions = {0u, 0u, 0u};
 };

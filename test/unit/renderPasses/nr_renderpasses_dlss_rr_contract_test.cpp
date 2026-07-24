@@ -172,6 +172,8 @@ const nr::test::CaseRegistrar dlssRrResolutionControllerCase{"renderpasses DLSS 
                                                                   auto snapshot = controller.snapshot();
                                                                   nr::test::require(snapshot.has_value());
                                                                   nr::test::requireEqual(snapshot->request, dlaaRequest);
+                                                                  nr::test::requireEqual(snapshot->displayExtent, resizedDisplay);
+                                                                  nr::test::requireEqual(snapshot->renderExtent, resizedDisplay);
                                                                   nr::test::require(snapshot->optimalSettings.has_value());
                                                               }};
 
@@ -279,22 +281,25 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{"renderpasses DLSS RR is 
                                                            requirePresent(node, "frameParameters.resolutionPlan.renderExtent", "coordinated RR must consume the renderer render extent");
                                                            requirePresent(node, "frameParameters.resolutionPlan.displayExtent", "coordinated RR must consume the renderer display extent");
                                                            requirePresent(node, "resolutionSnapshot->request == activeRequest", "coordinated RR must match the early request to active staged input");
+                                                           requirePresent(node, "resolutionSnapshot->displayExtent == frameParameters.resolutionPlan.displayExtent", "coordinated RR must match the controller-owned display extent");
+                                                           requirePresent(node, "resolutionSnapshot->renderExtent == frameParameters.resolutionPlan.renderExtent", "coordinated RR must match the controller-owned render extent");
+                                                           requireAbsent(nodeInterface, "nr::renderer::FrameResolutionPlan plan", "the DLSS snapshot must not copy the renderer-final temporal reset");
                                                            requireAbsent(node, "DLSS always receives a zero jitter offset", "RR must not force jitter off");
-                                                           requirePresent(rendererInterface, "bool reset = false", "renderer camera-state construction must retain a false reset default");
+                                                           requireAbsent(rendererInterface, "bool reset = false", "renderer camera state must not carry renderer-wide temporal reset state");
                                                            requirePresent(rendererInterface, "struct FrameResolutionPlan", "renderer must expose the generic display/render resolution plan");
                                                            requirePresent(rendererInterface, "std::optional<FrameResolutionResolver> frameResolutionResolver", "renderer graph specs must optionally inject a generic frame resolution resolver");
                                                            requirePresent(rendererImplementation, "frameParameters.resolutionPlan = resolutionPlan", "renderer must publish the resolved plan to node frame parameters");
                                                            requirePresent(rendererImplementation, "frameParameters.resolutionPlan.renderExtent", "renderer camera jitter must use the resolved render extent");
-                                                           requirePresent(rendererImplementation, "frameParameters.resolutionPlan.resetHistory", "renderer camera state must consume the plan history-reset flag");
                                                            requirePresent(rendererImplementation, "frameResolutionResolver_.has_value() && static_cast<bool>(*frameResolutionResolver_)", "renderer must early-acquire only for a non-empty resolution resolver");
                                                            requireOrdered(rendererImplementation, "preAcquiredFrameImage = device_->acquireFrameImage(input.acquireTimeout)", "auto const currentDisplayExtent", "resolver graphs must acquire before snapshotting display extent");
                                                            requirePresent(executorInterface, "std::optional<nr::rhi::Device::FrameAcquireResult> preAcquiredFrameImage{}", "executor contexts must optionally carry a pre-acquired frame image");
                                                            requirePresent(executorImplementation, "context.preAcquiredFrameImage.has_value()", "executor must recognize a pre-acquired frame image");
                                                            requirePresent(executorImplementation, "activeSwapchainImageIndex() == acquire.swapchainImageIndex", "executor must validate the pre-acquired image remains active");
                                                            requireOrdered(executorImplementation, "? *context.preAcquiredFrameImage", "resolveSwapchainRuntimeResources(", "executor must reuse the pre-acquired result before resolving the swapchain binding");
-                                                           requirePresent(node, "cameraFrameState.reset", "RR evaluation should consume the renderer-owned camera reset flag");
+                                                           requirePresent(node, "frameParameters.resolutionPlan.resetHistory", "RR evaluation should consume the renderer-final temporal reset directly");
+                                                           requireAbsent(node, "cameraFrameState.reset", "RR evaluation must not route renderer-wide reset through camera jitter state");
                                                            requireAbsent(node, "cameraFrameState.accumulationReset", "RR must not consume the standalone Accumulate node's history policy");
-                                                           requirePresent(rendererImplementation, "makeRendererCameraFrameState(\n            cameraJitter_,\n            sampleFrameOrdinal,", "renderer jitter should follow the monotonic sample-frame ordinal");
+                                                           requirePresent(rendererImplementation, "makeRendererCameraFrameState(\n            cameraJitter_,\n            sampleFrameOrdinal,\n            frameParameters.resolutionPlan.renderExtent);", "renderer jitter should follow the monotonic sample-frame ordinal and resolved render extent without carrying temporal reset");
                                                            requireAbsent(rendererImplementation, "cameraStableFrameOrdinal_", "camera movement must not restart the Halton sequence");
                                                            requirePresent(node, "runtime_->resetNextEvaluation = true", "disabled RR must request a reset on resume");
                                                            requirePresent(node, "previousBuildTime_ = {};", "disabled RR must reset automatic frame-delta history");

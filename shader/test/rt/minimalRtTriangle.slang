@@ -39,7 +39,9 @@ void rgMain()
     RayPayload payload;
     payload.color = float3(0.02, 0.02, 0.05);
 
-    TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+    HitObject hitObject = HitObject::TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+    ReorderThread(hitObject);
+    HitObject::Invoke(scene, hitObject, payload);
 
     outputImage[int2(pixel)] = float4(payload.color, 1.0);
 }

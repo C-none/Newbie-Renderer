@@ -126,8 +126,6 @@ struct FrameResolutionPlan
     vk::Extent2D displayExtent{1u, 1u};
     vk::Extent2D renderExtent{1u, 1u};
     bool resetHistory = false;
-
-    [[nodiscard]] friend bool operator==(const FrameResolutionPlan&, const FrameResolutionPlan&) noexcept = default;
 };
 
 using FrameResolutionResolver = std::function<FrameResolutionPlan(nr::rhi::Device&, vk::Extent2D)>;
@@ -226,7 +224,6 @@ struct RendererCameraJitterSample
 struct RendererCameraFrameState
 {
     bool jitterEnabled = false;
-    bool reset = false;
     RendererCameraJitterSample jitter{};
     vk::Extent2D viewportExtent{1u, 1u};
 };
@@ -245,8 +242,7 @@ struct RendererCameraFrameState
 [[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(
     const RendererCameraJitterConfig& jitterConfig,
     std::uint64_t frameOrdinal,
-    vk::Extent2D viewportExtent,
-    bool reset = false) noexcept;
+    vk::Extent2D viewportExtent) noexcept;
 
 struct alignas(16) EnvironmentMapParameters
 {
@@ -1621,6 +1617,7 @@ class Renderer
     RendererCameraJitterConfig cameraJitter_{};
     std::optional<FrameResolutionResolver> frameResolutionResolver_{};
     std::uint64_t sampleFrameOrdinal_ = 0u;
+    bool temporalHistoryResetPending_ = false;
 
     std::optional<std::reference_wrapper<nr::scene::Scene>> activeScene_{};
     std::optional<nr::scene::SceneExtractProfileHandle> sceneExtractProfile_{};

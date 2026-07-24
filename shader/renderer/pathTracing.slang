@@ -19,6 +19,8 @@ void rgMain()
 void msMain(inout RayPayload payload)
 {
     payload.hit = 0u;
+    // Camera-primary and later-bounce path segments both use RayKind.material, so the shared miss
+    // entry returns the selected environment radiance for either kind of path escape.
     if (payload.rayKind == RayKind.material)
     {
         payload.missRadiance = sampleEnvironment(WorldRayDirection());

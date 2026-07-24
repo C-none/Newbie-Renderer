@@ -240,7 +240,11 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
     auto const previousSlot = runtime_->historyValid
                                   ? runtime_->lastWrittenSlot
                                   : 1u - currentSlot;
-    auto const resetHistory = cameraReset || reallocated || !runtime_->historyValid;
+    auto const resetHistory =
+        frameParameters.resolutionPlan.resetHistory ||
+        cameraReset ||
+        reallocated ||
+        !runtime_->historyValid;
 
     auto previousHistory = detail::importHistoryImage(
         context,

@@ -72,7 +72,8 @@ struct DlssRayReconstructionResolutionRequest
 struct DlssRayReconstructionResolutionSnapshot
 {
     DlssRayReconstructionResolutionRequest request{};
-    nr::renderer::FrameResolutionPlan plan{};
+    vk::Extent2D displayExtent{1u, 1u};
+    vk::Extent2D renderExtent{1u, 1u};
     std::optional<nr::rhi::DlssOptimalSettings> optimalSettings{};
 };
 

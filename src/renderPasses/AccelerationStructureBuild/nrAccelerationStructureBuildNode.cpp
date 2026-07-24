@@ -1044,6 +1044,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
 {
     nrAssert(static_cast<bool>(runtime_), "AccelerationStructureBuild build stage requires initialized runtime state.");
     nrAssert(device_.has_value(), "AccelerationStructureBuild build stage requires device reference from initialize stage.");
+    auto const probeStart = std::chrono::steady_clock::now();
 
     auto &runtime = *runtime_;
     auto &device = device_->get();
@@ -1173,6 +1174,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
         auto &entry = detail::ensureBlasEntry(runtime, device, pendingRef.get(), retireDelay);
         entry.lastSeenFrameSerial = runtime.frameSerial;
     });
+    auto const cacheScanEnd = std::chrono::steady_clock::now();
 
     std::ranges::for_each(packets, [&](const nr::scene::TlasBuildInputPacket &packet) {
         auto entryIt = runtime.blasCache.find(packet.mesh);
@@ -1212,6 +1214,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     }
     finalizeSceneRtHitSbtPlan(hitSbtPlan);
     nrAssert(hitSbtPlan.valid(), "AS build generated an invalid RT hit SBT plan.");
+    auto const metadataPlanEnd = std::chrono::steady_clock::now();
 
     auto &slot = runtime.frameSlots[context.frameIndex % runtime.frameSlots.size()];
     auto const instanceBytes = static_cast<vk::DeviceSize>(instances.size() * sizeof(vk::AccelerationStructureInstanceKHR));
@@ -1270,6 +1273,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     detail::writeMetadataBuffer(
         slot.rtMaterialTextureRefBuffer,
         std::span<const nr::scene::RtMaterialTextureRef>{rtMaterialTable.textureRefs});
+    auto const cpuWritesEnd = std::chrono::steady_clock::now();
 
     auto const tlasInput = nr::rhi::TlasBuildInput{
         .instancesAddress = slot.instanceBuffer.deviceAddress(),
@@ -1286,6 +1290,7 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     });
     auto const requiredScratchBytes = std::max(blasScratchBytes, tlasSizes.buildScratchSize);
     detail::ensureScratchBuffer(device, slot, requiredScratchBytes);
+    auto const tlasSizingEnd = std::chrono::steady_clock::now();
 
     auto importedBuffers = std::map<const nr::rhi::Buffer *, GraphResourceHandle>{};
     auto blasResourceByMesh = std::map<nr::resource::MeshHandle, GraphResourceHandle>{};
@@ -1540,5 +1545,52 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
                 },
                 frameData.scratchAlignment);
         });
+    auto const graphDeclareEnd = std::chrono::steady_clock::now();
+    struct AccelerationStructureProbe
+    {
+        double cacheScan = 0.0;
+        double metadataPlan = 0.0;
+        double cpuWrites = 0.0;
+        double tlasSizing = 0.0;
+        double graphDeclare = 0.0;
+        std::uint64_t packets = 0u;
+        std::uint64_t instances = 0u;
+        std::uint64_t dirtyBlas = 0u;
+        std::uint32_t frames = 0u;
+    };
+    static auto accelerationStructureProbe = AccelerationStructureProbe{};
+    accelerationStructureProbe.cacheScan += std::chrono::duration<double, std::milli>(
+        cacheScanEnd - probeStart).count();
+    accelerationStructureProbe.metadataPlan += std::chrono::duration<double, std::milli>(
+        metadataPlanEnd - cacheScanEnd).count();
+    accelerationStructureProbe.cpuWrites += std::chrono::duration<double, std::milli>(
+        cpuWritesEnd - metadataPlanEnd).count();
+    accelerationStructureProbe.tlasSizing += std::chrono::duration<double, std::milli>(
+        tlasSizingEnd - cpuWritesEnd).count();
+    accelerationStructureProbe.graphDeclare += std::chrono::duration<double, std::milli>(
+        graphDeclareEnd - tlasSizingEnd).count();
+    accelerationStructureProbe.packets += packets.size();
+    accelerationStructureProbe.instances += instances.size();
+    accelerationStructureProbe.dirtyBlas += dirtyBuilds.size();
+    ++accelerationStructureProbe.frames;
+    if (accelerationStructureProbe.frames >= 300u)
+    {
+        auto const divisor = static_cast<double>(accelerationStructureProbe.frames);
+        std::println(
+            std::cerr,
+            "[NR_CPU_PROBE] as_build frames={} cache_scan_ms={:.6f} metadata_plan_ms={:.6f} "
+            "cpu_writes_ms={:.6f} tlas_sizing_ms={:.6f} graph_declare_ms={:.6f} "
+            "packets_per_frame={:.2f} instances_per_frame={:.2f} dirty_blas_per_frame={:.2f}",
+            accelerationStructureProbe.frames,
+            accelerationStructureProbe.cacheScan / divisor,
+            accelerationStructureProbe.metadataPlan / divisor,
+            accelerationStructureProbe.cpuWrites / divisor,
+            accelerationStructureProbe.tlasSizing / divisor,
+            accelerationStructureProbe.graphDeclare / divisor,
+            static_cast<double>(accelerationStructureProbe.packets) / divisor,
+            static_cast<double>(accelerationStructureProbe.instances) / divisor,
+            static_cast<double>(accelerationStructureProbe.dirtyBlas) / divisor);
+        accelerationStructureProbe = {};
+    }
 }
 } // namespace nr::renderPasses

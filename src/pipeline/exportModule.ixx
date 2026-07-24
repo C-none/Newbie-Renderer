@@ -53,10 +53,19 @@ void registerDefaultPipelines(RenderPipelineRegistry& registry);
 [[nodiscard]] RenderPipelineRegistry makeDefaultPipelineRegistry();
 
 [[nodiscard]] std::filesystem::path defaultModelPath();
+[[nodiscard]] std::filesystem::path environmentMapAssetDirectoryPath();
 [[nodiscard]] std::filesystem::path defaultEnvironmentMapPath();
 [[nodiscard]] std::filesystem::path modelHistoryFilePath();
 [[nodiscard]] std::filesystem::path normalizeModelPathForStorage(const std::filesystem::path& path);
 [[nodiscard]] std::string displayPathLeafFirst(const std::filesystem::path& path);
+
+struct EnvironmentMapAsset
+{
+    std::filesystem::path sourcePath{};
+    std::string displayName{};
+};
+
+[[nodiscard]] std::expected<std::vector<EnvironmentMapAsset>, std::string> discoverEnvironmentMapAssets();
 
 class ModelHistory
 {
@@ -136,7 +145,7 @@ void registerRtObjectPipeline(RenderPipelineRegistry& registry);
     RtPostProcessingMode& mode,
     std::optional<RtPostProcessingMode>& pendingMode);
 
-[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(
+[[nodiscard]] std::expected<EnvironmentMapAsset, std::string> loadEnvironmentMap(
     nr::renderer::Renderer& renderer,
     const std::filesystem::path& sourcePath);
 } // namespace nr::pipeline::detail

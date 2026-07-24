@@ -306,8 +306,8 @@ nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::res
         auto const& previous = *impl_->snapshot;
         plan.resetHistory = previous.request.enabled != request.enabled ||
                             previous.request.quality != request.quality ||
-                            previous.plan.displayExtent != plan.displayExtent ||
-                            previous.plan.renderExtent != plan.renderExtent;
+                            previous.displayExtent != plan.displayExtent ||
+                            previous.renderExtent != plan.renderExtent;
     }
     else
     {
@@ -316,7 +316,8 @@ nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::res
 
     impl_->snapshot = DlssRayReconstructionResolutionSnapshot{
         .request = request,
-        .plan = plan,
+        .displayExtent = plan.displayExtent,
+        .renderExtent = plan.renderExtent,
         .optimalSettings = std::move(optimalSettings),
     };
     return plan;
@@ -497,7 +498,8 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
             .bypass = input.bypass,
         };
         nrAssert(resolutionSnapshot->request == activeRequest, "Coordinated DLSS RR request does not match the node's active staged configuration.");
-        nrAssert(resolutionSnapshot->plan == frameParameters.resolutionPlan, "Coordinated DLSS RR snapshot does not match the renderer frame resolution plan.");
+        nrAssert(resolutionSnapshot->displayExtent == frameParameters.resolutionPlan.displayExtent, "Coordinated DLSS RR snapshot display extent does not match the renderer frame resolution plan.");
+        nrAssert(resolutionSnapshot->renderExtent == frameParameters.resolutionPlan.renderExtent, "Coordinated DLSS RR snapshot render extent does not match the renderer frame resolution plan.");
         nrAssert(frameParameters.resolutionPlan.displayExtent == frameParameters.swapchainExtent, "Coordinated DLSS RR display extent does not match the renderer swapchain extent.");
     }
     if (!input.enabled)
@@ -639,7 +641,7 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
     evalDesc.indicatorInvertXAxis = input.evaluate.indicatorInvertXAxis;
     evalDesc.indicatorInvertYAxis = input.evaluate.indicatorInvertYAxis;
     evalDesc.toneMapper = input.evaluate.toneMapper;
-    evalDesc.reset = consumeOneShotReset_ || context.globalResources.get().cameraFrameState.reset;
+    evalDesc.reset = consumeOneShotReset_ || frameParameters.resolutionPlan.resetHistory;
     consumeOneShotReset_ = false;
     auto const cameraJitter = context.globalResources.get().cameraFrameState.jitter.pixelOffset;
     evalDesc.jitterOffset = input.evaluate.automaticJitter

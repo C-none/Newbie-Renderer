@@ -303,6 +303,10 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
             "Accumulate must derive its reset from its node-local camera transform snapshot");
         requirePresent(
             accumulate,
+            "frameParameters.resolutionPlan.resetHistory",
+            "Accumulate must consume renderer-wide temporal resets such as environment replacement");
+        requirePresent(
+            accumulate,
             "std::uint32_t historySampleCount = 0u",
             "Accumulate must own its history sample count");
         requirePresent(
@@ -312,7 +316,15 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{
         requireAbsent(
             accumulate,
             "cameraFrameState",
-            "Accumulate history reset and weighting must not depend on renderer or other nodes");
+            "Accumulate history reset and weighting must not depend on another node's camera state");
+        requirePresent(
+            rendererImplementation,
+            "temporalHistoryResetPending_ = true;",
+            "Environment replacement must queue a renderer-wide temporal history reset");
+        requirePresent(
+            rendererImplementation,
+            "resolutionPlan.resetHistory || temporalHistoryResetPending_",
+            "Renderer must merge an environment replacement reset into the next frame plan");
         requireAbsent(
             accumulate,
             "VariantItemEffect::RuntimeOnly",
@@ -580,7 +592,31 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(core, "public struct Pt", "PathTracing core should define the PT path object");
         requirePresent(core, "public PathState path", "Pt should hold the per-path state");
         requirePresent(core, "public bool isActive()", "Pt should expose active-state testing");
-        requirePresent(core, "public void traceMaterialRay", "Pt should own material TraceRay scheduling");
+        requirePresent(core, "public void traceMaterialRay", "Pt should own material ray scheduling");
+        requirePresent(
+            core,
+            "HitObject hitObject = HitObject::TraceRay(",
+            "material rays should separate traversal from hit/miss shader invocation");
+        requireAbsent(
+            core,
+            "RayPayload traversalPayload",
+            "material rays should reuse the output payload instead of carrying a second payload across SER");
+        requirePresent(
+            core,
+            "materialRayCoherenceHint(path.vertexIndex)",
+            "material rays should compute a path-specific SER coherence hint");
+        requirePresent(
+            core,
+            "kMaterialRayCoherenceHintBitCount = 3u",
+            "material-ray SER should use the three architecturally meaningful hint bits");
+        requirePresent(
+            core,
+            "HitObject::Invoke(scene, hitObject, payload);",
+            "material rays should invoke their reordered hit or miss shader");
+        requireAbsent(
+            core,
+            "\n        TraceRay(",
+            "material rays must not retain the synchronous TraceRay path");
         requirePresent(
             core,
             "RAY_FLAG_CULL_BACK_FACING_TRIANGLES,\n            0xFF,\n            0,\n            1,\n            0,",
@@ -631,6 +667,18 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{
         requirePresent(environment, "gEnvironment.radianceDecodeScale", "environment sampling should restore scaled source radiance");
         requirePresent(environment, "gEnvironment.intensity", "environment sampling should apply independent user intensity");
         requireAbsent(visibility, "sampleEnvironment", "visibility rays must not evaluate environment radiance");
+        requirePresent(
+            visibility,
+            "TraceRay(",
+            "visibility/shadow rays should retain direct TraceRay traversal");
+        requireAbsent(
+            visibility,
+            "HitObject::TraceRay",
+            "visibility/shadow rays should remain outside the SER path");
+        requireAbsent(
+            visibility,
+            "ReorderThread",
+            "visibility/shadow rays should not pay an SER reorder");
         requirePresent(
             roulette,
             "public extern struct RussianRoulettePolicy : IRussianRoulettePolicy;",

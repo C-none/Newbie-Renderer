@@ -16,6 +16,7 @@ struct ViewerPendingRequests
 {
     std::optional<std::string> pipelineId{};
     std::optional<std::filesystem::path> modelPath{};
+    std::optional<std::filesystem::path> environmentMapPath{};
     std::optional<RtPostProcessingMode> rtPostProcessingMode{};
 };
 
@@ -28,6 +29,8 @@ struct ViewerControlState
 {
     std::string activePipelineId{std::string{defaultPipelineId}};
     std::filesystem::path activeModelPath{};
+    std::filesystem::path activeEnvironmentMapPath{};
+    std::vector<EnvironmentMapAsset> environmentMapAssets{};
     std::string modelInput{};
     std::string statusMessage{};
     RtPostProcessingMode rtPostProcessingMode = RtPostProcessingMode::dlssRayReconstruction;
@@ -153,6 +156,37 @@ void drawModelHistoryCombo(
     ui.endCombo();
 }
 
+void drawEnvironmentMapCombo(
+    nr::app::UiSystem& ui,
+    ViewerControlState& controls)
+{
+    auto const activeAsset = std::ranges::find(
+        controls.environmentMapAssets,
+        controls.activeEnvironmentMapPath,
+        &EnvironmentMapAsset::sourcePath);
+    auto const preview = activeAsset != controls.environmentMapAssets.end()
+                             ? activeAsset->displayName
+                             : controls.activeEnvironmentMapPath.stem().string();
+    if (!ui.beginCombo("Environment Map", preview))
+    {
+        return;
+    }
+
+    std::ranges::for_each(controls.environmentMapAssets, [&](const EnvironmentMapAsset& asset) {
+        auto const selected = asset.sourcePath == controls.activeEnvironmentMapPath;
+        auto const label = std::format("{}##{}", asset.displayName, asset.sourcePath.filename().string());
+        if (ui.selectable(label, selected) && !selected)
+        {
+            controls.pending.environmentMapPath = asset.sourcePath;
+        }
+        if (selected)
+        {
+            ui.setItemDefaultFocus();
+        }
+    });
+    ui.endCombo();
+}
+
 void queueViewerControls(
     nr::app::UiSystem& ui,
     const RenderPipelineRegistry& registry,
@@ -164,6 +198,7 @@ void queueViewerControls(
         .title = "Viewer",
         .draw = [&](nr::app::UiSystem& sectionUi) {
             drawPipelineCombo(sectionUi, registry, controls);
+            drawEnvironmentMapCombo(sectionUi, controls);
             drawModelHistoryCombo(sectionUi, history, controls);
             static_cast<void>(sectionUi.inputText("Model Path", controls.modelInput));
             if (sectionUi.button("Load"))
@@ -218,6 +253,27 @@ void queueViewerControls(
                 success = false;
             }
         }
+    }
+
+    if (controls.pending.environmentMapPath.has_value())
+    {
+        auto environmentLoad = detail::loadEnvironmentMap(
+            app.renderer(),
+            *controls.pending.environmentMapPath);
+        if (environmentLoad)
+        {
+            controls.activeEnvironmentMapPath = environmentLoad->sourcePath;
+            controls.statusMessage = std::format(
+                "Loaded environment map: {}",
+                environmentLoad->displayName);
+        }
+        else
+        {
+            controls.statusMessage = environmentLoad.error();
+            nr::nrLog(nr::LogLevel::error, "PIPELINE", controls.statusMessage);
+            success = false;
+        }
+        controls.pending.environmentMapPath.reset();
     }
 
     if (controls.pending.modelPath.has_value())
@@ -347,6 +403,13 @@ void printViewerUsage(std::string_view executableName)
         config.initialEnvironmentMapPath = defaultEnvironmentMapPath();
     }
 
+    auto environmentMapAssets = discoverEnvironmentMapAssets();
+    if (!environmentMapAssets)
+    {
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentMapAssets.error());
+        return 1;
+    }
+
     auto app = nr::app::AppSession{};
     app.initialize(nr::renderer::RendererCreateInfo{
         .appName = config.appName,
@@ -369,6 +432,8 @@ void printViewerUsage(std::string_view executableName)
     auto modelController = SceneModelController{};
     auto controls = ViewerControlState{
         .activePipelineId = config.initialPipelineId,
+        .activeEnvironmentMapPath = environmentLoad->sourcePath,
+        .environmentMapAssets = std::move(*environmentMapAssets),
         .modelInput = normalizeModelPathForStorage(config.initialModelPath).string(),
     };
 

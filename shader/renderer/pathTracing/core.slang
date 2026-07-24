@@ -204,6 +204,33 @@ public bool reachedBounceLimit(PathState path)
     return path.vertexIndex >= kMaxSurfaceBounces;
 }
 
+public static const uint kMaterialRayCoherenceHintBitCount = 3u;
+
+public uint materialRayBounceClass(uint vertexIndex)
+{
+    if (vertexIndex <= 1u)
+    {
+        return 0u;
+    }
+    if (vertexIndex == 2u)
+    {
+        return 1u;
+    }
+    return 2u;
+}
+
+public uint materialRayCoherenceHint(uint vertexIndex)
+{
+    // HitObject identity already groups miss and link-time material shaders. The two low bits group
+    // primary, second, and later-vertex raygen branches; the MSB marks the fixed bounce-limit path.
+    uint hint = materialRayBounceClass(vertexIndex);
+    if (vertexIndex >= kMaxSurfaceBounces)
+    {
+        hint |= 1u << 2u;
+    }
+    return hint;
+}
+
 public void handleHit(inout PathState path, ResolvedMaterialPayload material, ResolvedMaterialScatter scatter)
 {
     pathStateSetHit(path, true);
@@ -331,6 +358,7 @@ public void handleMiss(inout PathState path, float3 missRadiance)
     }
     if (path.vertexIndex == 1u)
     {
+        // Primary camera misses consume the same environment sample written by msMain.
         addDiffusePathContribution(path, missRadiance);
     }
     else
@@ -362,12 +390,11 @@ public struct Pt
     public void traceMaterialRay(out RayPayload payload)
     {
         path.vertexIndex += 1u;
-        payload = {};
-        payload.rayKind = RayKind.material;
-        payload.scatterRandomValues = path.rng.get3D();
 
         // TLAS instance flags encode glTF source winding, double-sided culling, and transform determinant.
-        TraceRay(
+        // Any-hit only decides alpha coverage and never reads or mutates the payload.
+        payload = {};
+        HitObject hitObject = HitObject::TraceRay(
             scene,
             RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             0xFF,
@@ -376,6 +403,15 @@ public struct Pt
             0,
             pathStateRayDesc(path),
             payload);
+        ReorderThread(
+            hitObject,
+            materialRayCoherenceHint(path.vertexIndex),
+            kMaterialRayCoherenceHintBitCount);
+
+        payload = {};
+        payload.rayKind = RayKind.material;
+        payload.scatterRandomValues = path.rng.get3D();
+        HitObject::Invoke(scene, hitObject, payload);
     }
 
     [mutating]

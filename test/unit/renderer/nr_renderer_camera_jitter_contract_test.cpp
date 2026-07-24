@@ -55,18 +55,16 @@ const nr::test::CaseRegistrar projectionJitterCase{
     }};
 
 const nr::test::CaseRegistrar frameStateCase{
-    "renderer camera jitter uses render extent and propagates resolution reset",
+    "renderer camera jitter uses render extent",
     [] {
         auto const renderExtent = vk::Extent2D{800u, 450u};
         auto const jitterConfig = nr::renderer::RendererCameraJitterConfig{
             .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
         };
         auto const frame41 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 41u, renderExtent);
-        auto const frame42 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 42u, renderExtent, true);
+        auto const frame42 = nr::renderer::makeRendererCameraFrameState(jitterConfig, 42u, renderExtent);
 
         nr::test::require(frame41.jitterEnabled);
-        nr::test::require(!frame41.reset);
-        nr::test::require(frame42.reset);
         nr::test::requireEqual(frame41.jitter.sampleIndex, 42u);
         nr::test::requireEqual(frame42.jitter.sampleIndex, 43u);
         nr::test::requireEqual(frame42.viewportExtent, renderExtent);
@@ -78,7 +76,6 @@ const nr::test::CaseRegistrar frameStateCase{
             99u,
             vk::Extent2D{0u, 0u});
         nr::test::require(!disabled.jitterEnabled);
-        nr::test::require(!disabled.reset);
         nr::test::requireEqual(disabled.jitter.sampleIndex, 0u);
         nr::test::requireEqual(disabled.viewportExtent, vk::Extent2D{1u, 1u});
     }};

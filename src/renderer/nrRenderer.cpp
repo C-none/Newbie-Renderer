@@ -269,13 +269,11 @@ void collectTlasSceneTextureHandles(
 [[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(
     const RendererCameraJitterConfig& jitterConfig,
     std::uint64_t frameOrdinal,
-    vk::Extent2D viewportExtent,
-    bool reset) noexcept
+    vk::Extent2D viewportExtent) noexcept
 {
     auto const extent = sanitizeViewportExtent(viewportExtent);
     auto state = RendererCameraFrameState{
         .jitterEnabled = jitterConfig.enabled(),
-        .reset = reset,
         .viewportExtent = extent,
     };
     if (!state.jitterEnabled)
@@ -1581,6 +1579,7 @@ void Renderer::setEnvironmentMap(nr::resource::EnvironmentMap environment)
                 .access = vk::AccessFlagBits2::eShaderSampledRead,
             },
         };
+        temporalHistoryResetPending_ = true;
     }
 
 void Renderer::installGraph(const RendererGraphSpec& spec)
@@ -1740,6 +1739,9 @@ void Renderer::resetSceneBinding() noexcept
         nrAssert(
             resolutionPlan.displayExtent == displayExtent,
             "Renderer::renderFrame resolution resolver display extent does not match the current presentation extent.");
+        resolutionPlan.resetHistory =
+            resolutionPlan.resetHistory || temporalHistoryResetPending_;
+        temporalHistoryResetPending_ = false;
         auto const sampleFrameOrdinal = sampleFrameOrdinal_;
         if (sampleFrameOrdinal_ < std::numeric_limits<std::uint64_t>::max())
         {
@@ -1761,13 +1763,21 @@ void Renderer::resetSceneBinding() noexcept
         auto sceneTextureHandlesById = std::map<std::uint32_t, nr::resource::TextureHandle>{};
         auto sceneExtractProfileCreated = false;
         auto sceneCameraOverride = input.cameraOverride;
+        auto sceneBeginUploadMilliseconds = 0.0;
+        auto sceneRasterExtractMilliseconds = 0.0;
+        auto sceneTlasExtractMilliseconds = 0.0;
+        auto sceneBridgeMilliseconds = 0.0;
 
         auto const sceneStart = std::chrono::steady_clock::now();
         if (input.scene.has_value())
         {
             auto& scene = input.scene->get();
+            auto const sceneBeginUploadStart = std::chrono::steady_clock::now();
             scene.beginFrame(begin.frameIndex);
             scene.uploadPending();
+            sceneBeginUploadMilliseconds = elapsedMilliseconds(
+                sceneBeginUploadStart,
+                std::chrono::steady_clock::now());
 
             auto [profile, created] = ensureSceneExtractProfile(scene);
             sceneExtractProfileCreated = created;
@@ -1790,8 +1800,16 @@ void Renderer::resetSceneBinding() noexcept
             tlasExtractInput.visibility = nr::scene::SceneVisibilityMode::none;
             tlasExtractInput.customFrustum.reset();
 
+            auto const rasterExtractStart = std::chrono::steady_clock::now();
             scenePackets = scene.extractPackets(profile, extractInput);
+            sceneRasterExtractMilliseconds = elapsedMilliseconds(
+                rasterExtractStart,
+                std::chrono::steady_clock::now());
+            auto const tlasExtractStart = std::chrono::steady_clock::now();
             sceneTlasPackets = scene.extractPackets(tlasProfile, tlasExtractInput);
+            sceneTlasExtractMilliseconds = elapsedMilliseconds(
+                tlasExtractStart,
+                std::chrono::steady_clock::now());
             if (!sceneCameraOverride.has_value())
             {
                 primaryCamera = scene.tryGetPrimaryCamera(extractInput.viewportExtent);
@@ -1928,11 +1946,17 @@ void Renderer::resetSceneBinding() noexcept
                 bridgeBuildInput.primaryCamera = std::cref(*primaryCamera);
             }
 
+            auto const sceneBridgeStart = std::chrono::steady_clock::now();
             sceneBridgeFrame = nr::scene::SceneRenderBridge::buildFrame(bridgeBuildInput);
+            sceneBridgeMilliseconds = elapsedMilliseconds(
+                sceneBridgeStart,
+                std::chrono::steady_clock::now());
         }
         cpuTimings.sceneMilliseconds = elapsedMilliseconds(
             sceneStart,
             std::chrono::steady_clock::now());
+        auto const postSceneStart = std::chrono::steady_clock::now();
+        auto tlasTextureCollectionMilliseconds = 0.0;
 
         auto frameParameters = NodeFrameParameters{};
         frameParameters.frameIndex = begin.frameIndex;
@@ -1962,10 +1986,14 @@ void Renderer::resetSceneBinding() noexcept
 
         if (input.scene.has_value() && sceneTlasPackets.has_value())
         {
+            auto const tlasTextureCollectionStart = std::chrono::steady_clock::now();
             collectTlasSceneTextureHandles(
                 input.scene->get(),
                 std::span<const nr::scene::TlasBuildInputPacket>{sceneTlasPackets->tlasBuildInputs},
                 sceneTextureHandlesById);
+            tlasTextureCollectionMilliseconds = elapsedMilliseconds(
+                tlasTextureCollectionStart,
+                std::chrono::steady_clock::now());
         }
 
         if (primaryCamera.has_value())
@@ -1993,8 +2021,7 @@ void Renderer::resetSceneBinding() noexcept
         auto const cameraFrameState = makeRendererCameraFrameState(
             cameraJitter_,
             sampleFrameOrdinal,
-            frameParameters.resolutionPlan.renderExtent,
-            frameParameters.resolutionPlan.resetHistory);
+            frameParameters.resolutionPlan.renderExtent);
         auto renderingFrameConstants = globalFrameConstants;
         if (cameraFrameState.jitterEnabled)
         {
@@ -2005,6 +2032,7 @@ void Renderer::resetSceneBinding() noexcept
         }
 
         auto const buildStart = std::chrono::steady_clock::now();
+        auto const postSceneMilliseconds = elapsedMilliseconds(postSceneStart, buildStart);
         buildInstalledGraph(
             frameParameters,
             renderingFrameConstants,
@@ -2059,6 +2087,42 @@ void Renderer::resetSceneBinding() noexcept
         cpuTimings.totalMilliseconds = elapsedMilliseconds(
             totalStart,
             std::chrono::steady_clock::now());
+        struct RendererFrameProbe
+        {
+            double sceneBeginUpload = 0.0;
+            double sceneRasterExtract = 0.0;
+            double sceneTlasExtract = 0.0;
+            double sceneBridge = 0.0;
+            double tlasTextureCollection = 0.0;
+            double postScene = 0.0;
+            std::uint32_t frames = 0u;
+        };
+        static auto rendererFrameProbe = RendererFrameProbe{};
+        rendererFrameProbe.sceneBeginUpload += sceneBeginUploadMilliseconds;
+        rendererFrameProbe.sceneRasterExtract += sceneRasterExtractMilliseconds;
+        rendererFrameProbe.sceneTlasExtract += sceneTlasExtractMilliseconds;
+        rendererFrameProbe.sceneBridge += sceneBridgeMilliseconds;
+        rendererFrameProbe.tlasTextureCollection += tlasTextureCollectionMilliseconds;
+        rendererFrameProbe.postScene += postSceneMilliseconds;
+        ++rendererFrameProbe.frames;
+        if (rendererFrameProbe.frames >= 300u)
+        {
+            auto const divisor = static_cast<double>(rendererFrameProbe.frames);
+            std::println(
+                std::cerr,
+                "[NR_CPU_PROBE] renderer frames={} scene_begin_upload_ms={:.6f} "
+                "scene_raster_extract_ms={:.6f} scene_tlas_extract_ms={:.6f} "
+                "scene_bridge_ms={:.6f} tlas_texture_collection_ms={:.6f} "
+                "post_scene_total_ms={:.6f}",
+                rendererFrameProbe.frames,
+                rendererFrameProbe.sceneBeginUpload / divisor,
+                rendererFrameProbe.sceneRasterExtract / divisor,
+                rendererFrameProbe.sceneTlasExtract / divisor,
+                rendererFrameProbe.sceneBridge / divisor,
+                rendererFrameProbe.tlasTextureCollection / divisor,
+                rendererFrameProbe.postScene / divisor);
+            rendererFrameProbe = {};
+        }
         recordCpuTimingSample(cpuTimings);
 
         return RendererFrameResult{
@@ -2126,6 +2190,7 @@ void Renderer::buildInstalledGraph(
 {
         nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
+        auto const graphPreludeStart = std::chrono::steady_clock::now();
         builder_.clear();
         auto const previousFrameConstants = previousGlobalFrameConstants_.value_or(frameConstants);
         auto const globalFrameUniforms =
@@ -2164,6 +2229,7 @@ void Renderer::buildInstalledGraph(
                 builder_.addFrameData("SceneBridgeFrame", sceneBridgeFrame->get());
         }
 
+        auto const uiCollectStart = std::chrono::steady_clock::now();
         auto nodeUiSections = std::vector<NodeUiSection>{};
         nodeUiSections.reserve(installedNodes_.size());
         std::ranges::for_each(installedNodes_, [&](InstalledNode& installedNode) {
@@ -2174,13 +2240,24 @@ void Renderer::buildInstalledGraph(
         });
         nodeFrameParameters.nodeUiSections =
             std::span<const NodeUiSection>{nodeUiSections.data(), nodeUiSections.size()};
+        auto const nodeBuildStart = std::chrono::steady_clock::now();
 
         auto frameResources = std::map<std::string, GraphResourceHandle>{};
         auto frameDataResources = std::map<std::string, GraphFrameDataHandle>{};
+        struct GraphBuildProbe
+        {
+            double prelude = 0.0;
+            double uiCollect = 0.0;
+            double nodeLoop = 0.0;
+            std::map<std::string, double> nodes{};
+            std::uint32_t frames = 0u;
+        };
+        static auto graphBuildProbe = GraphBuildProbe{};
 
         auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
         std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
             auto& installedNode = installedNodes_[nodeIndex];
+            auto const nodeStart = std::chrono::steady_clock::now();
 
             auto nodeHandle = builder_.addNode(
                 installedNode.config.instanceName,
@@ -2198,6 +2275,9 @@ void Renderer::buildInstalledGraph(
             };
 
             installedNode.runtime->build(buildContext, nodeFrameParameters);
+            graphBuildProbe.nodes[installedNode.config.instanceName] += elapsedMilliseconds(
+                nodeStart,
+                std::chrono::steady_clock::now());
 
             auto boundaries = submitNodesByAfterIndex_.equal_range(nodeIndex);
             std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto& entry) {
@@ -2208,6 +2288,31 @@ void Renderer::buildInstalledGraph(
                 nrAssert(submitHandle.valid(), "Renderer::buildInstalledGraph failed to add a valid submit node.");
             });
         });
+        auto const graphBuildEnd = std::chrono::steady_clock::now();
+        graphBuildProbe.prelude += elapsedMilliseconds(graphPreludeStart, uiCollectStart);
+        graphBuildProbe.uiCollect += elapsedMilliseconds(uiCollectStart, nodeBuildStart);
+        graphBuildProbe.nodeLoop += elapsedMilliseconds(nodeBuildStart, graphBuildEnd);
+        ++graphBuildProbe.frames;
+        if (graphBuildProbe.frames >= 300u)
+        {
+            auto const divisor = static_cast<double>(graphBuildProbe.frames);
+            std::println(
+                std::cerr,
+                "[NR_CPU_PROBE] graph_build frames={} prelude_ms={:.6f} ui_collect_ms={:.6f} "
+                "node_loop_ms={:.6f}",
+                graphBuildProbe.frames,
+                graphBuildProbe.prelude / divisor,
+                graphBuildProbe.uiCollect / divisor,
+                graphBuildProbe.nodeLoop / divisor);
+            std::ranges::for_each(graphBuildProbe.nodes, [&](const auto& entry) {
+                std::println(
+                    std::cerr,
+                    "[NR_CPU_PROBE] graph_node name={} avg_ms={:.6f}",
+                    entry.first,
+                    entry.second / divisor);
+            });
+            graphBuildProbe = {};
+        }
 
     }
 

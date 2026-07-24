@@ -23,6 +23,8 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
                           "maintenance8 device extension should be enabled");
         nr::test::require(device.hasEnabledDeviceExtension(vk::KHRMaintenance9ExtensionName),
                           "maintenance9 device extension should be enabled");
+        nr::test::require(device.hasEnabledDeviceExtension(vk::EXTRayTracingInvocationReorderExtensionName),
+                          "shader invocation reorder device extension should be enabled");
         nr::test::require(!device.hasEnabledDeviceExtension(vk::NVCommandBufferInheritanceExtensionName),
                           "NV command buffer state inheritance must remain disabled");
 
@@ -74,9 +76,13 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
         auto const &rt = device.rayTracingCapabilities();
         nr::test::require(rt.rayTracingMaintenance1, "ray tracing maintenance1 should be enabled");
         nr::test::require(rt.rayTracingPipelineTraceRaysIndirect, "traceRaysIndirect should be enabled");
+        nr::test::require(rt.rayTracingInvocationReorder,
+                          "ray tracing invocation reorder should expose actual hardware reordering");
         nr::test::require(rt.shaderGroupHandleSize > 0, "shader-group handle size should be populated");
         nr::test::require(rt.shaderGroupBaseAlignment > 0, "shader-group base alignment should be populated");
         nr::test::require(rt.maxRayRecursionDepth > 0, "ray recursion depth limit should be populated");
+        nr::test::require(rt.maxShaderBindingTableRecordIndex > 0,
+                          "shader invocation reorder SBT record limit should be populated");
 
         device.waitIdle();
     }};

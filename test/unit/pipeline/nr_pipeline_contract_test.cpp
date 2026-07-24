@@ -148,14 +148,44 @@ const nr::test::CaseRegistrar cliCase{
     }};
 
 const nr::test::CaseRegistrar defaultEnvironmentCase{
-    "viewer default environment selects the staged studio OpenEXR asset",
+    "viewer default environment selects the Kloofendal OpenEXR asset",
     [] {
         auto const path = nr::pipeline::defaultEnvironmentMapPath();
-        nr::test::requireEqual(path.filename().string(), std::string{"studio_small_09_8k.exr"});
-        nr::test::requireEqual(path.parent_path().filename().string(), std::string{"envMap"});
+        nr::test::requireEqual(
+            path.filename().string(),
+            std::string{"kloofendal_48d_partly_cloudy_puresky_8k.exr"});
+        nr::test::requireEqual(path.parent_path(), nr::pipeline::environmentMapAssetDirectoryPath());
         auto statusError = std::error_code{};
         nr::test::require(
             std::filesystem::is_regular_file(path, statusError) && !statusError,
             "viewer default environment asset should exist");
+    }};
+
+const nr::test::CaseRegistrar environmentDiscoveryCase{
+    "viewer environment choices are sorted direct OpenEXR assets with extension-free labels",
+    [] {
+        auto assets = nr::pipeline::discoverEnvironmentMapAssets();
+        nr::test::require(
+            assets.has_value(),
+            assets.has_value() ? std::string{} : assets.error());
+        nr::test::require(!assets->empty(), "viewer should discover at least one environment map");
+
+        auto const assetDirectory = nr::pipeline::environmentMapAssetDirectoryPath();
+        nr::test::require(
+            std::ranges::all_of(*assets, [&](const nr::pipeline::EnvironmentMapAsset& asset) {
+                auto equivalentError = std::error_code{};
+                auto const directChild = std::filesystem::equivalent(
+                    asset.sourcePath.parent_path(),
+                    assetDirectory,
+                    equivalentError);
+                return !equivalentError &&
+                       directChild &&
+                       asset.sourcePath.extension() == ".exr" &&
+                       asset.displayName == asset.sourcePath.stem().string();
+            }),
+            "viewer environment choices must stay within assets/envMap and hide file extensions");
+        nr::test::require(
+            std::ranges::is_sorted(*assets, {}, &nr::pipeline::EnvironmentMapAsset::displayName),
+            "viewer environment choices should have deterministic display-name ordering");
     }};
 } // namespace

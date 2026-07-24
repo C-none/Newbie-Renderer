@@ -484,7 +484,7 @@ vk::raii::Device Device::makeDevice()
             frameBoundaryFeatureSupported = frameBoundaryFeatures.frameBoundary == vk::True;
         }
 
-        auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR, vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV,
+        auto features2 = physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features, vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR, vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT,
                                                      vk::PhysicalDeviceCooperativeVectorFeaturesNV, vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT, vk::PhysicalDeviceMeshShaderFeaturesEXT, vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
                                                      vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR, vk::PhysicalDeviceRayQueryFeaturesKHR, vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
 
@@ -495,7 +495,7 @@ vk::raii::Device Device::makeDevice()
         auto &vulkan14Features = features2.get<vk::PhysicalDeviceVulkan14Features>();
         auto &maintenance8Features = features2.get<vk::PhysicalDeviceMaintenance8FeaturesKHR>();
         auto &maintenance9Features = features2.get<vk::PhysicalDeviceMaintenance9FeaturesKHR>();
-        auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesNV>();
+        auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT>();
         auto &cooperativeVectorFeatures = features2.get<vk::PhysicalDeviceCooperativeVectorFeaturesNV>();
         auto &extendedDynamicState3Features = features2.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
         auto &meshShaderFeatures = features2.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>();
@@ -510,10 +510,11 @@ vk::raii::Device Device::makeDevice()
         meshShaderFeatures.multiviewMeshShader = vk::False;
         meshShaderFeatures.primitiveFragmentShadingRateMeshShader = vk::False;
 
-        auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorIndexingProperties, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorIndexingProperties, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR, vk::PhysicalDeviceRayTracingInvocationReorderPropertiesEXT>();
         auto &physicalDeviceProperties = properties2.get<vk::PhysicalDeviceProperties2>();
         auto &descriptorIndexingProperties = properties2.get<vk::PhysicalDeviceDescriptorIndexingProperties>();
         auto &rayTracingPipelineProperties = properties2.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        auto &invocationReorderProperties = properties2.get<vk::PhysicalDeviceRayTracingInvocationReorderPropertiesEXT>();
 
 #define REQUIRE_FEATURE(feature_field, feature_name) nrAssert(feature_field == vk::True, std::format("Required feature {} is not enabled.", feature_name))
 
@@ -541,6 +542,10 @@ vk::raii::Device Device::makeDevice()
         REQUIRE_FEATURE(opacityMicromapFeatures.micromap, "opacityMicromap");
         REQUIRE_FEATURE(invocationReorderFeatures.rayTracingInvocationReorder, "rayTracingInvocationReorder");
         REQUIRE_FEATURE(cooperativeVectorFeatures.cooperativeVector, "cooperativeVector");
+        nrAssert(
+            invocationReorderProperties.rayTracingInvocationReorderReorderingHint ==
+                vk::RayTracingInvocationReorderModeEXT::eReorder,
+            "VK_EXT_ray_tracing_invocation_reorder is required to expose actual invocation reordering.");
 
 #undef REQUIRE_FEATURE
 
@@ -637,6 +642,10 @@ vk::raii::Device Device::makeDevice()
             .rayTracingPipelineShaderGroupHandleCaptureReplay = rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplay == vk::True,
             .rayTracingPipelineShaderGroupHandleCaptureReplayMixed = rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplayMixed == vk::True,
             .rayTraversalPrimitiveCulling = rayTracingPipelineFeatures.rayTraversalPrimitiveCulling == vk::True,
+            .rayTracingInvocationReorder =
+                invocationReorderFeatures.rayTracingInvocationReorder == vk::True &&
+                invocationReorderProperties.rayTracingInvocationReorderReorderingHint ==
+                    vk::RayTracingInvocationReorderModeEXT::eReorder,
             .opacityMicromap = opacityMicromapFeatures.micromap == vk::True,
             .opacityMicromapCaptureReplay = opacityMicromapFeatures.micromapCaptureReplay == vk::True,
             .opacityMicromapHostCommands = opacityMicromapFeatures.micromapHostCommands == vk::True,
@@ -648,6 +657,7 @@ vk::raii::Device Device::makeDevice()
             .maxRayDispatchInvocationCount = rayTracingPipelineProperties.maxRayDispatchInvocationCount,
             .maxRayRecursionDepth = rayTracingPipelineProperties.maxRayRecursionDepth,
             .maxRayHitAttributeSize = rayTracingPipelineProperties.maxRayHitAttributeSize,
+            .maxShaderBindingTableRecordIndex = invocationReorderProperties.maxShaderBindingTableRecordIndex,
             .maxDispatchDimensions =
                 {
                     static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[0]) * static_cast<std::uint64_t>(limits.maxComputeWorkGroupSize[0]),
