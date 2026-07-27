@@ -28,6 +28,36 @@ void requireAbsent(std::string_view contents, std::string_view token, std::strin
     nr::test::require(!contents.contains(token), std::string{message});
 }
 
+[[nodiscard]] std::string collapseWhitespace(std::string_view value)
+{
+    auto normalized = std::string{};
+    auto pendingWhitespace = false;
+    std::ranges::for_each(value, [&](char character) {
+        if (std::isspace(static_cast<unsigned char>(character)) != 0)
+        {
+            pendingWhitespace = !normalized.empty();
+            return;
+        }
+        if (pendingWhitespace)
+        {
+            normalized += ' ';
+            pendingWhitespace = false;
+        }
+        normalized += character;
+    });
+    return normalized;
+}
+
+void requireWhitespaceInsensitivePresent(
+    std::string_view contents,
+    std::string_view token,
+    std::string_view message)
+{
+    nr::test::require(
+        collapseWhitespace(contents).contains(collapseWhitespace(token)),
+        std::string{message});
+}
+
 [[nodiscard]] std::size_t countOccurrences(std::string_view contents, std::string_view token)
 {
     nr::test::require(!token.empty(), "countOccurrences requires a non-empty token");
@@ -299,7 +329,7 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{"renderpasses DLSS RR is 
                                                            requirePresent(node, "frameParameters.resolutionPlan.resetHistory", "RR evaluation should consume the renderer-final temporal reset directly");
                                                            requireAbsent(node, "cameraFrameState.reset", "RR evaluation must not route renderer-wide reset through camera jitter state");
                                                            requireAbsent(node, "cameraFrameState.accumulationReset", "RR must not consume the standalone Accumulate node's history policy");
-                                                           requirePresent(rendererImplementation, "makeRendererCameraFrameState(\n            cameraJitter_,\n            sampleFrameOrdinal,\n            frameParameters.resolutionPlan.renderExtent);", "renderer jitter should follow the monotonic sample-frame ordinal and resolved render extent without carrying temporal reset");
+                                                           requireWhitespaceInsensitivePresent(rendererImplementation, "makeRendererCameraFrameState(cameraJitter_, sampleFrameOrdinal, frameParameters.resolutionPlan.renderExtent);", "renderer jitter should follow the monotonic sample-frame ordinal and resolved render extent without carrying temporal reset");
                                                            requireAbsent(rendererImplementation, "cameraStableFrameOrdinal_", "camera movement must not restart the Halton sequence");
                                                            requirePresent(node, "runtime_->resetNextEvaluation = true", "disabled RR must request a reset on resume");
                                                            requirePresent(node, "previousBuildTime_ = {};", "disabled RR must reset automatic frame-delta history");

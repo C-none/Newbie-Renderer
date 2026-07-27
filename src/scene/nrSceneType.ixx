@@ -8,6 +8,7 @@ import dependency.vulkan;
 import nr.load;
 import nr.resource;
 import nr.rhi;
+import nr.utils;
 import std;
 
 export namespace nr::scene
@@ -15,6 +16,118 @@ export namespace nr::scene
 using SceneTemplateHandle = nr::resource::Handle<struct SceneTemplateTag>;
 using SceneInstanceHandle = nr::resource::Handle<struct SceneInstanceTag>;
 using SceneExtractProfileHandle = nr::resource::Handle<struct SceneExtractProfileTag>;
+
+enum class SceneRtRevisionDomain : std::uint8_t
+{
+    topology,
+    transform,
+    visibility,
+    traceMask,
+    meshBinding,
+    meshContent,
+    meshLayout,
+    materialBinding,
+    materialPayload,
+    textureBinding,
+    textureContent,
+    textureResidency,
+    count,
+};
+
+using SceneRtStructuralRevisionProjection =
+    nr::revision::RevisionProjection<SceneRtRevisionDomain::topology, SceneRtRevisionDomain::visibility, SceneRtRevisionDomain::meshBinding, SceneRtRevisionDomain::meshContent, SceneRtRevisionDomain::meshLayout, SceneRtRevisionDomain::materialBinding, SceneRtRevisionDomain::materialPayload,
+                                     SceneRtRevisionDomain::textureBinding, SceneRtRevisionDomain::textureContent, SceneRtRevisionDomain::textureResidency>;
+
+enum class SceneRevisionMutation : std::uint8_t
+{
+    templateRegistered,
+    templateDestroyed,
+    instanceAdded,
+    instanceRemoved,
+    simulationUpdated,
+    meshResident,
+    materialResident,
+    textureResident,
+    externalTopology,
+    externalTransform,
+    externalVisibility,
+    externalTraceMask,
+    externalMeshBinding,
+    externalMeshContent,
+    externalMeshLayout,
+    externalMaterialBinding,
+    externalMaterialPayload,
+    externalTextureBinding,
+    externalTextureContent,
+    externalTextureResidency,
+    externalEcsMutation,
+};
+
+struct SceneRevisionMutationPolicy
+{
+    using Mask = nr::revision::RevisionMask<SceneRtRevisionDomain>;
+
+    [[nodiscard]] static constexpr Mask mask(SceneRevisionMutation mutation) noexcept
+    {
+        using enum SceneRtRevisionDomain;
+        switch (mutation)
+        {
+        case SceneRevisionMutation::templateRegistered:
+        case SceneRevisionMutation::templateDestroyed:
+            return Mask::of<topology, meshBinding, meshContent, meshLayout, materialBinding, materialPayload, textureBinding, textureContent>();
+        case SceneRevisionMutation::instanceAdded:
+        case SceneRevisionMutation::instanceRemoved:
+            return Mask::of<topology, transform, visibility, traceMask, meshBinding>();
+        case SceneRevisionMutation::simulationUpdated:
+        case SceneRevisionMutation::externalTransform:
+            return Mask::of<transform>();
+        case SceneRevisionMutation::meshResident:
+            return Mask::of<topology, meshContent>();
+        case SceneRevisionMutation::materialResident:
+            return Mask::of<topology, materialPayload>();
+        case SceneRevisionMutation::textureResident:
+        case SceneRevisionMutation::externalTextureResidency:
+            return Mask::of<topology, textureResidency>();
+        case SceneRevisionMutation::externalTopology:
+            return Mask::of<topology>();
+        case SceneRevisionMutation::externalVisibility:
+            return Mask::of<topology, visibility>();
+        case SceneRevisionMutation::externalTraceMask:
+            return Mask::of<traceMask>();
+        case SceneRevisionMutation::externalMeshBinding:
+            return Mask::of<topology, meshBinding>();
+        case SceneRevisionMutation::externalMeshContent:
+            return Mask::of<meshContent>();
+        case SceneRevisionMutation::externalMeshLayout:
+            return Mask::of<topology, meshLayout>();
+        case SceneRevisionMutation::externalMaterialBinding:
+            return Mask::of<topology, materialBinding>();
+        case SceneRevisionMutation::externalMaterialPayload:
+            return Mask::of<materialPayload>();
+        case SceneRevisionMutation::externalTextureBinding:
+            return Mask::of<topology, textureBinding>();
+        case SceneRevisionMutation::externalTextureContent:
+            return Mask::of<textureContent>();
+        case SceneRevisionMutation::externalEcsMutation:
+            return Mask::of<topology, transform, visibility, traceMask, meshBinding, meshContent, meshLayout, materialBinding, materialPayload, textureBinding, textureContent, textureResidency>();
+        default:
+            return {};
+        }
+    }
+};
+
+struct SceneRevisionSnapshot
+{
+    std::uint64_t sceneIdentity = 0u;
+    nr::revision::RevisionSnapshot<SceneRtRevisionDomain> rt{};
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return sceneIdentity != 0u;
+    }
+
+    [[nodiscard]] friend bool operator==(const SceneRevisionSnapshot &, const SceneRevisionSnapshot &) noexcept = default;
+};
 
 enum class DestroyTemplateResult : std::uint8_t
 {
@@ -186,6 +299,7 @@ struct SceneLightPacket
 
 struct ScenePacketSet
 {
+    SceneRevisionSnapshot revisions{};
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
     std::vector<RasterDrawPacket> rasterDraws{};
     std::vector<RayTracingInstancePacket> rtInstances{};

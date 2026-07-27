@@ -44,7 +44,9 @@ namespace
         dlssResolutionController = std::make_shared<nr::renderPasses::DlssRayReconstructionResolutionController>();
         dlssRayReconstruction->setResolutionController(dlssResolutionController);
         dlssRayReconstruction->input.enabled = true;
-        dlssRayReconstruction->input.create.quality = nr::rhi::DlssQuality::Dlaa;
+        dlssRayReconstruction->input.create.quality = context.rtDlssQuality == RtDlssQuality::ultraPerformance
+                                                          ? nr::rhi::DlssQuality::UltraPerformance
+                                                          : nr::rhi::DlssQuality::Dlaa;
         dlssRayReconstruction->input.create.depthType = nr::rhi::DlssDepthType::Hardware;
         dlssRayReconstruction->input.outputColorKey = std::string{nr::renderer::frameResource::presentSourceColor};
         dlssRayReconstructionNode = dlssRayReconstruction;

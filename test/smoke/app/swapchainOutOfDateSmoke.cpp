@@ -7,6 +7,7 @@ import nr.rhi;
 
 namespace
 {
+// TODO: Replace this compatibility guard with std::scope_exit as soon as libc++ supports C++23 <scope>.
 class AcquireOutOfDateHookCleanupGuard
 {
   public:
@@ -97,7 +98,9 @@ struct ResolverObservations
 [[nodiscard]] bool validateObservations(
     const AcquireObservations& acquire,
     const ResolverObservations& resolver,
-    const nr::renderer::RendererFrameResult& frameResult)
+    const nr::renderer::RendererFrameResult& frameResult,
+    std::uint64_t recreationGenerationBefore,
+    std::uint64_t recreationGenerationAfter)
 {
     auto valid = true;
     auto require = [&](bool condition, std::string_view message) {
@@ -119,8 +122,12 @@ struct ResolverObservations
     require(frameResult.presentResult == vk::Result::eSuccess, "expected presentation to succeed");
     require(frameResult.compiledSubmitBatchCount >= 2u, "expected at least two compiled submit batches");
     require(frameResult.submittedBatchCount == frameResult.compiledSubmitBatchCount, "expected every compiled submit batch to be submitted");
-    require(frameResult.invokedPassPrepareCount >= 3u, "expected at least three prepared passes");
-    require(frameResult.invokedPassRecordCount == frameResult.invokedPassPrepareCount, "expected every prepared pass to be recorded");
+    require(frameResult.invokedPassPrepareCount >= 2u, "expected at least two pass prepare callbacks to be invoked");
+    require(frameResult.invokedPassRecordCount >= 3u, "expected at least three explicit pass record callbacks to be invoked");
+    require(frameResult.replayedSecondaryCommandBufferCount == 4u, "expected all four fixed graph pass secondary command buffers to be replayed");
+    require(
+        recreationGenerationAfter == recreationGenerationBefore + 1u,
+        "expected the forced acquire out-of-date path to increment swapchain recreation generation exactly once");
     return valid;
 }
 
@@ -151,13 +158,20 @@ struct ResolverObservations
 
     auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
     renderer.installGraph(buildGraphSpec(embeddedTriangle, acquire, resolver));
+    auto const recreationGenerationBefore = renderer.device().swapchainRecreationGeneration();
     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
     });
+    auto const recreationGenerationAfter = renderer.device().swapchainRecreationGeneration();
 
     presentation.clearAcquireOutOfDateTestHook();
     hookCleanup.release();
-    auto const valid = validateObservations(acquire, resolver, frameResult);
+    auto const valid = validateObservations(
+        acquire,
+        resolver,
+        frameResult,
+        recreationGenerationBefore,
+        recreationGenerationAfter);
     auto const attemptsAfterRender = acquire.attempts;
     if (attemptsAfterRender != 2u)
     {

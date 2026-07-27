@@ -82,6 +82,30 @@ struct ExecutorPlan
     bool requiresSyntheticPresentBatch = false;
 };
 
+struct ExecutorBenchmarkTelemetry
+{
+    double executorSetupMilliseconds = 0.0;
+    double completedGpuTimingReadbackMilliseconds = 0.0;
+    double timingSetupMilliseconds = 0.0;
+    double perFrameLookupMilliseconds = 0.0;
+    double swapchainAcquireMilliseconds = 0.0;
+    double deferredPrepareMilliseconds = 0.0;
+    double taskPlanLaunchMilliseconds = 0.0;
+    double primaryRecordBeforeCollectMilliseconds = 0.0;
+    double recordCompletionWaitMilliseconds = 0.0;
+    double primaryReplayBarrierTimestampMilliseconds = 0.0;
+    double primaryEndAndSubmitBuildMilliseconds = 0.0;
+    double queueSubmitMilliseconds = 0.0;
+    double initialReleaseRecordSubmitMilliseconds = 0.0;
+    double syntheticPresentRecordSubmitMilliseconds = 0.0;
+    double finalizationMilliseconds = 0.0;
+    std::size_t compiledSubmitBatchCount = 0u;
+    std::size_t acquireBatchCount = 0u;
+    std::size_t recordTaskCount = 0u;
+    std::size_t replayedSecondaryCommandBufferCount = 0u;
+    std::size_t queueSubmitCount = 0u;
+};
+
 struct ExecuteReport
 {
     ExecutorPlan plan{};
@@ -97,6 +121,7 @@ struct ExecuteReport
     std::size_t submittedBatchCount = 0;
     std::size_t submittedRecordTaskCount = 0;
     std::size_t recordedSecondaryCommandBufferCount = 0;
+    std::size_t replayedSecondaryCommandBufferCount = 0;
     std::size_t recordWorkerCount = 0;
     std::optional<GpuPassTimingFrame> completedGpuPassTimingFrame{};
     bool parallelPassRecording = false;
@@ -355,9 +380,11 @@ class RenderGraphExecutor
     {
         nr::rhi::Device& device;
         std::uint32_t frameIndex = 0;
+        std::uint64_t frameOrdinal = 0;
         std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max();
         std::optional<nr::rhi::Device::FrameAcquireResult> preAcquiredFrameImage{};
         std::optional<std::reference_wrapper<RendererSubmissionTimelines>> submissionTimelines{};
+        std::optional<std::reference_wrapper<ExecutorBenchmarkTelemetry>> benchmarkTelemetry{};
     };
 
     [[nodiscard]] ExecutorPlan buildPlan(const CompiledGraphFrame& compiled) const;
@@ -441,7 +468,7 @@ class RenderGraphExecutor
         const CompiledSubmitBatch& batch,
         const std::map<GraphResourceHandle, std::reference_wrapper<const CompiledResourceDesc>>& compiledResourceByHandle);
 
-    static void updateRetainedImageStates(
+    static void updateRetainedExternalResourceStates(
         const CompiledGraphFrame& compiled,
         const std::map<std::uint32_t, RendererSubmitToken>& signalTokenByBatch);
 
@@ -509,7 +536,7 @@ class RenderGraphExecutor
     {
         vk::raii::QueryPool queryPool{nullptr};
         std::uint32_t queryCapacity = 0;
-        std::uint32_t pendingFrameIndex = 0;
+        std::uint64_t pendingFrameOrdinal = 0;
         std::vector<GpuPassTimingSample> pendingPasses{};
     };
 

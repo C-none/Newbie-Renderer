@@ -11,6 +11,8 @@ import :renderGraphType;
 
 export namespace nr::renderer
 {
+struct FrameGlobalResources;
+
 struct SceneTextureDescriptorBinding
 {
     std::uint32_t descriptorIndex = nr::scene::kDefaultSceneTextureId;
@@ -26,14 +28,181 @@ struct RenderGraphCompileCacheStatistics
     std::size_t entryCount = 0;
 };
 
+enum class RenderGraphSkeletonMissReason : std::uint8_t
+{
+    None,
+    Disabled,
+    UnsupportedNode,
+    KeyNotFound,
+    StructureMismatch,
+    PatchFailed,
+    Invalidated,
+};
+
+struct RenderGraphSkeletonNodeKey
+{
+    std::uint64_t configurationRevision = 0;
+    std::uint64_t runtimeConfigurationRevision = 0;
+    std::string structuralBranchKey{};
+
+    [[nodiscard]] bool operator==(const RenderGraphSkeletonNodeKey&) const = default;
+};
+
+struct RenderGraphSkeletonKey
+{
+    std::uint64_t installedGraphGeneration = 0;
+    vk::Extent2D displayExtent{1u, 1u};
+    vk::Extent2D renderExtent{1u, 1u};
+    vk::Extent2D swapchainExtent{1u, 1u};
+    vk::Format swapchainFormat = vk::Format::eUndefined;
+    vk::ColorSpaceKHR swapchainColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
+    std::uint64_t shaderSessionGeneration = 0;
+    std::uint64_t swapchainRecreationGeneration = 0;
+    std::uint64_t submitAcquirePolicyRevision = 0;
+    bool hasSceneBridgeFrame = false;
+    std::vector<RenderGraphSkeletonNodeKey> nodes{};
+
+    [[nodiscard]] bool operator==(const RenderGraphSkeletonKey&) const = default;
+};
+
+struct RenderGraphSkeletonCacheStatistics
+{
+    std::uint64_t hitCount = 0;
+    std::uint64_t missCount = 0;
+    std::uint64_t invalidationCount = 0;
+    std::uint64_t structureMismatchCount = 0;
+    std::size_t entryCount = 0;
+    RenderGraphSkeletonMissReason lastMissReason = RenderGraphSkeletonMissReason::None;
+};
+
+struct RenderGraphSkeletonNodePatchLayout
+{
+    QueueDomain queue = QueueDomain::Graphics;
+    std::size_t resourceBegin = 0;
+    std::size_t resourceCount = 0;
+    std::size_t frameDataBegin = 0;
+    std::size_t frameDataCount = 0;
+    std::size_t passBegin = 0;
+    std::size_t passCount = 0;
+};
+
+struct RenderGraphSkeletonTemplate
+{
+    RenderGraphFrameDescription staticFrame{};
+    RenderGraphSkeletonNodePatchLayout globalPatchLayout{};
+    std::vector<RenderGraphSkeletonNodePatchLayout> nodePatchLayouts{};
+    std::map<std::string, GraphResourceHandle> namedFrameResources{};
+    std::map<std::string, GraphFrameDataHandle> namedFrameData{};
+};
+
+struct RenderGraphSkeletonCapture
+{
+    RenderGraphSkeletonNodePatchLayout globalPatchLayout{};
+    std::vector<RenderGraphSkeletonNodePatchLayout> nodePatchLayouts{};
+    std::map<std::string, GraphResourceHandle> namedFrameResources{};
+    std::map<std::string, GraphFrameDataHandle> namedFrameData{};
+};
+
+struct RenderGraphSkeletonImageResourceDesc
+{
+    std::string debugName{};
+    vk::Extent3D extent{1u, 1u, 1u};
+    vk::Format format = vk::Format::eUndefined;
+    ImageAspectIntent aspect = ImageAspectIntent::Color;
+};
+
+class RenderGraphSkeletonPatchContext
+{
+  public:
+    RenderGraphSkeletonPatchContext(
+        RenderGraphFrameDescription& frame,
+        RenderGraphSkeletonNodePatchLayout layout,
+        const std::map<std::string, GraphResourceHandle>& namedFrameResources,
+        const std::map<std::string, GraphFrameDataHandle>& namedFrameData,
+        const FrameGlobalResources* globalResources = nullptr) noexcept;
+
+    void patchResource(std::size_t localSlot, GraphResourceDescVariant desc);
+
+    void patchFrameData(
+        std::size_t localSlot,
+        std::string_view debugName,
+        std::any payload);
+
+    void patchPass(
+        std::size_t localSlot,
+        std::string_view debugName,
+        PassPrepareCallback prepare,
+        PassRecordCallback record,
+        std::optional<PassParallelRecordDesc> parallelRecord = std::nullopt);
+
+    void patchCopy(std::size_t localSlot, std::string_view debugName, CopyPassDesc copy);
+
+    [[nodiscard]] GraphResourceHandle namedResource(std::string_view name) const;
+
+    [[nodiscard]] GraphFrameDataHandle namedFrameData(std::string_view name) const;
+
+    [[nodiscard]] std::optional<std::reference_wrapper<const std::any>> resolveFrameDataPayload(
+        GraphFrameDataHandle handle) const;
+
+    template <typename TPayload>
+    [[nodiscard]] std::optional<std::reference_wrapper<const std::remove_cvref_t<TPayload>>>
+    resolveFrameData(GraphFrameDataHandle handle) const
+    {
+        using Payload = std::remove_cvref_t<TPayload>;
+        nrAssert(handle.valid(), "RenderGraphSkeletonPatchContext::resolveFrameData requires a valid handle.");
+        auto payload = resolveFrameDataPayload(handle);
+        if (!payload.has_value())
+        {
+            return {};
+        }
+        auto const typedPayload = std::any_cast<Payload>(&payload->get());
+        nrAssert(
+            typedPayload != nullptr,
+            std::format(
+                "RenderGraphSkeletonPatchContext::resolveFrameData resolved unexpected payload type for handle {}.",
+                handle.value));
+        return std::cref(*typedPayload);
+    }
+
+    [[nodiscard]] const FrameGlobalResources& globalResources() const noexcept;
+
+    [[nodiscard]] GraphResourceHandle resource(std::size_t localSlot) const;
+
+    [[nodiscard]] QueueDomain queue() const noexcept;
+
+    [[nodiscard]] GraphFrameDataHandle frameData(std::size_t localSlot) const;
+
+    [[nodiscard]] GraphResourceHandle passResource(
+        std::size_t localPassSlot,
+        std::size_t useSlot) const;
+
+    [[nodiscard]] bool hasNamedResource(std::string_view name) const;
+
+    [[nodiscard]] bool hasNamedFrameData(std::string_view name) const;
+
+    [[nodiscard]] std::optional<RenderGraphSkeletonImageResourceDesc> describeImageResource(
+        GraphResourceHandle resource) const;
+
+  private:
+    std::reference_wrapper<RenderGraphFrameDescription> frame_;
+    RenderGraphSkeletonNodePatchLayout layout_{};
+    std::reference_wrapper<const std::map<std::string, GraphResourceHandle>> namedFrameResources_;
+    std::reference_wrapper<const std::map<std::string, GraphFrameDataHandle>> namedFrameData_;
+    const FrameGlobalResources* globalResources_ = nullptr;
+};
+
 class RenderGraphCompileCache
 {
   public:
+    struct FrameSignature;
+
     [[nodiscard]] CompiledGraphFrame compileConsumingCached(RenderGraphFrameDescription& frame);
 
     void clear() noexcept;
 
     [[nodiscard]] RenderGraphCompileCacheStatistics statistics() const noexcept;
+
+    [[nodiscard]] static FrameSignature structuralSignature(const RenderGraphFrameDescription& frame);
 
     struct ResourceUseSignature
     {
@@ -61,6 +230,9 @@ class RenderGraphCompileCache
         ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined;
         vk::DeviceSize size = 0;
         std::vector<BufferUsageIntent> usageIntents{};
+        bool retainedInitialized = false;
+        ResourceOwnershipDomain retainedOwnership = ResourceOwnershipDomain::Undefined;
+        AccessScope retainedAccess{};
 
         [[nodiscard]] bool operator==(const ImportedBufferResourceSignature&) const = default;
     };
@@ -76,6 +248,10 @@ class RenderGraphCompileCache
         ImageLayoutIntent initialLayout = ImageLayoutIntent::Undefined;
         AccessScope initialAccessScope{};
         ImageAspectIntent aspect = ImageAspectIntent::Color;
+        bool retainedInitialized = false;
+        ResourceOwnershipDomain retainedOwnership = ResourceOwnershipDomain::Undefined;
+        AccessScope retainedAccess{};
+        ImageLayoutIntent retainedLayout = ImageLayoutIntent::Undefined;
 
         [[nodiscard]] bool operator==(const ImportedImageResourceSignature&) const = default;
     };
@@ -88,6 +264,9 @@ class RenderGraphCompileCache
         vk::AccelerationStructureTypeKHR type = vk::AccelerationStructureTypeKHR::eTopLevel;
         vk::DeviceSize size = 0;
         std::vector<AccelerationStructureUsageIntent> usageIntents{};
+        bool retainedInitialized = false;
+        ResourceOwnershipDomain retainedOwnership = ResourceOwnershipDomain::Undefined;
+        AccessScope retainedAccess{};
 
         [[nodiscard]] bool operator==(const ImportedAccelerationStructureResourceSignature&) const = default;
     };
@@ -225,6 +404,59 @@ class RenderGraphCompileCache
     std::vector<CacheEntry> entries_{};
     std::uint64_t hitCount_ = 0;
     std::uint64_t missCount_ = 0;
+};
+
+class RenderGraphSkeletonCache
+{
+  public:
+    struct ProbeResult
+    {
+        bool keyHit = false;
+        bool structureMatches = false;
+        RenderGraphSkeletonMissReason missReason = RenderGraphSkeletonMissReason::None;
+    };
+
+    [[nodiscard]] bool contains(const RenderGraphSkeletonKey& key) const;
+
+    [[nodiscard]] std::shared_ptr<const RenderGraphSkeletonTemplate> lookup(
+        const RenderGraphSkeletonKey& key) const;
+
+    [[nodiscard]] static RenderGraphFrameDescription instantiate(
+        const RenderGraphSkeletonTemplate& skeleton);
+
+    [[nodiscard]] ProbeResult acceptMaterialized(
+        RenderGraphSkeletonKey key,
+        const RenderGraphFrameDescription& frame,
+        RenderGraphSkeletonCapture capture = {});
+
+    void recordHit() noexcept;
+
+    void refreshMaterialized(
+        RenderGraphSkeletonKey key,
+        const RenderGraphFrameDescription& frame,
+        RenderGraphSkeletonCapture capture);
+
+    void recordMiss(RenderGraphSkeletonMissReason reason) noexcept;
+
+    void clear(RenderGraphSkeletonMissReason reason = RenderGraphSkeletonMissReason::Invalidated) noexcept;
+
+    [[nodiscard]] RenderGraphSkeletonCacheStatistics statistics() const noexcept;
+
+  private:
+    struct Entry
+    {
+        RenderGraphSkeletonKey key{};
+        RenderGraphCompileCache::FrameSignature structure{};
+        std::shared_ptr<const RenderGraphSkeletonTemplate> skeleton{};
+    };
+
+    [[nodiscard]] static RenderGraphSkeletonTemplate makeTemplate(
+        const RenderGraphFrameDescription& frame,
+        RenderGraphSkeletonCapture capture);
+
+    static constexpr std::size_t kMaxEntries = 8;
+    std::vector<Entry> entries_{};
+    RenderGraphSkeletonCacheStatistics statistics_{};
 };
 
 enum class BindlessImageTableRequirement
@@ -475,6 +707,7 @@ class RendererGlobalDescriptorTableCache
 
 struct RendererCacheSuite
 {
+    RenderGraphSkeletonCache skeletonCache{};
     RenderGraphCompileCache compileCache{};
     BindlessImageTableCache bindlessImageTableCache{};
     RendererGlobalDescriptorTableCache globalDescriptorTableCache{};

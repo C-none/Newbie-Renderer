@@ -53,6 +53,20 @@ constexpr inline void nrAssert(bool condition, std::string_view context = "", st
     }
 }
 
+template <typename ContextFactory>
+    requires std::invocable<ContextFactory &&> &&
+             std::convertible_to<std::invoke_result_t<ContextFactory &&>, std::string_view>
+constexpr inline void nrAssert(
+    bool condition,
+    ContextFactory &&contextFactory,
+    std::source_location loc = std::source_location::current())
+{
+    if (!condition)
+    {
+        nrAssert(false, std::invoke(std::forward<ContextFactory>(contextFactory)), loc);
+    }
+}
+
 constexpr inline void nrLog(LogLevel level,
                             std::string_view channel,
                             std::string_view context,

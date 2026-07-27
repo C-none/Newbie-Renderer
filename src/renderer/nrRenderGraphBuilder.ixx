@@ -65,6 +65,20 @@ class RenderGraphNodeContext
 
 export namespace nr::renderer
 {
+struct RenderGraphDeclarationCounts
+{
+    std::size_t nodes = 0;
+    std::size_t resources = 0;
+    std::size_t frameData = 0;
+    std::size_t passes = 0;
+    std::size_t submitNodes = 0;
+
+    [[nodiscard]] std::size_t total() const noexcept
+    {
+        return nodes + resources + frameData + passes + submitNodes;
+    }
+};
+
 class RenderGraphBuilder
 {
   public:
@@ -84,6 +98,7 @@ class RenderGraphBuilder
     template <typename TDesc>
     [[nodiscard]] inline GraphResourceHandle addResource(const TDesc& desc)
     {
+        ++declarationCounts_.resources;
         auto handle = GraphResourceHandle{nextResource_++};
         auto index = frame_.resources.size();
         frame_.resources.push_back(GraphResourceDesc{
@@ -103,6 +118,7 @@ class RenderGraphBuilder
             std::copy_constructible<Payload>,
             "RenderGraphBuilder::addFrameData requires copy-constructible frame data.");
 
+        ++declarationCounts_.frameData;
         auto handle = GraphFrameDataHandle{nextFrameData_++};
         frame_.frameData.push_back(GraphFrameDataDesc{
             .handle = handle,
@@ -143,6 +159,8 @@ class RenderGraphBuilder
     [[nodiscard]] RenderGraphFrameDescription& mutableFrame() noexcept;
 
     [[nodiscard]] RenderGraphFrameDescription build() const;
+
+    [[nodiscard]] RenderGraphDeclarationCounts declarationCounts() const noexcept;
 
   private:
     [[nodiscard]] GraphPassHandle addPassCore(
@@ -236,6 +254,7 @@ class RenderGraphBuilder
     std::uint32_t nextPass_ = 0;
     std::uint32_t nextNode_ = 0;
     std::uint32_t nextSubmit_ = 0;
+    RenderGraphDeclarationCounts declarationCounts_{};
 };
 
 template <typename TDesc>

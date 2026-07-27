@@ -64,4 +64,22 @@ struct ClearDepthStencilImagePassDesc
     NodeBuildContext& context,
     std::string_view debugName,
     CopyImageToImagePassDesc desc);
+
+void patchClearColorImage(
+    RenderGraphSkeletonPatchContext& context,
+    std::size_t passSlot,
+    std::string_view debugName,
+    ClearColorImagePassDesc desc);
+
+void patchCopyImageToBuffer(
+    RenderGraphSkeletonPatchContext& context,
+    std::size_t passSlot,
+    std::string_view debugName,
+    CopyImageToBufferPassDesc desc);
+
+void patchCopyImageToImage(
+    RenderGraphSkeletonPatchContext& context,
+    std::size_t passSlot,
+    std::string_view debugName,
+    CopyImageToImagePassDesc desc);
 } // namespace nr::renderer::ops

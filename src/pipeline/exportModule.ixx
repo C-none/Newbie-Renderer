@@ -19,11 +19,18 @@ enum class RtPostProcessingMode : std::uint8_t
     dlssRayReconstruction,
 };
 
+enum class RtDlssQuality : std::uint8_t
+{
+    dlaa,
+    ultraPerformance,
+};
+
 struct PipelineBuildContext
 {
     vk::Format swapchainFormat = vk::Format::eUndefined;
     vk::Extent2D swapchainExtent{1u, 1u};
     RtPostProcessingMode rtPostProcessingMode = RtPostProcessingMode::dlssRayReconstruction;
+    RtDlssQuality rtDlssQuality = RtDlssQuality::dlaa;
 };
 
 using PipelineGraphFactory = std::function<nr::renderer::RendererGraphSpec(const PipelineBuildContext&)>;
@@ -117,6 +124,11 @@ struct ViewerCommandLineOptions
     bool showHelp = false;
     std::filesystem::path modelPath{};
     std::string pipelineId{std::string{defaultPipelineId}};
+    bool benchmark = false;
+    std::uint32_t warmupFrames = 0u;
+    std::uint32_t measureFrames = 0u;
+    std::filesystem::path outputDirectory{};
+    RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
     std::string errorMessage{};
 };
 
@@ -127,6 +139,12 @@ struct ViewerRunConfig
     std::string initialPipelineId{std::string{defaultPipelineId}};
     std::string appName{"NewbieRenderer"};
     std::string engineName{"NewbieRenderer"};
+    bool benchmark = false;
+    std::uint32_t warmupFrames = 0u;
+    std::uint32_t measureFrames = 0u;
+    std::filesystem::path outputDirectory{};
+    RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
+    std::string commandLine{};
 };
 
 [[nodiscard]] ViewerCommandLineOptions parseViewerCommandLine(std::span<char*> args);

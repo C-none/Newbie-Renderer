@@ -16,6 +16,8 @@ namespace
     auto lightPrepare = std::make_shared<nr::renderPasses::LightPrepareNode>();
     auto rayTrace = std::make_shared<nr::renderPasses::PathTracingNode>();
     auto dlssRayReconstruction = std::make_shared<nr::renderPasses::DlssRayReconstructionNode>();
+    auto dlssResolutionController = std::make_shared<nr::renderPasses::DlssRayReconstructionResolutionController>();
+    dlssRayReconstruction->setResolutionController(dlssResolutionController);
     dlssRayReconstruction->input.enabled = true;
     dlssRayReconstruction->input.create.quality = nr::rhi::DlssQuality::Dlaa;
     dlssRayReconstruction->input.create.depthType = nr::rhi::DlssDepthType::Hardware;
@@ -30,38 +32,49 @@ namespace
         .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
         .cycleLength = nr::renderer::kRendererDefaultCameraJitterCycleLength,
     };
+    graphSpec.frameResolutionResolver = [controller = std::move(dlssResolutionController), node = std::weak_ptr{dlssRayReconstruction}](nr::rhi::Device &device, vk::Extent2D displayExtent) {
+        auto activeNode = node.lock();
+        nr::nrAssert(static_cast<bool>(activeNode), "rtobject material smoke DLSS RR resolution resolver lost its node.");
+        auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{[&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) { return device.dlssContext()->optimalSettings(targetSize, quality); }};
+        return controller->resolve(activeNode->effectiveResolutionRequest(), displayExtent, query);
+    };
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
             .runtime = asBuild,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "AccelerationStructureBuild",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "AccelerationStructureBuild",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = lightPrepare,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "LightPrepare",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "LightPrepare",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = rayTrace,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "PathTracing",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "PathTracing",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = dlssRayReconstruction,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "DlssRayReconstruction",
-                .queue = nr::renderer::QueueDomain::Compute,
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "DlssRayReconstruction",
+                    .queue = nr::renderer::QueueDomain::Compute,
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = present,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "Present",
-                .queue = nr::renderer::QueueDomain::Compute,
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "Present",
+                    .queue = nr::renderer::QueueDomain::Compute,
+                },
         },
     };
 
@@ -77,16 +90,10 @@ namespace
 
 [[nodiscard]] std::filesystem::path toyCarPath()
 {
-    return std::filesystem::path{std::string{nr::projectRoot}} /
-           "assets" /
-           "glTF-Sample-Assets" /
-           "Models" /
-           "ToyCar" /
-           "glTF" /
-           "ToyCar.gltf";
+    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" / "ToyCar" / "glTF" / "ToyCar.gltf";
 }
 
-[[nodiscard]] std::optional<std::reference_wrapper<nr::scene::Scene>> loadToyCar(nr::app::AppSession& app)
+[[nodiscard]] std::optional<std::reference_wrapper<nr::scene::Scene>> loadToyCar(nr::app::AppSession &app)
 {
     auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
         .sourcePath = toyCarPath(),
@@ -97,7 +104,7 @@ namespace
         return std::nullopt;
     }
 
-    auto& scene = app.createScene();
+    auto &scene = app.createScene();
     auto templateHandle = scene.registerTemplate(loadResult.value());
     if (!templateHandle.valid())
     {
@@ -116,12 +123,10 @@ namespace
     return std::ref(scene);
 }
 
-[[nodiscard]] std::optional<nr::renderer::RendererFrameResult> renderOneFrame(
-    nr::app::AppSession& app,
-    nr::scene::Scene& scene)
+[[nodiscard]] std::optional<nr::renderer::RendererFrameResult> renderOneFrame(nr::app::AppSession &app, nr::scene::Scene &scene)
 {
-    auto& renderer = app.renderer();
-    auto& presentation = renderer.device().presentationContext;
+    auto &renderer = app.renderer();
+    auto &presentation = renderer.device().presentationContext;
 
     presentation.pollEvents();
     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
@@ -137,8 +142,7 @@ namespace
         return std::nullopt;
     }
 
-    if (frameResult.presentResult == vk::Result::eErrorOutOfDateKHR ||
-        frameResult.presentResult == vk::Result::eSuboptimalKHR)
+    if (frameResult.presentResult == vk::Result::eErrorOutOfDateKHR || frameResult.presentResult == vk::Result::eSuboptimalKHR)
     {
         renderer.resize();
         return renderOneFrame(app, scene);
@@ -153,7 +157,7 @@ namespace
     return frameResult;
 }
 
-[[nodiscard]] bool renderUntilRtSceneReady(nr::app::AppSession& app, nr::scene::Scene& scene)
+[[nodiscard]] bool renderUntilRtSceneReady(nr::app::AppSession &app, nr::scene::Scene &scene)
 {
     auto failed = false;
     auto observedRtFrame = false;
@@ -171,9 +175,7 @@ namespace
             return;
         }
 
-        observedRtFrame = frameResult->sceneTlasPacketCount > 0u &&
-                          frameResult->invokedPassPrepareCount >= 3u &&
-                          frameResult->invokedPassRecordCount >= 6u;
+        observedRtFrame = frameResult->sceneTlasPacketCount > 0u && frameResult->invokedPassPrepareCount >= 3u && frameResult->invokedPassRecordCount >= 6u;
     });
 
     if (failed)
@@ -190,7 +192,7 @@ namespace
     return true;
 }
 
-[[nodiscard]] bool renderCameraMotionFrames(nr::app::AppSession& app, nr::scene::Scene& scene)
+[[nodiscard]] bool renderCameraMotionFrames(nr::app::AppSession &app, nr::scene::Scene &scene)
 {
     auto const previousPosition = app.camera().frame().position;
     app.camera().viewer().applyControl(nr::renderer::ViewerCameraControlInput{
@@ -218,6 +220,23 @@ namespace
     return true;
 }
 
+[[nodiscard]] bool verifySkeletonReuse(const nr::renderer::RenderGraphSkeletonCacheStatistics &before, const nr::renderer::RenderGraphSkeletonCacheStatistics &after)
+{
+    if (after.missCount <= before.missCount)
+    {
+        std::println("[error] rtobject material smoke did not observe a cold RenderGraph Skeleton miss.");
+        return false;
+    }
+
+    if (after.hitCount <= before.hitCount)
+    {
+        std::println("[error] rtobject material smoke did not observe a patch-only RenderGraph Skeleton hit.");
+        return false;
+    }
+
+    return true;
+}
+
 [[nodiscard]] bool runSmokeTest()
 {
     auto app = nr::app::AppSession{};
@@ -233,12 +252,17 @@ namespace
             return false;
         }
 
-        auto& presentation = app.renderer().device().presentationContext;
+        auto &presentation = app.renderer().device().presentationContext;
         auto graphSpec = buildRtObjectGraphSpec(presentation.swapchainFormat());
         app.renderer().installGraph(graphSpec);
 
-        return renderUntilRtSceneReady(app, scene->get()) &&
-               renderCameraMotionFrames(app, scene->get());
+        auto const skeletonStatisticsBefore = app.renderer().renderGraphSkeletonStatistics();
+        if (!renderUntilRtSceneReady(app, scene->get()) || !renderCameraMotionFrames(app, scene->get()))
+        {
+            return false;
+        }
+        auto const skeletonStatisticsAfter = app.renderer().renderGraphSkeletonStatistics();
+        return verifySkeletonReuse(skeletonStatisticsBefore, skeletonStatisticsAfter);
     }();
 
     app.shutdown();

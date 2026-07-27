@@ -164,6 +164,22 @@ class RenderGraphCompiler
                         compiledResource.initialOwnership = desc.initialOwnership;
                         compiledResource.finalOwnership = desc.initialOwnership;
                         compiledResource.importedBufferResource = desc.importedResource;
+                        compiledResource.retainedBufferState = desc.retainedState;
+                        if (desc.retainedState.has_value())
+                        {
+                            const auto& retained = desc.retainedState->get().common;
+                            if (retained.initialized)
+                            {
+                                compiledResource.initialOwnership = retained.ownership;
+                                compiledResource.initialAccessScope = retained.access;
+                            }
+                            else
+                            {
+                                compiledResource.initialOwnership = ResourceOwnershipDomain::Undefined;
+                                compiledResource.initialAccessScope = {};
+                            }
+                            compiledResource.finalOwnership = compiledResource.initialOwnership;
+                        }
                         mergeUsageIntents(compiledResource, desc.usageIntents);
                     }
                     else if constexpr (std::same_as<DescT, GraphTransientBufferDesc>)
@@ -185,15 +201,16 @@ class RenderGraphCompiler
                         compiledResource.initialLayout = desc.initialLayout;
                         compiledResource.initialAccessScope = desc.initialAccessScope;
                         compiledResource.initialOwnership = desc.initialOwnership;
+                        compiledResource.retainedImageState = desc.retainedState;
                         compiledResource.retainedState = desc.retainedState;
                         if (desc.retainedState.has_value())
                         {
                             const auto& retainedState = desc.retainedState->get();
-                            if (retainedState.initialized)
+                            if (retainedState.common.initialized)
                             {
                                 compiledResource.initialLayout = retainedState.layout;
-                                compiledResource.initialOwnership = retainedState.ownership;
-                                compiledResource.initialAccessScope = retainedState.access;
+                                compiledResource.initialOwnership = retainedState.common.ownership;
+                                compiledResource.initialAccessScope = retainedState.common.access;
                             }
                             else
                             {
@@ -219,6 +236,22 @@ class RenderGraphCompiler
                         compiledResource.initialOwnership = desc.initialOwnership;
                         compiledResource.finalOwnership = desc.initialOwnership;
                         compiledResource.importedAccelerationStructureResource = desc.importedResource;
+                        compiledResource.retainedAccelerationStructureState = desc.retainedState;
+                        if (desc.retainedState.has_value())
+                        {
+                            const auto& retained = desc.retainedState->get().common;
+                            if (retained.initialized)
+                            {
+                                compiledResource.initialOwnership = retained.ownership;
+                                compiledResource.initialAccessScope = retained.access;
+                            }
+                            else
+                            {
+                                compiledResource.initialOwnership = ResourceOwnershipDomain::Undefined;
+                                compiledResource.initialAccessScope = {};
+                            }
+                            compiledResource.finalOwnership = compiledResource.initialOwnership;
+                        }
                         if (desc.importedResource.has_value())
                         {
                             compiledResource.resolvedAccelerationStructureType = desc.importedResource->get().type();

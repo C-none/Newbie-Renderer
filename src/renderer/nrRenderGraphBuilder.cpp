@@ -104,12 +104,14 @@ void RenderGraphBuilder::clear()
         nextPass_ = 0;
         nextNode_ = 0;
         nextSubmit_ = 0;
+        declarationCounts_ = {};
     }
 
 [[nodiscard]] GraphNodeHandle RenderGraphBuilder::addNode(
         std::string_view debugName,
         QueueDomain queue)
 {
+        ++declarationCounts_.nodes;
         auto handle = GraphNodeHandle{nextNode_++};
         frame_.nodes.push_back(GraphNodeDesc{
             .handle = handle,
@@ -121,6 +123,7 @@ void RenderGraphBuilder::clear()
 
 [[nodiscard]] GraphNodeHandle RenderGraphBuilder::addPresentNode(std::string_view debugName)
 {
+        ++declarationCounts_.nodes;
         auto handle = GraphNodeHandle{nextNode_++};
         frame_.nodes.push_back(GraphNodeDesc{
             .handle = handle,
@@ -213,6 +216,7 @@ void RenderGraphBuilder::clear()
         std::string_view debugName,
         SubmitBoundaryKind kind)
 {
+        ++declarationCounts_.submitNodes;
         auto handle = GraphSubmitHandle{nextSubmit_++};
         frame_.submitBoundaries.push_back(SubmitBoundaryDesc{
             .handle = handle,
@@ -236,7 +240,12 @@ void RenderGraphBuilder::clear()
 [[nodiscard]] RenderGraphFrameDescription RenderGraphBuilder::build() const
 {
         return frame_;
-    }
+}
+
+[[nodiscard]] RenderGraphDeclarationCounts RenderGraphBuilder::declarationCounts() const noexcept
+{
+        return declarationCounts_;
+}
 
 [[nodiscard]] GraphPassHandle RenderGraphBuilder::addPassCore(
         std::string_view debugName,
@@ -244,6 +253,7 @@ void RenderGraphBuilder::clear()
         bool isCopyPass,
         vk::PipelineStageFlags2 shaderStages)
 {
+        ++declarationCounts_.passes;
         nrAssert(node.valid(), "RenderGraphBuilder::addPass requires a valid node handle.");
 
         auto nodeIt = findNode(node);

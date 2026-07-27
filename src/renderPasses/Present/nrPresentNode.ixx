@@ -51,11 +51,15 @@ class PresentNode final : public Node
     PresentNodeInput input{};
 
     void initialize(NodeInitContext& context) override;
+    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
+    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
+    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext& context, const NodeFrameParameters& frameParameters, const StructuralSnapshot& snapshot) override;
     void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void shutdown(NodeShutdownContext& context) override;
 
   private:
+    void materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters);
     void processCompletedScreenshot(std::uint32_t frameSlot);
     void savePendingScreenshot();
 

@@ -254,4 +254,49 @@ namespace
 {
     return addCopyPass(context, debugName, CopyPassDesc{desc});
 }
+
+void patchClearColorImage(
+    RenderGraphSkeletonPatchContext& context,
+    std::size_t passSlot,
+    std::string_view debugName,
+    ClearColorImagePassDesc desc)
+{
+    context.patchPass(
+        passSlot,
+        debugName,
+        nullptr,
+        [desc](const PassRecordContext& recordContext) {
+            nrAssert(recordContext.commandBuffer.has_value(), "patchClearColorImage requires RAII command buffer access.");
+            nrAssert(static_cast<bool>(recordContext.resolveImage), "patchClearColorImage requires an image resolver.");
+            auto resolvedImage = recordContext.resolveImage(desc.image);
+            nrAssert(resolvedImage.has_value(), "patchClearColorImage failed to resolve destination image.");
+            auto range = normalizeImageSubresourceRange(
+                desc.subresourceRange,
+                *resolvedImage,
+                ImageAspectIntent::Color);
+            recordContext.commandBuffer->get().clearColorImage(
+                resolvedImage->image,
+                vk::ImageLayout::eTransferDstOptimal,
+                desc.value,
+                range);
+        });
+}
+
+void patchCopyImageToBuffer(
+    RenderGraphSkeletonPatchContext& context,
+    std::size_t passSlot,
+    std::string_view debugName,
+    CopyImageToBufferPassDesc desc)
+{
+    context.patchCopy(passSlot, debugName, CopyPassDesc{std::move(desc)});
+}
+
+void patchCopyImageToImage(
+    RenderGraphSkeletonPatchContext& context,
+    std::size_t passSlot,
+    std::string_view debugName,
+    CopyImageToImagePassDesc desc)
+{
+    context.patchCopy(passSlot, debugName, CopyPassDesc{std::move(desc)});
+}
 } // namespace nr::renderer::ops

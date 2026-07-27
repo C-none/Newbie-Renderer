@@ -703,7 +703,13 @@ void Device::recreateSwapchain()
 {
         presentationContext.recreate(physicalDevice, device, queueManager);
         refreshPresentSemaphores();
-    }
+        ++swapchainRecreationGeneration_;
+}
+
+[[nodiscard]] std::uint64_t Device::swapchainRecreationGeneration() const noexcept
+{
+        return swapchainRecreationGeneration_;
+}
 
 [[nodiscard]] PipelineService &Device::pipeline() noexcept
 {

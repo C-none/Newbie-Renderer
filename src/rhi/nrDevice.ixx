@@ -197,6 +197,8 @@ class Device
 
     void recreateSwapchain();
 
+    [[nodiscard]] std::uint64_t swapchainRecreationGeneration() const noexcept;
+
     [[nodiscard]] PipelineService &pipeline() noexcept;
 
     [[nodiscard]] const PipelineService &pipeline() const noexcept;
@@ -257,6 +259,7 @@ class Device
     std::optional<QueueRole> frameFinalSubmitRole_{};
     std::optional<std::uint64_t> presentFrameBoundaryFrameID_{};
     bool frameAcquireRequiresRecreate_ = false;
+    std::uint64_t swapchainRecreationGeneration_ = 0;
     std::vector<vk::raii::Semaphore> presentSemaphoresByImage_{};
 };
 

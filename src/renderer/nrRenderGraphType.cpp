@@ -13,14 +13,29 @@ namespace nr::renderer
         return stages != vk::PipelineStageFlags2{};
     }
 
+void RetainedExternalResourceState::reset() noexcept
+{
+    initialized = false;
+    ownership = ResourceOwnershipDomain::Undefined;
+    access = {};
+    lastSubmissionTimelineValue = 0;
+}
+
+void RetainedBufferState::reset() noexcept
+{
+    common.reset();
+}
+
 void RetainedImageState::reset() noexcept
 {
-        initialized = false;
-        layout = ImageLayoutIntent::Undefined;
-        ownership = ResourceOwnershipDomain::Undefined;
-        access = {};
-        lastSubmissionTimelineValue = 0;
-    }
+    common.reset();
+    layout = ImageLayoutIntent::Undefined;
+}
+
+void RetainedAccelerationStructureState::reset() noexcept
+{
+    common.reset();
+}
 
 [[nodiscard]] PassParallelRecordPlan ParallelRecordPlanner::planContiguousRanges(
         std::size_t itemCount,

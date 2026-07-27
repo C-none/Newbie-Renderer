@@ -80,6 +80,7 @@ struct UiRuntimeCache
     std::map<std::uint64_t, std::uint32_t> textureSlotByKey{};
     std::vector<std::uint32_t> freeTextureSlots{};
     std::vector<UiRetiredTexture> retiredTextures{};
+    std::optional<UiFrameDrawData> preparedDrawFrame{};
 };
 
 [[nodiscard]] vk::PipelineColorBlendAttachmentState makeUiBlendAttachment()
@@ -505,10 +506,10 @@ void createOrUpdateUiTexture(
         device,
         textureEntry.image,
         std::span<const std::byte>{uploadBytes.data(), uploadBytes.size()});
-    textureEntry.state.initialized = true;
+    textureEntry.state.common.initialized = true;
     textureEntry.state.layout = nr::renderer::ImageLayoutIntent::ShaderReadOnly;
-    textureEntry.state.ownership = nr::renderer::ResourceOwnershipDomain::Graphics;
-    textureEntry.state.access = nr::renderer::AccessScope{
+    textureEntry.state.common.ownership = nr::renderer::ResourceOwnershipDomain::Graphics;
+    textureEntry.state.common.access = nr::renderer::AccessScope{
         .stages = vk::PipelineStageFlagBits2::eFragmentShader,
         .access = vk::AccessFlagBits2::eShaderSampledRead,
     };
@@ -672,11 +673,11 @@ void synchronizeUiTextures(
             .usageIntents = {
                 nr::renderer::ImageUsageIntent::Sampled,
             },
-            .initialLayout = textureEntry.state.initialized
+            .initialLayout = textureEntry.state.common.initialized
                                  ? textureEntry.state.layout
                                  : nr::renderer::ImageLayoutIntent::Undefined,
-            .initialAccessScope = textureEntry.state.initialized
-                                      ? textureEntry.state.access
+            .initialAccessScope = textureEntry.state.common.initialized
+                                      ? textureEntry.state.common.access
                                       : nr::renderer::AccessScope{},
             .importedResource = std::cref(textureEntry.image),
             .retainedState = std::ref(textureEntry.state),
@@ -686,6 +687,25 @@ void synchronizeUiTextures(
     });
 
     return graphResourceBySlot;
+}
+
+[[nodiscard]] std::string uiSkeletonBranchKey(const UiRuntimeCache& runtime, vk::Format format)
+{
+    auto key = std::format(
+        "overlay;format={};revision={};slots={}",
+        static_cast<std::uint32_t>(format),
+        runtime.textureTableRevision,
+        runtime.texturesBySlot.size());
+    auto const slots = std::views::iota(std::size_t{0u}, runtime.texturesBySlot.size());
+    std::ranges::for_each(slots, [&](std::size_t slot) {
+        auto const& entry = runtime.texturesBySlot[slot];
+        key += std::format(
+            ";{}:{}:{}",
+            slot,
+            entry.textureKey,
+            entry.image.valid() ? 1u : 0u);
+    });
+    return key;
 }
 
 void ensureFrameUploadBuffer(
@@ -841,6 +861,7 @@ void drawCpuPerformanceSection(nr::app::UiSystem& ui)
     drawCpuTimingLine(ui, "CPU Wait GPU", average.cpuWaitGpuMilliseconds);
     drawCpuTimingLine(ui, "Frame Setup", average.frameSetupMilliseconds);
     drawCpuTimingLine(ui, "Scene", average.sceneMilliseconds);
+    drawCpuTimingLine(ui, "Post Scene", average.postSceneMilliseconds);
     drawCpuTimingLine(ui, "Build", average.buildMilliseconds);
     drawCpuTimingLine(ui, "Compile", average.compileMilliseconds);
     drawCpuTimingLine(ui, "Prepare", average.prepareMilliseconds);
@@ -1090,6 +1111,43 @@ void prepareBindlessTextureTableForFrame(
 
     return output;
 }
+
+[[nodiscard]] UiFrameDrawData prepareUiDrawFrame(
+    nr::rhi::Device& device,
+    UiRuntimeCache& runtime,
+    const nr::renderer::NodeFrameParameters& frameParameters)
+{
+    auto const bufferExtent = vk::Extent2D{
+        std::max(1u, frameParameters.swapchainExtent.width),
+        std::max(1u, frameParameters.swapchainExtent.height),
+    };
+    auto drawFrame = UiFrameDrawData{};
+    drawFrame.framebufferExtent = bufferExtent;
+    auto uiSystem = tryGetUiOverlaySystem(frameParameters);
+    if (!uiSystem.has_value())
+    {
+        return drawFrame;
+    }
+
+    auto trailingSections = makeTrailingUiSections(tryGetPresentationContext(frameParameters));
+    uiSystem->get().renderSections(
+        std::span<const nr::app::UiSection>{},
+        frameParameters.nodeUiSections,
+        sectionSpan(trailingSections));
+    uiSystem->get().finalizeFrame();
+    auto drawData = uiSystem->get().drawData();
+    if (!drawData.has_value())
+    {
+        return drawFrame;
+    }
+
+    synchronizeUiTextures(
+        device,
+        runtime,
+        drawData->get(),
+        static_cast<std::uint64_t>(frameParameters.frameIndex));
+    return copyUiDrawData(drawData->get(), bufferExtent);
+}
 } // namespace nr::renderPasses::detail
 
 namespace nr::renderPasses
@@ -1115,6 +1173,193 @@ void UiNode::initialize(NodeInitContext& context)
 
 void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
 {
+        materializeCurrentFrame(context, frameParameters);
+    }
+
+[[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot>
+UiNode::structuralSnapshot(const NodeFrameParameters& frameParameters) const
+{
+        if (!runtime_ || !device_.has_value())
+        {
+            return std::nullopt;
+        }
+        runtime_->preparedDrawFrame = detail::prepareUiDrawFrame(
+            device_->get(), *runtime_, frameParameters);
+        auto const bufferFormat = input.bufferFormat == vk::Format::eUndefined
+                                      ? vk::Format::eR8G8B8A8Unorm
+                                      : input.bufferFormat;
+        auto branch = detail::uiSkeletonBranchKey(*runtime_, bufferFormat);
+        return StructuralSnapshot{
+            .configurationRevision = std::max<std::uint64_t>(1u, std::hash<std::string>{}(branch)),
+            .branchKey = std::move(branch),
+        };
+    }
+
+bool UiNode::materializeRenderGraphSkeleton(
+    nr::renderer::RenderGraphSkeletonPatchContext& context,
+    const NodeFrameParameters& frameParameters,
+    const StructuralSnapshot& snapshot)
+{
+        nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "UiNode Skeleton patch requires initialized state.");
+        auto const bufferExtent = vk::Extent2D{
+            std::max(1u, frameParameters.swapchainExtent.width),
+            std::max(1u, frameParameters.swapchainExtent.height),
+        };
+        auto const bufferFormat = input.bufferFormat == vk::Format::eUndefined
+                                      ? vk::Format::eR8G8B8A8Unorm
+                                      : input.bufferFormat;
+        detail::ensureUiBufferImage(device_->get(), *runtime_, bufferExtent, bufferFormat);
+        auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
+        context.patchResource(0u, nr::renderer::GraphImportedImageDesc{
+            .debugName = std::format("Ui.Buffer[{}]", frameSlot),
+            .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
+            .extent = vk::Extent3D{bufferExtent.width, bufferExtent.height, 1u},
+            .format = bufferFormat,
+            .usageIntents = {
+                nr::renderer::ImageUsageIntent::Sampled,
+                nr::renderer::ImageUsageIntent::ColorAttachment,
+            },
+            .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
+            .importedResource = std::cref(runtime_->uiBuffers[frameSlot]),
+        });
+
+        if (!runtime_->preparedDrawFrame.has_value())
+        {
+            runtime_->preparedDrawFrame = detail::prepareUiDrawFrame(
+                device_->get(), *runtime_, frameParameters);
+        }
+        auto const drawFrame = *runtime_->preparedDrawFrame;
+        if (detail::uiSkeletonBranchKey(*runtime_, bufferFormat) != snapshot.branchKey)
+        {
+            return false;
+        }
+
+        auto resourceSlot = std::size_t{1u};
+        auto const textureSlots = std::views::iota(std::size_t{0u}, runtime_->texturesBySlot.size());
+        std::ranges::for_each(textureSlots, [&](std::size_t slot) {
+            auto& entry = runtime_->texturesBySlot[slot];
+            if (!entry.image.valid())
+            {
+                return;
+            }
+            context.patchResource(resourceSlot++, nr::renderer::GraphImportedImageDesc{
+                .debugName = std::format("Ui.TextureResource[{}]", slot),
+                .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+                .initialOwnership = nr::renderer::ResourceOwnershipDomain::Graphics,
+                .extent = entry.image.extent(),
+                .format = vk::Format::eR8G8B8A8Unorm,
+                .usageIntents = {nr::renderer::ImageUsageIntent::Sampled},
+                .initialLayout = entry.state.common.initialized
+                                     ? entry.state.layout
+                                     : nr::renderer::ImageLayoutIntent::Undefined,
+                .initialAccessScope = entry.state.common.initialized
+                                          ? entry.state.common.access
+                                          : nr::renderer::AccessScope{},
+                .importedResource = std::cref(entry.image),
+                .retainedState = std::ref(entry.state),
+            });
+        });
+
+        auto runtime = runtime_;
+        auto& bindlessCache = context.globalResources().bindlessImageTableCache.get();
+        auto patch = nr::renderer::RasterPassPatchBuilder{
+            context, 0u, "Ui.Overlay", runtime_->pipeline};
+        patch.viewport(drawFrame.framebufferExtent)
+            .colorAttachment(
+                context.resource(0u),
+                vk::ClearValue{vk::ClearColorValue{
+                    std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}})
+            .rasterState(nr::rhi::MeshRasterState{
+                .cullMode = vk::CullModeFlagBits::eNone,
+                .depthCompareOp = vk::CompareOp::eAlways,
+            })
+            .prepare([runtime, drawFrame, cache = std::ref(bindlessCache)](
+                         const nr::renderer::PassPrepareContext& prepareContext) {
+                detail::prepareBindlessTextureTableForFrame(
+                    *runtime, cache.get(), prepareContext.frameIndex);
+                auto& device = prepareContext.device->get();
+                auto const frameSlot = static_cast<std::size_t>(
+                    prepareContext.frameIndex % runtime->vertexBuffers.size());
+                auto const vertexBytes = static_cast<vk::DeviceSize>(
+                    drawFrame.vertices.size() * sizeof(ImDrawVert));
+                auto const indexBytes = static_cast<vk::DeviceSize>(
+                    drawFrame.indices.size() * sizeof(ImDrawIdx));
+                detail::ensureFrameUploadBuffer(
+                    device, runtime->vertexBuffers[frameSlot], vertexBytes,
+                    vk::BufferUsageFlagBits::eVertexBuffer,
+                    std::format("Ui.VertexBuffer[{}]", frameSlot));
+                detail::ensureFrameUploadBuffer(
+                    device, runtime->indexBuffers[frameSlot], indexBytes,
+                    vk::BufferUsageFlagBits::eIndexBuffer,
+                    std::format("Ui.IndexBuffer[{}]", frameSlot));
+                if (vertexBytes > 0u)
+                {
+                    runtime->vertexBuffers[frameSlot].writeMappedAndFlush(
+                        std::span<const ImDrawVert>{drawFrame.vertices});
+                }
+                if (indexBytes > 0u)
+                {
+                    runtime->indexBuffers[frameSlot].writeMappedAndFlush(
+                        std::span<const ImDrawIdx>{drawFrame.indices});
+                }
+            })
+            .dynamicBindingSnapshot(
+                [runtime, cache = std::ref(bindlessCache)](
+                    const nr::renderer::PassPrepareContext& prepareContext) {
+                    return detail::makeBindlessTextureBindingSnapshotForFrame(
+                        *runtime, cache.get(), prepareContext.frameIndex);
+                })
+            .record([runtime, drawFrame](const nr::renderer::RasterPassRecordContext& rasterContext) {
+                if (drawFrame.commands.empty())
+                {
+                    return;
+                }
+                auto const frameSlot = static_cast<std::size_t>(
+                    rasterContext.pass.frameIndex % runtime->vertexBuffers.size());
+                auto& commandBuffer = rasterContext.commandBuffer;
+                auto const vertexBuffers = std::array{
+                    runtime->vertexBuffers[frameSlot].handle()};
+                auto const vertexOffsets = std::array<vk::DeviceSize, 1>{0u};
+                commandBuffer.bindVertexBuffers(0u, vertexBuffers, vertexOffsets);
+                commandBuffer.bindIndexBuffer(
+                    runtime->indexBuffers[frameSlot].handle(), 0u,
+                    sizeof(ImDrawIdx) == 2u
+                        ? vk::IndexType::eUint16
+                        : vk::IndexType::eUint32);
+                auto constants = drawFrame.pushConstants;
+                auto lastTexture = std::optional<std::uint32_t>{};
+                std::ranges::for_each(drawFrame.commands, [&](const detail::UiDrawCommand& command) {
+                    if (command.elementCount == 0u ||
+                        command.scissor.extent.width == 0u ||
+                        command.scissor.extent.height == 0u)
+                    {
+                        return;
+                    }
+                    nr::nrAssert(
+                        command.textureSlot < runtime->texturesBySlot.size() &&
+                            runtime->texturesBySlot[command.textureSlot].image.valid(),
+                        std::format(
+                            "UiNode Skeleton record could not resolve texture slot {}.",
+                            command.textureSlot));
+                    if (!lastTexture.has_value() || *lastTexture != command.textureSlot)
+                    {
+                        constants.textureIndex = command.textureSlot;
+                        rasterContext.pushConstants("gUiPush", constants);
+                        lastTexture = command.textureSlot;
+                    }
+                    commandBuffer.setScissor(0u, {command.scissor});
+                    commandBuffer.drawIndexed(
+                        command.elementCount, 1u, command.firstIndex,
+                        command.vertexOffset, 0u);
+                });
+            });
+        patch.patch();
+        runtime_->preparedDrawFrame.reset();
+        return true;
+}
+
+void UiNode::materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
+{
         nr::nrAssert(static_cast<bool>(runtime_), "UiNode build stage requires initialized runtime state.");
         nr::nrAssert(device_.has_value(), "UiNode build stage requires initialize() device reference.");
 
@@ -1138,29 +1383,13 @@ void UiNode::build(NodeBuildContext& context, const NodeFrameParameters& framePa
 
         context.publishFrameResource(nr::renderer::frameResource::uiColor, uiBuffer);
 
-        auto uiSystem = tryGetUiOverlaySystem(frameParameters);
-        auto drawFrame = UiFrameDrawData{};
-        drawFrame.framebufferExtent = bufferExtent;
-        auto const currentFrameIndex = static_cast<std::uint64_t>(frameParameters.frameIndex);
-        if (uiSystem.has_value())
+        if (!runtime_->preparedDrawFrame.has_value())
         {
-            auto trailingSections = makeTrailingUiSections(tryGetPresentationContext(frameParameters));
-            uiSystem->get().renderSections(
-                std::span<const nr::app::UiSection>{},
-                frameParameters.nodeUiSections,
-                sectionSpan(trailingSections));
-            uiSystem->get().finalizeFrame();
-            auto drawData = uiSystem->get().drawData();
-            if (drawData.has_value())
-            {
-                synchronizeUiTextures(
-                    device_->get(),
-                    *runtime_,
-                    drawData->get(),
-                    currentFrameIndex);
-                drawFrame = copyUiDrawData(drawData->get(), bufferExtent);
-            }
+            runtime_->preparedDrawFrame = prepareUiDrawFrame(
+                device_->get(), *runtime_, frameParameters);
         }
+        auto drawFrame = std::move(*runtime_->preparedDrawFrame);
+        runtime_->preparedDrawFrame.reset();
 
         auto graphResourceBySlot = registerUiTextureImageResources(
             context,

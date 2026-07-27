@@ -310,8 +310,8 @@ template <typename VkHandle>
     auto retainedImage = builder.addResource(nr::renderer::GraphImportedImageDesc{
         .debugName = std::format("Retained.Image.{}", debugSuffix),
         .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-        .initialOwnership = state.initialized
-                                ? state.ownership
+        .initialOwnership = state.common.initialized
+                                ? state.common.ownership
                                 : nr::renderer::ResourceOwnershipDomain::Undefined,
         .extent = vk::Extent3D{128, 72, 1},
         .format = vk::Format::eR16G16B16A16Sfloat,
@@ -319,11 +319,11 @@ template <typename VkHandle>
             nr::renderer::ImageUsageIntent::StorageWrite,
             nr::renderer::ImageUsageIntent::TransferSrc,
         },
-        .initialLayout = state.initialized
+        .initialLayout = state.common.initialized
                              ? state.layout
                              : nr::renderer::ImageLayoutIntent::Undefined,
-        .initialAccessScope = state.initialized
-                                  ? state.access
+        .initialAccessScope = state.common.initialized
+                                  ? state.common.access
                                   : nr::renderer::AccessScope{},
         .retainedState = std::ref(state),
     });
@@ -847,13 +847,15 @@ const nr::test::CaseRegistrar compilerRetainedImageInitializedCase{
     "render graph compiler uses initialized retained image state for first-use barriers",
     [] {
         auto state = nr::renderer::RetainedImageState{
-            .initialized = true,
-            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
-            .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
-            .access = nr::renderer::AccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferRead,
+            .common = nr::renderer::RetainedExternalResourceState{
+                .initialized = true,
+                .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
+                .access = nr::renderer::AccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferRead,
+                },
             },
+            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
         };
         auto frame = buildRetainedStorageWriteFrame(state, "initialized");
         auto compiled = nr::renderer::RenderGraphCompiler{}.compile(frame);
@@ -892,13 +894,15 @@ const nr::test::CaseRegistrar compilerRetainedImageInitialOwnershipCase{
     "render graph compiler transfers initialized retained image ownership before first use",
     [] {
         auto state = nr::renderer::RetainedImageState{
-            .initialized = true,
-            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
-            .ownership = nr::renderer::ResourceOwnershipDomain::Graphics,
-            .access = nr::renderer::AccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferRead,
+            .common = nr::renderer::RetainedExternalResourceState{
+                .initialized = true,
+                .ownership = nr::renderer::ResourceOwnershipDomain::Graphics,
+                .access = nr::renderer::AccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferRead,
+                },
             },
+            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
         };
         auto frame = buildRetainedStorageWriteFrame(state, "initial-ownership");
         auto compiled = nr::renderer::RenderGraphCompiler{}.compile(frame);
@@ -1145,17 +1149,19 @@ const nr::test::CaseRegistrar compileCachePatchesRetainedImageStateCase{
     [] {
         auto cache = nr::renderer::RenderGraphCompileCache{};
         auto previousState = nr::renderer::RetainedImageState{
-            .initialized = true,
-            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
-            .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
-            .access = nr::renderer::AccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferRead,
+            .common = nr::renderer::RetainedExternalResourceState{
+                .initialized = true,
+                .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
+                .access = nr::renderer::AccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferRead,
+                },
             },
+            .layout = nr::renderer::ImageLayoutIntent::TransferSrc,
         };
         auto currentState = previousState;
         auto changedAccessState = previousState;
-        changedAccessState.access = nr::renderer::AccessScope{
+        changedAccessState.common.access = nr::renderer::AccessScope{
             .stages = vk::PipelineStageFlagBits2::eTransfer,
             .access = vk::AccessFlagBits2::eMemoryRead,
         };

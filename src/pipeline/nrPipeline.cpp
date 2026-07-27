@@ -34,6 +34,7 @@ struct ViewerControlState
     std::string modelInput{};
     std::string statusMessage{};
     RtPostProcessingMode rtPostProcessingMode = RtPostProcessingMode::dlssRayReconstruction;
+    RtDlssQuality rtDlssQuality = RtDlssQuality::dlaa;
     std::optional<PipelineUiComponent> activePipelineUi{};
     ViewerPendingRequests pending{};
 };
@@ -62,6 +63,7 @@ struct ViewerControlState
         .swapchainFormat = presentation.swapchainFormat(),
         .swapchainExtent = presentation.swapchainExtent(),
         .rtPostProcessingMode = controls.rtPostProcessingMode,
+        .rtDlssQuality = controls.rtDlssQuality,
     });
     if (graphSpec.nodes.empty())
     {
@@ -349,6 +351,69 @@ void queueViewerControls(
             return;
         }
 
+        if (token == "--benchmark")
+        {
+            options.benchmark = true;
+            return;
+        }
+
+        auto parseCount = [&](std::string_view option, std::uint32_t& destination) {
+            auto const valueIndex = index + 1u;
+            if (valueIndex >= tokens.size())
+            {
+                options.errorMessage = std::format("{} requires a non-negative integer value.", option);
+                return;
+            }
+            auto value = std::uint32_t{};
+            auto const [end, parseError] = std::from_chars(tokens[valueIndex].data(), tokens[valueIndex].data() + tokens[valueIndex].size(), value);
+            if (parseError != std::errc{} || end != tokens[valueIndex].data() + tokens[valueIndex].size())
+            {
+                options.errorMessage = std::format("{} requires a non-negative integer value.", option);
+                return;
+            }
+            destination = value;
+            consumed[valueIndex] = true;
+        };
+        if (token == "--warmup-frames")
+        {
+            parseCount(token, options.warmupFrames);
+            return;
+        }
+        if (token == "--measure-frames")
+        {
+            parseCount(token, options.measureFrames);
+            return;
+        }
+        if (token == "--output")
+        {
+            auto const valueIndex = index + 1u;
+            if (valueIndex >= tokens.size() || tokens[valueIndex].empty())
+            {
+                options.errorMessage = "--output requires a directory value.";
+                return;
+            }
+            options.outputDirectory = std::filesystem::path{tokens[valueIndex]};
+            consumed[valueIndex] = true;
+            return;
+        }
+        if (token == "--dlss-quality")
+        {
+            auto const valueIndex = index + 1u;
+            if (valueIndex >= tokens.size())
+            {
+                options.errorMessage = "--dlss-quality requires 'ultra-performance'.";
+                return;
+            }
+            if (tokens[valueIndex] != "ultra-performance")
+            {
+                options.errorMessage = "--dlss-quality currently accepts only 'ultra-performance'.";
+                return;
+            }
+            options.dlssQuality = RtDlssQuality::ultraPerformance;
+            consumed[valueIndex] = true;
+            return;
+        }
+
         if (token.starts_with("-"))
         {
             options.errorMessage = std::format("Unknown argument: {}", token);
@@ -367,6 +432,14 @@ void queueViewerControls(
     {
         options.modelPath = defaultModelPath();
     }
+    if (options.benchmark && (options.measureFrames == 0u || options.outputDirectory.empty()))
+    {
+        options.errorMessage = "--benchmark requires --measure-frames N (N > 0) and --output <directory>.";
+    }
+    if (options.benchmark && options.dlssQuality != RtDlssQuality::ultraPerformance)
+    {
+        options.errorMessage = "--benchmark requires --dlss-quality ultra-performance.";
+    }
     return options;
 }
 
@@ -374,6 +447,7 @@ void printViewerUsage(std::string_view executableName)
 {
     std::println("Usage:");
     std::println("  {} [model_path] [--pipeline normalview|rtobject]", executableName);
+    std::println("  {} --benchmark --warmup-frames N --measure-frames N --output <directory> [--dlss-quality ultra-performance]", executableName);
     std::println("  {} --help", executableName);
     std::println("Controls:");
     std::println("  Move: W/S/A/D/Q/E");
@@ -391,6 +465,11 @@ void printViewerUsage(std::string_view executableName)
             nr::LogLevel::error,
             "PIPELINE",
             std::format("Unknown initial pipeline: {}", config.initialPipelineId));
+        return 2;
+    }
+    if (config.benchmark && config.initialPipelineId != rtObjectPipelineId)
+    {
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", "--benchmark is currently supported only by the rtobject pipeline.");
         return 2;
     }
 
@@ -435,6 +514,7 @@ void printViewerUsage(std::string_view executableName)
         .activeEnvironmentMapPath = environmentLoad->sourcePath,
         .environmentMapAssets = std::move(*environmentMapAssets),
         .modelInput = normalizeModelPathForStorage(config.initialModelPath).string(),
+        .rtDlssQuality = config.dlssQuality,
     };
 
     auto initialLoad = modelController.loadModel(app, config.initialModelPath, std::ref(history));
@@ -453,6 +533,19 @@ void printViewerUsage(std::string_view executableName)
         app.shutdown();
         return 2;
     }
+    if (config.benchmark)
+    {
+        app.renderer().configureBenchmark(nr::renderer::RendererBenchmarkConfig{
+            .enabled = true,
+            .warmupFrames = config.warmupFrames,
+            .measureFrames = config.measureFrames,
+            .outputDirectory = config.outputDirectory,
+            .dlssQuality = "ultra-performance",
+            .modelPath = initialLoad.modelPath.string(),
+            .pipelineId = config.initialPipelineId,
+            .commandLine = config.commandLine,
+        });
+    }
 
     auto frameServices = app.makeFrameServices();
     auto& presentation = app.renderer().device().presentationContext;
@@ -462,7 +555,10 @@ void printViewerUsage(std::string_view executableName)
 
     while (!presentation.windowShouldClose())
     {
-        static_cast<void>(processPendingRequests(app, registry, history, modelController, controls));
+        if (!config.benchmark)
+        {
+            static_cast<void>(processPendingRequests(app, registry, history, modelController, controls));
+        }
 
         presentation.pollEvents();
         auto now = std::chrono::steady_clock::now();
@@ -483,8 +579,11 @@ void printViewerUsage(std::string_view executableName)
         }
 
         app.ui().beginFrame(presentation, deltaSeconds);
-        queueViewerControls(app.ui(), registry, history, controls);
-        app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
+        if (!config.benchmark)
+        {
+            queueViewerControls(app.ui(), registry, history, controls);
+            app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
+        }
         app.ui().setCameraFrame(app.camera().frame());
         auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
@@ -518,8 +617,16 @@ void printViewerUsage(std::string_view executableName)
             exitCode = 1;
             break;
         }
+        if (config.benchmark && app.renderer().benchmarkComplete())
+        {
+            break;
+        }
     }
 
+    if (config.benchmark && exitCode == 0 && !app.renderer().finalizeBenchmark())
+    {
+        exitCode = 1;
+    }
     app.shutdown();
     return exitCode;
 }
@@ -540,11 +647,25 @@ void printViewerUsage(std::string_view executableName)
         return 2;
     }
 
+    auto commandLine = std::string{};
+    std::ranges::for_each(args, [&](const char* argument) {
+        if (!commandLine.empty())
+        {
+            commandLine += ' ';
+        }
+        commandLine += argument;
+    });
     return runViewer(ViewerRunConfig{
         .initialModelPath = options.modelPath,
         .initialPipelineId = options.pipelineId,
         .appName = "NewbieRenderer",
         .engineName = "NewbieRenderer",
+        .benchmark = options.benchmark,
+        .warmupFrames = options.warmupFrames,
+        .measureFrames = options.measureFrames,
+        .outputDirectory = options.outputDirectory,
+        .dlssQuality = options.dlssQuality,
+        .commandLine = std::move(commandLine),
     });
 }
 } // namespace nr::pipeline

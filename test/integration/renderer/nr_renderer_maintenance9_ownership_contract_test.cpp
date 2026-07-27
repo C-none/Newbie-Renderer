@@ -26,14 +26,16 @@ const nr::test::CaseRegistrar maintenance9OwnershipCase{
             "Maintenance9.PathTracingGuide");
 
         auto retainedState = nr::renderer::RetainedImageState{
-            .initialized = true,
-            .layout = nr::renderer::ImageLayoutIntent::ShaderReadOnly,
-            .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
-            .access = nr::renderer::AccessScope{
-                .stages = vk::PipelineStageFlagBits2::eComputeShader,
-                .access = vk::AccessFlagBits2::eShaderRead,
+            .common = nr::renderer::RetainedExternalResourceState{
+                .initialized = true,
+                .ownership = nr::renderer::ResourceOwnershipDomain::Compute,
+                .access = nr::renderer::AccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eComputeShader,
+                    .access = vk::AccessFlagBits2::eShaderRead,
+                },
+                .lastSubmissionTimelineValue = 1u,
             },
-            .lastSubmissionTimelineValue = 1u,
+            .layout = nr::renderer::ImageLayoutIntent::ShaderReadOnly,
         };
 
         auto builder = nr::renderer::RenderGraphBuilder{};
@@ -41,7 +43,7 @@ const nr::test::CaseRegistrar maintenance9OwnershipCase{
         auto guideResource = builder.addResource(nr::renderer::GraphImportedImageDesc{
             .debugName = "Maintenance9.PathTracingGuide",
             .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-            .initialOwnership = retainedState.ownership,
+            .initialOwnership = retainedState.common.ownership,
             .extent = vk::Extent3D{128u, 72u, 1u},
             .format = vk::Format::eR16G16B16A16Sfloat,
             .usageIntents = {
@@ -51,7 +53,7 @@ const nr::test::CaseRegistrar maintenance9OwnershipCase{
                 nr::renderer::ImageUsageIntent::TransferSrc,
             },
             .initialLayout = retainedState.layout,
-            .initialAccessScope = retainedState.access,
+            .initialAccessScope = retainedState.common.access,
             .importedResource = std::cref(guide),
             .retainedState = std::ref(retainedState),
         });

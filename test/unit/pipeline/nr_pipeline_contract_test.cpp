@@ -145,6 +145,29 @@ const nr::test::CaseRegistrar cliCase{
         auto badOptions = nr::pipeline::parseViewerCommandLine(
             std::span<char*>{badArgv.data(), badArgv.size()});
         nr::test::require(!badOptions.errorMessage.empty());
+
+        auto benchmarkValues = std::vector<std::string>{
+            "--benchmark", "--warmup-frames", "12", "--measure-frames", "24", "--output", "build/benchmark", "--dlss-quality", "ultra-performance"};
+        auto benchmarkArgv = makeArgSpanStorage(benchmarkValues);
+        auto benchmark = nr::pipeline::parseViewerCommandLine(
+            std::span<char*>{benchmarkArgv.data(), benchmarkArgv.size()});
+        nr::test::require(benchmark.errorMessage.empty());
+        nr::test::require(benchmark.benchmark);
+        nr::test::requireEqual(benchmark.warmupFrames, 12u);
+        nr::test::requireEqual(benchmark.measureFrames, 24u);
+        nr::test::requireEqual(benchmark.dlssQuality, nr::pipeline::RtDlssQuality::ultraPerformance);
+
+        auto incompleteValues = std::vector<std::string>{"--benchmark", "--measure-frames", "0"};
+        auto incompleteArgv = makeArgSpanStorage(incompleteValues);
+        auto incomplete = nr::pipeline::parseViewerCommandLine(
+            std::span<char*>{incompleteArgv.data(), incompleteArgv.size()});
+        nr::test::require(!incomplete.errorMessage.empty());
+
+        auto missingUpValues = std::vector<std::string>{"--benchmark", "--measure-frames", "1", "--output", "build/benchmark"};
+        auto missingUpArgv = makeArgSpanStorage(missingUpValues);
+        auto missingUp = nr::pipeline::parseViewerCommandLine(
+            std::span<char*>{missingUpArgv.data(), missingUpArgv.size()});
+        nr::test::require(!missingUp.errorMessage.empty());
     }};
 
 const nr::test::CaseRegistrar defaultEnvironmentCase{

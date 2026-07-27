@@ -43,28 +43,16 @@ struct DlssRayReconstructionResolutionControllerImpl
     std::optional<DlssRayReconstructionResolutionSnapshot> snapshot{};
 };
 
-void validateDlssOptimalSettings(
-    const nr::rhi::DlssOptimalSettings& settings,
-    nr::rhi::DlssDimensions targetSize,
-    nr::rhi::DlssQuality quality)
+void validateDlssOptimalSettings(const nr::rhi::DlssOptimalSettings &settings, nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality)
 {
     nr::nrAssert(settings.status.success(), std::format("DLSS RR optimal-settings query failed: {}", settings.status.message));
-    nr::nrAssert(
-        settings.optimalRenderSize.valid() && settings.minimumRenderSize.valid() && settings.maximumRenderSize.valid(),
-        "DLSS RR optimal-settings query returned zero dimensions.");
-    nr::nrAssert(
-        settings.minimumRenderSize.width <= settings.optimalRenderSize.width &&
-            settings.minimumRenderSize.height <= settings.optimalRenderSize.height &&
-            settings.optimalRenderSize.width <= settings.maximumRenderSize.width &&
-            settings.optimalRenderSize.height <= settings.maximumRenderSize.height &&
-            settings.maximumRenderSize.width <= targetSize.width &&
-            settings.maximumRenderSize.height <= targetSize.height,
-        "DLSS RR optimal-settings query returned inconsistent dimensions or bounds outside the target size.");
+    nr::nrAssert(settings.optimalRenderSize.valid() && settings.minimumRenderSize.valid() && settings.maximumRenderSize.valid(), "DLSS RR optimal-settings query returned zero dimensions.");
+    nr::nrAssert(settings.minimumRenderSize.width <= settings.optimalRenderSize.width && settings.minimumRenderSize.height <= settings.optimalRenderSize.height && settings.optimalRenderSize.width <= settings.maximumRenderSize.width &&
+                     settings.optimalRenderSize.height <= settings.maximumRenderSize.height && settings.maximumRenderSize.width <= targetSize.width && settings.maximumRenderSize.height <= targetSize.height,
+                 "DLSS RR optimal-settings query returned inconsistent dimensions or bounds outside the target size.");
     if (quality == nr::rhi::DlssQuality::Dlaa)
     {
-        nr::nrAssert(
-            settings.optimalRenderSize == targetSize,
-            "DLSS RR DLAA optimal render size must equal the target size.");
+        nr::nrAssert(settings.optimalRenderSize == targetSize, "DLSS RR DLAA optimal render size must equal the target size.");
     }
 }
 
@@ -173,34 +161,29 @@ void validateActiveSubrectBounds(const std::array<std::optional<nr::renderer::No
     return vk::Extent3D{subrectBase.x + targetSize.width, subrectBase.y + targetSize.height, 1u};
 }
 
-[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> createMotionVectorDebugPipeline(
-    nr::rhi::Device& device)
+[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> createMotionVectorDebugPipeline(nr::rhi::Device &device)
 {
-    auto& shaderService = nr::rhi::ShaderService::instance();
+    auto &shaderService = nr::rhi::ShaderService::instance();
     auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
         .sourcePath = std::filesystem::path{"renderer/dlssRayReconstructionDebug"},
     });
     nrAssert(program.valid(), "DLSS RR motion-vector debug pass failed to compile renderer/dlssRayReconstructionDebug.");
 
     auto pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
-    pipeline->initialize(device.pipeline().createComputePipeline(
-        program,
-        nr::rhi::ComputePipelineDesc{
-            .entryPointName = "visualizeMotionVectorsMain",
-        }));
+    pipeline->initialize(device.pipeline().createComputePipeline(program, nr::rhi::ComputePipelineDesc{
+                                                                              .entryPointName = "visualizeMotionVectorsMain",
+                                                                          }));
     nrAssert(pipeline->valid(), "DLSS RR motion-vector debug pass failed to create its compute pipeline.");
     return pipeline;
 }
 
-[[nodiscard]] std::uint32_t dlssMotionVectorDebugDivideRoundUp(
-    std::uint32_t value,
-    std::uint32_t divisor)
+[[nodiscard]] std::uint32_t dlssMotionVectorDebugDivideRoundUp(std::uint32_t value, std::uint32_t divisor)
 {
     nrAssert(divisor > 0u, "DLSS RR motion-vector debug dispatch requires a non-zero divisor.");
     return (value + divisor - 1u) / divisor;
 }
 
-std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4& value) noexcept
+std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4 &value) noexcept
 {
     // Preserve the transform while converting GLM column-vector math to NGX row-vector math.
     auto result = std::array<float, 16u>{};
@@ -245,19 +228,15 @@ template <typename TEnum, std::size_t Count, typename TName> [[nodiscard]] bool 
 
 namespace nr::renderPasses
 {
-DlssRayReconstructionResolutionController::DlssRayReconstructionResolutionController()
-    : impl_(std::make_unique<detail::DlssRayReconstructionResolutionControllerImpl>())
+DlssRayReconstructionResolutionController::DlssRayReconstructionResolutionController() : impl_(std::make_unique<detail::DlssRayReconstructionResolutionControllerImpl>())
 {
 }
 
 DlssRayReconstructionResolutionController::~DlssRayReconstructionResolutionController() = default;
-DlssRayReconstructionResolutionController::DlssRayReconstructionResolutionController(DlssRayReconstructionResolutionController&&) noexcept = default;
-DlssRayReconstructionResolutionController& DlssRayReconstructionResolutionController::operator=(DlssRayReconstructionResolutionController&&) noexcept = default;
+DlssRayReconstructionResolutionController::DlssRayReconstructionResolutionController(DlssRayReconstructionResolutionController &&) noexcept = default;
+DlssRayReconstructionResolutionController &DlssRayReconstructionResolutionController::operator=(DlssRayReconstructionResolutionController &&) noexcept = default;
 
-nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::resolve(
-    DlssRayReconstructionResolutionRequest request,
-    vk::Extent2D displayExtent,
-    const OptimalSettingsQuery& optimalSettingsQuery)
+nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::resolve(DlssRayReconstructionResolutionRequest request, vk::Extent2D displayExtent, const OptimalSettingsQuery &optimalSettingsQuery)
 {
     nrAssert(static_cast<bool>(impl_), "DLSS RR resolution controller requires valid implementation state.");
     nrAssert(displayExtent.width > 0u && displayExtent.height > 0u, "DLSS RR resolution controller requires a non-zero display extent.");
@@ -283,15 +262,13 @@ nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::res
     if (request.enabled)
     {
         nrAssert(static_cast<bool>(optimalSettingsQuery), "DLSS RR enabled resolution requires an optimal-settings query.");
-        auto& cachedSettings = impl_->optimalSettingsByQuality[qualityIndex];
+        auto &cachedSettings = impl_->optimalSettingsByQuality[qualityIndex];
         if (!cachedSettings.has_value())
         {
-            cachedSettings = optimalSettingsQuery(
-                nr::rhi::DlssDimensions{displayExtent.width, displayExtent.height},
-                request.quality);
+            cachedSettings = optimalSettingsQuery(nr::rhi::DlssDimensions{displayExtent.width, displayExtent.height}, request.quality);
         }
 
-        auto const& settings = *cachedSettings;
+        auto const &settings = *cachedSettings;
         detail::validateDlssOptimalSettings(
             settings,
             nr::rhi::DlssDimensions{displayExtent.width, displayExtent.height},
@@ -303,11 +280,8 @@ nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::res
 
     if (impl_->snapshot.has_value())
     {
-        auto const& previous = *impl_->snapshot;
-        plan.resetHistory = previous.request.enabled != request.enabled ||
-                            previous.request.quality != request.quality ||
-                            previous.displayExtent != plan.displayExtent ||
-                            previous.renderExtent != plan.renderExtent;
+        auto const &previous = *impl_->snapshot;
+        plan.resetHistory = previous.request.enabled != request.enabled || previous.request.quality != request.quality || previous.displayExtent != plan.displayExtent || previous.renderExtent != plan.renderExtent;
     }
     else
     {
@@ -371,14 +345,14 @@ DlssRayReconstructionNode::DlssRayReconstructionNode() : input(makeDefaultDlssRa
 
 DlssRayReconstructionNode::~DlssRayReconstructionNode() = default;
 
-void DlssRayReconstructionNode::setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController>& controller) noexcept
+void DlssRayReconstructionNode::setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController> &controller) noexcept
 {
     resolutionController_ = controller;
 }
 
 DlssRayReconstructionResolutionRequest DlssRayReconstructionNode::effectiveResolutionRequest() const noexcept
 {
-    auto const& effectiveInput = pendingInput_.has_value() ? *pendingInput_ : input;
+    auto const &effectiveInput = pendingInput_.has_value() ? *pendingInput_ : input;
     return DlssRayReconstructionResolutionRequest{
         .enabled = effectiveInput.enabled,
         .quality = effectiveInput.create.quality,
@@ -483,6 +457,287 @@ void DlssRayReconstructionNode::collectUi(NodeUiBuildContext &context, const Nod
 
 void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
+    materializeCurrentFrame(context, frameParameters);
+}
+
+[[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> DlssRayReconstructionNode::structuralSnapshot(const NodeFrameParameters &frameParameters) const
+{
+    auto branch = std::format("{};bypass={};alpha={};hdr={};debug={};quality={};roughness={};outSubrects={};overrideRender={}:{}x{};overrideTarget={}:{}x{};render={}x{};display={}x{};colorFmt={};alphaFmt={};colorKey={};alphaKey={}", input.enabled ? "enabled" : "disabled", input.bypass ? 1u : 0u,
+                              input.create.flags.alphaUpscaling ? 1u : 0u, input.create.flags.hdr ? 1u : 0u, input.evaluate.visualizeMotionVectors ? 1u : 0u, static_cast<std::uint32_t>(input.create.quality), static_cast<std::uint32_t>(input.create.roughnessMode),
+                              input.create.enableOutputSubrects ? 1u : 0u, input.overrideRenderSize ? 1u : 0u, input.renderSizeOverride.width, input.renderSizeOverride.height, input.overrideTargetSize ? 1u : 0u, input.targetSizeOverride.width, input.targetSizeOverride.height,
+                              frameParameters.resolutionPlan.renderExtent.width, frameParameters.resolutionPlan.renderExtent.height, frameParameters.resolutionPlan.displayExtent.width, frameParameters.resolutionPlan.displayExtent.height, static_cast<std::uint32_t>(input.outputColorFormat),
+                              static_cast<std::uint32_t>(input.outputAlphaFormat), input.outputColorKey, input.outputAlphaKey);
+    auto const slots = std::views::iota(std::size_t{0u}, nr::rhi::kDlssRayReconstructionResourceSlotCount);
+    std::ranges::for_each(slots, [&](std::size_t index) { branch += std::format(";{}:{}:{}", index, input.includeResources[index] ? 1u : 0u, input.resourceKeys[index]); });
+    std::ranges::for_each(input.create.presets, [&](auto preset) { branch += std::format(";preset={}", static_cast<std::uint32_t>(preset)); });
+    std::ranges::for_each(input.evaluate.subrectBases, [&](auto base) { branch += std::format(";subrect={},{}", base.x, base.y); });
+    return StructuralSnapshot{
+        .configurationRevision = std::max<std::uint64_t>(1u, std::hash<std::string>{}(branch)),
+        .branchKey = std::move(branch),
+    };
+}
+
+bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context, const NodeFrameParameters &frameParameters, const StructuralSnapshot &snapshot)
+{
+    nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "DLSS RR Skeleton patch requires initialized state.");
+    if (!input.enabled)
+    {
+        if (!snapshot.branchKey.starts_with("disabled;"))
+        {
+            return false;
+        }
+        previousBuildTime_ = {};
+        {
+            std::scoped_lock lock(runtime_->mutex);
+            runtime_->resetNextEvaluation = true;
+        }
+        return true;
+    }
+    if (!snapshot.branchKey.starts_with("enabled;"))
+    {
+        return false;
+    }
+    nrAssert(nr::rhi::dlssSdkCompiled(), "DLSS RR was enabled, but the validated NGX bridge could not be loaded.");
+    nrAssert(!input.bypass || input.create.quality == nr::rhi::DlssQuality::Dlaa, "DLSS RR bypass is available only in DLAA mode.");
+    nrAssert(input.create.flags.hdr, "DLSS RR requires the HDR feature flag.");
+    nrAssert(!input.outputColorKey.empty(), "DLSS RR output color key must not be empty.");
+    nrAssert(input.outputColorFormat != vk::Format::eUndefined, "DLSS RR output color format must not be undefined.");
+    if (input.create.flags.alphaUpscaling)
+    {
+        nrAssert(!input.outputAlphaKey.empty(), "DLSS RR alpha output key must not be empty.");
+        nrAssert(input.outputAlphaFormat != vk::Format::eUndefined, "DLSS RR alpha output format must be defined.");
+        nrAssert(input.outputAlphaKey != input.outputColorKey, "DLSS RR alpha and color output keys must differ.");
+    }
+
+    auto const resolutionController = resolutionController_.lock();
+    auto resolutionSnapshot = resolutionController ? resolutionController->snapshot() : std::optional<DlssRayReconstructionResolutionSnapshot>{};
+    if (resolutionController)
+    {
+        nrAssert(resolutionSnapshot.has_value(), "Coordinated DLSS RR Skeleton patch requires a resolution snapshot.");
+        auto const request = DlssRayReconstructionResolutionRequest{
+            .enabled = input.enabled,
+            .quality = input.create.quality,
+            .bypass = input.bypass,
+        };
+        nrAssert(resolutionSnapshot->request == request, "DLSS RR Skeleton resolution request is stale.");
+        nrAssert(resolutionSnapshot->displayExtent == frameParameters.resolutionPlan.displayExtent && resolutionSnapshot->renderExtent == frameParameters.resolutionPlan.renderExtent, "DLSS RR Skeleton resolution snapshot does not match the frame plan.");
+    }
+    auto handles = std::array<nr::renderer::GraphResourceHandle, nr::rhi::kDlssRayReconstructionResourceSlotCount>{};
+    auto descriptions = std::array<std::optional<nr::renderer::NodeImageResourceDesc>, nr::rhi::kDlssRayReconstructionResourceSlotCount>{};
+    auto const indices = std::views::iota(std::size_t{0u}, nr::rhi::kDlssRayReconstructionResourceSlotCount);
+    std::ranges::for_each(indices, [&](std::size_t index) {
+        auto const slot = static_cast<nr::rhi::DlssRayReconstructionResourceSlot>(index);
+        if (slot == nr::rhi::DlssRayReconstructionResourceSlot::Output || slot == nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha)
+        {
+            return;
+        }
+        auto const required = dlssRayReconstructionResourceRequired(slot, input.create.roughnessMode, input.create.flags.alphaUpscaling);
+        if (!required && !input.includeResources[index])
+        {
+            return;
+        }
+        if (!context.hasNamedResource(input.resourceKeys[index]))
+        {
+            return;
+        }
+        handles[index] = context.namedResource(input.resourceKeys[index]);
+        auto image = context.describeImageResource(handles[index]);
+        nrAssert(image.has_value(), "DLSS RR Skeleton input must remain an image.");
+        descriptions[index] = nr::renderer::NodeImageResourceDesc{
+            .debugName = image->debugName,
+            .extent = image->extent,
+            .format = image->format,
+            .aspect = image->aspect,
+        };
+    });
+    if (std::ranges::any_of(indices, [&](std::size_t index) {
+            auto const slot = static_cast<nr::rhi::DlssRayReconstructionResourceSlot>(index);
+            return dlssRayReconstructionResourceRequired(slot, input.create.roughnessMode, input.create.flags.alphaUpscaling) && slot != nr::rhi::DlssRayReconstructionResourceSlot::Output && slot != nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha && !handles[index].valid();
+        }))
+    {
+        return false;
+    }
+
+    auto const colorIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::Color);
+    auto createDesc = input.create;
+    if (resolutionSnapshot.has_value())
+    {
+        createDesc.renderSize = nr::rhi::DlssDimensions{
+            frameParameters.resolutionPlan.renderExtent.width,
+            frameParameters.resolutionPlan.renderExtent.height,
+        };
+        createDesc.targetSize = nr::rhi::DlssDimensions{
+            frameParameters.resolutionPlan.displayExtent.width,
+            frameParameters.resolutionPlan.displayExtent.height,
+        };
+    }
+    else
+    {
+        createDesc.renderSize = input.overrideRenderSize ? input.renderSizeOverride
+                                                         : nr::rhi::DlssDimensions{
+                                                               descriptions[colorIndex]->extent.width,
+                                                               descriptions[colorIndex]->extent.height,
+                                                           };
+        createDesc.targetSize = input.overrideTargetSize ? input.targetSizeOverride
+                                                         : nr::rhi::DlssDimensions{
+                                                               frameParameters.swapchainExtent.width,
+                                                               frameParameters.swapchainExtent.height,
+                                                           };
+    }
+    nrAssert(createDesc.renderSize.valid() && createDesc.targetSize.valid(), "DLSS RR requires non-zero render and target sizes.");
+    nrAssert(createDesc.quality != nr::rhi::DlssQuality::Count, "DLSS RR quality value is invalid.");
+    if (createDesc.quality == nr::rhi::DlssQuality::Dlaa)
+    {
+        nrAssert(createDesc.renderSize == createDesc.targetSize, "DLSS RR DLAA requires equal render and target sizes.");
+    }
+    auto const outputExtent = detail::outputExtent(createDesc.targetSize, input.evaluate.subrectBases[detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::Output)], createDesc.enableOutputSubrects, "color");
+    auto const outputIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::Output);
+    auto const outputColor = context.resource(0u);
+    context.patchResource(0u, nr::renderer::GraphTransientImageDesc{
+                                  .debugName = "DLSS.RR.OutputColor",
+                                  .extent = outputExtent,
+                                  .format = input.outputColorFormat,
+                                  .usageIntents =
+                                      {
+                                          nr::renderer::ImageUsageIntent::StorageWrite,
+                                          nr::renderer::ImageUsageIntent::Sampled,
+                                          nr::renderer::ImageUsageIntent::TransferSrc,
+                                      },
+                              });
+    handles[outputIndex] = outputColor;
+    descriptions[outputIndex] = nr::renderer::NodeImageResourceDesc{
+        .debugName = "DLSS.RR.OutputColor",
+        .extent = outputExtent,
+        .format = input.outputColorFormat,
+    };
+    if (createDesc.flags.alphaUpscaling)
+    {
+        auto const alphaExtent = detail::outputExtent(createDesc.targetSize, input.evaluate.subrectBases[detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::OutputAlpha)], createDesc.enableOutputSubrects, "alpha");
+        auto const alphaIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha);
+        context.patchResource(1u, nr::renderer::GraphTransientImageDesc{
+                                      .debugName = "DLSS.RR.OutputAlpha",
+                                      .extent = alphaExtent,
+                                      .format = input.outputAlphaFormat,
+                                      .usageIntents =
+                                          {
+                                              nr::renderer::ImageUsageIntent::StorageWrite,
+                                              nr::renderer::ImageUsageIntent::Sampled,
+                                              nr::renderer::ImageUsageIntent::TransferSrc,
+                                          },
+                                  });
+        handles[alphaIndex] = context.resource(1u);
+        descriptions[alphaIndex] = nr::renderer::NodeImageResourceDesc{
+            .debugName = "DLSS.RR.OutputAlpha",
+            .extent = alphaExtent,
+            .format = input.outputAlphaFormat,
+        };
+    }
+    detail::validateActiveSubrectBounds(descriptions, input.evaluate.subrectBases, createDesc);
+
+    auto const reflectionMvIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::ReflectionMotionVectors);
+    auto const gBufferSpecularMvIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::GBufferSpecularMotionVectors);
+    auto const specularHitIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::SpecularHitDistance);
+    auto const hasReflectionMotionVectors = handles[reflectionMvIndex].valid() || handles[gBufferSpecularMvIndex].valid();
+    auto const hasManualMatrices = input.evaluate.worldToViewRowMajor.has_value() && input.evaluate.viewToClipRowMajor.has_value();
+    nrAssert(hasReflectionMotionVectors || (handles[specularHitIndex].valid() && (input.evaluate.automaticMatrices || hasManualMatrices)), "DLSS RR requires reflection motion vectors, or hit distance plus matrices.");
+
+    auto evalDesc = nr::rhi::DlssRayReconstructionEvalDesc{};
+    evalDesc.subrectBases = input.evaluate.subrectBases;
+    evalDesc.renderSubrectDimensions = createDesc.renderSize;
+    evalDesc.motionVectorScale = input.evaluate.motionVectorScale;
+    evalDesc.preExposure = input.evaluate.preExposure;
+    evalDesc.exposureScale = input.evaluate.exposureScale;
+    evalDesc.indicatorInvertXAxis = input.evaluate.indicatorInvertXAxis;
+    evalDesc.indicatorInvertYAxis = input.evaluate.indicatorInvertYAxis;
+    evalDesc.toneMapper = input.evaluate.toneMapper;
+    evalDesc.reset = consumeOneShotReset_ || frameParameters.resolutionPlan.resetHistory;
+    consumeOneShotReset_ = false;
+    auto const cameraJitter = context.globalResources().cameraFrameState.jitter.pixelOffset;
+    evalDesc.jitterOffset = input.evaluate.automaticJitter ? std::array{cameraJitter.x, cameraJitter.y} : input.evaluate.manualJitter;
+    if (input.evaluate.automaticMatrices)
+    {
+        evalDesc.worldToViewRowMajor = detail::toDlssRowVectorMatrix(frameParameters.renderCameraConstants.view);
+        evalDesc.viewToClipRowMajor = detail::toDlssRowVectorMatrix(frameParameters.renderCameraConstants.projection);
+    }
+    else
+    {
+        evalDesc.worldToViewRowMajor = input.evaluate.worldToViewRowMajor;
+        evalDesc.viewToClipRowMajor = input.evaluate.viewToClipRowMajor;
+    }
+    auto const now = std::chrono::steady_clock::now();
+    auto const measuredDelta = previousBuildTime_ == std::chrono::steady_clock::time_point{} ? 1000.0f / 60.0f : std::chrono::duration<float, std::milli>(now - previousBuildTime_).count();
+    previousBuildTime_ = now;
+    evalDesc.frameTimeDeltaMilliseconds = input.evaluate.automaticFrameTimeDelta ? std::clamp(measuredDelta, 0.01f, 1000.0f) : input.evaluate.manualFrameTimeDeltaMilliseconds;
+
+    auto const coordinatedOptimalSettings = resolutionSnapshot.has_value() ? resolutionSnapshot->optimalSettings : std::nullopt;
+    auto prepare = [runtime = runtime_, createDesc, coordinatedOptimalSettings](const nr::renderer::PassPrepareContext &prepareContext) {
+        nrAssert(prepareContext.device.has_value(), "DLSS RR prepare requires the active RHI device.");
+        std::scoped_lock lock(runtime->mutex);
+        auto &device = prepareContext.device->get();
+        if (!runtime->feature || runtime->activeCreateDesc != createDesc)
+        {
+            runtime->optimalSettings = coordinatedOptimalSettings.has_value() ? *coordinatedOptimalSettings : device.dlssContext()->optimalSettings(createDesc.targetSize, createDesc.quality);
+            detail::validateDlssOptimalSettings(runtime->optimalSettings, createDesc.targetSize, createDesc.quality);
+            runtime->optimalSettingsQueried = true;
+            runtime->feature = device.createDlssRayReconstructionFeature(createDesc);
+            runtime->activeCreateDesc = createDesc;
+            runtime->resetNextEvaluation = true;
+            runtime->status = std::format("Ready: render {}x{}, target {}x{}, quality {}.", createDesc.renderSize.width, createDesc.renderSize.height, createDesc.targetSize.width, createDesc.targetSize.height, nr::rhi::dlssQualityName(createDesc.quality));
+        }
+    };
+    auto record = [runtime = runtime_, handles, descriptions, evalDesc](const nr::renderer::PassRecordContext &recordContext) mutable {
+        nrAssert(recordContext.commandBuffer.has_value(), "DLSS RR Skeleton record requires a command buffer.");
+        nrAssert(static_cast<bool>(recordContext.resolveImage), "DLSS RR Skeleton record requires the graph image resolver.");
+        auto const indices = std::views::iota(std::size_t{0u}, nr::rhi::kDlssRayReconstructionResourceSlotCount);
+        std::ranges::for_each(indices, [&](std::size_t index) {
+            if (!handles[index].valid())
+            {
+                return;
+            }
+            auto resolved = recordContext.resolveImage(handles[index]);
+            nrAssert(resolved.has_value(), std::format("DLSS RR Skeleton failed to resolve image slot {}.", index));
+            nrAssert(descriptions[index].has_value(), "DLSS RR Skeleton image format snapshot is missing.");
+            auto const slot = static_cast<nr::rhi::DlssRayReconstructionResourceSlot>(index);
+            auto const readWrite = slot == nr::rhi::DlssRayReconstructionResourceSlot::Output || slot == nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha;
+            evalDesc.resources[index] = detail::makeDlssImage(*resolved, *descriptions[index], readWrite);
+        });
+
+        std::scoped_lock lock(runtime->mutex);
+        nrAssert(runtime->feature && runtime->feature->valid(), "DLSS RR Skeleton record requires a prepared feature.");
+        auto const resetForFeatureLifecycle = std::exchange(runtime->resetNextEvaluation, false);
+        evalDesc.reset = evalDesc.reset || resetForFeatureLifecycle;
+        auto const status = runtime->feature->evaluate(recordContext.commandBuffer->get(), evalDesc);
+        nrAssert(status.success(), std::format("DLSS RR Skeleton evaluation failed: {}", status.message));
+    };
+    context.patchPass(0u, "DLSS.RayReconstruction", std::move(prepare), std::move(record));
+    if (input.evaluate.visualizeMotionVectors)
+    {
+        auto const motionVectorIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors);
+        auto const motionVectorSize = detail::requiredSubrectDimensions(nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors, createDesc);
+        auto const outputBase = createDesc.enableOutputSubrects ? input.evaluate.subrectBases[detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::Output)] : nr::rhi::DlssCoordinates{};
+        auto const motionVectorBase = input.evaluate.subrectBases[detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::MotionVectors)];
+        auto const constants = detail::DlssMotionVectorDebugPushConstants{
+            .outputBase = {outputBase.x, outputBase.y},
+            .outputSize = {createDesc.targetSize.width, createDesc.targetSize.height},
+            .motionVectorBase = {motionVectorBase.x, motionVectorBase.y},
+            .motionVectorSize = {motionVectorSize.width, motionVectorSize.height},
+            .motionVectorScale = input.evaluate.motionVectorScale,
+        };
+        auto patch = nr::renderer::ComputePassPatchBuilder{context, 1u, "DLSS.RayReconstruction.VisualizeMotionVectors", runtime_->motionVectorDebugPipeline};
+        patch.sampledImage("gMotionVectors", handles[motionVectorIndex], "DLSS.RR.MotionVectors")
+            .storageImage("gMotionVectorVisualization", outputColor, "DLSS.RR.MotionVectorVisualization")
+            .pushConstants("gMotionVectorDebug", constants)
+            .record([outputExtent](const nr::renderer::ComputePassRecordContext &computeContext) {
+                constexpr auto threadGroupSize = 8u;
+                computeContext.commandBuffer.dispatch(detail::dlssMotionVectorDebugDivideRoundUp(outputExtent.width, threadGroupSize), detail::dlssMotionVectorDebugDivideRoundUp(outputExtent.height, threadGroupSize), 1u);
+            });
+        patch.patch();
+    }
+    return true;
+}
+
+void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
+{
     nrAssert(static_cast<bool>(runtime_), "DLSS RR build requires initialized runtime state.");
     nrAssert(device_.has_value(), "DLSS RR build requires a device reference.");
     auto const resolutionController = resolutionController_.lock();
@@ -505,8 +760,10 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
     if (!input.enabled)
     {
         previousBuildTime_ = {};
-        std::scoped_lock lock(runtime_->mutex);
-        runtime_->resetNextEvaluation = true;
+        {
+            std::scoped_lock lock(runtime_->mutex);
+            runtime_->resetNextEvaluation = true;
+        }
         return;
     }
 
@@ -555,9 +812,7 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
             frameParameters.resolutionPlan.displayExtent.width,
             frameParameters.resolutionPlan.displayExtent.height,
         };
-        nrAssert(
-            descriptions[colorIndex]->extent.width == createDesc.renderSize.width && descriptions[colorIndex]->extent.height == createDesc.renderSize.height,
-            "Coordinated DLSS RR input color extent does not match the renderer render extent.");
+        nrAssert(descriptions[colorIndex]->extent.width == createDesc.renderSize.width && descriptions[colorIndex]->extent.height == createDesc.renderSize.height, "Coordinated DLSS RR input color extent does not match the renderer render extent.");
         nrAssert(resolutionSnapshot->optimalSettings.has_value(), "Coordinated enabled DLSS RR build requires cached optimal settings.");
     }
     else
@@ -644,9 +899,7 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
     evalDesc.reset = consumeOneShotReset_ || frameParameters.resolutionPlan.resetHistory;
     consumeOneShotReset_ = false;
     auto const cameraJitter = context.globalResources.get().cameraFrameState.jitter.pixelOffset;
-    evalDesc.jitterOffset = input.evaluate.automaticJitter
-                                ? std::array{cameraJitter.x, cameraJitter.y}
-                                : input.evaluate.manualJitter;
+    evalDesc.jitterOffset = input.evaluate.automaticJitter ? std::array{cameraJitter.x, cameraJitter.y} : input.evaluate.manualJitter;
     if (input.evaluate.automaticMatrices)
     {
         evalDesc.worldToViewRowMajor = detail::toDlssRowVectorMatrix(frameParameters.renderCameraConstants.view);
@@ -709,7 +962,9 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
         auto indices = std::views::iota(std::size_t{0u}, nr::rhi::kDlssRayReconstructionResourceSlotCount);
         std::ranges::for_each(indices, [&](std::size_t index) {
             if (!handles[index].valid())
+            {
                 return;
+            }
             auto resolved = recordContext.resolveImage(handles[index]);
             nrAssert(resolved.has_value(), std::format("DLSS RR failed to resolve image slot {}.", index));
             nrAssert(descriptions[index].has_value(), "DLSS RR image format snapshot is missing.");
@@ -725,7 +980,6 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
         auto const status = runtime->feature->evaluate(recordContext.commandBuffer->get(), evalDesc);
         nrAssert(status.success(), std::format("DLSS RR evaluation failed: {}", status.message));
     };
-
     [[maybe_unused]] auto pass = context.addPass(intents, "DLSS.RayReconstruction", std::move(record), std::move(prepare), false, vk::PipelineStageFlagBits2::eComputeShader);
 
     if (input.evaluate.visualizeMotionVectors)
@@ -733,12 +987,8 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
         auto const motionVectorIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors);
         auto const motionVectorSubrectIndex = detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::MotionVectors);
         auto const outputSubrectIndex = detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::Output);
-        auto const motionVectorSize = detail::requiredSubrectDimensions(
-            nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors,
-            createDesc);
-        auto const outputBase = createDesc.enableOutputSubrects
-                                    ? input.evaluate.subrectBases[outputSubrectIndex]
-                                    : nr::rhi::DlssCoordinates{};
+        auto const motionVectorSize = detail::requiredSubrectDimensions(nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors, createDesc);
+        auto const outputBase = createDesc.enableOutputSubrects ? input.evaluate.subrectBases[outputSubrectIndex] : nr::rhi::DlssCoordinates{};
         auto const motionVectorBase = input.evaluate.subrectBases[motionVectorSubrectIndex];
         auto const pushConstants = detail::DlssMotionVectorDebugPushConstants{
             .outputBase = {outputBase.x, outputBase.y},
@@ -748,20 +998,13 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
             .motionVectorScale = input.evaluate.motionVectorScale,
         };
 
-        auto debugPass = nr::renderer::ComputePassBuilder{
-            context,
-            "DLSS.RayReconstruction.VisualizeMotionVectors",
-            runtime_->motionVectorDebugPipeline};
-        debugPass
-            .sampledImage("gMotionVectors", handles[motionVectorIndex], "DLSS.RR.MotionVectors")
+        auto debugPass = nr::renderer::ComputePassBuilder{context, "DLSS.RayReconstruction.VisualizeMotionVectors", runtime_->motionVectorDebugPipeline};
+        debugPass.sampledImage("gMotionVectors", handles[motionVectorIndex], "DLSS.RR.MotionVectors")
             .storageImage("gMotionVectorVisualization", outputColor, "DLSS.RR.MotionVectorVisualization")
             .pushConstants("gMotionVectorDebug", pushConstants)
-            .record([outputColorExtent](const nr::renderer::ComputePassRecordContext& computeContext) {
+            .record([outputColorExtent](const nr::renderer::ComputePassRecordContext &computeContext) {
                 constexpr auto threadGroupSize = 8u;
-                computeContext.commandBuffer.dispatch(
-                    detail::dlssMotionVectorDebugDivideRoundUp(outputColorExtent.width, threadGroupSize),
-                    detail::dlssMotionVectorDebugDivideRoundUp(outputColorExtent.height, threadGroupSize),
-                    1u);
+                computeContext.commandBuffer.dispatch(detail::dlssMotionVectorDebugDivideRoundUp(outputColorExtent.width, threadGroupSize), detail::dlssMotionVectorDebugDivideRoundUp(outputColorExtent.height, threadGroupSize), 1u);
             });
         [[maybe_unused]] auto debugPassHandle = debugPass.build();
     }

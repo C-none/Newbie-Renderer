@@ -17,6 +17,12 @@ nr_add_contract_test(nr_renderer_camera_jitter_contract_test nr_renderer_camera_
     dependency
 )
 
+nr_add_contract_test(nr_renderer_benchmark_contract_test nr_renderer_benchmark_contract_test.cpp "fast;cpu;unit;renderer;benchmark"
+    nrrenderer
+    utils
+    dependency
+)
+
 nr_add_contract_test(nr_render_graph_builder_contract_test nr_render_graph_builder_contract_test.cpp "fast;cpu;unit;renderer;rdg"
     nrrenderer
     nrrhi
@@ -25,6 +31,13 @@ nr_add_contract_test(nr_render_graph_builder_contract_test nr_render_graph_build
 )
 
 nr_add_contract_test(nr_render_graph_compiler_contract_test nr_render_graph_compiler_contract_test.cpp "fast;cpu;unit;renderer;rdg"
+    nrrenderer
+    nrrhi
+    utils
+    dependency
+)
+
+nr_add_contract_test(nr_render_graph_skeleton_contract_test nr_render_graph_skeleton_contract_test.cpp "fast;cpu;unit;renderer;rdg;skeleton"
     nrrenderer
     nrrhi
     utils

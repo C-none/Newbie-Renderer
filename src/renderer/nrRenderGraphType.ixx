@@ -59,6 +59,9 @@ struct GraphImportedBufferDesc
     /// initialize time and import them into the graph at build time, avoiding
     /// runtime memory allocations.
     std::optional<std::reference_wrapper<const nr::rhi::Buffer>> importedResource{};
+
+    /// Optional retained state for persistent imported buffers reused across frames.
+    std::optional<std::reference_wrapper<struct RetainedBufferState>> retainedState{};
 };
 
 /**
@@ -76,13 +79,34 @@ struct AccessScope
     [[nodiscard]] bool operator==(const AccessScope&) const = default;
 };
 
-struct RetainedImageState
+struct RetainedExternalResourceState
 {
     bool initialized = false;
-    ImageLayoutIntent layout = ImageLayoutIntent::Undefined;
     ResourceOwnershipDomain ownership = ResourceOwnershipDomain::Undefined;
     AccessScope access{};
     std::uint64_t lastSubmissionTimelineValue = 0;
+
+    void reset() noexcept;
+};
+
+struct RetainedBufferState
+{
+    RetainedExternalResourceState common{};
+
+    void reset() noexcept;
+};
+
+struct RetainedImageState
+{
+    RetainedExternalResourceState common{};
+    ImageLayoutIntent layout = ImageLayoutIntent::Undefined;
+
+    void reset() noexcept;
+};
+
+struct RetainedAccelerationStructureState
+{
+    RetainedExternalResourceState common{};
 
     void reset() noexcept;
 };
@@ -123,6 +147,9 @@ struct GraphImportedAccelerationStructureDesc
 
     /// Optional reference to a pre-built acceleration structure held by the node or renderer cache.
     std::optional<std::reference_wrapper<const nr::rhi::AccelerationStructureResource>> importedResource{};
+
+    /// Optional retained state for the acceleration structure backing storage.
+    std::optional<std::reference_wrapper<RetainedAccelerationStructureState>> retainedState{};
 };
 
 struct GraphImportedSwapchainImageDesc
@@ -1249,8 +1276,11 @@ struct CompiledResourceDesc
     /// Populated from GraphImportedImageDesc::importedResource during compilation.
     std::optional<std::reference_wrapper<const nr::rhi::Image>> importedImageResource{};
 
-    /// Optional retained image state updated after successful submission.
-    /// Populated from GraphImportedImageDesc::retainedState during compilation.
+    /// Optional retained external-resource states updated after successful submission.
+    std::optional<std::reference_wrapper<RetainedBufferState>> retainedBufferState{};
+    std::optional<std::reference_wrapper<RetainedImageState>> retainedImageState{};
+    std::optional<std::reference_wrapper<RetainedAccelerationStructureState>> retainedAccelerationStructureState{};
+    /// Compatibility alias for image-only callers; mirrors retainedImageState.
     std::optional<std::reference_wrapper<RetainedImageState>> retainedState{};
 
     /// Optional reference to a pre-built acceleration structure held by the node or renderer cache.
@@ -1302,13 +1332,18 @@ struct GpuPassTimingSample
     GraphPassHandle pass{};
     std::string debugName{};
     QueueDomain queue = QueueDomain::Graphics;
+    std::uint32_t batchIndex = 0u;
     bool isCopyPass = false;
     double milliseconds = 0.0;
 };
 
 struct GpuPassTimingFrame
 {
-    std::uint32_t frameIndex = 0;
+    // This is the renderer's monotonic frame ordinal, not a recycled frame-slot index.
+    std::uint64_t frameOrdinal = 0;
+    std::size_t expectedPassCount = 0u;
+    std::size_t availablePassCount = 0u;
+    bool complete = false;
     std::vector<GpuPassTimingSample> passes{};
 };
 
