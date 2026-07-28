@@ -5,6 +5,7 @@ import dependency.vulkan;
 import nr.rhi;
 import nr.scene;
 import nr.resource;
+import nr.options;
 import nr.utils;
 import std;
 import :frameServices;
@@ -41,50 +42,6 @@ enum class RenderGraphSkeletonMode : std::uint8_t
     Differential,
 };
 
-class NodeUiWriter
-{
-  public:
-    virtual ~NodeUiWriter() = default;
-
-    virtual void text(std::string_view content) = 0;
-    virtual void separator() = 0;
-    [[nodiscard]] virtual bool checkbox(std::string_view label, bool &value) = 0;
-    [[nodiscard]] virtual bool button(std::string_view label) = 0;
-    [[nodiscard]] virtual bool beginCombo(std::string_view label, std::string_view preview) = 0;
-    virtual void endCombo() = 0;
-    [[nodiscard]] virtual bool selectable(std::string_view label, bool selected = false) = 0;
-    [[nodiscard]] virtual bool sliderFloat(std::string_view label, float &value, float minValue, float maxValue) = 0;
-    [[nodiscard]] virtual bool inputFloat(std::string_view label, float &value, float minValue, float maxValue) = 0;
-    [[nodiscard]] virtual bool inputInt32(std::string_view label, std::int32_t &value, std::int32_t minValue, std::int32_t maxValue) = 0;
-    [[nodiscard]] virtual bool inputUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue, std::uint32_t maxValue) = 0;
-    [[nodiscard]] virtual bool sliderUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue, std::uint32_t maxValue) = 0;
-};
-
-using NodeUiSectionDrawCallback = std::function<void(NodeUiWriter &)>;
-
-struct NodeUiSection
-{
-    std::string id{};
-    std::string title{};
-    NodeUiSectionDrawCallback draw{};
-    bool defaultOpen = true;
-};
-
-class NodeUiBuildContext
-{
-  public:
-    NodeUiBuildContext(std::string_view runtimeName, std::vector<NodeUiSection> &sections);
-
-    [[nodiscard]] std::string_view runtimeName() const noexcept;
-    [[nodiscard]] std::string makeSectionId(std::string_view localId) const;
-    void addSection(std::string_view title, NodeUiSectionDrawCallback draw, bool defaultOpen = true, std::string_view localId = {});
-
-  private:
-    std::string runtimeName_{};
-    std::reference_wrapper<std::vector<NodeUiSection>> sections_;
-    std::size_t nextSectionOrdinal_ = 0u;
-};
-
 namespace frameResource
 {
 inline constexpr std::string_view presentSourceColor = "present.sourceColor";
@@ -116,12 +73,42 @@ struct FrameResolutionPlan
     bool resetHistory = false;
 };
 
-using FrameResolutionResolver = std::function<FrameResolutionPlan(nr::rhi::Device &, vk::Extent2D)>;
+using FrameResolutionResolver = std::function<FrameResolutionPlan(
+    nr::rhi::Device&,
+    vk::Extent2D,
+    const nr::options::OptionFrameSnapshot&)>;
+
+class NodeRuntime;
+
+enum class FrameEffectFinalizeDisposition : std::uint8_t
+{
+    terminalSucceeded,
+    terminalFailed,
+    continuationArmed,
+};
+
+class FrameEffectSink
+{
+  public:
+    explicit FrameEffectSink(std::optional<nr::options::FrameEffect> effect = {});
+
+    [[nodiscard]] const std::optional<nr::options::FrameEffect>& effect() const noexcept;
+    [[nodiscard]] bool claim(NodeRuntime& runtime, GraphPassHandle targetPass) noexcept;
+    [[nodiscard]] bool claimed() const noexcept;
+    [[nodiscard]] std::optional<std::reference_wrapper<NodeRuntime>> claimedRuntime() const noexcept;
+    [[nodiscard]] GraphPassHandle targetPass() const noexcept;
+
+  private:
+    std::optional<nr::options::FrameEffect> effect_{};
+    std::optional<std::reference_wrapper<NodeRuntime>> claimedRuntime_{};
+    GraphPassHandle targetPass_{};
+};
 
 struct RendererBenchmarkBuildTelemetry;
 
 struct NodeFrameParameters
 {
+    std::reference_wrapper<const nr::options::OptionFrameSnapshot> optionSnapshot;
     std::uint32_t frameIndex = 0;
     vk::Extent2D swapchainExtent{1, 1};
     FrameResolutionPlan resolutionPlan{};
@@ -136,7 +123,7 @@ struct NodeFrameParameters
     std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};
     nr::scene::SceneBridgeFrameConstants renderCameraConstants{};
     std::optional<std::reference_wrapper<FrameServices>> frameServices{};
-    std::span<const NodeUiSection> nodeUiSections{};
+    std::optional<std::reference_wrapper<FrameEffectSink>> frameEffectSink{};
     std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>> benchmarkTelemetry{};
 };
 
@@ -1389,6 +1376,18 @@ class NodeRuntime
   public:
     virtual ~NodeRuntime() = default;
 
+    // Non-empty semantic IDs identify actionable runtime roles that must be
+    // unique in an installed graph.
+    [[nodiscard]] virtual std::string_view actionableSemantic() const noexcept;
+
+    // Pure graph registration. Implementations must not access Device or mutable runtime state.
+    virtual void declareOptions(nr::options::OptionCatalogBuilder& builder) const;
+
+    // Collect conservative live availability for this node's declared options.
+    virtual void collectOptionAvailability(
+        const nr::options::OptionFrameSnapshot& snapshot,
+        nr::options::OptionAvailabilityMap& availability) const;
+
     // Stage 1 (initialize): create persistent node state.
     // Typical work: shader/pipeline creation and long-lived GPU allocations.
     virtual void initialize(NodeInitContext &);
@@ -1417,11 +1416,13 @@ class NodeRuntime
         const NodeFrameParameters& frameParameters,
         const StructuralSnapshot& snapshot);
 
-    // Stage 2 UI collection: optionally publish frame-local UI sections.
-    // Draw callbacks may update node-owned staged UI state, applied by that node on the next frame.
-    virtual void collectUi(NodeUiBuildContext &context, const NodeFrameParameters &frameParameters);
-
     // Stage 3 (shutdown): release persistent node state.
+    virtual void advanceContinuations(std::uint32_t frameSlot);
+    virtual void flushContinuations();
+    [[nodiscard]] virtual FrameEffectFinalizeDisposition finalizeFrameEffect(
+        const nr::options::FrameEffect& effect,
+        bool targetBatchSubmitted,
+        std::uint32_t frameSlot);
     virtual void shutdown(NodeShutdownContext &);
 };
 
@@ -1443,10 +1444,24 @@ struct RendererGraphSpec
     std::vector<SubmitNodeSpec> submitNodes{};
     RendererCameraJitterConfig cameraJitter{};
     std::optional<FrameResolutionResolver> frameResolutionResolver{};
+    std::vector<nr::options::OptionId> frameResolutionOptionRequirements{};
+};
+
+struct RendererGraphPreflightResult
+{
+    bool valid = false;
+    std::string message{};
+    std::shared_ptr<const nr::options::OptionCatalog> optionCatalog{};
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return valid;
+    }
 };
 
 struct RendererFrameInput
 {
+    std::reference_wrapper<const nr::options::OptionFrameSnapshot> optionSnapshot;
     std::optional<std::reference_wrapper<nr::scene::Scene>> scene{};
     std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max();
     std::optional<nr::scene::SceneExtractInput> sceneExtractInput{};
@@ -1491,7 +1506,10 @@ class Renderer
 
     void initialize(const RendererCreateInfo &info = {});
 
-    void installGraph(const RendererGraphSpec &spec);
+    [[nodiscard]] RendererGraphPreflightResult preflightGraph(
+        const RendererGraphSpec& spec) const;
+
+    [[nodiscard]] bool installGraph(const RendererGraphSpec &spec);
 
     void uninstallGraph();
 
@@ -1507,7 +1525,11 @@ class Renderer
 
     void resetSceneBinding() noexcept;
 
-    [[nodiscard]] RendererFrameResult renderFrame(const RendererFrameInput &input = {});
+    void collectOptionAvailability(
+        const nr::options::OptionFrameSnapshot& snapshot,
+        nr::options::OptionAvailabilityMap& availability) const;
+
+    [[nodiscard]] RendererFrameResult renderFrame(const RendererFrameInput &input);
 
     [[nodiscard]] nr::rhi::Device &device();
 

@@ -8,3 +8,6 @@
 [submodule "src/extern/DLSS"]
 	path = src/extern/DLSS
 	url = https://github.com/NVIDIA/DLSS.git
+[submodule "tools/ninjatracing"]
+	path = tools/ninjatracing
+	url = https://github.com/nico/ninjatracing.git

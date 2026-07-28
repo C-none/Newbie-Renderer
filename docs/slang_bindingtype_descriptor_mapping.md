@@ -6,7 +6,7 @@ This document explains:
 
 - what `slang::BindingType` means
 - what `vk::DescriptorType` means
-- why the mapping in `src/rhi/nrDescriptor.ixx` is designed this way
+- why the mapping implemented by `src/rhi/nrDescriptor.cpp` is designed this way
 - how the runtime binding flow is completed in `nrDescriptor` and `nrPipeline`
 
 The implementation described here only covers `src/rhi` and does not modify `src/extern/slang`.
@@ -35,7 +35,7 @@ Important characteristics:
 
 ## Mapping Table
 
-Current mapping in `src/rhi/nrDescriptor.ixx` (`detail::toVkDescriptorType`):
+Current mapping in `src/rhi/nrDescriptor.cpp` (`detail::toVkDescriptorType`):
 
 | Slang `BindingType` | Vulkan `DescriptorType` | Notes |
 |---|---|---|
@@ -50,7 +50,7 @@ Current mapping in `src/rhi/nrDescriptor.ixx` (`detail::toVkDescriptorType`):
 | `MutableTypedBuffer` | `eStorageTexelBuffer` | formatted read-write buffer |
 | `RawBuffer` | `eStorageBuffer` | structured/raw buffer view |
 | `MutableRawBuffer` | `eStorageBuffer` | read-write raw buffer |
-| `InlineUniformData` | `eInlineUniformBlock` | runtime write path is implemented via `ShaderResourceWriter::bindInlineUniformData(...)` |
+| `InlineUniformData` | `eInlineUniformBlock` | runtime bytes are recorded through `ShaderCursor::setData(...)` |
 | `RayTracingAccelerationStructure` | `eAccelerationStructureKHR` | ray tracing AS descriptor |
 | `PushConstant` | N/A (not descriptor) | handled via pipeline push constant ranges |
 | `Unknown`, `VaryingInput`, `VaryingOutput`, `ExistentialValue`, `MutableFlag`, `BaseMask`, `ExtMask` | N/A | not mapped in descriptor layout |
@@ -107,9 +107,10 @@ RWByteAddressBuffer rwRawBuffer;            // MutableRawBuffer -> eStorageBuffe
 
 ### Where this is verified in the project
 
-- Shader declaration coverage example: `shader/test/main/resourceBindingReflection.slang`
-- Runtime mapping function: `src/rhi/nrDescriptor.ixx`
-- Runtime smoke coverage path: `test/smoke/app/normalBufferUiSmoke.cpp` (through `shaderCursor` + descriptor write/update + draw/dispatch binding flow)
+- Runtime mapping and cursor API: `src/rhi/nrDescriptor.cpp` and `src/rhi/nrDescriptor.ixx`
+- Cursor snapshot and descriptor-write contract: `test/unit/rhi/nr_rhi_shader_cursor_contract_test.cpp`
+- Ray-tracing descriptor reflection contract: `test/unit/rhi/nr_rhi_rt_shader_reflection_contract_test.cpp`
+- Runtime smoke coverage path: `test/smoke/app/normalBufferUiSmoke.cpp`
 
 ## Why this Mapping
 
@@ -137,7 +138,7 @@ Newbie-Renderer enforces a project hard limit of 128 bytes for push constants (`
 
 ### Reflection and layout discovery
 
-- `ShaderDescriptorLayout::create(...)` in `src/rhi/nrDescriptor.ixx`
+- `ShaderDescriptorLayout::create(...)` in `src/rhi/nrDescriptor.cpp`
 - Collects descriptor set/binding metadata and push constant metadata
 - Can now mark unbounded descriptor bindings as runtime-sized and attach:
   - `eVariableDescriptorCount`
@@ -175,19 +176,24 @@ Scene material textures use this convention through a single global combined ima
 - Because of that, `PipelineState` in `src/rhi/nrPipeline.ixx` now retains a `SlangProgram` copy for the full lifetime of the descriptor layout and cursor usage.
 - Removing that ownership without replacing it with another lifetime guarantee will reintroduce dangling reflection pointers.
 
-### Write request construction
+### Cursor-owned binding snapshot
 
-- `ShaderCursor` is intentionally address/reflection-only:
-   - path navigation (`field`, `element`, `getPath`)
-   - metadata query (`descriptorBinding`, type/layout helpers)
-- `ShaderResourceWriter` in `src/rhi/nrDescriptor.ixx` builds write requests from runtime resources:
-   - RAII `Buffer` / `Image`
-   - `vk::Sampler`, `vk::BufferView`, `vk::AccelerationStructureKHR`
-- Output is `DescriptorWriteRequest` with resolved set/binding metadata from `ShaderCursor`.
+- A root `ShaderCursor` owns shared mutable binding state; copied field/element cursors write
+  into the same state.
+- `ShaderCursor::setObject(...)` records descriptor-backed resources:
+   - RAII `Buffer` and `Image`
+   - `vk::Sampler`, `vk::BufferView`, and `vk::AccelerationStructureKHR`
+   - `LogicalResourceDescriptorWrite` for resources resolved later from an RDG pass context
+- `ShaderCursor::setData(...)` records push-constant bytes or inline-uniform bytes.
+- `ShaderCursor::snapshot()` captures the immutable `ShaderBindingSnapshot` consumed by the
+  pipeline prepare/record path.
+- `resolveDescriptorWriteRequests(...)` resolves logical resources and produces
+  `DescriptorWriteRequest` values with the set/binding metadata already carried by the
+  snapshot.
 
 ### Descriptor update submission
 
-- `ShaderBindingPool::update(...)` in `src/rhi/nrDescriptor.ixx`
+- `ShaderBindingPool::update(...)` in `src/rhi/nrDescriptor.cpp`
 - Converts `DescriptorWriteRequest` payloads to Vulkan write structs
 - Calls `vkUpdateDescriptorSets` through RAII device
 - Validates set index and array element bounds
@@ -195,46 +201,46 @@ Scene material textures use this convention through a single global combined ima
 
 ### RAII resource adaptation
 
-- `ShaderResourceWriter` directly adapts project resource wrappers:
-   - `bindUniformBuffer(const ShaderCursor&, const Buffer&, ...)`
-   - `bindStorageBuffer(const ShaderCursor&, const Buffer&, ...)`
-   - `bindSampledImage(const ShaderCursor&, const Image&, ...)`
-   - `bindStorageImage(const ShaderCursor&, const Image&, ...)`
-   - `bindCombinedImageSampler(const ShaderCursor&, const Image&, vk::Sampler, ...)`
-   - texel-buffer overloads that can auto-create `BufferView` from `Buffer::addView(...)`
-- This keeps VMA-backed resource details in resource/pipeline layer, not in cursor reflection layer.
+- `ShaderCursor::setObject(...)` adapts the project resource wrappers directly and validates
+  them against the reflected binding:
+   - buffer descriptors carry explicit offset/range
+   - image descriptors carry layout and optional sampler
+   - typed-buffer writes may create a `BufferView` from a mutable `Buffer`
+   - acceleration structures and logical RDG resources use dedicated overloads
+- VMA-backed resource details remain behind `Buffer` and `Image`; the snapshot stores Vulkan
+  descriptor payloads or typed logical-resource records, not ownership.
 
 ### Command binding
 
-Two layers are available:
+Pipeline-layout-aware helpers provide:
 
-1. Pipeline-layout aware helpers:
-   - `CursorPipelineLayout::bindDescriptorSet(...)`
-   - `CursorPipelineLayout::bindDescriptorSets(...)`
-   - `CursorPipelineLayout::pushConstants(...)`
+- `CursorPipelineLayout::bindDescriptorSet(...)`
+- `CursorPipelineLayout::bindDescriptorSets(...)`
+- `CursorPipelineLayout::pushConstants(...)`
 
 `src/rhi/nrCommand.ixx` currently only provides command-buffer begin/end recording helpers and does not expose descriptor/pipeline bind wrappers.
 
 ## Resource-Type Support Matrix (Code-Accurate)
 
-This matrix reflects current behavior in `src/rhi/nrDescriptor.ixx`:
+This matrix reflects current behavior in `src/rhi/nrDescriptor.cpp` and its
+`src/rhi/nrDescriptor.ixx` interface:
 
-| Slang `BindingType` | Mapped to Vulkan descriptor | `ShaderResourceWriter` bind API present | `ShaderBindingPool::update` payload support | End-to-end runtime bindable now |
+| Slang `BindingType` | Mapped to Vulkan descriptor | `ShaderCursor` write API | `ShaderBindingPool::update` payload support | End-to-end runtime bindable now |
 |---|---|---|---|---|
-| `Sampler` | Yes (`eSampler`) | Yes (`bindSampler`) | Yes (`ImageDescriptorWrite`) | Yes |
-| `CombinedTextureSampler` | Yes (`eCombinedImageSampler`) | Yes (`bindCombinedImageSampler`) | Yes (`ImageDescriptorWrite`) | Yes |
-| `Texture` | Yes (`eSampledImage`) | Yes (`bindSampledImage`) | Yes (`ImageDescriptorWrite`) | Yes |
-| `InputRenderTarget` | Yes (`eInputAttachment`) | Reuses `bindSampledImage` allow-list | Yes (`ImageDescriptorWrite`) | Yes |
-| `MutableTexture` | Yes (`eStorageImage`) | Yes (`bindStorageImage`) | Yes (`ImageDescriptorWrite`) | Yes |
-| `ConstantBuffer` | Yes (`eUniformBuffer`) | Yes (`bindUniformBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
-| `ParameterBlock` | Yes (`eUniformBuffer`) | Yes (`bindUniformBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
-| `TypedBuffer` | Yes (`eUniformTexelBuffer`) | Yes (`bindUniformTexelBuffer`) | Yes (`TexelBufferDescriptorWrite`) | Yes |
-| `MutableTypedBuffer` | Yes (`eStorageTexelBuffer`) | Yes (`bindStorageTexelBuffer`) | Yes (`TexelBufferDescriptorWrite`) | Yes |
-| `RawBuffer` | Yes (`eStorageBuffer`) | Yes (`bindStorageBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
-| `MutableRawBuffer` | Yes (`eStorageBuffer`) | Yes (`bindStorageBuffer`) | Yes (`BufferDescriptorWrite`) | Yes |
-| `RayTracingAccelerationStructure` | Yes (`eAccelerationStructureKHR`) | Yes (`bindAccelerationStructure`) | Yes (`AccelerationStructureDescriptorWrite`) | Yes |
-| `InlineUniformData` | Yes (`eInlineUniformBlock`) | Yes (`bindInlineUniformData`) | Yes (`InlineUniformDescriptorWrite` + `VkWriteDescriptorSetInlineUniformBlock`) | Yes |
-| `PushConstant` | Not descriptor-backed | N/A | N/A | Yes (via push constants path) |
+| `Sampler` | Yes (`eSampler`) | `setObject(vk::Sampler)` | Yes (`ImageDescriptorWrite`) | Yes |
+| `CombinedTextureSampler` | Yes (`eCombinedImageSampler`) | `setObject(Image, vk::Sampler, layout)` | Yes (`ImageDescriptorWrite`) | Yes |
+| `Texture` | Yes (`eSampledImage`) | `setObject(Image, layout)` | Yes (`ImageDescriptorWrite`) | Yes |
+| `InputRenderTarget` | Yes (`eInputAttachment`) | `setObject(Image, layout)` | Yes (`ImageDescriptorWrite`) | Yes |
+| `MutableTexture` | Yes (`eStorageImage`) | `setObject(Image, layout)` | Yes (`ImageDescriptorWrite`) | Yes |
+| `ConstantBuffer` | Yes (`eUniformBuffer`) | `setObject(Buffer, offset, range)` | Yes (`BufferDescriptorWrite`) | Yes |
+| `ParameterBlock` | Yes (`eUniformBuffer`) | `setObject(Buffer, offset, range)` | Yes (`BufferDescriptorWrite`) | Yes |
+| `TypedBuffer` | Yes (`eUniformTexelBuffer`) | `setObject(BufferView)` or typed-buffer overload | Yes (`TexelBufferDescriptorWrite`) | Yes |
+| `MutableTypedBuffer` | Yes (`eStorageTexelBuffer`) | `setObject(BufferView)` or typed-buffer overload | Yes (`TexelBufferDescriptorWrite`) | Yes |
+| `RawBuffer` | Yes (`eStorageBuffer`) | `setObject(Buffer, offset, range)` | Yes (`BufferDescriptorWrite`) | Yes |
+| `MutableRawBuffer` | Yes (`eStorageBuffer`) | `setObject(Buffer, offset, range)` | Yes (`BufferDescriptorWrite`) | Yes |
+| `RayTracingAccelerationStructure` | Yes (`eAccelerationStructureKHR`) | `setObject(vk::AccelerationStructureKHR)` | Yes (`AccelerationStructureDescriptorWrite`) | Yes |
+| `InlineUniformData` | Yes (`eInlineUniformBlock`) | `setData(...)` | Yes (`InlineUniformDescriptorWrite` + `VkWriteDescriptorSetInlineUniformBlock`) | Yes |
+| `PushConstant` | Not descriptor-backed | `setData(...)` | N/A | Yes (via push constants path) |
 
 ## Redundancy and Optimization Notes
 
@@ -255,10 +261,10 @@ These changes preserve external APIs and behavior while reducing repeated scans.
 1. Build descriptor layout from Slang program.
 2. Create pipeline layout and descriptor pool.
 3. Allocate descriptor sets.
-4. Build write requests from `ShaderCursor`.
-5. Submit descriptor writes through `ShaderBindingPool::update(...)`.
-6. Bind pipeline and descriptor sets on command buffer.
-7. Push constants through layout or command helpers.
+4. Record objects/data through the root cursor and capture its binding snapshot.
+5. Resolve logical resources and submit changed descriptor requests through `ShaderBindingPool::update(...)`.
+6. Bind pipeline and prepared descriptor sets on the command buffer.
+7. Push the snapshot's constant ranges through the pipeline-layout helper.
 
 ## Notes and Constraints
 

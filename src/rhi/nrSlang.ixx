@@ -434,7 +434,7 @@ struct SlangProgramVariantDesc
 struct SlangProgramCompileFileRequest
 {
     // Required input form:
-    // - test/utils/useFlag
+    // - renderer/pathTracing/core
     std::filesystem::path sourcePath;
     SlangProgramVariantDesc variant{};
     std::vector<SlangProgramVariantDesc> linkVariants{};
@@ -600,8 +600,8 @@ class ShaderService
      * @brief Resolve canonical dotted module name from relative module-path input.
      *
      * Internal Input/Output examples:
-    * - input:  test/utils/useFlag
-    *   output: test.utils.useFlag
+    * - input:  renderer/pathTracing/core
+    *   output: renderer.pathTracing.core
      * - input valid, but declared module token conflicts with derived leaf token
      *   output: "" (empty, hard fail)
      */

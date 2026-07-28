@@ -45,7 +45,7 @@ If the same module exists in both paths, the first matching path wins.
 
 Practical implications:
 
-- `test/main/main.slang`, `./test/main/main.slang`, and `test\\main\\main.slang` all normalize to `test.main.main`.
+- `renderer/pathTracing/core.slang`, `./renderer/pathTracing/core.slang`, and `renderer\\pathTracing\\core.slang` all normalize to `renderer.pathTracing.core`.
 - Cache file path is generated from normalized module name: `<cache>/<module_path>.slang-module`.
 - Always treat `shader/`-relative path as the source of truth for module identity.
 
@@ -53,13 +53,13 @@ Practical implications:
 
 Module names are derived from paths relative to `shader/`:
 
-- `shader/test/utils/utils.slang` -> `test.utils.utils`
-- `shader/test/main/main.slang` -> `test.main.main`
+- `shader/renderer/pathTracing/core.slang` -> `renderer.pathTracing.core`
+- `shader/test/rt/minimalRtTriangle.slang` -> `test.rt.minimalRtTriangle`
 
 So user code should write:
 
 ```slang
-import test.utils.utils;
+import renderer.pathTracing.core;
 ```
 
 Current Slang version in this repo does not accept dotted `module a.b;` declarations.
@@ -79,8 +79,8 @@ module utils;
 
 Example:
 
-- File: `shader/test/utils/useFlag.slang`
-- Declaration: `module useFlag;`
+- File: `shader/renderer/pathTracing/core.slang`
+- Declaration: `module core;`
 
 ### 2) `import` declaration (cross-module reference)
 
@@ -91,26 +91,27 @@ Example:
 Example:
 
 ```slang
-import test.utils.useFlag;
-import test.dep.dep;
+import renderer.pathTracing.core;
+import renderer.pathTracing.resources;
 ```
 
 ### 3) `implementing` declaration (implementing file)
 
 - Must declare the **same module token** as the primary file's `module` declaration.
-- Use leaf-name form consistent with the primary file (for example `implementing utils;`).
-- Implementing files must live in the same directory as the primary file.
+- Use leaf-name form consistent with the primary file (for example `implementing common;`).
+- An implementing file may live under a different shader-root-relative directory. It is attached to the primary module through `__include`, while its `implementing` token identifies the module being extended.
 
 Example:
 
-- Primary: `utils.slang` -> `module utils;`
-- Implementing: `constant.slang` -> `implementing utils;`
+- Primary: `shader/common.slang` -> `module common;`
+- Implementing include: `shader/include/globalUniform.slang` -> `implementing common;`
 
 ### 4) Consistency rule between filesystem and symbols
 
-- Directory path defines fully qualified module identity (`test/utils/useFlag` -> `test.utils.useFlag`).
-- `module`/`implementing` keep leaf token (`utils`) for parser compatibility.
-- `import` must use fully qualified dotted name (`test.utils.utils`).
+- A primary module's directory path defines its fully qualified module identity (`renderer/pathTracing/core` -> `renderer.pathTracing.core`).
+- `module` keeps the primary file's leaf token (`core`) for parser compatibility.
+- `implementing` names the leaf token of the primary module being extended (`common` for files aggregated by `common.slang`).
+- `import` must use the primary module's fully qualified dotted name (`renderer.pathTracing.core`).
 
 This split is intentional and required by current Slang behavior in this repository.
 
@@ -194,7 +195,7 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 ### 2) Module load and source/cache resolution
 
 - Convert module name to query path using module mapping rules.
-- Call `ISession::loadModule("<module_path>")` (slash form, e.g. `test/utils/useFlag`).
+- Call `ISession::loadModule("<module_path>")` (slash form, e.g. `renderer/pathTracing/core`).
 - Slang resolves the module by search-path order.
 - When an up-to-date `.slang-module` exists in cache, it can be loaded directly.
 - Otherwise Slang loads/parses source from `shader/` and builds module state.
@@ -231,7 +232,7 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 
 - One module identity corresponds to one normalized shader-root-relative path.
 - `import` identity is always fully qualified dotted name.
-- `module` and `implementing` token must match each other within the module folder.
+- Each `implementing` token must match the primary module it extends; filesystem co-location is not required when the file is attached through `__include`.
 - Every module path segment must be lower camelCase (`useFlag`) and cannot contain `_` or `-`.
 - Cache artifact path must be the normalized module path with `.slang-module` suffix.
 - Search-path order is authoritative for cache-vs-source precedence.

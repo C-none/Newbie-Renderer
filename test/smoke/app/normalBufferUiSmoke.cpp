@@ -1,6 +1,7 @@
 import std;
 import dependency;
 import nr.app;
+import nr.options;
 import nr.renderer;
 import nr.renderPasses;
 import nr.rhi;
@@ -10,6 +11,29 @@ import nr.utils;
 
 namespace
 {
+[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
+    const nr::renderer::RendererGraphPreflightResult& preflight)
+{
+    auto values = nr::options::OptionValueMap{};
+    auto availability = nr::options::OptionAvailabilityMap{};
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+        values.emplace(entry.first, entry.second.defaultValue);
+        availability.emplace(
+            entry.first,
+            nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    return nr::options::OptionFrameSnapshot{
+        .catalog = preflight.optionCatalog,
+        .values = std::move(values),
+        .availability = std::move(availability),
+        .frameIndex = 1u,
+        .revision = 1u,
+        .graphGeneration = 1u,
+        .bindingEpoch = 1u,
+        .snapshotToken = "normal-buffer-snapshot",
+    };
+}
+
 [[nodiscard]] nr::renderer::RendererGraphSpec buildNormalBufferGraphSpec(
     const std::shared_ptr<nr::renderPasses::NormalBufferNode>& normalBuffer)
 {
@@ -113,6 +137,7 @@ namespace
     nr::app::AppSession& app,
     nr::scene::Scene& scene,
     nr::renderer::FrameServices& frameServices,
+    const nr::options::OptionFrameSnapshot& optionSnapshot,
     float deltaSeconds)
 {
     auto& renderer = app.renderer();
@@ -126,12 +151,12 @@ namespace
 
     presentation.pollEvents();
     app.ui().beginFrame(presentation, deltaSeconds);
-    app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
     app.ui().setCameraFrame(app.camera().frame());
 
     auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
+        .optionSnapshot = std::cref(optionSnapshot),
         .scene = std::ref(scene),
         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
         .sceneExtractInput = nr::scene::SceneExtractInput{},
@@ -149,7 +174,7 @@ namespace
         frameResult.presentResult == vk::Result::eSuboptimalKHR)
     {
         renderer.resize();
-        return renderOneFrame(app, scene, frameServices, deltaSeconds);
+        return renderOneFrame(app, scene, frameServices, optionSnapshot, deltaSeconds);
     }
 
     if (frameResult.presentResult != vk::Result::eSuccess)
@@ -191,6 +216,7 @@ namespace
     nr::app::AppSession& app,
     nr::scene::Scene& scene,
     nr::renderer::FrameServices& frameServices,
+    const nr::options::OptionFrameSnapshot& optionSnapshot,
     float deltaSeconds,
     std::string_view label)
 {
@@ -203,7 +229,7 @@ namespace
             return;
         }
 
-        auto frameResult = renderOneFrame(app, scene, frameServices, deltaSeconds);
+        auto frameResult = renderOneFrame(app, scene, frameServices, optionSnapshot, deltaSeconds);
         if (!frameResult.has_value())
         {
             failed = true;
@@ -245,12 +271,24 @@ namespace
         }
 
         auto normalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
-        app.renderer().installGraph(buildNormalBufferGraphSpec(normalBuffer));
+        auto graphSpec = buildNormalBufferGraphSpec(normalBuffer);
+        auto const preflight = app.renderer().preflightGraph(graphSpec);
+        if (!preflight || !app.renderer().installGraph(graphSpec))
+        {
+            return false;
+        }
+        auto const optionSnapshot = makeDefaultSnapshot(preflight);
 
         auto frameServices = app.makeFrameServices();
         constexpr auto deltaSeconds = 1.0f / 60.0f;
 
-        if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, deltaSeconds, "initial model"))
+        if (!renderUntilSceneDraw(
+                app,
+                firstScene->get(),
+                frameServices,
+                optionSnapshot,
+                deltaSeconds,
+                "initial model"))
         {
             return false;
         }
@@ -258,9 +296,21 @@ namespace
         app.renderer().uninstallGraph();
         nr::rhi::ShaderService::instance().reloadSession();
         auto switchedNormalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
-        app.renderer().installGraph(buildNormalBufferGraphSpec(switchedNormalBuffer));
+        auto switchedGraphSpec = buildNormalBufferGraphSpec(switchedNormalBuffer);
+        auto const switchedPreflight = app.renderer().preflightGraph(switchedGraphSpec);
+        if (!switchedPreflight || !app.renderer().installGraph(switchedGraphSpec))
+        {
+            return false;
+        }
+        auto const switchedSnapshot = makeDefaultSnapshot(switchedPreflight);
 
-        if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, deltaSeconds, "pipeline switch"))
+        if (!renderUntilSceneDraw(
+                app,
+                firstScene->get(),
+                frameServices,
+                switchedSnapshot,
+                deltaSeconds,
+                "pipeline switch"))
         {
             return false;
         }
@@ -271,7 +321,13 @@ namespace
             return false;
         }
 
-        if (!renderUntilSceneDraw(app, secondScene->get(), frameServices, deltaSeconds, "replacement model"))
+        if (!renderUntilSceneDraw(
+                app,
+                secondScene->get(),
+                frameServices,
+                switchedSnapshot,
+                deltaSeconds,
+                "replacement model"))
         {
             return false;
         }

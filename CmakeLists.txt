@@ -116,7 +116,7 @@ if(CMAKE_GENERATOR MATCHES "^Ninja")
 else()
     set(NR_CMAKE_ENABLE_IMPORT_STD OFF)
     message(WARNING
-        "CMake 4.3.3 documents `import std` support only for Ninja generators. "
+        "CMake 4.4 documents `import std` support only for Ninja generators. "
         "Newbie-Renderer enables the `CXX_MODULE_STD` target property only for Ninja-based builds."
     )
 endif()
@@ -126,7 +126,6 @@ find_package(imgui CONFIG REQUIRED)
 find_package(glm REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-find_package(tracy CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(libjpeg-turbo CONFIG REQUIRED)
@@ -136,15 +135,6 @@ if(${Vulkan_VERSION} VERSION_LESS "1.4.341")
         "Found ${Vulkan_VERSION}."
     )
 endif()
-
-# add_library(VulkanHppModule)
-# target_sources(VulkanHppModule PRIVATE
-#     FILE_SET CXX_MODULES
-#     BASE_DIRS ${Vulkan_INCLUDE_DIR}
-#     FILES ${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm
-# )
-# target_compile_features(VulkanHppModule PUBLIC cxx_std_26)
-# target_link_libraries(VulkanHppModule PUBLIC Vulkan::Vulkan)
 
 if(NR_ENABLE_RELEASE_IPO)
     check_ipo_supported(RESULT NR_RELEASE_IPO_SUPPORTED OUTPUT NR_RELEASE_IPO_OUTPUT LANGUAGES CXX)
@@ -378,9 +368,24 @@ if(NR_ENABLE_CLANGD_SYNC
     endif()
 
     foreach(nr_clangd_cache_var IN ITEMS
+        CMAKE_MAKE_PROGRAM
+        CMAKE_C_COMPILER
+        CMAKE_CXX_COMPILER
+        CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS
+        CMAKE_C_COMPILER_TARGET
+        CMAKE_CXX_COMPILER_TARGET
+        CMAKE_AR
+        CMAKE_RANLIB
+        CMAKE_OBJCOPY
+        CMAKE_STRIP
+        CMAKE_RC_COMPILER
         VCPKG_FEATURE_FLAGS
         VCPKG_INSTALL_OPTIONS
+        VCPKG_CHAINLOAD_TOOLCHAIN_FILE
         VCPKG_TARGET_TRIPLET
+        VCPKG_HOST_TRIPLET
+        VCPKG_TARGET_ARCHITECTURE
+        VCPKG_OVERLAY_PORTS
         VCPKG_OVERLAY_TRIPLETS
     )
         if(DEFINED ${nr_clangd_cache_var})

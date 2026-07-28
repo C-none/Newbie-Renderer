@@ -24,8 +24,16 @@ endif()
 
 find_package(flecs CONFIG REQUIRED)
 find_package(OpenEXR CONFIG REQUIRED)
+find_package(Boost 1.91.0 EXACT CONFIG REQUIRED COMPONENTS json)
+find_package(lua 5.5.0 EXACT CONFIG REQUIRED)
 if(NOT TARGET OpenEXR::OpenEXR)
     message(FATAL_ERROR "find_package(OpenEXR) did not provide the expected OpenEXR::OpenEXR target.")
+endif()
+if(NOT TARGET Boost::json)
+    message(FATAL_ERROR "find_package(Boost) did not provide the expected Boost::json target.")
+endif()
+if(NOT TARGET lua::lua)
+    message(FATAL_ERROR "find_package(lua) did not provide the expected lua::lua target.")
 endif()
 
 add_subdirectory(dlssBridge)
@@ -39,8 +47,8 @@ endif()
 file(GLOB DEPENDENCY_MODULE_UNITS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.ixx"
 )
-file(GLOB_RECURSE NR_SHADER_CODEGEN_SLANG_DEPENDENCIES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/shader/*.slang"
+file(GLOB_RECURSE NR_SHADER_SHARE_SLANG_DEPENDENCIES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/shader/include/share/*.slang"
 )
 set(DEPENDENCY_IMPLEMENTATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyImpl.cpp"
@@ -48,21 +56,34 @@ set(DEPENDENCY_IMPLEMENTATION_SOURCES
 )
 set(DEPENDENCY_MODULE_IMPLEMENTATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyDlss.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyJson.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyLua.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyNetwork.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyNsight.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyWindow.cpp"
 )
 
-set(NR_SHADER_SHARE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(NR_SHADER_SHARE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")
 set(NR_SHADER_SHARE_GENERATED_MODULE "${NR_SHADER_SHARE_GENERATED_DIR}/dependencyShaderShare.ixx")
+set(NR_SHADER_SHARE_GENERATED_STAMP "${NR_SHADER_SHARE_GENERATED_DIR}/dependencyShaderShare.stamp")
 
-nr_add_executable(nr_shader_share_codegen
+add_executable(nr_shader_share_codegen
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/nrShaderShareCodegen.cpp"
 )
 target_link_libraries(nr_shader_share_codegen PRIVATE slang::slang)
-set_target_properties(nr_shader_share_codegen PROPERTIES FOLDER "extern/tools")
+nr_add_slang_runtime_dependency(nr_shader_share_codegen)
+nr_apply_target_settings(nr_shader_share_codegen)
+set_target_properties(nr_shader_share_codegen PROPERTIES
+    CXX_SCAN_FOR_MODULES OFF
+    CXX_MODULE_STD OFF
+    INTERPROCEDURAL_OPTIMIZATION FALSE
+    INTERPROCEDURAL_OPTIMIZATION_RELEASE FALSE
+    FOLDER "extern/tools"
+)
 
 add_custom_command(
-    OUTPUT "${NR_SHADER_SHARE_GENERATED_MODULE}"
+    OUTPUT "${NR_SHADER_SHARE_GENERATED_STAMP}"
+    BYPRODUCTS "${NR_SHADER_SHARE_GENERATED_MODULE}"
     COMMAND "$<TARGET_FILE:nr_shader_share_codegen>"
         --shader-root "${CMAKE_SOURCE_DIR}/shader"
         --share-root "${CMAKE_SOURCE_DIR}/shader/include/share"
@@ -70,14 +91,19 @@ add_custom_command(
         --output "${NR_SHADER_SHARE_GENERATED_MODULE}"
         --module dependency.shaderShare
         --namespace nr::shader::share
+    COMMAND ${CMAKE_COMMAND} -E touch "${NR_SHADER_SHARE_GENERATED_STAMP}"
     DEPENDS
         nr_shader_share_codegen
-        ${NR_SHADER_CODEGEN_SLANG_DEPENDENCIES}
+        ${NR_SHADER_SHARE_SLANG_DEPENDENCIES}
+    DEPENDS_EXPLICIT_ONLY
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Generating dependency.shaderShare from Slang shared ABI declarations"
     VERBATIM
 )
-set_source_files_properties("${NR_SHADER_SHARE_GENERATED_MODULE}" PROPERTIES GENERATED TRUE)
+add_custom_target(nr_generate_shader_share
+    DEPENDS "${NR_SHADER_SHARE_GENERATED_STAMP}"
+)
+set_target_properties(nr_generate_shader_share PROPERTIES FOLDER "extern/tools")
 
 set_source_files_properties(
     ${DEPENDENCY_IMPLEMENTATION_SOURCES}
@@ -94,11 +120,15 @@ PUBLIC
     glm::glm
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
-    Tracy::TracyClient
     assimp::assimp
     OpenEXR::OpenEXR
+    Boost::json
+    lua::lua
     $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
 )
+if(WIN32)
+    target_link_libraries(dependency PUBLIC ws2_32)
+endif()
 target_include_directories(dependency
 PUBLIC
     ${Stb_INCLUDE_DIR}
@@ -127,12 +157,8 @@ endif()
 target_sources(dependency
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES
-        BASE_DIRS
-            "${CMAKE_CURRENT_SOURCE_DIR}"
-            "${NR_SHADER_SHARE_GENERATED_DIR}"
-        FILES
-            ${DEPENDENCY_MODULE_UNITS}
-            "${NR_SHADER_SHARE_GENERATED_MODULE}"
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+        FILES ${DEPENDENCY_MODULE_UNITS}
     PRIVATE
         ${DEPENDENCY_IMPLEMENTATION_SOURCES}
         ${DEPENDENCY_MODULE_IMPLEMENTATION_SOURCES}
@@ -142,5 +168,32 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
     ${DEPENDENCY_MODULE_IMPLEMENTATION_SOURCES}
     ${DEPENDENCY_MODULE_UNITS}
 )
-source_group("generated" FILES "${NR_SHADER_SHARE_GENERATED_MODULE}")
 set_target_properties(dependency PROPERTIES FOLDER "extern")
+
+if(NR_BUILD_TESTS)
+    nr_add_library(dependency_network_test STATIC)
+    target_link_libraries(dependency_network_test
+        PUBLIC
+            dependency
+    )
+    target_sources(dependency_network_test
+        PUBLIC
+            FILE_SET cxx_modules TYPE CXX_MODULES
+            BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/test"
+            FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/dependencyNetworkTest.ixx"
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/dependencyNetworkTest.cpp"
+    )
+    set_target_properties(dependency_network_test PROPERTIES FOLDER "extern/test")
+endif()
+
+nr_add_library(dependency_shader_share STATIC)
+add_dependencies(dependency_shader_share nr_generate_shader_share)
+target_link_libraries(dependency_shader_share PUBLIC dependency)
+target_sources(dependency_shader_share
+    PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES
+        BASE_DIRS "${NR_SHADER_SHARE_GENERATED_DIR}"
+        FILES "${NR_SHADER_SHARE_GENERATED_MODULE}"
+)
+set_target_properties(dependency_shader_share PROPERTIES FOLDER "extern")

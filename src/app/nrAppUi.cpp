@@ -375,7 +375,6 @@ void UiSystem::renderSections(std::span<const UiSection> sections, ImGuiWindowFl
 {
     renderSections(
         sections,
-        std::span<const nr::renderer::NodeUiSection>{},
         std::span<const UiSection>{},
         flags);
 }
@@ -385,23 +384,10 @@ void UiSystem::renderSections(
     std::span<const UiSection> trailingSections,
     ImGuiWindowFlags flags)
 {
-    renderSections(
-        leadingSections,
-        std::span<const nr::renderer::NodeUiSection>{},
-        trailingSections,
-        flags);
-}
-
-void UiSystem::renderSections(
-    std::span<const UiSection> leadingSections,
-    std::span<const nr::renderer::NodeUiSection> nodeSections,
-    std::span<const UiSection> trailingSections,
-    ImGuiWindowFlags flags)
-{
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::renderSections requires an active UI frame.");
     setCurrentContext();
 
-    if (leadingSections.empty() && queuedSections_.empty() && nodeSections.empty() && trailingSections.empty())
+    if (leadingSections.empty() && queuedSections_.empty() && trailingSections.empty())
     {
         return;
     }
@@ -431,25 +417,12 @@ void UiSystem::renderSections(
         ImGui::Spacing();
     };
 
-    auto drawNodeSection = [&](const nr::renderer::NodeUiSection& section) {
-        if (!beginSection(section.id, section.title, section.defaultOpen) || !section.draw)
-        {
-            return;
-        }
-
-        ImGui::Indent();
-        section.draw(*this);
-        ImGui::Unindent();
-        ImGui::Spacing();
-    };
-
     auto drawAppSections = [&](std::span<const UiSection> sectionSpan) {
         std::ranges::for_each(sectionSpan, drawAppSection);
     };
 
     drawAppSections(leadingSections);
     std::ranges::for_each(queuedSections_, drawAppSection);
-    std::ranges::for_each(nodeSections, drawNodeSection);
     drawAppSections(trailingSections);
     queuedSections_.clear();
 }
@@ -629,6 +602,32 @@ bool UiSystem::sliderUInt(
     auto const changed = ImGui::SliderInt(ownedLabel.c_str(), std::addressof(intValue), intMin, intMax);
     value = static_cast<std::uint32_t>(std::clamp(intValue, intMin, intMax));
     return changed;
+}
+
+void UiSystem::beginDisabled(bool disabled)
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::beginDisabled requires an active UI frame.");
+    setCurrentContext();
+    ImGui::BeginDisabled(disabled);
+}
+
+void UiSystem::endDisabled()
+{
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::endDisabled requires an active UI frame.");
+    setCurrentContext();
+    ImGui::EndDisabled();
+}
+
+bool UiSystem::itemEditCommitted() const
+{
+    nrAssert(frameActive_ && !frameFinalized_,
+             "UiSystem::itemEditCommitted requires an active UI frame.");
+    setCurrentContext();
+    auto const enterPressed =
+        ImGui::IsItemActive() &&
+        (ImGui::IsKeyPressed(imgui::keyEnter, false) ||
+         ImGui::IsKeyPressed(imgui::keyKeypadEnter, false));
+    return ImGui::IsItemDeactivatedAfterEdit() || enterPressed;
 }
 
 void UiSystem::setItemDefaultFocus()

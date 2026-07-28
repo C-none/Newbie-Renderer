@@ -1,6 +1,7 @@
 export module nr.app:session;
 
 import nr.renderer;
+import nr.options;
 import nr.scene;
 import std;
 import :camera;
@@ -28,6 +29,9 @@ class AppSession
     void initialize(const nr::renderer::RendererCreateInfo& createInfo = {});
     void shutdown();
     void destroyScene();
+    [[nodiscard]] std::unique_ptr<nr::scene::Scene> makeSceneCandidate(
+        const SceneSessionCreateInfo& createInfo = {});
+    void commitScene(std::unique_ptr<nr::scene::Scene> candidate);
     [[nodiscard]] nr::scene::Scene& createScene(const SceneSessionCreateInfo& createInfo = {});
     [[nodiscard]] bool initialized() const noexcept;
     [[nodiscard]] bool hasScene() const noexcept;
@@ -35,6 +39,8 @@ class AppSession
 
     [[nodiscard]] nr::renderer::Renderer& renderer() noexcept;
     [[nodiscard]] const nr::renderer::Renderer& renderer() const noexcept;
+    [[nodiscard]] nr::options::OptionSystem& options() noexcept;
+    [[nodiscard]] const nr::options::OptionSystem& options() const noexcept;
     [[nodiscard]] AppCamera& camera() noexcept;
     [[nodiscard]] const AppCamera& camera() const noexcept;
     [[nodiscard]] UiSystem& ui() noexcept;
@@ -46,10 +52,11 @@ class AppSession
     [[nodiscard]] std::optional<std::reference_wrapper<const nr::scene::Scene>> tryScene() const noexcept;
 
   private:
-    // Declaration order matters: scene_ and ui_ must be destroyed before renderer_.
+    // Declaration order matters: scene_, ui_, and renderer_ must be destroyed before options_.
+    nr::options::OptionSystem options_{};
     nr::renderer::Renderer renderer_{};
     AppCamera camera_{};
     UiSystem ui_{};
-    std::optional<nr::scene::Scene> scene_{};
+    std::unique_ptr<nr::scene::Scene> scene_{};
 };
 } // namespace nr::app

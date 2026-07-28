@@ -16,6 +16,7 @@ namespace
     auto ui = std::make_shared<nr::renderPasses::UiNode>();
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
     present->input.format = context.swapchainFormat;
+    present->input.screenshot.sessionId = context.captureSessionId;
 
     auto graphSpec = nr::renderer::RendererGraphSpec{};
     graphSpec.nodes = {

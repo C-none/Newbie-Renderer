@@ -3,9 +3,11 @@ import dependency.math;
 
 import :camera;
 import :ui;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import nr.scene;
+import nr.utils;
 import std;
 
 namespace nr::app::detail
@@ -152,6 +154,111 @@ inline constexpr int kKeyE = 'E';
         .cursorDelta = cursorDelta,
     };
 }
+
+[[nodiscard]] float normalizedYawRadians(float yawRadians) noexcept
+{
+    auto const turn = glm::two_pi<float>();
+    auto normalized = std::fmod(yawRadians + glm::pi<float>(), turn);
+    if (normalized < 0.0f)
+    {
+        normalized += turn;
+    }
+    return normalized - glm::pi<float>();
+}
+
+[[nodiscard]] nr::options::OptionWireValue::Object poseValue(
+    const nr::renderer::ViewerCameraPose& pose)
+{
+    return {
+        {"position",
+         nr::options::OptionWireValue::Array{
+             static_cast<double>(pose.position.x),
+             static_cast<double>(pose.position.y),
+             static_cast<double>(pose.position.z),
+         }},
+        {"yaw_degrees",
+         static_cast<double>(glm::degrees(normalizedYawRadians(pose.yawRadians)))},
+        {"pitch_degrees",
+         static_cast<double>(glm::degrees(std::clamp(
+             pose.pitchRadians,
+             -glm::radians(89.0f),
+             glm::radians(89.0f))))},
+    };
+}
+
+[[nodiscard]] nr::options::OptionWireValue::Object clipValue(
+    const nr::renderer::ViewerPerspectiveLens& lens)
+{
+    return {
+        {"near", static_cast<double>(lens.nearPlane)},
+        {"far", static_cast<double>(lens.farPlane)},
+    };
+}
+
+[[nodiscard]] const nr::options::OptionWireValue& requiredValue(
+    const nr::options::OptionFrameSnapshot& snapshot,
+    std::string_view id) noexcept
+{
+    auto const* value = snapshot.findValue(id);
+    nrAssert(value != nullptr, std::format("Camera snapshot is missing required option '{}'.", id));
+    return *value;
+}
+
+[[nodiscard]] nr::renderer::ViewerCameraPose poseFromSnapshot(
+    const nr::options::OptionFrameSnapshot& snapshot) noexcept
+{
+    auto const& wire = requiredValue(snapshot, nr::options::keys::viewerCameraPose.id());
+    auto const* object = std::get_if<nr::options::OptionWireValue::Object>(&wire.storage);
+    nrAssert(object != nullptr, "viewer.camera.pose must be an object.");
+    auto const* position = std::get_if<nr::options::OptionWireValue::Array>(
+        &object->at("position").storage);
+    nrAssert(position != nullptr && position->size() == 3u,
+             "viewer.camera.pose.position must contain three numbers.");
+
+    auto numberAt = [](const nr::options::OptionWireValue& value) noexcept {
+        auto const* number = std::get_if<double>(&value.storage);
+        nrAssert(number != nullptr, "Camera snapshot number has an invalid wire type.");
+        return static_cast<float>(*number);
+    };
+    return nr::renderer::ViewerCameraPose{
+        .position = glm::vec3{
+            numberAt((*position)[0]),
+            numberAt((*position)[1]),
+            numberAt((*position)[2]),
+        },
+        .yawRadians = glm::radians(numberAt(object->at("yaw_degrees"))),
+        .pitchRadians = glm::radians(numberAt(object->at("pitch_degrees"))),
+    };
+}
+
+[[nodiscard]] nr::renderer::ViewerPerspectiveLens lensFromSnapshot(
+    const nr::options::OptionFrameSnapshot& snapshot) noexcept
+{
+    auto const* fov = snapshot.find(nr::options::keys::viewerCameraVerticalFovDegrees);
+    nrAssert(fov != nullptr, "Camera snapshot is missing viewer.camera.vertical_fov_degrees.");
+    auto const& clipWire = requiredValue(snapshot, nr::options::keys::viewerCameraClipPlanes.id());
+    auto const* clip = std::get_if<nr::options::OptionWireValue::Object>(&clipWire.storage);
+    nrAssert(clip != nullptr, "viewer.camera.clip_planes must be an object.");
+    auto const* nearPlane = std::get_if<double>(&clip->at("near").storage);
+    auto const* farPlane = std::get_if<double>(&clip->at("far").storage);
+    nrAssert(nearPlane != nullptr && farPlane != nullptr,
+             "viewer.camera.clip_planes fields must be numbers.");
+    return nr::renderer::ViewerPerspectiveLens{
+        .verticalFovRadians = glm::radians(static_cast<float>(*fov)),
+        .nearPlane = static_cast<float>(*nearPlane),
+        .farPlane = static_cast<float>(*farPlane),
+    };
+}
+
+[[nodiscard]] bool hasCameraInput(const nr::renderer::ViewerCameraControlInput& input) noexcept
+{
+    auto const moves = input.moveForward || input.moveBackward || input.moveLeft ||
+                       input.moveRight || input.moveUp || input.moveDown;
+    auto const rotates =
+        input.rotateActive &&
+        (std::abs(input.cursorDelta.x) > 0.0f || std::abs(input.cursorDelta.y) > 0.0f);
+    return moves || rotates;
+}
 } // namespace nr::app::detail
 
 namespace nr::app
@@ -202,17 +309,66 @@ void AppCamera::syncViewportExtent(const nr::rhi::PresentationContext& presentat
     viewer_.setViewportExtent(detail::viewportExtentFrom(presentation));
 }
 
-void AppCamera::updateFromPresentation(const nr::rhi::PresentationContext& presentation,
-                                       float deltaSeconds,
-                                       const UiCaptureState& captureState) noexcept
+void AppCamera::syncFromSnapshot(
+    const nr::options::OptionFrameSnapshot& snapshot,
+    const nr::rhi::PresentationContext& presentation) noexcept
 {
     syncViewportExtent(presentation);
-    viewer_.applyControl(detail::sampleControlInput(presentation, deltaSeconds, cursorTracking_, captureState));
+    viewer_.setPose(detail::poseFromSnapshot(snapshot));
+    viewer_.setLens(detail::lensFromSnapshot(snapshot));
 }
 
-nr::renderer::ViewerPerspectiveCamera& AppCamera::viewer() noexcept
+bool AppCamera::tryScheduleFromPresentation(
+    nr::options::OptionSystem& options,
+    const nr::options::OptionFrameSnapshot& snapshot,
+    const nr::rhi::PresentationContext& presentation,
+    float deltaSeconds,
+    const UiCaptureState& captureState) noexcept
 {
-    return viewer_;
+    auto const control =
+        detail::sampleControlInput(presentation, deltaSeconds, cursorTracking_, captureState);
+    if (!detail::hasCameraInput(control))
+    {
+        return false;
+    }
+
+    auto candidate = nr::renderer::ViewerPerspectiveCamera{};
+    candidate.setViewportExtent(viewer_.viewportExtent());
+    candidate.setControlConfig(viewer_.controlConfig());
+    candidate.setLens(detail::lensFromSnapshot(snapshot));
+    candidate.setPose(detail::poseFromSnapshot(snapshot));
+    candidate.applyControl(control);
+
+    auto result = options.trySchedule(nr::options::OptionMutationRequest{
+        .id = nr::options::optionId(nr::options::keys::viewerCameraPose),
+        .value = detail::poseValue(candidate.pose()),
+        .binding = nr::options::BindingProof{.bindingEpoch = snapshot.bindingEpoch},
+        .origin = nr::options::MutationOrigin::camera,
+    });
+    return result.started;
+}
+
+void AppCamera::discardPresentationInput(
+    const nr::rhi::PresentationContext& presentation,
+    float deltaSeconds,
+    const UiCaptureState& captureState) noexcept
+{
+    static_cast<void>(
+        detail::sampleControlInput(
+            presentation,
+            deltaSeconds,
+            cursorTracking_,
+            captureState));
+}
+
+nr::options::CameraResetValues AppCamera::optionResetValues() const
+{
+    return nr::options::CameraResetValues{
+        .pose = detail::poseValue(viewer_.pose()),
+        .verticalFovDegrees =
+            static_cast<double>(glm::degrees(viewer_.lens().verticalFovRadians)),
+        .clipPlanes = detail::clipValue(viewer_.lens()),
+    };
 }
 
 const nr::renderer::ViewerPerspectiveCamera& AppCamera::viewer() const noexcept

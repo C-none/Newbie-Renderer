@@ -1,0 +1,200 @@
+diff --git a/src/ldo.c b/src/ldo.c
+--- a/src/ldo.c
++++ b/src/ldo.c
+@@ -1128,28 +1128,54 @@ static void checkmode (lua_State *L, const char *mode, const char *x) {
+ }
+ 
+ 
++/*
++** Before the first call to the reader function, Lua reserves a slot
++** with a table for anchoring stuff.
++*/
+ static void f_parser (lua_State *L, void *ud) {
+   LClosure *cl;
+   struct SParser *p = cast(struct SParser *, ud);
+   const char *mode = p->mode ? p->mode : "bt";
+-  int c = zgetc(p->z);  /* read first character */
++  int c;
++  Table *anchor;
++  ptrdiff_t otop = savestack(L, L->top.p);  /* original top */
++  luaD_checkstack(L, 2);
++  anchor = luaH_new(L);  /* create the anchor table */
++  sethvalue2s(L, L->top.p++, anchor);  /* anchor the anchor table */
++  c = zgetc(p->z);  /* read first character */
+   if (c == LUA_SIGNATURE[0]) {
+     int fixed = 0;
+     if (strchr(mode, 'B') != NULL)
+       fixed = 1;
+     else
+       checkmode(L, mode, "binary");
+-    cl = luaU_undump(L, p->z, p->name, fixed);
++    cl = luaU_undump(L, p->z, anchor, p->name, fixed);
+   }
+   else {
+     checkmode(L, mode, "text");
+-    cl = luaY_parser(L, p->z, &p->buff, &p->dyd, p->name, c);
++    cl = luaY_parser(L, p->z, anchor, &p->buff, &p->dyd, p->name, c);
+   }
++  L->top.p = restorestack(L, otop);  /* restore stack */
++  setclLvalue2s(L, L->top.p++, cl);  /* push closure */
+   lua_assert(cl->nupvalues == cl->p->sizeupvalues);
+   luaF_initupvals(L, cl);
+ }
+ 
+ 
++/*
++** Anchor an object in a table in the stack.  First, anchor the object
++** temporarily in the stack, as luaH_set may call an emergency GC.
++** Then, add it in the table with itself as its key.
++*/
++void luaD_anchorobj (lua_State *L, Table *anchor, GCObject *obj) {
++  setgcovalue(L, s2v(L->top.p++), obj);  /* temporary anchor in the stack */
++  luaH_set(L, anchor, s2v(L->top.p - 1), s2v(L->top.p - 1));
++  /* Because this is a new key, luaH_set will call the GC barrier, so
++     we don't need to call the barrier again here */
++  L->top.p--;
++}
++
++
+ TStatus luaD_protectedparser (lua_State *L, ZIO *z, const char *name,
+                                             const char *mode) {
+   struct SParser p;
+diff --git a/src/ldo.h b/src/ldo.h
+--- a/src/ldo.h
++++ b/src/ldo.h
+@@ -90,6 +90,7 @@ LUAI_FUNC int luaD_growstack (lua_State *L, int n, int raiseerror);
+ LUAI_FUNC void luaD_shrinkstack (lua_State *L);
+ LUAI_FUNC void luaD_inctop (lua_State *L);
+ LUAI_FUNC int luaD_checkminstack (lua_State *L);
++LUAI_FUNC void luaD_anchorobj (lua_State *L, Table *anchor, GCObject *obj);
+ 
+ LUAI_FUNC l_noret luaD_throw (lua_State *L, TStatus errcode);
+ LUAI_FUNC l_noret luaD_throwbaselevel (lua_State *L, TStatus errcode);
+diff --git a/src/lparser.c b/src/lparser.c
+--- a/src/lparser.c
++++ b/src/lparser.c
+@@ -821,8 +821,7 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
+   luaC_objbarrier(L, f, f->source);
+   f->maxstacksize = 2;  /* registers 0/1 are always valid */
+   fs->kcache = luaH_new(L);  /* create table for function */
+-  sethvalue2s(L, L->top.p, fs->kcache);  /* anchor it */
+-  luaD_inctop(L);
++  luaD_anchorobj(L, ls->h, obj2gco(fs->kcache));  /* anchor it */
+   enterblock(fs, bl, 0);
+ }
+ 
+@@ -831,6 +830,7 @@ static void close_func (LexState *ls) {
+   lua_State *L = ls->L;
+   FuncState *fs = ls->fs;
+   Proto *f = fs->f;
++  TValue temp;
+   luaK_ret(fs, luaY_nvarstack(fs), 0);  /* final return */
+   leaveblock(fs);
+   lua_assert(fs->bl == NULL);
+@@ -843,8 +843,10 @@ static void close_func (LexState *ls) {
+   luaM_shrinkvector(L, f->p, f->sizep, fs->np, Proto *);
+   luaM_shrinkvector(L, f->locvars, f->sizelocvars, fs->ndebugvars, LocVar);
+   luaM_shrinkvector(L, f->upvalues, f->sizeupvalues, fs->nups, Upvaldesc);
++  /* remove kcache table from scanner table ("weigh" its anchor) */
++  sethvalue(L, &temp, fs->kcache);  /* key to be set to nil */
++  luaH_set(L, ls->h, &temp, &G(L)->nilvalue);
+   ls->fs = fs->prev;
+-  L->top.p--;  /* pop kcache table */
+   luaC_checkGC(L);
+ }
+ 
+@@ -2174,16 +2176,14 @@ static void mainfunc (LexState *ls, FuncState *fs) {
+ }
+ 
+ 
+-LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
++LClosure *luaY_parser (lua_State *L, ZIO *z, Table *anchor, Mbuffer *buff,
+                        Dyndata *dyd, const char *name, int firstchar) {
+   LexState lexstate;
+   FuncState funcstate;
+-  LClosure *cl = luaF_newLclosure(L, 1);  /* create main closure */
+-  setclLvalue2s(L, L->top.p, cl);  /* anchor it (to avoid being collected) */
+-  luaD_inctop(L);
+-  lexstate.h = luaH_new(L);  /* create table for scanner */
+-  sethvalue2s(L, L->top.p, lexstate.h);  /* anchor it */
+-  luaD_inctop(L);
++  LClosure *cl;
++  lexstate.h = anchor;  /* table for scanner */
++  cl = luaF_newLclosure(L, 1);  /* create main closure */
++  luaD_anchorobj(L, anchor, obj2gco(cl));  /* anchor it in scanner table */
+   funcstate.f = cl->p = luaF_newproto(L);
+   luaC_objbarrier(L, cl, cl->p);
+   funcstate.f->source = luaS_new(L, name);  /* create and anchor TString */
+@@ -2196,6 +2196,5 @@ LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
+   lua_assert(!funcstate.prev && funcstate.nups == 1 && !lexstate.fs);
+   /* all scopes should be correctly finished */
+   lua_assert(dyd->actvar.n == 0 && dyd->gt.n == 0 && dyd->label.n == 0);
+-  L->top.p--;  /* remove scanner's table */
+-  return cl;  /* closure is on the stack, too */
++  return cl;
+ }
+diff --git a/src/lparser.h b/src/lparser.h
+--- a/src/lparser.h
++++ b/src/lparser.h
+@@ -189,8 +189,9 @@ typedef struct FuncState {
+ LUAI_FUNC lu_byte luaY_nvarstack (FuncState *fs);
+ LUAI_FUNC void luaY_checklimit (FuncState *fs, int v, int l,
+                                 const char *what);
+-LUAI_FUNC LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
+-                                 Dyndata *dyd, const char *name, int firstchar);
++LUAI_FUNC LClosure *luaY_parser (lua_State *L, ZIO *z, Table *anchor,
++                                 Mbuffer *buff, Dyndata *dyd,
++                                 const char *name, int firstchar);
+ 
+ 
+ #endif
+diff --git a/src/lundump.c b/src/lundump.c
+--- a/src/lundump.c
++++ b/src/lundump.c
+@@ -392,7 +392,8 @@ static void checkHeader (LoadState *S) {
+ /*
+ ** Load precompiled chunk.
+ */
+-LClosure *luaU_undump (lua_State *L, ZIO *Z, const char *name, int fixed) {
++LClosure *luaU_undump (lua_State *L, ZIO *Z, Table *anchor, const char *name,
++                       int fixed) {
+   LoadState S;
+   LClosure *cl;
+   if (*name == '@' || *name == '=')
+@@ -405,19 +406,15 @@ LClosure *luaU_undump (lua_State *L, ZIO *Z, const char *name, int fixed) {
+   S.fixed = cast_byte(fixed);
+   S.offset = 1;  /* fist byte was already read */
+   checkHeader(&S);
+-  cl = luaF_newLclosure(L, loadByte(&S));
+-  setclLvalue2s(L, L->top.p, cl);
+-  luaD_inctop(L);
+-  S.h = luaH_new(L);  /* create list of saved strings */
++  S.h = anchor;
+   S.nstr = 0;
+-  sethvalue2s(L, L->top.p, S.h);  /* anchor it */
+-  luaD_inctop(L);
++  cl = luaF_newLclosure(L, loadByte(&S));
++  luaD_anchorobj(L, anchor, obj2gco(cl));
+   cl->p = luaF_newproto(L);
+   luaC_objbarrier(L, cl, cl->p);
+   loadFunction(&S, cl->p);
+   if (cl->nupvalues != cl->p->sizeupvalues)
+     error(&S, "corrupted chunk");
+   luai_verifycode(L, cl->p);
+-  L->top.p--;  /* pop table */
+   return cl;
+ }
+diff --git a/src/lundump.h b/src/lundump.h
+--- a/src/lundump.h
++++ b/src/lundump.h
+@@ -30,8 +30,8 @@
+ 
+ 
+ /* load one chunk; from lundump.c */
+-LUAI_FUNC LClosure* luaU_undump (lua_State* L, ZIO* Z, const char* name,
+-                                               int fixed);
++LUAI_FUNC LClosure* luaU_undump (lua_State* L, ZIO* Z, Table *anchor,
++                                 const char* name, int fixed);
+ 
+ /* dump one chunk; from ldump.c */
+ LUAI_FUNC int luaU_dump (lua_State* L, const Proto* f, lua_Writer w,

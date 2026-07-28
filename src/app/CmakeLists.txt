@@ -12,6 +12,7 @@ nr_add_library(nrapp STATIC)
 target_link_libraries(nrapp
 PUBLIC
     dependency
+    nroptions
     nrrhi
     nrrenderer
     nrscene

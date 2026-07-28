@@ -3,6 +3,7 @@ import dependency.math;
 import dependency.vulkan;
 
 import :accumulateNode;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import nr.utils;
@@ -157,54 +158,45 @@ struct AccumulateRuntimeCache
 
 namespace nr::renderPasses
 {
+namespace
+{
+[[nodiscard]] std::uint32_t maxHistorySampleCount(
+    const nr::options::OptionFrameSnapshot& snapshot)
+{
+    auto const* value = snapshot.find(nr::options::keys::accumulateMaxHistorySamples);
+    nr::nrAssert(value != nullptr, "Accumulate requires its max-history option in the frame snapshot.");
+    return static_cast<std::uint32_t>(*value);
+}
+} // namespace
+
 AccumulateNode::~AccumulateNode() = default;
+
+void AccumulateNode::declareOptions(nr::options::OptionCatalogBuilder& builder) const
+{
+    std::ranges::for_each(
+        nr::options::makeAccumulateDefinitions(),
+        [&](nr::options::OptionDefinition definition) {
+            static_cast<void>(builder.add(std::move(definition)));
+        });
+}
+
+void AccumulateNode::collectOptionAvailability(
+    const nr::options::OptionFrameSnapshot&,
+    nr::options::OptionAvailabilityMap& availability) const
+{
+    availability.insert_or_assign(
+        nr::options::optionId(nr::options::keys::accumulateMaxHistorySamples),
+        nr::options::OptionAvailability{.available = true, .reason = {}});
+}
 
 void AccumulateNode::initialize(NodeInitContext& context)
 {
     device_ = context.device;
-    input.maxHistorySampleCount = std::clamp(
-        input.maxHistorySampleCount,
-        1u,
-        kAccumulateMaxHistorySampleCount);
     runtime_ = detail::ensureAccumulateRuntime(context.device.get());
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),
         context.runtimeName + ".Pipeline");
-}
-
-void AccumulateNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters&)
-{
-    if (pendingMaxHistorySampleCountValid_)
-    {
-        input.maxHistorySampleCount = std::clamp(
-            pendingMaxHistorySampleCount_,
-            1u,
-            kAccumulateMaxHistorySampleCount);
-        pendingMaxHistorySampleCountValid_ = false;
-    }
-
-    maxHistorySampleCountDraft_ = std::clamp(
-        input.maxHistorySampleCount,
-        1u,
-        kAccumulateMaxHistorySampleCount);
-
-    context.addSection(
-        context.runtimeName(),
-        [this](NodeUiWriter& ui) {
-            auto value = maxHistorySampleCountDraft_;
-            if (ui.inputUInt("History Samples", value, 1u, kAccumulateMaxHistorySampleCount))
-            {
-                maxHistorySampleCountDraft_ = std::clamp(
-                    value,
-                    1u,
-                    kAccumulateMaxHistorySampleCount);
-                pendingMaxHistorySampleCount_ = maxHistorySampleCountDraft_;
-                pendingMaxHistorySampleCountValid_ = true;
-            }
-        },
-        true,
-        "controls");
 }
 
 void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
@@ -213,7 +205,7 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
 }
 
 [[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> AccumulateNode::structuralSnapshot(
-    const NodeFrameParameters&) const
+    const NodeFrameParameters& frameParameters) const
 {
     auto const historyFormat = input.historyFormat == vk::Format::eUndefined
                                    ? vk::Format::eR16G16B16A16Sfloat
@@ -221,7 +213,7 @@ void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters&
     return StructuralSnapshot{
         .configurationRevision =
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(historyFormat)) << 32u) |
-            std::clamp(input.maxHistorySampleCount, 1u, kAccumulateMaxHistorySampleCount),
+            maxHistorySampleCount(frameParameters.optionSnapshot.get()),
         .branchKey = "compute",
     };
 }
@@ -232,7 +224,7 @@ bool AccumulateNode::materializeRenderGraphSkeleton(
     const StructuralSnapshot&)
 {
     nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "Accumulate Skeleton patch requires initialized state.");
-    input.maxHistorySampleCount = std::clamp(input.maxHistorySampleCount, 1u, kAccumulateMaxHistorySampleCount);
+    auto const maximumHistorySamples = maxHistorySampleCount(frameParameters.optionSnapshot.get());
     auto viewportExtent = frameParameters.swapchainExtent;
     viewportExtent.width = std::max(1u, viewportExtent.width);
     viewportExtent.height = std::max(1u, viewportExtent.height);
@@ -279,7 +271,7 @@ bool AccumulateNode::materializeRenderGraphSkeleton(
         .height = viewportExtent.height,
         .resetHistory = resetHistory ? 1u : 0u,
         .historySampleCount = resetHistory ? 0u : runtime_->historySampleCount,
-        .maxHistorySampleCount = input.maxHistorySampleCount,
+        .maxHistorySampleCount = maximumHistorySamples,
     };
     auto patch = nr::renderer::ComputePassPatchBuilder{context, 0u, "Accumulate.Compute", runtime_->pipeline};
     patch
@@ -299,7 +291,7 @@ bool AccumulateNode::materializeRenderGraphSkeleton(
     runtime_->previousCameraTransform = currentCameraTransform;
     runtime_->historySampleCount = resetHistory
                                        ? 1u
-                                       : std::min(runtime_->historySampleCount + 1u, kAccumulateMaxHistorySampleCount);
+                                       : std::min(runtime_->historySampleCount + 1u, maximumHistorySamples);
     runtime_->lastWrittenSlot = currentSlot;
     runtime_->historyValid = true;
     return true;
@@ -309,10 +301,6 @@ void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const No
 {
     nr::nrAssert(static_cast<bool>(runtime_), "Accumulate build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "Accumulate build stage requires device reference from initialize stage.");
-    input.maxHistorySampleCount = std::clamp(
-        input.maxHistorySampleCount,
-        1u,
-        kAccumulateMaxHistorySampleCount);
 
     auto sourceColor = context.requireFrameResource(nr::renderer::frameResource::presentSourceColor, "Accumulate");
 
@@ -367,13 +355,13 @@ void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const No
             nr::renderer::ImageUsageIntent::TransferSrc,
         });
 
-    auto const maxHistorySampleCount = std::clamp(input.maxHistorySampleCount, 1u, kAccumulateMaxHistorySampleCount);
+    auto const maximumHistorySamples = maxHistorySampleCount(frameParameters.optionSnapshot.get());
     auto pushConstants = detail::AccumulatePushConstants{
         .width = viewportExtent.width,
         .height = viewportExtent.height,
         .resetHistory = resetHistory ? 1u : 0u,
         .historySampleCount = resetHistory ? 0u : runtime_->historySampleCount,
-        .maxHistorySampleCount = maxHistorySampleCount,
+        .maxHistorySampleCount = maximumHistorySamples,
     };
 
     auto accumulatePass = nr::renderer::ComputePassBuilder{
@@ -400,7 +388,7 @@ void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const No
     {
         runtime_->historySampleCount = 1u;
     }
-    else if (runtime_->historySampleCount < kAccumulateMaxHistorySampleCount)
+    else if (runtime_->historySampleCount < maximumHistorySamples)
     {
         ++runtime_->historySampleCount;
     }

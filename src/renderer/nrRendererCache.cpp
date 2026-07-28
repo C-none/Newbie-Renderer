@@ -557,6 +557,12 @@ RenderGraphSkeletonPatchContext::resolveFrameDataPayload(GraphFrameDataHandle ha
     return frame_.get().frameData[layout_.frameDataBegin + localSlot].handle;
 }
 
+[[nodiscard]] GraphPassHandle RenderGraphSkeletonPatchContext::passHandle(std::size_t localSlot) const
+{
+    nrAssert(localSlot < layout_.passCount, "Skeleton pass slot is outside the node layout.");
+    return frame_.get().passes[layout_.passBegin + localSlot].handle;
+}
+
 [[nodiscard]] GraphResourceHandle RenderGraphSkeletonPatchContext::passResource(
     std::size_t localPassSlot,
     std::size_t useSlot) const

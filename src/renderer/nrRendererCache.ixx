@@ -172,6 +172,8 @@ class RenderGraphSkeletonPatchContext
 
     [[nodiscard]] GraphFrameDataHandle frameData(std::size_t localSlot) const;
 
+    [[nodiscard]] GraphPassHandle passHandle(std::size_t localSlot) const;
+
     [[nodiscard]] GraphResourceHandle passResource(
         std::size_t localPassSlot,
         std::size_t useSlot) const;

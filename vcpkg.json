@@ -1,15 +1,19 @@
 {
   "name": "newbie-renderer",
+  "builtin-baseline": "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
   "dependencies": [
     "imgui",
     "glfw3",
     "vulkan-memory-allocator",
     "glm",
-    "tracy",
     "assimp",
     "stb",
     "libjpeg-turbo",
     "openexr",
-    "flecs"
+    "flecs",
+    "boost-asio",
+    "boost-beast",
+    "boost-json",
+    "nr-lua"
   ]
 }

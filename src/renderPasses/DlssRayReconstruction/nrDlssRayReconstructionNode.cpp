@@ -3,6 +3,7 @@ module nr.renderPasses;
 import dependency.math;
 import dependency.vulkan;
 import :dlssRayReconstruction;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import nr.utils;
@@ -183,6 +184,109 @@ void validateActiveSubrectBounds(const std::array<std::optional<nr::renderer::No
     return (value + divisor - 1u) / divisor;
 }
 
+[[nodiscard]] nr::rhi::DlssQuality dlssQualityFromOption(std::string_view value)
+{
+    if (value == "performance")
+    {
+        return nr::rhi::DlssQuality::Performance;
+    }
+    if (value == "balanced")
+    {
+        return nr::rhi::DlssQuality::Balanced;
+    }
+    if (value == "quality")
+    {
+        return nr::rhi::DlssQuality::Quality;
+    }
+    if (value == "ultra_performance")
+    {
+        return nr::rhi::DlssQuality::UltraPerformance;
+    }
+    nrAssert(value == "dlaa", "DLSS option snapshot contains an invalid quality.");
+    return nr::rhi::DlssQuality::Dlaa;
+}
+
+[[nodiscard]] std::string dlssQualityOptionValue(nr::rhi::DlssQuality value)
+{
+    switch (value)
+    {
+    case nr::rhi::DlssQuality::Performance:
+        return "performance";
+    case nr::rhi::DlssQuality::Balanced:
+        return "balanced";
+    case nr::rhi::DlssQuality::Quality:
+        return "quality";
+    case nr::rhi::DlssQuality::UltraPerformance:
+        return "ultra_performance";
+    case nr::rhi::DlssQuality::Dlaa:
+        return "dlaa";
+    case nr::rhi::DlssQuality::Count:
+        break;
+    }
+    nrAssert(false, "DLSS graph registration received an invalid quality.");
+    return "quality";
+}
+
+[[nodiscard]] nr::rhi::DlssRayReconstructionPreset dlssPresetFromOption(
+    std::string_view value)
+{
+    if (value == "default")
+    {
+        return nr::rhi::DlssRayReconstructionPreset::Default;
+    }
+    if (value == "d")
+    {
+        return nr::rhi::DlssRayReconstructionPreset::D;
+    }
+    nrAssert(value == "e", "DLSS option snapshot contains an invalid preset.");
+    return nr::rhi::DlssRayReconstructionPreset::E;
+}
+
+template <typename T>
+[[nodiscard]] const T& requiredOption(
+    const nr::options::OptionFrameSnapshot& snapshot,
+    nr::options::OptionKey<T> key)
+{
+    auto const* value = snapshot.find(key);
+    nrAssert(
+        value != nullptr,
+        std::format("DLSS requires option '{}' in the frame snapshot.", key.id()));
+    return *value;
+}
+
+[[nodiscard]] bool hasFrameEffect(
+    const nr::options::OptionFrameSnapshot& snapshot,
+    nr::options::OptionKey<nr::options::OptionWireValue::Object> key)
+{
+    return snapshot.effect.has_value() &&
+           snapshot.effect->id == nr::options::optionId(key);
+}
+
+[[nodiscard]] DlssRayReconstructionNodeInput resolveDlssInput(
+    const DlssRayReconstructionNodeInput& configured,
+    const nr::options::OptionFrameSnapshot& snapshot)
+{
+    auto resolved = configured;
+    resolved.enabled = requiredOption(snapshot, nr::options::keys::dlssEnabled);
+    resolved.create.quality = dlssQualityFromOption(
+        requiredOption(snapshot, nr::options::keys::dlssQuality));
+    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Performance)] =
+        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetPerformance));
+    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Balanced)] =
+        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetBalanced));
+    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Quality)] =
+        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetQuality));
+    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::UltraPerformance)] =
+        dlssPresetFromOption(
+            requiredOption(snapshot, nr::options::keys::dlssPresetUltraPerformance));
+    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Dlaa)] =
+        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetDlaa));
+    resolved.bypass = requiredOption(snapshot, nr::options::keys::dlssBypass);
+    resolved.evaluate.visualizeMotionVectors =
+        requiredOption(snapshot, nr::options::keys::dlssVisualizeMotionVectors);
+    return resolved;
+}
+
 std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4 &value) noexcept
 {
     // Preserve the transform while converting GLM column-vector math to NGX row-vector math.
@@ -208,22 +312,6 @@ std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4 &value) noexcept
     };
 }
 
-template <typename TEnum, std::size_t Count, typename TName> [[nodiscard]] bool enumCombo(nr::renderer::NodeUiWriter &ui, std::string_view label, TEnum &value, const std::array<TEnum, Count> &values, TName &&name)
-{
-    auto changed = false;
-    if (ui.beginCombo(label, name(value)))
-    {
-        std::ranges::for_each(values, [&](TEnum candidate) {
-            if (ui.selectable(name(candidate), candidate == value))
-            {
-                value = candidate;
-                changed = true;
-            }
-        });
-        ui.endCombo();
-    }
-    return changed;
-}
 } // namespace nr::renderPasses::detail
 
 namespace nr::renderPasses
@@ -339,25 +427,71 @@ bool dlssRayReconstructionResourceRequired(nr::rhi::DlssRayReconstructionResourc
     }
 }
 
-DlssRayReconstructionNode::DlssRayReconstructionNode() : input(makeDefaultDlssRayReconstructionNodeInput()), uiDraft_(input)
+DlssRayReconstructionNode::DlssRayReconstructionNode() : input(makeDefaultDlssRayReconstructionNodeInput())
 {
 }
 
 DlssRayReconstructionNode::~DlssRayReconstructionNode() = default;
+
+void DlssRayReconstructionNode::declareOptions(
+    nr::options::OptionCatalogBuilder& builder) const
+{
+    std::ranges::for_each(
+        nr::options::makeDlssDefinitions(
+            detail::dlssQualityOptionValue(input.create.quality)),
+        [&](nr::options::OptionDefinition definition) {
+            static_cast<void>(builder.add(std::move(definition)));
+        });
+}
+
+void DlssRayReconstructionNode::collectOptionAvailability(
+    const nr::options::OptionFrameSnapshot& snapshot,
+    nr::options::OptionAvailabilityMap& availability) const
+{
+    auto markAvailable = [&](const nr::options::OptionId& id) {
+        availability.insert_or_assign(
+            id,
+            nr::options::OptionAvailability{.available = true, .reason = {}});
+    };
+    auto definitions = nr::options::makeDlssDefinitions();
+    std::ranges::for_each(
+        definitions,
+        [&](const nr::options::OptionDefinition& definition) {
+            if (definition.id != nr::options::optionId(nr::options::keys::dlssResetHistory))
+            {
+                markAvailable(definition.id);
+            }
+        });
+
+    auto const* enabled = snapshot.find(nr::options::keys::dlssEnabled);
+    auto const resetAvailable = runtime_ && enabled != nullptr && *enabled;
+    availability.insert_or_assign(
+        nr::options::optionId(nr::options::keys::dlssResetHistory),
+        resetAvailable
+            ? nr::options::OptionAvailability{.available = true, .reason = {}}
+            : nr::options::OptionAvailability{.available = false, .reason = "dlss_disabled"});
+}
 
 void DlssRayReconstructionNode::setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController> &controller) noexcept
 {
     resolutionController_ = controller;
 }
 
-DlssRayReconstructionResolutionRequest DlssRayReconstructionNode::effectiveResolutionRequest() const noexcept
+DlssRayReconstructionResolutionRequest dlssResolutionRequestFromSnapshot(
+    const nr::options::OptionFrameSnapshot& snapshot)
 {
-    auto const &effectiveInput = pendingInput_.has_value() ? *pendingInput_ : input;
     return DlssRayReconstructionResolutionRequest{
-        .enabled = effectiveInput.enabled,
-        .quality = effectiveInput.create.quality,
-        .bypass = effectiveInput.bypass,
+        .enabled = detail::requiredOption(snapshot, nr::options::keys::dlssEnabled),
+        .quality = detail::dlssQualityFromOption(
+            detail::requiredOption(snapshot, nr::options::keys::dlssQuality)),
+        .bypass = detail::requiredOption(snapshot, nr::options::keys::dlssBypass),
     };
+}
+
+DlssRayReconstructionResolutionRequest DlssRayReconstructionNode::effectiveResolutionRequest(
+    const nr::options::OptionFrameSnapshot& snapshot) const
+{
+    return dlssResolutionRequestFromSnapshot(snapshot);
 }
 
 void DlssRayReconstructionNode::initialize(NodeInitContext &context)
@@ -368,93 +502,6 @@ void DlssRayReconstructionNode::initialize(NodeInitContext &context)
     runtime_->status = nr::rhi::dlssSdkCompiled() ? "NGX bridge loaded; enable the node to initialize NGX and query capability." : "NGX bridge unavailable; execution will fail fast.";
 }
 
-void DlssRayReconstructionNode::stageUiDraft()
-{
-    pendingInput_ = uiDraft_;
-}
-
-void DlssRayReconstructionNode::collectUi(NodeUiBuildContext &context, const NodeFrameParameters &)
-{
-    if (pendingInput_.has_value())
-    {
-        input = std::move(*pendingInput_);
-        pendingInput_.reset();
-    }
-    if (pendingOneShotReset_)
-    {
-        consumeOneShotReset_ = true;
-        pendingOneShotReset_ = false;
-    }
-    uiDraft_ = input;
-
-    context.addSection(
-        "DLSS Ray Reconstruction",
-        [this, runtime = runtime_](NodeUiWriter &ui) {
-            auto changed = false;
-            changed |= ui.checkbox("Enable", uiDraft_.enabled);
-
-            constexpr auto qualities = std::array{
-                nr::rhi::DlssQuality::Performance, nr::rhi::DlssQuality::Balanced, nr::rhi::DlssQuality::Quality, nr::rhi::DlssQuality::UltraPerformance, nr::rhi::DlssQuality::Dlaa,
-            };
-            changed |= detail::enumCombo(ui, "Quality", uiDraft_.create.quality, qualities, nr::rhi::dlssQualityName);
-
-            constexpr auto presets = std::array{
-                nr::rhi::DlssRayReconstructionPreset::Default,
-                nr::rhi::DlssRayReconstructionPreset::D,
-                nr::rhi::DlssRayReconstructionPreset::E,
-            };
-            std::ranges::for_each(qualities, [&](nr::rhi::DlssQuality quality) {
-                auto const index = static_cast<std::size_t>(quality);
-                auto label = std::format("{} Preset", nr::rhi::dlssQualityName(quality));
-                changed |= detail::enumCombo(ui, label, uiDraft_.create.presets[index], presets, nr::rhi::dlssPresetName);
-            });
-            ui.text("Preset E is required when the Depth of Field guide is included.");
-
-            if (uiDraft_.create.quality == nr::rhi::DlssQuality::Dlaa)
-            {
-                changed |= ui.checkbox("Bypass Output (show PathTracing color)", uiDraft_.bypass);
-            }
-            else
-            {
-                if (uiDraft_.bypass)
-                {
-                    uiDraft_.bypass = false;
-                    changed = true;
-                }
-                ui.text("Bypass is available only in DLAA.");
-            }
-
-            changed |= ui.checkbox("Visualize Motion Vectors", uiDraft_.evaluate.visualizeMotionVectors);
-            if (uiDraft_.evaluate.visualizeMotionVectors)
-            {
-                ui.text("MV debug: neutral=(0.5, 0.5), R=X, G=Y; pixel motion is logarithmically amplified.");
-            }
-            if (ui.button("Reset History Next Frame"))
-            {
-                pendingOneShotReset_ = true;
-            }
-
-            ui.separator();
-            ui.text("Status");
-            ui.text(nr::rhi::dlssSdkCompiled() ? "NGX bridge: loaded" : "NGX bridge: unavailable (execution will fail fast)");
-            {
-                std::scoped_lock lock(runtime->mutex);
-                ui.text(runtime->status);
-                if (runtime->optimalSettingsQueried && runtime->optimalSettings.status.success())
-                {
-                    ui.text(std::format("Optimal render {}x{}; range {}x{}..{}x{}", runtime->optimalSettings.optimalRenderSize.width, runtime->optimalSettings.optimalRenderSize.height, runtime->optimalSettings.minimumRenderSize.width, runtime->optimalSettings.minimumRenderSize.height,
-                                        runtime->optimalSettings.maximumRenderSize.width, runtime->optimalSettings.maximumRenderSize.height));
-                }
-            }
-
-            if (changed)
-            {
-                stageUiDraft();
-            }
-        },
-        true, "dlss-rr");
-}
-
 void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     materializeCurrentFrame(context, frameParameters);
@@ -462,6 +509,9 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
 
 [[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> DlssRayReconstructionNode::structuralSnapshot(const NodeFrameParameters &frameParameters) const
 {
+    auto const input = detail::resolveDlssInput(
+        this->input,
+        frameParameters.optionSnapshot.get());
     auto branch = std::format("{};bypass={};alpha={};hdr={};debug={};quality={};roughness={};outSubrects={};overrideRender={}:{}x{};overrideTarget={}:{}x{};render={}x{};display={}x{};colorFmt={};alphaFmt={};colorKey={};alphaKey={}", input.enabled ? "enabled" : "disabled", input.bypass ? 1u : 0u,
                               input.create.flags.alphaUpscaling ? 1u : 0u, input.create.flags.hdr ? 1u : 0u, input.evaluate.visualizeMotionVectors ? 1u : 0u, static_cast<std::uint32_t>(input.create.quality), static_cast<std::uint32_t>(input.create.roughnessMode),
                               input.create.enableOutputSubrects ? 1u : 0u, input.overrideRenderSize ? 1u : 0u, input.renderSizeOverride.width, input.renderSizeOverride.height, input.overrideTargetSize ? 1u : 0u, input.targetSizeOverride.width, input.targetSizeOverride.height,
@@ -479,6 +529,9 @@ void DlssRayReconstructionNode::build(NodeBuildContext &context, const NodeFrame
 
 bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context, const NodeFrameParameters &frameParameters, const StructuralSnapshot &snapshot)
 {
+    auto const input = detail::resolveDlssInput(
+        this->input,
+        frameParameters.optionSnapshot.get());
     nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "DLSS RR Skeleton patch requires initialized state.");
     if (!input.enabled)
     {
@@ -650,8 +703,11 @@ bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(nr::renderer::Ren
     evalDesc.indicatorInvertXAxis = input.evaluate.indicatorInvertXAxis;
     evalDesc.indicatorInvertYAxis = input.evaluate.indicatorInvertYAxis;
     evalDesc.toneMapper = input.evaluate.toneMapper;
-    evalDesc.reset = consumeOneShotReset_ || frameParameters.resolutionPlan.resetHistory;
-    consumeOneShotReset_ = false;
+    evalDesc.reset =
+        detail::hasFrameEffect(
+            frameParameters.optionSnapshot.get(),
+            nr::options::keys::dlssResetHistory) ||
+        frameParameters.resolutionPlan.resetHistory;
     auto const cameraJitter = context.globalResources().cameraFrameState.jitter.pixelOffset;
     evalDesc.jitterOffset = input.evaluate.automaticJitter ? std::array{cameraJitter.x, cameraJitter.y} : input.evaluate.manualJitter;
     if (input.evaluate.automaticMatrices)
@@ -710,6 +766,15 @@ bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(nr::renderer::Ren
         nrAssert(status.success(), std::format("DLSS RR Skeleton evaluation failed: {}", status.message));
     };
     context.patchPass(0u, "DLSS.RayReconstruction", std::move(prepare), std::move(record));
+    if (detail::hasFrameEffect(
+            frameParameters.optionSnapshot.get(),
+            nr::options::keys::dlssResetHistory))
+    {
+        nrAssert(
+            frameParameters.frameEffectSink.has_value() &&
+                frameParameters.frameEffectSink->get().claim(*this, context.passHandle(0u)),
+            "DLSS reset-history effect must claim its evaluation pass exactly once.");
+    }
     if (input.evaluate.visualizeMotionVectors)
     {
         auto const motionVectorIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors);
@@ -738,6 +803,9 @@ bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(nr::renderer::Ren
 
 void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
+    auto const input = detail::resolveDlssInput(
+        this->input,
+        frameParameters.optionSnapshot.get());
     nrAssert(static_cast<bool>(runtime_), "DLSS RR build requires initialized runtime state.");
     nrAssert(device_.has_value(), "DLSS RR build requires a device reference.");
     auto const resolutionController = resolutionController_.lock();
@@ -896,8 +964,11 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
     evalDesc.indicatorInvertXAxis = input.evaluate.indicatorInvertXAxis;
     evalDesc.indicatorInvertYAxis = input.evaluate.indicatorInvertYAxis;
     evalDesc.toneMapper = input.evaluate.toneMapper;
-    evalDesc.reset = consumeOneShotReset_ || frameParameters.resolutionPlan.resetHistory;
-    consumeOneShotReset_ = false;
+    evalDesc.reset =
+        detail::hasFrameEffect(
+            frameParameters.optionSnapshot.get(),
+            nr::options::keys::dlssResetHistory) ||
+        frameParameters.resolutionPlan.resetHistory;
     auto const cameraJitter = context.globalResources.get().cameraFrameState.jitter.pixelOffset;
     evalDesc.jitterOffset = input.evaluate.automaticJitter ? std::array{cameraJitter.x, cameraJitter.y} : input.evaluate.manualJitter;
     if (input.evaluate.automaticMatrices)
@@ -980,7 +1051,22 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
         auto const status = runtime->feature->evaluate(recordContext.commandBuffer->get(), evalDesc);
         nrAssert(status.success(), std::format("DLSS RR evaluation failed: {}", status.message));
     };
-    [[maybe_unused]] auto pass = context.addPass(intents, "DLSS.RayReconstruction", std::move(record), std::move(prepare), false, vk::PipelineStageFlagBits2::eComputeShader);
+    auto pass = context.addPass(
+        intents,
+        "DLSS.RayReconstruction",
+        std::move(record),
+        std::move(prepare),
+        false,
+        vk::PipelineStageFlagBits2::eComputeShader);
+    if (detail::hasFrameEffect(
+            frameParameters.optionSnapshot.get(),
+            nr::options::keys::dlssResetHistory))
+    {
+        nrAssert(
+            frameParameters.frameEffectSink.has_value() &&
+                frameParameters.frameEffectSink->get().claim(*this, pass),
+            "DLSS reset-history effect must claim its evaluation pass exactly once.");
+    }
 
     if (input.evaluate.visualizeMotionVectors)
     {

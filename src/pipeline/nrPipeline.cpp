@@ -2,6 +2,9 @@ module nr.pipeline;
 import dependency.vulkan;
 
 import nr.app;
+import nr.automation;
+import nr.interaction;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import nr.scene;
@@ -12,286 +15,290 @@ namespace nr::pipeline
 {
 namespace
 {
-struct ViewerPendingRequests
+struct PreparedPipelineGraph
 {
-    std::optional<std::string> pipelineId{};
-    std::optional<std::filesystem::path> modelPath{};
-    std::optional<std::filesystem::path> environmentMapPath{};
-    std::optional<RtPostProcessingMode> rtPostProcessingMode{};
+    nr::renderer::RendererGraphSpec spec{};
+    std::shared_ptr<const nr::options::OptionCatalog> optionCatalog{};
 };
 
-struct PipelineUiComponent
+struct MutationFrameResult
 {
-    std::function<std::vector<nr::app::UiSection>()> buildSections{};
+    std::optional<nr::options::FrameEffect> effect{};
 };
 
-struct ViewerControlState
+[[nodiscard]] RtPostProcessingMode postProcessingMode(std::string_view value) noexcept
 {
-    std::string activePipelineId{std::string{defaultPipelineId}};
-    std::filesystem::path activeModelPath{};
-    std::filesystem::path activeEnvironmentMapPath{};
-    std::vector<EnvironmentMapAsset> environmentMapAssets{};
-    std::string modelInput{};
-    std::string statusMessage{};
-    RtPostProcessingMode rtPostProcessingMode = RtPostProcessingMode::dlssRayReconstruction;
-    RtDlssQuality rtDlssQuality = RtDlssQuality::dlaa;
-    std::optional<PipelineUiComponent> activePipelineUi{};
-    ViewerPendingRequests pending{};
-};
-
-[[nodiscard]] std::string pipelineDisplayName(const RenderPipelineDesc& desc)
-{
-    return desc.displayName.empty() ? desc.id : desc.displayName;
+    return value == "accumulate" ? RtPostProcessingMode::accumulate : RtPostProcessingMode::dlssRayReconstruction;
 }
 
-[[nodiscard]] bool installPipeline(
-    nr::renderer::Renderer& renderer,
-    const RenderPipelineRegistry& registry,
-    std::string_view pipelineId,
-    ViewerControlState& controls)
+[[nodiscard]] std::expected<PreparedPipelineGraph, std::string> preparePipelineGraph(nr::renderer::Renderer &renderer, const RenderPipelineRegistry &registry, std::string_view pipelineId, RtPostProcessingMode mode, RtDlssQuality dlssQuality, std::string_view captureSessionId)
 {
     auto pipeline = registry.find(pipelineId);
     if (!pipeline.has_value())
     {
-        controls.statusMessage = std::format("Unknown pipeline: {}", pipelineId);
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", controls.statusMessage);
-        return false;
+        return std::unexpected(std::format("Unknown pipeline: {}", pipelineId));
     }
 
-    auto& presentation = renderer.device().presentationContext;
+    auto &presentation = renderer.device().presentationContext;
     auto graphSpec = pipeline->get().buildGraph(PipelineBuildContext{
         .swapchainFormat = presentation.swapchainFormat(),
         .swapchainExtent = presentation.swapchainExtent(),
-        .rtPostProcessingMode = controls.rtPostProcessingMode,
-        .rtDlssQuality = controls.rtDlssQuality,
+        .rtPostProcessingMode = mode,
+        .rtDlssQuality = dlssQuality,
+        .captureSessionId = std::string{captureSessionId},
     });
     if (graphSpec.nodes.empty())
     {
-        controls.statusMessage = std::format("Pipeline '{}' produced an empty graph.", pipelineId);
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", controls.statusMessage);
-        return false;
+        return std::unexpected(std::format("Pipeline '{}' produced an empty graph.", pipelineId));
     }
 
-    auto const replacingInstalledGraph = renderer.graphInstalled();
-    if (replacingInstalledGraph)
+    auto const preflight = renderer.preflightGraph(graphSpec);
+    if (!preflight)
+    {
+        return std::unexpected(preflight.message);
+    }
+    nrAssert(preflight.optionCatalog != nullptr, "Successful renderer graph preflight must publish an option catalog.");
+    return PreparedPipelineGraph{
+        .spec = std::move(graphSpec),
+        .optionCatalog = preflight.optionCatalog,
+    };
+}
+
+void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const PreparedPipelineGraph &prepared, bool reloadShaderSession)
+{
+    if (reloadShaderSession && renderer.graphInstalled())
     {
         renderer.uninstallGraph();
         nr::rhi::ShaderService::instance().reloadSession();
     }
-    renderer.installGraph(graphSpec);
+    nrAssert(renderer.installGraph(prepared.spec), "Renderer graph initialization failed after the destructive graph replacement barrier.");
+}
 
-    controls.activePipelineId = std::string{pipelineId};
-    if (pipelineId == rtObjectPipelineId)
+[[nodiscard]] std::filesystem::path projectRelativePath(const std::filesystem::path &path)
+{
+    auto ec = std::error_code{};
+    auto const root = std::filesystem::canonical(std::filesystem::path{std::string{nr::projectRoot}}, ec);
+    nrAssert(!ec, "Failed to canonicalize the project root.");
+    auto const canonical = std::filesystem::canonical(path, ec);
+    nrAssert(!ec, "Failed to canonicalize a fixed project asset path.");
+    return canonical.lexically_relative(root).lexically_normal();
+}
+
+[[nodiscard]] bool isRootRelativeOptionPath(std::string_view value)
+{
+    auto const path = std::filesystem::path{value};
+    return !path.empty() && !path.is_absolute() && !path.has_root_name() && !path.has_root_directory();
+}
+
+[[nodiscard]] std::string makeCaptureSessionId()
+{
+    auto const ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    return std::format("run_{}", ticks);
+}
+
+[[nodiscard]] std::shared_ptr<const nr::options::OptionCatalog> buildSessionCatalog(const RenderPipelineRegistry &registry, std::string selectedPipeline, std::string modelSource, std::string environmentSource, const nr::app::AppSession &app)
+{
+    auto pipelineIds = registry.pipelines() | std::views::transform([](const RenderPipelineDesc &pipeline) { return pipeline.id; }) | std::ranges::to<std::vector>();
+    auto const camera = app.camera().optionResetValues();
+    auto definitions = nr::options::makeSessionDefinitions(nr::options::SessionDefinitionSeed{
+        .pipelineIds = std::move(pipelineIds),
+        .selectedPipeline = std::move(selectedPipeline),
+        .modelSource = std::move(modelSource),
+        .environmentSource = std::move(environmentSource),
+        .postProcessingMode = "dlss_ray_reconstruction",
+        .fullscreen = app.renderer().device().presentationContext.fullscreenEnabled(),
+        .cameraPose = camera.pose,
+        .verticalFovDegrees = camera.verticalFovDegrees,
+        .clipPlanes = camera.clipPlanes,
+    });
+    auto builder = nr::options::OptionCatalogBuilder{};
+    std::ranges::for_each(definitions, [&](nr::options::OptionDefinition &definition) { static_cast<void>(builder.add(std::move(definition))); });
+    auto built = builder.build();
+    nrAssert(built.valid(), "The fixed session option catalog must pass preflight.");
+    return std::move(built.catalog);
+}
+
+[[nodiscard]] std::expected<void, std::string> validateSessionAndGraphCatalog(const nr::options::OptionCatalog &catalogWithSessionDefinitions, const nr::options::OptionCatalog &graphCatalog)
+{
+    auto builder = nr::options::OptionCatalogBuilder{};
+    std::ranges::for_each(catalogWithSessionDefinitions.definitions() | std::views::filter([](const auto &entry) { return entry.second.scope == nr::options::OptionScope::session; }), [&](const auto &entry) { static_cast<void>(builder.add(entry.second)); });
+    std::ranges::for_each(graphCatalog.definitions(), [&](const auto &entry) { static_cast<void>(builder.add(entry.second)); });
+    auto combined = builder.build();
+    if (combined.valid())
     {
-        controls.activePipelineUi = PipelineUiComponent{
-            .buildSections = [&controls] {
-                return detail::buildRtObjectUi(
-                    controls.rtPostProcessingMode,
-                    controls.pending.rtPostProcessingMode);
-            },
-        };
+        return {};
+    }
+
+    auto const &issue = combined.issues.front();
+    return std::unexpected(issue.id ? std::format("Combined option catalog rejected '{}': {}", issue.id->value(), issue.detail) : std::format("Combined option catalog rejected: {}", issue.detail));
+}
+
+[[nodiscard]] nr::options::OptionAvailabilityMap fullyAvailable(const nr::options::OptionCatalog &session, const nr::options::OptionCatalog &graph)
+{
+    auto availability = nr::options::OptionAvailabilityMap{};
+    auto add = [&](const nr::options::OptionCatalog &catalog) {
+        std::ranges::for_each(catalog.definitions(), [&](auto const &entry) {
+            availability.emplace(entry.first, nr::options::OptionAvailability{
+                                                  .available = true,
+                                                  .reason = {},
+                                              });
+        });
+    };
+    add(session);
+    add(graph);
+    return availability;
+}
+
+void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::uint64_t frameIndex, nr::options::MutationOrigin origin, const std::optional<std::string> &requestId, bool succeeded, std::optional<std::string> reason = {})
+{
+    auto record = nr::options::OptionMachineRecord{
+        .sequence = sequence,
+        .id = id,
+        .phase = nr::options::OptionLogPhase::terminal,
+        .status = succeeded ? nr::options::OptionLogStatus::succeeded : nr::options::OptionLogStatus::failed,
+        .frameIndex = frameIndex,
+        .origin = origin,
+        .requestId = requestId,
+        .reason = std::move(reason),
+    };
+    if (succeeded)
+    {
+        nr::options::emitMachineRecord(record);
     }
     else
     {
-        controls.activePipelineUi.reset();
+        nr::options::emitMachineRecord<nr::LogLevel::error>(record);
     }
-    return true;
 }
 
-void drawPipelineCombo(
-    nr::app::UiSystem& ui,
-    const RenderPipelineRegistry& registry,
-    ViewerControlState& controls)
+[[nodiscard]] MutationFrameResult executeMutation(nr::app::AppSession &app, const RenderPipelineRegistry &registry, ModelHistory &history, SceneModelController &modelController, RtDlssQuality initialDlssQuality, std::string_view captureSessionId,
+                                                  const nr::options::OptionFrameSnapshot &previousSnapshot, std::uint64_t frameIndex, nr::options::ScheduledMutation mutation)
 {
-    auto activeLabel = controls.activePipelineId;
-    if (auto active = registry.find(controls.activePipelineId); active.has_value())
+    auto &options = app.options();
+    auto const sequence = mutation.sequence();
+    auto const id = mutation.request().id;
+    auto const origin = mutation.request().origin;
+    auto const requestId = mutation.request().requestId;
+    auto fail = [&](std::string reason) {
+        static_cast<void>(options.discardMutation(std::move(mutation)));
+        emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::move(reason));
+        return MutationFrameResult{};
+    };
+
+    auto const validation = options.validateForExecution(mutation);
+    if (validation != nr::options::ScheduleRejectReason::none)
     {
-        activeLabel = pipelineDisplayName(active->get());
+        return fail(std::string{nr::options::wireName(validation)});
     }
 
-    if (!ui.beginCombo("Pipeline", activeLabel))
+    auto const pipelineOption = nr::options::optionId(nr::options::keys::viewerPipelineSelected);
+    auto const postProcessingOption = nr::options::optionId(nr::options::keys::viewerRtPostProcessingMode);
+    if (id == pipelineOption || id == postProcessingOption)
     {
-        return;
+        auto const *currentPipeline = previousSnapshot.find(nr::options::keys::viewerPipelineSelected);
+        auto const *currentMode = previousSnapshot.find(nr::options::keys::viewerRtPostProcessingMode);
+        nrAssert(currentPipeline != nullptr && currentMode != nullptr, "Graph mutation requires the session pipeline options.");
+        auto pipelineId = id == pipelineOption ? std::get<std::string>(mutation.request().value.storage) : *currentPipeline;
+        auto modeName = id == postProcessingOption ? std::get<std::string>(mutation.request().value.storage) : *currentMode;
+        if (id == postProcessingOption && pipelineId != rtObjectPipelineId)
+        {
+            return fail("unavailable");
+        }
+
+        auto prepared = preparePipelineGraph(app.renderer(), registry, pipelineId, postProcessingMode(modeName), initialDlssQuality, captureSessionId);
+        if (!prepared)
+        {
+            return fail(std::move(prepared.error()));
+        }
+        auto combinedCatalog = validateSessionAndGraphCatalog(*previousSnapshot.catalog, *prepared->optionCatalog);
+        if (!combinedCatalog)
+        {
+            return fail(std::move(combinedCatalog.error()));
+        }
+        installPreparedPipelineGraph(app.renderer(), *prepared, true);
+        auto committed = options.commitGraphReplacement(std::move(mutation), prepared->optionCatalog);
+        nrAssert(committed.committed, "Option graph commit failed after the destructive graph replacement barrier.");
+        emitTerminal(sequence, id, frameIndex, origin, requestId, true);
+        return {};
     }
 
-    std::ranges::for_each(registry.pipelines(), [&](const RenderPipelineDesc& pipeline) {
-        auto const selected = pipeline.id == controls.activePipelineId;
-        if (ui.selectable(pipelineDisplayName(pipeline), selected))
+    if (id == nr::options::optionId(nr::options::keys::viewerModelSource))
+    {
+        auto const &source = std::get<std::string>(mutation.request().value.storage);
+        if (!isRootRelativeOptionPath(source))
         {
-            controls.pending.pipelineId = pipeline.id;
+            return fail("model_source_must_be_assets_root_relative");
         }
-        if (selected)
+        auto report = modelController.loadModel(app, source, std::ref(history));
+        if (!report.loaded)
         {
-            ui.setItemDefaultFocus();
+            return fail(std::move(report.message));
         }
+        auto committed = options.commitModelAndCameraReset(std::move(mutation), app.camera().optionResetValues());
+        nrAssert(committed.committed, "Model and derived camera option commit failed after Scene commit.");
+        emitTerminal(sequence, id, frameIndex, origin, requestId, true);
+        return {};
+    }
+
+    if (id == nr::options::optionId(nr::options::keys::viewerEnvironmentSource))
+    {
+        auto const &source = std::get<std::string>(mutation.request().value.storage);
+        if (!isRootRelativeOptionPath(source))
+        {
+            return fail("environment_source_must_be_project_root_relative");
+        }
+        auto loaded = detail::loadEnvironmentMap(app.renderer(), source);
+        if (!loaded)
+        {
+            return fail(std::move(loaded.error()));
+        }
+    }
+    else if (id == nr::options::optionId(nr::options::keys::viewerWindowFullscreen))
+    {
+        app.renderer().device().presentationContext.setFullscreen(std::get<bool>(mutation.request().value.storage));
+    }
+
+    auto const *definition = previousSnapshot.catalog->find(id);
+    nrAssert(definition != nullptr, "Validated option mutation lost its definition.");
+    if (definition->lifetime == nr::options::OptionValueLifetime::frameEffect)
+    {
+        auto materialized = options.materializeFrameEffect(std::move(mutation));
+        if (!materialized.effect)
+        {
+            emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::string{nr::options::wireName(materialized.reason)});
+            return {};
+        }
+        return MutationFrameResult{.effect = std::move(materialized.effect)};
+    }
+
+    auto committed = options.commitCanonical(std::move(mutation));
+    if (!committed.committed)
+    {
+        emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::string{nr::options::wireName(committed.reason)});
+        return {};
+    }
+    emitTerminal(sequence, id, frameIndex, origin, requestId, true);
+    return {};
+}
+
+[[nodiscard]] nr::options::OptionAvailabilityMap collectAvailability(nr::app::AppSession &app, const nr::options::OptionFrameSnapshot &collectionSnapshot)
+{
+    auto availability = nr::options::OptionAvailabilityMap{};
+    std::ranges::for_each(collectionSnapshot.catalog->definitions(), [&](auto const &entry) {
+        availability.emplace(entry.first, nr::options::OptionAvailability{
+                                              .available = true,
+                                              .reason = {},
+                                          });
     });
-    ui.endCombo();
-}
-
-void drawModelHistoryCombo(
-    nr::app::UiSystem& ui,
-    const ModelHistory& history,
-    ViewerControlState& controls)
-{
-    auto preview = controls.activeModelPath.empty()
-                       ? std::string{"No model"}
-                       : displayPathLeafFirst(controls.activeModelPath);
-    if (!ui.beginCombo("Model History", preview))
+    auto const *pipeline = collectionSnapshot.find(nr::options::keys::viewerPipelineSelected);
+    if (pipeline != nullptr && *pipeline != rtObjectPipelineId)
     {
-        return;
+        availability.insert_or_assign(nr::options::optionId(nr::options::keys::viewerRtPostProcessingMode), nr::options::OptionAvailability{
+                                                                                                                .reason = "pipeline_not_rtobject",
+                                                                                                            });
     }
-
-    auto const activeKey = detail::normalizedModelPathKey(controls.activeModelPath);
-    std::ranges::for_each(history.entries(), [&](const std::filesystem::path& entry) {
-        auto const selected = detail::normalizedModelPathKey(entry) == activeKey;
-        auto const label = std::format("{}##{}", displayPathLeafFirst(entry), entry.string());
-        if (ui.selectable(label, selected))
-        {
-            controls.pending.modelPath = entry;
-            controls.modelInput = entry.string();
-        }
-        if (selected)
-        {
-            ui.setItemDefaultFocus();
-        }
-    });
-    ui.endCombo();
-}
-
-void drawEnvironmentMapCombo(
-    nr::app::UiSystem& ui,
-    ViewerControlState& controls)
-{
-    auto const activeAsset = std::ranges::find(
-        controls.environmentMapAssets,
-        controls.activeEnvironmentMapPath,
-        &EnvironmentMapAsset::sourcePath);
-    auto const preview = activeAsset != controls.environmentMapAssets.end()
-                             ? activeAsset->displayName
-                             : controls.activeEnvironmentMapPath.stem().string();
-    if (!ui.beginCombo("Environment Map", preview))
-    {
-        return;
-    }
-
-    std::ranges::for_each(controls.environmentMapAssets, [&](const EnvironmentMapAsset& asset) {
-        auto const selected = asset.sourcePath == controls.activeEnvironmentMapPath;
-        auto const label = std::format("{}##{}", asset.displayName, asset.sourcePath.filename().string());
-        if (ui.selectable(label, selected) && !selected)
-        {
-            controls.pending.environmentMapPath = asset.sourcePath;
-        }
-        if (selected)
-        {
-            ui.setItemDefaultFocus();
-        }
-    });
-    ui.endCombo();
-}
-
-void queueViewerControls(
-    nr::app::UiSystem& ui,
-    const RenderPipelineRegistry& registry,
-    const ModelHistory& history,
-    ViewerControlState& controls)
-{
-    ui.queueSection(nr::app::UiSection{
-        .id = "viewer.controls",
-        .title = "Viewer",
-        .draw = [&](nr::app::UiSystem& sectionUi) {
-            drawPipelineCombo(sectionUi, registry, controls);
-            drawEnvironmentMapCombo(sectionUi, controls);
-            drawModelHistoryCombo(sectionUi, history, controls);
-            static_cast<void>(sectionUi.inputText("Model Path", controls.modelInput));
-            if (sectionUi.button("Load"))
-            {
-                controls.pending.modelPath = std::filesystem::path{controls.modelInput};
-            }
-            if (!controls.statusMessage.empty())
-            {
-                sectionUi.separator();
-                sectionUi.text(controls.statusMessage);
-            }
-        },
-    });
-
-    if (controls.activePipelineUi.has_value() && controls.activePipelineUi->buildSections)
-    {
-        auto sections = controls.activePipelineUi->buildSections();
-        std::ranges::for_each(sections, [&](nr::app::UiSection& section) {
-            ui.queueSection(std::move(section));
-        });
-    }
-}
-
-[[nodiscard]] bool processPendingRequests(
-    nr::app::AppSession& app,
-    const RenderPipelineRegistry& registry,
-    ModelHistory& history,
-    SceneModelController& modelController,
-    ViewerControlState& controls)
-{
-    auto success = true;
-    if (controls.pending.pipelineId.has_value())
-    {
-        if (*controls.pending.pipelineId != controls.activePipelineId)
-        {
-            success = installPipeline(app.renderer(), registry, *controls.pending.pipelineId, controls) && success;
-        }
-        controls.pending.pipelineId.reset();
-    }
-
-    if (controls.pending.rtPostProcessingMode.has_value())
-    {
-        auto const requestedMode = *controls.pending.rtPostProcessingMode;
-        controls.pending.rtPostProcessingMode.reset();
-        if (controls.activePipelineId == rtObjectPipelineId && requestedMode != controls.rtPostProcessingMode)
-        {
-            auto const previousMode = controls.rtPostProcessingMode;
-            controls.rtPostProcessingMode = requestedMode;
-            if (!installPipeline(app.renderer(), registry, rtObjectPipelineId, controls))
-            {
-                controls.rtPostProcessingMode = previousMode;
-                success = false;
-            }
-        }
-    }
-
-    if (controls.pending.environmentMapPath.has_value())
-    {
-        auto environmentLoad = detail::loadEnvironmentMap(
-            app.renderer(),
-            *controls.pending.environmentMapPath);
-        if (environmentLoad)
-        {
-            controls.activeEnvironmentMapPath = environmentLoad->sourcePath;
-            controls.statusMessage = std::format(
-                "Loaded environment map: {}",
-                environmentLoad->displayName);
-        }
-        else
-        {
-            controls.statusMessage = environmentLoad.error();
-            nr::nrLog(nr::LogLevel::error, "PIPELINE", controls.statusMessage);
-            success = false;
-        }
-        controls.pending.environmentMapPath.reset();
-    }
-
-    if (controls.pending.modelPath.has_value())
-    {
-        auto report = modelController.loadModel(app, *controls.pending.modelPath, std::ref(history));
-        if (report.loaded)
-        {
-            controls.activeModelPath = report.modelPath;
-            controls.modelInput = report.modelPath.string();
-        }
-        controls.statusMessage = std::move(report.message);
-        success = report.loaded && success;
-        controls.pending.modelPath.reset();
-    }
-
-    return success;
+    app.renderer().collectOptionAvailability(collectionSnapshot, availability);
+    return availability;
 }
 
 [[nodiscard]] bool handlePresentResult(vk::Result presentResult)
@@ -303,10 +310,7 @@ void queueViewerControls(
 
     if (presentResult != vk::Result::eSuccess)
     {
-        nr::nrLog(
-            nr::LogLevel::error,
-            "PIPELINE",
-            std::format("Unexpected present result: {}", vk::to_string(presentResult)));
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Unexpected present result: {}", vk::to_string(presentResult)));
         return false;
     }
 
@@ -314,14 +318,10 @@ void queueViewerControls(
 }
 } // namespace
 
-[[nodiscard]] ViewerCommandLineOptions parseViewerCommandLine(std::span<char*> args)
+[[nodiscard]] ViewerCommandLineOptions parseViewerCommandLine(std::span<char *> args)
 {
     auto options = ViewerCommandLineOptions{};
-    auto tokens = args |
-                  std::views::transform([](const char* token) {
-                      return std::string_view{token};
-                  }) |
-                  std::ranges::to<std::vector>();
+    auto tokens = args | std::views::transform([](const char *token) { return std::string_view{token}; }) | std::ranges::to<std::vector>();
 
     auto consumed = std::vector<bool>(tokens.size(), false);
     auto indices = std::views::iota(std::size_t{0u}, tokens.size());
@@ -351,13 +351,56 @@ void queueViewerControls(
             return;
         }
 
+        if (token == "--interaction")
+        {
+            auto const valueIndex = index + 1u;
+            if (valueIndex >= tokens.size())
+            {
+                options.errorMessage = "--interaction requires human, agent, or offline-lua.";
+                return;
+            }
+            auto const value = tokens[valueIndex];
+            if (value == "human")
+            {
+                options.interactionMode = ViewerInteractionMode::human;
+            }
+            else if (value == "agent")
+            {
+                options.interactionMode = ViewerInteractionMode::agent;
+            }
+            else if (value == "offline-lua")
+            {
+                options.interactionMode = ViewerInteractionMode::offlineLua;
+            }
+            else
+            {
+                options.errorMessage = std::format("Unknown interaction mode: {}", value);
+                return;
+            }
+            consumed[valueIndex] = true;
+            return;
+        }
+
+        if (token == "--script")
+        {
+            auto const valueIndex = index + 1u;
+            if (valueIndex >= tokens.size() || tokens[valueIndex].empty())
+            {
+                options.errorMessage = "--script requires an automation-root-relative .lua path.";
+                return;
+            }
+            options.automationScript = std::filesystem::path{tokens[valueIndex]};
+            consumed[valueIndex] = true;
+            return;
+        }
+
         if (token == "--benchmark")
         {
             options.benchmark = true;
             return;
         }
 
-        auto parseCount = [&](std::string_view option, std::uint32_t& destination) {
+        auto parseCount = [&](std::string_view option, std::uint32_t &destination) {
             auto const valueIndex = index + 1u;
             if (valueIndex >= tokens.size())
             {
@@ -440,6 +483,14 @@ void queueViewerControls(
     {
         options.errorMessage = "--benchmark requires --dlss-quality ultra-performance.";
     }
+    if (options.interactionMode == ViewerInteractionMode::offlineLua && options.automationScript.empty())
+    {
+        options.errorMessage = "--interaction offline-lua requires --script <path.lua>.";
+    }
+    if (options.interactionMode != ViewerInteractionMode::offlineLua && !options.automationScript.empty())
+    {
+        options.errorMessage = "--script is valid only with --interaction offline-lua.";
+    }
     return options;
 }
 
@@ -447,6 +498,8 @@ void printViewerUsage(std::string_view executableName)
 {
     std::println("Usage:");
     std::println("  {} [model_path] [--pipeline normalview|rtobject]", executableName);
+    std::println("  {} [model_path] --interaction agent", executableName);
+    std::println("  {} [model_path] --interaction offline-lua --script <path.lua>", executableName);
     std::println("  {} --benchmark --warmup-frames N --measure-frames N --output <directory> [--dlss-quality ultra-performance]", executableName);
     std::println("  {} --help", executableName);
     std::println("Controls:");
@@ -461,10 +514,7 @@ void printViewerUsage(std::string_view executableName)
     auto registry = makeDefaultPipelineRegistry();
     if (!registry.contains(config.initialPipelineId))
     {
-        nr::nrLog(
-            nr::LogLevel::error,
-            "PIPELINE",
-            std::format("Unknown initial pipeline: {}", config.initialPipelineId));
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Unknown initial pipeline: {}", config.initialPipelineId));
         return 2;
     }
     if (config.benchmark && config.initialPipelineId != rtObjectPipelineId)
@@ -482,22 +532,26 @@ void printViewerUsage(std::string_view executableName)
         config.initialEnvironmentMapPath = defaultEnvironmentMapPath();
     }
 
-    auto environmentMapAssets = discoverEnvironmentMapAssets();
-    if (!environmentMapAssets)
-    {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentMapAssets.error());
-        return 1;
-    }
-
     auto app = nr::app::AppSession{};
     app.initialize(nr::renderer::RendererCreateInfo{
         .appName = config.appName,
         .engineName = config.engineName,
     });
+    auto const authorityMode = [&] {
+        switch (config.interactionMode)
+        {
+        case ViewerInteractionMode::human:
+            return nr::options::AuthorityMode::human;
+        case ViewerInteractionMode::agent:
+            return nr::options::AuthorityMode::agent;
+        case ViewerInteractionMode::offlineLua:
+            return nr::options::AuthorityMode::offlineLua;
+        }
+        std::unreachable();
+    }();
+    nrAssert(app.options().setAuthorityMode(authorityMode), "Option authority mode must be selected before session initialization.");
 
-    auto environmentLoad = detail::loadEnvironmentMap(
-        app.renderer(),
-        config.initialEnvironmentMapPath);
+    auto environmentLoad = detail::loadEnvironmentMap(app.renderer(), config.initialEnvironmentMapPath);
     if (!environmentLoad)
     {
         nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentLoad.error());
@@ -509,14 +563,6 @@ void printViewerUsage(std::string_view executableName)
     history.load();
 
     auto modelController = SceneModelController{};
-    auto controls = ViewerControlState{
-        .activePipelineId = config.initialPipelineId,
-        .activeEnvironmentMapPath = environmentLoad->sourcePath,
-        .environmentMapAssets = std::move(*environmentMapAssets),
-        .modelInput = normalizeModelPathForStorage(config.initialModelPath).string(),
-        .rtDlssQuality = config.dlssQuality,
-    };
-
     auto initialLoad = modelController.loadModel(app, config.initialModelPath, std::ref(history));
     if (!initialLoad.loaded)
     {
@@ -524,15 +570,60 @@ void printViewerUsage(std::string_view executableName)
         app.shutdown();
         return 1;
     }
-    controls.activeModelPath = initialLoad.modelPath;
-    controls.modelInput = initialLoad.modelPath.string();
-    controls.statusMessage = initialLoad.message;
 
-    if (!installPipeline(app.renderer(), registry, config.initialPipelineId, controls))
+    auto const captureSessionId = makeCaptureSessionId();
+    auto initialGraph = preparePipelineGraph(app.renderer(), registry, config.initialPipelineId, RtPostProcessingMode::dlssRayReconstruction, config.dlssQuality, captureSessionId);
+    if (!initialGraph)
     {
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", initialGraph.error());
         app.shutdown();
         return 2;
     }
+
+    auto sessionCatalog = buildSessionCatalog(registry, config.initialPipelineId, initialLoad.modelPath.generic_string(), projectRelativePath(environmentLoad->sourcePath).generic_string(), app);
+    auto combinedCatalog = validateSessionAndGraphCatalog(*sessionCatalog, *initialGraph->optionCatalog);
+    if (!combinedCatalog)
+    {
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", combinedCatalog.error());
+        app.shutdown();
+        return 2;
+    }
+    installPreparedPipelineGraph(app.renderer(), *initialGraph, false);
+
+    auto initialAvailability = fullyAvailable(*sessionCatalog, *initialGraph->optionCatalog);
+    auto initializedOptions = app.options().initializeSession(std::move(sessionCatalog), initialGraph->optionCatalog, initialAvailability);
+    if (!initializedOptions.committed)
+    {
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Failed to initialize OptionSystem: {}", initializedOptions.detail));
+        app.shutdown();
+        return 2;
+    }
+
+    auto webSocketHost = nr::interaction::OptionWebSocketHost{app.options()};
+    if (config.interactionMode == ViewerInteractionMode::agent)
+    {
+        auto started = webSocketHost.start();
+        if (!started.started)
+        {
+            nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Failed to start the option WebSocket host: {}", started.detail));
+            app.shutdown();
+            return 2;
+        }
+    }
+
+    auto luaHost = nr::automation::OfflineLuaHost{};
+    if (config.interactionMode == ViewerInteractionMode::offlineLua)
+    {
+        auto started = luaHost.start(app.options(), config.automationScript);
+        if (!started.started)
+        {
+            nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Failed to start offline Lua automation: {}", started.detail));
+            webSocketHost.stop();
+            app.shutdown();
+            return 2;
+        }
+    }
+
     if (config.benchmark)
     {
         app.renderer().configureBenchmark(nr::renderer::RendererBenchmarkConfig{
@@ -548,18 +639,15 @@ void printViewerUsage(std::string_view executableName)
     }
 
     auto frameServices = app.makeFrameServices();
-    auto& presentation = app.renderer().device().presentationContext;
+    auto &presentation = app.renderer().device().presentationContext;
     auto previousTick = std::chrono::steady_clock::now();
     auto exitCode = 0;
     auto framebufferWasUnavailable = false;
+    auto optionUiPresenter = nr::app::OptionUiPresenter{};
+    auto stopAfterCurrentFrame = false;
 
     while (!presentation.windowShouldClose())
     {
-        if (!config.benchmark)
-        {
-            static_cast<void>(processPendingRequests(app, registry, history, modelController, controls));
-        }
-
         presentation.pollEvents();
         auto now = std::chrono::steady_clock::now();
         auto deltaSeconds = std::chrono::duration<float>(now - previousTick).count();
@@ -578,16 +666,67 @@ void printViewerUsage(std::string_view executableName)
             framebufferWasUnavailable = false;
         }
 
+        if (!app.renderer().initialized() || !app.renderer().graphInstalled())
+        {
+            nr::nrLog(nr::LogLevel::error, "PIPELINE", "Renderable viewer iteration requires an initialized renderer and installed graph.");
+            exitCode = 1;
+            break;
+        }
+
+        auto previousSnapshot = app.options().snapshot();
+        nrAssert(previousSnapshot != nullptr, "Renderable viewer iteration requires a published option snapshot.");
+        auto frameStart = app.options().beginRenderableFrame();
+        nrAssert(frameStart.has_value(), "Renderable viewer iteration failed to close OptionSystem admission.");
+        auto mutationResult = MutationFrameResult{};
+        if (frameStart->mutation.has_value())
+        {
+            mutationResult = executeMutation(app, registry, history, modelController, config.dlssQuality, captureSessionId, *previousSnapshot, frameStart->frameIndex, std::move(*frameStart->mutation));
+        }
+
+        auto collectionSnapshot = app.options().snapshotForCollection(mutationResult.effect);
+        nrAssert(collectionSnapshot != nullptr, "OptionSystem failed to provide its closed-gate collection snapshot.");
+        auto availability = collectAvailability(app, *collectionSnapshot);
+        auto optionSnapshot = app.options().publishRenderableFrame(availability, std::move(mutationResult.effect));
+        nrAssert(optionSnapshot != nullptr, "OptionSystem failed to publish the renderable frame snapshot.");
+
+        if (config.interactionMode == ViewerInteractionMode::offlineLua)
+        {
+            auto luaFrame = luaHost.resume(optionSnapshot);
+            if (luaFrame.status == nr::automation::OfflineLuaFrameStatus::completed)
+            {
+                stopAfterCurrentFrame = true;
+            }
+            else if (luaFrame.status == nr::automation::OfflineLuaFrameStatus::failed || luaFrame.status == nr::automation::OfflineLuaFrameStatus::notStarted)
+            {
+                nr::nrLog(nr::LogLevel::error, "LUA", luaFrame.detail.empty() ? "Offline Lua automation stopped unexpectedly." : luaFrame.detail);
+                exitCode = 1;
+                stopAfterCurrentFrame = true;
+            }
+        }
+
         app.ui().beginFrame(presentation, deltaSeconds);
+        app.camera().syncFromSnapshot(*optionSnapshot, presentation);
         if (!config.benchmark)
         {
-            queueViewerControls(app.ui(), registry, history, controls);
-            app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
+            auto const uiInteractionPolicy = config.interactionMode == ViewerInteractionMode::human ? nr::app::OptionUiInteractionPolicy::interactive : nr::app::OptionUiInteractionPolicy::readOnly;
+            auto uiResult = optionUiPresenter.present(app.ui(), app.options(), optionSnapshot, uiInteractionPolicy);
+            if (uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)
+            {
+                if (uiResult.mutationAttempted)
+                {
+                    app.camera().discardPresentationInput(presentation, deltaSeconds, app.ui().captureState());
+                }
+                else
+                {
+                    static_cast<void>(app.camera().tryScheduleFromPresentation(app.options(), *optionSnapshot, presentation, deltaSeconds, app.ui().captureState()));
+                }
+            }
         }
         app.ui().setCameraFrame(app.camera().frame());
         auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
         auto frameInput = nr::renderer::RendererFrameInput{
+            .optionSnapshot = std::cref(*optionSnapshot),
             .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
             .sceneExtractInput = nr::scene::SceneExtractInput{},
             .cameraOverride = cameraOverride,
@@ -621,17 +760,23 @@ void printViewerUsage(std::string_view executableName)
         {
             break;
         }
+        if (stopAfterCurrentFrame)
+        {
+            break;
+        }
     }
 
     if (config.benchmark && exitCode == 0 && !app.renderer().finalizeBenchmark())
     {
         exitCode = 1;
     }
+    luaHost.stop();
+    webSocketHost.stop();
     app.shutdown();
     return exitCode;
 }
 
-[[nodiscard]] int runViewerFromCommandLine(std::span<char*> args)
+[[nodiscard]] int runViewerFromCommandLine(std::span<char *> args)
 {
     auto options = parseViewerCommandLine(args);
     if (options.showHelp)
@@ -647,8 +792,15 @@ void printViewerUsage(std::string_view executableName)
         return 2;
     }
 
+    auto logSession = nr::RotatingNdjsonLogSession::start({});
+    if (!logSession)
+    {
+        nr::nrLog(nr::LogLevel::error, "LOG", std::format("Failed to start rotating NDJSON logs: {}", logSession.error()));
+        return 2;
+    }
+
     auto commandLine = std::string{};
-    std::ranges::for_each(args, [&](const char* argument) {
+    std::ranges::for_each(args, [&](const char *argument) {
         if (!commandLine.empty())
         {
             commandLine += ' ';
@@ -665,6 +817,8 @@ void printViewerUsage(std::string_view executableName)
         .measureFrames = options.measureFrames,
         .outputDirectory = options.outputDirectory,
         .dlssQuality = options.dlssQuality,
+        .interactionMode = options.interactionMode,
+        .automationScript = options.automationScript,
         .commandLine = std::move(commandLine),
     });
 }

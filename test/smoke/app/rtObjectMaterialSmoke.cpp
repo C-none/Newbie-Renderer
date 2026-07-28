@@ -2,6 +2,7 @@ import std;
 import dependency;
 import nr.app;
 import nr.load;
+import nr.options;
 import nr.renderer;
 import nr.renderPasses;
 import nr.rhi;
@@ -10,6 +11,29 @@ import nr.utils;
 
 namespace
 {
+[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
+    const nr::renderer::RendererGraphPreflightResult& preflight)
+{
+    auto values = nr::options::OptionValueMap{};
+    auto availability = nr::options::OptionAvailabilityMap{};
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+        values.emplace(entry.first, entry.second.defaultValue);
+        availability.emplace(
+            entry.first,
+            nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    return nr::options::OptionFrameSnapshot{
+        .catalog = preflight.optionCatalog,
+        .values = std::move(values),
+        .availability = std::move(availability),
+        .frameIndex = 1u,
+        .revision = 1u,
+        .graphGeneration = 1u,
+        .bindingEpoch = 1u,
+        .snapshotToken = "rtobject-material-snapshot",
+    };
+}
+
 [[nodiscard]] nr::renderer::RendererGraphSpec buildRtObjectGraphSpec(vk::Format swapchainFormat)
 {
     auto asBuild = std::make_shared<nr::renderPasses::AccelerationStructureBuildNode>();
@@ -32,11 +56,20 @@ namespace
         .sequence = nr::renderer::RendererCameraJitterSequence::Halton23,
         .cycleLength = nr::renderer::kRendererDefaultCameraJitterCycleLength,
     };
-    graphSpec.frameResolutionResolver = [controller = std::move(dlssResolutionController), node = std::weak_ptr{dlssRayReconstruction}](nr::rhi::Device &device, vk::Extent2D displayExtent) {
-        auto activeNode = node.lock();
-        nr::nrAssert(static_cast<bool>(activeNode), "rtobject material smoke DLSS RR resolution resolver lost its node.");
+    graphSpec.frameResolutionResolver = [controller = std::move(dlssResolutionController)](
+                                            nr::rhi::Device& device,
+                                            vk::Extent2D displayExtent,
+                                            const nr::options::OptionFrameSnapshot& snapshot) {
         auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{[&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) { return device.dlssContext()->optimalSettings(targetSize, quality); }};
-        return controller->resolve(activeNode->effectiveResolutionRequest(), displayExtent, query);
+        return controller->resolve(
+            nr::renderPasses::dlssResolutionRequestFromSnapshot(snapshot),
+            displayExtent,
+            query);
+    };
+    graphSpec.frameResolutionOptionRequirements = {
+        nr::options::optionId(nr::options::keys::dlssEnabled),
+        nr::options::optionId(nr::options::keys::dlssQuality),
+        nr::options::optionId(nr::options::keys::dlssBypass),
     };
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
@@ -123,17 +156,22 @@ namespace
     return std::ref(scene);
 }
 
-[[nodiscard]] std::optional<nr::renderer::RendererFrameResult> renderOneFrame(nr::app::AppSession &app, nr::scene::Scene &scene)
+[[nodiscard]] std::optional<nr::renderer::RendererFrameResult> renderOneFrame(
+    nr::app::AppSession& app,
+    nr::scene::Scene& scene,
+    const nr::options::OptionFrameSnapshot& optionSnapshot,
+    std::optional<nr::renderer::RendererCameraOverride> cameraOverride = {})
 {
     auto &renderer = app.renderer();
     auto &presentation = renderer.device().presentationContext;
 
     presentation.pollEvents();
     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
+        .optionSnapshot = std::cref(optionSnapshot),
         .scene = std::ref(scene),
         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
         .sceneExtractInput = nr::scene::SceneExtractInput{},
-        .cameraOverride = app.camera().buildRendererCameraOverride(),
+        .cameraOverride = cameraOverride.value_or(app.camera().buildRendererCameraOverride()),
     });
 
     if (!frameResult.rendered)
@@ -145,7 +183,7 @@ namespace
     if (frameResult.presentResult == vk::Result::eErrorOutOfDateKHR || frameResult.presentResult == vk::Result::eSuboptimalKHR)
     {
         renderer.resize();
-        return renderOneFrame(app, scene);
+        return renderOneFrame(app, scene, optionSnapshot, std::move(cameraOverride));
     }
 
     if (frameResult.presentResult != vk::Result::eSuccess)
@@ -157,7 +195,10 @@ namespace
     return frameResult;
 }
 
-[[nodiscard]] bool renderUntilRtSceneReady(nr::app::AppSession &app, nr::scene::Scene &scene)
+[[nodiscard]] bool renderUntilRtSceneReady(
+    nr::app::AppSession& app,
+    nr::scene::Scene& scene,
+    const nr::options::OptionFrameSnapshot& optionSnapshot)
 {
     auto failed = false;
     auto observedRtFrame = false;
@@ -168,7 +209,7 @@ namespace
             return;
         }
 
-        auto frameResult = renderOneFrame(app, scene);
+        auto frameResult = renderOneFrame(app, scene, optionSnapshot);
         if (!frameResult.has_value())
         {
             failed = true;
@@ -192,27 +233,39 @@ namespace
     return true;
 }
 
-[[nodiscard]] bool renderCameraMotionFrames(nr::app::AppSession &app, nr::scene::Scene &scene)
+[[nodiscard]] bool renderCameraMotionFrames(
+    nr::app::AppSession& app,
+    nr::scene::Scene& scene,
+    const nr::options::OptionFrameSnapshot& optionSnapshot)
 {
-    auto const previousPosition = app.camera().frame().position;
-    app.camera().viewer().applyControl(nr::renderer::ViewerCameraControlInput{
+    auto movedCamera = app.camera().viewer();
+    auto const previousPosition = movedCamera.frame().position;
+    movedCamera.applyControl(nr::renderer::ViewerCameraControlInput{
         .deltaSeconds = 1.0f / 30.0f,
         .moveRight = true,
     });
-    auto const movedPosition = app.camera().frame().position;
+    auto const movedPosition = movedCamera.frame().position;
     if (glm::length(movedPosition - previousPosition) <= std::numeric_limits<float>::epsilon())
     {
         std::println("[error] rtobject material smoke failed to move the test camera.");
         return false;
     }
 
-    if (!renderOneFrame(app, scene).has_value())
+    if (!renderOneFrame(
+            app,
+            scene,
+            optionSnapshot,
+            movedCamera.buildRendererCameraOverride()).has_value())
     {
         std::println("[error] rtobject material smoke failed while rendering camera motion.");
         return false;
     }
 
-    if (!renderOneFrame(app, scene).has_value())
+    if (!renderOneFrame(
+            app,
+            scene,
+            optionSnapshot,
+            movedCamera.buildRendererCameraOverride()).has_value())
     {
         std::println("[error] rtobject material smoke failed on the stationary frame after camera motion.");
         return false;
@@ -254,10 +307,16 @@ namespace
 
         auto &presentation = app.renderer().device().presentationContext;
         auto graphSpec = buildRtObjectGraphSpec(presentation.swapchainFormat());
-        app.renderer().installGraph(graphSpec);
+        auto const preflight = app.renderer().preflightGraph(graphSpec);
+        if (!preflight || !app.renderer().installGraph(graphSpec))
+        {
+            return false;
+        }
+        auto const optionSnapshot = makeDefaultSnapshot(preflight);
 
         auto const skeletonStatisticsBefore = app.renderer().renderGraphSkeletonStatistics();
-        if (!renderUntilRtSceneReady(app, scene->get()) || !renderCameraMotionFrames(app, scene->get()))
+        if (!renderUntilRtSceneReady(app, scene->get(), optionSnapshot) ||
+            !renderCameraMotionFrames(app, scene->get(), optionSnapshot))
         {
             return false;
         }

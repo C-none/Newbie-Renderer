@@ -1,2 +1,14 @@
-src/extern/dlssBridge/artifacts/**/*.dll -text -diff -merge
+* text eol=crlf
+
+*.dll binary
+*.exe binary
+*.exr binary
+*.jpeg binary
+*.jpg binary
+*.lib binary
+*.pdf binary
+*.pdb binary
+*.png binary
+*.zip binary
+
 assets/envMap/** filter=lfs diff=lfs merge=lfs -text

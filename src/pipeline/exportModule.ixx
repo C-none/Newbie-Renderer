@@ -25,12 +25,20 @@ enum class RtDlssQuality : std::uint8_t
     ultraPerformance,
 };
 
+enum class ViewerInteractionMode : std::uint8_t
+{
+    human,
+    agent,
+    offlineLua,
+};
+
 struct PipelineBuildContext
 {
     vk::Format swapchainFormat = vk::Format::eUndefined;
     vk::Extent2D swapchainExtent{1u, 1u};
     RtPostProcessingMode rtPostProcessingMode = RtPostProcessingMode::dlssRayReconstruction;
     RtDlssQuality rtDlssQuality = RtDlssQuality::dlaa;
+    std::string captureSessionId{"session"};
 };
 
 using PipelineGraphFactory = std::function<nr::renderer::RendererGraphSpec(const PipelineBuildContext&)>;
@@ -60,9 +68,12 @@ void registerDefaultPipelines(RenderPipelineRegistry& registry);
 [[nodiscard]] RenderPipelineRegistry makeDefaultPipelineRegistry();
 
 [[nodiscard]] std::filesystem::path defaultModelPath();
+[[nodiscard]] std::filesystem::path modelAssetRootPath();
 [[nodiscard]] std::filesystem::path environmentMapAssetDirectoryPath();
 [[nodiscard]] std::filesystem::path defaultEnvironmentMapPath();
 [[nodiscard]] std::filesystem::path modelHistoryFilePath();
+[[nodiscard]] std::expected<std::filesystem::path, std::string> resolveModelAssetPath(
+    const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path normalizeModelPathForStorage(const std::filesystem::path& path);
 [[nodiscard]] std::string displayPathLeafFirst(const std::filesystem::path& path);
 
@@ -129,6 +140,8 @@ struct ViewerCommandLineOptions
     std::uint32_t measureFrames = 0u;
     std::filesystem::path outputDirectory{};
     RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
+    ViewerInteractionMode interactionMode = ViewerInteractionMode::human;
+    std::filesystem::path automationScript{};
     std::string errorMessage{};
 };
 
@@ -144,6 +157,8 @@ struct ViewerRunConfig
     std::uint32_t measureFrames = 0u;
     std::filesystem::path outputDirectory{};
     RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
+    ViewerInteractionMode interactionMode = ViewerInteractionMode::human;
+    std::filesystem::path automationScript{};
     std::string commandLine{};
 };
 
@@ -159,10 +174,6 @@ void registerNormalViewPipeline(RenderPipelineRegistry& registry);
 void registerRtObjectPipeline(RenderPipelineRegistry& registry);
 
 [[nodiscard]] std::string normalizedModelPathKey(const std::filesystem::path& path);
-[[nodiscard]] std::vector<nr::app::UiSection> buildRtObjectUi(
-    RtPostProcessingMode& mode,
-    std::optional<RtPostProcessingMode>& pendingMode);
-
 [[nodiscard]] std::expected<EnvironmentMapAsset, std::string> loadEnvironmentMap(
     nr::renderer::Renderer& renderer,
     const std::filesystem::path& sourcePath);

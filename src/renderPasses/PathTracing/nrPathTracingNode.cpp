@@ -5,6 +5,7 @@ import dependency.shaderShare;
 import :pathTracing;
 import :rtHitSbtPlan;
 import :sceneTextureTableBinding;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import nr.utils;
@@ -671,53 +672,57 @@ void clearUnavailableGuides(NodeBuildContext &context, std::span<const nr::rende
 
 namespace nr::renderPasses
 {
+namespace
+{
+[[nodiscard]] PathTracingVariantKey pathTracingVariant(
+    const nr::options::OptionFrameSnapshot& snapshot)
+{
+    auto const* maxBounces =
+        snapshot.find(nr::options::keys::pathTracingMaxSurfaceBounces);
+    auto const* russianRoulette =
+        snapshot.find(nr::options::keys::pathTracingRussianRouletteEnabled);
+    nrAssert(maxBounces != nullptr && russianRoulette != nullptr,
+             "PathTracing requires its option values in the frame snapshot.");
+    return detail::normalizePathTracingVariantKey(PathTracingVariantKey{
+        .maxSurfaceBounces = static_cast<std::uint32_t>(*maxBounces),
+        .enableRussianRoulette = *russianRoulette,
+    });
+}
+} // namespace
+
 PathTracingNode::~PathTracingNode() = default;
+
+void PathTracingNode::declareOptions(nr::options::OptionCatalogBuilder& builder) const
+{
+    std::ranges::for_each(
+        nr::options::makePathTracingDefinitions(),
+        [&](nr::options::OptionDefinition definition) {
+            static_cast<void>(builder.add(std::move(definition)));
+        });
+}
+
+void PathTracingNode::collectOptionAvailability(
+    const nr::options::OptionFrameSnapshot&,
+    nr::options::OptionAvailabilityMap& availability) const
+{
+    auto const definitions = std::array{
+        nr::options::optionId(nr::options::keys::pathTracingMaxSurfaceBounces),
+        nr::options::optionId(nr::options::keys::pathTracingRussianRouletteEnabled),
+    };
+    std::ranges::for_each(
+        definitions,
+        [&](const nr::options::OptionId& id) {
+            availability.insert_or_assign(
+                id,
+                nr::options::OptionAvailability{.available = true, .reason = {}});
+        });
+}
 
 void PathTracingNode::initialize(NodeInitContext &context)
 {
     device_ = context.device;
     nr::nrAssert(input.outputFormat != vk::Format::eUndefined, "PathTracing output format must be defined.");
-    input.variant = detail::normalizePathTracingVariantKey(input.variant);
-    variantUiDraft_ = input.variant;
-    pendingVariant_.reset();
     runtime_ = detail::makePathTracingRuntimeCache();
-}
-
-void PathTracingNode::collectUi(NodeUiBuildContext &context, const NodeFrameParameters &)
-{
-    if (pendingVariant_.has_value())
-    {
-        input.variant = detail::normalizePathTracingVariantKey(*pendingVariant_);
-        pendingVariant_.reset();
-    }
-
-    variantUiDraft_ = detail::normalizePathTracingVariantKey(input.variant);
-
-    context.addSection(
-        context.runtimeName(),
-        [this](NodeUiWriter &ui) {
-            auto changed = false;
-            auto maxSurfaceBounces = variantUiDraft_.maxSurfaceBounces;
-            if (ui.inputUInt("Max Bounces", maxSurfaceBounces, kPathTracingMinSurfaceBounces, kPathTracingMaxSurfaceBouncesLimit))
-            {
-                maxSurfaceBounces = std::clamp(maxSurfaceBounces, kPathTracingMinSurfaceBounces, kPathTracingMaxSurfaceBouncesLimit);
-                variantUiDraft_.maxSurfaceBounces = maxSurfaceBounces;
-                changed = true;
-            }
-
-            auto enableRussianRoulette = variantUiDraft_.enableRussianRoulette;
-            if (ui.checkbox("Russian Roulette", enableRussianRoulette))
-            {
-                variantUiDraft_.enableRussianRoulette = enableRussianRoulette;
-                changed = true;
-            }
-
-            if (changed)
-            {
-                pendingVariant_ = detail::normalizePathTracingVariantKey(variantUiDraft_);
-            }
-        },
-        true, "controls");
 }
 
 void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
@@ -728,7 +733,7 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
 [[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot>
 PathTracingNode::structuralSnapshot(const NodeFrameParameters& frameParameters) const
 {
-    auto const variant = detail::normalizePathTracingVariantKey(input.variant);
+    auto const variant = pathTracingVariant(frameParameters.optionSnapshot.get());
     auto const hasTraceInputs =
         frameParameters.scene.has_value() &&
         frameParameters.sceneTlasBuildInputs.has_value() &&
@@ -816,7 +821,7 @@ bool PathTracingNode::materializeRenderGraphSkeleton(
     const StructuralSnapshot& snapshot)
 {
     nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "PathTracing Skeleton patch requires initialized state.");
-    input.variant = detail::normalizePathTracingVariantKey(input.variant);
+    auto const variant = pathTracingVariant(frameParameters.optionSnapshot.get());
     auto const renderExtent = frameParameters.resolutionPlan.renderExtent;
     auto const frameSlotIndex = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
     auto& guideFrameSlot = runtime_->guideFrameSlots[frameSlotIndex];
@@ -857,7 +862,7 @@ bool PathTracingNode::materializeRenderGraphSkeleton(
 
     auto const& inputs = *frameInputs;
     auto activeRuntime = detail::ensurePathTracingFrameRuntime(
-        *runtime_, device_->get(), input.variant, *inputs.hitSbtPlan);
+        *runtime_, device_->get(), variant, *inputs.hitSbtPlan);
     auto const& sbtBuffer = activeRuntime.shaderBindingTable.get().buffer();
     context.patchResource(detail::kPathTracingGuideResourceCount, nr::renderer::GraphImportedBufferDesc{
         .debugName = "PathTracing.SBT",
@@ -938,7 +943,7 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
 {
     nr::nrAssert(static_cast<bool>(runtime_), "PathTracing build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "PathTracing build stage requires device reference from initialize stage.");
-    input.variant = detail::normalizePathTracingVariantKey(input.variant);
+    auto const variant = pathTracingVariant(frameParameters.optionSnapshot.get());
 
     auto const renderExtent = frameParameters.resolutionPlan.renderExtent;
     nr::nrAssert(renderExtent.width > 0u && renderExtent.height > 0u, "PathTracing requires a non-zero renderer frame render extent.");
@@ -957,7 +962,7 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
         return;
     }
     auto const &inputs = *frameInputs;
-    auto activeRuntime = detail::ensurePathTracingFrameRuntime(*runtime_, device_->get(), input.variant, *inputs.hitSbtPlan);
+    auto activeRuntime = detail::ensurePathTracingFrameRuntime(*runtime_, device_->get(), variant, *inputs.hitSbtPlan);
 
     auto sbtResource = context.importBuffer(activeRuntime.shaderBindingTable.get().buffer(), "PathTracing.SBT", nr::renderer::ResourceLifetime::RendererPersistent,
                                             {

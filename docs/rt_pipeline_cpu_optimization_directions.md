@@ -1,6 +1,6 @@
 # RT Pipeline CPU Optimization Directions
 
-> **Status:** R0 and the first R1 runtime phase are implemented. R1 is not experimentally promoted because this patch does not retain a live legacy switch or differential mode; other work packages remain proposed experiments.
+> **Status:** R0, the first R1 runtime phase, and the M1 lazy-diagnostic facility are implemented. R1 is not experimentally promoted because this patch does not retain a live legacy switch or differential mode; M1 performance promotion still requires an isolated benchmark; other work packages remain proposed experiments.
 >
 > **Baseline date:** 2026-07-25.
 >
@@ -11,8 +11,9 @@
 >
 > **Document role:** This is the implementation decision document. The
 > [performance investigation](rt_pipeline_cpu_performance_investigation.md), especially
-> section 12, remains the evidence narrative and source audit. This roadmap turns that
-> evidence into ordered experiments, shared contracts, and promotion gates.
+> sections 6 through 11, remains the historical evidence narrative and source audit. This
+> roadmap turns that evidence into ordered experiments, shared contracts, and promotion
+> gates.
 
 ## 1. Technical summary
 
@@ -115,7 +116,7 @@ repeated pairs rather than a single before/after run.
 | R0 | Which owner advances each scene/extraction revision? | Gate, not a direct saving | High need | High API and invalidation-design risk | Mutation matrix | Implemented |
 | R1 | Can stable RT topology/metadata/material/geometry/hit-SBT plans be reused and dynamic instance state patched? | Build ceiling 0.652 ms; AS metadata-plan mean approximately 0.137 ms is nested | Medium-high | High correctness/lifetime risk | R0 and differential validation | Runtime implemented; legacy switch, differential validation, and promotion pending |
 | S1 | Can static scene bridge and TLAS texture products become incremental? | Scene ceiling 0.250 ms plus non-additive TLAS collection in Unclassified | Medium | High mutation coverage risk | R0; preferably R1 contracts | Hold until revisions |
-| M1 | Does lazy successful `nrAssert` message construction produce repeatable savings? | Unmeasured micro-opportunity | Medium feasibility, low impact confidence | Low | Isolated counter and A/B | Measure; not headline P0 |
+| M1 | Does lazy successful `nrAssert` message construction produce repeatable savings? | Unmeasured micro-opportunity | Medium feasibility, low impact confidence | Low | Isolated counter and A/B | Lazy facility and expensive ShaderCursor contexts implemented; promotion pending |
 | P2 | Where do Present and Prepare costs belong? | Present 0.225 ms; Prepare 0.135 ms, separately | Medium | Medium WSI/driver attribution risk | G0-quality trace | Attribute later |
 | Deferred | Do fewer submits, managed transient reuse, or compile redesign become material? | Submit nested in Execute; Compile only 0.017 ms | Low current priority | High architecture/synchronization risk | New evidence | Do not implement now |
 
@@ -276,14 +277,14 @@ Each package should be independently switchable and retain the current path unti
 ### M1 - Lazy successful `nrAssert` diagnostic construction
 
 - **Objective / hypothesis:** test whether suppressing successful-path message formatting saves measurable hot cursor/descriptor time.
-- **Current boundary:** `nrAssert` in [`errorHandle.ixx`](../src/utils/errorHandle.ixx) is an ordinary call, so `std::format`/`ShaderCursor::debugSummary()` in [`nrDescriptor.cpp`](../src/rhi/nrDescriptor.cpp) can evaluate on success.
-- **Proposal:** add a lazy form inside the single error facility, preserving source location/failure text, and convert only measured hot sites.
+- **Implemented boundary:** [`errorHandle.ixx`](../src/utils/errorHandle.ixx) provides a constrained context-factory overload that invokes the factory only after a failed condition while preserving the original source location. Expensive `std::format`/`ShaderCursor::debugSummary()` contexts in [`nrDescriptor.cpp`](../src/rhi/nrDescriptor.cpp) use that lazy form.
+- **Remaining experiment:** count suppressed constructions and A/B the converted implementation against the eager baseline before claiming a measurable CPU improvement.
 - **Must remain dynamic:** condition and complete failure diagnostic; reporting stays in `nr.utils:errorHandle`.
-- **Dependencies:** counters/profiler evidence and isolated A/B.
+- **Dependencies:** counters/profiler evidence and isolated A/B for promotion.
 - **Telemetry / experiment:** suppressed constructions, failure golden tests, affected bucket, CPU work.
-- **Risks:** broad conversion, changed diagnostics, or complexity for sub-`0.05 ms`; broad success logging is not proven dominant.
-- **Exit:** apply the micro-improvement rule without displacing E1/D1/R0/R1.
-- **Rollback:** restore ordinary calls.
+- **Risks:** broad conversion, changed diagnostics, or complexity for sub-`0.05 ms`; measurable impact is not yet proven.
+- **Exit:** retain the implementation only with complete failure diagnostics; promote it as a performance result only if the micro-improvement gate passes without displacing E1/D1/R0/R1.
+- **Rollback:** convert the affected sites back to eager string contexts and remove the factory overload.
 
 ### P2 - Present and Prepare boundary attribution
 

@@ -1,6 +1,7 @@
 module;
 #include <glm/glm.hpp>
 #include <glm/common.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 export module dependency.math;
@@ -11,6 +12,7 @@ using ::glm::all;
 using ::glm::any;
 using ::glm::clamp;
 using ::glm::cross;
+using ::glm::degrees;
 using ::glm::determinant;
 using ::glm::dot;
 using ::glm::dvec2;
@@ -34,6 +36,7 @@ using ::glm::qualifier;
 using ::glm::quat;
 using ::glm::radians;
 using ::glm::transpose;
+using ::glm::two_pi;
 using ::glm::uvec2;
 using ::glm::uvec3;
 using ::glm::uvec4;

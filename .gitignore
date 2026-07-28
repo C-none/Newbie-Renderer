@@ -3,6 +3,9 @@
 !.vscode/extensions.json
 build/
 .github/
+/debug.log
+/imgui.ini
+/tmp/
 
 # Keep screenshots folder but ignore its content
 screenshots/*

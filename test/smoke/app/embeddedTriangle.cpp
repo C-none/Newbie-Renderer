@@ -1,11 +1,35 @@
 import std;
 import dependency;
 import nr.app;
+import nr.options;
 import nr.renderer;
 import nr.renderPasses;
 
 namespace
 {
+[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
+    const nr::renderer::RendererGraphPreflightResult& preflight)
+{
+    auto values = nr::options::OptionValueMap{};
+    auto availability = nr::options::OptionAvailabilityMap{};
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+        values.emplace(entry.first, entry.second.defaultValue);
+        availability.emplace(
+            entry.first,
+            nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    return nr::options::OptionFrameSnapshot{
+        .catalog = preflight.optionCatalog,
+        .values = std::move(values),
+        .availability = std::move(availability),
+        .frameIndex = 1u,
+        .revision = 1u,
+        .graphGeneration = 1u,
+        .bindingEpoch = 1u,
+        .snapshotToken = "embedded-triangle-snapshot",
+    };
+}
+
 void printUsage()
 {
     std::println("Usage:");
@@ -89,7 +113,13 @@ void printUsage()
 
             if (exitCode == 0)
             {
-                renderer.installGraph(buildMainGraphSpec(embeddedTriangle));
+                auto graphSpec = buildMainGraphSpec(embeddedTriangle);
+                auto const preflight = renderer.preflightGraph(graphSpec);
+                if (!preflight || !renderer.installGraph(graphSpec))
+                {
+                    return 1;
+                }
+                auto const optionSnapshot = makeDefaultSnapshot(preflight);
                 auto frameServices = app.makeFrameServices();
 
                 auto previousTick = std::chrono::steady_clock::now();
@@ -102,11 +132,11 @@ void printUsage()
                     auto deltaSeconds = std::chrono::duration<float>(now - previousTick).count();
                     previousTick = now;
                     app.ui().beginFrame(presentation, deltaSeconds);
-                    app.camera().updateFromPresentation(presentation, deltaSeconds, app.ui().captureState());
                     app.ui().setCameraFrame(app.camera().frame());
                     auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
                     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
+                        .optionSnapshot = std::cref(optionSnapshot),
                         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
                         .cameraOverride = cameraOverride,
                         .frameServices = std::ref(frameServices),

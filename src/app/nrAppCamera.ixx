@@ -2,6 +2,7 @@ export module nr.app:camera;
 import dependency.math;
 
 import nr.renderer;
+import nr.options;
 import nr.rhi;
 import nr.scene;
 import :ui;
@@ -32,11 +33,20 @@ class AppCamera
                                       const nr::rhi::PresentationContext& presentation,
                                       const AppCameraDefaultView& defaults = {}) noexcept;
     void syncViewportExtent(const nr::rhi::PresentationContext& presentation) noexcept;
-    void updateFromPresentation(const nr::rhi::PresentationContext& presentation,
-                                float deltaSeconds,
-                                const UiCaptureState& captureState = {}) noexcept;
+    void syncFromSnapshot(const nr::options::OptionFrameSnapshot& snapshot,
+                          const nr::rhi::PresentationContext& presentation) noexcept;
+    [[nodiscard]] bool tryScheduleFromPresentation(
+        nr::options::OptionSystem& options,
+        const nr::options::OptionFrameSnapshot& snapshot,
+        const nr::rhi::PresentationContext& presentation,
+        float deltaSeconds,
+        const UiCaptureState& captureState = {}) noexcept;
+    void discardPresentationInput(
+        const nr::rhi::PresentationContext& presentation,
+        float deltaSeconds,
+        const UiCaptureState& captureState = {}) noexcept;
+    [[nodiscard]] nr::options::CameraResetValues optionResetValues() const;
 
-    [[nodiscard]] nr::renderer::ViewerPerspectiveCamera& viewer() noexcept;
     [[nodiscard]] const nr::renderer::ViewerPerspectiveCamera& viewer() const noexcept;
     [[nodiscard]] nr::renderer::ViewerPerspectiveCameraFrame frame() const noexcept;
     [[nodiscard]] nr::renderer::RendererCameraOverride buildRendererCameraOverride() const noexcept;

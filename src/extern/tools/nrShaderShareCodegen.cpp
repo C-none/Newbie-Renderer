@@ -174,6 +174,78 @@ struct Model
     return iterator != relative.end() && *iterator != "..";
 }
 
+[[nodiscard]] std::optional<std::string> buildShareRootModuleSource(const Options& options)
+{
+    if (!pathIsUnder(options.shareRoot, options.shaderRoot))
+    {
+        std::cerr << "Share root '" << genericPathString(options.shareRoot)
+                  << "' must be inside shader root '" << genericPathString(options.shaderRoot) << "'.\n";
+        return std::nullopt;
+    }
+
+    auto includePaths = std::vector<std::string>{};
+    auto ec = std::error_code{};
+    auto iterator = std::filesystem::recursive_directory_iterator{options.shareRoot, ec};
+    if (ec)
+    {
+        std::cerr << "Failed to enumerate share root '" << genericPathString(options.shareRoot)
+                  << "': " << ec.message() << "\n";
+        return std::nullopt;
+    }
+
+    auto const end = std::filesystem::recursive_directory_iterator{};
+    while (iterator != end)
+    {
+        auto const& entry = *iterator;
+        auto entryEc = std::error_code{};
+        auto const isSlangFile = entry.is_regular_file(entryEc) && entry.path().extension() == ".slang";
+        if (entryEc)
+        {
+            std::cerr << "Failed to inspect share-root entry '" << genericPathString(entry.path())
+                      << "': " << entryEc.message() << "\n";
+            return std::nullopt;
+        }
+
+        if (isSlangFile)
+        {
+            auto relativeEc = std::error_code{};
+            auto relativePath = std::filesystem::relative(entry.path(), options.shaderRoot, relativeEc);
+            if (relativeEc || relativePath.empty() || *relativePath.begin() == "..")
+            {
+                std::cerr << "Failed to express share-root file '" << genericPathString(entry.path())
+                          << "' relative to shader root.\n";
+                return std::nullopt;
+            }
+            includePaths.push_back(genericPathString(relativePath));
+        }
+
+        iterator.increment(ec);
+        if (ec)
+        {
+            std::cerr << "Failed while enumerating share root '" << genericPathString(options.shareRoot)
+                      << "': " << ec.message() << "\n";
+            return std::nullopt;
+        }
+    }
+
+    if (includePaths.empty())
+    {
+        std::cerr << "No Slang source files were found under share root '"
+                  << genericPathString(options.shareRoot) << "'.\n";
+        return std::nullopt;
+    }
+
+    std::ranges::sort(includePaths);
+
+    auto source = std::ostringstream{};
+    source << "module " << options.rootModule << ";\n\n";
+    for (auto const& includePath : includePaths)
+    {
+        source << "__include \"" << includePath << "\";\n";
+    }
+    return source.str();
+}
+
 [[nodiscard]] std::string locationText(const SourceSite& site)
 {
     auto stream = std::ostringstream{};
@@ -644,17 +716,28 @@ struct Model
     return session;
 }
 
-[[nodiscard]] Slang::ComPtr<slang::IModule> loadRootModule(slang::ISession* session, const std::string& rootModule)
+[[nodiscard]] Slang::ComPtr<slang::IModule> loadRootModule(slang::ISession* session, const Options& options)
 {
+    auto source = buildShareRootModuleSource(options);
+    if (!source.has_value())
+    {
+        return {};
+    }
+
+    auto virtualPath = genericPathString(options.shaderRoot / ".__nrShaderShareCodegenRoot.slang");
     Slang::ComPtr<slang::IBlob> diagnostics;
     Slang::ComPtr<slang::IModule> module;
     try
     {
-        module = Slang::ComPtr<slang::IModule>(session->loadModule(rootModule.c_str(), diagnostics.writeRef()));
+        module = Slang::ComPtr<slang::IModule>(session->loadModuleFromSourceString(
+            options.rootModule.c_str(),
+            virtualPath.c_str(),
+            source->c_str(),
+            diagnostics.writeRef()));
     }
     catch (...)
     {
-        std::cerr << "Slang threw while loading root module '" << rootModule << "'.\n";
+        std::cerr << "Slang threw while loading synthesized root module '" << options.rootModule << "'.\n";
         auto diagnosticsText = blobText(diagnostics.get());
         if (!diagnosticsText.empty())
         {
@@ -671,7 +754,7 @@ struct Model
 
     if (!module)
     {
-        std::cerr << "Failed to load root module '" << rootModule << "'.\n";
+        std::cerr << "Failed to load synthesized root module '" << options.rootModule << "'.\n";
     }
     return module;
 }
@@ -1197,13 +1280,6 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
         stream << existing.rdbuf();
         if (stream.str() == text)
         {
-            std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now(), ec);
-            if (ec)
-            {
-                std::cerr << "Failed to update generated module timestamp '" << genericPathString(path)
-                          << "': " << ec.message() << "\n";
-                return false;
-            }
             return true;
         }
     }
@@ -1233,7 +1309,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    auto module = loadRootModule(session.get(), options.rootModule);
+    auto module = loadRootModule(session.get(), options);
     if (!module)
     {
         return EXIT_FAILURE;

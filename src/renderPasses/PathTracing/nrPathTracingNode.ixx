@@ -1,6 +1,7 @@
 export module nr.renderPasses:pathTracing;
 import dependency.vulkan;
 
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import std;
@@ -28,7 +29,6 @@ struct PathTracingVariantKey
 struct PathTracingNodeInput
 {
     vk::Format outputFormat = vk::Format::eR16G16B16A16Sfloat;
-    PathTracingVariantKey variant{};
 };
 
 class PathTracingNode final : public Node
@@ -39,8 +39,15 @@ class PathTracingNode final : public Node
 
     PathTracingNodeInput input{};
 
+    [[nodiscard]] std::string_view actionableSemantic() const noexcept override
+    {
+        return "render.path_tracing";
+    }
+    void declareOptions(nr::options::OptionCatalogBuilder& builder) const override;
+    void collectOptionAvailability(
+        const nr::options::OptionFrameSnapshot& snapshot,
+        nr::options::OptionAvailabilityMap& availability) const override;
     void initialize(NodeInitContext& context) override;
-    void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
     [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
@@ -51,7 +58,5 @@ class PathTracingNode final : public Node
     void materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters);
     std::shared_ptr<detail::PathTracingRuntimeCache> runtime_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
-    PathTracingVariantKey variantUiDraft_{};
-    std::optional<PathTracingVariantKey> pendingVariant_{};
 };
 } // namespace nr::renderPasses

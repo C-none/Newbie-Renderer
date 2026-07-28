@@ -575,6 +575,7 @@ namespace nr::renderer
         auto const queueSubmitStart = timingStart();
         context.device.submitFrameBatch(std::move(submitBatch), submitRole, planBatch.signalsPresent, imageAvailableWaitStage);
         ++report.submittedBatchCount;
+        report.submittedCompiledBatchIndices.push_back(compiledBatch.batchIndex);
         recordTiming(&ExecutorBenchmarkTelemetry::queueSubmitMilliseconds, queueSubmitStart);
     });
 

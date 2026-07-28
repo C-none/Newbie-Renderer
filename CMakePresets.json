@@ -2,8 +2,8 @@
   "version": 6,
   "cmakeMinimumRequired": {
     "major": 4,
-    "minor": 3,
-    "patch": 3
+    "minor": 4,
+    "patch": 0
   },
   "configurePresets": [
     {
@@ -17,6 +17,7 @@
       "cacheVariables": {
         "VCPKG_FEATURE_FLAGS": "manifests",
         "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=${sourceDir}/build/vcpkg/buildtrees;--x-packages-root=${sourceDir}/build/vcpkg/packages;--binarysource=default,readwrite",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlay-ports",
         "CMAKE_CXX_STANDARD": "26",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "CMAKE_CXX_EXTENSIONS": "OFF",

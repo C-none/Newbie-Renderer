@@ -1,11 +1,28 @@
 import std;
 import dependency;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import nr.test;
 
 namespace
 {
+[[nodiscard]] const nr::options::OptionFrameSnapshot& emptyOptionSnapshot()
+{
+    static auto const catalog = nr::options::OptionCatalogBuilder{}.build().catalog;
+    static auto const snapshot = nr::options::OptionFrameSnapshot{
+        .catalog = catalog,
+    };
+    return snapshot;
+}
+
+[[nodiscard]] nr::renderer::NodeFrameParameters nodeFrameParameters()
+{
+    return nr::renderer::NodeFrameParameters{
+        .optionSnapshot = std::cref(emptyOptionSnapshot()),
+    };
+}
+
 [[nodiscard]] nr::renderer::RenderGraphFrameDescription makeFrame(
     std::uint32_t dynamicValue,
     bool addSecondPass = false)
@@ -342,7 +359,7 @@ const nr::test::CaseRegistrar patchFailureColdFallbackCase{
             dataNames,
         };
         auto node = FailingSkeletonNode{};
-        auto parameters = nr::renderer::NodeFrameParameters{};
+        auto parameters = nodeFrameParameters();
         auto snapshot = node.structuralSnapshot(parameters);
         nr::test::require(snapshot.has_value());
         nr::test::require(!node.materializeRenderGraphSkeleton(patch, parameters, *snapshot));
@@ -385,7 +402,7 @@ const nr::test::CaseRegistrar unsupportedNodeCase{
     [] {
         auto node = UnsupportedNode{};
         nr::test::require(!node.supportsRenderGraphSkeleton());
-        nr::test::require(!node.structuralSnapshot(nr::renderer::NodeFrameParameters{}).has_value());
+        nr::test::require(!node.structuralSnapshot(nodeFrameParameters()).has_value());
     }};
 
 const nr::test::CaseRegistrar hitMaterializationBypassesBuildEntryCase{
@@ -402,7 +419,7 @@ const nr::test::CaseRegistrar hitMaterializationBypassesBuildEntryCase{
             resources,
             frameData,
         };
-        auto parameters = nr::renderer::NodeFrameParameters{};
+        auto parameters = nodeFrameParameters();
         auto node = CountingSkeletonNode{};
         auto bindlessCache = nr::renderer::BindlessImageTableCache{};
         auto globals = nr::renderer::FrameGlobalResources{.bindlessImageTableCache = std::ref(bindlessCache)};

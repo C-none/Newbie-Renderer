@@ -59,16 +59,43 @@ if(NOT _NR_MSYS2_CLANGXX_TOOLCHAIN)
     set(CMAKE_SYSTEM_PROCESSOR "${_nr_system_processor}" CACHE STRING "" FORCE)
     set(_nr_target_triple "${CMAKE_SYSTEM_PROCESSOR}-w64-windows-gnu")
 
-    find_program(_nr_clang_compiler NAMES clang.exe clang REQUIRED)
-    find_program(_nr_clangxx_compiler NAMES clang++.exe clang++ REQUIRED)
-    find_program(_nr_clang_scan_deps NAMES clang-scan-deps.exe clang-scan-deps REQUIRED)
-    find_program(_nr_llvm_ar NAMES llvm-ar.exe llvm-ar REQUIRED)
-    find_program(_nr_llvm_ranlib NAMES llvm-ranlib.exe llvm-ranlib REQUIRED)
-    find_program(_nr_llvm_objcopy NAMES llvm-objcopy.exe llvm-objcopy objcopy.exe objcopy REQUIRED)
-    find_program(_nr_llvm_strip NAMES llvm-strip.exe llvm-strip strip.exe strip REQUIRED)
-    find_program(_nr_llvm_rc NAMES llvm-rc.exe llvm-rc)
-    if(NOT _nr_llvm_rc)
-        find_program(_nr_llvm_rc NAMES windres.exe windres)
+    function(_nr_find_required_tool output configured_path)
+        if(configured_path AND EXISTS "${configured_path}")
+            set(${output} "${configured_path}" PARENT_SCOPE)
+            return()
+        endif()
+
+        find_program(resolved_tool NAMES ${ARGN} REQUIRED NO_CACHE)
+        set(${output} "${resolved_tool}" PARENT_SCOPE)
+    endfunction()
+
+    _nr_find_required_tool(_nr_clang_compiler "${CMAKE_C_COMPILER}" clang.exe clang)
+    _nr_find_required_tool(_nr_clangxx_compiler "${CMAKE_CXX_COMPILER}" clang++.exe clang++)
+    _nr_find_required_tool(
+        _nr_clang_scan_deps
+        "${CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS}"
+        clang-scan-deps.exe
+        clang-scan-deps
+    )
+    _nr_find_required_tool(_nr_llvm_ar "${CMAKE_AR}" llvm-ar.exe llvm-ar)
+    _nr_find_required_tool(_nr_llvm_ranlib "${CMAKE_RANLIB}" llvm-ranlib.exe llvm-ranlib)
+    _nr_find_required_tool(
+        _nr_llvm_objcopy
+        "${CMAKE_OBJCOPY}"
+        llvm-objcopy.exe
+        llvm-objcopy
+        objcopy.exe
+        objcopy
+    )
+    _nr_find_required_tool(_nr_llvm_strip "${CMAKE_STRIP}" llvm-strip.exe llvm-strip strip.exe strip)
+
+    if(CMAKE_RC_COMPILER AND EXISTS "${CMAKE_RC_COMPILER}")
+        set(_nr_llvm_rc "${CMAKE_RC_COMPILER}")
+    else()
+        find_program(_nr_llvm_rc NAMES llvm-rc.exe llvm-rc NO_CACHE)
+        if(NOT _nr_llvm_rc)
+            find_program(_nr_llvm_rc NAMES windres.exe windres NO_CACHE)
+        endif()
     endif()
 
     execute_process(

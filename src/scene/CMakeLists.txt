@@ -16,6 +16,7 @@ PUBLIC
     nrresource
     nrrhi
     dependency
+    dependency_shader_share
 )
 target_sources(nrscene
     PRIVATE
@@ -28,7 +29,3 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES
     ${MODULE_UNITS}
     ${IMPL_SOURCES}
 )
-
-# if(MSVC)
-#     target_compile_options(nrscene PRIVATE /wd4702)
-# endif()

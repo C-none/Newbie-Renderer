@@ -12,7 +12,10 @@ nr_add_library(nrpipeline STATIC)
 target_link_libraries(nrpipeline
 PUBLIC
     nrapp
+    nrautomation
+    nrinteraction
     nrload
+    nroptions
     nrrenderer
     nrrenderpasses
     nrrhi

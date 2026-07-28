@@ -2,6 +2,7 @@ export module nr.renderPasses:dlssRayReconstruction;
 
 import dependency.math;
 import dependency.vulkan;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import std;
@@ -103,6 +104,9 @@ class DlssRayReconstructionResolutionController final
 
 [[nodiscard]] DlssRayReconstructionNodeInput makeDefaultDlssRayReconstructionNodeInput();
 
+[[nodiscard]] DlssRayReconstructionResolutionRequest dlssResolutionRequestFromSnapshot(
+    const nr::options::OptionFrameSnapshot& snapshot);
+
 [[nodiscard]] bool dlssRayReconstructionResourceRequired(
     nr::rhi::DlssRayReconstructionResourceSlot slot,
     nr::rhi::DlssRoughnessMode roughnessMode,
@@ -116,11 +120,19 @@ class DlssRayReconstructionNode final : public Node
 
     DlssRayReconstructionNodeInput input{};
 
+    [[nodiscard]] std::string_view actionableSemantic() const noexcept override
+    {
+        return "render.dlss";
+    }
+    void declareOptions(nr::options::OptionCatalogBuilder& builder) const override;
+    void collectOptionAvailability(
+        const nr::options::OptionFrameSnapshot& snapshot,
+        nr::options::OptionAvailabilityMap& availability) const override;
     void setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController>& controller) noexcept;
-    [[nodiscard]] DlssRayReconstructionResolutionRequest effectiveResolutionRequest() const noexcept;
+    [[nodiscard]] DlssRayReconstructionResolutionRequest effectiveResolutionRequest(
+        const nr::options::OptionFrameSnapshot& snapshot) const;
 
     void initialize(NodeInitContext& context) override;
-    void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
     [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
     [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
@@ -129,15 +141,10 @@ class DlssRayReconstructionNode final : public Node
 
   private:
     void materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters);
-    void stageUiDraft();
 
     std::shared_ptr<detail::DlssRayReconstructionRuntime> runtime_{};
     std::weak_ptr<DlssRayReconstructionResolutionController> resolutionController_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
-    DlssRayReconstructionNodeInput uiDraft_{};
-    std::optional<DlssRayReconstructionNodeInput> pendingInput_{};
-    bool pendingOneShotReset_ = false;
-    bool consumeOneShotReset_ = false;
     std::chrono::steady_clock::time_point previousBuildTime_{};
 };
 } // namespace nr::renderPasses

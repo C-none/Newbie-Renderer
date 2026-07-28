@@ -23,11 +23,11 @@ For each required command:
 3. Forward directly to the matching RAII member function.
 4. Keep wrapper logic minimal. No hidden state machines, no capability registries, no function-pointer caches.
 
-## 4. Current Migration Scope
+## 4. Current RAII Command Paths
 
-- `vkCmdBuildAccelerationStructuresKHR` -> `vk::raii::CommandBuffer::buildAccelerationStructuresKHR(...)`
-- `vkCmdTraceRaysKHR` -> `vk::raii::CommandBuffer::traceRaysKHR(...)`
-- Timeline semaphore sync API in `nr.rhi:sync` migrated from C API calls to RAII/C++ methods.
+- Acceleration-structure builds use `vk::raii::CommandBuffer::buildAccelerationStructuresKHR(...)`.
+- Ray tracing uses `vk::raii::CommandBuffer::traceRaysKHR(...)`.
+- Timeline-semaphore synchronization in `nr.rhi:sync` uses Vulkan-Hpp RAII/C++ methods.
 
 ## 5. Verification Checklist
 
@@ -46,8 +46,7 @@ Rules:
 1. Use `enum class ImageTransitionBranch` to encode transition branch kind.
 2. Use `makeImageTransitionBarrier<TBranch>(...)` as the primary implementation path.
 3. Resolve destination layout/stage/access through compile-time `if constexpr` selectors.
-4. Keep legacy `makeImageTo*` helpers as thin forwarders only when API compatibility is needed.
-5. For queue-ownership adapters, select `release` or `acquire` requests through
+4. For queue-ownership adapters, select `release` or `acquire` requests through
    `OwnershipBarrierPhase` compile-time dispatch, not duplicated runtime branches.
 
 Example:

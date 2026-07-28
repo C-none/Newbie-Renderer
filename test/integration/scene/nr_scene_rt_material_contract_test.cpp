@@ -1,4 +1,5 @@
 import std;
+import dependency.json;
 import dependency.math;
 import nr.load;
 import nr.resource;
@@ -163,7 +164,7 @@ namespace
     return compiled;
 }
 
-void requireSourceMentionsExtension(const std::filesystem::path &relativePath, std::string_view extension)
+void requireSourceDeclaresExtension(const std::filesystem::path &relativePath, std::string_view extension)
 {
     auto text = std::string{};
     {
@@ -171,7 +172,19 @@ void requireSourceMentionsExtension(const std::filesystem::path &relativePath, s
         nr::test::require(file.good(), std::format("asset '{}' should be readable", relativePath.generic_string()));
         text.assign(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
     }
-    nr::test::require(text.find(extension) != std::string::npos, std::format("asset should mention {}", extension));
+    auto parsed = dependency::json::parseJson(text);
+    nr::test::require(parsed.valid(), std::format("asset '{}' should contain valid JSON", relativePath.generic_string()));
+    auto const *root = std::get_if<dependency::json::JsonValue::Object>(&parsed.value->storage);
+    nr::test::require(root != nullptr, "glTF root should be a JSON object");
+    auto const extensions = root->find("extensionsUsed");
+    nr::test::require(extensions != root->end(), "glTF should declare extensionsUsed");
+    auto const *extensionNames = std::get_if<dependency::json::JsonValue::Array>(&extensions->second.storage);
+    nr::test::require(extensionNames != nullptr, "glTF extensionsUsed should be an array");
+    auto const declared = std::ranges::any_of(*extensionNames, [&](const dependency::json::JsonValue &entry) {
+        auto const *name = std::get_if<std::string>(&entry.storage);
+        return name != nullptr && *name == extension;
+    });
+    nr::test::require(declared, std::format("asset should declare {}", extension));
 }
 
 [[nodiscard]] std::size_t materialTextureSemanticCount(
@@ -733,7 +746,7 @@ const nr::test::CaseRegistrar unsupportedExtensionAssetCase{
         };
 
         std::ranges::for_each(unsupportedAssets, [](const auto &asset) {
-            requireSourceMentionsExtension(asset.first, asset.second);
+            requireSourceDeclaresExtension(asset.first, asset.second);
             auto compiled = compileAssetMaterials(asset.first);
             nr::test::require(
                 std::ranges::all_of(compiled, [](const nr::scene::RtCompiledMaterial &material) {

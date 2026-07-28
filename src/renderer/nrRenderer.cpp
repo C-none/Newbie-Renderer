@@ -1,6 +1,7 @@
 module nr.renderer;
 import :renderer;
 import dependency.assets;
+import dependency.json;
 import dependency.math;
 import dependency.vulkan;
 import nr.rhi;
@@ -18,6 +19,30 @@ namespace nr::renderer
 {
 namespace
 {
+template <typename Function> class ScopeExit
+{
+  public:
+    explicit ScopeExit(Function function) noexcept(std::is_nothrow_move_constructible_v<Function>)
+        : function_(std::move(function))
+    {
+    }
+
+    ~ScopeExit() noexcept
+    {
+        function_();
+    }
+
+    ScopeExit(const ScopeExit &) = delete;
+    ScopeExit &operator=(const ScopeExit &) = delete;
+    ScopeExit(ScopeExit &&) = delete;
+    ScopeExit &operator=(ScopeExit &&) = delete;
+
+  private:
+    [[no_unique_address]] Function function_;
+};
+
+template <typename Function> ScopeExit(Function) -> ScopeExit<Function>;
+
 struct RendererGlobalFrameUniforms
 {
     glm::mat4 view{1.0f};
@@ -277,38 +302,6 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene, std::span<con
             }
         },
         resource.desc);
-}
-
-NodeUiBuildContext::NodeUiBuildContext(std::string_view runtimeName, std::vector<NodeUiSection> &sections) : runtimeName_{runtimeName}, sections_{sections}
-{
-    nrAssert(!runtimeName_.empty(), "NodeUiBuildContext requires a non-empty runtime name.");
-}
-
-[[nodiscard]] std::string_view NodeUiBuildContext::runtimeName() const noexcept
-{
-    return runtimeName_;
-}
-
-[[nodiscard]] std::string NodeUiBuildContext::makeSectionId(std::string_view localId) const
-{
-    nrAssert(!localId.empty(), "NodeUiBuildContext::makeSectionId requires a non-empty local id.");
-    return std::format("{}.{}", runtimeName_, localId);
-}
-
-void NodeUiBuildContext::addSection(std::string_view title, NodeUiSectionDrawCallback draw, bool defaultOpen, std::string_view localId)
-{
-    nrAssert(!title.empty(), "NodeUiBuildContext::addSection requires a non-empty title.");
-    nrAssert(static_cast<bool>(draw), "NodeUiBuildContext::addSection requires a draw callback.");
-
-    auto const sectionOrdinal = nextSectionOrdinal_++;
-    auto sectionId = localId.empty() ? std::format("{}.{}", runtimeName_, sectionOrdinal) : makeSectionId(localId);
-
-    sections_.get().push_back(NodeUiSection{
-        .id = std::move(sectionId),
-        .title = std::string{title},
-        .draw = std::move(draw),
-        .defaultOpen = defaultOpen,
-    });
 }
 
 void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
@@ -1405,6 +1398,58 @@ void NodeRuntime::initialize(NodeInitContext &)
 {
 }
 
+[[nodiscard]] std::string_view NodeRuntime::actionableSemantic() const noexcept
+{
+    return {};
+}
+
+FrameEffectSink::FrameEffectSink(std::optional<nr::options::FrameEffect> effect)
+    : effect_(std::move(effect))
+{
+}
+
+[[nodiscard]] const std::optional<nr::options::FrameEffect>& FrameEffectSink::effect() const noexcept
+{
+    return effect_;
+}
+
+[[nodiscard]] bool FrameEffectSink::claim(NodeRuntime& runtime, GraphPassHandle targetPass) noexcept
+{
+    if (!effect_.has_value() || claimedRuntime_.has_value() || !targetPass.valid())
+    {
+        return false;
+    }
+    claimedRuntime_ = std::ref(runtime);
+    targetPass_ = targetPass;
+    return true;
+}
+
+[[nodiscard]] bool FrameEffectSink::claimed() const noexcept
+{
+    return claimedRuntime_.has_value() && targetPass_.valid();
+}
+
+[[nodiscard]] std::optional<std::reference_wrapper<NodeRuntime>>
+FrameEffectSink::claimedRuntime() const noexcept
+{
+    return claimedRuntime_;
+}
+
+[[nodiscard]] GraphPassHandle FrameEffectSink::targetPass() const noexcept
+{
+    return targetPass_;
+}
+
+void NodeRuntime::declareOptions(nr::options::OptionCatalogBuilder&) const
+{
+}
+
+void NodeRuntime::collectOptionAvailability(
+    const nr::options::OptionFrameSnapshot&,
+    nr::options::OptionAvailabilityMap&) const
+{
+}
+
 [[nodiscard]] bool NodeRuntime::supportsRenderGraphSkeleton() const noexcept
 {
     return false;
@@ -1420,7 +1465,7 @@ void NodeRuntime::initialize(NodeInitContext &)
 
     return StructuralSnapshot{
         .branchKey = std::format(
-            "display={}x{};render={}x{};swapchain={}x{};format={};colorSpace={};reset={};scenePackets={};tlasPackets={};uiSections={}",
+            "display={}x{};render={}x{};swapchain={}x{};format={};colorSpace={};reset={};scenePackets={};tlasPackets={}",
             frameParameters.resolutionPlan.displayExtent.width,
             frameParameters.resolutionPlan.displayExtent.height,
             frameParameters.resolutionPlan.renderExtent.width,
@@ -1431,8 +1476,7 @@ void NodeRuntime::initialize(NodeInitContext &)
             static_cast<std::uint32_t>(frameParameters.swapchainColorSpace),
             frameParameters.resolutionPlan.resetHistory ? 1 : 0,
             frameParameters.scenePackets.has_value() ? frameParameters.scenePackets->get().rtInstances.size() : 0u,
-            frameParameters.sceneTlasBuildInputs.has_value() ? frameParameters.sceneTlasBuildInputs->get().size() : 0u,
-            frameParameters.nodeUiSections.size()),
+            frameParameters.sceneTlasBuildInputs.has_value() ? frameParameters.sceneTlasBuildInputs->get().size() : 0u),
     };
 }
 
@@ -1444,8 +1488,22 @@ bool NodeRuntime::materializeRenderGraphSkeleton(
     return false;
 }
 
-void NodeRuntime::collectUi(NodeUiBuildContext &, const NodeFrameParameters &)
+void NodeRuntime::advanceContinuations(std::uint32_t)
 {
+}
+
+void NodeRuntime::flushContinuations()
+{
+}
+
+[[nodiscard]] FrameEffectFinalizeDisposition NodeRuntime::finalizeFrameEffect(
+    const nr::options::FrameEffect&,
+    bool targetBatchSubmitted,
+    std::uint32_t)
+{
+    return targetBatchSubmitted
+               ? FrameEffectFinalizeDisposition::terminalSucceeded
+               : FrameEffectFinalizeDisposition::terminalFailed;
 }
 
 void NodeRuntime::shutdown(NodeShutdownContext &)
@@ -1652,24 +1710,162 @@ void Renderer::setEnvironmentMap(nr::resource::EnvironmentMap environment)
     temporalHistoryResetPending_ = true;
 }
 
-void Renderer::installGraph(const RendererGraphSpec &spec)
+[[nodiscard]] RendererGraphPreflightResult Renderer::preflightGraph(
+    const RendererGraphSpec& spec) const
 {
-    nrAssert(static_cast<bool>(device_), "Renderer::installGraph requires initialize() before graph installation.");
+    if (!device_)
+    {
+        return RendererGraphPreflightResult{
+            .message = "Renderer graph preflight requires initialize() first.",
+        };
+    }
+
+    auto knownNames = std::set<std::string>{};
+    auto knownSemantics = std::set<std::string>{};
+    auto validationError = std::string{};
+    auto nodeIndices = std::views::iota(std::size_t{0u}, spec.nodes.size());
+    std::ranges::for_each(nodeIndices, [&](std::size_t nodeIndex) {
+        if (!validationError.empty())
+        {
+            return;
+        }
+
+        auto const& createInfo = spec.nodes[nodeIndex];
+        if (!createInfo.runtime)
+        {
+            validationError = std::format(
+                "Renderer graph node {} has no runtime.",
+                nodeIndex);
+            return;
+        }
+        if (createInfo.config.instanceName.empty())
+        {
+            validationError = std::format(
+                "Renderer graph node {} has an empty instance name.",
+                nodeIndex);
+            return;
+        }
+        if (!knownNames.emplace(createInfo.config.instanceName).second)
+        {
+            validationError = std::format(
+                "Renderer graph contains duplicate node name '{}'.",
+                createInfo.config.instanceName);
+            return;
+        }
+
+        auto const semantic = createInfo.runtime->actionableSemantic();
+        if (!semantic.empty() &&
+            !knownSemantics.emplace(semantic).second)
+        {
+            validationError = std::format(
+                "Renderer graph contains duplicate actionable semantic '{}'.",
+                semantic);
+        }
+    });
+    if (!validationError.empty())
+    {
+        return RendererGraphPreflightResult{
+            .message = std::move(validationError),
+        };
+    }
+
+    auto const invalidSubmit = std::ranges::find_if(
+        spec.submitNodes,
+        [&](const SubmitNodeSpec& submitSpec) {
+            return submitSpec.afterNodeIndex >= spec.nodes.size();
+        });
+    if (invalidSubmit != spec.submitNodes.end())
+    {
+        return RendererGraphPreflightResult{
+            .message = std::format(
+                "Renderer graph submit '{}' references node index {} but the graph has {} node(s).",
+                invalidSubmit->debugName,
+                invalidSubmit->afterNodeIndex,
+                spec.nodes.size()),
+        };
+    }
+
+    auto optionBuilder = nr::options::OptionCatalogBuilder{};
+    std::ranges::for_each(
+        spec.nodes,
+        [&](const NodeCreateInfo& createInfo) {
+            createInfo.runtime->declareOptions(optionBuilder);
+        });
+    auto optionCatalog = optionBuilder.build();
+    if (!optionCatalog.valid())
+    {
+        auto const& issue = optionCatalog.issues.front();
+        return RendererGraphPreflightResult{
+            .message = issue.id.has_value()
+                           ? std::format(
+                                 "Renderer graph option '{}' failed preflight: {}.",
+                                 issue.id->value(),
+                                 issue.detail)
+                           : std::format(
+                                 "Renderer graph option catalog failed preflight: {}.",
+                                 issue.detail),
+        };
+    }
+    auto const nonGraphOption = std::ranges::find_if(
+        optionCatalog.catalog->definitions(),
+        [](auto const& entry) {
+            return entry.second.scope != nr::options::OptionScope::graph;
+        });
+    if (nonGraphOption != optionCatalog.catalog->definitions().end())
+    {
+        return RendererGraphPreflightResult{
+            .message = std::format(
+                "Renderer node option '{}' must use graph scope.",
+                nonGraphOption->first.value()),
+        };
+    }
+
+    if (!spec.frameResolutionOptionRequirements.empty() &&
+        (!spec.frameResolutionResolver.has_value() ||
+         !static_cast<bool>(*spec.frameResolutionResolver)))
+    {
+        return RendererGraphPreflightResult{
+            .message =
+                "Renderer graph declares frame-resolution option requirements without a resolver.",
+        };
+    }
+    auto const missingResolverOption = std::ranges::find_if(
+        spec.frameResolutionOptionRequirements,
+        [&](const nr::options::OptionId& id) {
+            return optionCatalog.catalog->find(id) == nullptr;
+        });
+    if (missingResolverOption != spec.frameResolutionOptionRequirements.end())
+    {
+        return RendererGraphPreflightResult{
+            .message = std::format(
+                "Frame resolution resolver requires undeclared graph option '{}'.",
+                missingResolverOption->value()),
+        };
+    }
+
+    return RendererGraphPreflightResult{
+        .valid = true,
+        .optionCatalog = std::move(optionCatalog.catalog),
+    };
+}
+
+[[nodiscard]] bool Renderer::installGraph(const RendererGraphSpec &spec)
+{
+    auto const preflight = preflightGraph(spec);
+    if (!preflight)
+    {
+        nr::nrLog(nr::LogLevel::error, "RENDERER", preflight.message);
+        return false;
+    }
+
+    device_->waitIdle();
     teardownInstalledGraph();
     cacheSuite_.clear();
 
     auto installed = std::vector<InstalledNode>{};
     installed.reserve(spec.nodes.size());
 
-    auto knownNames = std::set<std::string>{};
-
     std::ranges::for_each(spec.nodes, [&](const NodeCreateInfo &createInfo) {
-        nrAssert(static_cast<bool>(createInfo.runtime), "Renderer::installGraph requires a valid node runtime in NodeCreateInfo.");
-
-        nrAssert(!createInfo.config.instanceName.empty(), "Renderer::installGraph requires each node to have a non-empty NodeConfig.instanceName.");
-        auto [_, inserted] = knownNames.insert(createInfo.config.instanceName);
-        nrAssert(inserted, "Renderer::installGraph found duplicate node names in RendererGraphSpec.");
-
         auto initContext = NodeInitContext{
             .device = std::ref(*device_),
             .runtimeName = createInfo.config.instanceName,
@@ -1684,7 +1880,6 @@ void Renderer::installGraph(const RendererGraphSpec &spec)
 
     auto submitNodesByAfterIndex = std::multimap<std::size_t, SubmitNodeSpec>{};
     std::ranges::for_each(spec.submitNodes, [&](const SubmitNodeSpec &submitSpec) {
-        nrAssert(submitSpec.afterNodeIndex < installed.size(), "Renderer::installGraph submit node index is out of range for installed nodes.");
         submitNodesByAfterIndex.emplace(submitSpec.afterNodeIndex, submitSpec);
     });
 
@@ -1696,6 +1891,7 @@ void Renderer::installGraph(const RendererGraphSpec &spec)
     ++installedGraphGeneration_;
     observedSwapchainRecreationGeneration_ = device_->swapchainRecreationGeneration();
     graphInstalled_ = true;
+    return true;
 }
 
 void Renderer::uninstallGraph()
@@ -1777,8 +1973,93 @@ void Renderer::resetSceneBinding() noexcept
     previousGlobalFrameConstants_.reset();
 }
 
+void Renderer::collectOptionAvailability(
+    const nr::options::OptionFrameSnapshot& snapshot,
+    nr::options::OptionAvailabilityMap& availability) const
+{
+    std::ranges::for_each(
+        installedNodes_,
+        [&](const InstalledNode& installedNode) {
+            installedNode.runtime->collectOptionAvailability(snapshot, availability);
+        });
+}
+
 [[nodiscard]] RendererFrameResult Renderer::renderFrame(const RendererFrameInput &input)
 {
+    auto frameEffectSink = FrameEffectSink{input.optionSnapshot.get().effect};
+    auto frameEffectTargetBatch = std::optional<std::uint32_t>{};
+    auto frameEffectFrameSlot = std::optional<std::uint32_t>{};
+    auto frameEffectTargetSubmitted = false;
+    auto frameEffectFailureReason = std::string{"failed_before_submission"};
+    auto frameEffectFinalizer = ScopeExit{[&]() noexcept {
+        if (!frameEffectSink.effect().has_value())
+        {
+            return;
+        }
+
+        auto const& effect = *frameEffectSink.effect();
+        auto disposition = FrameEffectFinalizeDisposition::terminalFailed;
+        if (!frameEffectSink.claimed())
+        {
+            frameEffectFailureReason = "effect_not_claimed";
+        }
+        else if (!frameEffectFrameSlot.has_value())
+        {
+            frameEffectFailureReason = "failed_before_frame_begin";
+        }
+        else
+        {
+            if (frameEffectTargetSubmitted &&
+                effect.id == nr::options::optionId(nr::options::keys::presentCaptureExr))
+            {
+                nr::options::emitMachineRecord(nr::options::OptionMachineRecord{
+                    .sequence = effect.sequence,
+                    .id = effect.id,
+                    .phase = nr::options::OptionLogPhase::dispatchStarted,
+                    .status = nr::options::OptionLogStatus::started,
+                    .frameIndex = input.optionSnapshot.get().frameIndex,
+                    .origin = effect.origin,
+                    .requestId = effect.requestId,
+                });
+            }
+            disposition = frameEffectSink.claimedRuntime()->get().finalizeFrameEffect(
+                effect,
+                frameEffectTargetSubmitted,
+                *frameEffectFrameSlot);
+            if (!frameEffectTargetSubmitted &&
+                disposition == FrameEffectFinalizeDisposition::continuationArmed)
+            {
+                disposition = FrameEffectFinalizeDisposition::terminalFailed;
+            }
+            if (frameEffectTargetSubmitted &&
+                disposition == FrameEffectFinalizeDisposition::terminalFailed)
+            {
+                frameEffectFailureReason = "effect_finalize_failed";
+            }
+        }
+
+        if (disposition == FrameEffectFinalizeDisposition::continuationArmed)
+        {
+            return;
+        }
+        nr::options::emitMachineRecord(nr::options::OptionMachineRecord{
+            .sequence = effect.sequence,
+            .id = effect.id,
+            .phase = nr::options::OptionLogPhase::terminal,
+            .status =
+                disposition == FrameEffectFinalizeDisposition::terminalSucceeded
+                    ? nr::options::OptionLogStatus::succeeded
+                    : nr::options::OptionLogStatus::failed,
+            .frameIndex = input.optionSnapshot.get().frameIndex,
+            .origin = effect.origin,
+            .requestId = effect.requestId,
+            .reason =
+                disposition == FrameEffectFinalizeDisposition::terminalSucceeded
+                    ? std::nullopt
+                    : std::optional<std::string>{frameEffectFailureReason},
+        });
+    }};
+
     if (!device_ || !graphInstalled_)
     {
         return RendererFrameResult{};
@@ -1787,6 +2068,12 @@ void Renderer::resetSceneBinding() noexcept
     auto const totalStart = std::chrono::steady_clock::now();
     auto const beginFrameStart = std::chrono::steady_clock::now();
     auto begin = device_->beginFrame();
+    frameEffectFrameSlot = begin.frameIndex;
+    std::ranges::for_each(
+        installedNodes_,
+        [&](InstalledNode& installedNode) {
+            installedNode.runtime->advanceContinuations(begin.frameIndex);
+        });
     auto invalidateForSwapchainRecreation = [&] {
         auto const generation = device_->swapchainRecreationGeneration();
         if (generation == observedSwapchainRecreationGeneration_)
@@ -1814,7 +2101,10 @@ void Renderer::resetSceneBinding() noexcept
     };
     if (hasFrameResolutionResolver)
     {
-        resolutionPlan = (*frameResolutionResolver_)(*device_, displayExtent);
+        resolutionPlan = (*frameResolutionResolver_)(
+            *device_,
+            displayExtent,
+            input.optionSnapshot.get());
     }
     nrAssert(resolutionPlan.displayExtent.width > 0u && resolutionPlan.displayExtent.height > 0u && resolutionPlan.renderExtent.width > 0u && resolutionPlan.renderExtent.height > 0u, "Renderer::renderFrame resolution resolver returned a zero display or render extent.");
     nrAssert(resolutionPlan.displayExtent == displayExtent, "Renderer::renderFrame resolution resolver display extent does not match the current presentation extent.");
@@ -1991,12 +2281,15 @@ void Renderer::resetSceneBinding() noexcept
     auto const postSceneStart = std::chrono::steady_clock::now();
     auto tlasTextureCollectionMilliseconds = 0.0;
 
-    auto frameParameters = NodeFrameParameters{};
+    auto frameParameters = NodeFrameParameters{
+        .optionSnapshot = input.optionSnapshot,
+    };
     frameParameters.frameIndex = begin.frameIndex;
     frameParameters.swapchainExtent = displayExtent;
     frameParameters.resolutionPlan = resolutionPlan;
     frameParameters.swapchainFormat = device_->presentationContext.swapchainFormat();
     frameParameters.swapchainColorSpace = device_->presentationContext.swapchainColorSpace();
+    frameParameters.frameEffectSink = std::ref(frameEffectSink);
     if (input.frameServices.has_value())
     {
         frameParameters.frameServices = input.frameServices;
@@ -2071,6 +2364,29 @@ void Renderer::resetSceneBinding() noexcept
 
     auto const compileStart = std::chrono::steady_clock::now();
     auto compiled = cacheSuite_.compileCache.compileConsumingCached(builder_.mutableFrame());
+    if (frameEffectSink.claimed())
+    {
+        auto const targetPass = frameEffectSink.targetPass();
+        std::ranges::for_each(
+            compiled.submitBatches,
+            [&](const CompiledSubmitBatch& batch) {
+                if (std::ranges::any_of(
+                        batch.passes,
+                        [&](const CompiledPass& pass) {
+                            return pass.handle == targetPass;
+                        }))
+                {
+                    nrAssert(
+                        !frameEffectTargetBatch.has_value(),
+                        "A frame-effect target pass must belong to exactly one compiled submit batch.");
+                    frameEffectTargetBatch = batch.batchIndex;
+                }
+            });
+        if (!frameEffectTargetBatch.has_value())
+        {
+            frameEffectFailureReason = "target_pass_not_compiled";
+        }
+    }
     cpuTimings.compileMilliseconds = elapsedMilliseconds(compileStart, std::chrono::steady_clock::now());
 
     auto const benchmarkCapturing = benchmarkPhase_ == RendererBenchmarkPhase::measure;
@@ -2091,6 +2407,12 @@ void Renderer::resetSceneBinding() noexcept
 
     auto const executeStart = std::chrono::steady_clock::now();
     auto executeReport = executor_.executePrepared(prepared, executeContext);
+    if (frameEffectTargetBatch.has_value())
+    {
+        frameEffectTargetSubmitted = std::ranges::contains(
+            executeReport.submittedCompiledBatchIndices,
+            *frameEffectTargetBatch);
+    }
     nrAssert(executeReport.swapchainImageIndex.has_value(), "Renderer::renderFrame expected the graph to acquire one swapchain image before presentation.");
     cpuTimings.executeMilliseconds = elapsedMilliseconds(executeStart, std::chrono::steady_clock::now());
     if (executeReport.completedGpuPassTimingFrame.has_value())
@@ -2239,14 +2561,6 @@ void Renderer::resetSceneBinding() noexcept
                                                        std::ref(*telemetry)}
                                                  : std::nullopt;
 
-    auto const uiCollectStart = telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    auto nodeUiSections = std::vector<NodeUiSection>{};
-    nodeUiSections.reserve(installedNodes_.size());
-    std::ranges::for_each(installedNodes_, [&](InstalledNode &installedNode) {
-        auto uiContext = NodeUiBuildContext{installedNode.config.instanceName, nodeUiSections};
-        installedNode.runtime->collectUi(uiContext, nodeFrameParameters);
-    });
-    nodeFrameParameters.nodeUiSections = std::span<const NodeUiSection>{nodeUiSections.data(), nodeUiSections.size()};
     auto const nodeBuildStart = telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     auto structuralSnapshots = std::vector<NodeRuntime::StructuralSnapshot>{};
@@ -2508,8 +2822,7 @@ void Renderer::resetSceneBinding() noexcept
 
     if (telemetry.has_value())
     {
-        timings.preludeMilliseconds = elapsedMilliseconds(graphPreludeStart, uiCollectStart);
-        timings.uiCollectMilliseconds = elapsedMilliseconds(uiCollectStart, nodeBuildStart);
+        timings.preludeMilliseconds = elapsedMilliseconds(graphPreludeStart, nodeBuildStart);
     }
     timings.skeletonHit = skeletonProbe.structureMatches;
     timings.skeletonMissReason = skeletonEligible
@@ -2534,6 +2847,7 @@ void Renderer::teardownInstalledGraph()
         std::ranges::for_each(installedNodes_, [&](InstalledNode &installedNode) {
             if (installedNode.runtime)
             {
+                installedNode.runtime->flushContinuations();
                 installedNode.runtime->shutdown(shutdownContext);
             }
         });
@@ -3015,37 +3329,6 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
         nr::nrLog(nr::LogLevel::error, "BENCHMARK", std::format("Failed to create benchmark output directory '{}': {}", benchmarkConfig_.outputDirectory.string(), error.message()));
         return false;
     }
-    auto escape = [](std::string_view value) {
-        auto escaped = std::string{};
-        std::ranges::for_each(value, [&](char character) {
-            switch (character)
-            {
-            case '"':
-                escaped += "\\\"";
-                break;
-            case '\\':
-                escaped += "\\\\";
-                break;
-            case '\n':
-                escaped += "\\n";
-                break;
-            case '\r':
-                escaped += "\\r";
-                break;
-            default:
-                if (static_cast<unsigned char>(character) < 0x20u)
-                {
-                    escaped += std::format("\\u{:04x}", static_cast<unsigned char>(character));
-                }
-                else
-                {
-                    escaped += character;
-                }
-                break;
-            }
-        });
-        return escaped;
-    };
     auto csv = [&](std::string_view value) {
         auto const needsQuotes = value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
         if (!needsQuotes)
@@ -3072,15 +3355,79 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
     auto const startEpochMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(benchmarkStartedAt_.time_since_epoch()).count();
     auto const endEpochMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     auto const props = device_->physicalDevice.getProperties();
-    auto nodeSchema = std::string{"["};
-    std::ranges::for_each(std::views::iota(std::size_t{0u}, benchmarkNodeNames_.size()), [&](std::size_t nodeIndex) {
-        if (nodeIndex > 0u)
+    using Json = ::dependency::json::JsonValue;
+    using JsonArray = Json::Array;
+    using JsonObject = Json::Object;
+    auto serializeBenchmarkArtifact = [](std::string_view artifactName, const Json &value, std::string &output) {
+        constexpr auto maximumSerializedBenchmarkArtifactBytes = std::size_t{16u * 1024u * 1024u};
+        auto const serializationError = ::dependency::json::serializeJson(value, output, maximumSerializedBenchmarkArtifactBytes - 1u);
+        if (serializationError != ::dependency::json::JsonError::none)
         {
-            nodeSchema += ',';
+            nr::nrLog(nr::LogLevel::error, "BENCHMARK",
+                      std::format("Failed to serialize benchmark artifact '{}': JSON error {}.", artifactName, static_cast<std::uint32_t>(serializationError)));
+            return false;
         }
-        nodeSchema += std::format("{{\"column\":\"node_build_{}_ms\",\"name\":\"{}\"}}", nodeIndex, escape(benchmarkNodeNames_[nodeIndex]));
+        output.push_back('\n');
+        return true;
+    };
+    auto nodeSchema = JsonArray{};
+    nodeSchema.reserve(benchmarkNodeNames_.size());
+    std::ranges::for_each(std::views::iota(std::size_t{0u}, benchmarkNodeNames_.size()), [&](std::size_t nodeIndex) {
+        nodeSchema.emplace_back(JsonObject{
+            {"column", Json{std::format("node_build_{}_ms", nodeIndex)}},
+            {"name", Json{benchmarkNodeNames_[nodeIndex]}},
+        });
     });
-    nodeSchema += ']';
+    auto metadataDocument = Json{JsonObject{
+        {"schema", Json{rendererBenchmarkSchemaVersion()}},
+        {"run_status", Json{runStatus}},
+        {"run_id", Json{std::format("{}", startEpochMilliseconds)}},
+        {"os", Json{"Windows"}},
+        {"start_epoch_ms", Json{static_cast<std::int64_t>(startEpochMilliseconds)}},
+        {"end_epoch_ms", Json{static_cast<std::int64_t>(endEpochMilliseconds)}},
+        {"argv", Json{benchmarkConfig_.commandLine}},
+        {"pipeline", Json{benchmarkConfig_.pipelineId}},
+        {"model", Json{benchmarkConfig_.modelPath}},
+        {"dlss_quality", Json{benchmarkConfig_.dlssQuality}},
+#if defined(NDEBUG)
+        {"build_config", Json{"Release"}},
+        {"validation_enabled", Json{false}},
+#else
+        {"build_config", Json{"Debug"}},
+        {"validation_enabled", Json{true}},
+#endif
+        {"ui_mode", Json{"visible-static"}},
+        {"display_extent",
+         Json{JsonArray{
+             Json{static_cast<std::uint64_t>(displayExtent.width)},
+             Json{static_cast<std::uint64_t>(displayExtent.height)},
+         }}},
+        {"render_extent",
+         Json{JsonArray{
+             Json{static_cast<std::uint64_t>(renderExtent.width)},
+             Json{static_cast<std::uint64_t>(renderExtent.height)},
+         }}},
+        {"node_build_columns", Json{std::move(nodeSchema)}},
+        {"gpu", Json{std::string_view{props.deviceName.data()}}},
+        {"driver_version", Json{static_cast<std::uint64_t>(props.driverVersion)}},
+        {"cpu_logical_threads", Json{static_cast<std::uint64_t>(std::thread::hardware_concurrency())}},
+        {"frames_in_flight", Json{static_cast<std::uint64_t>(nr::maxFrameInFlight)}},
+        {"warmup_requested", Json{static_cast<std::uint64_t>(benchmarkConfig_.warmupFrames)}},
+        {"warmup_accepted", Json{static_cast<std::uint64_t>(benchmarkWarmupAccepted_)}},
+        {"measure_requested", Json{static_cast<std::uint64_t>(requested)}},
+        {"measure_accepted", Json{static_cast<std::uint64_t>(accepted)}},
+        {"drain_rendered", Json{static_cast<std::uint64_t>(benchmarkDrainRendered_)}},
+        {"time_unit", Json{"milliseconds"}},
+        {"cpu_nesting",
+         Json{"top-level stages are mutually exclusive wall-clock intervals; Frame Setup excludes Wait GPU; Post Scene is top-level; CPU substages are nested diagnostics and must not be summed with top-level stages"}},
+        {"gpu_semantics", Json{"per-pass timestamp durations only; cross-queue values are not a frame critical path"}},
+        {"quantile", Json{"Hyndman-Fan type 7"}},
+    }};
+    auto metadataText = std::string{};
+    if (!serializeBenchmarkArtifact("metadata.json", metadataDocument, metadataText))
+    {
+        return false;
+    }
     auto metadata = std::ofstream{benchmarkConfig_.outputDirectory / "metadata.json", std::ios::binary};
     auto frames = std::ofstream{benchmarkConfig_.outputDirectory / "frames.csv", std::ios::binary};
     auto gpu = std::ofstream{benchmarkConfig_.outputDirectory / "gpu_passes.csv", std::ios::binary};
@@ -3090,19 +3437,7 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
         nr::nrLog(nr::LogLevel::error, "BENCHMARK", "Failed to open one or more benchmark artifacts for writing.");
         return false;
     }
-    metadata << std::format("{{\n  \"schema\": \"{}\",\n  \"run_status\": \"{}\",\n  \"run_id\": \"{}\",\n  \"os\": \"Windows\",\n  \"start_epoch_ms\": {},\n  \"end_epoch_ms\": {},\n  \"argv\": \"{}\",\n  \"pipeline\": \"{}\",\n  \"model\": \"{}\",\n  \"dlss_quality\": "
-                            "\"{}\",\n  \"build_config\": \"{}\",\n  \"validation_enabled\": {},\n  \"ui_mode\": \"visible-static\",\n  \"display_extent\": [{}, {}],\n  \"render_extent\": [{}, {}],\n  \"node_build_columns\": {},\n  \"gpu\": \"{}\",\n  \"driver_version\": {},\n  "
-                            "\"cpu_logical_threads\": {},\n  \"frames_in_flight\": {},\n  \"warmup_requested\": {},\n  \"warmup_accepted\": {},\n  \"measure_requested\": {},\n  \"measure_accepted\": {},\n  \"drain_rendered\": {},\n  \"time_unit\": \"milliseconds\",\n  \"cpu_nesting\": \"top-level "
-                            "stages are mutually exclusive wall-clock intervals; Frame Setup excludes Wait GPU; Post Scene is top-level; CPU substages are nested diagnostics and must not be summed with top-level stages\",\n  \"gpu_semantics\": \"per-pass timestamp durations only; cross-queue "
-                            "values are not a frame critical path\",\n  \"quantile\": \"Hyndman-Fan type 7\"\n}}\n",
-                            rendererBenchmarkSchemaVersion(), runStatus, startEpochMilliseconds, startEpochMilliseconds, endEpochMilliseconds, escape(benchmarkConfig_.commandLine), escape(benchmarkConfig_.pipelineId), escape(benchmarkConfig_.modelPath), escape(benchmarkConfig_.dlssQuality),
-#if defined(NDEBUG)
-                            "Release", "false",
-#else
-                            "Debug", "true",
-#endif
-                            displayExtent.width, displayExtent.height, renderExtent.width, renderExtent.height, nodeSchema, escape(std::string_view{props.deviceName.data()}), props.driverVersion, std::thread::hardware_concurrency(), nr::maxFrameInFlight, benchmarkConfig_.warmupFrames,
-                            benchmarkWarmupAccepted_, requested, accepted, benchmarkDrainRendered_);
+    metadata << metadataText;
     frames << "frame_ordinal,frame_slot,config_revision,display_width,display_height,render_width,render_height,dlss_quality";
     std::ranges::for_each(rendererBenchmarkCpuStageColumns(), [&](std::string_view column) { frames << std::format(",{}", column); });
     std::ranges::for_each(rendererBenchmarkCpuSubstageColumns(), [&](std::string_view column) { frames << std::format(",{}", column); });
@@ -3138,22 +3473,88 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
     });
     auto const statisticsObject = [](std::vector<double> values) {
         auto const distribution = makeRendererBenchmarkDistribution(std::move(values));
-        return std::format("{{\"count\":{},\"min\":{:.9f},\"p50\":{:.9f},\"p95\":{:.9f},\"p99\":{:.9f},\"max\":{:.9f},\"mean\":{:.9f},\"stddev\":{:.9f}}}", distribution.count, distribution.minimum, distribution.p50, distribution.p95, distribution.p99, distribution.maximum, distribution.mean,
-                           distribution.populationStddev);
+        return Json{JsonObject{
+            {"count", Json{static_cast<std::uint64_t>(distribution.count)}},
+            {"min", Json{distribution.minimum}},
+            {"p50", Json{distribution.p50}},
+            {"p95", Json{distribution.p95}},
+            {"p99", Json{distribution.p99}},
+            {"max", Json{distribution.maximum}},
+            {"mean", Json{distribution.mean}},
+            {"stddev", Json{distribution.populationStddev}},
+        }};
     };
-    auto const statisticsJson = [&](std::string_view name, std::vector<double> values) { return std::format("\"{}\":{}", name, statisticsObject(std::move(values))); };
-    auto stageSummary = [&](std::string_view name, auto accessor) { return statisticsJson(name, benchmarkFrames_ | std::views::transform(accessor) | std::ranges::to<std::vector<double>>()); };
-    auto nodeSummary = std::string{};
+    auto frameStatistics = [&](auto accessor) { return statisticsObject(benchmarkFrames_ | std::views::transform(accessor) | std::ranges::to<std::vector<double>>()); };
+    auto asStatistics = [&](auto accessor) { return statisticsObject(benchmarkAsTelemetry_ | std::views::transform(accessor) | std::ranges::to<std::vector<double>>()); };
+    auto cpuStages = JsonObject{
+        {"wait_gpu_ms", frameStatistics([](const auto &frame) { return frame.cpu.cpuWaitGpuMilliseconds; })},
+        {"frame_setup_ms", frameStatistics([](const auto &frame) { return frame.cpu.frameSetupMilliseconds; })},
+        {"scene_ms", frameStatistics([](const auto &frame) { return frame.cpu.sceneMilliseconds; })},
+        {"post_scene_ms", frameStatistics([](const auto &frame) { return frame.cpu.postSceneMilliseconds; })},
+        {"build_ms", frameStatistics([](const auto &frame) { return frame.cpu.buildMilliseconds; })},
+        {"compile_ms", frameStatistics([](const auto &frame) { return frame.cpu.compileMilliseconds; })},
+        {"prepare_ms", frameStatistics([](const auto &frame) { return frame.cpu.prepareMilliseconds; })},
+        {"execute_ms", frameStatistics([](const auto &frame) { return frame.cpu.executeMilliseconds; })},
+        {"present_ms", frameStatistics([](const auto &frame) { return frame.cpu.presentMilliseconds; })},
+        {"total_ms", frameStatistics([](const auto &frame) { return frame.cpu.totalMilliseconds; })},
+        {"cpu_work_ms", frameStatistics([](const auto &frame) { return frame.cpu.totalMilliseconds - frame.cpu.cpuWaitGpuMilliseconds; })},
+        {"classified_ms", frameStatistics([](const auto &frame) { return rendererBenchmarkClassifiedCpuMilliseconds(frame.cpu); })},
+        {"unclassified_ms", frameStatistics([](const auto &frame) { return frame.cpu.totalMilliseconds - rendererBenchmarkClassifiedCpuMilliseconds(frame.cpu); })},
+    };
+    auto cpuSubstages = JsonObject{
+        {"scene_begin_upload_ms", frameStatistics([](const auto &frame) { return frame.sceneBeginUploadMilliseconds; })},
+        {"scene_raster_extract_ms", frameStatistics([](const auto &frame) { return frame.sceneRasterExtractMilliseconds; })},
+        {"scene_tlas_extract_ms", frameStatistics([](const auto &frame) { return frame.sceneTlasExtractMilliseconds; })},
+        {"scene_bridge_ms", frameStatistics([](const auto &frame) { return frame.sceneBridgeMilliseconds; })},
+        {"tlas_texture_collection_ms", frameStatistics([](const auto &frame) { return frame.tlasTextureCollectionMilliseconds; })},
+        {"graph_prelude_ms", frameStatistics([](const auto &frame) { return frame.graphPreludeMilliseconds; })},
+        {"ui_collect_ms", frameStatistics([](const auto &frame) { return frame.uiCollectMilliseconds; })},
+        {"node_loop_ms", frameStatistics([](const auto &frame) { return frame.nodeLoopMilliseconds; })},
+    };
+    auto executeSubstages = JsonObject{
+        {"executor_setup_ms", frameStatistics([](const auto &frame) { return frame.execute.executorSetupMilliseconds; })},
+        {"completed_gpu_timing_readback_ms", frameStatistics([](const auto &frame) { return frame.execute.completedGpuTimingReadbackMilliseconds; })},
+        {"timing_setup_ms", frameStatistics([](const auto &frame) { return frame.execute.timingSetupMilliseconds; })},
+        {"per_frame_lookup_ms", frameStatistics([](const auto &frame) { return frame.execute.perFrameLookupMilliseconds; })},
+        {"swapchain_acquire_ms", frameStatistics([](const auto &frame) { return frame.execute.swapchainAcquireMilliseconds; })},
+        {"deferred_prepare_ms", frameStatistics([](const auto &frame) { return frame.execute.deferredPrepareMilliseconds; })},
+        {"task_plan_launch_ms", frameStatistics([](const auto &frame) { return frame.execute.taskPlanLaunchMilliseconds; })},
+        {"primary_record_before_collect_ms", frameStatistics([](const auto &frame) { return frame.execute.primaryRecordBeforeCollectMilliseconds; })},
+        {"record_completion_wait_ms", frameStatistics([](const auto &frame) { return frame.execute.recordCompletionWaitMilliseconds; })},
+        {"primary_replay_barrier_timestamp_ms", frameStatistics([](const auto &frame) { return frame.execute.primaryReplayBarrierTimestampMilliseconds; })},
+        {"primary_end_and_submit_build_ms", frameStatistics([](const auto &frame) { return frame.execute.primaryEndAndSubmitBuildMilliseconds; })},
+        {"queue_submit_ms", frameStatistics([](const auto &frame) { return frame.execute.queueSubmitMilliseconds; })},
+        {"initial_release_record_submit_ms", frameStatistics([](const auto &frame) { return frame.execute.initialReleaseRecordSubmitMilliseconds; })},
+        {"synthetic_present_record_submit_ms", frameStatistics([](const auto &frame) { return frame.execute.syntheticPresentRecordSubmitMilliseconds; })},
+        {"finalization_ms", frameStatistics([](const auto &frame) { return frame.execute.finalizationMilliseconds; })},
+        {"accounted_main_thread_ms", frameStatistics([](const auto &frame) { return frame.executeAccountedMainThreadMilliseconds; })},
+        {"unclassified_ms", frameStatistics([](const auto &frame) { return frame.executeUnclassifiedMilliseconds; })},
+    };
+    auto executeCounts = JsonObject{
+        {"compiled_submit_batches", frameStatistics([](const auto &frame) { return static_cast<double>(frame.execute.compiledSubmitBatchCount); })},
+        {"acquire_batches", frameStatistics([](const auto &frame) { return static_cast<double>(frame.execute.acquireBatchCount); })},
+        {"record_tasks", frameStatistics([](const auto &frame) { return static_cast<double>(frame.execute.recordTaskCount); })},
+        {"replayed_secondary_command_buffers", frameStatistics([](const auto &frame) { return static_cast<double>(frame.execute.replayedSecondaryCommandBufferCount); })},
+        {"queue_submits", frameStatistics([](const auto &frame) { return static_cast<double>(frame.execute.queueSubmitCount); })},
+    };
+    auto asTimings = JsonObject{
+        {"cache_scan_ms", asStatistics([](const auto &telemetry) { return telemetry.cacheScanMilliseconds; })},
+        {"metadata_plan_ms", asStatistics([](const auto &telemetry) { return telemetry.metadataPlanMilliseconds; })},
+        {"cpu_writes_ms", asStatistics([](const auto &telemetry) { return telemetry.cpuWritesMilliseconds; })},
+        {"tlas_sizing_ms", asStatistics([](const auto &telemetry) { return telemetry.tlasSizingMilliseconds; })},
+        {"graph_declare_ms", asStatistics([](const auto &telemetry) { return telemetry.graphDeclareMilliseconds; })},
+    };
+    auto asCounts = JsonObject{
+        {"packets", asStatistics([](const auto &telemetry) { return static_cast<double>(telemetry.packetCount); })},
+        {"instances", asStatistics([](const auto &telemetry) { return static_cast<double>(telemetry.instanceCount); })},
+        {"dirty_blas", asStatistics([](const auto &telemetry) { return static_cast<double>(telemetry.dirtyBlasCount); })},
+    };
+    auto nodeSummary = JsonObject{};
     std::ranges::for_each(std::views::iota(std::size_t{0u}, benchmarkNodeNames_.size()), [&](std::size_t nodeIndex) {
-        if (!nodeSummary.empty())
-        {
-            nodeSummary += ", ";
-        }
         auto values = std::views::iota(std::size_t{0u}, benchmarkFrames_.size()) | std::views::transform([&](std::size_t frameIndex) { return benchmarkNodeBuildMilliseconds_[frameIndex * benchmarkNodeNames_.size() + nodeIndex]; }) | std::ranges::to<std::vector<double>>();
-        nodeSummary += statisticsJson(std::format("node_build_{}_ms", nodeIndex), std::move(values));
+        nodeSummary.emplace(std::format("node_build_{}_ms", nodeIndex), statisticsObject(std::move(values)));
     });
-    auto asSummary = [&](std::string_view name, auto accessor) { return statisticsJson(name, benchmarkAsTelemetry_ | std::views::transform(accessor) | std::ranges::to<std::vector<double>>()); };
-    auto gpuPassSummary = std::string{};
+    auto gpuPassSummary = JsonObject{};
     if (!benchmarkFrames_.empty())
     {
         auto baseline = std::map<std::uint32_t, RendererBenchmarkGpuPass>{};
@@ -3165,45 +3566,54 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
         });
         std::ranges::for_each(baseline, [&](const auto &entry) {
             auto const &pass = entry.second;
-            if (!gpuPassSummary.empty())
-            {
-                gpuPassSummary += ", ";
-            }
             auto values = benchmarkGpuPasses_ | std::views::filter([&](const RendererBenchmarkGpuPass &candidate) { return candidate.passIndex == pass.passIndex; }) | std::views::transform([](const RendererBenchmarkGpuPass &candidate) { return candidate.milliseconds; }) |
                           std::ranges::to<std::vector<double>>();
-            gpuPassSummary += std::format("\"pass_{}\":{{\"pass_index\":{},\"name\":\"{}\",\"queue\":{},\"batch_index\":{},\"copy_to_swapchain\":{},\"statistics\":{}}}", pass.passIndex, pass.passIndex, escape(pass.debugName), static_cast<std::uint32_t>(pass.queue), pass.batchIndex, pass.isCopyPass,
-                                          statisticsObject(std::move(values)));
+            gpuPassSummary.emplace(
+                std::format("pass_{}", pass.passIndex),
+                Json{JsonObject{
+                    {"pass_index", Json{static_cast<std::uint64_t>(pass.passIndex)}},
+                    {"name", Json{pass.debugName}},
+                    {"queue", Json{static_cast<std::uint64_t>(pass.queue)}},
+                    {"batch_index", Json{static_cast<std::uint64_t>(pass.batchIndex)}},
+                    {"copy_to_swapchain", Json{pass.isCopyPass}},
+                    {"statistics", statisticsObject(std::move(values))},
+                }});
         });
     }
-    summary << std::format(
-        "{{\n  \"schema\": \"{}\",\n  \"run_status\": \"{}\",\n  \"data_quality\": {{\"frames_valid\": {}, \"node_telemetry_valid\": {}, \"as_telemetry_valid\": {}, \"accepted_matches_requested\": {}, \"missing_gpu_frames\": {}, \"partial_gpu_frames\": {}, "
-        "\"extra_gpu_statuses\": {}, \"duplicate_gpu_statuses\": {}, \"invalid_gpu_durations\": {}, \"duplicate_gpu_passes\": {}, \"schema_drift_frames\": {}, \"pass_row_count_mismatch_frames\": {}, \"extra_gpu_pass_frames\": {}}},\n  \"cpu_stages\": {{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, "
-        "{}, {}}},\n  \"cpu_substages\": {{{}, {}, {}, {}, {}, {}, {}, {}}},\n  \"execute_substages\": {{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}}},\n  \"execute_counts\": {{{}, {}, {}, {}, {}}},\n  \"as_timings\": {{{}, {}, {}, {}, {}}},\n  \"as_counts\": {{{}, {}, "
-        "{}}},\n  \"node_build\": {{{}}},\n  \"gpu_passes\": {{{}}}\n}}\n",
-        rendererBenchmarkSchemaVersion(), runStatus, audit.framesValid, audit.nodeTelemetryValid, audit.accelerationStructureTelemetryValid, accepted == requested, audit.missingGpuFrames, audit.partialGpuFrames, audit.extraGpuStatuses, audit.duplicateGpuStatuses, audit.invalidGpuDurations,
-        audit.duplicateGpuPasses, audit.schemaDriftFrames, audit.passRowCountMismatchFrames, audit.extraGpuPassFrames, stageSummary("wait_gpu_ms", [](const auto &f) { return f.cpu.cpuWaitGpuMilliseconds; }), stageSummary("frame_setup_ms", [](const auto &f) { return f.cpu.frameSetupMilliseconds; }),
-        stageSummary("scene_ms", [](const auto &f) { return f.cpu.sceneMilliseconds; }), stageSummary("post_scene_ms", [](const auto &f) { return f.cpu.postSceneMilliseconds; }), stageSummary("build_ms", [](const auto &f) { return f.cpu.buildMilliseconds; }),
-        stageSummary("compile_ms", [](const auto &f) { return f.cpu.compileMilliseconds; }), stageSummary("prepare_ms", [](const auto &f) { return f.cpu.prepareMilliseconds; }), stageSummary("execute_ms", [](const auto &f) { return f.cpu.executeMilliseconds; }),
-        stageSummary("present_ms", [](const auto &f) { return f.cpu.presentMilliseconds; }), stageSummary("total_ms", [](const auto &f) { return f.cpu.totalMilliseconds; }), stageSummary("cpu_work_ms", [](const auto &f) { return f.cpu.totalMilliseconds - f.cpu.cpuWaitGpuMilliseconds; }),
-        stageSummary("classified_ms", [](const auto &f) { return rendererBenchmarkClassifiedCpuMilliseconds(f.cpu); }), stageSummary("unclassified_ms", [](const auto &f) { return f.cpu.totalMilliseconds - rendererBenchmarkClassifiedCpuMilliseconds(f.cpu); }),
-        stageSummary("scene_begin_upload_ms", [](const auto &f) { return f.sceneBeginUploadMilliseconds; }), stageSummary("scene_raster_extract_ms", [](const auto &f) { return f.sceneRasterExtractMilliseconds; }),
-        stageSummary("scene_tlas_extract_ms", [](const auto &f) { return f.sceneTlasExtractMilliseconds; }), stageSummary("scene_bridge_ms", [](const auto &f) { return f.sceneBridgeMilliseconds; }),
-        stageSummary("tlas_texture_collection_ms", [](const auto &f) { return f.tlasTextureCollectionMilliseconds; }), stageSummary("graph_prelude_ms", [](const auto &f) { return f.graphPreludeMilliseconds; }), stageSummary("ui_collect_ms", [](const auto &f) { return f.uiCollectMilliseconds; }),
-        stageSummary("node_loop_ms", [](const auto &f) { return f.nodeLoopMilliseconds; }), stageSummary("executor_setup_ms", [](const auto &f) { return f.execute.executorSetupMilliseconds; }),
-        stageSummary("completed_gpu_timing_readback_ms", [](const auto &f) { return f.execute.completedGpuTimingReadbackMilliseconds; }), stageSummary("timing_setup_ms", [](const auto &f) { return f.execute.timingSetupMilliseconds; }),
-        stageSummary("per_frame_lookup_ms", [](const auto &f) { return f.execute.perFrameLookupMilliseconds; }), stageSummary("swapchain_acquire_ms", [](const auto &f) { return f.execute.swapchainAcquireMilliseconds; }),
-        stageSummary("deferred_prepare_ms", [](const auto &f) { return f.execute.deferredPrepareMilliseconds; }), stageSummary("task_plan_launch_ms", [](const auto &f) { return f.execute.taskPlanLaunchMilliseconds; }),
-        stageSummary("primary_record_before_collect_ms", [](const auto &f) { return f.execute.primaryRecordBeforeCollectMilliseconds; }), stageSummary("record_completion_wait_ms", [](const auto &f) { return f.execute.recordCompletionWaitMilliseconds; }),
-        stageSummary("primary_replay_barrier_timestamp_ms", [](const auto &f) { return f.execute.primaryReplayBarrierTimestampMilliseconds; }), stageSummary("primary_end_and_submit_build_ms", [](const auto &f) { return f.execute.primaryEndAndSubmitBuildMilliseconds; }),
-        stageSummary("queue_submit_ms", [](const auto &f) { return f.execute.queueSubmitMilliseconds; }), stageSummary("initial_release_record_submit_ms", [](const auto &f) { return f.execute.initialReleaseRecordSubmitMilliseconds; }),
-        stageSummary("synthetic_present_record_submit_ms", [](const auto &f) { return f.execute.syntheticPresentRecordSubmitMilliseconds; }), stageSummary("finalization_ms", [](const auto &f) { return f.execute.finalizationMilliseconds; }),
-        stageSummary("accounted_main_thread_ms", [](const auto &f) { return f.executeAccountedMainThreadMilliseconds; }), stageSummary("unclassified_ms", [](const auto &f) { return f.executeUnclassifiedMilliseconds; }),
-        stageSummary("compiled_submit_batches", [](const auto &f) { return static_cast<double>(f.execute.compiledSubmitBatchCount); }), stageSummary("acquire_batches", [](const auto &f) { return static_cast<double>(f.execute.acquireBatchCount); }),
-        stageSummary("record_tasks", [](const auto &f) { return static_cast<double>(f.execute.recordTaskCount); }), stageSummary("replayed_secondary_command_buffers", [](const auto &f) { return static_cast<double>(f.execute.replayedSecondaryCommandBufferCount); }),
-        stageSummary("queue_submits", [](const auto &f) { return static_cast<double>(f.execute.queueSubmitCount); }), asSummary("cache_scan_ms", [](const auto &a) { return a.cacheScanMilliseconds; }), asSummary("metadata_plan_ms", [](const auto &a) { return a.metadataPlanMilliseconds; }),
-        asSummary("cpu_writes_ms", [](const auto &a) { return a.cpuWritesMilliseconds; }), asSummary("tlas_sizing_ms", [](const auto &a) { return a.tlasSizingMilliseconds; }), asSummary("graph_declare_ms", [](const auto &a) { return a.graphDeclareMilliseconds; }),
-        asSummary("packets", [](const auto &a) { return static_cast<double>(a.packetCount); }), asSummary("instances", [](const auto &a) { return static_cast<double>(a.instanceCount); }), asSummary("dirty_blas", [](const auto &a) { return static_cast<double>(a.dirtyBlasCount); }), nodeSummary,
-        gpuPassSummary);
+    auto summaryDocument = Json{JsonObject{
+        {"schema", Json{rendererBenchmarkSchemaVersion()}},
+        {"run_status", Json{runStatus}},
+        {"data_quality",
+         Json{JsonObject{
+             {"frames_valid", Json{audit.framesValid}},
+             {"node_telemetry_valid", Json{audit.nodeTelemetryValid}},
+             {"as_telemetry_valid", Json{audit.accelerationStructureTelemetryValid}},
+             {"accepted_matches_requested", Json{accepted == requested}},
+             {"missing_gpu_frames", Json{static_cast<std::uint64_t>(audit.missingGpuFrames)}},
+             {"partial_gpu_frames", Json{static_cast<std::uint64_t>(audit.partialGpuFrames)}},
+             {"extra_gpu_statuses", Json{static_cast<std::uint64_t>(audit.extraGpuStatuses)}},
+             {"duplicate_gpu_statuses", Json{static_cast<std::uint64_t>(audit.duplicateGpuStatuses)}},
+             {"invalid_gpu_durations", Json{static_cast<std::uint64_t>(audit.invalidGpuDurations)}},
+             {"duplicate_gpu_passes", Json{static_cast<std::uint64_t>(audit.duplicateGpuPasses)}},
+             {"schema_drift_frames", Json{static_cast<std::uint64_t>(audit.schemaDriftFrames)}},
+             {"pass_row_count_mismatch_frames", Json{static_cast<std::uint64_t>(audit.passRowCountMismatchFrames)}},
+             {"extra_gpu_pass_frames", Json{static_cast<std::uint64_t>(audit.extraGpuPassFrames)}},
+         }}},
+        {"cpu_stages", Json{std::move(cpuStages)}},
+        {"cpu_substages", Json{std::move(cpuSubstages)}},
+        {"execute_substages", Json{std::move(executeSubstages)}},
+        {"execute_counts", Json{std::move(executeCounts)}},
+        {"as_timings", Json{std::move(asTimings)}},
+        {"as_counts", Json{std::move(asCounts)}},
+        {"node_build", Json{std::move(nodeSummary)}},
+        {"gpu_passes", Json{std::move(gpuPassSummary)}},
+    }};
+    auto summaryText = std::string{};
+    if (!serializeBenchmarkArtifact("summary.json", summaryDocument, summaryText))
+    {
+        return false;
+    }
+    summary << summaryText;
     metadata.flush();
     frames.flush();
     gpu.flush();

@@ -25,6 +25,21 @@ namespace
     {
         return std::unexpected("Environment map path is empty.");
     }
+    auto const rawPath = sourcePath.generic_string();
+    auto const hasForbiddenPrefix =
+        rawPath.starts_with("//") ||
+        rawPath.starts_with(R"(\\)") ||
+        rawPath.starts_with(R"(\\?\)") ||
+        rawPath.starts_with(R"(\\.\)") ||
+        rawPath.contains("://");
+    auto const hasShellSyntax =
+        rawPath.find_first_of("|&;<>\n\r\t\"'`$*?") != std::string::npos;
+    if (hasForbiddenPrefix || hasShellSyntax)
+    {
+        return std::unexpected(std::format(
+            "Environment map path contains a forbidden path or shell form: '{}'.",
+            rawPath));
+    }
     if (!isSupportedEnvironmentMapAsset(sourcePath))
     {
         return std::unexpected(std::format(

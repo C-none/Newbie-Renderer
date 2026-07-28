@@ -3,6 +3,7 @@ import dependency.assets;
 import dependency.vulkan;
 
 import :presentNode;
+import nr.options;
 import nr.renderer;
 import nr.rhi;
 import nr.utils;
@@ -33,14 +34,55 @@ inline constexpr std::uint32_t kToneMappingReinhard = 1u;
 inline constexpr std::uint32_t kToneMappingAcesFilmic = 2u;
 inline constexpr std::uint32_t kToneMappingBt2390 = 3u;
 
-// Selection index 0 keeps the per-gamut default; entries 1..N map to explicit methods (index - 1).
-inline constexpr std::array<std::string_view, 5u> kToneMappingSelectionLabels = {
-    "Auto",
-    "None",
-    "Reinhard",
-    "ACES Filmic",
-    "BT.2390 EETF",
-};
+template <typename T>
+[[nodiscard]] const T& requiredOption(
+    const nr::options::OptionFrameSnapshot& snapshot,
+    nr::options::OptionKey<T> key)
+{
+    auto const* value = snapshot.find(key);
+    nr::nrAssert(
+        value != nullptr,
+        std::format("Present requires option '{}' in the frame snapshot.", key.id()));
+    return *value;
+}
+
+[[nodiscard]] std::uint32_t toneMappingSelection(
+    const nr::options::OptionFrameSnapshot& snapshot)
+{
+    auto const& value = requiredOption(snapshot, nr::options::keys::presentToneMapping);
+    if (value == "auto")
+    {
+        return 0u;
+    }
+    if (value == "none")
+    {
+        return 1u;
+    }
+    if (value == "reinhard")
+    {
+        return 2u;
+    }
+    if (value == "aces_filmic")
+    {
+        return 3u;
+    }
+    nr::nrAssert(value == "bt2390_eetf", "Present snapshot contains an invalid tone-mapping value.");
+    return 4u;
+}
+
+[[nodiscard]] float uiOpacity(const nr::options::OptionFrameSnapshot& snapshot)
+{
+    return static_cast<float>(
+        requiredOption(snapshot, nr::options::keys::presentUiOpacity));
+}
+
+[[nodiscard]] bool hasCaptureEffect(
+    const nr::options::OptionFrameSnapshot& snapshot)
+{
+    return snapshot.effect.has_value() &&
+           snapshot.effect->id ==
+               nr::options::optionId(nr::options::keys::presentCaptureExr);
+}
 
 // Defaults follow the color-space research: SDR sRGB -> ACES filmic, HDR10 ST2084 -> BT.2390 EETF,
 // scRGB extended-linear -> None (preserve the scene-referred signal for the compositor).
@@ -198,18 +240,18 @@ struct PresentRuntimeCache
 
 [[nodiscard]] std::filesystem::path makeScreenshotPath(
     const PresentScreenshotConfig& config,
-    std::uint64_t sequence)
+    std::uint64_t sequence,
+    std::uint64_t frameIndex)
 {
     auto outputDirectory = config.outputDirectory.empty()
                                ? std::filesystem::path{"screenshots"}
                                : config.outputDirectory;
-    auto filePrefix = config.filePrefix.empty()
-                          ? std::string{"screenshot"}
-                          : config.filePrefix;
-    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::system_clock::now().time_since_epoch())
-                         .count();
-    return outputDirectory / std::format("{}-{}-{}.exr", filePrefix, timestamp, sequence);
+    auto const sessionId = config.sessionId.empty()
+                               ? std::string{"session"}
+                               : config.sessionId;
+    return outputDirectory /
+           sessionId /
+           std::format("capture_{}_frame_{}.exr", sequence, frameIndex);
 }
 
 [[nodiscard]] nr::renderer::GraphResourceHandle makeTransparentUiFallback(
@@ -286,7 +328,7 @@ void ensureScreenshotReadbackBuffer(
     nr::nrAssert(buffer.valid(), "Present failed to allocate screenshot readback buffer.");
 }
 
-void addPresentReadbackCopyPass(
+[[nodiscard]] nr::renderer::GraphPassHandle addPresentReadbackCopyPass(
     nr::renderer::NodeBuildContext& context,
     nr::renderer::GraphResourceHandle sourceImage,
     PresentReadbackTarget readbackTarget,
@@ -340,7 +382,7 @@ void addPresentReadbackCopyPass(
         1u,
     };
 
-    [[maybe_unused]] auto readbackPassHandle = nr::renderer::ops::copyImageToBuffer(
+    return nr::renderer::ops::copyImageToBuffer(
         context,
         passDebugName,
         nr::renderer::CopyImageToBufferPassDesc{
@@ -541,7 +583,7 @@ template <typename Pixel>
     }
     catch (const std::exception& error)
     {
-        nr::nrInfo<nr::LogLevel::error>(std::format(
+        nr::nrInfo<nr::LogLevel::error, false>(std::format(
             "Present failed to write EXR screenshot '{}': {}",
             path.generic_string(),
             error.what()));
@@ -549,7 +591,7 @@ template <typename Pixel>
     }
     catch (...)
     {
-        nr::nrInfo<nr::LogLevel::error>(std::format(
+        nr::nrInfo<nr::LogLevel::error, false>(std::format(
             "Present failed to write EXR screenshot '{}': unknown OpenEXR error.",
             path.generic_string()));
         return false;
@@ -630,7 +672,7 @@ template <typename Pixel, typename LoadPixel>
         return writeOpenExrRgba(path, extent, nr::dependency::openexr::halfPixelType, pixels);
     }
     default:
-        nr::nrInfo<nr::LogLevel::error>(std::format(
+        nr::nrInfo<nr::LogLevel::error, false>(std::format(
             "Present EXR screenshot unsupported source format: {}.",
             vk::to_string(format)));
         return false;
@@ -641,6 +683,41 @@ template <typename Pixel, typename LoadPixel>
 namespace nr::renderPasses
 {
 PresentNode::~PresentNode() = default;
+
+void PresentNode::declareOptions(nr::options::OptionCatalogBuilder& builder) const
+{
+    std::ranges::for_each(
+        nr::options::makePresentDefinitions(),
+        [&](nr::options::OptionDefinition definition) {
+            static_cast<void>(builder.add(std::move(definition)));
+        });
+}
+
+void PresentNode::collectOptionAvailability(
+    const nr::options::OptionFrameSnapshot&,
+    nr::options::OptionAvailabilityMap& availability) const
+{
+    auto const scalarIds = std::array{
+        nr::options::optionId(nr::options::keys::presentToneMapping),
+        nr::options::optionId(nr::options::keys::presentUiOpacity),
+    };
+    std::ranges::for_each(
+        scalarIds,
+        [&](const nr::options::OptionId& id) {
+            availability.insert_or_assign(
+                id,
+                nr::options::OptionAvailability{.available = true, .reason = {}});
+        });
+    auto const captureAvailable =
+        runtime_ &&
+        !screenshotPrepared_.has_value() &&
+        !screenshotPendingSave_.has_value();
+    availability.insert_or_assign(
+        nr::options::optionId(nr::options::keys::presentCaptureExr),
+        captureAvailable
+            ? nr::options::OptionAvailability{.available = true, .reason = {}}
+            : nr::options::OptionAvailability{.available = false, .reason = "capture_busy"});
+}
 
 void PresentNode::initialize(NodeInitContext& context)
 {
@@ -660,21 +737,29 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
 [[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> PresentNode::structuralSnapshot(
     const NodeFrameParameters& frameParameters) const
 {
+    if (detail::hasCaptureEffect(frameParameters.optionSnapshot.get()) &&
+        screenshotPendingSave_.has_value())
+    {
+        nr::nrInfo<nr::LogLevel::error, false>(
+            "Present capture effect reached the node while a previous capture was still in flight.");
+    }
+    else if (detail::hasCaptureEffect(frameParameters.optionSnapshot.get()))
+    {
+        return std::nullopt;
+    }
     auto const swapchainFormat = frameParameters.swapchainFormat == vk::Format::eUndefined
                                      ? input.format
                                      : frameParameters.swapchainFormat;
-    auto const captureScreenshot = screenshotRequestCount_ > 0u && !screenshotPendingSave_.has_value();
+    auto const opacity = detail::uiOpacity(frameParameters.optionSnapshot.get());
+    auto const toneMapping = detail::toneMappingSelection(frameParameters.optionSnapshot.get());
     auto branch = std::format(
-        "format={};colorSpace={};uiOpacity={};tone={};readback={};readbackOffset={};screenshot={};screenshotDir={};screenshotPrefix={}",
+        "format={};colorSpace={};uiOpacity={};tone={};readback={};readbackOffset={}",
         static_cast<std::uint32_t>(swapchainFormat),
         static_cast<std::uint32_t>(frameParameters.swapchainColorSpace),
-        std::bit_cast<std::uint32_t>(input.uiOpacity),
-        toneMappingSelection_,
+        std::bit_cast<std::uint32_t>(opacity),
+        toneMapping,
         input.readback.has_value() ? 1u : 0u,
-        input.readback.has_value() ? input.readback->offset : 0u,
-        captureScreenshot ? 1u : 0u,
-        input.screenshot.outputDirectory.generic_string(),
-        input.screenshot.filePrefix);
+        input.readback.has_value() ? input.readback->offset : 0u);
     return StructuralSnapshot{
         .configurationRevision = std::max<std::uint64_t>(1u, std::hash<std::string>{}(branch)),
         .branchKey = std::move(branch),
@@ -705,18 +790,6 @@ bool PresentNode::materializeRenderGraphSkeleton(
     if (!formatConversion.has_value())
     {
         return false;
-    }
-    auto const captureScreenshot = screenshotRequestCount_ > 0u && !screenshotPendingSave_.has_value();
-    auto screenshotSourceDesc = std::optional<nr::renderer::RenderGraphSkeletonImageResourceDesc>{};
-    if (captureScreenshot)
-    {
-        screenshotSourceDesc = context.describeImageResource(sourceColor);
-        if (!screenshotSourceDesc.has_value() ||
-            screenshotSourceDesc->aspect != nr::renderer::ImageAspectIntent::Color ||
-            !detail::supportsLinearExrScreenshotFormat(screenshotSourceDesc->format))
-        {
-            return false;
-        }
     }
     detail::ensureConvertedColorImage(device_->get(), *runtime_, viewportExtent, formatConversion->convertedFormat);
     context.patchResource(0u, nr::renderer::GraphImportedImageDesc{
@@ -817,40 +890,15 @@ bool PresentNode::materializeRenderGraphSkeleton(
             });
     };
 
-    if (captureScreenshot)
-    {
-        auto const screenshotExtent = vk::Extent2D{
-            std::max(1u, screenshotSourceDesc->extent.width),
-            std::max(1u, screenshotSourceDesc->extent.height),
-        };
-        auto const screenshotByteSize = detail::presentReadbackByteSize(
-            screenshotExtent, screenshotSourceDesc->format);
-        detail::ensureScreenshotReadbackBuffer(device_->get(), screenshotReadbackBuffer_, screenshotByteSize);
-        --screenshotRequestCount_;
-        patchReadback(
-            sourceColor,
-            PresentReadbackTarget{.buffer = std::cref(screenshotReadbackBuffer_)},
-            "Present.ScreenshotReadbackBuffer",
-            "Present.CopyScreenshotToReadback",
-            screenshotExtent);
-        ++screenshotSequence_;
-        screenshotPendingSave_ = detail::PresentScreenshotPendingSave{
-            .extent = screenshotExtent,
-            .format = screenshotSourceDesc->format,
-            .byteSize = screenshotByteSize,
-            .path = detail::makeScreenshotPath(input.screenshot, screenshotSequence_),
-            .frameSlot = frameParameters.frameIndex,
-        };
-        screenshotStatus_ = std::format("Saving {}", screenshotPendingSave_->path.generic_string());
-    }
-
+    auto const toneMapping = detail::toneMappingSelection(frameParameters.optionSnapshot.get());
+    auto const opacity = detail::uiOpacity(frameParameters.optionSnapshot.get());
     auto const pushConstants = detail::PresentConvertPushConstants{
         .width = conversionExtent.width,
         .height = conversionExtent.height,
         .swizzleBgr = formatConversion->swizzleBgr ? 1u : 0u,
         .outputEncoding = formatConversion->outputEncoding,
-        .toneMapping = detail::resolveToneMappingMethod(toneMappingSelection_, swapchainColorSpace),
-        .uiOpacity = hasUiBuffer ? std::clamp(input.uiOpacity, 0.0f, 1.0f) : 0.0f,
+        .toneMapping = detail::resolveToneMappingMethod(toneMapping, swapchainColorSpace),
+        .uiOpacity = hasUiBuffer ? opacity : 0.0f,
     };
     auto convertPatch = nr::renderer::ComputePassPatchBuilder{context, passSlot++, "Present.Convert", runtime_->pipeline};
     convertPatch
@@ -934,30 +982,31 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
         uiBuffer = detail::makeTransparentUiFallback(context, conversionExtent);
     }
 
+    auto const toneMapping = detail::toneMappingSelection(frameParameters.optionSnapshot.get());
+    auto const opacity = detail::uiOpacity(frameParameters.optionSnapshot.get());
     auto pushConstants = detail::PresentConvertPushConstants{
         .width = conversionExtent.width,
         .height = conversionExtent.height,
         .swizzleBgr = formatConversion->swizzleBgr ? 1u : 0u,
         .outputEncoding = formatConversion->outputEncoding,
-        .toneMapping = detail::resolveToneMappingMethod(toneMappingSelection_, swapchainColorSpace),
-        .uiOpacity = hasUiBuffer ? std::clamp(input.uiOpacity, 0.0f, 1.0f) : 0.0f,
+        .toneMapping = detail::resolveToneMappingMethod(toneMapping, swapchainColorSpace),
+        .uiOpacity = hasUiBuffer ? opacity : 0.0f,
     };
 
-    auto const captureScreenshot = screenshotRequestCount_ > 0u && !screenshotPendingSave_.has_value();
-    if (captureScreenshot)
+    nr::nrAssert(
+        !screenshotPrepared_.has_value(),
+        "Present must finalize a provisional screenshot before building another frame.");
+    if (detail::hasCaptureEffect(frameParameters.optionSnapshot.get()))
     {
-        --screenshotRequestCount_;
         auto sourceDesc = context.describeImageResource(sourceColor);
         if (!sourceDesc.has_value() || sourceDesc->aspect != nr::renderer::ImageAspectIntent::Color)
         {
-            screenshotStatus_ = "Screenshot failed: source metadata unavailable";
-            nr::nrInfo<nr::LogLevel::error>(
+            nr::nrInfo<nr::LogLevel::error, false>(
                 "Present EXR screenshot requires color-image metadata for frameResource::presentSourceColor.");
         }
         else if (!detail::supportsLinearExrScreenshotFormat(sourceDesc->format))
         {
-            screenshotStatus_ = "Screenshot failed: unsupported source format";
-            nr::nrInfo<nr::LogLevel::error>(std::format(
+            nr::nrInfo<nr::LogLevel::error, false>(std::format(
                 "Present EXR screenshot unsupported source format for '{}': {}.",
                 sourceDesc->debugName,
                 vk::to_string(sourceDesc->format)));
@@ -971,7 +1020,7 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
             auto const screenshotByteSize = detail::presentReadbackByteSize(screenshotExtent, sourceDesc->format);
             detail::ensureScreenshotReadbackBuffer(device_->get(), screenshotReadbackBuffer_, screenshotByteSize);
 
-            detail::addPresentReadbackCopyPass(
+            auto const readbackPass = detail::addPresentReadbackCopyPass(
                 context,
                 sourceColor,
                 PresentReadbackTarget{
@@ -981,16 +1030,22 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
                 sourceDesc->format,
                 "Present.ScreenshotReadbackBuffer",
                 "Present.CopyScreenshotToReadback");
-
-            ++screenshotSequence_;
-            screenshotPendingSave_ = detail::PresentScreenshotPendingSave{
+            auto const& effect = *frameParameters.optionSnapshot.get().effect;
+            screenshotPrepared_ = detail::PresentScreenshotPrepared{
                 .extent = screenshotExtent,
                 .format = sourceDesc->format,
                 .byteSize = screenshotByteSize,
-                .path = detail::makeScreenshotPath(input.screenshot, screenshotSequence_),
-                .frameSlot = frameParameters.frameIndex,
+                .path = detail::makeScreenshotPath(
+                    input.screenshot,
+                    effect.sequence,
+                    frameParameters.optionSnapshot.get().frameIndex),
+                .frameIndex = frameParameters.optionSnapshot.get().frameIndex,
+                .effect = effect,
             };
-            screenshotStatus_ = std::format("Saving {}", screenshotPendingSave_->path.generic_string());
+            nr::nrAssert(
+                frameParameters.frameEffectSink.has_value() &&
+                    frameParameters.frameEffectSink->get().claim(*this, readbackPass),
+                "Present capture effect must claim its image-to-readback copy pass exactly once.");
         }
     }
 
@@ -1015,14 +1070,14 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
 
     if (input.readback.has_value())
     {
-        detail::addPresentReadbackCopyPass(
+        static_cast<void>(detail::addPresentReadbackCopyPass(
             context,
             convertedColor,
             *input.readback,
             conversionExtent,
             formatConversion->convertedFormat,
             "Present.ReadbackBuffer",
-            "Present.CopyToReadback");
+            "Present.CopyToReadback"));
     }
 
     [[maybe_unused]] auto acquireNodeHandle = context.addSwapchainAcquireNode(
@@ -1040,77 +1095,47 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
     context.publishFrameResource(nr::renderer::frameResource::swapchainImage, swapchainImage);
 }
 
-void PresentNode::collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters)
+void PresentNode::advanceContinuations(std::uint32_t frameSlot)
 {
-    processCompletedScreenshot(frameParameters.frameIndex);
+    processCompletedScreenshot(frameSlot);
+}
 
-    if (pendingScreenshotRequestCount_ > 0u)
+void PresentNode::flushContinuations()
+{
+    savePendingScreenshot();
+}
+
+[[nodiscard]] nr::renderer::FrameEffectFinalizeDisposition
+PresentNode::finalizeFrameEffect(
+    const nr::options::FrameEffect& effect,
+    bool targetBatchSubmitted,
+    std::uint32_t frameSlot)
+{
+    if (effect.id != nr::options::optionId(nr::options::keys::presentCaptureExr) ||
+        !screenshotPrepared_.has_value() ||
+        screenshotPrepared_->effect.sequence != effect.sequence)
     {
-        screenshotRequestCount_ += pendingScreenshotRequestCount_;
-        pendingScreenshotRequestCount_ = 0u;
-        screenshotStatus_ = "Screenshot queued";
+        screenshotPrepared_.reset();
+        return nr::renderer::FrameEffectFinalizeDisposition::terminalFailed;
+    }
+    if (!targetBatchSubmitted || screenshotPendingSave_.has_value())
+    {
+        screenshotPrepared_.reset();
+        return nr::renderer::FrameEffectFinalizeDisposition::terminalFailed;
     }
 
-    if (pendingUiOpacityValid_)
-    {
-        input.uiOpacity = std::clamp(pendingUiOpacity_, 0.0f, 1.0f);
-        pendingUiOpacityValid_ = false;
-    }
-
-    if (pendingToneMappingSelectionValid_)
-    {
-        toneMappingSelection_ = std::min(
-            pendingToneMappingSelection_,
-            static_cast<std::uint32_t>(detail::kToneMappingSelectionLabels.size() - 1u));
-        pendingToneMappingSelectionValid_ = false;
-    }
-
-    auto const autoMethod = detail::defaultToneMappingForColorSpace(frameParameters.swapchainColorSpace);
-
-    uiOpacityDraft_ = std::clamp(input.uiOpacity, 0.0f, 1.0f);
-    context.addSection(
-        context.runtimeName(),
-        [this, autoMethod](NodeUiWriter& ui) {
-            auto const selection = toneMappingSelection_;
-            auto const autoLabel = detail::kToneMappingSelectionLabels[autoMethod + 1u];
-            auto const previewText = selection == 0u
-                                         ? std::format("Auto ({})", autoLabel)
-                                         : std::string(detail::kToneMappingSelectionLabels[selection]);
-            if (ui.beginCombo("Tone Mapping", previewText))
-            {
-                auto indices = std::views::iota(std::size_t{0}, detail::kToneMappingSelectionLabels.size());
-                std::ranges::for_each(indices, [&](std::size_t index) {
-                    auto const optionLabel = index == 0u
-                                                 ? std::format("Auto ({})", autoLabel)
-                                                 : std::string(detail::kToneMappingSelectionLabels[index]);
-                    if (ui.selectable(optionLabel, index == static_cast<std::size_t>(selection)))
-                    {
-                        pendingToneMappingSelection_ = static_cast<std::uint32_t>(index);
-                        pendingToneMappingSelectionValid_ = true;
-                    }
-                });
-                ui.endCombo();
-            }
-
-            auto value = uiOpacityDraft_;
-            if (ui.sliderFloat("UI Opacity", value, 0.0f, 1.0f))
-            {
-                uiOpacityDraft_ = std::clamp(value, 0.0f, 1.0f);
-                pendingUiOpacity_ = uiOpacityDraft_;
-                pendingUiOpacityValid_ = true;
-            }
-
-            if (ui.button("Screenshot"))
-            {
-                ++pendingScreenshotRequestCount_;
-            }
-            if (!screenshotStatus_.empty())
-            {
-                ui.text(screenshotStatus_);
-            }
-        },
-        true,
-        "controls");
+    auto prepared = std::move(*screenshotPrepared_);
+    screenshotPrepared_.reset();
+    screenshotPendingSave_ = detail::PresentScreenshotPendingSave{
+        .extent = prepared.extent,
+        .format = prepared.format,
+        .byteSize = prepared.byteSize,
+        .path = std::move(prepared.path),
+        .frameSlot = frameSlot,
+        .frameIndex = prepared.frameIndex,
+        .effect = std::move(prepared.effect),
+    };
+    return nr::renderer::FrameEffectFinalizeDisposition::continuationArmed;
 }
 
 void PresentNode::processCompletedScreenshot(std::uint32_t frameSlot)
@@ -1131,6 +1156,18 @@ void PresentNode::savePendingScreenshot()
     }
 
     auto const pending = *screenshotPendingSave_;
+    auto emitTerminal = [&](nr::options::OptionLogStatus status, std::optional<std::string> reason = {}) {
+        nr::options::emitMachineRecord(nr::options::OptionMachineRecord{
+            .sequence = pending.effect.sequence,
+            .id = pending.effect.id,
+            .phase = nr::options::OptionLogPhase::terminal,
+            .status = status,
+            .frameIndex = pending.frameIndex,
+            .origin = pending.effect.origin,
+            .requestId = pending.effect.requestId,
+            .reason = std::move(reason),
+        });
+    };
     nr::nrAssert(screenshotReadbackBuffer_.valid(), "Present screenshot save requires a valid readback buffer.");
     nr::nrAssert(
         screenshotReadbackBuffer_.mapped() != nullptr,
@@ -1148,13 +1185,13 @@ void PresentNode::savePendingScreenshot()
         std::filesystem::create_directories(parentPath, directoryError);
         if (directoryError)
         {
-            screenshotStatus_ = std::format(
-                "Screenshot failed: {}",
-                directoryError.message());
-            nr::nrInfo<nr::LogLevel::error>(std::format(
+            nr::nrInfo<nr::LogLevel::error, false>(std::format(
                 "Present failed to create screenshot directory '{}': {}",
                 parentPath.generic_string(),
                 directoryError.message()));
+            emitTerminal(
+                nr::options::OptionLogStatus::failed,
+                std::format("create_directory_failed:{}", directoryError.message()));
             screenshotPendingSave_.reset();
             return;
         }
@@ -1177,23 +1214,23 @@ void PresentNode::savePendingScreenshot()
         bytes);
     if (!writeResult)
     {
-        screenshotStatus_ = "Screenshot failed";
-        nr::nrInfo<nr::LogLevel::error>(std::format(
+        nr::nrInfo<nr::LogLevel::error, false>(std::format(
             "Present failed to write EXR screenshot '{}'.",
             pending.path.generic_string()));
+        emitTerminal(
+            nr::options::OptionLogStatus::failed,
+            "exr_write_failed");
         screenshotPendingSave_.reset();
         return;
     }
 
-    screenshotStatus_ = std::format("Saved {}", pending.path.generic_string());
     nr::nrInfo(std::format("Present saved screenshot '{}'.", pending.path.generic_string()));
+    emitTerminal(nr::options::OptionLogStatus::succeeded);
     screenshotPendingSave_.reset();
 }
 
 void PresentNode::shutdown(NodeShutdownContext&)
 {
-    savePendingScreenshot();
-
     if (runtime_ && runtime_->pipeline)
     {
         runtime_->pipeline->clearBindingSets();
@@ -1201,6 +1238,7 @@ void PresentNode::shutdown(NodeShutdownContext&)
     runtime_.reset();
     device_.reset();
     screenshotReadbackBuffer_ = {};
+    screenshotPrepared_.reset();
     screenshotPendingSave_.reset();
 }
 } // namespace nr::renderPasses

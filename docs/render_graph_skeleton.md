@@ -36,7 +36,9 @@ the resulting no-instance, TLAS-only, or dirty-BLAS topology, including exact di
 mesh geometry variants and current resource capacities. A hit patches current
 BLAS/TLAS imports, sideband frame data, build inputs, and callbacks without graph
 declarations. A branch mismatch preserves the prepared AS packet so the clean cold
-fallback consumes that same preflight result without advancing the frame serial again.
+materialization consumes that same preflight result without advancing the frame serial
+again. Materialization requires this packet and fails fast when preflight was skipped;
+it never reruns AS planning through a node-local fallback.
 Dynamic instance transforms and masks remain patch-preserving; scene
 identity, structural RT revisions, BLAS atlas replacement/growth, structural-plan
 generation, or capacity changes select a cold exact variant.

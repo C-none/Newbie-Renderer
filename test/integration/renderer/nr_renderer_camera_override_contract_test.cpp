@@ -1,6 +1,7 @@
 import std;
 import dependency;
 import nr.load;
+import nr.options;
 import nr.renderPasses;
 import nr.renderer;
 import nr.scene;
@@ -127,6 +128,29 @@ struct RendererShutdownGuard
     };
 }
 
+[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
+    const nr::renderer::RendererGraphPreflightResult& preflight)
+{
+    auto values = nr::options::OptionValueMap{};
+    auto availability = nr::options::OptionAvailabilityMap{};
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+        values.emplace(entry.first, entry.second.defaultValue);
+        availability.emplace(
+            entry.first,
+            nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    return nr::options::OptionFrameSnapshot{
+        .catalog = preflight.optionCatalog,
+        .values = std::move(values),
+        .availability = std::move(availability),
+        .frameIndex = 1u,
+        .revision = 1u,
+        .graphGeneration = 1u,
+        .bindingEpoch = 1u,
+        .snapshotToken = "camera-override-snapshot",
+    };
+}
+
 const nr::test::CaseRegistrar cameraOverrideCase{
     "renderer camera override switches scene extraction to override frustum",
     [] {
@@ -146,9 +170,16 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         nr::test::require(instanceHandle.valid(), "instance registration should succeed");
         scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
 
-        renderer.installGraph(makeGraphSpec(renderer.device().presentationContext.swapchainFormat()));
+        auto graphSpec = makeGraphSpec(renderer.device().presentationContext.swapchainFormat());
+        auto const preflight = renderer.preflightGraph(graphSpec);
+        nr::test::require(
+            static_cast<bool>(preflight),
+            "camera override graph should pass preflight");
+        nr::test::require(renderer.installGraph(graphSpec), "camera override graph should install");
+        auto const optionSnapshot = makeDefaultSnapshot(preflight);
 
         auto baseline = renderer.renderFrame(nr::renderer::RendererFrameInput{
+            .optionSnapshot = std::cref(optionSnapshot),
             .scene = std::ref(scene),
             .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
             .sceneExtractInput = nr::scene::SceneExtractInput{},
@@ -176,6 +207,7 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         };
 
         auto overridden = renderer.renderFrame(nr::renderer::RendererFrameInput{
+            .optionSnapshot = std::cref(optionSnapshot),
             .scene = std::ref(scene),
             .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
             .sceneExtractInput = nr::scene::SceneExtractInput{},

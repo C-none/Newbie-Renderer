@@ -2,6 +2,9 @@ add_subdirectory(extern)
 
 # utils must be before any other subdirectory that might depend on it
 add_subdirectory(utils)
+add_subdirectory(options)
+add_subdirectory(automation)
+add_subdirectory(interaction)
 add_subdirectory(load)
 add_subdirectory(resource)
 add_subdirectory(scene)

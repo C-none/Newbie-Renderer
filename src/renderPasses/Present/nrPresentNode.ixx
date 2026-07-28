@@ -1,8 +1,10 @@
 export module nr.renderPasses:presentNode;
 import dependency.vulkan;
 
+import nr.options;
 import nr.renderer;
 import nr.rhi;
+import nr.utils;
 import std;
 import :nodeType;
 
@@ -17,6 +19,18 @@ struct PresentScreenshotPendingSave
     vk::DeviceSize byteSize = 0;
     std::filesystem::path path{};
     std::uint32_t frameSlot = 0;
+    std::uint64_t frameIndex = 0;
+    nr::options::FrameEffect effect{};
+};
+
+struct PresentScreenshotPrepared
+{
+    vk::Extent2D extent{1u, 1u};
+    vk::Format format = vk::Format::eUndefined;
+    vk::DeviceSize byteSize = 0;
+    std::filesystem::path path{};
+    std::uint64_t frameIndex = 0;
+    nr::options::FrameEffect effect{};
 };
 } // namespace nr::renderPasses::detail
 
@@ -24,8 +38,9 @@ export namespace nr::renderPasses
 {
 struct PresentScreenshotConfig
 {
-    std::filesystem::path outputDirectory{"screenshots"};
-    std::string filePrefix{"screenshot"};
+    std::filesystem::path outputDirectory{
+        std::filesystem::path{std::string{nr::projectRoot}} / "screenshots"};
+    std::string sessionId{"session"};
 };
 
 struct PresentReadbackTarget
@@ -37,7 +52,6 @@ struct PresentReadbackTarget
 struct PresentNodeInput
 {
     vk::Format format = vk::Format::eR8G8B8A8Unorm;
-    float uiOpacity = 1.0f;
     std::optional<PresentReadbackTarget> readback{};
     PresentScreenshotConfig screenshot{};
 };
@@ -50,12 +64,25 @@ class PresentNode final : public Node
 
     PresentNodeInput input{};
 
+    [[nodiscard]] std::string_view actionableSemantic() const noexcept override
+    {
+        return "render.present";
+    }
+    void declareOptions(nr::options::OptionCatalogBuilder& builder) const override;
+    void collectOptionAvailability(
+        const nr::options::OptionFrameSnapshot& snapshot,
+        nr::options::OptionAvailabilityMap& availability) const override;
     void initialize(NodeInitContext& context) override;
     [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
     [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
     bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext& context, const NodeFrameParameters& frameParameters, const StructuralSnapshot& snapshot) override;
-    void collectUi(NodeUiBuildContext& context, const NodeFrameParameters& frameParameters) override;
+    void advanceContinuations(std::uint32_t frameSlot) override;
+    void flushContinuations() override;
+    [[nodiscard]] nr::renderer::FrameEffectFinalizeDisposition finalizeFrameEffect(
+        const nr::options::FrameEffect& effect,
+        bool targetBatchSubmitted,
+        std::uint32_t frameSlot) override;
     void shutdown(NodeShutdownContext& context) override;
 
   private:
@@ -66,16 +93,7 @@ class PresentNode final : public Node
     std::shared_ptr<detail::PresentRuntimeCache> runtime_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
     nr::rhi::Buffer screenshotReadbackBuffer_{};
+    std::optional<detail::PresentScreenshotPrepared> screenshotPrepared_{};
     std::optional<detail::PresentScreenshotPendingSave> screenshotPendingSave_{};
-    std::uint32_t pendingScreenshotRequestCount_ = 0;
-    std::uint32_t screenshotRequestCount_ = 0;
-    std::uint64_t screenshotSequence_ = 0;
-    float uiOpacityDraft_ = 1.0f;
-    float pendingUiOpacity_ = 1.0f;
-    bool pendingUiOpacityValid_ = false;
-    std::uint32_t toneMappingSelection_ = 0u;
-    std::uint32_t pendingToneMappingSelection_ = 0u;
-    bool pendingToneMappingSelectionValid_ = false;
-    std::string screenshotStatus_{};
 };
 } // namespace nr::renderPasses

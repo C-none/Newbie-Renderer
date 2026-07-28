@@ -1,6 +1,7 @@
 import std;
 import dependency;
 import nr.app;
+import nr.options;
 import nr.renderer;
 import nr.renderPasses;
 import nr.rhi;
@@ -54,6 +55,29 @@ struct ResolverObservations
     bool matchedPresentationExtent = false;
 };
 
+[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
+    const nr::renderer::RendererGraphPreflightResult& preflight)
+{
+    auto values = nr::options::OptionValueMap{};
+    auto availability = nr::options::OptionAvailabilityMap{};
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+        values.emplace(entry.first, entry.second.defaultValue);
+        availability.emplace(
+            entry.first,
+            nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    return nr::options::OptionFrameSnapshot{
+        .catalog = preflight.optionCatalog,
+        .values = std::move(values),
+        .availability = std::move(availability),
+        .frameIndex = 1u,
+        .revision = 1u,
+        .graphGeneration = 1u,
+        .bindingEpoch = 1u,
+        .snapshotToken = "smoke-snapshot",
+    };
+}
+
 [[nodiscard]] nr::renderer::RendererGraphSpec buildGraphSpec(
     const std::shared_ptr<nr::renderPasses::EmbeddedTriangleNode>& embeddedTriangle,
     AcquireObservations& acquire,
@@ -82,7 +106,10 @@ struct ResolverObservations
             .afterNodeIndex = 0,
         },
     };
-    graphSpec.frameResolutionResolver = [&acquire, &resolver](nr::rhi::Device& device, vk::Extent2D displayExtent) {
+    graphSpec.frameResolutionResolver = [&acquire, &resolver](
+                                            nr::rhi::Device& device,
+                                            vk::Extent2D displayExtent,
+                                            const nr::options::OptionFrameSnapshot&) {
         ++resolver.calls;
         resolver.acquireAttemptsAtCall = acquire.attempts;
         resolver.displayExtent = displayExtent;
@@ -157,9 +184,16 @@ struct ResolverObservations
     auto hookCleanup = AcquireOutOfDateHookCleanupGuard{presentation};
 
     auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
-    renderer.installGraph(buildGraphSpec(embeddedTriangle, acquire, resolver));
+    auto graphSpec = buildGraphSpec(embeddedTriangle, acquire, resolver);
+    auto const preflight = renderer.preflightGraph(graphSpec);
+    if (!preflight || !renderer.installGraph(graphSpec))
+    {
+        return 1;
+    }
+    auto const optionSnapshot = makeDefaultSnapshot(preflight);
     auto const recreationGenerationBefore = renderer.device().swapchainRecreationGeneration();
     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
+        .optionSnapshot = std::cref(optionSnapshot),
         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
     });
     auto const recreationGenerationAfter = renderer.device().swapchainRecreationGeneration();

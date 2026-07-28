@@ -1,4 +1,6 @@
+import dependency.json;
 import std;
+import nr.options;
 import nr.rhi;
 import nr.renderer;
 import nr.renderPasses;
@@ -9,30 +11,79 @@ import nr.utils;
 
 namespace
 {
+[[nodiscard]] nr::options::OptionFrameSnapshot makeOptionSnapshot(
+    std::vector<nr::options::OptionDefinition> definitions)
+{
+    auto builder = nr::options::OptionCatalogBuilder{};
+    std::ranges::for_each(
+        definitions,
+        [&](nr::options::OptionDefinition definition) {
+            nr::test::require(builder.add(std::move(definition)));
+        });
+    auto result = builder.build();
+    nr::test::require(result.valid());
+
+    auto values = nr::options::OptionValueMap{};
+    auto availability = nr::options::OptionAvailabilityMap{};
+    std::ranges::for_each(result.catalog->definitions(), [&](const auto& entry) {
+        values.emplace(entry.first, entry.second.defaultValue);
+        availability.emplace(
+            entry.first,
+            nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    return nr::options::OptionFrameSnapshot{
+        .catalog = std::move(result.catalog),
+        .values = std::move(values),
+        .availability = std::move(availability),
+        .frameIndex = 1u,
+        .revision = 1u,
+        .graphGeneration = 1u,
+        .bindingEpoch = 1u,
+        .snapshotToken = "renderpasses-cache-contract",
+    };
+}
+
 const nr::test::CaseRegistrar migratedRenderPassBranchSnapshotsCase{
     "all rtobject nodes opt into exact Skeleton branch snapshots",
     [] {
-        auto parameters = nr::renderer::NodeFrameParameters{};
-
         auto pathTracing = nr::renderPasses::PathTracingNode{};
         nr::test::require(pathTracing.supportsRenderGraphSkeleton());
-        auto const pathDefault = pathTracing.structuralSnapshot(parameters);
+        auto pathDefaultSnapshot = makeOptionSnapshot(nr::options::makePathTracingDefinitions());
+        auto const pathDefault = pathTracing.structuralSnapshot(
+            nr::renderer::NodeFrameParameters{
+                .optionSnapshot = std::cref(pathDefaultSnapshot),
+            });
         nr::test::require(pathDefault.has_value());
-        pathTracing.input.variant.maxSurfaceBounces = 7u;
-        auto const pathVariant = pathTracing.structuralSnapshot(parameters);
+        auto pathVariantSnapshot = pathDefaultSnapshot;
+        pathVariantSnapshot.values.insert_or_assign(
+            nr::options::optionId(nr::options::keys::pathTracingMaxSurfaceBounces),
+            nr::options::OptionWireValue{std::uint64_t{7u}});
+        auto const pathVariant = pathTracing.structuralSnapshot(
+            nr::renderer::NodeFrameParameters{
+                .optionSnapshot = std::cref(pathVariantSnapshot),
+            });
         nr::test::require(pathVariant.has_value());
         nr::test::require(pathDefault->branchKey != pathVariant->branchKey);
 
         auto dlss = nr::renderPasses::DlssRayReconstructionNode{};
         nr::test::require(dlss.supportsRenderGraphSkeleton());
-        auto const dlssDisabled = dlss.structuralSnapshot(parameters);
-        nr::test::require(dlssDisabled.has_value());
-        dlss.input.enabled = true;
+        auto dlssDefaultSnapshot = makeOptionSnapshot(nr::options::makeDlssDefinitions());
+        auto const dlssDefault = dlss.structuralSnapshot(
+            nr::renderer::NodeFrameParameters{
+                .optionSnapshot = std::cref(dlssDefaultSnapshot),
+            });
+        nr::test::require(dlssDefault.has_value());
         dlss.input.create.flags.alphaUpscaling = true;
-        dlss.input.evaluate.visualizeMotionVectors = true;
-        auto const dlssAlphaDebug = dlss.structuralSnapshot(parameters);
+        auto dlssDebugSnapshot = dlssDefaultSnapshot;
+        dlssDebugSnapshot.values.insert_or_assign(
+            nr::options::optionId(nr::options::keys::dlssVisualizeMotionVectors),
+            nr::options::OptionWireValue{true});
+        auto const dlssAlphaDebug = dlss.structuralSnapshot(
+            nr::renderer::NodeFrameParameters{
+                .optionSnapshot = std::cref(dlssDebugSnapshot),
+            });
         nr::test::require(dlssAlphaDebug.has_value());
-        nr::test::require(dlssDisabled->branchKey != dlssAlphaDebug->branchKey);
+        nr::test::require(dlssDefault->branchKey != dlssAlphaDebug->branchKey);
 
         auto ui = nr::renderPasses::UiNode{};
         nr::test::require(ui.supportsRenderGraphSkeleton());
@@ -40,77 +91,6 @@ const nr::test::CaseRegistrar migratedRenderPassBranchSnapshotsCase{
         auto accelerationStructure = nr::renderPasses::AccelerationStructureBuildNode{};
         nr::test::require(accelerationStructure.supportsRenderGraphSkeleton());
     }};
-
-struct StagingTestUiWriter final : nr::renderer::NodeUiWriter
-{
-    float nextFloat = 0.0f;
-    std::uint32_t nextUInt = 0u;
-    bool nextBool = false;
-    bool nextButton = false;
-    std::uint32_t inputUIntCallCount = 0u;
-    std::uint32_t sliderUIntCallCount = 0u;
-    std::vector<std::string> textCalls{};
-
-    void text(std::string_view value) override
-    {
-        textCalls.emplace_back(value);
-    }
-    void separator() override
-    {
-    }
-    [[nodiscard]] bool checkbox(std::string_view, bool &value) override
-    {
-        value = nextBool;
-        return true;
-    }
-    [[nodiscard]] bool button(std::string_view) override
-    {
-        return nextButton;
-    }
-    [[nodiscard]] bool beginCombo(std::string_view, std::string_view) override
-    {
-        return false;
-    }
-    void endCombo() override
-    {
-    }
-    [[nodiscard]] bool selectable(std::string_view, bool) override
-    {
-        return false;
-    }
-
-    [[nodiscard]] bool sliderFloat(std::string_view, float &value, float, float) override
-    {
-        value = nextFloat;
-        return true;
-    }
-
-    [[nodiscard]] bool inputFloat(std::string_view, float &value, float, float) override
-    {
-        value = nextFloat;
-        return true;
-    }
-
-    [[nodiscard]] bool inputInt32(std::string_view, std::int32_t &value, std::int32_t, std::int32_t) override
-    {
-        value = 0;
-        return true;
-    }
-
-    [[nodiscard]] bool inputUInt(std::string_view, std::uint32_t &value, std::uint32_t, std::uint32_t) override
-    {
-        ++inputUIntCallCount;
-        value = nextUInt;
-        return true;
-    }
-
-    [[nodiscard]] bool sliderUInt(std::string_view, std::uint32_t &value, std::uint32_t, std::uint32_t) override
-    {
-        ++sliderUIntCallCount;
-        value = nextUInt;
-        return true;
-    }
-};
 
 [[nodiscard]] std::string readProjectFile(std::filesystem::path relativePath)
 {
@@ -186,7 +166,7 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requireAbsent(sceneTextureBinding, "resetSceneTextureTableFrameCache", "scene texture table helper should not own frame-slot cache reset state");
                                                                          requirePresent(normalBuffer, "sceneTextureTableImmutableSamplerBinding()", "NormalBuffer should install the scene texture table immutable sampler before graphics PSO creation");
                                                                          requirePresent(pathTracing, "sceneTextureTableImmutableSamplerBinding()", "PathTracing should install the scene texture table immutable sampler before RT PSO creation");
-                                                                         requirePresent(pathTracingInterface, "PathTracingVariantKey variant{}", "PathTracing input should expose a node-local variant key");
+                                                                         requireAbsent(pathTracingInterface, "PathTracingVariantKey variant{}", "PathTracing input must not retain a second writable option value");
                                                                          requirePresent(pathTracingInterface, "enableRussianRoulette", "PathTracing variant key should expose the Russian roulette toggle");
                                                                          requirePresent(pathTracing, "std::map<PathTracingPipelineKey, std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>>", "PathTracing should cache RT pipelines by root variant and CHS permutation set");
                                                                          requirePresent(pathTracing, "std::map<PathTracingSbtKey, nr::rhi::ShaderBindingTable>", "PathTracing should cache SBTs separately from pipeline runtimes");
@@ -197,17 +177,19 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requirePresent(pathTracing, "ensurePathTracingFrameRuntime", "PathTracing should compose the current frame pipeline and SBT from separate node-owned caches");
                                                                          requireAbsent(pathTracing, "PathTracingRuntimeKey", "PathTracing should not merge root variants, CHS permutations, and SBT records into one runtime key");
                                                                          requireAbsent(pathTracing, "PathTracingVariantRuntime", "PathTracing should keep pipeline and SBT runtime state in separate caches");
-                                                                         requirePresent(pathTracingInterface, "PathTracingVariantKey variantUiDraft_", "PathTracing UI state should be node-owned");
-                                                                         requirePresent(pathTracingInterface, "std::optional<PathTracingVariantKey> pendingVariant_", "PathTracing variant UI edits should be staged by the node");
+                                                                         requireAbsent(pathTracingInterface, "variantUiDraft_", "PathTracing must not retain a node-local UI draft");
+                                                                         requireAbsent(pathTracingInterface, "pendingVariant_", "PathTracing must not retain a node-local pending variant");
+                                                                         requirePresent(pathTracingInterface, "void declareOptions", "PathTracing must declare its controls through the option catalog");
+                                                                         requirePresent(pathTracing, "pathTracingVariant(frameParameters.optionSnapshot.get())", "PathTracing must derive its active variant from the immutable frame option snapshot");
                                                                          requireAbsent(pathTracing, "context.variants", "PathTracing should not access renderer-owned variant state");
                                                                          requirePresent(pathTracing, "createPathTracingPipelineRuntime(device, pipelineKey, hitSbtPlan)", "PathTracing pipeline cache misses should rebuild the PSO synchronously on the build thread");
                                                                          requirePresent(pathTracing, "createPathTracingShaderBindingTable(device, pipelineRuntime, sbtKey, hitSbtPlan)", "PathTracing SBT cache misses should rebuild only the SBT for the active record plan");
-                                                                         requirePresent(pathTracingInterface, "void collectUi", "PathTracing controls should be node-local UI that stages link-time variant assignments");
+                                                                         requireAbsent(pathTracingInterface, "collectUi", "PathTracing must not expose a node-local mutation UI");
                                                                          requireAbsent(rendererInterface, "VariantStateRegistry", "Renderer interfaces should not expose a shared variant registry");
                                                                          requireAbsent(rendererCacheInterface, "variantRegistry", "Renderer cache suite should not own node variant state");
                                                                          requireAbsent(rendererImplementation, "commitFramePatches", "Renderer should not commit shader variant patches");
                                                                          requireAbsent(rendererImplementation, "collectVariantUiSections", "Renderer should not append registry-generated variant UI sections");
-                                                                         requirePresent(rendererImplementation, "non-empty NodeConfig.instanceName", "Renderer graph installation should require NodeConfig as the node-name source");
+                                                                         requirePresent(rendererImplementation, "createInfo.config.instanceName.empty()", "Renderer graph preflight should require NodeConfig as the node-name source");
                                                                          requireAbsent(pathTracing, "RendererCacheSuite", "PathTracing variant PSOs must not be stored in RendererCacheSuite");
                                                                          requirePresent(rendererImplementation, "makeTlasTextureCollectionKey", "Renderer should cache TLAS-only scene texture collection by an exact structural key");
                                                                          requirePresent(rendererInterface, "std::optional<RendererTlasTextureCollectionKey> tlasTextureCollectionKey_", "Renderer should own the TLAS texture collection cache");
@@ -225,7 +207,7 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requirePresent(accelerationStructureBuild, "runtime.blasRevisions.has_value() && *runtime.blasRevisions != blasRevisions", "mesh revision changes alone should invalidate the BLAS subcache");
                                                                          requirePresent(accelerationStructureBuild, "entry.second.cachedBuild = {};", "mesh content or layout revision changes should invalidate cached BLAS descriptors");
                                                                          requirePresent(accelerationStructureBuild, "replacementBlasAtlasCapacity", "revision-only BLAS atlas replacement should preserve capacity without applying the growth policy");
-                                                                         requirePresent(accelerationStructureBuild, "createBlasAtlas(runtime, device, requiredAtlasBytes, capacityOverflow)", "only actual BLAS atlas overflow should select capacity growth");
+                                                                         requirePresent(accelerationStructureBuild, "createBlasAtlas(runtime, device, requiredBytes, capacityOverflow)", "only actual BLAS atlas overflow should select capacity growth");
                                                                          requirePresent(accelerationStructureBuild, "recordBuildTlas", "AS optimization should preserve unconditional per-frame TLAS rebuild recording");
                                                                          requirePresent(sceneTextureBinding, ".usesImmutableSampler = true", "scene texture table descriptor writes should rely on the immutable sampler in the PSO layout");
                                                                          requireAbsent(rendererInterface, "sceneTextureSampler", "Renderer global resources should not expose a per-frame scene texture sampler");
@@ -253,7 +235,8 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requirePresent(rendererImplementation, "temporalHistoryResetPending_ = true;", "Environment replacement must queue a renderer-wide temporal history reset");
                                                                          requirePresent(rendererImplementation, "resolutionPlan.resetHistory || temporalHistoryResetPending_", "Renderer must merge an environment replacement reset into the next frame plan");
                                                                          requireAbsent(accumulate, "VariantItemEffect::RuntimeOnly", "Accumulate max history samples should not be registered as a runtime-only variant item");
-                                                                         requirePresent(accumulate, "void AccumulateNode::collectUi", "Accumulate max history samples should be staged by node-local UI");
+                                                                         requirePresent(accumulate, "maxHistorySampleCount(frameParameters.optionSnapshot.get())", "Accumulate must read its maximum history sample count from the immutable frame option snapshot");
+                                                                         requireAbsent(accumulate, "AccumulateNode::collectUi", "Accumulate must not expose a node-local mutation UI");
                                                                          requireAbsent(rendererImplementation, "snapshot.desc.effect != VariantItemEffect::RuntimeOnly", "Renderer should not contain generated runtime-only variant UI branching");
                                                                      }};
 
@@ -363,7 +346,19 @@ const nr::test::CaseRegistrar presentLinearExrScreenshotCase{"present screenshot
                                                                  auto presentInterface = readProjectFile("src/renderPasses/Present/nrPresentNode.ixx");
                                                                  auto present = readProjectFile("src/renderPasses/Present/nrPresentNode.cpp");
 
-                                                                 requirePresent(manifest, "\"openexr\"", "vcpkg manifest should install OpenEXR");
+                                                                 auto parsedManifest = dependency::json::parseJson(manifest);
+                                                                 nr::test::require(parsedManifest.valid(), "vcpkg manifest should be valid JSON");
+                                                                 auto const *manifestObject = std::get_if<dependency::json::JsonValue::Object>(&parsedManifest.value->storage);
+                                                                 nr::test::require(manifestObject != nullptr, "vcpkg manifest should be a JSON object");
+                                                                 auto const dependencies = manifestObject->find("dependencies");
+                                                                 nr::test::require(dependencies != manifestObject->end(), "vcpkg manifest should declare dependencies");
+                                                                 auto const *dependencyArray = std::get_if<dependency::json::JsonValue::Array>(&dependencies->second.storage);
+                                                                 nr::test::require(dependencyArray != nullptr, "vcpkg dependencies should be a JSON array");
+                                                                 auto const hasOpenExr = std::ranges::any_of(*dependencyArray, [](const dependency::json::JsonValue &entry) {
+                                                                     auto const *name = std::get_if<std::string>(&entry.storage);
+                                                                     return name != nullptr && *name == "openexr";
+                                                                 });
+                                                                 nr::test::require(hasOpenExr, "vcpkg manifest should install OpenEXR");
                                                                  requirePresent(externCMake, "find_package(OpenEXR CONFIG REQUIRED)", "dependency boundary should find OpenEXR");
                                                                  requirePresent(externCMake, "OpenEXR::OpenEXR", "dependency target should link OpenEXR");
                                                                  requirePresent(dependencyAssets, "namespace nr::dependency::openexr", "OpenEXR declarations should be exposed only through dependency.assets");
@@ -378,70 +373,15 @@ const nr::test::CaseRegistrar presentLinearExrScreenshotCase{"present screenshot
                                                                  requirePresent(present, ".format = sourceDesc->format", "Pending screenshot save should remember the source format");
                                                                  requirePresent(presentInterface, "vk::Format format = vk::Format::eUndefined", "Pending screenshot save should carry the source format across the frame fence");
                                                                  requirePresent(present, "writeLinearScreenshotExr", "Present should save the readback payload through the EXR writer");
+                                                                 requirePresent(present, "!screenshotPrepared_.has_value() &&\n        !screenshotPendingSave_.has_value()", "capture availability must remain conservatively busy while dispatch or continuation state exists");
+                                                                 requirePresent(present, "frameParameters.frameEffectSink->get().claim(*this, readbackPass)", "capture must claim its exact image-to-readback copy pass");
+                                                                 requirePresent(present, "if (!targetBatchSubmitted || screenshotPendingSave_.has_value())", "capture must not arm its continuation unless the target batch submitted");
+                                                                 requireOrdered(present, "if (!targetBatchSubmitted || screenshotPendingSave_.has_value())", "screenshotPendingSave_ = detail::PresentScreenshotPendingSave", "capture continuation state must be created only after target submission validation");
+                                                                 requirePresent(present, "screenshotPendingSave_->frameSlot != frameSlot", "capture harvest must wait for the owning RHI frame slot");
+                                                                 requirePresent(present, "void PresentNode::flushContinuations()", "graph replacement and shutdown must expose a synchronous capture flush hook");
+                                                                 requirePresent(present, ".phase = nr::options::OptionLogPhase::terminal", "capture harvest must emit its terminal machine record");
+                                                                 requireAbsent(present, "screenshotRequestCount_", "Present must not retain a multi-request screenshot counter");
                                                              }};
-
-const nr::test::CaseRegistrar renderPassNodeUiStagingCase{"renderpass node ui callbacks stage changes for the next frame", [] {
-                                                              auto frameParameters = nr::renderer::NodeFrameParameters{};
-
-                                                              auto present = nr::renderPasses::PresentNode{};
-                                                              present.input.uiOpacity = 1.0f;
-                                                              auto presentSections = std::vector<nr::renderer::NodeUiSection>{};
-                                                              auto presentUiContext = nr::renderer::NodeUiBuildContext{"Present", presentSections};
-                                                              present.collectUi(presentUiContext, frameParameters);
-                                                              nr::test::requireEqual(presentSections.size(), std::size_t{1u});
-
-                                                              auto presentWriter = StagingTestUiWriter{};
-                                                              presentWriter.nextFloat = 0.25f;
-                                                              presentWriter.nextButton = true;
-                                                              presentSections[0].draw(presentWriter);
-                                                              nr::test::requireEqual(present.input.uiOpacity, 1.0f);
-
-                                                              auto nextPresentSections = std::vector<nr::renderer::NodeUiSection>{};
-                                                              auto nextPresentUiContext = nr::renderer::NodeUiBuildContext{"Present", nextPresentSections};
-                                                              present.collectUi(nextPresentUiContext, frameParameters);
-                                                              nr::test::require(std::abs(present.input.uiOpacity - 0.25f) < 0.001f);
-                                                              auto nextPresentWriter = StagingTestUiWriter{};
-                                                              nextPresentSections[0].draw(nextPresentWriter);
-                                                              nr::test::require(std::ranges::find(nextPresentWriter.textCalls, "Screenshot queued") != nextPresentWriter.textCalls.end(), "Present screenshot button should stage a next-frame queued status");
-
-                                                              auto accumulate = nr::renderPasses::AccumulateNode{};
-                                                              accumulate.input.maxHistorySampleCount = nr::renderPasses::kAccumulateDefaultMaxHistorySampleCount;
-                                                              auto accumulateSections = std::vector<nr::renderer::NodeUiSection>{};
-                                                              auto accumulateUiContext = nr::renderer::NodeUiBuildContext{"Accumulate", accumulateSections};
-                                                              accumulate.collectUi(accumulateUiContext, frameParameters);
-                                                              nr::test::requireEqual(accumulateSections.size(), std::size_t{1u});
-
-                                                              auto accumulateWriter = StagingTestUiWriter{};
-                                                              accumulateWriter.nextUInt = nr::renderPasses::kAccumulateMaxHistorySampleCount + 128u;
-                                                              accumulateSections[0].draw(accumulateWriter);
-                                                              nr::test::requireEqual(accumulate.input.maxHistorySampleCount, nr::renderPasses::kAccumulateDefaultMaxHistorySampleCount, "Accumulate UI edits should be staged for the next frame");
-
-                                                              auto nextAccumulateSections = std::vector<nr::renderer::NodeUiSection>{};
-                                                              auto nextAccumulateUiContext = nr::renderer::NodeUiBuildContext{"Accumulate", nextAccumulateSections};
-                                                              accumulate.collectUi(nextAccumulateUiContext, frameParameters);
-                                                              nr::test::requireEqual(accumulate.input.maxHistorySampleCount, nr::renderPasses::kAccumulateMaxHistorySampleCount, "Accumulate node should clamp its staged history sample count internally");
-
-                                                              auto pathTracing = nr::renderPasses::PathTracingNode{};
-                                                              pathTracing.input.variant.maxSurfaceBounces = nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces;
-                                                              pathTracing.input.variant.enableRussianRoulette = true;
-                                                              auto pathTracingSections = std::vector<nr::renderer::NodeUiSection>{};
-                                                              auto pathTracingUiContext = nr::renderer::NodeUiBuildContext{"PathTracing", pathTracingSections};
-                                                              pathTracing.collectUi(pathTracingUiContext, frameParameters);
-                                                              nr::test::requireEqual(pathTracingSections.size(), std::size_t{1u});
-
-                                                              auto pathTracingWriter = StagingTestUiWriter{};
-                                                              pathTracingWriter.nextUInt = 0u;
-                                                              pathTracingWriter.nextBool = false;
-                                                              pathTracingSections[0].draw(pathTracingWriter);
-                                                              nr::test::requireEqual(pathTracing.input.variant.maxSurfaceBounces, nr::renderPasses::kPathTracingDefaultMaxSurfaceBounces, "PathTracing UI edits should not affect the current frame variant");
-                                                              nr::test::require(pathTracing.input.variant.enableRussianRoulette);
-
-                                                              auto nextPathTracingSections = std::vector<nr::renderer::NodeUiSection>{};
-                                                              auto nextPathTracingUiContext = nr::renderer::NodeUiBuildContext{"PathTracing", nextPathTracingSections};
-                                                              pathTracing.collectUi(nextPathTracingUiContext, frameParameters);
-                                                              nr::test::requireEqual(pathTracing.input.variant.maxSurfaceBounces, nr::renderPasses::kPathTracingMinSurfaceBounces, "PathTracing node should clamp its staged max-bounce UI input internally");
-                                                              nr::test::require(!pathTracing.input.variant.enableRussianRoulette, "PathTracing node should apply the staged Russian roulette toggle internally");
-                                                          }};
 
 const nr::test::CaseRegistrar pathTracingNodeAssemblyCase{"path tracing node resolves typed inputs and uses named RT assembly groups", [] {
                                                               auto pathTracingNode = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
@@ -698,8 +638,8 @@ const nr::test::CaseRegistrar skeletonPatchCapabilityCase{"all rtobject nodes ex
                                                                auto dlssHit = sourceSection(dlss, "bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(", "void DlssRayReconstructionNode::materializeCurrentFrame(");
                                                                auto uiHit = sourceSection(ui, "bool UiNode::materializeRenderGraphSkeleton(", "void UiNode::materializeCurrentFrame(");
                                                                auto asHit = sourceSection(asSource, "bool AccelerationStructureBuildNode::materializeRenderGraphSkeleton(", "void AccelerationStructureBuildNode::materializeCurrentFrame(");
-                                                               auto presentCold = sourceSection(present, "void PresentNode::materializeCurrentFrame(", "void PresentNode::collectUi(");
-                                                               auto presentCollectUi = sourceSection(present, "void PresentNode::collectUi(", "void PresentNode::processCompletedScreenshot(");
+                                                               auto presentCold = sourceSection(present, "void PresentNode::materializeCurrentFrame(", "void PresentNode::advanceContinuations(");
+                                                               auto presentAdvance = sourceSection(present, "void PresentNode::advanceContinuations(", "void PresentNode::flushContinuations(");
                                                                auto asCold = sourceSection(asSource, "void AccelerationStructureBuildNode::materializeCurrentFrame(", "} // namespace nr::renderPasses");
 
                                                                requirePresent(light, "nr::renderer::RenderGraphSkeletonPatchContext& context", "LightPrepare hit path must use patch-only context");
@@ -731,13 +671,14 @@ const nr::test::CaseRegistrar skeletonPatchCapabilityCase{"all rtobject nodes ex
                                                                requireAbsent(asHit, "detail::prepareAsFrame", "AS hit patch must not rebuild or advance preflight state when its prepared packet is unavailable");
                                                                requireOrdered(asHit, "snapshot.branchKey != expectedBranch", "auto prepared = std::move(*runtime_->preparedFrame)", "AS hit patch must validate the branch before consuming its prepared packet");
                                                                requireOrdered(asHit, "snapshot.branchKey != expectedBranch", "runtime_->preparedFrame.reset()", "AS hit patch must preserve its prepared packet on a branch mismatch");
-                                                               requireOrdered(asCold, "if (runtime_->preparedFrame.has_value())", "detail::declarePreparedAsFrame(context, *runtime_, std::move(prepared))", "AS cold fallback must reuse the unconsumed preflight packet");
-                                                               requirePresent(presentCollectUi, "processCompletedScreenshot(frameParameters.frameIndex)", "Present must process completed screenshots during pre-snapshot UI collection");
-                                                               requireOrdered(renderer, "installedNode.runtime->collectUi(uiContext, nodeFrameParameters)", "installedNode.runtime->structuralSnapshot(nodeFrameParameters)", "renderer must process Present screenshot completion before capturing structural snapshots");
+                                                               requireOrdered(asCold, "runtime_->preparedFrame.has_value()", "auto prepared = std::move(*runtime_->preparedFrame)", "AS build must require preflight preparation before consuming its packet");
+                                                               requireOrdered(asCold, "auto prepared = std::move(*runtime_->preparedFrame)", "detail::declarePreparedAsFrame(context, *runtime_, std::move(prepared))", "AS build must declare only the preflight-prepared packet");
+                                                               requireAbsent(asCold, "detail::prepareAsFrame(", "AS build must not retain a no-packet fallback preparation path");
+                                                               requirePresent(presentAdvance, "processCompletedScreenshot(frameSlot)", "Present must process completed screenshots through the renderer continuation hook");
+                                                               requireOrdered(renderer, "installedNode.runtime->advanceContinuations(begin.frameIndex)", "installedNode.runtime->structuralSnapshot(nodeFrameParameters)", "renderer must harvest Present screenshot continuations before capturing structural snapshots");
                                                                requireAbsent(presentHit, "processCompletedScreenshot(", "Present hit patch must not change screenshot topology after key selection");
-                                                               requireAbsent(presentCold, "processCompletedScreenshot(", "Present cold materialization must use the screenshot decision frozen before snapshot capture");
+                                                               requireAbsent(presentCold, "processCompletedScreenshot(", "Present cold materialization must not harvest a continuation during graph construction");
                                                                requireOrdered(presentHit, "expectedSnapshot->branchKey != snapshot.branchKey", "context.patchResource(", "Present hit patch must validate the selected screenshot branch before patching slots");
-                                                               requireOrdered(presentHit, "expectedSnapshot->branchKey != snapshot.branchKey", "--screenshotRequestCount_", "Present hit patch must validate the selected screenshot branch before consuming the one-shot request");
                                                                requireOrdered(dlssHit, "!snapshot.branchKey.starts_with(\"disabled;\")", "previousBuildTime_ = {}", "disabled DLSS hit patch must validate its branch before changing reset state");
                                                                auto hitSections = std::array{lightHit, asHit, pathHit, accumulateHit, dlssHit, uiHit, presentHit};
                                                                std::ranges::for_each(hitSections, [](std::string_view hit) {
@@ -753,12 +694,12 @@ const nr::test::CaseRegistrar skeletonPatchCapabilityCase{"all rtobject nodes ex
                                                                requirePresent(pathInterface, "supportsRenderGraphSkeleton() const noexcept override { return true; }", "PathTracing supports Skeleton patching");
                                                                requirePresent(dlssInterface, "supportsRenderGraphSkeleton() const noexcept override { return true; }", "DLSS supports Skeleton patching");
                                                                requirePresent(uiInterface, "supportsRenderGraphSkeleton() const noexcept override { return true; }", "UI supports Skeleton patching");
-                                                               auto const screenshotValidation = presentHit.find("screenshotSourceDesc = context.describeImageResource(sourceColor)");
-                                                               auto const screenshotConsume = presentHit.find("--screenshotRequestCount_");
+                                                               auto const screenshotValidation = presentCold.find("sourceDesc = context.describeImageResource(sourceColor)");
+                                                               auto const screenshotConsume = presentCold.find("screenshotPrepared_ = detail::PresentScreenshotPrepared");
                                                                nr::test::require(
                                                                    screenshotValidation != std::string_view::npos &&
                                                                        screenshotConsume != std::string_view::npos &&
                                                                        screenshotValidation < screenshotConsume,
-                                                                   "Present Skeleton hit must validate screenshot source metadata before consuming the one-shot request");
+                                                                   "Present capture must validate screenshot source metadata before preparing the one-shot effect");
                                                            }};
 } // namespace

@@ -1,14 +1,16 @@
 ---
 name: update-submodules
-description: How to update this repository's git submodules. Use when the user asks to update, bump, or sync submodules — the asset submodule (assets/glTF-Sample-Assets) or the Slang submodule (src/extern/slang).
+description: How to update this repository's git submodules. Use when the user asks to update, bump, or sync glTF sample assets, Slang, DLSS, or the pinned Ninja tracing tool.
 ---
 
 # Update Submodules
 
-Two submodules (see `.gitmodules`):
+Four submodules are recorded in `.gitmodules`:
 
 - `assets/glTF-Sample-Assets` — sample asset data.
 - `src/extern/slang` — Slang compiler; has its own nested submodules.
+- `src/extern/DLSS` — NVIDIA DLSS SDK and runtime feature binaries.
+- `tools/ninjatracing` — pinned Ninja-log to Chrome-trace converter.
 
 ## 1. Asset — update to HEAD
 
@@ -52,11 +54,42 @@ git submodule update --init --recursive
 cd ../..
 ```
 
-## 3. Record the bump in the superproject
+## 3. DLSS — checkout an explicitly selected release
+
+DLSS is a release input to the tracked MSVC bridge and feature-DLL deployment flow. Do not
+float it to the remote branch tip. Fetch tags, inspect the available formal releases, and
+checkout only the release requested by the user:
+
+```powershell
+cd src/extern/DLSS
+git fetch --tags --prune
+git tag --list "v*" --sort=-v:refname
+git checkout <reviewed-release-tag>
+git submodule update --init --recursive
+cd ../../..
+```
+
+After changing the pin, follow the repository's bridge publication and validation policy;
+moving the gitlink alone does not make the tracked bridge compatible with a new SDK.
+
+## 4. Ninja tracing — pinned commit only
+
+`tools/ninjatracing` is deliberately pinned. Never run
+`git submodule update --remote tools/ninjatracing` and do not make it track a floating
+remote branch. Update it only when the user supplies or approves a reviewed commit:
+
+```powershell
+cd tools/ninjatracing
+git fetch origin
+git checkout <reviewed-commit>
+cd ../..
+```
+
+## 5. Record the bump in the superproject
 
 Updating submodules moves their gitlink; commit it in this repo:
 
 ```powershell
-git add assets/glTF-Sample-Assets src/extern/slang
+git add assets/glTF-Sample-Assets src/extern/slang src/extern/DLSS tools/ninjatracing
 git commit -m "chore: bump submodules"
 ```

@@ -12,6 +12,7 @@ nr_add_library(nrrenderer STATIC)
 target_link_libraries(nrrenderer
 PUBLIC
     utils
+    nroptions
     nrscene
     nrresource
     nrrhi

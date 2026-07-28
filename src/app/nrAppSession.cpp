@@ -3,6 +3,7 @@ module nr.app;
 import :camera;
 import :session;
 import :ui;
+import nr.options;
 import nr.renderer;
 import nr.scene;
 import nr.utils;
@@ -24,6 +25,22 @@ void AppSession::initialize(const nr::renderer::RendererCreateInfo& createInfo)
 
 void AppSession::shutdown()
 {
+    if (auto abandoned = options_.shutdown(); abandoned.has_value())
+    {
+        auto const snapshot = options_.snapshot();
+        nr::options::emitMachineRecord<nr::LogLevel::warning>(
+            nr::options::OptionMachineRecord{
+                .sequence = abandoned->sequence,
+                .id = abandoned->id,
+                .phase = nr::options::OptionLogPhase::terminal,
+                .status = nr::options::OptionLogStatus::abandoned,
+                .frameIndex = snapshot != nullptr ? snapshot->frameIndex : 0u,
+                .origin = abandoned->origin,
+                .requestId = abandoned->requestId,
+                .reason = "shutdown",
+            });
+    }
+
     if (!renderer_.initialized())
     {
         scene_.reset();
@@ -37,7 +54,7 @@ void AppSession::shutdown()
 
 void AppSession::destroyScene()
 {
-    if (!scene_.has_value())
+    if (!scene_)
     {
         return;
     }
@@ -51,16 +68,36 @@ void AppSession::destroyScene()
     scene_.reset();
 }
 
-nr::scene::Scene& AppSession::createScene(const SceneSessionCreateInfo& createInfo)
+std::unique_ptr<nr::scene::Scene> AppSession::makeSceneCandidate(
+    const SceneSessionCreateInfo& createInfo)
 {
-    nrAssert(renderer_.initialized(), "AppSession::createScene requires initialize() first.");
+    nrAssert(renderer_.initialized(), "AppSession::makeSceneCandidate requires initialize() first.");
 
-    destroyScene();
-    scene_.emplace(nr::scene::SceneCreateInfo{
+    return std::make_unique<nr::scene::Scene>(nr::scene::SceneCreateInfo{
         .device = renderer_.device(),
         .uploadBudgetBytesPerFrame = createInfo.uploadBudgetBytesPerFrame,
         .cpuRetention = createInfo.cpuRetention,
     });
+}
+
+void AppSession::commitScene(std::unique_ptr<nr::scene::Scene> candidate)
+{
+    nrAssert(renderer_.initialized(), "AppSession::commitScene requires initialize() first.");
+    nrAssert(candidate != nullptr, "AppSession::commitScene requires a valid candidate.");
+    nrAssert(
+        &candidate->device() == &renderer_.device(),
+        "AppSession::commitScene candidate belongs to a different renderer device.");
+
+    renderer_.device().waitIdle();
+    renderer_.resetSceneBinding();
+    scene_.swap(candidate);
+    candidate.reset();
+}
+
+nr::scene::Scene& AppSession::createScene(const SceneSessionCreateInfo& createInfo)
+{
+    auto candidate = makeSceneCandidate(createInfo);
+    commitScene(std::move(candidate));
     return *scene_;
 }
 
@@ -71,7 +108,7 @@ bool AppSession::initialized() const noexcept
 
 bool AppSession::hasScene() const noexcept
 {
-    return scene_.has_value();
+    return scene_ != nullptr;
 }
 
 void AppSession::resetCameraFromSceneOrDefault(const AppCameraDefaultView& defaults)
@@ -79,7 +116,7 @@ void AppSession::resetCameraFromSceneOrDefault(const AppCameraDefaultView& defau
     nrAssert(renderer_.initialized(),
              "AppSession::resetCameraFromSceneOrDefault requires initialize() first.");
 
-    if (scene_.has_value())
+    if (scene_)
     {
         camera_.initializeFromSceneOrDefault(*scene_, renderer_.device().presentationContext, defaults);
         return;
@@ -96,6 +133,16 @@ nr::renderer::Renderer& AppSession::renderer() noexcept
 const nr::renderer::Renderer& AppSession::renderer() const noexcept
 {
     return renderer_;
+}
+
+nr::options::OptionSystem& AppSession::options() noexcept
+{
+    return options_;
+}
+
+const nr::options::OptionSystem& AppSession::options() const noexcept
+{
+    return options_;
 }
 
 AppCamera& AppSession::camera() noexcept
@@ -131,19 +178,19 @@ nr::renderer::FrameServices AppSession::makeFrameServices() noexcept
 
 nr::scene::Scene& AppSession::scene() noexcept
 {
-    nrAssert(scene_.has_value(), "AppSession::scene requires an active scene.");
+    nrAssert(scene_ != nullptr, "AppSession::scene requires an active scene.");
     return *scene_;
 }
 
 const nr::scene::Scene& AppSession::scene() const noexcept
 {
-    nrAssert(scene_.has_value(), "AppSession::scene requires an active scene.");
+    nrAssert(scene_ != nullptr, "AppSession::scene requires an active scene.");
     return *scene_;
 }
 
 std::optional<std::reference_wrapper<nr::scene::Scene>> AppSession::tryScene() noexcept
 {
-    if (!scene_.has_value())
+    if (!scene_)
     {
         return std::nullopt;
     }
@@ -153,7 +200,7 @@ std::optional<std::reference_wrapper<nr::scene::Scene>> AppSession::tryScene() n
 
 std::optional<std::reference_wrapper<const nr::scene::Scene>> AppSession::tryScene() const noexcept
 {
-    if (!scene_.has_value())
+    if (!scene_)
     {
         return std::nullopt;
     }

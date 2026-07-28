@@ -233,7 +233,7 @@ namespace nr::rhi::detail
     std::string_view moduleName)
 {
     // Business mapping is strict and 1:1 with `shader/` tree:
-    //   module test.utils.useFlag -> shader/test/utils/useFlag.slang
+    //   module renderer.pathTracing.core -> shader/renderer/pathTracing/core.slang
     return {std::filesystem::path(moduleNameToPath(moduleName) + ".slang")};
 }
 
@@ -1080,7 +1080,7 @@ void ShaderService::reloadSession()
         auto modulePath = detail::normalizeRequestModulePath(request.sourcePath);
         if (!modulePath.has_value())
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] invalid request.sourcePath='{}'. expected relative module-path form like 'test/utils/useFlag'.", request.sourcePath.string()));
+            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] invalid request.sourcePath='{}'. expected relative module-path form like 'renderer/pathTracing/core'.", request.sourcePath.string()));
             return result;
         }
 
@@ -1785,7 +1785,7 @@ void ShaderService::emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string
                 auto declaredMatches = false;
 
                 // Slang source may use leaf declaration (`module useFlag;`) while runtime
-                // identity is full path-derived module name (`test.utils.useFlag`).
+                // identity is full path-derived module name (`renderer.pathTracing.core`).
                 if (declaredModule.find('.') == std::string::npos)
                 {
                     declaredMatches = (declaredModule == expectedLeaf);
@@ -1859,7 +1859,7 @@ SlangCompiledModule ShaderService::loadOrCompileModuleLocked(const std::string &
 
         if (!loadedModule)
         {
-            auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via loadModule(module-path='{}'). Expected slash form like 'test/utils/useFlag'.", normalizedModuleName, normalizedModulePath);
+            auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via loadModule(module-path='{}'). Expected slash form like 'renderer/pathTracing/core'.", normalizedModuleName, normalizedModulePath);
             nrInfo<LogLevel::warning>(message);
             return {};
         }

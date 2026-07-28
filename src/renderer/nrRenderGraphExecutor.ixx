@@ -119,6 +119,7 @@ struct ExecuteReport
     std::size_t appliedAcquireBarrierCount = 0;
     std::size_t appliedReleaseBarrierCount = 0;
     std::size_t submittedBatchCount = 0;
+    std::vector<std::uint32_t> submittedCompiledBatchIndices{};
     std::size_t submittedRecordTaskCount = 0;
     std::size_t recordedSecondaryCommandBufferCount = 0;
     std::size_t replayedSecondaryCommandBufferCount = 0;

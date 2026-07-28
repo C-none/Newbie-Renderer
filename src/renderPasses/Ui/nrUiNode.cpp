@@ -751,7 +751,7 @@ void ensureFrameUploadBuffer(
     return frameParameters.frameServices->get().tryGet<nr::app::UiSystem>();
 }
 
-[[nodiscard]] std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> tryGetPresentationContext(
+[[nodiscard]] std::optional<std::reference_wrapper<const nr::rhi::PresentationContext>> tryGetPresentationContext(
     const nr::renderer::NodeFrameParameters& frameParameters)
 {
     if (!frameParameters.frameServices.has_value())
@@ -759,7 +759,7 @@ void ensureFrameUploadBuffer(
         return std::nullopt;
     }
 
-    return frameParameters.frameServices->get().tryGet<nr::rhi::PresentationContext>();
+    return std::as_const(frameParameters.frameServices->get()).tryGet<nr::rhi::PresentationContext>();
 }
 
 void drawVec3StatusLine(nr::app::UiSystem& ui, std::string_view label, const glm::vec3& value)
@@ -769,7 +769,7 @@ void drawVec3StatusLine(nr::app::UiSystem& ui, std::string_view label, const glm
 
 void drawRendererStatsSection(
     nr::app::UiSystem& ui,
-    std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> presentation)
+    std::optional<std::reference_wrapper<const nr::rhi::PresentationContext>> presentation)
 {
     auto const& stats = ui.stats();
     ui.textFmt("FPS: {:.1f}", stats.framesPerSecond);
@@ -784,7 +784,7 @@ void drawRendererStatsSection(
         return;
     }
 
-    auto& presentationContext = presentation->get();
+    auto const& presentationContext = presentation->get();
     auto const swapchainFormat = presentationContext.swapchainFormat();
     auto const swapchainColorSpace = presentationContext.swapchainColorSpace();
     ui.separator();
@@ -796,10 +796,6 @@ void drawRendererStatsSection(
     ui.textFmt(
         "Window Mode: {}",
         fullscreenEnabled ? std::string_view{"Exclusive Fullscreen"} : std::string_view{"Windowed"});
-    if (ui.button(fullscreenEnabled ? "Exit Fullscreen" : "Enter Fullscreen"))
-    {
-        presentationContext.setFullscreen(!fullscreenEnabled);
-    }
 }
 
 void drawCpuTimingLine(nr::app::UiSystem& ui, std::string_view label, double milliseconds)
@@ -899,7 +895,7 @@ template <std::size_t N>
 }
 
 [[nodiscard]] UiSectionArray<3> makeTrailingUiSections(
-    std::optional<std::reference_wrapper<nr::rhi::PresentationContext>> presentation)
+    std::optional<std::reference_wrapper<const nr::rhi::PresentationContext>> presentation)
 {
     return {
         nr::app::UiSection{
@@ -1132,7 +1128,6 @@ void prepareBindlessTextureTableForFrame(
     auto trailingSections = makeTrailingUiSections(tryGetPresentationContext(frameParameters));
     uiSystem->get().renderSections(
         std::span<const nr::app::UiSection>{},
-        frameParameters.nodeUiSections,
         sectionSpan(trailingSections));
     uiSystem->get().finalizeFrame();
     auto drawData = uiSystem->get().drawData();

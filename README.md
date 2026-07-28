@@ -27,26 +27,27 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 4. [x] Asset import and decode foundation for glTF-oriented content ingestion.
 5. [x] Multi-queue RDG execution and asynchronous queue submission.
 6. [x] Scene-driven cached BLAS rebuilds with per-frame TLAS construction and RT metadata.
-7.  [ ] Light BVH / Many-Light Sampling. Suggested reference: [Dynamic Many-Light Sampling for Real-Time Ray Tracing](https://research.nvidia.com/sites/default/files/pubs/2019-07_Dynamic-Many-Light-Sampling//MPC19.pdf)
-8.  [ ] Neural Material System. Suggested reference: [Real-Time Neural Appearance Models](https://research.nvidia.com/labs/rtr/neural_appearance_models/)
-9.  [ ] NTC. Suggested reference: [Random-Access Neural Compression of Material Textures](https://research.nvidia.com/labs/rtr/neural_texture_compression/)
-10. [ ] Neural Radiance Caching. Suggested reference: [Real-time Neural Radiance Caching for Path Tracing](https://research.nvidia.com/publication/2021-06_real-time-neural-radiance-caching-path-tracing)
-11. [ ] Filter After Shading. Suggested reference: [Filtering After Shading with Stochastic Texture Filtering](https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/)
-12. [x] DLSS Ray Reconstruction with quality-driven render resolution and DLAA-only output bypass. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
-13. [ ] Ray-Cones and Texture LOD. Suggested reference: [Improved Shader and Texture Level of Detail Using Ray Cones](https://research.nvidia.com/publication/2021-04_improved-shader-and-texture-level-detail-using-ray-cones)
-14. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
-15. [ ] NeuSample / neural material importance sampling. Suggested reference: [NeuSample: Importance Sampling for Neural Materials](https://cseweb.ucsd.edu/~viscomp/projects/neusample/)
-16. [ ] Neural shading optimization stability. Suggested reference: [Taming Optimization Variance in Compact Neural Shading Networks](https://research.nvidia.com/labs/rtr/publication/bitterli2026taming/)
-17. [ ] Comprehensive neural materials. Suggested reference: [Towards Comprehensive Neural Materials: Dynamic Structure-Preserving Synthesis with Accurate Silhouette at Instant Inference Speed](https://dl.acm.org/doi/full/10.1145/3721238.3730626)
+7.  [x] Alias-table many-light sampling for active punctual lights. Suggested reference: [Dynamic Many-Light Sampling for Real-Time Ray Tracing](https://research.nvidia.com/sites/default/files/pubs/2019-07_Dynamic-Many-Light-Sampling//MPC19.pdf)
+8.  [ ] Light BVH.
+9.  [ ] Neural Material System. Suggested reference: [Real-Time Neural Appearance Models](https://research.nvidia.com/labs/rtr/neural_appearance_models/)
+10. [ ] NTC. Suggested reference: [Random-Access Neural Compression of Material Textures](https://research.nvidia.com/labs/rtr/neural_texture_compression/)
+11. [ ] Neural Radiance Caching. Suggested reference: [Real-time Neural Radiance Caching for Path Tracing](https://research.nvidia.com/publication/2021-06_real-time-neural-radiance-caching-path-tracing)
+12. [ ] Filter After Shading. Suggested reference: [Filtering After Shading with Stochastic Texture Filtering](https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/)
+13. [x] DLSS Ray Reconstruction with quality-driven render resolution and DLAA-only output bypass. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
+14. [ ] Ray-Cones and Texture LOD. Suggested reference: [Improved Shader and Texture Level of Detail Using Ray Cones](https://research.nvidia.com/publication/2021-04_improved-shader-and-texture-level-detail-using-ray-cones)
+15. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
+16. [ ] NeuSample / neural material importance sampling. Suggested reference: [NeuSample: Importance Sampling for Neural Materials](https://cseweb.ucsd.edu/~viscomp/projects/neusample/)
+17. [ ] Neural shading optimization stability. Suggested reference: [Taming Optimization Variance in Compact Neural Shading Networks](https://research.nvidia.com/labs/rtr/publication/bitterli2026taming/)
+18. [ ] Comprehensive neural materials. Suggested reference: [Towards Comprehensive Neural Materials: Dynamic Structure-Preserving Synthesis with Accurate Silhouette at Instant Inference Speed](https://dl.acm.org/doi/full/10.1145/3721238.3730626)
 
 ## Prerequisites
 
 - MSYS2 CLANG64 tools on `PATH` (`clang`, `clang++`, `clang-scan-deps`, `lld`, `llvm-ar`, `llvm-ranlib`, `llvm-objcopy`, `llvm-strip`, `clangd`, `lldb-dap`, `ninja`)
 - A compiler toolchain with `import std;` support for C++26
 - Vulkan SDK 1.4.341 or newer
-- CMake 4.3.3 or newer
+- CMake 4.4 or newer
 - Vcpkg with `VCPKG_ROOT` configured
-- Git submodules initialized recursively for Slang, DLSS, and sample assets
+- Git submodules initialized recursively for Slang, DLSS, sample assets, and Ninja tracing
 
 Optional MSVC toolchains:
 
@@ -89,17 +90,42 @@ Optional MSVC toolchains:
 
    ```bash
    # Debug
-   ./build/llvm/Debug/main.exe
+   ./build/llvm/src/Debug/main.exe
 
    # Release
-   ./build/llvm/Release/main.exe
+   ./build/llvm/src/Release/main.exe
    ```
+
+### Runtime Logs
+
+The viewer owns one rotating NDJSON log session under `build/app/logs`:
+
+- `engine.ndjson` contains `nr.utils:errorHandle` diagnostics. Informational records are
+  file-only; warnings, errors, and assertions are also shown in the command window.
+- `options.ndjson` contains every `nrCompactRecord`, including `NR_OPTION_V1` final
+  outcomes and `NR_OPTION_ENDPOINT_V1` endpoint discovery.
+
+Each active file rotates at 32 MiB and retains four older segments named
+`engine.1.ndjson` through `engine.4.ndjson` or `options.1.ndjson` through
+`options.4.ndjson`. Every new segment starts with an `NR_LOG_SESSION_V1` record that
+identifies the viewer session and stream.
+
+Agents and humans can read or tail the active files without capturing the process'
+stdout/stderr. A tailer must detect replacement of the active file, reopen it, and scan
+the new segment from its session marker after rotation. An `.active-viewer` directory
+exclusively leases the fixed paths; a second viewer fails before rotating them. After an
+abnormal process termination, remove a stale empty lease only after confirming that no
+viewer still owns the log directory.
+
+For a quick PowerShell view, run
+`Get-Content .\build\app\logs\options.ndjson -Wait`; restart that reader after a rotation
+so it resumes from the new `NR_LOG_SESSION_V1` marker.
 
 ### MSVC / Visual Studio Generator
 
-Per the CMake 4.3.3 C++ modules manual, `import std` is currently supported only with Ninja generators. The supported build and verification path in this repository is therefore the LLVM/Ninja preset above.
+Per the CMake 4.4 C++ modules manual, `import std` is currently supported only with Ninja generators. The supported build and verification path in this repository is therefore the LLVM/Ninja preset above.
 
-The available MSVC-oriented configure preset is `msvc-vs`, which uses the Visual Studio 18 2026 generator and is kept for IDE-oriented workflows. It is not the supported `import std` verification path under CMake 4.3.3.
+The available MSVC-oriented configure preset is `msvc-vs`, which uses the Visual Studio 18 2026 generator and is kept for IDE-oriented workflows. It is not the supported `import std` verification path under CMake 4.4.
 
 ```bash
 cmake --preset msvc-vs
@@ -153,9 +179,10 @@ app.shutdown();
 
 | Name | Current State | Purpose |
 | --- | --- | --- |
-| Slang | `v2026.10.2` | Shader language, compilation, reflection, SPIR-V generation |
+| Slang | `v2026.13` | Shader language, compilation, reflection, SPIR-V generation |
 | glTF-Sample-Assets | `2bac6f8c` | Sample assets for import, testing, and regression cases |
 | NVIDIA DLSS SDK | `310.7.0` | NGX headers, static loader input for MSVC bridge publication, and the Release Ray Reconstruction feature DLL |
+| Ninja tracing | `fc292457` | Converts Ninja build logs into Chrome trace JSON through the project trace target |
 | Nsight Aftermath SDK `R590` | bundled under `src/extern/Aftermath` | Future GPU crash diagnostics and shader crash analysis |
 | Nsight Graphics SDK `0.9.0` | bundled under `src/extern/NsightGraphics/0.9.0` | Env-driven Graphics Capture, GPU Trace, and SDK frame boundaries |
 
@@ -176,16 +203,21 @@ git submodule update --init --recursive
 | `imgui` | Debug UI and tooling overlays |
 | `glfw3` | Window creation and Vulkan surface bootstrap |
 | `vulkan-memory-allocator` | Vulkan memory allocation |
-| `tracy` | Profiling hooks and runtime instrumentation support |
 | `assimp` | Model and scene import |
 | `stb` | Generic image decode fallback |
 | `libjpeg-turbo` | Fast JPEG decode path |
+| `openexr` | HDR environment-map decode |
 | `flecs` | ECS runtime used by the scene layer |
+| `boost-asio` | Networking and asynchronous I/O foundation |
+| `boost-beast` | WebSocket transport for the authenticated agent controller |
+| `boost-json` | All project-owned C++ JSON parsing and serialization through `dependency.json` |
+| `nr-lua` | Project-packaged Lua runtime for offline automation |
 
 ### Notes
 
 - Third-party C/C++ headers are surfaced to engine code through narrow `dependency.*` C++ modules under `src/extern`; `src/extern/exportDependency.ixx` remains a compatibility umbrella. Internal project sources should import the narrow module they need instead of adding raw third-party includes.
 - The Slang git submodule is kept under `src/extern/slang`, configured as a local build-tree CMake package, and consumed by the engine through `find_package(slang)` / `slang::slang`.
+- The Ninja tracing submodule is pinned to an explicitly reviewed commit; do not float `tools/ninjatracing` with `git submodule update --remote`.
 - Additional transitive dependencies used by Slang, SPIR-V tooling, and related build scripts are resolved through the Slang submodule itself.
 - Vcpkg package versions are controlled by the active manifest/toolchain resolution in your local environment.
 - If you want to update submodules, use normal Git workflows. Nsight Aftermath is the exception and should be updated manually from the NVIDIA Developer website when needed.

@@ -109,22 +109,24 @@ void ModelHistory::trimToLimit()
     if (normalizedPath.empty())
     {
         return ModelLoadReport{
-            .message = "Model path is empty.",
+            .message = std::format(
+                "Model path is invalid or outside the assets root: {}",
+                modelPath.generic_string()),
         };
     }
 
-    auto ec = std::error_code{};
-    if (!std::filesystem::exists(normalizedPath, ec) || ec)
+    auto resolvedPath = resolveModelAssetPath(normalizedPath);
+    if (!resolvedPath)
     {
         return ModelLoadReport{
             .modelPath = normalizedPath,
-            .message = std::format("Model file not found: {}", normalizedPath.string()),
+            .message = std::move(resolvedPath.error()),
         };
     }
 
-    nr::nrLog(nr::LogLevel::info, "PIPELINE", std::format("Loading model: {}", normalizedPath.string()));
+    nr::nrLog(nr::LogLevel::info, "PIPELINE", std::format("Loading model: {}", resolvedPath->string()));
     auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
-        .sourcePath = normalizedPath,
+        .sourcePath = *resolvedPath,
     });
     if (!loadResult.has_value())
     {
@@ -135,8 +137,8 @@ void ModelHistory::trimToLimit()
     }
 
     auto &sceneAsset = loadResult.value();
-    auto &scene = app.createScene();
-    auto templateHandle = scene.registerTemplate(sceneAsset);
+    auto candidate = app.makeSceneCandidate();
+    auto templateHandle = candidate->registerTemplate(sceneAsset);
     if (!templateHandle.valid())
     {
         return ModelLoadReport{
@@ -145,7 +147,7 @@ void ModelHistory::trimToLimit()
         };
     }
 
-    auto instanceHandle = scene.instantiate(templateHandle);
+    auto instanceHandle = candidate->instantiate(templateHandle);
     if (!instanceHandle.valid())
     {
         return ModelLoadReport{
@@ -154,6 +156,7 @@ void ModelHistory::trimToLimit()
         };
     }
 
+    app.commitScene(std::move(candidate));
     app.resetCameraFromSceneOrDefault();
     currentModelPath_ = normalizedPath;
 

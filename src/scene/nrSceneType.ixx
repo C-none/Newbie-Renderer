@@ -1,4 +1,3 @@
-// #include <flecs.h>
 export module nr.scene:type;
 import dependency.math;
 import dependency.ecs;

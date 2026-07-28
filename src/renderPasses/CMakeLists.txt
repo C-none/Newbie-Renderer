@@ -12,12 +12,14 @@ nr_add_library(nrrenderpasses STATIC)
 target_link_libraries(nrrenderpasses
 PUBLIC
     nrapp
+    nroptions
     nrrenderer
     nrscene
     nrresource
     nrrhi
     utils
     dependency
+    dependency_shader_share
 )
 target_sources(nrrenderpasses
     PRIVATE
