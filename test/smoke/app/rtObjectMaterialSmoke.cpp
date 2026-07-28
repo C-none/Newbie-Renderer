@@ -34,6 +34,9 @@ namespace
     };
 }
 
+constexpr auto kFrameAcquireTimeout = std::chrono::seconds{5};
+constexpr auto kMaxResizeRetries = std::uint32_t{3u};
+
 [[nodiscard]] nr::renderer::RendererGraphSpec buildRtObjectGraphSpec(vk::Format swapchainFormat)
 {
     auto asBuild = std::make_shared<nr::renderPasses::AccelerationStructureBuildNode>();
@@ -164,35 +167,67 @@ namespace
 {
     auto &renderer = app.renderer();
     auto &presentation = renderer.device().presentationContext;
+    auto result = std::optional<nr::renderer::RendererFrameResult>{};
+    auto failed = false;
+    auto const totalAttempts = kMaxResizeRetries + 1u;
+    auto const attempts = std::views::iota(std::uint32_t{0u}, totalAttempts);
+    std::ranges::for_each(attempts, [&](std::uint32_t attemptIndex) {
+        if (failed || result.has_value())
+        {
+            return;
+        }
 
-    presentation.pollEvents();
-    auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
-        .optionSnapshot = std::cref(optionSnapshot),
-        .scene = std::ref(scene),
-        .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
-        .sceneExtractInput = nr::scene::SceneExtractInput{},
-        .cameraOverride = cameraOverride.value_or(app.camera().buildRendererCameraOverride()),
+        presentation.pollEvents();
+        auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
+            .optionSnapshot = std::cref(optionSnapshot),
+            .scene = std::ref(scene),
+            .acquireTimeout = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(kFrameAcquireTimeout).count()),
+            .sceneExtractInput = nr::scene::SceneExtractInput{},
+            .cameraOverride = cameraOverride.value_or(app.camera().buildRendererCameraOverride()),
+        });
+
+        if (!frameResult.rendered)
+        {
+            std::println(
+                "[error] rtobject material smoke frame attempt {}/{} was not rendered within the bounded acquire.",
+                attemptIndex + 1u,
+                totalAttempts);
+            failed = true;
+            return;
+        }
+
+        if (frameResult.presentResult == vk::Result::eErrorOutOfDateKHR ||
+            frameResult.presentResult == vk::Result::eSuboptimalKHR)
+        {
+            if (attemptIndex >= kMaxResizeRetries)
+            {
+                std::println(
+                    "[error] rtobject material smoke exhausted {} resize retries across {} total frame attempts.",
+                    kMaxResizeRetries,
+                    totalAttempts);
+                failed = true;
+                return;
+            }
+
+            renderer.resize();
+            return;
+        }
+
+        if (frameResult.presentResult != vk::Result::eSuccess)
+        {
+            std::println(
+                "[error] rtobject material smoke present failed on attempt {}/{} with {}.",
+                attemptIndex + 1u,
+                totalAttempts,
+                vk::to_string(frameResult.presentResult));
+            failed = true;
+            return;
+        }
+
+        result = std::move(frameResult);
     });
-
-    if (!frameResult.rendered)
-    {
-        std::println("[error] rtobject material smoke frame was not rendered.");
-        return std::nullopt;
-    }
-
-    if (frameResult.presentResult == vk::Result::eErrorOutOfDateKHR || frameResult.presentResult == vk::Result::eSuboptimalKHR)
-    {
-        renderer.resize();
-        return renderOneFrame(app, scene, optionSnapshot, std::move(cameraOverride));
-    }
-
-    if (frameResult.presentResult != vk::Result::eSuccess)
-    {
-        std::println("[error] rtobject material smoke present failed with {}.", vk::to_string(frameResult.presentResult));
-        return std::nullopt;
-    }
-
-    return frameResult;
+    return result;
 }
 
 [[nodiscard]] bool renderUntilRtSceneReady(
@@ -233,11 +268,68 @@ namespace
     return true;
 }
 
-[[nodiscard]] bool renderCameraMotionFrames(
-    nr::app::AppSession& app,
-    nr::scene::Scene& scene,
+[[nodiscard]] bool renderFrameExpectingSkeletonHit(
+    nr::app::AppSession &app,
+    nr::scene::Scene &scene,
+    const nr::options::OptionFrameSnapshot& optionSnapshot,
+    std::optional<nr::renderer::RendererCameraOverride> cameraOverride,
+    std::string_view frameLabel)
+{
+    auto const before = app.renderer().renderGraphSkeletonStatistics();
+    if (!renderOneFrame(app, scene, optionSnapshot, std::move(cameraOverride)).has_value())
+    {
+        std::println("[error] rtobject material smoke failed while rendering the {} frame.", frameLabel);
+        return false;
+    }
+
+    auto const after = app.renderer().renderGraphSkeletonStatistics();
+    if (after.hitCount != before.hitCount + 1u || after.missCount != before.missCount)
+    {
+        std::println(
+            "[error] rtobject material smoke {} frame expected exactly one Skeleton hit and no miss: hits {} -> {}, misses {} -> {}, last miss reason '{}'.",
+            frameLabel,
+            before.hitCount,
+            after.hitCount,
+            before.missCount,
+            after.missCount,
+            nr::renderer::renderGraphSkeletonMissReasonName(after.lastMissReason));
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool renderSkeletonReuseFrames(
+    nr::app::AppSession &app,
+    nr::scene::Scene &scene,
     const nr::options::OptionFrameSnapshot& optionSnapshot)
 {
+    // The first ready frame can carry the one-shot dirty-BLAS branch, and each
+    // in-flight slot can expose a distinct retained scratch-buffer capacity.
+    // Materialize every steady-state slot variant before requiring exact reuse.
+    auto stabilizationFailed = false;
+    std::ranges::for_each(
+        std::views::iota(std::uint32_t{0u}, nr::maxFrameInFlight),
+        [&](std::uint32_t) {
+            stabilizationFailed =
+                stabilizationFailed || !renderOneFrame(app, scene, optionSnapshot).has_value();
+        });
+    if (stabilizationFailed)
+    {
+        std::println(
+            "[error] rtobject material smoke failed while stabilizing the post-upload AS frame-slot variants.");
+        return false;
+    }
+
+    if (!renderFrameExpectingSkeletonHit(
+            app,
+            scene,
+            optionSnapshot,
+            {},
+            "stable warm"))
+    {
+        return false;
+    }
+
     auto movedCamera = app.camera().viewer();
     auto const previousPosition = movedCamera.frame().position;
     movedCamera.applyControl(nr::renderer::ViewerCameraControlInput{
@@ -251,42 +343,25 @@ namespace
         return false;
     }
 
-    if (!renderOneFrame(
+    if (!renderFrameExpectingSkeletonHit(
             app,
             scene,
             optionSnapshot,
-            movedCamera.buildRendererCameraOverride()).has_value())
+            movedCamera.buildRendererCameraOverride(),
+            "camera motion"))
     {
-        std::println("[error] rtobject material smoke failed while rendering camera motion.");
         return false;
     }
 
-    if (!renderOneFrame(
+    if (!renderFrameExpectingSkeletonHit(
             app,
             scene,
             optionSnapshot,
-            movedCamera.buildRendererCameraOverride()).has_value())
+            movedCamera.buildRendererCameraOverride(),
+            "post-motion stationary"))
     {
-        std::println("[error] rtobject material smoke failed on the stationary frame after camera motion.");
         return false;
     }
-    return true;
-}
-
-[[nodiscard]] bool verifySkeletonReuse(const nr::renderer::RenderGraphSkeletonCacheStatistics &before, const nr::renderer::RenderGraphSkeletonCacheStatistics &after)
-{
-    if (after.missCount <= before.missCount)
-    {
-        std::println("[error] rtobject material smoke did not observe a cold RenderGraph Skeleton miss.");
-        return false;
-    }
-
-    if (after.hitCount <= before.hitCount)
-    {
-        std::println("[error] rtobject material smoke did not observe a patch-only RenderGraph Skeleton hit.");
-        return false;
-    }
-
     return true;
 }
 
@@ -316,12 +391,12 @@ namespace
 
         auto const skeletonStatisticsBefore = app.renderer().renderGraphSkeletonStatistics();
         if (!renderUntilRtSceneReady(app, scene->get(), optionSnapshot) ||
-            !renderCameraMotionFrames(app, scene->get(), optionSnapshot))
+            !renderSkeletonReuseFrames(app, scene->get(), optionSnapshot))
         {
             return false;
         }
         auto const skeletonStatisticsAfter = app.renderer().renderGraphSkeletonStatistics();
-        return verifySkeletonReuse(skeletonStatisticsBefore, skeletonStatisticsAfter);
+        return skeletonStatisticsAfter.hitCount > skeletonStatisticsBefore.hitCount;
     }();
 
     app.shutdown();

@@ -40,7 +40,10 @@ nr_link_module_dependencies(nr_rt_object_material_smoke_test rtObjectMaterialSmo
 )
 
 add_test(NAME nr_rt_object_material_smoke_test COMMAND nr_rt_object_material_smoke_test)
-set_tests_properties(nr_rt_object_material_smoke_test PROPERTIES LABELS "gpu;window;smoke;app;rt;assets")
+set_tests_properties(nr_rt_object_material_smoke_test PROPERTIES
+    LABELS "gpu;window;smoke;app;rt;assets;requires-unsandboxed"
+    TIMEOUT 90
+)
 
 nr_add_executable(nr_swapchain_out_of_date_smoke_test swapchainOutOfDateSmoke.cpp)
 set_target_properties(nr_swapchain_out_of_date_smoke_test PROPERTIES FOLDER "Test/smoke/app")

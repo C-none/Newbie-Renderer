@@ -456,6 +456,34 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
             consumed[valueIndex] = true;
             return;
         }
+        if (token == "--render-graph-skeleton")
+        {
+            auto const valueIndex = index + 1u;
+            if (valueIndex >= tokens.size())
+            {
+                options.errorMessage =
+                    "--render-graph-skeleton requires 'legacy' or 'enabled'.";
+                return;
+            }
+            if (tokens[valueIndex] == "legacy")
+            {
+                options.benchmarkRenderGraphSkeletonMode =
+                    nr::renderer::RenderGraphSkeletonMode::Legacy;
+            }
+            else if (tokens[valueIndex] == "enabled")
+            {
+                options.benchmarkRenderGraphSkeletonMode =
+                    nr::renderer::RenderGraphSkeletonMode::Enabled;
+            }
+            else
+            {
+                options.errorMessage =
+                    "--render-graph-skeleton accepts only 'legacy' or 'enabled'.";
+                return;
+            }
+            consumed[valueIndex] = true;
+            return;
+        }
 
         if (token.starts_with("-"))
         {
@@ -491,6 +519,12 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     {
         options.errorMessage = "--script is valid only with --interaction offline-lua.";
     }
+    if (!options.benchmark &&
+        options.benchmarkRenderGraphSkeletonMode.has_value())
+    {
+        options.errorMessage =
+            "--render-graph-skeleton is available only with --benchmark.";
+    }
     return options;
 }
 
@@ -500,7 +534,11 @@ void printViewerUsage(std::string_view executableName)
     std::println("  {} [model_path] [--pipeline normalview|rtobject]", executableName);
     std::println("  {} [model_path] --interaction agent", executableName);
     std::println("  {} [model_path] --interaction offline-lua --script <path.lua>", executableName);
-    std::println("  {} --benchmark --warmup-frames N --measure-frames N --output <directory> [--dlss-quality ultra-performance]", executableName);
+    std::println(
+        "  {} --benchmark --warmup-frames N --measure-frames N --output <directory> "
+        "[--dlss-quality ultra-performance] "
+        "[--render-graph-skeleton legacy|enabled]",
+        executableName);
     std::println("  {} --help", executableName);
     std::println("Controls:");
     std::println("  Move: W/S/A/D/Q/E");
@@ -511,6 +549,15 @@ void printViewerUsage(std::string_view executableName)
 
 [[nodiscard]] int runViewer(ViewerRunConfig config)
 {
+    if (config.benchmark && !benchmarkExecutionSupported)
+    {
+        nr::nrLog(
+            nr::LogLevel::error,
+            "PIPELINE",
+            "--benchmark requires an optimized Release executable with validation disabled.");
+        return 2;
+    }
+
     auto registry = makeDefaultPipelineRegistry();
     if (!registry.contains(config.initialPipelineId))
     {
@@ -520,6 +567,16 @@ void printViewerUsage(std::string_view executableName)
     if (config.benchmark && config.initialPipelineId != rtObjectPipelineId)
     {
         nr::nrLog(nr::LogLevel::error, "PIPELINE", "--benchmark is currently supported only by the rtobject pipeline.");
+        return 2;
+    }
+    if (config.benchmark &&
+        config.benchmarkRenderGraphSkeletonMode ==
+            nr::renderer::RenderGraphSkeletonMode::Differential)
+    {
+        nr::nrLog(
+            nr::LogLevel::error,
+            "PIPELINE",
+            "--benchmark does not support Differential RenderGraph Skeleton timing.");
         return 2;
     }
 
@@ -626,6 +683,8 @@ void printViewerUsage(std::string_view executableName)
 
     if (config.benchmark)
     {
+        app.renderer().configureRenderGraphSkeletonMode(
+            config.benchmarkRenderGraphSkeletonMode);
         app.renderer().configureBenchmark(nr::renderer::RendererBenchmarkConfig{
             .enabled = true,
             .warmupFrames = config.warmupFrames,
@@ -634,6 +693,8 @@ void printViewerUsage(std::string_view executableName)
             .dlssQuality = "ultra-performance",
             .modelPath = initialLoad.modelPath.string(),
             .pipelineId = config.initialPipelineId,
+            .renderGraphSkeletonMode =
+                config.benchmarkRenderGraphSkeletonMode,
             .commandLine = config.commandLine,
         });
     }
@@ -819,6 +880,9 @@ void printViewerUsage(std::string_view executableName)
         .dlssQuality = options.dlssQuality,
         .interactionMode = options.interactionMode,
         .automationScript = options.automationScript,
+        .benchmarkRenderGraphSkeletonMode =
+            options.benchmarkRenderGraphSkeletonMode.value_or(
+                nr::renderer::RenderGraphSkeletonMode::Enabled),
         .commandLine = std::move(commandLine),
     });
 }

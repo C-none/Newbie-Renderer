@@ -1,6 +1,9 @@
 # RT Pipeline CPU Optimization Directions
 
-> **Status:** R0, the first R1 runtime phase, and the M1 lazy-diagnostic facility are implemented. R1 is not experimentally promoted because this patch does not retain a live legacy switch or differential mode; M1 performance promotion still requires an isolated benchmark; other work packages remain proposed experiments.
+> **Status:** R0 and R1 runtime reuse are implemented with live benchmark-only Legacy
+> and Enabled controls. A valid single-pair Release A/B verifies the Enabled
+> mechanism and records a `0.043404 ms` CPU-work mean improvement, but it remains a
+> hold/re-measure result rather than a major-package promotion.
 >
 > **Baseline date:** 2026-07-25.
 >
@@ -78,9 +81,48 @@ The current runs and older captures lack controlled, matching provenance. This d
 therefore makes no old-versus-current causal comparison.
 
 The numerical baseline artifacts in this roadmap use schema v1: `post_scene_ms` was a
-`cpu_substages` diagnostic and remained part of Unclassified. Current schema v2 promotes
-that same mutually exclusive interval to a top-level stage, so the baseline table and its
-`0.244 ms` Unclassified value retain historical v1 semantics.
+`cpu_substages` diagnostic and remained part of Unclassified. Current schema v3 keeps
+that mutually exclusive interval as a top-level stage and adds Skeleton telemetry, so
+the baseline table and its `0.244 ms` Unclassified value retain historical v1
+semantics.
+
+### 2.1 R1 Release closure pair
+
+The 2026-07-28 pair used executable SHA256
+`03e97506ac52d2601631b2d00a17b7dca6fbbacbf25ad6108840980fe719d8ed`.
+The retained [Legacy](reports/rt_pipeline_cpu_performance/runs/20260728-rtobject-skeleton-legacy-release-v3)
+and [Enabled](reports/rt_pipeline_cpu_performance/runs/20260728-rtobject-skeleton-enabled-release-v3)
+schema-v3 runs match on Release/validation state, Sponza, GPU and driver, display/render
+extents, DLSS preset, UI mode, three frames in flight, and 600/1200 accepted
+warmup/measurement frames. Only run identity, timestamps, output/argv, and Skeleton
+mode differ.
+
+| Metric | Legacy p50 / p95 / mean (ms) | Enabled p50 / p95 / mean (ms) | Enabled delta p50 / p95 / mean (ms) |
+|---|---:|---:|---:|
+| Total | 2.184950 / 3.113600 / 2.182049 | 2.173650 / 3.040295 / 2.185846 | -0.011300 / -0.073305 / +0.003797 |
+| CPU work | 1.393350 / 2.060700 / 1.479125 | 1.350600 / 2.024815 / 1.435721 | -0.042750 / -0.035885 / -0.043404 |
+| Build | 0.257450 / 0.555220 / 0.293764 | 0.236100 / 0.511930 / 0.269315 | -0.021350 / -0.043290 / -0.024449 |
+| Node loop | 0.200100 / 0.430300 / 0.225586 | 0 / 0 / 0 | -0.200100 / -0.430300 / -0.225586 |
+| Skeleton patch | 0 / 0 / 0 | 0.080000 / 0.172700 / 0.089502 | +0.080000 / +0.172700 / +0.089502 |
+| Compile | 0.022900 / 0.047700 / 0.025221 | 0.022000 / 0.046210 / 0.024426 | -0.000900 / -0.001490 / -0.000795 |
+| Prepare | 0.118500 / 0.164730 / 0.125181 | 0.115700 / 0.213670 / 0.123235 | -0.002800 / +0.048940 / -0.001946 |
+| Execute | 0.601600 / 0.812015 / 0.615095 | 0.598400 / 0.804705 / 0.607642 | -0.003200 / -0.007310 / -0.007454 |
+
+Both audits are valid: each has 1200 strictly increasing measurement frames, one
+stable configuration, 8400 complete GPU-pass rows, and zero missing, partial,
+duplicate, extra, invalid, or schema-drift counts. Legacy has 1200 intentional
+`disabled` frames and zero patch/rebuild timing. Enabled has 1200 hits with reason
+`none`, zero measurement misses/rebuilds/failures/mismatches, and 1794 hits plus nine
+cold misses over the complete warmup/measurement/drain lifecycle.
+
+The verified finding is a `0.043404 ms` (`2.93%`) CPU-work mean reduction with p50 and
+p95 reductions of `0.042750 ms` and `0.035885 ms`. Build mean falls by `0.024449 ms`
+(`8.32%`). Total mean is effectively mixed (`+0.003797 ms`), and Prepare p95 rises
+`0.048940 ms`. Under section 8.4 this one ordered pair and incomplete clock,
+power/thermal, affinity, commit, and dirty-tree provenance are insufficient for major
+promotion; retain the rollback/differential controls and repeat counterbalanced pairs.
+Nested node-loop and patch values are not additive with Build, and no GPU pass was
+summed or treated as a frame critical path.
 
 ## 3. Current baseline and opportunity
 
@@ -114,7 +156,7 @@ repeated pairs rather than a single before/after run.
 | D1 | Can raster and TLAS texture discovery produce one frame-local request? | Unclassified ceiling 0.244 ms; TLAS collection is nested there | High feasibility | Low-medium correctness risk | Request telemetry | Proceed independently of E1 |
 | D2 | Can a shared request and earlier version hit avoid redundant request construction? | Build/Prepare are ceilings only; request cost unisolated | Medium | Medium descriptor-state risk | D1 and cache counters | Proceed after D1 |
 | R0 | Which owner advances each scene/extraction revision? | Gate, not a direct saving | High need | High API and invalidation-design risk | Mutation matrix | Implemented |
-| R1 | Can stable RT topology/metadata/material/geometry/hit-SBT plans be reused and dynamic instance state patched? | Build ceiling 0.652 ms; AS metadata-plan mean approximately 0.137 ms is nested | Medium-high | High correctness/lifetime risk | R0 and differential validation | Runtime implemented; legacy switch, differential validation, and promotion pending |
+| R1 | Can stable RT topology/metadata/material/geometry/hit-SBT plans be reused and dynamic instance state patched? | Valid pair: CPU-work mean -0.043404 ms; Build mean -0.024449 ms | Medium; one ordered pair | High correctness/lifetime risk | R0, live rollback/differential controls, repeated pairs | Runtime and controls implemented; valid mechanism closure; hold and re-measure |
 | S1 | Can static scene bridge and TLAS texture products become incremental? | Scene ceiling 0.250 ms plus non-additive TLAS collection in Unclassified | Medium | High mutation coverage risk | R0; preferably R1 contracts | Hold until revisions |
 | M1 | Does lazy successful `nrAssert` message construction produce repeatable savings? | Unmeasured micro-opportunity | Medium feasibility, low impact confidence | Low | Isolated counter and A/B | Lazy facility and expensive ShaderCursor contexts implemented; promotion pending |
 | P2 | Where do Present and Prepare costs belong? | Present 0.225 ms; Prepare 0.135 ms, separately | Medium | Medium WSI/driver attribution risk | G0-quality trace | Attribute later |
@@ -176,7 +218,9 @@ Those are constraints on E1/E2, not proof that more or fewer tasks win on this w
 
 ## 6. Detailed work packages
 
-Each package should be independently switchable and retain the current path until promotion. The current R1 runtime patch does not yet meet that promotion requirement.
+Each package should be independently switchable and retain the current path until
+promotion. R1 now retains Legacy and Differential controls; its valid single-pair
+Release result remains below the repeated-pair promotion gate.
 
 ### G0 - Provenance, timeline, and Unclassified closure
 
@@ -186,7 +230,7 @@ Each package should be independently switchable and retain the current path unti
 - **Must remain dynamic:** frame ordinal/slot, CPU scheduling, queue and acquire/present events, and per-frame resource state are observations, not cache keys.
 - **Dependencies:** supported driver/tool combinations, saved GPU Trace and system-timeline artifacts, and an executable hash matching the benchmark.
 - **Telemetry / experiment:** CPU core/thread lanes, Vulkan calls, submits, queue lanes, acquire/present, residual timers, power/thermal state, and profiler completion.
-- **Risks:** instrumentation perturbation; a connected session without openable saved artifacts from the relevant profiler is invalid evidence.
+- **Risks:** instrumentation perturbation; a connected session without openable saved artifacts from the relevant profiler is invalid evidence. Diagnostics must use a finite timeout and complete process-tree cleanup as defined by [Smoke-test process lifetime and bounded diagnostics](renderer_performance_measurement.md#smoke-test-process-lifetime-and-bounded-diagnostics); a timed-out or orphaned run, or one missing its required stack or trace, cannot serve as promotion evidence.
 - **Exit:** proceed when Unclassified is partitioned, the completed GPU Trace opens, and the separate CPU/system timeline is analyzable; hold if any is absent; abandon only an unsupported tool path, not the evidence requirement.
 - **Rollback:** keep probes opt-in and disable them if they perturb sampling.
 
@@ -406,7 +450,7 @@ Perform P2 Present/Prepare attribution. Reconsider submit merging, transient-res
 or compile work only if new timeline/allocation evidence makes them material.
 
 Every implementation package needs a feature/config switch, the old path, and an optional
-differential mode until promotion. R1 currently lacks those promotion controls. Later changes to stable runtime boundaries must update
+differential mode until promotion. R1 now retains those controls. Later changes to stable runtime boundaries must update
 [`docs/architecture/README.md`](architecture/README.md) and any linked topic document in
 the same patch.
 

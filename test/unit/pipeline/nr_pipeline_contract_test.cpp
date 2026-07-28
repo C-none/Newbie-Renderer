@@ -228,6 +228,8 @@ const nr::test::CaseRegistrar cliCase{
         nr::test::require(options.errorMessage.empty());
         nr::test::requireEqual(options.modelPath.string(), std::string{"assets/Box.gltf"});
         nr::test::requireEqual(options.pipelineId, std::string{"rtobject"});
+        nr::test::require(
+            !options.benchmarkRenderGraphSkeletonMode.has_value());
 
         auto badValues = std::vector<std::string>{"--unknown"};
         auto badArgv = makeArgSpanStorage(badValues);
@@ -236,7 +238,17 @@ const nr::test::CaseRegistrar cliCase{
         nr::test::require(!badOptions.errorMessage.empty());
 
         auto benchmarkValues = std::vector<std::string>{
-            "--benchmark", "--warmup-frames", "12", "--measure-frames", "24", "--output", "build/benchmark", "--dlss-quality", "ultra-performance"};
+            "--benchmark",
+            "--warmup-frames",
+            "12",
+            "--measure-frames",
+            "24",
+            "--output",
+            "build/benchmark",
+            "--dlss-quality",
+            "ultra-performance",
+            "--render-graph-skeleton",
+            "legacy"};
         auto benchmarkArgv = makeArgSpanStorage(benchmarkValues);
         auto benchmark = nr::pipeline::parseViewerCommandLine(
             std::span<char*>{benchmarkArgv.data(), benchmarkArgv.size()});
@@ -245,6 +257,9 @@ const nr::test::CaseRegistrar cliCase{
         nr::test::requireEqual(benchmark.warmupFrames, 12u);
         nr::test::requireEqual(benchmark.measureFrames, 24u);
         nr::test::requireEqual(benchmark.dlssQuality, nr::pipeline::RtDlssQuality::ultraPerformance);
+        nr::test::requireEqual(
+            benchmark.benchmarkRenderGraphSkeletonMode,
+            std::optional{nr::renderer::RenderGraphSkeletonMode::Legacy});
 
         auto incompleteValues = std::vector<std::string>{"--benchmark", "--measure-frames", "0"};
         auto incompleteArgv = makeArgSpanStorage(incompleteValues);
@@ -283,6 +298,51 @@ const nr::test::CaseRegistrar cliCase{
         nr::test::requireEqual(
             lua.automationScript.generic_string(),
             std::string{"smoke.lua"});
+
+        auto invalidSkeletonValues = std::vector<std::string>{
+            "--benchmark",
+            "--measure-frames",
+            "1",
+            "--output",
+            "build/benchmark",
+            "--dlss-quality",
+            "ultra-performance",
+            "--render-graph-skeleton",
+            "differential"};
+        auto invalidSkeletonArgv =
+            makeArgSpanStorage(invalidSkeletonValues);
+        auto invalidSkeleton = nr::pipeline::parseViewerCommandLine(
+            std::span<char*>{
+                invalidSkeletonArgv.data(),
+                invalidSkeletonArgv.size()});
+        nr::test::require(!invalidSkeleton.errorMessage.empty());
+
+        auto nonBenchmarkSkeletonValues = std::vector<std::string>{
+            "--render-graph-skeleton",
+            "enabled"};
+        auto nonBenchmarkSkeletonArgv =
+            makeArgSpanStorage(nonBenchmarkSkeletonValues);
+        auto nonBenchmarkSkeleton = nr::pipeline::parseViewerCommandLine(
+            std::span<char*>{
+                nonBenchmarkSkeletonArgv.data(),
+                nonBenchmarkSkeletonArgv.size()});
+        nr::test::require(!nonBenchmarkSkeleton.errorMessage.empty());
+    }};
+
+const nr::test::CaseRegistrar benchmarkBuildGateCase{
+    "viewer benchmark execution is gated to Release builds before app initialization",
+    [] {
+#if defined(NDEBUG)
+        nr::test::require(nr::pipeline::benchmarkExecutionSupported);
+#else
+        nr::test::require(!nr::pipeline::benchmarkExecutionSupported);
+        nr::test::requireEqual(
+            nr::pipeline::runViewer(
+                nr::pipeline::ViewerRunConfig{
+                    .benchmark = true,
+                }),
+            2);
+#endif
     }};
 
 const nr::test::CaseRegistrar defaultEnvironmentCase{

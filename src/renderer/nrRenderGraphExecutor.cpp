@@ -487,23 +487,6 @@ namespace nr::renderer
                 commandBuffer,
                 detail::rendererBatchScopeLabel(planBatch.batchIndex, planBatch.queue, compiledBatch.openedBySubmitNodeDebugName),
             };
-            auto commandBufferHandle = *commandBuffer;
-
-            static auto loggedBatchIndices = std::set<std::uint32_t>{};
-            if (loggedBatchIndices.insert(planBatch.batchIndex).second)
-            {
-                auto passList = std::string{};
-                std::ranges::for_each(compiledBatch.passes, [&](const CompiledPass &pass) {
-                    if (!passList.empty())
-                    {
-                        passList += ",";
-                    }
-                    passList += pass.debugName;
-                });
-
-                auto commandBufferRaw = std::bit_cast<std::uint64_t>(static_cast<VkCommandBuffer>(commandBufferHandle));
-                nrInfo(std::format("RenderGraphExecutor batch={} queue={} cmd=0x{:x} passes=[{}]", planBatch.batchIndex, detail::queueDomainLabel(planBatch.queue), commandBufferRaw, passList));
-            }
 
             if (batchTimedPassCount > 0u)
             {

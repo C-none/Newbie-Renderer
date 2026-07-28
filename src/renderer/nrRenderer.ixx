@@ -42,6 +42,9 @@ enum class RenderGraphSkeletonMode : std::uint8_t
     Differential,
 };
 
+[[nodiscard]] std::string_view renderGraphSkeletonModeName(RenderGraphSkeletonMode mode) noexcept;
+[[nodiscard]] std::string_view renderGraphSkeletonMissReasonName(
+    RenderGraphSkeletonMissReason reason) noexcept;
 namespace frameResource
 {
 inline constexpr std::string_view presentSourceColor = "present.sourceColor";
@@ -193,6 +196,7 @@ struct RendererBenchmarkConfig
     std::string dlssQuality{"dlaa"};
     std::string modelPath{};
     std::string pipelineId{};
+    RenderGraphSkeletonMode renderGraphSkeletonMode = RenderGraphSkeletonMode::Enabled;
     std::string commandLine{};
 };
 
@@ -212,6 +216,10 @@ struct RendererBenchmarkFrame
     double graphPreludeMilliseconds = 0.0;
     double uiCollectMilliseconds = 0.0;
     double nodeLoopMilliseconds = 0.0;
+    double skeletonPatchMilliseconds = 0.0;
+    double skeletonRebuildMilliseconds = 0.0;
+    bool skeletonHit = false;
+    RenderGraphSkeletonMissReason skeletonMissReason = RenderGraphSkeletonMissReason::None;
     ExecutorBenchmarkTelemetry execute{};
     double executeAccountedMainThreadMilliseconds = 0.0;
     double executeUnclassifiedMilliseconds = 0.0;
@@ -311,9 +319,14 @@ struct RendererGraphBuildTimings
 [[nodiscard]] double rendererBenchmarkClassifiedCpuMilliseconds(const RendererCpuFrameTimings &timings) noexcept;
 [[nodiscard]] double rendererBenchmarkExecuteAccountedMainThreadMilliseconds(const ExecutorBenchmarkTelemetry &telemetry) noexcept;
 [[nodiscard]] bool validateRendererBenchmarkExecuteTelemetry(const RendererBenchmarkFrame &frame) noexcept;
-[[nodiscard]] bool validateBenchmarkFrames(std::span<const RendererBenchmarkFrame> frames);
+[[nodiscard]] bool validateRendererBenchmarkSkeletonTelemetry(
+    const RendererBenchmarkFrame &frame,
+    RenderGraphSkeletonMode mode) noexcept;
+[[nodiscard]] bool validateBenchmarkFrames(
+    std::span<const RendererBenchmarkFrame> frames,
+    RenderGraphSkeletonMode mode);
 [[nodiscard]] RendererBenchmarkQualityAudit auditRendererBenchmark(std::span<const RendererBenchmarkFrame> frames, std::span<const RendererBenchmarkGpuPass> passes, std::span<const RendererBenchmarkGpuFrameStatus> statuses, std::size_t expectedNodeCount,
-                                                                   std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry);
+                                                                   std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry, RenderGraphSkeletonMode skeletonMode);
 [[nodiscard]] RendererBenchmarkDistribution makeRendererBenchmarkDistribution(std::vector<double> values);
 
 struct NodeInitContext
@@ -1634,6 +1647,7 @@ class Renderer
     std::vector<double> benchmarkNodeBuildMilliseconds_{};
     RendererBenchmarkAsTelemetry benchmarkCurrentAsTelemetry_{};
     std::vector<RendererBenchmarkAsTelemetry> benchmarkAsTelemetry_{};
+    RenderGraphSkeletonCacheStatistics benchmarkSkeletonStatisticsBefore_{};
     std::chrono::system_clock::time_point benchmarkStartedAt_{};
     bool benchmarkFinalized_ = false;
     bool benchmarkSucceeded_ = false;

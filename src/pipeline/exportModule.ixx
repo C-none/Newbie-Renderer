@@ -12,6 +12,11 @@ inline constexpr std::string_view normalViewPipelineId = "normalview";
 inline constexpr std::string_view rtObjectPipelineId = "rtobject";
 inline constexpr std::string_view defaultPipelineId = rtObjectPipelineId;
 inline constexpr std::size_t defaultModelHistoryLimit = 32u;
+#if defined(NDEBUG)
+inline constexpr bool benchmarkExecutionSupported = true;
+#else
+inline constexpr bool benchmarkExecutionSupported = false;
+#endif
 
 enum class RtPostProcessingMode : std::uint8_t
 {
@@ -142,6 +147,7 @@ struct ViewerCommandLineOptions
     RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
     ViewerInteractionMode interactionMode = ViewerInteractionMode::human;
     std::filesystem::path automationScript{};
+    std::optional<nr::renderer::RenderGraphSkeletonMode> benchmarkRenderGraphSkeletonMode{};
     std::string errorMessage{};
 };
 
@@ -159,6 +165,8 @@ struct ViewerRunConfig
     RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
     ViewerInteractionMode interactionMode = ViewerInteractionMode::human;
     std::filesystem::path automationScript{};
+    nr::renderer::RenderGraphSkeletonMode benchmarkRenderGraphSkeletonMode =
+        nr::renderer::RenderGraphSkeletonMode::Enabled;
     std::string commandLine{};
 };
 

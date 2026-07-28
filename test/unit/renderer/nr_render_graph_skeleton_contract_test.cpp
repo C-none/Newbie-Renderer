@@ -384,17 +384,45 @@ const nr::test::CaseRegistrar patchFailureColdFallbackCase{
     }};
 
 const nr::test::CaseRegistrar structureMismatchCase{
-    "render graph Skeleton differential comparison falls back on structural mismatch",
+    "render graph Skeleton Differential cold comparison refreshes an authoritative structural mismatch",
     [] {
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
         auto cold = makeFrame(1u);
         static_cast<void>(cache.acceptMaterialized(makeKey(), cold));
+        auto const beforeMismatch = cache.statistics();
+
         auto changed = makeFrame(2u, true);
         auto mismatch = cache.acceptMaterialized(makeKey(), changed);
         nr::test::require(mismatch.keyHit);
         nr::test::require(!mismatch.structureMatches);
         nr::test::requireEqual(mismatch.missReason, nr::renderer::RenderGraphSkeletonMissReason::StructureMismatch);
-        nr::test::requireEqual(cache.statistics().structureMismatchCount, std::uint64_t{1u});
+        auto const afterMismatch = cache.statistics();
+        nr::test::requireEqual(afterMismatch.hitCount, beforeMismatch.hitCount);
+        nr::test::requireEqual(afterMismatch.missCount, beforeMismatch.missCount + 1u);
+        nr::test::requireEqual(
+            afterMismatch.structureMismatchCount,
+            beforeMismatch.structureMismatchCount + 1u);
+        nr::test::requireEqual(
+            afterMismatch.lastMissReason,
+            nr::renderer::RenderGraphSkeletonMissReason::StructureMismatch);
+
+        auto refreshed = cache.lookup(makeKey());
+        nr::test::require(static_cast<bool>(refreshed));
+        nr::test::requireEqual(refreshed->staticFrame.passes.size(), std::size_t{2u});
+
+        auto sameChangedStructure = makeFrame(3u, true);
+        auto hit = cache.acceptMaterialized(makeKey(), sameChangedStructure);
+        nr::test::require(hit.keyHit);
+        nr::test::require(hit.structureMatches);
+        nr::test::requireEqual(hit.missReason, nr::renderer::RenderGraphSkeletonMissReason::None);
+        auto const afterHit = cache.statistics();
+        nr::test::requireEqual(afterHit.hitCount, afterMismatch.hitCount + 1u);
+        nr::test::requireEqual(afterHit.missCount, afterMismatch.missCount);
+        nr::test::requireEqual(
+            afterHit.structureMismatchCount,
+            afterMismatch.structureMismatchCount);
+        nr::test::requireEqual(afterHit.entryCount, std::size_t{1u});
+        nr::test::requireEqual(afterHit.lastMissReason, nr::renderer::RenderGraphSkeletonMissReason::None);
     }};
 
 const nr::test::CaseRegistrar unsupportedNodeCase{

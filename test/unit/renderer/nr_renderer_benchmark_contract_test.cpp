@@ -1,15 +1,28 @@
 import dependency.vulkan;
 import nr.renderer;
 import nr.test;
+import nr.utils;
 import std;
 
 namespace
 {
+[[nodiscard]] std::string readProjectFile(std::filesystem::path relativePath)
+{
+    auto path = std::filesystem::path{std::string{nr::projectRoot}} / relativePath;
+    auto file = std::ifstream{path};
+    nr::test::require(file.good(), std::format("failed to open {}", path.generic_string()));
+
+    auto contents = std::ostringstream{};
+    contents << file.rdbuf();
+    return contents.str();
+}
+
 [[nodiscard]] nr::renderer::RendererBenchmarkFrame frame(std::uint64_t ordinal, double totalMilliseconds)
 {
     auto sample = nr::renderer::RendererBenchmarkFrame{};
     sample.frameOrdinal = ordinal;
     sample.cpu.totalMilliseconds = totalMilliseconds;
+    sample.skeletonHit = true;
     return sample;
 }
 
@@ -32,9 +45,28 @@ struct AuditInput
     };
 }
 
-[[nodiscard]] nr::renderer::RendererBenchmarkQualityAudit audit(const AuditInput &input, std::size_t expectedNodeCount = 0u)
+[[nodiscard]] bool validate(
+    std::span<const nr::renderer::RendererBenchmarkFrame> frames,
+    nr::renderer::RenderGraphSkeletonMode mode =
+        nr::renderer::RenderGraphSkeletonMode::Enabled)
 {
-    return nr::renderer::auditRendererBenchmark(input.frames, input.passes, input.statuses, expectedNodeCount, input.nodeBuildMilliseconds, input.accelerationStructures);
+    return nr::renderer::validateBenchmarkFrames(frames, mode);
+}
+
+[[nodiscard]] nr::renderer::RendererBenchmarkQualityAudit audit(
+    const AuditInput &input,
+    std::size_t expectedNodeCount = 0u,
+    nr::renderer::RenderGraphSkeletonMode mode =
+        nr::renderer::RenderGraphSkeletonMode::Enabled)
+{
+    return nr::renderer::auditRendererBenchmark(
+        input.frames,
+        input.passes,
+        input.statuses,
+        expectedNodeCount,
+        input.nodeBuildMilliseconds,
+        input.accelerationStructures,
+        mode);
 }
 
 void appendValidFrame(AuditInput &input)
@@ -66,27 +98,120 @@ const nr::test::CaseRegistrar distributionCase{"renderer benchmark distribution 
 const nr::test::CaseRegistrar validationCase{"renderer benchmark rejects duplicate ordinals and invalid durations", [] {
                                                  auto valid = std::array{frame(3u, 1.0), frame(5u, 2.0)};
                                                  valid.front().cpu.postSceneMilliseconds = 0.25;
-                                                 nr::test::require(nr::renderer::validateBenchmarkFrames(valid));
+                                                 nr::test::require(validate(valid));
                                                  nr::test::requireEqual(nr::renderer::rendererBenchmarkClassifiedCpuMilliseconds(valid.front().cpu), 0.25);
 
                                                  auto duplicate = std::array{frame(3u, 1.0), frame(3u, 2.0)};
-                                                 nr::test::require(!nr::renderer::validateBenchmarkFrames(duplicate));
+                                                 nr::test::require(!validate(duplicate));
 
                                                  auto negative = std::array{frame(3u, -1.0)};
-                                                 nr::test::require(!nr::renderer::validateBenchmarkFrames(negative));
+                                                 nr::test::require(!validate(negative));
 
                                                  auto negativePostScene = std::array{frame(3u, 1.0)};
                                                  negativePostScene.front().cpu.postSceneMilliseconds = -0.1;
-                                                 nr::test::require(!nr::renderer::validateBenchmarkFrames(negativePostScene));
+                                                 nr::test::require(!validate(negativePostScene));
 
                                                  auto nonFinitePostScene = std::array{frame(3u, 1.0)};
                                                  nonFinitePostScene.front().cpu.postSceneMilliseconds = std::numeric_limits<double>::quiet_NaN();
-                                                 nr::test::require(!nr::renderer::validateBenchmarkFrames(nonFinitePostScene));
+                                                 nr::test::require(!validate(nonFinitePostScene));
+
+                                                 auto negativeSkeletonPatch = std::array{frame(3u, 1.0)};
+                                                 negativeSkeletonPatch.front().skeletonPatchMilliseconds = -0.1;
+                                                 nr::test::require(!validate(negativeSkeletonPatch));
+
+                                                 auto nonFiniteSkeletonRebuild = std::array{frame(3u, 1.0)};
+                                                 nonFiniteSkeletonRebuild.front().skeletonRebuildMilliseconds =
+                                                     std::numeric_limits<double>::quiet_NaN();
+                                                 nr::test::require(!validate(nonFiniteSkeletonRebuild));
 
                                                  auto drift = std::array{frame(3u, 1.0), frame(4u, 2.0)};
                                                  drift[1].configRevision = 2u;
-                                                 nr::test::require(!nr::renderer::validateBenchmarkFrames(drift));
+                                                 nr::test::require(!validate(drift));
                                              }};
+
+const nr::test::CaseRegistrar skeletonTelemetryValidationCase{
+    "renderer benchmark validates Skeleton telemetry against the selected mode",
+    [] {
+        auto legacy = frame(1u, 1.0);
+        legacy.skeletonHit = false;
+        legacy.skeletonMissReason =
+            nr::renderer::RenderGraphSkeletonMissReason::Disabled;
+        nr::test::require(validate(
+            std::span{&legacy, std::size_t{1u}},
+            nr::renderer::RenderGraphSkeletonMode::Legacy));
+
+        auto legacyHit = legacy;
+        legacyHit.skeletonHit = true;
+        nr::test::require(!validate(
+            std::span{&legacyHit, std::size_t{1u}},
+            nr::renderer::RenderGraphSkeletonMode::Legacy));
+
+        auto legacyPatch = legacy;
+        legacyPatch.skeletonPatchMilliseconds = 0.1;
+        nr::test::require(!validate(
+            std::span{&legacyPatch, std::size_t{1u}},
+            nr::renderer::RenderGraphSkeletonMode::Legacy));
+
+        auto legacyRebuild = legacy;
+        legacyRebuild.skeletonRebuildMilliseconds = 0.1;
+        nr::test::require(!validate(
+            std::span{&legacyRebuild, std::size_t{1u}},
+            nr::renderer::RenderGraphSkeletonMode::Legacy));
+
+        auto enabledHit = frame(1u, 1.0);
+        enabledHit.skeletonPatchMilliseconds = 0.1;
+        nr::test::require(validate(
+            std::span{&enabledHit, std::size_t{1u}}));
+
+        auto enabledHitRebuild = enabledHit;
+        enabledHitRebuild.skeletonRebuildMilliseconds = 0.1;
+        nr::test::require(!validate(
+            std::span{&enabledHitRebuild, std::size_t{1u}}));
+
+        auto enabledHitReason = enabledHit;
+        enabledHitReason.skeletonMissReason =
+            nr::renderer::RenderGraphSkeletonMissReason::KeyNotFound;
+        nr::test::require(!validate(
+            std::span{&enabledHitReason, std::size_t{1u}}));
+
+        auto enabledMiss = frame(1u, 1.0);
+        enabledMiss.skeletonHit = false;
+        enabledMiss.skeletonMissReason =
+            nr::renderer::RenderGraphSkeletonMissReason::KeyNotFound;
+        enabledMiss.skeletonRebuildMilliseconds = 0.1;
+        nr::test::require(validate(
+            std::span{&enabledMiss, std::size_t{1u}}));
+
+        auto enabledMissPatch = enabledMiss;
+        enabledMissPatch.skeletonPatchMilliseconds = 0.1;
+        nr::test::require(!validate(
+            std::span{&enabledMissPatch, std::size_t{1u}}));
+
+        auto enabledMissNone = enabledMiss;
+        enabledMissNone.skeletonMissReason =
+            nr::renderer::RenderGraphSkeletonMissReason::None;
+        nr::test::require(!validate(
+            std::span{&enabledMissNone, std::size_t{1u}}));
+
+        auto enabledMissDisabled = enabledMiss;
+        enabledMissDisabled.skeletonMissReason =
+            nr::renderer::RenderGraphSkeletonMissReason::Disabled;
+        nr::test::require(!validate(
+            std::span{&enabledMissDisabled, std::size_t{1u}}));
+
+        auto unknownReason = enabledMiss;
+        unknownReason.skeletonMissReason =
+            static_cast<nr::renderer::RenderGraphSkeletonMissReason>(255u);
+        nr::test::require(!validate(
+            std::span{&unknownReason, std::size_t{1u}}));
+
+        nr::test::require(!validate(
+            std::span{&enabledHit, std::size_t{1u}},
+            nr::renderer::RenderGraphSkeletonMode::Differential));
+        nr::test::require(!validate(
+            std::span{&enabledHit, std::size_t{1u}},
+            static_cast<nr::renderer::RenderGraphSkeletonMode>(255u)));
+    }};
 
 const nr::test::CaseRegistrar executeTelemetryCase{"renderer benchmark validates execute telemetry accounting and counts", [] {
                                                       auto input = validAuditInput();
@@ -137,17 +262,65 @@ const nr::test::CaseRegistrar executeSchemaCase{"renderer benchmark execute CSV 
                                                      nr::test::require(std::ranges::contains(sections, std::string_view{"execute_counts"}));
                                                  }};
 
-const nr::test::CaseRegistrar cpuSchemaCase{"renderer benchmark v2 promotes post-scene to one top-level stage", [] {
+const nr::test::CaseRegistrar frameCsvDelimiterCase{
+    "renderer benchmark CSV joins execute and node columns with one delimiter",
+    [] {
+        auto const source = readProjectFile("src/renderer/nrRenderer.cpp");
+        auto const writerBegin = source.find("auto const &execute = frame.execute;");
+        auto const literalBegin = source.find("frames << std::format(\"", writerBegin);
+        auto const argumentsBegin = source.find("\", execute.executorSetupMilliseconds", literalBegin);
+        nr::test::require(
+            writerBegin != std::string::npos &&
+                literalBegin != std::string::npos &&
+                argumentsBegin != std::string::npos,
+            "failed to locate the benchmark execute CSV writer");
+        auto const formatLiteral = std::string_view{source}.substr(
+            literalBegin + std::string_view{"frames << std::format(\""}.size(),
+            argumentsBegin - literalBegin - std::string_view{"frames << std::format(\""}.size());
+        nr::test::require(!formatLiteral.ends_with(','));
+        nr::test::require(
+            source.find(
+                "frames << std::format(\",{:.9f}\", benchmarkNodeBuildMilliseconds_",
+                argumentsBegin) != std::string::npos,
+            "node build CSV writer must retain its leading delimiter");
+    }};
+
+const nr::test::CaseRegistrar cpuSchemaCase{"renderer benchmark v3 preserves top-level CPU stages and adds Skeleton diagnostics", [] {
                                                  auto const stages = nr::renderer::rendererBenchmarkCpuStageColumns();
                                                  auto const substages = nr::renderer::rendererBenchmarkCpuSubstageColumns();
-                                                 nr::test::requireEqual(nr::renderer::rendererBenchmarkSchemaVersion(), std::string_view{"nr-renderer-benchmark-v2"});
+                                                 nr::test::requireEqual(nr::renderer::rendererBenchmarkSchemaVersion(), std::string_view{"nr-renderer-benchmark-v3"});
                                                  nr::test::requireEqual(std::ranges::count(stages, std::string_view{"post_scene_ms"}), std::ptrdiff_t{1});
                                                  nr::test::requireEqual(std::ranges::count(substages, std::string_view{"post_scene_ms"}), std::ptrdiff_t{0});
+                                                 nr::test::requireEqual(std::ranges::count(stages, std::string_view{"skeleton_patch_ms"}), std::ptrdiff_t{0});
+                                                 nr::test::requireEqual(std::ranges::count(stages, std::string_view{"skeleton_rebuild_ms"}), std::ptrdiff_t{0});
+                                                 nr::test::requireEqual(std::ranges::count(substages, std::string_view{"skeleton_patch_ms"}), std::ptrdiff_t{1});
+                                                 nr::test::requireEqual(std::ranges::count(substages, std::string_view{"skeleton_rebuild_ms"}), std::ptrdiff_t{1});
                                                  auto const scene = std::ranges::find(stages, std::string_view{"scene_ms"});
                                                  auto const postScene = std::ranges::find(stages, std::string_view{"post_scene_ms"});
                                                  auto const build = std::ranges::find(stages, std::string_view{"build_ms"});
                                                  nr::test::require(scene != stages.end() && postScene == std::next(scene) && build == std::next(postScene));
                                              }};
+
+const nr::test::CaseRegistrar skeletonNamesCase{
+    "renderer benchmark uses stable Skeleton mode and miss-reason names",
+    [] {
+        nr::test::requireEqual(
+            nr::renderer::renderGraphSkeletonModeName(
+                nr::renderer::RenderGraphSkeletonMode::Legacy),
+            std::string_view{"legacy"});
+        nr::test::requireEqual(
+            nr::renderer::renderGraphSkeletonModeName(
+                nr::renderer::RenderGraphSkeletonMode::Enabled),
+            std::string_view{"enabled"});
+        nr::test::requireEqual(
+            nr::renderer::renderGraphSkeletonMissReasonName(
+                nr::renderer::RenderGraphSkeletonMissReason::Disabled),
+            std::string_view{"disabled"});
+        nr::test::requireEqual(
+            nr::renderer::renderGraphSkeletonMissReasonName(
+                nr::renderer::RenderGraphSkeletonMissReason::PatchFailed),
+            std::string_view{"patch_failed"});
+    }};
 
 const nr::test::CaseRegistrar disabledFinalizationCase{"renderer benchmark finalization is stable when benchmarking is disabled", [] {
                                                            auto renderer = nr::renderer::Renderer{};
