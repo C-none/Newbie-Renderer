@@ -74,7 +74,7 @@ inline constexpr auto viewerEnvironmentSource = OptionKey<std::string>{"viewer.e
 inline constexpr auto viewerRtPostProcessingMode = OptionKey<std::string>{"viewer.rt.post_processing_mode"};
 inline constexpr auto viewerWindowFullscreen = OptionKey<bool>{"viewer.window.fullscreen"};
 inline constexpr auto viewerCameraPose = OptionKey<OptionWireValue::Object>{"viewer.camera.pose"};
-inline constexpr auto viewerCameraVerticalFovDegrees = OptionKey<double>{"viewer.camera.vertical_fov_degrees"};
+inline constexpr auto viewerCameraVerticalFovDegrees = OptionKey<std::uint64_t>{"viewer.camera.vertical_fov_degrees"};
 inline constexpr auto viewerCameraClipPlanes = OptionKey<OptionWireValue::Object>{"viewer.camera.clip_planes"};
 
 inline constexpr auto pathTracingMaxSurfaceBounces = OptionKey<std::uint64_t>{"render.path_tracing.max_surface_bounces"};
@@ -82,11 +82,6 @@ inline constexpr auto pathTracingRussianRouletteEnabled = OptionKey<bool>{"rende
 inline constexpr auto accumulateMaxHistorySamples = OptionKey<std::uint64_t>{"render.accumulate.max_history_samples"};
 inline constexpr auto dlssEnabled = OptionKey<bool>{"render.dlss.enabled"};
 inline constexpr auto dlssQuality = OptionKey<std::string>{"render.dlss.quality"};
-inline constexpr auto dlssPresetPerformance = OptionKey<std::string>{"render.dlss.preset.performance"};
-inline constexpr auto dlssPresetBalanced = OptionKey<std::string>{"render.dlss.preset.balanced"};
-inline constexpr auto dlssPresetQuality = OptionKey<std::string>{"render.dlss.preset.quality"};
-inline constexpr auto dlssPresetUltraPerformance = OptionKey<std::string>{"render.dlss.preset.ultra_performance"};
-inline constexpr auto dlssPresetDlaa = OptionKey<std::string>{"render.dlss.preset.dlaa"};
 inline constexpr auto dlssBypass = OptionKey<bool>{"render.dlss.bypass"};
 inline constexpr auto dlssVisualizeMotionVectors = OptionKey<bool>{"render.dlss.visualize_motion_vectors"};
 inline constexpr auto dlssResetHistory = OptionKey<OptionWireValue::Object>{"render.dlss.reset_history"};
@@ -100,7 +95,8 @@ struct SessionDefinitionSeed
     std::vector<std::string> pipelineIds{"normalview", "rtobject"};
     std::string selectedPipeline = "normalview";
     std::string modelSource{};
-    std::string environmentSource{};
+    std::string environmentName{};
+    std::vector<std::string> environmentNames{};
     std::string postProcessingMode = "accumulate";
     bool fullscreen = false;
     OptionWireValue::Object cameraPose{
@@ -113,7 +109,7 @@ struct SessionDefinitionSeed
         {"yaw_degrees", OptionWireValue{0.0}},
         {"pitch_degrees", OptionWireValue{0.0}},
     };
-    double verticalFovDegrees = 60.0;
+    std::uint64_t verticalFovDegrees = 60u;
     OptionWireValue::Object clipPlanes{
         {"near", OptionWireValue{0.1}},
         {"far", OptionWireValue{1000.0}},

@@ -41,6 +41,7 @@ nr_link_module_dependencies(
     nr_utils_rotating_ndjson_probe.cpp
     PRIVATE
         utils
+        dependency_services
 )
 
 add_test(

@@ -10,10 +10,10 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrinteraction STATIC)
 target_link_libraries(nrinteraction
-PUBLIC
-    nroptions
-    utils
-    dependency
+    PUBLIC
+        nroptions
+        utils
+        dependency_services
 )
 target_sources(nrinteraction
     PRIVATE

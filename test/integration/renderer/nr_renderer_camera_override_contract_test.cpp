@@ -1,5 +1,6 @@
 import std;
-import dependency;
+import dependency.math;
+import dependency.vulkan;
 import nr.load;
 import nr.options;
 import nr.renderPasses;
@@ -9,17 +10,24 @@ import nr.test;
 
 namespace
 {
-struct RendererShutdownGuard
+class ShutdownCountingNode final : public nr::renderer::NodeRuntime
 {
-    nr::renderer::Renderer &renderer;
-
-    ~RendererShutdownGuard()
+  public:
+    explicit ShutdownCountingNode(std::shared_ptr<std::size_t> shutdownCount) : shutdownCount_(std::move(shutdownCount))
     {
-        if (renderer.initialized())
-        {
-            renderer.shutdown();
-        }
     }
+
+    void build(nr::renderer::NodeBuildContext &, const nr::renderer::NodeFrameParameters &) override
+    {
+    }
+
+    void shutdown(nr::renderer::NodeShutdownContext &) override
+    {
+        ++*shutdownCount_;
+    }
+
+  private:
+    std::shared_ptr<std::size_t> shutdownCount_{};
 };
 
 [[nodiscard]] std::array<float, 16> identityTransform() noexcept
@@ -155,7 +163,6 @@ const nr::test::CaseRegistrar cameraOverrideCase{
     "renderer camera override switches scene extraction to override frustum",
     [] {
         auto renderer = nr::renderer::Renderer{};
-        auto shutdownGuard = RendererShutdownGuard{renderer};
 
         renderer.initialize(nr::renderer::RendererCreateInfo{
             .appName = "rendererCameraOverrideContract",
@@ -169,6 +176,10 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         nr::test::require(templateHandle.valid(), "template registration should succeed");
         nr::test::require(instanceHandle.valid(), "instance registration should succeed");
         scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
+        scene.beginFrame(0u);
+        scene.uploadPending();
+        renderer.device().waitIdle();
+        scene.uploadPending();
 
         auto graphSpec = makeGraphSpec(renderer.device().presentationContext.swapchainFormat());
         auto const preflight = renderer.preflightGraph(graphSpec);
@@ -223,7 +234,37 @@ const nr::test::CaseRegistrar cameraOverrideCase{
             overridden.sceneTlasPacketCount,
             baseline.sceneTlasPacketCount,
             "RT/TLAS extraction must ignore camera override frustum culling");
+    }};
 
-        renderer.device().waitIdle();
+const nr::test::CaseRegistrar rendererDestructorCase{
+    "renderer destructor shuts installed nodes down exactly once",
+    [] {
+        auto shutdownCount = std::make_shared<std::size_t>(0u);
+        {
+            auto renderer = nr::renderer::Renderer{};
+            renderer.initialize(nr::renderer::RendererCreateInfo{
+                .appName = "rendererDestructorContract",
+                .engineName = "NewbieRenderer",
+            });
+
+            auto runtime = std::make_shared<ShutdownCountingNode>(shutdownCount);
+            nr::test::require(
+                renderer.installGraph(nr::renderer::RendererGraphSpec{
+                    .nodes = {
+                        nr::renderer::NodeCreateInfo{
+                            .runtime = std::move(runtime),
+                            .config = nr::renderer::NodeConfig{
+                                .instanceName = "ShutdownCounting",
+                            },
+                        },
+                    },
+                }),
+                "renderer lifetime graph should install");
+        }
+
+        nr::test::requireEqual(
+            *shutdownCount,
+            std::size_t{1u},
+            "Renderer RAII teardown should invoke each installed node shutdown exactly once");
     }};
 } // namespace

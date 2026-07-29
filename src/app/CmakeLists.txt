@@ -10,13 +10,14 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrapp STATIC)
 target_link_libraries(nrapp
-PUBLIC
-    dependency
-    nroptions
-    nrrhi
-    nrrenderer
-    nrscene
-    utils
+    PUBLIC
+        nroptions
+        nrrhi
+        nrrenderer
+        nrscene
+        utils
+        dependency_math
+        dependency_ui
 )
 target_sources(nrapp
     PRIVATE

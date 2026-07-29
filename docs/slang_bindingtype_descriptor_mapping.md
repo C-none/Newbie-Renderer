@@ -242,20 +242,6 @@ This matrix reflects current behavior in `src/rhi/nrDescriptor.cpp` and its
 | `InlineUniformData` | Yes (`eInlineUniformBlock`) | `setData(...)` | Yes (`InlineUniformDescriptorWrite` + `VkWriteDescriptorSetInlineUniformBlock`) | Yes |
 | `PushConstant` | Not descriptor-backed | `setData(...)` | N/A | Yes (via push constants path) |
 
-## Redundancy and Optimization Notes
-
-Two redundant traversal hotspots were optimized in code:
-
-1. Descriptor-set grouping in `ShaderDescriptorLayout::create(...)`
-   - Before: gather set indices, sort/unique, then rescan all bindings per set.
-   - Now: single-pass grouping directly over `bindingBySetAndBinding_` (already ordered by `(set, binding)`).
-
-2. Descriptor write pre-counting in `ShaderBindingPool::update(...)`
-   - Before: four `count_if` passes (buffer/texel/image/AS) plus one build pass.
-   - Now: single build pass with upfront reserve by `writeRequests.size()`.
-
-These changes preserve external APIs and behavior while reducing repeated scans.
-
 ## Practical Usage Pattern
 
 1. Build descriptor layout from Slang program.

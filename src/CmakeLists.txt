@@ -19,5 +19,4 @@ nr_add_executable(main main.cpp)
 nr_link_module_dependencies(main main.cpp PRIVATE
     utils
     nrpipeline
-    dependency
 )

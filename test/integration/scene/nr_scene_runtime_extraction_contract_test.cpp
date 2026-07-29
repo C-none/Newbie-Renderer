@@ -1,5 +1,5 @@
 import std;
-import dependency;
+import dependency.math;
 import nr.load;
 import nr.resource;
 import nr.rhi;

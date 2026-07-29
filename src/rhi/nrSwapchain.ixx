@@ -144,6 +144,7 @@ class PresentationContext
     [[nodiscard]] bool keyDown(int glfwKeyCode) const;
     [[nodiscard]] bool mouseButtonDown(int glfwMouseButton) const;
     [[nodiscard]] glm::dvec2 cursorPosition() const;
+    [[nodiscard]] double consumeVerticalScrollOffset() const noexcept;
     [[nodiscard]] std::vector<std::uint32_t> consumeTextInputCodepoints() const;
     [[nodiscard]] bool windowShouldClose() const;
     [[nodiscard]] bool framebufferAvailable() const noexcept;
@@ -185,6 +186,7 @@ class PresentationContext
     AcquireSemaphorePool acquirePool_{};
     std::array<std::optional<std::uint32_t>, maxFrameInFlight> borrowedAcquireSlotByFrame_{};
     AcquireOutOfDateTestHook acquireOutOfDateTestHook_{};
+    mutable double verticalScrollOffset_ = 0.0;
     mutable std::vector<std::uint32_t> textInputCodepoints_{};
 };
 } // namespace nr::rhi

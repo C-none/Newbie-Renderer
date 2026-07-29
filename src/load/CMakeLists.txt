@@ -10,10 +10,12 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrload STATIC)
 target_link_libraries(nrload
-PUBLIC
-    utils
-    nrresource
-    dependency
+    PUBLIC
+        utils
+        nrresource
+    PRIVATE
+        dependency_assets
+        dependency_graphics
 )
 target_sources(nrload
     PRIVATE

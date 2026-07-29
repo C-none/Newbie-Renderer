@@ -17,7 +17,10 @@ namespace options = nr::options;
 [[nodiscard]] std::shared_ptr<const options::OptionCatalog> sessionCatalog()
 {
     auto builder = options::OptionCatalogBuilder{};
-    auto definitions = options::makeSessionDefinitions(options::SessionDefinitionSeed{});
+    auto definitions = options::makeSessionDefinitions(options::SessionDefinitionSeed{
+        .environmentName = "test_environment",
+        .environmentNames = {"test_environment"},
+    });
     std::ranges::for_each(definitions, [&](auto definition) { nr::test::require(builder.add(std::move(definition))); });
     auto result = builder.build();
     nr::test::require(result.valid());

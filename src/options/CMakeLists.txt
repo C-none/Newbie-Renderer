@@ -10,8 +10,10 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nroptions STATIC)
 target_link_libraries(nroptions
-PUBLIC
-    utils
+    PUBLIC
+        utils
+    PRIVATE
+        dependency_services
 )
 target_sources(nroptions
     PRIVATE

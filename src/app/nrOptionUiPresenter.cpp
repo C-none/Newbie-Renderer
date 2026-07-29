@@ -9,6 +9,8 @@ namespace nr::app
 {
 namespace
 {
+inline constexpr std::string_view kViewerUiGroup = "Viewer";
+
 [[nodiscard]] std::string optionLabel(const nr::options::OptionDefinition &definition)
 {
     return definition.presentation.label.empty() ? std::string{definition.id.value()} : definition.presentation.label;
@@ -298,7 +300,8 @@ OptionUiPresentResult OptionUiPresenter::present(UiSystem &ui, nr::options::Opti
     std::ranges::sort(definitions, [](auto lhs, auto rhs) {
         auto const &left = lhs.get();
         auto const &right = rhs.get();
-        return std::tuple{left.presentation.group, left.presentation.order, left.id.value()} < std::tuple{right.presentation.group, right.presentation.order, right.id.value()};
+        return std::tuple{left.presentation.group != kViewerUiGroup, left.presentation.group, left.presentation.order, left.id.value()} <
+               std::tuple{right.presentation.group != kViewerUiGroup, right.presentation.group, right.presentation.order, right.id.value()};
     });
 
     auto sections = std::vector<UiSection>{};
@@ -321,10 +324,17 @@ OptionUiPresentResult OptionUiPresenter::present(UiSystem &ui, nr::options::Opti
                             static_cast<void>(drawInteractiveOption(sectionUi, system, *snapshot, definition.get(), result));
                         }
                     });
-                },
+            },
         });
     });
-    ui.renderSections(sections);
+    auto const sectionView = std::span<const UiSection>{sections};
+    auto const leadingSectionCount =
+        !sections.empty() && sections.front().id == kViewerUiGroup
+            ? std::size_t{1u}
+            : std::size_t{0u};
+    ui.renderSections(
+        sectionView.first(leadingSectionCount),
+        sectionView.subspan(leadingSectionCount));
     return result;
 }
 } // namespace nr::app

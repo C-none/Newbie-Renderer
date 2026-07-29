@@ -16,7 +16,7 @@ assert(reason == nil)
 
 local second_started, second_reason = nr.options.apply(
     "viewer.camera.vertical_fov_degrees",
-    75.0,
+    75,
     { binding_epoch = snapshot.binding_epoch }
 )
 assert(second_started == false)

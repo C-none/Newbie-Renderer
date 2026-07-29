@@ -265,7 +265,7 @@ const nr::test::CaseRegistrar executeSchemaCase{"renderer benchmark execute CSV 
 const nr::test::CaseRegistrar frameCsvDelimiterCase{
     "renderer benchmark CSV joins execute and node columns with one delimiter",
     [] {
-        auto const source = readProjectFile("src/renderer/nrRenderer.cpp");
+        auto const source = readProjectFile("src/renderer/nrRendererBenchmark.cpp");
         auto const writerBegin = source.find("auto const &execute = frame.execute;");
         auto const literalBegin = source.find("frames << std::format(\"", writerBegin);
         auto const argumentsBegin = source.find("\", execute.executorSetupMilliseconds", literalBegin);

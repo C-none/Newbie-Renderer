@@ -9,6 +9,22 @@ namespace nr::pipeline
 {
 namespace
 {
+inline constexpr auto environmentMapAssetPrefix = std::string_view{"assets/envMap"};
+inline constexpr auto defaultEnvironmentName =
+    std::string_view{"kloofendal_48d_partly_cloudy_puresky_8k"};
+
+struct EnvironmentMapAsset
+{
+    std::filesystem::path sourcePath{};
+    std::string name{};
+};
+
+[[nodiscard]] std::filesystem::path environmentMapAssetDirectoryPath()
+{
+    return std::filesystem::path{std::string{nr::projectRoot}} /
+           std::filesystem::path{std::string{environmentMapAssetPrefix}};
+}
+
 [[nodiscard]] bool isSupportedEnvironmentMapAsset(const std::filesystem::path& sourcePath)
 {
     auto extension = sourcePath.extension().string();
@@ -18,33 +34,28 @@ namespace
     return extension == ".exr";
 }
 
-[[nodiscard]] std::expected<EnvironmentMapAsset, std::string> resolveEnvironmentMapAsset(
-    const std::filesystem::path& sourcePath)
+[[nodiscard]] bool isEnvironmentMapName(std::string_view name)
 {
-    if (sourcePath.empty())
+    if (name.empty() || name.contains('\0'))
     {
-        return std::unexpected("Environment map path is empty.");
+        return false;
     }
-    auto const rawPath = sourcePath.generic_string();
-    auto const hasForbiddenPrefix =
-        rawPath.starts_with("//") ||
-        rawPath.starts_with(R"(\\)") ||
-        rawPath.starts_with(R"(\\?\)") ||
-        rawPath.starts_with(R"(\\.\)") ||
-        rawPath.contains("://");
-    auto const hasShellSyntax =
-        rawPath.find_first_of("|&;<>\n\r\t\"'`$*?") != std::string::npos;
-    if (hasForbiddenPrefix || hasShellSyntax)
+
+    auto const path = std::filesystem::path{std::string{name}};
+    return !path.has_root_name() &&
+           !path.has_root_directory() &&
+           path == path.filename() &&
+           path != "." &&
+           path != "..";
+}
+
+[[nodiscard]] std::expected<EnvironmentMapAsset, std::string> resolveEnvironmentMapAsset(
+    std::string_view name)
+{
+    if (!isEnvironmentMapName(name))
     {
-        return std::unexpected(std::format(
-            "Environment map path contains a forbidden path or shell form: '{}'.",
-            rawPath));
-    }
-    if (!isSupportedEnvironmentMapAsset(sourcePath))
-    {
-        return std::unexpected(std::format(
-            "Environment map '{}' is not a supported OpenEXR asset.",
-            sourcePath.generic_string()));
+        return std::unexpected(
+            std::format("Invalid environment map name: '{}'.", name));
     }
 
     auto pathError = std::error_code{};
@@ -59,15 +70,14 @@ namespace
             pathError.message()));
     }
 
-    auto const requestedSourcePath = sourcePath.is_absolute()
-                                         ? sourcePath
-                                         : std::filesystem::path{std::string{nr::projectRoot}} / sourcePath;
+    auto const requestedSourcePath =
+        assetDirectory / std::filesystem::path{std::format("{}.exr", name)};
     auto const resolvedSourcePath = std::filesystem::canonical(requestedSourcePath, pathError);
     if (pathError)
     {
         return std::unexpected(std::format(
-            "Failed to resolve environment map asset '{}': {}",
-            sourcePath.generic_string(),
+            "Failed to resolve environment map '{}': {}",
+            name,
             pathError.message()));
     }
 
@@ -88,30 +98,22 @@ namespace
         return std::unexpected(std::format(
             "Environment maps must be direct files under '{}': '{}'.",
             assetDirectory.generic_string(),
-            sourcePath.generic_string()));
+            name));
     }
 
     return EnvironmentMapAsset{
         .sourcePath = resolvedSourcePath,
-        .displayName = resolvedSourcePath.stem().string(),
+        .name = std::string{name},
     };
 }
 } // namespace
 
-[[nodiscard]] std::filesystem::path environmentMapAssetDirectoryPath()
+[[nodiscard]] std::string_view defaultEnvironmentMapName() noexcept
 {
-    return std::filesystem::path{std::string{nr::projectRoot}} /
-           "assets" /
-           "envMap";
+    return defaultEnvironmentName;
 }
 
-[[nodiscard]] std::filesystem::path defaultEnvironmentMapPath()
-{
-    return environmentMapAssetDirectoryPath() /
-           "kloofendal_48d_partly_cloudy_puresky_8k.exr";
-}
-
-[[nodiscard]] std::expected<std::vector<EnvironmentMapAsset>, std::string> discoverEnvironmentMapAssets()
+[[nodiscard]] std::expected<std::vector<std::string>, std::string> discoverEnvironmentMapNames()
 {
     auto const assetDirectory = environmentMapAssetDirectoryPath();
     auto iterationError = std::error_code{};
@@ -127,7 +129,7 @@ namespace
             iterationError.message()));
     }
 
-    auto assets = std::vector<EnvironmentMapAsset>{};
+    auto names = std::vector<std::string>{};
     auto const end = std::filesystem::directory_iterator{};
     while (iterator != end)
     {
@@ -144,12 +146,14 @@ namespace
         if (std::filesystem::is_regular_file(status) &&
             isSupportedEnvironmentMapAsset(iterator->path()))
         {
-            auto asset = resolveEnvironmentMapAsset(iterator->path());
-            if (!asset)
+            auto const name = iterator->path().stem().string();
+            if (!isEnvironmentMapName(name))
             {
-                return std::unexpected(std::move(asset.error()));
+                return std::unexpected(std::format(
+                    "Environment map asset has an invalid selectable name: '{}'.",
+                    iterator->path().generic_string()));
             }
-            assets.push_back(std::move(*asset));
+            names.push_back(name);
         }
 
         iterator.increment(iterationError);
@@ -162,18 +166,25 @@ namespace
         }
     }
 
-    std::ranges::sort(assets, {}, &EnvironmentMapAsset::displayName);
-    return assets;
+    std::ranges::sort(names);
+    auto const duplicate = std::ranges::adjacent_find(names);
+    if (duplicate != names.end())
+    {
+        return std::unexpected(std::format(
+            "Environment map asset names must be unique after removing '.exr': '{}'.",
+            *duplicate));
+    }
+    return names;
 }
 } // namespace nr::pipeline
 
 namespace nr::pipeline::detail
 {
-[[nodiscard]] std::expected<EnvironmentMapAsset, std::string> loadEnvironmentMap(
+[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(
     nr::renderer::Renderer& renderer,
-    const std::filesystem::path& sourcePath)
+    std::string_view environmentMapName)
 {
-    auto asset = resolveEnvironmentMapAsset(sourcePath);
+    auto asset = resolveEnvironmentMapAsset(environmentMapName);
     if (!asset)
     {
         return std::unexpected(std::move(asset.error()));
@@ -198,11 +209,12 @@ namespace nr::pipeline::detail
         nr::LogLevel::info,
         "PIPELINE",
         std::format(
-            "Loaded environment map: {} ({}x{}, RGBA16F, decode scale {})",
+            "Loaded environment map '{}': {} ({}x{}, RGBA16F, decode scale {})",
+            asset->name,
             asset->sourcePath.generic_string(),
             width,
             height,
             decodeScale));
-    return asset;
+    return {};
 }
 } // namespace nr::pipeline::detail

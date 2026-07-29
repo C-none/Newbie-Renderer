@@ -1516,6 +1516,11 @@ class Renderer
 {
   public:
     Renderer() = default;
+    Renderer(const Renderer &) = delete;
+    Renderer &operator=(const Renderer &) = delete;
+    Renderer(Renderer &&) = delete;
+    Renderer &operator=(Renderer &&) = delete;
+    ~Renderer() noexcept;
 
     void initialize(const RendererCreateInfo &info = {});
 
@@ -1624,7 +1629,7 @@ class Renderer
     RenderGraphSkeletonMode renderGraphSkeletonMode_ = RenderGraphSkeletonMode::Enabled;
     bool temporalHistoryResetPending_ = false;
 
-    std::optional<std::reference_wrapper<nr::scene::Scene>> activeScene_{};
+    std::optional<std::uint64_t> activeSceneIdentity_{};
     std::optional<RendererTlasTextureCollectionKey> tlasTextureCollectionKey_{};
     std::map<std::uint32_t, nr::resource::TextureHandle> tlasTextureHandlesById_{};
     std::optional<nr::scene::SceneExtractProfileHandle> sceneExtractProfile_{};

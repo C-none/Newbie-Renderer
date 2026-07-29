@@ -1,7 +1,8 @@
 #include <cstddef>
 
 import std;
-import dependency;
+import dependency.math;
+import dependency.vulkan;
 import nr.resource;
 import nr.rhi;
 import nr.test;

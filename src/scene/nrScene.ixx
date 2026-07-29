@@ -205,7 +205,7 @@ class Scene : public nr::revision::RevisionSyntax
     Scene &operator=(const Scene &) = delete;
     Scene(Scene &&) = delete;
     Scene &operator=(Scene &&) = delete;
-    ~Scene() = default;
+    ~Scene() noexcept;
 
     [[nodiscard]] nr::rhi::Device &device() noexcept;
 
@@ -314,11 +314,18 @@ class Scene : public nr::revision::RevisionSyntax
         std::vector<nr::rhi::ops::ImageUploadTicket> imageTickets{};
     };
 
+    struct GraphicsSyncCompletion
+    {
+        GpuAssetHandleRef asset{};
+        std::uint64_t targetGpuVersion = 0;
+    };
+
     struct SubmittedGraphicsSyncWork
     {
         nr::rhi::CommandPool commandPool{};
         std::optional<vk::raii::CommandBuffers> commandBuffers{};
         vk::raii::Fence fence{nullptr};
+        std::vector<GraphicsSyncCompletion> completions{};
     };
 
     struct SubmittedGeometryAtlasGrowWork
@@ -453,6 +460,8 @@ class Scene : public nr::revision::RevisionSyntax
 
     [[nodiscard]] bool uploadContextAvailable() const noexcept;
 
+    [[nodiscard]] bool geometryAtlasReadyForUse() const noexcept;
+
     [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeTransferToGraphicsUploadPlan(vk::PipelineStageFlags2 acquireStages, vk::AccessFlags2 acquireAccess) const;
 
     [[nodiscard]] static std::size_t meshUploadBytes(const nr::resource::Mesh &mesh) noexcept;
@@ -570,15 +579,13 @@ class Scene : public nr::revision::RevisionSyntax
 
     void uploadQueuedTextureAssets(nr::rhi::ops::UploadReadbackContext &uploadContext, std::size_t &uploadBudgetRemaining);
 
-    void markGraphicsSyncBatchResident(const PendingGraphicsSyncBatch &batch);
+    void markGraphicsSyncCompletionResident(const GraphicsSyncCompletion &completion);
 
     [[nodiscard]] static std::uint64_t maxUploadSignalValue(const PendingGraphicsSyncBatch &batch) noexcept;
 
     void reapSubmittedGraphicsSyncWork();
 
-    void submitReadyGraphicsSyncBatches(nr::rhi::ops::UploadReadbackContext &uploadContext);
-
-    void pollUploadTimelineUntilGraphicsSyncBatchesReady(nr::rhi::ops::UploadReadbackContext &uploadContext);
+    void submitPendingGraphicsSyncBatches(nr::rhi::ops::UploadReadbackContext &uploadContext);
 
     [[nodiscard]] static constexpr std::string_view importStageName(ImportStage stage) noexcept
     {
@@ -707,7 +714,7 @@ class Scene : public nr::revision::RevisionSyntax
     template <typename HandleT, typename StorageT, typename GraveyardT> void collectUnusedAsset(HandleT handle, StorageT &storage, GraveyardT &graveyard)
     {
         auto *record = storage.tryGet(handle);
-        if (record == nullptr || !canCollect(*record))
+        if (record == nullptr || !canCollect(*record) || record->gpuState == GpuResidencyState::waitingGraphicsSync)
         {
             return;
         }

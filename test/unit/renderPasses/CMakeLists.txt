@@ -4,7 +4,6 @@ nr_add_contract_test(nr_renderpasses_as_build_contract_test nr_renderpasses_as_b
     nrscene
     nrrhi
     utils
-    dependency
 )
 
 nr_add_contract_test(nr_renderpasses_renderer_cache_contract_test nr_renderpasses_renderer_cache_contract_test.cpp "fast;cpu;unit;renderpasses;renderer-cache"
@@ -13,7 +12,7 @@ nr_add_contract_test(nr_renderpasses_renderer_cache_contract_test nr_renderpasse
     nrscene
     nrresource
     utils
-    dependency
+    dependency_services
 )
 
 nr_add_contract_test(nr_renderpasses_dlss_rr_contract_test nr_renderpasses_dlss_rr_contract_test.cpp "fast;cpu;unit;renderpasses;dlss;rr"
@@ -21,5 +20,6 @@ nr_add_contract_test(nr_renderpasses_dlss_rr_contract_test nr_renderpasses_dlss_
     nrrenderer
     nrrhi
     utils
-    dependency
+    dependency_math
+    dependency_graphics
 )

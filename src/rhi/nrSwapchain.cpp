@@ -419,6 +419,14 @@ void PresentationContext::initialize(const vk::raii::Instance &instance, const v
     presentQueueFamily_ = presentQueueFamily;
     surface_ = Surface::create(instance, appName);
     glfwSetWindowUserPointer(surface_.handle.get(), this);
+    glfwSetScrollCallback(surface_.handle.get(), [](GLFWwindow *window, double, double yOffset) {
+        auto *presentation = static_cast<PresentationContext *>(glfwGetWindowUserPointer(window));
+        nrAssert(presentation != nullptr, "PresentationContext scroll callback requires a window user pointer.");
+        if (std::isfinite(yOffset))
+        {
+            presentation->verticalScrollOffset_ += yOffset;
+        }
+    });
     glfwSetCharCallback(surface_.handle.get(), [](GLFWwindow *window, unsigned int codepoint) {
         auto *presentation = static_cast<PresentationContext *>(glfwGetWindowUserPointer(window));
         nrAssert(presentation != nullptr, "PresentationContext text input callback requires a window user pointer.");
@@ -563,6 +571,7 @@ vk::ImageView PresentationContext::swapchainImageView(std::uint32_t imageIndex) 
 
 void PresentationContext::pollEvents() const
 {
+    verticalScrollOffset_ = 0.0;
     glfwPollEvents();
 }
 
@@ -598,6 +607,11 @@ glm::dvec2 PresentationContext::cursorPosition() const
     auto y = 0.0;
     glfwGetCursorPos(surface_.handle.get(), &x, &y);
     return glm::dvec2{x, y};
+}
+
+double PresentationContext::consumeVerticalScrollOffset() const noexcept
+{
+    return std::exchange(verticalScrollOffset_, 0.0);
 }
 
 std::vector<std::uint32_t> PresentationContext::consumeTextInputCodepoints() const

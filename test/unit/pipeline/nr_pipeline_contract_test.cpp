@@ -346,45 +346,41 @@ const nr::test::CaseRegistrar benchmarkBuildGateCase{
     }};
 
 const nr::test::CaseRegistrar defaultEnvironmentCase{
-    "viewer default environment selects the Kloofendal OpenEXR asset",
+    "viewer default environment selects Kloofendal by extension-free name",
     [] {
-        auto const path = nr::pipeline::defaultEnvironmentMapPath();
         nr::test::requireEqual(
-            path.filename().string(),
-            std::string{"kloofendal_48d_partly_cloudy_puresky_8k.exr"});
-        nr::test::requireEqual(path.parent_path(), nr::pipeline::environmentMapAssetDirectoryPath());
-        auto statusError = std::error_code{};
-        nr::test::require(
-            std::filesystem::is_regular_file(path, statusError) && !statusError,
-            "viewer default environment asset should exist");
+            nr::pipeline::defaultEnvironmentMapName(),
+            std::string_view{"kloofendal_48d_partly_cloudy_puresky_8k"});
     }};
 
 const nr::test::CaseRegistrar environmentDiscoveryCase{
-    "viewer environment choices are sorted direct OpenEXR assets with extension-free labels",
+    "viewer environment choices are sorted extension-free OpenEXR names",
     [] {
-        auto assets = nr::pipeline::discoverEnvironmentMapAssets();
+        auto names = nr::pipeline::discoverEnvironmentMapNames();
         nr::test::require(
-            assets.has_value(),
-            assets.has_value() ? std::string{} : assets.error());
-        nr::test::require(!assets->empty(), "viewer should discover at least one environment map");
+            names.has_value(),
+            names.has_value() ? std::string{} : names.error());
+        nr::test::require(!names->empty(), "viewer should discover at least one environment map");
 
-        auto const assetDirectory = nr::pipeline::environmentMapAssetDirectoryPath();
+        auto const assetDirectory =
+            std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "envMap";
         nr::test::require(
-            std::ranges::all_of(*assets, [&](const nr::pipeline::EnvironmentMapAsset& asset) {
-                auto equivalentError = std::error_code{};
-                auto const directChild = std::filesystem::equivalent(
-                    asset.sourcePath.parent_path(),
-                    assetDirectory,
-                    equivalentError);
-                return !equivalentError &&
-                       directChild &&
-                       asset.sourcePath.extension() == ".exr" &&
-                       asset.displayName == asset.sourcePath.stem().string();
+            std::ranges::all_of(*names, [&](const std::string& name) {
+                auto statusError = std::error_code{};
+                auto const sourcePath = assetDirectory / std::format("{}.exr", name);
+                return !name.ends_with(".exr") &&
+                       std::filesystem::is_regular_file(sourcePath, statusError) &&
+                       !statusError;
             }),
-            "viewer environment choices must stay within assets/envMap and hide file extensions");
+            "viewer environment choices must hide extensions and resolve under the fixed assets/envMap prefix");
         nr::test::require(
-            std::ranges::is_sorted(*assets, {}, &nr::pipeline::EnvironmentMapAsset::displayName),
-            "viewer environment choices should have deterministic display-name ordering");
+            std::ranges::is_sorted(*names),
+            "viewer environment choices should have deterministic name ordering");
+        nr::test::require(
+            std::ranges::contains(
+                *names,
+                std::string{"brown_photostudio_02_8k"}),
+            "viewer environment discovery should expose known EXR stems");
     }};
 
 const nr::test::CaseRegistrar graphCatalogPreflightOrderingCase{
@@ -424,7 +420,7 @@ const nr::test::CaseRegistrar graphCatalogPreflightOrderingCase{
         auto const installHelper = sourceSection(
             pipeline,
             "void installPreparedPipelineGraph(",
-            "[[nodiscard]] std::filesystem::path projectRelativePath");
+            "[[nodiscard]] bool isRootRelativeOptionPath");
         requireOrdered(
             installHelper,
             "renderer.uninstallGraph();",
@@ -574,7 +570,7 @@ const nr::test::CaseRegistrar uiCameraAdmissionPriorityCase{
         auto const allUiModes = sourceSection(
             pipeline,
             "if (!config.benchmark)",
-            "app.ui().setCameraFrame(app.camera().frame());");
+            "auto const cameraOverride = app.camera().buildRendererCameraOverride();");
         requirePresent(
             allUiModes,
             "config.interactionMode == ViewerInteractionMode::human",
@@ -592,7 +588,7 @@ const nr::test::CaseRegistrar uiCameraAdmissionPriorityCase{
         auto const humanInput = sourceSection(
             pipeline,
             "if (uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)",
-            "app.ui().setCameraFrame(app.camera().frame());");
+            "auto const cameraOverride = app.camera().buildRendererCameraOverride();");
         requireOrdered(
             humanInput,
             "if (uiResult.mutationAttempted)",
@@ -621,5 +617,189 @@ const nr::test::CaseRegistrar uiCameraAdmissionPriorityCase{
             discardInput,
             "cursorTracking_",
             "discarding presentation input must update the persistent cursor baseline");
+    }};
+
+const nr::test::CaseRegistrar uiSectionOrderCase{
+    "viewer and frame status lead while CPU and GPU performance always trail",
+    [] {
+        auto const pipeline = readProjectFile("src/pipeline/nrPipeline.cpp");
+        auto const presenter = readProjectFile("src/app/nrOptionUiPresenter.cpp");
+        auto const uiSystem = readProjectFile("src/app/nrAppUi.cpp");
+        auto const uiNode = readProjectFile("src/renderPasses/Ui/nrUiNode.cpp");
+
+        auto const mainLoop = sourceSection(
+            pipeline,
+            "while (!presentation.windowShouldClose())",
+            "if (config.benchmark && exitCode == 0");
+        requireOrdered(
+            mainLoop,
+            "app.ui().setCameraFrame(app.camera().frame());",
+            "queueFrameStatusSection(app.ui(), presentation);",
+            "frame status must observe the current viewer camera");
+        requireOrdered(
+            mainLoop,
+            "queueFrameStatusSection(app.ui(), presentation);",
+            "if (!config.benchmark)",
+            "frame status must be queued in every interaction and benchmark mode");
+
+        requirePresent(
+            presenter,
+            "left.presentation.group != kViewerUiGroup",
+            "the Viewer option group must sort before every ordinary option group");
+        requireOrdered(
+            presenter,
+            "sectionView.first(leadingSectionCount)",
+            "sectionView.subspan(leadingSectionCount)",
+            "Viewer must be the leading section and remaining option groups must trail the queued frame status");
+
+        requireOrdered(
+            uiSystem,
+            "drawAppSections(leadingSections);",
+            "std::ranges::for_each(queuedSections_, drawAppSection);",
+            "UiSystem must draw Viewer before queued frame status");
+        requireOrdered(
+            uiSystem,
+            "std::ranges::for_each(queuedSections_, drawAppSection);",
+            "drawAppSections(trailingSections);",
+            "UiSystem must draw remaining option groups after queued frame status");
+
+        auto const performanceSections = sourceSection(
+            uiNode,
+            "makeTrailingPerformanceUiSections()",
+            "makeUiTextureDescriptors(");
+        requireAbsent(
+            performanceSections,
+            "frame.status",
+            "UiNode must not append frame status with the performance tail");
+        requireOrdered(
+            performanceSections,
+            "cpu.performance",
+            "gpu.performance",
+            "CPU performance must precede GPU performance at the absolute UI tail");
+
+        auto const uiFinalization = sourceSection(
+            uiNode,
+            "auto trailingSections = makeTrailingPerformanceUiSections();",
+            "synchronizeUiTextures(");
+        requirePresent(
+            uiFinalization,
+            "std::span<const nr::app::UiSection>{},",
+            "UiNode must reserve no leading section ahead of queued app sections");
+        requireOrdered(
+            uiFinalization,
+            "sectionSpan(trailingSections)",
+            "uiSystem->get().finalizeFrame();",
+            "performance sections must be the last renderSections input before UI finalization");
+    }};
+
+const nr::test::CaseRegistrar verticalWheelUiOnlyCase{
+    "vertical wheel input is a per-poll Dear ImGui navigation event only",
+    [] {
+        auto const dependencyWindow = readProjectFile("src/extern/dependencyWindow.ixx");
+        auto const swapchainInterface = readProjectFile("src/rhi/nrSwapchain.ixx");
+        auto const swapchain = readProjectFile("src/rhi/nrSwapchain.cpp");
+        auto const ui = readProjectFile("src/app/nrAppUi.cpp");
+        auto const camera = readProjectFile("src/app/nrAppCamera.cpp");
+        auto const optionModel = readProjectFile("src/options/nrOptionModel.ixx");
+        auto const optionSystem = readProjectFile("src/options/nrOptionSystem.cpp");
+        auto const websocket = readProjectFile("src/interaction/nrInteractionProtocol.cpp");
+        auto const lua = readProjectFile("src/automation/nrOfflineLuaHost.cpp");
+
+        requirePresent(
+            dependencyWindow,
+            "export using ::glfwSetScrollCallback;",
+            "the narrow window dependency must expose GLFW scroll event registration");
+        requirePresent(
+            swapchainInterface,
+            "double consumeVerticalScrollOffset() const noexcept;",
+            "PresentationContext must expose one-shot vertical scroll consumption");
+
+        auto const initialization = sourceSection(
+            swapchain,
+            "void PresentationContext::initialize(",
+            "AcquireResult PresentationContext::acquireNextImage(");
+        requirePresent(
+            initialization,
+            "glfwSetScrollCallback(",
+            "PresentationContext must register a GLFW scroll callback");
+        requirePresent(
+            initialization,
+            "verticalScrollOffset_ += yOffset;",
+            "all finite vertical events from one poll must accumulate");
+        requireAbsent(
+            initialization,
+            "xOffset",
+            "horizontal scroll input must be discarded at the presentation boundary");
+
+        auto const polling = sourceSection(
+            swapchain,
+            "void PresentationContext::pollEvents() const",
+            "bool PresentationContext::keyDown(");
+        requireOrdered(
+            polling,
+            "verticalScrollOffset_ = 0.0;",
+            "glfwPollEvents();",
+            "each event poll must discard unconsumed offsets from older presentation iterations");
+
+        auto const consumption = sourceSection(
+            swapchain,
+            "double PresentationContext::consumeVerticalScrollOffset() const noexcept",
+            "std::vector<std::uint32_t> PresentationContext::consumeTextInputCodepoints()");
+        requirePresent(
+            consumption,
+            "std::exchange(verticalScrollOffset_, 0.0)",
+            "vertical scroll consumption must clear the accumulated delta");
+
+        auto const uiInitialization = sourceSection(
+            ui,
+            "void UiSystem::initialize()",
+            "void UiSystem::shutdown()");
+        requirePresent(
+            uiInitialization,
+            "io.FontAllowUserScaling = false;",
+            "Ctrl+wheel window scaling must remain disabled");
+
+        auto const uiFrame = sourceSection(
+            ui,
+            "void UiSystem::beginFrame(",
+            "void UiSystem::finalizeFrame()");
+        requirePresent(
+            uiFrame,
+            "presentation.consumeVerticalScrollOffset();",
+            "UiSystem must be the sole vertical scroll consumer");
+        requirePresent(
+            uiFrame,
+            "io.AddMouseWheelEvent(0.0f,",
+            "UiSystem must forward only the vertical ImGui wheel axis");
+        requireOrdered(
+            uiFrame,
+            "io.AddMouseWheelEvent(0.0f,",
+            "ImGui::NewFrame();",
+            "vertical wheel input must reach ImGui before its frame begins");
+
+        auto const mutationOrigins = sourceSection(
+            optionModel,
+            "enum class MutationOrigin",
+            "enum class AuthorityMode");
+        requireAbsent(
+            mutationOrigins,
+            "wheel",
+            "wheel navigation must not become an OptionSystem mutation origin");
+        requireAbsent(
+            camera,
+            "consumeVerticalScrollOffset",
+            "the camera adapter must not consume wheel input");
+        requireAbsent(
+            optionSystem,
+            "consumeVerticalScrollOffset",
+            "OptionSystem must remain independent of wheel input");
+        requireAbsent(
+            websocket,
+            "consumeVerticalScrollOffset",
+            "WebSocket control must remain independent of wheel input");
+        requireAbsent(
+            lua,
+            "consumeVerticalScrollOffset",
+            "offline Lua control must remain independent of wheel input");
     }};
 } // namespace

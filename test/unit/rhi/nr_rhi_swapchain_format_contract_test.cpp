@@ -1,4 +1,4 @@
-import dependency;
+import dependency.vulkan;
 import nr.rhi;
 import nr.test;
 import std;

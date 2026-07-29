@@ -227,21 +227,6 @@ void validateActiveSubrectBounds(const std::array<std::optional<nr::renderer::No
     return "quality";
 }
 
-[[nodiscard]] nr::rhi::DlssRayReconstructionPreset dlssPresetFromOption(
-    std::string_view value)
-{
-    if (value == "default")
-    {
-        return nr::rhi::DlssRayReconstructionPreset::Default;
-    }
-    if (value == "d")
-    {
-        return nr::rhi::DlssRayReconstructionPreset::D;
-    }
-    nrAssert(value == "e", "DLSS option snapshot contains an invalid preset.");
-    return nr::rhi::DlssRayReconstructionPreset::E;
-}
-
 template <typename T>
 [[nodiscard]] const T& requiredOption(
     const nr::options::OptionFrameSnapshot& snapshot,
@@ -270,17 +255,6 @@ template <typename T>
     resolved.enabled = requiredOption(snapshot, nr::options::keys::dlssEnabled);
     resolved.create.quality = dlssQualityFromOption(
         requiredOption(snapshot, nr::options::keys::dlssQuality));
-    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Performance)] =
-        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetPerformance));
-    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Balanced)] =
-        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetBalanced));
-    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Quality)] =
-        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetQuality));
-    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::UltraPerformance)] =
-        dlssPresetFromOption(
-            requiredOption(snapshot, nr::options::keys::dlssPresetUltraPerformance));
-    resolved.create.presets[static_cast<std::size_t>(nr::rhi::DlssQuality::Dlaa)] =
-        dlssPresetFromOption(requiredOption(snapshot, nr::options::keys::dlssPresetDlaa));
     resolved.bypass = requiredOption(snapshot, nr::options::keys::dlssBypass);
     resolved.evaluate.visualizeMotionVectors =
         requiredOption(snapshot, nr::options::keys::dlssVisualizeMotionVectors);

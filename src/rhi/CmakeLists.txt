@@ -9,10 +9,12 @@ file(GLOB IMPL_SOURCES
 )
 
 nr_add_library(nrrhi STATIC)
-target_link_libraries(nrrhi 
-PUBLIC
-    utils
-    dependency
+target_link_libraries(nrrhi
+    PUBLIC
+        utils
+        dependency_graphics
+        dependency_math
+        dependency_shader
 )
 target_sources(nrrhi
     PRIVATE

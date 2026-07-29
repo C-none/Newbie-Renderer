@@ -1,5 +1,4 @@
 import std;
-import dependency;
 import nr.renderPasses;
 import nr.scene;
 import nr.test;

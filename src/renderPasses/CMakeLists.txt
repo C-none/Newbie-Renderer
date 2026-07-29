@@ -10,16 +10,20 @@ file(GLOB_RECURSE IMPL_SOURCES
 
 nr_add_library(nrrenderpasses STATIC)
 target_link_libraries(nrrenderpasses
-PUBLIC
-    nrapp
-    nroptions
-    nrrenderer
-    nrscene
-    nrresource
-    nrrhi
-    utils
-    dependency
-    dependency_shader_share
+    PUBLIC
+        nrapp
+        nroptions
+        nrrenderer
+        nrscene
+        nrresource
+        nrrhi
+        utils
+        dependency_graphics
+        dependency_math
+        dependency_shader_share
+    PRIVATE
+        dependency_ui
+        dependency_assets
 )
 target_sources(nrrenderpasses
     PRIVATE

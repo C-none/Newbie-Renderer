@@ -26,6 +26,46 @@ struct MutationFrameResult
     std::optional<nr::options::FrameEffect> effect{};
 };
 
+void drawFrameStatusSection(
+    nr::app::UiSystem &ui,
+    const nr::rhi::PresentationContext &presentation)
+{
+    auto const &stats = ui.stats();
+    ui.textFmt("FPS: {:.1f}", stats.framesPerSecond);
+    ui.textFmt("Frame Time: {:.2f} ms", stats.frameTimeMilliseconds);
+
+    auto const &cameraFrame = ui.cameraFrame();
+    auto drawVec3 = [&](std::string_view label, const auto &value) {
+        ui.textFmt("{}: ({:.3f}, {:.3f}, {:.3f})", label, value.x, value.y, value.z);
+    };
+    drawVec3("Camera Position", cameraFrame.position);
+    drawVec3("Camera Forward", cameraFrame.forward);
+
+    ui.separator();
+    ui.textFmt("Swapchain Format: {}", vk::to_string(presentation.swapchainFormat()));
+    ui.textFmt("Color Space: {}", vk::to_string(presentation.swapchainColorSpace()));
+
+    ui.separator();
+    ui.textFmt(
+        "Window Mode: {}",
+        presentation.fullscreenEnabled()
+            ? std::string_view{"Exclusive Fullscreen"}
+            : std::string_view{"Windowed"});
+}
+
+void queueFrameStatusSection(
+    nr::app::UiSystem &ui,
+    const nr::rhi::PresentationContext &presentation)
+{
+    ui.queueSection(nr::app::UiSection{
+        .id = "frame.status",
+        .title = "Frame Status",
+        .draw = [presentation = std::cref(presentation)](nr::app::UiSystem &sectionUi) {
+            drawFrameStatusSection(sectionUi, presentation.get());
+        },
+    });
+}
+
 [[nodiscard]] RtPostProcessingMode postProcessingMode(std::string_view value) noexcept
 {
     return value == "accumulate" ? RtPostProcessingMode::accumulate : RtPostProcessingMode::dlssRayReconstruction;
@@ -74,16 +114,6 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
     nrAssert(renderer.installGraph(prepared.spec), "Renderer graph initialization failed after the destructive graph replacement barrier.");
 }
 
-[[nodiscard]] std::filesystem::path projectRelativePath(const std::filesystem::path &path)
-{
-    auto ec = std::error_code{};
-    auto const root = std::filesystem::canonical(std::filesystem::path{std::string{nr::projectRoot}}, ec);
-    nrAssert(!ec, "Failed to canonicalize the project root.");
-    auto const canonical = std::filesystem::canonical(path, ec);
-    nrAssert(!ec, "Failed to canonicalize a fixed project asset path.");
-    return canonical.lexically_relative(root).lexically_normal();
-}
-
 [[nodiscard]] bool isRootRelativeOptionPath(std::string_view value)
 {
     auto const path = std::filesystem::path{value};
@@ -96,7 +126,13 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
     return std::format("run_{}", ticks);
 }
 
-[[nodiscard]] std::shared_ptr<const nr::options::OptionCatalog> buildSessionCatalog(const RenderPipelineRegistry &registry, std::string selectedPipeline, std::string modelSource, std::string environmentSource, const nr::app::AppSession &app)
+[[nodiscard]] std::shared_ptr<const nr::options::OptionCatalog> buildSessionCatalog(
+    const RenderPipelineRegistry &registry,
+    std::string selectedPipeline,
+    std::string modelSource,
+    std::string environmentName,
+    std::vector<std::string> environmentNames,
+    const nr::app::AppSession &app)
 {
     auto pipelineIds = registry.pipelines() | std::views::transform([](const RenderPipelineDesc &pipeline) { return pipeline.id; }) | std::ranges::to<std::vector>();
     auto const camera = app.camera().optionResetValues();
@@ -104,7 +140,8 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
         .pipelineIds = std::move(pipelineIds),
         .selectedPipeline = std::move(selectedPipeline),
         .modelSource = std::move(modelSource),
-        .environmentSource = std::move(environmentSource),
+        .environmentName = std::move(environmentName),
+        .environmentNames = std::move(environmentNames),
         .postProcessingMode = "dlss_ray_reconstruction",
         .fullscreen = app.renderer().device().presentationContext.fullscreenEnabled(),
         .cameraPose = camera.pose,
@@ -243,10 +280,6 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     if (id == nr::options::optionId(nr::options::keys::viewerEnvironmentSource))
     {
         auto const &source = std::get<std::string>(mutation.request().value.storage);
-        if (!isRootRelativeOptionPath(source))
-        {
-            return fail("environment_source_must_be_project_root_relative");
-        }
         auto loaded = detail::loadEnvironmentMap(app.renderer(), source);
         if (!loaded)
         {
@@ -584,9 +617,34 @@ void printViewerUsage(std::string_view executableName)
     {
         config.initialModelPath = defaultModelPath();
     }
-    if (config.initialEnvironmentMapPath.empty())
+    if (config.initialEnvironmentMapName.empty())
     {
-        config.initialEnvironmentMapPath = defaultEnvironmentMapPath();
+        config.initialEnvironmentMapName = defaultEnvironmentMapName();
+    }
+
+    auto environmentNames = discoverEnvironmentMapNames();
+    if (!environmentNames)
+    {
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentNames.error());
+        return 1;
+    }
+    if (environmentNames->empty())
+    {
+        nr::nrLog(
+            nr::LogLevel::error,
+            "PIPELINE",
+            "No OpenEXR environment maps were found under assets/envMap.");
+        return 1;
+    }
+    if (!std::ranges::contains(*environmentNames, config.initialEnvironmentMapName))
+    {
+        nr::nrLog(
+            nr::LogLevel::error,
+            "PIPELINE",
+            std::format(
+                "Initial environment map '{}' was not found under assets/envMap.",
+                config.initialEnvironmentMapName));
+        return 1;
     }
 
     auto app = nr::app::AppSession{};
@@ -608,7 +666,8 @@ void printViewerUsage(std::string_view executableName)
     }();
     nrAssert(app.options().setAuthorityMode(authorityMode), "Option authority mode must be selected before session initialization.");
 
-    auto environmentLoad = detail::loadEnvironmentMap(app.renderer(), config.initialEnvironmentMapPath);
+    auto environmentLoad =
+        detail::loadEnvironmentMap(app.renderer(), config.initialEnvironmentMapName);
     if (!environmentLoad)
     {
         nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentLoad.error());
@@ -637,7 +696,13 @@ void printViewerUsage(std::string_view executableName)
         return 2;
     }
 
-    auto sessionCatalog = buildSessionCatalog(registry, config.initialPipelineId, initialLoad.modelPath.generic_string(), projectRelativePath(environmentLoad->sourcePath).generic_string(), app);
+    auto sessionCatalog = buildSessionCatalog(
+        registry,
+        config.initialPipelineId,
+        initialLoad.modelPath.generic_string(),
+        config.initialEnvironmentMapName,
+        std::move(*environmentNames),
+        app);
     auto combinedCatalog = validateSessionAndGraphCatalog(*sessionCatalog, *initialGraph->optionCatalog);
     if (!combinedCatalog)
     {
@@ -767,6 +832,8 @@ void printViewerUsage(std::string_view executableName)
 
         app.ui().beginFrame(presentation, deltaSeconds);
         app.camera().syncFromSnapshot(*optionSnapshot, presentation);
+        app.ui().setCameraFrame(app.camera().frame());
+        queueFrameStatusSection(app.ui(), presentation);
         if (!config.benchmark)
         {
             auto const uiInteractionPolicy = config.interactionMode == ViewerInteractionMode::human ? nr::app::OptionUiInteractionPolicy::interactive : nr::app::OptionUiInteractionPolicy::readOnly;
@@ -783,7 +850,6 @@ void printViewerUsage(std::string_view executableName)
                 }
             }
         }
-        app.ui().setCameraFrame(app.camera().frame());
         auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
         auto frameInput = nr::renderer::RendererFrameInput{

@@ -1,5 +1,6 @@
 import std;
-import dependency;
+import dependency.math;
+import dependency.vulkan;
 import nr.rhi;
 import nr.test;
 

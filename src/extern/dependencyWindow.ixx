@@ -27,6 +27,7 @@ export using ::glfwInit;
 export using ::glfwPollEvents;
 export using ::glfwSetCharCallback;
 export using ::glfwSetErrorCallback;
+export using ::glfwSetScrollCallback;
 export using ::glfwSetWindowMonitor;
 export using ::glfwSetWindowPos;
 export using ::glfwSetWindowSize;

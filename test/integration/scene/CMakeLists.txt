@@ -4,7 +4,7 @@ nr_add_contract_test(nr_scene_bridge_plan_contract_test nr_scene_bridge_plan_con
     nrresource
     nrrhi
     utils
-    dependency
+    dependency_math
 )
 
 nr_add_contract_test(nr_scene_render_bridge_contract_test nr_scene_render_bridge_contract_test.cpp "cpu;integration;scene;renderer-boundary"
@@ -12,7 +12,8 @@ nr_add_contract_test(nr_scene_render_bridge_contract_test nr_scene_render_bridge
     nrresource
     nrrhi
     utils
-    dependency
+    dependency_math
+    dependency_graphics
 )
 
 nr_add_contract_test(nr_scene_runtime_extraction_contract_test nr_scene_runtime_extraction_contract_test.cpp "cpu;integration;scene"
@@ -21,7 +22,7 @@ nr_add_contract_test(nr_scene_runtime_extraction_contract_test nr_scene_runtime_
     nrresource
     nrrhi
     utils
-    dependency
+    dependency_math
 )
 
 nr_add_contract_test(nr_scene_as_mesh_contract_test nr_scene_as_mesh_contract_test.cpp "gpu;window;integration;scene;rt"
@@ -30,7 +31,7 @@ nr_add_contract_test(nr_scene_as_mesh_contract_test nr_scene_as_mesh_contract_te
     nrresource
     nrrhi
     utils
-    dependency
+    dependency_graphics
 )
 
 nr_add_contract_test(nr_scene_rt_material_contract_test nr_scene_rt_material_contract_test.cpp "cpu;integration;scene;rt;assets"
@@ -39,5 +40,6 @@ nr_add_contract_test(nr_scene_rt_material_contract_test nr_scene_rt_material_con
     nrresource
     nrrhi
     utils
-    dependency
+    dependency_services
+    dependency_math
 )

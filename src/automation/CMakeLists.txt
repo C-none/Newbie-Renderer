@@ -10,10 +10,11 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrautomation STATIC)
 target_link_libraries(nrautomation
-PUBLIC
-    dependency
-    nroptions
-    utils
+    PUBLIC
+        nroptions
+        utils
+    PRIVATE
+        dependency_services
 )
 target_sources(nrautomation
     PRIVATE

@@ -10,13 +10,15 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrscene STATIC)
 target_link_libraries(nrscene
-PUBLIC
-    utils
-    nrload
-    nrresource
-    nrrhi
-    dependency
-    dependency_shader_share
+    PUBLIC
+        utils
+        nrload
+        nrresource
+        nrrhi
+        dependency_math
+        dependency_ecs
+        dependency_graphics
+        dependency_shader_share
 )
 target_sources(nrscene
     PRIVATE

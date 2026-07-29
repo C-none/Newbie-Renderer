@@ -1,5 +1,5 @@
 import std;
-import dependency;
+import dependency.vulkan;
 import nr.load;
 import nr.resource;
 import nr.rhi;
@@ -95,6 +95,38 @@ namespace
     return scene;
 }
 
+[[nodiscard]] nr::load::SceneAsset makeAtlasGrowSceneAsset()
+{
+    auto scene = makeAsMeshSceneAsset();
+    scene.sourcePath = std::filesystem::path{"scene_atlas_grow_contract.gltf"};
+    scene.materials.resize(1u);
+    scene.materials.front().name = "atlas_grow_material";
+    scene.meshes.resize(1u);
+
+    auto &mesh = scene.meshes.front();
+    mesh.name = "atlas_grow_mesh";
+    mesh.vertices.resize(16384u);
+    mesh.vertices[0].position = {-1.0f, -1.0f, 0.0f};
+    mesh.vertices[1].position = {1.0f, -1.0f, 0.0f};
+    mesh.vertices[2].position = {0.0f, 1.0f, 0.0f};
+    mesh.indices = {0u, 1u, 2u};
+    mesh.geometries = {
+        nr::load::MeshGeometryAsset{
+            .name = "atlas_grow_geometry",
+            .indexCount = 3u,
+            .materialIndex = 0u,
+        },
+    };
+    mesh.clockwiseFrontFace = false;
+
+    scene.nodes[1].meshIndices = {0u};
+    scene.stats.meshCount = 1u;
+    scene.stats.materialCount = 1u;
+    scene.stats.vertexCount = static_cast<std::uint32_t>(mesh.vertices.size());
+    scene.stats.indexCount = static_cast<std::uint32_t>(mesh.indices.size());
+    return scene;
+}
+
 [[nodiscard]] bool hasInstanceFlag(
     vk::GeometryInstanceFlagsKHR flags,
     vk::GeometryInstanceFlagBitsKHR flag) noexcept
@@ -130,11 +162,33 @@ namespace
     return *handle;
 }
 
-void uploadSceneGeometry(nr::scene::Scene& scene, nr::rhi::Device& device)
+void uploadSceneGeometry(
+    nr::scene::Scene& scene,
+    nr::rhi::Device& device,
+    nr::resource::MeshHandle meshHandle)
 {
     scene.beginFrame(0u);
     scene.uploadPending();
+
+    auto submittedMesh = scene.tryGetMeshAsset(meshHandle);
+    nr::test::require(submittedMesh.has_value(), "submitted scene mesh should remain tracked");
+    nr::test::requireEqual(
+        submittedMesh->get().gpuState,
+        nr::scene::GpuResidencyState::waitingGraphicsSync,
+        "staged scene mesh must not become resident before the graphics acquire fence completes");
+    nr::test::require(
+        !scene.tryGetAccelerationStructureMesh(meshHandle).has_value(),
+        "staged scene mesh must not be exposed as AS input before graphics acquire completion");
+
     device.waitIdle();
+    scene.uploadPending();
+
+    auto residentMesh = scene.tryGetMeshAsset(meshHandle);
+    nr::test::require(residentMesh.has_value(), "completed scene mesh should remain tracked");
+    nr::test::requireEqual(
+        residentMesh->get().gpuState,
+        nr::scene::GpuResidencyState::resident,
+        "graphics acquire completion should promote the staged scene mesh to resident");
 }
 
 const nr::test::CaseRegistrar asMeshFlagsCase{
@@ -151,7 +205,7 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
         auto meshHandle = resolveMeshHandle(scene, sceneAsset, 0u);
         auto clockwiseMeshHandle = resolveMeshHandle(scene, sceneAsset, 1u);
         auto alphaMaskMaterial = resolveMaterialHandle(scene, sceneAsset, 2u);
-        uploadSceneGeometry(scene, device);
+        uploadSceneGeometry(scene, device, meshHandle);
 
         auto importedClockwiseMesh = scene.tryGetMeshAsset(clockwiseMeshHandle);
         nr::test::require(importedClockwiseMesh.has_value(), "clockwise source mesh should import into scene mesh storage");
@@ -198,5 +252,93 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
             "material opacity changes should update AS geometry flags and therefore BLAS build signatures");
 
         device.waitIdle();
+    }};
+
+const nr::test::CaseRegistrar graphicsSyncLifetimeCase{
+    "scene defers submitted asset collection and drains submitted graphics work on destruction",
+    [] {
+        auto device = nr::rhi::Device{};
+        device.initialize("nr_scene_graphics_sync_lifetime_contract_test", "NewbieRenderer");
+
+        {
+            auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
+            auto sceneAsset = makeAsMeshSceneAsset();
+            auto templateHandle = scene.registerTemplate(sceneAsset);
+            auto meshHandle = resolveMeshHandle(scene, sceneAsset);
+
+            scene.beginFrame(0u);
+            scene.uploadPending();
+            auto submittedMesh = scene.tryGetMeshAsset(meshHandle);
+            nr::test::require(submittedMesh.has_value(), "submitted mesh should remain tracked");
+            nr::test::requireEqual(
+                submittedMesh->get().gpuState,
+                nr::scene::GpuResidencyState::waitingGraphicsSync,
+                "submitted mesh should remain non-resident while its graphics acquire fence is pending");
+
+            nr::test::requireEqual(
+                scene.destroyTemplate(templateHandle),
+                nr::scene::DestroyTemplateResult::destroyed,
+                "uninstantiated template destruction should succeed while its upload is pending");
+            nr::test::require(
+                scene.tryGetMeshAsset(meshHandle).has_value(),
+                "template destruction must defer collection of a mesh referenced by submitted graphics work");
+
+            device.waitIdle();
+            scene.uploadPending();
+            nr::test::require(
+                !scene.tryGetMeshAsset(meshHandle).has_value(),
+                "graphics completion reaping should collect an unpinned deferred mesh");
+        }
+
+        {
+            auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
+            auto sceneAsset = makeAsMeshSceneAsset();
+            auto templateHandle = scene.registerTemplate(sceneAsset);
+            auto meshHandle = resolveMeshHandle(scene, sceneAsset);
+
+            scene.beginFrame(0u);
+            scene.uploadPending();
+            auto submittedMesh = scene.tryGetMeshAsset(meshHandle);
+            nr::test::require(submittedMesh.has_value(), "scene destruction case mesh should remain tracked");
+            nr::test::requireEqual(
+                submittedMesh->get().gpuState,
+                nr::scene::GpuResidencyState::waitingGraphicsSync,
+                "scene destruction case requires submitted graphics work");
+            nr::test::require(templateHandle.valid(), "scene destruction case should retain its template");
+        }
+    }};
+
+const nr::test::CaseRegistrar geometryAtlasGrowVisibilityCase{
+    "scene hides resident geometry while an atlas prefix grow copy is pending",
+    [] {
+        auto device = nr::rhi::Device{};
+        device.initialize("nr_scene_atlas_grow_visibility_contract_test", "NewbieRenderer");
+
+        auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
+        auto initialAsset = makeAsMeshSceneAsset();
+        auto initialTemplate = scene.registerTemplate(initialAsset);
+        auto initialMesh = resolveMeshHandle(scene, initialAsset);
+        nr::test::require(initialTemplate.valid(), "initial atlas template should register");
+        uploadSceneGeometry(scene, device, initialMesh);
+        nr::test::require(scene.tryGetRasterGeometryBuffers().has_value(), "completed initial atlas should be raster-visible");
+        nr::test::require(scene.tryGetAccelerationStructureMeshSemanticKey(initialMesh).has_value(), "completed initial atlas should be AS-visible");
+
+        auto growAsset = makeAtlasGrowSceneAsset();
+        auto growTemplate = scene.registerTemplate(growAsset);
+        nr::test::require(growTemplate.valid(), "atlas grow template should register");
+
+        scene.beginFrame(1u);
+        scene.uploadPending();
+        nr::test::require(
+            !scene.tryGetRasterGeometryBuffers().has_value(),
+            "new atlas buffers must stay hidden while their prefix copy is pending");
+        nr::test::require(
+            !scene.tryGetAccelerationStructureMeshSemanticKey(initialMesh).has_value(),
+            "resident meshes must stay hidden from AS consumers while the atlas prefix copy is pending");
+
+        device.waitIdle();
+        scene.uploadPending();
+        nr::test::require(scene.tryGetRasterGeometryBuffers().has_value(), "completed atlas grow should restore raster visibility");
+        nr::test::require(scene.tryGetAccelerationStructureMeshSemanticKey(initialMesh).has_value(), "completed atlas grow should restore AS visibility");
     }};
 } // namespace

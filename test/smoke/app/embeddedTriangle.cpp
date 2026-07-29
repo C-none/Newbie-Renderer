@@ -1,5 +1,5 @@
 import std;
-import dependency;
+import dependency.vulkan;
 import nr.app;
 import nr.options;
 import nr.renderer;

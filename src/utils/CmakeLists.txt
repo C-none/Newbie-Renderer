@@ -40,8 +40,9 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(utils STATIC)
 add_dependencies(utils generate_static_utils_constants_config)
-target_link_libraries(utils PUBLIC
-    dependency
+target_link_libraries(utils
+    PRIVATE
+        dependency_services
 )
 target_include_directories(utils PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>"

@@ -10,13 +10,17 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrrenderer STATIC)
 target_link_libraries(nrrenderer
-PUBLIC
-    utils
-    nroptions
-    nrscene
-    nrresource
-    nrrhi
-    dependency
+    PUBLIC
+        utils
+        nroptions
+        nrscene
+        nrresource
+        nrrhi
+        dependency_graphics
+        dependency_math
+    PRIVATE
+        dependency_assets
+        dependency_services
 )
 target_sources(nrrenderer
     PRIVATE

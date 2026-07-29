@@ -7,7 +7,7 @@ nr_link_module_dependencies(embeddedTriangle embeddedTriangle.cpp PRIVATE
     nrrenderpasses
     nrrenderer
     utils
-    dependency
+    dependency_graphics
 )
 
 nr_add_executable(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp)
@@ -20,7 +20,7 @@ nr_link_module_dependencies(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.c
     nrscene
     nrload
     utils
-    dependency
+    dependency_graphics
 )
 
 add_test(NAME nr_normal_buffer_ui_smoke_test COMMAND nr_normal_buffer_ui_smoke_test)
@@ -36,7 +36,8 @@ nr_link_module_dependencies(nr_rt_object_material_smoke_test rtObjectMaterialSmo
     nrscene
     nrload
     utils
-    dependency
+    dependency_math
+    dependency_graphics
 )
 
 add_test(NAME nr_rt_object_material_smoke_test COMMAND nr_rt_object_material_smoke_test)
@@ -53,7 +54,7 @@ nr_link_module_dependencies(nr_swapchain_out_of_date_smoke_test swapchainOutOfDa
     nrrenderpasses
     nrrenderer
     utils
-    dependency
+    dependency_graphics
 )
 
 add_test(NAME nr_swapchain_out_of_date_smoke_test COMMAND nr_swapchain_out_of_date_smoke_test)

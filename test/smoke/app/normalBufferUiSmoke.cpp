@@ -1,5 +1,5 @@
 import std;
-import dependency;
+import dependency.vulkan;
 import nr.app;
 import nr.options;
 import nr.renderer;
@@ -201,10 +201,10 @@ namespace
         return std::nullopt;
     }
 
-    if (frameResult.invokedPassRecordCount < 3u)
+    if (frameResult.invokedPassRecordCount < 2u)
     {
         std::println(
-            "[error] smoke test expected at least 3 recorded passes, observed {}.",
+            "[error] smoke test expected at least the UI and Present passes, observed {} recorded passes.",
             frameResult.invokedPassRecordCount);
         return std::nullopt;
     }
@@ -238,6 +238,13 @@ namespace
 
         observedDraw = frameResult->sceneRasterPacketCount > 0u &&
                        frameResult->sceneBridgeDrawCount > 0u;
+        if (observedDraw && frameResult->invokedPassRecordCount < 3u)
+        {
+            std::println(
+                "[error] smoke test observed a scene draw for {} without the expected NormalBuffer, UI and Present passes.",
+                label);
+            failed = true;
+        }
     });
 
     if (failed)

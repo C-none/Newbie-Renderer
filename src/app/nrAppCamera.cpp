@@ -366,7 +366,11 @@ nr::options::CameraResetValues AppCamera::optionResetValues() const
     return nr::options::CameraResetValues{
         .pose = detail::poseValue(viewer_.pose()),
         .verticalFovDegrees =
-            static_cast<double>(glm::degrees(viewer_.lens().verticalFovRadians)),
+            static_cast<std::uint64_t>(
+                std::clamp(
+                    std::lround(glm::degrees(viewer_.lens().verticalFovRadians)),
+                    1l,
+                    179l)),
         .clipPlanes = detail::clipValue(viewer_.lens()),
     };
 }

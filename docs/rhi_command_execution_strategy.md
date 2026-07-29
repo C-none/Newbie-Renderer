@@ -1,10 +1,10 @@
-# RHI Command Invocation Execution Strategy
+# RHI Command Invocation Rules
 
 This strategy applies to `nr.rhi` and project test command-recording code.
 
 ## 1. Objective
 
-Move command recording to Vulkan-Hpp RAII member functions and remove raw C API command invocation patterns.
+Define the project command-recording boundary in terms of Vulkan-Hpp RAII member functions.
 
 ## 2. Mandatory Rules
 
@@ -31,15 +31,15 @@ For each required command:
 
 ## 5. Verification Checklist
 
-- No `dispatcher->vkCmd*` usage remains in migrated files.
-- No `reinterpret_cast<PFN_vk...>` remains for migrated command paths.
-- No `vkGetSemaphoreCounterValue` / `vkWaitSemaphores` C API calls remain in `src/rhi` sync path.
+- No `dispatcher->vkCmd*` usage exists in project command paths.
+- No `reinterpret_cast<PFN_vk...>` exists in project command paths.
+- No `vkGetSemaphoreCounterValue` / `vkWaitSemaphores` C API calls exist in the `src/rhi` sync path.
 - Build and run the relevant LLVM Debug tests to confirm behavior equivalence.
 
 ## 6. Compile-Time Branch Strategy in `nr.rhi:resourceOps`
 
-To reduce repetitive helper variants that only differ by fixed constants,
-`nr.rhi:resourceOps` now follows one template entry point with a non-type template parameter.
+Helper variants that differ only by fixed constants use one template entry point with
+a non-type template parameter in `nr.rhi:resourceOps`.
 
 Rules:
 

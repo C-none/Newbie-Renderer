@@ -72,46 +72,6 @@ namespace
     };
 }
 
-[[nodiscard]] OptionAdmissionValidator environmentSourceValidator()
-{
-    return [](const OptionWireValue &value, const OptionValueMap &) -> std::optional<std::string> {
-        auto const &source = std::get<std::string>(value.storage);
-        if (hasForbiddenPathForm(source))
-        {
-            return "environment_source_must_be_project_root_relative";
-        }
-
-        auto extension = std::filesystem::path{source}.extension().string();
-        std::ranges::transform(extension, extension.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
-        if (extension != ".exr")
-        {
-            return "environment_source_must_be_exr";
-        }
-
-        auto error = std::error_code{};
-        auto const projectRoot = std::filesystem::canonical(std::filesystem::path{std::string{nr::projectRoot}}, error);
-        if (error)
-        {
-            return "project_root_unavailable";
-        }
-        auto const environmentRoot = std::filesystem::canonical(projectRoot / "assets" / "envMap", error);
-        if (error)
-        {
-            return "environment_asset_root_unavailable";
-        }
-        auto const resolved = std::filesystem::canonical(projectRoot / std::filesystem::path{source}, error);
-        if (error || !std::filesystem::is_regular_file(resolved, error) || error)
-        {
-            return "environment_source_missing";
-        }
-        if (!std::filesystem::equivalent(resolved.parent_path(), environmentRoot, error) || error)
-        {
-            return "environment_source_must_be_direct_child";
-        }
-        return {};
-    };
-}
-
 [[nodiscard]] constexpr std::size_t saturatedAdd(std::size_t left, std::size_t right) noexcept
 {
     return right > std::numeric_limits<std::size_t>::max() - left ? std::numeric_limits<std::size_t>::max() : left + right;
@@ -451,6 +411,11 @@ OptionDefinition makeEmptyEffectDefinition(OptionKey<OptionWireValue::Object> ke
 
 std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed &seed)
 {
+    nrAssert(
+        !seed.environmentNames.empty() &&
+            std::ranges::contains(seed.environmentNames, seed.environmentName),
+        "Session environment name must be one of the discovered environment names.");
+
     auto const floatMaximum = static_cast<double>(std::numeric_limits<float>::max());
     auto positionSchema = OptionSchema::array(OptionSchema::number(-floatMaximum, floatMaximum), 3u, 3u);
     auto cameraSchema = OptionSchema::object({
@@ -474,11 +439,11 @@ std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed
     return {
         makeEnumDefinition(keys::viewerPipelineSelected, seed.selectedPipeline, seed.pipelineIds, OptionScope::session, ui("Viewer", "Pipeline", OptionUiControl::combo, 10)),
         makeDefinition(keys::viewerModelSource, OptionSchema::string(4u * 1024u), seed.modelSource, OptionScope::session, ui("Viewer", "Model", OptionUiControl::input, 20), modelSourceValidator()),
-        makeDefinition(keys::viewerEnvironmentSource, OptionSchema::string(4u * 1024u), seed.environmentSource, OptionScope::session, ui("Viewer", "Environment", OptionUiControl::input, 30), environmentSourceValidator()),
+        makeEnumDefinition(keys::viewerEnvironmentSource, seed.environmentName, seed.environmentNames, OptionScope::session, ui("Viewer", "Environment", OptionUiControl::combo, 30)),
         makeEnumDefinition(keys::viewerRtPostProcessingMode, seed.postProcessingMode, {"accumulate", "dlss_ray_reconstruction"}, OptionScope::session, ui("Viewer", "RT post processing", OptionUiControl::combo, 40)),
         makeBooleanDefinition(keys::viewerWindowFullscreen, seed.fullscreen, OptionScope::session, ui("Viewer", "Fullscreen", OptionUiControl::checkbox, 50)),
         makeDefinition(keys::viewerCameraPose, std::move(cameraSchema), seed.cameraPose, OptionScope::session, ui("Camera", "Pose", OptionUiControl::hidden, 10)),
-        makeNumberDefinition(keys::viewerCameraVerticalFovDegrees, seed.verticalFovDegrees, 1.0, 179.0, OptionScope::session, ui("Camera", "Vertical FOV", OptionUiControl::slider, 20)),
+        makeUnsignedDefinition(keys::viewerCameraVerticalFovDegrees, seed.verticalFovDegrees, 1u, 179u, OptionScope::session, ui("Camera", "Vertical FOV", OptionUiControl::slider, 20)),
         makeDefinition(keys::viewerCameraClipPlanes, std::move(clipSchema), seed.clipPlanes, OptionScope::session, ui("Camera", "Clip planes", OptionUiControl::input, 30)),
     };
 }
@@ -512,16 +477,10 @@ std::vector<OptionDefinition> makeDlssDefinitions(std::string initialQuality)
         return bypass != nullptr && *bypass && (quality == nullptr || *quality != "dlaa") ? std::optional{std::string{"DLSS bypass can only be enabled in DLAA quality"}} : std::nullopt;
     };
     auto const qualityValues = std::vector<std::string>{"performance", "balanced", "quality", "ultra_performance", "dlaa"};
-    auto const presetValues = std::vector<std::string>{"default", "d", "e"};
 
     return {
         makeBooleanDefinition(keys::dlssEnabled, true, OptionScope::graph, ui("DLSS", "Enabled", OptionUiControl::checkbox, 10)),
         makeEnumDefinition(keys::dlssQuality, std::move(initialQuality), qualityValues, OptionScope::graph, ui("DLSS", "Quality", OptionUiControl::combo, 20), std::move(qualityValidator)),
-        makeEnumDefinition(keys::dlssPresetPerformance, "default", presetValues, OptionScope::graph, ui("DLSS presets", "Performance", OptionUiControl::combo, 10)),
-        makeEnumDefinition(keys::dlssPresetBalanced, "default", presetValues, OptionScope::graph, ui("DLSS presets", "Balanced", OptionUiControl::combo, 20)),
-        makeEnumDefinition(keys::dlssPresetQuality, "default", presetValues, OptionScope::graph, ui("DLSS presets", "Quality", OptionUiControl::combo, 30)),
-        makeEnumDefinition(keys::dlssPresetUltraPerformance, "default", presetValues, OptionScope::graph, ui("DLSS presets", "Ultra performance", OptionUiControl::combo, 40)),
-        makeEnumDefinition(keys::dlssPresetDlaa, "default", presetValues, OptionScope::graph, ui("DLSS presets", "DLAA", OptionUiControl::combo, 50)),
         OptionDefinition{
             .id = optionId(keys::dlssBypass),
             .schema = OptionSchema::boolean(),

@@ -531,11 +531,6 @@ render.path_tracing.russian_roulette_enabled
 render.accumulate.max_history_samples
 render.dlss.enabled
 render.dlss.quality
-render.dlss.preset.performance
-render.dlss.preset.balanced
-render.dlss.preset.quality
-render.dlss.preset.ultra_performance
-render.dlss.preset.dlaa
 render.dlss.bypass
 render.dlss.visualize_motion_vectors
 render.dlss.reset_history
@@ -544,8 +539,10 @@ render.present.ui_opacity
 render.present.capture_exr
 ```
 
-These are the fixed initial V1 IDs. `viewer.rt.dlss_quality` is deliberately absent:
-`--dlss-quality` seeds `render.dlss.quality` and does not create a second option.
+These are the current V1 IDs. `viewer.rt.dlss_quality` is deliberately absent:
+`--dlss-quality` seeds `render.dlss.quality` and does not create a second option. DLSS
+preset selection is also absent from the option protocol and remains a programmatic
+`DlssRayReconstructionNodeInput` setting.
 
 ### 9.3 One option per mutation
 
@@ -1033,7 +1030,7 @@ frame N boundary
 
 frame N body
   8. in offline-Lua mode, resume the Lua coroutine once against Snapshot N
-  9. begin Dear ImGui frame
+  9. consume the latest per-poll vertical wheel delta and begin the Dear ImGui frame
  10. render semantic UI from Snapshot N; agent and offline-Lua modes use a disabled
      read-only mirror
  11. in human mode, give a committed UI mutation first chance to reserve N+1
@@ -1172,6 +1169,25 @@ All three surfaces have the same option IDs, schemas, validation, snapshot value
 `read/apply` semantics. Authority decides which surface may submit now. This does not
 create three different option systems.
 
+### 14.6 Presentation-only UI navigation
+
+Physical mouse-wheel input is not a fourth mutation producer. It has no option ID,
+`MutationOrigin`, binding proof, admission-slot interaction, or one-frame snapshot
+visibility rule.
+
+`PresentationContext` accumulates only finite vertical offsets delivered during the
+latest GLFW event poll. `UiSystem::beginFrame()` consumes that value once and submits it
+to Dear ImGui with a zero horizontal component before `ImGui::NewFrame()`. This path is
+active in human, agent, and offline-Lua modes so both interactive UI and read-only mirrors
+remain vertically navigable. Horizontal offsets are discarded, unconsumed offsets from
+older non-renderable iterations are cleared before the next event poll, and Dear ImGui
+window scaling remains disabled.
+
+The wheel delta is never exposed to `AppCamera`, `OptionUiPresenter`, `OptionSystem`, the
+WebSocket protocol, or the Lua host. In particular, it cannot zoom or otherwise mutate
+the viewer camera, edit an option, reserve the mutation slot, or trigger an automation
+operation.
+
 ## 15. Camera Design
 
 ### 15.1 Canonical options
@@ -1181,7 +1197,7 @@ Recommended initial camera options:
 | ID | Complete value |
 |---|---|
 | `viewer.camera.pose` | position, yaw degrees, pitch degrees |
-| `viewer.camera.vertical_fov_degrees` | finite scalar in `[1, 179]` |
+| `viewer.camera.vertical_fov_degrees` | integer degrees in `[1, 179]` |
 | `viewer.camera.clip_planes` | near/far pair with `near >= 0.001` and `far > near` |
 
 Viewport extent remains derived from presentation and is not a mutation.
@@ -1345,11 +1361,11 @@ replacement.
 |---|---|
 | `viewer.pipeline.selected` | current registry ID; initially `normalview` or `rtobject` |
 | `viewer.model.source` | root-relative UTF-8 path below `nr::projectRoot/assets` |
-| `viewer.environment.source` | one direct `.exr` child of `assets/envMap` |
+| `viewer.environment.source` | one extension-free name from the startup-scanned direct `.exr` children of `assets/envMap` |
 | `viewer.rt.post_processing_mode` | `accumulate` or `dlss_ray_reconstruction` |
 | `viewer.window.fullscreen` | boolean |
 | `viewer.camera.pose` | closed `{position:[x,y,z], yaw_degrees, pitch_degrees}` with the coordinate/range and 32-bit representability contract in §15.4 |
-| `viewer.camera.vertical_fov_degrees` | finite number in `[1, 179]` |
+| `viewer.camera.vertical_fov_degrees` | integer degrees in `[1, 179]` |
 | `viewer.camera.clip_planes` | closed `{near, far}` with finite, 32-bit-representable values, `near >= 0.001`, and `far > near` |
 
 `viewer.window.fullscreen` is the only fullscreen mutation path. `UiNode` and presentation
@@ -1364,11 +1380,6 @@ code must not expose a direct `setFullscreen` bypass.
 | `render.accumulate.max_history_samples` | unsigned integer `1..4096`, default `1024` |
 | `render.dlss.enabled` | boolean, default `true` |
 | `render.dlss.quality` | `performance`, `balanced`, `quality`, `ultra_performance`, or `dlaa`; launch `--dlss-quality` seeds this value |
-| `render.dlss.preset.performance` | `default`, `d`, or `e`; default `default` |
-| `render.dlss.preset.balanced` | `default`, `d`, or `e`; default `default` |
-| `render.dlss.preset.quality` | `default`, `d`, or `e`; default `default` |
-| `render.dlss.preset.ultra_performance` | `default`, `d`, or `e`; default `default` |
-| `render.dlss.preset.dlaa` | `default`, `d`, or `e`; default `default` |
 | `render.dlss.bypass` | boolean, default `false`; legal only while quality is `dlaa` |
 | `render.dlss.visualize_motion_vectors` | boolean, default `false` |
 | `render.dlss.reset_history` | closed `{}` one-frame effect |
@@ -2250,9 +2261,10 @@ own host environment.
 
 ### 25.2 Filesystem
 
-- model input is root-relative below `nr::projectRoot/assets`; environment input is one
-  direct `.exr` child of `assets/envMap`;
-- any path input is length-bounded, canonicalized, and root-restricted;
+- model input is root-relative below `nr::projectRoot/assets`; environment input is a
+  closed extension-free name discovered from direct `.exr` children of the fixed
+  `assets/envMap` prefix;
+- model path input is length-bounded, canonicalized, and root-restricted;
 - capture output is selected by the renderer under `nr::projectRoot/screenshots`;
 - protocol callers do not choose arbitrary capture destinations;
 - no shell command construction or execution;
@@ -2459,7 +2471,8 @@ Exit condition: the app executes at most one viewer-domain mutation per renderab
 - migrate pipeline/post-processing options;
 - implement detached Scene candidate/commit ownership and the model-to-camera derived
   commit;
-- normalize all model/environment paths to their fixed roots.
+- normalize model paths to the asset root and resolve environment names beneath their
+  fixed prefix.
 
 Exit condition: preflight failure preserves the old graph, and model failure preserves the
 old Scene and camera.
@@ -2552,6 +2565,8 @@ for separate implementation approval.
 
 - UI commit has priority over held movement input;
 - ImGui keyboard/mouse capture blocks camera mutation;
+- vertical wheel input reaches Dear ImGui before `NewFrame`, discards its horizontal
+  component, and has no camera, option, WebSocket, or Lua consumer;
 - WASD/QE plus mouse delta produce one pose mutation;
 - suppressed mouse input advances/discards the cursor baseline and cannot jump later;
 - no physical input produces no mutation;
@@ -2572,8 +2587,8 @@ for separate implementation approval.
   camera, while success commits source plus the derived camera reset;
 - resolver, node structural snapshot, skeleton patch, materialization, and build read the
   same snapshot;
-- DLSS bypass/DLAA constraints, presets, quality, reset target-pass semantics, and
-  resolution consistency;
+- DLSS bypass/DLAA constraints, quality, absence of preset option IDs, reset
+  target-pass semantics, and resolution consistency;
 - DLSS reset is consumed once;
 - only the exact target batch can complete a frame effect; unrelated submission,
   compile-only, record-only, and early-return cases fail it;

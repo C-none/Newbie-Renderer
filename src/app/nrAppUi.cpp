@@ -223,6 +223,7 @@ void UiSystem::initialize()
     io.BackendRendererName = "NewbieRenderer.UiNode";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.FontAllowUserScaling = false;
     io.FontGlobalScale = detail::kUiFontGlobalScale;
 
     ImGui::StyleColorsDark();
@@ -308,6 +309,11 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, floa
     io.AddMouseButtonEvent(0, presentation.mouseButtonDown(detail::kMouseButtonLeft));
     io.AddMouseButtonEvent(1, presentation.mouseButtonDown(detail::kMouseButtonRight));
     io.AddMouseButtonEvent(2, presentation.mouseButtonDown(detail::kMouseButtonMiddle));
+    auto const verticalScrollOffset = presentation.consumeVerticalScrollOffset();
+    if (verticalScrollOffset != 0.0)
+    {
+        io.AddMouseWheelEvent(0.0f, static_cast<float>(verticalScrollOffset));
+    }
     detail::submitKeyboardInput(io, presentation);
 
     ImGui::NewFrame();

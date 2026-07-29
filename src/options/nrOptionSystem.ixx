@@ -106,7 +106,7 @@ struct EffectMaterializationResult
 struct CameraResetValues
 {
     OptionWireValue::Object pose{};
-    double verticalFovDegrees = 60.0;
+    std::uint64_t verticalFovDegrees = 60u;
     OptionWireValue::Object clipPlanes{};
 };
 

@@ -1,4 +1,5 @@
-import dependency;
+import dependency.math;
+import dependency.vulkan;
 import nr.renderer;
 import nr.test;
 import std;

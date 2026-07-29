@@ -2,5 +2,5 @@ nr_add_contract_test(nr_pipeline_contract_test nr_pipeline_contract_test.cpp "fa
     nrpipeline
     nroptions
     utils
-    dependency
+    dependency_graphics
 )

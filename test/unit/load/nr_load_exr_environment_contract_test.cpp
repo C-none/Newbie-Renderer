@@ -1,5 +1,6 @@
 import std;
-import dependency;
+import dependency.assets;
+import dependency.vulkan;
 import nr.load;
 import nr.resource;
 import nr.test;

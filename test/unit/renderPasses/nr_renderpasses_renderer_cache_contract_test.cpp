@@ -153,7 +153,9 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          auto sceneTextureBinding = readProjectFile("src/renderPasses/nrSceneTextureTableBinding.ixx");
                                                                          auto rendererInterface = readProjectFile("src/renderer/nrRenderer.ixx");
                                                                          auto rendererCacheInterface = readProjectFile("src/renderer/nrRendererCache.ixx");
-                                                                         auto rendererImplementation = readProjectFile("src/renderer/nrRenderer.cpp");
+                                                                          auto rendererImplementation =
+                                                                              readProjectFile("src/renderer/nrRenderer.cpp") +
+                                                                              readProjectFile("src/renderer/nrRendererPassBuilders.cpp");
                                                                          auto accelerationStructureBuild = readProjectFile("src/renderPasses/AccelerationStructureBuild/nrAccelerationStructureBuildNode.cpp");
 
                                                                          requireAbsent(normalBuffer, "SceneTextureTableBindingCache", "NormalBuffer must use renderer-owned bindless table cache instead of a node-local scene cache");
@@ -342,7 +344,7 @@ const nr::test::CaseRegistrar presentLinearExrScreenshotCase{"present screenshot
                                                                  auto externCMake = readProjectFile("src/extern/CMakeLists.txt");
                                                                  auto dependencyAssets = readProjectFile("src/extern/dependencyAssets.ixx");
                                                                  auto rendererInterface = readProjectFile("src/renderer/nrRenderer.ixx");
-                                                                 auto rendererImplementation = readProjectFile("src/renderer/nrRenderer.cpp");
+                                                                 auto rendererImplementation = readProjectFile("src/renderer/nrRendererPassBuilders.cpp");
                                                                  auto presentInterface = readProjectFile("src/renderPasses/Present/nrPresentNode.ixx");
                                                                  auto present = readProjectFile("src/renderPasses/Present/nrPresentNode.cpp");
 
@@ -407,7 +409,9 @@ const nr::test::CaseRegistrar pathTracingNodeAssemblyCase{"path tracing node res
                                                           }};
 
 const nr::test::CaseRegistrar rendererSubmissionTimelinesCase{"renderer submission batches use producer-owned per-queue timelines", [] {
-                                                                  auto executor = readProjectFile("src/renderer/nrRenderGraphExecutor.cpp");
+                                                                   auto executor =
+                                                                       readProjectFile("src/renderer/nrRenderGraphExecutor.cpp") +
+                                                                       readProjectFile("src/renderer/nrRenderGraphExecutorResources.cpp");
                                                                   auto timeline = readProjectFile("src/renderer/nrRendererSubmission.ixx");
                                                                   auto waitStageBegin = executor.find("RenderGraphExecutor::submissionWaitStage");
                                                                   auto waitStageEnd = executor.find("RenderGraphExecutor::shaderWaitStageForQueue", waitStageBegin);

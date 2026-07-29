@@ -74,21 +74,13 @@ void registerDefaultPipelines(RenderPipelineRegistry& registry);
 
 [[nodiscard]] std::filesystem::path defaultModelPath();
 [[nodiscard]] std::filesystem::path modelAssetRootPath();
-[[nodiscard]] std::filesystem::path environmentMapAssetDirectoryPath();
-[[nodiscard]] std::filesystem::path defaultEnvironmentMapPath();
+[[nodiscard]] std::string_view defaultEnvironmentMapName() noexcept;
+[[nodiscard]] std::expected<std::vector<std::string>, std::string> discoverEnvironmentMapNames();
 [[nodiscard]] std::filesystem::path modelHistoryFilePath();
 [[nodiscard]] std::expected<std::filesystem::path, std::string> resolveModelAssetPath(
     const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path normalizeModelPathForStorage(const std::filesystem::path& path);
 [[nodiscard]] std::string displayPathLeafFirst(const std::filesystem::path& path);
-
-struct EnvironmentMapAsset
-{
-    std::filesystem::path sourcePath{};
-    std::string displayName{};
-};
-
-[[nodiscard]] std::expected<std::vector<EnvironmentMapAsset>, std::string> discoverEnvironmentMapAssets();
 
 class ModelHistory
 {
@@ -154,7 +146,7 @@ struct ViewerCommandLineOptions
 struct ViewerRunConfig
 {
     std::filesystem::path initialModelPath{};
-    std::filesystem::path initialEnvironmentMapPath{};
+    std::string initialEnvironmentMapName{};
     std::string initialPipelineId{std::string{defaultPipelineId}};
     std::string appName{"NewbieRenderer"};
     std::string engineName{"NewbieRenderer"};
@@ -182,7 +174,7 @@ void registerNormalViewPipeline(RenderPipelineRegistry& registry);
 void registerRtObjectPipeline(RenderPipelineRegistry& registry);
 
 [[nodiscard]] std::string normalizedModelPathKey(const std::filesystem::path& path);
-[[nodiscard]] std::expected<EnvironmentMapAsset, std::string> loadEnvironmentMap(
+[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(
     nr::renderer::Renderer& renderer,
-    const std::filesystem::path& sourcePath);
+    std::string_view environmentMapName);
 } // namespace nr::pipeline::detail

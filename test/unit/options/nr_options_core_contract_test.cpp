@@ -35,9 +35,20 @@ namespace json = dependency::json;
     return result.catalog;
 }
 
+[[nodiscard]] SessionDefinitionSeed sessionDefinitionSeed()
+{
+    return SessionDefinitionSeed{
+        .environmentName = "kloofendal_48d_partly_cloudy_puresky_8k",
+        .environmentNames = {
+            "brown_photostudio_02_8k",
+            "kloofendal_48d_partly_cloudy_puresky_8k",
+        },
+    };
+}
+
 [[nodiscard]] std::shared_ptr<const OptionCatalog> sessionCatalog()
 {
-    auto definitions = makeSessionDefinitions(SessionDefinitionSeed{});
+    auto definitions = makeSessionDefinitions(sessionDefinitionSeed());
     return catalog(definitions);
 }
 
@@ -78,7 +89,7 @@ const nr::test::CaseRegistrar schemaAndCatalogCase{"option catalog validates IDs
                                                        nr::test::require(!OptionId::parse("render..opacity").has_value());
                                                        nr::test::require(!OptionId::parse("render.present.trailing.").has_value());
 
-                                                       auto sessionDefinitions = makeSessionDefinitions(SessionDefinitionSeed{});
+                                                       auto sessionDefinitions = makeSessionDefinitions(sessionDefinitionSeed());
                                                        auto clipDefinition = std::ranges::find_if(sessionDefinitions, [](auto const &definition) { return definition.id == optionId(keys::viewerCameraClipPlanes); });
                                                        nr::test::require(clipDefinition != sessionDefinitions.end(), "clip definition must be registered");
 
@@ -152,7 +163,21 @@ const nr::test::CaseRegistrar fixedCatalogCase{"fixed option catalog has one can
                                                    auto session = sessionCatalog();
                                                    nr::test::require(session->find(optionId(keys::viewerWindowFullscreen)) != nullptr);
                                                    nr::test::require(session->find(optionId(keys::viewerCameraPose)) != nullptr);
-                                                   nr::test::require(session->find(optionId(keys::viewerCameraVerticalFovDegrees)) != nullptr);
+                                                   auto const *environment = session->find(optionId(keys::viewerEnvironmentSource));
+                                                   nr::test::require(
+                                                       environment != nullptr &&
+                                                           environment->presentation.control == OptionUiControl::combo &&
+                                                           environment->schema.allowedStrings ==
+                                                               sessionDefinitionSeed().environmentNames,
+                                                       "environment selection must be a closed combo of discovered extension-free names");
+                                                   auto const *verticalFov = session->find(optionId(keys::viewerCameraVerticalFovDegrees));
+                                                   nr::test::require(
+                                                       verticalFov != nullptr &&
+                                                           verticalFov->schema.type == OptionValueType::unsignedInteger &&
+                                                           verticalFov->schema.unsignedMinimum == 1u &&
+                                                           verticalFov->schema.unsignedMaximum == 179u &&
+                                                           verticalFov->presentation.control == OptionUiControl::slider,
+                                                       "vertical FOV must be an integer-degree slider");
                                                    nr::test::require(session->find(optionId(keys::viewerCameraClipPlanes)) != nullptr);
                                                    auto legacyQuality = OptionId::parse("viewer.rt.dlss_quality");
                                                    nr::test::require(legacyQuality.has_value());
@@ -162,6 +187,20 @@ const nr::test::CaseRegistrar fixedCatalogCase{"fixed option catalog has one can
                                                    nr::test::require(dlss->find(optionId(keys::dlssQuality)) != nullptr);
                                                    auto const *reset = dlss->find(optionId(keys::dlssResetHistory));
                                                    nr::test::require(reset != nullptr && reset->lifetime == OptionValueLifetime::frameEffect, "DLSS reset must be a one-frame effect");
+                                                   auto const removedPresetIds = std::array<std::string_view, 5u>{
+                                                       "render.dlss.preset.performance",
+                                                       "render.dlss.preset.balanced",
+                                                       "render.dlss.preset.quality",
+                                                       "render.dlss.preset.ultra_performance",
+                                                       "render.dlss.preset.dlaa",
+                                                   };
+                                                   std::ranges::for_each(removedPresetIds, [&](std::string_view id) {
+                                                       auto parsed = OptionId::parse(id);
+                                                       nr::test::require(parsed.has_value());
+                                                       nr::test::require(
+                                                           dlss->find(*parsed) == nullptr,
+                                                           std::format("removed DLSS preset option '{}' must not be registered", id));
+                                                   });
 
                                                    auto present = catalog(makePresentDefinitions());
                                                    auto const *capture = present->find(optionId(keys::presentCaptureExr));
@@ -171,14 +210,27 @@ const nr::test::CaseRegistrar fixedCatalogCase{"fixed option catalog has one can
                                                    auto addDefinitions = [&](std::vector<OptionDefinition> definitions) {
                                                        std::ranges::for_each(definitions, [&](OptionDefinition &definition) { nr::test::require(completeRtBuilder.add(std::move(definition)), "complete RT catalog definition should be accepted"); });
                                                    };
-                                                   addDefinitions(makeSessionDefinitions(SessionDefinitionSeed{}));
+                                                   addDefinitions(makeSessionDefinitions(sessionDefinitionSeed()));
                                                    addDefinitions(makePathTracingDefinitions());
                                                    addDefinitions(makeDlssDefinitions());
                                                    addDefinitions(makePresentDefinitions());
                                                    nr::test::require(completeRtBuilder.build().valid(), "the complete fixed RT snapshot must fit in one 256 KiB response");
                                                }};
 
-const nr::test::CaseRegistrar pathAdmissionCase{"filesystem options reject invalid roots before reserving the mutation slot", [] {
+const nr::test::CaseRegistrar verticalFovAdmissionCase{"vertical FOV rejects fractional degrees", [] {
+                                                           auto system = initializedSystem();
+                                                           auto fractional = system->trySchedule(OptionMutationRequest{
+                                                               .id = optionId(keys::viewerCameraVerticalFovDegrees),
+                                                               .value = OptionWireValue{75.5},
+                                                               .binding = BindingProof{.bindingEpoch = system->liveBinding().bindingEpoch},
+                                                               .origin = MutationOrigin::imgui,
+                                                           });
+                                                           nr::test::require(!fractional.started);
+                                                           nr::test::requireEqual(fractional.reason, ScheduleRejectReason::invalidValue);
+                                                           nr::test::require(!system->hasPendingMutation());
+                                                       }};
+
+const nr::test::CaseRegistrar pathAdmissionCase{"filesystem paths and unknown environment names are rejected before reserving the mutation slot", [] {
                                                     auto system = initializedSystem();
                                                     auto reject = [&](OptionKey<std::string> key, std::string value) {
                                                         auto result = system->trySchedule(request(*system, key, std::move(value)));
@@ -193,6 +245,7 @@ const nr::test::CaseRegistrar pathAdmissionCase{"filesystem options reject inval
                                                     reject(keys::viewerEnvironmentSource, "brown_photostudio_02_8k.exr");
                                                     reject(keys::viewerEnvironmentSource, "assets/envMap/missing.exr");
                                                     reject(keys::viewerEnvironmentSource, "assets/envMap/../glTF-Sample-Assets/README.md");
+                                                    reject(keys::viewerEnvironmentSource, "missing");
 
                                                     auto validModel = system->trySchedule(request(*system, keys::viewerModelSource, std::string{"glTF-Sample-Assets/Models/AnimatedCube/glTF/AnimatedCube.gltf"}));
                                                     nr::test::require(validModel.started);
@@ -201,7 +254,7 @@ const nr::test::CaseRegistrar pathAdmissionCase{"filesystem options reject inval
                                                     nr::test::require(system->discardMutation(std::move(*frame->mutation)));
                                                     static_cast<void>(finishFrame(*system));
 
-                                                    auto validEnvironment = system->trySchedule(request(*system, keys::viewerEnvironmentSource, std::string{"assets/envMap/brown_photostudio_02_8k.exr"}));
+                                                    auto validEnvironment = system->trySchedule(request(*system, keys::viewerEnvironmentSource, std::string{"brown_photostudio_02_8k"}));
                                                     nr::test::require(validEnvironment.started);
                                                     frame = system->beginRenderableFrame();
                                                     nr::test::require(frame && frame->mutation);
@@ -214,14 +267,14 @@ const nr::test::CaseRegistrar singleSlotCase{"option admission has one slot and 
                                                  nr::test::require(first.started);
                                                  nr::test::requireEqual(first.sequence, std::uint64_t{1u});
 
-                                                 auto second = system->trySchedule(request(*system, keys::viewerCameraVerticalFovDegrees, 75.0));
+                                                 auto second = system->trySchedule(request(*system, keys::viewerCameraVerticalFovDegrees, std::uint64_t{75u}));
                                                  nr::test::require(!second.started);
                                                  nr::test::requireEqual(second.reason, ScheduleRejectReason::busy);
 
                                                  auto frame = system->beginRenderableFrame();
                                                  nr::test::require(frame.has_value() && frame->mutation.has_value());
                                                  nr::test::require(!system->admissionOpen(), "gate must close before execution");
-                                                 nr::test::requireEqual(system->trySchedule(request(*system, keys::viewerCameraVerticalFovDegrees, 80.0)).reason, ScheduleRejectReason::admissionClosed, "closed frame gate must reject every new mutation source");
+                                                 nr::test::requireEqual(system->trySchedule(request(*system, keys::viewerCameraVerticalFovDegrees, std::uint64_t{80u})).reason, ScheduleRejectReason::admissionClosed, "closed frame gate must reject every new mutation source");
                                                  auto commit = system->commitCanonical(std::move(*frame->mutation));
                                                  nr::test::require(commit.committed);
 
@@ -305,7 +358,7 @@ const nr::test::CaseRegistrar concurrentSingleSlotCase{"concurrent admission lin
                                                                results[index] = system->trySchedule(std::move(mutation));
                                                            };
                                                            auto first = std::jthread{run, 0u, request(*system, keys::viewerWindowFullscreen, true)};
-                                                           auto second = std::jthread{run, 1u, request(*system, keys::viewerCameraVerticalFovDegrees, 75.0)};
+                                                           auto second = std::jthread{run, 1u, request(*system, keys::viewerCameraVerticalFovDegrees, std::uint64_t{75u})};
                                                            while (readyCount.load(std::memory_order_acquire) != results.size())
                                                            {
                                                                std::this_thread::yield();
@@ -566,7 +619,7 @@ const nr::test::CaseRegistrar derivedModelCase{"model commit atomically applies 
                                                                {"yaw_degrees", OptionWireValue{45.0}},
                                                                {"pitch_degrees", OptionWireValue{-10.0}},
                                                            },
-                                                       .verticalFovDegrees = 72.0,
+                                                       .verticalFovDegrees = 72u,
                                                        .clipPlanes =
                                                            {
                                                                {"near", OptionWireValue{0.05}},
@@ -576,7 +629,7 @@ const nr::test::CaseRegistrar derivedModelCase{"model commit atomically applies 
                                                    nr::test::require(system->commitModelAndCameraReset(std::move(*frame->mutation), std::move(camera)).committed);
                                                    auto snapshot = finishFrame(*system);
                                                    nr::test::requireEqual(*snapshot->find(keys::viewerModelSource), modelSource);
-                                                   nr::test::requireEqual(*snapshot->find(keys::viewerCameraVerticalFovDegrees), 72.0);
+                                                   nr::test::requireEqual(*snapshot->find(keys::viewerCameraVerticalFovDegrees), std::uint64_t{72u});
                                                    auto const *pose = snapshot->find(keys::viewerCameraPose);
                                                    nr::test::require(pose != nullptr && pose->contains("position"));
                                                }};

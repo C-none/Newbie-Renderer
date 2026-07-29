@@ -10,18 +10,18 @@ file(GLOB IMPL_SOURCES
 
 nr_add_library(nrpipeline STATIC)
 target_link_libraries(nrpipeline
-PUBLIC
-    nrapp
-    nrautomation
-    nrinteraction
-    nrload
-    nroptions
-    nrrenderer
-    nrrenderpasses
-    nrrhi
-    nrscene
-    utils
-    dependency
+    PUBLIC
+        nrapp
+        nrautomation
+        nrinteraction
+        nrload
+        nroptions
+        nrrenderer
+        nrrenderpasses
+        nrrhi
+        nrscene
+        utils
+        dependency_graphics
 )
 target_sources(nrpipeline
     PRIVATE
