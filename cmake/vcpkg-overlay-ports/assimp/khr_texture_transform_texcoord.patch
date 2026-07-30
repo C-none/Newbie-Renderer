@@ -1,0 +1,37 @@
+diff --git a/code/AssetLib/glTF2/glTF2Asset.inl b/code/AssetLib/glTF2/glTF2Asset.inl
+index 618a973..8ba90fc 100644
+--- a/code/AssetLib/glTF2/glTF2Asset.inl
++++ b/code/AssetLib/glTF2/glTF2Asset.inl
+@@ -1246,6 +1246,10 @@ inline void Texture::Read(Value &obj, Asset &r) {
+ }
+ 
+ void Material::SetTextureProperties(Asset &r, Value *prop, TextureInfo &out) {
++    if (Value *texcoord = FindUInt(*prop, "texCoord")) {
++        out.texCoord = texcoord->GetUint();
++    }
++
+     if (r.extensionsUsed.KHR_texture_transform) {
+         if (Value *pKHR_texture_transform = FindExtension(*prop, "KHR_texture_transform")) {
+             out.textureTransformSupported = true;
+@@ -1267,16 +1271,16 @@ void Material::SetTextureProperties(Asset &r, Value *prop, TextureInfo &out) {
+             } else {
+                 out.TextureTransformExt_t.scale[0] = 1;
+                 out.TextureTransformExt_t.scale[1] = 1;
+             }
++
++            if (Value *texcoord = FindUInt(*pKHR_texture_transform, "texCoord")) {
++                out.texCoord = texcoord->GetUint();
++            }
+         }
+     }
+ 
+     if (Value *indexProp = FindUInt(*prop, "index")) {
+         out.texture = r.textures.Retrieve(indexProp->GetUint());
+     }
+-
+-    if (Value *texcoord = FindUInt(*prop, "texCoord")) {
+-        out.texCoord = texcoord->GetUint();
+-    }
+ }
+ 
+ inline void Material::ReadTextureProperty(Asset &r, Value &vals, const char *propName, TextureInfo &out) {

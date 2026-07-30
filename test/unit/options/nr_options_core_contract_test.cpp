@@ -170,6 +170,17 @@ const nr::test::CaseRegistrar fixedCatalogCase{"fixed option catalog has one can
                                                            environment->schema.allowedStrings ==
                                                                sessionDefinitionSeed().environmentNames,
                                                        "environment selection must be a closed combo of discovered extension-free names");
+                                                   auto const *exit = session->find(optionId(keys::viewerExit));
+                                                   nr::test::require(
+                                                       exit != nullptr &&
+                                                           exit->scope == OptionScope::session &&
+                                                           exit->lifetime == OptionValueLifetime::frameEffect &&
+                                                           exit->schema.type == OptionValueType::object &&
+                                                           exit->presentation.group == "Viewer" &&
+                                                           exit->presentation.label == "Exit" &&
+                                                           exit->presentation.control == OptionUiControl::button &&
+                                                           exit->presentation.order == 60,
+                                                       "viewer exit must be a shared session frame-effect button");
                                                    auto const *verticalFov = session->find(optionId(keys::viewerCameraVerticalFovDegrees));
                                                    nr::test::require(
                                                        verticalFov != nullptr &&

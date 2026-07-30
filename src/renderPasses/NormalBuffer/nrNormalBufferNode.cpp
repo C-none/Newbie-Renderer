@@ -30,11 +30,18 @@ struct NormalBufferPushConstants
     glm::vec4 modelRow0{};
     glm::vec4 modelRow1{};
     glm::vec4 modelRow2{};
-    glm::uvec4 textureIdPairs0{};
-    glm::uvec2 textureIdPairs1{};
+    glm::vec4 normalUvLinear{};
+    glm::vec4 normalUvOffsetScale{};
+    glm::uvec4 normalTextureMeta{};
 };
 
-static_assert(sizeof(NormalBufferPushConstants) == 72u, "NormalBuffer push constants must stay packed as model rows plus uint16 texture id pairs.");
+static_assert(sizeof(NormalBufferPushConstants) == 96u, "NormalBuffer push constants must match the reflected shader layout.");
+static_assert(offsetof(NormalBufferPushConstants, modelRow0) == 0u);
+static_assert(offsetof(NormalBufferPushConstants, modelRow1) == 16u);
+static_assert(offsetof(NormalBufferPushConstants, modelRow2) == 32u);
+static_assert(offsetof(NormalBufferPushConstants, normalUvLinear) == 48u);
+static_assert(offsetof(NormalBufferPushConstants, normalUvOffsetScale) == 64u);
+static_assert(offsetof(NormalBufferPushConstants, normalTextureMeta) == 80u);
 static_assert(sizeof(NormalBufferPushConstants) <= nr::rhi::kMaxPushConstantBytes, "Push constants exceed 128 bytes.");
 
 inline constexpr std::uint32_t kVertexStride = static_cast<std::uint32_t>(sizeof(nr::resource::Vertex));
@@ -42,13 +49,7 @@ inline constexpr std::uint32_t kOffsetPosition = static_cast<std::uint32_t>(offs
 inline constexpr std::uint32_t kOffsetNormal = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, normal));
 inline constexpr std::uint32_t kOffsetTangent = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, tangent));
 inline constexpr std::uint32_t kOffsetTexCoord0 = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, texCoord0));
-
-[[nodiscard]] constexpr std::uint32_t packSceneTextureIdPair(
-    nr::scene::SceneTextureId low,
-    nr::scene::SceneTextureId high) noexcept
-{
-    return static_cast<std::uint32_t>(low) | (static_cast<std::uint32_t>(high) << 16u);
-}
+inline constexpr std::uint32_t kOffsetTexCoord1 = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, texCoord1));
 
 [[nodiscard]] std::vector<vk::VertexInputBindingDescription> makeVertexBindings()
 {
@@ -68,26 +69,29 @@ inline constexpr std::uint32_t kOffsetTexCoord0 = static_cast<std::uint32_t>(off
         vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat, kOffsetNormal},
         vk::VertexInputAttributeDescription{2, 0, vk::Format::eR32G32B32A32Sfloat, kOffsetTangent},
         vk::VertexInputAttributeDescription{3, 0, vk::Format::eR32G32Sfloat, kOffsetTexCoord0},
+        vk::VertexInputAttributeDescription{4, 0, vk::Format::eR32G32Sfloat, kOffsetTexCoord1},
     };
 }
 
 [[nodiscard]] NormalBufferPushConstants packDrawPushConstants(
     const glm::mat4& model,
-    const nr::scene::SceneMaterialTextureIds& textureIds) noexcept
+    const nr::scene::SceneMaterialNormalTextureBinding& normalTexture) noexcept
 {
     return NormalBufferPushConstants{
         .modelRow0 = glm::vec4{model[0][0], model[1][0], model[2][0], model[3][0]},
         .modelRow1 = glm::vec4{model[0][1], model[1][1], model[2][1], model[3][1]},
         .modelRow2 = glm::vec4{model[0][2], model[1][2], model[2][2], model[3][2]},
-        .textureIdPairs0 = glm::uvec4{
-            packSceneTextureIdPair(textureIds[0], textureIds[1]),
-            packSceneTextureIdPair(textureIds[2], textureIds[3]),
-            packSceneTextureIdPair(textureIds[4], textureIds[5]),
-            packSceneTextureIdPair(textureIds[6], textureIds[7]),
+        .normalUvLinear = normalTexture.uvLinear,
+        .normalUvOffsetScale = glm::vec4{
+            normalTexture.uvOffset,
+            normalTexture.normalScale,
+            0.0f,
         },
-        .textureIdPairs1 = glm::uvec2{
-            packSceneTextureIdPair(textureIds[8], textureIds[9]),
-            packSceneTextureIdPair(textureIds[10], textureIds[11]),
+        .normalTextureMeta = glm::uvec4{
+            normalTexture.textureId,
+            normalTexture.uvSet,
+            0u,
+            0u,
         },
     };
 }
@@ -393,7 +397,9 @@ void NormalBufferNode::build(NodeBuildContext& context, const NodeFrameParameter
                     currentCullMode = drawCullMode;
                 }
 
-                rasterContext.pushConstants(modelPushConstants, detail::packDrawPushConstants(draw.world, draw.materialTextureIds));
+                rasterContext.pushConstants(
+                    modelPushConstants,
+                    detail::packDrawPushConstants(draw.world, draw.materialTextures.normal));
 
                 if (currentFrontFace != draw.geometry.frontFace)
                 {

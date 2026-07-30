@@ -442,6 +442,7 @@ std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed
         makeEnumDefinition(keys::viewerEnvironmentSource, seed.environmentName, seed.environmentNames, OptionScope::session, ui("Viewer", "Environment", OptionUiControl::combo, 30)),
         makeEnumDefinition(keys::viewerRtPostProcessingMode, seed.postProcessingMode, {"accumulate", "dlss_ray_reconstruction"}, OptionScope::session, ui("Viewer", "RT post processing", OptionUiControl::combo, 40)),
         makeBooleanDefinition(keys::viewerWindowFullscreen, seed.fullscreen, OptionScope::session, ui("Viewer", "Fullscreen", OptionUiControl::checkbox, 50)),
+        makeEmptyEffectDefinition(keys::viewerExit, OptionScope::session, ui("Viewer", "Exit", OptionUiControl::button, 60)),
         makeDefinition(keys::viewerCameraPose, std::move(cameraSchema), seed.cameraPose, OptionScope::session, ui("Camera", "Pose", OptionUiControl::hidden, 10)),
         makeUnsignedDefinition(keys::viewerCameraVerticalFovDegrees, seed.verticalFovDegrees, 1u, 179u, OptionScope::session, ui("Camera", "Vertical FOV", OptionUiControl::slider, 20)),
         makeDefinition(keys::viewerCameraClipPlanes, std::move(clipSchema), seed.clipPlanes, OptionScope::session, ui("Camera", "Clip planes", OptionUiControl::input, 30)),

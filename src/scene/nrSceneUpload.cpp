@@ -57,8 +57,11 @@ namespace nr::scene::detail
 
     auto slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
-        data.textureHandles[slotIndex] = material.textureSlots[slotIndex].texture.packed();
-        data.uvSets[slotIndex] = material.textureSlots[slotIndex].uvSet;
+        auto const& slot = material.textureSlots[slotIndex];
+        data.textureHandles[slotIndex] = slot.texture.packed();
+        data.uvSets[slotIndex] = slot.uvSet;
+        data.uvLinear[slotIndex] = slot.transform.linear;
+        data.uvOffsets[slotIndex] = slot.transform.offset;
     });
 
     return data;

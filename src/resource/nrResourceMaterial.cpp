@@ -112,7 +112,9 @@ namespace nr::resource
             flags |= MaterialFeatureFlag::sheen;
         }
 
-        if (transmission.has_value())
+        if (transmission.has_value() &&
+            std::isfinite(transmission->factor) &&
+            transmission->factor > 0.0f)
         {
             flags |= MaterialFeatureFlag::transmission;
         }
@@ -139,6 +141,16 @@ namespace nr::resource
 
         return flags;
     }
+
+[[nodiscard]] bool Material::hasVolumeTransmissionBoundary() const noexcept
+{
+        return transmission.has_value() &&
+               std::isfinite(transmission->factor) &&
+               transmission->factor > 0.0f &&
+               volumeBoundary.has_value() &&
+               std::isfinite(volumeBoundary->thicknessFactor) &&
+               volumeBoundary->thicknessFactor > 0.0f;
+}
 
 [[nodiscard]] bool Material::isOpaque() const noexcept
 {

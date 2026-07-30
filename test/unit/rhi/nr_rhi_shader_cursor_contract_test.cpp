@@ -58,7 +58,25 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
         nr::test::require(pushConstantsCursor.valid(), "gPushConstants cursor should resolve");
         auto normalBufferPushRange = pushConstantsCursor.pushConstantRange();
         nr::test::require(normalBufferPushRange.has_value(), "gPushConstants should have push constant reflection");
-        nr::test::requireEqual(normalBufferPushRange->size, 72u);
+        nr::test::requireEqual(normalBufferPushRange->size, 96u);
+        auto const expectedPushFieldOffsets = std::array{
+            std::pair{"modelRow0", std::size_t{0u}},
+            std::pair{"modelRow1", std::size_t{16u}},
+            std::pair{"modelRow2", std::size_t{32u}},
+            std::pair{"normalUvLinear", std::size_t{48u}},
+            std::pair{"normalUvOffsetScale", std::size_t{64u}},
+            std::pair{"normalTextureMeta", std::size_t{80u}},
+        };
+        std::ranges::for_each(expectedPushFieldOffsets, [&](auto const& expected) {
+            auto fieldCursor = pushConstantsCursor[expected.first];
+            nr::test::require(
+                fieldCursor.valid(),
+                std::format("normalBuffer push field '{}' should resolve", expected.first));
+            nr::test::requireEqual(
+                fieldCursor.address().uniformOffset,
+                expected.second,
+                std::format("normalBuffer push field '{}' offset should match C++", expected.first));
+        });
 
         auto sceneTexturesCursor = root["gSceneTextures"];
         nr::test::require(sceneTexturesCursor.valid(), "gSceneTextures cursor should resolve");

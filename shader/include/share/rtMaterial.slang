@@ -25,6 +25,12 @@ public enum RtMaterialLayerFlag : uint
     transmission = 1u << 3u,
 }
 
+public enum RtTransmissionMode : uint
+{
+    thin = 0u,
+    volume = 1u,
+}
+
 [Flags]
 public enum RtMaterialFeatureFlag : uint
 {
@@ -33,6 +39,7 @@ public enum RtMaterialFeatureFlag : uint
     alphaBlend = 1u << 1u,
     doubleSided = 1u << 2u,
     emissive = 1u << 3u,
+    volumeBoundary = 1u << 4u,
     unsupportedAnisotropy = 1u << 31u,
 }
 
@@ -49,6 +56,7 @@ public struct RtMaterialHeader
     public float4 baseColorFactor = float4(1.0f);
     public float4 emissiveAndMetallic = float4(0.0f);
     public float4 roughnessNormalOcclusionAlpha = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    // x is reserved. Transmission factor, IOR, and mode have one source of truth in the layer record.
     public float4 transmissionClearcoatSheen = float4(0.0f);
 };
 
@@ -63,7 +71,9 @@ public struct RtMaterialLayerRecord
 
 public struct RtMaterialTextureRef
 {
-    public MaterialTextureSlot slot = MaterialTextureSlot.baseColor;
+    // Row-major 2x2 affine linear term: (m00, m01, m10, m11).
+    public float4 uvLinear = float4(1.0f, 0.0f, 0.0f, 1.0f);
+    public float2 uvOffset = float2(0.0f);
     public uint textureId = 0u;
     public uint uvSet = 0u;
 };

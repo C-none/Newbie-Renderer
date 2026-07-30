@@ -210,6 +210,9 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
     auto semanticKey = SceneAccelerationStructureMeshSemanticKey{
         .meshGpuVersion = meshRecord->gpuVersion,
     };
+    // Vulkan ray traversal treats a right-handed CCW triangle as front-facing when
+    // viewed from its positive geometric-normal side. Invert only imported meshes
+    // that explicitly declare clockwise front faces.
     if (meshRecord->cpu.clockwiseFrontFace)
     {
         semanticKey.instanceFlags = semanticKey.instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing;
@@ -218,30 +221,54 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
     auto const geometryCount = meshRecord->cpu.geometries.empty() ? std::size_t{1} : meshRecord->cpu.geometries.size();
     semanticKey.geometries.reserve(geometryCount);
 
+    auto materialRecordForGeometry = [&](const nr::resource::MeshGeometry &geometry, std::uint32_t geometryIndex) {
+        auto const materialHandle = meshGeometryMaterial(handle, geometryIndex).value_or(geometry.material);
+        return materialHandle.valid() ? materials_.tryGet(materialHandle) : nullptr;
+    };
+    auto geometryKeepsBackFaces = [&](const nr::resource::MeshGeometry &geometry, std::uint32_t geometryIndex) {
+        auto const *materialRecord = materialRecordForGeometry(geometry, geometryIndex);
+        return materialRecord != nullptr &&
+               materialRecord->cpuReady &&
+               (materialRecord->cpu.core.doubleSided ||
+                (!materialRecord->cpu.unlit &&
+                materialRecord->cpu.hasVolumeTransmissionBoundary()));
+    };
+    auto geometryPrimitiveCount = [&](const nr::resource::MeshGeometry &geometry) {
+        return geometry.indexCount / 3u;
+    };
+
+    auto const instanceKeepsBackFaces = !meshRecord->cpu.geometries.empty() &&
+                                        std::ranges::any_of(
+                                            std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(meshRecord->cpu.geometries.size())),
+                                            [&](std::uint32_t geometryIndex) {
+                                                auto const &geometry = meshRecord->cpu.geometries[geometryIndex];
+                                                return geometryPrimitiveCount(geometry) > 0u &&
+                                                       geometryKeepsBackFaces(geometry, geometryIndex);
+                                            });
+    if (instanceKeepsBackFaces)
+    {
+        semanticKey.instanceFlags =
+            semanticKey.instanceFlags |
+            vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable;
+    }
+
     auto appendGeometryKey = [&](const nr::resource::MeshGeometry &geometry, std::uint32_t geometryIndex) {
-        auto const indexed = atlas.indexCount > 0u;
-        auto const primitiveElementCount = geometry.indexCount > 0u ? geometry.indexCount : (indexed ? atlas.indexCount : atlas.vertexCount);
-        auto const primitiveCount = primitiveElementCount / 3u;
+        auto const primitiveCount = geometryPrimitiveCount(geometry);
         if (primitiveCount == 0u)
         {
             return;
         }
 
         auto flags = vk::GeometryFlagsKHR{};
-        auto const materialHandle = meshGeometryMaterial(handle, geometryIndex).value_or(geometry.material);
-        if (materialHandle.valid())
-        {
-            auto const *materialRecord = materials_.tryGet(materialHandle);
-            if (materialRecord == nullptr || !materialRecord->cpuReady || !materialRecord->cpu.isAlphaMasked())
-            {
-                flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
-            }
-            if (materialRecord != nullptr && materialRecord->cpuReady && materialRecord->cpu.core.doubleSided)
-            {
-                semanticKey.instanceFlags = semanticKey.instanceFlags | vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable;
-            }
-        }
-        else
+        auto const *materialRecord = materialRecordForGeometry(geometry, geometryIndex);
+        auto const alphaMasked =
+            materialRecord != nullptr &&
+            materialRecord->cpuReady &&
+            materialRecord->cpu.isAlphaMasked();
+        auto const keepsBackFaces = geometryKeepsBackFaces(geometry, geometryIndex);
+        // Facing cull disable is an instance-wide Vulkan flag. In a mixed mesh, keep unrelated
+        // single-sided geometries non-opaque so the shared any-hit policy can reject their back faces.
+        if (!alphaMasked && (!instanceKeepsBackFaces || keepsBackFaces))
         {
             flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
         }
@@ -322,27 +349,19 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 
     auto appendGeometry = [&](const nr::resource::MeshGeometry &geometry, std::uint32_t geometryIndex) {
         auto const indexed = atlas.indexCount > 0u;
-        auto const primitiveElementCount = geometry.indexCount > 0u ? geometry.indexCount : (indexed ? atlas.indexCount : atlas.vertexCount);
-        auto const primitiveCount = primitiveElementCount / 3u;
+        auto const primitiveCount = geometry.indexCount / 3u;
         if (primitiveCount == 0u)
         {
             return;
         }
 
-        auto flags = vk::GeometryFlagsKHR{};
-        auto const materialHandle = meshGeometryMaterial(handle, geometryIndex).value_or(geometry.material);
-        if (materialHandle.valid())
-        {
-            auto const *materialRecord = materials_.tryGet(materialHandle);
-            if (materialRecord == nullptr || !materialRecord->cpuReady || !materialRecord->cpu.isAlphaMasked())
-            {
-                flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
-            }
-        }
-        else
-        {
-            flags = flags | vk::GeometryFlagBitsKHR::eOpaque;
-        }
+        auto const semanticGeometry = std::ranges::find(
+            semanticKey->geometries,
+            geometryIndex,
+            &SceneAccelerationStructureGeometrySemanticKey::geometryIndex);
+        nrAssert(
+            semanticGeometry != semanticKey->geometries.end(),
+            "AS mesh geometry must have a matching semantic-key entry.");
 
         mesh.geometries.push_back(SceneAccelerationStructureGeometry{
             .geometryIndex = geometryIndex,
@@ -350,7 +369,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             .primitiveOffset = static_cast<vk::DeviceSize>(geometry.firstIndex) * (indexed ? sizeof(std::uint32_t) : sizeof(nr::resource::Vertex)),
             .firstVertex = indexed ? geometry.vertexOffset : 0u,
             .primitiveCount = primitiveCount,
-            .geometryFlags = flags,
+            .geometryFlags = semanticGeometry->geometryFlags,
         });
     };
 

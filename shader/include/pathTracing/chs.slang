@@ -13,6 +13,7 @@ public static const RtMaterialFeatureFlag kKnownRtMaterialFeatureMask =
     RtMaterialFeatureFlag.alphaBlend |
     RtMaterialFeatureFlag.doubleSided |
     RtMaterialFeatureFlag.emissive |
+    RtMaterialFeatureFlag.volumeBoundary |
     RtMaterialFeatureFlag.unsupportedAnisotropy;
 
 public struct ClosestHitInput
@@ -21,9 +22,15 @@ public struct ClosestHitInput
     public RtMaterialHeader material = {};
     public RtSurfaceData surface = {};
     public float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
-    public float3 scatterRandomValues = float3(0.0f);
+    public float3 geometryNormal = float3(0.0f, 1.0f, 0.0f);
+    public bool frontFace = true;
+    public float4 scatterRandomValues = float4(0.0f);
+    public float incidentMediumIor = 1.0f;
+    public float exteriorMediumIor = 1.0f;
     public float hitT = 0.0f;
     public uint materialIndex = kRtMaterialFallbackIndex;
+    public uint instanceMetadataIndex = 0xffffffffu;
+    public uint geometryIndex = 0xffffffffu;
 };
 
 public struct ClosestHitResult
@@ -60,6 +67,12 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
                 input.viewDirection,
                 input.hitT,
                 input.materialIndex);
+            result.material.geometryNormal = input.geometryNormal;
+            result.material.frontFace = input.frontFace;
+            result.material.incidentMediumIor = input.incidentMediumIor;
+            result.material.exteriorMediumIor = input.exteriorMediumIor;
+            result.material.instanceMetadataIndex = input.instanceMetadataIndex;
+            result.material.geometryIndex = input.geometryIndex;
             return result;
         }
 
@@ -71,6 +84,12 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
             input.viewDirection,
             input.hitT,
             input.materialIndex);
+        result.material.geometryNormal = input.geometryNormal;
+        result.material.frontFace = input.frontFace;
+        result.material.incidentMediumIor = input.incidentMediumIor;
+        result.material.exteriorMediumIor = input.exteriorMediumIor;
+        result.material.instanceMetadataIndex = input.instanceMetadataIndex;
+        result.material.geometryIndex = input.geometryIndex;
         result.scatter = sampleResolvedMaterialScatterVariant<LayerFlags>(
             result.material,
             input.viewDirection,

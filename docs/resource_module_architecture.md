@@ -62,7 +62,8 @@ Important consequence:
 
 Material-specific consequence:
 
-- `Material` is the canonical metallic-roughness CPU record: `MaterialCorePbr` owns core PBR factors, optional extension structs hold clearcoat/sheen/transmission/anisotropy data, and texture bindings live in enum-indexed `textureSlots`.
+- `Material` is the canonical metallic-roughness CPU record: `MaterialCorePbr` owns core PBR factors, optional extension structs hold clearcoat/sheen/transmission/IOR/volume-boundary/anisotropy data, and texture bindings live in enum-indexed `textureSlots`. Every slot records UV set 0 or 1 plus an identity-default row-major 2x2 UV transform and offset; this preserves per-texture `KHR_texture_transform` state instead of baking it into shared mesh UVs. The RT compiler consumes the separate IOR block only when a transmission layer is active; IOR-only base-reflection changes remain unsupported. The volume-boundary block currently carries only the scalar thickness-mode signal; attenuation, Beer absorption, thickness textures, and volume scattering are outside the runtime contract.
+- The canonical vertex record stores two UV sets but one tangent frame. The glTF load path therefore generates missing MikkTSpace tangents from the effective base-normal mapping, falling back to the clearcoat-normal mapping only when base normal is absent; distinct base and clearcoat mappings are diagnosed because they cannot both be represented exactly by this vertex ABI.
 - Specular-glossiness authoring inputs are converted by `scene` before they enter `nr.resource`; this layer does not store specular/glossiness fields.
 - `MaterialFeatureFlag` and `MaterialTextureSlotSemantic` form the stable material ABI consumed by `scene`; source importer strings stay in `load` diagnostics.
 

@@ -94,7 +94,7 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrame
     return std::chrono::duration<double, std::milli>(end - begin).count();
 }
 
-[[nodiscard]] std::optional<nr::scene::SceneMaterialTextureIds> collectSceneMaterialTextureIds(const nr::scene::Scene &scene, nr::resource::MaterialHandle materialHandle, std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
+[[nodiscard]] std::optional<nr::scene::SceneMaterialTextureBindings> collectSceneMaterialTextures(const nr::scene::Scene &scene, nr::resource::MaterialHandle materialHandle, std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
 {
     auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
     nrAssert(materialRecordRef.has_value(), std::format("Renderer scene texture collection expected material handle (slot={}, generation={}) to resolve.", materialHandle.slot, materialHandle.generation));
@@ -102,7 +102,7 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrame
     auto const &materialRecord = materialRecordRef->get();
     nrAssert(materialRecord.cpuReady, std::format("Renderer scene texture collection expected material '{}' to be CPU ready.", materialRecord.cpu.name));
 
-    auto textureIds = nr::scene::SceneMaterialTextureIds{};
+    auto textures = nr::scene::SceneMaterialTextureBindings{};
     auto slotIndices = std::views::iota(std::size_t{0}, materialRecord.cpu.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
         auto textureHandle = materialRecord.cpu.textureSlots[slotIndex].texture;
@@ -117,10 +117,26 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrame
         nrAssert(binding->descriptorIndex <= nr::scene::kMaxSceneTextureId, std::format("Scene texture descriptor id {} exceeds packed uint16 id capacity {}.", binding->descriptorIndex, nr::scene::kMaxSceneTextureId));
 
         auto const textureId = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
-        textureIds[slotIndex] = textureId;
+        textures.ids[slotIndex] = textureId;
         sceneTextureHandlesById.insert_or_assign(binding->descriptorIndex, textureHandle);
     });
-    return textureIds;
+
+    auto const normalSlotIndex = nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::normal);
+    auto const& normalSlot = materialRecord.cpu.textureSlots[normalSlotIndex];
+    nrAssert(
+        normalSlot.uvSet <= 1u,
+        std::format(
+            "Renderer normal texture sampling expected material '{}' UV set to be 0 or 1, got {}.",
+            materialRecord.cpu.name,
+            normalSlot.uvSet));
+    textures.normal = nr::scene::SceneMaterialNormalTextureBinding{
+        .textureId = textures.ids[normalSlotIndex],
+        .uvSet = normalSlot.uvSet,
+        .uvLinear = normalSlot.transform.linear,
+        .uvOffset = normalSlot.transform.offset,
+        .normalScale = materialRecord.cpu.core.normalScale,
+    };
+    return textures;
 }
 
 void collectTlasSceneTextureHandles(const nr::scene::Scene &scene, std::span<const nr::scene::TlasBuildInputPacket> tlasPackets, std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
@@ -134,7 +150,7 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene, std::span<con
         std::ranges::for_each(meshRecord.cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
             if (geometry.material.valid())
             {
-                static_cast<void>(collectSceneMaterialTextureIds(scene, geometry.material, sceneTextureHandlesById));
+                static_cast<void>(collectSceneMaterialTextures(scene, geometry.material, sceneTextureHandlesById));
             }
         });
     });
@@ -1020,7 +1036,7 @@ void Renderer::collectOptionAvailability(
         auto rasterGeometryBuffers = scene.tryGetRasterGeometryBuffers();
         bridgeBuildInput.resolveGeometryBuffers = [rasterGeometryBuffers]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> { return rasterGeometryBuffers; };
 
-        bridgeBuildInput.resolveMaterialTextureIds = [&](nr::resource::MaterialHandle materialHandle) -> std::optional<nr::scene::SceneMaterialTextureIds> { return collectSceneMaterialTextureIds(scene, materialHandle, sceneTextureHandlesById); };
+        bridgeBuildInput.resolveMaterialTextures = [&](nr::resource::MaterialHandle materialHandle) -> std::optional<nr::scene::SceneMaterialTextureBindings> { return collectSceneMaterialTextures(scene, materialHandle, sceneTextureHandlesById); };
 
         if (sceneCameraOverride.has_value())
         {

@@ -59,7 +59,6 @@ if(NR_DLSS_BRIDGE_ONLY)
     if(NOT MSVC OR NOT NR_DLSS_NGX_SDK_OPERATIONAL)
         message(FATAL_ERROR "NR_DLSS_BRIDGE_ONLY requires MSVC with NR_ENABLE_DLSS_NGX_SDK=ON.")
     endif()
-    find_package(Vulkan REQUIRED)
     add_subdirectory(src/extern/dlssBridge)
     return()
 endif()
@@ -118,21 +117,6 @@ else()
     message(WARNING
         "CMake 4.4 documents `import std` support only for Ninja generators. "
         "Newbie-Renderer enables the `CXX_MODULE_STD` target property only for Ninja-based builds."
-    )
-endif()
-
-find_package(Vulkan REQUIRED)
-find_package(imgui CONFIG REQUIRED)
-find_package(glm REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
-find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-find_package(assimp CONFIG REQUIRED)
-find_package(Stb REQUIRED)
-find_package(libjpeg-turbo CONFIG REQUIRED)
-
-if(${Vulkan_VERSION} VERSION_LESS "1.4.341")
-    message(FATAL_ERROR "Minimum required Vulkan version for C++ modules is 1.4.341. "
-        "Found ${Vulkan_VERSION}."
     )
 endif()
 

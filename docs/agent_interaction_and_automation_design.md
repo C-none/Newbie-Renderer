@@ -1364,12 +1364,18 @@ replacement.
 | `viewer.environment.source` | one extension-free name from the startup-scanned direct `.exr` children of `assets/envMap` |
 | `viewer.rt.post_processing_mode` | `accumulate` or `dlss_ray_reconstruction` |
 | `viewer.window.fullscreen` | boolean |
+| `viewer.exit` | closed empty-object frame effect; completes the current renderable frame, then shuts down the viewer |
 | `viewer.camera.pose` | closed `{position:[x,y,z], yaw_degrees, pitch_degrees}` with the coordinate/range and 32-bit representability contract in §15.4 |
 | `viewer.camera.vertical_fov_degrees` | integer degrees in `[1, 179]` |
 | `viewer.camera.clip_planes` | closed `{near, far}` with finite, 32-bit-representable values, `near >= 0.001`, and `far > near` |
 
 `viewer.window.fullscreen` is the only fullscreen mutation path. `UiNode` and presentation
 code must not expose a direct `setFullscreen` bypass.
+
+`viewer.exit` is the only option-driven shutdown path. Dear ImGui, WebSocket, and Lua
+discover and schedule the same session effect; the frame coordinator writes its terminal
+success record, completes that renderable frame, then stops the interaction hosts and
+shuts down `AppSession`.
 
 ### 17.2 Graph scope
 

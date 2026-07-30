@@ -8,11 +8,11 @@ import std;
 
 export namespace nr::renderPasses
 {
-using nr::shader::share::RtHitAlphaPolicy;
+using nr::shader::share::RtHitAnyHitPolicy;
 
 // CHS variants are keyed solely by the combined RtMaterialLayerFlag mask (9 valid combinations: unlit
-// plus baseSurface with any subset of clearcoat/sheen/transmission). Alpha policy doubles the hit-group
-// space (opaque-like vs alpha-mask any-hit).
+// plus baseSurface with any subset of clearcoat/sheen/transmission). Any-hit policy doubles the hit-group
+// space (hardware-opaque vs shared material-policy any-hit).
 inline constexpr std::uint32_t kRtBsdfVariantHardUpperBound = 9u;
 inline constexpr std::uint32_t kRtHitGroupVariantHardUpperBound = kRtBsdfVariantHardUpperBound * 2u;
 
@@ -26,7 +26,7 @@ struct RtBsdfVariantKey
 struct RtHitGroupKey
 {
     RtBsdfVariantKey bsdf{};
-    RtHitAlphaPolicy alphaPolicy = RtHitAlphaPolicy::opaqueLike;
+    RtHitAnyHitPolicy anyHitPolicy = RtHitAnyHitPolicy::none;
 
     [[nodiscard]] friend auto operator<=>(const RtHitGroupKey&, const RtHitGroupKey&) noexcept = default;
 };
@@ -95,7 +95,7 @@ struct SceneRtHitSbtPlan
 
 [[nodiscard]] inline bool rtHitPermutationUsesAnyHit(const RtHitPermutationKey& key) noexcept
 {
-    return key.alphaPolicy == RtHitAlphaPolicy::alphaMask;
+    return key.anyHitPolicy == RtHitAnyHitPolicy::materialPolicy;
 }
 
 [[nodiscard]] inline RtBsdfVariantKey makeRtBsdfVariantKey(nr::scene::RtMaterialLayerFlag layerFlags) noexcept
@@ -107,22 +107,27 @@ struct SceneRtHitSbtPlan
 
 [[nodiscard]] inline RtHitGroupKey makeRtHitGroupKey(
     nr::scene::RtMaterialLayerFlag layerFlags,
-    nr::scene::RtMaterialFeatureFlag featureFlags) noexcept
+    nr::scene::RtMaterialFeatureFlag featureFlags,
+    bool forceMaterialPolicy = false) noexcept
 {
     auto const alphaMaskFeature = static_cast<std::uint32_t>(nr::scene::RtMaterialFeatureFlag::alphaMask);
+    auto const requiresMaterialPolicy =
+        forceMaterialPolicy ||
+        (static_cast<std::uint32_t>(featureFlags) & alphaMaskFeature) != 0u;
     return RtHitGroupKey{
         .bsdf = makeRtBsdfVariantKey(layerFlags),
-        .alphaPolicy = (static_cast<std::uint32_t>(featureFlags) & alphaMaskFeature) != 0u
-                           ? RtHitAlphaPolicy::alphaMask
-                           : RtHitAlphaPolicy::opaqueLike,
+        .anyHitPolicy = requiresMaterialPolicy
+                            ? RtHitAnyHitPolicy::materialPolicy
+                            : RtHitAnyHitPolicy::none,
     };
 }
 
 [[nodiscard]] inline RtHitPermutationKey makeRtHitPermutationKey(
     nr::scene::RtMaterialLayerFlag layerFlags,
-    nr::scene::RtMaterialFeatureFlag featureFlags) noexcept
+    nr::scene::RtMaterialFeatureFlag featureFlags,
+    bool forceMaterialPolicy = false) noexcept
 {
-    return makeRtHitGroupKey(layerFlags, featureFlags);
+    return makeRtHitGroupKey(layerFlags, featureFlags, forceMaterialPolicy);
 }
 
 [[nodiscard]] inline std::uint64_t hashRtBsdfVariantKey(const RtBsdfVariantKey& key) noexcept
@@ -136,9 +141,9 @@ struct SceneRtHitSbtPlan
 [[nodiscard]] inline std::uint64_t hashRtHitPermutationKey(const RtHitPermutationKey& key) noexcept
 {
     auto state = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(state, "RtHitGroupKey.v1");
+    nr::hash::hashAppendString(state, "RtHitGroupKey.v2");
     nr::hash::hashAppend(state, hashRtBsdfVariantKey(key.bsdf));
-    nr::hash::hashAppend(state, key.alphaPolicy);
+    nr::hash::hashAppend(state, key.anyHitPolicy);
     return state;
 }
 
@@ -167,7 +172,7 @@ struct SceneRtHitSbtPlan
         "RT hit permutation count exceeds uint32 ABI.");
     nrAssert(
         plan.permutations.size() < static_cast<std::size_t>(kRtHitGroupVariantHardUpperBound),
-        "RT hit permutation count exceeds the current BSDF-feature/alpha-policy key space.");
+        "RT hit permutation count exceeds the current BSDF/any-hit-policy key space.");
     auto const permutationIndex = static_cast<std::uint32_t>(plan.permutations.size());
     plan.permutations.push_back(SceneRtHitSbtPermutation{
         .key = key,

@@ -73,6 +73,7 @@ inline constexpr auto viewerModelSource = OptionKey<std::string>{"viewer.model.s
 inline constexpr auto viewerEnvironmentSource = OptionKey<std::string>{"viewer.environment.source"};
 inline constexpr auto viewerRtPostProcessingMode = OptionKey<std::string>{"viewer.rt.post_processing_mode"};
 inline constexpr auto viewerWindowFullscreen = OptionKey<bool>{"viewer.window.fullscreen"};
+inline constexpr auto viewerExit = OptionKey<OptionWireValue::Object>{"viewer.exit"};
 inline constexpr auto viewerCameraPose = OptionKey<OptionWireValue::Object>{"viewer.camera.pose"};
 inline constexpr auto viewerCameraVerticalFovDegrees = OptionKey<std::uint64_t>{"viewer.camera.vertical_fov_degrees"};
 inline constexpr auto viewerCameraClipPlanes = OptionKey<OptionWireValue::Object>{"viewer.camera.clip_planes"};

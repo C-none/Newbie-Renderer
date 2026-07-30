@@ -525,6 +525,54 @@ const nr::test::CaseRegistrar renderableFrameGateCase{
             "zero-sized presentation iterations must retain the pending mutation");
     }};
 
+const nr::test::CaseRegistrar exitOptionShutdownCase{
+    "viewer exit is a shared frame effect that finishes the current frame before shutdown",
+    [] {
+        auto const pipeline = readProjectFile("src/pipeline/nrPipeline.cpp");
+        auto const exitMutation = sourceSection(
+            pipeline,
+            "if (id == nr::options::optionId(nr::options::keys::viewerExit))",
+            "auto const pipelineOption = nr::options::optionId(nr::options::keys::viewerPipelineSelected);");
+        requireOrdered(
+            exitMutation,
+            "options.materializeFrameEffect(std::move(mutation))",
+            "emitTerminal(sequence, id, frameIndex, origin, requestId, true);",
+            "exit must consume the same frame-effect mutation contract before terminal success");
+        requirePresent(
+            exitMutation,
+            "return MutationFrameResult{.exitRequested = true};",
+            "successful exit execution must report a pipeline-owned stop request");
+
+        auto const mainLoop = sourceSection(
+            pipeline,
+            "while (!presentation.windowShouldClose())",
+            "if (config.benchmark && exitCode == 0");
+        requireOrdered(
+            mainLoop,
+            "stopAfterCurrentFrame = stopAfterCurrentFrame || mutationResult.exitRequested;",
+            "auto frameResult = app.renderer().renderFrame(frameInput);",
+            "viewer exit must allow the accepted renderable frame to finish");
+        requireOrdered(
+            mainLoop,
+            "auto frameResult = app.renderer().renderFrame(frameInput);",
+            "if (stopAfterCurrentFrame)",
+            "the exit stop check must occur after current-frame rendering and presentation");
+        auto const loopAndShutdown = sourceSection(
+            pipeline,
+            "while (!presentation.windowShouldClose())",
+            "return exitCode;");
+        requireOrdered(
+            loopAndShutdown,
+            "if (stopAfterCurrentFrame)",
+            "webSocketHost.stop();",
+            "interaction hosts must stop only after the exit frame leaves the main loop");
+        requireOrdered(
+            loopAndShutdown,
+            "webSocketHost.stop();",
+            "app.shutdown();",
+            "WebSocket admission must close before AppSession shutdown");
+    }};
+
 const nr::test::CaseRegistrar uiCameraAdmissionPriorityCase{
     "all interaction modes render the option snapshot while only human UI may submit",
     [] {

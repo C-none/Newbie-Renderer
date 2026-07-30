@@ -133,11 +133,40 @@ const nr::test::CaseRegistrar textureMaterialCase{
         nr::test::require(!nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::unsupported),
                           "unsupported should be rejected before Material::slot access");
 
+        auto const &defaultTextureTransform =
+            material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform;
+        nr::test::require(
+            defaultTextureTransform.linear == glm::vec4{1.0f, 0.0f, 0.0f, 1.0f} &&
+                defaultTextureTransform.offset == glm::vec2{0.0f},
+            "material texture transforms should default to identity");
+
+        material.transmission.emplace();
+        material.ior.emplace();
+        material.volumeBoundary.emplace();
+        nr::test::requireEqual(material.ior->ior, 1.5f);
+        nr::test::requireEqual(material.volumeBoundary->thicknessFactor, 0.0f);
+        nr::test::require(!material.hasVolumeTransmissionBoundary(),
+                          "zero factor and thickness should remain a thin boundary");
+        nr::test::require(
+            !nr::resource::hasAnyFeature(
+                material.featureFlags(),
+                nr::resource::MaterialFeatureFlag::transmission),
+            "zero-factor transmission should not enable the material feature");
+        material.transmission->factor = 0.5f;
+        material.volumeBoundary->thicknessFactor = 0.25f;
+        nr::test::require(material.hasVolumeTransmissionBoundary(),
+                          "positive transmission and thickness should form a volume boundary");
+
         material.core.alphaMode = nr::resource::AlphaMode::blend;
         material.clearcoat.emplace();
         material.anisotropy.emplace();
         material.anisotropy->factor = 0.25f;
         material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet = 1u;
+        material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform =
+            nr::resource::MaterialTextureTransform{
+                .linear = glm::vec4{2.0f, 0.25f, -0.5f, 0.75f},
+                .offset = glm::vec2{0.125f, 0.625f},
+            };
 
         auto const featureFlags = material.featureFlags();
         nr::test::require(material.isAlphaBlended(), "blend material should report alpha blending");
@@ -145,8 +174,16 @@ const nr::test::CaseRegistrar textureMaterialCase{
                           "feature flags should include alpha blend");
         nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::clearcoat),
                           "feature flags should include clearcoat");
+        nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::transmission),
+                          "positive transmission factor should enable transmission");
         nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::anisotropy),
                           "feature flags should include anisotropy");
         nr::test::requireEqual(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet, 1u);
+        nr::test::require(
+            material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear ==
+                    glm::vec4{2.0f, 0.25f, -0.5f, 0.75f} &&
+                material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.offset ==
+                    glm::vec2{0.125f, 0.625f},
+            "material texture slots should retain their affine transform metadata");
     }};
 } // namespace

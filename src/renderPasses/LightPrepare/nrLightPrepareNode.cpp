@@ -131,7 +131,7 @@ void ensureAliasBuffer(
             std::numeric_limits<std::uint32_t>::max(),
             0u,
         },
-        .colorIntensity = glm::vec4{glm::vec3{1.0f, 0.92f, 0.72f}, 256.0f},
+        .colorIntensity = glm::vec4{glm::vec3{1.0f, 0.92f, 0.72f}, 32.0f},
         .direction = glm::vec4{normalizedDirection(glm::vec3{0.482f, -0.704f, -0.522f}), 0.0f},
     };
 }

@@ -2,6 +2,8 @@ if(NOT NR_DLSS_NGX_SDK_OPERATIONAL OR NOT MSVC)
     return()
 endif()
 
+find_package(Vulkan REQUIRED)
+
 add_library(nr_dlss_bridge SHARED
     "nrDlssBridge.cpp"
     "nrDlssBridge.def"

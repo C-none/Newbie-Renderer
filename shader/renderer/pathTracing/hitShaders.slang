@@ -22,10 +22,40 @@ public bool shouldIgnoreAlphaMaskedHit(
     return alpha < material.alphaCutoff;
 }
 
+public bool shouldIgnoreSingleSidedBackFace(
+    RtMaterialHeader material,
+    bool frontFace)
+{
+    return
+        !frontFace &&
+        !hasRtMaterialFeature(material, RtMaterialFeatureFlag.doubleSided) &&
+        !hasRtMaterialFeature(material, RtMaterialFeatureFlag.volumeBoundary);
+}
+
 public void handleAnyHit(
     inout RayPayload payload,
     BuiltInTriangleIntersectionAttributes attributes)
 {
+    RtInstanceMetadata instance = currentRtInstance();
+    bool geometryValid = false;
+    RtGeometryMetadata geometry = currentRtGeometry(instance, geometryValid);
+    if (!geometryValid)
+    {
+        return;
+    }
+
+    RtMaterialHeader material = rtMaterialHeaders[geometry.materialIndex];
+    bool frontFace = HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
+    if (shouldIgnoreSingleSidedBackFace(material, frontFace))
+    {
+        IgnoreHit();
+        return;
+    }
+    if (!hasRtMaterialFeature(material, RtMaterialFeatureFlag.alphaMask))
+    {
+        return;
+    }
+
     float3 viewDirection = normalize(-WorldRayDirection());
     RtHitSurface hit = currentRtHitSurface(attributes, viewDirection);
     if (!hit.geometryValid)
@@ -33,7 +63,6 @@ public void handleAnyHit(
         return;
     }
 
-    RtMaterialHeader material = rtMaterialHeaders[hit.geometry.materialIndex];
     orientRtSurfaceForMaterial(hit.surface, material, viewDirection);
     if (shouldIgnoreAlphaMaskedHit(
         material,
@@ -57,6 +86,12 @@ public ClosestHitInput makeClosestHitInput(
     RtHitSurface hit = currentRtHitSurface(attributes, viewDirection);
     input.geometryValid = hit.geometryValid;
     input.materialIndex = hit.geometry.materialIndex;
+    // InstanceID is the dense, collision-free RT metadata index written to Vulkan
+    // InstanceCustomIndex. GeometryIndex is unique within that instance's BLAS.
+    input.instanceMetadataIndex = uint(InstanceID());
+    input.geometryIndex = uint(GeometryIndex());
+    input.geometryNormal = hit.geometryNormal;
+    input.frontFace = hit.frontFace;
     input.surface = hit.surface;
     if (!hit.geometryValid)
     {

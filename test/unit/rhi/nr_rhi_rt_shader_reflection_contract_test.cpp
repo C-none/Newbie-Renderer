@@ -157,6 +157,62 @@ const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
         nr::test::require(program.entryPointData("chMain") != nullptr, "path tracing shader should expose fixed chMain");
     }};
 
+const nr::test::CaseRegistrar pathTracingTransmissionChsFamiliesCase{
+    "rhi shader service links separate base-only and transmission CHS families",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto baseOnlyVariant = makePathTracingTestChsVariant(1u);
+        auto transmissionVariant = makePathTracingTestChsVariant(9u);
+        nr::test::require(
+            baseOnlyVariant.hashValue() != transmissionVariant.hashValue(),
+            "base-only and transmission CHS aliases must remain distinct link variants");
+
+        auto baseOnlyProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = makePathTracingTestVariant(),
+            .linkVariants = {baseOnlyVariant},
+        });
+        auto transmissionProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+            .variant = makePathTracingTestVariant(),
+            .linkVariants = {transmissionVariant},
+        });
+        nr::test::require(baseOnlyProgram.valid(), "base-only CHS family should compile");
+        nr::test::require(transmissionProgram.valid(), "transmission-enabled CHS family should compile");
+
+        auto* baseOnlyBlob = baseOnlyProgram.entryPointBlob("chMain");
+        auto* transmissionBlob = transmissionProgram.entryPointBlob("chMain");
+        nr::test::require(baseOnlyBlob != nullptr, "base-only CHS should expose linked SPIR-V");
+        nr::test::require(transmissionBlob != nullptr, "transmission CHS should expose linked SPIR-V");
+        nr::test::require(
+            baseOnlyBlob->getBufferSize() < transmissionBlob->getBufferSize(),
+            "link specialization should prune transmission record and BTDF code from the base-only CHS");
+
+        auto const remainingLayerMasks = std::array{
+            3u,
+            5u,
+            7u,
+            11u,
+            13u,
+            15u,
+        };
+        std::ranges::for_each(remainingLayerMasks, [&](std::uint32_t layerMask) {
+            auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+                .variant = makePathTracingTestVariant(),
+                .linkVariants = {makePathTracingTestChsVariant(layerMask)},
+            });
+            nr::test::require(
+                program.valid(),
+                std::format("path tracing layer-mask {} CHS should compile", layerMask));
+            nr::test::require(
+                program.entryPointBlob("chMain") != nullptr,
+                std::format("path tracing layer-mask {} CHS should expose linked SPIR-V", layerMask));
+        });
+    }};
+
 const nr::test::CaseRegistrar rtPipelineStageSelectionCase{
     "rhi rt stage selections can give specialized chMain stages distinct logical names",
     [] {

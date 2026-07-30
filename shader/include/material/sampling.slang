@@ -12,7 +12,9 @@ public float4 sampleMaterialTexture(
     // texture yields a neutral multiplier without a texture-presence branch. `fallback` is retained for
     // source compatibility and stays neutral now that id 0 provides the default.
     RtMaterialTextureRef textureRef = rtMaterialTextureRef(textureRefs, material, slot);
-    return gSceneTextures[textureRef.textureId].SampleLevel(materialUv(textureRef.uvSet, texCoord0, texCoord1), 0.0f);
+    return gSceneTextures[textureRef.textureId].SampleLevel(
+        materialTextureUv(textureRef, texCoord0, texCoord1),
+        0.0f);
 }
 
 public float3 applyNormalMapSlot(
@@ -33,7 +35,7 @@ public float3 applyNormalMapSlot(
     float3 tangentFallback = orthogonalTangent(normal);
     float3 tangent = safeNormalize(worldTangent - normal * dot(normal, worldTangent), tangentFallback);
     float3 bitangent = safeNormalize(cross(normal, tangent) * tangentSign, cross(normal, tangentFallback));
-    float2 normalUv = materialUv(normalRef.uvSet, texCoord0, texCoord1);
+    float2 normalUv = materialTextureUv(normalRef, texCoord0, texCoord1);
     float3 tangentNormal = gSceneTextures[normalRef.textureId].SampleLevel(normalUv, 0.0f).xyz * 2.0f - 1.0f;
     tangentNormal.xy *= normalScale;
     return safeNormalize(
@@ -161,6 +163,10 @@ public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMateria
             surface.texCoord1,
             float4(1.0f)).r;
         sample.transmission = saturate(transmissionLayer.p0.x * transmissionTexture);
+        sample.transmissionMode = transmissionLayer.aux0 == uint(RtTransmissionMode.volume)
+            ? RtTransmissionMode.volume
+            : RtTransmissionMode.thin;
+        sample.transmissionIor = transmissionLayer.p0.y;
     }
 
     return sample;

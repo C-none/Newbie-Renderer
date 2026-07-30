@@ -809,7 +809,12 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         auto const materialIndex = ensureRtMaterialIndex(runtime, state, scene, materialHandle, materialRevisions);
         nrAssert(materialIndex < state.materials.size(), "RT material index must resolve before building hit SBT plan.");
         auto const &materialHeader = state.materials[materialIndex].header;
-        geometryPermutationKeys.push_back(makeRtHitPermutationKey(materialHeader.layerFlags, materialHeader.featureFlags));
+        auto const requiresMaterialPolicy =
+            !static_cast<bool>(geometry.geometryFlags & vk::GeometryFlagBitsKHR::eOpaque);
+        geometryPermutationKeys.push_back(makeRtHitPermutationKey(
+            materialHeader.layerFlags,
+            materialHeader.featureFlags,
+            requiresMaterialPolicy));
         state.geometries.push_back(nr::scene::RtGeometryMetadata{
             .materialIndex = materialIndex,
             .geometryIndex = geometry.geometryIndex,
@@ -869,26 +874,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     };
 }
 
-[[nodiscard]] bool transformFlipsTriangleFacing(const glm::mat4 &world) noexcept
-{
-    auto const column0 = glm::vec3{world[0]};
-    auto const column1 = glm::vec3{world[1]};
-    auto const column2 = glm::vec3{world[2]};
-    auto const determinant = glm::dot(column0, glm::cross(column1, column2));
-    return std::isfinite(determinant) && determinant < 0.0f;
-}
-
-[[nodiscard]] vk::GeometryInstanceFlagsKHR tlasInstanceFlags(const nr::scene::TlasBuildInputPacket &packet, vk::GeometryInstanceFlagsKHR baseFlags) noexcept
-{
-    auto flags = baseFlags;
-    if (transformFlipsTriangleFacing(packet.world))
-    {
-        // glTF global transforms with a negative determinant reverse triangle winding.
-        flags ^= vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing;
-    }
-    return flags;
-}
-
 [[nodiscard]] vk::AccelerationStructureInstanceKHR makeTlasInstance(const nr::scene::TlasBuildInputPacket &packet, vk::GeometryInstanceFlagsKHR baseFlags, const nr::rhi::AccelerationStructureResource &blas, std::uint32_t hitRecordBase, std::uint32_t hitRecordCount, std::uint32_t instanceCustomIndex)
 {
     nrAssert(hitRecordCount > 0u, "AS build requires at least one hit SBT record.");
@@ -901,7 +886,9 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     instance.setInstanceCustomIndex(instanceCustomIndex);
     instance.setMask(packet.instanceMask & 0xFFu);
     instance.setInstanceShaderBindingTableRecordOffset(hitRecordBase);
-    instance.setFlags(tlasInstanceFlags(packet, baseFlags));
+    // Vulkan RT determines triangle facing in object space. Instance transforms, including
+    // negative-determinant transforms, do not change the source mesh winding policy.
+    instance.setFlags(baseFlags);
     instance.setAccelerationStructureReference(blas.deviceAddress());
     return instance;
 }

@@ -4,23 +4,24 @@ implementing common;
 //  Low-discrepancy random sequence (Owen-scrambled Sobol').
 //
 //  Ported from the Unreal Engine path tracer (PathTracingRandomSequence.ush,
-//  RANDSEQ_OWENSOBOL) as a blue-noise error-diffusion sampler. One sample per
-//  pixel per frame (no in-frame sample count / MaxSamples).
+//  RANDSEQ_OWENSOBOL) as a tiled screen-space low-discrepancy sampler. One
+//  sample per pixel per frame (no in-frame sample count / MaxSamples).
 //
 //    * (dispatch.xy, frame) -> Sobol' sample index:
-//        - dispatch.xy through a Hilbert space-filling curve, so neighbouring
-//          pixels are adjacent in the sequence -> a single frame is spatial
-//          blue noise (great for denoising);
+//        - dispatch.xy through a Hilbert space-filling curve, preserving
+//          hierarchical locality within each tile while assigning one complete
+//          tile to one contiguous sequence block;
 //        - the frame index is added above the tile bits as a large stride
-//          (frame << 2*tileBits, i.e. frame * 65536 for tileBits == 8) so
+//          (frame << 2*tileBits, i.e. frame * 4194304 for the default
+//          tileBits == 11) so
 //          successive frames step far along the sequence and fastOwenScrambling
 //          shatters that stride into decorrelated (white) cross-frame samples.
 //    * The scrambling seed is shared across the whole frame. It stays at 0 while
 //      the frame ordinal fits beside the spatial bits in the 32-bit Sobol' index,
 //      then changes once per frame era so the pattern does not repeat on wrap.
-//      The seed is evolved per draw (the increment counter) via an LCG so each
-//      dimension/bounce picks a fresh Owen scramble -> cross-draw values are
-//      decorrelated (white).
+//      Each 4D packet consumes five successive LCG keys: one for the scrambled
+//      Sobol' index and one for each output lane. Successive packets therefore
+//      use distinct deterministic Owen scrambles without extra RNG state.
 //
 //  The whole sampler is pure ALU: no lookup textures or extra GPU resources.
 // ============================================================================
@@ -31,39 +32,8 @@ implementing common;
 public static const float kInvTwoPow24 = 5.9604644775390625e-08f;
 
 // ---------------------------------------------------------------------------
-//  Legacy white-noise hash (kept: consumed by makeAliasLightSample).
-// ---------------------------------------------------------------------------
-public uint hashSample(uint value)
-{
-    value ^= value >> 16u;
-    value *= 2246822519u;
-    value ^= value >> 13u;
-    value *= 3266489917u;
-    value ^= value >> 16u;
-    return value;
-}
-
-public float random01FromHash(uint value)
-{
-    return float(hashSample(value) & 0x00FFFFFFu) * (1.0f / 16777216.0f);
-}
-
-// ---------------------------------------------------------------------------
 //  Integer hashes (bit mixers) used for seeding / decorrelation.
 // ---------------------------------------------------------------------------
-
-// Mixes bits at the theoretical bias limit. https://nullprogram.com/blog/2018/07/31/
-public uint perfectIntegerHash(uint x)
-{
-    x ^= x >> 17u;
-    x *= 0xed5ad4bbu;
-    x ^= x >> 11u;
-    x *= 0xac4c1b51u;
-    x ^= x >> 15u;
-    x *= 0x31848babu;
-    x ^= x >> 14u;
-    return x;
-}
 
 // High quality integer hash (skeeto/hash-prospector).
 public uint strongIntegerHash(uint x)
@@ -99,8 +69,8 @@ public uint fastOwenScrambling(uint index, uint seed)
 // ---------------------------------------------------------------------------
 //  Sobol' seed evolution. LCG multiplier/increment from Steele & Vigna,
 //  "Computationally Easy, Spectrally Good Multipliers ...", 2022.
-//  Advancing the seed once per draw decorrelates successive dimensions and is
-//  what we drive with the "increment count" here.
+//  One rand4() packet advances the LCG five times: once for the scrambled
+//  sample index and once for each of the four output-lane scramble keys.
 // ---------------------------------------------------------------------------
 public uint evolveSobolSeed(inout uint seed)
 {
@@ -131,7 +101,7 @@ public uint hilbertSFCInverse(uint x, uint y, int numBits)
 
 // ---------------------------------------------------------------------------
 //  Owen-scrambled Sobol' 4D core. Returns four decorrelated 32-bit components
-//  forming a well-stratified point; advances the seed as it goes.
+//  forming a well-stratified point; advances the seed through five LCG steps.
 //
 //  Dimensions 1/2 are derived from the scrambled index with pure bit ops:
 //    * dim 2 via SZ-sequence Eq.42 (Ahmed et al., SIGGRAPH Asia 2025)
@@ -176,88 +146,47 @@ public uint4 sobolSamplerCore(uint sampleIndex, inout uint seed)
 }
 
 // ---------------------------------------------------------------------------
-//  Sequence abstraction. Draw 1..4 dimensional samples in the unit square,
-//  either as raw bits or as floats in [0,1). Values from a single get<N>() call
-//  are well stratified; separate calls are statistically independent.
+//  Sequence abstraction. Every draw returns one complete 4D packet in [0,1)^4.
+//  Packet consumers split the four lanes without retaining a lane cursor or
+//  cached packet in per-path state.
 // ---------------------------------------------------------------------------
-public interface IRandomSequence
-{
-    // Draw an N-dimensional sample in [0,1)^N and advance the sequence.
-    [mutating]
-    vector<float, N> get<let N : int>();
-}
-
-public struct RandomSequence : IRandomSequence
+public struct RandomSequence
 {
     public uint sampleIndex = 0u; // low-discrepancy index (spatial), pre-bit-reversed
-    public uint sampleSeed = 0u;  // scrambling seed; shared per frame, evolves per draw (increment count)
+    public uint sampleSeed = 0u;  // scrambling seed; shared per frame, evolves per 4D packet
 
-    // Raw N-dimensional bits in [0,2^32)^N (N in [1,4]).
+    // Draw one complete low-discrepancy packet. The core advances the scramble
+    // seed through the five keys used to construct it.
     [mutating]
-    public vector<uint, N> getBits<let N : int>()
+    public float4 rand4()
     {
-        uint4 packed = sobolSamplerCore(sampleIndex, sampleSeed);
-        vector<uint, N> result;
-        [ForceUnroll]
-        for (int i = 0; i < N; ++i)
-        {
-            result[i] = packed[i];
-        }
-        return result;
-    }
-
-    // N-dimensional floats in [0,1)^N (N in [1,4]).
-    [mutating]
-    public vector<float, N> get<let N : int>()
-    {
-        vector<uint, N> bits = getBits<N>();
-        vector<float, N> result;
-        [ForceUnroll]
-        for (int i = 0; i < N; ++i)
-        {
-            result[i] = float(bits[i] >> 8u) * kInvTwoPow24;
-        }
-        return result;
-    }
-
-    // Convenience aliases.
-    [mutating]
-    public float get1D()
-    {
-        // Dedicated 1D path avoids instantiating vector<float,1>.
-        uint bits = sobolSamplerCore(sampleIndex, sampleSeed).x;
-        return float(bits >> 8u) * kInvTwoPow24;
-    }
-    [mutating] public float2 get2D() { return get<2>(); }
-    [mutating] public float3 get3D() { return get<3>(); }
-    [mutating] public float4 get4D() { return get<4>(); }
-
-    // Split into Num sub-streams and keep sampling along the Index branch.
-    // The sub-stream stays stratified relative to the parent (Index in [0,Num)).
-    public RandomSequence split(uint index, uint num)
-    {
-        RandomSequence sub;
-        sub.sampleSeed = sampleSeed;
-        sub.sampleIndex = reversebits(reversebits(sampleIndex) * num + index);
-        return sub;
+        uint4 bits = sobolSamplerCore(sampleIndex, sampleSeed);
+        return float4(
+            float(bits.x >> 8u),
+            float(bits.y >> 8u),
+            float(bits.z >> 8u),
+            float(bits.w >> 8u)) * kInvTwoPow24;
     }
 }
 
-// Blue-noise error-diffusion initialisation (UE-aligned, one sample per frame).
+// Tiled screen-space low-discrepancy initialisation (UE-aligned, one sample per frame).
 //   dispatch : per-thread 2D position (e.g. DispatchRaysIndex().xy)
 //   sampleFrameOrdinal : monotonic 64-bit frame ordinal as low/high uint lanes
-//   tileBits           : Hilbert tile size = 2^tileBits per axis (1..15)
+//   tileBits           : Hilbert tile size = 2^tileBits per axis (1..15);
+//                        the default 11-bit axes leave 10 frame bits
 public RandomSequence makeErrorDiffusionSequence(
     uint2 dispatch,
     uint2 sampleFrameOrdinal,
-    int tileBits = 8)
+    int tileBits = 11)
 {
     RandomSequence seq;
-    // Spatial low discrepancy: encode dispatch.xy along a Hilbert curve so that
-    // neighbouring pixels are adjacent in the Sobol' index. The low ordinal bits
-    // are added above the tile bits (frame * 65536 when tileBits == 8) as a large
-    // stride that fastOwenScrambling shatters into white cross-frame noise. The
-    // 1..15 tileBits contract keeps every shift strictly below 32 bits.
+    // Spatial low discrepancy: encode the low dispatch.xy tile coordinates along
+    // a Hilbert curve so one complete tile spans one contiguous Sobol' index
+    // block. With the default tileBits == 11, the 32-bit index dedicates 22 bits
+    // to a 2048x2048 spatial tile and 10 bits to the in-era frame ordinal. The
+    // resulting frame * 4194304 stride is shattered into white cross-frame noise
+    // by fastOwenScrambling. The 1..15 tileBits contract keeps every shift
+    // strictly below 32 bits.
     uint spatialBitCount = uint(2 * tileBits);
     uint frameBitCount = 32u - spatialBitCount;
     uint frameInEraMask = 0xffffffffu >> spatialBitCount;
@@ -267,9 +196,9 @@ public RandomSequence makeErrorDiffusionSequence(
     seq.sampleIndex = reversebits(tileId);
 
     // Fold the ordinal bits that do not fit in the Sobol' index into a frame-era
-    // seed. It is independent of dispatch, preserving the spatial error-diffusion
-    // structure. Era zero deliberately retains the old zero seed, so tileBits=8
-    // produces exactly the previous sequence for the first 65,536 frames.
+    // seed. It is independent of dispatch, preserving the tile-local
+    // low-discrepancy structure. Era zero deliberately retains the zero seed;
+    // with the default tileBits == 11, each era spans 1,024 frames.
     uint2 frameEra = uint2(
         (sampleFrameOrdinal.x >> frameBitCount) |
             (sampleFrameOrdinal.y << spatialBitCount),

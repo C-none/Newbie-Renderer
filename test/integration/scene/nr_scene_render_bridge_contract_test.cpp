@@ -76,6 +76,21 @@ const nr::test::CaseRegistrar rasterFrameCase{
             .resolveMaterialBindless = [](nr::resource::MaterialHandle handle) -> std::optional<std::uint32_t> {
                 return handle.slot + 200u;
             },
+            .resolveMaterialTextures = [](nr::resource::MaterialHandle) -> std::optional<nr::scene::SceneMaterialTextureBindings> {
+                auto bindings = nr::scene::SceneMaterialTextureBindings{};
+                bindings.ids[nr::resource::materialTextureSlotIndex(
+                    nr::resource::MaterialTextureSlotSemantic::normal)] = 17u;
+                bindings.ids[nr::resource::materialTextureSlotIndex(
+                    nr::resource::MaterialTextureSlotSemantic::occlusion)] = 23u;
+                bindings.normal = nr::scene::SceneMaterialNormalTextureBinding{
+                    .textureId = 17u,
+                    .uvSet = 1u,
+                    .uvLinear = glm::vec4{2.0f, 0.25f, -0.5f, 3.0f},
+                    .uvOffset = glm::vec2{0.125f, -0.25f},
+                    .normalScale = 0.75f,
+                };
+                return bindings;
+            },
             .resolveGeometryBuffers = [&]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> {
                 return nr::scene::SceneBridgeGeometryBuffers{
                     .vertexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(vertexAtlas)},
@@ -108,6 +123,22 @@ const nr::test::CaseRegistrar rasterFrameCase{
         nr::test::requireEqual(frame.rasterDraws[0].meshBindless, 103u);
         nr::test::requireEqual(frame.rasterDraws[1].meshBindless, 104u);
         nr::test::requireEqual(frame.rasterDraws[0].materialBindless, 209u);
+        nr::test::requireEqual(
+            frame.rasterDraws[0].materialTextures.ids[nr::resource::materialTextureSlotIndex(
+                nr::resource::MaterialTextureSlotSemantic::occlusion)],
+            nr::scene::SceneTextureId{23u});
+        nr::test::requireEqual(frame.rasterDraws[0].materialTextures.normal.textureId, nr::scene::SceneTextureId{17u});
+        nr::test::requireEqual(frame.rasterDraws[0].materialTextures.normal.uvSet, 1u);
+        nr::test::require(near(frame.rasterDraws[0].materialTextures.normal.uvLinear.x, 2.0f) &&
+                              near(frame.rasterDraws[0].materialTextures.normal.uvLinear.y, 0.25f) &&
+                              near(frame.rasterDraws[0].materialTextures.normal.uvLinear.z, -0.5f) &&
+                              near(frame.rasterDraws[0].materialTextures.normal.uvLinear.w, 3.0f),
+                          "normal texture linear UV transform should cross the bridge");
+        nr::test::require(near(frame.rasterDraws[0].materialTextures.normal.uvOffset.x, 0.125f) &&
+                              near(frame.rasterDraws[0].materialTextures.normal.uvOffset.y, -0.25f),
+                          "normal texture UV offset should cross the bridge");
+        nr::test::require(near(frame.rasterDraws[0].materialTextures.normal.normalScale, 0.75f),
+                          "normal scale should cross the bridge");
         nr::test::requireEqual(frame.rasterDraws[0].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
         nr::test::require(!frame.rasterDraws[0].materialRaster.doubleSided, "default material raster state should be single-sided");
         nr::test::requireEqual(frame.materialGroups.front().materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});

@@ -13,6 +13,8 @@ public struct RtHitSurface
     public RtInstanceMetadata instance = {};
     public RtGeometryMetadata geometry = {};
     public RtSurfaceData surface = {};
+    public float3 geometryNormal = float3(0.0f, 1.0f, 0.0f);
+    public bool frontFace = true;
     public bool geometryValid = false;
 };
 
@@ -98,10 +100,20 @@ public float3 transformRtObjectPointToWorld(float3 objectPoint)
         dot(objectToWorld[2].xyz, objectPoint) + objectToWorld[2].w);
 }
 
+public float rtObjectToWorldHandedness()
+{
+    float3x4 objectToWorld = ObjectToWorld3x4();
+    float determinant = dot(
+        objectToWorld[0].xyz,
+        cross(objectToWorld[1].xyz, objectToWorld[2].xyz));
+    return determinant < 0.0f ? -1.0f : 1.0f;
+}
+
 public RtSurfaceData interpolateCurrentRtSurface(
     RtInstanceMetadata instance,
     RtGeometryMetadata geometry,
-    BuiltInTriangleIntersectionAttributes attributes)
+    BuiltInTriangleIntersectionAttributes attributes,
+    out float3 geometryNormal)
 {
     float3 barycentrics = float3(
         1.0f - attributes.barycentrics.x - attributes.barycentrics.y,
@@ -115,10 +127,13 @@ public RtSurfaceData interpolateCurrentRtSurface(
     uint vertexOffset1 = rtVertexByteOffset(instance, vertexIndex1);
     uint vertexOffset2 = rtVertexByteOffset(instance, vertexIndex2);
 
+    float3 objectPosition0 = loadRtVertexFloat3(vertexOffset0, kRtVertexOffsetPosition);
+    float3 objectPosition1 = loadRtVertexFloat3(vertexOffset1, kRtVertexOffsetPosition);
+    float3 objectPosition2 = loadRtVertexFloat3(vertexOffset2, kRtVertexOffsetPosition);
     float3 objectPosition =
-        loadRtVertexFloat3(vertexOffset0, kRtVertexOffsetPosition) * barycentrics.x +
-        loadRtVertexFloat3(vertexOffset1, kRtVertexOffsetPosition) * barycentrics.y +
-        loadRtVertexFloat3(vertexOffset2, kRtVertexOffsetPosition) * barycentrics.z;
+        objectPosition0 * barycentrics.x +
+        objectPosition1 * barycentrics.y +
+        objectPosition2 * barycentrics.z;
     float3 objectNormal =
         loadRtVertexFloat3(vertexOffset0, kRtVertexOffsetNormal) * barycentrics.x +
         loadRtVertexFloat3(vertexOffset1, kRtVertexOffsetNormal) * barycentrics.y +
@@ -138,8 +153,12 @@ public RtSurfaceData interpolateCurrentRtSurface(
     RtSurfaceData surface = {};
     surface.position = transformRtObjectPointToWorld(objectPosition);
     surface.normal = safeNormalize(transformRtObjectNormalToWorld(objectNormal), float3(0.0f, 0.0f, 1.0f));
+    float3 objectGeometryNormal = cross(objectPosition1 - objectPosition0, objectPosition2 - objectPosition0);
+    geometryNormal = safeNormalize(transformRtObjectNormalToWorld(objectGeometryNormal), surface.normal);
     surface.tangent = safeNormalize(transformRtObjectVectorToWorld(objectTangent), float3(1.0f, 0.0f, 0.0f));
-    surface.tangentSign = tangentSign < 0.0f ? -1.0f : 1.0f;
+    surface.tangentSign =
+        (tangentSign < 0.0f ? -1.0f : 1.0f) *
+        rtObjectToWorldHandedness();
     surface.texCoord0 =
         loadRtVertexFloat2(vertexOffset0, kRtVertexOffsetTexCoord0) * barycentrics.x +
         loadRtVertexFloat2(vertexOffset1, kRtVertexOffsetTexCoord0) * barycentrics.y +
@@ -164,6 +183,8 @@ public RtHitSurface currentRtHitSurface(
     hit.geometry = currentRtGeometry(hit.instance, hit.geometryValid);
     hit.surface.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     hit.surface.normal = viewDirection;
+    hit.geometryNormal = viewDirection;
+    hit.frontFace = HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
     hit.surface.texCoord0 = float2(0.5f, 0.5f);
     hit.surface.texCoord1 = hit.surface.texCoord0;
     if (hit.geometryValid)
@@ -171,14 +192,22 @@ public RtHitSurface currentRtHitSurface(
         hit.surface = interpolateCurrentRtSurface(
             hit.instance,
             hit.geometry,
-            attributes);
+            attributes,
+            hit.geometryNormal);
+        bool geometryNormalFacesView = dot(hit.geometryNormal, viewDirection) >= 0.0f;
+        if (geometryNormalFacesView != hit.frontFace)
+        {
+            hit.geometryNormal = -hit.geometryNormal;
+        }
     }
     return hit;
 }
 
 public void orientRtSurfaceForMaterial(inout RtSurfaceData surface, RtMaterialHeader material, float3 viewDirection)
 {
-    if (hasRtMaterialFeature(material, RtMaterialFeatureFlag.doubleSided) && dot(surface.normal, viewDirection) < 0.0f)
+    // Back faces are normally culled. Double-sided and volume-boundary instances keep them, and both
+    // use a view-facing shading frame while the untouched face normal drives boundary transitions.
+    if (dot(surface.normal, viewDirection) < 0.0f)
     {
         surface.normal = -surface.normal;
         surface.tangentSign = -surface.tangentSign;

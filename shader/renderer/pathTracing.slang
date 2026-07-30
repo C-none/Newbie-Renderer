@@ -28,7 +28,7 @@ void msMain(inout RayPayload payload)
 }
 
 [shader("anyhit")]
-void ahAlphaMask(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
+void ahMaterialPolicy(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
     handleAnyHit(payload, attributes);
 }
@@ -44,6 +44,8 @@ void chMain(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attr
     CHS chs = CHS();
     ClosestHitInput input = makeClosestHitInput(attributes);
     input.scatterRandomValues = payload.scatterRandomValues;
+    input.incidentMediumIor = payload.incidentMediumIor;
+    input.exteriorMediumIor = payload.exteriorMediumIor;
     ClosestHitResult result = chs.handleClosestHit(input);
     payload.hit = result.hit;
     payload.material = result.material;

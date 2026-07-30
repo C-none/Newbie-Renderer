@@ -1,0 +1,314 @@
+diff --git a/code/AssetLib/glTF2/glTF2Asset.h b/code/AssetLib/glTF2/glTF2Asset.h
+index 78bf2c6..8574ddd 100644
+--- a/code/AssetLib/glTF2/glTF2Asset.h
++++ b/code/AssetLib/glTF2/glTF2Asset.h
+@@ -54,6 +54,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *   KHR_materials_ior full
+  *   KHR_materials_emissive_strength full
+  *   KHR_materials_anisotropy full
++ *   EXT_mesh_gpu_instancing transform attributes
+  */
+ #ifndef GLTF2ASSET_H_INC
+ #define GLTF2ASSET_H_INC
+@@ -552,6 +553,7 @@ struct Accessor : public Object {
+     ComponentType componentType; //!< The datatype of components in the attribute. (required)
+     size_t count; //!< The number of attributes referenced by this accessor. (required)
+     AttribType::Value type; //!< Specifies if the attribute is a scalar, vector, or matrix. (required)
++    bool normalized{false}; //!< Whether integer components are normalized before use. (default: false)
+     std::vector<double> max; //!< Maximum value of each component in this attribute.
+     std::vector<double> min; //!< Minimum value of each component in this attribute.
+     std::unique_ptr<Sparse> sparse;
+@@ -915,6 +917,14 @@ struct Mesh : public Object {
+ };
+ 
+ struct Node : public Object {
++    struct MeshGpuInstancing {
++        Ref<Accessor> translation;
++        Ref<Accessor> rotation;
++        Ref<Accessor> scale;
++        size_t count{0};
++        bool isPresent{false};
++    };
++
+     std::vector<Ref<Node>> children;
+     std::vector<Ref<Mesh>> meshes;
+ 
+@@ -931,6 +941,7 @@ struct Node : public Object {
+     std::string jointName; //!< Name used when this node is a joint in a skin.
+ 
+     Ref<Node> parent; //!< This is not part of the glTF specification. Used as a helper.
++    MeshGpuInstancing meshGpuInstancing;
+ 
+     Node() = default;
+     void Read(Value &obj, Asset &r);
+@@ -1138,6 +1149,7 @@ public:
+         bool FB_ngon_encoding{false};
+         bool KHR_texture_basisu{false};
+         bool EXT_texture_webp{false};
++        bool EXT_mesh_gpu_instancing{false};
+ 
+         Extensions() = default;
+         ~Extensions() = default;
+@@ -1148,6 +1160,7 @@ public:
+         bool KHR_draco_mesh_compression{false};
+         bool KHR_texture_basisu{false};
+         bool EXT_texture_webp{false};
++        bool EXT_mesh_gpu_instancing{false};
+ 
+         RequiredExtensions() = default;
+     } extensionsRequired;
+diff --git a/code/AssetLib/glTF2/glTF2Asset.inl b/code/AssetLib/glTF2/glTF2Asset.inl
+index 618a973..dd72f00 100644
+--- a/code/AssetLib/glTF2/glTF2Asset.inl
++++ b/code/AssetLib/glTF2/glTF2Asset.inl
+@@ -885,6 +885,7 @@ inline void Accessor::Read(Value &obj, Asset &r) {
+ 
+     const char *typestr;
+     type = ReadMember(obj, "type", typestr) ? AttribType::FromString(typestr) : AttribType::SCALAR;
++    normalized = MemberOrDefault(obj, "normalized", false);
+ 
+     if (bufferView) {
+         // Check length
+@@ -1803,6 +1804,58 @@ inline void Node::Read(Value &obj, Asset &r) {
+                 }
+             }
+         }
++
++        if (r.extensionsUsed.EXT_mesh_gpu_instancing) {
++            if (Value *ext = FindObject(*curExtensions, "EXT_mesh_gpu_instancing")) {
++                if (this->meshes.empty()) {
++                    throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing requires a mesh on ", getContextForErrorMessages(id, name));
++                }
++
++                Value *attributes = FindObject(*ext, "attributes");
++                if (attributes == nullptr || attributes->ObjectEmpty()) {
++                    throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing requires at least one attribute on ", getContextForErrorMessages(id, name));
++                }
++
++                for (auto attribute = attributes->MemberBegin(); attribute != attributes->MemberEnd(); ++attribute) {
++                    if (!attribute->value.IsUint()) {
++                        throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing attribute '", attribute->name.GetString(), "' does not reference an accessor on ", getContextForErrorMessages(id, name));
++                    }
++
++                    Ref<Accessor> accessor = r.accessors.Retrieve(attribute->value.GetUint());
++                    if (!accessor || accessor->count == 0) {
++                        throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing attribute '", attribute->name.GetString(), "' has no instances on ", getContextForErrorMessages(id, name));
++                    }
++
++                    if (!meshGpuInstancing.isPresent) {
++                        meshGpuInstancing.count = accessor->count;
++                        meshGpuInstancing.isPresent = true;
++                    } else if (meshGpuInstancing.count != accessor->count) {
++                        throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing attributes have different counts on ", getContextForErrorMessages(id, name));
++                    }
++
++                    const char *semantic = attribute->name.GetString();
++                    if (strcmp(semantic, "TRANSLATION") == 0) {
++                        if (accessor->type != AttribType::VEC3 || accessor->componentType != ComponentType_FLOAT) {
++                            throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing TRANSLATION must use a FLOAT VEC3 accessor on ", getContextForErrorMessages(id, name));
++                        }
++                        meshGpuInstancing.translation = accessor;
++                    } else if (strcmp(semantic, "ROTATION") == 0) {
++                        const bool isFloat = accessor->componentType == ComponentType_FLOAT;
++                        const bool isNormalizedInteger = accessor->normalized &&
++                                                         (accessor->componentType == ComponentType_BYTE || accessor->componentType == ComponentType_SHORT);
++                        if (accessor->type != AttribType::VEC4 || (!isFloat && !isNormalizedInteger)) {
++                            throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing ROTATION must use a FLOAT VEC4 or normalized BYTE/SHORT VEC4 accessor on ", getContextForErrorMessages(id, name));
++                        }
++                        meshGpuInstancing.rotation = accessor;
++                    } else if (strcmp(semantic, "SCALE") == 0) {
++                        if (accessor->type != AttribType::VEC3 || accessor->componentType != ComponentType_FLOAT) {
++                            throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing SCALE must use a FLOAT VEC3 accessor on ", getContextForErrorMessages(id, name));
++                        }
++                        meshGpuInstancing.scale = accessor;
++                    }
++                }
++            }
++        }
+     }
+ }
+ 
+@@ -2173,6 +2226,7 @@ inline void Asset::ReadExtensionsRequired(Document &doc) {
+     CHECK_REQUIRED_EXT(KHR_draco_mesh_compression);
+     CHECK_REQUIRED_EXT(KHR_texture_basisu);
+     CHECK_REQUIRED_EXT(EXT_texture_webp);
++    CHECK_REQUIRED_EXT(EXT_mesh_gpu_instancing);
+ 
+ #undef CHECK_REQUIRED_EXT
+ }
+@@ -2204,6 +2258,7 @@ inline void Asset::ReadExtensionsUsed(Document &doc) {
+     CHECK_EXT(KHR_draco_mesh_compression);
+     CHECK_EXT(KHR_texture_basisu);
+     CHECK_EXT(EXT_texture_webp);
++    CHECK_EXT(EXT_mesh_gpu_instancing);
+ 
+ #undef CHECK_EXT
+ }
+diff --git a/code/AssetLib/glTF2/glTF2Importer.cpp b/code/AssetLib/glTF2/glTF2Importer.cpp
+index 99559df..01419e2 100644
+--- a/code/AssetLib/glTF2/glTF2Importer.cpp
++++ b/code/AssetLib/glTF2/glTF2Importer.cpp
+@@ -60,6 +60,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include <assimp/DefaultLogger.hpp>
+ #include <assimp/Importer.hpp>
+ 
++#include <limits>
+ #include <memory>
+ #include <unordered_map>
+ 
+@@ -1133,6 +1134,146 @@ void ParseExtras(aiMetadata* metadata, const Extras& extras) {
+     }
+ }
+ 
++namespace {
++
++struct InstanceFloat3 {
++    float values[3];
++};
++
++struct InstanceFloat4 {
++    float values[4];
++};
++
++struct InstanceByte4 {
++    int8_t values[4];
++};
++
++struct InstanceShort4 {
++    int16_t values[4];
++};
++
++template <class T>
++T ReadInstanceAccessorElement(Accessor &accessor, size_t index) {
++    uint8_t *data = accessor.GetPointer();
++    const size_t elementSize = accessor.GetElementSize();
++    const size_t stride = accessor.sparse ? elementSize : accessor.GetStride();
++
++    if (data == nullptr || index >= accessor.count || elementSize > sizeof(T) || stride == 0) {
++        throw DeadlyImportError("GLTF: Invalid EXT_mesh_gpu_instancing accessor ", getContextForErrorMessages(accessor.id, accessor.name));
++    }
++
++    const size_t maxByteSize = accessor.GetMaxByteSize();
++    if (elementSize > maxByteSize || index > (maxByteSize - elementSize) / stride) {
++        throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing accessor element is out of range in ", getContextForErrorMessages(accessor.id, accessor.name));
++    }
++
++    T value{};
++    memcpy(&value, data + index * stride, elementSize);
++    return value;
++}
++
++static ai_real NormalizeSignedInstanceComponent(int32_t value, int32_t positiveMax) {
++    if (value < -positiveMax) {
++        return static_cast<ai_real>(-1.0f);
++    }
++    return static_cast<ai_real>(static_cast<float>(value) / static_cast<float>(positiveMax));
++}
++
++static aiVector3D ReadInstanceVector3(Accessor &accessor, size_t index) {
++    const InstanceFloat3 value = ReadInstanceAccessorElement<InstanceFloat3>(accessor, index);
++    return aiVector3D(value.values[0], value.values[1], value.values[2]);
++}
++
++static aiQuaternion ReadInstanceQuaternion(Accessor &accessor, size_t index) {
++    aiQuaternion value;
++    if (accessor.componentType == ComponentType_FLOAT) {
++        const InstanceFloat4 raw = ReadInstanceAccessorElement<InstanceFloat4>(accessor, index);
++        value.x = raw.values[0];
++        value.y = raw.values[1];
++        value.z = raw.values[2];
++        value.w = raw.values[3];
++    } else if (accessor.componentType == ComponentType_BYTE) {
++        const InstanceByte4 raw = ReadInstanceAccessorElement<InstanceByte4>(accessor, index);
++        value.x = NormalizeSignedInstanceComponent(raw.values[0], 127);
++        value.y = NormalizeSignedInstanceComponent(raw.values[1], 127);
++        value.z = NormalizeSignedInstanceComponent(raw.values[2], 127);
++        value.w = NormalizeSignedInstanceComponent(raw.values[3], 127);
++    } else {
++        const InstanceShort4 raw = ReadInstanceAccessorElement<InstanceShort4>(accessor, index);
++        value.x = NormalizeSignedInstanceComponent(raw.values[0], 32767);
++        value.y = NormalizeSignedInstanceComponent(raw.values[1], 32767);
++        value.z = NormalizeSignedInstanceComponent(raw.values[2], 32767);
++        value.w = NormalizeSignedInstanceComponent(raw.values[3], 32767);
++    }
++    return value;
++}
++
++static std::vector<aiMatrix4x4> ReadMeshGpuInstanceTransforms(Node &node) {
++    std::vector<aiMatrix4x4> transforms(node.meshGpuInstancing.count);
++
++    for (size_t instanceIndex = 0; instanceIndex < transforms.size(); ++instanceIndex) {
++        aiMatrix4x4 &transform = transforms[instanceIndex];
++
++        if (node.meshGpuInstancing.translation) {
++            aiMatrix4x4 translation;
++            aiMatrix4x4::Translation(ReadInstanceVector3(*node.meshGpuInstancing.translation, instanceIndex), translation);
++            transform = transform * translation;
++        }
++
++        if (node.meshGpuInstancing.rotation) {
++            const aiQuaternion rotation = ReadInstanceQuaternion(*node.meshGpuInstancing.rotation, instanceIndex);
++            transform = transform * aiMatrix4x4(rotation.GetMatrix());
++        }
++
++        if (node.meshGpuInstancing.scale) {
++            aiMatrix4x4 scale;
++            aiMatrix4x4::Scaling(ReadInstanceVector3(*node.meshGpuInstancing.scale, instanceIndex), scale);
++            transform = transform * scale;
++        }
++    }
++
++    return transforms;
++}
++
++static void ExpandMeshGpuInstances(aiNode &ainode, Node &node) {
++    if (!node.meshGpuInstancing.isPresent) {
++        return;
++    }
++
++    std::vector<aiMatrix4x4> transforms = ReadMeshGpuInstanceTransforms(node);
++    if (transforms.size() > std::numeric_limits<unsigned int>::max() - ainode.mNumChildren) {
++        throw DeadlyImportError("GLTF: EXT_mesh_gpu_instancing child count exceeds Assimp node limits on ", getContextForErrorMessages(node.id, node.name));
++    }
++
++    const unsigned int firstInstanceChild = ainode.mNumChildren;
++    const unsigned int expandedChildCount = firstInstanceChild + static_cast<unsigned int>(transforms.size());
++    aiNode **expandedChildren = new aiNode *[expandedChildCount]();
++    if (ainode.mNumChildren > 0) {
++        std::copy(ainode.mChildren, ainode.mChildren + ainode.mNumChildren, expandedChildren);
++    }
++    delete[] ainode.mChildren;
++    ainode.mChildren = expandedChildren;
++    ainode.mNumChildren = expandedChildCount;
++
++    for (size_t instanceIndex = 0; instanceIndex < transforms.size(); ++instanceIndex) {
++        std::unique_ptr<aiNode> instance(new aiNode(GetNodeName(node) + "_instance_" + std::to_string(instanceIndex)));
++        instance->mParent = &ainode;
++        instance->mTransformation = transforms[instanceIndex];
++        instance->mNumMeshes = ainode.mNumMeshes;
++        if (instance->mNumMeshes > 0) {
++            instance->mMeshes = new unsigned int[instance->mNumMeshes];
++            std::copy(ainode.mMeshes, ainode.mMeshes + ainode.mNumMeshes, instance->mMeshes);
++        }
++        ainode.mChildren[firstInstanceChild + static_cast<unsigned int>(instanceIndex)] = instance.release();
++    }
++
++    delete[] ainode.mMeshes;
++    ainode.mMeshes = nullptr;
++    ainode.mNumMeshes = 0;
++}
++
++} // namespace
++
+ aiNode *glTF2Importer::ImportNode(glTF2::Asset &r, glTF2::Ref<glTF2::Node> &ptr) {
+     Node &node = *ptr;
+ 
+@@ -1246,6 +1387,8 @@ aiNode *glTF2Importer::ImportNode(glTF2::Asset &r, glTF2::Ref<glTF2::Node> &ptr)
+             }
+         }
+ 
++        ExpandMeshGpuInstances(*ainode, node);
++
+         if (node.camera) {
+             mScene->mCameras[node.camera.GetIndex()]->mName = ainode->mName;
+         }

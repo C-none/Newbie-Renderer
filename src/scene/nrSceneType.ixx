@@ -382,6 +382,21 @@ using SceneMaterialTextureIds = std::array<SceneTextureId, sceneMaterialTextureS
     return texture.valid() ? texture.slot + 1u : kDefaultSceneTextureId;
 }
 
+struct SceneMaterialNormalTextureBinding
+{
+    SceneTextureId textureId = kDefaultSceneTextureId;
+    std::uint32_t uvSet = 0u;
+    glm::vec4 uvLinear{1.0f, 0.0f, 0.0f, 1.0f};
+    glm::vec2 uvOffset{};
+    float normalScale = 1.0f;
+};
+
+struct SceneMaterialTextureBindings
+{
+    SceneMaterialTextureIds ids{};
+    SceneMaterialNormalTextureBinding normal{};
+};
+
 struct SceneBridgeDrawPacket
 {
     flecs::entity renderable{};
@@ -393,7 +408,7 @@ struct SceneBridgeDrawPacket
     std::uint64_t sortKey = 0;
     std::uint32_t meshBindless = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
-    SceneMaterialTextureIds materialTextureIds{};
+    SceneMaterialTextureBindings materialTextures{};
     SceneBridgeMaterialRasterState materialRaster{};
     SceneBridgeDrawGeometry geometry{};
 };
@@ -600,7 +615,7 @@ namespace detail
 {
 struct MaterialGpuData
 {
-    std::uint32_t abiVersion = 2;
+    std::uint32_t abiVersion = 3;
     std::uint32_t featureFlags = 0;
     std::uint32_t alphaMode = 0;
     std::uint32_t textureSlotCount = static_cast<std::uint32_t>(nr::resource::materialTextureSlotCount);
@@ -620,6 +635,8 @@ struct MaterialGpuData
     std::array<std::uint64_t, nr::resource::materialTextureSlotCount> textureHandles{};
 
     std::array<std::uint32_t, nr::resource::materialTextureSlotCount> uvSets{};
+    std::array<glm::vec4, nr::resource::materialTextureSlotCount> uvLinear{};
+    std::array<glm::vec2, nr::resource::materialTextureSlotCount> uvOffsets{};
 };
 
 struct CameraGpuData

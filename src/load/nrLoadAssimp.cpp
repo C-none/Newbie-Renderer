@@ -1,5 +1,6 @@
 module nr.load;
 import dependency.assets;
+import dependency.math;
 
 import :assimp;
 import :type;
@@ -39,9 +40,24 @@ constexpr MaterialPropertyKey kMatKeyClearcoatRoughnessFactor{"$mat.clearcoat.ro
 constexpr MaterialPropertyKey kMatKeySheenColorFactor{"$clr.sheen.factor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeySheenRoughnessFactor{"$mat.sheen.roughnessFactor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyTransmissionFactor{"$mat.transmission.factor", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyIor{"$mat.refracti", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyVolumeThicknessFactor{"$mat.volume.thicknessFactor", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyVolumeAttenuationDistance{"$mat.volume.attenuationDistance", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyVolumeAttenuationColor{"$mat.volume.attenuationColor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyShadingModel{"$mat.shadingm", 0u, 0u};
+// Stable property key used by AI_MATKEY_UVTRANSFORM(textureType, textureSlot).
+inline constexpr const char *kMatKeyUvTransform = "$tex.uvtrafo";
 inline constexpr const char *kAssimpGltfLightRangeMetadataKey = "PBR_LightRange";
+
+struct AssimpTextureTransform
+{
+    float translationU = 0.0f;
+    float translationV = 0.0f;
+    float scaleU = 1.0f;
+    float scaleV = 1.0f;
+    float rotation = 0.0f;
+};
 
 [[nodiscard]] bool readMaterialColor4(const aiMaterial &material,
                                              const MaterialPropertyKey &key,
@@ -107,6 +123,92 @@ inline constexpr const char *kAssimpGltfLightRangeMetadataKey = "PBR_LightRange"
     auto const *text = raw.C_Str();
     value = text == nullptr ? std::string{} : std::string{text};
     return !value.empty();
+}
+
+[[nodiscard]] bool readMaterialTextureTransform(const aiMaterial &material,
+                                                aiTextureType textureType,
+                                                unsigned int textureSlot,
+                                                AssimpTextureTransform &value)
+{
+    auto raw = std::array<ai_real, 5>{};
+    auto count = static_cast<unsigned int>(raw.size());
+    if (aiGetMaterialFloatArray(
+            &material,
+            kMatKeyUvTransform,
+            static_cast<unsigned int>(textureType),
+            textureSlot,
+            raw.data(),
+            &count) != aiReturn_SUCCESS ||
+        count != static_cast<unsigned int>(raw.size()))
+    {
+        return false;
+    }
+
+    value = AssimpTextureTransform{
+        .translationU = static_cast<float>(raw[0]),
+        .translationV = static_cast<float>(raw[1]),
+        .scaleU = static_cast<float>(raw[2]),
+        .scaleV = static_cast<float>(raw[3]),
+        .rotation = static_cast<float>(raw[4]),
+    };
+    return true;
+}
+
+[[nodiscard]] nr::resource::MaterialTextureTransform makeTextureTransform(
+    const AssimpTextureTransform &source,
+    bool restoreGltfTextureCoordinateV) noexcept
+{
+    if (restoreGltfTextureCoordinateV)
+    {
+        // Assimp stores glTF transforms in its V-flipped, center-rotation convention. The mesh path
+        // restores the original glTF image-space UVs, so invert that conversion and retain the
+        // canonical KHR_texture_transform affine: offset + rotation * scale * uv.
+        auto const rotation = -source.rotation;
+        auto const rotationCos = std::cos(rotation);
+        auto const rotationSin = std::sin(rotation);
+        auto const offsetU =
+            source.translationU -
+            0.5f * source.scaleU * (-rotationCos + rotationSin + 1.0f);
+        auto const offsetV =
+            0.5f * source.scaleV * (rotationSin + rotationCos - 1.0f) +
+            1.0f -
+            source.scaleV -
+            source.translationV;
+
+        return nr::resource::MaterialTextureTransform{
+            .linear = glm::vec4{
+                rotationCos * source.scaleU,
+                -rotationSin * source.scaleV,
+                rotationSin * source.scaleU,
+                rotationCos * source.scaleV,
+            },
+            .offset = glm::vec2{offsetU, offsetV},
+        };
+    }
+
+    auto const rotationCos = std::cos(source.rotation);
+    auto const rotationSin = std::sin(source.rotation);
+    auto const m00 = source.scaleU * rotationCos;
+    auto const m01 = -source.scaleU * rotationSin;
+    auto const m10 = source.scaleV * rotationSin;
+    auto const m11 = source.scaleV * rotationCos;
+    return nr::resource::MaterialTextureTransform{
+        .linear = glm::vec4{m00, m01, m10, m11},
+        .offset = glm::vec2{
+            0.5f + m00 * (source.translationU - 0.5f) + m01 * (source.translationV - 0.5f),
+            0.5f + m10 * (source.translationU - 0.5f) + m11 * (source.translationV - 0.5f),
+        },
+    };
+}
+
+[[nodiscard]] bool textureTransformFinite(const nr::resource::MaterialTextureTransform &transform) noexcept
+{
+    return std::isfinite(transform.linear.x) &&
+           std::isfinite(transform.linear.y) &&
+           std::isfinite(transform.linear.z) &&
+           std::isfinite(transform.linear.w) &&
+           std::isfinite(transform.offset.x) &&
+           std::isfinite(transform.offset.y);
 }
 
 [[nodiscard]] std::string toStdString(const aiString &value)
@@ -205,6 +307,279 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
 [[nodiscard]] float tangentHandedness(float signSource) noexcept
 {
     return signSource < 0.0f ? -1.0f : 1.0f;
+}
+
+struct TangentUvSelection
+{
+    std::uint32_t uvChannel = 0u;
+    nr::resource::MaterialTextureTransform transform{};
+    nr::resource::MaterialTextureSlotSemantic semantic =
+        nr::resource::MaterialTextureSlotSemantic::unsupported;
+    bool hasNormalTexture = false;
+};
+
+[[nodiscard]] const MaterialTextureBinding* findTextureBinding(
+    const MaterialAsset& material,
+    nr::resource::MaterialTextureSlotSemantic semantic) noexcept
+{
+    auto binding = std::ranges::find(material.textures, semantic, &MaterialTextureBinding::semantic);
+    return binding == material.textures.end() ? nullptr : std::addressof(*binding);
+}
+
+[[nodiscard]] bool tangentMappingsEquivalent(
+    const MaterialTextureBinding& lhs,
+    const MaterialTextureBinding& rhs,
+    float tolerance = 1e-6f) noexcept
+{
+    auto const near = [tolerance](float a, float b) noexcept {
+        return std::abs(a - b) <= tolerance;
+    };
+    return lhs.uvChannel == rhs.uvChannel &&
+           near(lhs.transform.linear.x, rhs.transform.linear.x) &&
+           near(lhs.transform.linear.y, rhs.transform.linear.y) &&
+           near(lhs.transform.linear.z, rhs.transform.linear.z) &&
+           near(lhs.transform.linear.w, rhs.transform.linear.w);
+}
+
+[[nodiscard]] TangentUvSelection selectTangentUv(
+    const SceneAsset& scene,
+    std::uint32_t materialIndex,
+    std::string_view meshName)
+{
+    if (materialIndex >= scene.materials.size())
+    {
+        return {};
+    }
+
+    auto const& material = scene.materials[materialIndex];
+    auto const* baseNormal =
+        findTextureBinding(material, nr::resource::MaterialTextureSlotSemantic::normal);
+    auto const* clearcoatNormal =
+        findTextureBinding(material, nr::resource::MaterialTextureSlotSemantic::clearcoatNormal);
+
+    if (baseNormal != nullptr &&
+        clearcoatNormal != nullptr &&
+        !tangentMappingsEquivalent(*baseNormal, *clearcoatNormal))
+    {
+        nr::nrLog(
+            nr::LogLevel::warning,
+            "LOAD",
+            std::format(
+                "Mesh '{}' material '{}' uses different effective UV mappings for base and clearcoat normal textures. "
+                "A vertex stores one tangent frame; generated tangents use the base normal mapping, so the clearcoat "
+                "normal tangent orientation cannot also be exact.",
+                meshName,
+                material.name));
+    }
+
+    auto const* selected = baseNormal != nullptr ? baseNormal : clearcoatNormal;
+    if (selected == nullptr)
+    {
+        return {};
+    }
+
+    return TangentUvSelection{
+        .uvChannel = selected->uvChannel,
+        .transform = selected->transform,
+        .semantic = selected->semantic,
+        .hasNormalTexture = true,
+    };
+}
+
+[[nodiscard]] std::array<float, 2> tangentTexCoord(
+    const VertexAsset& vertex,
+    const TangentUvSelection& selection) noexcept
+{
+    auto const& source = selection.uvChannel == 1u ? vertex.texCoord1 : vertex.texCoord0;
+    return {
+        selection.transform.linear.x * source[0] +
+            selection.transform.linear.y * source[1] +
+            selection.transform.offset.x,
+        selection.transform.linear.z * source[0] +
+            selection.transform.linear.w * source[1] +
+            selection.transform.offset.y,
+    };
+}
+
+[[nodiscard]] bool tangentDirectionFinite(
+    const nr::dependency::mikktspace::Tangent& tangent) noexcept
+{
+    return std::ranges::all_of(tangent.direction, [](float component) {
+               return std::isfinite(component);
+           }) &&
+           std::isfinite(tangent.sign);
+}
+
+[[nodiscard]] std::optional<std::array<float, 4>> normalizedTangent(
+    const nr::dependency::mikktspace::Tangent& tangent) noexcept
+{
+    if (!tangentDirectionFinite(tangent))
+    {
+        return std::nullopt;
+    }
+
+    auto const lengthSquared =
+        tangent.direction[0] * tangent.direction[0] +
+        tangent.direction[1] * tangent.direction[1] +
+        tangent.direction[2] * tangent.direction[2];
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 1e-12f)
+    {
+        return std::nullopt;
+    }
+
+    auto const inverseLength = 1.0f / std::sqrt(lengthSquared);
+    return std::array<float, 4>{
+        tangent.direction[0] * inverseLength,
+        tangent.direction[1] * inverseLength,
+        tangent.direction[2] * inverseLength,
+        tangentHandedness(tangent.sign),
+    };
+}
+
+[[nodiscard]] bool tangentsCompatible(
+    const std::array<float, 4>& lhs,
+    const std::array<float, 4>& rhs) noexcept
+{
+    constexpr float directionTolerance = 1e-5f;
+    auto const directionDot =
+        lhs[0] * rhs[0] +
+        lhs[1] * rhs[1] +
+        lhs[2] * rhs[2];
+    return lhs[3] == rhs[3] && directionDot >= 1.0f - directionTolerance;
+}
+
+struct VertexTangentVariant
+{
+    std::array<float, 4> tangent{};
+    std::uint32_t vertexIndex = 0u;
+};
+
+[[nodiscard]] std::optional<LoadError> generateMikkTangents(
+    MeshAsset& mesh,
+    std::span<const std::uint32_t> faceVertexCounts,
+    const TangentUvSelection& selection,
+    const std::filesystem::path& sourcePath)
+{
+    auto corners = std::vector<nr::dependency::mikktspace::Corner>{};
+    corners.reserve(mesh.indices.size());
+    for (auto vertexIndex : mesh.indices)
+    {
+        if (vertexIndex >= mesh.vertices.size())
+        {
+            return makeLoadError(
+                LoadErrorCode::invalidScene,
+                "assimp",
+                sourcePath,
+                std::format(
+                    "Mesh '{}' references vertex {} while generating tangent space, but only {} vertices exist.",
+                    mesh.name,
+                    vertexIndex,
+                    mesh.vertices.size()));
+        }
+
+        auto const& vertex = mesh.vertices[vertexIndex];
+        auto const texCoord = tangentTexCoord(vertex, selection);
+        auto const finiteCorner =
+            std::ranges::all_of(vertex.position, [](float component) {
+                return std::isfinite(component);
+            }) &&
+            std::ranges::all_of(vertex.normal, [](float component) {
+                return std::isfinite(component);
+            }) &&
+            std::ranges::all_of(texCoord, [](float component) {
+                return std::isfinite(component);
+            });
+        if (!finiteCorner)
+        {
+            return makeLoadError(
+                LoadErrorCode::invalidScene,
+                "assimp",
+                sourcePath,
+                std::format(
+                    "Mesh '{}' contains non-finite position, normal, or effective normal-map UV data required by MikkTSpace.",
+                    mesh.name));
+        }
+
+        corners.push_back(nr::dependency::mikktspace::Corner{
+            .position = vertex.position,
+            .normal = vertex.normal,
+            .texCoord = texCoord,
+        });
+    }
+
+    auto cornerTangents =
+        std::vector<nr::dependency::mikktspace::Tangent>(corners.size());
+    if (!nr::dependency::mikktspace::generateTangents(
+            faceVertexCounts,
+            corners,
+            cornerTangents))
+    {
+        return makeLoadError(
+            LoadErrorCode::invalidScene,
+            "assimp",
+            sourcePath,
+            std::format(
+                "MikkTSpace failed to generate tangent space for mesh '{}' from its effective normal-map UVs.",
+                mesh.name));
+    }
+
+    auto const originalVertexCount = mesh.vertices.size();
+    auto tangentVariants =
+        std::vector<std::vector<VertexTangentVariant>>(originalVertexCount);
+    auto cornerIndices = std::views::iota(std::size_t{0}, mesh.indices.size());
+    for (auto cornerIndex : cornerIndices)
+    {
+        auto const originalVertexIndex = mesh.indices[cornerIndex];
+        auto tangent = normalizedTangent(cornerTangents[cornerIndex]);
+        if (!tangent.has_value())
+        {
+            return makeLoadError(
+                LoadErrorCode::invalidScene,
+                "assimp",
+                sourcePath,
+                std::format(
+                    "MikkTSpace generated an invalid tangent frame for mesh '{}' corner {}.",
+                    mesh.name,
+                    cornerIndex));
+        }
+
+        auto& variants = tangentVariants[originalVertexIndex];
+        auto compatible = std::ranges::find_if(variants, [&](const VertexTangentVariant& variant) {
+            return tangentsCompatible(variant.tangent, *tangent);
+        });
+        if (compatible != variants.end())
+        {
+            mesh.indices[cornerIndex] = compatible->vertexIndex;
+            continue;
+        }
+
+        auto targetVertexIndex = originalVertexIndex;
+        if (!variants.empty())
+        {
+            if (mesh.vertices.size() >= std::numeric_limits<std::uint32_t>::max())
+            {
+                return makeLoadError(
+                    LoadErrorCode::invalidScene,
+                    "assimp",
+                    sourcePath,
+                    std::format(
+                        "Mesh '{}' exceeds the 32-bit vertex index range while splitting incompatible MikkTSpace corners.",
+                        mesh.name));
+            }
+
+            targetVertexIndex = static_cast<std::uint32_t>(mesh.vertices.size());
+            mesh.vertices.push_back(mesh.vertices[originalVertexIndex]);
+        }
+
+        mesh.vertices[targetVertexIndex].tangent = *tangent;
+        variants.push_back(VertexTangentVariant{
+            .tangent = *tangent,
+            .vertexIndex = targetVertexIndex,
+        });
+        mesh.indices[cornerIndex] = targetVertexIndex;
+    }
+
+    return std::nullopt;
 }
 
 [[nodiscard]] std::string textureTypeName(aiTextureType textureType, unsigned int textureSlot)
@@ -516,6 +891,8 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
     return found->second;
 }
 
+[[nodiscard]] bool shouldFlipAssimpTextureCoordinateV(const std::filesystem::path &sourcePath);
+
 [[nodiscard]] std::optional<LoadError> appendMaterials(const aiScene &assimpScene,
                                                               const std::filesystem::path &baseDirectory,
                                                               SceneAsset &scene)
@@ -525,6 +902,7 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
     {
         textureIndexByKey.emplace(scene.textures[textureIndex].key, textureIndex);
     }
+    auto const restoreGltfTextureCoordinateV = shouldFlipAssimpTextureCoordinateV(scene.sourcePath);
 
     auto materialIndices = std::views::iota(0u, assimpScene.mNumMaterials);
     for (auto materialIndex : materialIndices)
@@ -604,6 +982,34 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
         if (float transmission; readMaterialFloat(*material, kMatKeyTransmissionFactor, transmission))
         {
             materialAsset.transmissionFactor = transmission;
+        }
+
+        if (float ior; readMaterialFloat(*material, kMatKeyIor, ior))
+        {
+            materialAsset.ior = ior;
+        }
+
+        if (float thicknessFactor; readMaterialFloat(*material, kMatKeyVolumeThicknessFactor, thicknessFactor))
+        {
+            materialAsset.thicknessFactor = thicknessFactor;
+        }
+
+        auto attenuationDistance = 0.0f;
+        auto const hasUnsupportedAttenuationDistance =
+            readMaterialFloat(*material, kMatKeyVolumeAttenuationDistance, attenuationDistance) &&
+            std::isfinite(attenuationDistance);
+        auto attenuationColor = aiColor3D{};
+        auto const hasUnsupportedAttenuationColor =
+            readMaterialColor3(*material, kMatKeyVolumeAttenuationColor, attenuationColor) &&
+            (attenuationColor.r != 1.0f || attenuationColor.g != 1.0f || attenuationColor.b != 1.0f);
+        if (hasUnsupportedAttenuationDistance || hasUnsupportedAttenuationColor)
+        {
+            nr::nrLog(
+                nr::LogLevel::warning,
+                "LOAD",
+                std::format(
+                    "Material '{}' uses volume attenuation/absorption properties; Beer-Lambert absorption is unsupported and will be ignored.",
+                    materialAsset.name));
         }
 
         // Read specular factor (for specular-glossiness workflow)
@@ -712,6 +1118,38 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
                     continue;
                 }
 
+                if (uvChannel > 1u)
+                {
+                    return makeLoadError(
+                        LoadErrorCode::invalidScene,
+                        "assimp",
+                        scene.sourcePath,
+                        std::format(
+                            "Material '{}' texture semantic '{}' selects unsupported UV set {}; only UV sets 0 and 1 are supported.",
+                            materialAsset.name,
+                            textureTypeName(textureType, slotIndex),
+                            uvChannel));
+                }
+
+                auto textureTransform = nr::resource::MaterialTextureTransform{};
+                auto assimpTextureTransform = AssimpTextureTransform{};
+                if (readMaterialTextureTransform(*material, textureType, slotIndex, assimpTextureTransform))
+                {
+                    textureTransform =
+                        makeTextureTransform(assimpTextureTransform, restoreGltfTextureCoordinateV);
+                    if (!textureTransformFinite(textureTransform))
+                    {
+                        return makeLoadError(
+                            LoadErrorCode::invalidScene,
+                            "assimp",
+                            scene.sourcePath,
+                            std::format(
+                                "Material '{}' texture semantic '{}' has a non-finite UV transform.",
+                                materialAsset.name,
+                                textureTypeName(textureType, slotIndex)));
+                    }
+                }
+
                 auto rawTexturePath = toStdString(texturePath);
                 if (rawTexturePath.empty())
                 {
@@ -753,6 +1191,7 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
                 materialAsset.textures.push_back(MaterialTextureBinding{
                     .textureIndex = resolvedTextureIndex,
                     .uvChannel = uvChannel,
+                    .transform = textureTransform,
                     .textureTypeRaw = textureTypeRaw,
                     .semantic = textureSlotSemantic(textureType, slotIndex),
                     .sourceSemanticName = textureTypeName(textureType, slotIndex),
@@ -766,11 +1205,10 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
     return std::nullopt;
 }
 
-[[nodiscard]] bool shouldFlipAssimpTextureCoordinateV(const std::filesystem::path &sourcePath);
-
 [[nodiscard]] std::optional<LoadError> appendMeshes(const aiScene &assimpScene,
-                                                           SceneAsset &scene,
-                                                           bool strict)
+                                                     SceneAsset &scene,
+                                                     bool strict,
+                                                     bool generateMissingGltfTangents)
 {
     auto meshIndices = std::views::iota(0u, assimpScene.mNumMeshes);
     for (auto meshIndex : meshIndices)
@@ -801,9 +1239,26 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
             meshAsset.name = std::format("mesh_{}", meshIndex);
         }
         meshAsset.clockwiseFrontFace = false;
+        auto const materialIndex = mesh->mMaterialIndex < assimpScene.mNumMaterials
+                                       ? mesh->mMaterialIndex
+                                       : invalidIndex;
 
         meshAsset.vertices.reserve(mesh->mNumVertices);
         auto const flipTextureCoordinateV = shouldFlipAssimpTextureCoordinateV(scene.sourcePath);
+        auto const hasSourceTangents = mesh->HasTangentsAndBitangents();
+        if (generateMissingGltfTangents &&
+            (mesh->mTangents != nullptr || mesh->mBitangents != nullptr) &&
+            !hasSourceTangents)
+        {
+            return makeLoadError(
+                LoadErrorCode::invalidScene,
+                "assimp",
+                scene.sourcePath,
+                std::format(
+                    "Mesh '{}' contains incomplete authored tangent data; both tangent and bitangent arrays are required.",
+                    meshAsset.name));
+        }
+
         auto invalidTangentFrameCount = 0u;
         auto firstInvalidTangentFrame = std::optional<std::string>{};
         auto vertexIndices = std::views::iota(0u, mesh->mNumVertices);
@@ -820,7 +1275,7 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
                 vertex.normal = {normal.x, normal.y, normal.z};
             }
 
-            if (mesh->HasTangentsAndBitangents())
+            if (hasSourceTangents)
             {
                 if (mesh->mTangents == nullptr || mesh->mBitangents == nullptr || !mesh->HasNormals() || mesh->mNormals == nullptr)
                 {
@@ -867,6 +1322,12 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
                 vertex.texCoord0 = {uv.x, flipTextureCoordinateV ? 1.0f - uv.y : uv.y};
             }
 
+            if (mesh->HasTextureCoords(1) && mesh->mTextureCoords[1] != nullptr)
+            {
+                auto const &uv = mesh->mTextureCoords[1][vertexIndex];
+                vertex.texCoord1 = {uv.x, flipTextureCoordinateV ? 1.0f - uv.y : uv.y};
+            }
+
             if (mesh->HasVertexColors(0) && mesh->mColors[0] != nullptr)
             {
                 auto const &color = mesh->mColors[0][vertexIndex];
@@ -889,6 +1350,8 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
         }
 
         meshAsset.indices.reserve(static_cast<std::size_t>(mesh->mNumFaces) * 3u);
+        auto faceVertexCounts = std::vector<std::uint32_t>{};
+        faceVertexCounts.reserve(mesh->mNumFaces);
         auto faceIndices = std::views::iota(0u, mesh->mNumFaces);
         for (auto faceIndex : faceIndices)
         {
@@ -907,10 +1370,52 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
                     std::format("Mesh '{}' contains a face with fewer than 3 indices.", meshAsset.name));
             }
 
+            faceVertexCounts.push_back(face.mNumIndices);
             auto localIndexRange = std::views::iota(0u, face.mNumIndices);
             for (auto localIndex : localIndexRange)
             {
                 meshAsset.indices.push_back(face.mIndices[localIndex]);
+            }
+        }
+
+        if (generateMissingGltfTangents && !hasSourceTangents && !meshAsset.indices.empty())
+        {
+            auto const selection = selectTangentUv(scene, materialIndex, meshAsset.name);
+            auto const hasNormals = mesh->HasNormals() && mesh->mNormals != nullptr;
+            auto const hasSelectedTexCoords =
+                mesh->HasTextureCoords(selection.uvChannel) &&
+                mesh->mTextureCoords[selection.uvChannel] != nullptr;
+            auto const hasSupportedFaces =
+                std::ranges::all_of(faceVertexCounts, [](std::uint32_t count) {
+                    return count >= 3u;
+                });
+
+            if (selection.hasNormalTexture &&
+                (!hasNormals || !hasSelectedTexCoords || !hasSupportedFaces))
+            {
+                return makeLoadError(
+                    LoadErrorCode::invalidScene,
+                    "assimp",
+                    scene.sourcePath,
+                    std::format(
+                        "Mesh '{}' requires generated tangents for its {} texture, but normals, TEXCOORD_{}, "
+                        "or triangle/polygon face data is missing.",
+                        meshAsset.name,
+                        nr::resource::materialTextureSlotSemanticName(selection.semantic),
+                        selection.uvChannel));
+            }
+
+            if (hasNormals && hasSelectedTexCoords && hasSupportedFaces)
+            {
+                if (auto error = generateMikkTangents(
+                        meshAsset,
+                        faceVertexCounts,
+                        selection,
+                        scene.sourcePath);
+                    error.has_value())
+                {
+                    return error;
+                }
             }
         }
 
@@ -920,9 +1425,7 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
                         : std::format("{}_geometry_0", meshAsset.name),
             .firstIndex = 0,
             .indexCount = static_cast<std::uint32_t>(meshAsset.indices.empty() ? meshAsset.vertices.size() : meshAsset.indices.size()),
-            .materialIndex = mesh->mMaterialIndex < assimpScene.mNumMaterials
-                                  ? mesh->mMaterialIndex
-                                  : invalidIndex,
+            .materialIndex = materialIndex,
         });
 
         scene.meshes.push_back(std::move(meshAsset));
@@ -1191,7 +1694,9 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
     return extension == ".gltf" || extension == ".glb";
 }
 
-[[nodiscard]] aiPostProcessSteps buildPostProcessFlags(const SceneLoadRequest &request)
+[[nodiscard]] aiPostProcessSteps buildPostProcessFlags(
+    const SceneLoadRequest &request,
+    bool gltfSource)
 {
     std::uint32_t flags = aiProcess_SortByPType;
 
@@ -1207,7 +1712,7 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
     {
         flags |= aiProcess_GenSmoothNormals;
     }
-    if (request.generateTangents)
+    if (request.generateTangents && !gltfSource)
     {
         flags |= aiProcess_CalcTangentSpace;
     }
@@ -1277,7 +1782,8 @@ SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest& reque
         }
 
         Assimp::Importer importer{};
-        auto flags = detail::buildPostProcessFlags(request);
+        auto const gltfSource = detail::shouldFlipAssimpTextureCoordinateV(request.sourcePath);
+        auto flags = detail::buildPostProcessFlags(request, gltfSource);
         auto const *assimpScene = importer.ReadFile(request.sourcePath.string(), flags);
         if (assimpScene == nullptr)
         {
@@ -1316,7 +1822,12 @@ SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest& reque
             return SceneImportResult{std::unexpected(std::move(decodeResult.error()))};
         }
 
-        if (auto error = detail::appendMeshes(*assimpScene, scene, request.strict); error.has_value())
+        if (auto error = detail::appendMeshes(
+                *assimpScene,
+                scene,
+                request.strict,
+                request.generateTangents && gltfSource);
+            error.has_value())
         {
             return SceneImportResult{std::unexpected(std::move(*error))};
         }

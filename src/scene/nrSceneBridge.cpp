@@ -179,17 +179,17 @@ namespace nr::scene
             return materialHandle.valid() ? materialHandle.slot : std::numeric_limits<std::uint32_t>::max();
         };
 
-        auto resolveMaterialTextureIds = [&](nr::resource::MaterialHandle materialHandle) {
-            if (input.resolveMaterialTextureIds)
+        auto resolveMaterialTextures = [&](nr::resource::MaterialHandle materialHandle) {
+            if (input.resolveMaterialTextures)
             {
-                auto resolved = input.resolveMaterialTextureIds(materialHandle);
+                auto resolved = input.resolveMaterialTextures(materialHandle);
                 if (resolved.has_value())
                 {
                     return *resolved;
                 }
             }
 
-            return SceneMaterialTextureIds{};
+            return SceneMaterialTextureBindings{};
         };
 
         auto resolveMaterialRasterState = [&](nr::resource::MaterialHandle materialHandle) {
@@ -230,7 +230,7 @@ namespace nr::scene
                 .sortKey = packet.sortKey,
                 .meshBindless = resolveMeshBindless(packet.mesh),
                 .materialBindless = resolveMaterialBindless(packet.material),
-                .materialTextureIds = resolveMaterialTextureIds(packet.material),
+                .materialTextures = resolveMaterialTextures(packet.material),
                 .materialRaster = resolveMaterialRasterState(packet.material),
                 .geometry = resolveRasterDrawGeometry(packet.mesh, packet.geometryIndex),
             });

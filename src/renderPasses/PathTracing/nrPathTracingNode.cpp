@@ -248,8 +248,8 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     {
         assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
             .program = std::cref(rootProgram),
-            .entryPointName = "ahAlphaMask",
-            .logicalEntryPointName = "ahAlphaMask",
+            .entryPointName = "ahMaterialPolicy",
+            .logicalEntryPointName = "ahMaterialPolicy",
         });
     }
     std::ranges::for_each(hitPrograms, [&](const PathTracingHitProgram &hitProgram) {
@@ -277,7 +277,7 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
         };
         if (rtHitPermutationUsesAnyHit(permutation.key))
         {
-            hitGroup.anyHitEntryPoint = "ahAlphaMask";
+            hitGroup.anyHitEntryPoint = "ahMaterialPolicy";
         }
         assembly.groups.push_back(std::move(hitGroup));
     });

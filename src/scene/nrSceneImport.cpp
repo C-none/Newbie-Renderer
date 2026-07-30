@@ -339,6 +339,20 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
             }
             material.transmission->factor = transmissionFactor;
         });
+        assignIfPresent(sourceMaterial.ior, [&](float ior) {
+            if (!material.ior.has_value())
+            {
+                material.ior.emplace();
+            }
+            material.ior->ior = ior;
+        });
+        assignIfPresent(sourceMaterial.thicknessFactor, [&](float thicknessFactor) {
+            if (!material.volumeBoundary.has_value())
+            {
+                material.volumeBoundary.emplace();
+            }
+            material.volumeBoundary->thicknessFactor = thicknessFactor;
+        });
         assignIfPresent(sourceMaterial.anisotropyFactor, [&](float anisotropyFactor) {
             if (!material.anisotropy.has_value())
             {
@@ -382,10 +396,27 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
             if (!nr::resource::materialTextureSlotSemanticValid(binding.semantic))
             {
                 auto const specGlossTexture = sourceSemantic == "specular" || sourceSemantic == "shininess" || sourceSemantic == "maya_specular" || sourceSemantic == "maya_specular_color" || sourceSemantic == "maya_specular_roughness";
+                auto const volumeThicknessTexture = sourceSemantic == "volume_thickness";
                 reportImport<nr::LogLevel::warning>(ImportStage::material,
                                                     specGlossTexture ? std::format("Material '{}' ignored specular-glossiness texture semantic '{}' because texture baking to metallic-roughness is not implemented.", material.name, sourceSemantic)
+                                                    : volumeThicknessTexture ? std::format("Material '{}' ignored volume thickness texture semantic '{}'; only scalar thicknessFactor boundary classification is supported.", material.name, sourceSemantic)
                                                                      : std::format("Material '{}' ignored unsupported texture semantic '{}'.", material.name, sourceSemantic),
                                                     entry.canonicalKey, entry.sourceIndex);
+                return;
+            }
+
+            if (binding.uvChannel > 1u)
+            {
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::material,
+                    std::format(
+                        "Material '{}' texture semantic '{}' selects unsupported UV set {}; only UV sets 0 and 1 are supported.",
+                        material.name,
+                        sourceSemantic,
+                        binding.uvChannel),
+                    entry.canonicalKey,
+                    entry.sourceIndex);
+                materialHasError = true;
                 return;
             }
 
@@ -406,6 +437,7 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
 
             slot->texture = textureHandle;
             slot->uvSet = binding.uvChannel;
+            slot->transform = binding.transform;
         });
 
         std::ranges::for_each(material.textureSlots, [&](const nr::resource::MaterialTextureSlot &slot) {
@@ -522,6 +554,7 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             vertex.normal = glm::vec3{sourceVertex.normal[0], sourceVertex.normal[1], sourceVertex.normal[2]};
             vertex.tangent = glm::vec4{sourceVertex.tangent[0], sourceVertex.tangent[1], sourceVertex.tangent[2], sourceVertex.tangent[3]};
             vertex.texCoord0 = glm::vec2{sourceVertex.texCoord0[0], sourceVertex.texCoord0[1]};
+            vertex.texCoord1 = glm::vec2{sourceVertex.texCoord1[0], sourceVertex.texCoord1[1]};
             vertex.color0 = glm::vec4{sourceVertex.color0[0], sourceVertex.color0[1], sourceVertex.color0[2], sourceVertex.color0[3]};
             mesh.vertices.push_back(vertex);
         });

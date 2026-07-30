@@ -33,6 +33,8 @@ public struct MaterialLayerStack
     public float3 sheenColor = float3(0.0f);
     public float sheenRoughness = 0.0f;
     public float transmission = 0.0f;
+    public RtTransmissionMode transmissionMode = RtTransmissionMode.thin;
+    public float transmissionIor = 1.5f;
 };
 
 public struct MaterialDirectLightingInput
@@ -59,9 +61,27 @@ public float3 safeNormalize(float3 value, float3 fallback)
     return fallback;
 }
 
-public float2 materialUv(uint uvSet, float2 texCoord0, float2 texCoord1)
+public float2 selectMaterialUv(uint uvSet, float2 texCoord0, float2 texCoord1)
 {
     return uvSet == 1u ? texCoord1 : texCoord0;
+}
+
+public float2 transformMaterialUv(float2 uv, float4 uvLinear, float2 uvOffset)
+{
+    return float2(
+        dot(uvLinear.xy, uv),
+        dot(uvLinear.zw, uv)) + uvOffset;
+}
+
+public float2 materialTextureUv(
+    RtMaterialTextureRef textureRef,
+    float2 texCoord0,
+    float2 texCoord1)
+{
+    return transformMaterialUv(
+        selectMaterialUv(textureRef.uvSet, texCoord0, texCoord1),
+        textureRef.uvLinear,
+        textureRef.uvOffset);
 }
 
 public float3 orthogonalTangent(float3 normal)

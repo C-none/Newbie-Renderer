@@ -1,7 +1,7 @@
 implementing common;
 
-public enum RtHitAlphaPolicy : uint
+public enum RtHitAnyHitPolicy : uint
 {
-    opaqueLike = 0u,
-    alphaMask = 1u,
+    none = 0u,
+    materialPolicy = 1u,
 }

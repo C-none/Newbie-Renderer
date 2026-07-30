@@ -70,20 +70,25 @@ namespace options = nr::options;
     return output;
 }
 
-[[nodiscard]] std::string applyRequest(std::uint64_t epoch, std::string_view id = "apply-1", bool includeUnexpectedField = false)
+[[nodiscard]] std::string applyRequest(
+    std::uint64_t epoch,
+    std::string_view requestId = "apply-1",
+    bool includeUnexpectedField = false,
+    std::string_view optionId = "viewer.window.fullscreen",
+    json::JsonValue value = json::JsonValue{true})
 {
     using Json = json::JsonValue;
     auto params = Json::Object{
         {"binding_epoch", Json{epoch}},
-        {"id", Json{"viewer.window.fullscreen"}},
-        {"value", Json{true}},
+        {"id", Json{optionId}},
+        {"value", std::move(value)},
     };
     if (includeUnexpectedField)
     {
         params.emplace("unexpected", Json{true});
     }
     return serializeFixture(Json{Json::Object{
-        {"id", Json{id}},
+        {"id", Json{requestId}},
         {"jsonrpc", Json{"2.0"}},
         {"method", Json{"option.apply"}},
         {"params", Json{std::move(params)}},
@@ -182,6 +187,16 @@ const nr::test::CaseRegistrar readMethodsCase{"WebSocket protocol exposes only s
                                                   auto const &records = std::get<json::JsonValue::Array>(jsonField(snapshotResult, "options").storage);
                                                   nr::test::require(!records.empty());
                                                   nr::test::requireEqual(std::get<std::uint64_t>(jsonField(snapshotResult, "schema_version").storage), std::uint64_t{1u});
+                                                  auto const exitRecord = std::ranges::find_if(records, [](auto const &candidate) {
+                                                      auto const &record = jsonObject(candidate);
+                                                      return std::get<std::string>(jsonField(record, "id").storage) == "viewer.exit";
+                                                  });
+                                                  nr::test::require(exitRecord != records.end(), "WebSocket discovery must expose viewer.exit");
+                                                  auto const &exitObject = jsonObject(*exitRecord);
+                                                  nr::test::requireEqual(std::get<std::string>(jsonField(exitObject, "control").storage), std::string{"button"});
+                                                  nr::test::requireEqual(std::get<std::string>(jsonField(exitObject, "group").storage), std::string{"Viewer"});
+                                                  nr::test::requireEqual(std::get<std::string>(jsonField(exitObject, "title").storage), std::string{"Exit"});
+                                                  nr::test::require(std::get<json::JsonValue::Object>(jsonField(exitObject, "value").storage).empty());
 
                                                   auto get = protocol.handleText(R"({"jsonrpc":"2.0","id":"get","method":"option.get","params":{"id":"viewer.window.fullscreen"}})", {}, slot);
                                                   nr::test::require(get.responseReady);
@@ -216,6 +231,30 @@ const nr::test::CaseRegistrar admissionCase{"started response is prepared before
                                                 nr::test::requireEqual(std::get<std::string>(jsonField(data, "reason").storage), std::string{"operation_busy"});
                                                 nr::test::require(system->hasPendingMutation(), "disconnect/reconnect must not cancel the admitted mutation");
                                             }};
+
+const nr::test::CaseRegistrar exitAdmissionCase{"WebSocket exit uses the shared empty-object frame-effect option", [] {
+                                                    auto system = agentSystem();
+                                                    auto protocol = interaction::OptionRpcProtocol{*system};
+                                                    auto slot = std::string{};
+                                                    auto started = protocol.handleText(
+                                                        applyRequest(
+                                                            system->liveBinding().bindingEpoch,
+                                                            "exit-1",
+                                                            false,
+                                                            "viewer.exit",
+                                                            json::JsonValue{json::JsonValue::Object{}}),
+                                                        {},
+                                                        slot);
+                                                    nr::test::require(started.responseReady && started.mutationStarted);
+
+                                                    auto frame = system->beginRenderableFrame();
+                                                    nr::test::require(frame && frame->mutation);
+                                                    auto materialized = system->materializeFrameEffect(std::move(*frame->mutation));
+                                                    nr::test::require(materialized.effect.has_value());
+                                                    nr::test::requireEqual(materialized.effect->id, options::optionId(options::keys::viewerExit));
+                                                    nr::test::requireEqual(materialized.effect->origin, options::MutationOrigin::websocket);
+                                                    nr::test::require(system->publishRenderableFrame(allAvailable(*system->activeCatalog())) != nullptr);
+                                                }};
 
 const nr::test::CaseRegistrar fragmentedAndProfileCase{"reassembled fragmented requests work while batch notification and extra fields never schedule", [] {
                                                            auto system = agentSystem();

@@ -1,3 +1,6 @@
+module;
+#include <cstddef>
+
 export module nr.scene:rtMaterial;
 
 import dependency.math;
@@ -20,6 +23,7 @@ using nr::shader::share::RtMaterialHeader;
 using nr::shader::share::RtMaterialLayerFlag;
 using nr::shader::share::RtMaterialLayerRecord;
 using nr::shader::share::RtMaterialTextureRef;
+using nr::shader::share::RtTransmissionMode;
 
 inline constexpr auto kRtMaterialFallbackIndex = nr::shader::share::kRtMaterialFallbackIndex;
 inline constexpr auto kRtGeometryFlagIndexed = RtGeometryFlag::indexed;
@@ -58,9 +62,15 @@ struct RtMaterialTable
 
 static_assert(sizeof(RtMaterialHeader) == 96u);
 static_assert(sizeof(RtMaterialLayerRecord) == 44u);
-static_assert(sizeof(RtMaterialTextureRef) == 12u);
+static_assert(sizeof(RtMaterialTextureRef) == 32u);
+static_assert(offsetof(RtMaterialTextureRef, uvLinear) == 0u);
+static_assert(offsetof(RtMaterialTextureRef, uvOffset) == 16u);
+static_assert(offsetof(RtMaterialTextureRef, textureId) == 24u);
+static_assert(offsetof(RtMaterialTextureRef, uvSet) == 28u);
 static_assert(sizeof(RtGeometryMetadata) == 32u);
 static_assert(sizeof(RtInstanceMetadata) == 32u);
+static_assert(static_cast<std::uint32_t>(RtTransmissionMode::thin) == 0u);
+static_assert(static_cast<std::uint32_t>(RtTransmissionMode::volume) == 1u);
 static_assert(static_cast<std::uint32_t>(AlphaMode::opaque) == static_cast<std::uint32_t>(nr::resource::AlphaMode::opaque));
 static_assert(static_cast<std::uint32_t>(AlphaMode::mask) == static_cast<std::uint32_t>(nr::resource::AlphaMode::mask));
 static_assert(static_cast<std::uint32_t>(AlphaMode::blend) == static_cast<std::uint32_t>(nr::resource::AlphaMode::blend));

@@ -1,5 +1,25 @@
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+find_package(Vulkan REQUIRED)
+find_package(imgui CONFIG REQUIRED)
+find_package(glm REQUIRED)
+find_package(glfw3 CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(assimp CONFIG REQUIRED)
+find_package(mikktspace CONFIG REQUIRED)
+find_package(Stb REQUIRED)
+find_package(libjpeg-turbo CONFIG REQUIRED)
+find_package(flecs CONFIG REQUIRED)
+find_package(OpenEXR CONFIG REQUIRED)
+find_package(Boost 1.91.0 EXACT CONFIG REQUIRED COMPONENTS json)
+find_package(lua 5.5.0 EXACT CONFIG REQUIRED)
+
+if(${Vulkan_VERSION} VERSION_LESS "1.4.341")
+    message(FATAL_ERROR "Minimum required Vulkan version for C++ modules is 1.4.341. "
+        "Found ${Vulkan_VERSION}."
+    )
+endif()
+
 include("${CMAKE_SOURCE_DIR}/cmake/NrBundledSlangPackage.cmake")
 
 unset(NR_USE_BUNDLED_SLANG_PACKAGE CACHE)
@@ -22,12 +42,11 @@ if(NOT TARGET slang::slang)
     message(FATAL_ERROR "find_package(slang) did not provide the expected slang::slang target.")
 endif()
 
-find_package(flecs CONFIG REQUIRED)
-find_package(OpenEXR CONFIG REQUIRED)
-find_package(Boost 1.91.0 EXACT CONFIG REQUIRED COMPONENTS json)
-find_package(lua 5.5.0 EXACT CONFIG REQUIRED)
 if(NOT TARGET OpenEXR::OpenEXR)
     message(FATAL_ERROR "find_package(OpenEXR) did not provide the expected OpenEXR::OpenEXR target.")
+endif()
+if(NOT TARGET mikktspace::mikktspace)
+    message(FATAL_ERROR "find_package(mikktspace) did not provide the expected mikktspace::mikktspace target.")
 endif()
 if(NOT TARGET Boost::json)
     message(FATAL_ERROR "find_package(Boost) did not provide the expected Boost::json target.")
@@ -80,6 +99,7 @@ set(DEPENDENCY_ASSETS_MODULE_UNITS
 )
 set(DEPENDENCY_ASSETS_IMPLEMENTATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyAssetsImpl.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyAssetsMikk.cpp"
 )
 set(DEPENDENCY_UI_MODULE_UNITS
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyUi.ixx"
@@ -227,6 +247,8 @@ target_link_libraries(dependency_assets
         assimp::assimp
         OpenEXR::OpenEXR
         $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
+    PRIVATE
+        mikktspace::mikktspace
 )
 target_include_directories(dependency_assets PUBLIC ${Stb_INCLUDE_DIR})
 target_sources(dependency_assets

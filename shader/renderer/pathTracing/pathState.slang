@@ -11,12 +11,25 @@ public enum PathFlag : uint
     hit = 1u << 1u,
 }
 
+public static const uint kPathMediumStackCapacity = 4u;
+public static const uint kInvalidPathMediumBoundaryIndex = 0xffffffffu;
+
+public struct PathMediumBoundary
+{
+    public uint instanceMetadataIndex = kInvalidPathMediumBoundaryIndex;
+    public uint geometryIndex = kInvalidPathMediumBoundaryIndex;
+    public uint materialIndex = kRtMaterialFallbackIndex;
+    public float ior = 1.0f;
+};
+
 public struct RayPayload
 {
     public RayKind rayKind = RayKind.material;
     public uint hit = 0u;
     public float3 missRadiance = float3(0.0f);
-    public float3 scatterRandomValues = float3(0.0f);
+    public float4 scatterRandomValues = float4(0.0f);
+    public float incidentMediumIor = 1.0f;
+    public float exteriorMediumIor = 1.0f;
     public ResolvedMaterialPayload material = {};
     public ResolvedMaterialScatter scatter = {};
 };
@@ -37,6 +50,9 @@ public struct PathState
     public float3 specularRadiance = float3(0.0f);
     public float3 diffuseRadiance = float3(0.0f);
     public float pdf = 1.0f;
+    public PathMediumBoundary mediumStack[kPathMediumStackCapacity];
+    public uint mediumDepth = 0u;
+    public float etaScale = 1.0f;
     public PathTracingGuideState guides = {};
 };
 
@@ -93,6 +109,73 @@ public float3 pathCombinedThroughput(PathState path)
 public float3 pathCombinedRadiance(PathState path)
 {
     return path.specularRadiance + path.diffuseRadiance;
+}
+
+public float pathCurrentMediumIor(PathState path)
+{
+    return path.mediumDepth == 0u ? 1.0f : path.mediumStack[path.mediumDepth - 1u].ior;
+}
+
+public float pathExteriorMediumIor(PathState path)
+{
+    return path.mediumDepth < 2u ? 1.0f : path.mediumStack[path.mediumDepth - 2u].ior;
+}
+
+public bool pathMediumTopMatches(
+    PathState path,
+    uint instanceMetadataIndex,
+    uint geometryIndex,
+    uint materialIndex)
+{
+    if (path.mediumDepth == 0u)
+    {
+        return false;
+    }
+
+    PathMediumBoundary top = path.mediumStack[path.mediumDepth - 1u];
+    return top.instanceMetadataIndex == instanceMetadataIndex &&
+        top.geometryIndex == geometryIndex &&
+        top.materialIndex == materialIndex;
+}
+
+public bool pushPathMediumBoundary(
+    inout PathState path,
+    uint instanceMetadataIndex,
+    uint geometryIndex,
+    uint materialIndex,
+    float ior)
+{
+    if (path.mediumDepth >= kPathMediumStackCapacity ||
+        !isfinite(ior) ||
+        ior <= 0.0f)
+    {
+        return false;
+    }
+
+    PathMediumBoundary boundary;
+    boundary.instanceMetadataIndex = instanceMetadataIndex;
+    boundary.geometryIndex = geometryIndex;
+    boundary.materialIndex = materialIndex;
+    boundary.ior = ior;
+    path.mediumStack[path.mediumDepth] = boundary;
+    path.mediumDepth += 1u;
+    return true;
+}
+
+public bool popPathMediumBoundary(
+    inout PathState path,
+    uint instanceMetadataIndex,
+    uint geometryIndex,
+    uint materialIndex)
+{
+    if (!pathMediumTopMatches(path, instanceMetadataIndex, geometryIndex, materialIndex))
+    {
+        return false;
+    }
+
+    path.mediumDepth -= 1u;
+    path.mediumStack[path.mediumDepth] = {};
+    return true;
 }
 
 public void addPathContribution(inout PathState path, float3 radiance)

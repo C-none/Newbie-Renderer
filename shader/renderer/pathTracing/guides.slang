@@ -99,6 +99,25 @@ public void initializePathTracingSkyGuides(
     guides.motionVectors = pathTracingGuideSkyMotionVector(rayDirection, dimensions);
 }
 
+public float3 pathTracingGuidePrimarySpecularF0(
+    ResolvedMaterialPayload material,
+    MaterialSample core)
+{
+    if (uint(material.layerFlags & RtMaterialLayerFlag.transmission) == 0u)
+    {
+        return metallicRoughnessF0(core);
+    }
+
+    float ior = material.layers.transmissionIor;
+    float dielectricF0 = 1.0f;
+    if (ior > 0.0f)
+    {
+        float ratio = (ior - 1.0f) / max(ior + 1.0f, 1.0e-7f);
+        dielectricF0 = saturate(ratio * ratio);
+    }
+    return lerp(float3(dielectricF0), core.baseColor.rgb, core.metallic);
+}
+
 public void capturePathTracingPrimarySurfaceGuides(
     inout PathTracingGuideState guides,
     ResolvedMaterialPayload material,
@@ -125,7 +144,7 @@ public void capturePathTracingPrimarySurfaceGuides(
         float3(0.0f));
 
     MaterialSample core = materialSampleFromResolvedPayload(material);
-    float3 specularColor = metallicRoughnessF0(core);
+    float3 specularColor = pathTracingGuidePrimarySpecularF0(material, core);
     float alpha = material.roughness * material.roughness;
     float noV = dot(normal, viewDirection);
     guides.specularAlbedo = max(

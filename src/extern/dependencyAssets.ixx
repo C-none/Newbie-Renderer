@@ -1,6 +1,8 @@
 module;
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
 #include <assimp/metadata.h>
@@ -76,6 +78,27 @@ export namespace nr::dependency::imath
 {
 using Half = ::IMATH_NAMESPACE::half;
 } // namespace nr::dependency::imath
+
+export namespace nr::dependency::mikktspace
+{
+struct Corner
+{
+    std::array<float, 3> position{};
+    std::array<float, 3> normal{};
+    std::array<float, 2> texCoord{};
+};
+
+struct Tangent
+{
+    std::array<float, 3> direction{};
+    float sign = 1.0f;
+};
+
+[[nodiscard]] bool generateTangents(
+    std::span<const std::uint32_t> faceVertexCounts,
+    std::span<const Corner> corners,
+    std::span<Tangent> tangents);
+} // namespace nr::dependency::mikktspace
 
 
 export using ::ai_real;

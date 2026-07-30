@@ -6,8 +6,9 @@ struct NormalBufferPushConstants
     float4 modelRow0;
     float4 modelRow1;
     float4 modelRow2;
-    uint4 textureIdPairs0;
-    uint2 textureIdPairs1;
+    float4 normalUvLinear;
+    float4 normalUvOffsetScale;
+    uint4 normalTextureMeta;
 };
 
 [[vk::push_constant]]
@@ -19,6 +20,7 @@ struct VSInput
     float3 normal : NORMAL;
     float4 tangent : TANGENT;
     float2 texCoord0 : TEXCOORD0;
+    float2 texCoord1 : TEXCOORD1;
 };
 
 struct VSOutput
@@ -26,8 +28,9 @@ struct VSOutput
     float4 position : SV_Position;
     float3 worldNormal : NORMAL;
     float2 texCoord0 : TEXCOORD0;
-    float3 worldTangent : TEXCOORD1;
-    float tangentSign : TEXCOORD2;
+    float2 texCoord1 : TEXCOORD1;
+    float3 worldTangent : TEXCOORD2;
+    float tangentSign : TEXCOORD3;
 };
 
 [shader("vertex")]
@@ -55,6 +58,7 @@ VSOutput vertexMain(VSInput input)
     output.worldTangent = worldTangent;
     output.tangentSign = input.tangent.w;
     output.texCoord0 = input.texCoord0;
+    output.texCoord1 = input.texCoord1;
     return output;
 }
 
@@ -62,15 +66,18 @@ VSOutput vertexMain(VSInput input)
 float4 fragmentMain(VSOutput input) : SV_Target0
 {
     float3 normal = normalize(input.worldNormal);
-    uint normalTextureId = materialTextureId(
-        gPushConstants.textureIdPairs0,
-        gPushConstants.textureIdPairs1,
-        MaterialTextureSlot.normal);
+    uint normalTextureId = gPushConstants.normalTextureMeta.x;
     if (normalTextureId != 0u)
     {
         float3 tangent = normalize(input.worldTangent - normal * dot(normal, input.worldTangent));
         float3 bitangent = normalize(cross(normal, tangent) * input.tangentSign);
-        float3 tangentNormal = gSceneTextures[normalTextureId].Sample(input.texCoord0).xyz * 2.0f - 1.0f;
+        float2 sourceUv = gPushConstants.normalTextureMeta.y == 1u ? input.texCoord1 : input.texCoord0;
+        float2 normalUv = float2(
+            dot(gPushConstants.normalUvLinear.xy, sourceUv),
+            dot(gPushConstants.normalUvLinear.zw, sourceUv)) +
+            gPushConstants.normalUvOffsetScale.xy;
+        float3 tangentNormal = gSceneTextures[normalTextureId].Sample(normalUv).xyz * 2.0f - 1.0f;
+        tangentNormal.xy *= gPushConstants.normalUvOffsetScale.z;
         normal = normalize(
             tangent * tangentNormal.x +
             bitangent * tangentNormal.y +

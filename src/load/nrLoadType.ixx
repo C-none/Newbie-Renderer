@@ -86,6 +86,7 @@ struct MaterialTextureBinding
 {
     std::uint32_t textureIndex = invalidIndex;
     std::uint32_t uvChannel = 0;
+    nr::resource::MaterialTextureTransform transform{};
     std::uint32_t textureTypeRaw = 0;
     nr::resource::MaterialTextureSlotSemantic semantic = nr::resource::MaterialTextureSlotSemantic::unsupported;
     std::string sourceSemanticName{};
@@ -131,6 +132,8 @@ struct MaterialAsset
     std::optional<std::array<float, 3>> sheenColorFactor{};
     std::optional<float> sheenRoughnessFactor{};
     std::optional<float> transmissionFactor{};
+    std::optional<float> ior{};
+    std::optional<float> thicknessFactor{};
     
     // Authoring: Transparency and rendering
     float opacity = 1.0f;
@@ -156,6 +159,7 @@ struct VertexAsset
     std::array<float, 3> normal{0.0f, 0.0f, 1.0f};
     std::array<float, 4> tangent{1.0f, 0.0f, 0.0f, 1.0f};
     std::array<float, 2> texCoord0{};
+    std::array<float, 2> texCoord1{};
     std::array<float, 4> color0{1.0f, 1.0f, 1.0f, 1.0f};
 };
 

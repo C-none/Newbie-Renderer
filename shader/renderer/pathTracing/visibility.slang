@@ -17,7 +17,9 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
     payload.hit = 1u;
     TraceRay(
         scene,
-        RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+        RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
+            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+            RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
         0xFF,
         0,
         1,

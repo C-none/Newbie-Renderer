@@ -27,6 +27,38 @@ namespace
     return value.x != 0.0f || value.y != 0.0f || value.z != 0.0f;
 }
 
+[[nodiscard]] float effectiveTransmissionFactor(const nr::resource::Material& material) noexcept
+{
+    if (!material.transmission.has_value() ||
+        !std::isfinite(material.transmission->factor))
+    {
+        return 0.0f;
+    }
+
+    return std::clamp(material.transmission->factor, 0.0f, 1.0f);
+}
+
+[[nodiscard]] float transmissionIor(const nr::resource::Material& material) noexcept
+{
+    auto const authoredIor = material.ior.has_value() ? material.ior->ior : 1.5f;
+    if (!std::isfinite(authoredIor))
+    {
+        return 1.5f;
+    }
+    if (authoredIor == 0.0f)
+    {
+        return 0.0f;
+    }
+    return std::max(authoredIor, 1.0f);
+}
+
+[[nodiscard]] RtTransmissionMode transmissionMode(const nr::resource::Material& material) noexcept
+{
+    return material.hasVolumeTransmissionBoundary()
+               ? RtTransmissionMode::volume
+               : RtTransmissionMode::thin;
+}
+
 // Non-layer feature flags only. Layer classification (clearcoat/sheen/transmission) lives in
 // rtLayerFlags/normalizeRtLayerFlags; RtMaterialFeatureFlag no longer carries layer bits.
 [[nodiscard]] RtMaterialFeatureFlag rtFeatureFlags(const nr::resource::Material& material) noexcept
@@ -45,6 +77,11 @@ namespace
     if (material.core.doubleSided)
     {
         flags |= RtMaterialFeatureFlag::doubleSided;
+    }
+
+    if (!material.unlit && material.hasVolumeTransmissionBoundary())
+    {
+        flags |= RtMaterialFeatureFlag::volumeBoundary;
     }
 
     if (anyNonZero(material.core.emissiveFactor) ||
@@ -91,8 +128,9 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
     {
         flags |= RtMaterialLayerFlag::sheen;
     }
-    if (material.transmission.has_value() ||
-        slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::transmission))
+    // The texture is a multiplier and cannot revive a zero scalar factor. Keeping zero-factor
+    // materials on the non-transmission specialization preserves the fixed nine-variant SBT matrix.
+    if (effectiveTransmissionFactor(material) > 0.0f)
     {
         flags |= RtMaterialLayerFlag::transmission;
     }
@@ -113,7 +151,8 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
 
     if (material.unlit &&
         (material.clearcoat.has_value() || material.sheen.has_value() ||
-         material.transmission.has_value() || anyNonZero(material.core.emissiveFactor)))
+         material.transmission.has_value() || material.ior.has_value() ||
+         material.volumeBoundary.has_value() || anyNonZero(material.core.emissiveFactor)))
     {
         nr::nrInfo<nr::LogLevel::warning>(std::format(
             "RT material '{}' is unlit; ignoring authored PBR extension and emissive data.",
@@ -187,10 +226,10 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
 
 [[nodiscard]] RtMaterialLayerRecord makeTransmissionLayer(const nr::resource::Material& material) noexcept
 {
-    auto factor = material.transmission.has_value() ? material.transmission->factor : 0.0f;
     return RtMaterialLayerRecord{
         .layer = RtMaterialLayerFlag::transmission,
-        .p0 = glm::vec4{factor, 0.0f, 0.0f, 0.0f},
+        .aux0 = static_cast<std::uint32_t>(transmissionMode(material)),
+        .p0 = glm::vec4{effectiveTransmissionFactor(material), transmissionIor(material), 0.0f, 0.0f},
     };
 }
 } // namespace
@@ -229,7 +268,7 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
             material.core.alphaCutoff,
         },
         .transmissionClearcoatSheen = glm::vec4{
-            material.transmission.has_value() ? material.transmission->factor : 0.0f,
+            0.0f,
             clearcoatFactor,
             clearcoatRoughness,
             sheenMax,
@@ -261,10 +300,21 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
     compiled.textureRefs.reserve(material.textureSlots.size());
     auto slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
+        auto const& textureSlot = material.textureSlots[slotIndex];
+        nr::nrAssert(
+            textureSlot.uvSet <= 1u,
+            [&] {
+                return std::format(
+                    "RT material '{}' texture slot {} uses unsupported UV set {}.",
+                    material.name,
+                    slotIndex,
+                    textureSlot.uvSet);
+            });
         compiled.textureRefs.push_back(RtMaterialTextureRef{
-            .slot = static_cast<MaterialTextureSlot>(static_cast<std::uint32_t>(slotIndex)),
+            .uvLinear = textureSlot.transform.linear,
+            .uvOffset = textureSlot.transform.offset,
             .textureId = textureIds[slotIndex],
-            .uvSet = material.textureSlots[slotIndex].uvSet,
+            .uvSet = textureSlot.uvSet,
         });
     });
 

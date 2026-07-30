@@ -102,6 +102,16 @@ namespace
         material.transmission.emplace();
         material.transmission->factor = *source.transmissionFactor;
     }
+    if (source.ior.has_value())
+    {
+        material.ior.emplace();
+        material.ior->ior = *source.ior;
+    }
+    if (source.thicknessFactor.has_value())
+    {
+        material.volumeBoundary.emplace();
+        material.volumeBoundary->thicknessFactor = *source.thicknessFactor;
+    }
     if (source.anisotropyFactor.has_value() || source.anisotropyRotation.has_value())
     {
         material.anisotropy.emplace();
@@ -390,17 +400,23 @@ void requireRtTextureRef(
     const nr::scene::RtCompiledMaterial& material,
     nr::resource::MaterialTextureSlotSemantic semantic)
 {
-    auto const slot = static_cast<nr::scene::MaterialTextureSlot>(
-        static_cast<std::uint32_t>(nr::resource::materialTextureSlotIndex(semantic)));
-    auto refIt = std::ranges::find_if(material.textureRefs, [&](const nr::scene::RtMaterialTextureRef& textureRef) {
-        return textureRef.slot == slot;
-    });
-    nr::test::require(refIt != material.textureRefs.end(),
+    auto const slotIndex = nr::resource::materialTextureSlotIndex(semantic);
+    nr::test::require(slotIndex < material.textureRefs.size(),
                       std::format("compiled RT material should contain {} texture ref",
                                   nr::resource::materialTextureSlotSemanticName(semantic)));
-    nr::test::require(refIt->textureId != nr::scene::kDefaultSceneTextureId,
+    nr::test::require(material.textureRefs[slotIndex].textureId != nr::scene::kDefaultSceneTextureId,
                       std::format("compiled RT material {} texture id should be non-zero",
                                   nr::resource::materialTextureSlotSemanticName(semantic)));
+}
+
+[[nodiscard]] std::string readProjectFile(const std::filesystem::path& relativePath)
+{
+    auto file = std::ifstream{projectRoot() / relativePath};
+    nr::test::require(file.good(), std::format("project file '{}' should be readable", relativePath.generic_string()));
+    return std::string{
+        std::istreambuf_iterator<char>{file},
+        std::istreambuf_iterator<char>{},
+    };
 }
 
 struct TangentSignSummary
@@ -441,6 +457,10 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         material.sheen->roughnessFactor = 0.6f;
         material.transmission.emplace();
         material.transmission->factor = 0.5f;
+        material.ior.emplace();
+        material.ior->ior = 1.33f;
+        material.volumeBoundary.emplace();
+        material.volumeBoundary->thicknessFactor = 0.25f;
         material.anisotropy.emplace();
         material.anisotropy->factor = 1.0f;
         material.anisotropy->rotation = 0.25f;
@@ -457,12 +477,18 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::clearcoat));
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::sheen));
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::transmission));
+        nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary));
         nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::unsupportedAnisotropy));
         nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
         nr::test::requireEqual(compiled.layers[0].layer, nr::scene::RtMaterialLayerFlag::baseSurface);
         nr::test::requireEqual(compiled.layers[1].layer, nr::scene::RtMaterialLayerFlag::clearcoat);
         nr::test::requireEqual(compiled.layers[2].layer, nr::scene::RtMaterialLayerFlag::sheen);
         nr::test::requireEqual(compiled.layers[3].layer, nr::scene::RtMaterialLayerFlag::transmission);
+        nr::test::requireEqual(
+            compiled.layers[3].aux0,
+            static_cast<std::uint32_t>(nr::scene::RtTransmissionMode::volume));
+        nr::test::require(nearlyEqual(compiled.layers[3].p0.x, 0.5f));
+        nr::test::require(nearlyEqual(compiled.layers[3].p0.y, 1.33f));
         nr::test::require(
             std::ranges::none_of(compiled.layers, [](const nr::scene::RtMaterialLayerRecord &layer) {
                 return layer.layer > nr::scene::RtMaterialLayerFlag::transmission;
@@ -482,11 +508,18 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             auto material = nr::resource::Material{};
             material.unlit = true;
             material.clearcoat.emplace();
+            material.transmission.emplace();
+            material.transmission->factor = 1.0f;
+            material.volumeBoundary.emplace();
+            material.volumeBoundary->thicknessFactor = 1.0f;
             auto compiled = nr::scene::compileRtMaterial(material);
             nr::test::requireEqual(compiled.header.layerFlags, Layer::none);
             nr::test::requireEqual(compiled.header.layerCount, 0u);
             nr::test::requireEqual(compiled.layers.size(), std::size_t{0});
             nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
+            nr::test::require(
+                !hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary),
+                "unlit materials must not retain an ignored PBR volume boundary");
         }
 
         // plain metallic-roughness -> baseSurface only; layer info must not leak into featureFlags;
@@ -529,14 +562,72 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::requireEqual(compiled.layers[1].layer, Layer::sheen);
         }
 
-        // base + single transmission.
+        // A zero scalar transmission factor cannot be revived by a transmission texture.
         {
             auto material = nr::resource::Material{};
             material.transmission.emplace();
+            material.slot(MaterialTextureSlotSemantic::transmission).texture = nr::resource::TextureHandle{2u, 1u};
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(!hasLayer(compiled, Layer::transmission));
+            nr::test::requireEqual(compiled.layers.size(), std::size_t{1});
+            nr::test::require(
+                !nr::resource::hasAnyFeature(
+                    material.featureFlags(),
+                    nr::resource::MaterialFeatureFlag::transmission),
+                "zero transmission factor must not enable the resource transmission feature");
+            nr::test::require(nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 0.0f));
+
+            material.transmission->factor = -0.25f;
+            auto negativeCompiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(!hasLayer(negativeCompiled, Layer::transmission));
+            nr::test::require(nearlyEqual(negativeCompiled.header.transmissionClearcoatSheen.x, 0.0f));
+        }
+
+        // Positive transmission defaults to a thin 1.5-IOR boundary.
+        {
+            auto material = nr::resource::Material{};
+            material.transmission.emplace();
+            material.transmission->factor = 0.75f;
+            material.volumeBoundary.emplace();
             auto compiled = nr::scene::compileRtMaterial(material);
             nr::test::require(hasLayer(compiled, Layer::transmission));
             nr::test::requireEqual(compiled.layers.size(), std::size_t{2});
             nr::test::requireEqual(compiled.layers[1].layer, Layer::transmission);
+            nr::test::requireEqual(
+                compiled.layers[1].aux0,
+                static_cast<std::uint32_t>(nr::scene::RtTransmissionMode::thin));
+            nr::test::require(nearlyEqual(compiled.layers[1].p0.x, 0.75f));
+            nr::test::require(nearlyEqual(compiled.layers[1].p0.y, 1.5f));
+            nr::test::require(
+                nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 0.0f),
+                "positive transmission must keep factor/IOR/mode single-sourced in its layer record");
+        }
+
+        // Positive thickness selects the volume boundary without changing the layer/SBT variant.
+        {
+            auto material = nr::resource::Material{};
+            material.transmission.emplace();
+            material.transmission->factor = 1.0f;
+            material.volumeBoundary.emplace();
+            material.volumeBoundary->thicknessFactor = 0.5f;
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::requireEqual(
+                compiled.layers[1].aux0,
+                static_cast<std::uint32_t>(nr::scene::RtTransmissionMode::volume));
+            nr::test::require(
+                hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary),
+                "volume transmission should expose its runtime any-hit back-face policy");
+        }
+
+        // KHR_materials_ior zero is the positive-infinity compatibility sentinel, not an invalid IOR.
+        {
+            auto material = nr::resource::Material{};
+            material.transmission.emplace();
+            material.transmission->factor = 1.0f;
+            material.ior.emplace();
+            material.ior->ior = 0.0f;
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(nearlyEqual(compiled.layers[1].p0.y, 0.0f));
         }
 
         // base + all three optional layers -> canonical order base -> clearcoat -> sheen -> transmission.
@@ -545,6 +636,7 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             material.clearcoat.emplace();
             material.sheen.emplace();
             material.transmission.emplace();
+            material.transmission->factor = 1.0f;
             auto compiled = nr::scene::compileRtMaterial(material);
             nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
             nr::test::requireEqual(compiled.layers[0].layer, Layer::baseSurface);
@@ -561,28 +653,66 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
                               "fallback RT material must not be unlit");
         }
 
-        // dense texture refs: fixed 12 entries in slot order; authored -> id, absent -> id 0; authored
-        // base normal preserves the real normal scale.
+        // Dense texture refs: fixed 12 entries in slot order; authored -> id, absent -> id 0. Each
+        // entry transports UV selection and its affine transform without a redundant slot field.
         {
             auto material = nr::resource::Material{};
             material.core.normalScale = 0.5f;
-            material.slot(MaterialTextureSlotSemantic::baseColor).texture = nr::resource::TextureHandle{2u, 1u};
-            material.slot(MaterialTextureSlotSemantic::normal).texture = nr::resource::TextureHandle{3u, 1u};
+            auto& baseColorSlot = material.slot(MaterialTextureSlotSemantic::baseColor);
+            baseColorSlot.texture = nr::resource::TextureHandle{2u, 1u};
+            baseColorSlot.uvSet = 1u;
+            baseColorSlot.transform.linear = glm::vec4{2.0f, 0.25f, -0.5f, 3.0f};
+            baseColorSlot.transform.offset = glm::vec2{0.125f, -0.25f};
+
+            auto& normalSlot = material.slot(MaterialTextureSlotSemantic::normal);
+            normalSlot.texture = nr::resource::TextureHandle{3u, 1u};
+            normalSlot.transform.linear = glm::vec4{0.5f, -0.25f, 0.75f, 1.5f};
+            normalSlot.transform.offset = glm::vec2{-0.125f, 0.375f};
+
+            auto& occlusionSlot = material.slot(MaterialTextureSlotSemantic::occlusion);
+            occlusionSlot.texture = nr::resource::TextureHandle{4u, 1u};
+            occlusionSlot.uvSet = 1u;
+            occlusionSlot.transform.linear = glm::vec4{4.0f, 0.0f, 0.0f, 2.0f};
+            occlusionSlot.transform.offset = glm::vec2{0.5f, 0.25f};
+
             auto ids = nr::scene::SceneMaterialTextureIds{};
             ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)] = 7u;
             ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::normal)] = 9u;
+            ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::occlusion)] = 11u;
             auto compiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::requireEqual(sizeof(nr::scene::RtMaterialTextureRef), std::size_t{32u});
             nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
-            auto slotIndices = std::views::iota(std::size_t{0}, compiled.textureRefs.size());
-            std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
-                nr::test::requireEqual(
-                    compiled.textureRefs[slotIndex].slot,
-                    static_cast<nr::scene::MaterialTextureSlot>(static_cast<std::uint32_t>(slotIndex)),
-                    "dense texture refs must follow MaterialTextureSlot order");
-            });
-            nr::test::requireEqual(
-                compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)].textureId,
-                7u);
+
+            auto const& baseColorRef =
+                compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)];
+            nr::test::requireEqual(baseColorRef.textureId, 7u);
+            nr::test::requireEqual(baseColorRef.uvSet, 1u);
+            nr::test::require(nearlyEqual(baseColorRef.uvLinear.x, 2.0f));
+            nr::test::require(nearlyEqual(baseColorRef.uvLinear.y, 0.25f));
+            nr::test::require(nearlyEqual(baseColorRef.uvLinear.z, -0.5f));
+            nr::test::require(nearlyEqual(baseColorRef.uvLinear.w, 3.0f));
+            nr::test::require(nearlyEqual(baseColorRef.uvOffset.x, 0.125f));
+            nr::test::require(nearlyEqual(baseColorRef.uvOffset.y, -0.25f));
+
+            auto const& normalRef =
+                compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::normal)];
+            nr::test::requireEqual(normalRef.textureId, 9u);
+            nr::test::require(nearlyEqual(normalRef.uvLinear.x, 0.5f));
+            nr::test::require(nearlyEqual(normalRef.uvLinear.y, -0.25f));
+            nr::test::require(nearlyEqual(normalRef.uvLinear.z, 0.75f));
+            nr::test::require(nearlyEqual(normalRef.uvLinear.w, 1.5f));
+            nr::test::require(nearlyEqual(normalRef.uvOffset.x, -0.125f));
+            nr::test::require(nearlyEqual(normalRef.uvOffset.y, 0.375f));
+
+            auto const& occlusionRef =
+                compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::occlusion)];
+            nr::test::requireEqual(occlusionRef.textureId, 11u);
+            nr::test::requireEqual(occlusionRef.uvSet, 1u);
+            nr::test::require(nearlyEqual(occlusionRef.uvLinear.x, 4.0f));
+            nr::test::require(nearlyEqual(occlusionRef.uvLinear.w, 2.0f));
+            nr::test::require(nearlyEqual(occlusionRef.uvOffset.x, 0.5f));
+            nr::test::require(nearlyEqual(occlusionRef.uvOffset.y, 0.25f));
+
             nr::test::requireEqual(
                 compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::metallicRoughness)].textureId,
                 0u,
@@ -590,6 +720,73 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::require(nearlyEqual(compiled.header.roughnessNormalOcclusionAlpha.y, 0.5f),
                               "authored base normal must preserve the real normal scale");
         }
+    }};
+
+const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
+    "RT material shader centralizes UV transforms and keeps ambient occlusion unshaded",
+    [] {
+        auto const materialTypes = readProjectFile("shader/include/material/types.slang");
+        auto const materialSampling = readProjectFile("shader/include/material/sampling.slang");
+        auto const hitSurface = readProjectFile("shader/include/rt/hitSurface.slang");
+
+        nr::test::require(
+            materialTypes.contains("public float2 selectMaterialUv(") &&
+                materialTypes.contains("public float2 transformMaterialUv(") &&
+                materialTypes.contains("public float2 materialTextureUv(") &&
+                materialTypes.contains("dot(uvLinear.xy, uv)") &&
+                materialTypes.contains("dot(uvLinear.zw, uv)) + uvOffset"),
+            "material shader should centralize UV-set selection and affine texture transforms");
+        nr::test::require(
+            hitSurface.contains("kRtVertexOffsetTexCoord0 = 40u") &&
+                hitSurface.contains("kRtVertexOffsetTexCoord1 = 48u") &&
+                hitSurface.contains("kRtVertexOffsetColor0 = 56u"),
+            "RT hit-surface atlas offsets should retain the resource Vertex UV/color layout");
+
+        auto const genericSample = materialSampling.find("public float4 sampleMaterialTexture(");
+        auto const normalSample = materialSampling.find("public float3 applyNormalMapSlot(");
+        auto const coreSample = materialSampling.find("public MaterialSample sampleCoreMaterial(");
+        auto const layerSample = materialSampling.find("// Canonical layer-record parser.");
+        nr::test::require(
+            genericSample != std::string::npos &&
+                normalSample != std::string::npos &&
+                coreSample != std::string::npos &&
+                layerSample != std::string::npos,
+            "material shader sampling functions should remain discoverable");
+        nr::test::require(
+            materialSampling.substr(genericSample, normalSample - genericSample).contains("materialTextureUv("),
+            "generic texture sampling should use the centralized transformed UV helper");
+        nr::test::require(
+            materialSampling.substr(normalSample, coreSample - normalSample).contains("materialTextureUv("),
+            "base and clearcoat normal sampling should use the centralized transformed UV helper");
+
+        auto const coreSamplingBody = materialSampling.substr(coreSample, layerSample - coreSample);
+        nr::test::require(
+            !coreSamplingBody.contains("MaterialTextureSlot.occlusion"),
+            "ambient occlusion must not be sampled by RT core material shading");
+        nr::test::require(
+            !coreSamplingBody.contains("roughnessNormalOcclusionAlpha.z"),
+            "ambient-occlusion strength must not multiply RT core material lighting");
+
+        auto shaderSources = std::filesystem::recursive_directory_iterator{projectRoot() / "shader"} |
+                             std::views::filter([](const std::filesystem::directory_entry& entry) {
+                                 return entry.is_regular_file() && entry.path().extension() == ".slang";
+                             });
+        std::ranges::for_each(shaderSources, [](const std::filesystem::directory_entry& entry) {
+            auto const relativePath = std::filesystem::relative(entry.path(), projectRoot());
+            auto const source = readProjectFile(relativePath);
+            nr::test::require(
+                !source.contains("MaterialTextureSlot.occlusion"),
+                std::format(
+                    "ambient-occlusion texture sampling must remain absent from shader source '{}'",
+                    relativePath.generic_string()));
+            nr::test::require(
+                !source.contains("roughnessNormalOcclusionAlpha.z") &&
+                    !source.contains("occlusionStrength") &&
+                    !source.contains("ambientOcclusion"),
+                std::format(
+                    "ambient-occlusion strength must remain absent from shader source '{}'",
+                    relativePath.generic_string()));
+        });
     }};
 
 const nr::test::CaseRegistrar rtSampleAssetsCase{
@@ -614,6 +811,17 @@ const nr::test::CaseRegistrar rtSampleAssetsCase{
                               return hasFeature(material, nr::scene::RtMaterialFeatureFlag::unsupportedAnisotropy);
                           }),
                           "AnisotropyRotationTest should be imported but marked unsupported for RT");
+
+        auto compareIor = compileAssetMaterials("assets/glTF-Sample-Assets/Models/CompareIor/glTF/CompareIor.gltf");
+        nr::test::require(
+            std::ranges::any_of(compareIor, [](const nr::scene::RtCompiledMaterial& material) {
+                return std::ranges::any_of(material.layers, [](const nr::scene::RtMaterialLayerRecord& layer) {
+                    return layer.layer == nr::scene::RtMaterialLayerFlag::transmission &&
+                           layer.aux0 == static_cast<std::uint32_t>(nr::scene::RtTransmissionMode::volume) &&
+                           nearlyEqual(layer.p0.y, 2.42f);
+                });
+            }),
+            "CompareIor should import its authored IOR and positive volume thickness into the RT transmission record");
     }};
 
 const nr::test::CaseRegistrar directionalLightImportCase{

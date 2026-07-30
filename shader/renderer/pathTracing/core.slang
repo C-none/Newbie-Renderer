@@ -81,25 +81,6 @@ public float lightVisibilityDistance(uint lightIndex, float3 hitPosition)
     return sqrt(max(dot(toLight, toLight), kSceneLightMinDistanceSquared));
 }
 
-public float2 makeAliasLightSample(float2 baseSample, uint sampleIndex)
-{
-    if (sampleIndex == 0u)
-    {
-        return baseSample;
-    }
-
-    uint sampleX = uint(saturate(baseSample.x) * 16777215.0f);
-    uint sampleY = uint(saturate(baseSample.y) * 16777215.0f);
-    uint seed =
-        sampleX ^
-        (sampleY << 11u) ^
-        (sampleIndex * 747796405u) ^
-        2891336453u;
-    return float2(
-        random01FromHash(seed ^ 1597334677u),
-        random01FromHash(seed ^ 3812015801u));
-}
-
 // Direct lighting is evaluated after CHS returns, so the CHS link-time LayerFlags is not a raygen
 // compile-time constant. This runtime switch maps the resolved layerFlags to the concrete static
 // evaluator so each invocation runs only its active-layer math. The root raygen SPIR-V contains every
@@ -122,22 +103,53 @@ public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectCo
     }
 }
 
-public ResolvedMaterialBsdfComponents dispatchEvaluateResolvedMaterialBsdfComponents(
+public void accumulateDirectLightSample(
+    inout PathState path,
     ResolvedMaterialPayload material,
     float3 viewDirection,
-    float3 lightDirection)
+    float2 randomValues,
+    float sampleWeight)
 {
-    switch (uint(material.layerFlags))
+    SceneLightSample lightSample;
+    if (!sampleSceneLightAlias(randomValues, lightSample))
     {
-    case 1u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(1u)>(material, viewDirection, lightDirection);
-    case 3u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(3u)>(material, viewDirection, lightDirection);
-    case 5u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(5u)>(material, viewDirection, lightDirection);
-    case 7u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(7u)>(material, viewDirection, lightDirection);
-    case 9u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(9u)>(material, viewDirection, lightDirection);
-    case 11u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(11u)>(material, viewDirection, lightDirection);
-    case 13u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(13u)>(material, viewDirection, lightDirection);
-    case 15u: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(15u)>(material, viewDirection, lightDirection);
-    default: return evaluateResolvedMaterialBsdfComponentsVariant<RtMaterialLayerFlag(1u)>(material, viewDirection, lightDirection);
+        return;
+    }
+
+    SceneLightContribution contribution;
+    if (!evaluateSceneLightAt(lightSample.lightIndex, material.position, contribution))
+    {
+        return;
+    }
+
+    contribution.radiance *= 1.0f / lightSample.pdf;
+    float3 visibilityOrigin = offsetRayOrigin(
+        material.position,
+        material.geometryNormal,
+        contribution.direction);
+    if (!tracePathVisibilityRay(
+        visibilityOrigin,
+        contribution.direction,
+        lightVisibilityDistance(lightSample.lightIndex, material.position)))
+    {
+        return;
+    }
+
+    ResolvedMaterialDirectComponents direct = dispatchEvaluateResolvedMaterialDirectComponents(
+        material,
+        makeLighting(viewDirection, contribution));
+    if (path.vertexIndex == 1u)
+    {
+        addPrimaryPathContribution(
+            path,
+            direct.specularRadiance * sampleWeight,
+            direct.diffuseRadiance * sampleWeight);
+    }
+    else
+    {
+        addPathContribution(
+            path,
+            (direct.specularRadiance + direct.diffuseRadiance) * sampleWeight);
     }
 }
 
@@ -151,52 +163,14 @@ public void sampleDirectLighting(
         return;
     }
 
-    float2 lightSampleBase = path.rng.get2D();
     float sampleWeight = 1.0f / float(kDirectLightSampleCount);
-    for (uint sampleIndex = 0u; sampleIndex < kDirectLightSampleCount; ++sampleIndex)
-    {
-        SceneLightSample lightSample;
-        if (!sampleSceneLightAlias(makeAliasLightSample(lightSampleBase, sampleIndex), lightSample))
-        {
-            continue;
-        }
+    float4 lightRandomValues = path.rng.rand4();
+    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.xy, sampleWeight);
+    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.zw, sampleWeight);
 
-        SceneLightContribution contribution;
-        if (!evaluateSceneLightAt(lightSample.lightIndex, material.position, contribution))
-        {
-            continue;
-        }
-
-        contribution.radiance *= 1.0f / lightSample.pdf;
-        float3 visibilityOrigin = offsetRayOrigin(
-            material.position,
-            material.geometryNormal,
-            contribution.direction);
-        if (!tracePathVisibilityRay(
-            visibilityOrigin,
-            contribution.direction,
-            lightVisibilityDistance(lightSample.lightIndex, material.position)))
-        {
-            continue;
-        }
-
-        ResolvedMaterialDirectComponents direct = dispatchEvaluateResolvedMaterialDirectComponents(
-            material,
-            makeLighting(viewDirection, contribution));
-        if (path.vertexIndex == 1u)
-        {
-            addPrimaryPathContribution(
-                path,
-                direct.specularRadiance * sampleWeight,
-                direct.diffuseRadiance * sampleWeight);
-        }
-        else
-        {
-            addPathContribution(
-                path,
-                (direct.specularRadiance + direct.diffuseRadiance) * sampleWeight);
-        }
-    }
+    lightRandomValues = path.rng.rand4();
+    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.xy, sampleWeight);
+    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.zw, sampleWeight);
 }
 
 public bool reachedBounceLimit(PathState path)
@@ -231,10 +205,96 @@ public uint materialRayCoherenceHint(uint vertexIndex)
     return hint;
 }
 
+public bool resolvedMaterialIsVolumeBoundary(ResolvedMaterialPayload material)
+{
+    return
+        uint(material.layerFlags & RtMaterialLayerFlag.transmission) != 0u &&
+        material.layers.transmissionMode == RtTransmissionMode.volume;
+}
+
+public bool applyResolvedMaterialMediumTransition(
+    inout PathState path,
+    ResolvedMaterialPayload material,
+    ResolvedMaterialScatter scatter)
+{
+    if (scatter.mediumTransition == ResolvedMaterialMediumTransition.none)
+    {
+        return true;
+    }
+    if (!resolvedMaterialIsVolumeBoundary(material) ||
+        !isfinite(scatter.etaRatio) ||
+        scatter.etaRatio <= 0.0f)
+    {
+        return false;
+    }
+
+    bool transitioned = false;
+    if (scatter.mediumTransition == ResolvedMaterialMediumTransition.enter)
+    {
+        if (!material.frontFace ||
+            pathMediumTopMatches(
+                path,
+                material.instanceMetadataIndex,
+                material.geometryIndex,
+                material.materialIndex))
+        {
+            return false;
+        }
+        transitioned = pushPathMediumBoundary(
+            path,
+            material.instanceMetadataIndex,
+            material.geometryIndex,
+            material.materialIndex,
+            material.layers.transmissionIor);
+    }
+    else if (scatter.mediumTransition == ResolvedMaterialMediumTransition.exit)
+    {
+        if (material.frontFace)
+        {
+            return false;
+        }
+        transitioned = popPathMediumBoundary(
+            path,
+            material.instanceMetadataIndex,
+            material.geometryIndex,
+            material.materialIndex);
+    }
+
+    if (!transitioned)
+    {
+        return false;
+    }
+
+    float nextEtaScale =
+        path.etaScale *
+        scatter.etaRatio *
+        scatter.etaRatio;
+    if (!isfinite(nextEtaScale) || nextEtaScale <= 0.0f)
+    {
+        return false;
+    }
+    path.etaScale = nextEtaScale;
+    return true;
+}
+
 public void handleHit(inout PathState path, ResolvedMaterialPayload material, ResolvedMaterialScatter scatter)
 {
     pathStateSetHit(path, true);
     float3 viewDirection = safeNormalize(-path.direction, material.geometryNormal);
+
+    if (resolvedMaterialIsVolumeBoundary(material) &&
+        !material.frontFace &&
+        !pathMediumTopMatches(
+            path,
+            material.instanceMetadataIndex,
+            material.geometryIndex,
+            material.materialIndex))
+    {
+        // The scoped volume implementation supports nested strict-LIFO boundaries only. Camera-inside,
+        // non-manifold, and overlapping/non-LIFO configurations terminate instead of guessing an IOR.
+        terminatePathState(path);
+        return;
+    }
 
     if (path.vertexIndex == 1u)
     {
@@ -297,6 +357,12 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
         return;
     }
 
+    if (!applyResolvedMaterialMediumTransition(path, material, scatter))
+    {
+        terminatePathState(path);
+        return;
+    }
+
     if (scatter.kind == ResolvedMaterialScatterKind.specular ||
         scatter.kind == ResolvedMaterialScatterKind.clearcoat ||
         scatter.kind == ResolvedMaterialScatterKind.transmission)
@@ -310,17 +376,10 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 
     if (path.vertexIndex == 1u)
     {
-        float3 normal = safeNormalize(material.shadingNormal, material.geometryNormal);
-        float noL = saturate(dot(normal, scatter.direction));
-        ResolvedMaterialBsdfComponents bsdf = dispatchEvaluateResolvedMaterialBsdfComponents(
-            material,
-            viewDirection,
-            scatter.direction);
-        float inversePdf = 1.0f / scatter.pdf;
         initializePrimaryPathThroughput(
             path,
-            bsdf.specular * noL * inversePdf,
-            bsdf.diffuse * noL * inversePdf);
+            scatter.specularWeight,
+            scatter.diffuseWeight);
     }
     else
     {
@@ -330,8 +389,9 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     RussianRoulettePolicy roulettePolicy = RussianRoulettePolicy();
     if (roulettePolicy.shouldApply(path.vertexIndex))
     {
-        float survivalProbability = roulettePolicy.survivalProbability(pathCombinedThroughput(path));
-        if (!roulettePolicy.survives(path.rng.get1D(), survivalProbability))
+        float survivalProbability = roulettePolicy.survivalProbability(
+            pathCombinedThroughput(path) * path.etaScale);
+        if (!roulettePolicy.survives(path.rng.rand4().x, survivalProbability))
         {
             terminatePathState(path);
             return;
@@ -340,7 +400,7 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
         updatePathThroughput(path, float3(roulettePolicy.throughputScale(survivalProbability)));
     }
 
-    path.pdf = scatter.pdf;
+    path.pdf = scatter.delta != 0u ? scatter.pmf : scatter.pdf;
     if (path.vertexIndex == 1u)
     {
         beginPathTracingSpecularHitTracking(path.guides, scatter.kind);
@@ -391,8 +451,8 @@ public struct Pt
     {
         path.vertexIndex += 1u;
 
-        // TLAS instance flags encode glTF source winding, double-sided culling, and transform determinant.
-        // Any-hit only decides alpha coverage and never reads or mutates the payload.
+        // TLAS instance flags encode object-space source winding and instance-wide facing-cull policy.
+        // Non-opaque candidates use any-hit for alpha coverage and mixed-mesh back-face filtering.
         payload = {};
         HitObject hitObject = HitObject::TraceRay(
             scene,
@@ -410,7 +470,9 @@ public struct Pt
 
         payload = {};
         payload.rayKind = RayKind.material;
-        payload.scatterRandomValues = path.rng.get3D();
+        payload.scatterRandomValues = path.rng.rand4();
+        payload.incidentMediumIor = pathCurrentMediumIor(path);
+        payload.exteriorMediumIor = pathExteriorMediumIor(path);
         HitObject::Invoke(scene, hitObject, payload);
     }
 

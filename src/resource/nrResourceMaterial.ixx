@@ -64,11 +64,18 @@ struct SamplerDesc
     ~SamplerDesc() = default;
 };
 
+struct MaterialTextureTransform
+{
+    glm::vec4 linear{1.0f, 0.0f, 0.0f, 1.0f};
+    glm::vec2 offset{};
+};
+
 struct MaterialTextureSlot
 {
     TextureHandle texture{};
     SamplerDesc sampler{};
     std::uint32_t uvSet = 0;
+    MaterialTextureTransform transform{};
     float scale = 1.0f;
     float strength = 1.0f;
 
@@ -182,6 +189,22 @@ struct MaterialTransmissionExtension
     ~MaterialTransmissionExtension() = default;
 };
 
+struct MaterialIorExtension
+{
+    float ior = 1.5f;
+
+    MaterialIorExtension() = default;
+    ~MaterialIorExtension() = default;
+};
+
+struct MaterialVolumeBoundaryExtension
+{
+    float thicknessFactor = 0.0f;
+
+    MaterialVolumeBoundaryExtension() = default;
+    ~MaterialVolumeBoundaryExtension() = default;
+};
+
 struct MaterialAnisotropyExtension
 {
     float factor = 0.0f;
@@ -198,6 +221,8 @@ struct Material
     std::optional<MaterialClearcoatExtension> clearcoat{};
     std::optional<MaterialSheenExtension> sheen{};
     std::optional<MaterialTransmissionExtension> transmission{};
+    std::optional<MaterialIorExtension> ior{};
+    std::optional<MaterialVolumeBoundaryExtension> volumeBoundary{};
     std::optional<MaterialAnisotropyExtension> anisotropy{};
     bool unlit = false;
     std::array<MaterialTextureSlot, materialTextureSlotCount> textureSlots{};
@@ -210,6 +235,8 @@ struct Material
     [[nodiscard]] const MaterialTextureSlot &slot(MaterialTextureSlotSemantic semantic) const noexcept;
 
     [[nodiscard]] MaterialFeatureFlag featureFlags() const noexcept;
+
+    [[nodiscard]] bool hasVolumeTransmissionBoundary() const noexcept;
 
     [[nodiscard]] bool isOpaque() const noexcept;
 

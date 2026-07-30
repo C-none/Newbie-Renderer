@@ -68,9 +68,18 @@ namespace
         .name = "runtime_triangle",
         .vertices =
             {
-                nr::load::VertexAsset{.position = {-0.5f, -0.5f, 0.0f}},
-                nr::load::VertexAsset{.position = {0.5f, -0.5f, 0.0f}},
-                nr::load::VertexAsset{.position = {0.0f, 0.5f, 0.0f}},
+                nr::load::VertexAsset{
+                    .position = {-0.5f, -0.5f, 0.0f},
+                    .texCoord1 = {0.125f, 0.875f},
+                },
+                nr::load::VertexAsset{
+                    .position = {0.5f, -0.5f, 0.0f},
+                    .texCoord1 = {0.875f, 0.875f},
+                },
+                nr::load::VertexAsset{
+                    .position = {0.0f, 0.5f, 0.0f},
+                    .texCoord1 = {0.5f, 0.125f},
+                },
             },
         .indices = {0u, 1u, 2u},
         .geometries =
@@ -272,6 +281,8 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{"scene material
                                                                          .clearcoatFactor = 0.8f,
                                                                          .sheenRoughnessFactor = 0.45f,
                                                                          .transmissionFactor = 0.6f,
+                                                                         .ior = 1.33f,
+                                                                         .thicknessFactor = 0.2f,
                                                                      });
 
                                                                      auto semanticIndices = std::views::iota(std::size_t{0}, semantics.size());
@@ -294,6 +305,20 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{"scene material
                                                                              .sourceSemanticName = std::string{semantics[semanticIndex].sourceName},
                                                                          });
                                                                      });
+
+                                                                     auto &baseColorBinding = sceneAsset.materials[0].textures.front();
+                                                                     baseColorBinding.uvChannel = 1u;
+                                                                     baseColorBinding.transform =
+                                                                         nr::resource::MaterialTextureTransform{
+                                                                             .linear = glm::vec4{2.0f, -0.5f, 0.25f, 0.75f},
+                                                                             .offset = glm::vec2{0.125f, 0.375f},
+                                                                         };
+                                                                     auto &occlusionBinding = sceneAsset.materials[0].textures[3];
+                                                                     occlusionBinding.transform =
+                                                                         nr::resource::MaterialTextureTransform{
+                                                                             .linear = glm::vec4{0.5f, 0.0f, 0.0f, 0.25f},
+                                                                             .offset = glm::vec2{0.625f, 0.75f},
+                                                                         };
 
                                                                      sceneAsset.materials[0].textures.push_back(nr::load::MaterialTextureBinding{
                                                                          .textureIndex = 4u,
@@ -343,6 +368,22 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{"scene material
                                                                      nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::emissive).texture == textureHandles[2], "emission_color should bind emissive slot");
                                                                      nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).texture == textureHandles[3], "ambient_occlusion should bind occlusion slot");
                                                                      nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::metallicRoughness).texture == textureHandles[4], "gltf_metallic_roughness should bind metallicRoughness slot");
+                                                                     nr::test::requireEqual(
+                                                                         material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet,
+                                                                         std::uint32_t{1},
+                                                                         "material bridge should preserve UV set 1");
+                                                                     nr::test::require(
+                                                                         material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear ==
+                                                                                 glm::vec4{2.0f, -0.5f, 0.25f, 0.75f} &&
+                                                                             material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.offset ==
+                                                                                 glm::vec2{0.125f, 0.375f},
+                                                                         "material bridge should preserve base-color affine texture metadata");
+                                                                     nr::test::require(
+                                                                         material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).transform.linear ==
+                                                                                 glm::vec4{0.5f, 0.0f, 0.0f, 0.25f} &&
+                                                                             material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).transform.offset ==
+                                                                                 glm::vec2{0.625f, 0.75f},
+                                                                         "material bridge should transport occlusion affine metadata without enabling shader behavior");
                                                                      nr::test::requireEqual(material.core.metallicFactor, 1.0f);
                                                                      nr::test::require(!material.clearcoat.has_value(), "core material should not create clearcoat extension");
                                                                      nr::test::require(!material.sheen.has_value(), "core material should not create sheen extension");
@@ -359,7 +400,11 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{"scene material
                                                                      nr::test::require(extensionMaterial.clearcoat.has_value(), "clearcoat texture or factor should create extension block");
                                                                      nr::test::require(extensionMaterial.sheen.has_value(), "sheen texture or factor should create extension block");
                                                                      nr::test::require(extensionMaterial.transmission.has_value(), "transmission texture or factor should create extension block");
+                                                                     nr::test::require(extensionMaterial.ior.has_value(), "authored IOR should create the IOR extension block");
+                                                                     nr::test::require(extensionMaterial.volumeBoundary.has_value(), "authored thickness should create the volume boundary extension block");
                                                                      nr::test::require(extensionMaterial.anisotropy.has_value(), "anisotropy texture or factor should create extension block");
+                                                                     nr::test::requireEqual(extensionMaterial.ior->ior, 1.33f);
+                                                                     nr::test::requireEqual(extensionMaterial.volumeBoundary->thicknessFactor, 0.2f);
                                                                      nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness).texture == textureHandles[5], "clearcoat_roughness should bind clearcoat roughness slot");
                                                                      nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::sheenColor).texture == textureHandles[6], "sheen_color should bind sheen color slot");
                                                                      nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::transmission).texture == textureHandles[7], "transmission should bind transmission slot");
@@ -376,6 +421,17 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{"scene material
 
                                                                      auto const conflictingRoughnessBound = std::ranges::any_of(material.textureSlots, [&](const nr::resource::MaterialTextureSlot &slot) { return slot.texture == textureHandles[10]; });
                                                                      nr::test::require(!conflictingRoughnessBound, "different metallicRoughness alias texture should be ignored after first slot assignment");
+
+                                                                     auto meshHandle = scene.findMeshHandleByStableKey(
+                                                                         nr::scene::SceneBridge::makeMeshCanonicalKey(sceneAsset, 0));
+                                                                     nr::test::require(meshHandle.has_value(), "mesh handle should resolve by stable key");
+                                                                     auto meshRecord = scene.tryGetMeshAsset(*meshHandle);
+                                                                     nr::test::require(meshRecord.has_value(), "mesh record should exist");
+                                                                     nr::test::require(
+                                                                         !meshRecord->get().cpu.vertices.empty() &&
+                                                                             meshRecord->get().cpu.vertices.front().texCoord1 ==
+                                                                                 glm::vec2{0.125f, 0.875f},
+                                                                         "mesh bridge should preserve the second UV set");
                                                                  }};
 
 [[nodiscard]] nr::scene::SceneExtractProfileHandle registerProfile(nr::scene::Scene &scene, nr::scene::ScenePacketDomain domain, bool requireReadyForDomain)

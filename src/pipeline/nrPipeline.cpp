@@ -24,6 +24,7 @@ struct PreparedPipelineGraph
 struct MutationFrameResult
 {
     std::optional<nr::options::FrameEffect> effect{};
+    bool exitRequested = false;
 };
 
 void drawFrameStatusSection(
@@ -226,6 +227,18 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     if (validation != nr::options::ScheduleRejectReason::none)
     {
         return fail(std::string{nr::options::wireName(validation)});
+    }
+
+    if (id == nr::options::optionId(nr::options::keys::viewerExit))
+    {
+        auto materialized = options.materializeFrameEffect(std::move(mutation));
+        if (!materialized.effect)
+        {
+            emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::string{nr::options::wireName(materialized.reason)});
+            return {};
+        }
+        emitTerminal(sequence, id, frameIndex, origin, requestId, true);
+        return MutationFrameResult{.exitRequested = true};
     }
 
     auto const pipelineOption = nr::options::optionId(nr::options::keys::viewerPipelineSelected);
@@ -808,6 +821,7 @@ void printViewerUsage(std::string_view executableName)
         {
             mutationResult = executeMutation(app, registry, history, modelController, config.dlssQuality, captureSessionId, *previousSnapshot, frameStart->frameIndex, std::move(*frameStart->mutation));
         }
+        stopAfterCurrentFrame = stopAfterCurrentFrame || mutationResult.exitRequested;
 
         auto collectionSnapshot = app.options().snapshotForCollection(mutationResult.effect);
         nrAssert(collectionSnapshot != nullptr, "OptionSystem failed to provide its closed-gate collection snapshot.");

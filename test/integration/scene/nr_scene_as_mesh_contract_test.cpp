@@ -37,6 +37,12 @@ namespace
         .alphaModeHint = nr::load::MaterialAlphaModeHint::mask,
         .alphaCutoff = 0.5f,
     });
+    scene.materials.push_back(nr::load::MaterialAsset{
+        .name = "volume_boundary_single_sided",
+        .transmissionFactor = 1.0f,
+        .ior = 1.5f,
+        .thicknessFactor = 1.0f,
+    });
 
     auto makeMesh = [](std::string name, bool clockwiseFrontFace) {
         return nr::load::MeshAsset{
@@ -67,6 +73,12 @@ namespace
                     .firstIndex = 6u,
                     .indexCount = 3u,
                     .materialIndex = 2u,
+                },
+                nr::load::MeshGeometryAsset{
+                    .name = "volume_boundary_single_sided_geometry",
+                    .firstIndex = 0u,
+                    .indexCount = 3u,
+                    .materialIndex = 3u,
                 },
             },
             .clockwiseFrontFace = clockwiseFrontFace,
@@ -204,7 +216,9 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
 
         auto meshHandle = resolveMeshHandle(scene, sceneAsset, 0u);
         auto clockwiseMeshHandle = resolveMeshHandle(scene, sceneAsset, 1u);
+        auto doubleSidedMaterial = resolveMaterialHandle(scene, sceneAsset, 1u);
         auto alphaMaskMaterial = resolveMaterialHandle(scene, sceneAsset, 2u);
+        auto volumeBoundaryMaterial = resolveMaterialHandle(scene, sceneAsset, 3u);
         uploadSceneGeometry(scene, device, meshHandle);
 
         auto importedClockwiseMesh = scene.tryGetMeshAsset(clockwiseMeshHandle);
@@ -215,28 +229,90 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
 
         auto asMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
         nr::test::require(asMesh.has_value(), "resident scene mesh should expose AS build input");
-        nr::test::requireEqual(asMesh->geometries.size(), std::size_t{3u});
+        nr::test::requireEqual(asMesh->geometries.size(), std::size_t{4u});
         nr::test::require(
             !hasInstanceFlag(asMesh->instanceFlags, vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing),
-            "default CCW mesh should keep Vulkan RT triangle facing unflipped");
+            "default CCW mesh should keep Vulkan RT default facing");
         nr::test::require(
             hasInstanceFlag(asMesh->instanceFlags, vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable),
             "any double-sided geometry should disable facing cull for the whole TLAS instance");
         nr::test::require(
-            hasGeometryFlag(asMesh->geometries[0].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
-            "opaque material should mark AS geometry opaque");
+            !hasGeometryFlag(asMesh->geometries[0].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
+            "mixed-instance single-sided geometry should stay non-opaque for any-hit back-face filtering");
         nr::test::require(
             hasGeometryFlag(asMesh->geometries[1].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
             "alpha-blended material should still mark AS geometry opaque for RT traversal");
         nr::test::require(
             !hasGeometryFlag(asMesh->geometries[2].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
             "alpha-mask material should keep AS geometry non-opaque for any-hit alpha testing");
+        nr::test::require(
+            hasGeometryFlag(asMesh->geometries[3].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
+            "volume-boundary transmission should remain opaque-like for RT traversal");
+        nr::test::requireEqual(
+            asMesh->semanticKey.geometries[0].geometryFlags,
+            asMesh->geometries[0].geometryFlags,
+            "AS semantic and concrete geometry flags must share one policy source");
+
+        {
+            auto record = scene.tryGetMaterialAsset(doubleSidedMaterial);
+            nr::test::require(record.has_value(), "AS contract double-sided material record should exist");
+            auto& mutableRecord = const_cast<nr::scene::MaterialAssetRecord&>(record->get());
+            mutableRecord.cpu.core.doubleSided = false;
+        }
+
+        {
+            auto record = scene.tryGetMeshAsset(meshHandle);
+            nr::test::require(record.has_value(), "AS contract mesh record should exist");
+            auto& mutableRecord = const_cast<nr::scene::MeshAssetRecord&>(record->get());
+            mutableRecord.cpu.geometries[3].indexCount = 0u;
+
+            auto zeroPrimitiveVolumeAsMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
+            nr::test::require(
+                zeroPrimitiveVolumeAsMesh.has_value(),
+                "zero-primitive volume geometry should not hide live AS geometry");
+            nr::test::requireEqual(zeroPrimitiveVolumeAsMesh->geometries.size(), std::size_t{3u});
+            nr::test::require(
+                !hasInstanceFlag(
+                    zeroPrimitiveVolumeAsMesh->instanceFlags,
+                    vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable),
+                "zero-primitive volume geometry must not alter live instance culling");
+
+            mutableRecord.cpu.geometries[3].indexCount = 3u;
+        }
+
+        auto volumeCullAsMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
+        nr::test::require(volumeCullAsMesh.has_value(), "volume-boundary mesh should remain AS-visible");
+        nr::test::require(
+            hasInstanceFlag(volumeCullAsMesh->instanceFlags, vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable),
+            "a single-sided volume boundary should retain exit-face intersections for the whole TLAS instance");
+        nr::test::require(
+            !hasGeometryFlag(volumeCullAsMesh->geometries[1].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
+            "a now-single-sided sibling should route retained back faces through any-hit");
+
+        {
+            auto record = scene.tryGetMaterialAsset(volumeBoundaryMaterial);
+            nr::test::require(record.has_value(), "AS contract volume-boundary material record should exist");
+            auto& mutableRecord = const_cast<nr::scene::MaterialAssetRecord&>(record->get());
+            nr::test::require(
+                mutableRecord.cpu.transmission.has_value(),
+                "AS contract volume-boundary material should retain its transmission extension");
+            mutableRecord.cpu.transmission->factor = 0.0f;
+        }
+
+        auto baseOnlyCullAsMesh = scene.tryGetAccelerationStructureMesh(meshHandle);
+        nr::test::require(baseOnlyCullAsMesh.has_value(), "base-only mesh should remain AS-visible");
+        nr::test::require(
+            !hasInstanceFlag(baseOnlyCullAsMesh->instanceFlags, vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable),
+            "zero effective transmission should not retain back faces after the double-sided material is disabled");
+        nr::test::require(
+            hasGeometryFlag(baseOnlyCullAsMesh->geometries[0].geometryFlags, vk::GeometryFlagBitsKHR::eOpaque),
+            "ordinary single-sided geometry should recover the hardware-opaque fast path");
 
         auto clockwiseAsMesh = scene.tryGetAccelerationStructureMesh(clockwiseMeshHandle);
         nr::test::require(clockwiseAsMesh.has_value(), "clockwise mesh should still expose AS build input");
         nr::test::require(
             hasInstanceFlag(clockwiseAsMesh->instanceFlags, vk::GeometryInstanceFlagBitsKHR::eTriangleFlipFacing),
-            "clockwise mesh should flip Vulkan RT triangle facing to preserve clockwise front-face");
+            "clockwise mesh should invert Vulkan RT default facing");
 
         {
             auto record = scene.tryGetMaterialAsset(alphaMaskMaterial);

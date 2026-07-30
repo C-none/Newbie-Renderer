@@ -29,9 +29,14 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
             static_cast<std::uint32_t>(nr::scene::RtMaterialFeatureFlag::alphaBlend) |
             static_cast<std::uint32_t>(nr::scene::RtMaterialFeatureFlag::doubleSided) |
             static_cast<std::uint32_t>(nr::scene::RtMaterialFeatureFlag::emissive));
+        auto const mixedInstancePolicyKey =
+            nr::renderPasses::makeRtHitPermutationKey(baseLayer, runtimeOnlyFeatures, true);
 
         nr::test::requireEqual(nr::renderPasses::kRtBsdfVariantHardUpperBound, 9u);
         nr::test::requireEqual(nr::renderPasses::kRtHitGroupVariantHardUpperBound, 18u);
+        nr::test::require(
+            nr::renderPasses::rtHitPermutationUsesAnyHit(mixedInstancePolicyKey),
+            "mixed-instance single-sided geometry should select the shared any-hit material policy");
 
         // Per-geometry permutation keys are built from (layerFlags, featureFlags): the CHS variant is
         // keyed only by layerFlags, while featureFlags contribute only the alpha hit-group policy.
@@ -54,6 +59,7 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
         nr::test::requireEqual(plan.instances.size(), std::size_t{2u});
         nr::test::requireEqual(plan.permutations.size(), std::size_t{3u});
         nr::test::requireEqual(plan.records[0].permutationIndex, plan.records[2].permutationIndex);
+        nr::test::require(!nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[0].permutationIndex].key));
         nr::test::require(nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[1].permutationIndex].key));
         nr::test::require(nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[3].permutationIndex].key));
         nr::test::requireEqual(
