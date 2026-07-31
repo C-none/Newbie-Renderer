@@ -115,12 +115,6 @@ namespace
     return flags;
 }
 
-inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFlag>(
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::baseSurface) |
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::clearcoat) |
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::sheen) |
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::transmission));
-
 // RT layer classification is independent from non-layer feature flags. layerFlags == none is the sole
 // unlit encoding; any non-zero mask must contain baseSurface (the 9 valid glTF combinations).
 [[nodiscard]] RtMaterialLayerFlag rtLayerFlags(const nr::resource::Material& material) noexcept
@@ -158,7 +152,7 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
     auto const layerFlags = rtLayerFlags(material);
     auto const layerBits = static_cast<std::uint32_t>(layerFlags);
     nr::nrAssert(
-        (layerBits & ~static_cast<std::uint32_t>(kKnownRtMaterialLayerMask)) == 0u,
+        (layerBits & ~static_cast<std::uint32_t>(kRtMaterialPhysicalLayerMask)) == 0u,
         "RT material layer flags contain bits outside the known layer mask.");
     nr::nrAssert(
         layerFlags == RtMaterialLayerFlag::none ||
@@ -258,7 +252,7 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
 {
     auto compiled = RtCompiledMaterial{};
     auto const flags = rtFeatureFlags(material);
-    auto const layerFlags = normalizeRtLayerFlags(material);
+    auto const physicalLayerFlags = normalizeRtLayerFlags(material);
 
     auto const clearcoatFactor = material.clearcoat.has_value() ? material.clearcoat->factor : 0.0f;
     auto const clearcoatRoughness = material.clearcoat.has_value() ? material.clearcoat->roughnessFactor : 0.0f;
@@ -274,11 +268,16 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
     auto const anisotropySlotIndex =
         nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::anisotropy);
     auto const anisotropyTexturePresent =
-        layerFlags != RtMaterialLayerFlag::none &&
+        physicalLayerFlags != RtMaterialLayerFlag::none &&
         slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::anisotropy) &&
         textureIds[anisotropySlotIndex] != 0u;
     auto const anisotropyStrength =
-        layerFlags != RtMaterialLayerFlag::none ? effectiveAnisotropyFactor(material) : 0.0f;
+        physicalLayerFlags != RtMaterialLayerFlag::none ? effectiveAnisotropyFactor(material) : 0.0f;
+    auto layerFlags = physicalLayerFlags;
+    if (anisotropyStrength > 0.0f)
+    {
+        layerFlags |= RtMaterialLayerFlag::anisotropicBaseLobe;
+    }
 
     compiled.header = RtMaterialHeader{
         .layerFlags = layerFlags,
@@ -301,7 +300,7 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
         },
         .anisotropy = glm::vec4{
             anisotropyStrength,
-            layerFlags != RtMaterialLayerFlag::none ? anisotropyRotation(material) : 0.0f,
+            physicalLayerFlags != RtMaterialLayerFlag::none ? anisotropyRotation(material) : 0.0f,
             anisotropyTexturePresent ? 1.0f : 0.0f,
             0.0f,
         },
@@ -309,18 +308,18 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
 
     // Lit materials write compact layer records in canonical bit order: base -> clearcoat -> sheen ->
     // transmission. Unlit (layerFlags == none) writes no records; layerCount stays 0.
-    if (layerFlags != RtMaterialLayerFlag::none)
+    if (physicalLayerFlags != RtMaterialLayerFlag::none)
     {
         compiled.layers.push_back(makeBaseLayer(material));
-        if (hasRtMaterialLayer(layerFlags, RtMaterialLayerFlag::clearcoat))
+        if (hasRtMaterialLayer(physicalLayerFlags, RtMaterialLayerFlag::clearcoat))
         {
             compiled.layers.push_back(makeClearcoatLayer(material));
         }
-        if (hasRtMaterialLayer(layerFlags, RtMaterialLayerFlag::sheen))
+        if (hasRtMaterialLayer(physicalLayerFlags, RtMaterialLayerFlag::sheen))
         {
             compiled.layers.push_back(makeSheenLayer(material));
         }
-        if (hasRtMaterialLayer(layerFlags, RtMaterialLayerFlag::transmission))
+        if (hasRtMaterialLayer(physicalLayerFlags, RtMaterialLayerFlag::transmission))
         {
             compiled.layers.push_back(makeTransmissionLayer(material));
         }

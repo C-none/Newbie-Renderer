@@ -480,6 +480,7 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::clearcoat));
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::sheen));
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::transmission));
+        nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::anisotropicBaseLobe));
         nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary));
         nr::test::require(nearlyEqual(compiled.header.anisotropy.x, 1.0f));
         nr::test::require(nearlyEqual(compiled.header.anisotropy.y, 0.25f));
@@ -626,16 +627,25 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             auto zeroCompiled = nr::scene::compileRtMaterial(material, ids);
             nr::test::require(nearlyEqual(zeroCompiled.header.anisotropy.x, 0.0f));
             nr::test::require(nearlyEqual(zeroCompiled.header.anisotropy.z, 1.0f));
+            nr::test::require(
+                !hasLayer(zeroCompiled, Layer::anisotropicBaseLobe),
+                "zero scalar anisotropy must keep the isotropic material flag");
 
             material.anisotropy->factor = 0.75f;
             auto unavailableCompiled = nr::scene::compileRtMaterial(material);
             nr::test::require(nearlyEqual(unavailableCompiled.header.anisotropy.x, 0.75f));
             nr::test::require(nearlyEqual(unavailableCompiled.header.anisotropy.y, 0.5f));
             nr::test::require(nearlyEqual(unavailableCompiled.header.anisotropy.z, 0.0f));
+            nr::test::require(
+                hasLayer(unavailableCompiled, Layer::anisotropicBaseLobe),
+                "positive scalar anisotropy must select the anisotropic base-lobe flag without a resident texture");
 
             auto presentCompiled = nr::scene::compileRtMaterial(material, ids);
             nr::test::require(nearlyEqual(presentCompiled.header.anisotropy.z, 1.0f));
             nr::test::require(nearlyEqual(presentCompiled.header.anisotropy.w, 0.0f));
+            nr::test::require(
+                hasLayer(presentCompiled, Layer::anisotropicBaseLobe),
+                "texture residency must not change anisotropic base-lobe specialization");
             auto const& anisotropyRef =
                 presentCompiled.textureRefs[
                     nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::anisotropy)];
@@ -649,21 +659,21 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::require(nearlyEqual(anisotropyRef.uvOffset.y, -0.5f));
 
             material.anisotropy->factor = -0.25f;
-            nr::test::require(nearlyEqual(
-                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
-                0.0f));
+            auto negativeCompiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::require(nearlyEqual(negativeCompiled.header.anisotropy.x, 0.0f));
+            nr::test::require(!hasLayer(negativeCompiled, Layer::anisotropicBaseLobe));
             material.anisotropy->factor = 2.0f;
-            nr::test::require(nearlyEqual(
-                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
-                1.0f));
+            auto clampedCompiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::require(nearlyEqual(clampedCompiled.header.anisotropy.x, 1.0f));
+            nr::test::require(hasLayer(clampedCompiled, Layer::anisotropicBaseLobe));
             material.anisotropy->factor = std::numeric_limits<float>::quiet_NaN();
-            nr::test::require(nearlyEqual(
-                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
-                0.0f));
+            auto nanCompiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::require(nearlyEqual(nanCompiled.header.anisotropy.x, 0.0f));
+            nr::test::require(!hasLayer(nanCompiled, Layer::anisotropicBaseLobe));
             material.anisotropy->factor = std::numeric_limits<float>::infinity();
-            nr::test::require(nearlyEqual(
-                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
-                0.0f));
+            auto infiniteCompiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::require(nearlyEqual(infiniteCompiled.header.anisotropy.x, 0.0f));
+            nr::test::require(!hasLayer(infiniteCompiled, Layer::anisotropicBaseLobe));
 
             material.anisotropy->factor = 0.5f;
             material.anisotropy->rotation = std::numeric_limits<float>::quiet_NaN();
@@ -820,10 +830,12 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
     }};
 
 const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
-    "RT material shader keeps transformed explicit mip-0 sampling and anisotropy semantics",
+    "RT material shader keeps transformed nearest LOD0 FAS and anisotropy semantics",
     [] {
         auto const materialTypes = readProjectFile("shader/include/material/types.slang");
         auto const materialSampling = readProjectFile("shader/include/material/sampling.slang");
+        auto const stochasticTextureFiltering =
+            readProjectFile("shader/include/material/stochasticTextureFiltering.slang");
         auto const materialPayload = readProjectFile("shader/include/material/payload.slang");
         auto const hitSurface = readProjectFile("shader/include/rt/hitSurface.slang");
         auto const sceneTextureBinding =
@@ -846,10 +858,10 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
             "RT hit-surface offsets and double-sided T/B/N reversal should retain their frame contract");
 
         auto const genericSample = materialSampling.find("public float4 sampleMaterialTexture(");
-        auto const normalSample = materialSampling.find("public float3 applyNormalMapSlot(");
+        auto const normalSample = materialSampling.find("public float3 applyNormalMapSlotVariant");
         auto const anisotropyDecode = materialSampling.find("public void decodeMaterialAnisotropy(");
-        auto const anisotropySample = materialSampling.find("public void sampleMaterialAnisotropy(");
-        auto const coreSample = materialSampling.find("public MaterialSample sampleCoreMaterial(");
+        auto const anisotropySample = materialSampling.find("public void sampleMaterialAnisotropyVariant");
+        auto const coreSample = materialSampling.find("public MaterialSample sampleCoreMaterialVariant");
         auto const layerSample = materialSampling.find("// Canonical layer-record parser.");
         nr::test::require(
             genericSample != std::string::npos &&
@@ -867,9 +879,9 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 genericSamplingBody.contains("0.0f"),
             "generic texture sampling should use transformed UVs and explicit mip 0");
         nr::test::require(
-            materialSampling.substr(normalSample, anisotropyDecode - normalSample).contains("materialTextureUv(") &&
-                materialSampling.substr(normalSample, anisotropyDecode - normalSample).contains(".SampleLevel("),
-            "normal sampling should use transformed UVs and explicit mip 0");
+            materialSampling.substr(normalSample, anisotropyDecode - normalSample).contains(
+                "sampleMaterialTextureVariant("),
+            "normal sampling should use the shared root-controlled nearest/FAS texture path");
         auto const anisotropyDecodeBody =
             materialSampling.substr(anisotropyDecode, anisotropySample - anisotropyDecode);
         nr::test::require(
@@ -884,11 +896,9 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
             materialSampling.substr(anisotropySample, coreSample - anisotropySample);
         nr::test::require(
             anisotropySamplingBody.contains("float3(1.0f, 0.5f, 1.0f)") &&
-                anisotropySamplingBody.contains("materialTextureUv(") &&
-                anisotropySamplingBody.contains(".SampleLevel(") &&
+                anisotropySamplingBody.contains(
+                    "sampleMaterialTextureVariant(") &&
                 anisotropySamplingBody.contains("decodeMaterialAnisotropy(") &&
-                !materialSampling.contains("sampleMaterialTextureFasMip0") &&
-                !materialSampling.contains("materialFilterRandom") &&
                 !materialSampling.contains(".Sample(") &&
                 !materialSampling.contains("ddx(") &&
                 !materialSampling.contains("ddy(") &&
@@ -898,17 +908,33 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 !materialSampling.contains("wave") &&
                 !materialSampling.contains("WIS") &&
                 !materialSampling.contains("wis"),
-            "all RT material slots, including anisotropy, should retain direct explicit mip-0 sampling without derivative, hardware-anisotropic, or FAS plumbing");
+            "all RT material slots, including anisotropy, should retain nearest explicit LOD0 sampling without derivatives, hardware anisotropy, or ray footprints");
         nr::test::require(
-            sceneTextureBinding.contains(".magFilter = vk::Filter::eLinear") &&
-                sceneTextureBinding.contains(".minFilter = vk::Filter::eLinear") &&
-                sceneTextureBinding.contains(".mipmapMode = vk::SamplerMipmapMode::eLinear") &&
+            materialSampling.contains(
+                "public float4 sampleMaterialTextureVariant(") &&
+                materialSampling.contains("if (kEnableFilterAfterShading)") &&
+                materialSampling.contains("stochasticBilinearTexelCenterUv(") &&
+                materialSampling.contains(
+                    "gSceneTextures[textureRef.textureId].SampleLevel(uv, 0.0f);") &&
+                stochasticTextureFiltering.contains(
+                    "public float2 stochasticBilinearTexelCenterUv(") &&
+                stochasticTextureFiltering.contains(
+                    "selectStochasticFilterUpperTap("),
+            "FAS-on should stochastically select one bilinear reconstruction tap while FAS-off directly fetches one nearest LOD0 texel");
+        nr::test::require(
+            sceneTextureBinding.contains("sceneTextureTableNearestSamplerDesc") &&
+                sceneTextureBinding.contains(".magFilter = vk::Filter::eNearest") &&
+                sceneTextureBinding.contains(".minFilter = vk::Filter::eNearest") &&
+                sceneTextureBinding.contains(".mipmapMode = vk::SamplerMipmapMode::eNearest") &&
+                sceneTextureBinding.contains(".minLod = 0.0f") &&
+                sceneTextureBinding.contains(".maxLod = 0.0f") &&
                 !sceneTextureBinding.contains("anisotropyEnable") &&
                 !sceneTextureBinding.contains("maxAnisotropy"),
-            "scene material textures should retain the linear sampler without hardware anisotropy");
+            "all scene material textures should use the shared mipless nearest sampler without hardware anisotropy");
 
         nr::test::require(
-            materialPayload.contains("public struct BaseGgxDistribution<let BaseLobeVariant") &&
+            materialPayload.contains("public struct BaseGgxDistribution<let LayerFlags") &&
+                materialPayload.contains("RtMaterialLayerFlag.anisotropicBaseLobe") &&
                 materialPayload.contains("alphaT = lerp(isotropicAlpha, 1.0f, strength * strength)") &&
                 materialPayload.contains("alphaB = isotropicAlpha") &&
                 materialPayload.contains("public float distribution(") &&
@@ -918,18 +944,57 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 materialPayload.contains("public float visibleHalfVectorPdf("),
             "anisotropic GGX D, separable Smith G, Heitz VNDF and visible-normal PDF should share one base helper");
         nr::test::require(
-            materialPayload.contains("BaseGgxDistribution<BaseLobeVariant> baseGgx") &&
+            materialPayload.contains("BaseGgxDistribution<LayerFlags> baseGgx") &&
                 materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.thin") &&
                 materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.volume"),
             "reflection, thin folded transmission and Walter volume transmission should share the base distribution");
         nr::test::require(
+            materialPayload.contains("public float3 materialPayloadFacingGeometryNormal(") &&
+                materialPayload.contains("public float3 adjustMaterialPayloadSpecularNormal(") &&
+                materialPayload.contains(
+                    "reflectedDirection - geometryCosine * facingGeometryNormal") &&
+                materialPayload.contains(
+                    "clippedReflection - incidentDirection"),
+            "specular lobes should clip view-dependent shading normals against a view-facing geometry normal");
+        nr::test::require(
+            materialPayload.contains(
+                "float3 rawNormal = safeNormalize(payload.shadingNormal, facingGeometryNormal)") &&
+                materialPayload.contains(
+                    "materialPayloadDiffusePdf(rawNormal, lightDirection)") &&
+                materialPayload.contains(
+                    "float3 specularNormal = adjustMaterialPayloadSpecularNormal("),
+            "base diffuse should retain the raw shading frame while the GGX interface uses its adjusted specular frame");
+        nr::test::require(
+            materialPayload.contains("public float3 diffuseProjected") &&
+                materialPayload.contains("public float3 specularProjected") &&
+                materialPayload.contains("bsdf.diffuseProjected *") &&
+                materialPayload.contains("bsdf.specularProjected *") &&
+                materialPayload.contains(
+                    "scatter.diffuseWeight = bsdf.diffuseProjected / pdf") &&
+                materialPayload.contains(
+                    "scatter.specularWeight = bsdf.specularProjected / pdf"),
+            "direct lighting and continuation throughput should consume per-lobe projected BSDF components");
+        nr::test::require(
             materialPayload.contains("public struct ClearcoatBsdfLobe") &&
                 materialPayload.contains("materialPayloadClearcoatGgxPdf") &&
-                materialPayload.contains("sampleMaterialPayloadGgxHalfVector"),
-            "clearcoat should remain on its legacy isotropic GGX helpers");
+                materialPayload.contains("sampleMaterialPayloadGgxHalfVector") &&
+                materialPayload.contains(
+                    "float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal("),
+            "clearcoat should retain its isotropic GGX distribution while using its independently adjusted normal");
         nr::test::require(
-            materialPayload.contains("dot(normal, scatter.direction) <= kMaterialMinCosTheta"),
-            "sampled base reflection must reject a below-macro-hemisphere direction before combined PDF evaluation");
+            materialPayload.contains(
+                "dot(specularNormal, scatter.direction) <= kMaterialMinCosTheta") &&
+                materialPayload.contains(
+                    "public bool materialPayloadGeometrySupportsReflection(") &&
+                materialPayload.contains(
+                    "return dot(facingGeometryNormal, lightDirection) >= -kMaterialMinCosTheta") &&
+                materialPayload.contains(
+                    "dot(specularNormal, scatter.direction) >= -kMaterialMinCosTheta") &&
+                materialPayload.contains(
+                    "public bool materialPayloadGeometrySupportsTransmission(") &&
+                materialPayload.contains(
+                    "return dot(facingGeometryNormal, lightDirection) <= kMaterialMinCosTheta"),
+            "sampled reflection and transmission must satisfy lobe-specific support while retaining the adjusted geometric tangent boundary");
 
         auto const coreSamplingBody = materialSampling.substr(coreSample, layerSample - coreSample);
         nr::test::require(

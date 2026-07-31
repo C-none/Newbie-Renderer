@@ -9,18 +9,16 @@ import std;
 export namespace nr::renderPasses
 {
 using nr::shader::share::RtHitAnyHitPolicy;
-using nr::shader::share::RtBaseLobeVariant;
 
-// CHS variants combine the nine valid layer masks with a separate base-lobe dimension. Unlit has only
-// the isotropic variant; each of the eight lit masks supports isotropic and anisotropic base GGX.
-// Any-hit policy remains orthogonal and doubles the hit-group space.
+// CHS variants use one combined material flag mask. Unlit is zero; each of the eight lit physical
+// layer masks has an isotropic form and an anisotropic-base-lobe form. Any-hit policy remains
+// orthogonal and doubles the hit-group space.
 inline constexpr std::uint32_t kRtBsdfVariantHardUpperBound = 17u;
 inline constexpr std::uint32_t kRtHitGroupVariantHardUpperBound = kRtBsdfVariantHardUpperBound * 2u;
 
 struct RtBsdfVariantKey
 {
     nr::scene::RtMaterialLayerFlag layerFlags = nr::scene::RtMaterialLayerFlag::none;
-    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic;
 
     [[nodiscard]] friend auto operator<=>(const RtBsdfVariantKey&, const RtBsdfVariantKey&) noexcept = default;
 };
@@ -69,29 +67,16 @@ struct SceneRtHitSbtPlan
 [[nodiscard]] constexpr bool rtMaterialLayerFlagsValid(
     nr::scene::RtMaterialLayerFlag layerFlags) noexcept
 {
-    constexpr auto knownMask =
-        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::baseSurface) |
-        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::clearcoat) |
-        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::sheen) |
-        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::transmission);
+    constexpr auto knownMask = static_cast<std::uint32_t>(nr::scene::kRtMaterialVariantMask);
     auto const bits = static_cast<std::uint32_t>(layerFlags);
     return bits == 0u ||
            ((bits & ~knownMask) == 0u &&
             (bits & static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::baseSurface)) != 0u);
 }
 
-[[nodiscard]] constexpr bool rtBaseLobeVariantValid(RtBaseLobeVariant variant) noexcept
-{
-    return variant == RtBaseLobeVariant::isotropic ||
-           variant == RtBaseLobeVariant::anisotropic;
-}
-
 [[nodiscard]] constexpr bool rtBsdfVariantKeyValid(const RtBsdfVariantKey& key) noexcept
 {
-    return rtMaterialLayerFlagsValid(key.layerFlags) &&
-           rtBaseLobeVariantValid(key.baseLobeVariant) &&
-           (key.layerFlags != nr::scene::RtMaterialLayerFlag::none ||
-            key.baseLobeVariant == RtBaseLobeVariant::isotropic);
+    return rtMaterialLayerFlagsValid(key.layerFlags);
 }
 
 [[nodiscard]] constexpr bool rtHitAnyHitPolicyValid(RtHitAnyHitPolicy policy) noexcept
@@ -111,52 +96,28 @@ struct SceneRtHitSbtPlan
     return key.anyHitPolicy == RtHitAnyHitPolicy::materialPolicy;
 }
 
-[[nodiscard]] inline RtBaseLobeVariant rtBaseLobeVariant(
-    nr::scene::RtMaterialLayerFlag layerFlags,
-    float anisotropyStrength) noexcept
-{
-    auto const hasBaseSurface =
-        (static_cast<std::uint32_t>(layerFlags) &
-         static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::baseSurface)) != 0u;
-    return hasBaseSurface &&
-                   std::isfinite(anisotropyStrength) &&
-                   anisotropyStrength > 0.0f
-               ? RtBaseLobeVariant::anisotropic
-               : RtBaseLobeVariant::isotropic;
-}
-
 [[nodiscard]] inline RtBsdfVariantKey makeRtBsdfVariantKey(
-    nr::scene::RtMaterialLayerFlag layerFlags,
-    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic) noexcept
+    nr::scene::RtMaterialLayerFlag layerFlags) noexcept
 {
     nrAssert(
         rtMaterialLayerFlagsValid(layerFlags),
         "RT BSDF variant layer flags are outside the exact unlit/lit domain.");
-    nrAssert(
-        rtBaseLobeVariantValid(baseLobeVariant),
-        "RT BSDF variant has an invalid base-lobe enum value.");
-    auto const key = RtBsdfVariantKey{
+    return RtBsdfVariantKey{
         .layerFlags = layerFlags,
-        .baseLobeVariant = baseLobeVariant,
     };
-    nrAssert(
-        rtBsdfVariantKeyValid(key),
-        "Unlit RT materials cannot select the anisotropic base-lobe variant.");
-    return key;
 }
 
 [[nodiscard]] inline RtHitGroupKey makeRtHitGroupKey(
     nr::scene::RtMaterialLayerFlag layerFlags,
     nr::scene::RtMaterialFeatureFlag featureFlags,
-    bool forceMaterialPolicy = false,
-    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic) noexcept
+    bool forceMaterialPolicy = false) noexcept
 {
     auto const alphaMaskFeature = static_cast<std::uint32_t>(nr::scene::RtMaterialFeatureFlag::alphaMask);
     auto const requiresMaterialPolicy =
         forceMaterialPolicy ||
         (static_cast<std::uint32_t>(featureFlags) & alphaMaskFeature) != 0u;
     return RtHitGroupKey{
-        .bsdf = makeRtBsdfVariantKey(layerFlags, baseLobeVariant),
+        .bsdf = makeRtBsdfVariantKey(layerFlags),
         .anyHitPolicy = requiresMaterialPolicy
                             ? RtHitAnyHitPolicy::materialPolicy
                             : RtHitAnyHitPolicy::none,
@@ -166,25 +127,23 @@ struct SceneRtHitSbtPlan
 [[nodiscard]] inline RtHitPermutationKey makeRtHitPermutationKey(
     nr::scene::RtMaterialLayerFlag layerFlags,
     nr::scene::RtMaterialFeatureFlag featureFlags,
-    bool forceMaterialPolicy = false,
-    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic) noexcept
+    bool forceMaterialPolicy = false) noexcept
 {
-    return makeRtHitGroupKey(layerFlags, featureFlags, forceMaterialPolicy, baseLobeVariant);
+    return makeRtHitGroupKey(layerFlags, featureFlags, forceMaterialPolicy);
 }
 
 [[nodiscard]] inline std::uint64_t hashRtBsdfVariantKey(const RtBsdfVariantKey& key) noexcept
 {
     auto state = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(state, "RtBsdfVariantKey.v3");
+    nr::hash::hashAppendString(state, "RtBsdfVariantKey.v4");
     nr::hash::hashAppend(state, static_cast<std::uint32_t>(key.layerFlags));
-    nr::hash::hashAppend(state, key.baseLobeVariant);
     return state;
 }
 
 [[nodiscard]] inline std::uint64_t hashRtHitPermutationKey(const RtHitPermutationKey& key) noexcept
 {
     auto state = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(state, "RtHitGroupKey.v3");
+    nr::hash::hashAppendString(state, "RtHitGroupKey.v4");
     nr::hash::hashAppend(state, hashRtBsdfVariantKey(key.bsdf));
     nr::hash::hashAppend(state, key.anyHitPolicy);
     return state;
@@ -274,7 +233,7 @@ struct SceneRtHitSbtPlan
     const SceneRtHitSbtPlan& plan) noexcept
 {
     auto permutationState = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(permutationState, "SceneRtHitSbtPlan.permutationSet.v2");
+    nr::hash::hashAppendString(permutationState, "SceneRtHitSbtPlan.permutationSet.v3");
     nr::hash::hashAppend(permutationState, static_cast<std::uint32_t>(plan.permutations.size()));
     std::ranges::for_each(plan.permutations, [&](const SceneRtHitSbtPermutation& permutation) {
         nr::hash::hashAppend(permutationState, permutation.permutationIndex);
@@ -288,7 +247,7 @@ struct SceneRtHitSbtPlan
     std::uint64_t permutationSetHash) noexcept
 {
     auto recordState = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(recordState, "SceneRtHitSbtPlan.recordPlan.v2");
+    nr::hash::hashAppendString(recordState, "SceneRtHitSbtPlan.recordPlan.v3");
     nr::hash::hashAppend(recordState, permutationSetHash);
     nr::hash::hashAppend(recordState, static_cast<std::uint32_t>(plan.instances.size()));
     std::ranges::for_each(plan.instances, [&](const SceneRtHitSbtInstanceRecord& instance) {

@@ -81,6 +81,7 @@ inline constexpr auto viewerCameraMovementSpeed = OptionKey<double>{"viewer.came
 
 inline constexpr auto pathTracingMaxSurfaceBounces = OptionKey<std::uint64_t>{"render.path_tracing.max_surface_bounces"};
 inline constexpr auto pathTracingRussianRouletteEnabled = OptionKey<bool>{"render.path_tracing.russian_roulette_enabled"};
+inline constexpr auto pathTracingFilterAfterShadingEnabled = OptionKey<bool>{"render.path_tracing.filter_after_shading_enabled"};
 inline constexpr auto accumulateMaxHistorySamples = OptionKey<std::uint64_t>{"render.accumulate.max_history_samples"};
 inline constexpr auto dlssEnabled = OptionKey<bool>{"render.dlss.enabled"};
 inline constexpr auto dlssQuality = OptionKey<std::string>{"render.dlss.quality"};

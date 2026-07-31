@@ -6,10 +6,7 @@ import renderer.pathTracing.pathState;
 
 public bool shouldIgnoreAlphaMaskedHit(
     RtMaterialHeader material,
-    RtSurfaceData surface,
-    float3 viewDirection,
-    float hitT,
-    uint materialIndex)
+    RtSurfaceData surface)
 {
     if (!hasRtMaterialFeature(material, RtMaterialFeatureFlag.alphaMask))
     {
@@ -66,10 +63,7 @@ public void handleAnyHit(
     orientRtSurfaceForMaterial(hit.surface, material, viewDirection);
     if (shouldIgnoreAlphaMaskedHit(
         material,
-        hit.surface,
-        viewDirection,
-        RayTCurrent(),
-        hit.geometry.materialIndex))
+        hit.surface))
     {
         IgnoreHit();
     }
@@ -81,7 +75,6 @@ public ClosestHitInput makeClosestHitInput(
     float3 viewDirection = normalize(-WorldRayDirection());
     ClosestHitInput input = {};
     input.viewDirection = viewDirection;
-    input.hitT = RayTCurrent();
 
     RtHitSurface hit = currentRtHitSurface(attributes, viewDirection);
     input.geometryValid = hit.geometryValid;

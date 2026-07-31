@@ -589,6 +589,11 @@ void Renderer::setEnvironmentMap(nr::resource::EnvironmentMap environment)
     temporalHistoryResetPending_ = true;
 }
 
+void Renderer::requestTemporalHistoryReset() noexcept
+{
+    temporalHistoryResetPending_ = true;
+}
+
 [[nodiscard]] RendererGraphPreflightResult Renderer::preflightGraph(
     const RendererGraphSpec& spec) const
 {

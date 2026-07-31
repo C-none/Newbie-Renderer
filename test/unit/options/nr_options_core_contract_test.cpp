@@ -254,11 +254,28 @@ const nr::test::CaseRegistrar fixedCatalogCase{"fixed option catalog has one can
                                                            std::format("removed DLSS preset option '{}' must not be registered", id));
                                                    });
 
-                                                   auto present = catalog(makePresentDefinitions());
-                                                   auto const *capture = present->find(optionId(keys::presentCaptureExr));
-                                                   nr::test::require(capture != nullptr && capture->lifetime == OptionValueLifetime::frameEffect, "EXR capture must be a one-frame effect");
+                                                    auto present = catalog(makePresentDefinitions());
+                                                    auto const *capture = present->find(optionId(keys::presentCaptureExr));
+                                                    nr::test::require(capture != nullptr && capture->lifetime == OptionValueLifetime::frameEffect, "EXR capture must be a one-frame effect");
 
-                                                   auto completeRtBuilder = OptionCatalogBuilder{};
+                                                    auto pathTracing = catalog(makePathTracingDefinitions());
+                                                    auto const* filterAfterShading =
+                                                        pathTracing->find(optionId(keys::pathTracingFilterAfterShadingEnabled));
+                                                    auto const* defaultFilterAfterShading =
+                                                        filterAfterShading != nullptr
+                                                            ? std::get_if<bool>(
+                                                                  &filterAfterShading->defaultValue.storage)
+                                                            : nullptr;
+                                                    nr::test::require(
+                                                        filterAfterShading != nullptr &&
+                                                            filterAfterShading->scope == OptionScope::graph &&
+                                                            filterAfterShading->schema.type == OptionValueType::boolean &&
+                                                            defaultFilterAfterShading != nullptr &&
+                                                            !*defaultFilterAfterShading &&
+                                                            filterAfterShading->resetsTemporalHistory,
+                                                        "PathTracing FAS must default off and reset temporal consumers after a committed A/B transition");
+
+                                                    auto completeRtBuilder = OptionCatalogBuilder{};
                                                    auto addDefinitions = [&](std::vector<OptionDefinition> definitions) {
                                                        std::ranges::for_each(definitions, [&](OptionDefinition &definition) { nr::test::require(completeRtBuilder.add(std::move(definition)), "complete RT catalog definition should be accepted"); });
                                                    };

@@ -17,7 +17,32 @@ public float4 sampleMaterialTexture(
         0.0f);
 }
 
-public float3 applyNormalMapSlot(
+public float4 sampleMaterialTextureVariant(
+    StructuredBuffer<RtMaterialTextureRef> textureRefs,
+    RtMaterialHeader material,
+    MaterialTextureSlot slot,
+    float2 texCoord0,
+    float2 texCoord1,
+    float4 fallback,
+    float filterRandomValue)
+{
+    RtMaterialTextureRef textureRef = rtMaterialTextureRef(textureRefs, material, slot);
+    float2 uv = materialTextureUv(textureRef, texCoord0, texCoord1);
+    if (kEnableFilterAfterShading)
+    {
+        uint width;
+        uint height;
+        gSceneTextures[textureRef.textureId].GetDimensions(width, height);
+        uv = stochasticBilinearTexelCenterUv(
+            uv,
+            uint2(width, height),
+            filterRandomValue);
+    }
+
+    return gSceneTextures[textureRef.textureId].SampleLevel(uv, 0.0f);
+}
+
+public float3 applyNormalMapSlotVariant(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
     MaterialTextureSlot normalSlot,
@@ -26,18 +51,24 @@ public float3 applyNormalMapSlot(
     float3 worldTangent,
     float tangentSign,
     float2 texCoord0,
-    float2 texCoord1)
+    float2 texCoord1,
+    float filterRandomValue)
 {
     // Always sample the normal slot. Unauthored normals hold texture id 0 (neutral white) and their
     // effective normalScale is 0, so the decoded tangent normal collapses to (0,0,1) and the shading
     // normal equals the incoming geometric/interpolated normal without a texture-presence branch.
-    RtMaterialTextureRef normalRef = rtMaterialTextureRef(textureRefs, material, normalSlot);
     float3 tangentFallback = orthogonalTangent(normal);
     float3 tangent = safeNormalize(worldTangent - normal * dot(normal, worldTangent), tangentFallback);
     float3 bitangent = safeNormalize(cross(normal, tangent) * tangentSign, cross(normal, tangentFallback));
-    float2 normalUv = materialTextureUv(normalRef, texCoord0, texCoord1);
     float3 tangentNormal =
-        gSceneTextures[normalRef.textureId].SampleLevel(normalUv, 0.0f).xyz * 2.0f - 1.0f;
+        sampleMaterialTextureVariant(
+            textureRefs,
+            material,
+            normalSlot,
+            texCoord0,
+            texCoord1,
+            float4(1.0f),
+            filterRandomValue).xyz * 2.0f - 1.0f;
     tangentNormal.xy *= normalScale;
     return safeNormalize(
         tangent * tangentNormal.x +
@@ -81,22 +112,26 @@ public void decodeMaterialAnisotropy(
         saturate(anisotropySample.b);
 }
 
-public void sampleMaterialAnisotropy(
+public void sampleMaterialAnisotropyVariant(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
     RtSurfaceData surface,
     float3 shadingNormal,
+    float filterRandomValue,
     out float3 anisotropyTangent,
     out float anisotropyStrength)
 {
     float3 anisotropySample = float3(1.0f, 0.5f, 1.0f);
     if (material.anisotropy.z > 0.5f)
     {
-        RtMaterialTextureRef anisotropyRef =
-            rtMaterialTextureRef(textureRefs, material, MaterialTextureSlot.anisotropy);
-        anisotropySample = gSceneTextures[anisotropyRef.textureId].SampleLevel(
-            materialTextureUv(anisotropyRef, surface.texCoord0, surface.texCoord1),
-            0.0f).rgb;
+        anisotropySample = sampleMaterialTextureVariant(
+            textureRefs,
+            material,
+            MaterialTextureSlot.anisotropy,
+            surface.texCoord0,
+            surface.texCoord1,
+            float4(1.0f, 0.5f, 1.0f, 1.0f),
+            filterRandomValue).rgb;
     }
 
     decodeMaterialAnisotropy(
@@ -108,32 +143,36 @@ public void sampleMaterialAnisotropy(
         anisotropyStrength);
 }
 
-public MaterialSample sampleCoreMaterial(
+public MaterialSample sampleCoreMaterialVariant(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     RtMaterialHeader material,
-    RtSurfaceData surface)
+    RtSurfaceData surface,
+    float3 filterRandomValues)
 {
-    float4 baseColorTexture = sampleMaterialTexture(
+    float4 baseColorTexture = sampleMaterialTextureVariant(
         textureRefs,
         material,
         MaterialTextureSlot.baseColor,
         surface.texCoord0,
         surface.texCoord1,
-        float4(1.0f));
-    float4 metallicRoughnessTexture = sampleMaterialTexture(
+        float4(1.0f),
+        filterRandomValues.x);
+    float4 metallicRoughnessTexture = sampleMaterialTextureVariant(
         textureRefs,
         material,
         MaterialTextureSlot.metallicRoughness,
         surface.texCoord0,
         surface.texCoord1,
-        float4(1.0f));
-    float4 emissiveTexture = sampleMaterialTexture(
+        float4(1.0f),
+        filterRandomValues.y);
+    float4 emissiveTexture = sampleMaterialTextureVariant(
         textureRefs,
         material,
         MaterialTextureSlot.emissive,
         surface.texCoord0,
         surface.texCoord1,
-        float4(1.0f));
+        float4(1.0f),
+        filterRandomValues.z);
 
     MaterialSample sample;
     sample.baseColor = material.baseColorFactor * baseColorTexture * surface.color0;
@@ -148,12 +187,15 @@ public MaterialSample sampleCoreMaterial(
 // transmission); base surface data lives in the header, so optional records start at layerOffset + 1.
 // Each optional layer reads its record and textures inside an `if (LayerFlags & flag)` static block, so
 // link specialization removes the record read and texture samples for inactive layers.
-public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMaterialLayerFlag>(
+public MaterialLayerStack sampleMaterialLayersVariant<
+    let LayerFlags : RtMaterialLayerFlag>(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     StructuredBuffer<RtMaterialLayerRecord> layerRecords,
     RtMaterialHeader material,
     RtSurfaceData surface,
-    float3 orientedNormal)
+    float3 orientedNormal,
+    float3 clearcoatFilterRandomValues,
+    inout RandomSequence filterSequence)
 {
     MaterialLayerStack sample = {};
     sample.clearcoatNormal = orientedNormal;
@@ -164,23 +206,25 @@ public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMateria
     {
         RtMaterialLayerRecord clearcoatLayer = layerRecords[layerRecordIndex];
         layerRecordIndex += 1u;
-        float clearcoatTexture = sampleMaterialTexture(
+        float clearcoatTexture = sampleMaterialTextureVariant(
             textureRefs,
             material,
             MaterialTextureSlot.clearcoat,
             surface.texCoord0,
             surface.texCoord1,
-            float4(1.0f)).r;
-        float clearcoatRoughnessTexture = sampleMaterialTexture(
+            float4(1.0f),
+            clearcoatFilterRandomValues.x).r;
+        float clearcoatRoughnessTexture = sampleMaterialTextureVariant(
             textureRefs,
             material,
             MaterialTextureSlot.clearcoatRoughness,
             surface.texCoord0,
             surface.texCoord1,
-            float4(1.0f)).g;
+            float4(1.0f),
+            clearcoatFilterRandomValues.y).g;
         sample.clearcoat = saturate(clearcoatLayer.p0.x * clearcoatTexture);
         sample.clearcoatRoughness = clamp(clearcoatLayer.p0.y * clearcoatRoughnessTexture, kMaterialMinRoughness, 1.0f);
-        sample.clearcoatNormal = applyNormalMapSlot(
+        sample.clearcoatNormal = applyNormalMapSlotVariant(
             textureRefs,
             material,
             MaterialTextureSlot.clearcoatNormal,
@@ -189,27 +233,33 @@ public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMateria
             surface.tangent,
             surface.tangentSign,
             surface.texCoord0,
-            surface.texCoord1);
+            surface.texCoord1,
+            clearcoatFilterRandomValues.z);
     }
 
+    // packet 1 is dead after the clearcoat block. Generate packet 2 only now
+    // so no more than one float4 texture-filter packet is live at a time.
+    float4 layerFilterRandomValues = filterSequence.rand4();
     if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
     {
         RtMaterialLayerRecord sheenLayer = layerRecords[layerRecordIndex];
         layerRecordIndex += 1u;
-        float4 sheenColorTexture = sampleMaterialTexture(
+        float4 sheenColorTexture = sampleMaterialTextureVariant(
             textureRefs,
             material,
             MaterialTextureSlot.sheenColor,
             surface.texCoord0,
             surface.texCoord1,
-            float4(1.0f));
-        float sheenRoughnessTexture = sampleMaterialTexture(
+            float4(1.0f),
+            layerFilterRandomValues.x);
+        float sheenRoughnessTexture = sampleMaterialTextureVariant(
             textureRefs,
             material,
             MaterialTextureSlot.sheenRoughness,
             surface.texCoord0,
             surface.texCoord1,
-            float4(1.0f)).a;
+            float4(1.0f),
+            layerFilterRandomValues.y).a;
         sample.sheenColor = saturate(sheenLayer.p0.rgb * sheenColorTexture.rgb);
         sample.sheenRoughness = clamp(sheenLayer.p0.w * sheenRoughnessTexture, kMaterialMinRoughness, 1.0f);
     }
@@ -218,13 +268,14 @@ public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMateria
     {
         RtMaterialLayerRecord transmissionLayer = layerRecords[layerRecordIndex];
         layerRecordIndex += 1u;
-        float transmissionTexture = sampleMaterialTexture(
+        float transmissionTexture = sampleMaterialTextureVariant(
             textureRefs,
             material,
             MaterialTextureSlot.transmission,
             surface.texCoord0,
             surface.texCoord1,
-            float4(1.0f)).r;
+            float4(1.0f),
+            layerFilterRandomValues.z).r;
         sample.transmission = saturate(transmissionLayer.p0.x * transmissionTexture);
         sample.transmissionMode = transmissionLayer.aux0 == uint(RtTransmissionMode.volume)
             ? RtTransmissionMode.volume

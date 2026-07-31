@@ -1070,6 +1070,12 @@ void ShaderService::reloadSession()
         return m_sessionGeneration;
     }
 
+void ShaderService::waitForPendingModuleCacheWrites()
+{
+        std::scoped_lock lock(m_mutex);
+        m_moduleCacheWriteThreads.clear();
+    }
+
 [[nodiscard]] SlangProgram ShaderService::compileProgramByFile(const SlangProgramCompileFileRequest &request)
 {
         std::scoped_lock lock(m_mutex);
@@ -1563,14 +1569,25 @@ void ShaderService::reloadSession()
 void ShaderService::writeModuleCacheBlobAsync(Slang::ComPtr<slang::IModule> module, const std::filesystem::path &moduleBlobPath)
 {
         auto pathText = moduleBlobPath.string();
-        std::thread([module = std::move(module), pathText = std::move(pathText)]() mutable {
-            auto writeResult = module->writeToFile(pathText.c_str());
-            if (!detail::slangSucceeded(writeResult))
+        m_moduleCacheWriteThreads.emplace_back([module = std::move(module), pathText = std::move(pathText)]() mutable -> bool {
+            try
             {
-                nrInfo<nr::LogLevel::warning>(std::format("[ShaderService::writeModuleCacheBlobAsync] writeToFile failed: path='{}', result={}", pathText, static_cast<std::int32_t>(writeResult)));
-                return;
+                auto writeResult = module->writeToFile(pathText.c_str());
+                if (!detail::slangSucceeded(writeResult))
+                {
+                    nrInfo<nr::LogLevel::warning>(std::format("[ShaderService::writeModuleCacheBlobAsync] writeToFile failed: path='{}', result={}", pathText, static_cast<std::int32_t>(writeResult)));
+                    return false;
+                }
             }
-        }).detach();
+            catch (...)
+            {
+                nrInfo<nr::LogLevel::error>(std::format(
+                    "[ShaderService::writeModuleCacheBlobAsync] Slang threw an internal exception during writeToFile: path='{}'",
+                    pathText));
+                return false;
+            }
+            return true;
+        });
     }
 
 [[nodiscard]] std::optional<std::string> ShaderService::validateModulePathOrganizationLocked(std::string_view moduleName, std::string_view modulePath) const
@@ -1677,6 +1694,7 @@ void ShaderService::invalidateStaleModuleCacheLocked(std::string_view modulePath
 
 void ShaderService::recreateSessionLocked()
 {
+        m_moduleCacheWriteThreads.clear();
         m_linkedProgramCache.clear();
         m_session = nullptr;
 

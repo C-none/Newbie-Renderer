@@ -166,6 +166,7 @@ struct PathTracingFrameInputs
 };
 
 inline constexpr std::string_view kMaxSurfaceBouncesVariantName = "kMaxSurfaceBounces";
+inline constexpr std::string_view kFilterAfterShadingVariantName = "kEnableFilterAfterShading";
 inline constexpr std::string_view kRussianRoulettePolicyVariantName = "RussianRoulettePolicy";
 inline constexpr std::string_view kRussianRoulettePolicyType = "IRussianRoulettePolicy";
 inline constexpr std::string_view kRussianRouletteEnabledPolicy = "RussianRouletteEnabledPolicy";
@@ -185,7 +186,11 @@ inline constexpr std::string_view kRussianRouletteDisabledPolicy = "RussianRoule
 [[nodiscard]] std::string describePathTracingVariantKey(const PathTracingVariantKey &key)
 {
     auto normalizedKey = normalizePathTracingVariantKey(key);
-    return std::format("PathTracing[maxBounces={},russianRoulette={}]", normalizedKey.maxSurfaceBounces, normalizedKey.enableRussianRoulette ? "enabled" : "disabled");
+    return std::format(
+        "PathTracing[maxBounces={},russianRoulette={},filterAfterShading={}]",
+        normalizedKey.maxSurfaceBounces,
+        normalizedKey.enableRussianRoulette ? "enabled" : "disabled",
+        normalizedKey.enableFilterAfterShading ? "enabled" : "disabled");
 }
 
 [[nodiscard]] std::string describePathTracingPipelineKey(const PathTracingPipelineKey &key)
@@ -202,20 +207,29 @@ inline constexpr std::string_view kRussianRouletteDisabledPolicy = "RussianRoule
 {
     auto normalizedKey = normalizePathTracingVariantKey(key);
     auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.assign(kMaxSurfaceBouncesVariantName, "uint", normalizedKey.maxSurfaceBounces).assign(kRussianRoulettePolicyVariantName, kRussianRoulettePolicyType, std::string{pathTracingRussianRoulettePolicy(normalizedKey.enableRussianRoulette)});
+    variant
+        .assign(kMaxSurfaceBouncesVariantName, "uint", normalizedKey.maxSurfaceBounces)
+        .assign(
+            kFilterAfterShadingVariantName,
+            "bool",
+            normalizedKey.enableFilterAfterShading)
+        .assign(
+            kRussianRoulettePolicyVariantName,
+            kRussianRoulettePolicyType,
+            std::string{pathTracingRussianRoulettePolicy(normalizedKey.enableRussianRoulette)});
     return variant;
 }
 
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingChsVariantDesc(const PathTracingChsVariantKey &key)
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingChsVariantDesc(
+    const PathTracingChsVariantKey& key)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant.assign(
         "CHS",
         "ICHS",
         std::format(
-            "MaterialCHS<RtMaterialLayerFlag({}u), RtBaseLobeVariant({}u)>",
-            static_cast<std::uint32_t>(key.layerFlags),
-            static_cast<std::uint32_t>(key.baseLobeVariant)));
+            "MaterialCHS<RtMaterialLayerFlag({}u)>",
+            static_cast<std::uint32_t>(key.layerFlags)));
     return variant;
 }
 
@@ -290,8 +304,14 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     return assembly;
 }
 
-[[nodiscard]] std::vector<PathTracingHitProgram> compilePathTracingHitPrograms(nr::rhi::ShaderService &shaderService, const nr::rhi::SlangProgram &rootProgram, const nr::rhi::SlangProgramVariantDesc &variantDesc, PathTracingChsVariantKey baselineChsKey,
-                                                                               const nr::rhi::SlangProgramVariantDesc &baselineChsVariantDesc, const nr::rhi::RayTracingPipelineDesc &pipelineDesc, const SceneRtHitSbtPlan &hitSbtPlan)
+[[nodiscard]] std::vector<PathTracingHitProgram> compilePathTracingHitPrograms(
+    nr::rhi::ShaderService& shaderService,
+    const nr::rhi::SlangProgram& rootProgram,
+    const nr::rhi::SlangProgramVariantDesc& variantDesc,
+    PathTracingChsVariantKey baselineChsKey,
+    const nr::rhi::SlangProgramVariantDesc& baselineChsVariantDesc,
+    const nr::rhi::RayTracingPipelineDesc& pipelineDesc,
+    const SceneRtHitSbtPlan& hitSbtPlan)
 {
     auto hitPrograms = std::vector<PathTracingHitProgram>{};
     auto programIndexByKey = std::map<PathTracingChsVariantKey, std::uint32_t>{};
@@ -339,7 +359,8 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     nr::nrAssert(!hitSbtPlan.permutations.empty(), "Path tracing pipeline creation requires at least one active hit permutation.");
 
     auto &shaderService = nr::rhi::ShaderService::instance();
-    auto baselineVariantDesc = makePathTracingVariantDesc(PathTracingVariantKey{});
+    auto const baselineVariantKey = PathTracingVariantKey{};
+    auto baselineVariantDesc = makePathTracingVariantDesc(baselineVariantKey);
     auto const baselineChsKey = hitSbtPlan.permutations.front().key.bsdf;
     auto baselineChsVariantDesc = makePathTracingChsVariantDesc(baselineChsKey);
     auto baselineProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
@@ -367,7 +388,14 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
         nr::rhi::assertShaderLayoutAbiStable(baselineProgram, rootProgram, pipelineDesc.descriptorBindingPolicy, describePathTracingVariantKey(pipelineKey.rootVariant));
     }
 
-    auto hitPrograms = compilePathTracingHitPrograms(shaderService, rootProgram, variantDesc, baselineChsKey, baselineChsVariantDesc, pipelineDesc, hitSbtPlan);
+    auto hitPrograms = compilePathTracingHitPrograms(
+        shaderService,
+        rootProgram,
+        variantDesc,
+        baselineChsKey,
+        baselineChsVariantDesc,
+        pipelineDesc,
+        hitSbtPlan);
     auto programAssembly = makePathTracingProgramAssembly(rootProgram, hitSbtPlan, hitPrograms);
 
     auto descriptorLayout = nr::rhi::ShaderDescriptorLayout::create(rootProgram, pipelineDesc.descriptorBindingPolicy);
@@ -687,11 +715,17 @@ namespace
         snapshot.find(nr::options::keys::pathTracingMaxSurfaceBounces);
     auto const* russianRoulette =
         snapshot.find(nr::options::keys::pathTracingRussianRouletteEnabled);
-    nrAssert(maxBounces != nullptr && russianRoulette != nullptr,
-             "PathTracing requires its option values in the frame snapshot.");
+    auto const* filterAfterShading =
+        snapshot.find(nr::options::keys::pathTracingFilterAfterShadingEnabled);
+    nrAssert(
+        maxBounces != nullptr &&
+            russianRoulette != nullptr &&
+            filterAfterShading != nullptr,
+        "PathTracing requires its option values in the frame snapshot.");
     return detail::normalizePathTracingVariantKey(PathTracingVariantKey{
         .maxSurfaceBounces = static_cast<std::uint32_t>(*maxBounces),
         .enableRussianRoulette = *russianRoulette,
+        .enableFilterAfterShading = *filterAfterShading,
     });
 }
 } // namespace
@@ -714,6 +748,7 @@ void PathTracingNode::collectOptionAvailability(
     auto const definitions = std::array{
         nr::options::optionId(nr::options::keys::pathTracingMaxSurfaceBounces),
         nr::options::optionId(nr::options::keys::pathTracingRussianRouletteEnabled),
+        nr::options::optionId(nr::options::keys::pathTracingFilterAfterShadingEnabled),
     };
     std::ranges::for_each(
         definitions,
@@ -745,11 +780,12 @@ PathTracingNode::structuralSnapshot(const NodeFrameParameters& frameParameters) 
         frameParameters.sceneTlasBuildInputs.has_value() &&
         !frameParameters.sceneTlasBuildInputs->get().empty();
     auto branch = std::format(
-        "{};format={};bounces={};roulette={};scene={}",
+        "{};format={};bounces={};roulette={};filterAfterShading={};scene={}",
         hasTraceInputs ? "trace" : "clear-MissingTLAS",
         static_cast<std::uint32_t>(input.outputFormat),
         variant.maxSurfaceBounces,
         variant.enableRussianRoulette ? 1u : 0u,
+        variant.enableFilterAfterShading ? 1u : 0u,
         frameParameters.sceneRevisions.sceneIdentity);
     auto const structuralRevisions =
         nr::scene::SceneRtStructuralRevisionProjection::capture(frameParameters.sceneRevisions.rt);

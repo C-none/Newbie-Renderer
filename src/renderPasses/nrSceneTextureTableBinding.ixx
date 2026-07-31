@@ -25,12 +25,14 @@ struct SceneTextureTableBindingInput
     std::uint64_t tableVersion = 0;
 };
 
-[[nodiscard]] inline nr::rhi::SlangSamplerDesc sceneTextureTableLinearSamplerDesc() noexcept
+[[nodiscard]] inline nr::rhi::SlangSamplerDesc sceneTextureTableNearestSamplerDesc() noexcept
 {
     return nr::rhi::SlangSamplerDesc{
-        .magFilter = vk::Filter::eLinear,
-        .minFilter = vk::Filter::eLinear,
-        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+        .magFilter = vk::Filter::eNearest,
+        .minFilter = vk::Filter::eNearest,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
     };
 }
 
@@ -40,7 +42,7 @@ struct SceneTextureTableBindingInput
         .set = kSceneTextureTableSet,
         .binding = kSceneTextureTableBinding,
         .descriptorCount = nr::renderer::kSceneTextureDescriptorCapacity,
-        .samplerDesc = sceneTextureTableLinearSamplerDesc(),
+        .samplerDesc = sceneTextureTableNearestSamplerDesc(),
     };
 }
 

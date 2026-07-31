@@ -22,6 +22,7 @@ struct PathTracingVariantKey
 {
     std::uint32_t maxSurfaceBounces = kPathTracingDefaultMaxSurfaceBounces;
     bool enableRussianRoulette = true;
+    bool enableFilterAfterShading = false;
 
     [[nodiscard]] friend auto operator<=>(const PathTracingVariantKey &, const PathTracingVariantKey &) noexcept = default;
 };

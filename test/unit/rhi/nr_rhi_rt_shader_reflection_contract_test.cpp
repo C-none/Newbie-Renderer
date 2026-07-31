@@ -20,7 +20,8 @@ struct CameraData
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestVariant(
     std::uint32_t maxSurfaceBounces = 16u,
-    bool enableRussianRoulette = true)
+    bool enableRussianRoulette = true,
+    bool enableFilterAfterShading = false)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant
@@ -28,6 +29,10 @@ struct CameraData
             "kMaxSurfaceBounces",
             "uint",
             maxSurfaceBounces)
+        .assign(
+            "kEnableFilterAfterShading",
+            "bool",
+            enableFilterAfterShading)
         .assign(
             "RussianRoulettePolicy",
             "IRussianRoulettePolicy",
@@ -38,17 +43,15 @@ struct CameraData
 }
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestChsVariant(
-    std::uint32_t layerMask = 0u,
-    std::uint32_t baseLobeVariant = 0u)
+    std::uint32_t layerMask = 0u)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant.assign(
         "CHS",
         "ICHS",
         std::format(
-            "MaterialCHS<RtMaterialLayerFlag({}u), RtBaseLobeVariant({}u)>",
-            layerMask,
-            baseLobeVariant));
+            "MaterialCHS<RtMaterialLayerFlag({}u)>",
+            layerMask));
     return variant;
 }
 
@@ -149,9 +152,7 @@ const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
         nr::test::requireEqual(effectiveLines[0], std::string{"import common;"});
         nr::test::requireEqual(
             effectiveLines[1],
-            std::string{
-                "export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u), "
-                "RtBaseLobeVariant(0u)>;"});
+            std::string{"export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u)>;"});
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
@@ -221,7 +222,7 @@ const nr::test::CaseRegistrar pathTracingTransmissionChsFamiliesCase{
             nr::rhi::SlangProgramCompileFileRequest{
                 .sourcePath = std::filesystem::path{"renderer/pathTracing"},
                 .variant = makePathTracingTestVariant(),
-                .linkVariants = {makePathTracingTestChsVariant(1u, 1u)},
+                .linkVariants = {makePathTracingTestChsVariant(17u)},
             });
         nr::test::require(
             anisotropicRoot.valid(),
@@ -576,7 +577,7 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
         auto reloadedVariantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
             .variant = constantVariant,
-            .linkVariants = {makePathTracingTestChsVariant(4u)},
+            .linkVariants = {makePathTracingTestChsVariant(5u)},
         });
         nr::test::require(reloadedVariantProgram.valid(), "path tracing variant should compile after session reload");
     }};

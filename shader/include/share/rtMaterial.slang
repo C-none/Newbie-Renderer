@@ -18,23 +18,18 @@ public enum RtInstanceFlag : uint
 [Flags]
 public enum RtMaterialLayerFlag : uint
 {
-    none         = 0u,
-    baseSurface  = 1u << 0u,
-    clearcoat    = 1u << 1u,
-    sheen        = 1u << 2u,
-    transmission = 1u << 3u,
+    none                    = 0u,
+    baseSurface             = 1u << 0u,
+    clearcoat               = 1u << 1u,
+    sheen                   = 1u << 2u,
+    transmission            = 1u << 3u,
+    anisotropicBaseLobe     = 1u << 4u,
 }
 
 public enum RtTransmissionMode : uint
 {
     thin = 0u,
     volume = 1u,
-}
-
-public enum RtBaseLobeVariant : uint
-{
-    isotropic = 0u,
-    anisotropic = 1u,
 }
 
 [Flags]

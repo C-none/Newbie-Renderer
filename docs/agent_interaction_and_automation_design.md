@@ -478,7 +478,7 @@ The public core model is fixed:
 | `OptionWireValue` | closed bool/integer/number/UTF-8 string/array/closed-object value |
 | `OptionKey<T>` | strongly typed key used by C++ domain code |
 | `OptionSchema` | type, range, enum, object-field, size, and cross-field validation |
-| `OptionDefinition` | ID, schema, default, scope, and UI presentation metadata |
+| `OptionDefinition` | ID, schema, default, scope, UI presentation metadata, and data-only post-commit temporal-reset policy |
 | `OptionMutationRequest` | ID, complete value, binding proof, origin, and optional request ID |
 | `ScheduleResult` | `started`, or `rejected` with one stable reason |
 | `OptionFrameSnapshot` | immutable catalog/value/availability, monotonic frame/revision, graph/binding identity, and at most one frame effect |
@@ -497,6 +497,7 @@ constraints
 presentation_hint
 scope
 schema_fingerprint
+resets_temporal_history
 ```
 
 It intentionally does not contain a public `kind = property|action` field.
@@ -504,6 +505,11 @@ It intentionally does not contain a public `kind = property|action` field.
 `presentation_hint` is advisory metadata such as checkbox, combo, slider, text input, or
 button. It controls only Dear ImGui rendering. It does not define semantics and is not
 used by WebSocket or Lua to choose a different mutation path.
+
+`resets_temporal_history` is internal definition metadata for retained values whose
+successful transition invalidates temporal consumers. Pipeline execution reads it before
+commit and requests the renderer reset only after canonical commit succeeds. It is not a
+frame effect, does not claim a GPU batch, and does not reset the sampling ordinal.
 
 ### 9.2 Stable IDs
 
@@ -529,6 +535,7 @@ viewer.camera.clip_planes
 viewer.camera.movement_speed
 render.path_tracing.max_surface_bounces
 render.path_tracing.russian_roulette_enabled
+render.path_tracing.filter_after_shading_enabled
 render.accumulate.max_history_samples
 render.dlss.enabled
 render.dlss.quality
@@ -756,8 +763,8 @@ Non-control performance/status diagnostics may remain in a separate diagnostics 
 ### 10.3 Data-only catalog and runtime routing
 
 `OptionDefinition` contains schema, default, scope, lifetime, UI presentation metadata,
-and an admission validator. It contains no node pointer, executor callback, availability
-callback, or transport object.
+the data-only `resetsTemporalHistory` post-commit policy, and an admission validator. It
+contains no node pointer, executor callback, availability callback, or transport object.
 
 Runtime work follows explicit frame-thread paths:
 
@@ -765,6 +772,8 @@ Runtime work follows explicit frame-thread paths:
   fullscreen, and canonical camera/value commits;
 - ordinary graph values commit generically to `OptionSystem`, and installed nodes read
   those values from the mandatory frame snapshot;
+- after a retained value commits successfully, `nr.pipeline` forwards its
+  `resetsTemporalHistory` policy to the renderer; failed commits request no reset;
 - the Renderer visits installed nodes to collect conservative availability;
 - a frame effect is claimed through the frame-local `FrameEffectSink` and is finalized
   against the exact submitted batch;
@@ -1389,6 +1398,7 @@ shuts down `AppSession`.
 |---|---|
 | `render.path_tracing.max_surface_bounces` | unsigned integer `1..64`, default `16` |
 | `render.path_tracing.russian_roulette_enabled` | boolean, default `true` |
+| `render.path_tracing.filter_after_shading_enabled` | boolean, default `false`; a successful transition resets temporal history |
 | `render.accumulate.max_history_samples` | unsigned integer `1..4096`, default `1024` |
 | `render.dlss.enabled` | boolean, default `true` |
 | `render.dlss.quality` | `performance`, `balanced`, `quality`, `ultra_performance`, or `dlaa`; launch `--dlss-quality` seeds this value |

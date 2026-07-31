@@ -18,7 +18,6 @@ using nr::shader::share::RtGeometryFlag;
 using nr::shader::share::RtGeometryMetadata;
 using nr::shader::share::RtInstanceFlag;
 using nr::shader::share::RtInstanceMetadata;
-using nr::shader::share::RtBaseLobeVariant;
 using nr::shader::share::RtMaterialFeatureFlag;
 using nr::shader::share::RtMaterialHeader;
 using nr::shader::share::RtMaterialLayerFlag;
@@ -28,6 +27,14 @@ using nr::shader::share::RtTransmissionMode;
 
 inline constexpr auto kRtMaterialFallbackIndex = nr::shader::share::kRtMaterialFallbackIndex;
 inline constexpr auto kRtGeometryFlagIndexed = RtGeometryFlag::indexed;
+inline constexpr auto kRtMaterialPhysicalLayerMask = static_cast<RtMaterialLayerFlag>(
+    static_cast<std::uint32_t>(RtMaterialLayerFlag::baseSurface) |
+    static_cast<std::uint32_t>(RtMaterialLayerFlag::clearcoat) |
+    static_cast<std::uint32_t>(RtMaterialLayerFlag::sheen) |
+    static_cast<std::uint32_t>(RtMaterialLayerFlag::transmission));
+inline constexpr auto kRtMaterialVariantMask = static_cast<RtMaterialLayerFlag>(
+    static_cast<std::uint32_t>(kRtMaterialPhysicalLayerMask) |
+    static_cast<std::uint32_t>(RtMaterialLayerFlag::anisotropicBaseLobe));
 
 [[nodiscard]] constexpr bool hasAnyRtMaterialFeature(RtMaterialFeatureFlag flags, RtMaterialFeatureFlag mask) noexcept
 {
@@ -71,6 +78,7 @@ static_assert(offsetof(RtMaterialTextureRef, textureId) == 24u);
 static_assert(offsetof(RtMaterialTextureRef, uvSet) == 28u);
 static_assert(sizeof(RtGeometryMetadata) == 32u);
 static_assert(sizeof(RtInstanceMetadata) == 32u);
+static_assert(static_cast<std::uint32_t>(RtMaterialLayerFlag::anisotropicBaseLobe) == 16u);
 static_assert(static_cast<std::uint32_t>(RtTransmissionMode::thin) == 0u);
 static_assert(static_cast<std::uint32_t>(RtTransmissionMode::volume) == 1u);
 static_assert(static_cast<std::uint32_t>(AlphaMode::opaque) == static_cast<std::uint32_t>(nr::resource::AlphaMode::opaque));

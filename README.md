@@ -15,7 +15,9 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 
 - **Path Tracing + DLSS Ray Reconstruction:** Path tracing produces a fixed 1spp seven-resource RR input set. DLSS quality selects render resolution; DLAA renders at display resolution and is the only mode that permits output bypass.
 
-- **Multi-Queue Render Graph:** RDG schedules graphics, compute, and transfer batches with timeline semaphores, queue-ownership transitions, and an explicit swapchain-acquire boundary.
+- **Filter After Shading (FAS):** RT path-traced materials expose an off-by-default A/B graph option backed by ABI-stable Slang root variants. The path tracer reserves a fixed three-`rand4` schedule for eleven material texture semantics regardless of the selected policy or optional material layers; when enabled, FAS selects one bilinear reconstruction tap and performs one nearest LOD0 fetch per lookup. Changing the option resets temporal history, while alpha-mask any-hit remains deterministic. The implemented filtering path is intentionally mipless and does not use derivatives or ray cones.
+
+- **Async Copy and Async Compute:** The multi-queue RDG implements asynchronous copy work on the transfer queue and asynchronous compute work on the compute queue, synchronized with graphics through timeline semaphores and queue-ownership transitions.
 
 - **UI and HDR Presentation:** ImGui tooling integrates with SDR, HDR10, and scRGB presentation conversion, selectable tone mapping, screenshots, and readback.
 
@@ -25,20 +27,19 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 2. [x] Slang compilation and reflection pipeline for reusable shader/module workflows.
 3. [x] flecs integration as the scene-layer ECS runtime.
 4. [x] Asset import and decode foundation for glTF-oriented content ingestion.
-5. [x] Multi-queue RDG execution and asynchronous queue submission.
+5. [x] Multi-queue RDG execution with Async Copy and Async Compute.
 6. [x] Scene-driven cached BLAS rebuilds with per-frame TLAS construction and RT metadata.
 7.  [x] Alias-table many-light sampling for active punctual lights. Suggested reference: [Dynamic Many-Light Sampling for Real-Time Ray Tracing](https://research.nvidia.com/sites/default/files/pubs/2019-07_Dynamic-Many-Light-Sampling//MPC19.pdf)
 8.  [ ] Light BVH.
 9.  [ ] Neural Material System. Suggested reference: [Real-Time Neural Appearance Models](https://research.nvidia.com/labs/rtr/neural_appearance_models/)
 10. [ ] NTC. Suggested reference: [Random-Access Neural Compression of Material Textures](https://research.nvidia.com/labs/rtr/neural_texture_compression/)
 11. [ ] Neural Radiance Caching. Suggested reference: [Real-time Neural Radiance Caching for Path Tracing](https://research.nvidia.com/publication/2021-06_real-time-neural-radiance-caching-path-tracing)
-12. [ ] Filter After Shading. Suggested reference: [Filtering After Shading with Stochastic Texture Filtering](https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/)
+12. [x] RT Filter After Shading (FAS) first stage: an ABI-stable root A/B variant, fixed random-dimension mapping for eleven material texture semantics, and one-sample stochastic bilinear reconstruction at LOD0. Suggested reference: [Filtering After Shading with Stochastic Texture Filtering](https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/)
 13. [x] DLSS Ray Reconstruction with quality-driven render resolution and DLAA-only output bypass. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
-14. [ ] Ray-Cones and Texture LOD. Suggested reference: [Improved Shader and Texture Level of Detail Using Ray Cones](https://research.nvidia.com/publication/2021-04_improved-shader-and-texture-level-detail-using-ray-cones)
-15. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
-16. [ ] NeuSample / neural material importance sampling. Suggested reference: [NeuSample: Importance Sampling for Neural Materials](https://cseweb.ucsd.edu/~viscomp/projects/neusample/)
-17. [ ] Neural shading optimization stability. Suggested reference: [Taming Optimization Variance in Compact Neural Shading Networks](https://research.nvidia.com/labs/rtr/publication/bitterli2026taming/)
-18. [ ] Comprehensive neural materials. Suggested reference: [Towards Comprehensive Neural Materials: Dynamic Structure-Preserving Synthesis with Accurate Silhouette at Instant Inference Speed](https://dl.acm.org/doi/full/10.1145/3721238.3730626)
+14. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
+15. [ ] NeuSample / neural material importance sampling. Suggested reference: [NeuSample: Importance Sampling for Neural Materials](https://cseweb.ucsd.edu/~viscomp/projects/neusample/)
+16. [ ] Neural shading optimization stability. Suggested reference: [Taming Optimization Variance in Compact Neural Shading Networks](https://research.nvidia.com/labs/rtr/publication/bitterli2026taming/)
+17. [ ] Comprehensive neural materials. Suggested reference: [Towards Comprehensive Neural Materials: Dynamic Structure-Preserving Synthesis with Accurate Silhouette at Instant Inference Speed](https://dl.acm.org/doi/full/10.1145/3721238.3730626)
 
 ## Prerequisites
 
@@ -95,6 +96,24 @@ Optional MSVC toolchains:
    # Release
    ./build/llvm/src/Release/main.exe
    ```
+
+### Single Shader Compile Check
+
+After configuring the LLVM build, compile one shader through the same `ShaderService`
+session, link, reflection, and per-entry-point SPIR-V generation path used by the
+renderer:
+
+```bash
+cmake "-DNR_SHADER_FILE=renderer/embeddedTriangle.slang" -P tools/CheckSlangShader.cmake
+```
+
+`NR_SHADER_FILE` may be absolute or relative to the configured `NR_SHADER_ROOT_DIR`;
+the `.slang` extension may be omitted.
+The script incrementally builds the excluded `nr_shader_compile_check` helper with
+LLVM Debug by default. Use `NR_SHADER_CHECK_BUILD_DIR` and
+`NR_SHADER_CHECK_CONFIG` to select another configured build tree or configuration.
+Shaders with required link-time assignments are checked with an empty variant and
+therefore fail until a variant-aware checker invocation is added explicitly.
 
 ### Runtime Logs
 

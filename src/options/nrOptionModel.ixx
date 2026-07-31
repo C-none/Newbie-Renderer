@@ -253,6 +253,7 @@ struct OptionDefinition
     OptionValueLifetime lifetime = OptionValueLifetime::canonical;
     OptionPresentation presentation{};
     OptionAdmissionValidator admissionValidator{};
+    bool resetsTemporalHistory = false;
 };
 
 class OptionCatalog

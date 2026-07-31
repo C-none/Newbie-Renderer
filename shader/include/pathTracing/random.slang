@@ -167,6 +167,15 @@ public struct RandomSequence
             float(bits.z >> 8u),
             float(bits.w >> 8u)) * kInvTwoPow24;
     }
+
+    // Advance exactly as three discarded rand4() packets. sobolSamplerCore()
+    // evolves the LCG five times per packet, and this affine jump is the
+    // closed-form composition of all fifteen seed steps modulo 2^32.
+    [mutating]
+    public void advanceThreeRand4Packets()
+    {
+        sampleSeed = sampleSeed * 0x98a5741du + 0xacfbeaa7u;
+    }
 }
 
 // Tiled screen-space low-discrepancy initialisation (UE-aligned, one sample per frame).

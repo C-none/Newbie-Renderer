@@ -1535,6 +1535,8 @@ class Renderer
 
     void setEnvironmentMap(nr::resource::EnvironmentMap environment);
 
+    void requestTemporalHistoryReset() noexcept;
+
     [[nodiscard]] bool initialized() const noexcept;
 
     [[nodiscard]] bool graphInstalled() const noexcept;

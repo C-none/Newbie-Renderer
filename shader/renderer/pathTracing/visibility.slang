@@ -13,8 +13,7 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
     ray.TMax = max(kRayEpsilon, maxDistance - kRayEpsilon);
 
     RayPayload payload = {};
-    payload.rayKind = RayKind.visibility;
-    payload.hit = 1u;
+    initializeVisibilityRayPayload(payload);
     TraceRay(
         scene,
         RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
@@ -26,7 +25,7 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
         0,
         ray,
         payload);
-    return payload.hit == 0u;
+    return !payload.hit;
 }
 
 public bool tracePathVisibilityRayToLight(float3 origin, SceneLightContribution contribution)

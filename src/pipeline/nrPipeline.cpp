@@ -317,11 +317,16 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
         return MutationFrameResult{.effect = std::move(materialized.effect)};
     }
 
+    auto const resetsTemporalHistory = definition->resetsTemporalHistory;
     auto committed = options.commitCanonical(std::move(mutation));
     if (!committed.committed)
     {
         emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::string{nr::options::wireName(committed.reason)});
         return {};
+    }
+    if (resetsTemporalHistory)
+    {
+        app.renderer().requestTemporalHistoryReset();
     }
     emitTerminal(sequence, id, frameIndex, origin, requestId, true);
     return {};

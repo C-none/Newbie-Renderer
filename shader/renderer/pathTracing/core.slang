@@ -47,7 +47,7 @@ public PathState generatePath(uint2 pixel, uint2 dimensions)
     PathState path = {};
     path.pixel = pixel;
     path.dimensions = dimensions;
-    path.flags = PathFlag.active;
+    path.active = true;
     path.rng = makeErrorDiffusionSequence(pixel, gFrame.frameState.xy);
     path.origin = origin;
     path.direction = safeNormalize(directionVector, float3(0.0f, 0.0f, -1.0f));
@@ -82,40 +82,32 @@ public float lightVisibilityDistance(uint lightIndex, float3 hitPosition)
 }
 
 // Direct lighting is evaluated after CHS returns, so the CHS link-time LayerFlags is not a raygen
-// compile-time constant. This runtime switch maps the resolved layerFlags to the concrete static
-// evaluator so each invocation runs only its active-layer math. The root raygen SPIR-V contains every
-// valid lit case; that is the accepted boundary of the current single-raygen architecture.
-public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponentsBaseVariant<
-    let BaseLobeVariant : RtBaseLobeVariant>(
+// compile-time constant. This runtime switch maps the resolved combined material flags to the concrete
+// static evaluator. The root raygen SPIR-V contains all sixteen valid lit cases.
+public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponents(
     ResolvedMaterialPayload material,
     MaterialDirectLightingInput lighting)
 {
     switch (uint(material.layerFlags))
     {
-    case 1u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u), BaseLobeVariant>(material, lighting);
-    case 3u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(3u), BaseLobeVariant>(material, lighting);
-    case 5u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(5u), BaseLobeVariant>(material, lighting);
-    case 7u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(7u), BaseLobeVariant>(material, lighting);
-    case 9u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(9u), BaseLobeVariant>(material, lighting);
-    case 11u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(11u), BaseLobeVariant>(material, lighting);
-    case 13u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(13u), BaseLobeVariant>(material, lighting);
-    case 15u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(15u), BaseLobeVariant>(material, lighting);
-    default: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u), BaseLobeVariant>(material, lighting);
+    case 1u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    case 3u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(3u)>(material, lighting);
+    case 5u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(5u)>(material, lighting);
+    case 7u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(7u)>(material, lighting);
+    case 9u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(9u)>(material, lighting);
+    case 11u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(11u)>(material, lighting);
+    case 13u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(13u)>(material, lighting);
+    case 15u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(15u)>(material, lighting);
+    case 17u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(17u)>(material, lighting);
+    case 19u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(19u)>(material, lighting);
+    case 21u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(21u)>(material, lighting);
+    case 23u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(23u)>(material, lighting);
+    case 25u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(25u)>(material, lighting);
+    case 27u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(27u)>(material, lighting);
+    case 29u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(29u)>(material, lighting);
+    case 31u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(31u)>(material, lighting);
+    default: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
     }
-}
-
-public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponents(
-    ResolvedMaterialPayload material,
-    MaterialDirectLightingInput lighting)
-{
-    if (material.anisotropyStrength > 0.0f)
-    {
-        return dispatchEvaluateResolvedMaterialDirectComponentsBaseVariant<
-            RtBaseLobeVariant.anisotropic>(material, lighting);
-    }
-
-    return dispatchEvaluateResolvedMaterialDirectComponentsBaseVariant<
-        RtBaseLobeVariant.isotropic>(material, lighting);
 }
 
 public void accumulateDirectLightSample(
@@ -294,7 +286,6 @@ public bool applyResolvedMaterialMediumTransition(
 
 public void handleHit(inout PathState path, ResolvedMaterialPayload material, ResolvedMaterialScatter scatter)
 {
-    pathStateSetHit(path, true);
     float3 viewDirection = safeNormalize(-path.direction, material.geometryNormal);
 
     if (resolvedMaterialIsVolumeBoundary(material) &&
@@ -324,7 +315,9 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
         resolvePathTracingSpecularHit(path.guides, material.position);
     }
 
-    float hitAlpha = material.alphaMode == AlphaMode.blend ? material.alpha : 1.0f;
+    float hitAlpha = material.alphaMode == AlphaMode.blend
+        ? material.alpha
+        : 1.0f;
     if (path.vertexIndex == 1u && hitAlpha < 1.0f)
     {
         addDiffusePathContribution(path, sampleEnvironment(path.direction) * (1.0f - hitAlpha));
@@ -366,7 +359,7 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
         return;
     }
 
-    if (scatter.valid == 0u)
+    if (!scatter.valid)
     {
         terminatePathState(path);
         return;
@@ -378,9 +371,10 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
         return;
     }
 
-    if (scatter.kind == ResolvedMaterialScatterKind.specular ||
-        scatter.kind == ResolvedMaterialScatterKind.clearcoat ||
-        scatter.kind == ResolvedMaterialScatterKind.transmission)
+    ResolvedMaterialScatterKind scatterKind = scatter.kind;
+    if (scatterKind == ResolvedMaterialScatterKind.specular ||
+        scatterKind == ResolvedMaterialScatterKind.clearcoat ||
+        scatterKind == ResolvedMaterialScatterKind.transmission)
     {
         path.specularBounces += 1u;
     }
@@ -415,10 +409,9 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
         updatePathThroughput(path, float3(roulettePolicy.throughputScale(survivalProbability)));
     }
 
-    path.pdf = scatter.delta != 0u ? scatter.pmf : scatter.pdf;
     if (path.vertexIndex == 1u)
     {
-        beginPathTracingSpecularHitTracking(path.guides, scatter.kind);
+        beginPathTracingSpecularHitTracking(path.guides, scatterKind);
     }
     path.origin = offsetRayOrigin(material.position, material.geometryNormal, scatter.direction);
     path.direction = scatter.direction;
@@ -426,7 +419,6 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 
 public void handleMiss(inout PathState path, float3 missRadiance)
 {
-    pathStateSetHit(path, false);
     if (path.vertexIndex == 2u)
     {
         resolvePathTracingSpecularMiss(path.guides);
@@ -458,7 +450,7 @@ public struct Pt
 
     public bool isActive()
     {
-        return pathStateIsActive(path);
+        return path.active;
     }
 
     [mutating]
@@ -483,20 +475,34 @@ public struct Pt
             materialRayCoherenceHint(path.vertexIndex),
             kMaterialRayCoherenceHintBitCount);
 
-        payload = {};
-        payload.rayKind = RayKind.material;
-        payload.scatterRandomValues = path.rng.rand4();
-        payload.incidentMediumIor = pathCurrentMediumIor(path);
-        payload.exteriorMediumIor = pathExteriorMediumIor(path);
+        float4 scatterRandomValues = path.rng.rand4();
+        RandomSequence materialFilterSequence = path.rng;
+        // The largest material CHS reads eleven texture semantics. Reserve
+        // three packets (12 scalar dimensions, one padding lane) after scatter
+        // for every material segment, including miss, unlit, and FAS-off paths.
+        // rand4() evolves five seed keys per packet. This one closed-form jump
+        // is exactly equivalent to discarding the three complete packets.
+        path.rng.advanceThreeRand4Packets();
+        initializeMaterialRayPayload(
+            payload,
+            scatterRandomValues,
+            materialFilterSequence,
+            pathCurrentMediumIor(path),
+            pathExteriorMediumIor(path));
         HitObject::Invoke(scene, hitObject, payload);
     }
 
     [mutating]
     public void handleTraceResult(RayPayload payload)
     {
-        if (payload.hit != 0u)
+        if (payload.hit)
         {
-            handleHit(payload.material, payload.scatter);
+            handleHit(
+                resolvedMaterialFromRayPayload(
+                    payload,
+                    pathCurrentMediumIor(path),
+                    pathExteriorMediumIor(path)),
+                resolvedMaterialScatterFromRayPayload(payload));
         }
         else
         {

@@ -65,6 +65,21 @@ const nr::test::CaseRegistrar migratedRenderPassBranchSnapshotsCase{
         nr::test::require(pathVariant.has_value());
         nr::test::require(pathDefault->branchKey != pathVariant->branchKey);
 
+        auto pathFilterAfterShadingSnapshot = pathDefaultSnapshot;
+        pathFilterAfterShadingSnapshot.values.insert_or_assign(
+            nr::options::optionId(
+                nr::options::keys::pathTracingFilterAfterShadingEnabled),
+            nr::options::OptionWireValue{true});
+        auto const pathFilterAfterShading = pathTracing.structuralSnapshot(
+            nr::renderer::NodeFrameParameters{
+                .optionSnapshot =
+                    std::cref(pathFilterAfterShadingSnapshot),
+            });
+        nr::test::require(pathFilterAfterShading.has_value());
+        nr::test::require(
+            pathDefault->branchKey != pathFilterAfterShading->branchKey,
+            "Filter After Shading must select a distinct PathTracing structural branch");
+
         auto dlss = nr::renderPasses::DlssRayReconstructionNode{};
         nr::test::require(dlss.supportsRenderGraphSkeleton());
         auto dlssDefaultSnapshot = makeOptionSnapshot(nr::options::makeDlssDefinitions());
@@ -140,6 +155,34 @@ void requireOrdered(
     return contents.substr(begin, end - begin);
 }
 
+const nr::test::CaseRegistrar materialFilterPacketAdvanceCase{
+    "path tracing material-filter reservation advances exactly three rand4 packets",
+    [] {
+        auto const seeds = std::array{
+            0u,
+            1u,
+            0x12345678u,
+            0x80000000u,
+            0xffffffffu,
+        };
+        std::ranges::for_each(seeds, [](std::uint32_t seed) {
+            auto expanded = seed;
+            std::ranges::for_each(
+                std::views::iota(0u, 15u),
+                [&](auto) {
+                    expanded =
+                        expanded * 0x915f77f5u + 0x93d765ddu;
+                });
+
+            auto const collapsed =
+                seed * 0x98a5741du + 0xacfbeaa7u;
+            nr::test::requireEqual(
+                expanded,
+                collapsed,
+                "fifteen LCG steps must equal the affine skip for three rand4 packets");
+        });
+    }};
+
 static_assert(std::same_as<nr::renderer::RendererTlasTextureRevisionProjection, nr::scene::SceneRtStructuralRevisionProjection>);
 
 const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpasses no longer own renderer/RDG descriptor table cache state", [] {
@@ -157,7 +200,9 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                           auto rendererImplementation =
                                                                               readProjectFile("src/renderer/nrRenderer.cpp") +
                                                                               readProjectFile("src/renderer/nrRendererPassBuilders.cpp");
-                                                                         auto accelerationStructureBuild = readProjectFile("src/renderPasses/AccelerationStructureBuild/nrAccelerationStructureBuildNode.cpp");
+                                                                          auto pipelineImplementation =
+                                                                              readProjectFile("src/pipeline/nrPipeline.cpp");
+                                                                          auto accelerationStructureBuild = readProjectFile("src/renderPasses/AccelerationStructureBuild/nrAccelerationStructureBuildNode.cpp");
 
                                                                          requireAbsent(normalBuffer, "SceneTextureTableBindingCache", "NormalBuffer must use renderer-owned bindless table cache instead of a node-local scene cache");
                                                                          requireAbsent(pathTracing, "SceneTextureTableBindingCache", "PathTracing must use renderer-owned bindless table cache instead of a node-local scene cache");
@@ -169,8 +214,9 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requireAbsent(sceneTextureBinding, "resetSceneTextureTableFrameCache", "scene texture table helper should not own frame-slot cache reset state");
                                                                          requirePresent(normalBuffer, "sceneTextureTableImmutableSamplerBinding()", "NormalBuffer should install the scene texture table immutable sampler before graphics PSO creation");
                                                                          requirePresent(pathTracing, "sceneTextureTableImmutableSamplerBinding()", "PathTracing should install the scene texture table immutable sampler before RT PSO creation");
-                                                                         requireAbsent(pathTracingInterface, "PathTracingVariantKey variant{}", "PathTracing input must not retain a second writable option value");
-                                                                         requirePresent(pathTracingInterface, "enableRussianRoulette", "PathTracing variant key should expose the Russian roulette toggle");
+                                                                          requireAbsent(pathTracingInterface, "PathTracingVariantKey variant{}", "PathTracing input must not retain a second writable option value");
+                                                                          requirePresent(pathTracingInterface, "enableRussianRoulette", "PathTracing variant key should expose the Russian roulette toggle");
+                                                                          requirePresent(pathTracingInterface, "enableFilterAfterShading", "PathTracing variant key should expose the compile-time FAS toggle");
                                                                          requirePresent(pathTracing, "std::map<PathTracingPipelineKey, std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>>", "PathTracing should cache RT pipelines by root variant and CHS permutation set");
                                                                          requirePresent(pathTracing, "std::map<PathTracingSbtKey, nr::rhi::ShaderBindingTable>", "PathTracing should cache SBTs separately from pipeline runtimes");
                                                                          requirePresent(pathTracing, "std::uint64_t chsPermutationSetHash", "PathTracing pipeline keys should include the CHS permutation set");
@@ -213,11 +259,16 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requirePresent(accelerationStructureBuild, "createBlasAtlas(runtime, device, requiredBytes, capacityOverflow)", "only actual BLAS atlas overflow should select capacity growth");
                                                                          requirePresent(accelerationStructureBuild, "recordBuildTlas", "AS optimization should preserve unconditional per-frame TLAS rebuild recording");
                                                                          requirePresent(sceneTextureBinding, ".usesImmutableSampler = true", "scene texture table descriptor writes should rely on the immutable sampler in the PSO layout");
-                                                                         requirePresent(sceneTextureBinding, "sceneTextureTableLinearSamplerDesc", "scene texture table should retain its linear immutable sampler");
-                                                                         requirePresent(sceneTextureBinding, ".magFilter = vk::Filter::eLinear", "scene texture table immutable sampler should use linear magnification");
-                                                                         requirePresent(sceneTextureBinding, ".minFilter = vk::Filter::eLinear", "scene texture table immutable sampler should use linear minification");
-                                                                         requirePresent(sceneTextureBinding, ".mipmapMode = vk::SamplerMipmapMode::eLinear", "scene texture table immutable sampler should use linear mip interpolation");
-                                                                         requirePresent(normalBufferShader, ".Sample(normalUv)", "NormalBuffer should retain its raster implicit-LOD sampling policy");
+                                                                         requirePresent(sceneTextureBinding, "sceneTextureTableNearestSamplerDesc", "scene texture table should expose its nearest immutable sampler");
+                                                                         requirePresent(sceneTextureBinding, ".magFilter = vk::Filter::eNearest", "scene texture table immutable sampler should use nearest magnification");
+                                                                         requirePresent(sceneTextureBinding, ".minFilter = vk::Filter::eNearest", "scene texture table immutable sampler should use nearest minification");
+                                                                         requirePresent(sceneTextureBinding, ".mipmapMode = vk::SamplerMipmapMode::eNearest", "scene texture table immutable sampler should disable mip interpolation");
+                                                                         requirePresent(sceneTextureBinding, ".minLod = 0.0f", "scene texture table immutable sampler should clamp its minimum LOD to zero");
+                                                                         requirePresent(sceneTextureBinding, ".maxLod = 0.0f", "scene texture table immutable sampler should clamp its maximum LOD to zero");
+                                                                         requirePresent(normalBufferShader, ".Sample(normalUv)", "NormalBuffer should retain its raster implicit-LOD texture-coordinate policy over the nearest scene sampler");
+                                                                         requirePresent(pathTracing, ".magFilter = vk::Filter::eLinear", "PathTracing environment sampling should retain linear magnification");
+                                                                         requirePresent(pathTracing, ".minFilter = vk::Filter::eLinear", "PathTracing environment sampling should retain linear minification");
+                                                                         requirePresent(pathTracing, ".mipmapMode = vk::SamplerMipmapMode::eLinear", "PathTracing environment sampling should remain independent from the nearest scene texture table");
                                                                          requirePresent(rendererImplementation, "MissingMaterialTexturePolicy::allowUnavailableAnisotropy", "TLAS texture collection should explicitly opt into the anisotropy-only unavailable-texture policy");
                                                                          requirePresent(rendererImplementation, "slotIndex == anisotropySlotIndex", "the unavailable-texture exception must be limited to the anisotropy slot");
                                                                          requireAbsent(rendererInterface, "sceneTextureSampler", "Renderer global resources should not expose a per-frame scene texture sampler");
@@ -244,6 +295,15 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requireAbsent(accumulate, "cameraFrameState", "Accumulate history reset and weighting must not depend on another node's camera state");
                                                                          requirePresent(rendererImplementation, "temporalHistoryResetPending_ = true;", "Environment replacement must queue a renderer-wide temporal history reset");
                                                                          requirePresent(rendererImplementation, "resolutionPlan.resetHistory || temporalHistoryResetPending_", "Renderer must merge an environment replacement reset into the next frame plan");
+                                                                         requirePresent(rendererInterface, "void requestTemporalHistoryReset() noexcept;", "Renderer should expose the narrow temporal-history reset request used by committed options");
+                                                                         auto const resetRequestBody = sourceSection(
+                                                                             rendererImplementation,
+                                                                             "void Renderer::requestTemporalHistoryReset() noexcept",
+                                                                             "[[nodiscard]] RendererGraphPreflightResult Renderer::preflightGraph");
+                                                                         requirePresent(resetRequestBody, "temporalHistoryResetPending_ = true;", "An explicit temporal-history reset request should arm only the pending renderer reset");
+                                                                         requireAbsent(resetRequestBody, "sampleFrameOrdinal_", "A temporal-history reset request must not restart the monotonic sampling sequence");
+                                                                         requirePresent(pipelineImplementation, "auto const resetsTemporalHistory = definition->resetsTemporalHistory;", "Option execution should snapshot the selected definition's temporal-reset policy before commit");
+                                                                         requirePresent(pipelineImplementation, "app.renderer().requestTemporalHistoryReset();", "A successfully committed temporal-resetting option should request one renderer-wide reset");
                                                                          requireAbsent(accumulate, "VariantItemEffect::RuntimeOnly", "Accumulate max history samples should not be registered as a runtime-only variant item");
                                                                          requirePresent(accumulate, "maxHistorySampleCount(frameParameters.optionSnapshot.get())", "Accumulate must read its maximum history sample count from the immutable frame option snapshot");
                                                                          requireAbsent(accumulate, "AccumulateNode::collectUi", "Accumulate must not expose a node-local mutation UI");
@@ -460,6 +520,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     auto hitShaders = readProjectFile("shader/renderer/pathTracing/hitShaders.slang");
                                                                     auto materialPayload = readProjectFile("shader/include/material/payload.slang");
                                                                     auto materialSampling = readProjectFile("shader/include/material/sampling.slang");
+                                                                    auto stochasticTextureFiltering = readProjectFile("shader/include/material/stochasticTextureFiltering.slang");
                                                                     auto hitSurface = readProjectFile("shader/include/rt/hitSurface.slang");
                                                                     auto roulette = readProjectFile("shader/include/pathTracing/roulette.slang");
                                                                     auto chs = readProjectFile("shader/include/pathTracing/chs.slang");
@@ -475,8 +536,8 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requireAbsent(entry, "ahMain", "PathTracing should not keep the old universal any-hit entry name");
                                                                     requireAbsent(entry, "evaluateSceneLightAt", "PathTracing entry should not own lighting logic");
                                                                     requireAbsent(entry, "resolveRtMaterialPayload", "PathTracing entry should not own material payload decoding");
-                                                                    requirePresent(entry, "payload.missRadiance = sampleEnvironment(WorldRayDirection());", "material-ray miss should sample the environment in miss shader");
-                                                                    requirePresent(entry, "payload.rayKind == RayKind.material", "visibility-ray misses should skip environment sampling");
+                                                                    requirePresent(entry, "payload.missRadiance = sampleEnvironment", "material-ray miss should reuse the resolved position slot for environment radiance");
+                                                                    requirePresent(entry, "payload.kind == RayKind.material", "visibility-ray misses should skip environment sampling");
 
                                                                     requirePresent(scheduler, "public struct Scheduler", "PathTracing scheduler should be a shader-side struct");
                                                                     requirePresent(scheduler, "Pt pt = makePt(pixel, dimensions);", "PathTracing scheduler should construct the PT path object");
@@ -515,6 +576,9 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requireAbsent(params, "kSamplesPerPixel", "PathTracing params must not expose configurable camera samples per pixel");
                                                                     requirePresent(params, "public extern static const uint kMaxSurfaceBounces;", "PathTracing max bounce variant must be provided by C++ VariantDesc");
                                                                     requireAbsent(params, "kMaxSurfaceBounces =", "PathTracing max bounce variant must not have a shader-side default");
+                                                                    requirePresent(stochasticTextureFiltering, "public extern static const bool kEnableFilterAfterShading;", "The common material filtering include must expose the FAS root link-time constant to linked CHS programs");
+                                                                    requireAbsent(stochasticTextureFiltering, "kEnableFilterAfterShading =", "The FAS root variant must not have a shader-side default");
+                                                                    requireAbsent(params, "kEnableFilterAfterShading", "The FAS constant should have one common-visible declaration rather than a PathTracing-local duplicate");
                                                                     requireAbsent(params, "kMissRadiance", "PathTracing should not retain a constant miss radiance after environment integration");
                                                                     requirePresent(environment, "Sampler2D<float4> gEnvironmentMap", "environment should use a dedicated combined sampler");
                                                                     requirePresent(environment, "ConstantBuffer<EnvironmentMapParameters> gEnvironment", "environment decode controls should use push constants");
@@ -549,10 +613,41 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                      requirePresent(core, "lightRandomValues.zw", "PathTracing direct lighting should consume the second pair from each four-lane packet");
                                                                      requireAbsent(core, "makeAliasLightSample", "PathTracing direct lighting should not hash native low-discrepancy packet lanes into white noise");
                                                                      requirePresent(core, "path.rng.rand4().x", "PathTracing roulette should consume one lane from the only public random packet API");
-                                                                     requirePresent(core, "payload.scatterRandomValues = path.rng.rand4();", "PathTracing scatter should consume one complete four-lane random packet");
+                                                                     requirePresent(core, "float4 scatterRandomValues = path.rng.rand4();", "PathTracing scatter should consume one complete four-lane random packet");
+                                                                     requirePresent(random, "public void advanceThreeRand4Packets()", "RandomSequence should expose the fixed three-packet material-filter skip");
+                                                                     requirePresent(random, "sampleSeed = sampleSeed * 0x98a5741du + 0xacfbeaa7u;", "The three-packet reservation should use the validated closed-form fifteen-step LCG jump");
+                                                                     requirePresent(core, "RandomSequence materialFilterSequence = path.rng;", "Each material segment should snapshot its FAS sequence immediately after the scatter packet");
+                                                                     requirePresent(core, "path.rng.advanceThreeRand4Packets();", "PathTracing must reserve exactly three rand4 packets for every material segment");
+                                                                     requireOrdered(
+                                                                         core,
+                                                                          "RandomSequence materialFilterSequence = path.rng;",
+                                                                         "path.rng.advanceThreeRand4Packets();",
+                                                                         "The material CHS must receive the pre-advance sequence while the path reserves the same dimensions unconditionally");
+                                                                     requirePresent(materialPayload, "RandomSequence localFilterSequence = filterSequence;", "Material resolution must draw from a by-value sequence copy");
+                                                                     requirePresent(materialPayload, "float4 filterPacket0 = localFilterSequence.rand4();", "Packet 0 should provide base color, metallic-roughness, emissive, and base-normal lanes");
+                                                                     requirePresent(materialPayload, "filterPacket0.xyz", "Packet 0 XYZ should feed the three core material textures");
+                                                                     requirePresent(materialPayload, "filterPacket0.w", "Packet 0 W should feed the base normal");
+                                                                     requirePresent(materialPayload, "float4 filterPacket1 = localFilterSequence.rand4();", "Packet 1 should provide anisotropy and the three clearcoat lanes");
+                                                                     requirePresent(materialPayload, "filterPacket1.x", "Packet 1 X should feed anisotropy");
+                                                                     requirePresent(materialPayload, "filterPacket1.yzw", "Packet 1 YZW should feed clearcoat factor, roughness, and normal");
+                                                                     requirePresent(materialSampling, "float4 layerFilterRandomValues = filterSequence.rand4();", "Packet 2 should be generated after packet 1 is dead");
+                                                                     requirePresent(materialSampling, "MaterialTextureSlot.sheenColor", "Packet 2 X should have a sheen-color consumer");
+                                                                     requirePresent(materialSampling, "MaterialTextureSlot.sheenRoughness", "Packet 2 Y should have a sheen-roughness consumer");
+                                                                     requirePresent(materialSampling, "MaterialTextureSlot.transmission", "Packet 2 Z should have a transmission consumer");
+                                                                     requirePresent(materialSampling, "layerFilterRandomValues.x", "Packet 2 X should feed sheen color");
+                                                                     requirePresent(materialSampling, "layerFilterRandomValues.y", "Packet 2 Y should feed sheen roughness");
+                                                                     requirePresent(materialSampling, "layerFilterRandomValues.z", "Packet 2 Z should feed transmission");
+                                                                     requireAbsent(materialSampling, "layerFilterRandomValues.w", "Packet 2 W must remain the explicit twelfth padding lane");
+                                                                     requireAbsent(materialSampling, "MaterialTextureSlot.occlusion", "The unsampled occlusion slot must not consume a FAS lane");
                                                                      requirePresent(params, "public static const uint kDirectLightSampleCount = 4u;", "PathTracing direct-light packet layout requires exactly four samples");
                                                                      requirePresent(pathState, "public RandomSequence rng = {};", "PathTracing path state should keep a per-pixel/per-frame random sequence");
-                                                                    requireAbsent(pathState, "sampleIndex", "PathTracing path state must not carry camera sample state in fixed 1spp mode");
+                                                                     requireAbsent(
+                                                                         sourceSection(
+                                                                             pathState,
+                                                                             "public struct PathState",
+                                                                             "public void terminatePathState"),
+                                                                         "sampleIndex",
+                                                                         "PathTracing path state must not carry camera sample state in fixed 1spp mode");
                                                                     requirePresent(pathState, "public float3 specularThroughput", "PathTracing path state should track primary-specular throughput independently");
                                                                     requirePresent(pathState, "public float3 diffuseThroughput", "PathTracing path state should track primary-diffuse throughput independently");
                                                                     requirePresent(pathState, "public float3 specularRadiance", "PathTracing path state should accumulate primary-specular radiance independently");
@@ -595,17 +690,64 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requireAbsent(hitShaders, "evaluateResolvedMaterialDirect", "PathTracing hit shaders must not shade direct light");
                                                                     requireAbsent(hitShaders, "outputImage", "PathTracing hit shaders must not write the output image");
                                                                     requirePresent(chs, "public interface ICHS", "PathTracing CHS contract should define the closest-hit interface");
-                                                                    requireAbsent(entry, "materialFilterRandom", "PathTracing closest hit should not carry a material-filter RNG");
-                                                                    requireAbsent(pathState, "materialFilterRandom", "RayPayload should not carry a material-filter RNG");
-                                                                    requireAbsent(materialPayload, "materialFilterRandom", "Material payload resolution should not carry filter RNG state");
-                                                                    requireAbsent(materialSampling, "sampleMaterialTextureFasMip0", "RT material sampling should not implement Filter After Shading");
-                                                                    requirePresent(materialSampling, "gSceneTextures[textureRef.textureId].SampleLevel(", "ordinary RT material textures should use explicit mip-0 SampleLevel");
-                                                                    requirePresent(materialSampling, "gSceneTextures[anisotropyRef.textureId].SampleLevel(", "anisotropy should use the same explicit mip-0 SampleLevel policy");
+                                                                    auto const anyHitEntry = sourceSection(
+                                                                        entry,
+                                                                        "[shader(\"anyhit\")]",
+                                                                        "[shader(\"closesthit\")]");
+                                                                    requireAbsent(anyHitEntry, "materialFilter", "PathTracing any-hit must not receive or consume FAS state");
+                                                                    requireAbsent(hitShaders, "materialFilter", "Alpha coverage and hit reconstruction must remain independent from FAS");
+                                                                     requirePresent(entry, "input.materialFilterSequence = payload.materialFilterSequence;", "Closest hit should decode only its pre-reserved material-filter sequence before overwriting shared payload slots");
+                                                                     requirePresent(pathState, "public property RandomSequence materialFilterSequence", "RayPayload should decode the transient material-filter sequence from shared output slots without adding it to PathState");
+                                                                     requirePresent(pathState, "public struct ResolvedMaterialRayPayload", "PathTracing should use a dedicated lossless ray-transport record instead of the BSDF working record");
+                                                                     requirePresent(pathState, "public void initializeMaterialRayPayload(", "Material-ray invoke input should be encoded into shared result slots");
+                                                                     requirePresent(pathState, "public void writeResolvedMaterialRayPayload(", "Closest hit should overwrite the shared invoke slots with the resolved hit result");
+                                                                     requirePresent(core, "pathCurrentMediumIor(path),\n                    pathExteriorMediumIor(path)", "Raygen should restore non-overlapping medium IOR state while decoding the compact hit payload");
+                                                                     auto const rayPayloadRecord = sourceSection(
+                                                                         pathState,
+                                                                         "public struct RayPayload",
+                                                                         "// Invoke input and hit output have disjoint lifetimes");
+                                                                     requirePresent(rayPayloadRecord, "public ResolvedMaterialRayPayload resolved = {};", "RayPayload should contain only the lossless shared-lifetime transport record");
+                                                                     requireAbsent(rayPayloadRecord, "public RandomSequence materialFilterSequence", "RayPayload must not retain a dedicated RNG storage field after lifetime reuse");
+                                                                     requireAbsent(rayPayloadRecord, "ResolvedMaterialPayload material", "RayPayload must not embed the full BSDF working material");
+                                                                     requireAbsent(rayPayloadRecord, "ResolvedMaterialScatter scatter", "RayPayload must not embed the full working scatter record");
+                                                                     auto const resolvedMaterialRecord = sourceSection(
+                                                                         materialPayload,
+                                                                         "public struct ResolvedMaterialPayload",
+                                                                         "public struct ResolvedMaterialScatter");
+                                                                     requirePresent(materialPayload, "[Flags]\npublic enum ResolvedMaterialFlag : uint", "Resolved material bool, enum, and flag state should use a strong uint-backed flag enum");
+                                                                     requirePresent(resolvedMaterialRecord, "public ResolvedMaterialFlag flags", "Resolved material metadata should use the shared strong flag enum");
+                                                                     requirePresent(resolvedMaterialRecord, "public property RtMaterialLayerFlag layerFlags", "Resolved material layer flags should use a typed property over packed metadata");
+                                                                     requirePresent(resolvedMaterialRecord, "public property AlphaMode alphaMode", "Resolved material alpha mode should use a typed property over packed metadata");
+                                                                     requirePresent(resolvedMaterialRecord, "public property bool frontFace", "Resolved material front-face state should use a property over packed metadata");
+                                                                     requireAbsent(resolvedMaterialRecord, "featureFlags", "Resolved material should not copy header feature flags that have no downstream consumer");
+                                                                     requireAbsent(resolvedMaterialRecord, "alphaCutoff", "Resolved material should not copy the any-hit-only alpha cutoff");
+                                                                     requireAbsent(resolvedMaterialRecord, "hitT", "Resolved material should not retain unused hit distance beside full-precision position");
+                                                                     requireAbsent(resolvedMaterialRecord, "public float alpha", "Resolved material alpha should derive from baseColor.a");
+                                                                     auto const persistentPathState = sourceSection(
+                                                                         pathState,
+                                                                         "public struct PathState",
+                                                                         "public void terminatePathState");
+                                                                    requireAbsent(persistentPathState, "materialFilterSequence", "FAS must not add persistent RNG state to PathState");
+                                                                    requirePresent(materialPayload, "RandomSequence filterSequence", "Material payload resolution should receive the pre-reserved sequence by value rather than draw from the live path RNG");
+                                                                    requirePresent(materialSampling, "public float4 sampleMaterialTextureVariant(", "RT material sampling should centralize the root-controlled FAS A/B policy");
+                                                                    requirePresent(materialSampling, "if (kEnableFilterAfterShading)", "Only the enabled root variant should stochastically select a bilinear reconstruction tap");
+                                                                    requirePresent(materialSampling, "gSceneTextures[textureRef.textureId].GetDimensions(width, height);", "LOD0 FAS should derive the texel grid from the sampled texture");
+                                                                    requirePresent(materialSampling, "stochasticBilinearTexelCenterUv(", "Enabled FAS should select one bilinear tap and convert it to a texel-center UV");
+                                                                    requirePresent(materialSampling, "gSceneTextures[textureRef.textureId].SampleLevel(uv, 0.0f);", "Both FAS states should fetch exactly one nearest texel at mip zero");
+                                                                    requirePresent(stochasticTextureFiltering, "selectStochasticFilterUpperTap(", "FAS should use scalar remapping for bilinear tap selection");
+                                                                    requirePresent(stochasticTextureFiltering, "uniformValue = selectUpper", "The X decision should remap the scalar before it is reused for Y");
                                                                     requireAbsent(materialSampling, "ddx(", "RT material sampling should not use derivative footprints");
                                                                     requireAbsent(materialSampling, "ddy(", "RT material sampling should not use derivative footprints");
-                                                                    requirePresent(chs, "let BaseLobeVariant : RtBaseLobeVariant> : ICHS", "PathTracing CHS contract should expose the separate base-lobe specialization target");
+                                                                    requireAbsent(materialSampling, "RayCone", "First-stage FAS should not introduce ray cones");
+                                                                    requireAbsent(materialSampling, "rayCone", "First-stage FAS should not introduce ray cones");
+                                                                    requirePresent(chs, "let LayerFlags : RtMaterialLayerFlag", "PathTracing CHS contract should expose one combined material-flag specialization target");
+                                                                    requireAbsent(chs, "let EnableFilterAfterShading", "PathTracing CHS must retain only the material-layer generic dimension");
+                                                                    requirePresent(materialSampling, "kEnableFilterAfterShading", "Material sampling should consume the common root link-time FAS constant");
+                                                                    requireAbsent(chs, "RtBaseLobeVariant", "PathTracing CHS contract should not retain a separate base-lobe specialization type");
                                                                     requirePresent(chs, "public extern struct CHS : ICHS;", "PathTracing CHS contract should require C++ link-time type binding");
                                                                     requirePresent(chs, "resolveLitMaterialPayloadVariant", "MaterialCHS should resolve lit material payloads through the layer-flag variant");
+                                                                    requirePresent(pathTracingNode, "\"kEnableFilterAfterShading\"", "PathTracing root variants should assign the FAS compile-time constant");
+                                                                    requirePresent(pathTracingNode, "\"MaterialCHS<RtMaterialLayerFlag({}u)>\"", "CHS link variants should remain keyed only by the material layer flags");
                                                                     requireAbsent(pathTracingNode, "makePathTracingSyntheticRootSource", "PathTracing node should no longer generate synthetic closest-hit wrappers");
                                                                     requireAbsent(pathTracingNode, "RtHitPolicy_", "PathTracing node should no longer generate shader-side policy structs");
                                                                     requirePresent(pathTracingNode, ".linkVariants = {chsVariantDesc}", "PathTracing node should compile BSDF-key CHS link variants");
@@ -620,14 +762,18 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     nr::test::require(missingInputs != std::string::npos && environmentBinding != std::string::npos && missingInputs < environmentBinding, "missing TLAS/sideband should retain the clear path before environment binding");
                                                                     requirePresent(materialPayload, "ResolvedMaterialPayload", "Common material payload helper should define resolved hit material data");
                                                                     requirePresent(materialPayload, "public struct BaseSurfaceBsdfLobe<", "Common material payload helper should expose the shared base/transmission lobe");
-                                                                    requirePresent(materialPayload, "public struct BaseGgxDistribution<let BaseLobeVariant", "Common material payload helper should expose the base-variant GGX distribution");
+                                                                    requirePresent(materialPayload, "public struct BaseGgxDistribution<let LayerFlags", "Common material payload helper should derive its GGX distribution from combined material flags");
                                                                     requirePresent(materialPayload, "alphaT = lerp(isotropicAlpha, 1.0f, strength * strength)", "Anisotropic GGX should use the approved alphaT mapping");
                                                                     requirePresent(materialPayload, "visibleHalfVectorPdf", "Anisotropic evaluate, PDF and VNDF sampling should share the base GGX helper");
-                                                                    requirePresent(materialPayload, "dot(normal, scatter.direction) <= kMaterialMinCosTheta", "base reflection sampling should reject below-macro-hemisphere directions before combined PDF evaluation");
+                                                                    requirePresent(materialPayload, "adjustMaterialPayloadSpecularNormal", "Specular lobes should derive a view-dependent normal without replacing the raw shading normal");
+                                                                    requirePresent(materialPayload, "materialPayloadGeometrySupportsReflection", "base reflection should retain the adjusted geometric tangent boundary while rejecting directions below it");
+                                                                    requirePresent(materialPayload, "materialPayloadGeometrySupportsTransmission", "transmission should use the complementary view-facing geometric hemisphere contract");
+                                                                    requirePresent(materialPayload, "bsdf.diffuseProjected / pdf", "continuation throughput should use the diffuse lobe's own projected contribution");
+                                                                    requirePresent(materialPayload, "bsdf.specularProjected / pdf", "continuation throughput should use the specular lobe's own projected contribution");
                                                                     requirePresent(hitSurface, "surface.tangent = -surface.tangent;", "double-sided orientation should reverse tangent with normal and tangent sign");
                                                                     requireAbsent(materialPayload, "TransmissionBsdfLobe", "Transmission must not remain an independent top-level lobe");
-                                                                    requirePresent(materialPayload, "public uint delta", "Common material scatter should carry an explicit delta-lobe flag");
-                                                                    requirePresent(materialPayload, "scatter.delta != 0u", "Common material scatter sampling should keep delta lobes out of continuous PDF mixing");
+                                                                     requirePresent(materialPayload, "scatterDelta", "Common material scatter should carry the delta-lobe flag in packed metadata");
+                                                                     requirePresent(materialPayload, "if (scatter.delta)", "Common material scatter sampling should keep delta lobes out of continuous PDF mixing");
                                                                     requirePresent(materialPayload, "sampleResolvedMaterialScatterVariant", "Common material payload helper should expose variant-aware scatter sampling");
                                                                     requirePresent(materialPayload, "resolvedMaterialCombinedPdfVariant", "Common material payload helper should expose variant-aware combined PDFs");
                                                                     requirePresent(materialPayload, "evaluateResolvedMaterialDirect", "Common material payload helper should expose direct lighting evaluation");

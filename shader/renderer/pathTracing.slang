@@ -18,10 +18,10 @@ void rgMain()
 [shader("miss")]
 void msMain(inout RayPayload payload)
 {
-    payload.hit = 0u;
+    payload.hit = false;
     // Camera-primary and later-bounce path segments both use RayKind.material, so the shared miss
     // entry returns the selected environment radiance for either kind of path escape.
-    if (payload.rayKind == RayKind.material)
+    if (payload.kind == RayKind.material)
     {
         payload.missRadiance = sampleEnvironment(WorldRayDirection());
     }
@@ -36,18 +36,28 @@ void ahMaterialPolicy(inout RayPayload payload, BuiltInTriangleIntersectionAttri
 [shader("closesthit")]
 void chMain(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
-    if (payload.rayKind != RayKind.material)
+    if (payload.kind != RayKind.material)
     {
         return;
     }
 
     CHS chs = CHS();
     ClosestHitInput input = makeClosestHitInput(attributes);
+    // Copy every shared-lifetime input before the result overwrites the same physical payload slots.
     input.scatterRandomValues = payload.scatterRandomValues;
+    input.materialFilterSequence = payload.materialFilterSequence;
     input.incidentMediumIor = payload.incidentMediumIor;
     input.exteriorMediumIor = payload.exteriorMediumIor;
     ClosestHitResult result = chs.handleClosestHit(input);
-    payload.hit = result.hit;
-    payload.material = result.material;
-    payload.scatter = result.scatter;
+    if (result.hit != 0u)
+    {
+        writeResolvedMaterialRayPayload(
+            payload,
+            result.material,
+            result.scatter);
+    }
+    else
+    {
+        payload.hit = false;
+    }
 }

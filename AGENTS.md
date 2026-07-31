@@ -121,9 +121,22 @@ When generating code or refactoring:
 *   **Default Build Preset:** Closed-loop build and test verification must use the LLVM Debug configuration (`cmake --build --preset debug`, `ctest --preset debug`, or an equivalent LLVM Debug target build).
 *   **No Release Substitute:** Do not use Release builds for verification unless the user explicitly requests Release validation.
 *   **Blocked Debug Verification:** If LLVM Debug verification is blocked by environment, toolchain, or file-lock issues, report that blocker and the affected command instead of switching to Release as a substitute.
+*   **Elevate Before Program Execution:** In managed or sandboxed Windows sessions, request elevated execution before launching project programs, smoke tests, or tests that invoke external compiler/shader-toolchain executables. Do not first launch these commands inside the sandbox: blocked child executables and orphaned compiler processes can turn a permission failure into a misleading timeout.
 *   **Configure/Build Wait Policy:** After launching configure or build commands, including CMake configure and `cmake --build` tasks, do not repeatedly poll process lists, lock files, or build directories while the command is still running. Wait for the command to return and report the final result; inspect locks or processes only after the command has completed, failed, or timed out.
 
-### 4.2 Architecture Context Maintenance Rules
+### 4.2 Single-Shader Slang Compile Check
+
+*   **Command:** After configuring the LLVM build, check one shader with:
+    ```powershell
+    cmake "-DNR_SHADER_FILE=renderer/embeddedTriangle.slang" -P tools/CheckSlangShader.cmake
+    ```
+*   **Path and Configuration:** `NR_SHADER_FILE` may be absolute or relative to the configured `NR_SHADER_ROOT_DIR`, and the `.slang` extension may be omitted. The script uses `build/llvm` and LLVM Debug by default; set `NR_SHADER_CHECK_BUILD_DIR` or `NR_SHADER_CHECK_CONFIG` only when an explicitly requested configuration requires it.
+*   **Runtime-Equivalent Path:** The helper reuses `ShaderService::configure()`, `compileProgramByFile()`, and `SlangProgram::valid()`, including the normal link, reflection, and per-entry-point SPIR-V generation path. It builds the `EXCLUDE_FROM_ALL` `nr_shader_compile_check` target on demand.
+*   **Default-Variant Limit:** The checker uses an empty/default `SlangProgramVariantDesc`. Shaders that require link-time constant or type assignments must be validated by their variant-aware contract test instead.
+*   **Allowed Test Substitution:** Use this command instead of an ad-hoc/manual compile smoke step when an isolated shader or import change only needs default-variant compile validation. It may be used as a fast pre-check before a targeted `ctest` run.
+*   **Existing Tests Remain Required:** Do not delete or skip registered tests merely because this command passes. It does not replace tests that verify reflection names or layouts, descriptor bindings, `shaderCursor` behavior, link-time variants, session reload/cache behavior, CPU/Shader ABI, SPIR-V differences, pipeline/SBT integration, or GPU runtime behavior. The current registered shader contract tests all cover at least one such additional contract, so none is fully replaceable by this checker at present.
+
+### 4.3 Architecture Context Maintenance Rules
 
 When code changes affect architecture-facing behavior, agents must keep the architecture context documents synchronized, especially `docs/architecture/README.md`.
 

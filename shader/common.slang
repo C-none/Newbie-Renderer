@@ -11,6 +11,7 @@ __include include.sceneLights;
 __include include.materialTextureIds;
 __include include.material.types;
 __include include.pathTracing.random;
+__include include.material.stochasticTextureFiltering;
 __include include.pathTracing.roulette;
 __include include.pathTracing.mis;
 __include include.rtMaterial;

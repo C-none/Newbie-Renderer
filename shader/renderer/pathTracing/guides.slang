@@ -146,7 +146,11 @@ public void capturePathTracingPrimarySurfaceGuides(
     MaterialSample core = materialSampleFromResolvedPayload(material);
     float3 specularColor = pathTracingGuidePrimarySpecularF0(material, core);
     float alpha = material.roughness * material.roughness;
-    float noV = dot(normal, viewDirection);
+    float3 specularNormal = adjustMaterialPayloadSpecularNormal(
+        material.shadingNormal,
+        material.geometryNormal,
+        viewDirection);
+    float noV = saturate(dot(specularNormal, viewDirection));
     guides.specularAlbedo = max(
         pathTracingGuideEnvBrdfApprox2(specularColor, alpha, noV),
         float3(0.0f));

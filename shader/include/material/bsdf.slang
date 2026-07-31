@@ -196,6 +196,7 @@ public float evaluateClearcoatSpecular(
 public float3 attenuateBaseByClearcoat(
     float3 baseBsdf,
     MaterialLayerStack layers,
+    float3 clearcoatSpecularNormal,
     float3 viewDirection)
 {
     if (layers.clearcoat <= 0.0f)
@@ -203,13 +204,14 @@ public float3 attenuateBaseByClearcoat(
         return baseBsdf;
     }
 
-    float noV = saturate(dot(layers.clearcoatNormal, viewDirection));
+    float noV = saturate(dot(clearcoatSpecularNormal, viewDirection));
     float coatFresnel = fresnelSchlick(0.04f, noV) * layers.clearcoat;
     return baseBsdf * (1.0f - coatFresnel);
 }
 
 public float3 evaluateClearcoatDirect(
     MaterialLayerStack layers,
+    float3 clearcoatSpecularNormal,
     float3 viewDirection,
     float3 lightDirection,
     float3 lightRadiance)
@@ -219,10 +221,10 @@ public float3 evaluateClearcoatDirect(
         return float3(0.0f);
     }
 
-    float noL = saturate(dot(layers.clearcoatNormal, lightDirection));
+    float noL = saturate(dot(clearcoatSpecularNormal, lightDirection));
     float coatSpecular = evaluateClearcoatSpecular(
         layers.clearcoatRoughness,
-        layers.clearcoatNormal,
+        clearcoatSpecularNormal,
         viewDirection,
         lightDirection) * layers.clearcoat;
     return float3(coatSpecular) * lightRadiance * noL;

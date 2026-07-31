@@ -22,6 +22,9 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
         auto const clearcoatLayer = static_cast<nr::scene::RtMaterialLayerFlag>(
             static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::baseSurface) |
             static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::clearcoat));
+        auto const anisotropicBaseLayer = static_cast<nr::scene::RtMaterialLayerFlag>(
+            static_cast<std::uint32_t>(baseLayer) |
+            static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::anisotropicBaseLobe));
 
         auto const opaqueFeatures = nr::scene::RtMaterialFeatureFlag::none;
         auto const alphaMaskFeatures = nr::scene::RtMaterialFeatureFlag::alphaMask;
@@ -33,10 +36,9 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
             nr::renderPasses::makeRtHitPermutationKey(baseLayer, runtimeOnlyFeatures, true);
         auto const anisotropicBaseKey =
             nr::renderPasses::makeRtHitPermutationKey(
-                baseLayer,
+                anisotropicBaseLayer,
                 opaqueFeatures,
-                false,
-                nr::scene::RtBaseLobeVariant::anisotropic);
+                false);
 
         nr::test::requireEqual(nr::renderPasses::kRtBsdfVariantHardUpperBound, 17u);
         nr::test::requireEqual(nr::renderPasses::kRtHitGroupVariantHardUpperBound, 34u);
@@ -78,9 +80,9 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
             clearcoatLayer,
             "layer flags should enter the BSDF variant key");
         nr::test::requireEqual(
-            plan.permutations[plan.records[3].permutationIndex].key.bsdf.baseLobeVariant,
-            nr::scene::RtBaseLobeVariant::anisotropic,
-            "anisotropy should enter the separate base-lobe variant dimension");
+            plan.permutations[plan.records[3].permutationIndex].key.bsdf.layerFlags,
+            anisotropicBaseLayer,
+            "anisotropy should enter the combined material layer flag key");
         nr::test::require(
             nr::renderPasses::rtHitClosestHitEntryPointName(plan.permutations[plan.records[3].permutationIndex].key) !=
                 nr::renderPasses::rtHitClosestHitEntryPointName(plan.permutations[plan.records[0].permutationIndex].key),
@@ -89,51 +91,12 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
             nr::renderPasses::rtHitClosestHitEntryPointName(plan.permutations[plan.records[1].permutationIndex].key),
             nr::renderPasses::rtHitClosestHitEntryPointName(plan.permutations[plan.records[0].permutationIndex].key),
             "alpha-mask and opaque hit groups should reuse the same closest-hit shader when the BSDF key matches");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(baseLayer, 0.0f),
-            nr::scene::RtBaseLobeVariant::isotropic,
-            "zero scalar anisotropy must select the isotropic variant");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(baseLayer, 0.5f),
-            nr::scene::RtBaseLobeVariant::anisotropic,
-            "positive scalar anisotropy must select the anisotropic variant");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(nr::scene::RtMaterialLayerFlag::none, 1.0f),
-            nr::scene::RtBaseLobeVariant::isotropic,
-            "unlit materials must remain isotropic");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(nr::scene::RtMaterialLayerFlag::clearcoat, 1.0f),
-            nr::scene::RtBaseLobeVariant::isotropic,
-            "clearcoat-only masks must not select the anisotropic base-lobe variant");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(
-                static_cast<nr::scene::RtMaterialLayerFlag>(16u),
-                1.0f),
-            nr::scene::RtBaseLobeVariant::isotropic,
-            "unknown nonzero layer masks must not select the anisotropic base-lobe variant");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(baseLayer, -0.5f),
-            nr::scene::RtBaseLobeVariant::isotropic,
-            "negative scalar anisotropy must select the isotropic variant");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(
-                baseLayer,
-                std::numeric_limits<float>::quiet_NaN()),
-            nr::scene::RtBaseLobeVariant::isotropic,
-            "non-finite anisotropy must remain isotropic");
-        nr::test::requireEqual(
-            nr::renderPasses::rtBaseLobeVariant(
-                baseLayer,
-                std::numeric_limits<float>::infinity()),
-            nr::scene::RtBaseLobeVariant::isotropic,
-            "infinite anisotropy must remain isotropic");
     }};
 
 const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
     "renderpasses RT hit SBT domain has exactly 17 BSDF and 34 hit-group keys",
     [] {
         using Layer = nr::scene::RtMaterialLayerFlag;
-        using Base = nr::scene::RtBaseLobeVariant;
         using AnyHit = nr::renderPasses::RtHitAnyHitPolicy;
 
         auto const litLayerMasks = std::array{
@@ -150,17 +113,16 @@ const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
         auto bsdfKeys = std::vector<nr::renderPasses::RtBsdfVariantKey>{
             nr::renderPasses::RtBsdfVariantKey{
                 .layerFlags = Layer::none,
-                .baseLobeVariant = Base::isotropic,
             },
         };
         std::ranges::for_each(litLayerMasks, [&](Layer layerFlags) {
             bsdfKeys.push_back(nr::renderPasses::RtBsdfVariantKey{
                 .layerFlags = layerFlags,
-                .baseLobeVariant = Base::isotropic,
             });
             bsdfKeys.push_back(nr::renderPasses::RtBsdfVariantKey{
-                .layerFlags = layerFlags,
-                .baseLobeVariant = Base::anisotropic,
+                .layerFlags = static_cast<Layer>(
+                    static_cast<std::uint32_t>(layerFlags) |
+                    static_cast<std::uint32_t>(Layer::anisotropicBaseLobe)),
             });
         });
 
@@ -203,7 +165,8 @@ const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
             static_cast<Layer>(4u),
             static_cast<Layer>(8u),
             static_cast<Layer>(16u),
-            static_cast<Layer>(17u),
+            static_cast<Layer>(32u),
+            static_cast<Layer>(33u),
         };
         nr::test::require(
             std::ranges::none_of(invalidLayers, nr::renderPasses::rtMaterialLayerFlagsValid),
@@ -211,19 +174,15 @@ const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
         nr::test::require(
             !nr::renderPasses::rtBsdfVariantKeyValid(
                 nr::renderPasses::RtBsdfVariantKey{
-                    .layerFlags = Layer::none,
-                    .baseLobeVariant = Base::anisotropic,
+                    .layerFlags = Layer::anisotropicBaseLobe,
                 }),
             "unlit anisotropic BSDF key must be rejected");
-        nr::test::require(
-            !nr::renderPasses::rtBaseLobeVariantValid(static_cast<Base>(2u)),
-            "unknown base-lobe enum values must be rejected");
         nr::test::require(
             !nr::renderPasses::rtHitAnyHitPolicyValid(static_cast<AnyHit>(2u)),
             "unknown any-hit enum values must be rejected");
 
         auto const isotropicOpaque = nr::renderPasses::RtHitPermutationKey{
-            .bsdf = {.layerFlags = Layer::baseSurface, .baseLobeVariant = Base::isotropic},
+            .bsdf = {.layerFlags = Layer::baseSurface},
             .anyHitPolicy = AnyHit::none,
         };
         auto const isotropicAnyHit = nr::renderPasses::RtHitPermutationKey{
@@ -231,7 +190,11 @@ const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
             .anyHitPolicy = AnyHit::materialPolicy,
         };
         auto const anisotropicOpaque = nr::renderPasses::RtHitPermutationKey{
-            .bsdf = {.layerFlags = Layer::baseSurface, .baseLobeVariant = Base::anisotropic},
+            .bsdf = {
+                .layerFlags = static_cast<Layer>(
+                    static_cast<std::uint32_t>(Layer::baseSurface) |
+                    static_cast<std::uint32_t>(Layer::anisotropicBaseLobe)),
+            },
             .anyHitPolicy = AnyHit::none,
         };
         auto const anisotropicAnyHit = nr::renderPasses::RtHitPermutationKey{

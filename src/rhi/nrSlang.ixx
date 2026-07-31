@@ -511,6 +511,11 @@ class ShaderService
 
     [[nodiscard]] std::uint64_t sessionGeneration() const;
 
+    /**
+     * @brief Wait for all pending module-cache write tasks to finish.
+     */
+    void waitForPendingModuleCacheWrites();
+
     [[nodiscard]] SlangProgram compileProgramByFile(const SlangProgramCompileFileRequest &request);
 
     [[nodiscard]] SlangProgram compileProgramFromSource(const SlangProgramCompileSourceRequest &request);
@@ -518,7 +523,7 @@ class ShaderService
   private:
     ShaderService() = default;
 
-    static void writeModuleCacheBlobAsync(Slang::ComPtr<slang::IModule> module, const std::filesystem::path &moduleBlobPath);
+    void writeModuleCacheBlobAsync(Slang::ComPtr<slang::IModule> module, const std::filesystem::path &moduleBlobPath);
 
     [[nodiscard]] std::optional<std::string> validateModulePathOrganizationLocked(std::string_view moduleName, std::string_view modulePath) const;
 
@@ -631,6 +636,7 @@ class ShaderService
     std::vector<slang::CompilerOptionEntry> m_compilerOptionEntries;
     slang::TargetDesc m_targetDesc{};
     std::map<std::string, SlangProgram> m_linkedProgramCache;
+    std::vector<std::jthread> m_moduleCacheWriteThreads;
 
 };
 
