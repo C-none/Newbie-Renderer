@@ -740,6 +740,30 @@ const nr::test::CaseRegistrar uiSectionOrderCase{
             "performance sections must be the last renderSections input before UI finalization");
     }};
 
+const nr::test::CaseRegistrar cameraMovementSpeedBindingCase{
+    "canonical camera movement speed updates only the viewer movement control",
+    [] {
+        auto const camera = readProjectFile("src/app/nrAppCamera.cpp");
+        auto const snapshotBinding = sourceSection(
+            camera,
+            "void AppCamera::syncFromSnapshot(",
+            "bool AppCamera::tryScheduleFromPresentation(");
+        requirePresent(
+            camera,
+            "requiredValue(snapshot, nr::options::keys::viewerCameraMovementSpeed.id())",
+            "the camera adapter must require the canonical movement speed wire value");
+        requireOrdered(
+            snapshotBinding,
+            "auto controlConfig = viewer_.controlConfig();",
+            "controlConfig.movementSpeed = detail::movementSpeedFromSnapshot(snapshot);",
+            "camera synchronization must preserve the existing look and pitch controls");
+        requireOrdered(
+            snapshotBinding,
+            "controlConfig.movementSpeed = detail::movementSpeedFromSnapshot(snapshot);",
+            "viewer_.setControlConfig(controlConfig);",
+            "camera synchronization must install the snapshot movement speed");
+    }};
+
 const nr::test::CaseRegistrar verticalWheelUiOnlyCase{
     "vertical wheel input is a per-poll Dear ImGui navigation event only",
     [] {

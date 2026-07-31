@@ -814,7 +814,8 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         geometryPermutationKeys.push_back(makeRtHitPermutationKey(
             materialHeader.layerFlags,
             materialHeader.featureFlags,
-            requiresMaterialPolicy));
+            requiresMaterialPolicy,
+            rtBaseLobeVariant(materialHeader.layerFlags, materialHeader.anisotropy.x)));
         state.geometries.push_back(nr::scene::RtGeometryMetadata{
             .materialIndex = materialIndex,
             .geometryIndex = geometry.geometryIndex,

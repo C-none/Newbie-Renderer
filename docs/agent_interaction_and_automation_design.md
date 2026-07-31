@@ -4,7 +4,7 @@ Status: implemented V1 contract; rotating NDJSON observability added on 2026-07-
 
 Decision date: 2026-07-24.
 
-Last revised: 2026-07-28.
+Last revised: 2026-07-30.
 
 This document is the source of truth for the implemented human, WebSocket-agent, and
 offline-Lua interaction architecture in Newbie-Renderer. It replaces the earlier design
@@ -526,6 +526,7 @@ viewer.window.fullscreen
 viewer.camera.pose
 viewer.camera.vertical_fov_degrees
 viewer.camera.clip_planes
+viewer.camera.movement_speed
 render.path_tracing.max_surface_bounces
 render.path_tracing.russian_roulette_enabled
 render.accumulate.max_history_samples
@@ -782,7 +783,7 @@ Examples:
 
 | State | Owner |
 |---|---|
-| camera pose and lens options | `OptionSystem` |
+| camera pose, lens, and movement-speed options | `OptionSystem` |
 | camera matrices and frustum | camera/renderer frame derivation |
 | path-tracing bounce count option | `OptionSystem` |
 | compiled path-tracing pipeline | PathTracing node |
@@ -1199,6 +1200,7 @@ Recommended initial camera options:
 | `viewer.camera.pose` | position, yaw degrees, pitch degrees |
 | `viewer.camera.vertical_fov_degrees` | integer degrees in `[1, 179]` |
 | `viewer.camera.clip_planes` | near/far pair with `near >= 0.001` and `far > near` |
+| `viewer.camera.movement_speed` | finite renderer world units per second in `[0.01, 1000]` |
 
 Viewport extent remains derived from presentation and is not a mutation.
 
@@ -1216,7 +1218,7 @@ It no longer directly mutates `ViewerPerspectiveCamera`.
 
 For frame N it:
 
-1. reads pose from snapshot N;
+1. reads pose and movement speed from snapshot N;
 2. samples W/S/A/D/Q/E and the current cursor position;
 3. updates the cursor baseline for this frame even if UI capture, UI priority, or a busy
    slot suppresses camera mutation;
@@ -1232,8 +1234,9 @@ There is no local/internal `trySchedule` overload that omits binding proof.
 
 ### 15.3 Direct agent/Lua camera control
 
-WebSocket and Lua write the same `viewer.camera.pose` option. There is no dedicated
-`camera.set_pose` mutation method.
+WebSocket and Lua write the same `viewer.camera.pose` and
+`viewer.camera.movement_speed` options used by human input. There is no dedicated
+`camera.set_pose` or movement-speed mutation method.
 
 There is also no separate `camera.look_at` mutation path. A look-at helper, if useful, may
 be provided as a pure client/SDK calculation that produces the complete pose value. It
@@ -1248,6 +1251,8 @@ The initial schema publishes:
 - yaw and pitch use degrees;
 - yaw increases from +X toward +Z and is normalized to `[-180, 180)`;
 - pitch is clamped to `[-89, 89]`;
+- movement speed is measured in renderer world units per second and is constrained to
+  `[0.01, 1000]`;
 - all numeric components must be finite and representable by the renderer's 32-bit
   floating-point camera state.
 
@@ -1368,6 +1373,7 @@ replacement.
 | `viewer.camera.pose` | closed `{position:[x,y,z], yaw_degrees, pitch_degrees}` with the coordinate/range and 32-bit representability contract in §15.4 |
 | `viewer.camera.vertical_fov_degrees` | integer degrees in `[1, 179]` |
 | `viewer.camera.clip_planes` | closed `{near, far}` with finite, 32-bit-representable values, `near >= 0.001`, and `far > near` |
+| `viewer.camera.movement_speed` | finite number in `[0.01, 1000]`, default `3.5` renderer world units per second |
 
 `viewer.window.fullscreen` is the only fullscreen mutation path. `UiNode` and presentation
 code must not expose a direct `setFullscreen` bypass.

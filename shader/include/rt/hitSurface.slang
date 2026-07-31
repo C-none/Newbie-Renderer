@@ -210,6 +210,7 @@ public void orientRtSurfaceForMaterial(inout RtSurfaceData surface, RtMaterialHe
     if (dot(surface.normal, viewDirection) < 0.0f)
     {
         surface.normal = -surface.normal;
+        surface.tangent = -surface.tangent;
         surface.tangentSign = -surface.tangentSign;
     }
 }

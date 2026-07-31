@@ -38,6 +38,28 @@ namespace
     return std::clamp(material.transmission->factor, 0.0f, 1.0f);
 }
 
+[[nodiscard]] float effectiveAnisotropyFactor(const nr::resource::Material& material) noexcept
+{
+    if (!material.anisotropy.has_value() ||
+        !std::isfinite(material.anisotropy->factor))
+    {
+        return 0.0f;
+    }
+
+    return std::clamp(material.anisotropy->factor, 0.0f, 1.0f);
+}
+
+[[nodiscard]] float anisotropyRotation(const nr::resource::Material& material) noexcept
+{
+    if (!material.anisotropy.has_value() ||
+        !std::isfinite(material.anisotropy->rotation))
+    {
+        return 0.0f;
+    }
+
+    return material.anisotropy->rotation;
+}
+
 [[nodiscard]] float transmissionIor(const nr::resource::Material& material) noexcept
 {
     auto const authoredIor = material.ior.has_value() ? material.ior->ior : 1.5f;
@@ -88,12 +110,6 @@ namespace
         slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::emissive))
     {
         flags |= RtMaterialFeatureFlag::emissive;
-    }
-
-    if (material.anisotropy.has_value() ||
-        slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::anisotropy))
-    {
-        flags |= RtMaterialFeatureFlag::unsupportedAnisotropy;
     }
 
     return flags;
@@ -152,7 +168,9 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
     if (material.unlit &&
         (material.clearcoat.has_value() || material.sheen.has_value() ||
          material.transmission.has_value() || material.ior.has_value() ||
-         material.volumeBoundary.has_value() || anyNonZero(material.core.emissiveFactor)))
+         material.volumeBoundary.has_value() || material.anisotropy.has_value() ||
+         slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::anisotropy) ||
+         anyNonZero(material.core.emissiveFactor)))
     {
         nr::nrInfo<nr::LogLevel::warning>(std::format(
             "RT material '{}' is unlit; ignoring authored PBR extension and emissive data.",
@@ -253,6 +271,14 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
     auto const baseNormalScale = slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::normal)
                                      ? material.core.normalScale
                                      : 0.0f;
+    auto const anisotropySlotIndex =
+        nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::anisotropy);
+    auto const anisotropyTexturePresent =
+        layerFlags != RtMaterialLayerFlag::none &&
+        slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::anisotropy) &&
+        textureIds[anisotropySlotIndex] != 0u;
+    auto const anisotropyStrength =
+        layerFlags != RtMaterialLayerFlag::none ? effectiveAnisotropyFactor(material) : 0.0f;
 
     compiled.header = RtMaterialHeader{
         .layerFlags = layerFlags,
@@ -272,6 +298,12 @@ inline constexpr auto kKnownRtMaterialLayerMask = static_cast<RtMaterialLayerFla
             clearcoatFactor,
             clearcoatRoughness,
             sheenMax,
+        },
+        .anisotropy = glm::vec4{
+            anisotropyStrength,
+            layerFlags != RtMaterialLayerFlag::none ? anisotropyRotation(material) : 0.0f,
+            anisotropyTexturePresent ? 1.0f : 0.0f,
+            0.0f,
         },
     };
 

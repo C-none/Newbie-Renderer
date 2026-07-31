@@ -250,6 +250,19 @@ inline constexpr int kKeyE = 'E';
     };
 }
 
+[[nodiscard]] float movementSpeedFromSnapshot(
+    const nr::options::OptionFrameSnapshot& snapshot) noexcept
+{
+    auto const& wire =
+        requiredValue(snapshot, nr::options::keys::viewerCameraMovementSpeed.id());
+    auto const* movementSpeed = std::get_if<double>(&wire.storage);
+    nrAssert(movementSpeed != nullptr, "viewer.camera.movement_speed must be a number.");
+    nrAssert(
+        std::isfinite(*movementSpeed) && *movementSpeed >= 0.01 && *movementSpeed <= 1000.0,
+        "viewer.camera.movement_speed must be finite and within [0.01, 1000].");
+    return static_cast<float>(*movementSpeed);
+}
+
 [[nodiscard]] bool hasCameraInput(const nr::renderer::ViewerCameraControlInput& input) noexcept
 {
     auto const moves = input.moveForward || input.moveBackward || input.moveLeft ||
@@ -316,6 +329,9 @@ void AppCamera::syncFromSnapshot(
     syncViewportExtent(presentation);
     viewer_.setPose(detail::poseFromSnapshot(snapshot));
     viewer_.setLens(detail::lensFromSnapshot(snapshot));
+    auto controlConfig = viewer_.controlConfig();
+    controlConfig.movementSpeed = detail::movementSpeedFromSnapshot(snapshot);
+    viewer_.setControlConfig(controlConfig);
 }
 
 bool AppCamera::tryScheduleFromPresentation(

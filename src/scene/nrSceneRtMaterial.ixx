@@ -18,6 +18,7 @@ using nr::shader::share::RtGeometryFlag;
 using nr::shader::share::RtGeometryMetadata;
 using nr::shader::share::RtInstanceFlag;
 using nr::shader::share::RtInstanceMetadata;
+using nr::shader::share::RtBaseLobeVariant;
 using nr::shader::share::RtMaterialFeatureFlag;
 using nr::shader::share::RtMaterialHeader;
 using nr::shader::share::RtMaterialLayerFlag;
@@ -60,7 +61,8 @@ struct RtMaterialTable
 
 [[nodiscard]] RtCompiledMaterial makeFallbackRtMaterial();
 
-static_assert(sizeof(RtMaterialHeader) == 96u);
+static_assert(sizeof(RtMaterialHeader) == 112u);
+static_assert(offsetof(RtMaterialHeader, anisotropy) == 96u);
 static_assert(sizeof(RtMaterialLayerRecord) == 44u);
 static_assert(sizeof(RtMaterialTextureRef) == 32u);
 static_assert(offsetof(RtMaterialTextureRef, uvLinear) == 0u);

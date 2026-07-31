@@ -77,6 +77,7 @@ inline constexpr auto viewerExit = OptionKey<OptionWireValue::Object>{"viewer.ex
 inline constexpr auto viewerCameraPose = OptionKey<OptionWireValue::Object>{"viewer.camera.pose"};
 inline constexpr auto viewerCameraVerticalFovDegrees = OptionKey<std::uint64_t>{"viewer.camera.vertical_fov_degrees"};
 inline constexpr auto viewerCameraClipPlanes = OptionKey<OptionWireValue::Object>{"viewer.camera.clip_planes"};
+inline constexpr auto viewerCameraMovementSpeed = OptionKey<double>{"viewer.camera.movement_speed"};
 
 inline constexpr auto pathTracingMaxSurfaceBounces = OptionKey<std::uint64_t>{"render.path_tracing.max_surface_bounces"};
 inline constexpr auto pathTracingRussianRouletteEnabled = OptionKey<bool>{"render.path_tracing.russian_roulette_enabled"};
@@ -115,6 +116,7 @@ struct SessionDefinitionSeed
         {"near", OptionWireValue{0.1}},
         {"far", OptionWireValue{1000.0}},
     };
+    double cameraMovementSpeed = 3.5;
 };
 
 [[nodiscard]] std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed &seed);

@@ -94,7 +94,17 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrame
     return std::chrono::duration<double, std::milli>(end - begin).count();
 }
 
-[[nodiscard]] std::optional<nr::scene::SceneMaterialTextureBindings> collectSceneMaterialTextures(const nr::scene::Scene &scene, nr::resource::MaterialHandle materialHandle, std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
+enum class MissingMaterialTexturePolicy : std::uint8_t
+{
+    strict,
+    allowUnavailableAnisotropy,
+};
+
+[[nodiscard]] std::optional<nr::scene::SceneMaterialTextureBindings> collectSceneMaterialTextures(
+    const nr::scene::Scene &scene,
+    nr::resource::MaterialHandle materialHandle,
+    std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById,
+    MissingMaterialTexturePolicy missingTexturePolicy = MissingMaterialTexturePolicy::strict)
 {
     auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
     nrAssert(materialRecordRef.has_value(), std::format("Renderer scene texture collection expected material handle (slot={}, generation={}) to resolve.", materialHandle.slot, materialHandle.generation));
@@ -112,6 +122,15 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrame
         }
 
         auto binding = scene.tryGetSampledTextureBinding(textureHandle);
+        auto const anisotropySlotIndex =
+            nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::anisotropy);
+        if (!binding.has_value() &&
+            missingTexturePolicy == MissingMaterialTexturePolicy::allowUnavailableAnisotropy &&
+            slotIndex == anisotropySlotIndex)
+        {
+            return;
+        }
+
         nrAssert(binding.has_value(), std::format("Renderer scene texture collection expected resident sampled texture for material '{}' slot {}.", materialRecord.cpu.name, slotIndex));
         nrAssert(binding->descriptorIndex < kSceneTextureDescriptorCapacity, std::format("Scene texture descriptor id {} exceeds capacity {}.", binding->descriptorIndex, kSceneTextureDescriptorCapacity));
         nrAssert(binding->descriptorIndex <= nr::scene::kMaxSceneTextureId, std::format("Scene texture descriptor id {} exceeds packed uint16 id capacity {}.", binding->descriptorIndex, nr::scene::kMaxSceneTextureId));
@@ -150,7 +169,11 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene, std::span<con
         std::ranges::for_each(meshRecord.cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
             if (geometry.material.valid())
             {
-                static_cast<void>(collectSceneMaterialTextures(scene, geometry.material, sceneTextureHandlesById));
+                static_cast<void>(collectSceneMaterialTextures(
+                    scene,
+                    geometry.material,
+                    sceneTextureHandlesById,
+                    MissingMaterialTexturePolicy::allowUnavailableAnisotropy));
             }
         });
     });

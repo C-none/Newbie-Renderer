@@ -48,10 +48,5 @@ public float3 rtMaterialFeaturePreviewColor(RtMaterialHeader material)
     {
         color += min(material.emissiveAndMetallic.rgb, float3(1.0f)) * 0.5f;
     }
-    if (hasRtMaterialFeature(material, RtMaterialFeatureFlag.unsupportedAnisotropy))
-    {
-        color = lerp(color, float3(1.0f, 0.15f, 0.05f), 0.5f);
-    }
-
     return saturate(color);
 }

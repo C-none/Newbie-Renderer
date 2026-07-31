@@ -399,7 +399,9 @@ class Scene : public nr::revision::RevisionSyntax
 
     [[nodiscard]] bool textureIsResident(nr::resource::TextureHandle textureHandle) const noexcept;
 
-    [[nodiscard]] bool materialTexturesReady(const nr::resource::Material &material) const noexcept;
+    [[nodiscard]] bool materialTexturesReady(
+        const nr::resource::Material &material,
+        bool allowUnavailableAnisotropy) const noexcept;
 
     [[nodiscard]] std::optional<nr::resource::MaterialHandle> meshGeometryMaterial(nr::resource::MeshHandle meshHandle, std::uint32_t geometryIndex) const noexcept;
 

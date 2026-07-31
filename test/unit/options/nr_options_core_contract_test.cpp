@@ -118,6 +118,29 @@ const nr::test::CaseRegistrar schemaAndCatalogCase{"option catalog validates IDs
                                                        }};
                                                        nr::test::require(!poseDefinition->schema.validate(tooLargePose).valid, "camera position values must remain representable by the float renderer camera");
 
+                                                       auto movementSpeedDefinition = std::ranges::find_if(sessionDefinitions, [](auto const &definition) { return definition.id == optionId(keys::viewerCameraMovementSpeed); });
+                                                       nr::test::require(movementSpeedDefinition != sessionDefinitions.end(), "camera movement speed definition must be registered");
+                                                       std::ranges::for_each(
+                                                           std::array{0.01, 1000.0},
+                                                           [&](double movementSpeed) {
+                                                               nr::test::require(
+                                                                   movementSpeedDefinition->schema.validate(OptionWireValue{movementSpeed}).valid,
+                                                                   "camera movement speed schema must accept both closed boundaries");
+                                                           });
+                                                       std::ranges::for_each(
+                                                           std::array{
+                                                               0.0,
+                                                               -0.01,
+                                                               std::numeric_limits<double>::quiet_NaN(),
+                                                               std::numeric_limits<double>::infinity(),
+                                                               1000.01,
+                                                           },
+                                                           [&](double movementSpeed) {
+                                                               nr::test::require(
+                                                                   !movementSpeedDefinition->schema.validate(OptionWireValue{movementSpeed}).valid,
+                                                                   "camera movement speed schema must reject non-finite and out-of-range values");
+                                                           });
+
                                                        auto duplicateBuilder = OptionCatalogBuilder{};
                                                        auto definition = makeBooleanDefinition(keys::viewerWindowFullscreen, false, OptionScope::session);
                                                        nr::test::require(duplicateBuilder.add(definition));
@@ -189,8 +212,26 @@ const nr::test::CaseRegistrar fixedCatalogCase{"fixed option catalog has one can
                                                            verticalFov->schema.unsignedMaximum == 179u &&
                                                            verticalFov->presentation.control == OptionUiControl::slider,
                                                        "vertical FOV must be an integer-degree slider");
-                                                   nr::test::require(session->find(optionId(keys::viewerCameraClipPlanes)) != nullptr);
-                                                   auto legacyQuality = OptionId::parse("viewer.rt.dlss_quality");
+                                                    nr::test::require(session->find(optionId(keys::viewerCameraClipPlanes)) != nullptr);
+                                                    auto const *movementSpeed = session->find(optionId(keys::viewerCameraMovementSpeed));
+                                                    auto const *defaultMovementSpeed =
+                                                        movementSpeed != nullptr
+                                                            ? std::get_if<double>(&movementSpeed->defaultValue.storage)
+                                                            : nullptr;
+                                                    nr::test::require(
+                                                        movementSpeed != nullptr &&
+                                                            movementSpeed->scope == OptionScope::session &&
+                                                            movementSpeed->schema.type == OptionValueType::number &&
+                                                            movementSpeed->schema.numberMinimum == 0.01 &&
+                                                            movementSpeed->schema.numberMaximum == 1000.0 &&
+                                                            defaultMovementSpeed != nullptr &&
+                                                            *defaultMovementSpeed == 3.5 &&
+                                                            movementSpeed->presentation.group == "Camera" &&
+                                                            movementSpeed->presentation.label == "Movement speed" &&
+                                                            movementSpeed->presentation.control == OptionUiControl::input &&
+                                                            movementSpeed->presentation.order == 40,
+                                                        "camera movement speed must be the canonical Camera session number input");
+                                                    auto legacyQuality = OptionId::parse("viewer.rt.dlss_quality");
                                                    nr::test::require(legacyQuality.has_value());
                                                    nr::test::require(session->find(*legacyQuality) == nullptr, "the removed viewer-scoped DLSS quality must not be registered");
 

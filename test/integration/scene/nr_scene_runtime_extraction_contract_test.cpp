@@ -319,6 +319,13 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{"scene material
                                                                              .linear = glm::vec4{0.5f, 0.0f, 0.0f, 0.25f},
                                                                              .offset = glm::vec2{0.625f, 0.75f},
                                                                          };
+                                                                     auto &anisotropyBinding = sceneAsset.materials[1].textures[3];
+                                                                     anisotropyBinding.uvChannel = 1u;
+                                                                     anisotropyBinding.transform =
+                                                                         nr::resource::MaterialTextureTransform{
+                                                                             .linear = glm::vec4{0.75f, -0.25f, 0.5f, 1.25f},
+                                                                             .offset = glm::vec2{0.2f, -0.1f},
+                                                                         };
 
                                                                      sceneAsset.materials[0].textures.push_back(nr::load::MaterialTextureBinding{
                                                                          .textureIndex = 4u,
@@ -409,6 +416,21 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{"scene material
                                                                      nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::sheenColor).texture == textureHandles[6], "sheen_color should bind sheen color slot");
                                                                      nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::transmission).texture == textureHandles[7], "transmission should bind transmission slot");
                                                                      nr::test::require(extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::anisotropy).texture == textureHandles[8], "anisotropy should bind anisotropy slot");
+                                                                     auto const& runtimeAnisotropySlot =
+                                                                         extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::anisotropy);
+                                                                     nr::test::requireEqual(runtimeAnisotropySlot.uvSet, std::uint32_t{1u});
+                                                                     nr::test::require(
+                                                                         runtimeAnisotropySlot.transform.linear ==
+                                                                                 glm::vec4{0.75f, -0.25f, 0.5f, 1.25f} &&
+                                                                             runtimeAnisotropySlot.transform.offset ==
+                                                                                 glm::vec2{0.2f, -0.1f},
+                                                                         "anisotropy should preserve UV reference and full affine transform");
+                                                                     auto anisotropyTextureRecord =
+                                                                         scene.tryGetTextureAsset(textureHandles[8]);
+                                                                     nr::test::require(
+                                                                         anisotropyTextureRecord.has_value() &&
+                                                                             !anisotropyTextureRecord->get().cpu.srgb,
+                                                                         "anisotropy texture data must remain linear rather than sRGB");
 
                                                                      auto const extensionFlags = extensionMaterial.featureFlags();
                                                                      nr::test::require(nr::resource::hasAnyFeature(extensionFlags, nr::resource::MaterialFeatureFlag::clearcoat), "extension flags should include clearcoat");
@@ -698,4 +720,67 @@ const nr::test::CaseRegistrar readinessCase{"scene extraction applies domain-spe
                                                 nr::test::requireEqual(scene.extractPackets(rtProfile).rtInstances.size(), std::size_t{1});
                                                 nr::test::requireEqual(scene.extractPackets(tlasProfile).tlasBuildInputs.size(), std::size_t{1});
                                             }};
+
+const nr::test::CaseRegistrar anisotropyReadinessCase{
+    "scene extraction keeps raster strict while RT accepts unavailable anisotropy",
+    [] {
+        nr::rhi::Device device{};
+        auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
+        auto sceneAsset = makeRuntimeSceneAsset(false);
+        sceneAsset.materials[0].anisotropyFactor = 0.75f;
+        sceneAsset.materials[0].textures[0].semantic =
+            nr::resource::MaterialTextureSlotSemantic::anisotropy;
+        sceneAsset.materials[0].textures[0].sourceSemanticName = "anisotropy";
+
+        auto templateHandle = scene.registerTemplate(sceneAsset);
+        auto instanceHandle = scene.instantiate(templateHandle);
+        nr::test::require(templateHandle.valid(), "template registration should succeed");
+        nr::test::require(instanceHandle.valid(), "instance registration should succeed");
+        scene.updateSimulation(
+            nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
+
+        auto handles = resolveRuntimeHandles(scene, sceneAsset);
+        auto rasterProfile =
+            registerProfile(scene, nr::scene::ScenePacketDomain::rasterDraw, true);
+        auto rtProfile =
+            registerProfile(scene, nr::scene::ScenePacketDomain::rayTracingInstance, true);
+        auto tlasProfile =
+            registerProfile(scene, nr::scene::ScenePacketDomain::tlasBuildInput, true);
+
+        setMeshResidentForTest(scene, handles.mesh, true);
+        setMaterialResidentForTest(scene, handles.material, true);
+        setTextureResidentForTest(scene, handles.texture, false);
+        nr::test::require(
+            scene.extractPackets(rasterProfile).rasterDraws.empty(),
+            "raster must retain strict residency for an authored anisotropy texture");
+        nr::test::requireEqual(
+            scene.extractPackets(rtProfile).rtInstances.size(),
+            std::size_t{1},
+            "RT must use the anisotropy semantic fallback while its texture is unavailable");
+        nr::test::requireEqual(
+            scene.extractPackets(tlasProfile).tlasBuildInputs.size(),
+            std::size_t{1},
+            "TLAS must not suppress a packet for unavailable anisotropy alone");
+        nr::test::require(
+            !scene.tryGetSampledTextureBinding(handles.texture).has_value(),
+            "unavailable anisotropy must not expose a sampled binding");
+
+        auto const unavailableRevisions = scene.revisionsSnapshot();
+        setTextureResidentForTest(scene, handles.texture, true);
+        auto const residentRevisions = scene.revisionsSnapshot();
+        nr::test::requireEqual(
+            scene.extractPackets(rasterProfile).rasterDraws.size(),
+            std::size_t{1},
+            "raster should become ready when anisotropy becomes resident");
+        nr::test::requireEqual(
+            scene.extractPackets(rtProfile).rtInstances.size(),
+            std::size_t{1});
+        nr::test::requireEqual(
+            scene.extractPackets(tlasProfile).tlasBuildInputs.size(),
+            std::size_t{1});
+        nr::test::require(
+            residentRevisions.rt.get<nr::scene::SceneRtRevisionDomain::textureResidency>() !=
+                unavailableRevisions.rt.get<nr::scene::SceneRtRevisionDomain::textureResidency>(),
+            "anisotropy residency promotion must invalidate RT material/texture collection");
+    }};
 } // namespace

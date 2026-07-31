@@ -446,6 +446,7 @@ std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed
         makeDefinition(keys::viewerCameraPose, std::move(cameraSchema), seed.cameraPose, OptionScope::session, ui("Camera", "Pose", OptionUiControl::hidden, 10)),
         makeUnsignedDefinition(keys::viewerCameraVerticalFovDegrees, seed.verticalFovDegrees, 1u, 179u, OptionScope::session, ui("Camera", "Vertical FOV", OptionUiControl::slider, 20)),
         makeDefinition(keys::viewerCameraClipPlanes, std::move(clipSchema), seed.clipPlanes, OptionScope::session, ui("Camera", "Clip planes", OptionUiControl::input, 30)),
+        makeNumberDefinition(keys::viewerCameraMovementSpeed, seed.cameraMovementSpeed, 0.01, 1000.0, OptionScope::session, ui("Camera", "Movement speed", OptionUiControl::input, 40)),
     };
 }
 

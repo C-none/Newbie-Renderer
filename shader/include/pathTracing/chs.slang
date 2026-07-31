@@ -13,8 +13,7 @@ public static const RtMaterialFeatureFlag kKnownRtMaterialFeatureMask =
     RtMaterialFeatureFlag.alphaBlend |
     RtMaterialFeatureFlag.doubleSided |
     RtMaterialFeatureFlag.emissive |
-    RtMaterialFeatureFlag.volumeBoundary |
-    RtMaterialFeatureFlag.unsupportedAnisotropy;
+    RtMaterialFeatureFlag.volumeBoundary;
 
 public struct ClosestHitInput
 {
@@ -45,7 +44,9 @@ public interface ICHS
     ClosestHitResult handleClosestHit(ClosestHitInput input);
 }
 
-public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
+public struct MaterialCHS<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant> : ICHS
 {
     public ClosestHitResult handleClosestHit(ClosestHitInput input)
     {
@@ -76,7 +77,7 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
             return result;
         }
 
-        result.material = resolveLitMaterialPayloadVariant<LayerFlags>(
+        result.material = resolveLitMaterialPayloadVariant<LayerFlags, BaseLobeVariant>(
             rtMaterialTextureRefs,
             rtMaterialLayers,
             input.material,
@@ -90,7 +91,7 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
         result.material.exteriorMediumIor = input.exteriorMediumIor;
         result.material.instanceMetadataIndex = input.instanceMetadataIndex;
         result.material.geometryIndex = input.geometryIndex;
-        result.scatter = sampleResolvedMaterialScatterVariant<LayerFlags>(
+        result.scatter = sampleResolvedMaterialScatterVariant<LayerFlags, BaseLobeVariant>(
             result.material,
             input.viewDirection,
             input.scatterRandomValues);

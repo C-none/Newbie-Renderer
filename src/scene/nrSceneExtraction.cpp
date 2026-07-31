@@ -818,11 +818,18 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
     return textureRecord->gpuState == GpuResidencyState::resident && textureRecord->gpuVersion >= textureRecord->cpuVersion;
 }
 
-[[nodiscard]] bool Scene::materialTexturesReady(const nr::resource::Material &material) const noexcept
+[[nodiscard]] bool Scene::materialTexturesReady(
+    const nr::resource::Material &material,
+    bool allowUnavailableAnisotropy) const noexcept
 {
-    return std::ranges::all_of(material.textureSlots, [&](const nr::resource::MaterialTextureSlot &slot) {
+    auto const anisotropySlotIndex =
+        nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::anisotropy);
+    auto const slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
+    return std::ranges::all_of(slotIndices, [&](std::size_t slotIndex) {
+        auto const& slot = material.textureSlots[slotIndex];
         auto textureHandle = slot.texture;
-        if (!textureHandle.valid())
+        if (!textureHandle.valid() ||
+            (allowUnavailableAnisotropy && slotIndex == anisotropySlotIndex))
         {
             return true;
         }
@@ -874,7 +881,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             return false;
         }
 
-        return materialTexturesReady(materialRecord->cpu);
+        return materialTexturesReady(materialRecord->cpu, false);
     });
 }
 
@@ -914,7 +921,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
             return false;
         }
 
-        return materialTexturesReady(materialRecord->cpu);
+        return materialTexturesReady(materialRecord->cpu, true);
     });
 }
 

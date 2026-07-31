@@ -209,7 +209,13 @@ inline constexpr std::string_view kRussianRouletteDisabledPolicy = "RussianRoule
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingChsVariantDesc(const PathTracingChsVariantKey &key)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.assign("CHS", "ICHS", std::format("MaterialCHS<RtMaterialLayerFlag({}u)>", static_cast<std::uint32_t>(key.layerFlags)));
+    variant.assign(
+        "CHS",
+        "ICHS",
+        std::format(
+            "MaterialCHS<RtMaterialLayerFlag({}u), RtBaseLobeVariant({}u)>",
+            static_cast<std::uint32_t>(key.layerFlags),
+            static_cast<std::uint32_t>(key.baseLobeVariant)));
     return variant;
 }
 

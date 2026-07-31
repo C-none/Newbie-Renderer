@@ -31,6 +31,12 @@ public enum RtTransmissionMode : uint
     volume = 1u,
 }
 
+public enum RtBaseLobeVariant : uint
+{
+    isotropic = 0u,
+    anisotropic = 1u,
+}
+
 [Flags]
 public enum RtMaterialFeatureFlag : uint
 {
@@ -40,7 +46,6 @@ public enum RtMaterialFeatureFlag : uint
     doubleSided = 1u << 2u,
     emissive = 1u << 3u,
     volumeBoundary = 1u << 4u,
-    unsupportedAnisotropy = 1u << 31u,
 }
 
 public struct RtMaterialHeader
@@ -58,6 +63,8 @@ public struct RtMaterialHeader
     public float4 roughnessNormalOcclusionAlpha = float4(1.0f, 1.0f, 1.0f, 1.0f);
     // x is reserved. Transmission factor, IOR, and mode have one source of truth in the layer record.
     public float4 transmissionClearcoatSheen = float4(0.0f);
+    // strength, counter-clockwise rotation in radians, usable-texture presence, reserved.
+    public float4 anisotropy = float4(0.0f);
 };
 
 public struct RtMaterialLayerRecord

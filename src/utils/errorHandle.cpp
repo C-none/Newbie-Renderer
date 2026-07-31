@@ -3,6 +3,7 @@ module nr.utils;
 import :errorHandle;
 import :staticUtils;
 import dependency.json;
+import dependency.processLease;
 import std;
 
 namespace nr
@@ -130,7 +131,7 @@ class ActiveLogDirectoryLease
 
     ActiveLogDirectoryLease(const ActiveLogDirectoryLease &) = delete;
     ActiveLogDirectoryLease &operator=(const ActiveLogDirectoryLease &) = delete;
-    ActiveLogDirectoryLease(ActiveLogDirectoryLease &&other) noexcept : path_(std::move(other.path_)), acquired_(std::exchange(other.acquired_, false))
+    ActiveLogDirectoryLease(ActiveLogDirectoryLease &&other) noexcept : path_(std::move(other.path_)), kernelLease_(std::move(other.kernelLease_)), acquired_(std::exchange(other.acquired_, false))
     {
     }
     ActiveLogDirectoryLease &operator=(ActiveLogDirectoryLease &&other) noexcept
@@ -139,6 +140,7 @@ class ActiveLogDirectoryLease
         {
             static_cast<void>(release());
             path_ = std::move(other.path_);
+            kernelLease_ = std::move(other.kernelLease_);
             acquired_ = std::exchange(other.acquired_, false);
         }
         return *this;
@@ -146,17 +148,60 @@ class ActiveLogDirectoryLease
 
     [[nodiscard]] std::expected<void, std::string> acquire(const std::filesystem::path &directory)
     {
+        auto kernelAcquired = kernelLease_.acquire(directory);
+        if (!kernelAcquired)
+        {
+            if (kernelAcquired.error().error == dependency::process::ExclusiveDirectoryLeaseError::alreadyOwned)
+            {
+                return std::unexpected{std::format("NDJSON log directory '{}' is already owned by another viewer.", directory.generic_string())};
+            }
+            return std::unexpected{std::format("Acquiring the NDJSON log-directory kernel lease failed: {}", kernelAcquired.error().detail)};
+        }
+
         path_ = directory / ".active-viewer";
         auto error = std::error_code{};
+        auto const status = std::filesystem::symlink_status(path_, error);
+        if (error && error != std::errc::no_such_file_or_directory)
+        {
+            return std::unexpected{filesystemFailure("Inspecting NDJSON viewer marker", path_, error)};
+        }
+        error.clear();
+        if (std::filesystem::exists(status))
+        {
+            if (!std::filesystem::is_directory(status))
+            {
+                return std::unexpected{std::format("NDJSON viewer marker '{}' is not a directory.", path_.generic_string())};
+            }
+            auto const markerEmpty = std::filesystem::is_empty(path_, error);
+            if (error)
+            {
+                return std::unexpected{filesystemFailure("Inspecting stale NDJSON viewer marker", path_, error)};
+            }
+            if (!markerEmpty)
+            {
+                return std::unexpected{std::format("NDJSON viewer marker '{}' is not empty; refusing automatic recovery.", path_.generic_string())};
+            }
+            auto const removed = std::filesystem::remove(path_, error);
+            if (error)
+            {
+                return std::unexpected{filesystemFailure("Removing stale NDJSON viewer marker", path_, error)};
+            }
+            if (!removed)
+            {
+                return std::unexpected{std::format("Removing stale NDJSON viewer marker '{}' did not remove a directory.", path_.generic_string())};
+            }
+        }
+
         auto const created = std::filesystem::create_directory(path_, error);
         if (error)
         {
-            return std::unexpected{filesystemFailure("Creating NDJSON viewer lease", path_, error)};
+            return std::unexpected{filesystemFailure("Creating NDJSON viewer marker", path_, error)};
         }
         if (!created)
         {
-            return std::unexpected{std::format("NDJSON log directory '{}' is already owned by another viewer or contains a stale '.active-viewer' lease.", directory.generic_string())};
+            return std::unexpected{std::format("Creating NDJSON viewer marker '{}' did not create a directory.", path_.generic_string())};
         }
+
         acquired_ = true;
         return {};
     }
@@ -169,16 +214,15 @@ class ActiveLogDirectoryLease
         }
         auto error = std::error_code{};
         static_cast<void>(std::filesystem::remove(path_, error));
-        if (!error)
-        {
-            acquired_ = false;
-            path_.clear();
-        }
+        kernelLease_.release();
+        acquired_ = false;
+        path_.clear();
         return error;
     }
 
   private:
     std::filesystem::path path_{};
+    dependency::process::ExclusiveDirectoryLease kernelLease_{};
     bool acquired_ = false;
 };
 
@@ -443,6 +487,12 @@ class NdjsonSink
         {
             return std::unexpected{filesystemFailure("Creating NDJSON log directory", config.directory, error)};
         }
+        auto canonicalDirectory = std::filesystem::canonical(config.directory, error);
+        if (error)
+        {
+            return std::unexpected{filesystemFailure("Canonicalizing NDJSON log directory", config.directory, error)};
+        }
+        config.directory = std::move(canonicalDirectory);
 
         auto directoryLease = ActiveLogDirectoryLease{};
         auto leaseAcquired = directoryLease.acquire(config.directory);

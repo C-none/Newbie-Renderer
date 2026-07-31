@@ -9,16 +9,18 @@ import std;
 export namespace nr::renderPasses
 {
 using nr::shader::share::RtHitAnyHitPolicy;
+using nr::shader::share::RtBaseLobeVariant;
 
-// CHS variants are keyed solely by the combined RtMaterialLayerFlag mask (9 valid combinations: unlit
-// plus baseSurface with any subset of clearcoat/sheen/transmission). Any-hit policy doubles the hit-group
-// space (hardware-opaque vs shared material-policy any-hit).
-inline constexpr std::uint32_t kRtBsdfVariantHardUpperBound = 9u;
+// CHS variants combine the nine valid layer masks with a separate base-lobe dimension. Unlit has only
+// the isotropic variant; each of the eight lit masks supports isotropic and anisotropic base GGX.
+// Any-hit policy remains orthogonal and doubles the hit-group space.
+inline constexpr std::uint32_t kRtBsdfVariantHardUpperBound = 17u;
 inline constexpr std::uint32_t kRtHitGroupVariantHardUpperBound = kRtBsdfVariantHardUpperBound * 2u;
 
 struct RtBsdfVariantKey
 {
     nr::scene::RtMaterialLayerFlag layerFlags = nr::scene::RtMaterialLayerFlag::none;
+    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic;
 
     [[nodiscard]] friend auto operator<=>(const RtBsdfVariantKey&, const RtBsdfVariantKey&) noexcept = default;
 };
@@ -61,61 +63,100 @@ struct SceneRtHitSbtPlan
     std::uint64_t permutationSetHash = 0u;
     std::uint64_t recordPlanHash = 0u;
 
-    [[nodiscard]] bool valid() const noexcept
-    {
-        if (permutations.empty() || records.empty() || instances.empty())
-        {
-            return false;
-        }
-
-        auto const permutationIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(permutations.size()));
-        auto const permutationsAreDense = std::ranges::all_of(permutationIndices, [&](std::uint32_t index) {
-            return permutations[index].permutationIndex == index;
-        });
-        if (!permutationsAreDense)
-        {
-            return false;
-        }
-
-        auto const recordsReferenceValidPermutations = std::ranges::all_of(records, [&](const SceneRtHitSbtRecord& record) {
-            return record.permutationIndex < permutations.size() && record.instanceRecordIndex < instances.size();
-        });
-        if (!recordsReferenceValidPermutations)
-        {
-            return false;
-        }
-
-        auto const instancesCoverValidRecordRanges = std::ranges::all_of(instances, [&](const SceneRtHitSbtInstanceRecord& instance) {
-            auto const recordEnd = static_cast<std::uint64_t>(instance.hitRecordBase) + static_cast<std::uint64_t>(instance.geometryCount);
-            return instance.geometryCount > 0u && recordEnd <= static_cast<std::uint64_t>(records.size());
-        });
-        return instancesCoverValidRecordRanges && permutationSetHash != 0u && recordPlanHash != 0u;
-    }
+    [[nodiscard]] bool valid() const noexcept;
 };
+
+[[nodiscard]] constexpr bool rtMaterialLayerFlagsValid(
+    nr::scene::RtMaterialLayerFlag layerFlags) noexcept
+{
+    constexpr auto knownMask =
+        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::baseSurface) |
+        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::clearcoat) |
+        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::sheen) |
+        static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::transmission);
+    auto const bits = static_cast<std::uint32_t>(layerFlags);
+    return bits == 0u ||
+           ((bits & ~knownMask) == 0u &&
+            (bits & static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::baseSurface)) != 0u);
+}
+
+[[nodiscard]] constexpr bool rtBaseLobeVariantValid(RtBaseLobeVariant variant) noexcept
+{
+    return variant == RtBaseLobeVariant::isotropic ||
+           variant == RtBaseLobeVariant::anisotropic;
+}
+
+[[nodiscard]] constexpr bool rtBsdfVariantKeyValid(const RtBsdfVariantKey& key) noexcept
+{
+    return rtMaterialLayerFlagsValid(key.layerFlags) &&
+           rtBaseLobeVariantValid(key.baseLobeVariant) &&
+           (key.layerFlags != nr::scene::RtMaterialLayerFlag::none ||
+            key.baseLobeVariant == RtBaseLobeVariant::isotropic);
+}
+
+[[nodiscard]] constexpr bool rtHitAnyHitPolicyValid(RtHitAnyHitPolicy policy) noexcept
+{
+    return policy == RtHitAnyHitPolicy::none ||
+           policy == RtHitAnyHitPolicy::materialPolicy;
+}
+
+[[nodiscard]] constexpr bool rtHitPermutationKeyValid(const RtHitPermutationKey& key) noexcept
+{
+    return rtBsdfVariantKeyValid(key.bsdf) &&
+           rtHitAnyHitPolicyValid(key.anyHitPolicy);
+}
 
 [[nodiscard]] inline bool rtHitPermutationUsesAnyHit(const RtHitPermutationKey& key) noexcept
 {
     return key.anyHitPolicy == RtHitAnyHitPolicy::materialPolicy;
 }
 
-[[nodiscard]] inline RtBsdfVariantKey makeRtBsdfVariantKey(nr::scene::RtMaterialLayerFlag layerFlags) noexcept
+[[nodiscard]] inline RtBaseLobeVariant rtBaseLobeVariant(
+    nr::scene::RtMaterialLayerFlag layerFlags,
+    float anisotropyStrength) noexcept
 {
-    return RtBsdfVariantKey{
+    auto const hasBaseSurface =
+        (static_cast<std::uint32_t>(layerFlags) &
+         static_cast<std::uint32_t>(nr::scene::RtMaterialLayerFlag::baseSurface)) != 0u;
+    return hasBaseSurface &&
+                   std::isfinite(anisotropyStrength) &&
+                   anisotropyStrength > 0.0f
+               ? RtBaseLobeVariant::anisotropic
+               : RtBaseLobeVariant::isotropic;
+}
+
+[[nodiscard]] inline RtBsdfVariantKey makeRtBsdfVariantKey(
+    nr::scene::RtMaterialLayerFlag layerFlags,
+    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic) noexcept
+{
+    nrAssert(
+        rtMaterialLayerFlagsValid(layerFlags),
+        "RT BSDF variant layer flags are outside the exact unlit/lit domain.");
+    nrAssert(
+        rtBaseLobeVariantValid(baseLobeVariant),
+        "RT BSDF variant has an invalid base-lobe enum value.");
+    auto const key = RtBsdfVariantKey{
         .layerFlags = layerFlags,
+        .baseLobeVariant = baseLobeVariant,
     };
+    nrAssert(
+        rtBsdfVariantKeyValid(key),
+        "Unlit RT materials cannot select the anisotropic base-lobe variant.");
+    return key;
 }
 
 [[nodiscard]] inline RtHitGroupKey makeRtHitGroupKey(
     nr::scene::RtMaterialLayerFlag layerFlags,
     nr::scene::RtMaterialFeatureFlag featureFlags,
-    bool forceMaterialPolicy = false) noexcept
+    bool forceMaterialPolicy = false,
+    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic) noexcept
 {
     auto const alphaMaskFeature = static_cast<std::uint32_t>(nr::scene::RtMaterialFeatureFlag::alphaMask);
     auto const requiresMaterialPolicy =
         forceMaterialPolicy ||
         (static_cast<std::uint32_t>(featureFlags) & alphaMaskFeature) != 0u;
     return RtHitGroupKey{
-        .bsdf = makeRtBsdfVariantKey(layerFlags),
+        .bsdf = makeRtBsdfVariantKey(layerFlags, baseLobeVariant),
         .anyHitPolicy = requiresMaterialPolicy
                             ? RtHitAnyHitPolicy::materialPolicy
                             : RtHitAnyHitPolicy::none,
@@ -125,23 +166,25 @@ struct SceneRtHitSbtPlan
 [[nodiscard]] inline RtHitPermutationKey makeRtHitPermutationKey(
     nr::scene::RtMaterialLayerFlag layerFlags,
     nr::scene::RtMaterialFeatureFlag featureFlags,
-    bool forceMaterialPolicy = false) noexcept
+    bool forceMaterialPolicy = false,
+    RtBaseLobeVariant baseLobeVariant = RtBaseLobeVariant::isotropic) noexcept
 {
-    return makeRtHitGroupKey(layerFlags, featureFlags, forceMaterialPolicy);
+    return makeRtHitGroupKey(layerFlags, featureFlags, forceMaterialPolicy, baseLobeVariant);
 }
 
 [[nodiscard]] inline std::uint64_t hashRtBsdfVariantKey(const RtBsdfVariantKey& key) noexcept
 {
     auto state = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(state, "RtBsdfVariantKey.v2");
+    nr::hash::hashAppendString(state, "RtBsdfVariantKey.v3");
     nr::hash::hashAppend(state, static_cast<std::uint32_t>(key.layerFlags));
+    nr::hash::hashAppend(state, key.baseLobeVariant);
     return state;
 }
 
 [[nodiscard]] inline std::uint64_t hashRtHitPermutationKey(const RtHitPermutationKey& key) noexcept
 {
     auto state = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(state, "RtHitGroupKey.v2");
+    nr::hash::hashAppendString(state, "RtHitGroupKey.v3");
     nr::hash::hashAppend(state, hashRtBsdfVariantKey(key.bsdf));
     nr::hash::hashAppend(state, key.anyHitPolicy);
     return state;
@@ -162,6 +205,9 @@ struct SceneRtHitSbtPlan
     std::map<RtHitPermutationKey, std::uint32_t>& permutationLookup,
     RtHitPermutationKey key)
 {
+    nrAssert(
+        rtHitPermutationKeyValid(key),
+        "RT hit permutation key is outside the exact BSDF/any-hit domain.");
     if (auto found = permutationLookup.find(key); found != permutationLookup.end())
     {
         return found->second;
@@ -224,20 +270,26 @@ struct SceneRtHitSbtPlan
     return hitRecordBase;
 }
 
-inline void finalizeSceneRtHitSbtPlan(SceneRtHitSbtPlan& plan) noexcept
+[[nodiscard]] inline std::uint64_t calculateSceneRtHitSbtPermutationSetHash(
+    const SceneRtHitSbtPlan& plan) noexcept
 {
     auto permutationState = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(permutationState, "SceneRtHitSbtPlan.permutationSet.v1");
+    nr::hash::hashAppendString(permutationState, "SceneRtHitSbtPlan.permutationSet.v2");
     nr::hash::hashAppend(permutationState, static_cast<std::uint32_t>(plan.permutations.size()));
     std::ranges::for_each(plan.permutations, [&](const SceneRtHitSbtPermutation& permutation) {
         nr::hash::hashAppend(permutationState, permutation.permutationIndex);
         nr::hash::hashAppend(permutationState, hashRtHitPermutationKey(permutation.key));
     });
-    plan.permutationSetHash = permutationState;
+    return permutationState;
+}
 
+[[nodiscard]] inline std::uint64_t calculateSceneRtHitSbtRecordPlanHash(
+    const SceneRtHitSbtPlan& plan,
+    std::uint64_t permutationSetHash) noexcept
+{
     auto recordState = nr::hash::fnv1a64OffsetBasis;
-    nr::hash::hashAppendString(recordState, "SceneRtHitSbtPlan.recordPlan.v1");
-    nr::hash::hashAppend(recordState, plan.permutationSetHash);
+    nr::hash::hashAppendString(recordState, "SceneRtHitSbtPlan.recordPlan.v2");
+    nr::hash::hashAppend(recordState, permutationSetHash);
     nr::hash::hashAppend(recordState, static_cast<std::uint32_t>(plan.instances.size()));
     std::ranges::for_each(plan.instances, [&](const SceneRtHitSbtInstanceRecord& instance) {
         nr::hash::hashAppend(recordState, instance.hitRecordBase);
@@ -250,6 +302,85 @@ inline void finalizeSceneRtHitSbtPlan(SceneRtHitSbtPlan& plan) noexcept
         nr::hash::hashAppend(recordState, record.instanceRecordIndex);
         nr::hash::hashAppend(recordState, record.geometryIndex);
     });
-    plan.recordPlanHash = recordState;
+    return recordState;
+}
+
+[[nodiscard]] inline bool SceneRtHitSbtPlan::valid() const noexcept
+{
+    if (permutations.empty() || records.empty() || instances.empty() ||
+        permutations.size() > kRtHitGroupVariantHardUpperBound)
+    {
+        return false;
+    }
+
+    auto const permutationIndices =
+        std::views::iota(std::size_t{0}, permutations.size());
+    if (!std::ranges::all_of(permutationIndices, [&](std::size_t index) {
+            auto const& permutation = permutations[index];
+            return permutation.permutationIndex == index &&
+                   rtHitPermutationKeyValid(permutation.key) &&
+                   std::ranges::count(permutations, permutation.key, &SceneRtHitSbtPermutation::key) == 1;
+        }))
+    {
+        return false;
+    }
+
+    if (!std::ranges::all_of(records, [&](const SceneRtHitSbtRecord& record) {
+            return record.permutationIndex < permutations.size() &&
+                   record.instanceRecordIndex < instances.size();
+        }))
+    {
+        return false;
+    }
+
+    auto const instanceIndices = std::views::iota(std::size_t{0}, instances.size());
+    if (!std::ranges::all_of(instanceIndices, [&](std::size_t instanceIndex) {
+            auto const& instance = instances[instanceIndex];
+            auto const expectedBase = instanceIndex == 0u
+                                          ? std::uint64_t{0}
+                                          : static_cast<std::uint64_t>(instances[instanceIndex - 1u].hitRecordBase) +
+                                                instances[instanceIndex - 1u].geometryCount;
+            auto const recordEnd =
+                static_cast<std::uint64_t>(instance.hitRecordBase) + instance.geometryCount;
+            if (instance.geometryCount == 0u ||
+                instance.hitRecordBase != expectedBase ||
+                recordEnd > records.size())
+            {
+                return false;
+            }
+
+            auto const geometryIndices =
+                std::views::iota(std::uint32_t{0}, instance.geometryCount);
+            return std::ranges::all_of(geometryIndices, [&](std::uint32_t geometryIndex) {
+                auto const& record = records[instance.hitRecordBase + geometryIndex];
+                return record.instanceRecordIndex == instanceIndex &&
+                       record.geometryIndex == geometryIndex;
+            });
+        }))
+    {
+        return false;
+    }
+
+    auto const& finalInstance = instances.back();
+    auto const finalRecordEnd =
+        static_cast<std::uint64_t>(finalInstance.hitRecordBase) + finalInstance.geometryCount;
+    if (finalRecordEnd != records.size())
+    {
+        return false;
+    }
+
+    auto const expectedPermutationSetHash =
+        calculateSceneRtHitSbtPermutationSetHash(*this);
+    auto const expectedRecordPlanHash =
+        calculateSceneRtHitSbtRecordPlanHash(*this, expectedPermutationSetHash);
+    return permutationSetHash == expectedPermutationSetHash &&
+           recordPlanHash == expectedRecordPlanHash;
+}
+
+inline void finalizeSceneRtHitSbtPlan(SceneRtHitSbtPlan& plan) noexcept
+{
+    plan.permutationSetHash = calculateSceneRtHitSbtPermutationSetHash(plan);
+    plan.recordPlanHash =
+        calculateSceneRtHitSbtRecordPlanHash(plan, plan.permutationSetHash);
 }
 } // namespace nr::renderPasses

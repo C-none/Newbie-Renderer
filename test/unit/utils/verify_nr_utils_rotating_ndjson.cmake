@@ -248,25 +248,75 @@ if(EXISTS "${NR_ROTATING_NDJSON_OUTPUT_DIR}/.active-viewer")
     message(FATAL_ERROR "Orderly shutdown left the NDJSON viewer lease behind.")
 endif()
 
-set(lease_conflict_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-lease-conflict")
-file(REMOVE_RECURSE "${lease_conflict_dir}")
-file(MAKE_DIRECTORY "${lease_conflict_dir}/.active-viewer")
+set(stale_lease_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-stale-lease")
+file(REMOVE_RECURSE "${stale_lease_dir}")
+file(MAKE_DIRECTORY "${stale_lease_dir}/.active-viewer")
 execute_process(
-    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${lease_conflict_dir}"
-    RESULT_VARIABLE lease_conflict_result
-    OUTPUT_VARIABLE lease_conflict_stdout
-    ERROR_VARIABLE lease_conflict_stderr
+    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${stale_lease_dir}"
+    RESULT_VARIABLE stale_lease_result
+    OUTPUT_VARIABLE stale_lease_stdout
+    ERROR_VARIABLE stale_lease_stderr
 )
-if(NOT lease_conflict_result EQUAL 3)
+if(NOT stale_lease_result EQUAL 0)
     message(
         FATAL_ERROR
-        "Lease-conflict probe exited with '${lease_conflict_result}' instead of 3.\n"
-        "stdout:\n${lease_conflict_stdout}\n"
-        "stderr:\n${lease_conflict_stderr}"
+        "Stale-lease recovery probe exited with '${stale_lease_result}'.\n"
+        "stdout:\n${stale_lease_stdout}\n"
+        "stderr:\n${stale_lease_stderr}"
     )
 endif()
-if(EXISTS "${lease_conflict_dir}/engine.ndjson" OR
-   EXISTS "${lease_conflict_dir}/options.ndjson")
-    message(FATAL_ERROR "Lease-conflict probe touched active NDJSON files.")
+if(NOT EXISTS "${stale_lease_dir}/engine.ndjson" OR
+   NOT EXISTS "${stale_lease_dir}/options.ndjson")
+    message(FATAL_ERROR "Stale-lease recovery did not create both active NDJSON files.")
 endif()
-file(REMOVE_RECURSE "${lease_conflict_dir}")
+if(EXISTS "${stale_lease_dir}/.active-viewer")
+    message(FATAL_ERROR "Stale-lease recovery left the NDJSON viewer marker behind.")
+endif()
+
+set(live_lease_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-live-lease")
+file(REMOVE_RECURSE "${live_lease_dir}")
+execute_process(
+    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${live_lease_dir}" --conflict-parent
+    RESULT_VARIABLE live_lease_result
+    OUTPUT_VARIABLE live_lease_stdout
+    ERROR_VARIABLE live_lease_stderr
+)
+if(NOT live_lease_result EQUAL 0)
+    message(
+        FATAL_ERROR
+        "Live two-process lease probe exited with '${live_lease_result}'.\n"
+        "stdout:\n${live_lease_stdout}\n"
+        "stderr:\n${live_lease_stderr}"
+    )
+endif()
+string(FIND "${live_lease_stdout}${live_lease_stderr}" "already owned by another viewer" live_conflict_message_index)
+if(live_conflict_message_index EQUAL -1)
+    message(FATAL_ERROR "Live two-process lease probe did not report the ownership conflict.")
+endif()
+if(EXISTS "${live_lease_dir}/.active-viewer")
+    message(FATAL_ERROR "Live two-process lease probe left the NDJSON viewer marker behind.")
+endif()
+
+set(unexpected_marker_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-unexpected-marker")
+file(REMOVE_RECURSE "${unexpected_marker_dir}")
+file(MAKE_DIRECTORY "${unexpected_marker_dir}/.active-viewer")
+file(WRITE "${unexpected_marker_dir}/.active-viewer/unexpected" "not a stale empty marker")
+execute_process(
+    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${unexpected_marker_dir}"
+    RESULT_VARIABLE unexpected_marker_result
+    OUTPUT_VARIABLE unexpected_marker_stdout
+    ERROR_VARIABLE unexpected_marker_stderr
+)
+if(NOT unexpected_marker_result EQUAL 3)
+    message(
+        FATAL_ERROR
+        "Unexpected-marker probe exited with '${unexpected_marker_result}' instead of 3.\n"
+        "stdout:\n${unexpected_marker_stdout}\n"
+        "stderr:\n${unexpected_marker_stderr}"
+    )
+endif()
+if(EXISTS "${unexpected_marker_dir}/engine.ndjson" OR
+   EXISTS "${unexpected_marker_dir}/options.ndjson")
+    message(FATAL_ERROR "Unexpected-marker probe touched active NDJSON files.")
+endif()
+file(REMOVE_RECURSE "${stale_lease_dir}" "${live_lease_dir}" "${unexpected_marker_dir}")

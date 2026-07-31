@@ -85,22 +85,37 @@ public float lightVisibilityDistance(uint lightIndex, float3 hitPosition)
 // compile-time constant. This runtime switch maps the resolved layerFlags to the concrete static
 // evaluator so each invocation runs only its active-layer math. The root raygen SPIR-V contains every
 // valid lit case; that is the accepted boundary of the current single-raygen architecture.
-public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponents(
+public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponentsBaseVariant<
+    let BaseLobeVariant : RtBaseLobeVariant>(
     ResolvedMaterialPayload material,
     MaterialDirectLightingInput lighting)
 {
     switch (uint(material.layerFlags))
     {
-    case 1u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
-    case 3u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(3u)>(material, lighting);
-    case 5u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(5u)>(material, lighting);
-    case 7u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(7u)>(material, lighting);
-    case 9u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(9u)>(material, lighting);
-    case 11u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(11u)>(material, lighting);
-    case 13u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(13u)>(material, lighting);
-    case 15u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(15u)>(material, lighting);
-    default: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    case 1u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u), BaseLobeVariant>(material, lighting);
+    case 3u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(3u), BaseLobeVariant>(material, lighting);
+    case 5u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(5u), BaseLobeVariant>(material, lighting);
+    case 7u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(7u), BaseLobeVariant>(material, lighting);
+    case 9u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(9u), BaseLobeVariant>(material, lighting);
+    case 11u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(11u), BaseLobeVariant>(material, lighting);
+    case 13u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(13u), BaseLobeVariant>(material, lighting);
+    case 15u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(15u), BaseLobeVariant>(material, lighting);
+    default: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u), BaseLobeVariant>(material, lighting);
     }
+}
+
+public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponents(
+    ResolvedMaterialPayload material,
+    MaterialDirectLightingInput lighting)
+{
+    if (material.anisotropyStrength > 0.0f)
+    {
+        return dispatchEvaluateResolvedMaterialDirectComponentsBaseVariant<
+            RtBaseLobeVariant.anisotropic>(material, lighting);
+    }
+
+    return dispatchEvaluateResolvedMaterialDirectComponentsBaseVariant<
+        RtBaseLobeVariant.isotropic>(material, lighting);
 }
 
 public void accumulateDirectLightSample(

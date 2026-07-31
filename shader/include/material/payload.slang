@@ -29,6 +29,8 @@ public struct ResolvedMaterialPayload
     public float3 position = float3(0.0f);
     public float3 geometryNormal = float3(0.0f, 1.0f, 0.0f);
     public float3 shadingNormal = float3(0.0f, 1.0f, 0.0f);
+    public float3 anisotropyTangent = float3(1.0f, 0.0f, 0.0f);
+    public float anisotropyStrength = 0.0f;
     public float4 baseColor = float4(1.0f);
     public float metallic = 0.0f;
     public float roughness = 1.0f;
@@ -138,7 +140,9 @@ public ResolvedMaterialPayload resolveUnlitMaterialPayload(
 // Lit resolver. baseSurface is always resolved from the header plus base textures; optional layer data
 // is parsed canonically inside sampleMaterialLayersVariant static blocks so inactive layers contribute
 // no record reads or texture samples.
-public ResolvedMaterialPayload resolveLitMaterialPayloadVariant<let LayerFlags : RtMaterialLayerFlag>(
+public ResolvedMaterialPayload resolveLitMaterialPayloadVariant<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>(
     StructuredBuffer<RtMaterialTextureRef> textureRefs,
     StructuredBuffer<RtMaterialLayerRecord> layerRecords,
     RtMaterialHeader material,
@@ -171,12 +175,29 @@ public ResolvedMaterialPayload resolveLitMaterialPayloadVariant<let LayerFlags :
     payload.position = surface.position;
     payload.geometryNormal = orientedNormal;
     payload.shadingNormal = shadingNormal;
+    payload.anisotropyTangent = orthogonalTangent(shadingNormal);
+    payload.anisotropyStrength = 0.0f;
+    if (BaseLobeVariant == RtBaseLobeVariant.anisotropic)
+    {
+        sampleMaterialAnisotropy(
+            textureRefs,
+            material,
+            surface,
+            shadingNormal,
+            payload.anisotropyTangent,
+            payload.anisotropyStrength);
+    }
     payload.baseColor = core.baseColor;
     payload.metallic = core.metallic;
     payload.roughness = core.roughness;
     payload.emissive = core.emissive;
     payload.alpha = core.alpha;
-    payload.layers = sampleMaterialLayersVariant<LayerFlags>(textureRefs, layerRecords, material, surface, orientedNormal);
+    payload.layers = sampleMaterialLayersVariant<LayerFlags>(
+        textureRefs,
+        layerRecords,
+        material,
+        surface,
+        orientedNormal);
     return payload;
 }
 
@@ -296,6 +317,190 @@ public float materialPayloadGgxVisibleHalfVectorPdf(
         noV;
 }
 
+public struct BaseGgxDistribution<let BaseLobeVariant : RtBaseLobeVariant>
+{
+    public float alpha(ResolvedMaterialPayload payload)
+    {
+        return max(
+            payload.roughness * payload.roughness,
+            kMaterialMinRoughness * kMaterialMinRoughness);
+    }
+
+    public void basis(
+        ResolvedMaterialPayload payload,
+        out float3 normal,
+        out float3 tangent,
+        out float3 bitangent)
+    {
+        normal = safeNormalize(payload.shadingNormal, payload.geometryNormal);
+        tangent = safeNormalize(
+            payload.anisotropyTangent - normal * dot(normal, payload.anisotropyTangent),
+            orthogonalTangent(normal));
+        bitangent = safeNormalize(cross(normal, tangent), cross(normal, orthogonalTangent(normal)));
+    }
+
+    public void roughness(
+        ResolvedMaterialPayload payload,
+        out float alphaT,
+        out float alphaB)
+    {
+        float isotropicAlpha = alpha(payload);
+        float strength = saturate(payload.anisotropyStrength);
+        alphaT = lerp(isotropicAlpha, 1.0f, strength * strength);
+        alphaB = isotropicAlpha;
+    }
+
+    public float distribution(ResolvedMaterialPayload payload, float3 halfVector)
+    {
+        float3 normal;
+        float3 tangent;
+        float3 bitangent;
+        basis(payload, normal, tangent, bitangent);
+        float noH = saturate(dot(normal, halfVector));
+        float isotropicAlpha = alpha(payload);
+        if (BaseLobeVariant == RtBaseLobeVariant.isotropic ||
+            payload.anisotropyStrength <= 0.0f)
+        {
+            return ggxDistribution(isotropicAlpha, noH);
+        }
+
+        float alphaT;
+        float alphaB;
+        roughness(payload, alphaT, alphaB);
+        float ht = dot(halfVector, tangent);
+        float hb = dot(halfVector, bitangent);
+        float denominator =
+            (ht / alphaT) * (ht / alphaT) +
+            (hb / alphaB) * (hb / alphaB) +
+            noH * noH;
+        return 1.0f / max(
+            kMaterialPi * alphaT * alphaB * denominator * denominator,
+            1.0e-7f);
+    }
+
+    public float smithG1(ResolvedMaterialPayload payload, float3 direction)
+    {
+        float3 normal;
+        float3 tangent;
+        float3 bitangent;
+        basis(payload, normal, tangent, bitangent);
+        float noX = abs(dot(normal, direction));
+        float isotropicAlpha = alpha(payload);
+        if (BaseLobeVariant == RtBaseLobeVariant.isotropic ||
+            payload.anisotropyStrength <= 0.0f)
+        {
+            return ggxSmithG1(isotropicAlpha, noX);
+        }
+        if (noX <= 0.0f)
+        {
+            return 0.0f;
+        }
+
+        float alphaT;
+        float alphaB;
+        roughness(payload, alphaT, alphaB);
+        float xt = dot(direction, tangent);
+        float xb = dot(direction, bitangent);
+        float projected =
+            alphaT * alphaT * xt * xt +
+            alphaB * alphaB * xb * xb;
+        float root = sqrt(1.0f + projected / max(noX * noX, 1.0e-7f));
+        return 2.0f / (1.0f + root);
+    }
+
+    public float smithG2(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        return smithG1(payload, viewDirection) * smithG1(payload, lightDirection);
+    }
+
+    public float3 sampleVisibleHalfVector(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float2 randomValues)
+    {
+        float3 normal;
+        float3 tangent;
+        float3 bitangent;
+        basis(payload, normal, tangent, bitangent);
+        if (BaseLobeVariant == RtBaseLobeVariant.isotropic ||
+            payload.anisotropyStrength <= 0.0f)
+        {
+            return sampleMaterialPayloadGgxVisibleHalfVector(
+                randomValues,
+                payload.roughness,
+                normal,
+                viewDirection);
+        }
+
+        float alphaT;
+        float alphaB;
+        roughness(payload, alphaT, alphaB);
+        float3 localView = float3(
+            dot(viewDirection, tangent),
+            dot(viewDirection, bitangent),
+            dot(viewDirection, normal));
+        float3 stretchedView = safeNormalize(
+            float3(alphaT * localView.x, alphaB * localView.y, max(localView.z, 0.0f)),
+            float3(0.0f, 0.0f, 1.0f));
+
+        float lensq = stretchedView.x * stretchedView.x + stretchedView.y * stretchedView.y;
+        float3 tangent1 = lensq > 1.0e-8f
+            ? float3(-stretchedView.y, stretchedView.x, 0.0f) * rsqrt(lensq)
+            : float3(1.0f, 0.0f, 0.0f);
+        float3 tangent2 = cross(stretchedView, tangent1);
+        float radius = sqrt(saturate(randomValues.x));
+        float phi = 2.0f * kMaterialPi * randomValues.y;
+        float diskX = radius * cos(phi);
+        float diskY = radius * sin(phi);
+        float blend = 0.5f * (1.0f + stretchedView.z);
+        diskY =
+            (1.0f - blend) * sqrt(saturate(1.0f - diskX * diskX)) +
+            blend * diskY;
+        float diskZ = sqrt(saturate(1.0f - diskX * diskX - diskY * diskY));
+        float3 stretchedNormal =
+            diskX * tangent1 +
+            diskY * tangent2 +
+            diskZ * stretchedView;
+        float3 localHalfVector = safeNormalize(
+            float3(
+                alphaT * stretchedNormal.x,
+                alphaB * stretchedNormal.y,
+                max(stretchedNormal.z, 0.0f)),
+            float3(0.0f, 0.0f, 1.0f));
+        return safeNormalize(
+            tangent * localHalfVector.x +
+            bitangent * localHalfVector.y +
+            normal * localHalfVector.z,
+            normal);
+    }
+
+    public float visibleHalfVectorPdf(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 halfVector)
+    {
+        float3 normal = safeNormalize(payload.shadingNormal, payload.geometryNormal);
+        float noV = abs(dot(normal, viewDirection));
+        float noH = saturate(dot(normal, halfVector));
+        float voH = abs(dot(viewDirection, halfVector));
+        if (noV <= kMaterialMinCosTheta ||
+            noH <= kMaterialMinCosTheta ||
+            voH <= kMaterialMinCosTheta)
+        {
+            return 0.0f;
+        }
+
+        return
+            distribution(payload, halfVector) *
+            smithG1(payload, viewDirection) *
+            voH /
+            noV;
+    }
+}
+
 public float materialPayloadDiffusePdf(float3 normal, float3 lightDirection)
 {
     return saturate(dot(normal, lightDirection)) * kMaterialInvPi;
@@ -329,7 +534,9 @@ public static const RtMaterialLayerFlag kResolvedMaterialLayerVariantMask =
 // transmission share one selection distribution so Fresnel/TIR decisions and their measures cannot
 // diverge between evaluate(), pdf(), and sample(). Every transmission-only operation remains in a
 // LayerFlags static block, allowing non-transmission link variants to discard it completely.
-public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
+public struct BaseSurfaceBsdfLobe<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>
 {
     public float dielectricInterfaceFresnel(
         ResolvedMaterialPayload payload,
@@ -499,7 +706,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         }
 
         MaterialSample core = materialSampleFromResolvedPayload(payload);
-        float alpha = core.roughness * core.roughness;
+        BaseGgxDistribution<BaseLobeVariant> baseGgx;
         if (signedNoL > kMaterialMinCosTheta)
         {
             float noL = saturate(signedNoL);
@@ -512,8 +719,8 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             }
 
             float3 fresnel = interfaceFresnel(payload, voH);
-            float distribution = ggxDistribution(alpha, noH);
-            float geometry = smithGGX(alpha, noV, noL);
+            float distribution = baseGgx.distribution(payload, halfVector);
+            float geometry = baseGgx.smithG2(payload, viewDirection, lightDirection);
             result.specular =
                 fresnel * distribution * geometry /
                 max(4.0f * noV * noL, 1.0e-7f);
@@ -561,8 +768,8 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 }
 
                 float transmissionFresnel = dielectricInterfaceFresnel(payload, voH);
-                float distribution = ggxDistribution(alpha, noH);
-                float geometry = smithGGX(alpha, noV, absNoL);
+                float distribution = baseGgx.distribution(payload, halfVector);
+                float geometry = baseGgx.smithG2(payload, viewDirection, lightDirection);
                 result.specular =
                     (1.0f - transmissionFresnel) *
                     core.baseColor.rgb *
@@ -609,8 +816,8 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             }
 
             float transmissionFresnel = dielectricInterfaceFresnel(payload, voH);
-            float distribution = ggxDistribution(alpha, noH);
-            float geometry = smithGGX(alpha, noV, absNoL);
+            float distribution = baseGgx.distribution(payload, halfVector);
+            float geometry = baseGgx.smithG2(payload, viewDirection, lightDirection);
             float refractionFactor =
                 etaT * etaT *
                 abs(voH * loH) /
@@ -644,6 +851,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         }
 
         float3 normal = safeNormalize(payload.shadingNormal, payload.geometryNormal);
+        BaseGgxDistribution<BaseLobeVariant> baseGgx;
         float noV = saturate(dot(normal, viewDirection));
         float signedNoL = dot(normal, lightDirection);
         if (noV <= kMaterialMinCosTheta)
@@ -694,11 +902,8 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 }
             }
             float diffusePdf = materialPayloadDiffusePdf(normal, lightDirection);
-            float halfVectorPdf = materialPayloadGgxVisibleHalfVectorPdf(
-                payload.roughness,
-                normal,
-                viewDirection,
-                halfVector);
+            float halfVectorPdf =
+                baseGgx.visibleHalfVectorPdf(payload, viewDirection, halfVector);
             float reflectionPdf = halfVectorPdf / max(4.0f * voH, 1.0e-7f);
             return (
                 diffuseWeight * diffusePdf +
@@ -775,11 +980,8 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 voH,
                 reflectionProbability,
                 transmissionProbability);
-            float halfVectorPdf = materialPayloadGgxVisibleHalfVectorPdf(
-                payload.roughness,
-                normal,
-                viewDirection,
-                halfVector);
+            float halfVectorPdf =
+                baseGgx.visibleHalfVectorPdf(payload, viewDirection, halfVector);
             return interfaceWeight * transmissionProbability * halfVectorPdf * refractionJacobian /
                 baseWeight;
         }
@@ -803,6 +1005,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         }
 
         float3 normal = safeNormalize(payload.shadingNormal, payload.geometryNormal);
+        BaseGgxDistribution<BaseLobeVariant> baseGgx;
         float noV = saturate(dot(normal, viewDirection));
         if (noV <= kMaterialMinCosTheta)
         {
@@ -824,11 +1027,8 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             return scatter;
         }
 
-        float3 halfVector = sampleMaterialPayloadGgxVisibleHalfVector(
-            randomValues.yz,
-            payload.roughness,
-            normal,
-            viewDirection);
+        float3 halfVector =
+            baseGgx.sampleVisibleHalfVector(payload, viewDirection, randomValues.yz);
         float voH = dot(viewDirection, halfVector);
         if (voH <= kMaterialMinCosTheta)
         {
@@ -868,6 +1068,11 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         if (interfaceRandom < reflectionProbability)
         {
             scatter.direction = safeNormalize(reflect(-viewDirection, halfVector), normal);
+            if (dot(normal, scatter.direction) <= kMaterialMinCosTheta)
+            {
+                return {};
+            }
+
             scatter.kind = ResolvedMaterialScatterKind.specular;
             scatter.pdf = pdf(payload, viewDirection, scatter.direction);
             scatter.valid = scatter.pdf > 0.0f ? 1u : 0u;
@@ -1047,7 +1252,9 @@ public struct ClearcoatBsdfLobe
     }
 };
 
-public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVariant<let LayerFlags : RtMaterialLayerFlag>(
+public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVariant<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>(
     ResolvedMaterialPayload payload,
     float3 viewDirection,
     float3 lightDirection)
@@ -1055,7 +1262,7 @@ public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVari
     ResolvedMaterialBsdfComponents result = {};
     if (uint(LayerFlags & RtMaterialLayerFlag.baseSurface) != 0u)
     {
-        BaseSurfaceBsdfLobe<LayerFlags> baseSurface;
+        BaseSurfaceBsdfLobe<LayerFlags, BaseLobeVariant> baseSurface;
         result = baseSurface.evaluate(payload, viewDirection, lightDirection);
     }
     if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
@@ -1079,12 +1286,14 @@ public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVari
 // absolute cosine is required for the opposite-hemisphere BTDF while same-hemisphere reflection keeps
 // the usual positive cosine. Optional sheen and clearcoat remain separate top-level lobes inside the
 // component evaluator above.
-public ResolvedMaterialDirectComponents evaluateResolvedMaterialDirectComponentsVariant<let LayerFlags : RtMaterialLayerFlag>(
+public ResolvedMaterialDirectComponents evaluateResolvedMaterialDirectComponentsVariant<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>(
     ResolvedMaterialPayload payload,
     MaterialDirectLightingInput lighting)
 {
     ResolvedMaterialBsdfComponents bsdf =
-        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags>(
+        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags, BaseLobeVariant>(
             payload,
             lighting.viewDirection,
             lighting.lightDirection);
@@ -1097,12 +1306,14 @@ public ResolvedMaterialDirectComponents evaluateResolvedMaterialDirectComponents
     return result;
 }
 
-public MaterialShadingResult evaluateResolvedMaterialDirectVariant<let LayerFlags : RtMaterialLayerFlag>(
+public MaterialShadingResult evaluateResolvedMaterialDirectVariant<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>(
     ResolvedMaterialPayload payload,
     MaterialDirectLightingInput lighting)
 {
     ResolvedMaterialDirectComponents components =
-        evaluateResolvedMaterialDirectComponentsVariant<LayerFlags>(payload, lighting);
+        evaluateResolvedMaterialDirectComponentsVariant<LayerFlags, BaseLobeVariant>(payload, lighting);
 
     MaterialShadingResult result;
     result.radiance = components.diffuseRadiance + components.specularRadiance;
@@ -1110,17 +1321,24 @@ public MaterialShadingResult evaluateResolvedMaterialDirectVariant<let LayerFlag
     return result;
 }
 
-public float3 evaluateResolvedMaterialBsdfVariant<let LayerFlags : RtMaterialLayerFlag>(
+public float3 evaluateResolvedMaterialBsdfVariant<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>(
     ResolvedMaterialPayload payload,
     float3 viewDirection,
     float3 lightDirection)
 {
     ResolvedMaterialBsdfComponents components =
-        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags>(payload, viewDirection, lightDirection);
+        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags, BaseLobeVariant>(
+            payload,
+            viewDirection,
+            lightDirection);
     return components.diffuse + components.specular;
 }
 
-public float resolvedMaterialCombinedPdfVariant<let LayerFlags : RtMaterialLayerFlag>(
+public float resolvedMaterialCombinedPdfVariant<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>(
     ResolvedMaterialPayload payload,
     float3 viewDirection,
     float3 lightDirection)
@@ -1130,7 +1348,7 @@ public float resolvedMaterialCombinedPdfVariant<let LayerFlags : RtMaterialLayer
 
     if (uint(LayerFlags & RtMaterialLayerFlag.baseSurface) != 0u)
     {
-        BaseSurfaceBsdfLobe<LayerFlags> baseSurface;
+        BaseSurfaceBsdfLobe<LayerFlags, BaseLobeVariant> baseSurface;
         float baseSurfaceWeight = baseSurface.selectionWeight(payload, viewDirection);
         totalWeight += baseSurfaceWeight;
         weightedPdf +=
@@ -1159,7 +1377,9 @@ public float resolvedMaterialCombinedPdfVariant<let LayerFlags : RtMaterialLayer
     return weightedPdf / totalWeight;
 }
 
-public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFlags : RtMaterialLayerFlag>(
+public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<
+    let LayerFlags : RtMaterialLayerFlag,
+    let BaseLobeVariant : RtBaseLobeVariant>(
     ResolvedMaterialPayload payload,
     float3 viewDirection,
     float4 randomValues)
@@ -1175,7 +1395,7 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFla
     float totalWeight = 0.0f;
     if (uint(LayerFlags & RtMaterialLayerFlag.baseSurface) != 0u)
     {
-        BaseSurfaceBsdfLobe<LayerFlags> baseSurface;
+        BaseSurfaceBsdfLobe<LayerFlags, BaseLobeVariant> baseSurface;
         baseSurfaceWeight = baseSurface.selectionWeight(payload, viewDirection);
         totalWeight += baseSurfaceWeight;
     }
@@ -1204,7 +1424,7 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFla
     bool sampled = false;
     if (uint(LayerFlags & RtMaterialLayerFlag.baseSurface) != 0u)
     {
-        BaseSurfaceBsdfLobe<LayerFlags> baseSurface;
+        BaseSurfaceBsdfLobe<LayerFlags, BaseLobeVariant> baseSurface;
         threshold += baseSurfaceWeight;
         if (!sampled && selectedWeight < threshold)
         {
@@ -1273,7 +1493,7 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFla
         return scatter;
     }
 
-    float pdf = resolvedMaterialCombinedPdfVariant<LayerFlags>(
+    float pdf = resolvedMaterialCombinedPdfVariant<LayerFlags, BaseLobeVariant>(
         payload,
         viewDirection,
         scatter.direction);
@@ -1284,7 +1504,7 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFla
     }
 
     ResolvedMaterialBsdfComponents bsdf =
-        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags>(
+        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags, BaseLobeVariant>(
         payload,
         viewDirection,
         scatter.direction);
@@ -1302,7 +1522,9 @@ public float3 evaluateResolvedMaterialBsdf(
     float3 viewDirection,
     float3 lightDirection)
 {
-    return evaluateResolvedMaterialBsdfVariant<kResolvedMaterialLayerVariantMask>(
+    return evaluateResolvedMaterialBsdfVariant<
+        kResolvedMaterialLayerVariantMask,
+        RtBaseLobeVariant.anisotropic>(
         payload,
         viewDirection,
         lightDirection);
@@ -1313,7 +1535,9 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatter(
     float3 viewDirection,
     float4 randomValues)
 {
-    return sampleResolvedMaterialScatterVariant<kResolvedMaterialLayerVariantMask>(
+    return sampleResolvedMaterialScatterVariant<
+        kResolvedMaterialLayerVariantMask,
+        RtBaseLobeVariant.anisotropic>(
         payload,
         viewDirection,
         randomValues);

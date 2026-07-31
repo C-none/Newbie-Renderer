@@ -2,6 +2,7 @@
 
 import std;
 import dependency.math;
+import dependency.slang;
 import dependency.vulkan;
 import nr.resource;
 import nr.rhi;
@@ -37,15 +38,17 @@ struct CameraData
 }
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestChsVariant(
-    std::uint32_t layerMask = 0u)
+    std::uint32_t layerMask = 0u,
+    std::uint32_t baseLobeVariant = 0u)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant.assign(
         "CHS",
         "ICHS",
         std::format(
-            "MaterialCHS<RtMaterialLayerFlag({}u)>",
-            layerMask));
+            "MaterialCHS<RtMaterialLayerFlag({}u), RtBaseLobeVariant({}u)>",
+            layerMask,
+            baseLobeVariant));
     return variant;
 }
 
@@ -146,7 +149,9 @@ const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
         nr::test::requireEqual(effectiveLines[0], std::string{"import common;"});
         nr::test::requireEqual(
             effectiveLines[1],
-            std::string{"export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u)>;"});
+            std::string{
+                "export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u), "
+                "RtBaseLobeVariant(0u)>;"});
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/pathTracing"},
@@ -211,6 +216,63 @@ const nr::test::CaseRegistrar pathTracingTransmissionChsFamiliesCase{
                 program.entryPointBlob("chMain") != nullptr,
                 std::format("path tracing layer-mask {} CHS should expose linked SPIR-V", layerMask));
         });
+
+        auto anisotropicRoot = shaderService.compileProgramByFile(
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+                .variant = makePathTracingTestVariant(),
+                .linkVariants = {makePathTracingTestChsVariant(1u, 1u)},
+            });
+        nr::test::require(
+            anisotropicRoot.valid(),
+            "path tracing anisotropic base-only CHS should compile in the real RT root");
+        nr::test::require(
+            anisotropicRoot.entryPointBlob("chMain") != nullptr,
+            "path tracing anisotropic base-only CHS should expose linked SPIR-V");
+
+        auto matrixProgram = shaderService.compileProgramByFile(
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"test/rt/materialAnisotropyContract"},
+            });
+        nr::test::require(
+            matrixProgram.valid(),
+            "lightweight anisotropy contract should instantiate both base variants for all eight lit masks");
+        nr::test::require(
+            matrixProgram.entryPointBlob("computeMain") != nullptr,
+            "lightweight anisotropy contract should expose compute SPIR-V");
+
+        auto matrixLayout = nr::rhi::ShaderDescriptorLayout::create(matrixProgram);
+        nr::test::require(matrixLayout.valid(), "anisotropy contract layout should be valid");
+        auto materialHeader = matrixLayout.rootCursor()["gMaterialHeader"];
+        auto anisotropyMember = materialHeader["anisotropy"];
+        nr::test::require(anisotropyMember.valid(), "RtMaterialHeader anisotropy member should reflect");
+        nr::test::requireEqual(
+            anisotropyMember.address().uniformOffset,
+            std::size_t{96u},
+            "RtMaterialHeader anisotropy member offset must match C++");
+        auto* headerLayout = materialHeader.typeLayout()->getElementTypeLayout();
+        nr::test::require(headerLayout != nullptr, "RtMaterialHeader element layout should reflect");
+        nr::test::requireEqual(
+            static_cast<std::size_t>(
+                headerLayout->getSize(slang::ParameterCategory::Uniform)),
+            std::size_t{112u},
+            "RtMaterialHeader reflected size must match C++");
+        nr::test::requireEqual(
+            static_cast<std::size_t>(
+                headerLayout->getStride(slang::ParameterCategory::Uniform)),
+            std::size_t{112u},
+            "RtMaterialHeader reflected stride must match C++");
+
+        auto isotropicLayout = nr::rhi::ShaderDescriptorLayout::create(baseOnlyProgram);
+        auto anisotropicLayout = nr::rhi::ShaderDescriptorLayout::create(anisotropicRoot);
+        nr::test::require(
+            isotropicLayout.valid() && anisotropicLayout.valid(),
+            "full-root isotropic and anisotropic layouts should be valid");
+        nr::test::require(
+            nr::rhi::shaderLayoutAbiEquivalent(
+                isotropicLayout.abiSignature(),
+                anisotropicLayout.abiSignature()),
+            "isotropic and anisotropic CHS variants must preserve descriptor and push ABI");
     }};
 
 const nr::test::CaseRegistrar rtPipelineStageSelectionCase{

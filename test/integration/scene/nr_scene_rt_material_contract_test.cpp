@@ -1,3 +1,5 @@
+#include <cstddef>
+
 import std;
 import dependency.json;
 import dependency.math;
@@ -139,6 +141,7 @@ namespace
 
         slot.texture = nr::resource::TextureHandle{binding.textureIndex + 1u, 1u};
         slot.uvSet = binding.uvChannel;
+        slot.transform = binding.transform;
     });
 
     return material;
@@ -445,7 +448,7 @@ struct TangentSignSummary
 }
 
 const nr::test::CaseRegistrar rtMaterialCompilerCase{
-    "scene RT material compiler builds canonical layer order and marks unsupported anisotropy",
+    "scene RT material compiler builds canonical layers and anisotropy ABI",
     [] {
         auto material = nr::resource::Material{};
         material.core.baseColorFactor = glm::vec4{0.8f, 0.2f, 0.1f, 1.0f};
@@ -478,7 +481,22 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::sheen));
         nr::test::require(hasLayer(compiled, nr::scene::RtMaterialLayerFlag::transmission));
         nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary));
-        nr::test::require(hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::unsupportedAnisotropy));
+        nr::test::require(nearlyEqual(compiled.header.anisotropy.x, 1.0f));
+        nr::test::require(nearlyEqual(compiled.header.anisotropy.y, 0.25f));
+        nr::test::require(nearlyEqual(compiled.header.anisotropy.z, 1.0f));
+        nr::test::require(nearlyEqual(compiled.header.anisotropy.w, 0.0f));
+        nr::test::requireEqual(sizeof(nr::scene::RtMaterialHeader), std::size_t{112u});
+        nr::test::requireEqual(offsetof(nr::scene::RtMaterialHeader, anisotropy), std::size_t{96u});
+        auto compiledRefs =
+            std::array<std::reference_wrapper<const nr::scene::RtCompiledMaterial>, 1>{
+                std::cref(compiled),
+            };
+        auto table = nr::scene::makeRtMaterialTable(compiledRefs);
+        nr::test::requireEqual(table.headers.size(), std::size_t{1u});
+        nr::test::requireEqual(
+            table.headers[0].anisotropy,
+            compiled.header.anisotropy,
+            "RT material table packing must preserve anisotropy ABI lanes");
         nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
         nr::test::requireEqual(compiled.layers[0].layer, nr::scene::RtMaterialLayerFlag::baseSurface);
         nr::test::requireEqual(compiled.layers[1].layer, nr::scene::RtMaterialLayerFlag::clearcoat);
@@ -512,6 +530,11 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             material.transmission->factor = 1.0f;
             material.volumeBoundary.emplace();
             material.volumeBoundary->thicknessFactor = 1.0f;
+            material.anisotropy.emplace();
+            material.anisotropy->factor = 1.0f;
+            material.anisotropy->rotation = 0.5f;
+            material.slot(MaterialTextureSlotSemantic::anisotropy).texture =
+                nr::resource::TextureHandle{2u, 1u};
             auto compiled = nr::scene::compileRtMaterial(material);
             nr::test::requireEqual(compiled.header.layerFlags, Layer::none);
             nr::test::requireEqual(compiled.header.layerCount, 0u);
@@ -520,6 +543,9 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::require(
                 !hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary),
                 "unlit materials must not retain an ignored PBR volume boundary");
+            nr::test::require(
+                compiled.header.anisotropy == glm::vec4{0.0f},
+                "unlit materials must not retain meaningful RT anisotropy data");
         }
 
         // plain metallic-roughness -> baseSurface only; layer info must not leak into featureFlags;
@@ -581,6 +607,77 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             auto negativeCompiled = nr::scene::compileRtMaterial(material);
             nr::test::require(!hasLayer(negativeCompiled, Layer::transmission));
             nr::test::require(nearlyEqual(negativeCompiled.header.transmissionClearcoatSheen.x, 0.0f));
+        }
+
+        // A zero anisotropy factor remains isotropic even with a usable texture. A non-resident
+        // authored texture falls back to scalar-only +T anisotropy.
+        {
+            auto material = nr::resource::Material{};
+            material.anisotropy.emplace();
+            material.anisotropy->rotation = 0.5f;
+            auto& anisotropySlot = material.slot(MaterialTextureSlotSemantic::anisotropy);
+            anisotropySlot.texture = nr::resource::TextureHandle{2u, 1u};
+            anisotropySlot.uvSet = 1u;
+            anisotropySlot.transform.linear = glm::vec4{2.0f, -0.25f, 0.5f, 3.0f};
+            anisotropySlot.transform.offset = glm::vec2{0.25f, -0.5f};
+
+            auto ids = nr::scene::SceneMaterialTextureIds{};
+            ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::anisotropy)] = 7u;
+            auto zeroCompiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::require(nearlyEqual(zeroCompiled.header.anisotropy.x, 0.0f));
+            nr::test::require(nearlyEqual(zeroCompiled.header.anisotropy.z, 1.0f));
+
+            material.anisotropy->factor = 0.75f;
+            auto unavailableCompiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(nearlyEqual(unavailableCompiled.header.anisotropy.x, 0.75f));
+            nr::test::require(nearlyEqual(unavailableCompiled.header.anisotropy.y, 0.5f));
+            nr::test::require(nearlyEqual(unavailableCompiled.header.anisotropy.z, 0.0f));
+
+            auto presentCompiled = nr::scene::compileRtMaterial(material, ids);
+            nr::test::require(nearlyEqual(presentCompiled.header.anisotropy.z, 1.0f));
+            nr::test::require(nearlyEqual(presentCompiled.header.anisotropy.w, 0.0f));
+            auto const& anisotropyRef =
+                presentCompiled.textureRefs[
+                    nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::anisotropy)];
+            nr::test::requireEqual(anisotropyRef.textureId, 7u);
+            nr::test::requireEqual(anisotropyRef.uvSet, 1u);
+            nr::test::require(nearlyEqual(anisotropyRef.uvLinear.x, 2.0f));
+            nr::test::require(nearlyEqual(anisotropyRef.uvLinear.y, -0.25f));
+            nr::test::require(nearlyEqual(anisotropyRef.uvLinear.z, 0.5f));
+            nr::test::require(nearlyEqual(anisotropyRef.uvLinear.w, 3.0f));
+            nr::test::require(nearlyEqual(anisotropyRef.uvOffset.x, 0.25f));
+            nr::test::require(nearlyEqual(anisotropyRef.uvOffset.y, -0.5f));
+
+            material.anisotropy->factor = -0.25f;
+            nr::test::require(nearlyEqual(
+                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
+                0.0f));
+            material.anisotropy->factor = 2.0f;
+            nr::test::require(nearlyEqual(
+                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
+                1.0f));
+            material.anisotropy->factor = std::numeric_limits<float>::quiet_NaN();
+            nr::test::require(nearlyEqual(
+                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
+                0.0f));
+            material.anisotropy->factor = std::numeric_limits<float>::infinity();
+            nr::test::require(nearlyEqual(
+                nr::scene::compileRtMaterial(material, ids).header.anisotropy.x,
+                0.0f));
+
+            material.anisotropy->factor = 0.5f;
+            material.anisotropy->rotation = std::numeric_limits<float>::quiet_NaN();
+            nr::test::require(nearlyEqual(
+                nr::scene::compileRtMaterial(material, ids).header.anisotropy.y,
+                0.0f));
+            material.anisotropy->rotation = std::numeric_limits<float>::infinity();
+            nr::test::require(nearlyEqual(
+                nr::scene::compileRtMaterial(material, ids).header.anisotropy.y,
+                0.0f));
+            material.anisotropy->rotation = -0.75f;
+            nr::test::require(nearlyEqual(
+                nr::scene::compileRtMaterial(material, ids).header.anisotropy.y,
+                -0.75f));
         }
 
         // Positive transmission defaults to a thin 1.5-IOR boundary.
@@ -723,11 +820,14 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
     }};
 
 const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
-    "RT material shader centralizes UV transforms and keeps ambient occlusion unshaded",
+    "RT material shader keeps transformed explicit mip-0 sampling and anisotropy semantics",
     [] {
         auto const materialTypes = readProjectFile("shader/include/material/types.slang");
         auto const materialSampling = readProjectFile("shader/include/material/sampling.slang");
+        auto const materialPayload = readProjectFile("shader/include/material/payload.slang");
         auto const hitSurface = readProjectFile("shader/include/rt/hitSurface.slang");
+        auto const sceneTextureBinding =
+            readProjectFile("src/renderPasses/nrSceneTextureTableBinding.ixx");
 
         nr::test::require(
             materialTypes.contains("public float2 selectMaterialUv(") &&
@@ -739,25 +839,97 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
         nr::test::require(
             hitSurface.contains("kRtVertexOffsetTexCoord0 = 40u") &&
                 hitSurface.contains("kRtVertexOffsetTexCoord1 = 48u") &&
-                hitSurface.contains("kRtVertexOffsetColor0 = 56u"),
-            "RT hit-surface atlas offsets should retain the resource Vertex UV/color layout");
+                hitSurface.contains("kRtVertexOffsetColor0 = 56u") &&
+                hitSurface.contains("surface.normal = -surface.normal;") &&
+                hitSurface.contains("surface.tangent = -surface.tangent;") &&
+                hitSurface.contains("surface.tangentSign = -surface.tangentSign;"),
+            "RT hit-surface offsets and double-sided T/B/N reversal should retain their frame contract");
 
         auto const genericSample = materialSampling.find("public float4 sampleMaterialTexture(");
         auto const normalSample = materialSampling.find("public float3 applyNormalMapSlot(");
+        auto const anisotropyDecode = materialSampling.find("public void decodeMaterialAnisotropy(");
+        auto const anisotropySample = materialSampling.find("public void sampleMaterialAnisotropy(");
         auto const coreSample = materialSampling.find("public MaterialSample sampleCoreMaterial(");
         auto const layerSample = materialSampling.find("// Canonical layer-record parser.");
         nr::test::require(
             genericSample != std::string::npos &&
                 normalSample != std::string::npos &&
+                anisotropyDecode != std::string::npos &&
+                anisotropySample != std::string::npos &&
                 coreSample != std::string::npos &&
                 layerSample != std::string::npos,
             "material shader sampling functions should remain discoverable");
+        auto const genericSamplingBody =
+            materialSampling.substr(genericSample, normalSample - genericSample);
         nr::test::require(
-            materialSampling.substr(genericSample, normalSample - genericSample).contains("materialTextureUv("),
-            "generic texture sampling should use the centralized transformed UV helper");
+            genericSamplingBody.contains("materialTextureUv(") &&
+                genericSamplingBody.contains(".SampleLevel(") &&
+                genericSamplingBody.contains("0.0f"),
+            "generic texture sampling should use transformed UVs and explicit mip 0");
         nr::test::require(
-            materialSampling.substr(normalSample, coreSample - normalSample).contains("materialTextureUv("),
-            "base and clearcoat normal sampling should use the centralized transformed UV helper");
+            materialSampling.substr(normalSample, anisotropyDecode - normalSample).contains("materialTextureUv(") &&
+                materialSampling.substr(normalSample, anisotropyDecode - normalSample).contains(".SampleLevel("),
+            "normal sampling should use transformed UVs and explicit mip 0");
+        auto const anisotropyDecodeBody =
+            materialSampling.substr(anisotropyDecode, anisotropySample - anisotropyDecode);
+        nr::test::require(
+            anisotropyDecodeBody.contains("anisotropySample.rg * 2.0f - 1.0f") &&
+                anisotropyDecodeBody.contains("float2(1.0f, 0.0f)") &&
+                anisotropyDecodeBody.contains("sincos(material.anisotropy.y") &&
+                anisotropyDecodeBody.contains("saturate(material.anisotropy.x)") &&
+                anisotropyDecodeBody.contains("saturate(anisotropySample.b)") &&
+                anisotropyDecodeBody.contains("surface.tangentSign"),
+            "pure anisotropy decoding should implement RG direction, +T fallback, CCW rotation, B strength and final-frame handedness");
+        auto const anisotropySamplingBody =
+            materialSampling.substr(anisotropySample, coreSample - anisotropySample);
+        nr::test::require(
+            anisotropySamplingBody.contains("float3(1.0f, 0.5f, 1.0f)") &&
+                anisotropySamplingBody.contains("materialTextureUv(") &&
+                anisotropySamplingBody.contains(".SampleLevel(") &&
+                anisotropySamplingBody.contains("decodeMaterialAnisotropy(") &&
+                !materialSampling.contains("sampleMaterialTextureFasMip0") &&
+                !materialSampling.contains("materialFilterRandom") &&
+                !materialSampling.contains(".Sample(") &&
+                !materialSampling.contains("ddx(") &&
+                !materialSampling.contains("ddy(") &&
+                !materialSampling.contains("RayCone") &&
+                !materialSampling.contains("rayCone") &&
+                !materialSampling.contains("Wave") &&
+                !materialSampling.contains("wave") &&
+                !materialSampling.contains("WIS") &&
+                !materialSampling.contains("wis"),
+            "all RT material slots, including anisotropy, should retain direct explicit mip-0 sampling without derivative, hardware-anisotropic, or FAS plumbing");
+        nr::test::require(
+            sceneTextureBinding.contains(".magFilter = vk::Filter::eLinear") &&
+                sceneTextureBinding.contains(".minFilter = vk::Filter::eLinear") &&
+                sceneTextureBinding.contains(".mipmapMode = vk::SamplerMipmapMode::eLinear") &&
+                !sceneTextureBinding.contains("anisotropyEnable") &&
+                !sceneTextureBinding.contains("maxAnisotropy"),
+            "scene material textures should retain the linear sampler without hardware anisotropy");
+
+        nr::test::require(
+            materialPayload.contains("public struct BaseGgxDistribution<let BaseLobeVariant") &&
+                materialPayload.contains("alphaT = lerp(isotropicAlpha, 1.0f, strength * strength)") &&
+                materialPayload.contains("alphaB = isotropicAlpha") &&
+                materialPayload.contains("public float distribution(") &&
+                materialPayload.contains("public float smithG1(") &&
+                materialPayload.contains("public float smithG2(") &&
+                materialPayload.contains("public float3 sampleVisibleHalfVector(") &&
+                materialPayload.contains("public float visibleHalfVectorPdf("),
+            "anisotropic GGX D, separable Smith G, Heitz VNDF and visible-normal PDF should share one base helper");
+        nr::test::require(
+            materialPayload.contains("BaseGgxDistribution<BaseLobeVariant> baseGgx") &&
+                materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.thin") &&
+                materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.volume"),
+            "reflection, thin folded transmission and Walter volume transmission should share the base distribution");
+        nr::test::require(
+            materialPayload.contains("public struct ClearcoatBsdfLobe") &&
+                materialPayload.contains("materialPayloadClearcoatGgxPdf") &&
+                materialPayload.contains("sampleMaterialPayloadGgxHalfVector"),
+            "clearcoat should remain on its legacy isotropic GGX helpers");
+        nr::test::require(
+            materialPayload.contains("dot(normal, scatter.direction) <= kMaterialMinCosTheta"),
+            "sampled base reflection must reject a below-macro-hemisphere direction before combined PDF evaluation");
 
         auto const coreSamplingBody = materialSampling.substr(coreSample, layerSample - coreSample);
         nr::test::require(
@@ -808,9 +980,34 @@ const nr::test::CaseRegistrar rtSampleAssetsCase{
 
         auto anisotropy = compileAssetMaterials("assets/glTF-Sample-Assets/Models/AnisotropyRotationTest/glTF/AnisotropyRotationTest.gltf");
         nr::test::require(std::ranges::any_of(anisotropy, [](const nr::scene::RtCompiledMaterial &material) {
-                              return hasFeature(material, nr::scene::RtMaterialFeatureFlag::unsupportedAnisotropy);
+                              return material.header.anisotropy.x > 0.0f;
                           }),
-                          "AnisotropyRotationTest should be imported but marked unsupported for RT");
+                          "AnisotropyRotationTest should retain anisotropy strength for RT");
+
+        auto anisotropyStrength = compileAssetMaterials(
+            "assets/glTF-Sample-Assets/Models/AnisotropyStrengthTest/glTF/AnisotropyStrengthTest.gltf");
+        nr::test::require(
+            std::ranges::any_of(anisotropyStrength, [](const nr::scene::RtCompiledMaterial& material) {
+                return material.header.anisotropy.x > 0.0f &&
+                       material.header.anisotropy.x < 1.0f;
+            }),
+            "AnisotropyStrengthTest should retain authored scalar strengths");
+
+        auto anisotropyDisc = compileAssetMaterials(
+            "assets/glTF-Sample-Assets/Models/AnisotropyDiscTest/glTF/AnisotropyDiscTest.gltf");
+        nr::test::require(
+            std::ranges::any_of(anisotropyDisc, [](const nr::scene::RtCompiledMaterial& material) {
+                return material.header.anisotropy.z > 0.5f;
+            }),
+            "AnisotropyDiscTest should retain a usable anisotropy texture");
+
+        auto compareAnisotropy = compileAssetMaterials(
+            "assets/glTF-Sample-Assets/Models/CompareAnisotropy/glTF/CompareAnisotropy.gltf");
+        nr::test::require(
+            std::ranges::any_of(compareAnisotropy, [](const nr::scene::RtCompiledMaterial& material) {
+                return material.header.anisotropy.x > 0.0f;
+            }),
+            "CompareAnisotropy should retain its anisotropic materials");
 
         auto compareIor = compileAssetMaterials("assets/glTF-Sample-Assets/Models/CompareIor/glTF/CompareIor.gltf");
         nr::test::require(

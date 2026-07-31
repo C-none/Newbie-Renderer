@@ -36,13 +36,76 @@ public float3 applyNormalMapSlot(
     float3 tangent = safeNormalize(worldTangent - normal * dot(normal, worldTangent), tangentFallback);
     float3 bitangent = safeNormalize(cross(normal, tangent) * tangentSign, cross(normal, tangentFallback));
     float2 normalUv = materialTextureUv(normalRef, texCoord0, texCoord1);
-    float3 tangentNormal = gSceneTextures[normalRef.textureId].SampleLevel(normalUv, 0.0f).xyz * 2.0f - 1.0f;
+    float3 tangentNormal =
+        gSceneTextures[normalRef.textureId].SampleLevel(normalUv, 0.0f).xyz * 2.0f - 1.0f;
     tangentNormal.xy *= normalScale;
     return safeNormalize(
         tangent * tangentNormal.x +
         bitangent * tangentNormal.y +
         normal * tangentNormal.z,
         normal);
+}
+
+public void decodeMaterialAnisotropy(
+    RtMaterialHeader material,
+    RtSurfaceData surface,
+    float3 shadingNormal,
+    float3 anisotropySample,
+    out float3 anisotropyTangent,
+    out float anisotropyStrength)
+{
+    float2 direction = anisotropySample.rg * 2.0f - 1.0f;
+    float directionLengthSquared = dot(direction, direction);
+    direction = directionLengthSquared > 1.0e-8f
+        ? direction * rsqrt(directionLengthSquared)
+        : float2(1.0f, 0.0f);
+
+    float rotationSin;
+    float rotationCos;
+    sincos(material.anisotropy.y, rotationSin, rotationCos);
+    direction = float2(
+        rotationCos * direction.x - rotationSin * direction.y,
+        rotationSin * direction.x + rotationCos * direction.y);
+
+    float3 normal = safeNormalize(shadingNormal, surface.normal);
+    float3 tangentFallback = orthogonalTangent(normal);
+    float3 tangent0 = safeNormalize(
+        surface.tangent - normal * dot(normal, surface.tangent),
+        tangentFallback);
+    float3 bitangent0 = cross(normal, tangent0) * surface.tangentSign;
+    anisotropyTangent = safeNormalize(
+        tangent0 * direction.x + bitangent0 * direction.y,
+        tangent0);
+    anisotropyStrength =
+        saturate(material.anisotropy.x) *
+        saturate(anisotropySample.b);
+}
+
+public void sampleMaterialAnisotropy(
+    StructuredBuffer<RtMaterialTextureRef> textureRefs,
+    RtMaterialHeader material,
+    RtSurfaceData surface,
+    float3 shadingNormal,
+    out float3 anisotropyTangent,
+    out float anisotropyStrength)
+{
+    float3 anisotropySample = float3(1.0f, 0.5f, 1.0f);
+    if (material.anisotropy.z > 0.5f)
+    {
+        RtMaterialTextureRef anisotropyRef =
+            rtMaterialTextureRef(textureRefs, material, MaterialTextureSlot.anisotropy);
+        anisotropySample = gSceneTextures[anisotropyRef.textureId].SampleLevel(
+            materialTextureUv(anisotropyRef, surface.texCoord0, surface.texCoord1),
+            0.0f).rgb;
+    }
+
+    decodeMaterialAnisotropy(
+        material,
+        surface,
+        shadingNormal,
+        anisotropySample,
+        anisotropyTangent,
+        anisotropyStrength);
 }
 
 public MaterialSample sampleCoreMaterial(

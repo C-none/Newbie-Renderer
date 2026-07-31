@@ -108,11 +108,13 @@ set(DEPENDENCY_SERVICES_MODULE_UNITS
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyJson.ixx"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyLua.ixx"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyNetwork.ixx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyProcessLease.ixx"
 )
 set(DEPENDENCY_SERVICES_IMPLEMENTATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyJson.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyLua.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyNetwork.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyProcessLease.cpp"
 )
 
 set(NR_SHADER_SHARE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>")

@@ -112,10 +112,12 @@ identifies the viewer session and stream.
 
 Agents and humans can read or tail the active files without capturing the process'
 stdout/stderr. A tailer must detect replacement of the active file, reopen it, and scan
-the new segment from its session marker after rotation. An `.active-viewer` directory
-exclusively leases the fixed paths; a second viewer fails before rotating them. After an
-abnormal process termination, remove a stale empty lease only after confirming that no
-viewer still owns the log directory.
+the new segment from its session marker after rotation. A Windows kernel-backed lease
+exclusively owns the canonical log directory, while `.active-viewer` exposes that
+ownership to humans and tools. A second current viewer fails before touching the fixed
+paths. If a crash or reboot leaves an empty `.active-viewer` marker after the kernel
+lease has gone away, the next viewer removes that stale marker and starts automatically;
+non-empty or otherwise unexpected markers still fail closed for operator inspection.
 
 For a quick PowerShell view, run
 `Get-Content .\build\app\logs\options.ndjson -Wait`; restart that reader after a rotation
