@@ -68,11 +68,14 @@ void computeMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         resolvedMaterialFromRayPayload(rayPayload, 1.0f, 1.5f);
     ResolvedMaterialScatter scatterRoundTrip =
         resolvedMaterialScatterFromRayPayload(rayPayload);
+    float3 expectedScatterDirection = safePayloadDirection(
+        hit.scatter.direction,
+        float3(0.0f, 1.0f, 0.0f));
     gContractResults[2] =
         inputRoundTrip &
         uint(rayPayload.hit) &
         uint(materialRoundTrip.materialIndex == hit.material.materialIndex) &
         uint(materialRoundTrip.incidentMediumIor == 1.0f) &
         uint(materialRoundTrip.exteriorMediumIor == 1.5f) &
-        uint(all(scatterRoundTrip.direction == hit.scatter.direction));
+        uint(dot(scatterRoundTrip.direction, expectedScatterDirection) > 0.999f);
 }

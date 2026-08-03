@@ -37,7 +37,7 @@ nr_add_contract_test(nr_rhi_rt_shader_reflection_contract_test nr_rhi_rt_shader_
     dependency_graphics
 )
 
-nr_add_contract_test(nr_rhi_fas_shader_contract_test nr_rhi_fas_shader_contract_test.cpp "cpu;unit;rhi;rt;shader;slow"
+nr_add_contract_test(nr_rhi_fas_shader_contract_test nr_rhi_fas_shader_contract_test.cpp "gpu;unit;rhi;rt;shader;slow"
     nrrhi
     utils
     dependency_graphics

@@ -497,12 +497,13 @@ public struct Pt
     {
         if (payload.hit)
         {
-            handleHit(
-                resolvedMaterialFromRayPayload(
-                    payload,
-                    pathCurrentMediumIor(path),
-                    pathExteriorMediumIor(path)),
-                resolvedMaterialScatterFromRayPayload(payload));
+            ResolvedMaterialPayload material = resolvedMaterialFromRayPayload(
+                payload,
+                pathCurrentMediumIor(path),
+                pathExteriorMediumIor(path));
+            ResolvedMaterialScatter scatter =
+                resolvedMaterialScatterFromRayPayload(payload);
+            handleHit(material, scatter);
         }
         else
         {
