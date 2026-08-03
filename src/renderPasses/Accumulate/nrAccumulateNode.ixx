@@ -38,6 +38,7 @@ class AccumulateNode final : public Node
     void collectOptionAvailability(
         const nr::options::OptionFrameSnapshot& snapshot,
         nr::options::OptionAvailabilityMap& availability) const override;
+    [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const override;
     void initialize(NodeInitContext& context) override;
     [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
     [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;

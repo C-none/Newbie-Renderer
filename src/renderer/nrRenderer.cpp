@@ -324,6 +324,11 @@ void NodeRuntime::collectOptionAvailability(
 {
 }
 
+[[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> NodeRuntime::shaderRequests() const
+{
+    return {};
+}
+
 [[nodiscard]] bool NodeRuntime::supportsRenderGraphSkeleton() const noexcept
 {
     return false;
@@ -742,6 +747,65 @@ void Renderer::requestTemporalHistoryReset() noexcept
         return false;
     }
 
+    struct NodeShaderSlice
+    {
+        std::size_t offset = 0u;
+        std::size_t count = 0u;
+    };
+
+    auto shaderRequests = std::vector<nr::rhi::SlangProgramCompileFileRequest>{};
+    auto shaderSlices = std::vector<NodeShaderSlice>{};
+    shaderSlices.reserve(spec.nodes.size());
+    std::ranges::for_each(spec.nodes, [&](const NodeCreateInfo &createInfo) {
+        auto nodeRequests = createInfo.runtime->shaderRequests();
+        shaderSlices.push_back(NodeShaderSlice{
+            .offset = shaderRequests.size(),
+            .count = nodeRequests.size(),
+        });
+        std::ranges::move(nodeRequests, std::back_inserter(shaderRequests));
+    });
+
+    auto shaderPrograms = shaderRequests.empty()
+                              ? std::vector<nr::rhi::SlangProgram>{}
+                              : nr::rhi::ShaderService::instance().compileProgramsByFile(shaderRequests);
+    if (shaderPrograms.size() != shaderRequests.size())
+    {
+        nr::nrLog(
+            nr::LogLevel::error,
+            "RENDERER",
+            std::format(
+                "Static shader batch returned {} programs for {} requests.",
+                shaderPrograms.size(),
+                shaderRequests.size()));
+        return false;
+    }
+
+    auto const invalidProgram = std::ranges::find_if(
+        shaderPrograms,
+        [](const nr::rhi::SlangProgram &program) { return !program.valid(); });
+    if (invalidProgram != shaderPrograms.end())
+    {
+        auto const invalidIndex = static_cast<std::size_t>(std::distance(shaderPrograms.begin(), invalidProgram));
+        auto const nodeIndices = std::views::iota(std::size_t{0u}, shaderSlices.size());
+        auto const ownerIt = std::ranges::find_if(
+            nodeIndices,
+            [&](std::size_t index) {
+                auto const &slice = shaderSlices[index];
+                return invalidIndex >= slice.offset && invalidIndex < slice.offset + slice.count;
+            });
+        auto const ownerName = ownerIt != nodeIndices.end()
+                                   ? spec.nodes[*ownerIt].config.instanceName
+                                   : std::string{"<unknown>"};
+        nr::nrLog(
+            nr::LogLevel::error,
+            "RENDERER",
+            std::format(
+                "Static shader '{}' failed while installing node '{}'.",
+                shaderRequests[invalidIndex].sourcePath.generic_string(),
+                ownerName));
+        return false;
+    }
+
     device_->waitIdle();
     teardownInstalledGraph();
     cacheSuite_.clear();
@@ -749,10 +813,16 @@ void Renderer::requestTemporalHistoryReset() noexcept
     auto installed = std::vector<InstalledNode>{};
     installed.reserve(spec.nodes.size());
 
-    std::ranges::for_each(spec.nodes, [&](const NodeCreateInfo &createInfo) {
+    auto const nodeIndices = std::views::iota(std::size_t{0u}, spec.nodes.size());
+    std::ranges::for_each(nodeIndices, [&](std::size_t nodeIndex) {
+        auto const &createInfo = spec.nodes[nodeIndex];
+        auto const &shaderSlice = shaderSlices[nodeIndex];
         auto initContext = NodeInitContext{
             .device = std::ref(*device_),
             .runtimeName = createInfo.config.instanceName,
+            .shaderPrograms = std::span<const nr::rhi::SlangProgram>{shaderPrograms}.subspan(
+                shaderSlice.offset,
+                shaderSlice.count),
         };
         createInfo.runtime->initialize(initContext);
 

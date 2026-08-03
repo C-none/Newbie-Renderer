@@ -27,6 +27,182 @@ struct UiPushConstants
     glm::uvec3 padding{};
 };
 
+static_assert(
+    nr::rhi::ShaderServiceConfig{}.backendWorkerCount == 6u,
+    "shader backend compilation must default to six workers");
+
+const nr::test::CaseRegistrar shaderBatchCompileCase{
+    "rhi shader batch compiler preserves single-entry request order",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto const requests = std::array{
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"test/sceneLightReflection"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi/vertex"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi/fragment"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi/vertex"},
+            },
+        };
+        auto programs = shaderService.compileProgramsByFile(requests);
+        auto const stats = shaderService.lastCompileBatchStats();
+
+        nr::test::requireEqual(programs.size(), requests.size());
+        nr::test::require(
+            std::ranges::all_of(programs, &nr::rhi::SlangProgram::valid),
+            "every single-entry batch request should compile");
+        auto const expectedEntryPoints = std::array{
+            std::pair{"main", SLANG_STAGE_COMPUTE},
+            std::pair{"vertexMain", SLANG_STAGE_VERTEX},
+            std::pair{"fragmentMain", SLANG_STAGE_FRAGMENT},
+            std::pair{"vertexMain", SLANG_STAGE_VERTEX},
+        };
+        std::ranges::for_each(
+            std::views::iota(std::size_t{0}, programs.size()),
+            [&](std::size_t index) {
+                auto const& program = programs[index];
+                auto const& expected = expectedEntryPoints[index];
+                auto const* entryPoint = program.entryPoint();
+                nr::test::require(entryPoint != nullptr);
+                nr::test::requireEqual(entryPoint->entryPointName, std::string{expected.first});
+                nr::test::require(entryPoint->stage == expected.second);
+            });
+        nr::test::requireEqual(stats.requestCount, requests.size());
+        nr::test::require(
+            stats.memoryHitCount >= 1u,
+            "an identical request in one batch should reuse the prepared program and fan out its result");
+    }};
+
+const nr::test::CaseRegistrar splitGraphicsReflectionRootCase{
+    "rhi split graphics entrypoints preserve the canonical reflection-root ABI",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+
+        auto const requests = std::array{
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi/vertex"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi/fragment"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/embeddedTriangle/vertex"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/embeddedTriangle/fragment"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/normalBuffer/vertex"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/normalBuffer/fragment"},
+            },
+        };
+        auto programs = shaderService.compileProgramsByFile(requests);
+        nr::test::requireEqual(programs.size(), requests.size());
+        nr::test::require(
+            std::ranges::all_of(programs, &nr::rhi::SlangProgram::valid),
+            "every split graphics entrypoint should compile");
+
+        auto layouts = programs |
+                       std::views::transform([](const nr::rhi::SlangProgram& program) {
+                           return nr::rhi::ShaderDescriptorLayout::create(program);
+                       }) |
+                       std::ranges::to<std::vector>();
+        nr::test::require(
+            std::ranges::all_of(layouts, &nr::rhi::ShaderDescriptorLayout::valid),
+            "every split graphics entrypoint should expose a valid descriptor layout");
+
+        auto const pipelinePairs = std::array{
+            std::pair{std::string_view{"appUi"}, std::size_t{0}},
+            std::pair{std::string_view{"embeddedTriangle"}, std::size_t{2}},
+            std::pair{std::string_view{"normalBuffer"}, std::size_t{4}},
+        };
+        std::ranges::for_each(pipelinePairs, [&](const auto& pipelinePair) {
+            auto const& [pipelineName, vertexIndex] = pipelinePair;
+            auto const& vertexLayout = layouts[vertexIndex];
+            auto const& fragmentLayout = layouts[vertexIndex + 1u];
+            auto const difference = nr::rhi::describeShaderLayoutAbiDifference(
+                vertexLayout.abiSignature(),
+                fragmentLayout.abiSignature());
+            nr::test::require(
+                nr::rhi::shaderLayoutAbiEquivalent(
+                    vertexLayout.abiSignature(),
+                    fragmentLayout.abiSignature()),
+                std::format(
+                    "split {} vertex/fragment programs must expose the same descriptor/push ABI: {}",
+                    pipelineName,
+                    difference));
+        });
+
+        auto requireRootFields = [&](std::size_t programIndex, std::span<const std::string_view> fieldNames) {
+            auto root = layouts[programIndex].rootCursor();
+            std::ranges::for_each(fieldNames, [&](std::string_view fieldName) {
+                nr::test::require(
+                    root.hasField(fieldName),
+                    std::format(
+                        "canonical reflection root '{}' must expose global field '{}'",
+                        requests[programIndex].sourcePath.generic_string(),
+                        fieldName));
+            });
+        };
+        auto const appUiRootFields = std::array{
+            std::string_view{"gUiTextures"},
+            std::string_view{"gUiPush"},
+        };
+        auto const embeddedTriangleRootFields = std::array{
+            std::string_view{"gFrame"},
+        };
+        auto const normalBufferRootFields = std::array{
+            std::string_view{"gFrame"},
+            std::string_view{"gSceneTextures"},
+            std::string_view{"gPushConstants"},
+        };
+        requireRootFields(0u, appUiRootFields);
+        requireRootFields(2u, embeddedTriangleRootFields);
+        requireRootFields(4u, normalBufferRootFields);
+    }};
+
+const nr::test::CaseRegistrar persistentSpirvCacheCase{
+    "rhi shader service reuses persistent SPIR-V after session reload",
+    [] {
+        auto& shaderService = nr::rhi::ShaderService::instance();
+        shaderService.configure();
+        auto const request = nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"test/sceneLightReflection"},
+        };
+
+        {
+            auto initialProgram = shaderService.compileProgramByFile(request);
+            nr::test::require(
+                initialProgram.valid(),
+                "the initial single-entry shader compile should produce SPIR-V");
+        }
+
+        shaderService.reloadSession();
+        auto restoredProgram = shaderService.compileProgramByFile(request);
+        auto const stats = shaderService.lastCompileBatchStats();
+        nr::test::require(
+            restoredProgram.valid(),
+            "the shader should remain valid when restored from persistent SPIR-V");
+        nr::test::requireEqual(stats.requestCount, std::size_t{1});
+        nr::test::require(
+            stats.persistentHitCount >= 1u,
+            "a fresh Slang session should reuse the persistent SPIR-V artifact");
+        nr::test::requireEqual(
+            stats.backendCompilationCount,
+            std::size_t{0},
+            "a persistent cache hit must skip Slang backend code generation");
+    }};
+
 const nr::test::CaseRegistrar globalFrameUniformCase{
     "rhi shader cursor exposes global frame uniform at set5 binding0",
     [] {
@@ -34,7 +210,7 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
         shaderService.configure();
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/normalBuffer"},
+            .sourcePath = std::filesystem::path{"renderer/normalBuffer/fragment"},
         });
         nr::test::require(program.valid(), "normalBuffer shader program should compile");
 
@@ -142,7 +318,7 @@ const nr::test::CaseRegistrar shaderServiceReloadCase{
 
         {
             auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-                .sourcePath = std::filesystem::path{"renderer/appUi"},
+                .sourcePath = std::filesystem::path{"renderer/appUi/fragment"},
             });
             nr::test::require(program.valid(), "appUi shader program should compile before session reload");
         }
@@ -155,7 +331,7 @@ const nr::test::CaseRegistrar shaderServiceReloadCase{
             "session generation should increase after reload");
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/appUi"},
+            .sourcePath = std::filesystem::path{"renderer/appUi/fragment"},
         });
         nr::test::require(program.valid(), "appUi shader program should compile after session reload");
     }};
@@ -231,7 +407,7 @@ const nr::test::CaseRegistrar appUiCursorCase{
         shaderService.configure();
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/appUi"},
+            .sourcePath = std::filesystem::path{"renderer/appUi/fragment"},
         });
         nr::test::require(program.valid(), "appUi shader program should compile");
 

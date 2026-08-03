@@ -99,12 +99,12 @@ Optional MSVC toolchains:
 
 ### Single Shader Compile Check
 
-After configuring the LLVM build, compile one shader through the same `ShaderService`
-session, link, reflection, and per-entry-point SPIR-V generation path used by the
-renderer:
+After configuring the LLVM build, compile one single-entry shader through the same
+`ShaderService` batch, link, reflection, persistent SPIR-V cache, and bounded backend
+worker path used by the renderer:
 
 ```bash
-cmake "-DNR_SHADER_FILE=renderer/embeddedTriangle.slang" -P tools/CheckSlangShader.cmake
+cmake "-DNR_SHADER_FILE=renderer/embeddedTriangle/vertex.slang" -P tools/CheckSlangShader.cmake
 ```
 
 `NR_SHADER_FILE` may be absolute or relative to the configured `NR_SHADER_ROOT_DIR`;

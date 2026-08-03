@@ -21,7 +21,7 @@ Entry-point resource bindings are rejected by RHI validation instead of being me
 
 `ISession` only uses two search paths:
 
-1. `<shader_cache_root>/<session_hash>`
+1. `<shader_cache_root>/<compile-options-hash>`
 2. `shader/`
 
 No other runtime search paths participate in Slang module lookup.
@@ -54,7 +54,7 @@ Practical implications:
 Module names are derived from paths relative to `shader/`:
 
 - `shader/renderer/pathTracing/core.slang` -> `renderer.pathTracing.core`
-- `shader/test/rt/minimalRtTriangle.slang` -> `test.rt.minimalRtTriangle`
+- `shader/test/rt/minimalRtTriangle/raygen.slang` -> `test.rt.minimalRtTriangle.raygen`
 
 So user code should write:
 
@@ -68,6 +68,20 @@ Therefore primary files keep simple `module` declarations, while runtime module 
 ```slang
 module utils;
 ```
+
+## Single-Entry Shader File Rule
+
+Every `.slang` file may declare at most one function carrying a `[shader(...)]` attribute. Files that contain shared declarations or implementation helpers declare no entry point. An entry-point file is a directly compilable primary module whose file name and leaf `module` declaration follow the normal module-name mapping rules.
+
+This is a project-level invariant, not an optional authoring convention:
+
+- Different graphics stages and ray-tracing stages live in different files.
+- A shader compile request identifies only the shader-root-relative source path. It never selects an entry point by name.
+- `ShaderService` rejects a requested root module unless it exposes exactly one defined entry point after loading.
+- Pipeline assembly records the entry point name reported by Slang for Vulkan and logical shader-group lookup; that discovered name is output metadata, not compile-request input.
+- Link-time assignments belong only to the entry-point file whose code consumes them. A miss shader with no assignments therefore has no material or ray-generation variant identity.
+
+For example, PathTracing uses the separate roots `renderer/pathTracing/raygen.slang`, `renderer/pathTracing/miss.slang`, `renderer/pathTracing/anyHit.slang`, and `renderer/pathTracing/closestHit.slang` instead of collecting those stages in one module.
 
 ## Naming Conventions (`module` / `import` / `implementing`)
 
@@ -177,9 +191,9 @@ public StructuredBuffer<SceneLightAliasGpuRecord> gSceneLightAliasTable;
 
 `LightPrepareNode` publishes the matching C++ buffers as `frameResource::sceneLightHeader`, `frameResource::sceneLights`, and `frameResource::sceneLightAliasTable`. It prepends a warm default directional sun before scene-authored lights, so PathTracing normally sees at least one positive-energy alias-table entry even when the loaded asset has no lights. The lower-level alias-table helper still supports a valid zero-count header plus one-record dummy list/alias buffers for direct helper use. The same include provides helpers for evaluating glTF punctual `directional`, `point`, and `spot` light values from uploaded photometric records and for sampling the alias table built from Rec.709 luminance times glTF intensity. Point/spot shader evaluation applies inverse-square attenuation and the optional glTF range fade.
 
-RT material shading declarations live in `shader/include/material`. The `[Flags] RtMaterialLayerFlag` value combines four physical layer bits with the `anisotropicBaseLobe` static-shading modifier (`none` == unlit; non-zero masks always contain `baseSurface`). The eight physical lit masks each have an isotropic form without the modifier and an anisotropic form with it. `payload.slang` owns the single material-variant dimension used by its specialized resolvers and BSDF variants; optional lobes remain inside static layer-flag blocks, while `BaseGgxDistribution<LayerFlags>` derives the base reflection/thin-transmission/volume-transmission GGX implementation from the same combined flag value. `pathTracing/chs.slang` exposes only `MaterialCHS<LayerFlags>`, which the PathTracing node binds through the link-time `CHS` alias. The common-visible extern bool `kEnableFilterAfterShading` is assigned by the root variant and is used as the compile-time filtering policy without becoming another CHS generic or material/SBT key dimension. One CHS can sample eleven shading texture semantics. `payload.slang` and `sampling.slang` map them onto three packets drawn from a by-value `RandomSequence` copy in fixed order, leaving packet 2 W as padding; `stochasticTextureFiltering.slang` owns the scalar-remapped bilinear tap selection. Raygen advances the live path sequence by the same three packets for every material segment. Optional layers therefore do not shift later random dimensions. Any-hit alpha coverage uses the deterministic non-variant nearest sample and has no FAS input. Anisotropy texture presence, UV selection, affine transform, RG direction, B strength, and scalar rotation remain runtime material data, and clearcoat remains isotropic. `RtMaterialLayerRecord.layer` remains restricted to the four physical single-bit layer values.
+RT material shading declarations live in `shader/include/material`. The `[Flags] RtMaterialLayerFlag` value combines four physical layer bits with the `anisotropicBaseLobe` static-shading modifier (`none` == unlit; non-zero masks always contain `baseSurface`). The eight physical lit masks each have an isotropic form without the modifier and an anisotropic form with it. `payload.slang` owns the single material-variant dimension used by its specialized resolvers and BSDF variants; optional lobes remain inside static layer-flag blocks, while `BaseGgxDistribution<LayerFlags>` derives the base reflection/thin-transmission/volume-transmission GGX implementation from the same combined flag value. `pathTracing/chs.slang` exposes only `MaterialCHS<LayerFlags>`, which the PathTracing node binds through the link-time `CHS` alias. The common-visible extern bool `kEnableFilterAfterShading` is assigned only by the closest-hit entry variant and is used as that entry's compile-time filtering policy. It is a closest-hit codegen dimension, but it does not become another CHS generic or material/SBT key dimension. One CHS can sample eleven shading texture semantics. `payload.slang` and `sampling.slang` map them onto three packets drawn from a by-value `RandomSequence` copy in fixed order, leaving packet 2 W as padding; `stochasticTextureFiltering.slang` owns the scalar-remapped bilinear tap selection. Raygen advances the live path sequence by the same three packets for every material segment. Optional layers therefore do not shift later random dimensions. Any-hit alpha coverage uses the deterministic non-variant nearest sample and has no FAS input. Anisotropy texture presence, UV selection, affine transform, RG direction, B strength, and scalar rotation remain runtime material data, and clearcoat remains isotropic. Base and clearcoat GGX use joint correlated Smith masking-shadowing. Opaque base reflection and clearcoat construct UE-style `Spec.W` and `Spec.E` from the resource-free analytic split-sum directional-albedo fit: `Spec.W` compensates missing rough microfacet multiple scattering, while `Spec.E` drives diffuse/lower-layer preservation and lobe selection. Active thin and volume transmission deliberately retain their existing energy model because UE applies distinct reflection/transmission and eta-dependent glass compensation. Base, sheen, and clearcoat reflection keep their independently adjusted shading normals, then push their sampled directions forward onto the view-facing geometry hemisphere by mirroring directions below its tangent plane. Their evaluation and PDF paths sum the exterior direction and mirrored preimage with the same unit solid-angle Jacobian, so the fold preserves the rough-lobe probability and projected estimator kernel instead of absorbing the portion below the geometry normal. Diffuse remains in the raw shading frame, while transmission retains the complementary geometry-boundary test and is not folded. `RtMaterialLayerRecord.layer` remains restricted to the four physical single-bit layer values.
 
-RT resource declarations and hit reconstruction helpers live in importable modules under `shader/include/rt`. `resources.slang` declares the shared RT scene sideband bindings consumed by RT shaders, while `hitSurface.slang` depends on ray-tracing builtins and reconstructs hit-surface data from those resources. These modules are not included by `common`; RT shaders import them explicitly so raster and compute shaders do not inherit RT sideband bindings, `InstanceID()`, `GeometryIndex()`, `PrimitiveIndex()`, or object-to-world RT helper dependencies.
+RT resource declarations and hit reconstruction helpers live under `shader/include/rt`. `resources.slang` is an `implementing common;` fragment aggregated by `common.slang` and declares the shared RT scene-sideband bindings, so entry roots obtain that stable global ABI by importing `common` rather than importing the implementing file directly. `hitSurface.slang` remains an importable helper module that depends on ray-tracing builtins and reconstructs hit-surface data from those resources; only RT helper/entry code imports and calls it.
 
 ## End-to-End Shader Build Pipeline
 
@@ -189,7 +203,7 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 
 - Create `IGlobalSession` and `ISession`.
 - Configure search paths in fixed order:
-  1. `<shader_cache_root>/<session_hash>`
+  1. `<shader_cache_root>/<compile-options-hash>`
   2. `shader/`
 
 ### 2) Module load and source/cache resolution
@@ -210,39 +224,58 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 ### 4) Cache write-back
 
 - After module load succeeds, module binary is persisted to:
-  - `<shader_cache_root>/<session_hash>/<module_path>.slang-module`
+  - `<shader_cache_root>/<compile-options-hash>/<module_path>.slang-module`
 - Cache directory layout mirrors `shader/` layout.
 - Cache keys are path-derived (normalized module identity) plus session context.
 
-### 5) Program composition and link
+### 5) Single-entry composition and link
 
-- Resolve entry points from the root module.
-- Build component array `[module, entryPoint...]`.
-- For non-empty link-time variants, generate a deterministic synthetic component from sorted constants/type aliases, then append it to the component array.
-- Create composite program with `ISession::createCompositeComponentType(...)`.
-- Link with `IComponentType::link(...)` to produce a linked program.
+- Resolve the root module's sole defined entry point and reject zero-entry or multi-entry roots.
+- Build the component array from the module, its sole entry point, and only that entry point's deterministic link-time assignment component when one is required.
+- Create the composite with `ISession::createCompositeComponentType(...)` and link it into an immutable single-entry program.
+- Precompute reflection/layout and Slang's authoritative `getEntryPointHash(0, 0)` on the serialized frontend lane.
 
-### 6) Target code generation
+### 6) Persistent SPIR-V lookup and backend code generation
 
-- Generate target code using `linkedProgram->getEntryPointCode(...)`.
-- Output is SPIR-V bytecode for the selected target/profile.
-- Reflection/dependency information is queried from component interfaces as needed.
+- Use the opaque Slang entry-point hash as the persistent target-artifact identity. Do not recreate Slang's dependency, build-version, option, or specialization hash in project code.
+- Probe the project-owned persistent SPIR-V cache before requesting backend code generation.
+- On a miss, dispatch only `linkedProgram->getEntryPointCode(0, 0)` to the dedicated bounded backend pool, copy the returned blob into project-owned storage on that worker, and publish it to the persistent cache atomically.
+- The backend pool defaults to six workers. Configuration may lower the limit, including one worker for diagnostics, but active backend jobs never exceed the configured limit.
+- Identical hashes within one `ShaderService` batch/process share one in-flight result, so the local backend pool compiles each artifact at most once. Separate processes may race, but each uses atomic publication and validates the winning artifact instead of relying on a cross-process in-flight registry.
+
+### 7) Batch completion and pipeline construction
+
+- Runtime initialization and the CMake shader checker both submit source-path requests to the same `ShaderService` batch compiler.
+- `Renderer::installGraph(...)` first collects the ordered static requirements returned by every node's `shaderRequests()`, submits one flattened batch, and gives each node only its matching `NodeInitContext::shaderPrograms` slice after the whole batch succeeds.
+- Frontend load/specialize/composite/link work remains serialized because it shares one Slang session; only fully linked backend code generation runs concurrently.
+- `ShaderCompileBatchStats` reports request/memory-hit/persistent-hit/backend-compile/corrupt-entry counts, the effective worker limit, and separate frontend, backend, and total elapsed times so startup diagnostics can distinguish serialized preparation from target codegen and cache I/O.
+- Pipeline and PSO construction starts only after every required single-entry artifact in the batch is ready.
+- Scene-derived permutations that cannot be known at graph installation, such as PathTracing closest-hit variants, are collected by their owning node on a pipeline miss and use the same batch-before-PSO rule.
+- A multi-file pipeline designates one canonical reflection root for descriptor sets, push constants, and cursor fields: graphics uses the first program in the ordered stage span, compute uses its sole program, and ray tracing passes an explicit reflection program. The canonical root must import and expose the complete global ABI used by every physical stage. `PipelineService` validates descriptor and push-constant coverage against every stage program before PSO creation; shader contract tests also pin the root field names consumed by renderer bindings.
+- The CMake checker supplies no alternate compiler path and performs no named-entry selection; it is a thin host for the same batch core used by runtime initialization.
 
 ## Cache and Naming Invariants
 
 - One module identity corresponds to one normalized shader-root-relative path.
+- Every `.slang` file declares zero or one shader entry point, and every compiled root module exposes exactly one defined entry point.
 - `import` identity is always fully qualified dotted name.
 - Each `implementing` token must match the primary module it extends; filesystem co-location is not required when the file is attached through `__include`.
 - Every module path segment must be lower camelCase (`useFlag`) and cannot contain `_` or `-`.
 - Cache artifact path must be the normalized module path with `.slang-module` suffix.
 - Search-path order is authoritative for cache-vs-source precedence.
-- Linked program variants are process-memory cache entries keyed by session generation, compile options hash, module path, and variant hash. They are invalidated by `ShaderService::reloadSession()` and session reconfiguration.
+- Linked single-entry variants are process-memory entries invalidated by `ShaderService::reloadSession()` and session reconfiguration. Persistent SPIR-V identity is Slang's opaque entry-point hash and does not include the process-local session generation.
 
 ## Cache Layout Rule
 
-Cache layout under `<shader_cache_root>/<session_hash>/` mirrors `shader/` module layout:
+Cache layout under `<shader_cache_root>/<compile-options-hash>/` mirrors `shader/` module layout:
 
 - module binary: `<cache>/<module_path>.slang-module`
+
+Persistent backend artifacts use a schema-versioned content-addressed tree inside the same compile-options cache namespace:
+
+- SPIR-V artifact: `<shader_cache_root>/<compile-options-hash>/spirv/v1/<hash-prefix>/<entry-point-hash>.nrspv`
+
+Artifact files carry a project cache magic/schema, the opaque Slang key, payload length, integrity data, and aligned SPIR-V bytes. Reads validate the envelope and SPIR-V magic. Writes use a same-directory temporary file followed by atomic publication so renderer and CMake checker processes can share the cache safely without a central mutable index.
 
 Example:
 

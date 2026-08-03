@@ -68,8 +68,18 @@ namespace nr::rhi::detail
     if (!file)
         return {};
 
-    auto const size = static_cast<std::size_t>(file.tellg());
+    auto const endOffset = static_cast<std::streamoff>(file.tellg());
+    if (endOffset < 0 ||
+        static_cast<std::uintmax_t>(endOffset) > std::numeric_limits<std::size_t>::max())
+    {
+        return {};
+    }
+    auto const size = static_cast<std::size_t>(endOffset);
     file.seekg(0, std::ios::beg);
+    if (!file)
+    {
+        return {};
+    }
 
     std::vector<std::byte> bytes(size);
     if (size > 0)
@@ -121,42 +131,6 @@ namespace nr::rhi::detail
             return moduleName;
         }
     }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::string> deriveModuleNameFromSourcePath(const std::filesystem::path &sourcePath, std::span<const std::string> searchPaths)
-{
-    auto normalizedSourcePath = normalizePath(sourcePath);
-    for (auto const &searchPath : searchPaths)
-    {
-        auto normalizedSearchPath = normalizePath(searchPath);
-        std::error_code ec;
-        auto relativePath = std::filesystem::relative(normalizedSourcePath, normalizedSearchPath, ec);
-        if (ec || relativePath.empty())
-        {
-            continue;
-        }
-        auto relativeText = relativePath.generic_string();
-        if (relativeText.starts_with(".."))
-        {
-            continue;
-        }
-
-        if (relativePath.extension() == ".slang")
-        {
-            relativePath.replace_extension();
-        }
-
-        auto moduleName = modulePathToName(relativePath.generic_string());
-        if (!moduleName.empty())
-        {
-            return moduleName;
-        }
-    }
-
-    // Responsibility boundary:
-    // This function only derives module name from filesystem path relation.
-    // It must not parse shader source declarations.
     return std::nullopt;
 }
 
@@ -227,48 +201,6 @@ namespace nr::rhi::detail
     // Keep this path aligned with Slang's `loadModule` lookup logic:
     // `<searchPath>/<module-path>.slang-module`.
     return cacheRoot / (moduleNameToPath(moduleName) + ".slang-module");
-}
-
-[[nodiscard]] std::vector<std::filesystem::path> makeModuleSourceSuffixes(
-    std::string_view moduleName)
-{
-    // Business mapping is strict and 1:1 with `shader/` tree:
-    //   module renderer.pathTracing.core -> shader/renderer/pathTracing/core.slang
-    return {std::filesystem::path(moduleNameToPath(moduleName) + ".slang")};
-}
-
-[[nodiscard]] std::vector<std::filesystem::path> makeModulePathCandidates(
-    std::string_view moduleName,
-    std::optional<std::filesystem::path> explicitSourcePath,
-    std::span<const std::string> searchPaths)
-{
-    // Module source lookup convention:
-    // - Use only configured search roots (shader root + session cache root).
-    // - Source path mirrors module path: <root>/<module-path>.slang
-
-    std::vector<std::filesystem::path> result;
-    if (explicitSourcePath.has_value())
-    {
-        result.push_back(*explicitSourcePath);
-        return result;
-    }
-
-    auto suffixes = makeModuleSourceSuffixes(moduleName);
-
-    for (auto const &searchPath : searchPaths)
-    {
-        for (auto const &suffix : suffixes)
-        {
-            if (suffix.empty())
-            {
-                continue;
-            }
-            // Normalize path to use forward slashes for consistent comparisons
-            auto candidate = std::filesystem::path(searchPath) / suffix;
-            result.push_back(normalizePath(candidate));
-        }
-    }
-    return result;
 }
 
 [[nodiscard]] std::string makeSlangFloatLiteral(float value)
@@ -406,7 +338,7 @@ void hashAppendSlangVariantAssignmentValue(
         if (!isSlangQualifiedIdentifier(name))
         {
             nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramByFile] invalid link-time variant name='{}' for module='{}'.",
+                "[ShaderService::compileProgramsByFile] invalid link-time variant name='{}' for module='{}'.",
                 name,
                 moduleName));
             return false;
@@ -415,7 +347,7 @@ void hashAppendSlangVariantAssignmentValue(
         if (!slangVariantAssignmentValueMatchesType(assignment))
         {
             nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramByFile] link-time variant value type mismatch: module='{}', name='{}', type='{}'.",
+                "[ShaderService::compileProgramsByFile] link-time variant value type mismatch: module='{}', name='{}', type='{}'.",
                 moduleName,
                 name,
                 assignment.type));
@@ -430,7 +362,7 @@ void hashAppendSlangVariantAssignmentValue(
                 concreteTypeName->empty())
             {
                 nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramByFile] invalid link-time type alias for module='{}': name='{}', interface='{}', concrete='{}'.",
+                    "[ShaderService::compileProgramsByFile] invalid link-time type alias for module='{}': name='{}', interface='{}', concrete='{}'.",
                     moduleName,
                     name,
                     assignment.type,
@@ -537,30 +469,16 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
     return result.empty() ? std::string{"variant"} : result;
 }
 
-[[nodiscard]] std::uint64_t hashSlangLinkVariants(std::span<const SlangProgramVariantDesc> linkVariants) noexcept
+[[nodiscard]] std::string makeSlangVariantSyntheticModuleName(
+    std::string_view variantLabel,
+    std::string_view variantHash)
 {
-    auto state = hash::fnv1a64OffsetBasis;
-    hash::hashAppendString(state, "SlangProgramLinkVariants.v1");
-    hash::hashAppend(state, static_cast<std::uint32_t>(linkVariants.size()));
-    std::ranges::for_each(linkVariants, [&](const SlangProgramVariantDesc &variant) {
-        hash::hashAppend(state, variant.hashValue());
-    });
-    return state;
-}
-
-[[nodiscard]] std::string makeSlangVariantSyntheticModuleName(std::string_view variantLabel)
-{
-    // Append a hash of the full (untruncated) label so distinct variants never collapse to the same
-    // synthetic module name after the readable fragment is truncated to kMaxSyntheticVariantLabelLength.
-    // A name collision makes Slang reject the second variant in a session with E38202 "module already
-    // loaded with different source" (observed for path-tracing kMaxSurfaceBounces variants on a cold
-    // cache, where both variants take the loadModuleFromSourceString path in one session).
-    auto labelHash = hash::fnv1a64OffsetBasis;
-    hash::hashAppendString(labelHash, variantLabel);
+    // The readable label intentionally omits assignment type details, so the identity suffix must
+    // come from the complete variant hash rather than from the label.
     return std::format(
         "variant_{}_{}",
         sanitizeSlangIdentifierFragment(variantLabel),
-        nr::hash::toHexString(labelHash));
+        variantHash);
 }
 
 [[nodiscard]] std::string makeSlangVariantSyntheticPath(std::string_view syntheticModuleName)
@@ -570,26 +488,10 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
 
 [[nodiscard]] std::string makeSlangProgramDebugNamePrefix(
     std::string_view baseName,
-    const SlangProgramVariantDesc &variant,
-    std::span<const SlangProgramVariantDesc> linkVariants)
+    const SlangProgramVariantDesc &variant)
 {
     auto normalizedBaseName = baseName.empty() ? std::string{"shader"} : std::string{baseName};
-
-    std::vector<std::string> parts;
-    parts.reserve(1u + linkVariants.size());
-    if (!variant.empty())
-    {
-        parts.push_back(compactSlangVariantDebugLabel(variant));
-    }
-
-    std::ranges::for_each(linkVariants, [&](const SlangProgramVariantDesc &linkVariant) {
-        if (!linkVariant.empty())
-        {
-            parts.push_back(compactSlangVariantDebugLabel(linkVariant));
-        }
-    });
-
-    if (parts.empty())
+    if (variant.empty())
     {
         return normalizedBaseName;
     }
@@ -597,59 +499,21 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
     return std::format(
         "{}[{}]",
         normalizedBaseName,
-        joinDebugNameParts(parts, '+'));
+        compactSlangVariantDebugLabel(variant));
 }
 
 [[nodiscard]] std::string makeSlangProgramCacheKey(
     std::uint64_t sessionGeneration,
     std::string_view optionsHash,
     std::string_view modulePath,
-    std::string_view variantHash,
-    std::string_view linkVariantsHash)
+    std::string_view variantHash)
 {
     return std::format(
-        "generation={}|options={}|module={}|variant={}|linkVariants={}",
+        "generation={}|options={}|module={}|variant={}",
         sessionGeneration,
         optionsHash,
         modulePath,
-        variantHash,
-        linkVariantsHash);
-}
-
-[[nodiscard]] std::uint64_t hashSourceText(std::string_view sourceText) noexcept
-{
-    auto state = hash::fnv1a64OffsetBasis;
-    hash::hashAppendString(state, "SlangSourceText.v1");
-    hash::hashAppendString(state, sourceText);
-    return state;
-}
-
-[[nodiscard]] std::string makeSlangSourceProgramCacheKey(
-    std::uint64_t sessionGeneration,
-    std::string_view optionsHash,
-    std::string_view moduleName,
-    std::string_view sourceHash,
-    std::string_view variantHash,
-    std::string_view linkVariantsHash)
-{
-    return std::format(
-        "generation={}|options={}|sourceModule={}|sourceHash={}|variant={}|linkVariants={}",
-        sessionGeneration,
-        optionsHash,
-        moduleName,
-        sourceHash,
-        variantHash,
-        linkVariantsHash);
-}
-
-[[nodiscard]] std::string makeSlangSourceLoadModuleName(std::string_view moduleName, std::string_view sourceHash)
-{
-    return std::format("{}_{}", moduleName, sourceHash);
-}
-
-[[nodiscard]] std::string makeSlangSourceSyntheticPath(std::string_view moduleName, std::string_view sourceHash)
-{
-    return std::format("generated/{}_{}.slang", moduleNameToPath(moduleName), sourceHash);
+        variantHash);
 }
 
 [[nodiscard]] std::string describeSlangVariantForLog(const SlangProgramVariantDesc &variant)
@@ -660,6 +524,220 @@ inline constexpr std::size_t kMaxSyntheticVariantLabelLength = 64;
         return std::format("default/{}", hashHex);
     }
     return std::format("{}/{}", compactSlangVariantDebugLabel(variant), hashHex);
+}
+
+inline constexpr std::uint32_t kSpirvMagic = 0x07230203u;
+inline constexpr std::uint32_t kSpirvCacheMagic = 0x4353524eu;
+inline constexpr std::uint32_t kSpirvCacheSchema = 1u;
+
+struct SpirvCacheHeader
+{
+    std::uint32_t magic = kSpirvCacheMagic;
+    std::uint32_t schema = kSpirvCacheSchema;
+    std::uint32_t hashByteCount = 0;
+    std::uint32_t spirvWordCount = 0;
+    std::uint64_t checksum = 0;
+};
+
+static_assert(std::is_trivially_copyable_v<SpirvCacheHeader>);
+
+struct SpirvCacheReadResult
+{
+    std::shared_ptr<const std::vector<std::uint32_t>> spirv{};
+    bool corrupt = false;
+};
+
+[[nodiscard]] std::string opaqueHashHex(std::span<const std::byte> hashBytes)
+{
+    constexpr std::array<char, 16> digits{
+        '0', '1', '2', '3', '4', '5', '6', '7',
+        '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+    std::string result(hashBytes.size() * 2u, '0');
+    std::ranges::for_each(std::views::iota(std::size_t{0}, hashBytes.size()), [&](std::size_t index) {
+        auto value = std::to_integer<std::uint8_t>(hashBytes[index]);
+        result[index * 2u] = digits[value >> 4u];
+        result[index * 2u + 1u] = digits[value & 0x0fu];
+    });
+    return result;
+}
+
+[[nodiscard]] std::filesystem::path makeSpirvCachePath(
+    const std::filesystem::path &root,
+    std::span<const std::byte> hashBytes)
+{
+    auto hashHex = opaqueHashHex(hashBytes);
+    auto shard = hashHex.size() >= 2u ? hashHex.substr(0, 2) : std::string{"00"};
+    return root / shard / (hashHex + ".nrspv");
+}
+
+[[nodiscard]] SpirvCacheReadResult readSpirvCache(
+    const std::filesystem::path &path,
+    std::span<const std::byte> expectedHash)
+{
+    std::error_code existsError;
+    if (!std::filesystem::exists(path, existsError) || existsError)
+    {
+        return {};
+    }
+
+    auto bytes = readBinaryFile(path);
+    auto corrupt = [&]() {
+        return SpirvCacheReadResult{.corrupt = true};
+    };
+    if (bytes.size() < sizeof(SpirvCacheHeader))
+    {
+        return corrupt();
+    }
+
+    SpirvCacheHeader header{};
+    std::memcpy(std::addressof(header), bytes.data(), sizeof(header));
+    if (header.magic != kSpirvCacheMagic ||
+        header.schema != kSpirvCacheSchema ||
+        header.hashByteCount != expectedHash.size() ||
+        header.spirvWordCount == 0)
+    {
+        return corrupt();
+    }
+
+    auto hashOffset = sizeof(SpirvCacheHeader);
+    auto spirvOffset = hashOffset + static_cast<std::size_t>(header.hashByteCount);
+    auto spirvByteCount = static_cast<std::size_t>(header.spirvWordCount) * sizeof(std::uint32_t);
+    if (spirvOffset > bytes.size() || spirvByteCount > bytes.size() - spirvOffset)
+    {
+        return corrupt();
+    }
+    if (spirvOffset + spirvByteCount != bytes.size())
+    {
+        return corrupt();
+    }
+
+    auto storedHash = std::span<const std::byte>{bytes}.subspan(hashOffset, header.hashByteCount);
+    if (!std::ranges::equal(storedHash, expectedHash))
+    {
+        return corrupt();
+    }
+
+    auto spirvBytes = std::span<const std::byte>{bytes}.subspan(spirvOffset, spirvByteCount);
+    if (hash::fnv1a64(spirvBytes) != header.checksum)
+    {
+        return corrupt();
+    }
+
+    auto spirv = std::make_shared<std::vector<std::uint32_t>>(header.spirvWordCount);
+    std::memcpy(spirv->data(), spirvBytes.data(), spirvByteCount);
+    if (spirv->front() != kSpirvMagic)
+    {
+        return corrupt();
+    }
+    return SpirvCacheReadResult{.spirv = std::move(spirv)};
+}
+
+enum class AtomicWriteResult : std::uint8_t
+{
+    published,
+    targetExists,
+    failed,
+};
+
+[[nodiscard]] AtomicWriteResult writeBytesAtomically(
+    const std::filesystem::path &path,
+    std::span<const std::byte> bytes)
+{
+    std::error_code directoryError;
+    std::filesystem::create_directories(path.parent_path(), directoryError);
+    if (directoryError)
+    {
+        return AtomicWriteResult::failed;
+    }
+
+    static std::atomic_uint64_t sequence = 0;
+    auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    auto threadIdentity = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    auto temporaryPath = path;
+    temporaryPath += std::format(
+        ".tmp.{}.{}.{}",
+        timestamp,
+        threadIdentity,
+        sequence.fetch_add(1));
+
+    {
+        std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
+        if (!output)
+        {
+            return AtomicWriteResult::failed;
+        }
+        output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!output)
+        {
+            std::error_code removeError;
+            std::filesystem::remove(temporaryPath, removeError);
+            return AtomicWriteResult::failed;
+        }
+    }
+
+    std::error_code renameError;
+    std::filesystem::rename(temporaryPath, path, renameError);
+    if (!renameError)
+    {
+        return AtomicWriteResult::published;
+    }
+
+    std::error_code targetError;
+    auto targetExists = std::filesystem::exists(path, targetError) && !targetError;
+    std::error_code removeError;
+    std::filesystem::remove(temporaryPath, removeError);
+    return targetExists ? AtomicWriteResult::targetExists : AtomicWriteResult::failed;
+}
+
+[[nodiscard]] bool writeSpirvCache(
+    const std::filesystem::path &path,
+    std::span<const std::byte> hashBytes,
+    std::span<const std::uint32_t> spirv)
+{
+    if (spirv.empty() || spirv.front() != kSpirvMagic)
+    {
+        return false;
+    }
+
+    auto spirvBytes = std::as_bytes(spirv);
+    auto header = SpirvCacheHeader{
+        .hashByteCount = static_cast<std::uint32_t>(hashBytes.size()),
+        .spirvWordCount = static_cast<std::uint32_t>(spirv.size()),
+        .checksum = hash::fnv1a64(spirvBytes),
+    };
+    auto bytes = std::vector<std::byte>(sizeof(header) + hashBytes.size() + spirvBytes.size());
+    std::memcpy(bytes.data(), std::addressof(header), sizeof(header));
+    std::ranges::copy(hashBytes, bytes.begin() + static_cast<std::ptrdiff_t>(sizeof(header)));
+    std::ranges::copy(
+        spirvBytes,
+        bytes.begin() + static_cast<std::ptrdiff_t>(sizeof(header) + hashBytes.size()));
+    auto writeResult = writeBytesAtomically(path, bytes);
+    if (writeResult == AtomicWriteResult::published)
+    {
+        return true;
+    }
+    if (writeResult == AtomicWriteResult::targetExists)
+    {
+        return readSpirvCache(path, hashBytes).spirv != nullptr;
+    }
+    return false;
+}
+
+[[nodiscard]] std::shared_ptr<const std::vector<std::uint32_t>> copySpirvBlob(slang::IBlob &blob)
+{
+    auto byteCount = blob.getBufferSize();
+    if (byteCount == 0 || byteCount % sizeof(std::uint32_t) != 0)
+    {
+        return {};
+    }
+
+    auto spirv = std::make_shared<std::vector<std::uint32_t>>(byteCount / sizeof(std::uint32_t));
+    std::memcpy(spirv->data(), blob.getBufferPointer(), byteCount);
+    if (spirv->empty() || spirv->front() != kSpirvMagic)
+    {
+        return {};
+    }
+    return spirv;
 }
 } // namespace nr::rhi::detail
 
@@ -810,232 +888,22 @@ SlangProgramVariantDesc& SlangProgramVariantDesc::assign(
 
 [[nodiscard]] bool SlangEntryPointData::valid() const noexcept
 {
-        return !entryPointName.empty() && stage != SLANG_STAGE_NONE && codeBlob != nullptr;
-    }
-
-[[nodiscard]] bool SlangCompiledModule::valid() const noexcept
-{
-        return module != nullptr;
+        return !entryPointName.empty() && stage != SLANG_STAGE_NONE && spirv && !spirv->empty();
     }
 
 [[nodiscard]] bool SlangProgram::valid() const noexcept
 {
-        return linkedProgram_ != nullptr && entryPointCount() > 0;
+        return state_ && state_->linkedProgram && state_->programLayout && state_->entryPoint.valid();
     }
 
-[[nodiscard]] std::size_t SlangProgram::entryPointCount() const noexcept
+[[nodiscard]] const SlangEntryPointData *SlangProgram::entryPoint() const noexcept
 {
-        if (!buildEntryPointCache())
-        {
-            return 0;
-        }
-        return entryPoints_.size();
-    }
-
-[[nodiscard]] std::span<const SlangEntryPointData> SlangProgram::entryPoints() const noexcept
-{
-        if (!buildEntryPointCache())
-        {
-            return {};
-        }
-        return entryPoints_;
-    }
-
-[[nodiscard]] const SlangEntryPointData *SlangProgram::entryPointData(std::string_view entryPointName) const noexcept
-{
-        if (!buildEntryPointCache())
-        {
-            return nullptr;
-        }
-
-        return findEntryPointDataCached(entryPointName);
-    }
-
-[[nodiscard]] slang::EntryPointReflection *SlangProgram::entryPointLayout(std::string_view entryPointName) const noexcept
-{
-        if (!buildEntryPointCache())
-        {
-            return nullptr;
-        }
-
-        auto const *entryPoint = findEntryPointDataCached(entryPointName);
-        auto *layout = programLayout();
-        if (!entryPoint || !layout)
-        {
-            return nullptr;
-        }
-
-        return layout->getEntryPointByIndex(entryPoint->linkedEntryPointIndex);
-    }
-
-[[nodiscard]] std::optional<SlangStage> SlangProgram::entryPointStage(std::string_view entryPointName) const noexcept
-{
-        auto const *entryPoint = entryPointData(entryPointName);
-        if (!entryPoint)
-        {
-            return std::nullopt;
-        }
-        return entryPoint->stage;
-    }
-
-[[nodiscard]] slang::IBlob *SlangProgram::entryPointBlob(std::string_view entryPointName) const noexcept
-{
-        auto const *entryPoint = entryPointData(entryPointName);
-        return entryPoint ? entryPoint->codeBlob.get() : nullptr;
-    }
-
-[[nodiscard]] slang::IComponentType *SlangProgram::componentType() const noexcept
-{
-        return linkedProgram_.get();
+        return valid() ? std::addressof(state_->entryPoint) : nullptr;
     }
 
 [[nodiscard]] slang::ProgramLayout *SlangProgram::programLayout() const noexcept
 {
-        if (hasQueriedProgramLayout_)
-        {
-            return cachedProgramLayout_;
-        }
-
-        hasQueriedProgramLayout_ = true;
-        if (!linkedProgram_)
-        {
-            return nullptr;
-        }
-
-        Slang::ComPtr<slang::IBlob> diagnostics;
-        cachedProgramLayout_ = linkedProgram_->getLayout(0, diagnostics.writeRef());
-        return cachedProgramLayout_;
-    }
-
-[[nodiscard]] const SlangEntryPointData *SlangProgram::findEntryPointDataCached(std::string_view entryPointName) const noexcept
-{
-        auto it = entryPointIndexByName_.find(std::string(entryPointName));
-        if (it == entryPointIndexByName_.end())
-        {
-            return nullptr;
-        }
-
-        auto index = it->second;
-        if (index >= entryPoints_.size())
-        {
-            return nullptr;
-        }
-        return &entryPoints_[index];
-    }
-
-[[nodiscard]] bool SlangProgram::buildEntryPointCache() const noexcept
-{
-        if (entryPointCacheBuilt_)
-        {
-            return true;
-        }
-
-        entryPoints_.clear();
-        entryPointIndexByName_.clear();
-
-        if (!linkedProgram_)
-        {
-            return false;
-        }
-
-        auto *layout = programLayout();
-        if (!layout)
-        {
-            return false;
-        }
-
-        auto linkedEntryPointCount = std::max<SlangUInt>(0u, layout->getEntryPointCount());
-        if (linkedEntryPointCount == 0)
-        {
-            return false;
-        }
-
-        entryPoints_.reserve(static_cast<std::size_t>(linkedEntryPointCount));
-
-        for (SlangUInt entryIndex = 0; entryIndex < linkedEntryPointCount; ++entryIndex)
-        {
-            auto *entryLayout = layout->getEntryPointByIndex(entryIndex);
-            if (!entryLayout)
-            {
-                return false;
-            }
-
-            auto entryName = std::string(entryLayout->getName() ? entryLayout->getName() : "");
-            if (entryName.empty())
-            {
-                entryName = std::format("entrypoint_{}", entryIndex);
-            }
-
-            auto reflectedStage = entryLayout->getStage();
-            if (reflectedStage == SLANG_STAGE_NONE)
-            {
-                return false;
-            }
-
-            auto *entryScopeVarLayout = entryLayout->getVarLayout();
-            auto *entryScopeTypeLayout = entryScopeVarLayout ? entryScopeVarLayout->getTypeLayout() : nullptr;
-            auto entryBindingRangeCount = entryScopeTypeLayout ? std::max<SlangInt>(0, entryScopeTypeLayout->getBindingRangeCount()) : 0;
-
-            if (entryScopeTypeLayout && entryBindingRangeCount > 0)
-            {
-                std::ranges::for_each(std::views::iota(SlangInt{0}, entryBindingRangeCount), [&](SlangInt rangeIndex) {
-                    auto bindingType = entryScopeTypeLayout->getBindingRangeType(rangeIndex);
-                    auto isStageIo = bindingType == slang::BindingType::VaryingInput || bindingType == slang::BindingType::VaryingOutput;
-                    nrAssert(
-                        isStageIo,
-                        std::format(
-                            "Entry-point descriptor binding is forbidden. Keep bindable resources in global scope only. entry='{}', rangeIndex={}, bindingType={}",
-                            entryName,
-                            rangeIndex,
-                            static_cast<std::int32_t>(bindingType)));
-                });
-            }
-
-            Slang::ComPtr<slang::IBlob> codeBlob;
-            Slang::ComPtr<slang::IBlob> diagnostics;
-            try
-            {
-                auto compileResult = linkedProgram_->getEntryPointCode(static_cast<SlangInt>(entryIndex), 0, codeBlob.writeRef(), diagnostics.writeRef());
-                if (diagnostics)
-                {
-                    auto text = std::string_view(static_cast<const char *>(diagnostics->getBufferPointer()), diagnostics->getBufferSize());
-                    if (!text.empty())
-                    {
-                        nrInfo<nr::LogLevel::warning>(std::format("[SlangProgram::buildEntryPointCache] entrypoint='{}' diagnostics:\n{}", entryName, text));
-                    }
-                }
-                if (!detail::slangSucceeded(compileResult) || !codeBlob)
-                {
-                    return false;
-                }
-            }
-            catch (...)
-            {
-                nrInfo<nr::LogLevel::error>(std::format(
-                    "[SlangProgram::buildEntryPointCache] Slang threw an internal exception during getEntryPointCode for entry='{}'. "
-                    "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                    entryName));
-                nrAssert(false, "Slang::IComponentType::getEntryPointCode threw an internal exception.");
-            }
-
-            SlangEntryPointData entryPointData{};
-            entryPointData.linkedEntryPointIndex = static_cast<std::uint32_t>(entryIndex);
-            entryPointData.entryPointName = std::move(entryName);
-            entryPointData.debugName = debugNamePrefix_;
-            entryPointData.stage = reflectedStage;
-            entryPointData.codeBlob = std::move(codeBlob);
-
-            auto [_, inserted] = entryPointIndexByName_.try_emplace(entryPointData.entryPointName, entryPoints_.size());
-            if (!inserted)
-            {
-                return false;
-            }
-
-            entryPoints_.push_back(std::move(entryPointData));
-        }
-
-        entryPointCacheBuilt_ = true;
-        return true;
+        return state_ ? state_->programLayout : nullptr;
     }
 
 [[nodiscard]] ShaderService &ShaderService::instance()
@@ -1044,10 +912,18 @@ SlangProgramVariantDesc& SlangProgramVariantDesc::assign(
         return service;
     }
 
-void ShaderService::configure()
+void ShaderService::configure(ShaderServiceConfig config)
 {
         std::scoped_lock lock(m_mutex);
+        config.backendWorkerCount = std::clamp(config.backendWorkerCount, 1u, nr::maxThreads);
+        if (m_backendPool && config.backendWorkerCount != m_serviceConfig.backendWorkerCount)
+        {
+            m_backendPool->waitIdle();
+            m_backendPool.reset();
+        }
+        m_serviceConfig = config;
         applyCompileOptionsLocked(kDefaultSlangCompileOptions);
+        ensureBackendPoolLocked();
     }
 
 void ShaderService::reloadSession()
@@ -1056,6 +932,7 @@ void ShaderService::reloadSession()
         if (!m_session)
         {
             applyCompileOptionsLocked(kDefaultSlangCompileOptions);
+            ensureBackendPoolLocked();
             return;
         }
 
@@ -1070,546 +947,551 @@ void ShaderService::reloadSession()
         return m_sessionGeneration;
     }
 
-void ShaderService::waitForPendingModuleCacheWrites()
+[[nodiscard]] ShaderCompileBatchStats ShaderService::lastCompileBatchStats() const
 {
         std::scoped_lock lock(m_mutex);
-        m_moduleCacheWriteThreads.clear();
+        return m_lastCompileBatchStats;
     }
 
-[[nodiscard]] SlangProgram ShaderService::compileProgramByFile(const SlangProgramCompileFileRequest &request)
+
+[[nodiscard]] SlangProgram ShaderService::compileProgramByFile(
+    const SlangProgramCompileFileRequest &request)
+{
+        auto requests = std::array{request};
+        auto programs = compileProgramsByFile(requests);
+        return programs.empty() ? SlangProgram{} : std::move(programs.front());
+    }
+
+[[nodiscard]] std::vector<SlangProgram> ShaderService::compileProgramsByFile(
+    std::span<const SlangProgramCompileFileRequest> requests)
 {
         std::scoped_lock lock(m_mutex);
+        auto const startedAt = std::chrono::steady_clock::now();
         ensureConfiguredLocked();
-
-        SlangProgram result;
-
-        auto modulePath = detail::normalizeRequestModulePath(request.sourcePath);
-        if (!modulePath.has_value())
+        auto programs = std::vector<SlangProgram>(requests.size());
+        if (requests.empty())
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] invalid request.sourcePath='{}'. expected relative module-path form like 'renderer/pathTracing/core'.", request.sourcePath.string()));
-            return result;
+            auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - startedAt);
+            m_lastCompileBatchStats = ShaderCompileBatchStats{
+                .workerCount = m_serviceConfig.backendWorkerCount,
+                .frontendElapsed = elapsed,
+                .elapsed = elapsed,
+            };
+            return programs;
         }
 
-        auto moduleName = resolveModuleNameLocked(*modulePath);
-        if (moduleName.empty())
+        struct PreparedProgram
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] unable to resolve module name from request.sourcePath='{}'.", request.sourcePath.string()));
-            return result;
-        }
+            std::vector<std::size_t> requestIndices{};
+            std::string memoryCacheKey{};
+            std::string moduleName{};
+            std::string variantLogLabel{};
+            Slang::ComPtr<slang::IComponentType> linkedProgram{};
+            slang::ProgramLayout *programLayout = nullptr;
+            std::vector<std::byte> cacheKey{};
+            std::filesystem::path cachePath{};
+            std::string entryPointName{};
+            std::string debugName{};
+            SlangStage stage = SLANG_STAGE_NONE;
+        };
 
-        auto variantHashHex = nr::hash::toHexString(request.variant.hashValue());
-        auto linkVariantsHashHex = nr::hash::toHexString(detail::hashSlangLinkVariants(request.linkVariants));
-        auto variantLogLabel = detail::describeSlangVariantForLog(request.variant);
-        if (!detail::validateSlangVariantDesc(request.variant, moduleName))
-        {
-            return result;
-        }
-        for (auto linkVariantIndex = std::size_t{0}; linkVariantIndex < request.linkVariants.size(); ++linkVariantIndex)
-        {
-            if (!detail::validateSlangVariantDesc(
-                    request.linkVariants[linkVariantIndex],
-                    std::format("{}#linkVariant{}", moduleName, linkVariantIndex)))
+        auto preparedPrograms = std::vector<PreparedProgram>{};
+        preparedPrograms.reserve(requests.size());
+        auto preparedIndexByMemoryKey = std::map<std::string, std::size_t>{};
+        auto memoryHitCount = std::size_t{0};
+
+        std::ranges::for_each(std::views::iota(std::size_t{0}, requests.size()), [&](std::size_t requestIndex) {
+            auto const &request = requests[requestIndex];
+            auto modulePath = detail::normalizeRequestModulePath(request.sourcePath);
+            if (!modulePath.has_value())
             {
-                return result;
-            }
-        }
-
-        auto cacheKey = detail::makeSlangProgramCacheKey(
-            m_sessionGeneration,
-            m_optionsHashHex,
-            *modulePath,
-            variantHashHex,
-            linkVariantsHashHex);
-        if (auto cachedProgramIt = m_linkedProgramCache.find(cacheKey); cachedProgramIt != m_linkedProgramCache.end())
-        {
-            return cachedProgramIt->second;
-        }
-
-        auto rootModule = loadOrCompileModuleLocked(moduleName, modulePath);
-        if (!rootModule.valid())
-        {
-            return result;
-        }
-
-        auto definedEntryPointCount = std::max<SlangInt32>(0, rootModule.module->getDefinedEntryPointCount());
-        if (definedEntryPointCount == 0)
-        {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] module='{}' defines no entrypoints.", moduleName));
-            return result;
-        }
-
-        std::vector<Slang::ComPtr<slang::IEntryPoint>> entryPointComponents;
-        entryPointComponents.reserve(static_cast<std::size_t>(definedEntryPointCount));
-        Slang::ComPtr<slang::IModule> variantModule;
-        std::vector<Slang::ComPtr<slang::IModule>> linkVariantModules;
-        linkVariantModules.reserve(request.linkVariants.size());
-
-        std::vector<slang::IComponentType *> components;
-        components.reserve(
-            static_cast<std::size_t>(definedEntryPointCount) +
-            1u +
-            (request.variant.empty() ? 0u : 1u) +
-            request.linkVariants.size());
-        components.push_back(rootModule.module.get());
-
-        for (SlangInt32 index = 0; index < definedEntryPointCount; ++index)
-        {
-            Slang::ComPtr<slang::IEntryPoint> entryPointComponent;
-            auto getEntryResult = rootModule.module->getDefinedEntryPoint(index, entryPointComponent.writeRef());
-            if (!detail::slangSucceeded(getEntryResult) || !entryPointComponent)
-            {
-                nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramByFile] getDefinedEntryPoint failed: module='{}', index={}", moduleName, index));
-                return result;
+                nrInfo<LogLevel::warning>(std::format(
+                    "[ShaderService::compileProgramsByFile] invalid sourcePath='{}'. Expected a shader-root-relative module path.",
+                    request.sourcePath.generic_string()));
+                return;
             }
 
-            components.push_back(entryPointComponent.get());
-            entryPointComponents.push_back(std::move(entryPointComponent));
-        }
+            auto moduleName = resolveModuleNameLocked(*modulePath);
+            if (moduleName.empty() || !detail::validateSlangVariantDesc(request.variant, moduleName))
+            {
+                return;
+            }
 
-        auto loadVariantModule = [&](const SlangProgramVariantDesc &variant, std::string_view role) -> Slang::ComPtr<slang::IModule> {
-            auto variantSource = variant.sourceText();
-            auto currentVariantLabel = detail::compactSlangVariantDebugLabel(variant);
-            auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(currentVariantLabel);
-            auto syntheticPath = detail::makeSlangVariantSyntheticPath(syntheticModuleName);
-            auto currentVariantLogLabel = detail::describeSlangVariantForLog(variant);
-            Slang::ComPtr<slang::IBlob> diagnostics;
-            Slang::ComPtr<slang::IModule> loadedVariantModule;
+            auto variantHashHex = nr::hash::toHexString(request.variant.hashValue());
+            auto memoryCacheKey = detail::makeSlangProgramCacheKey(
+                m_sessionGeneration,
+                m_optionsHashHex,
+                *modulePath,
+                variantHashHex);
+            if (auto cached = m_linkedProgramCache.find(memoryCacheKey); cached != m_linkedProgramCache.end())
+            {
+                programs[requestIndex] = cached->second;
+                ++memoryHitCount;
+                return;
+            }
+            if (auto prepared = preparedIndexByMemoryKey.find(memoryCacheKey);
+                prepared != preparedIndexByMemoryKey.end())
+            {
+                preparedPrograms[prepared->second].requestIndices.push_back(requestIndex);
+                ++memoryHitCount;
+                return;
+            }
+
+            auto rootModule = loadOrCompileModuleLocked(moduleName);
+            if (!rootModule)
+            {
+                return;
+            }
+
+            auto definedEntryPointCount = SlangInt32{0};
             try
             {
-                loadedVariantModule = Slang::ComPtr<slang::IModule>(m_session->loadModuleFromSourceString(
-                    syntheticModuleName.c_str(),
-                    syntheticPath.c_str(),
-                    variantSource.c_str(),
-                    diagnostics.writeRef()));
+                definedEntryPointCount = std::max<SlangInt32>(0, rootModule->getDefinedEntryPointCount());
             }
             catch (...)
             {
-                emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(exception-path)");
-                nrInfo<nr::LogLevel::error>(std::format(
-                    "[ShaderService::compileProgramByFile] Slang threw an internal exception during {} module load: module='{}', variant='{}'. "
-                    "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                    role,
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] Slang threw while enumerating entrypoints for module='{}'.",
+                    moduleName));
+                nrAssert(false, "Slang entrypoint enumeration threw an internal exception.");
+                return;
+            }
+            if (definedEntryPointCount != 1)
+            {
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] module='{}' defines {} entrypoints; every shader file must define exactly one.",
                     moduleName,
-                    currentVariantLogLabel));
-                nrAssert(false, "Slang::ISession::loadModuleFromSourceString threw an internal exception.");
-            }
-            emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(variant)");
-
-            if (!loadedVariantModule)
-            {
-                nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramByFile] failed to load {} module: module='{}', variant='{}', source:\n{}",
-                    role,
-                    moduleName,
-                    currentVariantLogLabel,
-                    variantSource));
-            }
-            return loadedVariantModule;
-        };
-
-        if (!request.variant.empty())
-        {
-            variantModule = loadVariantModule(request.variant, "variant");
-            if (!variantModule)
-            {
-                return result;
-            }
-            components.push_back(variantModule.get());
-        }
-        for (auto const &linkVariant : request.linkVariants)
-        {
-            if (linkVariant.empty())
-            {
-                continue;
+                    definedEntryPointCount));
+                return;
             }
 
-            auto linkVariantModule = loadVariantModule(linkVariant, "link variant");
-            if (!linkVariantModule)
-            {
-                return result;
-            }
-            components.push_back(linkVariantModule.get());
-            linkVariantModules.push_back(std::move(linkVariantModule));
-        }
-
-        Slang::ComPtr<slang::IComponentType> compositeProgram;
-        Slang::ComPtr<slang::IBlob> diagnostics;
-        try
-        {
-            auto createResult = m_session->createCompositeComponentType(
-                components.data(),
-                static_cast<SlangInt>(components.size()),
-                compositeProgram.writeRef(),
-                diagnostics.writeRef());
-            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType");
-            if (!detail::slangSucceeded(createResult) || !compositeProgram)
-            {
-                nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramByFile] createCompositeComponentType failed for module='{}', variant='{}'.",
-                    moduleName,
-                    variantLogLabel));
-                return result;
-            }
-        }
-        catch (...)
-        {
-            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(exception-path)");
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::compileProgramByFile] Slang threw an internal exception during createCompositeComponentType for module='{}', variant='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                moduleName,
-                variantLogLabel));
-            nrAssert(false, "Slang::ISession::createCompositeComponentType threw an internal exception.");
-        }
-
-        Slang::ComPtr<slang::IComponentType> linkedProgram;
-        diagnostics = nullptr;
-        try
-        {
-            auto linkResult = compositeProgram->link(linkedProgram.writeRef(), diagnostics.writeRef());
-            emitDiagnosticsLocked(diagnostics.get(), "link");
-            if (!detail::slangSucceeded(linkResult) || !linkedProgram)
-            {
-                nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramByFile] link failed for module='{}', variant='{}'.",
-                    moduleName,
-                    variantLogLabel));
-                return result;
-            }
-        }
-        catch (...)
-        {
-            emitDiagnosticsLocked(diagnostics.get(), "link(exception-path)");
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::compileProgramByFile] Slang threw an internal exception during link for module='{}', variant='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                moduleName,
-                variantLogLabel));
-            nrAssert(false, "Slang::IComponentType::link threw an internal exception.");
-        }
-
-        auto programDebugNamePrefix = detail::makeSlangProgramDebugNamePrefix(
-            std::filesystem::path(*modulePath).stem().string(),
-            request.variant,
-            request.linkVariants);
-        result.linkedProgram_ = linkedProgram;
-        result.debugNamePrefix_ = std::move(programDebugNamePrefix);
-        m_linkedProgramCache.insert_or_assign(cacheKey, result);
-
-        nrInfo<>(std::format(
-            "[ShaderService::compileProgramByFile] finished: module='{}', variant='{}'",
-            moduleName,
-            variantLogLabel));
-        return result;
-    }
-
-[[nodiscard]] SlangProgram ShaderService::compileProgramFromSource(const SlangProgramCompileSourceRequest &request)
-{
-        std::scoped_lock lock(m_mutex);
-        ensureConfiguredLocked();
-
-        SlangProgram result;
-        if (!detail::isSlangQualifiedIdentifier(request.moduleName))
-        {
-            nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramFromSource] invalid request.moduleName='{}'.",
-                request.moduleName));
-            return result;
-        }
-        if (request.sourceText.empty())
-        {
-            nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramFromSource] empty source text for module='{}'.",
-                request.moduleName));
-            return result;
-        }
-
-        auto variantHashHex = nr::hash::toHexString(request.variant.hashValue());
-        auto linkVariantsHashHex = nr::hash::toHexString(detail::hashSlangLinkVariants(request.linkVariants));
-        auto variantLogLabel = detail::describeSlangVariantForLog(request.variant);
-        if (!detail::validateSlangVariantDesc(request.variant, request.moduleName))
-        {
-            return result;
-        }
-        for (auto linkVariantIndex = std::size_t{0}; linkVariantIndex < request.linkVariants.size(); ++linkVariantIndex)
-        {
-            if (!detail::validateSlangVariantDesc(
-                    request.linkVariants[linkVariantIndex],
-                    std::format("{}#linkVariant{}", request.moduleName, linkVariantIndex)))
-            {
-                return result;
-            }
-        }
-
-        auto sourceHash = nr::hash::toHexString(detail::hashSourceText(request.sourceText));
-        auto sourceLoadModuleName = detail::makeSlangSourceLoadModuleName(request.moduleName, sourceHash);
-        auto syntheticPath = detail::makeSlangSourceSyntheticPath(request.moduleName, sourceHash);
-        auto cacheKey = detail::makeSlangSourceProgramCacheKey(
-            m_sessionGeneration,
-            m_optionsHashHex,
-            request.moduleName,
-            sourceHash,
-            variantHashHex,
-            linkVariantsHashHex);
-        if (auto cachedProgramIt = m_linkedProgramCache.find(cacheKey); cachedProgramIt != m_linkedProgramCache.end())
-        {
-            return cachedProgramIt->second;
-        }
-
-        Slang::ComPtr<slang::IBlob> diagnostics;
-        Slang::ComPtr<slang::IModule> rootModule;
-        try
-        {
-            rootModule = Slang::ComPtr<slang::IModule>(m_session->loadModuleFromSourceString(
-                sourceLoadModuleName.c_str(),
-                syntheticPath.c_str(),
-                request.sourceText.c_str(),
-                diagnostics.writeRef()));
-        }
-        catch (...)
-        {
-            emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(source exception-path)");
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::compileProgramFromSource] Slang threw an internal exception during root source module load: module='{}', sourceHash='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                request.moduleName,
-                sourceHash));
-            nrAssert(false, "Slang::ISession::loadModuleFromSourceString threw an internal exception.");
-        }
-        emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(source)");
-
-        if (!rootModule)
-        {
-            nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramFromSource] failed to load source module: module='{}', sourceHash='{}', source:\n{}",
-                request.moduleName,
-                sourceHash,
-                request.sourceText));
-            return result;
-        }
-
-        auto definedEntryPointCount = std::max<SlangInt32>(0, rootModule->getDefinedEntryPointCount());
-        if (definedEntryPointCount == 0)
-        {
-            nrInfo<LogLevel::warning>(std::format(
-                "[ShaderService::compileProgramFromSource] module='{}' defines no entrypoints.",
-                request.moduleName));
-            return result;
-        }
-
-        std::vector<Slang::ComPtr<slang::IEntryPoint>> entryPointComponents;
-        entryPointComponents.reserve(static_cast<std::size_t>(definedEntryPointCount));
-        Slang::ComPtr<slang::IModule> variantModule;
-        std::vector<Slang::ComPtr<slang::IModule>> linkVariantModules;
-        linkVariantModules.reserve(request.linkVariants.size());
-
-        std::vector<slang::IComponentType *> components;
-        components.reserve(
-            static_cast<std::size_t>(definedEntryPointCount) +
-            1u +
-            (request.variant.empty() ? 0u : 1u) +
-            request.linkVariants.size());
-        components.push_back(rootModule.get());
-
-        for (SlangInt32 index = 0; index < definedEntryPointCount; ++index)
-        {
             Slang::ComPtr<slang::IEntryPoint> entryPointComponent;
-            auto getEntryResult = rootModule->getDefinedEntryPoint(index, entryPointComponent.writeRef());
-            if (!detail::slangSucceeded(getEntryResult) || !entryPointComponent)
-            {
-                nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramFromSource] getDefinedEntryPoint failed: module='{}', index={}",
-                    request.moduleName,
-                    index));
-                return result;
-            }
-
-            components.push_back(entryPointComponent.get());
-            entryPointComponents.push_back(std::move(entryPointComponent));
-        }
-
-        auto loadVariantModule = [&](const SlangProgramVariantDesc &variant, std::string_view role) -> Slang::ComPtr<slang::IModule> {
-            auto variantSource = variant.sourceText();
-            auto currentVariantLabel = detail::compactSlangVariantDebugLabel(variant);
-            auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(currentVariantLabel);
-            auto variantSyntheticPath = detail::makeSlangVariantSyntheticPath(syntheticModuleName);
-            auto currentVariantLogLabel = detail::describeSlangVariantForLog(variant);
-            diagnostics = nullptr;
-            Slang::ComPtr<slang::IModule> loadedVariantModule;
+            auto entryPointResult = SlangResult{};
             try
             {
-                loadedVariantModule = Slang::ComPtr<slang::IModule>(m_session->loadModuleFromSourceString(
-                    syntheticModuleName.c_str(),
-                    variantSyntheticPath.c_str(),
-                    variantSource.c_str(),
-                    diagnostics.writeRef()));
+                entryPointResult = rootModule->getDefinedEntryPoint(0, entryPointComponent.writeRef());
             }
             catch (...)
             {
-                emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(source variant exception-path)");
-                nrInfo<nr::LogLevel::error>(std::format(
-                    "[ShaderService::compileProgramFromSource] Slang threw an internal exception during {} module load: module='{}', variant='{}'. "
-                    "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                    role,
-                    request.moduleName,
-                    currentVariantLogLabel));
-                nrAssert(false, "Slang::ISession::loadModuleFromSourceString threw an internal exception.");
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] Slang threw while loading the sole entrypoint for module='{}'.",
+                    moduleName));
+                nrAssert(false, "Slang entrypoint loading threw an internal exception.");
+                return;
             }
-            emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(source variant)");
-
-            if (!loadedVariantModule)
+            if (!detail::slangSucceeded(entryPointResult) || !entryPointComponent)
             {
-                nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramFromSource] failed to load {} module: module='{}', variant='{}', source:\n{}",
-                    role,
-                    request.moduleName,
-                    currentVariantLogLabel,
-                    variantSource));
-            }
-            return loadedVariantModule;
-        };
-
-        if (!request.variant.empty())
-        {
-            variantModule = loadVariantModule(request.variant, "variant");
-            if (!variantModule)
-            {
-                return result;
-            }
-            components.push_back(variantModule.get());
-        }
-        for (auto const &linkVariant : request.linkVariants)
-        {
-            if (linkVariant.empty())
-            {
-                continue;
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] unable to load the only entrypoint for module='{}'.",
+                    moduleName));
+                return;
             }
 
-            auto linkVariantModule = loadVariantModule(linkVariant, "link variant");
-            if (!linkVariantModule)
+            auto components = std::vector<slang::IComponentType *>{rootModule.get(), entryPointComponent.get()};
+            Slang::ComPtr<slang::IModule> variantModule;
+            auto variantLogLabel = detail::describeSlangVariantForLog(request.variant);
+            if (!request.variant.empty())
             {
-                return result;
-            }
-            components.push_back(linkVariantModule.get());
-            linkVariantModules.push_back(std::move(linkVariantModule));
-        }
-
-        Slang::ComPtr<slang::IComponentType> compositeProgram;
-        diagnostics = nullptr;
-        try
-        {
-            auto createResult = m_session->createCompositeComponentType(
-                components.data(),
-                static_cast<SlangInt>(components.size()),
-                compositeProgram.writeRef(),
-                diagnostics.writeRef());
-            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(source)");
-            if (!detail::slangSucceeded(createResult) || !compositeProgram)
-            {
-                nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramFromSource] createCompositeComponentType failed for module='{}', variant='{}'.",
-                    request.moduleName,
-                    variantLogLabel));
-                return result;
-            }
-        }
-        catch (...)
-        {
-            emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(source exception-path)");
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::compileProgramFromSource] Slang threw an internal exception during createCompositeComponentType for module='{}', variant='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                request.moduleName,
-                variantLogLabel));
-            nrAssert(false, "Slang::ISession::createCompositeComponentType threw an internal exception.");
-        }
-
-        Slang::ComPtr<slang::IComponentType> linkedProgram;
-        diagnostics = nullptr;
-        try
-        {
-            auto linkResult = compositeProgram->link(linkedProgram.writeRef(), diagnostics.writeRef());
-            emitDiagnosticsLocked(diagnostics.get(), "link(source)");
-            if (!detail::slangSucceeded(linkResult) || !linkedProgram)
-            {
-                nrInfo<LogLevel::warning>(std::format(
-                    "[ShaderService::compileProgramFromSource] link failed for module='{}', variant='{}'.",
-                    request.moduleName,
-                    variantLogLabel));
-                return result;
-            }
-        }
-        catch (...)
-        {
-            emitDiagnosticsLocked(diagnostics.get(), "link(source exception-path)");
-            nrInfo<nr::LogLevel::error>(std::format(
-                "[ShaderService::compileProgramFromSource] Slang threw an internal exception during link for module='{}', variant='{}'. "
-                "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                request.moduleName,
-                variantLogLabel));
-            nrAssert(false, "Slang::IComponentType::link threw an internal exception.");
-        }
-
-        auto programDebugNamePrefix = detail::makeSlangProgramDebugNamePrefix(
-            request.moduleName,
-            request.variant,
-            request.linkVariants);
-        result.linkedProgram_ = linkedProgram;
-        result.debugNamePrefix_ = std::move(programDebugNamePrefix);
-        m_linkedProgramCache.insert_or_assign(cacheKey, result);
-
-        nrInfo<>(std::format(
-            "[ShaderService::compileProgramFromSource] finished: module='{}', sourceHash='{}', variant='{}'",
-            request.moduleName,
-            sourceHash,
-            variantLogLabel));
-        return result;
-    }
-
-void ShaderService::writeModuleCacheBlobAsync(Slang::ComPtr<slang::IModule> module, const std::filesystem::path &moduleBlobPath)
-{
-        auto pathText = moduleBlobPath.string();
-        m_moduleCacheWriteThreads.emplace_back([module = std::move(module), pathText = std::move(pathText)]() mutable -> bool {
-            try
-            {
-                auto writeResult = module->writeToFile(pathText.c_str());
-                if (!detail::slangSucceeded(writeResult))
+                auto variantSource = request.variant.sourceText();
+                auto variantLabel = detail::compactSlangVariantDebugLabel(request.variant);
+                auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(
+                    variantLabel,
+                    variantHashHex);
+                auto syntheticPath = detail::makeSlangVariantSyntheticPath(syntheticModuleName);
+                Slang::ComPtr<slang::IBlob> diagnostics;
+                try
                 {
-                    nrInfo<nr::LogLevel::warning>(std::format("[ShaderService::writeModuleCacheBlobAsync] writeToFile failed: path='{}', result={}", pathText, static_cast<std::int32_t>(writeResult)));
-                    return false;
+                    variantModule = Slang::ComPtr<slang::IModule>(m_session->loadModuleFromSourceString(
+                        syntheticModuleName.c_str(),
+                        syntheticPath.c_str(),
+                        variantSource.c_str(),
+                        diagnostics.writeRef()));
+                }
+                catch (...)
+                {
+                    emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(exception-path)");
+                    nrInfo<LogLevel::error>(std::format(
+                        "[ShaderService::compileProgramsByFile] Slang threw while loading variant for module='{}', variant='{}'.",
+                        moduleName,
+                        variantLogLabel));
+                    nrAssert(false, "Slang variant module loading threw an internal exception.");
+                }
+                emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(variant)");
+                if (!variantModule)
+                {
+                    nrInfo<LogLevel::error>(std::format(
+                        "[ShaderService::compileProgramsByFile] failed to load variant for module='{}', variant='{}'.",
+                        moduleName,
+                        variantLogLabel));
+                    return;
+                }
+                components.push_back(variantModule.get());
+            }
+
+            Slang::ComPtr<slang::IComponentType> compositeProgram;
+            Slang::ComPtr<slang::IBlob> diagnostics;
+            try
+            {
+                auto composeResult = m_session->createCompositeComponentType(
+                    components.data(),
+                    static_cast<SlangInt>(components.size()),
+                    compositeProgram.writeRef(),
+                    diagnostics.writeRef());
+                emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(single-entry)");
+                if (!detail::slangSucceeded(composeResult) || !compositeProgram)
+                {
+                    nrInfo<LogLevel::error>(std::format(
+                        "[ShaderService::compileProgramsByFile] composition failed for module='{}', variant='{}'.",
+                        moduleName,
+                        variantLogLabel));
+                    return;
                 }
             }
             catch (...)
             {
-                nrInfo<nr::LogLevel::error>(std::format(
-                    "[ShaderService::writeModuleCacheBlobAsync] Slang threw an internal exception during writeToFile: path='{}'",
-                    pathText));
-                return false;
+                emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(exception-path)");
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] Slang threw while composing module='{}', variant='{}'.",
+                    moduleName,
+                    variantLogLabel));
+                nrAssert(false, "Slang component composition threw an internal exception.");
             }
-            return true;
+
+            Slang::ComPtr<slang::IComponentType> linkedProgram;
+            diagnostics = nullptr;
+            try
+            {
+                auto linkResult = compositeProgram->link(linkedProgram.writeRef(), diagnostics.writeRef());
+                emitDiagnosticsLocked(diagnostics.get(), "link(single-entry)");
+                if (!detail::slangSucceeded(linkResult) || !linkedProgram)
+                {
+                    nrInfo<LogLevel::error>(std::format(
+                        "[ShaderService::compileProgramsByFile] link failed for module='{}', variant='{}'.",
+                        moduleName,
+                        variantLogLabel));
+                    return;
+                }
+            }
+            catch (...)
+            {
+                emitDiagnosticsLocked(diagnostics.get(), "link(exception-path)");
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] Slang threw while linking module='{}', variant='{}'.",
+                    moduleName,
+                    variantLogLabel));
+                nrAssert(false, "Slang component linking threw an internal exception.");
+            }
+
+            diagnostics = nullptr;
+            auto *programLayout = static_cast<slang::ProgramLayout *>(nullptr);
+            try
+            {
+                programLayout = linkedProgram->getLayout(0, diagnostics.writeRef());
+            }
+            catch (...)
+            {
+                emitDiagnosticsLocked(diagnostics.get(), "getLayout(exception-path)");
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] Slang threw while reflecting module='{}', variant='{}'.",
+                    moduleName,
+                    variantLogLabel));
+                nrAssert(false, "Slang program reflection threw an internal exception.");
+                return;
+            }
+            emitDiagnosticsLocked(diagnostics.get(), "getLayout(single-entry)");
+            if (!programLayout || programLayout->getEntryPointCount() != 1)
+            {
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] linked module='{}' does not expose exactly one entrypoint.",
+                    moduleName));
+                return;
+            }
+
+            auto *entryPointLayout = programLayout->getEntryPointByIndex(0);
+            auto entryPointName = entryPointLayout && entryPointLayout->getName()
+                                      ? std::string{entryPointLayout->getName()}
+                                      : std::string{};
+            auto stage = entryPointLayout ? entryPointLayout->getStage() : SLANG_STAGE_NONE;
+            if (entryPointName.empty() || stage == SLANG_STAGE_NONE)
+            {
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] invalid entrypoint reflection for module='{}'.",
+                    moduleName));
+                return;
+            }
+
+            auto *entryScopeVarLayout = entryPointLayout->getVarLayout();
+            auto *entryScopeTypeLayout = entryScopeVarLayout ? entryScopeVarLayout->getTypeLayout() : nullptr;
+            auto entryBindingRangeCount = entryScopeTypeLayout
+                                              ? std::max<SlangInt>(0, entryScopeTypeLayout->getBindingRangeCount())
+                                              : 0;
+            std::ranges::for_each(std::views::iota(SlangInt{0}, entryBindingRangeCount), [&](SlangInt rangeIndex) {
+                auto bindingType = entryScopeTypeLayout->getBindingRangeType(rangeIndex);
+                auto isStageIo = bindingType == slang::BindingType::VaryingInput ||
+                                 bindingType == slang::BindingType::VaryingOutput;
+                nrAssert(
+                    isStageIo,
+                    std::format(
+                        "Entry-point descriptor binding is forbidden. entry='{}', rangeIndex={}, bindingType={}",
+                        entryPointName,
+                        rangeIndex,
+                        static_cast<std::int32_t>(bindingType)));
+            });
+
+            Slang::ComPtr<slang::IBlob> hashBlob;
+            try
+            {
+                linkedProgram->getEntryPointHash(0, 0, hashBlob.writeRef());
+            }
+            catch (...)
+            {
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] Slang threw while hashing module='{}', entry='{}'.",
+                    moduleName,
+                    entryPointName));
+                nrAssert(false, "Slang entrypoint hashing threw an internal exception.");
+                return;
+            }
+            if (!hashBlob || hashBlob->getBufferSize() == 0)
+            {
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] failed to compute backend cache key for module='{}'.",
+                    moduleName));
+                return;
+            }
+
+            auto cacheKey = std::vector<std::byte>(hashBlob->getBufferSize());
+            std::memcpy(cacheKey.data(), hashBlob->getBufferPointer(), cacheKey.size());
+            auto cachePath = m_serviceConfig.persistentSpirvCache
+                                 ? detail::makeSpirvCachePath(spirvCacheRootLocked(), cacheKey)
+                                 : std::filesystem::path{};
+            auto const preparedIndex = preparedPrograms.size();
+            preparedPrograms.push_back(PreparedProgram{
+                .requestIndices = {requestIndex},
+                .memoryCacheKey = std::move(memoryCacheKey),
+                .moduleName = std::move(moduleName),
+                .variantLogLabel = std::move(variantLogLabel),
+                .linkedProgram = std::move(linkedProgram),
+                .programLayout = programLayout,
+                .cacheKey = std::move(cacheKey),
+                .cachePath = std::move(cachePath),
+                .entryPointName = std::move(entryPointName),
+                .debugName = detail::makeSlangProgramDebugNamePrefix(
+                    *modulePath,
+                    request.variant),
+                .stage = stage,
+            });
+            preparedIndexByMemoryKey.emplace(
+                preparedPrograms.back().memoryCacheKey,
+                preparedIndex);
+        });
+        auto const frontendFinishedAt = std::chrono::steady_clock::now();
+
+        struct BackendCompileResult
+        {
+            std::shared_ptr<const std::vector<std::uint32_t>> spirv{};
+            bool cacheHit = false;
+            bool cacheCorrupt = false;
+        };
+
+        auto leaderByHash = std::map<std::string, std::size_t>{};
+        std::ranges::for_each(std::views::iota(std::size_t{0}, preparedPrograms.size()), [&](std::size_t index) {
+            leaderByHash.try_emplace(detail::opaqueHashHex(preparedPrograms[index].cacheKey), index);
+        });
+
+        auto futures = std::map<std::string, std::future<BackendCompileResult>>{};
+        std::ranges::for_each(leaderByHash, [&](auto const &entry) {
+            auto const &[hashHex, preparedIndex] = entry;
+            auto *prepared = std::addressof(preparedPrograms[preparedIndex]);
+            auto *linkedProgram = prepared->linkedProgram.get();
+            auto cachePath = prepared->cachePath;
+            auto cacheKey = prepared->cacheKey;
+            auto entryPointName = prepared->entryPointName;
+            auto persistentCacheEnabled = m_serviceConfig.persistentSpirvCache;
+            futures.emplace(
+                hashHex,
+                m_backendPool->submit([
+                    linkedProgram,
+                    cachePath = std::move(cachePath),
+                    cacheKey = std::move(cacheKey),
+                    entryPointName = std::move(entryPointName),
+                    persistentCacheEnabled]() mutable -> BackendCompileResult {
+                    auto cacheCorrupt = false;
+                    if (persistentCacheEnabled)
+                    {
+                        auto cached = detail::readSpirvCache(cachePath, cacheKey);
+                        if (cached.spirv)
+                        {
+                            return BackendCompileResult{
+                                .spirv = std::move(cached.spirv),
+                                .cacheHit = true,
+                            };
+                        }
+                        cacheCorrupt = cached.corrupt;
+                        if (cacheCorrupt)
+                        {
+                            std::error_code removeError;
+                            std::filesystem::remove(cachePath, removeError);
+                            if (removeError)
+                            {
+                                nrInfo<LogLevel::warning>(std::format(
+                                    "[ShaderService::backend] failed to remove corrupt SPIR-V cache '{}': {}",
+                                    cachePath.generic_string(),
+                                    removeError.message()));
+                            }
+                        }
+                    }
+
+                    Slang::ComPtr<slang::IBlob> codeBlob;
+                    Slang::ComPtr<slang::IBlob> diagnostics;
+                    try
+                    {
+                        auto compileResult = linkedProgram->getEntryPointCode(
+                            0,
+                            0,
+                            codeBlob.writeRef(),
+                            diagnostics.writeRef());
+                        if (diagnostics)
+                        {
+                            auto text = std::string_view{
+                                static_cast<const char *>(diagnostics->getBufferPointer()),
+                                diagnostics->getBufferSize()};
+                            if (!text.empty())
+                            {
+                                nrInfo<LogLevel::warning>(std::format(
+                                    "[ShaderService::backend] entry='{}' diagnostics:\n{}",
+                                    entryPointName,
+                                    text));
+                            }
+                        }
+                        if (!detail::slangSucceeded(compileResult) || !codeBlob)
+                        {
+                            return BackendCompileResult{.cacheCorrupt = cacheCorrupt};
+                        }
+                    }
+                    catch (...)
+                    {
+                        nrInfo<LogLevel::error>(std::format(
+                            "[ShaderService::backend] Slang threw during getEntryPointCode for entry='{}'.",
+                            entryPointName));
+                        return BackendCompileResult{.cacheCorrupt = cacheCorrupt};
+                    }
+
+                    auto spirv = detail::copySpirvBlob(*codeBlob);
+                    if (!spirv)
+                    {
+                        nrInfo<LogLevel::error>(std::format(
+                            "[ShaderService::backend] entry='{}' produced invalid SPIR-V.",
+                            entryPointName));
+                        return BackendCompileResult{.cacheCorrupt = cacheCorrupt};
+                    }
+                    if (persistentCacheEnabled && !detail::writeSpirvCache(cachePath, cacheKey, *spirv))
+                    {
+                        nrInfo<LogLevel::warning>(std::format(
+                            "[ShaderService::backend] failed to persist SPIR-V cache '{}'.",
+                            cachePath.generic_string()));
+                    }
+                    return BackendCompileResult{
+                        .spirv = std::move(spirv),
+                        .cacheCorrupt = cacheCorrupt,
+                    };
+                }));
+        });
+
+        auto backendResults = std::map<std::string, BackendCompileResult>{};
+        std::ranges::for_each(futures, [&](auto &entry) {
+            backendResults.emplace(entry.first, entry.second.get());
+        });
+        auto const backendFinishedAt = std::chrono::steady_clock::now();
+
+        auto diskHitCount = std::size_t{0};
+        auto backendCompileCount = std::size_t{0};
+        auto corruptCount = std::size_t{0};
+        std::ranges::for_each(backendResults, [&](auto const &entry) {
+            diskHitCount += entry.second.cacheHit ? 1u : 0u;
+            backendCompileCount += !entry.second.cacheHit && entry.second.spirv ? 1u : 0u;
+            corruptCount += entry.second.cacheCorrupt ? 1u : 0u;
+        });
+
+        std::ranges::for_each(preparedPrograms, [&](PreparedProgram &prepared) {
+            auto hashHex = detail::opaqueHashHex(prepared.cacheKey);
+            auto backend = backendResults.find(hashHex);
+            if (backend == backendResults.end() || !backend->second.spirv)
+            {
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::compileProgramsByFile] backend failed for module='{}', entry='{}', variant='{}'.",
+                    prepared.moduleName,
+                    prepared.entryPointName,
+                    prepared.variantLogLabel));
+                return;
+            }
+
+            auto state = std::make_shared<SlangProgram::State>();
+            state->linkedProgram = std::move(prepared.linkedProgram);
+            state->programLayout = prepared.programLayout;
+            state->entryPoint = SlangEntryPointData{
+                .entryPointName = std::move(prepared.entryPointName),
+                .debugName = std::move(prepared.debugName),
+                .stage = prepared.stage,
+                .spirv = backend->second.spirv,
+            };
+            SlangProgram program;
+            program.state_ = std::move(state);
+            std::ranges::for_each(prepared.requestIndices, [&](std::size_t requestIndex) {
+                programs[requestIndex] = program;
+            });
+            m_linkedProgramCache.insert_or_assign(prepared.memoryCacheKey, std::move(program));
+        });
+
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt);
+        auto frontendElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            frontendFinishedAt - startedAt);
+        auto backendElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            backendFinishedAt - frontendFinishedAt);
+        m_lastCompileBatchStats = ShaderCompileBatchStats{
+            .requestCount = requests.size(),
+            .memoryHitCount = memoryHitCount,
+            .persistentHitCount = diskHitCount,
+            .backendCompilationCount = backendCompileCount,
+            .corruptCacheEntryCount = corruptCount,
+            .workerCount = m_serviceConfig.backendWorkerCount,
+            .frontendElapsed = frontendElapsed,
+            .backendElapsed = backendElapsed,
+            .elapsed = elapsed,
+        };
+        nrInfo<>(std::format(
+            "[ShaderService::compileProgramsByFile] requests={}, memoryHits={}, diskHits={}, backendCompiles={}, corruptEntries={}, workers={}, frontendMs={}, backendMs={}, elapsedMs={}",
+            requests.size(),
+            memoryHitCount,
+            diskHitCount,
+            backendCompileCount,
+            corruptCount,
+            m_serviceConfig.backendWorkerCount,
+            frontendElapsed.count(),
+            backendElapsed.count(),
+            elapsed.count()));
+        return programs;
+    }
+
+void ShaderService::enqueueModuleCacheWrite(
+    std::vector<std::byte> bytes,
+    std::filesystem::path moduleBlobPath)
+{
+        ensureBackendPoolLocked();
+        [[maybe_unused]] auto writeFuture = m_backendPool->submit([
+            bytes = std::move(bytes),
+            moduleBlobPath = std::move(moduleBlobPath)]() {
+            if (detail::writeBytesAtomically(moduleBlobPath, bytes) == detail::AtomicWriteResult::failed)
+            {
+                nrInfo<LogLevel::warning>(std::format(
+                    "[ShaderService::moduleCache] failed to persist '{}'.",
+                    moduleBlobPath.generic_string()));
+            }
         });
     }
 
-[[nodiscard]] std::optional<std::string> ShaderService::validateModulePathOrganizationLocked(std::string_view moduleName, std::string_view modulePath) const
-{
-        if (moduleName.empty())
-        {
-            return std::nullopt;
-        }
-
-        auto expectedPath = detail::moduleNameToPath(moduleName);
-        auto normalizedModulePath = detail::moduleNameToPath(detail::modulePathToName(std::string(modulePath)));
-        if (normalizedModulePath == expectedPath)
-        {
-            return std::nullopt;
-        }
-
-        return std::format(
-            "Module '{}' path '{}' violates shader organization rule. Expected exact module path '{}'.",
-            moduleName,
-            normalizedModulePath,
-            expectedPath);
-    }
 
 void ShaderService::ensureGlobalSessionLocked()
 {
@@ -1636,11 +1518,16 @@ void ShaderService::ensureConfiguredLocked()
         {
             applyCompileOptionsLocked(kDefaultSlangCompileOptions);
         }
+        ensureBackendPoolLocked();
     }
 
-[[nodiscard]] std::uint64_t ShaderService::computeOptionsHashValueLocked() const noexcept
+void ShaderService::ensureBackendPoolLocked()
 {
-        return m_optionsHashValue;
+        if (!m_backendPool)
+        {
+            m_backendPool = std::make_unique<nr::threading::StaticThreadPool>();
+        }
+        m_backendPool->ensureWorkerCount(m_serviceConfig.backendWorkerCount);
     }
 
 [[nodiscard]] std::string_view ShaderService::optionsHashLocked() const noexcept
@@ -1653,48 +1540,73 @@ void ShaderService::ensureConfiguredLocked()
         return std::filesystem::path(std::string(shaderCacheRoot)) / std::string(optionsHashLocked());
     }
 
+[[nodiscard]] std::filesystem::path ShaderService::spirvCacheRootLocked() const
+{
+        return moduleCacheRootLocked() / "spirv" / "v1";
+    }
+
 void ShaderService::invalidateStaleModuleCacheLocked(std::string_view modulePath, const std::filesystem::path &moduleBlobPath)
 {
+        auto removeStaleCache = [&]() {
+            std::error_code removeError;
+            auto removed = std::filesystem::remove(moduleBlobPath, removeError);
+            if (removeError)
+            {
+                nrInfo<nr::LogLevel::warning>(std::format(
+                    "[ShaderService::invalidateStaleModuleCacheLocked] stale cache removal failed: path='{}', error='{}'",
+                    moduleBlobPath.generic_string(),
+                    removeError.message()));
+                return;
+            }
+            if (removed)
+            {
+                nrInfo<>(std::format(
+                    "[ShaderService::invalidateStaleModuleCacheLocked] removed stale cache blob: path='{}'",
+                    moduleBlobPath.generic_string()));
+            }
+        };
+
         auto binaryBytes = detail::readBinaryFile(moduleBlobPath);
         if (binaryBytes.empty())
         {
+            removeStaleCache();
             return;
         }
 
         Slang::ComPtr<slang::IBlob> binaryBlob(slang_createBlob(binaryBytes.data(), binaryBytes.size()));
         if (!binaryBlob)
         {
+            removeStaleCache();
             return;
         }
 
         auto const sourceModulePath = std::string(modulePath) + ".slang";
-        if (m_session->isBinaryModuleUpToDate(sourceModulePath.c_str(), binaryBlob.get()))
+        auto isUpToDate = false;
+        try
         {
-            return;
+            isUpToDate = m_session->isBinaryModuleUpToDate(sourceModulePath.c_str(), binaryBlob.get());
         }
-
-        std::error_code removeEc;
-        auto removed = std::filesystem::remove(moduleBlobPath, removeEc);
-        if (removeEc)
+        catch (...)
         {
-            nrInfo<nr::LogLevel::warning>(std::format(
-                "[ShaderService::invalidateStaleModuleCacheLocked] stale cache removal failed: path='{}', error='{}'",
-                moduleBlobPath.generic_string(),
-                removeEc.message()));
-            return;
-        }
-
-        if (removed)
-        {
-            nrInfo<>(std::format(
-                "[ShaderService::invalidateStaleModuleCacheLocked] removed stale cache blob: path='{}'",
+            nrInfo<LogLevel::error>(std::format(
+                "[ShaderService::invalidateStaleModuleCacheLocked] Slang threw while validating '{}'.",
                 moduleBlobPath.generic_string()));
+            nrAssert(false, "Slang module-cache validation threw an internal exception.");
         }
+        if (isUpToDate)
+        {
+            return;
+        }
+
+        removeStaleCache();
     }
 
 void ShaderService::recreateSessionLocked()
 {
-        m_moduleCacheWriteThreads.clear();
+        if (m_backendPool)
+        {
+            m_backendPool->waitIdle();
+        }
         m_linkedProgramCache.clear();
         m_session = nullptr;
 
@@ -1828,34 +1740,19 @@ void ShaderService::emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string
             return derivedModuleName;
     }
 
-SlangCompiledModule ShaderService::loadOrCompileModuleLocked(const std::string &moduleName, std::optional<std::string> explicitModulePath)
+Slang::ComPtr<slang::IModule> ShaderService::loadOrCompileModuleLocked(const std::string &moduleName)
 {
-        auto normalizedModuleName = moduleName;
-        auto normalizedModulePath = detail::moduleNameToPath(normalizedModuleName);
-
-        if (explicitModulePath.has_value())
-        {
-            if (auto violation = validateModulePathOrganizationLocked(normalizedModuleName, *explicitModulePath); violation.has_value())
-            {
-                nrInfo<LogLevel::warning>(std::string(violation.value()));
-                return {};
-            }
-        }
+        auto normalizedModulePath = detail::moduleNameToPath(moduleName);
 
         auto cacheRootPath = detail::normalizePath(moduleCacheRootLocked());
-        auto moduleBlobPath = detail::makeModuleBinaryPath(cacheRootPath, normalizedModuleName);
+        auto moduleBlobPath = detail::makeModuleBinaryPath(cacheRootPath, moduleName);
         std::error_code moduleBlobEc;
-        auto sourceModulePath = normalizedModulePath + ".slang";
 
         auto cacheExists = std::filesystem::exists(moduleBlobPath, moduleBlobEc);
         if (!moduleBlobEc && cacheExists)
         {
             invalidateStaleModuleCacheLocked(normalizedModulePath, moduleBlobPath);
         }
-
-        SlangCompiledModule result;
-        result.moduleName = normalizedModuleName;
-        result.sourcePath = std::filesystem::path(sourceModulePath);
 
         Slang::ComPtr<slang::IBlob> diagnostics;
         Slang::ComPtr<slang::IModule> loadedModule;
@@ -1869,7 +1766,7 @@ SlangCompiledModule ShaderService::loadOrCompileModuleLocked(const std::string &
             nrInfo<nr::LogLevel::error>(std::format(
                 "[ShaderService::loadOrCompileModuleLocked] Slang threw an internal exception during loadModule for module='{}' path='{}'. "
                 "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                normalizedModuleName, normalizedModulePath));
+                moduleName, normalizedModulePath));
             emitDiagnosticsLocked(diagnostics.get(), "loadModule(exception-path)");
             nrAssert(false, "Slang::ISession::loadModule threw an internal exception.");
         }
@@ -1877,17 +1774,45 @@ SlangCompiledModule ShaderService::loadOrCompileModuleLocked(const std::string &
 
         if (!loadedModule)
         {
-            auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via loadModule(module-path='{}'). Expected slash form like 'renderer/pathTracing/core'.", normalizedModuleName, normalizedModulePath);
+            auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via loadModule(module-path='{}'). Expected slash form like 'renderer/appUi/vertex'.", moduleName, normalizedModulePath);
             nrInfo<LogLevel::warning>(message);
             return {};
         }
 
-        std::error_code createDirEc;
-        std::filesystem::create_directories(moduleBlobPath.parent_path(), createDirEc);
+        std::error_code cacheStateError;
+        auto hasFreshModuleCache = std::filesystem::exists(moduleBlobPath, cacheStateError) && !cacheStateError;
+        if (!hasFreshModuleCache)
+        {
+            Slang::ComPtr<slang::IBlob> serializedModule;
+            try
+            {
+                auto serializeResult = loadedModule->serialize(serializedModule.writeRef());
+                if (!detail::slangSucceeded(serializeResult) || !serializedModule)
+                {
+                    nrInfo<LogLevel::warning>(std::format(
+                        "[ShaderService::loadOrCompileModuleLocked] failed to serialize module cache for module='{}'.",
+                        moduleName));
+                }
+            }
+            catch (...)
+            {
+                nrInfo<LogLevel::error>(std::format(
+                    "[ShaderService::loadOrCompileModuleLocked] Slang threw while serializing module='{}'.",
+                    moduleName));
+                nrAssert(false, "Slang module serialization threw an internal exception.");
+            }
 
-            writeModuleCacheBlobAsync(loadedModule, moduleBlobPath);
+            if (serializedModule && serializedModule->getBufferSize() > 0)
+            {
+                auto serializedBytes = std::vector<std::byte>(serializedModule->getBufferSize());
+                std::memcpy(
+                    serializedBytes.data(),
+                    serializedModule->getBufferPointer(),
+                    serializedBytes.size());
+                enqueueModuleCacheWrite(std::move(serializedBytes), moduleBlobPath);
+            }
+        }
 
-        result.module = loadedModule;
-        return result;
+        return loadedModule;
     }
 } // namespace nr::rhi

@@ -26,6 +26,7 @@ class UiNode final : public Node
     UiNode() = default;
     ~UiNode() override;
 
+    [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const override;
     void initialize(NodeInitContext& context) override;
     [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
     [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;

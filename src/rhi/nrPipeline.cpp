@@ -48,9 +48,9 @@ namespace nr::rhi
 		{
 			return;
 		}
-		if (stage.entryPointName.empty() || stage.logicalEntryPointName.empty())
+		if (stage.logicalEntryPointName.empty())
 		{
-			stageValidation = "RayTracingProgramAssemblyDesc stages require non-empty actual and logical entry-point names.";
+			stageValidation = "RayTracingProgramAssemblyDesc stages require non-empty logical entry-point names.";
 			return;
 		}
 		if (!logicalEntryPointNames.insert(stage.logicalEntryPointName).second)
@@ -58,15 +58,19 @@ namespace nr::rhi
 			stageValidation = std::format("RayTracingProgramAssemblyDesc has duplicate logical entry point '{}'.", stage.logicalEntryPointName);
 			return;
 		}
-		auto const *entryPointData = stage.program.get().entryPointData(stage.entryPointName);
+		auto const *entryPointData = stage.program.get().entryPoint();
 		if (entryPointData == nullptr)
 		{
-			stageValidation = std::format("RayTracingProgramAssemblyDesc has unknown actual entry point '{}'.", stage.entryPointName);
+			stageValidation = std::format(
+				"RayTracingProgramAssemblyDesc logical entry point '{}' references an invalid single-entry program.",
+				stage.logicalEntryPointName);
 			return;
 		}
 		if (!detail::isRayTracingStage(entryPointData->stage))
 		{
-			stageValidation = std::format("RayTracingProgramAssemblyDesc entry point '{}' is not a ray-tracing stage.", stage.entryPointName);
+			stageValidation = std::format(
+				"RayTracingProgramAssemblyDesc logical entry point '{}' is not a ray-tracing stage.",
+				stage.logicalEntryPointName);
 			return;
 		}
 		logicalEntryPointStages.emplace(stage.logicalEntryPointName, entryPointData->stage);
@@ -167,6 +171,108 @@ namespace nr::rhi
 
 	return std::nullopt;
 }
+
+namespace
+{
+[[nodiscard]] bool shaderStageFlagsCover(vk::ShaderStageFlags available, vk::ShaderStageFlags required) noexcept
+{
+	return (available & required) == required;
+}
+
+[[nodiscard]] std::string_view programDebugName(const SlangProgram &program) noexcept
+{
+	auto const *entryPoint = program.entryPoint();
+	return entryPoint ? std::string_view{entryPoint->debugName} : std::string_view{"<invalid>"};
+}
+
+[[nodiscard]] std::optional<std::string> validateReflectionLayoutCoverage(
+	const ShaderLayoutAbiSignature &owner,
+	const ShaderLayoutAbiSignature &required,
+	std::string_view ownerName,
+	std::string_view requiredName)
+{
+	auto error = std::optional<std::string>{};
+	std::ranges::for_each(required.descriptorBindings, [&](const ShaderDescriptorAbiBinding &requiredBinding) {
+		if (error.has_value())
+		{
+			return;
+		}
+
+		auto ownerBinding = std::ranges::find_if(owner.descriptorBindings, [&](const ShaderDescriptorAbiBinding &candidate) {
+			return candidate.set == requiredBinding.set && candidate.binding == requiredBinding.binding;
+		});
+		if (ownerBinding == owner.descriptorBindings.end())
+		{
+			error = std::format(
+				"Reflection root '{}' does not expose descriptor set={}, binding={} required by '{}'.",
+				ownerName,
+				requiredBinding.set,
+				requiredBinding.binding,
+				requiredName);
+			return;
+		}
+
+		if (ownerBinding->descriptorCount != requiredBinding.descriptorCount ||
+			ownerBinding->isRuntimeSized != requiredBinding.isRuntimeSized ||
+			ownerBinding->descriptorType != requiredBinding.descriptorType ||
+			ownerBinding->bindingFlags != requiredBinding.bindingFlags ||
+			!shaderStageFlagsCover(ownerBinding->stageFlags, requiredBinding.stageFlags))
+		{
+			error = std::format(
+				"Reflection root '{}' has an incompatible descriptor at set={}, binding={} required by '{}'.",
+				ownerName,
+				requiredBinding.set,
+				requiredBinding.binding,
+				requiredName);
+		}
+	});
+	if (error.has_value())
+	{
+		return error;
+	}
+
+	std::ranges::for_each(required.pushConstantRanges, [&](const ShaderPushConstantAbiRange &requiredRange) {
+		if (error.has_value())
+		{
+			return;
+		}
+
+		auto const requiredEnd = static_cast<std::uint64_t>(requiredRange.offset) + requiredRange.size;
+		auto ownerRange = std::ranges::find_if(owner.pushConstantRanges, [&](const ShaderPushConstantAbiRange &candidate) {
+			auto const candidateEnd = static_cast<std::uint64_t>(candidate.offset) + candidate.size;
+			return candidate.offset <= requiredRange.offset &&
+			       candidateEnd >= requiredEnd &&
+			       shaderStageFlagsCover(candidate.stageFlags, requiredRange.stageFlags);
+		});
+		if (ownerRange == owner.pushConstantRanges.end())
+		{
+			error = std::format(
+				"Reflection root '{}' does not cover push-constant bytes [{}, {}) required by '{}'.",
+				ownerName,
+				requiredRange.offset,
+				requiredEnd,
+				requiredName);
+		}
+	});
+	return error;
+}
+
+void assertReflectionLayoutCoverage(
+	const ShaderLayoutAbiSignature &ownerSignature,
+	const SlangProgram &ownerProgram,
+	const SlangProgram &requiredProgram,
+	const DescriptorBindingPolicy &policy)
+{
+	auto requiredLayout = ShaderDescriptorLayout::create(requiredProgram, policy);
+	nrAssert(requiredLayout.valid(), "Pipeline reflection coverage validation requires a valid required-stage layout.");
+	auto validation = validateReflectionLayoutCoverage(
+		ownerSignature,
+		requiredLayout.abiSignature(),
+		programDebugName(ownerProgram),
+		programDebugName(requiredProgram));
+	nrAssert(!validation.has_value(), validation.value_or(std::string{}));
+}
+} // namespace
 
 [[nodiscard]] CursorPipelineLayout CursorPipelineLayout::create(
 				const vk::raii::Device &device,
@@ -664,97 +770,68 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 	return entryPoint.debugName;
 }
 
-[[nodiscard]] VkShaderProgram VkShaderProgram::create(const vk::raii::Device &device, std::span<const SlangEntryPointData *const> selectedEntryPoints)
+void VkShaderProgram::appendStage(
+	VkShaderProgram &program,
+	const vk::raii::Device &device,
+	const SlangEntryPointData &entryPoint,
+	std::string logicalEntryPointName)
 {
-				nrAssert(!selectedEntryPoints.empty(), "VkShaderProgram::create requires at least one selected entrypoint.");
+	nrAssert(entryPoint.valid(), std::format("Entry point '{}' has no valid SPIR-V artifact.", entryPoint.entryPointName));
 
-				VkShaderProgram result;
-				result.modules_.reserve(selectedEntryPoints.size());
-				result.shaderEntryPointNames_.reserve(selectedEntryPoints.size());
-				result.entryPointNames_.reserve(selectedEntryPoints.size());
-				result.stages_.reserve(selectedEntryPoints.size());
-				result.stageCreateInfos_.reserve(selectedEntryPoints.size());
+	vk::ShaderModuleCreateInfo moduleInfo{};
+	moduleInfo.codeSize = entryPoint.spirv->size() * sizeof(std::uint32_t);
+	moduleInfo.pCode = entryPoint.spirv->data();
+	program.modules_.emplace_back(device, moduleInfo);
+	setShaderModuleDebugName(device, program.modules_.back(), makeShaderModuleDebugName(entryPoint));
 
-				std::ranges::for_each(selectedEntryPoints, [&](const SlangEntryPointData *entryPoint) {
-					nrAssert(entryPoint != nullptr, "VkShaderProgram::create received a null entrypoint selection.");
-					nrAssert(entryPoint->codeBlob != nullptr, std::format("Entry point '{}' has null code blob.", entryPoint->entryPointName));
+	program.shaderEntryPointNames_.push_back(entryPoint.entryPointName);
+	program.logicalEntryPointNames_.push_back(std::move(logicalEntryPointName));
+	program.stages_.push_back(entryPoint.stage);
 
-					auto codeSize = entryPoint->codeBlob->getBufferSize();
-					nrAssert(codeSize > 0, std::format("Entry point '{}' has empty code blob.", entryPoint->entryPointName));
-					nrAssert(
-						codeSize % sizeof(std::uint32_t) == 0,
-						std::format("Entry point '{}' code size is not uint32-aligned: {} bytes.", entryPoint->entryPointName, codeSize));
+	auto stageInfo = vk::PipelineShaderStageCreateInfo{};
+	stageInfo.stage = toVkShaderStage(entryPoint.stage);
+	stageInfo.module = *program.modules_.back();
+	stageInfo.pName = program.shaderEntryPointNames_.back().c_str();
+	program.stageCreateInfos_.push_back(stageInfo);
+}
 
-					vk::ShaderModuleCreateInfo moduleInfo{};
-					moduleInfo.codeSize = codeSize;
-					moduleInfo.pCode = static_cast<const std::uint32_t *>(entryPoint->codeBlob->getBufferPointer());
-					result.modules_.emplace_back(device, moduleInfo);
-					setShaderModuleDebugName(device, result.modules_.back(), makeShaderModuleDebugName(*entryPoint));
+[[nodiscard]] VkShaderProgram VkShaderProgram::create(
+	const vk::raii::Device &device,
+	std::span<const SlangProgram> programs)
+{
+	nrAssert(!programs.empty(), "VkShaderProgram::create requires at least one single-entry program.");
 
-					result.shaderEntryPointNames_.push_back(entryPoint->entryPointName.empty() ? "main" : entryPoint->entryPointName);
-					result.entryPointNames_.push_back(result.shaderEntryPointNames_.back());
-					result.stages_.push_back(entryPoint->stage);
-
-					vk::PipelineShaderStageCreateInfo stageInfo{};
-					stageInfo.stage = toVkShaderStage(entryPoint->stage);
-					stageInfo.module = *result.modules_.back();
-					stageInfo.pName = result.shaderEntryPointNames_.back().c_str();
-					result.stageCreateInfos_.push_back(stageInfo);
-				});
-
-				return result;
-		}
+	VkShaderProgram result;
+	result.modules_.reserve(programs.size());
+	result.shaderEntryPointNames_.reserve(programs.size());
+	result.logicalEntryPointNames_.reserve(programs.size());
+	result.stages_.reserve(programs.size());
+	result.stageCreateInfos_.reserve(programs.size());
+	std::ranges::for_each(programs, [&](const SlangProgram &program) {
+		auto const *entryPoint = program.entryPoint();
+		nrAssert(entryPoint != nullptr, "VkShaderProgram::create received an invalid single-entry program.");
+		appendStage(result, device, *entryPoint, entryPoint->entryPointName);
+	});
+	return result;
+}
 
 [[nodiscard]] VkShaderProgram VkShaderProgram::create(const vk::raii::Device &device, std::span<const RayTracingPipelineStageSelection> selectedEntryPoints)
 {
-				nrAssert(!selectedEntryPoints.empty(), "VkShaderProgram::create requires at least one selected entrypoint.");
+	nrAssert(!selectedEntryPoints.empty(), "VkShaderProgram::create requires at least one selected entrypoint.");
 
-				VkShaderProgram result;
-				result.modules_.reserve(selectedEntryPoints.size());
-				result.shaderEntryPointNames_.reserve(selectedEntryPoints.size());
-				result.entryPointNames_.reserve(selectedEntryPoints.size());
-				result.stages_.reserve(selectedEntryPoints.size());
-				result.stageCreateInfos_.reserve(selectedEntryPoints.size());
-
-				std::ranges::for_each(selectedEntryPoints, [&](const RayTracingPipelineStageSelection &selection) {
-					auto const *entryPoint = selection.program.get().entryPointData(selection.entryPointName);
-					nrAssert(entryPoint != nullptr, std::format("VkShaderProgram::create unknown selected entrypoint '{}'.", selection.entryPointName));
-					nrAssert(entryPoint->codeBlob != nullptr, std::format("Entry point '{}' has null code blob.", entryPoint->entryPointName));
-
-					auto logicalEntryPointName = selection.logicalEntryPointName.empty()
-					                                 ? (entryPoint->entryPointName.empty() ? std::string{"main"} : entryPoint->entryPointName)
-					                                 : selection.logicalEntryPointName;
-					nrAssert(
-						std::ranges::none_of(result.entryPointNames_, [&](const std::string &existingName) {
-							return existingName == logicalEntryPointName;
-						}),
-						std::format("VkShaderProgram::create duplicate logical entrypoint '{}'.", logicalEntryPointName));
-
-					auto codeSize = entryPoint->codeBlob->getBufferSize();
-					nrAssert(codeSize > 0, std::format("Entry point '{}' has empty code blob.", entryPoint->entryPointName));
-					nrAssert(
-						codeSize % sizeof(std::uint32_t) == 0,
-						std::format("Entry point '{}' code size is not uint32-aligned: {} bytes.", entryPoint->entryPointName, codeSize));
-
-					vk::ShaderModuleCreateInfo moduleInfo{};
-					moduleInfo.codeSize = codeSize;
-					moduleInfo.pCode = static_cast<const std::uint32_t *>(entryPoint->codeBlob->getBufferPointer());
-					result.modules_.emplace_back(device, moduleInfo);
-					setShaderModuleDebugName(device, result.modules_.back(), makeShaderModuleDebugName(*entryPoint));
-
-					result.shaderEntryPointNames_.push_back(entryPoint->entryPointName.empty() ? "main" : entryPoint->entryPointName);
-					result.entryPointNames_.push_back(std::move(logicalEntryPointName));
-					result.stages_.push_back(entryPoint->stage);
-
-					vk::PipelineShaderStageCreateInfo stageInfo{};
-					stageInfo.stage = toVkShaderStage(entryPoint->stage);
-					stageInfo.module = *result.modules_.back();
-					stageInfo.pName = result.shaderEntryPointNames_.back().c_str();
-					result.stageCreateInfos_.push_back(stageInfo);
-				});
-
-				return result;
-		}
+	VkShaderProgram result;
+	result.modules_.reserve(selectedEntryPoints.size());
+	result.shaderEntryPointNames_.reserve(selectedEntryPoints.size());
+	result.logicalEntryPointNames_.reserve(selectedEntryPoints.size());
+	result.stages_.reserve(selectedEntryPoints.size());
+	result.stageCreateInfos_.reserve(selectedEntryPoints.size());
+	std::ranges::for_each(selectedEntryPoints, [&](const RayTracingPipelineStageSelection &selection) {
+		auto const *entryPoint = selection.program.get().entryPoint();
+		nrAssert(entryPoint != nullptr, "VkShaderProgram::create received an invalid single-entry RT program.");
+		appendStage(result, device, *entryPoint, selection.logicalEntryPointName);
+	});
+	return result;
+}
 
 [[nodiscard]] bool VkShaderProgram::valid() const noexcept
 { return !stageCreateInfos_.empty(); }
@@ -765,8 +842,8 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 [[nodiscard]] std::span<const SlangStage> VkShaderProgram::stages() const noexcept
 { return stages_; }
 
-[[nodiscard]] std::span<const std::string> VkShaderProgram::entryPointNames() const noexcept
-{ return entryPointNames_; }
+[[nodiscard]] std::span<const std::string> VkShaderProgram::logicalEntryPointNames() const noexcept
+{ return logicalEntryPointNames_; }
 
 [[nodiscard]] GraphicsPipeline GraphicsPipeline::create(
 				const vk::raii::Device &device,
@@ -1003,9 +1080,9 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 					{
 						return shaderUnused;
 					}
-					auto it = std::ranges::find(shaderProgram.entryPointNames(), entryPointName);
-					nrAssert(it != std::ranges::end(shaderProgram.entryPointNames()), std::format("RayTracingPipeline::create unknown entrypoint '{}' in custom group.", entryPointName));
-					auto globalIndex = static_cast<std::uint32_t>(std::distance(std::ranges::begin(shaderProgram.entryPointNames()), it));
+					auto it = std::ranges::find(shaderProgram.logicalEntryPointNames(), entryPointName);
+					nrAssert(it != std::ranges::end(shaderProgram.logicalEntryPointNames()), std::format("RayTracingPipeline::create unknown logical entrypoint '{}' in custom group.", entryPointName));
+					auto globalIndex = static_cast<std::uint32_t>(std::distance(std::ranges::begin(shaderProgram.logicalEntryPointNames()), it));
 					auto localIt = std::ranges::find(rtStageIndices, globalIndex);
 					nrAssert(localIt != std::ranges::end(rtStageIndices), std::format("RayTracingPipeline::create entrypoint '{}' is not a RT stage.", entryPointName));
 					auto stage = shaderProgram.stages()[globalIndex];
@@ -1386,14 +1463,39 @@ void PipelineService::bindDevice(
 		return *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr;
 	}
 
-[[nodiscard]] PipelineState<GraphicsPipeline> PipelineService::createGraphicsPipeline(const SlangProgram &slangProgram, const GraphicsPipelineDesc &desc, std::uint32_t descriptorMaxSets, std::span<const SlangImmutableSamplerBinding> immutableSamplers) const
+[[nodiscard]] PipelineState<GraphicsPipeline> PipelineService::createGraphicsPipeline(
+	std::span<const SlangProgram> programs,
+	const GraphicsPipelineDesc &desc,
+	std::uint32_t descriptorMaxSets,
+	std::span<const SlangImmutableSamplerBinding> immutableSamplers) const
 {
 		nrAssert(device_.has_value(), "PipelineService::createGraphicsPipeline requires a bound logical device.");
-		nrAssert(slangProgram.valid(), "PipelineService::createGraphicsPipeline requires a valid SlangProgram.");
+		nrAssert(!programs.empty(), "PipelineService::createGraphicsPipeline requires at least one single-entry program.");
+		nrAssert(
+			std::ranges::all_of(programs, [](const SlangProgram &program) {
+				auto const *entryPoint = program.entryPoint();
+				return entryPoint && detail::isGraphicsStage(entryPoint->stage);
+			}),
+			"PipelineService::createGraphicsPipeline requires valid graphics-stage programs.");
+		auto uniqueStages = std::set<SlangStage>{};
+		nrAssert(
+			std::ranges::all_of(programs, [&](const SlangProgram &program) {
+				return uniqueStages.insert(program.entryPoint()->stage).second;
+			}),
+			"PipelineService::createGraphicsPipeline requires at most one program for each graphics stage.");
+		auto const &reflectionProgram = programs.front();
 
 		const auto &device = device_->get();
 		auto effectiveDesc = desc;
-		auto layoutBundle = createPipelineLayoutBundle(slangProgram, effectiveDesc.descriptorBindingPolicy, immutableSamplers);
+		auto layoutBundle = createPipelineLayoutBundle(reflectionProgram, effectiveDesc.descriptorBindingPolicy, immutableSamplers);
+		auto const reflectionSignature = layoutBundle.descriptorLayout.abiSignature();
+		std::ranges::for_each(programs | std::views::drop(1), [&](const SlangProgram &program) {
+			assertReflectionLayoutCoverage(
+				reflectionSignature,
+				reflectionProgram,
+				program,
+				effectiveDesc.descriptorBindingPolicy);
+		});
 
 		auto appendDynamicState = [&effectiveDesc](vk::DynamicState state) {
 			if (std::ranges::none_of(effectiveDesc.dynamicStates, [state](vk::DynamicState current) { return current == state; }))
@@ -1413,29 +1515,9 @@ void PipelineService::bindDevice(
 		appendDynamicState(vk::DynamicState::ePolygonModeEXT);
 		appendDynamicState(vk::DynamicState::eRasterizationSamplesEXT);
 
-		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
-		if (!effectiveDesc.entryPointNames.empty())
-		{
-			selectedEntryPoints.reserve(effectiveDesc.entryPointNames.size());
-			std::ranges::for_each(effectiveDesc.entryPointNames, [&](const std::string &entryPointName) {
-				auto const *entryPointData = slangProgram.entryPointData(entryPointName);
-				nrAssert(entryPointData != nullptr, std::format("PipelineService::createGraphicsPipeline unknown entrypoint '{}'.", entryPointName));
-				nrAssert(detail::isGraphicsStage(entryPointData->stage), std::format("PipelineService::createGraphicsPipeline entrypoint '{}' is not a graphics stage.", entryPointName));
-				selectedEntryPoints.push_back(entryPointData);
-			});
-		}
-		else
-		{
-			selectedEntryPoints = slangProgram.entryPoints() |
-			                      std::views::filter([](const SlangEntryPointData &entryPoint) { return detail::isGraphicsStage(entryPoint.stage); }) |
-			                      std::views::transform([](const SlangEntryPointData &entryPoint) { return &entryPoint; }) |
-			                      std::ranges::to<std::vector>();
-		}
-		nrAssert(!selectedEntryPoints.empty(), "PipelineService::createGraphicsPipeline requires at least one selected graphics entrypoint.");
-
-		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
+		auto shaderProgram = VkShaderProgram::create(device, programs);
 		auto pipeline = GraphicsPipeline::create(device, layoutBundle.layout, shaderProgram, effectiveDesc, pipelineCacheOrNull());
-		auto state = makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
+		auto state = makePipelineState(reflectionProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
 		state.graphicsDesc = std::move(effectiveDesc);
 		return state;
 	}
@@ -1444,26 +1526,16 @@ void PipelineService::bindDevice(
 {
 		nrAssert(device_.has_value(), "PipelineService::createComputePipeline requires a bound logical device.");
 		nrAssert(slangProgram.valid(), "PipelineService::createComputePipeline requires a valid SlangProgram.");
+		auto const *entryPoint = slangProgram.entryPoint();
+		nrAssert(
+			entryPoint && entryPoint->stage == SLANG_STAGE_COMPUTE,
+			"PipelineService::createComputePipeline requires a compute-stage single-entry program.");
 
 		const auto &device = device_->get();
 		auto layoutBundle = createPipelineLayoutBundle(slangProgram, desc.descriptorBindingPolicy, immutableSamplers);
 
-		auto selectedEntryPoints = std::vector<const SlangEntryPointData *>{};
-		if (!desc.entryPointName.empty())
-		{
-			auto const *entryPointData = slangProgram.entryPointData(desc.entryPointName);
-			nrAssert(entryPointData != nullptr, std::format("PipelineService::createComputePipeline unknown entrypoint '{}'.", desc.entryPointName));
-			nrAssert(entryPointData->stage == SLANG_STAGE_COMPUTE, std::format("PipelineService::createComputePipeline entrypoint '{}' is not a compute stage.", desc.entryPointName));
-			selectedEntryPoints.push_back(entryPointData);
-		}
-		else
-		{
-			auto it = std::ranges::find_if(slangProgram.entryPoints(), [](const SlangEntryPointData &entryPoint) { return entryPoint.stage == SLANG_STAGE_COMPUTE; });
-			nrAssert(it != std::ranges::end(slangProgram.entryPoints()), "PipelineService::createComputePipeline requires at least one compute entrypoint.");
-			selectedEntryPoints.push_back(&(*it));
-		}
-
-		auto shaderProgram = VkShaderProgram::create(device, selectedEntryPoints);
+		auto programs = std::array{slangProgram};
+		auto shaderProgram = VkShaderProgram::create(device, programs);
 		auto pipeline = ComputePipeline::create(device, layoutBundle.layout, shaderProgram, desc, pipelineCacheOrNull());
 		return makePipelineState(slangProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
 	}
@@ -1486,6 +1558,14 @@ void PipelineService::bindDevice(
 
 		const auto &device = device_->get();
 		auto layoutBundle = createPipelineLayoutBundle(reflectionProgram, desc.descriptorBindingPolicy, immutableSamplers);
+		auto const reflectionSignature = layoutBundle.descriptorLayout.abiSignature();
+		std::ranges::for_each(assembly.stages, [&](const RayTracingPipelineStageSelection &selection) {
+			assertReflectionLayoutCoverage(
+				reflectionSignature,
+				reflectionProgram,
+				selection.program.get(),
+				desc.descriptorBindingPolicy);
+		});
 
 		auto hasCaptureReplayHandles = std::ranges::any_of(assembly.groups, [](const RayTracingShaderGroupDesc &groupDesc) {
 			return !groupDesc.captureReplayHandle.empty();
@@ -1528,11 +1608,11 @@ void PipelineService::bindDevice(
 		}
 
 		std::ranges::for_each(assembly.stages, [](const RayTracingPipelineStageSelection &selection) {
-			auto const *entryPointData = selection.program.get().entryPointData(selection.entryPointName);
-			nrAssert(entryPointData != nullptr, std::format("PipelineService::createRayTracingPipeline unknown entrypoint '{}'.", selection.entryPointName));
+			auto const *entryPointData = selection.program.get().entryPoint();
+			nrAssert(entryPointData != nullptr, "PipelineService::createRayTracingPipeline received an invalid single-entry program.");
 			nrAssert(
 				detail::isRayTracingStage(entryPointData->stage),
-				std::format("PipelineService::createRayTracingPipeline entrypoint '{}' is not a ray-tracing stage.", selection.entryPointName));
+				std::format("PipelineService::createRayTracingPipeline entrypoint '{}' is not a ray-tracing stage.", entryPointData->entryPointName));
 		});
 
 		auto shaderProgram = VkShaderProgram::create(device, assembly.stages);

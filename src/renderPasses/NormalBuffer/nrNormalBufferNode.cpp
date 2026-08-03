@@ -98,18 +98,11 @@ inline constexpr std::uint32_t kOffsetTexCoord1 = static_cast<std::uint32_t>(off
 
 [[nodiscard]] std::shared_ptr<NormalBufferRuntimeCache> ensureNormalBufferRuntime(
     nr::rhi::Device& device,
+    std::span<const nr::rhi::SlangProgram> programs,
     vk::Format colorFormat,
     vk::Format depthFormat)
 {
-    auto& shaderService = nr::rhi::ShaderService::instance();
-
-    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path("renderer/normalBuffer"),
-    });
-    nr::nrAssert(program.valid(), "NormalBuffer pass failed to compile shader module renderer/normalBuffer.");
-
     auto pipelineDesc = nr::rhi::GraphicsPipelineDesc{};
-    pipelineDesc.entryPointNames = {"vertexMain", "fragmentMain"};
     pipelineDesc.colorAttachmentFormats = {colorFormat};
     pipelineDesc.depthAttachmentFormat = depthFormat;
     pipelineDesc.depthTestEnable = true;
@@ -147,7 +140,7 @@ inline constexpr std::uint32_t kOffsetTexCoord1 = static_cast<std::uint32_t>(off
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
     auto sceneTextureImmutableSamplers = std::array{sceneTextureTableImmutableSamplerBinding()};
     runtime->pipeline->initializeDeferred(device.pipeline().createGraphicsPipeline(
-        program,
+        programs,
         pipelineDesc,
         64u,
         sceneTextureImmutableSamplers));
@@ -245,15 +238,38 @@ namespace nr::renderPasses
 {
 NormalBufferNode::~NormalBufferNode() = default;
 
+[[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> NormalBufferNode::shaderRequests() const
+{
+    return {
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/normalBuffer/vertex"},
+        },
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/normalBuffer/fragment"},
+        },
+    };
+}
+
 void NormalBufferNode::initialize(NodeInitContext& context)
 {
+    nr::nrAssert(
+        context.shaderPrograms.size() == 2u &&
+            context.shaderPrograms[0].entryPoint() != nullptr &&
+            context.shaderPrograms[0].entryPoint()->stage == SLANG_STAGE_VERTEX &&
+            context.shaderPrograms[1].entryPoint() != nullptr &&
+            context.shaderPrograms[1].entryPoint()->stage == SLANG_STAGE_FRAGMENT,
+        "NormalBuffer initialization requires ordered vertex and fragment shaders.");
     device_ = context.device;
     auto colorFormat = input.colorFormat;
     if (colorFormat == vk::Format::eUndefined)
     {
         colorFormat = context.device.get().presentationContext.swapchainFormat();
     }
-    runtime_ = detail::ensureNormalBufferRuntime(context.device.get(), colorFormat, input.depthFormat);
+    runtime_ = detail::ensureNormalBufferRuntime(
+        context.device.get(),
+        context.shaderPrograms,
+        colorFormat,
+        input.depthFormat);
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),

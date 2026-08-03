@@ -166,21 +166,13 @@ struct PresentRuntimeCache
     }
 }
 
-[[nodiscard]] std::shared_ptr<PresentRuntimeCache> ensurePresentRuntime(nr::rhi::Device& device)
+[[nodiscard]] std::shared_ptr<PresentRuntimeCache> ensurePresentRuntime(
+    nr::rhi::Device& device,
+    const nr::rhi::SlangProgram& program)
 {
-    auto& shaderService = nr::rhi::ShaderService::instance();
-    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path("renderer/presentConvert"),
-    });
-    nr::nrAssert(program.valid(), "Present pass failed to compile shader module renderer/presentConvert.");
-
-    auto pipelineDesc = nr::rhi::ComputePipelineDesc{
-        .entryPointName = "presentConvertMain",
-    };
-
     auto runtime = std::make_shared<PresentRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program, pipelineDesc));
+    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program));
     nr::nrAssert(runtime->pipeline->valid(), "Present pass failed to create compute pipeline.");
 
     return runtime;
@@ -719,10 +711,24 @@ void PresentNode::collectOptionAvailability(
             : nr::options::OptionAvailability{.available = false, .reason = "capture_busy"});
 }
 
+[[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> PresentNode::shaderRequests() const
+{
+    return {
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/presentConvert"},
+        },
+    };
+}
+
 void PresentNode::initialize(NodeInitContext& context)
 {
+    nr::nrAssert(
+        context.shaderPrograms.size() == 1u &&
+            context.shaderPrograms.front().entryPoint() != nullptr &&
+            context.shaderPrograms.front().entryPoint()->stage == SLANG_STAGE_COMPUTE,
+        "Present initialization requires one compiled compute shader.");
     device_ = context.device;
-    runtime_ = detail::ensurePresentRuntime(context.device.get());
+    runtime_ = detail::ensurePresentRuntime(context.device.get(), context.shaderPrograms.front());
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),

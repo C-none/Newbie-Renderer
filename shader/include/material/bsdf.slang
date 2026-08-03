@@ -37,9 +37,66 @@ public float ggxSmithG1(float alpha, float noX)
     return 2.0f / (1.0f + sqrt(1.0f + a2 * tan2));
 }
 
+// Joint height correlation keeps the masking-shadowing term coupled between the incident and
+// outgoing directions. This is G2, not the visibility term G2 / (4 NoV NoL).
 public float smithGGX(float alpha, float noV, float noL)
 {
-    return ggxSmithG1(alpha, noV) * ggxSmithG1(alpha, noL);
+    if (noV <= 0.0f || noL <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float a2 = alpha * alpha;
+    float lenV = sqrt(max(a2 + (1.0f - a2) * noV * noV, 0.0f));
+    float lenL = sqrt(max(a2 + (1.0f - a2) * noL * noL, 0.0f));
+    return
+        2.0f * noV * noL /
+        max(noL * lenV + noV * lenL, 1.0e-7f);
+}
+
+public struct GgxSpecularEnergyTerms
+{
+    // W compensates the single-scattering GGX lobe; E is its compensated directional albedo.
+    public float3 W = float3(1.0f);
+    public float3 E = float3(1.0f);
+};
+
+// Analytic form of UE's split-sum GGX directional-albedo lookup. It avoids introducing a shader
+// resource solely for the energy LUT while preserving the same Spec.W / Spec.E construction.
+public float2 ggxDirectionalAlbedoAnalytic(float roughness, float noV)
+{
+    float r = max(roughness, kMaterialMinRoughness);
+    float c = saturate(noV);
+    float directionalAlbedo =
+        1.0f -
+        saturate(
+            pow(r, c / r) *
+            ((r * c + 0.0266916f) / (0.466495f + c)));
+    float fresnelDirectionalAlbedo =
+        schlickWeight(c) *
+        pow(
+            2.36651f * pow(c, 4.7703f * r) + 0.0387332f,
+            r);
+    return float2(directionalAlbedo, fresnelDirectionalAlbedo);
+}
+
+public GgxSpecularEnergyTerms computeGgxSpecularEnergyTerms(
+    float roughness,
+    float noV,
+    float3 f0,
+    float3 f90)
+{
+    float2 splitSum = ggxDirectionalAlbedoAnalytic(roughness, noV);
+    float safeDirectionalAlbedo = max(splitSum.x, 1.0e-4f);
+
+    GgxSpecularEnergyTerms result;
+    result.W =
+        float3(1.0f) +
+        f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
+    result.E =
+        result.W *
+        (splitSum.x * f0 + splitSum.y * (f90 - f0));
+    return result;
 }
 
 public float3 metallicRoughnessF0(MaterialSample material)
@@ -174,7 +231,8 @@ public float evaluateClearcoatSpecular(
     float clearcoatRoughness,
     float3 normal,
     float3 viewDirection,
-    float3 lightDirection)
+    float3 lightDirection,
+    float energyWeight)
 {
     float noV = saturate(dot(normal, viewDirection));
     float noL = saturate(dot(normal, lightDirection));
@@ -190,23 +248,39 @@ public float evaluateClearcoatSpecular(
     float fresnel = fresnelSchlick(0.04f, voH);
     float distribution = ggxDistribution(alpha, noH);
     float geometry = smithGGX(alpha, noV, noL);
-    return fresnel * distribution * geometry / max(4.0f * noV * noL, 1.0e-6f);
+    return
+        energyWeight * fresnel * distribution * geometry /
+        max(4.0f * noV * noL, 1.0e-6f);
 }
 
-public float3 attenuateBaseByClearcoat(
-    float3 baseBsdf,
+public GgxSpecularEnergyTerms clearcoatGgxEnergyTerms(
+    MaterialLayerStack layers,
+    float3 clearcoatSpecularNormal,
+    float3 viewDirection)
+{
+    float noV = saturate(dot(clearcoatSpecularNormal, viewDirection));
+    return computeGgxSpecularEnergyTerms(
+        layers.clearcoatRoughness,
+        noV,
+        float3(0.04f),
+        float3(1.0f));
+}
+
+public float clearcoatBaseAttenuation(
     MaterialLayerStack layers,
     float3 clearcoatSpecularNormal,
     float3 viewDirection)
 {
     if (layers.clearcoat <= 0.0f)
     {
-        return baseBsdf;
+        return 1.0f;
     }
 
-    float noV = saturate(dot(clearcoatSpecularNormal, viewDirection));
-    float coatFresnel = fresnelSchlick(0.04f, noV) * layers.clearcoat;
-    return baseBsdf * (1.0f - coatFresnel);
+    GgxSpecularEnergyTerms energy = clearcoatGgxEnergyTerms(
+        layers,
+        clearcoatSpecularNormal,
+        viewDirection);
+    return saturate(1.0f - layers.clearcoat * energy.E.x);
 }
 
 public float3 evaluateClearcoatDirect(
@@ -222,10 +296,15 @@ public float3 evaluateClearcoatDirect(
     }
 
     float noL = saturate(dot(clearcoatSpecularNormal, lightDirection));
+    GgxSpecularEnergyTerms energy = clearcoatGgxEnergyTerms(
+        layers,
+        clearcoatSpecularNormal,
+        viewDirection);
     float coatSpecular = evaluateClearcoatSpecular(
         layers.clearcoatRoughness,
         clearcoatSpecularNormal,
         viewDirection,
-        lightDirection) * layers.clearcoat;
+        lightDirection,
+        energy.W.x) * layers.clearcoat;
     return float3(coatSpecular) * lightRadiance * noL;
 }

@@ -333,6 +333,7 @@ struct NodeInitContext
 {
     std::reference_wrapper<nr::rhi::Device> device;
     std::string runtimeName{};
+    std::span<const nr::rhi::SlangProgram> shaderPrograms{};
 };
 
 struct NodeShutdownContext
@@ -1400,6 +1401,10 @@ class NodeRuntime
     virtual void collectOptionAvailability(
         const nr::options::OptionFrameSnapshot& snapshot,
         nr::options::OptionAvailabilityMap& availability) const;
+
+    // Pure CPU declaration of the ordered static shader artifacts required by initialize().
+    // Scene- or frame-derived shader permutations remain deferred to the owning node's build path.
+    [[nodiscard]] virtual std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const;
 
     // Stage 1 (initialize): create persistent node state.
     // Typical work: shader/pipeline creation and long-lived GPU allocations.

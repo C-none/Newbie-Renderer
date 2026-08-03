@@ -162,18 +162,12 @@ void validateActiveSubrectBounds(const std::array<std::optional<nr::renderer::No
     return vk::Extent3D{subrectBase.x + targetSize.width, subrectBase.y + targetSize.height, 1u};
 }
 
-[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> createMotionVectorDebugPipeline(nr::rhi::Device &device)
+[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> createMotionVectorDebugPipeline(
+    nr::rhi::Device &device,
+    const nr::rhi::SlangProgram &program)
 {
-    auto &shaderService = nr::rhi::ShaderService::instance();
-    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path{"renderer/dlssRayReconstructionDebug"},
-    });
-    nrAssert(program.valid(), "DLSS RR motion-vector debug pass failed to compile renderer/dlssRayReconstructionDebug.");
-
     auto pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
-    pipeline->initialize(device.pipeline().createComputePipeline(program, nr::rhi::ComputePipelineDesc{
-                                                                              .entryPointName = "visualizeMotionVectorsMain",
-                                                                          }));
+    pipeline->initialize(device.pipeline().createComputePipeline(program));
     nrAssert(pipeline->valid(), "DLSS RR motion-vector debug pass failed to create its compute pipeline.");
     return pipeline;
 }
@@ -468,11 +462,27 @@ DlssRayReconstructionResolutionRequest DlssRayReconstructionNode::effectiveResol
     return dlssResolutionRequestFromSnapshot(snapshot);
 }
 
+[[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> DlssRayReconstructionNode::shaderRequests() const
+{
+    return {
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/dlssRayReconstructionDebug"},
+        },
+    };
+}
+
 void DlssRayReconstructionNode::initialize(NodeInitContext &context)
 {
+    nrAssert(
+        context.shaderPrograms.size() == 1u &&
+            context.shaderPrograms.front().entryPoint() != nullptr &&
+            context.shaderPrograms.front().entryPoint()->stage == SLANG_STAGE_COMPUTE,
+        "DLSS RR initialization requires one compiled debug compute shader.");
     device_ = context.device;
     runtime_ = std::make_shared<detail::DlssRayReconstructionRuntime>();
-    runtime_->motionVectorDebugPipeline = detail::createMotionVectorDebugPipeline(context.device.get());
+    runtime_->motionVectorDebugPipeline = detail::createMotionVectorDebugPipeline(
+        context.device.get(),
+        context.shaderPrograms.front());
     runtime_->status = nr::rhi::dlssSdkCompiled() ? "NGX bridge loaded; enable the node to initialize NGX and query capability." : "NGX bridge unavailable; execution will fail fast.";
 }
 

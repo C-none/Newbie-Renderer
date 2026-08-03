@@ -156,6 +156,15 @@ public struct ResolvedMaterialBsdfComponents
     public float3 specularProjected = float3(0.0f);
 };
 
+// Reflection folding is a push-forward from the shading-normal hemisphere to the geometric
+// hemisphere. Keep the unprojected query value and the solid-angle estimator kernel together,
+// because the two preimages generally have different shading-normal cosines.
+public struct MaterialPayloadReflectionEvaluation
+{
+    public float3 value = float3(0.0f);
+    public float3 projected = float3(0.0f);
+};
+
 public struct ResolvedMaterialDirectComponents
 {
     public float3 diffuseRadiance = float3(0.0f);
@@ -380,11 +389,44 @@ public float3 adjustMaterialPayloadSpecularNormal(
         : -specularNormal;
 }
 
+// This is the output domain of the folded reflection model. It must never be applied to an
+// unfolded sample or mirrored preimage, because doing so would absorb the energy being redirected.
 public bool materialPayloadGeometrySupportsReflection(
     float3 facingGeometryNormal,
     float3 lightDirection)
 {
-    return dot(facingGeometryNormal, lightDirection) >= -kMaterialMinCosTheta;
+    return dot(facingGeometryNormal, lightDirection) >= 0.0f;
+}
+
+public float3 materialPayloadMirrorReflectionDirection(
+    float3 facingGeometryNormal,
+    float3 direction)
+{
+    float3 safeGeometryNormal = safeNormalize(
+        facingGeometryNormal,
+        float3(0.0f, 1.0f, 0.0f));
+    float3 safeDirection = safeNormalize(direction, safeGeometryNormal);
+    return safeNormalize(
+        safeDirection -
+            2.0f * dot(safeDirection, safeGeometryNormal) * safeGeometryNormal,
+        safeDirection);
+}
+
+// The mirror is an involutive solid-angle isometry, so folding a sampled direction has unit
+// Jacobian. Evaluation and PDF code must still add both preimages for an exterior direction.
+public float3 materialPayloadFoldReflectionDirection(
+    float3 facingGeometryNormal,
+    float3 direction)
+{
+    float3 safeGeometryNormal = safeNormalize(
+        facingGeometryNormal,
+        float3(0.0f, 1.0f, 0.0f));
+    float3 safeDirection = safeNormalize(direction, safeGeometryNormal);
+    return dot(safeGeometryNormal, safeDirection) >= 0.0f
+        ? safeDirection
+        : materialPayloadMirrorReflectionDirection(
+            safeGeometryNormal,
+            safeDirection);
 }
 
 public bool materialPayloadGeometrySupportsTransmission(
@@ -609,9 +651,40 @@ public struct BaseGgxDistribution<let LayerFlags : RtMaterialLayerFlag>
         float3 viewDirection,
         float3 lightDirection)
     {
+        float3 normal;
+        float3 tangent;
+        float3 bitangent;
+        basis(payload, specularNormal, normal, tangent, bitangent);
+        // Reflection uses the positive lobe hemisphere; transmission passes the opposite-side
+        // direction and therefore needs the absolute projected cosines in the shared G2 term.
+        float noV = abs(dot(normal, viewDirection));
+        float noL = abs(dot(normal, lightDirection));
+        if (noV <= 0.0f || noL <= 0.0f)
+        {
+            return 0.0f;
+        }
+
+        float isotropicAlpha = alpha(payload);
+        if (uint(LayerFlags & RtMaterialLayerFlag.anisotropicBaseLobe) == 0u ||
+            payload.anisotropyStrength <= 0.0f)
+        {
+            return smithGGX(isotropicAlpha, noV, noL);
+        }
+
+        float alphaT;
+        float alphaB;
+        roughness(payload, alphaT, alphaB);
+        float lenV = length(float3(
+            alphaT * dot(viewDirection, tangent),
+            alphaB * dot(viewDirection, bitangent),
+            noV));
+        float lenL = length(float3(
+            alphaT * dot(lightDirection, tangent),
+            alphaB * dot(lightDirection, bitangent),
+            noL));
         return
-            smithG1(payload, specularNormal, viewDirection) *
-            smithG1(payload, specularNormal, lightDirection);
+            2.0f * noV * noL /
+            max(noL * lenV + noV * lenL, 1.0e-7f);
     }
 
     public float3 sampleVisibleHalfVector(
@@ -814,6 +887,32 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         return lerp(dielectricFresnel, conductorFresnel, core.metallic);
     }
 
+    public bool hasActiveTransmission(ResolvedMaterialPayload payload)
+    {
+        if (uint(LayerFlags & RtMaterialLayerFlag.transmission) == 0u)
+        {
+            return false;
+        }
+
+        return
+            payload.layers.transmission > 0.0f &&
+            payload.layers.transmissionIor > 0.0f &&
+            payload.metallic < 1.0f;
+    }
+
+    public GgxSpecularEnergyTerms specularEnergyTerms(
+        ResolvedMaterialPayload payload,
+        float3 specularNormal,
+        float3 viewDirection)
+    {
+        float noV = saturate(dot(specularNormal, viewDirection));
+        return computeGgxSpecularEnergyTerms(
+            payload.roughness,
+            noV,
+            interfaceFresnel(payload, 1.0f),
+            float3(1.0f));
+    }
+
     public void selectionWeights(
         ResolvedMaterialPayload payload,
         float3 viewDirection,
@@ -826,6 +925,19 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             viewDirection);
         float noV = saturate(dot(specularNormal, viewDirection));
         float3 fresnel = interfaceFresnel(payload, noV);
+        float3 reflectionImportance = fresnel;
+        float3 diffusePreservation = float3(1.0f) - fresnel;
+        if (!hasActiveTransmission(payload))
+        {
+            GgxSpecularEnergyTerms energy = specularEnergyTerms(
+                payload,
+                specularNormal,
+                viewDirection);
+            reflectionImportance = energy.E;
+            diffusePreservation = float3(
+                saturate(1.0f - materialPayloadLuminance(energy.E)));
+        }
+
         float transmissionFactor = 0.0f;
         float3 transmissionImportance = float3(0.0f);
 
@@ -845,13 +957,13 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
 
         float dielectricShare = 1.0f - payload.metallic;
         float3 diffuseImportance =
-            (float3(1.0f) - fresnel) *
+            diffusePreservation *
             payload.baseColor.rgb *
             dielectricShare *
             (1.0f - transmissionFactor);
         diffuseWeight = max(materialPayloadLuminance(diffuseImportance), 0.0f);
         interfaceWeight =
-            max(materialPayloadLuminance(fresnel), 0.0f) +
+            max(materialPayloadLuminance(reflectionImportance), 0.0f) +
             max(materialPayloadLuminance(transmissionImportance), 0.0f);
     }
 
@@ -896,7 +1008,218 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         float diffuseWeight;
         float interfaceWeight;
         selectionWeights(payload, viewDirection, diffuseWeight, interfaceWeight);
-        return diffuseWeight + interfaceWeight;
+        float result = diffuseWeight + interfaceWeight;
+        if (uint(LayerFlags & RtMaterialLayerFlag.clearcoat) != 0u)
+        {
+            float3 facingClearcoatGeometryNormal = materialPayloadFacingGeometryNormal(
+                payload.geometryNormal,
+                payload.layers.clearcoatNormal,
+                viewDirection);
+            float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal(
+                payload.layers.clearcoatNormal,
+                facingClearcoatGeometryNormal,
+                viewDirection);
+            result *= clearcoatBaseAttenuation(
+                payload.layers,
+                clearcoatSpecularNormal,
+                viewDirection);
+        }
+        return result;
+    }
+
+    public MaterialPayloadReflectionEvaluation evaluateUnfoldedReflection(
+        ResolvedMaterialPayload payload,
+        float3 specularNormal,
+        float3 viewDirection,
+        float3 lightDirection,
+        float3 energyWeight)
+    {
+        MaterialPayloadReflectionEvaluation result = {};
+        float specularNoV = saturate(dot(specularNormal, viewDirection));
+        float specularNoL = saturate(dot(specularNormal, lightDirection));
+        if (specularNoV <= kMaterialMinCosTheta ||
+            specularNoL <= kMaterialMinCosTheta)
+        {
+            return result;
+        }
+
+        float3 halfVector = safeNormalize(
+            viewDirection + lightDirection,
+            specularNormal);
+        float noH = saturate(dot(specularNormal, halfVector));
+        float voH = saturate(dot(viewDirection, halfVector));
+        if (noH <= kMaterialMinCosTheta || voH <= kMaterialMinCosTheta)
+        {
+            return result;
+        }
+
+        BaseGgxDistribution<LayerFlags> baseGgx;
+        float3 fresnel = interfaceFresnel(payload, voH);
+        float distribution = baseGgx.distribution(
+            payload,
+            specularNormal,
+            halfVector);
+        float geometry = baseGgx.smithG2(
+            payload,
+            specularNormal,
+            viewDirection,
+            lightDirection);
+        result.value =
+            energyWeight * fresnel * distribution * geometry /
+            max(4.0f * specularNoV * specularNoL, 1.0e-7f);
+        result.projected = result.value * specularNoL;
+        return result;
+    }
+
+    public MaterialPayloadReflectionEvaluation evaluateFoldedReflection(
+        ResolvedMaterialPayload payload,
+        float3 facingGeometryNormal,
+        float3 specularNormal,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        MaterialPayloadReflectionEvaluation result = {};
+        if (!materialPayloadGeometrySupportsReflection(
+                facingGeometryNormal,
+                lightDirection))
+        {
+            return result;
+        }
+
+        float3 energyWeight = float3(1.0f);
+        if (!hasActiveTransmission(payload))
+        {
+            energyWeight = specularEnergyTerms(
+                payload,
+                specularNormal,
+                viewDirection).W;
+        }
+
+        result = evaluateUnfoldedReflection(
+            payload,
+            specularNormal,
+            viewDirection,
+            lightDirection,
+            energyWeight);
+        if (dot(facingGeometryNormal, lightDirection) > 0.0f)
+        {
+            float3 mirroredDirection = materialPayloadMirrorReflectionDirection(
+                facingGeometryNormal,
+                lightDirection);
+            MaterialPayloadReflectionEvaluation mirrored =
+                evaluateUnfoldedReflection(
+                    payload,
+                    specularNormal,
+                    viewDirection,
+                    mirroredDirection,
+                    energyWeight);
+            result.value += mirrored.value;
+            result.projected += mirrored.projected;
+        }
+        return result;
+    }
+
+    public float unfoldedReflectionPdf(
+        ResolvedMaterialPayload payload,
+        float3 specularNormal,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        float specularNoV = saturate(dot(specularNormal, viewDirection));
+        float specularNoL = saturate(dot(specularNormal, lightDirection));
+        if (specularNoV <= kMaterialMinCosTheta ||
+            specularNoL <= kMaterialMinCosTheta)
+        {
+            return 0.0f;
+        }
+
+        float3 halfVector = safeNormalize(
+            viewDirection + lightDirection,
+            specularNormal);
+        float noH = saturate(dot(specularNormal, halfVector));
+        float voH = saturate(dot(viewDirection, halfVector));
+        if (noH <= kMaterialMinCosTheta || voH <= kMaterialMinCosTheta)
+        {
+            return 0.0f;
+        }
+
+        float3 fresnel = interfaceFresnel(payload, voH);
+        float reflectionProbability;
+        float transmissionProbability;
+        interfaceEventProbabilities(
+            payload,
+            fresnel,
+            voH,
+            reflectionProbability,
+            transmissionProbability);
+        if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
+        {
+            if (payload.layers.transmissionMode == RtTransmissionMode.volume)
+            {
+                float etaI = payload.incidentMediumIor;
+                float etaT = payload.frontFace
+                    ? payload.layers.transmissionIor
+                    : payload.exteriorMediumIor;
+                if (etaI > 0.0f && etaT > 0.0f && abs(etaT - etaI) <= 1.0e-6f)
+                {
+                    // Equal-IOR transmission is a direction-independent delta event. Preserve the
+                    // event split used by sample() before applying the folded reflection mapping.
+                    float3 selectionFresnel = interfaceFresnel(
+                        payload,
+                        specularNoV);
+                    interfaceEventProbabilities(
+                        payload,
+                        selectionFresnel,
+                        specularNoV,
+                        reflectionProbability,
+                        transmissionProbability);
+                }
+            }
+        }
+
+        BaseGgxDistribution<LayerFlags> baseGgx;
+        float halfVectorPdf = baseGgx.visibleHalfVectorPdf(
+            payload,
+            specularNormal,
+            viewDirection,
+            halfVector);
+        return
+            reflectionProbability *
+            halfVectorPdf /
+            max(4.0f * voH, 1.0e-7f);
+    }
+
+    public float foldedReflectionPdf(
+        ResolvedMaterialPayload payload,
+        float3 facingGeometryNormal,
+        float3 specularNormal,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        if (!materialPayloadGeometrySupportsReflection(
+                facingGeometryNormal,
+                lightDirection))
+        {
+            return 0.0f;
+        }
+
+        float result = unfoldedReflectionPdf(
+            payload,
+            specularNormal,
+            viewDirection,
+            lightDirection);
+        if (dot(facingGeometryNormal, lightDirection) > 0.0f)
+        {
+            float3 mirroredDirection = materialPayloadMirrorReflectionDirection(
+                facingGeometryNormal,
+                lightDirection);
+            result += unfoldedReflectionPdf(
+                payload,
+                specularNormal,
+                viewDirection,
+                mirroredDirection);
+        }
+        return result;
     }
 
     public ResolvedMaterialBsdfComponents evaluate(
@@ -926,7 +1249,17 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 viewDirection + lightDirection,
                 rawNormal);
             float diffuseVoH = saturate(dot(viewDirection, diffuseHalfVector));
-            float3 diffuseFresnel = interfaceFresnel(payload, diffuseVoH);
+            float3 diffusePreservation =
+                float3(1.0f) - interfaceFresnel(payload, diffuseVoH);
+            if (!hasActiveTransmission(payload))
+            {
+                GgxSpecularEnergyTerms energy = specularEnergyTerms(
+                    payload,
+                    specularNormal,
+                    viewDirection);
+                diffusePreservation = float3(
+                    saturate(1.0f - materialPayloadLuminance(energy.E)));
+            }
             float transmissionFactor = 0.0f;
             if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
             {
@@ -934,7 +1267,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             }
 
             result.diffuse =
-                (float3(1.0f) - diffuseFresnel) *
+                diffusePreservation *
                 core.baseColor.rgb *
                 (1.0f - core.metallic) *
                 (1.0f - transmissionFactor) *
@@ -949,36 +1282,16 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             return result;
         }
 
-        // Reflection uses the adjusted normal and must remain on the view-facing geometric side.
-        if (signedSpecularNoL > kMaterialMinCosTheta &&
-            materialPayloadGeometrySupportsReflection(
-                facingGeometryNormal,
-                lightDirection))
-        {
-            float specularNoL = saturate(signedSpecularNoL);
-            float3 halfVector = safeNormalize(
-                viewDirection + lightDirection,
-                specularNormal);
-            float noH = saturate(dot(specularNormal, halfVector));
-            float voH = saturate(dot(viewDirection, halfVector));
-            if (noH > kMaterialMinCosTheta && voH > kMaterialMinCosTheta)
-            {
-                float3 fresnel = interfaceFresnel(payload, voH);
-                float distribution = baseGgx.distribution(
-                    payload,
-                    specularNormal,
-                    halfVector);
-                float geometry = baseGgx.smithG2(
-                    payload,
-                    specularNormal,
-                    viewDirection,
-                    lightDirection);
-                result.specular =
-                    fresnel * distribution * geometry /
-                    max(4.0f * specularNoV * specularNoL, 1.0e-7f);
-                result.specularProjected = result.specular * specularNoL;
-            }
-        }
+        // Push the shading-frame reflection kernel onto the exterior geometry hemisphere. The
+        // mirrored preimage restores the rough-lobe energy that a hard Ng test would absorb.
+        MaterialPayloadReflectionEvaluation reflection = evaluateFoldedReflection(
+            payload,
+            facingGeometryNormal,
+            specularNormal,
+            viewDirection,
+            lightDirection);
+        result.specular = reflection.value;
+        result.specularProjected = reflection.projected;
 
         if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
         {
@@ -1131,64 +1444,14 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
 
         float specularNoV = saturate(dot(specularNormal, viewDirection));
         float signedSpecularNoL = dot(specularNormal, lightDirection);
-        if (specularNoV > kMaterialMinCosTheta &&
-            signedSpecularNoL > kMaterialMinCosTheta &&
-            materialPayloadGeometrySupportsReflection(
+        weightedPdf +=
+            interfaceWeight *
+            foldedReflectionPdf(
+                payload,
                 facingGeometryNormal,
-                lightDirection))
-        {
-            float3 halfVector = safeNormalize(
-                viewDirection + lightDirection,
-                specularNormal);
-            float noH = saturate(dot(specularNormal, halfVector));
-            float voH = saturate(dot(viewDirection, halfVector));
-            if (noH > kMaterialMinCosTheta && voH > kMaterialMinCosTheta)
-            {
-                float3 fresnel = interfaceFresnel(payload, voH);
-                float reflectionProbability;
-                float transmissionProbability;
-                interfaceEventProbabilities(
-                    payload,
-                    fresnel,
-                    voH,
-                    reflectionProbability,
-                    transmissionProbability);
-                if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
-                {
-                    if (payload.layers.transmissionMode == RtTransmissionMode.volume)
-                    {
-                        float etaI = payload.incidentMediumIor;
-                        float etaT = payload.frontFace
-                            ? payload.layers.transmissionIor
-                            : payload.exteriorMediumIor;
-                        if (etaI > 0.0f && etaT > 0.0f && abs(etaT - etaI) <= 1.0e-6f)
-                        {
-                            // All transmitted microfacets collapse to the same straight-through delta
-                            // when etaI == etaT. Keep its event probability direction-independent.
-                            float3 selectionFresnel = interfaceFresnel(
-                                payload,
-                                specularNoV);
-                            interfaceEventProbabilities(
-                                payload,
-                                selectionFresnel,
-                                specularNoV,
-                                reflectionProbability,
-                                transmissionProbability);
-                        }
-                    }
-                }
-                float halfVectorPdf = baseGgx.visibleHalfVectorPdf(
-                    payload,
-                    specularNormal,
-                    viewDirection,
-                    halfVector);
-                float reflectionPdf = halfVectorPdf / max(4.0f * voH, 1.0e-7f);
-                weightedPdf +=
-                    interfaceWeight *
-                    reflectionProbability *
-                    reflectionPdf;
-            }
-        }
+                specularNormal,
+                viewDirection,
+                lightDirection);
 
         if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
         {
@@ -1376,17 +1639,17 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         float interfaceRandom = saturate((selectedWeight - diffuseWeight) / interfaceWeight);
         if (interfaceRandom < reflectionProbability)
         {
-            scatter.direction = safeNormalize(
+            float3 unfoldedDirection = safeNormalize(
                 reflect(-viewDirection, halfVector),
                 specularNormal);
-            if (dot(specularNormal, scatter.direction) <= kMaterialMinCosTheta ||
-                !materialPayloadGeometrySupportsReflection(
-                    facingGeometryNormal,
-                    scatter.direction))
+            if (dot(specularNormal, unfoldedDirection) <= kMaterialMinCosTheta)
             {
                 return {};
             }
 
+            scatter.direction = materialPayloadFoldReflectionDirection(
+                facingGeometryNormal,
+                unfoldedDirection);
             scatter.kind = ResolvedMaterialScatterKind.specular;
             scatter.pdf = pdf(payload, viewDirection, scatter.direction);
             scatter.valid = scatter.pdf > 0.0f;
@@ -1509,8 +1772,34 @@ public struct SheenBsdfLobe
         return max(materialPayloadLuminance(payload.layers.sheenColor), 0.0f);
     }
 
-    public float3 evaluate(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
+    public MaterialPayloadReflectionEvaluation evaluateUnfoldedReflection(
+        ResolvedMaterialPayload payload,
+        float3 specularNormal,
+        float3 viewDirection,
+        float3 lightDirection)
     {
+        MaterialPayloadReflectionEvaluation result = {};
+        float noL = saturate(dot(specularNormal, lightDirection));
+        if (noL <= kMaterialMinCosTheta)
+        {
+            return result;
+        }
+
+        result.value = evaluateSheenBsdf(
+            payload.layers,
+            specularNormal,
+            viewDirection,
+            lightDirection);
+        result.projected = result.value * noL;
+        return result;
+    }
+
+    public MaterialPayloadReflectionEvaluation evaluateFoldedReflection(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        MaterialPayloadReflectionEvaluation result = {};
         float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
             payload.geometryNormal,
             payload.shadingNormal,
@@ -1519,29 +1808,58 @@ public struct SheenBsdfLobe
             facingGeometryNormal,
             lightDirection))
         {
-            return float3(0.0f);
+            return result;
         }
 
         float3 specularNormal = adjustMaterialPayloadSpecularNormal(
             payload.shadingNormal,
             facingGeometryNormal,
             viewDirection);
-        return evaluateSheenBsdf(
-            payload.layers,
+        result = evaluateUnfoldedReflection(
+            payload,
             specularNormal,
             viewDirection,
             lightDirection);
+        if (dot(facingGeometryNormal, lightDirection) > 0.0f)
+        {
+            float3 mirroredDirection = materialPayloadMirrorReflectionDirection(
+                facingGeometryNormal,
+                lightDirection);
+            MaterialPayloadReflectionEvaluation mirrored =
+                evaluateUnfoldedReflection(
+                    payload,
+                    specularNormal,
+                    viewDirection,
+                    mirroredDirection);
+            result.value += mirrored.value;
+            result.projected += mirrored.projected;
+        }
+        return result;
     }
 
-    public float pdf(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
+    public float3 evaluate(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        return evaluateFoldedReflection(
+            payload,
+            viewDirection,
+            lightDirection).value;
+    }
+
+    public float foldedReflectionPdf(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
     {
         float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
             payload.geometryNormal,
             payload.shadingNormal,
             viewDirection);
         if (!materialPayloadGeometrySupportsReflection(
-            facingGeometryNormal,
-            lightDirection))
+                facingGeometryNormal,
+                lightDirection))
         {
             return 0.0f;
         }
@@ -1550,19 +1868,45 @@ public struct SheenBsdfLobe
             payload.shadingNormal,
             facingGeometryNormal,
             viewDirection);
-        return materialPayloadDiffusePdf(specularNormal, lightDirection);
+        float result = materialPayloadDiffusePdf(
+            specularNormal,
+            lightDirection);
+        if (dot(facingGeometryNormal, lightDirection) > 0.0f)
+        {
+            result += materialPayloadDiffusePdf(
+                specularNormal,
+                materialPayloadMirrorReflectionDirection(
+                    facingGeometryNormal,
+                    lightDirection));
+        }
+        return result;
+    }
+
+    public float pdf(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        return foldedReflectionPdf(payload, viewDirection, lightDirection);
     }
 
     public ResolvedMaterialScatter sample(ResolvedMaterialPayload payload, float3 viewDirection, float2 randomValues)
     {
         ResolvedMaterialScatter scatter = {};
+        float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
+            payload.geometryNormal,
+            payload.shadingNormal,
+            viewDirection);
         float3 specularNormal = adjustMaterialPayloadSpecularNormal(
             payload.shadingNormal,
-            payload.geometryNormal,
+            facingGeometryNormal,
             viewDirection);
-        scatter.direction = sampleMaterialPayloadCosineHemisphere(
+        float3 unfoldedDirection = sampleMaterialPayloadCosineHemisphere(
             randomValues,
             specularNormal);
+        scatter.direction = materialPayloadFoldReflectionDirection(
+            facingGeometryNormal,
+            unfoldedDirection);
         scatter.kind = ResolvedMaterialScatterKind.sheen;
         scatter.pdf = pdf(payload, viewDirection, scatter.direction);
         scatter.valid = scatter.pdf > 0.0f;
@@ -1579,11 +1923,57 @@ public struct ClearcoatBsdfLobe
 {
     public float selectionWeight(ResolvedMaterialPayload payload, float3 viewDirection)
     {
-        return max(payload.layers.clearcoat, 0.0f);
+        if (payload.layers.clearcoat <= 0.0f)
+        {
+            return 0.0f;
+        }
+
+        float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
+            payload.geometryNormal,
+            payload.layers.clearcoatNormal,
+            viewDirection);
+        float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal(
+            payload.layers.clearcoatNormal,
+            facingGeometryNormal,
+            viewDirection);
+        GgxSpecularEnergyTerms energy = clearcoatGgxEnergyTerms(
+            payload.layers,
+            clearcoatSpecularNormal,
+            viewDirection);
+        return max(payload.layers.clearcoat * energy.E.x, 0.0f);
     }
 
-    public float3 evaluate(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
+    public MaterialPayloadReflectionEvaluation evaluateUnfoldedReflection(
+        ResolvedMaterialPayload payload,
+        float3 clearcoatSpecularNormal,
+        float3 viewDirection,
+        float3 lightDirection,
+        float energyWeight)
     {
+        MaterialPayloadReflectionEvaluation result = {};
+        float noL = saturate(dot(clearcoatSpecularNormal, lightDirection));
+        if (noL <= kMaterialMinCosTheta)
+        {
+            return result;
+        }
+
+        float coatSpecular = evaluateClearcoatSpecular(
+            payload.layers.clearcoatRoughness,
+            clearcoatSpecularNormal,
+            viewDirection,
+            lightDirection,
+            energyWeight) * payload.layers.clearcoat;
+        result.value = float3(coatSpecular);
+        result.projected = result.value * noL;
+        return result;
+    }
+
+    public MaterialPayloadReflectionEvaluation evaluateFoldedReflection(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        MaterialPayloadReflectionEvaluation result = {};
         float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
             payload.geometryNormal,
             payload.layers.clearcoatNormal,
@@ -1592,30 +1982,64 @@ public struct ClearcoatBsdfLobe
             facingGeometryNormal,
             lightDirection))
         {
-            return float3(0.0f);
+            return result;
         }
 
         float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal(
             payload.layers.clearcoatNormal,
             facingGeometryNormal,
             viewDirection);
-        float coatSpecular = evaluateClearcoatSpecular(
-            payload.layers.clearcoatRoughness,
+        float energyWeight = clearcoatGgxEnergyTerms(
+            payload.layers,
+            clearcoatSpecularNormal,
+            viewDirection).W.x;
+        result = evaluateUnfoldedReflection(
+            payload,
             clearcoatSpecularNormal,
             viewDirection,
-            lightDirection) * payload.layers.clearcoat;
-        return float3(coatSpecular);
+            lightDirection,
+            energyWeight);
+        if (dot(facingGeometryNormal, lightDirection) > 0.0f)
+        {
+            float3 mirroredDirection = materialPayloadMirrorReflectionDirection(
+                facingGeometryNormal,
+                lightDirection);
+            MaterialPayloadReflectionEvaluation mirrored =
+                evaluateUnfoldedReflection(
+                    payload,
+                    clearcoatSpecularNormal,
+                    viewDirection,
+                    mirroredDirection,
+                    energyWeight);
+            result.value += mirrored.value;
+            result.projected += mirrored.projected;
+        }
+        return result;
     }
 
-    public float pdf(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
+    public float3 evaluate(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        return evaluateFoldedReflection(
+            payload,
+            viewDirection,
+            lightDirection).value;
+    }
+
+    public float foldedReflectionPdf(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
     {
         float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
             payload.geometryNormal,
             payload.layers.clearcoatNormal,
             viewDirection);
         if (!materialPayloadGeometrySupportsReflection(
-            facingGeometryNormal,
-            lightDirection))
+                facingGeometryNormal,
+                lightDirection))
         {
             return 0.0f;
         }
@@ -1624,27 +2048,58 @@ public struct ClearcoatBsdfLobe
             payload.layers.clearcoatNormal,
             facingGeometryNormal,
             viewDirection);
-        return materialPayloadClearcoatGgxPdf(
+        float result = materialPayloadClearcoatGgxPdf(
             payload,
             clearcoatSpecularNormal,
             viewDirection,
             lightDirection);
+        if (dot(facingGeometryNormal, lightDirection) > 0.0f)
+        {
+            result += materialPayloadClearcoatGgxPdf(
+                payload,
+                clearcoatSpecularNormal,
+                viewDirection,
+                materialPayloadMirrorReflectionDirection(
+                    facingGeometryNormal,
+                    lightDirection));
+        }
+        return result;
+    }
+
+    public float pdf(
+        ResolvedMaterialPayload payload,
+        float3 viewDirection,
+        float3 lightDirection)
+    {
+        return foldedReflectionPdf(payload, viewDirection, lightDirection);
     }
 
     public ResolvedMaterialScatter sample(ResolvedMaterialPayload payload, float3 viewDirection, float2 randomValues)
     {
         ResolvedMaterialScatter scatter = {};
+        float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
+            payload.geometryNormal,
+            payload.layers.clearcoatNormal,
+            viewDirection);
         float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal(
             payload.layers.clearcoatNormal,
-            payload.geometryNormal,
+            facingGeometryNormal,
             viewDirection);
         float3 halfVector = sampleMaterialPayloadGgxHalfVector(
             randomValues,
             payload.layers.clearcoatRoughness,
             clearcoatSpecularNormal);
-        scatter.direction = safeNormalize(
+        float3 unfoldedDirection = safeNormalize(
             reflect(-viewDirection, halfVector),
             clearcoatSpecularNormal);
+        if (dot(clearcoatSpecularNormal, unfoldedDirection) <= kMaterialMinCosTheta)
+        {
+            return scatter;
+        }
+
+        scatter.direction = materialPayloadFoldReflectionDirection(
+            facingGeometryNormal,
+            unfoldedDirection);
         scatter.kind = ResolvedMaterialScatterKind.clearcoat;
         scatter.pdf = pdf(payload, viewDirection, scatter.direction);
         scatter.valid = scatter.pdf > 0.0f;
@@ -1672,51 +2127,42 @@ public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVari
     if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
     {
         SheenBsdfLobe sheen;
-        float3 sheenValue = sheen.evaluate(payload, viewDirection, lightDirection);
-        float3 sheenSpecularNormal = adjustMaterialPayloadSpecularNormal(
-            payload.shadingNormal,
-            payload.geometryNormal,
-            viewDirection);
-        float sheenNoL = saturate(dot(sheenSpecularNormal, lightDirection));
-        result.diffuse += sheenValue;
-        result.diffuseProjected += sheenValue * sheenNoL;
+        MaterialPayloadReflectionEvaluation sheenReflection =
+            sheen.evaluateFoldedReflection(
+                payload,
+                viewDirection,
+                lightDirection);
+        result.diffuse += sheenReflection.value;
+        result.diffuseProjected += sheenReflection.projected;
     }
 
     if (uint(LayerFlags & RtMaterialLayerFlag.clearcoat) != 0u)
     {
         ClearcoatBsdfLobe clearcoat;
+        float3 facingClearcoatGeometryNormal = materialPayloadFacingGeometryNormal(
+            payload.geometryNormal,
+            payload.layers.clearcoatNormal,
+            viewDirection);
         float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal(
             payload.layers.clearcoatNormal,
-            payload.geometryNormal,
+            facingClearcoatGeometryNormal,
             viewDirection);
-        result.diffuse = attenuateBaseByClearcoat(
-            result.diffuse,
+        float baseAttenuation = clearcoatBaseAttenuation(
             payload.layers,
             clearcoatSpecularNormal,
             viewDirection);
-        result.specular = attenuateBaseByClearcoat(
-            result.specular,
-            payload.layers,
-            clearcoatSpecularNormal,
-            viewDirection);
-        result.diffuseProjected = attenuateBaseByClearcoat(
-            result.diffuseProjected,
-            payload.layers,
-            clearcoatSpecularNormal,
-            viewDirection);
-        result.specularProjected = attenuateBaseByClearcoat(
-            result.specularProjected,
-            payload.layers,
-            clearcoatSpecularNormal,
-            viewDirection);
+        result.diffuse *= baseAttenuation;
+        result.specular *= baseAttenuation;
+        result.diffuseProjected *= baseAttenuation;
+        result.specularProjected *= baseAttenuation;
 
-        float3 clearcoatValue = clearcoat.evaluate(
-            payload,
-            viewDirection,
-            lightDirection);
-        float clearcoatNoL = saturate(dot(clearcoatSpecularNormal, lightDirection));
-        result.specular += clearcoatValue;
-        result.specularProjected += clearcoatValue * clearcoatNoL;
+        MaterialPayloadReflectionEvaluation clearcoatReflection =
+            clearcoat.evaluateFoldedReflection(
+                payload,
+                viewDirection,
+                lightDirection);
+        result.specular += clearcoatReflection.value;
+        result.specularProjected += clearcoatReflection.projected;
     }
 
     return result;
@@ -1906,22 +2352,20 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<
 
         if (uint(LayerFlags & RtMaterialLayerFlag.clearcoat) != 0u)
         {
+            float3 facingClearcoatGeometryNormal = materialPayloadFacingGeometryNormal(
+                payload.geometryNormal,
+                payload.layers.clearcoatNormal,
+                viewDirection);
             float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal(
                 payload.layers.clearcoatNormal,
-                payload.geometryNormal,
+                facingClearcoatGeometryNormal,
                 viewDirection);
-            scatter.diffuseWeight =
-                attenuateBaseByClearcoat(
-                    scatter.diffuseWeight,
-                    payload.layers,
-                    clearcoatSpecularNormal,
-                    viewDirection);
-            scatter.specularWeight =
-                attenuateBaseByClearcoat(
-                    scatter.specularWeight,
-                    payload.layers,
-                    clearcoatSpecularNormal,
-                    viewDirection);
+            float baseAttenuation = clearcoatBaseAttenuation(
+                payload.layers,
+                clearcoatSpecularNormal,
+                viewDirection);
+            scatter.diffuseWeight *= baseAttenuation;
+            scatter.specularWeight *= baseAttenuation;
         }
 
         scatter.diffuseWeight /= scatter.pmf;

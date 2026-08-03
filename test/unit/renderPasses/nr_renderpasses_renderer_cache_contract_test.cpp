@@ -128,6 +128,91 @@ void requirePresent(std::string_view contents, std::string_view token, std::stri
     nr::test::require(contents.find(token) != std::string::npos, std::string{message});
 }
 
+const nr::test::CaseRegistrar singleEntryPointShaderFileCase{
+    "each Slang source file declares at most one shader entry point",
+    [] {
+        auto shaderSources =
+            std::filesystem::recursive_directory_iterator{
+                std::filesystem::path{std::string{nr::projectRoot}} / "shader"} |
+            std::views::filter([](const std::filesystem::directory_entry& entry) {
+                return
+                    entry.is_regular_file() &&
+                    entry.path().extension() == ".slang";
+            });
+
+        std::ranges::for_each(shaderSources, [](const auto& entry) {
+            auto const relativePath = std::filesystem::relative(
+                entry.path(),
+                std::filesystem::path{std::string{nr::projectRoot}});
+            auto const source = readProjectFile(relativePath);
+            auto const entryPointAttribute = std::regex{
+                R"(\[\s*shader\s*\()",
+                std::regex_constants::ECMAScript | std::regex_constants::optimize};
+            auto const matches = std::ranges::subrange{
+                std::sregex_iterator{source.begin(), source.end(), entryPointAttribute},
+                std::sregex_iterator{}};
+            auto const entryPointCount = std::ranges::distance(matches);
+            nr::test::require(
+                entryPointCount <= 1,
+                std::format(
+                    "shader source '{}' declares {} entry points; each file may declare at most one",
+                    relativePath.generic_string(),
+                    entryPointCount));
+        });
+    }};
+
+const nr::test::CaseRegistrar renderPassShaderRequestCollectionCase{
+    "render passes declare ordered static single-entry shader requests",
+    [] {
+        auto requireRequests = []<std::size_t Count>(
+                                   const nr::renderer::NodeRuntime& node,
+                                   const std::array<std::string_view, Count>& expectedPaths) {
+            auto const requests = node.shaderRequests();
+            nr::test::requireEqual(requests.size(), expectedPaths.size());
+            std::ranges::for_each(
+                std::views::iota(std::size_t{0}, requests.size()),
+                [&](std::size_t index) {
+                    nr::test::requireEqual(
+                        requests[index].sourcePath.generic_string(),
+                        std::string{expectedPaths[index]});
+                    nr::test::require(
+                        requests[index].variant.assignments.empty(),
+                        "static render-pass shaders should not carry unrelated variants");
+                });
+        };
+
+        requireRequests(
+            nr::renderPasses::AccumulateNode{},
+            std::array{std::string_view{"renderer/accumulate"}});
+        requireRequests(
+            nr::renderPasses::DlssRayReconstructionNode{},
+            std::array{std::string_view{"renderer/dlssRayReconstructionDebug"}});
+        requireRequests(
+            nr::renderPasses::EmbeddedTriangleNode{},
+            std::array{
+                std::string_view{"renderer/embeddedTriangle/vertex"},
+                std::string_view{"renderer/embeddedTriangle/fragment"},
+            });
+        requireRequests(
+            nr::renderPasses::NormalBufferNode{},
+            std::array{
+                std::string_view{"renderer/normalBuffer/vertex"},
+                std::string_view{"renderer/normalBuffer/fragment"},
+            });
+        requireRequests(
+            nr::renderPasses::PresentNode{},
+            std::array{std::string_view{"renderer/presentConvert"}});
+        requireRequests(
+            nr::renderPasses::UiNode{},
+            std::array{
+                std::string_view{"renderer/appUi/vertex"},
+                std::string_view{"renderer/appUi/fragment"},
+            });
+        requireRequests(
+            nr::renderPasses::PathTracingNode{},
+            std::array<std::string_view, 0>{});
+    }};
+
 void requireOrdered(
     std::string_view contents,
     std::string_view beforeToken,
@@ -189,7 +274,7 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          auto normalBuffer = readProjectFile("src/renderPasses/NormalBuffer/nrNormalBufferNode.cpp");
                                                                          auto embeddedTriangle = readProjectFile("src/renderPasses/EmbeddedTriangle/nrEmbeddedTriangleNode.cpp");
                                                                          auto pathTracing = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.cpp");
-                                                                         auto normalBufferShader = readProjectFile("shader/renderer/normalBuffer.slang");
+                                                                         auto normalBufferShader = readProjectFile("shader/renderer/normalBuffer/fragment.slang");
                                                                          auto pathTracingInterface = readProjectFile("src/renderPasses/PathTracing/nrPathTracingNode.ixx");
                                                                          auto accumulate = readProjectFile("src/renderPasses/Accumulate/nrAccumulateNode.cpp");
                                                                          auto accumulateInterface = readProjectFile("src/renderPasses/Accumulate/nrAccumulateNode.ixx");
@@ -238,6 +323,15 @@ const nr::test::CaseRegistrar renderPassesRendererCacheOwnershipCase{"renderpass
                                                                          requireAbsent(rendererCacheInterface, "variantRegistry", "Renderer cache suite should not own node variant state");
                                                                          requireAbsent(rendererImplementation, "commitFramePatches", "Renderer should not commit shader variant patches");
                                                                          requireAbsent(rendererImplementation, "collectVariantUiSections", "Renderer should not append registry-generated variant UI sections");
+                                                                         requirePresent(rendererInterface, "std::span<const nr::rhi::SlangProgram> shaderPrograms{}", "Node initialization should receive only its ordered slice of precompiled shaders");
+                                                                         requirePresent(rendererInterface, "shaderRequests() const", "Node runtimes should declare static shader requirements before initialization");
+                                                                         requirePresent(rendererImplementation, "createInfo.runtime->shaderRequests()", "Renderer graph installation should collect every node's static shader requirements");
+                                                                         requirePresent(rendererImplementation, "compileProgramsByFile(shaderRequests)", "Renderer graph installation should submit one flattened static shader batch");
+                                                                         requirePresent(rendererImplementation, ".shaderPrograms = std::span<const nr::rhi::SlangProgram>{shaderPrograms}.subspan(", "Renderer should return each node's ordered shader-program slice only after batch completion");
+                                                                         requireAbsent(normalBuffer, "ShaderService::instance()", "NormalBuffer initialization must consume the renderer-provided batch result");
+                                                                         requireAbsent(embeddedTriangle, "ShaderService::instance()", "EmbeddedTriangle initialization must consume the renderer-provided batch result");
+                                                                         requireAbsent(accumulate, "ShaderService::instance()", "Accumulate initialization must consume the renderer-provided batch result");
+                                                                         requireAbsent(ui, "ShaderService::instance()", "Ui initialization must consume the renderer-provided batch result");
                                                                          requirePresent(rendererImplementation, "createInfo.config.instanceName.empty()", "Renderer graph preflight should require NodeConfig as the node-name source");
                                                                          requireAbsent(pathTracing, "RendererCacheSuite", "PathTracing variant PSOs must not be stored in RendererCacheSuite");
                                                                          requirePresent(rendererImplementation, "makeTlasTextureCollectionKey", "Renderer should cache TLAS-only scene texture collection by an exact structural key");
@@ -472,8 +566,8 @@ const nr::test::CaseRegistrar pathTracingNodeAssemblyCase{"path tracing node res
                                                               requirePresent(rhiPipelineHeader, "struct RayTracingProgramAssemblyDesc", "RHI should expose one RT program assembly description");
                                                               requirePresent(rhiPipelineHeader, "shaderGroupIndex", "RHI RT pipelines should expose named shader group lookup");
                                                               requirePresent(rhiPipelineHeader, "logicalEntryPointName", "RHI RT stage selections should carry logical names for shader group lookup");
-                                                              requirePresent(rhiPipelineSource, "result.entryPointNames_.push_back(std::move(logicalEntryPointName));", "RHI RT shader program should store logical names for group lookup");
-                                                              requirePresent(rhiPipelineSource, "stageInfo.pName = result.shaderEntryPointNames_.back().c_str();", "RHI Vulkan shader stages should still use actual entry point names");
+                                                              requirePresent(rhiPipelineSource, "program.logicalEntryPointNames_.push_back(std::move(logicalEntryPointName));", "RHI RT shader program should store logical names for group lookup");
+                                                              requirePresent(rhiPipelineSource, "stageInfo.pName = program.shaderEntryPointNames_.back().c_str();", "RHI Vulkan shader stages should use the actual name discovered from each single-entry program");
                                                           }};
 
 const nr::test::CaseRegistrar rendererSubmissionTimelinesCase{"renderer submission batches use producer-owned per-queue timelines", [] {
@@ -507,7 +601,11 @@ const nr::test::CaseRegistrar rendererSubmissionTimelinesCase{"renderer submissi
                                                               }};
 
 const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing shader keeps raygen core separate from material hit shaders", [] {
-                                                                    auto entry = readProjectFile("shader/renderer/pathTracing.slang");
+                                                                    auto raygenEntry = readProjectFile("shader/renderer/pathTracing/raygen.slang");
+                                                                    auto missEntry = readProjectFile("shader/renderer/pathTracing/miss.slang");
+                                                                    auto anyHitEntry = readProjectFile("shader/renderer/pathTracing/anyHit.slang");
+                                                                    auto closestHitEntry = readProjectFile("shader/renderer/pathTracing/closestHit.slang");
+                                                                    auto entryPoints = raygenEntry + missEntry + anyHitEntry + closestHitEntry;
                                                                     auto core = readProjectFile("shader/renderer/pathTracing/core.slang");
                                                                     auto guides = readProjectFile("shader/renderer/pathTracing/guides.slang");
                                                                     auto params = readProjectFile("shader/renderer/pathTracing/params.slang");
@@ -518,6 +616,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     auto scheduler = readProjectFile("shader/renderer/pathTracing/scheduler.slang");
                                                                     auto visibility = readProjectFile("shader/renderer/pathTracing/visibility.slang");
                                                                     auto hitShaders = readProjectFile("shader/renderer/pathTracing/hitShaders.slang");
+                                                                    auto materialBsdf = readProjectFile("shader/include/material/bsdf.slang");
                                                                     auto materialPayload = readProjectFile("shader/include/material/payload.slang");
                                                                     auto materialSampling = readProjectFile("shader/include/material/sampling.slang");
                                                                     auto stochasticTextureFiltering = readProjectFile("shader/include/material/stochasticTextureFiltering.slang");
@@ -528,16 +627,16 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     auto rhiPipelineHeader = readProjectFile("src/rhi/nrPipeline.ixx");
                                                                     auto rhiPipelineSource = readProjectFile("src/rhi/nrPipeline.cpp");
 
-                                                                    requirePresent(entry, "Scheduler scheduler;", "PathTracing entry should construct the raygen scheduler");
-                                                                    requirePresent(entry, "scheduler.traceSample(pixel, dimensions);", "PathTracing entry should delegate raygen work to the scheduler");
-                                                                    requirePresent(entry, "CHS chs = CHS();", "PathTracing closest-hit entry should construct the link-time CHS type");
-                                                                    requirePresent(entry, "chs.handleClosestHit", "PathTracing closest-hit entry should delegate to CHS");
-                                                                    requirePresent(entry, "ahMaterialPolicy", "PathTracing any-hit entry should expose the shared material-policy ABI");
-                                                                    requireAbsent(entry, "ahMain", "PathTracing should not keep the old universal any-hit entry name");
-                                                                    requireAbsent(entry, "evaluateSceneLightAt", "PathTracing entry should not own lighting logic");
-                                                                    requireAbsent(entry, "resolveRtMaterialPayload", "PathTracing entry should not own material payload decoding");
-                                                                    requirePresent(entry, "payload.missRadiance = sampleEnvironment", "material-ray miss should reuse the resolved position slot for environment radiance");
-                                                                    requirePresent(entry, "payload.kind == RayKind.material", "visibility-ray misses should skip environment sampling");
+                                                                    requirePresent(raygenEntry, "Scheduler scheduler;", "PathTracing raygen entry should construct the scheduler");
+                                                                    requirePresent(raygenEntry, "scheduler.traceSample(pixel, dimensions);", "PathTracing raygen entry should delegate work to the scheduler");
+                                                                    requirePresent(closestHitEntry, "CHS chs = CHS();", "PathTracing closest-hit entry should construct its entry-local CHS type");
+                                                                    requirePresent(closestHitEntry, "chs.handleClosestHit", "PathTracing closest-hit entry should delegate to CHS");
+                                                                    requirePresent(anyHitEntry, "ahMaterialPolicy", "PathTracing any-hit entry should expose the shared material-policy ABI");
+                                                                    requireAbsent(anyHitEntry, "ahMain", "PathTracing should not keep the old universal any-hit entry name");
+                                                                    requireAbsent(entryPoints, "evaluateSceneLightAt", "PathTracing entries should not own lighting logic");
+                                                                    requireAbsent(entryPoints, "resolveRtMaterialPayload", "PathTracing entries should not own material payload decoding");
+                                                                    requirePresent(missEntry, "payload.missRadiance = sampleEnvironment", "material-ray miss should reuse the resolved position slot for environment radiance");
+                                                                    requirePresent(missEntry, "payload.kind == RayKind.material", "visibility-ray misses should skip environment sampling");
 
                                                                     requirePresent(scheduler, "public struct Scheduler", "PathTracing scheduler should be a shader-side struct");
                                                                     requirePresent(scheduler, "Pt pt = makePt(pixel, dimensions);", "PathTracing scheduler should construct the PT path object");
@@ -577,7 +676,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requirePresent(params, "public extern static const uint kMaxSurfaceBounces;", "PathTracing max bounce variant must be provided by C++ VariantDesc");
                                                                     requireAbsent(params, "kMaxSurfaceBounces =", "PathTracing max bounce variant must not have a shader-side default");
                                                                     requirePresent(stochasticTextureFiltering, "public extern static const bool kEnableFilterAfterShading;", "The common material filtering include must expose the FAS root link-time constant to linked CHS programs");
-                                                                    requireAbsent(stochasticTextureFiltering, "kEnableFilterAfterShading =", "The FAS root variant must not have a shader-side default");
+                                                                    requireAbsent(stochasticTextureFiltering, "kEnableFilterAfterShading =", "The closest-hit FAS variant must not have a shader-side default");
                                                                     requireAbsent(params, "kEnableFilterAfterShading", "The FAS constant should have one common-visible declaration rather than a PathTracing-local duplicate");
                                                                     requireAbsent(params, "kMissRadiance", "PathTracing should not retain a constant miss radiance after environment integration");
                                                                     requirePresent(environment, "Sampler2D<float4> gEnvironmentMap", "environment should use a dedicated combined sampler");
@@ -690,13 +789,9 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requireAbsent(hitShaders, "evaluateResolvedMaterialDirect", "PathTracing hit shaders must not shade direct light");
                                                                     requireAbsent(hitShaders, "outputImage", "PathTracing hit shaders must not write the output image");
                                                                     requirePresent(chs, "public interface ICHS", "PathTracing CHS contract should define the closest-hit interface");
-                                                                    auto const anyHitEntry = sourceSection(
-                                                                        entry,
-                                                                        "[shader(\"anyhit\")]",
-                                                                        "[shader(\"closesthit\")]");
                                                                     requireAbsent(anyHitEntry, "materialFilter", "PathTracing any-hit must not receive or consume FAS state");
                                                                     requireAbsent(hitShaders, "materialFilter", "Alpha coverage and hit reconstruction must remain independent from FAS");
-                                                                     requirePresent(entry, "input.materialFilterSequence = payload.materialFilterSequence;", "Closest hit should decode only its pre-reserved material-filter sequence before overwriting shared payload slots");
+                                                                     requirePresent(closestHitEntry, "input.materialFilterSequence = payload.materialFilterSequence;", "Closest hit should decode only its pre-reserved material-filter sequence before overwriting shared payload slots");
                                                                      requirePresent(pathState, "public property RandomSequence materialFilterSequence", "RayPayload should decode the transient material-filter sequence from shared output slots without adding it to PathState");
                                                                      requirePresent(pathState, "public struct ResolvedMaterialRayPayload", "PathTracing should use a dedicated lossless ray-transport record instead of the BSDF working record");
                                                                      requirePresent(pathState, "public void initializeMaterialRayPayload(", "Material-ray invoke input should be encoded into shared result slots");
@@ -730,7 +825,7 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requireAbsent(persistentPathState, "materialFilterSequence", "FAS must not add persistent RNG state to PathState");
                                                                     requirePresent(materialPayload, "RandomSequence filterSequence", "Material payload resolution should receive the pre-reserved sequence by value rather than draw from the live path RNG");
                                                                     requirePresent(materialSampling, "public float4 sampleMaterialTextureVariant(", "RT material sampling should centralize the root-controlled FAS A/B policy");
-                                                                    requirePresent(materialSampling, "if (kEnableFilterAfterShading)", "Only the enabled root variant should stochastically select a bilinear reconstruction tap");
+                                                                    requirePresent(materialSampling, "if (kEnableFilterAfterShading)", "Only the enabled closest-hit variant should stochastically select a bilinear reconstruction tap");
                                                                     requirePresent(materialSampling, "gSceneTextures[textureRef.textureId].GetDimensions(width, height);", "LOD0 FAS should derive the texel grid from the sampled texture");
                                                                     requirePresent(materialSampling, "stochasticBilinearTexelCenterUv(", "Enabled FAS should select one bilinear tap and convert it to a texel-center UV");
                                                                     requirePresent(materialSampling, "gSceneTextures[textureRef.textureId].SampleLevel(uv, 0.0f);", "Both FAS states should fetch exactly one nearest texel at mip zero");
@@ -746,13 +841,19 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requireAbsent(chs, "RtBaseLobeVariant", "PathTracing CHS contract should not retain a separate base-lobe specialization type");
                                                                     requirePresent(chs, "public extern struct CHS : ICHS;", "PathTracing CHS contract should require C++ link-time type binding");
                                                                     requirePresent(chs, "resolveLitMaterialPayloadVariant", "MaterialCHS should resolve lit material payloads through the layer-flag variant");
-                                                                    requirePresent(pathTracingNode, "\"kEnableFilterAfterShading\"", "PathTracing root variants should assign the FAS compile-time constant");
-                                                                    requirePresent(pathTracingNode, "\"MaterialCHS<RtMaterialLayerFlag({}u)>\"", "CHS link variants should remain keyed only by the material layer flags");
+                                                                    requirePresent(pathTracingNode, "makePathTracingRaygenVariantDesc", "PathTracing should isolate bounce and roulette assignments to raygen requests");
+                                                                    requirePresent(pathTracingNode, "makePathTracingClosestHitVariantDesc", "PathTracing should combine FAS and material CHS assignments only for closest-hit requests");
+                                                                    requirePresent(pathTracingNode, "\"MaterialCHS<RtMaterialLayerFlag({}u)>\"", "CHS variants should remain keyed only by the material layer flags");
                                                                     requireAbsent(pathTracingNode, "makePathTracingSyntheticRootSource", "PathTracing node should no longer generate synthetic closest-hit wrappers");
                                                                     requireAbsent(pathTracingNode, "RtHitPolicy_", "PathTracing node should no longer generate shader-side policy structs");
-                                                                    requirePresent(pathTracingNode, ".linkVariants = {chsVariantDesc}", "PathTracing node should compile BSDF-key CHS link variants");
+                                                                    requireAbsent(pathTracingNode, ".linkVariants", "Single-entry compile requests must not retain the old secondary link-variant list");
+                                                                    requirePresent(pathTracingNode, "compileProgramsByFile", "PathTracing should submit all required single-entry shaders through one batch compiler call");
+                                                                    requirePresent(pathTracingNode, "renderer/pathTracing/raygen", "PathTracing should compile its raygen entry from its own file");
+                                                                    requirePresent(pathTracingNode, "renderer/pathTracing/miss", "PathTracing should compile its non-variant miss entry from its own file");
+                                                                    requirePresent(pathTracingNode, "renderer/pathTracing/anyHit", "PathTracing should compile its non-variant any-hit entry from its own file when required");
+                                                                    requirePresent(pathTracingNode, "renderer/pathTracing/closestHit", "PathTracing should compile each closest-hit variant from its own file");
                                                                     requirePresent(pathTracingNode, "permutation.key.bsdf", "PathTracing node should derive CHS variants from BSDF keys, not full hit-group keys");
-                                                                    requirePresent(pathTracingNode, "hitSbtPlan.permutations.front().key.bsdf", "PathTracing node should seed reflection with an active BSDF key");
+                                                                    requirePresent(pathTracingNode, "createRayTracingPipeline(\n        programs.raygen,", "PathTracing should use raygen as the explicit canonical reflection program");
                                                                     requirePresent(pathTracingNode, ".sampledImage(\"gEnvironmentMap\"", "PathTracing should bind the renderer-global environment through reflection");
                                                                     requirePresent(pathTracingNode, ".pushConstants(\"gEnvironment\"", "PathTracing should bind environment parameters through reflection");
                                                                     requirePresent(pathTracingNode, "addressModeU = vk::SamplerAddressMode::eRepeat", "lat-long environment longitude should repeat");
@@ -765,8 +866,20 @@ const nr::test::CaseRegistrar pathTracingShaderOrganizationCase{"path tracing sh
                                                                     requirePresent(materialPayload, "public struct BaseGgxDistribution<let LayerFlags", "Common material payload helper should derive its GGX distribution from combined material flags");
                                                                     requirePresent(materialPayload, "alphaT = lerp(isotropicAlpha, 1.0f, strength * strength)", "Anisotropic GGX should use the approved alphaT mapping");
                                                                     requirePresent(materialPayload, "visibleHalfVectorPdf", "Anisotropic evaluate, PDF and VNDF sampling should share the base GGX helper");
+                                                                    requirePresent(materialBsdf, "GgxSpecularEnergyTerms", "GGX shading should expose Spec.W compensation and Spec.E directional albedo");
+                                                                    requirePresent(materialBsdf, "ggxDirectionalAlbedoAnalytic", "GGX energy compensation should use the resource-free UE analytic lookup");
+                                                                    requirePresent(materialBsdf, "noL * lenV + noV * lenL", "Isotropic GGX should use joint correlated Smith masking-shadowing");
+                                                                    requirePresent(materialPayload, "energyWeight * fresnel * distribution * geometry", "Base GGX reflection should apply Spec.W to the single-scattering lobe");
+                                                                    requirePresent(materialPayload, "reflectionImportance = energy.E", "Base lobe selection should use Spec.E directional albedo");
+                                                                    requirePresent(materialPayload, "if (!hasActiveTransmission(payload))", "Opaque Spec.W/Spec.E should not be reused for active glass energy compensation");
+                                                                    requirePresent(materialPayload, "clearcoatBaseAttenuation", "Clearcoat Spec.E should attenuate lower layers");
                                                                     requirePresent(materialPayload, "adjustMaterialPayloadSpecularNormal", "Specular lobes should derive a view-dependent normal without replacing the raw shading normal");
-                                                                    requirePresent(materialPayload, "materialPayloadGeometrySupportsReflection", "base reflection should retain the adjusted geometric tangent boundary while rejecting directions below it");
+                                                                    requirePresent(materialPayload, "MaterialPayloadReflectionEvaluation", "Folded reflection should carry both unprojected and projected evaluation kernels");
+                                                                    requirePresent(materialPayload, "materialPayloadMirrorReflectionDirection", "Reflection folding should expose its geometry-plane mirror isometry");
+                                                                    requirePresent(materialPayload, "materialPayloadFoldReflectionDirection", "Base, sheen, and clearcoat samples should fold into the exterior geometry hemisphere");
+                                                                    requirePresent(materialPayload, "evaluateFoldedReflection", "Reflection evaluation should sum the exterior direction and mirrored preimage");
+                                                                    requirePresent(materialPayload, "foldedReflectionPdf", "Reflection PDFs should use the same two-preimage push-forward as evaluation");
+                                                                    requirePresent(materialPayload, "materialPayloadGeometrySupportsReflection", "Folded reflection queries should retain exterior-only geometry support");
                                                                     requirePresent(materialPayload, "materialPayloadGeometrySupportsTransmission", "transmission should use the complementary view-facing geometric hemisphere contract");
                                                                     requirePresent(materialPayload, "bsdf.diffuseProjected / pdf", "continuation throughput should use the diffuse lobe's own projected contribution");
                                                                     requirePresent(materialPayload, "bsdf.specularProjected / pdf", "continuation throughput should use the specular lobe's own projected contribution");

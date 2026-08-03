@@ -13,36 +13,7 @@ namespace nr::rhi::detail
     return result >= 0;
 }
 
-[[nodiscard]] std::string moduleNameToPath(std::string_view moduleName);
-
-[[nodiscard]] std::string modulePathToName(std::string_view modulePath);
-
-[[nodiscard]] std::string readTextFile(const std::filesystem::path &path);
-
-[[nodiscard]] std::vector<std::byte> readBinaryFile(const std::filesystem::path &path);
-[[nodiscard]] std::filesystem::path normalizePath(const std::filesystem::path &path);
-
-[[nodiscard]] std::string normalizeModuleNameFromSourceToken(std::string token);
-
-[[nodiscard]] std::optional<std::string> extractDeclaredModuleNameFromSource(std::string_view sourceText);
-
-[[nodiscard]] std::optional<std::string> deriveModuleNameFromSourcePath(const std::filesystem::path &sourcePath, std::span<const std::string> searchPaths);
-
-[[nodiscard]] std::optional<std::string> normalizeRequestModulePath(const std::filesystem::path &requestPath);
-
-[[nodiscard]] std::string moduleLeafName(std::string_view moduleName);
-
 [[nodiscard]] std::filesystem::path resolveShaderRootPath();
-
-[[nodiscard]] std::filesystem::path makeModuleBinaryPath(const std::filesystem::path &cacheRoot, std::string_view moduleName);
-
-[[nodiscard]] std::vector<std::filesystem::path> makeModuleSourceSuffixes(
-    std::string_view moduleName);
-
-[[nodiscard]] std::vector<std::filesystem::path> makeModulePathCandidates(
-    std::string_view moduleName,
-    std::optional<std::filesystem::path> explicitSourcePath,
-    std::span<const std::string> searchPaths);
 
 } // namespace nr::rhi::detail
 
@@ -318,27 +289,11 @@ struct SlangImmutableSamplerBinding
  */
 struct SlangEntryPointData
 {
-    std::uint32_t linkedEntryPointIndex = 0;
     std::string entryPointName;
     std::string debugName;
     SlangStage stage = SLANG_STAGE_NONE;
-    Slang::ComPtr<slang::IBlob> codeBlob;
+    std::shared_ptr<const std::vector<std::uint32_t>> spirv{};
 
-    [[nodiscard]] bool valid() const noexcept;
-};
-
-/**
- * @brief Result of compiling/loading a single module from cache or source.
- */
-struct SlangCompiledModule
-{
-    std::string moduleName;
-    std::filesystem::path sourcePath;
-    Slang::ComPtr<slang::IModule> module;
-
-    /**
-     * @brief Return true when `module` is a valid Slang module handle.
-     */
     [[nodiscard]] bool valid() const noexcept;
 };
 
@@ -349,44 +304,14 @@ class SlangProgram
 {
   public:
     /**
-     * @brief Return whether the linked component and entrypoint blobs are available.
+     * @brief Return whether the linked single-entry program and SPIR-V are available.
      */
     [[nodiscard]] bool valid() const noexcept;
 
     /**
-     * @brief Number of linked entrypoints available in this program.
+     * @brief Access the program's only entrypoint.
      */
-    [[nodiscard]] std::size_t entryPointCount() const noexcept;
-
-    /**
-     * @brief Access all linked entrypoint payloads.
-     */
-    [[nodiscard]] std::span<const SlangEntryPointData> entryPoints() const noexcept;
-
-    /**
-     * @brief Find entrypoint payload by name.
-     */
-    [[nodiscard]] const SlangEntryPointData *entryPointData(std::string_view entryPointName) const noexcept;
-
-    /**
-     * @brief Get linked entrypoint reflection by name.
-     */
-    [[nodiscard]] slang::EntryPointReflection *entryPointLayout(std::string_view entryPointName) const noexcept;
-
-    /**
-     * @brief Get linked entrypoint stage by name.
-     */
-    [[nodiscard]] std::optional<SlangStage> entryPointStage(std::string_view entryPointName) const noexcept;
-
-    /**
-     * @brief Get linked entrypoint code blob by name.
-     */
-    [[nodiscard]] slang::IBlob *entryPointBlob(std::string_view entryPointName) const noexcept;
-
-    /**
-     * @brief Access the underlying linked Slang component type.
-     */
-    [[nodiscard]] slang::IComponentType *componentType() const noexcept;
+    [[nodiscard]] const SlangEntryPointData *entryPoint() const noexcept;
 
     /**
      * @brief Access the linked Slang program layout reflection.
@@ -396,17 +321,14 @@ class SlangProgram
   private:
     friend class ShaderService;
 
-    [[nodiscard]] const SlangEntryPointData *findEntryPointDataCached(std::string_view entryPointName) const noexcept;
+    struct State
+    {
+        Slang::ComPtr<slang::IComponentType> linkedProgram{};
+        slang::ProgramLayout *programLayout = nullptr;
+        SlangEntryPointData entryPoint{};
+    };
 
-    [[nodiscard]] bool buildEntryPointCache() const noexcept;
-
-    Slang::ComPtr<slang::IComponentType> linkedProgram_;
-    std::string debugNamePrefix_;
-    mutable bool hasQueriedProgramLayout_ = false;
-    mutable slang::ProgramLayout *cachedProgramLayout_ = nullptr;
-    mutable bool entryPointCacheBuilt_ = false;
-    mutable std::vector<SlangEntryPointData> entryPoints_;
-    mutable std::map<std::string, std::size_t> entryPointIndexByName_;
+    std::shared_ptr<const State> state_{};
 };
 
 using SlangVariantAssignmentValue = std::variant<bool, std::int32_t, std::uint32_t, float, std::string>;
@@ -433,21 +355,32 @@ struct SlangProgramVariantDesc
 
 struct SlangProgramCompileFileRequest
 {
-    // Required input form:
-    // - renderer/pathTracing/core
+    // Shader-root-relative module path. The referenced file must define exactly one entrypoint.
     std::filesystem::path sourcePath;
     SlangProgramVariantDesc variant{};
-    std::vector<SlangProgramVariantDesc> linkVariants{};
 };
 
-struct SlangProgramCompileSourceRequest
+struct ShaderServiceConfig
 {
-    // Stable synthetic module namespace. The implementation adds a source hash to
-    // the loaded Slang module identity so callers can reuse this name safely.
-    std::string moduleName;
-    std::string sourceText;
-    SlangProgramVariantDesc variant{};
-    std::vector<SlangProgramVariantDesc> linkVariants{};
+    std::uint32_t backendWorkerCount = 6;
+    bool persistentSpirvCache = true;
+};
+
+struct ShaderCompileBatchStats
+{
+    // Input and in-memory reuse counts are request-based. Batch-local duplicate requests count as
+    // memory hits because they reuse the first prepared program in the same call.
+    std::size_t requestCount = 0;
+    std::size_t memoryHitCount = 0;
+    // Persistent hits and backend compilations count unique opaque Slang entry hashes. A failed
+    // backend attempt contributes to neither count and leaves its requested programs invalid.
+    std::size_t persistentHitCount = 0;
+    std::size_t backendCompilationCount = 0;
+    std::size_t corruptCacheEntryCount = 0;
+    std::uint32_t workerCount = 0;
+    std::chrono::milliseconds frontendElapsed{};
+    std::chrono::milliseconds backendElapsed{};
+    std::chrono::milliseconds elapsed{};
 };
 
 struct RuntimeSlangMacro
@@ -481,7 +414,9 @@ struct RuntimeSlangCompileOptions
  * Responsibilities:
  * - Session configuration
  * - Module compile/load with cache
- * - Program link and deferred entrypoint query
+ * - Single-entry program link and SPIR-V generation
+ * - Persistent target artifact caching
+ * - Bounded parallel backend compilation
  * - Hot-reload/cache freshness checks
  */
 class ShaderService
@@ -500,32 +435,29 @@ class ShaderService
     {
         std::scoped_lock lock(m_mutex);
         applyCompileOptionsLocked(options);
+        ensureBackendPoolLocked();
     }
 
     /**
      * @brief Configure Slang session with project default compile options.
      */
-    void configure();
+    void configure(ShaderServiceConfig config = {});
 
     void reloadSession();
 
     [[nodiscard]] std::uint64_t sessionGeneration() const;
 
-    /**
-     * @brief Wait for all pending module-cache write tasks to finish.
-     */
-    void waitForPendingModuleCacheWrites();
+    [[nodiscard]] ShaderCompileBatchStats lastCompileBatchStats() const;
 
     [[nodiscard]] SlangProgram compileProgramByFile(const SlangProgramCompileFileRequest &request);
 
-    [[nodiscard]] SlangProgram compileProgramFromSource(const SlangProgramCompileSourceRequest &request);
+    [[nodiscard]] std::vector<SlangProgram> compileProgramsByFile(
+        std::span<const SlangProgramCompileFileRequest> requests);
 
   private:
     ShaderService() = default;
 
-    void writeModuleCacheBlobAsync(Slang::ComPtr<slang::IModule> module, const std::filesystem::path &moduleBlobPath);
-
-    [[nodiscard]] std::optional<std::string> validateModulePathOrganizationLocked(std::string_view moduleName, std::string_view modulePath) const;
+    void enqueueModuleCacheWrite(std::vector<std::byte> bytes, std::filesystem::path moduleBlobPath);
 
     template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t CompilerOptionCount>
     [[nodiscard]] static RuntimeSlangCompileOptions materializeRuntimeOptions(
@@ -576,7 +508,6 @@ class ShaderService
         m_linkedProgramCache.clear();
         m_options = std::move(runtimeOptions);
         m_shaderRootPath = std::move(resolvedShaderRootPath);
-        m_optionsHashValue = options.hashValue;
         m_optionsHashHex = std::move(hashHex);
 
         ensureGlobalSessionLocked();
@@ -589,11 +520,13 @@ class ShaderService
 
     void ensureConfiguredLocked();
 
-    [[nodiscard]] std::uint64_t computeOptionsHashValueLocked() const noexcept;
+    void ensureBackendPoolLocked();
 
     [[nodiscard]] std::string_view optionsHashLocked() const noexcept;
 
     [[nodiscard]] std::filesystem::path moduleCacheRootLocked() const;
+
+    [[nodiscard]] std::filesystem::path spirvCacheRootLocked() const;
 
     void invalidateStaleModuleCacheLocked(std::string_view modulePath, const std::filesystem::path &moduleBlobPath);
 
@@ -612,21 +545,17 @@ class ShaderService
      */
     [[nodiscard]] std::string resolveModuleNameLocked(std::string_view modulePath) const;
 
-    SlangCompiledModule loadOrCompileModuleLocked(const std::string &moduleName, std::optional<std::string> explicitModulePath);
+    [[nodiscard]] Slang::ComPtr<slang::IModule> loadOrCompileModuleLocked(const std::string &moduleName);
 
-
-  public:
-    // Locking policy: all access to Slang session/global-session/module/component APIs
-    // is serialized by m_mutex because those interfaces are treated as non-thread-safe
-    // in this renderer integration. Methods with `Locked` suffix require the caller to
-    // hold m_mutex.
+    // Locking policy: frontend Slang operations are serialized by m_mutex. Backend workers only
+    // call getEntryPointCode() on fully linked components whose lifetimes are owned by the active
+    // batch. Methods with `Locked` suffix require the caller to hold m_mutex.
     mutable std::mutex m_mutex;
     Slang::ComPtr<slang::IGlobalSession> m_globalSession;
     Slang::ComPtr<slang::ISession> m_session;
     std::uint64_t m_sessionGeneration = 0;
 
     RuntimeSlangCompileOptions m_options;
-    std::uint64_t m_optionsHashValue = kDefaultSlangCompileOptions.hashValue;
     std::string m_optionsHashHex = hash::toHexString(kDefaultSlangCompileOptions.hashHex);
     std::filesystem::path m_shaderRootPath = detail::resolveShaderRootPath();
 
@@ -636,7 +565,9 @@ class ShaderService
     std::vector<slang::CompilerOptionEntry> m_compilerOptionEntries;
     slang::TargetDesc m_targetDesc{};
     std::map<std::string, SlangProgram> m_linkedProgramCache;
-    std::vector<std::jthread> m_moduleCacheWriteThreads;
+    ShaderServiceConfig m_serviceConfig{};
+    ShaderCompileBatchStats m_lastCompileBatchStats{};
+    std::unique_ptr<nr::threading::StaticThreadPool> m_backendPool{};
 
 };
 

@@ -1,14 +1,9 @@
-module embeddedTriangle;
+module vertex;
 import common;
-
-struct VSOutput
-{
-    float4 position : SV_Position;
-    float3 color : COLOR0;
-};
+import renderer.embeddedTriangle.abi;
 
 [shader("vertex")]
-VSOutput vertexMain(uint vertexId : SV_VertexID)
+EmbeddedTriangleVertexOutput vertexMain(uint vertexId : SV_VertexID)
 {
     float3 positions[3] = {
         float3(-0.75f, -0.55f, 0.15f),
@@ -24,14 +19,8 @@ VSOutput vertexMain(uint vertexId : SV_VertexID)
 
     uint index = vertexId % 3u;
 
-    VSOutput output;
+    EmbeddedTriangleVertexOutput output;
     output.position = mul(gFrame.viewProjection, float4(positions[index], 1.0f));
     output.color = colors[index];
     return output;
-}
-
-[shader("fragment")]
-float4 fragmentMain(VSOutput input) : SV_Target0
-{
-    return float4(input.color, 1.0f);
 }

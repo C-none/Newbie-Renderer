@@ -28,6 +28,186 @@ constexpr auto kReferenceMinLengthSquared = 1.0e-8f;
            2.0f * glm::dot(incidentDirection, normal) * normal;
 }
 
+struct GgxSpecularEnergyTermsReference
+{
+    glm::vec3 W{1.0f};
+    glm::vec3 E{1.0f};
+};
+
+[[nodiscard]] float correlatedSmithG2Reference(
+    float alphaT,
+    float alphaB,
+    glm::vec3 localView,
+    glm::vec3 localLight) noexcept
+{
+    auto const noV = std::abs(localView.z);
+    auto const noL = std::abs(localLight.z);
+    if (noV <= 0.0f || noL <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    auto const lenV = glm::length(glm::vec3{
+        alphaT * localView.x,
+        alphaB * localView.y,
+        noV,
+    });
+    auto const lenL = glm::length(glm::vec3{
+        alphaT * localLight.x,
+        alphaB * localLight.y,
+        noL,
+    });
+    return
+        2.0f * noV * noL /
+        std::max(noL * lenV + noV * lenL, 1.0e-7f);
+}
+
+[[nodiscard]] float separableSmithG2Reference(
+    float alphaT,
+    float alphaB,
+    glm::vec3 localView,
+    glm::vec3 localLight) noexcept
+{
+    auto smithG1 = [alphaT, alphaB](glm::vec3 direction) {
+        auto const noX = std::abs(direction.z);
+        if (noX <= 0.0f)
+        {
+            return 0.0f;
+        }
+
+        auto const lenX = glm::length(glm::vec3{
+            alphaT * direction.x,
+            alphaB * direction.y,
+            noX,
+        });
+        return 2.0f * noX / std::max(noX + lenX, 1.0e-7f);
+    };
+    return smithG1(localView) * smithG1(localLight);
+}
+
+[[nodiscard]] glm::vec2 ggxDirectionalAlbedoAnalyticReference(
+    float roughness,
+    float noV) noexcept
+{
+    constexpr auto minRoughness = 0.045f;
+    auto const r = std::max(roughness, minRoughness);
+    auto const c = std::clamp(noV, 0.0f, 1.0f);
+    auto const directionalAlbedo =
+        1.0f -
+        std::clamp(
+            std::pow(r, c / r) *
+                ((r * c + 0.0266916f) / (0.466495f + c)),
+            0.0f,
+            1.0f);
+    auto const oneMinusC = 1.0f - c;
+    auto const fresnelDirectionalAlbedo =
+        oneMinusC * oneMinusC * oneMinusC * oneMinusC * oneMinusC *
+        std::pow(
+            2.36651f * std::pow(c, 4.7703f * r) + 0.0387332f,
+            r);
+    return glm::vec2{directionalAlbedo, fresnelDirectionalAlbedo};
+}
+
+[[nodiscard]] GgxSpecularEnergyTermsReference ggxSpecularEnergyTermsReference(
+    float roughness,
+    float noV,
+    glm::vec3 f0,
+    glm::vec3 f90) noexcept
+{
+    auto const splitSum = ggxDirectionalAlbedoAnalyticReference(
+        roughness,
+        noV);
+    auto const safeDirectionalAlbedo = std::max(splitSum.x, 1.0e-4f);
+
+    GgxSpecularEnergyTermsReference result;
+    result.W =
+        glm::vec3{1.0f} +
+        f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
+    result.E =
+        result.W *
+        (splitSum.x * f0 + splitSum.y * (f90 - f0));
+    return result;
+}
+
+[[nodiscard]] glm::vec3 mirrorReflectionDirectionReference(
+    glm::vec3 facingGeometryNormal,
+    glm::vec3 direction) noexcept
+{
+    auto const safeGeometryNormal = safeNormalizeReference(
+        facingGeometryNormal,
+        glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeDirection = safeNormalizeReference(
+        direction,
+        safeGeometryNormal);
+    return safeNormalizeReference(
+        safeDirection -
+            2.0f * glm::dot(safeDirection, safeGeometryNormal) *
+                safeGeometryNormal,
+        safeDirection);
+}
+
+[[nodiscard]] glm::vec3 foldReflectionDirectionReference(
+    glm::vec3 facingGeometryNormal,
+    glm::vec3 direction) noexcept
+{
+    auto const safeGeometryNormal = safeNormalizeReference(
+        facingGeometryNormal,
+        glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeDirection = safeNormalizeReference(
+        direction,
+        safeGeometryNormal);
+    return glm::dot(safeGeometryNormal, safeDirection) >= 0.0f
+               ? safeDirection
+               : mirrorReflectionDirectionReference(
+                     safeGeometryNormal,
+                     safeDirection);
+}
+
+[[nodiscard]] float cosineHemispherePdfReference(
+    glm::vec3 normal,
+    glm::vec3 direction) noexcept
+{
+    auto const safeNormal = safeNormalizeReference(
+        normal,
+        glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeDirection = safeNormalizeReference(
+        direction,
+        safeNormal);
+    return
+        std::max(glm::dot(safeNormal, safeDirection), 0.0f) /
+        std::numbers::pi_v<float>;
+}
+
+[[nodiscard]] float foldedCosineHemispherePdfReference(
+    glm::vec3 shadingNormal,
+    glm::vec3 facingGeometryNormal,
+    glm::vec3 exteriorDirection) noexcept
+{
+    auto const safeGeometryNormal = safeNormalizeReference(
+        facingGeometryNormal,
+        glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeDirection = safeNormalizeReference(
+        exteriorDirection,
+        safeGeometryNormal);
+    if (glm::dot(safeGeometryNormal, safeDirection) < 0.0f)
+    {
+        return 0.0f;
+    }
+
+    auto result = cosineHemispherePdfReference(
+        shadingNormal,
+        safeDirection);
+    if (glm::dot(safeGeometryNormal, safeDirection) > 0.0f)
+    {
+        result += cosineHemispherePdfReference(
+            shadingNormal,
+            mirrorReflectionDirectionReference(
+                safeGeometryNormal,
+                safeDirection));
+    }
+    return result;
+}
+
 [[nodiscard]] glm::vec3 facingGeometryNormalReference(
     glm::vec3 geometryNormal,
     glm::vec3 shadingNormal,
@@ -118,7 +298,8 @@ const nr::test::CaseRegistrar lobeSpecificNormalShaderMatrixCase{
             program.valid(),
             "lobe-specific normal contract should compile all physical-layer and anisotropy combinations");
         nr::test::require(
-            program.entryPointBlob("computeMain") != nullptr,
+            program.entryPoint()->spirv != nullptr &&
+                !program.entryPoint()->spirv->empty(),
             "lobe-specific normal contract should expose compute SPIR-V");
 
         auto layout = nr::rhi::ShaderDescriptorLayout::create(program);
@@ -258,5 +439,190 @@ const nr::test::CaseRegistrar lobeSpecificNormalThresholdCase{
         nr::test::require(
             glm::dot(reflectedAbove, geometryNormal) >= -1.0e-5f,
             "the corrected side of the threshold should stay in the geometric hemisphere");
+    }};
+
+const nr::test::CaseRegistrar correlatedSmithGeometryCase{
+    "GGX uses joint correlated Smith masking and shadowing",
+    [] {
+        constexpr auto alphaT = 0.8f;
+        constexpr auto alphaB = 0.35f;
+        auto const localView = glm::normalize(glm::vec3{0.72f, 0.12f, 0.68f});
+        auto const localLight = glm::normalize(glm::vec3{-0.43f, 0.71f, 0.56f});
+        auto const correlated = correlatedSmithG2Reference(
+            alphaT,
+            alphaB,
+            localView,
+            localLight);
+        auto const separable = separableSmithG2Reference(
+            alphaT,
+            alphaB,
+            localView,
+            localLight);
+
+        nr::test::require(
+            std::isfinite(correlated) &&
+                correlated > separable + 1.0e-4f &&
+                correlated <= 1.0f,
+            "height correlation should retain more valid rough-lobe energy than independent G1 products");
+        nr::test::require(
+            std::abs(
+                correlatedSmithG2Reference(
+                    alphaT,
+                    alphaB,
+                    glm::vec3{0.0f, 0.0f, 1.0f},
+                    glm::vec3{0.0f, 0.0f, 1.0f}) -
+                1.0f) <= 1.0e-6f,
+            "joint Smith masking should remain one at normal incidence");
+        nr::test::require(
+            std::abs(
+                correlatedSmithG2Reference(
+                    alphaT,
+                    alphaB,
+                    localView,
+                    glm::vec3{localLight.x, localLight.y, -localLight.z}) -
+                correlated) <= 1.0e-6f,
+            "the shared correlated G2 helper should use the opposite-side cosine for transmission");
+    }};
+
+const nr::test::CaseRegistrar ggxSpecularEnergyCompensationCase{
+    "GGX Spec.W restores rough-lobe loss and Spec.E remains bounded",
+    [] {
+        auto const terms = ggxSpecularEnergyTermsReference(
+            0.85f,
+            0.2f,
+            glm::vec3{0.04f, 0.2f, 0.8f},
+            glm::vec3{1.0f});
+        nr::test::require(
+            finite(terms.W) &&
+                finite(terms.E) &&
+                terms.W.x >= 1.0f &&
+                terms.W.y >= 1.0f &&
+                terms.W.z >= 1.0f &&
+                terms.E.x >= 0.0f &&
+                terms.E.y >= 0.0f &&
+                terms.E.z >= 0.0f &&
+                terms.E.x <= 1.0f + 1.0e-5f &&
+                terms.E.y <= 1.0f + 1.0e-5f &&
+                terms.E.z <= 1.0f + 1.0e-5f,
+            "rough GGX energy terms should be finite, compensating, and energy bounded");
+
+        auto const perfectReflector = ggxSpecularEnergyTermsReference(
+            0.85f,
+            0.2f,
+            glm::vec3{1.0f},
+            glm::vec3{1.0f});
+        nr::test::require(
+            nearlyEqual(perfectReflector.E, glm::vec3{1.0f}, 1.0e-5f),
+            "Spec.W should restore a Schlick perfect reflector to unit directional albedo");
+
+        auto const smoothTerms = ggxSpecularEnergyTermsReference(
+            0.045f,
+            1.0f,
+            glm::vec3{0.04f},
+            glm::vec3{1.0f});
+        nr::test::require(
+            nearlyEqual(smoothTerms.W, glm::vec3{1.0f}, 1.0e-5f),
+            "nearly smooth normal-incidence GGX should not receive material compensation");
+    }};
+
+const nr::test::CaseRegistrar reflectionDirectionFoldGeometryCase{
+    "reflection direction fold is an exterior-preserving mirror involution",
+    [] {
+        auto const geometryNormal = glm::vec3{0.0f, 1.0f, 0.0f};
+        auto const interiorDirection = safeNormalizeReference(
+            glm::vec3{0.6f, -0.7f, 0.25f},
+            geometryNormal);
+        auto const exteriorDirection = safeNormalizeReference(
+            glm::vec3{-0.35f, 0.8f, 0.48f},
+            geometryNormal);
+
+        auto const mirrored = mirrorReflectionDirectionReference(
+            geometryNormal,
+            interiorDirection);
+        auto const roundTrip = mirrorReflectionDirectionReference(
+            geometryNormal,
+            mirrored);
+        nr::test::require(
+            nearlyEqual(roundTrip, interiorDirection),
+            "reflection-plane mirroring should be an involution");
+        nr::test::require(
+            glm::dot(geometryNormal, mirrored) > 0.0f &&
+                glm::dot(geometryNormal, interiorDirection) < 0.0f,
+            "mirroring should move an interior reflection direction to the exterior hemisphere");
+
+        auto const foldedInterior = foldReflectionDirectionReference(
+            geometryNormal,
+            interiorDirection);
+        auto const foldedExterior = foldReflectionDirectionReference(
+            geometryNormal,
+            exteriorDirection);
+        nr::test::require(
+            nearlyEqual(foldedInterior, mirrored) &&
+                nearlyEqual(foldedExterior, exteriorDirection),
+            "folding should mirror only directions below the facing geometry plane");
+
+        auto const interiorTangent =
+            interiorDirection -
+            glm::dot(interiorDirection, geometryNormal) * geometryNormal;
+        auto const mirroredTangent =
+            mirrored - glm::dot(mirrored, geometryNormal) * geometryNormal;
+        nr::test::require(
+            std::abs(glm::length(mirrored) - glm::length(interiorDirection)) <= 1.0e-5f &&
+                nearlyEqual(mirroredTangent, interiorTangent),
+            "reflection-plane mirroring should preserve direction length and tangent components");
+    }};
+
+const nr::test::CaseRegistrar reflectionDirectionFoldPdfCase{
+    "reflection direction fold preserves normalized push-forward probability",
+    [] {
+        constexpr auto cosineStepCount = 256u;
+        constexpr auto azimuthStepCount = 512u;
+        auto const geometryNormal = glm::vec3{0.0f, 1.0f, 0.0f};
+        auto const shadingNormal = safeNormalizeReference(
+            glm::vec3{0.8660254f, 0.5f, 0.0f},
+            geometryNormal);
+        auto const solidAngleStep =
+            (2.0 * std::numbers::pi_v<double>) /
+            static_cast<double>(cosineStepCount * azimuthStepCount);
+        auto integratedProbability = 0.0;
+
+        std::ranges::for_each(
+            std::views::iota(0u, cosineStepCount),
+            [&](std::uint32_t cosineIndex) {
+                auto const geometryCosine =
+                    (static_cast<float>(cosineIndex) + 0.5f) /
+                    static_cast<float>(cosineStepCount);
+                auto const sine = std::sqrt(
+                    std::max(1.0f - geometryCosine * geometryCosine, 0.0f));
+                std::ranges::for_each(
+                    std::views::iota(0u, azimuthStepCount),
+                    [&](std::uint32_t azimuthIndex) {
+                        auto const azimuth =
+                            2.0f * std::numbers::pi_v<float> *
+                            (static_cast<float>(azimuthIndex) + 0.5f) /
+                            static_cast<float>(azimuthStepCount);
+                        auto const exteriorDirection = glm::vec3{
+                            sine * std::cos(azimuth),
+                            geometryCosine,
+                            sine * std::sin(azimuth),
+                        };
+                        integratedProbability +=
+                            static_cast<double>(foldedCosineHemispherePdfReference(
+                                shadingNormal,
+                                geometryNormal,
+                                exteriorDirection)) *
+                            solidAngleStep;
+                    });
+            });
+
+        nr::test::require(
+            std::abs(integratedProbability - 1.0) <= 2.0e-3,
+            "the sum of both reflection preimage PDFs should integrate to one over the exterior hemisphere");
+        nr::test::require(
+            foldedCosineHemispherePdfReference(
+                shadingNormal,
+                geometryNormal,
+                -geometryNormal) == 0.0f,
+            "the folded reflection PDF should have no support inside the geometry boundary");
     }};
 } // namespace

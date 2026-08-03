@@ -16,7 +16,6 @@ export namespace nr::rhi
 
 struct GraphicsPipelineDesc
 {
-		std::vector<std::string> entryPointNames;
 		std::vector<vk::Format> colorAttachmentFormats;
 		std::optional<vk::Format> depthAttachmentFormat{};
 		std::optional<vk::Format> stencilAttachmentFormat{};
@@ -39,7 +38,6 @@ struct GraphicsPipelineDesc
 
 struct ComputePipelineDesc
 {
-		std::string entryPointName;
 		DescriptorBindingPolicy descriptorBindingPolicy{};
 		vk::PipelineCreateFlags flags = {};
 };
@@ -76,7 +74,6 @@ struct RayTracingPipelineDesc
 struct RayTracingPipelineStageSelection
 {
 		std::reference_wrapper<const SlangProgram> program;
-		std::string entryPointName;
 		std::string logicalEntryPointName;
 };
 
@@ -222,18 +219,24 @@ void pushConstantsToCommandBuffer(
 class VkShaderProgram
 {
 	public:
-		[[nodiscard]] static VkShaderProgram create(const vk::raii::Device &device, std::span<const SlangEntryPointData *const> selectedEntryPoints);
+		[[nodiscard]] static VkShaderProgram create(const vk::raii::Device &device, std::span<const SlangProgram> programs);
 		[[nodiscard]] static VkShaderProgram create(const vk::raii::Device &device, std::span<const RayTracingPipelineStageSelection> selectedEntryPoints);
 
 		[[nodiscard]] bool valid() const noexcept;
 		[[nodiscard]] const vk::PipelineShaderStageCreateInfo &stageCreateInfo(std::uint32_t index) const noexcept;
 		[[nodiscard]] std::span<const SlangStage> stages() const noexcept;
-		[[nodiscard]] std::span<const std::string> entryPointNames() const noexcept;
+		[[nodiscard]] std::span<const std::string> logicalEntryPointNames() const noexcept;
 
 	private:
+		static void appendStage(
+			VkShaderProgram &program,
+			const vk::raii::Device &device,
+			const SlangEntryPointData &entryPoint,
+			std::string logicalEntryPointName);
+
 		std::vector<vk::raii::ShaderModule> modules_;
 		std::vector<std::string> shaderEntryPointNames_;
-		std::vector<std::string> entryPointNames_;
+		std::vector<std::string> logicalEntryPointNames_;
 		std::vector<SlangStage> stages_;
 		std::vector<vk::PipelineShaderStageCreateInfo> stageCreateInfos_;
 };
@@ -377,7 +380,7 @@ class PipelineService
 	}
 
   public:
-	[[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(const SlangProgram &slangProgram, const GraphicsPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
+	[[nodiscard]] PipelineState<GraphicsPipeline> createGraphicsPipeline(std::span<const SlangProgram> programs, const GraphicsPipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
 
 	[[nodiscard]] PipelineState<ComputePipeline> createComputePipeline(const SlangProgram &slangProgram, const ComputePipelineDesc &desc = {}, std::uint32_t descriptorMaxSets = 64, std::span<const SlangImmutableSamplerBinding> immutableSamplers = {}) const;
 

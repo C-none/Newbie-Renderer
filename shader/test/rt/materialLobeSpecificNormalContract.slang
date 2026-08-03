@@ -24,10 +24,23 @@ uint instantiateMaterialChsNormalContract<
         hit.material.shadingNormal,
         hit.material.geometryNormal,
         viewDirection);
+    float3 interiorReflectionDirection = safeNormalize(
+        float3(0.75f, -0.5f, 0.25f),
+        -facingGeometryNormal);
+    float3 mirroredReflectionDirection =
+        materialPayloadMirrorReflectionDirection(
+            facingGeometryNormal,
+            interiorReflectionDirection);
+    float3 foldedReflectionDirection =
+        materialPayloadFoldReflectionDirection(
+            facingGeometryNormal,
+            interiorReflectionDirection);
 
     bool finite =
         all(isfinite(facingGeometryNormal)) &&
         all(isfinite(specularNormal)) &&
+        all(isfinite(mirroredReflectionDirection)) &&
+        all(isfinite(foldedReflectionDirection)) &&
         all(isfinite(hit.scatter.weight));
     return
         uint(finite) |
@@ -63,6 +76,52 @@ uint instantiateFullLobeEvaluationContract<
         hit.material,
         viewDirection,
         lightDirection);
+    float3 facingGeometryNormal = materialPayloadFacingGeometryNormal(
+        hit.material.geometryNormal,
+        hit.material.shadingNormal,
+        viewDirection);
+    float3 specularNormal = adjustMaterialPayloadSpecularNormal(
+        hit.material.shadingNormal,
+        facingGeometryNormal,
+        viewDirection);
+    BaseSurfaceBsdfLobe<LayerFlags> baseSurface;
+    MaterialPayloadReflectionEvaluation foldedReflection =
+        baseSurface.evaluateFoldedReflection(
+            hit.material,
+            facingGeometryNormal,
+            specularNormal,
+            viewDirection,
+            lightDirection);
+    float foldedReflectionPdf = baseSurface.foldedReflectionPdf(
+        hit.material,
+        facingGeometryNormal,
+        specularNormal,
+        viewDirection,
+        lightDirection);
+    BaseGgxDistribution<LayerFlags> baseGgx;
+    float correlatedSmithG2 = baseGgx.smithG2(
+        hit.material,
+        specularNormal,
+        viewDirection,
+        lightDirection);
+    GgxSpecularEnergyTerms specularEnergy = baseSurface.specularEnergyTerms(
+        hit.material,
+        specularNormal,
+        viewDirection);
+    float2 directionalAlbedo = ggxDirectionalAlbedoAnalytic(
+        hit.material.roughness,
+        saturate(dot(specularNormal, viewDirection)));
+    float3 facingClearcoatGeometryNormal = materialPayloadFacingGeometryNormal(
+        hit.material.geometryNormal,
+        hit.material.layers.clearcoatNormal,
+        viewDirection);
+    GgxSpecularEnergyTerms clearcoatEnergy = clearcoatGgxEnergyTerms(
+        hit.material.layers,
+        adjustMaterialPayloadSpecularNormal(
+            hit.material.layers.clearcoatNormal,
+            facingClearcoatGeometryNormal,
+            viewDirection),
+        viewDirection);
 
     bool finite =
         all(isfinite(components.diffuse)) &&
@@ -71,7 +130,16 @@ uint instantiateFullLobeEvaluationContract<
         all(isfinite(components.specularProjected)) &&
         all(isfinite(direct.diffuseRadiance)) &&
         all(isfinite(direct.specularRadiance)) &&
-        isfinite(combinedPdf);
+        all(isfinite(foldedReflection.value)) &&
+        all(isfinite(foldedReflection.projected)) &&
+        isfinite(correlatedSmithG2) &&
+        all(isfinite(specularEnergy.W)) &&
+        all(isfinite(specularEnergy.E)) &&
+        all(isfinite(directionalAlbedo)) &&
+        all(isfinite(clearcoatEnergy.W)) &&
+        all(isfinite(clearcoatEnergy.E)) &&
+        isfinite(combinedPdf) &&
+        isfinite(foldedReflectionPdf);
     return uint(finite);
 }
 

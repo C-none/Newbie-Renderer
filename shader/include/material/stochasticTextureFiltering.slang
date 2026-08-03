@@ -1,6 +1,6 @@
 implementing common;
 
-// The owning path-tracing root variant provides this link-time constant. It is
+// The owning closest-hit entry variant provides this link-time constant. It is
 // declared in a common include so linked CHS specializations see the same
 // compile-time policy without adding another MaterialCHS generic dimension.
 public extern static const bool kEnableFilterAfterShading;

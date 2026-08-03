@@ -32,8 +32,10 @@ const nr::test::CaseRegistrar materialFilterContractCase{
             offProgram.valid() && onProgram.valid(),
             "material FAS contract should compile both root link-time policies");
         nr::test::require(
-            offProgram.entryPointBlob("computeMain") != nullptr &&
-                onProgram.entryPointBlob("computeMain") != nullptr,
+            offProgram.entryPoint()->spirv != nullptr &&
+                !offProgram.entryPoint()->spirv->empty() &&
+                onProgram.entryPoint()->spirv != nullptr &&
+                !onProgram.entryPoint()->spirv->empty(),
             "material FAS contract should expose off/on compute SPIR-V");
 
         auto* programLayout = offProgram.programLayout();

@@ -186,7 +186,14 @@ function(nr_apply_target_settings target)
 endfunction()
 
 function(nr_add_slang_runtime_dependency target)
+    set(options DEFER_TARGET_DEPENDENCY)
+    set(one_value_args OUT_COPY_STAMP)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "${options}" "${one_value_args}" "")
+
     if(NOT WIN32 OR NOT DEFINED NR_SLANG_RUNTIME_DIR)
+        if(arg_OUT_COPY_STAMP)
+            set(${arg_OUT_COPY_STAMP} "" PARENT_SCOPE)
+        endif()
         return()
     endif()
 
@@ -221,7 +228,13 @@ function(nr_add_slang_runtime_dependency target)
         )
     endif()
 
-    add_dependencies(${target} ${runtime_copy_target})
+    if(arg_OUT_COPY_STAMP)
+        set(${arg_OUT_COPY_STAMP} "${runtime_copy_stamp}" PARENT_SCOPE)
+    endif()
+
+    if(NOT arg_DEFER_TARGET_DEPENDENCY)
+        add_dependencies(${target} ${runtime_copy_target})
+    endif()
 endfunction()
 
 function(nr_add_executable target)

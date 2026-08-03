@@ -173,16 +173,10 @@ void ensureUiBufferImage(
 
 [[nodiscard]] std::shared_ptr<UiRuntimeCache> ensureUiRuntime(
     nr::rhi::Device& device,
+    std::span<const nr::rhi::SlangProgram> programs,
     vk::Format colorFormat)
 {
-    auto& shaderService = nr::rhi::ShaderService::instance();
-    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path("renderer/appUi"),
-    });
-    nr::nrAssert(program.valid(), "UiNode failed to compile shader module renderer/appUi.");
-
     auto pipelineDesc = nr::rhi::GraphicsPipelineDesc{};
-    pipelineDesc.entryPointNames = {"vertexMain", "fragmentMain"};
     pipelineDesc.colorAttachmentFormats = {colorFormat};
     pipelineDesc.cullMode = vk::CullModeFlagBits::eNone;
     pipelineDesc.vertexBindings = makeUiVertexBindings();
@@ -205,7 +199,7 @@ void ensureUiBufferImage(
 
     auto runtime = std::make_shared<UiRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
-    runtime->pipeline->initializeDeferred(device.pipeline().createGraphicsPipeline(program, pipelineDesc));
+    runtime->pipeline->initializeDeferred(device.pipeline().createGraphicsPipeline(programs, pipelineDesc));
     nr::nrAssert(runtime->pipeline->valid(), "UiNode failed to create graphics pipeline.");
 
     runtime->textureSampler = device.pipeline().createSampler(nr::rhi::SlangSamplerDesc{
@@ -1096,15 +1090,34 @@ using namespace detail;
 
 UiNode::~UiNode() = default;
 
+[[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> UiNode::shaderRequests() const
+{
+        return {
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi/vertex"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/appUi/fragment"},
+            },
+        };
+}
+
 void UiNode::initialize(NodeInitContext& context)
 {
+        nr::nrAssert(
+            context.shaderPrograms.size() == 2u &&
+                context.shaderPrograms[0].entryPoint() != nullptr &&
+                context.shaderPrograms[0].entryPoint()->stage == SLANG_STAGE_VERTEX &&
+                context.shaderPrograms[1].entryPoint() != nullptr &&
+                context.shaderPrograms[1].entryPoint()->stage == SLANG_STAGE_FRAGMENT,
+            "Ui initialization requires ordered vertex and fragment shaders.");
         device_ = context.device;
 
         auto bufferFormat = input.bufferFormat == vk::Format::eUndefined
                                 ? vk::Format::eR8G8B8A8Unorm
                                 : input.bufferFormat;
 
-        runtime_ = ensureUiRuntime(context.device.get(), bufferFormat);
+        runtime_ = ensureUiRuntime(context.device.get(), context.shaderPrograms, bufferFormat);
         nr::rhi::setPipelineDebugName(
             context.device.get().device,
             runtime_->pipeline->pipeline().raw(),

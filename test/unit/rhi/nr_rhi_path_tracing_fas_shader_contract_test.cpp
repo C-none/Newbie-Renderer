@@ -5,57 +5,43 @@ import nr.test;
 
 namespace
 {
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingVariant(
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingClosestHitVariant(
     bool enableFilterAfterShading)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant
-        .assign("kMaxSurfaceBounces", "uint", 16u)
         .assign(
             "kEnableFilterAfterShading",
             "bool",
             enableFilterAfterShading)
         .assign(
-            "RussianRoulettePolicy",
-            "IRussianRoulettePolicy",
-            std::string{"RussianRouletteEnabledPolicy"});
-    return variant;
-}
-
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makeFullyLayeredChsVariant()
-{
-    auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.assign(
-        "CHS",
-        "ICHS",
-        std::string{"MaterialCHS<RtMaterialLayerFlag(31u)>"});
+            "CHS",
+            "ICHS",
+            std::string{"MaterialCHS<RtMaterialLayerFlag(31u)>"});
     return variant;
 }
 
 const nr::test::CaseRegistrar pathTracingFasVariantCase{
-    "path tracing FAS root variants compile with stable layout ABI",
+    "path tracing FAS closest-hit variants compile with stable layout ABI",
     [] {
         auto& shaderService = nr::rhi::ShaderService::instance();
         shaderService.configure();
 
-        auto offVariant = makePathTracingVariant(false);
-        auto onVariant = makePathTracingVariant(true);
+        auto offVariant = makePathTracingClosestHitVariant(false);
+        auto onVariant = makePathTracingClosestHitVariant(true);
         nr::test::require(
             offVariant.hashValue() != onVariant.hashValue(),
-            "FAS must be a distinct root link-time variant");
+            "FAS must be a distinct closest-hit link-time variant");
 
-        auto chsVariant = makeFullyLayeredChsVariant();
         auto offProgram = shaderService.compileProgramByFile(
             nr::rhi::SlangProgramCompileFileRequest{
-                .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
                 .variant = offVariant,
-                .linkVariants = {chsVariant},
             });
         auto onProgram = shaderService.compileProgramByFile(
             nr::rhi::SlangProgramCompileFileRequest{
-                .sourcePath = std::filesystem::path{"renderer/pathTracing"},
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
                 .variant = onVariant,
-                .linkVariants = {chsVariant},
             });
         nr::test::require(
             offProgram.valid() && onProgram.valid(),

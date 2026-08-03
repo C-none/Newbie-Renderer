@@ -1,22 +1,6 @@
-module minimalRtTriangle;
+module raygen;
 import common;
-
-struct CameraData
-{
-    float4 origin;
-    float4 right;
-    float4 up;
-    float4 forward;
-};
-
-RaytracingAccelerationStructure scene;
-RWTexture2D<float4> outputImage;
-ConstantBuffer<CameraData> camera;
-
-struct RayPayload
-{
-    float3 color;
-};
+import test.rt.minimalRtTriangle.abi;
 
 [shader("raygeneration")]
 void rgMain()
@@ -44,17 +28,4 @@ void rgMain()
     HitObject::Invoke(scene, hitObject, payload);
 
     outputImage[int2(pixel)] = float4(payload.color, 1.0);
-}
-
-[shader("miss")]
-void msMain(inout RayPayload payload)
-{
-    payload.color = float3(0.1, 0.2, 0.35);
-}
-
-[shader("closesthit")]
-void chMain(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attr)
-{
-    float3 bary = float3(1.0 - attr.barycentrics.x - attr.barycentrics.y, attr.barycentrics.x, attr.barycentrics.y);
-    payload.color = bary;
 }

@@ -76,7 +76,7 @@
     {
       "name": "build-base",
       "hidden": true,
-      "jobs": 32
+      "jobs": 0
     },
     {
       "name": "debug",

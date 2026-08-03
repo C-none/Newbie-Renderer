@@ -17,22 +17,15 @@ struct EmbeddedTriangleRuntimeCache
 
 [[nodiscard]] std::shared_ptr<EmbeddedTriangleRuntimeCache> ensureEmbeddedTriangleRuntime(
     nr::rhi::Device& device,
+    std::span<const nr::rhi::SlangProgram> programs,
     vk::Format colorFormat)
 {
-    auto& shaderService = nr::rhi::ShaderService::instance();
-
-    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path("renderer/embeddedTriangle"),
-    });
-    nr::nrAssert(program.valid(), "EmbeddedTriangle pass failed to compile shader module renderer/embeddedTriangle.");
-
     auto pipelineDesc = nr::rhi::GraphicsPipelineDesc{};
-    pipelineDesc.entryPointNames = {"vertexMain", "fragmentMain"};
     pipelineDesc.colorAttachmentFormats = {colorFormat};
 
     auto runtime = std::make_shared<EmbeddedTriangleRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createGraphicsPipeline(program, pipelineDesc));
+    runtime->pipeline->initialize(device.pipeline().createGraphicsPipeline(programs, pipelineDesc));
     nr::nrAssert(runtime->pipeline->valid(), "EmbeddedTriangle pass failed to create graphics pipeline.");
 
     return runtime;
@@ -43,14 +36,36 @@ namespace nr::renderPasses
 {
 EmbeddedTriangleNode::~EmbeddedTriangleNode() = default;
 
+[[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> EmbeddedTriangleNode::shaderRequests() const
+{
+    return {
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path("renderer/embeddedTriangle/vertex"),
+        },
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path("renderer/embeddedTriangle/fragment"),
+        },
+    };
+}
+
 void EmbeddedTriangleNode::initialize(NodeInitContext& context)
 {
+    nr::nrAssert(
+        context.shaderPrograms.size() == 2u &&
+            context.shaderPrograms[0].entryPoint() != nullptr &&
+            context.shaderPrograms[0].entryPoint()->stage == SLANG_STAGE_VERTEX &&
+            context.shaderPrograms[1].entryPoint() != nullptr &&
+            context.shaderPrograms[1].entryPoint()->stage == SLANG_STAGE_FRAGMENT,
+        "EmbeddedTriangle initialization requires ordered vertex and fragment shaders.");
     auto colorFormat = input.colorFormat;
     if (colorFormat == vk::Format::eUndefined)
     {
         colorFormat = context.device.get().presentationContext.swapchainFormat();
     }
-    runtime_ = detail::ensureEmbeddedTriangleRuntime(context.device.get(), colorFormat);
+    runtime_ = detail::ensureEmbeddedTriangleRuntime(
+        context.device.get(),
+        context.shaderPrograms,
+        colorFormat);
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),

@@ -2,6 +2,7 @@ export module nr.renderPasses:embeddedTriangle;
 import dependency.vulkan;
 
 import nr.renderer;
+import nr.rhi;
 import std;
 import :nodeType;
 
@@ -25,6 +26,7 @@ class EmbeddedTriangleNode final : public Node
 
     EmbeddedTriangleNodeInput input{};
 
+    [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const override;
     void initialize(NodeInitContext& context) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void shutdown(NodeShutdownContext& context) override;

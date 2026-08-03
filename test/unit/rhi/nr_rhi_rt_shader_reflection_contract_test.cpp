@@ -18,10 +18,9 @@ struct CameraData
     glm::vec4 forward{};
 };
 
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestVariant(
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingRaygenVariant(
     std::uint32_t maxSurfaceBounces = 16u,
-    bool enableRussianRoulette = true,
-    bool enableFilterAfterShading = false)
+    bool enableRussianRoulette = true)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant
@@ -29,10 +28,6 @@ struct CameraData
             "kMaxSurfaceBounces",
             "uint",
             maxSurfaceBounces)
-        .assign(
-            "kEnableFilterAfterShading",
-            "bool",
-            enableFilterAfterShading)
         .assign(
             "RussianRoulettePolicy",
             "IRussianRoulettePolicy",
@@ -42,16 +37,22 @@ struct CameraData
     return variant;
 }
 
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingTestChsVariant(
-    std::uint32_t layerMask = 0u)
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingClosestHitVariant(
+    std::uint32_t layerMask = 0u,
+    bool enableFilterAfterShading = false)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.assign(
-        "CHS",
-        "ICHS",
-        std::format(
-            "MaterialCHS<RtMaterialLayerFlag({}u)>",
-            layerMask));
+    variant
+        .assign(
+            "CHS",
+            "ICHS",
+            std::format(
+                "MaterialCHS<RtMaterialLayerFlag({}u)>",
+                layerMask))
+        .assign(
+            "kEnableFilterAfterShading",
+            "bool",
+            enableFilterAfterShading);
     return variant;
 }
 
@@ -112,55 +113,31 @@ const nr::test::CaseRegistrar variantAssignmentSourceTextCase{
         nr::test::requireEqual(constantsReordered.sourceText(), constants.sourceText());
     }};
 
-const nr::test::CaseRegistrar syntheticSourceCompileCase{
-    "rhi shader service compiles synthetic source roots with link-time constants",
-    [] {
-        auto &shaderService = nr::rhi::ShaderService::instance();
-        shaderService.configure();
-
-        auto variant = nr::rhi::SlangProgramVariantDesc{};
-        variant.assign("kSyntheticSourceValue", "uint", 7u);
-
-        auto program = shaderService.compileProgramFromSource(nr::rhi::SlangProgramCompileSourceRequest{
-            .moduleName = "test.syntheticSourceRoot",
-            .sourceText = R"(
-public extern static const uint kSyntheticSourceValue;
-
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void csMain()
-{
-    uint value = kSyntheticSourceValue;
-}
-)",
-            .variant = variant,
-        });
-        nr::test::require(program.valid(), "synthetic source shader should compile");
-        nr::test::require(program.entryPointData("csMain") != nullptr, "synthetic source shader should expose csMain");
-    }};
-
 const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
     "rhi shader service compiles path tracing CHS link-time generic type aliases",
     [] {
         auto& shaderService = nr::rhi::ShaderService::instance();
         shaderService.configure();
 
-        auto chsVariant = makePathTracingTestChsVariant();
+        auto chsVariant = makePathTracingClosestHitVariant();
         auto chsSource = chsVariant.sourceText();
         auto effectiveLines = effectiveShaderLines(chsSource);
-        nr::test::requireEqual(effectiveLines.size(), std::size_t{2u});
+        nr::test::requireEqual(effectiveLines.size(), std::size_t{3u});
         nr::test::requireEqual(effectiveLines[0], std::string{"import common;"});
         nr::test::requireEqual(
             effectiveLines[1],
             std::string{"export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u)>;"});
+        nr::test::requireEqual(
+            effectiveLines[2],
+            std::string{"export static const bool kEnableFilterAfterShading = false;"});
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = makePathTracingTestVariant(),
-            .linkVariants = {chsVariant},
+            .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
+            .variant = chsVariant,
         });
-        nr::test::require(program.valid(), "path tracing shader should compile with a CHS link-time type");
-        nr::test::require(program.entryPointData("chMain") != nullptr, "path tracing shader should expose fixed chMain");
+        nr::test::require(
+            program.valid(),
+            "path tracing closest-hit shader should compile with an entry-local CHS type");
     }};
 
 const nr::test::CaseRegistrar pathTracingTransmissionChsFamiliesCase{
@@ -169,78 +146,62 @@ const nr::test::CaseRegistrar pathTracingTransmissionChsFamiliesCase{
         auto& shaderService = nr::rhi::ShaderService::instance();
         shaderService.configure();
 
-        auto baseOnlyVariant = makePathTracingTestChsVariant(1u);
-        auto transmissionVariant = makePathTracingTestChsVariant(9u);
+        auto baseOnlyVariant = makePathTracingClosestHitVariant(1u);
+        auto transmissionVariant = makePathTracingClosestHitVariant(9u);
         nr::test::require(
             baseOnlyVariant.hashValue() != transmissionVariant.hashValue(),
-            "base-only and transmission CHS aliases must remain distinct link variants");
+            "base-only and transmission CHS aliases must remain distinct entry variants");
 
-        auto baseOnlyProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = makePathTracingTestVariant(),
-            .linkVariants = {baseOnlyVariant},
-        });
-        auto transmissionProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = makePathTracingTestVariant(),
-            .linkVariants = {transmissionVariant},
-        });
-        nr::test::require(baseOnlyProgram.valid(), "base-only CHS family should compile");
-        nr::test::require(transmissionProgram.valid(), "transmission-enabled CHS family should compile");
-
-        auto* baseOnlyBlob = baseOnlyProgram.entryPointBlob("chMain");
-        auto* transmissionBlob = transmissionProgram.entryPointBlob("chMain");
-        nr::test::require(baseOnlyBlob != nullptr, "base-only CHS should expose linked SPIR-V");
-        nr::test::require(transmissionBlob != nullptr, "transmission CHS should expose linked SPIR-V");
-        nr::test::require(
-            baseOnlyBlob->getBufferSize() < transmissionBlob->getBufferSize(),
-            "link specialization should prune transmission record and BTDF code from the base-only CHS");
-
-        auto const remainingLayerMasks = std::array{
+        auto const layerMasks = std::array{
+            1u,
+            9u,
             3u,
             5u,
             7u,
             11u,
             13u,
             15u,
+            17u,
         };
-        std::ranges::for_each(remainingLayerMasks, [&](std::uint32_t layerMask) {
-            auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-                .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-                .variant = makePathTracingTestVariant(),
-                .linkVariants = {makePathTracingTestChsVariant(layerMask)},
-            });
+        auto requests = layerMasks |
+                        std::views::transform([](std::uint32_t layerMask) {
+                            return nr::rhi::SlangProgramCompileFileRequest{
+                                .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
+                                .variant = makePathTracingClosestHitVariant(layerMask),
+                            };
+                        }) |
+                        std::ranges::to<std::vector>();
+        requests.push_back(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"test/rt/materialAnisotropyContract"},
+        });
+        auto programs = shaderService.compileProgramsByFile(requests);
+        nr::test::requireEqual(programs.size(), requests.size());
+
+        auto const& baseOnlyProgram = programs[0];
+        auto const& transmissionProgram = programs[1];
+        nr::test::require(baseOnlyProgram.valid(), "base-only CHS family should compile");
+        nr::test::require(transmissionProgram.valid(), "transmission-enabled CHS family should compile");
+
+        nr::test::require(
+            baseOnlyProgram.entryPoint()->spirv->size() <
+                transmissionProgram.entryPoint()->spirv->size(),
+            "link specialization should prune transmission record and BTDF code from the base-only CHS");
+
+        std::ranges::for_each(std::views::iota(std::size_t{2}, std::size_t{8}), [&](std::size_t index) {
             nr::test::require(
-                program.valid(),
-                std::format("path tracing layer-mask {} CHS should compile", layerMask));
-            nr::test::require(
-                program.entryPointBlob("chMain") != nullptr,
-                std::format("path tracing layer-mask {} CHS should expose linked SPIR-V", layerMask));
+                programs[index].valid(),
+                std::format("path tracing layer-mask {} CHS should compile", layerMasks[index]));
         });
 
-        auto anisotropicRoot = shaderService.compileProgramByFile(
-            nr::rhi::SlangProgramCompileFileRequest{
-                .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-                .variant = makePathTracingTestVariant(),
-                .linkVariants = {makePathTracingTestChsVariant(17u)},
-            });
+        auto const& anisotropicProgram = programs[8];
         nr::test::require(
-            anisotropicRoot.valid(),
-            "path tracing anisotropic base-only CHS should compile in the real RT root");
-        nr::test::require(
-            anisotropicRoot.entryPointBlob("chMain") != nullptr,
-            "path tracing anisotropic base-only CHS should expose linked SPIR-V");
+            anisotropicProgram.valid(),
+            "path tracing anisotropic base-only closest-hit shader should compile");
 
-        auto matrixProgram = shaderService.compileProgramByFile(
-            nr::rhi::SlangProgramCompileFileRequest{
-                .sourcePath = std::filesystem::path{"test/rt/materialAnisotropyContract"},
-            });
+        auto const& matrixProgram = programs[9];
         nr::test::require(
             matrixProgram.valid(),
             "lightweight anisotropy contract should instantiate both base variants for all eight lit masks");
-        nr::test::require(
-            matrixProgram.entryPointBlob("computeMain") != nullptr,
-            "lightweight anisotropy contract should expose compute SPIR-V");
 
         auto matrixLayout = nr::rhi::ShaderDescriptorLayout::create(matrixProgram);
         nr::test::require(matrixLayout.valid(), "anisotropy contract layout should be valid");
@@ -265,10 +226,10 @@ const nr::test::CaseRegistrar pathTracingTransmissionChsFamiliesCase{
             "RtMaterialHeader reflected stride must match C++");
 
         auto isotropicLayout = nr::rhi::ShaderDescriptorLayout::create(baseOnlyProgram);
-        auto anisotropicLayout = nr::rhi::ShaderDescriptorLayout::create(anisotropicRoot);
+        auto anisotropicLayout = nr::rhi::ShaderDescriptorLayout::create(anisotropicProgram);
         nr::test::require(
             isotropicLayout.valid() && anisotropicLayout.valid(),
-            "full-root isotropic and anisotropic layouts should be valid");
+            "isotropic and anisotropic closest-hit layouts should be valid");
         nr::test::require(
             nr::rhi::shaderLayoutAbiEquivalent(
                 isotropicLayout.abiSignature(),
@@ -283,35 +244,30 @@ const nr::test::CaseRegistrar rtPipelineStageSelectionCase{
         shaderService.configure();
 
         auto opaqueProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = makePathTracingTestVariant(),
-            .linkVariants = {makePathTracingTestChsVariant()},
+            .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
+            .variant = makePathTracingClosestHitVariant(),
         });
         nr::test::require(opaqueProgram.valid(), "opaque CHS path tracing shader should compile");
 
         auto alphaMaskProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = makePathTracingTestVariant(),
-            .linkVariants = {makePathTracingTestChsVariant()},
+            .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
+            .variant = makePathTracingClosestHitVariant(),
         });
         nr::test::require(alphaMaskProgram.valid(), "reused alpha-mask CHS path tracing shader should compile");
 
         auto selectedStages = std::array{
             nr::rhi::RayTracingPipelineStageSelection{
                 .program = std::cref(opaqueProgram),
-                .entryPointName = "chMain",
                 .logicalEntryPointName = "ch_opaque",
             },
             nr::rhi::RayTracingPipelineStageSelection{
                 .program = std::cref(alphaMaskProgram),
-                .entryPointName = "chMain",
                 .logicalEntryPointName = "ch_alphaMask",
             },
         };
 
-        nr::test::require(selectedStages[0].program.get().entryPointData(selectedStages[0].entryPointName) != nullptr);
-        nr::test::require(selectedStages[1].program.get().entryPointData(selectedStages[1].entryPointName) != nullptr);
-        nr::test::requireEqual(selectedStages[0].entryPointName, selectedStages[1].entryPointName);
+        nr::test::require(selectedStages[0].program.get().entryPoint() != nullptr);
+        nr::test::require(selectedStages[1].program.get().entryPoint() != nullptr);
         nr::test::require(selectedStages[0].logicalEntryPointName != selectedStages[1].logicalEntryPointName);
 
         auto assembly = nr::rhi::RayTracingProgramAssemblyDesc{
@@ -353,7 +309,7 @@ const nr::test::CaseRegistrar rtShaderReflectionCase{
         shaderService.configure();
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"test/rt/minimalRtTriangle"},
+            .sourcePath = std::filesystem::path{"test/rt/minimalRtTriangle/raygen"},
         });
         nr::test::require(program.valid(), "minimal RT shader should compile");
 
@@ -428,9 +384,8 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(presentPushConstants.pushConstantRange().has_value());
 
         auto rtProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = makePathTracingTestVariant(),
-            .linkVariants = {makePathTracingTestChsVariant()},
+            .sourcePath = std::filesystem::path{"renderer/pathTracing/raygen"},
+            .variant = makePathTracingRaygenVariant(),
         });
         nr::test::require(rtProgram.valid(), "rtobject path tracing shader should compile");
 
@@ -515,31 +470,51 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
         auto& shaderService = nr::rhi::ShaderService::instance();
         shaderService.configure();
 
-        auto baselineVariant = makePathTracingTestVariant();
-        auto baselineProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = baselineVariant,
-            .linkVariants = {makePathTracingTestChsVariant()},
-        });
-        nr::test::require(baselineProgram.valid(), "path tracing baseline shader should compile");
+        auto const requests = std::array{
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/raygen"},
+                .variant = makePathTracingRaygenVariant(),
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/raygen"},
+                .variant = makePathTracingRaygenVariant(2u),
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/raygen"},
+                .variant = makePathTracingRaygenVariant(16u, false),
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/miss"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/anyHit"},
+            },
+            nr::rhi::SlangProgramCompileFileRequest{
+                .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
+                .variant = makePathTracingClosestHitVariant(),
+            },
+        };
+        auto programs = shaderService.compileProgramsByFile(requests);
+        nr::test::requireEqual(programs.size(), requests.size());
+        nr::test::require(
+            std::ranges::all_of(programs, &nr::rhi::SlangProgram::valid),
+            "every path tracing raygen variant should compile in one backend batch");
 
-        auto constantVariant = makePathTracingTestVariant(2u);
-
-        auto constantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = constantVariant,
-            .linkVariants = {makePathTracingTestChsVariant()},
-        });
-        nr::test::require(constantProgram.valid(), "path tracing constant variant should compile");
-
-        auto typeVariant = makePathTracingTestVariant(16u, false);
-
-        auto typeProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = typeVariant,
-            .linkVariants = {makePathTracingTestChsVariant()},
-        });
-        nr::test::require(typeProgram.valid(), "path tracing type alias variant should compile");
+        auto const& baselineProgram = programs[0];
+        auto const& constantProgram = programs[1];
+        auto const& typeProgram = programs[2];
+        nr::test::require(
+            requests[3].variant.empty() && requests[4].variant.empty(),
+            "path tracing miss and any-hit entries must remain fixed empty-variant programs");
+        nr::test::require(
+            programs[3].entryPoint()->stage == SLANG_STAGE_MISS,
+            "path tracing miss should compile without unrelated raygen/closest-hit assignments");
+        nr::test::require(
+            programs[4].entryPoint()->stage == SLANG_STAGE_ANY_HIT,
+            "path tracing any-hit should compile without unrelated raygen/closest-hit assignments");
+        nr::test::require(
+            programs[5].entryPoint()->stage == SLANG_STAGE_CLOSEST_HIT,
+            "path tracing closest-hit should compile beside fixed miss/any-hit entries in the same batch");
 
         auto descriptorPolicy = nr::rhi::DescriptorBindingPolicy{
             .defaultRuntimeDescriptorCount = 1024u,
@@ -575,9 +550,8 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
             "shader service reload should advance session generation for variant cache invalidation");
 
         auto reloadedVariantProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = constantVariant,
-            .linkVariants = {makePathTracingTestChsVariant(5u)},
+            .sourcePath = std::filesystem::path{"renderer/pathTracing/closestHit"},
+            .variant = makePathTracingClosestHitVariant(5u),
         });
         nr::test::require(reloadedVariantProgram.valid(), "path tracing variant should compile after session reload");
     }};
@@ -600,7 +574,7 @@ const nr::test::CaseRegistrar rtMaterialTextureIdsReflectionCase{
         shaderService.configure();
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"test/rt/materialTextureIdsRt"},
+            .sourcePath = std::filesystem::path{"test/rt/materialTextureIdsRt/raygen"},
         });
         nr::test::require(program.valid(), "material texture id RT shader should compile");
 

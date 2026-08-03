@@ -27,6 +27,7 @@ class NormalBufferNode final : public Node
 
     NormalBufferNodeInput input{};
 
+    [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const override;
     void initialize(NodeInitContext& context) override;
     void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
     void shutdown(NodeShutdownContext& context) override;

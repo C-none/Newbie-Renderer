@@ -68,21 +68,13 @@ struct AccumulateRuntimeCache
     return (value + divisor - 1u) / divisor;
 }
 
-[[nodiscard]] std::shared_ptr<AccumulateRuntimeCache> ensureAccumulateRuntime(nr::rhi::Device& device)
+[[nodiscard]] std::shared_ptr<AccumulateRuntimeCache> ensureAccumulateRuntime(
+    nr::rhi::Device& device,
+    const nr::rhi::SlangProgram& program)
 {
-    auto& shaderService = nr::rhi::ShaderService::instance();
-    auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path("renderer/accumulate"),
-    });
-    nr::nrAssert(program.valid(), "Accumulate pass failed to compile shader module renderer/accumulate.");
-
-    auto pipelineDesc = nr::rhi::ComputePipelineDesc{
-        .entryPointName = "accumulateMain",
-    };
-
     auto runtime = std::make_shared<AccumulateRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program, pipelineDesc));
+    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program));
     nr::nrAssert(runtime->pipeline->valid(), "Accumulate pass failed to create compute pipeline.");
 
     return runtime;
@@ -189,10 +181,24 @@ void AccumulateNode::collectOptionAvailability(
         nr::options::OptionAvailability{.available = true, .reason = {}});
 }
 
+[[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> AccumulateNode::shaderRequests() const
+{
+    return {
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"renderer/accumulate"},
+        },
+    };
+}
+
 void AccumulateNode::initialize(NodeInitContext& context)
 {
+    nr::nrAssert(
+        context.shaderPrograms.size() == 1u &&
+            context.shaderPrograms.front().entryPoint() != nullptr &&
+            context.shaderPrograms.front().entryPoint()->stage == SLANG_STAGE_COMPUTE,
+        "Accumulate initialization requires one compiled compute shader.");
     device_ = context.device;
-    runtime_ = detail::ensureAccumulateRuntime(context.device.get());
+    runtime_ = detail::ensureAccumulateRuntime(context.device.get(), context.shaderPrograms.front());
     nr::rhi::setPipelineDebugName(
         context.device.get().device,
         runtime_->pipeline->pipeline().raw(),

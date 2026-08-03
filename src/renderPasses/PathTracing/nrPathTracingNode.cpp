@@ -22,9 +22,17 @@ struct PathTracingHitProgram
     nr::rhi::SlangProgram program{};
 };
 
+struct PathTracingProgramBatch
+{
+    nr::rhi::SlangProgram raygen{};
+    nr::rhi::SlangProgram miss{};
+    std::optional<nr::rhi::SlangProgram> anyHit{};
+    std::vector<PathTracingHitProgram> hitPrograms{};
+};
+
 struct PathTracingPipelineKey
 {
-    PathTracingVariantKey rootVariant{};
+    PathTracingVariantKey variant{};
     std::uint64_t chsPermutationSetHash = 0u;
     std::uint64_t shaderSessionGeneration = 0u;
 
@@ -195,7 +203,7 @@ inline constexpr std::string_view kRussianRouletteDisabledPolicy = "RussianRoule
 
 [[nodiscard]] std::string describePathTracingPipelineKey(const PathTracingPipelineKey &key)
 {
-    return std::format("{},chsPermutations={},shaderSession={}", describePathTracingVariantKey(key.rootVariant), nr::hash::toHexString(key.chsPermutationSetHash), key.shaderSessionGeneration);
+    return std::format("{},chsPermutations={},shaderSession={}", describePathTracingVariantKey(key.variant), nr::hash::toHexString(key.chsPermutationSetHash), key.shaderSessionGeneration);
 }
 
 [[nodiscard]] std::string describePathTracingSbtKey(const PathTracingSbtKey &key)
@@ -203,16 +211,13 @@ inline constexpr std::string_view kRussianRouletteDisabledPolicy = "RussianRoule
     return std::format("{},hitRecords={}", describePathTracingPipelineKey(key.pipeline), nr::hash::toHexString(key.hitRecordPlanHash));
 }
 
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingVariantDesc(const PathTracingVariantKey &key)
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingRaygenVariantDesc(
+    const PathTracingVariantKey &key)
 {
     auto normalizedKey = normalizePathTracingVariantKey(key);
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant
         .assign(kMaxSurfaceBouncesVariantName, "uint", normalizedKey.maxSurfaceBounces)
-        .assign(
-            kFilterAfterShadingVariantName,
-            "bool",
-            normalizedKey.enableFilterAfterShading)
         .assign(
             kRussianRoulettePolicyVariantName,
             kRussianRoulettePolicyType,
@@ -220,16 +225,22 @@ inline constexpr std::string_view kRussianRouletteDisabledPolicy = "RussianRoule
     return variant;
 }
 
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingChsVariantDesc(
-    const PathTracingChsVariantKey& key)
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingClosestHitVariantDesc(
+    const PathTracingVariantKey &variantKey,
+    const PathTracingChsVariantKey &chsKey)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant.assign(
-        "CHS",
-        "ICHS",
-        std::format(
-            "MaterialCHS<RtMaterialLayerFlag({}u)>",
-            static_cast<std::uint32_t>(key.layerFlags)));
+    variant
+        .assign(
+            kFilterAfterShadingVariantName,
+            "bool",
+            normalizePathTracingVariantKey(variantKey).enableFilterAfterShading)
+        .assign(
+            "CHS",
+            "ICHS",
+            std::format(
+                "MaterialCHS<RtMaterialLayerFlag({}u)>",
+                static_cast<std::uint32_t>(chsKey.layerFlags)));
     return variant;
 }
 
@@ -248,34 +259,30 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     return pipelineDesc;
 }
 
-[[nodiscard]] nr::rhi::RayTracingProgramAssemblyDesc makePathTracingProgramAssembly(const nr::rhi::SlangProgram &rootProgram, const SceneRtHitSbtPlan &hitSbtPlan, std::span<const PathTracingHitProgram> hitPrograms)
+[[nodiscard]] nr::rhi::RayTracingProgramAssemblyDesc makePathTracingProgramAssembly(
+    const PathTracingProgramBatch &programs,
+    const SceneRtHitSbtPlan &hitSbtPlan)
 {
-    auto const usesAnyHit = std::ranges::any_of(hitSbtPlan.permutations, [](const SceneRtHitSbtPermutation &permutation) { return rtHitPermutationUsesAnyHit(permutation.key); });
-
     auto assembly = nr::rhi::RayTracingProgramAssemblyDesc{};
-    assembly.stages.reserve(2u + (usesAnyHit ? 1u : 0u) + hitPrograms.size());
+    assembly.stages.reserve(2u + (programs.anyHit.has_value() ? 1u : 0u) + programs.hitPrograms.size());
     assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
-        .program = std::cref(rootProgram),
-        .entryPointName = "rgMain",
+        .program = std::cref(programs.raygen),
         .logicalEntryPointName = "rgMain",
     });
     assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
-        .program = std::cref(rootProgram),
-        .entryPointName = "msMain",
+        .program = std::cref(programs.miss),
         .logicalEntryPointName = "msMain",
     });
-    if (usesAnyHit)
+    if (programs.anyHit.has_value())
     {
         assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
-            .program = std::cref(rootProgram),
-            .entryPointName = "ahMaterialPolicy",
+            .program = std::cref(*programs.anyHit),
             .logicalEntryPointName = "ahMaterialPolicy",
         });
     }
-    std::ranges::for_each(hitPrograms, [&](const PathTracingHitProgram &hitProgram) {
+    std::ranges::for_each(programs.hitPrograms, [&](const PathTracingHitProgram &hitProgram) {
         assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
             .program = std::cref(hitProgram.program),
-            .entryPointName = "chMain",
             .logicalEntryPointName = rtHitClosestHitEntryPointName(hitProgram.key),
         });
     });
@@ -304,53 +311,122 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     return assembly;
 }
 
-[[nodiscard]] std::vector<PathTracingHitProgram> compilePathTracingHitPrograms(
-    nr::rhi::ShaderService& shaderService,
-    const nr::rhi::SlangProgram& rootProgram,
-    const nr::rhi::SlangProgramVariantDesc& variantDesc,
-    PathTracingChsVariantKey baselineChsKey,
-    const nr::rhi::SlangProgramVariantDesc& baselineChsVariantDesc,
-    const nr::rhi::RayTracingPipelineDesc& pipelineDesc,
-    const SceneRtHitSbtPlan& hitSbtPlan)
+[[nodiscard]] PathTracingProgramBatch compilePathTracingPrograms(
+    nr::rhi::ShaderService &shaderService,
+    const nr::rhi::RayTracingPipelineDesc &pipelineDesc,
+    const PathTracingVariantKey &variantKey,
+    const SceneRtHitSbtPlan &hitSbtPlan)
 {
-    auto hitPrograms = std::vector<PathTracingHitProgram>{};
-    auto programIndexByKey = std::map<PathTracingChsVariantKey, std::uint32_t>{};
-    hitPrograms.reserve(hitSbtPlan.permutations.size());
-    hitPrograms.push_back(PathTracingHitProgram{
-        .key = baselineChsKey,
-        .program = rootProgram,
-    });
-    programIndexByKey.emplace(baselineChsKey, 0u);
+    auto chsKeys = hitSbtPlan.permutations |
+                   std::views::transform([](const SceneRtHitSbtPermutation &permutation) {
+                       return permutation.key.bsdf;
+                   }) |
+                   std::ranges::to<std::vector>();
+    std::ranges::sort(chsKeys);
+    chsKeys.erase(std::ranges::unique(chsKeys).begin(), chsKeys.end());
 
-    std::ranges::for_each(hitSbtPlan.permutations, [&](const SceneRtHitSbtPermutation &permutation) {
-        auto const &chsKey = permutation.key.bsdf;
-        if (programIndexByKey.contains(chsKey))
-        {
-            return;
-        }
-
-        auto chsVariantDesc = makePathTracingChsVariantDesc(chsKey);
-        auto chsProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = variantDesc,
-            .linkVariants = {chsVariantDesc},
+    auto requests = std::vector<nr::rhi::SlangProgramCompileFileRequest>{};
+    requests.reserve(4u + chsKeys.size());
+    auto appendRequest = [&](std::filesystem::path sourcePath, nr::rhi::SlangProgramVariantDesc variant = {}) {
+        auto const index = requests.size();
+        requests.push_back(nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::move(sourcePath),
+            .variant = std::move(variant),
         });
-        nr::nrAssert(chsProgram.valid(), "Path tracing pass failed to compile CHS-specialized shader module.");
-        if (chsVariantDesc.hashValue() != baselineChsVariantDesc.hashValue())
-        {
-            nr::rhi::assertShaderLayoutAbiStable(rootProgram, chsProgram, pipelineDesc.descriptorBindingPolicy, rtHitClosestHitEntryPointName(chsKey));
-        }
+        return index;
+    };
 
-        nr::nrAssert(hitPrograms.size() < static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()), "Path tracing CHS program count exceeds uint32 ABI.");
-        auto const programIndex = static_cast<std::uint32_t>(hitPrograms.size());
-        hitPrograms.push_back(PathTracingHitProgram{
-            .key = chsKey,
-            .program = std::move(chsProgram),
+    auto const baselineRaygenVariant = makePathTracingRaygenVariantDesc(PathTracingVariantKey{});
+    auto const raygenVariant = makePathTracingRaygenVariantDesc(variantKey);
+    auto const baselineRaygenIndex = appendRequest(
+        std::filesystem::path{"renderer/pathTracing/raygen"},
+        baselineRaygenVariant);
+    auto const raygenIndex = raygenVariant.hashValue() == baselineRaygenVariant.hashValue()
+                                 ? baselineRaygenIndex
+                                 : appendRequest(
+                                       std::filesystem::path{"renderer/pathTracing/raygen"},
+                                       raygenVariant);
+    auto const missIndex = appendRequest(std::filesystem::path{"renderer/pathTracing/miss"});
+    auto const usesAnyHit = std::ranges::any_of(
+        hitSbtPlan.permutations,
+        [](const SceneRtHitSbtPermutation &permutation) {
+            return rtHitPermutationUsesAnyHit(permutation.key);
         });
-        programIndexByKey.emplace(chsKey, programIndex);
+    auto const anyHitIndex = usesAnyHit
+                                 ? std::optional{appendRequest(std::filesystem::path{"renderer/pathTracing/anyHit"})}
+                                 : std::optional<std::size_t>{};
+    auto const firstClosestHitIndex = requests.size();
+    std::ranges::for_each(chsKeys, [&](const PathTracingChsVariantKey &chsKey) {
+        appendRequest(
+            std::filesystem::path{"renderer/pathTracing/closestHit"},
+            makePathTracingClosestHitVariantDesc(variantKey, chsKey));
     });
 
-    return hitPrograms;
+    auto compiledPrograms = shaderService.compileProgramsByFile(requests);
+    nr::nrAssert(
+        compiledPrograms.size() == requests.size() &&
+            std::ranges::all_of(compiledPrograms, &nr::rhi::SlangProgram::valid),
+        "Path tracing pass failed to compile its shader batch.");
+    nr::nrAssert(
+        compiledPrograms[baselineRaygenIndex].entryPoint()->stage == SLANG_STAGE_RAY_GENERATION &&
+            compiledPrograms[raygenIndex].entryPoint()->stage == SLANG_STAGE_RAY_GENERATION,
+        "Path tracing ray-generation files must each define one ray-generation entrypoint.");
+    nr::nrAssert(
+        compiledPrograms[missIndex].entryPoint()->stage == SLANG_STAGE_MISS,
+        "Path tracing miss file must define one miss entrypoint.");
+    if (anyHitIndex.has_value())
+    {
+        nr::nrAssert(
+            compiledPrograms[*anyHitIndex].entryPoint()->stage == SLANG_STAGE_ANY_HIT,
+            "Path tracing any-hit file must define one any-hit entrypoint.");
+    }
+    nr::nrAssert(
+        std::ranges::all_of(
+            std::views::iota(firstClosestHitIndex, compiledPrograms.size()),
+            [&](std::size_t index) {
+                return compiledPrograms[index].entryPoint()->stage == SLANG_STAGE_CLOSEST_HIT;
+            }),
+        "Path tracing closest-hit files must each define one closest-hit entrypoint.");
+
+    if (raygenIndex != baselineRaygenIndex)
+    {
+        nr::rhi::assertShaderLayoutAbiStable(
+            compiledPrograms[baselineRaygenIndex],
+            compiledPrograms[raygenIndex],
+            pipelineDesc.descriptorBindingPolicy,
+            describePathTracingVariantKey(variantKey));
+    }
+    if (!chsKeys.empty())
+    {
+        auto const& baselineClosestHit = compiledPrograms[firstClosestHitIndex];
+        auto const variantIndices = std::views::iota(firstClosestHitIndex + 1u, compiledPrograms.size());
+        std::ranges::for_each(variantIndices, [&](std::size_t index) {
+            auto const keyIndex = index - firstClosestHitIndex;
+            nr::rhi::assertShaderLayoutAbiStable(
+                baselineClosestHit,
+                compiledPrograms[index],
+                pipelineDesc.descriptorBindingPolicy,
+                rtHitClosestHitEntryPointName(chsKeys[keyIndex]));
+        });
+    }
+
+    auto result = PathTracingProgramBatch{
+        .raygen = compiledPrograms[raygenIndex],
+        .miss = compiledPrograms[missIndex],
+    };
+    if (anyHitIndex.has_value())
+    {
+        result.anyHit.emplace(compiledPrograms[*anyHitIndex]);
+    }
+    result.hitPrograms = std::views::iota(std::size_t{0u}, chsKeys.size()) |
+                         std::views::transform([&](std::size_t index) {
+                             return PathTracingHitProgram{
+                                 .key = chsKeys[index],
+                                 .program = compiledPrograms[firstClosestHitIndex + index],
+                             };
+                         }) |
+                         std::ranges::to<std::vector>();
+    return result;
 }
 
 [[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> createPathTracingPipelineRuntime(nr::rhi::Device &device, const PathTracingPipelineKey &pipelineKey, const SceneRtHitSbtPlan &hitSbtPlan)
@@ -358,47 +434,15 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     nr::nrAssert(pipelineKey.chsPermutationSetHash == hitSbtPlan.permutationSetHash, "Path tracing pipeline key must match the hit SBT permutation set.");
     nr::nrAssert(!hitSbtPlan.permutations.empty(), "Path tracing pipeline creation requires at least one active hit permutation.");
 
-    auto &shaderService = nr::rhi::ShaderService::instance();
-    auto const baselineVariantKey = PathTracingVariantKey{};
-    auto baselineVariantDesc = makePathTracingVariantDesc(baselineVariantKey);
-    auto const baselineChsKey = hitSbtPlan.permutations.front().key.bsdf;
-    auto baselineChsVariantDesc = makePathTracingChsVariantDesc(baselineChsKey);
-    auto baselineProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-        .variant = baselineVariantDesc,
-        .linkVariants = {baselineChsVariantDesc},
-    });
-    nr::nrAssert(baselineProgram.valid(), "Path tracing pass failed to compile baseline shader module.");
-
-    auto variantDesc = makePathTracingVariantDesc(pipelineKey.rootVariant);
-    auto rootProgram = baselineProgram;
-    if (variantDesc.hashValue() != baselineVariantDesc.hashValue())
-    {
-        rootProgram = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/pathTracing"},
-            .variant = variantDesc,
-            .linkVariants = {baselineChsVariantDesc},
-        });
-        nr::nrAssert(rootProgram.valid(), "Path tracing pass failed to compile variant shader module.");
-    }
-
     auto pipelineDesc = makePathTracingPipelineDesc();
-    if (variantDesc.hashValue() != baselineVariantDesc.hashValue())
-    {
-        nr::rhi::assertShaderLayoutAbiStable(baselineProgram, rootProgram, pipelineDesc.descriptorBindingPolicy, describePathTracingVariantKey(pipelineKey.rootVariant));
-    }
-
-    auto hitPrograms = compilePathTracingHitPrograms(
-        shaderService,
-        rootProgram,
-        variantDesc,
-        baselineChsKey,
-        baselineChsVariantDesc,
+    auto programs = compilePathTracingPrograms(
+        nr::rhi::ShaderService::instance(),
         pipelineDesc,
+        pipelineKey.variant,
         hitSbtPlan);
-    auto programAssembly = makePathTracingProgramAssembly(rootProgram, hitSbtPlan, hitPrograms);
+    auto programAssembly = makePathTracingProgramAssembly(programs, hitSbtPlan);
 
-    auto descriptorLayout = nr::rhi::ShaderDescriptorLayout::create(rootProgram, pipelineDesc.descriptorBindingPolicy);
+    auto descriptorLayout = nr::rhi::ShaderDescriptorLayout::create(programs.raygen, pipelineDesc.descriptorBindingPolicy);
     nr::nrAssert(descriptorLayout.valid(), "Path tracing environment sampler reflection failed.");
     auto environmentSampler = descriptorLayout.rootCursor()["gEnvironmentMap"].makeImmutableSamplerBinding(nr::rhi::SlangSamplerDesc{
         .magFilter = vk::Filter::eLinear,
@@ -417,7 +461,12 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
         sceneTextureTableImmutableSamplerBinding(),
         *environmentSampler,
     };
-    pipelineRuntime->initializeDeferred(device.pipeline().createRayTracingPipeline(rootProgram, programAssembly, pipelineDesc, 64u, immutableSamplers));
+    pipelineRuntime->initializeDeferred(device.pipeline().createRayTracingPipeline(
+        programs.raygen,
+        programAssembly,
+        pipelineDesc,
+        64u,
+        immutableSamplers));
     nr::nrAssert(pipelineRuntime->valid(), "Path tracing pass failed to create ray tracing pipeline.");
     nr::rhi::setPipelineDebugName(device.device, pipelineRuntime->pipeline().raw(), describePathTracingPipelineKey(pipelineKey) + ".Pipeline");
 
@@ -491,7 +540,7 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
 [[nodiscard]] PathTracingFrameRuntime ensurePathTracingFrameRuntime(PathTracingRuntimeCache &cache, nr::rhi::Device &device, const PathTracingVariantKey &key, const SceneRtHitSbtPlan &hitSbtPlan)
 {
     auto pipelineKey = PathTracingPipelineKey{
-        .rootVariant = normalizePathTracingVariantKey(key),
+        .variant = normalizePathTracingVariantKey(key),
         .chsPermutationSetHash = hitSbtPlan.permutationSetHash,
         .shaderSessionGeneration = nr::rhi::ShaderService::instance().sessionGeneration(),
     };

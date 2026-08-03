@@ -384,7 +384,7 @@ struct FakeBindlessPipeline
     shaderService.configure();
     auto pipeline = FakeBindlessPipeline{};
     pipeline.program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
-        .sourcePath = std::filesystem::path{"renderer/appUi"},
+        .sourcePath = std::filesystem::path{"renderer/appUi/fragment"},
     });
     nr::test::require(pipeline.program.valid(), "appUi shader program should compile for bindless cache contract tests");
 

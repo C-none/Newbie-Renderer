@@ -836,6 +836,7 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
         auto const materialSampling = readProjectFile("shader/include/material/sampling.slang");
         auto const stochasticTextureFiltering =
             readProjectFile("shader/include/material/stochasticTextureFiltering.slang");
+        auto const materialBsdf = readProjectFile("shader/include/material/bsdf.slang");
         auto const materialPayload = readProjectFile("shader/include/material/payload.slang");
         auto const hitSurface = readProjectFile("shader/include/rt/hitSurface.slang");
         auto const sceneTextureBinding =
@@ -942,7 +943,25 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 materialPayload.contains("public float smithG2(") &&
                 materialPayload.contains("public float3 sampleVisibleHalfVector(") &&
                 materialPayload.contains("public float visibleHalfVectorPdf("),
-            "anisotropic GGX D, separable Smith G, Heitz VNDF and visible-normal PDF should share one base helper");
+            "anisotropic GGX D, correlated Smith G2, Heitz VNDF and visible-normal PDF should share one base helper");
+        nr::test::require(
+            materialBsdf.contains("public struct GgxSpecularEnergyTerms") &&
+                materialBsdf.contains("public float2 ggxDirectionalAlbedoAnalytic(") &&
+                materialBsdf.contains("0.0266916f") &&
+                materialBsdf.contains("0.466495f") &&
+                materialBsdf.contains("2.36651f") &&
+                materialBsdf.contains("4.7703f") &&
+                materialBsdf.contains("result.W =") &&
+                materialBsdf.contains("result.E =") &&
+                materialBsdf.contains("noL * lenV + noV * lenL") &&
+                materialPayload.contains("public GgxSpecularEnergyTerms specularEnergyTerms(") &&
+                materialPayload.contains("public bool hasActiveTransmission(") &&
+                materialPayload.contains("if (!hasActiveTransmission(payload))") &&
+                materialPayload.contains("reflectionImportance = energy.E") &&
+                materialPayload.contains("energyWeight * fresnel * distribution * geometry") &&
+                materialPayload.contains("clearcoatBaseAttenuation(") &&
+                materialPayload.contains("clearcoatGgxEnergyTerms("),
+            "opaque base and clearcoat GGX should use UE-style correlated Smith plus analytic Spec.E/Spec.W without applying opaque compensation to active glass");
         nr::test::require(
             materialPayload.contains("BaseGgxDistribution<LayerFlags> baseGgx") &&
                 materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.thin") &&
@@ -956,6 +975,16 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 materialPayload.contains(
                     "clippedReflection - incidentDirection"),
             "specular lobes should clip view-dependent shading normals against a view-facing geometry normal");
+        nr::test::require(
+            materialPayload.contains(
+                "public struct MaterialPayloadReflectionEvaluation") &&
+                materialPayload.contains(
+                    "public float3 materialPayloadMirrorReflectionDirection(") &&
+                materialPayload.contains(
+                    "public float3 materialPayloadFoldReflectionDirection(") &&
+                materialPayload.contains(
+                    "2.0f * dot(safeDirection, safeGeometryNormal) * safeGeometryNormal"),
+            "reflection folding should use a unit-Jacobian mirror across the facing geometry plane");
         nr::test::require(
             materialPayload.contains(
                 "float3 rawNormal = safeNormalize(payload.shadingNormal, facingGeometryNormal)") &&
@@ -981,20 +1010,59 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 materialPayload.contains(
                     "float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal("),
             "clearcoat should retain its isotropic GGX distribution while using its independently adjusted normal");
+
+        auto const baseSurfaceBegin = materialPayload.find(
+            "public struct BaseSurfaceBsdfLobe<");
+        auto const sheenBegin = materialPayload.find(
+            "public struct SheenBsdfLobe");
+        auto const clearcoatBegin = materialPayload.find(
+            "public struct ClearcoatBsdfLobe");
+        auto const resolvedEvaluationBegin = materialPayload.find(
+            "public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVariant");
+        nr::test::require(
+            baseSurfaceBegin != std::string::npos &&
+                sheenBegin != std::string::npos &&
+                clearcoatBegin != std::string::npos &&
+                resolvedEvaluationBegin != std::string::npos &&
+                baseSurfaceBegin < sheenBegin &&
+                sheenBegin < clearcoatBegin &&
+                clearcoatBegin < resolvedEvaluationBegin,
+            "reflection lobe bodies should retain their expected material-payload order");
+
+        auto const baseSurfaceBody = materialPayload.substr(
+            baseSurfaceBegin,
+            sheenBegin - baseSurfaceBegin);
+        auto const sheenBody = materialPayload.substr(
+            sheenBegin,
+            clearcoatBegin - sheenBegin);
+        auto const clearcoatBody = materialPayload.substr(
+            clearcoatBegin,
+            resolvedEvaluationBegin - clearcoatBegin);
+        auto const lobeUsesPushForwardFold = [](std::string_view body) {
+            return
+                body.contains("evaluateFoldedReflection(") &&
+                body.contains("foldedReflectionPdf(") &&
+                body.contains("materialPayloadMirrorReflectionDirection(") &&
+                body.contains("materialPayloadFoldReflectionDirection(");
+        };
+        nr::test::require(
+            lobeUsesPushForwardFold(baseSurfaceBody) &&
+                lobeUsesPushForwardFold(sheenBody) &&
+                lobeUsesPushForwardFold(clearcoatBody) &&
+                baseSurfaceBody.contains("result.projected += mirrored.projected") &&
+                sheenBody.contains("result.projected += mirrored.projected") &&
+                clearcoatBody.contains("result.projected += mirrored.projected"),
+            "base, sheen, and clearcoat reflection must fold samples and sum both evaluation and PDF preimages");
         nr::test::require(
             materialPayload.contains(
-                "dot(specularNormal, scatter.direction) <= kMaterialMinCosTheta") &&
+                "public bool materialPayloadGeometrySupportsReflection(") &&
                 materialPayload.contains(
-                    "public bool materialPayloadGeometrySupportsReflection(") &&
-                materialPayload.contains(
-                    "return dot(facingGeometryNormal, lightDirection) >= -kMaterialMinCosTheta") &&
-                materialPayload.contains(
-                    "dot(specularNormal, scatter.direction) >= -kMaterialMinCosTheta") &&
+                    "return dot(facingGeometryNormal, lightDirection) >= 0.0f") &&
                 materialPayload.contains(
                     "public bool materialPayloadGeometrySupportsTransmission(") &&
                 materialPayload.contains(
                     "return dot(facingGeometryNormal, lightDirection) <= kMaterialMinCosTheta"),
-            "sampled reflection and transmission must satisfy lobe-specific support while retaining the adjusted geometric tangent boundary");
+            "folded reflection should stay exterior while transmission retains the complementary geometry-boundary contract");
 
         auto const coreSamplingBody = materialSampling.substr(coreSample, layerSample - coreSample);
         nr::test::require(

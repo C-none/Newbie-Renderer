@@ -12,6 +12,7 @@ This document outlines the development standards, architectural principles, and 
 
 *   **C++ Version:** strictly **C++26**.
 *   **Shader Language:** strictly **Slang** compiling to **SPIR-V**. HLSL/GLSL are not to be used directly unless wrapped or transpiled via Slang.
+*   **Single Shader Entry-Point Per File:** A `.slang` source file may declare at most one stage entry point. Shared/library modules may declare none; every file submitted as a shader compilation unit must declare exactly one. Compilation and variants are file-scoped, so project code must not add named-entry-point selection or bundle multiple stage entry points into one source file.
 
 ### 2.2 Coding Style & Modern C++
 
@@ -128,10 +129,10 @@ When generating code or refactoring:
 
 *   **Command:** After configuring the LLVM build, check one shader with:
     ```powershell
-    cmake "-DNR_SHADER_FILE=renderer/embeddedTriangle.slang" -P tools/CheckSlangShader.cmake
+    cmake "-DNR_SHADER_FILE=renderer/embeddedTriangle/vertex.slang" -P tools/CheckSlangShader.cmake
     ```
 *   **Path and Configuration:** `NR_SHADER_FILE` may be absolute or relative to the configured `NR_SHADER_ROOT_DIR`, and the `.slang` extension may be omitted. The script uses `build/llvm` and LLVM Debug by default; set `NR_SHADER_CHECK_BUILD_DIR` or `NR_SHADER_CHECK_CONFIG` only when an explicitly requested configuration requires it.
-*   **Runtime-Equivalent Path:** The helper reuses `ShaderService::configure()`, `compileProgramByFile()`, and `SlangProgram::valid()`, including the normal link, reflection, and per-entry-point SPIR-V generation path. It builds the `EXCLUDE_FROM_ALL` `nr_shader_compile_check` target on demand.
+*   **Runtime-Equivalent Path:** The helper reuses `ShaderService::configure()`, the shared `compileProgramsByFile()` batch core, and `SlangProgram::valid()`, including the normal single-entry link, reflection, persistent SPIR-V cache, and bounded backend-worker path. It builds the `EXCLUDE_FROM_ALL` `nr_shader_compile_check` target on demand.
 *   **Default-Variant Limit:** The checker uses an empty/default `SlangProgramVariantDesc`. Shaders that require link-time constant or type assignments must be validated by their variant-aware contract test instead.
 *   **Allowed Test Substitution:** Use this command instead of an ad-hoc/manual compile smoke step when an isolated shader or import change only needs default-variant compile validation. It may be used as a fast pre-check before a targeted `ctest` run.
 *   **Existing Tests Remain Required:** Do not delete or skip registered tests merely because this command passes. It does not replace tests that verify reflection names or layouts, descriptor bindings, `shaderCursor` behavior, link-time variants, session reload/cache behavior, CPU/Shader ABI, SPIR-V differences, pipeline/SBT integration, or GPU runtime behavior. The current registered shader contract tests all cover at least one such additional contract, so none is fully replaceable by this checker at present.

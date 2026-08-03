@@ -125,7 +125,10 @@ add_executable(nr_shader_share_codegen
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/nrShaderShareCodegen.cpp"
 )
 target_link_libraries(nr_shader_share_codegen PRIVATE slang::slang)
-nr_add_slang_runtime_dependency(nr_shader_share_codegen)
+nr_add_slang_runtime_dependency(nr_shader_share_codegen
+    DEFER_TARGET_DEPENDENCY
+    OUT_COPY_STAMP NR_SHADER_SHARE_CODEGEN_RUNTIME_STAMP
+)
 nr_apply_target_settings(nr_shader_share_codegen)
 set_target_properties(nr_shader_share_codegen PROPERTIES
     CXX_SCAN_FOR_MODULES OFF
@@ -148,6 +151,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E touch "${NR_SHADER_SHARE_GENERATED_STAMP}"
     DEPENDS
         nr_shader_share_codegen
+        ${NR_SHADER_SHARE_CODEGEN_RUNTIME_STAMP}
         ${NR_SHADER_SHARE_SLANG_DEPENDENCIES}
     DEPENDS_EXPLICIT_ONLY
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
