@@ -83,7 +83,8 @@ void emitAssertion(std::string_view context, std::source_location loc);
 void shutdownNdjsonLogs() noexcept;
 } // namespace detail
 
-constexpr inline void nrAssert(bool condition, std::string_view context = "", std::source_location loc = std::source_location::current())
+constexpr inline void nrAssert(bool condition, std::string_view context = "",
+                               std::source_location loc = std::source_location::current())
 {
     if (!condition)
     {
@@ -93,8 +94,10 @@ constexpr inline void nrAssert(bool condition, std::string_view context = "", st
 }
 
 template <typename ContextFactory>
-    requires std::invocable<ContextFactory &&> && std::convertible_to<std::invoke_result_t<ContextFactory &&>, std::string_view>
-constexpr inline void nrAssert(bool condition, ContextFactory &&contextFactory, std::source_location loc = std::source_location::current())
+    requires std::invocable<ContextFactory &&> &&
+             std::convertible_to<std::invoke_result_t<ContextFactory &&>, std::string_view>
+constexpr inline void nrAssert(bool condition, ContextFactory &&contextFactory,
+                               std::source_location loc = std::source_location::current())
 {
     if (!condition)
     {
@@ -102,7 +105,8 @@ constexpr inline void nrAssert(bool condition, ContextFactory &&contextFactory, 
     }
 }
 
-constexpr inline void nrLog(LogLevel level, std::string_view channel, std::string_view context, std::source_location loc = std::source_location::current(), bool terminateOnError = false)
+constexpr inline void nrLog(LogLevel level, std::string_view channel, std::string_view context,
+                            std::source_location loc = std::source_location::current(), bool terminateOnError = false)
 {
     if (globalLogLevel <= level)
     {
@@ -116,12 +120,14 @@ constexpr inline void nrLog(LogLevel level, std::string_view channel, std::strin
     }
 }
 
-constexpr inline void nrLog(LogLevel level, std::string_view context, std::source_location loc = std::source_location::current(), bool terminateOnError = false)
+constexpr inline void nrLog(LogLevel level, std::string_view context,
+                            std::source_location loc = std::source_location::current(), bool terminateOnError = false)
 {
     nrLog(level, "LOG", context, loc, terminateOnError);
 }
 
-template <LogLevel Level = LogLevel::info, bool TerminateOnError = (Level == LogLevel::error)> constexpr inline void nrInfo(std::string_view context = "", std::source_location loc = std::source_location::current())
+template <LogLevel Level = LogLevel::info, bool TerminateOnError = (Level == LogLevel::error)>
+constexpr inline void nrInfo(std::string_view context = "", std::source_location loc = std::source_location::current())
 {
     // Compile-time log level filtering (type-safe enum comparison)
     if constexpr (globalLogLevel <= Level)
@@ -129,7 +135,8 @@ template <LogLevel Level = LogLevel::info, bool TerminateOnError = (Level == Log
         nrLog(Level, "LOG", context, loc, TerminateOnError);
     }
 }
-constexpr inline void nrVulkan(LogLevel level, std::string_view context, std::source_location /*loc*/ = std::source_location::current())
+constexpr inline void nrVulkan(LogLevel level, std::string_view context,
+                               std::source_location /*loc*/ = std::source_location::current())
 {
     if (globalLogLevel <= level)
     {
@@ -137,7 +144,8 @@ constexpr inline void nrVulkan(LogLevel level, std::string_view context, std::so
     }
 }
 
-template <LogLevel Level = LogLevel::info> constexpr inline void nrCompactRecord(std::string_view schema, std::string_view payload)
+template <LogLevel Level = LogLevel::info>
+constexpr inline void nrCompactRecord(std::string_view schema, std::string_view payload)
 {
     detail::emitCompactRecord(Level, schema, payload);
 }

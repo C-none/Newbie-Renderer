@@ -21,7 +21,9 @@ struct OptionUiPresentResult
 class OptionUiPresenter
 {
   public:
-    [[nodiscard]] OptionUiPresentResult present(UiSystem &ui, nr::options::OptionSystem &system, std::shared_ptr<const nr::options::OptionFrameSnapshot> snapshot, OptionUiInteractionPolicy interactionPolicy);
+    [[nodiscard]] OptionUiPresentResult present(UiSystem &ui, nr::options::OptionSystem &system,
+                                                std::shared_ptr<const nr::options::OptionFrameSnapshot> snapshot,
+                                                OptionUiInteractionPolicy interactionPolicy);
 
   private:
     struct DraftState
@@ -30,10 +32,17 @@ class OptionUiPresenter
         nr::options::OptionWireValue value{};
     };
 
-    [[nodiscard]] DraftState &draftFor(const nr::options::OptionDefinition &definition, const nr::options::OptionWireValue &canonical);
-    void drawReadOnlyOption(UiSystem &ui, const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition) const;
-    [[nodiscard]] bool drawInteractiveOption(UiSystem &ui, nr::options::OptionSystem &system, const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition, OptionUiPresentResult &result);
-    [[nodiscard]] bool schedule(nr::options::OptionSystem &system, const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition, nr::options::OptionWireValue value, OptionUiPresentResult &result);
+    [[nodiscard]] DraftState &draftFor(const nr::options::OptionDefinition &definition,
+                                       const nr::options::OptionWireValue &canonical);
+    void drawReadOnlyOption(UiSystem &ui, const nr::options::OptionFrameSnapshot &snapshot,
+                            const nr::options::OptionDefinition &definition) const;
+    [[nodiscard]] bool drawInteractiveOption(UiSystem &ui, nr::options::OptionSystem &system,
+                                             const nr::options::OptionFrameSnapshot &snapshot,
+                                             const nr::options::OptionDefinition &definition,
+                                             OptionUiPresentResult &result);
+    [[nodiscard]] bool schedule(nr::options::OptionSystem &system, const nr::options::OptionFrameSnapshot &snapshot,
+                                const nr::options::OptionDefinition &definition, nr::options::OptionWireValue value,
+                                OptionUiPresentResult &result);
 
     std::map<nr::options::OptionId, DraftState> drafts_{};
     std::optional<std::uint64_t> blockedRevision_{};

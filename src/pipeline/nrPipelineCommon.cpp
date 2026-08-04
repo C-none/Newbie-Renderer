@@ -23,7 +23,8 @@ namespace nr::pipeline
     return true;
 }
 
-[[nodiscard]] std::optional<std::reference_wrapper<const RenderPipelineDesc>> RenderPipelineRegistry::find(std::string_view id) const noexcept
+[[nodiscard]] std::optional<std::reference_wrapper<const RenderPipelineDesc>> RenderPipelineRegistry::find(
+    std::string_view id) const noexcept
 {
     auto const it = indexById_.find(std::string{id});
     if (it == indexById_.end())
@@ -78,8 +79,7 @@ void registerDefaultPipelines(RenderPipelineRegistry &registry)
     return std::filesystem::path{std::string{nr::projectRoot}} / "build" / "app" / "model-history.txt";
 }
 
-[[nodiscard]] std::expected<std::filesystem::path, std::string> resolveModelAssetPath(
-    const std::filesystem::path& path)
+[[nodiscard]] std::expected<std::filesystem::path, std::string> resolveModelAssetPath(const std::filesystem::path &path)
 {
     if (path.empty())
     {
@@ -87,72 +87,50 @@ void registerDefaultPipelines(RenderPipelineRegistry &registry)
     }
 
     auto const rawPath = path.generic_string();
-    auto const hasForbiddenPrefix =
-        rawPath.starts_with("//") ||
-        rawPath.starts_with(R"(\\)") ||
-        rawPath.starts_with(R"(\\?\)") ||
-        rawPath.starts_with(R"(\\.\)") ||
-        rawPath.contains("://");
+    auto const hasForbiddenPrefix = rawPath.starts_with("//") || rawPath.starts_with(R"(\\)") ||
+                                    rawPath.starts_with(R"(\\?\)") || rawPath.starts_with(R"(\\.\)") ||
+                                    rawPath.contains("://");
     auto const hasShellSyntax = rawPath.find_first_of("|&;<>\n\r\t\"'`$*?") != std::string::npos;
     if (hasForbiddenPrefix || hasShellSyntax)
     {
-        return std::unexpected(std::format(
-            "Model path contains a forbidden path or shell form: '{}'.",
-            rawPath));
+        return std::unexpected(std::format("Model path contains a forbidden path or shell form: '{}'.", rawPath));
     }
 
     auto ec = std::error_code{};
     auto const assetRoot = std::filesystem::canonical(modelAssetRootPath(), ec);
     if (ec)
     {
-        return std::unexpected(std::format(
-            "Failed to resolve model asset root '{}': {}",
-            modelAssetRootPath().generic_string(),
-            ec.message()));
+        return std::unexpected(std::format("Failed to resolve model asset root '{}': {}",
+                                           modelAssetRootPath().generic_string(), ec.message()));
     }
 
     auto requested = path;
     if (!requested.is_absolute())
     {
         auto firstComponent = requested.begin();
-        auto firstText = firstComponent == requested.end()
-                             ? std::string{}
-                             : firstComponent->string();
-        std::ranges::transform(
-            firstText,
-            firstText.begin(),
-            [](unsigned char value) {
-                return static_cast<char>(std::tolower(value));
-            });
-        requested = firstText == "assets"
-                        ? std::filesystem::path{std::string{nr::projectRoot}} / requested
-                        : assetRoot / requested;
+        auto firstText = firstComponent == requested.end() ? std::string{} : firstComponent->string();
+        std::ranges::transform(firstText, firstText.begin(),
+                               [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+        requested = firstText == "assets" ? std::filesystem::path{std::string{nr::projectRoot}} / requested
+                                          : assetRoot / requested;
     }
 
     auto const resolved = std::filesystem::canonical(requested, ec);
     if (ec)
     {
-        return std::unexpected(std::format(
-            "Failed to resolve model asset '{}': {}",
-            path.generic_string(),
-            ec.message()));
+        return std::unexpected(
+            std::format("Failed to resolve model asset '{}': {}", path.generic_string(), ec.message()));
     }
     if (!std::filesystem::is_regular_file(resolved, ec) || ec)
     {
-        return std::unexpected(std::format(
-            "Model asset is not a regular file: '{}'.",
-            resolved.generic_string()));
+        return std::unexpected(std::format("Model asset is not a regular file: '{}'.", resolved.generic_string()));
     }
 
     auto const relative = resolved.lexically_relative(assetRoot);
-    if (relative.empty() ||
-        relative.is_absolute() ||
-        *relative.begin() == "..")
+    if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
     {
-        return std::unexpected(std::format(
-            "Model assets must remain under '{}': '{}'.",
-            assetRoot.generic_string(),
-            path.generic_string()));
+        return std::unexpected(std::format("Model assets must remain under '{}': '{}'.", assetRoot.generic_string(),
+                                           path.generic_string()));
     }
 
     return resolved;
@@ -216,7 +194,8 @@ namespace nr::pipeline::detail
 [[nodiscard]] std::string normalizedModelPathKey(const std::filesystem::path &path)
 {
     auto key = normalizeModelPathForStorage(path).string();
-    std::ranges::transform(key, key.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    std::ranges::transform(key, key.begin(),
+                           [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     return key;
 }
 } // namespace nr::pipeline::detail

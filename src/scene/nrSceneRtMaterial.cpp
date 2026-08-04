@@ -10,9 +10,8 @@ namespace nr::scene
 {
 namespace
 {
-[[nodiscard]] bool slotHasTexture(
-    const nr::resource::Material& material,
-    nr::resource::MaterialTextureSlotSemantic semantic) noexcept
+[[nodiscard]] bool slotHasTexture(const nr::resource::Material &material,
+                                  nr::resource::MaterialTextureSlotSemantic semantic) noexcept
 {
     if (!nr::resource::materialTextureSlotSemanticValid(semantic))
     {
@@ -27,10 +26,9 @@ namespace
     return value.x != 0.0f || value.y != 0.0f || value.z != 0.0f;
 }
 
-[[nodiscard]] float effectiveTransmissionFactor(const nr::resource::Material& material) noexcept
+[[nodiscard]] float effectiveTransmissionFactor(const nr::resource::Material &material) noexcept
 {
-    if (!material.transmission.has_value() ||
-        !std::isfinite(material.transmission->factor))
+    if (!material.transmission.has_value() || !std::isfinite(material.transmission->factor))
     {
         return 0.0f;
     }
@@ -38,10 +36,9 @@ namespace
     return std::clamp(material.transmission->factor, 0.0f, 1.0f);
 }
 
-[[nodiscard]] float effectiveAnisotropyFactor(const nr::resource::Material& material) noexcept
+[[nodiscard]] float effectiveAnisotropyFactor(const nr::resource::Material &material) noexcept
 {
-    if (!material.anisotropy.has_value() ||
-        !std::isfinite(material.anisotropy->factor))
+    if (!material.anisotropy.has_value() || !std::isfinite(material.anisotropy->factor))
     {
         return 0.0f;
     }
@@ -49,10 +46,9 @@ namespace
     return std::clamp(material.anisotropy->factor, 0.0f, 1.0f);
 }
 
-[[nodiscard]] float anisotropyRotation(const nr::resource::Material& material) noexcept
+[[nodiscard]] float anisotropyRotation(const nr::resource::Material &material) noexcept
 {
-    if (!material.anisotropy.has_value() ||
-        !std::isfinite(material.anisotropy->rotation))
+    if (!material.anisotropy.has_value() || !std::isfinite(material.anisotropy->rotation))
     {
         return 0.0f;
     }
@@ -60,7 +56,7 @@ namespace
     return material.anisotropy->rotation;
 }
 
-[[nodiscard]] float transmissionIor(const nr::resource::Material& material) noexcept
+[[nodiscard]] float transmissionIor(const nr::resource::Material &material) noexcept
 {
     auto const authoredIor = material.ior.has_value() ? material.ior->ior : 1.5f;
     if (!std::isfinite(authoredIor))
@@ -74,16 +70,14 @@ namespace
     return std::max(authoredIor, 1.0f);
 }
 
-[[nodiscard]] RtTransmissionMode transmissionMode(const nr::resource::Material& material) noexcept
+[[nodiscard]] RtTransmissionMode transmissionMode(const nr::resource::Material &material) noexcept
 {
-    return material.hasVolumeTransmissionBoundary()
-               ? RtTransmissionMode::volume
-               : RtTransmissionMode::thin;
+    return material.hasVolumeTransmissionBoundary() ? RtTransmissionMode::volume : RtTransmissionMode::thin;
 }
 
 // Non-layer feature flags only. Layer classification (clearcoat/sheen/transmission) lives in
 // rtLayerFlags/normalizeRtLayerFlags; RtMaterialFeatureFlag no longer carries layer bits.
-[[nodiscard]] RtMaterialFeatureFlag rtFeatureFlags(const nr::resource::Material& material) noexcept
+[[nodiscard]] RtMaterialFeatureFlag rtFeatureFlags(const nr::resource::Material &material) noexcept
 {
     auto flags = RtMaterialFeatureFlag::none;
 
@@ -117,7 +111,7 @@ namespace
 
 // RT layer classification is independent from non-layer feature flags. layerFlags == none is the sole
 // unlit encoding; any non-zero mask must contain baseSurface (the 9 valid glTF combinations).
-[[nodiscard]] RtMaterialLayerFlag rtLayerFlags(const nr::resource::Material& material) noexcept
+[[nodiscard]] RtMaterialLayerFlag rtLayerFlags(const nr::resource::Material &material) noexcept
 {
     if (material.unlit)
     {
@@ -132,8 +126,7 @@ namespace
     {
         flags |= RtMaterialLayerFlag::clearcoat;
     }
-    if (material.sheen.has_value() ||
-        slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::sheenColor) ||
+    if (material.sheen.has_value() || slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::sheenColor) ||
         slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::sheenRoughness))
     {
         flags |= RtMaterialLayerFlag::sheen;
@@ -147,28 +140,24 @@ namespace
     return flags;
 }
 
-[[nodiscard]] RtMaterialLayerFlag normalizeRtLayerFlags(const nr::resource::Material& material)
+[[nodiscard]] RtMaterialLayerFlag normalizeRtLayerFlags(const nr::resource::Material &material)
 {
     auto const layerFlags = rtLayerFlags(material);
     auto const layerBits = static_cast<std::uint32_t>(layerFlags);
-    nr::nrAssert(
-        (layerBits & ~static_cast<std::uint32_t>(kRtMaterialPhysicalLayerMask)) == 0u,
-        "RT material layer flags contain bits outside the known layer mask.");
-    nr::nrAssert(
-        layerFlags == RtMaterialLayerFlag::none ||
-            (layerBits & static_cast<std::uint32_t>(RtMaterialLayerFlag::baseSurface)) != 0u,
-        "Non-empty RT material layer flags must contain baseSurface.");
+    nr::nrAssert((layerBits & ~static_cast<std::uint32_t>(kRtMaterialPhysicalLayerMask)) == 0u,
+                 "RT material layer flags contain bits outside the known layer mask.");
+    nr::nrAssert(layerFlags == RtMaterialLayerFlag::none ||
+                     (layerBits & static_cast<std::uint32_t>(RtMaterialLayerFlag::baseSurface)) != 0u,
+                 "Non-empty RT material layer flags must contain baseSurface.");
 
     if (material.unlit &&
-        (material.clearcoat.has_value() || material.sheen.has_value() ||
-         material.transmission.has_value() || material.ior.has_value() ||
-         material.volumeBoundary.has_value() || material.anisotropy.has_value() ||
+        (material.clearcoat.has_value() || material.sheen.has_value() || material.transmission.has_value() ||
+         material.ior.has_value() || material.volumeBoundary.has_value() || material.anisotropy.has_value() ||
          slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::anisotropy) ||
          anyNonZero(material.core.emissiveFactor)))
     {
         nr::nrInfo<nr::LogLevel::warning>(std::format(
-            "RT material '{}' is unlit; ignoring authored PBR extension and emissive data.",
-            material.name));
+            "RT material '{}' is unlit; ignoring authored PBR extension and emissive data.", material.name));
     }
 
     return layerFlags;
@@ -178,27 +167,31 @@ namespace
 {
     switch (mode)
     {
-    case nr::resource::AlphaMode::opaque: return AlphaMode::opaque;
-    case nr::resource::AlphaMode::mask: return AlphaMode::mask;
-    case nr::resource::AlphaMode::blend: return AlphaMode::blend;
+    case nr::resource::AlphaMode::opaque:
+        return AlphaMode::opaque;
+    case nr::resource::AlphaMode::mask:
+        return AlphaMode::mask;
+    case nr::resource::AlphaMode::blend:
+        return AlphaMode::blend;
     }
 
     return AlphaMode::opaque;
 }
 
-[[nodiscard]] RtMaterialLayerRecord makeBaseLayer(const nr::resource::Material& material) noexcept
+[[nodiscard]] RtMaterialLayerRecord makeBaseLayer(const nr::resource::Material &material) noexcept
 {
     return RtMaterialLayerRecord{
         .layer = RtMaterialLayerFlag::baseSurface,
         .p0 = material.core.baseColorFactor,
-        .p1 = glm::vec4{
-            material.core.emissiveFactor,
-            material.core.metallicFactor,
-        },
+        .p1 =
+            glm::vec4{
+                material.core.emissiveFactor,
+                material.core.metallicFactor,
+            },
     };
 }
 
-[[nodiscard]] RtMaterialLayerRecord makeClearcoatLayer(const nr::resource::Material& material) noexcept
+[[nodiscard]] RtMaterialLayerRecord makeClearcoatLayer(const nr::resource::Material &material) noexcept
 {
     auto factor = 0.0f;
     auto roughness = 0.0f;
@@ -210,9 +203,10 @@ namespace
 
     // Effective clearcoat normal scale is 0 when the clearcoat normal slot is unauthored, so the shader
     // can always sample texture id 0 (neutral) and have the decoded tangent normal collapse to (0,0,1).
-    auto const clearcoatNormalScale = slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::clearcoatNormal)
-                                          ? material.slot(nr::resource::MaterialTextureSlotSemantic::clearcoatNormal).scale
-                                          : 0.0f;
+    auto const clearcoatNormalScale =
+        slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::clearcoatNormal)
+            ? material.slot(nr::resource::MaterialTextureSlotSemantic::clearcoatNormal).scale
+            : 0.0f;
 
     return RtMaterialLayerRecord{
         .layer = RtMaterialLayerFlag::clearcoat,
@@ -220,7 +214,7 @@ namespace
     };
 }
 
-[[nodiscard]] RtMaterialLayerRecord makeSheenLayer(const nr::resource::Material& material) noexcept
+[[nodiscard]] RtMaterialLayerRecord makeSheenLayer(const nr::resource::Material &material) noexcept
 {
     auto color = glm::vec3{0.0f};
     auto roughness = 0.0f;
@@ -236,7 +230,7 @@ namespace
     };
 }
 
-[[nodiscard]] RtMaterialLayerRecord makeTransmissionLayer(const nr::resource::Material& material) noexcept
+[[nodiscard]] RtMaterialLayerRecord makeTransmissionLayer(const nr::resource::Material &material) noexcept
 {
     return RtMaterialLayerRecord{
         .layer = RtMaterialLayerFlag::transmission,
@@ -246,9 +240,8 @@ namespace
 }
 } // namespace
 
-[[nodiscard]] RtCompiledMaterial compileRtMaterial(
-    const nr::resource::Material& material,
-    const SceneMaterialTextureIds& textureIds)
+[[nodiscard]] RtCompiledMaterial compileRtMaterial(const nr::resource::Material &material,
+                                                   const SceneMaterialTextureIds &textureIds)
 {
     auto compiled = RtCompiledMaterial{};
     auto const flags = rtFeatureFlags(material);
@@ -256,15 +249,15 @@ namespace
 
     auto const clearcoatFactor = material.clearcoat.has_value() ? material.clearcoat->factor : 0.0f;
     auto const clearcoatRoughness = material.clearcoat.has_value() ? material.clearcoat->roughnessFactor : 0.0f;
-    auto const sheenMax = material.sheen.has_value()
-                              ? std::max({material.sheen->colorFactor.x, material.sheen->colorFactor.y, material.sheen->colorFactor.z})
-                              : 0.0f;
+    auto const sheenMax =
+        material.sheen.has_value()
+            ? std::max({material.sheen->colorFactor.x, material.sheen->colorFactor.y, material.sheen->colorFactor.z})
+            : 0.0f;
 
     // Effective base normal scale is 0 when the base normal slot is unauthored, so always-sampling the
     // neutral texture id 0 collapses the decoded tangent normal back to the geometric/interpolated normal.
-    auto const baseNormalScale = slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::normal)
-                                     ? material.core.normalScale
-                                     : 0.0f;
+    auto const baseNormalScale =
+        slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::normal) ? material.core.normalScale : 0.0f;
     auto const anisotropySlotIndex =
         nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::anisotropy);
     auto const anisotropyTexturePresent =
@@ -286,24 +279,27 @@ namespace
         .alphaCutoff = material.core.alphaCutoff,
         .baseColorFactor = material.core.baseColorFactor,
         .emissiveAndMetallic = glm::vec4{material.core.emissiveFactor, material.core.metallicFactor},
-        .roughnessNormalOcclusionAlpha = glm::vec4{
-            material.core.roughnessFactor,
-            baseNormalScale,
-            material.core.occlusionStrength,
-            material.core.alphaCutoff,
-        },
-        .transmissionClearcoatSheen = glm::vec4{
-            0.0f,
-            clearcoatFactor,
-            clearcoatRoughness,
-            sheenMax,
-        },
-        .anisotropy = glm::vec4{
-            anisotropyStrength,
-            physicalLayerFlags != RtMaterialLayerFlag::none ? anisotropyRotation(material) : 0.0f,
-            anisotropyTexturePresent ? 1.0f : 0.0f,
-            0.0f,
-        },
+        .roughnessNormalOcclusionAlpha =
+            glm::vec4{
+                material.core.roughnessFactor,
+                baseNormalScale,
+                material.core.occlusionStrength,
+                material.core.alphaCutoff,
+            },
+        .transmissionClearcoatSheen =
+            glm::vec4{
+                0.0f,
+                clearcoatFactor,
+                clearcoatRoughness,
+                sheenMax,
+            },
+        .anisotropy =
+            glm::vec4{
+                anisotropyStrength,
+                physicalLayerFlags != RtMaterialLayerFlag::none ? anisotropyRotation(material) : 0.0f,
+                anisotropyTexturePresent ? 1.0f : 0.0f,
+                0.0f,
+            },
     };
 
     // Lit materials write compact layer records in canonical bit order: base -> clearcoat -> sheen ->
@@ -331,16 +327,11 @@ namespace
     compiled.textureRefs.reserve(material.textureSlots.size());
     auto slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
-        auto const& textureSlot = material.textureSlots[slotIndex];
-        nr::nrAssert(
-            textureSlot.uvSet <= 1u,
-            [&] {
-                return std::format(
-                    "RT material '{}' texture slot {} uses unsupported UV set {}.",
-                    material.name,
-                    slotIndex,
-                    textureSlot.uvSet);
-            });
+        auto const &textureSlot = material.textureSlots[slotIndex];
+        nr::nrAssert(textureSlot.uvSet <= 1u, [&] {
+            return std::format("RT material '{}' texture slot {} uses unsupported UV set {}.", material.name, slotIndex,
+                               textureSlot.uvSet);
+        });
         compiled.textureRefs.push_back(RtMaterialTextureRef{
             .uvLinear = textureSlot.transform.linear,
             .uvOffset = textureSlot.transform.offset,
@@ -354,13 +345,14 @@ namespace
     return compiled;
 }
 
-[[nodiscard]] RtMaterialTable makeRtMaterialTable(std::span<const std::reference_wrapper<const RtCompiledMaterial>> materials)
+[[nodiscard]] RtMaterialTable makeRtMaterialTable(
+    std::span<const std::reference_wrapper<const RtCompiledMaterial>> materials)
 {
     auto table = RtMaterialTable{};
     table.headers.reserve(materials.size());
 
     std::ranges::for_each(materials, [&](std::reference_wrapper<const RtCompiledMaterial> materialRef) {
-        auto const& material = materialRef.get();
+        auto const &material = materialRef.get();
         auto header = material.header;
         header.layerOffset = static_cast<std::uint32_t>(table.layers.size());
         header.layerCount = static_cast<std::uint32_t>(material.layers.size());

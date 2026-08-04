@@ -21,12 +21,13 @@ namespace
 
     scene.meshes.push_back(nr::load::MeshAsset{
         .name = "bridge_plan_mesh",
-        .geometries = {
-            nr::load::MeshGeometryAsset{
-                .name = "bridge_plan_geometry_0",
-                .materialIndex = 0,
+        .geometries =
+            {
+                nr::load::MeshGeometryAsset{
+                    .name = "bridge_plan_geometry_0",
+                    .materialIndex = 0,
+                },
             },
-        },
     });
 
     scene.cameras.push_back(nr::load::CameraAsset{
@@ -75,12 +76,13 @@ namespace
     std::ranges::for_each(meshIndices, [&](std::uint32_t meshIndex) {
         scene.meshes.push_back(nr::load::MeshAsset{
             .name = std::format("bridge_plan_mesh_{}", meshIndex),
-            .geometries = {
-                nr::load::MeshGeometryAsset{
-                    .name = std::format("bridge_plan_geometry_{}", meshIndex),
-                    .materialIndex = meshIndex % static_cast<std::uint32_t>(scene.materials.size()),
+            .geometries =
+                {
+                    nr::load::MeshGeometryAsset{
+                        .name = std::format("bridge_plan_geometry_{}", meshIndex),
+                        .materialIndex = meshIndex % static_cast<std::uint32_t>(scene.materials.size()),
+                    },
                 },
-            },
         });
     });
 
@@ -114,9 +116,7 @@ namespace
 }
 
 template <typename InputT, typename KeyFn>
-void requireSequentialBridgeInputs(const std::vector<InputT> &inputs,
-                                   std::uint32_t expectedCount,
-                                   KeyFn &&expectedKey,
+void requireSequentialBridgeInputs(const std::vector<InputT> &inputs, std::uint32_t expectedCount, KeyFn &&expectedKey,
                                    std::string_view label)
 {
     nr::test::requireEqual(inputs.size(), static_cast<std::size_t>(expectedCount), "bridge entry count mismatch");
@@ -131,8 +131,7 @@ void requireSequentialBridgeInputs(const std::vector<InputT> &inputs,
 }
 
 const nr::test::CaseRegistrar allAssetKindsCase{
-    "scene bridge plan includes all asset kinds",
-    [] {
+    "scene bridge plan includes all asset kinds", [] {
         auto sceneAsset = makeBridgePlanAsset();
         auto plan = nr::scene::SceneBridge::buildPlan(sceneAsset);
 
@@ -156,8 +155,7 @@ const nr::test::CaseRegistrar allAssetKindsCase{
     }};
 
 const nr::test::CaseRegistrar emptySourcePathCase{
-    "scene bridge plan reports indexed assets without source path",
-    [] {
+    "scene bridge plan reports indexed assets without source path", [] {
         auto sceneAsset = makeBridgePlanAsset();
         sceneAsset.sourcePath.clear();
 
@@ -172,8 +170,7 @@ const nr::test::CaseRegistrar emptySourcePathCase{
     }};
 
 const nr::test::CaseRegistrar missingTextureKeyCase{
-    "scene bridge plan reports missing texture keys",
-    [] {
+    "scene bridge plan reports missing texture keys", [] {
         auto sceneAsset = makeBridgePlanAsset();
         sceneAsset.textures.front().key.clear();
 
@@ -186,36 +183,37 @@ const nr::test::CaseRegistrar missingTextureKeyCase{
     }};
 
 const nr::test::CaseRegistrar sourceOrderingCase{
-    "scene bridge plan preserves source ordering",
-    [] {
+    "scene bridge plan preserves source ordering", [] {
         auto sceneAsset = makeMultiAssetBridgePlanAsset();
         auto plan = nr::scene::SceneBridge::buildPlan(sceneAsset);
 
         nr::test::require(plan.valid(), "multi-asset bridge plan should be valid");
         requireSequentialBridgeInputs(
-            plan.textures,
-            static_cast<std::uint32_t>(sceneAsset.textures.size()),
-            [&](std::uint32_t sourceIndex) { return sceneAsset.textures[sourceIndex].key; },
-            "Texture");
+            plan.textures, static_cast<std::uint32_t>(sceneAsset.textures.size()),
+            [&](std::uint32_t sourceIndex) { return sceneAsset.textures[sourceIndex].key; }, "Texture");
         requireSequentialBridgeInputs(
-            plan.materials,
-            static_cast<std::uint32_t>(sceneAsset.materials.size()),
-            [&](std::uint32_t sourceIndex) { return nr::scene::SceneBridge::makeMaterialCanonicalKey(sceneAsset, sourceIndex); },
+            plan.materials, static_cast<std::uint32_t>(sceneAsset.materials.size()),
+            [&](std::uint32_t sourceIndex) {
+                return nr::scene::SceneBridge::makeMaterialCanonicalKey(sceneAsset, sourceIndex);
+            },
             "Material");
         requireSequentialBridgeInputs(
-            plan.meshes,
-            static_cast<std::uint32_t>(sceneAsset.meshes.size()),
-            [&](std::uint32_t sourceIndex) { return nr::scene::SceneBridge::makeMeshCanonicalKey(sceneAsset, sourceIndex); },
+            plan.meshes, static_cast<std::uint32_t>(sceneAsset.meshes.size()),
+            [&](std::uint32_t sourceIndex) {
+                return nr::scene::SceneBridge::makeMeshCanonicalKey(sceneAsset, sourceIndex);
+            },
             "Mesh");
         requireSequentialBridgeInputs(
-            plan.cameras,
-            static_cast<std::uint32_t>(sceneAsset.cameras.size()),
-            [&](std::uint32_t sourceIndex) { return nr::scene::SceneBridge::makeCameraCanonicalKey(sceneAsset, sourceIndex); },
+            plan.cameras, static_cast<std::uint32_t>(sceneAsset.cameras.size()),
+            [&](std::uint32_t sourceIndex) {
+                return nr::scene::SceneBridge::makeCameraCanonicalKey(sceneAsset, sourceIndex);
+            },
             "Camera");
         requireSequentialBridgeInputs(
-            plan.lights,
-            static_cast<std::uint32_t>(sceneAsset.lights.size()),
-            [&](std::uint32_t sourceIndex) { return nr::scene::SceneBridge::makeLightCanonicalKey(sceneAsset, sourceIndex); },
+            plan.lights, static_cast<std::uint32_t>(sceneAsset.lights.size()),
+            [&](std::uint32_t sourceIndex) {
+                return nr::scene::SceneBridge::makeLightCanonicalKey(sceneAsset, sourceIndex);
+            },
             "Light");
     }};
 } // namespace

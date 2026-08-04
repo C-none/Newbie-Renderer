@@ -48,7 +48,10 @@ template <WireValueAlternative T> [[nodiscard]] OptionId optionId(OptionKey<T> k
     return *OptionId::parse(key.id());
 }
 
-template <WireValueAlternative T> [[nodiscard]] OptionDefinition makeDefinition(OptionKey<T> key, OptionSchema schema, T defaultValue, OptionScope scope, OptionPresentation presentation = {}, OptionAdmissionValidator validator = {})
+template <WireValueAlternative T>
+[[nodiscard]] OptionDefinition makeDefinition(OptionKey<T> key, OptionSchema schema, T defaultValue, OptionScope scope,
+                                              OptionPresentation presentation = {},
+                                              OptionAdmissionValidator validator = {})
 {
     return OptionDefinition{
         .id = optionId(key),
@@ -60,11 +63,20 @@ template <WireValueAlternative T> [[nodiscard]] OptionDefinition makeDefinition(
     };
 }
 
-[[nodiscard]] OptionDefinition makeBooleanDefinition(OptionKey<bool> key, bool defaultValue, OptionScope scope, OptionPresentation presentation = {});
-[[nodiscard]] OptionDefinition makeUnsignedDefinition(OptionKey<std::uint64_t> key, std::uint64_t defaultValue, std::uint64_t minimum, std::uint64_t maximum, OptionScope scope, OptionPresentation presentation = {});
-[[nodiscard]] OptionDefinition makeNumberDefinition(OptionKey<double> key, double defaultValue, double minimum, double maximum, OptionScope scope, OptionPresentation presentation = {});
-[[nodiscard]] OptionDefinition makeEnumDefinition(OptionKey<std::string> key, std::string defaultValue, std::vector<std::string> allowed, OptionScope scope, OptionPresentation presentation = {}, OptionAdmissionValidator validator = {});
-[[nodiscard]] OptionDefinition makeEmptyEffectDefinition(OptionKey<OptionWireValue::Object> key, OptionScope scope, OptionPresentation presentation = {});
+[[nodiscard]] OptionDefinition makeBooleanDefinition(OptionKey<bool> key, bool defaultValue, OptionScope scope,
+                                                     OptionPresentation presentation = {});
+[[nodiscard]] OptionDefinition makeUnsignedDefinition(OptionKey<std::uint64_t> key, std::uint64_t defaultValue,
+                                                      std::uint64_t minimum, std::uint64_t maximum, OptionScope scope,
+                                                      OptionPresentation presentation = {});
+[[nodiscard]] OptionDefinition makeNumberDefinition(OptionKey<double> key, double defaultValue, double minimum,
+                                                    double maximum, OptionScope scope,
+                                                    OptionPresentation presentation = {});
+[[nodiscard]] OptionDefinition makeEnumDefinition(OptionKey<std::string> key, std::string defaultValue,
+                                                  std::vector<std::string> allowed, OptionScope scope,
+                                                  OptionPresentation presentation = {},
+                                                  OptionAdmissionValidator validator = {});
+[[nodiscard]] OptionDefinition makeEmptyEffectDefinition(OptionKey<OptionWireValue::Object> key, OptionScope scope,
+                                                         OptionPresentation presentation = {});
 
 namespace keys
 {
@@ -79,9 +91,12 @@ inline constexpr auto viewerCameraVerticalFovDegrees = OptionKey<std::uint64_t>{
 inline constexpr auto viewerCameraClipPlanes = OptionKey<OptionWireValue::Object>{"viewer.camera.clip_planes"};
 inline constexpr auto viewerCameraMovementSpeed = OptionKey<double>{"viewer.camera.movement_speed"};
 
-inline constexpr auto pathTracingMaxSurfaceBounces = OptionKey<std::uint64_t>{"render.path_tracing.max_surface_bounces"};
-inline constexpr auto pathTracingRussianRouletteEnabled = OptionKey<bool>{"render.path_tracing.russian_roulette_enabled"};
-inline constexpr auto pathTracingFilterAfterShadingEnabled = OptionKey<bool>{"render.path_tracing.filter_after_shading_enabled"};
+inline constexpr auto pathTracingMaxSurfaceBounces =
+    OptionKey<std::uint64_t>{"render.path_tracing.max_surface_bounces"};
+inline constexpr auto pathTracingRussianRouletteEnabled =
+    OptionKey<bool>{"render.path_tracing.russian_roulette_enabled"};
+inline constexpr auto pathTracingFilterAfterShadingEnabled =
+    OptionKey<bool>{"render.path_tracing.filter_after_shading_enabled"};
 inline constexpr auto accumulateMaxHistorySamples = OptionKey<std::uint64_t>{"render.accumulate.max_history_samples"};
 inline constexpr auto dlssEnabled = OptionKey<bool>{"render.dlss.enabled"};
 inline constexpr auto dlssQuality = OptionKey<std::string>{"render.dlss.quality"};

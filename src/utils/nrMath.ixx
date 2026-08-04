@@ -20,9 +20,7 @@ concept StringViewLike = requires(const T &value) {
 [[nodiscard]] constexpr std::uint64_t fnv1a64(std::span<const std::byte> bytes) noexcept
 {
     return std::ranges::fold_left(
-        bytes,
-        fnv1a64OffsetBasis,
-        [](std::uint64_t state, std::byte byteValue) constexpr noexcept {
+        bytes, fnv1a64OffsetBasis, [](std::uint64_t state, std::byte byteValue) constexpr noexcept {
             auto next = state ^ static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(byteValue));
             return next * fnv1a64Prime;
         });
@@ -33,21 +31,17 @@ concept StringViewLike = requires(const T &value) {
     return state ^ (mixed + hashCombineMagic + (state << 6) + (state >> 2));
 }
 
-template <TriviallyByteHashable T>
-constexpr void hashAppend(std::uint64_t &state, const T &value) noexcept
+template <TriviallyByteHashable T> constexpr void hashAppend(std::uint64_t &state, const T &value) noexcept
 {
     auto rawBytes = std::bit_cast<std::array<std::byte, sizeof(T)>>(value);
     state = combineHash(state, fnv1a64(std::span<const std::byte>{rawBytes.data(), rawBytes.size()}));
 }
 
-template <StringViewLike TString>
-constexpr void hashAppendString(std::uint64_t &state, const TString &value) noexcept
+template <StringViewLike TString> constexpr void hashAppendString(std::uint64_t &state, const TString &value) noexcept
 {
     auto text = std::string_view(value);
-    auto mixed = std::ranges::fold_left(
-        text,
-        fnv1a64OffsetBasis,
-        [](std::uint64_t current, char ch) constexpr noexcept {
+    auto mixed =
+        std::ranges::fold_left(text, fnv1a64OffsetBasis, [](std::uint64_t current, char ch) constexpr noexcept {
             auto byteValue = static_cast<std::uint8_t>(ch);
             auto next = current ^ static_cast<std::uint64_t>(byteValue);
             return next * fnv1a64Prime;
@@ -83,8 +77,7 @@ constexpr void hashAppendString(std::uint64_t &state, const TString &value) noex
     return toHexString(toHexChars(value));
 }
 
-template <typename T>
-[[nodiscard]] consteval std::uint64_t hashValue(const T &value) noexcept
+template <typename T> [[nodiscard]] consteval std::uint64_t hashValue(const T &value) noexcept
 {
     std::uint64_t state = fnv1a64OffsetBasis;
     hashAppend(state, value);

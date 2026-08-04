@@ -48,12 +48,15 @@ using ErrorCode = boost::system::error_code;
     case boostJson::kind::array: {
         auto result = JsonValue::Array{};
         result.reserve(value.as_array().size());
-        std::ranges::transform(value.as_array(), std::back_inserter(result), [](auto const &element) { return fromBoostJson(element); });
+        std::ranges::transform(value.as_array(), std::back_inserter(result),
+                               [](auto const &element) { return fromBoostJson(element); });
         return JsonValue{std::move(result)};
     }
     case boostJson::kind::object: {
         auto result = JsonValue::Object{};
-        std::ranges::for_each(value.as_object(), [&](auto const &entry) { result.emplace(std::string{entry.key().data(), entry.key().size()}, fromBoostJson(entry.value())); });
+        std::ranges::for_each(value.as_object(), [&](auto const &entry) {
+            result.emplace(std::string{entry.key().data(), entry.key().size()}, fromBoostJson(entry.value()));
+        });
         return JsonValue{std::move(result)};
     }
     }
@@ -69,7 +72,8 @@ using ErrorCode = boost::system::error_code;
             {
                 return nullptr;
             }
-            else if constexpr (std::same_as<Stored, bool> || std::same_as<Stored, std::int64_t> || std::same_as<Stored, std::uint64_t> || std::same_as<Stored, double>)
+            else if constexpr (std::same_as<Stored, bool> || std::same_as<Stored, std::int64_t> ||
+                               std::same_as<Stored, std::uint64_t> || std::same_as<Stored, double>)
             {
                 return stored;
             }
@@ -81,14 +85,16 @@ using ErrorCode = boost::system::error_code;
             {
                 auto result = boostJson::array{};
                 result.reserve(stored.size());
-                std::ranges::transform(stored, std::back_inserter(result), [](auto const &element) { return toBoostJson(element); });
+                std::ranges::transform(stored, std::back_inserter(result),
+                                       [](auto const &element) { return toBoostJson(element); });
                 return result;
             }
             else
             {
                 auto result = boostJson::object{};
                 result.reserve(stored.size());
-                std::ranges::for_each(stored, [&](auto const &entry) { result.emplace(entry.first, toBoostJson(entry.second)); });
+                std::ranges::for_each(
+                    stored, [&](auto const &entry) { result.emplace(entry.first, toBoostJson(entry.second)); });
                 return result;
             }
         },
@@ -129,7 +135,8 @@ JsonError serializeJson(const JsonValue &value, std::string &output, std::size_t
     }
 
     auto validationError = ErrorCode{};
-    auto validator = boostJson::parser{boostJson::storage_ptr{}, strictJsonOptions(std::numeric_limits<std::size_t>::max())};
+    auto validator =
+        boostJson::parser{boostJson::storage_ptr{}, strictJsonOptions(std::numeric_limits<std::size_t>::max())};
     auto const consumed = validator.write(output.data(), output.size(), validationError);
     if (validationError || consumed != output.size())
     {

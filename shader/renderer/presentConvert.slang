@@ -27,8 +27,13 @@ struct PresentConvertPushConstants
     float uiOpacity;
 };
 
+[[vk::binding(0, 1)]]
 Texture2D<float4> gSourceColor;
+
+[[vk::binding(1, 1)]]
 Texture2D<float4> gUiColor;
+
+[[vk::binding(0, 2)]]
 RWTexture2D<float4> gConvertedColor;
 
 [[vk::push_constant]]
@@ -52,10 +57,9 @@ float3 linearToSrgb(float3 linearColor)
 
 float3 linearSrgbToBt2020(float3 linearColor)
 {
-    return float3(
-        0.6274040f * linearColor.r + 0.3292820f * linearColor.g + 0.0433136f * linearColor.b,
-        0.0690970f * linearColor.r + 0.9195400f * linearColor.g + 0.0113612f * linearColor.b,
-        0.0163916f * linearColor.r + 0.0880132f * linearColor.g + 0.8955950f * linearColor.b);
+    return float3(0.6274040f * linearColor.r + 0.3292820f * linearColor.g + 0.0433136f * linearColor.b,
+                  0.0690970f * linearColor.r + 0.9195400f * linearColor.g + 0.0113612f * linearColor.b,
+                  0.0163916f * linearColor.r + 0.0880132f * linearColor.g + 0.8955950f * linearColor.b);
 }
 
 // ST 2084 / PQ OETF on a signal normalized so 1.0 == 10000 nits.
@@ -88,10 +92,8 @@ float normalizedFromPqSignal(float e)
 
 float3 nitsToSt2084Pq(float3 nits)
 {
-    return float3(
-        pqSignalFromNormalized(nits.r / 10000.0f),
-        pqSignalFromNormalized(nits.g / 10000.0f),
-        pqSignalFromNormalized(nits.b / 10000.0f));
+    return float3(pqSignalFromNormalized(nits.r / 10000.0f), pqSignalFromNormalized(nits.g / 10000.0f),
+                  pqSignalFromNormalized(nits.b / 10000.0f));
 }
 
 float3 linearToHdr10Pq(float3 linearColor)
@@ -153,9 +155,8 @@ float bt2390EetfNits(float lumNits, float maxDisplayNits)
         float t = (e1 - ks) / max(1.0f - ks, 1.0e-6f);
         float t2 = t * t;
         float t3 = t2 * t;
-        e2 = (2.0f * t3 - 3.0f * t2 + 1.0f) * ks
-           + (t3 - 2.0f * t2 + t) * (1.0f - ks)
-           + (-2.0f * t3 + 3.0f * t2) * maxLum;
+        e2 = (2.0f * t3 - 3.0f * t2 + 1.0f) * ks + (t3 - 2.0f * t2 + t) * (1.0f - ks) +
+             (-2.0f * t3 + 3.0f * t2) * maxLum;
     }
     return normalizedFromPqSignal(e2) * 10000.0f;
 }
@@ -215,7 +216,7 @@ float3 encodePresentOutput(float3 linearColor, PresentOutputEncoding outputEncod
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void presentConvertMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+void presentConvertMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     if (dispatchThreadID.x >= gPresentConvert.width || dispatchThreadID.y >= gPresentConvert.height)
     {
@@ -226,7 +227,8 @@ void presentConvertMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float4 sourceColor = gSourceColor.Load(int3(pixelCoord.x, pixelCoord.y, 0));
 
     // Tone map the scene before compositing UI so the UI stays display-referred SDR reference white.
-    float3 displayLinear = applyToneMapping(sourceColor.rgb, gPresentConvert.toneMapping, gPresentConvert.outputEncoding);
+    float3 displayLinear =
+        applyToneMapping(sourceColor.rgb, gPresentConvert.toneMapping, gPresentConvert.outputEncoding);
 
     float effectiveUiOpacity = saturate(gPresentConvert.uiOpacity);
     if (effectiveUiOpacity > 0.0f)
@@ -244,8 +246,6 @@ void presentConvertMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 convertedRgb = encodePresentOutput(displayLinear, gPresentConvert.outputEncoding);
 
     bool swizzleBgr = gPresentConvert.swizzleBgr != 0u;
-    float3 outputRgb = swizzleBgr
-                           ? float3(convertedRgb.b, convertedRgb.g, convertedRgb.r)
-                           : convertedRgb;
+    float3 outputRgb = swizzleBgr ? float3(convertedRgb.b, convertedRgb.g, convertedRgb.r) : convertedRgb;
     gConvertedColor[pixelCoord] = float4(outputRgb, 1.0f);
 }

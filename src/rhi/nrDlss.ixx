@@ -25,25 +25,21 @@ using DlssRayReconstructionEvalDesc = nr::dependency::dlss::RayReconstructionEva
 
 inline constexpr auto kDlssRayReconstructionResourceSlotCount =
     nr::dependency::dlss::rayReconstructionResourceSlotCount;
-inline constexpr auto kDlssRayReconstructionSubrectSlotCount =
-    nr::dependency::dlss::rayReconstructionSubrectSlotCount;
+inline constexpr auto kDlssRayReconstructionSubrectSlotCount = nr::dependency::dlss::rayReconstructionSubrectSlotCount;
 
 class DlssContext final
 {
   public:
-    DlssContext(
-        vk::Instance instance,
-        vk::PhysicalDevice physicalDevice,
-        vk::Device device,
-        std::filesystem::path applicationDataPath);
+    DlssContext(vk::Instance instance, vk::PhysicalDevice physicalDevice, vk::Device device,
+                std::filesystem::path applicationDataPath);
 
-    DlssContext(const DlssContext&) = delete;
-    DlssContext& operator=(const DlssContext&) = delete;
-    DlssContext(DlssContext&&) = delete;
-    DlssContext& operator=(DlssContext&&) = delete;
+    DlssContext(const DlssContext &) = delete;
+    DlssContext &operator=(const DlssContext &) = delete;
+    DlssContext(DlssContext &&) = delete;
+    DlssContext &operator=(DlssContext &&) = delete;
 
     [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] const DlssStatus& status() const noexcept;
+    [[nodiscard]] const DlssStatus &status() const noexcept;
     [[nodiscard]] DlssOptimalSettings optimalSettings(DlssDimensions targetSize, DlssQuality quality);
 
   private:
@@ -54,22 +50,19 @@ class DlssContext final
 class DlssRayReconstructionFeature final
 {
   public:
-    DlssRayReconstructionFeature(
-        std::shared_ptr<DlssContext> context,
-        const vk::raii::CommandBuffer& commandBuffer,
-        const DlssRayReconstructionCreateDesc& desc);
+    DlssRayReconstructionFeature(std::shared_ptr<DlssContext> context, const vk::raii::CommandBuffer &commandBuffer,
+                                 const DlssRayReconstructionCreateDesc &desc);
     ~DlssRayReconstructionFeature();
 
-    DlssRayReconstructionFeature(const DlssRayReconstructionFeature&) = delete;
-    DlssRayReconstructionFeature& operator=(const DlssRayReconstructionFeature&) = delete;
-    DlssRayReconstructionFeature(DlssRayReconstructionFeature&&) noexcept;
-    DlssRayReconstructionFeature& operator=(DlssRayReconstructionFeature&&) noexcept;
+    DlssRayReconstructionFeature(const DlssRayReconstructionFeature &) = delete;
+    DlssRayReconstructionFeature &operator=(const DlssRayReconstructionFeature &) = delete;
+    DlssRayReconstructionFeature(DlssRayReconstructionFeature &&) noexcept;
+    DlssRayReconstructionFeature &operator=(DlssRayReconstructionFeature &&) noexcept;
 
     [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] const DlssStatus& status() const noexcept;
-    [[nodiscard]] DlssStatus evaluate(
-        const vk::raii::CommandBuffer& commandBuffer,
-        const DlssRayReconstructionEvalDesc& desc);
+    [[nodiscard]] const DlssStatus &status() const noexcept;
+    [[nodiscard]] DlssStatus evaluate(const vk::raii::CommandBuffer &commandBuffer,
+                                      const DlssRayReconstructionEvalDesc &desc);
 
   private:
     // Declaration order guarantees the feature and its parameter map are

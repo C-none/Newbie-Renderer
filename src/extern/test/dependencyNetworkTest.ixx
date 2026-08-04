@@ -38,7 +38,8 @@ class WebSocketClient
     WebSocketClient(WebSocketClient &&) = delete;
     WebSocketClient &operator=(WebSocketClient &&) = delete;
 
-    [[nodiscard]] ConnectResult connect(const WebSocketEndpoint &endpoint, std::string bearerToken, std::optional<std::string> origin = {});
+    [[nodiscard]] ConnectResult connect(const WebSocketEndpoint &endpoint, std::string bearerToken,
+                                        std::optional<std::string> origin = {});
     [[nodiscard]] WriteResult writeText(std::string_view payload);
     [[nodiscard]] WriteResult writeTextFragments(std::span<const std::string_view> fragments);
     [[nodiscard]] WriteResult writeBinary(std::string_view payload);

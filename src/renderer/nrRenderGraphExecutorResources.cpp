@@ -11,16 +11,22 @@ import :rendererSubmission;
 
 namespace nr::renderer
 {
-[[nodiscard]] nr::rhi::LogicalDescriptorResolver makeDefaultLogicalDescriptorResolver(const PassPrepareContext &prepareContext)
+[[nodiscard]] nr::rhi::LogicalDescriptorResolver makeDefaultLogicalDescriptorResolver(
+    const PassPrepareContext &prepareContext)
 {
-    return [&prepareContext](const nr::rhi::LogicalResourceDescriptorWrite &logicalResource, const nr::rhi::DescriptorBindingInfo &binding, std::uint32_t arrayElement) -> std::optional<nr::rhi::DescriptorWritePayload> {
+    return [&prepareContext](const nr::rhi::LogicalResourceDescriptorWrite &logicalResource,
+                             const nr::rhi::DescriptorBindingInfo &binding,
+                             std::uint32_t arrayElement) -> std::optional<nr::rhi::DescriptorWritePayload> {
         return resolveLogicalDescriptorWriteDefault(logicalResource, binding, arrayElement, prepareContext);
     };
 }
 
 void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &compiled, const nr::rhi::Device &device)
 {
-    auto resourceByHandle = compiled.resources | std::views::transform([](const CompiledResourceDesc &resource) { return std::pair{resource.handle, std::cref(resource)}; }) | std::ranges::to<CompiledResourceLookup>();
+    auto resourceByHandle = compiled.resources | std::views::transform([](const CompiledResourceDesc &resource) {
+                                return std::pair{resource.handle, std::cref(resource)};
+                            }) |
+                            std::ranges::to<CompiledResourceLookup>();
 
     auto canOmit = [&](const ResourceStateTransition &transition) {
         if (transition.strength != DependencyStrength::ReleaseAcquireRequired)
@@ -29,7 +35,9 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
         }
 
         auto resourceIt = resourceByHandle.find(transition.resource);
-        nrAssert(resourceIt != resourceByHandle.end(), "RenderGraphExecutor::applyQueueFamilyTransferPolicy transition references an unknown resource handle.");
+        nrAssert(
+            resourceIt != resourceByHandle.end(),
+            "RenderGraphExecutor::applyQueueFamilyTransferPolicy transition references an unknown resource handle.");
         return canOmitQueueFamilyOwnershipTransfer(resourceIt->second.get(), transition, device);
     };
 
@@ -49,15 +57,18 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
                     auto sourceSubmissionTimelineValue = std::uint64_t{0};
                     if (resource.retainedBufferState.has_value())
                     {
-                        sourceSubmissionTimelineValue = resource.retainedBufferState->get().common.lastSubmissionTimelineValue;
+                        sourceSubmissionTimelineValue =
+                            resource.retainedBufferState->get().common.lastSubmissionTimelineValue;
                     }
                     else if (resource.retainedImageState.has_value())
                     {
-                        sourceSubmissionTimelineValue = resource.retainedImageState->get().common.lastSubmissionTimelineValue;
+                        sourceSubmissionTimelineValue =
+                            resource.retainedImageState->get().common.lastSubmissionTimelineValue;
                     }
                     else if (resource.retainedAccelerationStructureState.has_value())
                     {
-                        sourceSubmissionTimelineValue = resource.retainedAccelerationStructureState->get().common.lastSubmissionTimelineValue;
+                        sourceSubmissionTimelineValue =
+                            resource.retainedAccelerationStructureState->get().common.lastSubmissionTimelineValue;
                     }
                     if (sourceSubmissionTimelineValue == 0)
                     {
@@ -67,24 +78,33 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
                 }
 
                 auto const needsLayoutTransition = resource.isImage && transition.oldLayout != transition.newLayout;
-                transition.strength = needsLayoutTransition ? DependencyStrength::BarrierRequired : DependencyStrength::InOrder;
+                transition.strength =
+                    needsLayoutTransition ? DependencyStrength::BarrierRequired : DependencyStrength::InOrder;
                 if (needsLayoutTransition)
                 {
                     // Submission timeline waits provide the cross-queue memory
                     // dependency. Keep only the consumer-side layout transition.
                     transition.srcScope = AccessScope{
-                        .stages = transition.dstScope.resolved() ? transition.dstScope.stages : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands},
+                        .stages = transition.dstScope.resolved()
+                                      ? transition.dstScope.stages
+                                      : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands},
                     };
                 }
             });
 
-            std::ranges::for_each(pass.resourceUses, [&](const PassResourceUseDesc &use) { seenResourceUses.insert(use.resource); });
+            std::ranges::for_each(pass.resourceUses,
+                                  [&](const PassResourceUseDesc &use) { seenResourceUses.insert(use.resource); });
         });
     });
 
     auto remainingOwnershipTransitions = std::vector<ResourceStateTransition>{};
     std::ranges::for_each(compiled.submitBatches, [&](const CompiledSubmitBatch &batch) {
-        std::ranges::for_each(batch.passes, [&](const CompiledPass &pass) { std::ranges::copy_if(pass.preBarriers, std::back_inserter(remainingOwnershipTransitions), [](const ResourceStateTransition &transition) { return transition.strength == DependencyStrength::ReleaseAcquireRequired; }); });
+        std::ranges::for_each(batch.passes, [&](const CompiledPass &pass) {
+            std::ranges::copy_if(pass.preBarriers, std::back_inserter(remainingOwnershipTransitions),
+                                 [](const ResourceStateTransition &transition) {
+                                     return transition.strength == DependencyStrength::ReleaseAcquireRequired;
+                                 });
+        });
     });
     compiled.ownershipTransitions = std::move(remainingOwnershipTransitions);
 }
@@ -96,7 +116,8 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
     };
 }
 
-[[nodiscard]] std::map<GraphResourceHandle, PreparedResourceBinding> RenderGraphExecutor::resolveRuntimeResources(const CompiledGraphFrame &compiled, const ExecuteContext &context)
+[[nodiscard]] std::map<GraphResourceHandle, PreparedResourceBinding> RenderGraphExecutor::resolveRuntimeResources(
+    const CompiledGraphFrame &compiled, const ExecuteContext &context)
 {
     auto bindings = std::map<GraphResourceHandle, PreparedResourceBinding>{};
 
@@ -113,7 +134,8 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
 
         if (resource.isBuffer)
         {
-            auto isTransientManaged = resource.lifetime == ResourceLifetime::GraphTransient && resource.residency == ResourceResidency::Managed;
+            auto isTransientManaged = resource.lifetime == ResourceLifetime::GraphTransient &&
+                                      resource.residency == ResourceResidency::Managed;
             if (isTransientManaged)
             {
                 auto createInfo = vk::BufferCreateInfo{};
@@ -125,7 +147,8 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
                 }
                 createInfo.sharingMode = vk::SharingMode::eExclusive;
 
-                auto &buffer = context.device.resourcePool.allocateTransientBuffer(createInfo, resource.resolvedBufferMemoryUsage, context.frameIndex, resource.debugName);
+                auto &buffer = context.device.resourcePool.allocateTransientBuffer(
+                    createInfo, resource.resolvedBufferMemoryUsage, context.frameIndex, resource.debugName);
                 binding.buffer = buffer.handle();
                 binding.bufferSize = buffer.size();
                 binding.bufferResource = std::cref(buffer);
@@ -134,7 +157,9 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
             {
                 // Use pre-allocated imported buffer from node
                 const auto &buffer = resource.importedBufferResource->get();
-                nrAssert(buffer.valid(), "RenderGraphExecutor::resolveRuntimeResources: importedBufferResource reference is invalid for resource: " + resource.debugName);
+                nrAssert(buffer.valid(), "RenderGraphExecutor::resolveRuntimeResources: importedBufferResource "
+                                         "reference is invalid for resource: " +
+                                             resource.debugName);
                 binding.buffer = buffer.handle();
                 binding.bufferSize = buffer.size();
                 binding.bufferResource = std::cref(buffer);
@@ -143,15 +168,19 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
 
         if (resource.isAccelerationStructure)
         {
-            auto resolveImportedAccelerationStructure = [&](const nr::rhi::AccelerationStructureResource &accelerationStructure) {
-                nrAssert(accelerationStructure.valid(), "RenderGraphExecutor::resolveRuntimeResources: imported acceleration structure reference is invalid for resource: " + resource.debugName);
-                binding.accelerationStructure = accelerationStructure.raw();
-                binding.accelerationStructureType = accelerationStructure.type();
-                binding.accelerationStructureSize = accelerationStructure.size();
-                binding.accelerationStructureStorageBuffer = accelerationStructure.storageBuffer().handle();
-                binding.accelerationStructureStorageOffset = accelerationStructure.storageOffset();
-                binding.accelerationStructureResource = std::cref(accelerationStructure);
-            };
+            auto resolveImportedAccelerationStructure =
+                [&](const nr::rhi::AccelerationStructureResource &accelerationStructure) {
+                    nrAssert(accelerationStructure.valid(),
+                             "RenderGraphExecutor::resolveRuntimeResources: imported acceleration structure reference "
+                             "is invalid for resource: " +
+                                 resource.debugName);
+                    binding.accelerationStructure = accelerationStructure.raw();
+                    binding.accelerationStructureType = accelerationStructure.type();
+                    binding.accelerationStructureSize = accelerationStructure.size();
+                    binding.accelerationStructureStorageBuffer = accelerationStructure.storageBuffer().handle();
+                    binding.accelerationStructureStorageOffset = accelerationStructure.storageOffset();
+                    binding.accelerationStructureResource = std::cref(accelerationStructure);
+                };
 
             if (resource.importedAccelerationStructureResource.has_value())
             {
@@ -167,7 +196,8 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
             }
             else
             {
-                auto isTransientManaged = resource.lifetime == ResourceLifetime::GraphTransient && resource.residency == ResourceResidency::Managed;
+                auto isTransientManaged = resource.lifetime == ResourceLifetime::GraphTransient &&
+                                          resource.residency == ResourceResidency::Managed;
                 if (isTransientManaged)
                 {
                     auto createInfo = vk::ImageCreateInfo{};
@@ -187,7 +217,8 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
                     // Vulkan image creation only permits Undefined/Preinitialized layouts.
                     createInfo.initialLayout = vk::ImageLayout::eUndefined;
 
-                    auto &image = context.device.resourcePool.allocateTransientImage(createInfo, nr::rhi::MemoryUsage::GpuOnly, context.frameIndex, resource.debugName);
+                    auto &image = context.device.resourcePool.allocateTransientImage(
+                        createInfo, nr::rhi::MemoryUsage::GpuOnly, context.frameIndex, resource.debugName);
                     binding.image = image.handle();
                     binding.imageView = *image.view();
                     binding.imageResource = std::cref(image);
@@ -196,7 +227,9 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
                 {
                     // Use pre-allocated imported image from node
                     const auto &image = resource.importedImageResource->get();
-                    nrAssert(image.valid(), "RenderGraphExecutor::resolveRuntimeResources: importedImageResource reference is invalid for resource: " + resource.debugName);
+                    nrAssert(image.valid(), "RenderGraphExecutor::resolveRuntimeResources: importedImageResource "
+                                            "reference is invalid for resource: " +
+                                                resource.debugName);
                     binding.image = image.handle();
                     binding.imageView = *image.view();
                     binding.imageResource = std::cref(image);
@@ -214,7 +247,10 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
     return bindings;
 }
 
-void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFrame &compiled, const ExecuteContext &context, std::uint32_t swapchainImageIndex, RuntimeBindingMap &runtimeBindings)
+void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFrame &compiled,
+                                                           const ExecuteContext &context,
+                                                           std::uint32_t swapchainImageIndex,
+                                                           RuntimeBindingMap &runtimeBindings)
 {
     auto const currentExtent = context.device.presentationContext.swapchainExtent();
     auto const currentFormat = context.device.presentationContext.swapchainFormat();
@@ -224,9 +260,17 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
             return;
         }
 
-        nrAssert(resource.resolvedFormat == currentFormat, std::format("RenderGraphExecutor swapchain format changed between graph build and acquire boundary: compiled={} acquired={}.", vk::to_string(resource.resolvedFormat), vk::to_string(currentFormat)));
-        nrAssert(resource.resolvedExtent.width == std::max(1u, currentExtent.width) && resource.resolvedExtent.height == std::max(1u, currentExtent.height) && resource.resolvedExtent.depth == 1u,
-                 std::format("RenderGraphExecutor swapchain extent changed between graph build and acquire boundary: compiled={}x{} acquired={}x{}.", resource.resolvedExtent.width, resource.resolvedExtent.height, currentExtent.width, currentExtent.height));
+        nrAssert(resource.resolvedFormat == currentFormat,
+                 std::format("RenderGraphExecutor swapchain format changed between graph build and acquire boundary: "
+                             "compiled={} acquired={}.",
+                             vk::to_string(resource.resolvedFormat), vk::to_string(currentFormat)));
+        nrAssert(resource.resolvedExtent.width == std::max(1u, currentExtent.width) &&
+                     resource.resolvedExtent.height == std::max(1u, currentExtent.height) &&
+                     resource.resolvedExtent.depth == 1u,
+                 std::format("RenderGraphExecutor swapchain extent changed between graph build and acquire boundary: "
+                             "compiled={}x{} acquired={}x{}.",
+                             resource.resolvedExtent.width, resource.resolvedExtent.height, currentExtent.width,
+                             currentExtent.height));
 
         auto binding = PreparedResourceBinding{};
         binding.isImage = true;
@@ -242,9 +286,14 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     });
 }
 
-[[nodiscard]] std::size_t RenderGraphExecutor::invokePassPrepareCallbacks(const CompiledGraphFrame &compiled, const ExecuteContext &context, const RuntimeBindingMap &runtimeBindings, std::size_t firstBatchOrdinal, std::size_t lastBatchOrdinal)
+[[nodiscard]] std::size_t RenderGraphExecutor::invokePassPrepareCallbacks(const CompiledGraphFrame &compiled,
+                                                                          const ExecuteContext &context,
+                                                                          const RuntimeBindingMap &runtimeBindings,
+                                                                          std::size_t firstBatchOrdinal,
+                                                                          std::size_t lastBatchOrdinal)
 {
-    nrAssert(firstBatchOrdinal <= lastBatchOrdinal && lastBatchOrdinal <= compiled.submitBatches.size(), "RenderGraphExecutor::invokePassPrepareCallbacks received an invalid submit-batch range.");
+    nrAssert(firstBatchOrdinal <= lastBatchOrdinal && lastBatchOrdinal <= compiled.submitBatches.size(),
+             "RenderGraphExecutor::invokePassPrepareCallbacks received an invalid submit-batch range.");
     auto resolveBuffer = [&](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
         auto bindingIt = runtimeBindings.find(handle);
         if (bindingIt == runtimeBindings.end() || !bindingIt->second.isBuffer)
@@ -275,7 +324,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
         };
     };
 
-    auto resolveAccelerationStructure = [&](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
+    auto resolveAccelerationStructure =
+        [&](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
         auto bindingIt = runtimeBindings.find(handle);
         if (bindingIt == runtimeBindings.end() || !bindingIt->second.isAccelerationStructure)
         {
@@ -293,9 +343,12 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     };
 
     auto frameDataByHandle = CompiledFrameDataLookup{};
-    std::ranges::for_each(compiled.frameData, [&](const GraphFrameDataDesc &frameData) { frameDataByHandle.emplace(frameData.handle, std::cref(frameData)); });
+    std::ranges::for_each(compiled.frameData, [&](const GraphFrameDataDesc &frameData) {
+        frameDataByHandle.emplace(frameData.handle, std::cref(frameData));
+    });
 
-    auto resolveFrameDataPayload = [&](GraphFrameDataHandle handle) -> std::optional<std::reference_wrapper<const std::any>> {
+    auto resolveFrameDataPayload =
+        [&](GraphFrameDataHandle handle) -> std::optional<std::reference_wrapper<const std::any>> {
         auto frameDataIt = frameDataByHandle.find(handle);
         if (frameDataIt == frameDataByHandle.end())
         {
@@ -330,7 +383,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     return invokedPrepareCount;
 }
 
-[[nodiscard]] nr::rhi::CommandPool &RenderGraphExecutor::primaryPoolForQueue(nr::rhi::FrameContext &frame, QueueDomain queue)
+[[nodiscard]] nr::rhi::CommandPool &RenderGraphExecutor::primaryPoolForQueue(nr::rhi::FrameContext &frame,
+                                                                             QueueDomain queue)
 {
     if (queue == QueueDomain::Graphics)
     {
@@ -343,9 +397,12 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     return frame.primary<nr::rhi::QueueRole::Transfer>();
 }
 
-[[nodiscard]] nr::rhi::CommandPool &RenderGraphExecutor::secondaryPoolForQueue(nr::rhi::FrameContext &frame, QueueDomain queue, std::uint32_t secondaryPoolSlot)
+[[nodiscard]] nr::rhi::CommandPool &RenderGraphExecutor::secondaryPoolForQueue(nr::rhi::FrameContext &frame,
+                                                                               QueueDomain queue,
+                                                                               std::uint32_t secondaryPoolSlot)
 {
-    nrAssert(secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase, "RenderGraphExecutor must not assign pass recording work to the main-thread secondary pool slot.");
+    nrAssert(secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase,
+             "RenderGraphExecutor must not assign pass recording work to the main-thread secondary pool slot.");
 
     if (queue == QueueDomain::Graphics)
     {
@@ -358,7 +415,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     return frame.secondary<nr::rhi::QueueRole::Transfer>(secondaryPoolSlot);
 }
 
-[[nodiscard]] std::uint32_t RenderGraphExecutor::preparedSecondaryPoolSlotCountForQueue(nr::rhi::FrameContext &frame, QueueDomain queue)
+[[nodiscard]] std::uint32_t RenderGraphExecutor::preparedSecondaryPoolSlotCountForQueue(nr::rhi::FrameContext &frame,
+                                                                                        QueueDomain queue)
 {
     if (queue == QueueDomain::Graphics)
     {
@@ -371,7 +429,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     return static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Transfer>());
 }
 
-[[nodiscard]] std::uint32_t RenderGraphExecutor::preparedRecordWorkerCountForQueue(nr::rhi::FrameContext &frame, QueueDomain queue)
+[[nodiscard]] std::uint32_t RenderGraphExecutor::preparedRecordWorkerCountForQueue(nr::rhi::FrameContext &frame,
+                                                                                   QueueDomain queue)
 {
     auto preparedPoolSlots = preparedSecondaryPoolSlotCountForQueue(frame, queue);
     if (preparedPoolSlots <= detail::kWorkerSecondaryPoolSlotBase)
@@ -389,15 +448,21 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
         static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Compute>()),
         static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Transfer>()),
     });
-    nrAssert(preparedPoolSlots > detail::kWorkerSecondaryPoolSlotBase, "RenderGraphExecutor requires at least one worker-only secondary command pool beyond the main-thread slot before execute.");
+    nrAssert(preparedPoolSlots > detail::kWorkerSecondaryPoolSlotBase,
+             "RenderGraphExecutor requires at least one worker-only secondary command pool beyond the main-thread slot "
+             "before execute.");
 
     auto availableRecordWorkers = preparedPoolSlots - detail::kWorkerSecondaryPoolSlotBase;
     return nr::threading::resolveWorkerCount(0, availableRecordWorkers);
 }
 
-[[nodiscard]] vk::raii::CommandBuffer &RenderGraphExecutor::primaryCommandBufferForQueue(const ExecuteContext &context, std::size_t frameSlot, QueueDomain queue, std::size_t ordinal)
+[[nodiscard]] vk::raii::CommandBuffer &RenderGraphExecutor::primaryCommandBufferForQueue(const ExecuteContext &context,
+                                                                                         std::size_t frameSlot,
+                                                                                         QueueDomain queue,
+                                                                                         std::size_t ordinal)
 {
-    nrAssert(frameSlot < primaryCommandBuffersByFrame_.size(), "RenderGraphExecutor command buffer frame slot is out of range.");
+    nrAssert(frameSlot < primaryCommandBuffersByFrame_.size(),
+             "RenderGraphExecutor command buffer frame slot is out of range.");
 
     auto &frameCache = primaryCommandBuffersByFrame_[frameSlot];
     if (frameCache.size() <= ordinal)
@@ -418,10 +483,14 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     return cached.buffers.front();
 }
 
-[[nodiscard]] vk::raii::CommandBuffer &RenderGraphExecutor::secondaryCommandBufferForPass(const ExecuteContext &context, std::size_t frameSlot, QueueDomain queue, std::size_t batchOrdinal, std::size_t passOrdinal, std::size_t chunkIndex, std::uint32_t secondaryPoolSlot)
+[[nodiscard]] vk::raii::CommandBuffer &RenderGraphExecutor::secondaryCommandBufferForPass(
+    const ExecuteContext &context, std::size_t frameSlot, QueueDomain queue, std::size_t batchOrdinal,
+    std::size_t passOrdinal, std::size_t chunkIndex, std::uint32_t secondaryPoolSlot)
 {
-    nrAssert(secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase, "RenderGraphExecutor must not allocate a pass secondary command buffer from the main-thread slot.");
-    nrAssert(frameSlot < secondaryCommandBuffersByFrame_.size(), "RenderGraphExecutor secondary command buffer frame slot is out of range.");
+    nrAssert(secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase,
+             "RenderGraphExecutor must not allocate a pass secondary command buffer from the main-thread slot.");
+    nrAssert(frameSlot < secondaryCommandBuffersByFrame_.size(),
+             "RenderGraphExecutor secondary command buffer frame slot is out of range.");
 
     auto &frameCache = secondaryCommandBuffersByFrame_[frameSlot];
     if (frameCache.size() <= batchOrdinal)
@@ -455,8 +524,11 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     return cached.buffers.front();
 }
 
-bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barriers, const CompiledResourceDesc &resource, const PreparedResourceBinding &binding, const ResourceStateTransition &transition, TransitionPlacement placement, std::uint32_t srcQueueFamilyIndex,
-                                               std::uint32_t dstQueueFamilyIndex)
+bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barriers,
+                                               const CompiledResourceDesc &resource,
+                                               const PreparedResourceBinding &binding,
+                                               const ResourceStateTransition &transition, TransitionPlacement placement,
+                                               std::uint32_t srcQueueFamilyIndex, std::uint32_t dstQueueFamilyIndex)
 {
     constexpr auto kReadWriteAccess = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
     const auto isOwnershipPlacement = placement != TransitionPlacement::InPass;
@@ -465,10 +537,16 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
     // Resolve each side from the precise declared scope when available, falling
     // back to a conservative all-commands scope only for unresolved sides so
     // resources without a declared access intent stay correct.
-    auto srcStageMask = transition.srcScope.resolved() ? transition.srcScope.stages : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
-    auto srcAccessMask = transition.srcScope.resolved() ? transition.srcScope.access : vk::AccessFlags2{kReadWriteAccess};
-    auto dstStageMask = transition.dstScope.resolved() ? transition.dstScope.stages : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
-    auto dstAccessMask = transition.dstScope.resolved() ? transition.dstScope.access : vk::AccessFlags2{kReadWriteAccess};
+    auto srcStageMask = transition.srcScope.resolved()
+                            ? transition.srcScope.stages
+                            : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+    auto srcAccessMask =
+        transition.srcScope.resolved() ? transition.srcScope.access : vk::AccessFlags2{kReadWriteAccess};
+    auto dstStageMask = transition.dstScope.resolved()
+                            ? transition.dstScope.stages
+                            : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands};
+    auto dstAccessMask =
+        transition.dstScope.resolved() ? transition.dstScope.access : vk::AccessFlags2{kReadWriteAccess};
 
     if (resource.isImage && transition.oldLayout == ImageLayoutIntent::Undefined)
     {
@@ -477,7 +555,8 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
         // acquire still requires an execution dependency from the semaphore
         // wait stage into the first layout transition, so keep the source
         // stage aligned with the consumer side for presentable images.
-        srcStageMask = resource.isSwapchain ? dstStageMask : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eTopOfPipe};
+        srcStageMask =
+            resource.isSwapchain ? dstStageMask : vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eTopOfPipe};
         srcAccessMask = vk::AccessFlags2{};
     }
 
@@ -497,8 +576,10 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
         srcAccessMask = vk::AccessFlags2{};
     }
 
-    auto barrierSrcQueue = placement == TransitionPlacement::InPass ? nr::rhi::ops::kIgnoredQueueFamilyIndex : srcQueueFamilyIndex;
-    auto barrierDstQueue = placement == TransitionPlacement::InPass ? nr::rhi::ops::kIgnoredQueueFamilyIndex : dstQueueFamilyIndex;
+    auto barrierSrcQueue =
+        placement == TransitionPlacement::InPass ? nr::rhi::ops::kIgnoredQueueFamilyIndex : srcQueueFamilyIndex;
+    auto barrierDstQueue =
+        placement == TransitionPlacement::InPass ? nr::rhi::ops::kIgnoredQueueFamilyIndex : dstQueueFamilyIndex;
 
     if (isOwnershipPlacement && !sameQueueFamily)
     {
@@ -512,7 +593,8 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
             return false;
         }
 
-        nrAssert(binding.buffer != vk::Buffer{}, "RenderGraphExecutor::addTransitionBarrier requires a valid buffer binding.");
+        nrAssert(binding.buffer != vk::Buffer{},
+                 "RenderGraphExecutor::addTransitionBarrier requires a valid buffer binding.");
         barriers.add(vk::BufferMemoryBarrier2{
             srcStageMask,
             srcAccessMask,
@@ -535,8 +617,11 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
             return false;
         }
 
-        nrAssert(binding.accelerationStructureStorageBuffer != vk::Buffer{}, "RenderGraphExecutor::addTransitionBarrier requires a valid acceleration-structure storage buffer binding.");
-        auto barrierSize = binding.accelerationStructureSize > 0 ? binding.accelerationStructureSize : std::numeric_limits<vk::DeviceSize>::max();
+        nrAssert(binding.accelerationStructureStorageBuffer != vk::Buffer{},
+                 "RenderGraphExecutor::addTransitionBarrier requires a valid acceleration-structure storage buffer "
+                 "binding.");
+        auto barrierSize = binding.accelerationStructureSize > 0 ? binding.accelerationStructureSize
+                                                                 : std::numeric_limits<vk::DeviceSize>::max();
         barriers.add(vk::BufferMemoryBarrier2{
             srcStageMask,
             srcAccessMask,
@@ -565,7 +650,8 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
             barrierDstQueue = nr::rhi::ops::kIgnoredQueueFamilyIndex;
         }
 
-        nrAssert(binding.image != vk::Image{}, "RenderGraphExecutor::addTransitionBarrier requires a valid image binding.");
+        nrAssert(binding.image != vk::Image{},
+                 "RenderGraphExecutor::addTransitionBarrier requires a valid image binding.");
         barriers.add(vk::ImageMemoryBarrier2{
             srcStageMask,
             srcAccessMask,
@@ -595,50 +681,68 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
     };
 }
 
-[[nodiscard]] const PreparedResourceBinding &requireBinding(const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings, GraphResourceHandle resource, std::string_view operation)
+[[nodiscard]] const PreparedResourceBinding &requireBinding(
+    const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings, GraphResourceHandle resource,
+    std::string_view operation)
 {
     auto bindingIt = runtimeBindings.find(resource);
-    nrAssert(bindingIt != runtimeBindings.end(), std::format("{} failed to resolve graph resource {}.", operation, resource.value));
+    nrAssert(bindingIt != runtimeBindings.end(),
+             std::format("{} failed to resolve graph resource {}.", operation, resource.value));
     return bindingIt->second;
 }
 
-[[nodiscard]] const PreparedResourceBinding &requireBufferBinding(const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings, GraphResourceHandle resource, std::string_view operation)
+[[nodiscard]] const PreparedResourceBinding &requireBufferBinding(
+    const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings, GraphResourceHandle resource,
+    std::string_view operation)
 {
     auto const &binding = requireBinding(runtimeBindings, resource, operation);
-    nrAssert(binding.isBuffer && binding.buffer != vk::Buffer{}, std::format("{} requires graph resource {} to resolve to a buffer.", operation, resource.value));
+    nrAssert(binding.isBuffer && binding.buffer != vk::Buffer{},
+             std::format("{} requires graph resource {} to resolve to a buffer.", operation, resource.value));
     return binding;
 }
 
-[[nodiscard]] const PreparedResourceBinding &requireImageBinding(const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings, GraphResourceHandle resource, std::string_view operation)
+[[nodiscard]] const PreparedResourceBinding &requireImageBinding(
+    const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings, GraphResourceHandle resource,
+    std::string_view operation)
 {
     auto const &binding = requireBinding(runtimeBindings, resource, operation);
-    nrAssert(binding.isImage && binding.image != vk::Image{}, std::format("{} requires graph resource {} to resolve to an image.", operation, resource.value));
+    nrAssert(binding.isImage && binding.image != vk::Image{},
+             std::format("{} requires graph resource {} to resolve to an image.", operation, resource.value));
     return binding;
 }
 
-[[nodiscard]] vk::DeviceSize remainingBufferBytes(const PreparedResourceBinding &binding, vk::DeviceSize offset, std::string_view operation)
+[[nodiscard]] vk::DeviceSize remainingBufferBytes(const PreparedResourceBinding &binding, vk::DeviceSize offset,
+                                                  std::string_view operation)
 {
-    nrAssert(offset <= binding.bufferSize, std::format("{} buffer offset {} exceeds buffer size {}.", operation, offset, binding.bufferSize));
+    nrAssert(offset <= binding.bufferSize,
+             std::format("{} buffer offset {} exceeds buffer size {}.", operation, offset, binding.bufferSize));
     return binding.bufferSize - offset;
 }
 
-[[nodiscard]] vk::DeviceSize normalizeBufferCopySize(vk::DeviceSize requestedSize, const PreparedResourceBinding &source, vk::DeviceSize sourceOffset, const PreparedResourceBinding &destination, vk::DeviceSize destinationOffset)
+[[nodiscard]] vk::DeviceSize normalizeBufferCopySize(vk::DeviceSize requestedSize,
+                                                     const PreparedResourceBinding &source, vk::DeviceSize sourceOffset,
+                                                     const PreparedResourceBinding &destination,
+                                                     vk::DeviceSize destinationOffset)
 {
     auto const sourceRemaining = remainingBufferBytes(source, sourceOffset, "RDG copy-buffer");
     auto const destinationRemaining = remainingBufferBytes(destination, destinationOffset, "RDG copy-buffer");
     auto const maxCopySize = std::min(sourceRemaining, destinationRemaining);
     auto const size = (requestedSize == 0 || requestedSize == vk::WholeSize) ? maxCopySize : requestedSize;
-    nrAssert(size <= maxCopySize, std::format("RDG copy-buffer size {} exceeds available source/destination range {}.", size, maxCopySize));
+    nrAssert(size <= maxCopySize,
+             std::format("RDG copy-buffer size {} exceeds available source/destination range {}.", size, maxCopySize));
     return size;
 }
 
-[[nodiscard]] vk::BufferCopy normalizeBufferCopyRegion(vk::BufferCopy region, const PreparedResourceBinding &source, const PreparedResourceBinding &destination)
+[[nodiscard]] vk::BufferCopy normalizeBufferCopyRegion(vk::BufferCopy region, const PreparedResourceBinding &source,
+                                                       const PreparedResourceBinding &destination)
 {
     region.size = normalizeBufferCopySize(region.size, source, region.srcOffset, destination, region.dstOffset);
     return region;
 }
 
-[[nodiscard]] vk::BufferImageCopy normalizeBufferImageCopyRegion(vk::BufferImageCopy region, const PreparedResourceBinding &image, vk::ImageAspectFlags aspectOverride = vk::ImageAspectFlags{})
+[[nodiscard]] vk::BufferImageCopy normalizeBufferImageCopyRegion(
+    vk::BufferImageCopy region, const PreparedResourceBinding &image,
+    vk::ImageAspectFlags aspectOverride = vk::ImageAspectFlags{})
 {
     auto const fullLayers = subresourceLayersFromRange(image.subresourceRange);
     auto effectiveLayers = fullLayers;
@@ -664,9 +768,12 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
     return region;
 }
 
-template <typename TPredicate> [[nodiscard]] vk::ImageLayout imageLayoutForUse(const CompiledPass &pass, GraphResourceHandle resource, TPredicate predicate, vk::ImageLayout fallback)
+template <typename TPredicate>
+[[nodiscard]] vk::ImageLayout imageLayoutForUse(const CompiledPass &pass, GraphResourceHandle resource,
+                                                TPredicate predicate, vk::ImageLayout fallback)
 {
-    auto useIt = std::ranges::find_if(pass.resourceUses, [&](const PassResourceUseDesc &use) { return use.resource == resource && predicate(use); });
+    auto useIt = std::ranges::find_if(
+        pass.resourceUses, [&](const PassResourceUseDesc &use) { return use.resource == resource && predicate(use); });
     if (useIt == pass.resourceUses.end() || !useIt->imageLayout.has_value())
     {
         return fallback;
@@ -674,9 +781,12 @@ template <typename TPredicate> [[nodiscard]] vk::ImageLayout imageLayoutForUse(c
     return RenderGraphCompiler::mapImageLayoutIntent(*useIt->imageLayout);
 }
 
-template <typename TPredicate> [[nodiscard]] vk::ImageAspectFlags imageAspectForUse(const CompiledPass &pass, GraphResourceHandle resource, TPredicate predicate, vk::ImageAspectFlags fallback)
+template <typename TPredicate>
+[[nodiscard]] vk::ImageAspectFlags imageAspectForUse(const CompiledPass &pass, GraphResourceHandle resource,
+                                                     TPredicate predicate, vk::ImageAspectFlags fallback)
 {
-    auto useIt = std::ranges::find_if(pass.resourceUses, [&](const PassResourceUseDesc &use) { return use.resource == resource && predicate(use); });
+    auto useIt = std::ranges::find_if(
+        pass.resourceUses, [&](const PassResourceUseDesc &use) { return use.resource == resource && predicate(use); });
     if (useIt == pass.resourceUses.end() || !useIt->imageAspect.has_value())
     {
         return fallback;
@@ -684,10 +794,13 @@ template <typename TPredicate> [[nodiscard]] vk::ImageAspectFlags imageAspectFor
     return RenderGraphCompiler::mapImageAspectIntent(*useIt->imageAspect);
 }
 
-void recordHostReadBarrier(const vk::raii::CommandBuffer &commandBuffer, const PreparedResourceBinding &destination, vk::DeviceSize offset, vk::DeviceSize size)
+void recordHostReadBarrier(const vk::raii::CommandBuffer &commandBuffer, const PreparedResourceBinding &destination,
+                           vk::DeviceSize offset, vk::DeviceSize size)
 {
-    auto const barrierSize = size == 0 || size == vk::WholeSize ? remainingBufferBytes(destination, offset, "RDG readback copy") : size;
-    nrAssert(barrierSize <= remainingBufferBytes(destination, offset, "RDG readback copy"), "RDG readback copy host-read barrier range exceeds destination buffer size.");
+    auto const barrierSize =
+        size == 0 || size == vk::WholeSize ? remainingBufferBytes(destination, offset, "RDG readback copy") : size;
+    nrAssert(barrierSize <= remainingBufferBytes(destination, offset, "RDG readback copy"),
+             "RDG readback copy host-read barrier range exceeds destination buffer size.");
 
     auto hostReadBarrier = nr::rhi::ops::BarrierBatch{};
     hostReadBarrier.add(vk::BufferMemoryBarrier2{
@@ -705,15 +818,22 @@ void recordHostReadBarrier(const vk::raii::CommandBuffer &commandBuffer, const P
     nr::rhi::ops::pipelineBarrier(commandBuffer, hostReadBarrier);
 }
 
-void recordPresentTransitionIfNeeded(const CompiledPass &pass, GraphResourceHandle destination, const PreparedResourceBinding &destinationBinding, vk::ImageLayout copyDestinationLayout, const vk::raii::CommandBuffer &commandBuffer)
+void recordPresentTransitionIfNeeded(const CompiledPass &pass, GraphResourceHandle destination,
+                                     const PreparedResourceBinding &destinationBinding,
+                                     vk::ImageLayout copyDestinationLayout,
+                                     const vk::raii::CommandBuffer &commandBuffer)
 {
-    auto presentUse = std::ranges::find_if(pass.resourceUses, [&](const PassResourceUseDesc &use) { return use.resource == destination && use.imageUsage == ImageUsageIntent::PresentSource; });
+    auto presentUse = std::ranges::find_if(pass.resourceUses, [&](const PassResourceUseDesc &use) {
+        return use.resource == destination && use.imageUsage == ImageUsageIntent::PresentSource;
+    });
     if (presentUse == pass.resourceUses.end())
     {
         return;
     }
 
-    auto presentLayout = presentUse->imageLayout.has_value() ? RenderGraphCompiler::mapImageLayoutIntent(*presentUse->imageLayout) : vk::ImageLayout::ePresentSrcKHR;
+    auto presentLayout = presentUse->imageLayout.has_value()
+                             ? RenderGraphCompiler::mapImageLayoutIntent(*presentUse->imageLayout)
+                             : vk::ImageLayout::ePresentSrcKHR;
     if (copyDestinationLayout == presentLayout)
     {
         return;
@@ -737,7 +857,9 @@ void recordPresentTransitionIfNeeded(const CompiledPass &pass, GraphResourceHand
     nr::rhi::ops::pipelineBarrier(commandBuffer, postCopyBarriers);
 }
 
-void recordCopyPassDesc(const CopyPassDesc &copy, const CompiledPass &pass, const vk::raii::CommandBuffer &commandBuffer, const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings)
+void recordCopyPassDesc(const CopyPassDesc &copy, const CompiledPass &pass,
+                        const vk::raii::CommandBuffer &commandBuffer,
+                        const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings)
 {
     std::visit(
         [&](const auto &desc) {
@@ -747,7 +869,8 @@ void recordCopyPassDesc(const CopyPassDesc &copy, const CompiledPass &pass, cons
                 auto const &source = requireBufferBinding(runtimeBindings, desc.source, "RDG copy-buffer");
                 auto const &destination = requireBufferBinding(runtimeBindings, desc.destination, "RDG copy-buffer");
                 auto const region = normalizeBufferCopyRegion(desc.region, source, destination);
-                nr::rhi::ops::copyBuffer2(commandBuffer, source.buffer, destination.buffer, nr::rhi::ops::toBufferCopy2(region));
+                nr::rhi::ops::copyBuffer2(commandBuffer, source.buffer, destination.buffer,
+                                          nr::rhi::ops::toBufferCopy2(region));
                 if (desc.destinationIntent == CopyBufferDestinationIntent::Readback)
                 {
                     recordHostReadBarrier(commandBuffer, destination, region.dstOffset, region.size);
@@ -755,47 +878,107 @@ void recordCopyPassDesc(const CopyPassDesc &copy, const CompiledPass &pass, cons
             }
             else if constexpr (std::same_as<DescT, CopyBufferToImagePassDesc>)
             {
-                auto const &source = requireBufferBinding(runtimeBindings, desc.sourceBuffer, "RDG copy-buffer-to-image");
-                auto const &destination = requireImageBinding(runtimeBindings, desc.destinationImage, "RDG copy-buffer-to-image");
-                auto const destinationAspect = imageAspectForUse(pass, desc.destinationImage, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination; }, destination.subresourceRange.aspectMask);
+                auto const &source =
+                    requireBufferBinding(runtimeBindings, desc.sourceBuffer, "RDG copy-buffer-to-image");
+                auto const &destination =
+                    requireImageBinding(runtimeBindings, desc.destinationImage, "RDG copy-buffer-to-image");
+                auto const destinationAspect = imageAspectForUse(
+                    pass, desc.destinationImage,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferDst ||
+                               use.imageUsage == ImageUsageIntent::CopyDestination;
+                    },
+                    destination.subresourceRange.aspectMask);
                 auto const region = normalizeBufferImageCopyRegion(desc.region, destination, destinationAspect);
-                auto const dstLayout = imageLayoutForUse(pass, desc.destinationImage, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination; }, vk::ImageLayout::eTransferDstOptimal);
-                nr::rhi::ops::copyBufferToImage2(commandBuffer, source.buffer, destination.image, dstLayout, nr::rhi::ops::toBufferImageCopy2(region));
+                auto const dstLayout = imageLayoutForUse(
+                    pass, desc.destinationImage,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferDst ||
+                               use.imageUsage == ImageUsageIntent::CopyDestination;
+                    },
+                    vk::ImageLayout::eTransferDstOptimal);
+                nr::rhi::ops::copyBufferToImage2(commandBuffer, source.buffer, destination.image, dstLayout,
+                                                 nr::rhi::ops::toBufferImageCopy2(region));
             }
             else if constexpr (std::same_as<DescT, CopyImageToBufferPassDesc>)
             {
                 auto const &source = requireImageBinding(runtimeBindings, desc.sourceImage, "RDG copy-image-to-buffer");
-                auto const &destination = requireBufferBinding(runtimeBindings, desc.destinationBuffer, "RDG copy-image-to-buffer");
-                auto const sourceAspect = imageAspectForUse(pass, desc.sourceImage, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferSrc || use.imageUsage == ImageUsageIntent::CopySource; }, source.subresourceRange.aspectMask);
+                auto const &destination =
+                    requireBufferBinding(runtimeBindings, desc.destinationBuffer, "RDG copy-image-to-buffer");
+                auto const sourceAspect = imageAspectForUse(
+                    pass, desc.sourceImage,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                               use.imageUsage == ImageUsageIntent::CopySource;
+                    },
+                    source.subresourceRange.aspectMask);
                 auto const region = normalizeBufferImageCopyRegion(desc.region, source, sourceAspect);
-                auto const srcLayout = imageLayoutForUse(pass, desc.sourceImage, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferSrc || use.imageUsage == ImageUsageIntent::CopySource; }, vk::ImageLayout::eTransferSrcOptimal);
-                nr::rhi::ops::copyImageToBuffer2(commandBuffer, source.image, srcLayout, destination.buffer, nr::rhi::ops::toBufferImageCopy2(region));
+                auto const srcLayout = imageLayoutForUse(
+                    pass, desc.sourceImage,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                               use.imageUsage == ImageUsageIntent::CopySource;
+                    },
+                    vk::ImageLayout::eTransferSrcOptimal);
+                nr::rhi::ops::copyImageToBuffer2(commandBuffer, source.image, srcLayout, destination.buffer,
+                                                 nr::rhi::ops::toBufferImageCopy2(region));
                 if (desc.destinationIntent == CopyBufferDestinationIntent::Readback)
                 {
-                    recordHostReadBarrier(commandBuffer, destination, region.bufferOffset, desc.destinationBufferRangeSize);
+                    recordHostReadBarrier(commandBuffer, destination, region.bufferOffset,
+                                          desc.destinationBufferRangeSize);
                 }
             }
             else
             {
                 auto const &source = requireImageBinding(runtimeBindings, desc.source, "RDG copy-image-to-image");
-                auto const &destination = requireImageBinding(runtimeBindings, desc.destination, "RDG copy-image-to-image");
-                auto const sourceAspect = imageAspectForUse(pass, desc.source, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferSrc || use.imageUsage == ImageUsageIntent::CopySource; }, source.subresourceRange.aspectMask);
-                auto const destinationAspect = imageAspectForUse(pass, desc.destination, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination; }, destination.subresourceRange.aspectMask);
-                auto const srcLayout = imageLayoutForUse(pass, desc.source, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferSrc || use.imageUsage == ImageUsageIntent::CopySource; }, vk::ImageLayout::eTransferSrcOptimal);
-                auto const dstLayout = imageLayoutForUse(pass, desc.destination, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination; }, vk::ImageLayout::eTransferDstOptimal);
-                nr::rhi::ops::copyImageToImage(commandBuffer, source.image, source.extent, sourceAspect, destination.image, destination.extent, destinationAspect, srcLayout, dstLayout, desc.region);
+                auto const &destination =
+                    requireImageBinding(runtimeBindings, desc.destination, "RDG copy-image-to-image");
+                auto const sourceAspect = imageAspectForUse(
+                    pass, desc.source,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                               use.imageUsage == ImageUsageIntent::CopySource;
+                    },
+                    source.subresourceRange.aspectMask);
+                auto const destinationAspect = imageAspectForUse(
+                    pass, desc.destination,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferDst ||
+                               use.imageUsage == ImageUsageIntent::CopyDestination;
+                    },
+                    destination.subresourceRange.aspectMask);
+                auto const srcLayout = imageLayoutForUse(
+                    pass, desc.source,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferSrc ||
+                               use.imageUsage == ImageUsageIntent::CopySource;
+                    },
+                    vk::ImageLayout::eTransferSrcOptimal);
+                auto const dstLayout = imageLayoutForUse(
+                    pass, desc.destination,
+                    [](const PassResourceUseDesc &use) {
+                        return use.imageUsage == ImageUsageIntent::TransferDst ||
+                               use.imageUsage == ImageUsageIntent::CopyDestination;
+                    },
+                    vk::ImageLayout::eTransferDstOptimal);
+                nr::rhi::ops::copyImageToImage(commandBuffer, source.image, source.extent, sourceAspect,
+                                               destination.image, destination.extent, destinationAspect, srcLayout,
+                                               dstLayout, desc.region);
                 recordPresentTransitionIfNeeded(pass, desc.destination, destination, dstLayout, commandBuffer);
             }
         },
         copy);
 }
 
-[[nodiscard]] vk::ImageSubresourceLayers RenderGraphExecutor::toSubresourceLayers(const vk::ImageSubresourceRange &range)
+[[nodiscard]] vk::ImageSubresourceLayers RenderGraphExecutor::toSubresourceLayers(
+    const vk::ImageSubresourceRange &range)
 {
     return subresourceLayersFromRange(range);
 }
 
-void RenderGraphExecutor::recordImplicitCopyPass(const CompiledPass &pass, const vk::raii::CommandBuffer &commandBuffer, const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings)
+void RenderGraphExecutor::recordImplicitCopyPass(
+    const CompiledPass &pass, const vk::raii::CommandBuffer &commandBuffer,
+    const std::map<GraphResourceHandle, PreparedResourceBinding> &runtimeBindings)
 {
     if (!pass.isCopyPass)
     {
@@ -808,11 +991,17 @@ void RenderGraphExecutor::recordImplicitCopyPass(const CompiledPass &pass, const
         return;
     }
 
-    auto srcUse = std::ranges::find_if(pass.resourceUses, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferSrc || use.imageUsage == ImageUsageIntent::CopySource; });
+    auto srcUse = std::ranges::find_if(pass.resourceUses, [](const PassResourceUseDesc &use) {
+        return use.imageUsage == ImageUsageIntent::TransferSrc || use.imageUsage == ImageUsageIntent::CopySource;
+    });
 
-    auto dstUse = std::ranges::find_if(pass.resourceUses, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination; });
+    auto dstUse = std::ranges::find_if(pass.resourceUses, [](const PassResourceUseDesc &use) {
+        return use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination;
+    });
 
-    auto presentUse = std::ranges::find_if(pass.resourceUses, [](const PassResourceUseDesc &use) { return use.imageUsage == ImageUsageIntent::PresentSource; });
+    auto presentUse = std::ranges::find_if(pass.resourceUses, [](const PassResourceUseDesc &use) {
+        return use.imageUsage == ImageUsageIntent::PresentSource;
+    });
 
     if (srcUse == pass.resourceUses.end() || dstUse == pass.resourceUses.end())
     {
@@ -833,8 +1022,10 @@ void RenderGraphExecutor::recordImplicitCopyPass(const CompiledPass &pass, const
         return;
     }
 
-    auto srcLayout = srcUse->imageLayout.has_value() ? RenderGraphCompiler::mapImageLayoutIntent(*srcUse->imageLayout) : vk::ImageLayout::eTransferSrcOptimal;
-    auto dstLayout = dstUse->imageLayout.has_value() ? RenderGraphCompiler::mapImageLayoutIntent(*dstUse->imageLayout) : vk::ImageLayout::eTransferDstOptimal;
+    auto srcLayout = srcUse->imageLayout.has_value() ? RenderGraphCompiler::mapImageLayoutIntent(*srcUse->imageLayout)
+                                                     : vk::ImageLayout::eTransferSrcOptimal;
+    auto dstLayout = dstUse->imageLayout.has_value() ? RenderGraphCompiler::mapImageLayoutIntent(*dstUse->imageLayout)
+                                                     : vk::ImageLayout::eTransferDstOptimal;
 
     auto region = vk::ImageCopy{};
     region.srcSubresource = toSubresourceLayers(srcBinding.subresourceRange);
@@ -845,11 +1036,14 @@ void RenderGraphExecutor::recordImplicitCopyPass(const CompiledPass &pass, const
         std::min(srcBinding.extent.depth, dstBinding.extent.depth),
     };
 
-    nr::rhi::ops::copyImage2(commandBuffer, srcBinding.image, srcLayout, dstBinding.image, dstLayout, nr::rhi::ops::toImageCopy2(region));
+    nr::rhi::ops::copyImage2(commandBuffer, srcBinding.image, srcLayout, dstBinding.image, dstLayout,
+                             nr::rhi::ops::toImageCopy2(region));
 
     if (presentUse != pass.resourceUses.end() && presentUse->resource == dstUse->resource)
     {
-        auto presentLayout = presentUse->imageLayout.has_value() ? RenderGraphCompiler::mapImageLayoutIntent(*presentUse->imageLayout) : vk::ImageLayout::ePresentSrcKHR;
+        auto presentLayout = presentUse->imageLayout.has_value()
+                                 ? RenderGraphCompiler::mapImageLayoutIntent(*presentUse->imageLayout)
+                                 : vk::ImageLayout::ePresentSrcKHR;
 
         if (dstLayout != presentLayout)
         {

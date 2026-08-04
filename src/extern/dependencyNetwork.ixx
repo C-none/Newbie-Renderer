@@ -45,7 +45,8 @@ enum class HandshakeRejectReason : std::uint8_t
     controllerBusy,
 };
 
-[[nodiscard]] HandshakeRejectReason evaluateHandshake(const HandshakeRequest &request, std::string_view bearerToken, const WebSocketLimits &limits = {}) noexcept;
+[[nodiscard]] HandshakeRejectReason evaluateHandshake(const HandshakeRequest &request, std::string_view bearerToken,
+                                                      const WebSocketLimits &limits = {}) noexcept;
 
 enum class WebSocketCloseCode : std::uint16_t
 {
@@ -66,7 +67,8 @@ struct PayloadDecision
     std::optional<WebSocketCloseCode> closeCode{};
 };
 
-[[nodiscard]] PayloadDecision evaluatePayload(PayloadKind kind, bool validUtf8, std::size_t reassembledBytes, const WebSocketLimits &limits = {}) noexcept;
+[[nodiscard]] PayloadDecision evaluatePayload(PayloadKind kind, bool validUtf8, std::size_t reassembledBytes,
+                                              const WebSocketLimits &limits = {}) noexcept;
 
 struct MessageContext
 {
@@ -144,7 +146,8 @@ class LoopbackWebSocketServer
     LoopbackWebSocketServer(LoopbackWebSocketServer &&) = delete;
     LoopbackWebSocketServer &operator=(LoopbackWebSocketServer &&) = delete;
 
-    [[nodiscard]] ServerStartResult start(WebSocketServerConfig config, TextMessageHandler messageHandler, TransportEventHandler eventHandler = {});
+    [[nodiscard]] ServerStartResult start(WebSocketServerConfig config, TextMessageHandler messageHandler,
+                                          TransportEventHandler eventHandler = {});
     void stop() noexcept;
     [[nodiscard]] bool running() const noexcept;
     [[nodiscard]] WebSocketEndpoint endpoint() const;

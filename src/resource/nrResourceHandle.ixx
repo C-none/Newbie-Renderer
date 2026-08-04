@@ -4,8 +4,7 @@ import :type;
 
 export namespace nr::resource
 {
-template <typename Tag>
-struct Handle
+template <typename Tag> struct Handle
 {
     std::uint32_t slot = invalidResourceSlot;
     std::uint32_t generation = 0;

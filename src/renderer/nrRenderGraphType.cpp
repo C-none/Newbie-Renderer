@@ -10,8 +10,8 @@ namespace nr::renderer
 {
 [[nodiscard]] bool AccessScope::resolved() const noexcept
 {
-        return stages != vk::PipelineStageFlags2{};
-    }
+    return stages != vk::PipelineStageFlags2{};
+}
 
 void RetainedExternalResourceState::reset() noexcept
 {
@@ -37,24 +37,22 @@ void RetainedAccelerationStructureState::reset() noexcept
     common.reset();
 }
 
-[[nodiscard]] PassParallelRecordPlan ParallelRecordPlanner::planContiguousRanges(
-        std::size_t itemCount,
-        std::uint32_t availableRecordWorkers)
+[[nodiscard]] PassParallelRecordPlan ParallelRecordPlanner::planContiguousRanges(std::size_t itemCount,
+                                                                                 std::uint32_t availableRecordWorkers)
 {
-        auto workPlan = nr::threading::planContiguousRanges(itemCount, availableRecordWorkers);
-        return PassParallelRecordPlan{
-            .itemCount = workPlan.itemCount,
-            .assignedThreadCount = workPlan.assignedWorkerCount,
-            .ranges = workPlan.ranges |
-                      std::views::transform([](const nr::threading::WorkRange& range) {
-                          return ParallelRecordRange{
-                              .begin = range.begin,
-                              .end = range.end,
-                          };
-                      }) |
-                      std::ranges::to<std::vector>(),
-        };
-    }
+    auto workPlan = nr::threading::planContiguousRanges(itemCount, availableRecordWorkers);
+    return PassParallelRecordPlan{
+        .itemCount = workPlan.itemCount,
+        .assignedThreadCount = workPlan.assignedWorkerCount,
+        .ranges = workPlan.ranges | std::views::transform([](const nr::threading::WorkRange &range) {
+                      return ParallelRecordRange{
+                          .begin = range.begin,
+                          .end = range.end,
+                      };
+                  }) |
+                  std::ranges::to<std::vector>(),
+    };
+}
 } // namespace nr::renderer
 
 namespace nr::renderer
@@ -89,34 +87,25 @@ namespace use
 [[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(std::span<const ShaderStageIntent> intents) noexcept
 {
     auto stages = vk::PipelineStageFlags2{};
-    std::ranges::for_each(intents, [&](ShaderStageIntent intent) {
-        stages |= shaderStageScope(intent);
-    });
+    std::ranges::for_each(intents, [&](ShaderStageIntent intent) { stages |= shaderStageScope(intent); });
     return stages;
 }
 
-[[nodiscard]] PassResourceUseDesc withShaderStages(
-    PassResourceUseDesc use,
-    vk::PipelineStageFlags2 stages) noexcept
+[[nodiscard]] PassResourceUseDesc withShaderStages(PassResourceUseDesc use, vk::PipelineStageFlags2 stages) noexcept
 {
     use.shaderStages = stages;
     return use;
 }
 
-[[nodiscard]] PassResourceUseDesc withShaderStages(
-    PassResourceUseDesc use,
-    ShaderStageIntent stage) noexcept
+[[nodiscard]] PassResourceUseDesc withShaderStages(PassResourceUseDesc use, ShaderStageIntent stage) noexcept
 {
     return withShaderStages(use, shaderStageScope(stage));
 }
 
-[[nodiscard]] PassResourceUseDesc withShaderStages(
-    PassResourceUseDesc use,
-    std::initializer_list<ShaderStageIntent> stages) noexcept
+[[nodiscard]] PassResourceUseDesc withShaderStages(PassResourceUseDesc use,
+                                                   std::initializer_list<ShaderStageIntent> stages) noexcept
 {
-    return withShaderStages(
-        use,
-        shaderStageScope(std::span<const ShaderStageIntent>{stages.begin(), stages.size()}));
+    return withShaderStages(use, shaderStageScope(std::span<const ShaderStageIntent>{stages.begin(), stages.size()}));
 }
 
 [[nodiscard]] PassResourceUseDesc orderedAfterPrevious(PassResourceUseDesc use) noexcept
@@ -155,9 +144,7 @@ namespace use
     return make<spec::DepthReadWrite>(resource);
 }
 
-[[nodiscard]] PassResourceUseDesc sampledRead(
-    GraphResourceHandle resource,
-    ImageAspectIntent aspect) noexcept
+[[nodiscard]] PassResourceUseDesc sampledRead(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
     auto result = make<spec::SampledRead>(resource);
     if (aspect != ImageAspectIntent::Color)
@@ -182,9 +169,7 @@ namespace use
     return make<spec::StorageReadWrite>(resource);
 }
 
-[[nodiscard]] PassResourceUseDesc inputAttachmentRead(
-    GraphResourceHandle resource,
-    ImageAspectIntent aspect) noexcept
+[[nodiscard]] PassResourceUseDesc inputAttachmentRead(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
     auto result = make<spec::InputAttachmentRead>(resource);
     if (aspect != ImageAspectIntent::Color)
@@ -354,9 +339,8 @@ namespace use
     return make<spec::PresentRead>(resource);
 }
 
-[[nodiscard]] PassResourceUseDesc presentRead(
-    GraphResourceHandle resource,
-    ResourceOwnershipDomain ownershipDomain) noexcept
+[[nodiscard]] PassResourceUseDesc presentRead(GraphResourceHandle resource,
+                                              ResourceOwnershipDomain ownershipDomain) noexcept
 {
     return make<spec::PresentRead>(resource, ImageUseOptions{
                                                  .ownershipDomain = ownershipDomain,

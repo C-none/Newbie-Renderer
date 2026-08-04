@@ -7,8 +7,7 @@ import :type;
 
 export namespace nr::scene
 {
-template <typename TagT>
-struct BridgeInput
+template <typename TagT> struct BridgeInput
 {
     std::uint32_t sourceIndex = nr::load::invalidIndex;
     std::string canonicalKey{};
@@ -66,28 +65,31 @@ class SceneBridge
     }
 
     template <IndexedCanonicalKeyKind Kind>
-    [[nodiscard]] static std::string makeIndexedCanonicalKey(const nr::load::SceneAsset &sceneAsset, std::uint32_t sourceIndex)
+    [[nodiscard]] static std::string makeIndexedCanonicalKey(const nr::load::SceneAsset &sceneAsset,
+                                                             std::uint32_t sourceIndex)
     {
         if (sceneAsset.sourcePath.empty())
         {
             return {};
         }
 
-        return std::format("{}::{}[{}]",
-                           sceneAsset.sourcePath.generic_string(),
-                           indexedCanonicalKeyLabel<Kind>(),
+        return std::format("{}::{}[{}]", sceneAsset.sourcePath.generic_string(), indexedCanonicalKeyLabel<Kind>(),
                            sourceIndex);
     }
 
     [[nodiscard]] static std::string makeTextureCanonicalKey(const nr::load::TextureAsset &textureAsset);
 
-    [[nodiscard]] static std::string makeMaterialCanonicalKey(const nr::load::SceneAsset &sceneAsset, std::uint32_t materialIndex);
+    [[nodiscard]] static std::string makeMaterialCanonicalKey(const nr::load::SceneAsset &sceneAsset,
+                                                              std::uint32_t materialIndex);
 
-    [[nodiscard]] static std::string makeMeshCanonicalKey(const nr::load::SceneAsset &sceneAsset, std::uint32_t meshIndex);
+    [[nodiscard]] static std::string makeMeshCanonicalKey(const nr::load::SceneAsset &sceneAsset,
+                                                          std::uint32_t meshIndex);
 
-    [[nodiscard]] static std::string makeCameraCanonicalKey(const nr::load::SceneAsset &sceneAsset, std::uint32_t cameraIndex);
+    [[nodiscard]] static std::string makeCameraCanonicalKey(const nr::load::SceneAsset &sceneAsset,
+                                                            std::uint32_t cameraIndex);
 
-    [[nodiscard]] static std::string makeLightCanonicalKey(const nr::load::SceneAsset &sceneAsset, std::uint32_t lightIndex);
+    [[nodiscard]] static std::string makeLightCanonicalKey(const nr::load::SceneAsset &sceneAsset,
+                                                           std::uint32_t lightIndex);
 
     [[nodiscard]] static SceneBridgePlan buildPlan(const nr::load::SceneAsset &sceneAsset);
 };
@@ -100,9 +102,11 @@ struct SceneRenderBridgeBuildInput
     std::function<std::optional<std::uint32_t>(nr::resource::MeshHandle)> resolveMeshBindless{};
     std::function<std::optional<std::uint32_t>(nr::resource::MaterialHandle)> resolveMaterialBindless{};
     std::function<std::optional<SceneMaterialTextureBindings>(nr::resource::MaterialHandle)> resolveMaterialTextures{};
-    std::function<std::optional<SceneBridgeMaterialRasterState>(nr::resource::MaterialHandle)> resolveMaterialRasterState{};
+    std::function<std::optional<SceneBridgeMaterialRasterState>(nr::resource::MaterialHandle)>
+        resolveMaterialRasterState{};
     std::function<std::optional<SceneBridgeGeometryBuffers>()> resolveGeometryBuffers{};
-    std::function<std::optional<SceneBridgeDrawGeometry>(nr::resource::MeshHandle, std::uint32_t)> resolveRasterDrawGeometry{};
+    std::function<std::optional<SceneBridgeDrawGeometry>(nr::resource::MeshHandle, std::uint32_t)>
+        resolveRasterDrawGeometry{};
 };
 
 class SceneRenderBridge

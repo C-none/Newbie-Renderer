@@ -6,7 +6,8 @@ import std;
 export namespace nr::automation
 {
 [[nodiscard]] std::filesystem::path automationRootPath();
-[[nodiscard]] std::expected<std::filesystem::path, std::string> resolveAutomationScriptPath(const std::filesystem::path &rootRelativePath);
+[[nodiscard]] std::expected<std::filesystem::path, std::string> resolveAutomationScriptPath(
+    const std::filesystem::path &rootRelativePath);
 
 enum class OfflineLuaStartError : std::uint8_t
 {
@@ -50,7 +51,8 @@ class OfflineLuaHost
     OfflineLuaHost(OfflineLuaHost &&) = delete;
     OfflineLuaHost &operator=(OfflineLuaHost &&) = delete;
 
-    [[nodiscard]] OfflineLuaStartResult start(nr::options::OptionSystem &optionSystem, const std::filesystem::path &rootRelativeScript);
+    [[nodiscard]] OfflineLuaStartResult start(nr::options::OptionSystem &optionSystem,
+                                              const std::filesystem::path &rootRelativeScript);
     [[nodiscard]] OfflineLuaFrameResult resume(std::shared_ptr<const nr::options::OptionFrameSnapshot> snapshot);
     void stop() noexcept;
     [[nodiscard]] bool started() const noexcept;

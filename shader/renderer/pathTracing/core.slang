@@ -85,37 +85,49 @@ public float lightVisibilityDistance(uint lightIndex, float3 hitPosition)
 // compile-time constant. This runtime switch maps the resolved combined material flags to the concrete
 // static evaluator. The root raygen SPIR-V contains all sixteen valid lit cases.
 public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponents(
-    ResolvedMaterialPayload material,
-    MaterialDirectLightingInput lighting)
+    ResolvedMaterialPayload material, MaterialDirectLightingInput lighting)
 {
     switch (uint(material.layerFlags))
     {
-    case 1u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
-    case 3u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(3u)>(material, lighting);
-    case 5u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(5u)>(material, lighting);
-    case 7u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(7u)>(material, lighting);
-    case 9u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(9u)>(material, lighting);
-    case 11u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(11u)>(material, lighting);
-    case 13u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(13u)>(material, lighting);
-    case 15u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(15u)>(material, lighting);
-    case 17u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(17u)>(material, lighting);
-    case 19u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(19u)>(material, lighting);
-    case 21u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(21u)>(material, lighting);
-    case 23u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(23u)>(material, lighting);
-    case 25u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(25u)>(material, lighting);
-    case 27u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(27u)>(material, lighting);
-    case 29u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(29u)>(material, lighting);
-    case 31u: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(31u)>(material, lighting);
-    default: return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    case 1u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
+    case 3u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(3u)>(material, lighting);
+    case 5u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(5u)>(material, lighting);
+    case 7u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(7u)>(material, lighting);
+    case 9u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(9u)>(material, lighting);
+    case 11u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(11u)>(material, lighting);
+    case 13u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(13u)>(material, lighting);
+    case 15u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(15u)>(material, lighting);
+    case 17u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(17u)>(material, lighting);
+    case 19u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(19u)>(material, lighting);
+    case 21u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(21u)>(material, lighting);
+    case 23u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(23u)>(material, lighting);
+    case 25u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(25u)>(material, lighting);
+    case 27u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(27u)>(material, lighting);
+    case 29u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(29u)>(material, lighting);
+    case 31u:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(31u)>(material, lighting);
+    default:
+        return evaluateResolvedMaterialDirectComponentsVariant<RtMaterialLayerFlag(1u)>(material, lighting);
     }
 }
 
-public void accumulateDirectLightSample(
-    inout PathState path,
-    ResolvedMaterialPayload material,
-    float3 viewDirection,
-    float2 randomValues,
-    float sampleWeight)
+public void accumulateDirectLightSample(inout PathState path, ResolvedMaterialPayload material, float3 viewDirection,
+                                        float2 randomValues, float sampleWeight)
 {
     SceneLightSample lightSample;
     if (!sampleSceneLightAlias(randomValues, lightSample))
@@ -130,40 +142,26 @@ public void accumulateDirectLightSample(
     }
 
     contribution.radiance *= 1.0f / lightSample.pdf;
-    float3 visibilityOrigin = offsetRayOrigin(
-        material.position,
-        material.geometryNormal,
-        contribution.direction);
-    if (!tracePathVisibilityRay(
-        visibilityOrigin,
-        contribution.direction,
-        lightVisibilityDistance(lightSample.lightIndex, material.position)))
+    float3 visibilityOrigin = offsetRayOrigin(material.position, material.geometryNormal, contribution.direction);
+    if (!tracePathVisibilityRay(visibilityOrigin, contribution.direction,
+                                lightVisibilityDistance(lightSample.lightIndex, material.position)))
     {
         return;
     }
 
-    ResolvedMaterialDirectComponents direct = dispatchEvaluateResolvedMaterialDirectComponents(
-        material,
-        makeLighting(viewDirection, contribution));
+    ResolvedMaterialDirectComponents direct =
+        dispatchEvaluateResolvedMaterialDirectComponents(material, makeLighting(viewDirection, contribution));
     if (path.vertexIndex == 1u)
     {
-        addPrimaryPathContribution(
-            path,
-            direct.specularRadiance * sampleWeight,
-            direct.diffuseRadiance * sampleWeight);
+        addPrimaryPathContribution(path, direct.specularRadiance * sampleWeight, direct.diffuseRadiance * sampleWeight);
     }
     else
     {
-        addPathContribution(
-            path,
-            (direct.specularRadiance + direct.diffuseRadiance) * sampleWeight);
+        addPathContribution(path, (direct.specularRadiance + direct.diffuseRadiance) * sampleWeight);
     }
 }
 
-public void sampleDirectLighting(
-    inout PathState path,
-    ResolvedMaterialPayload material,
-    float3 viewDirection)
+public void sampleDirectLighting(inout PathState path, ResolvedMaterialPayload material, float3 viewDirection)
 {
     if (sceneLightAliasCount() == 0u)
     {
@@ -214,23 +212,18 @@ public uint materialRayCoherenceHint(uint vertexIndex)
 
 public bool resolvedMaterialIsVolumeBoundary(ResolvedMaterialPayload material)
 {
-    return
-        uint(material.layerFlags & RtMaterialLayerFlag.transmission) != 0u &&
-        material.layers.transmissionMode == RtTransmissionMode.volume;
+    return uint(material.layerFlags & RtMaterialLayerFlag.transmission) != 0u &&
+           material.layers.transmissionMode == RtTransmissionMode.volume;
 }
 
-public bool applyResolvedMaterialMediumTransition(
-    inout PathState path,
-    ResolvedMaterialPayload material,
-    ResolvedMaterialScatter scatter)
+public bool applyResolvedMaterialMediumTransition(inout PathState path, ResolvedMaterialPayload material,
+                                                  ResolvedMaterialScatter scatter)
 {
     if (scatter.mediumTransition == ResolvedMaterialMediumTransition.none)
     {
         return true;
     }
-    if (!resolvedMaterialIsVolumeBoundary(material) ||
-        !isfinite(scatter.etaRatio) ||
-        scatter.etaRatio <= 0.0f)
+    if (!resolvedMaterialIsVolumeBoundary(material) || !isfinite(scatter.etaRatio) || scatter.etaRatio <= 0.0f)
     {
         return false;
     }
@@ -239,20 +232,12 @@ public bool applyResolvedMaterialMediumTransition(
     if (scatter.mediumTransition == ResolvedMaterialMediumTransition.enter)
     {
         if (!material.frontFace ||
-            pathMediumTopMatches(
-                path,
-                material.instanceMetadataIndex,
-                material.geometryIndex,
-                material.materialIndex))
+            pathMediumTopMatches(path, material.instanceMetadataIndex, material.geometryIndex, material.materialIndex))
         {
             return false;
         }
-        transitioned = pushPathMediumBoundary(
-            path,
-            material.instanceMetadataIndex,
-            material.geometryIndex,
-            material.materialIndex,
-            material.layers.transmissionIor);
+        transitioned = pushPathMediumBoundary(path, material.instanceMetadataIndex, material.geometryIndex,
+                                              material.materialIndex, material.layers.transmissionIor);
     }
     else if (scatter.mediumTransition == ResolvedMaterialMediumTransition.exit)
     {
@@ -260,11 +245,8 @@ public bool applyResolvedMaterialMediumTransition(
         {
             return false;
         }
-        transitioned = popPathMediumBoundary(
-            path,
-            material.instanceMetadataIndex,
-            material.geometryIndex,
-            material.materialIndex);
+        transitioned =
+            popPathMediumBoundary(path, material.instanceMetadataIndex, material.geometryIndex, material.materialIndex);
     }
 
     if (!transitioned)
@@ -272,10 +254,7 @@ public bool applyResolvedMaterialMediumTransition(
         return false;
     }
 
-    float nextEtaScale =
-        path.etaScale *
-        scatter.etaRatio *
-        scatter.etaRatio;
+    float nextEtaScale = path.etaScale * scatter.etaRatio * scatter.etaRatio;
     if (!isfinite(nextEtaScale) || nextEtaScale <= 0.0f)
     {
         return false;
@@ -288,13 +267,8 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 {
     float3 viewDirection = safeNormalize(-path.direction, material.geometryNormal);
 
-    if (resolvedMaterialIsVolumeBoundary(material) &&
-        !material.frontFace &&
-        !pathMediumTopMatches(
-            path,
-            material.instanceMetadataIndex,
-            material.geometryIndex,
-            material.materialIndex))
+    if (resolvedMaterialIsVolumeBoundary(material) && !material.frontFace &&
+        !pathMediumTopMatches(path, material.instanceMetadataIndex, material.geometryIndex, material.materialIndex))
     {
         // The scoped volume implementation supports nested strict-LIFO boundaries only. Camera-inside,
         // non-manifold, and overlapping/non-LIFO configurations terminate instead of guessing an IOR.
@@ -304,20 +278,14 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 
     if (path.vertexIndex == 1u)
     {
-        capturePathTracingPrimarySurfaceGuides(
-            path.guides,
-            material,
-            viewDirection,
-            path.dimensions);
+        capturePathTracingPrimarySurfaceGuides(path.guides, material, viewDirection, path.dimensions);
     }
     else if (path.vertexIndex == 2u)
     {
         resolvePathTracingSpecularHit(path.guides, material.position);
     }
 
-    float hitAlpha = material.alphaMode == AlphaMode.blend
-        ? material.alpha
-        : 1.0f;
+    float hitAlpha = material.alphaMode == AlphaMode.blend ? material.alpha : 1.0f;
     if (path.vertexIndex == 1u && hitAlpha < 1.0f)
     {
         addDiffusePathContribution(path, sampleEnvironment(path.direction) * (1.0f - hitAlpha));
@@ -372,8 +340,7 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     }
 
     ResolvedMaterialScatterKind scatterKind = scatter.kind;
-    if (scatterKind == ResolvedMaterialScatterKind.specular ||
-        scatterKind == ResolvedMaterialScatterKind.clearcoat ||
+    if (scatterKind == ResolvedMaterialScatterKind.specular || scatterKind == ResolvedMaterialScatterKind.clearcoat ||
         scatterKind == ResolvedMaterialScatterKind.transmission)
     {
         path.specularBounces += 1u;
@@ -385,10 +352,7 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 
     if (path.vertexIndex == 1u)
     {
-        initializePrimaryPathThroughput(
-            path,
-            scatter.specularWeight,
-            scatter.diffuseWeight);
+        initializePrimaryPathThroughput(path, scatter.specularWeight, scatter.diffuseWeight);
     }
     else
     {
@@ -398,8 +362,7 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     RussianRoulettePolicy roulettePolicy = RussianRoulettePolicy();
     if (roulettePolicy.shouldApply(path.vertexIndex))
     {
-        float survivalProbability = roulettePolicy.survivalProbability(
-            pathCombinedThroughput(path) * path.etaScale);
+        float survivalProbability = roulettePolicy.survivalProbability(pathCombinedThroughput(path) * path.etaScale);
         if (!roulettePolicy.survives(path.rng.rand4().x, survivalProbability))
         {
             terminatePathState(path);
@@ -425,7 +388,7 @@ public void handleMiss(inout PathState path, float3 missRadiance)
     }
     if (path.vertexIndex == 1u)
     {
-        // Primary camera misses consume the same environment sample written by msMain.
+        // Primary camera misses consume the same environment sample written by msMaterial.
         addDiffusePathContribution(path, missRadiance);
     }
     else
@@ -454,26 +417,17 @@ public struct Pt
     }
 
     [mutating]
-    public void traceMaterialRay(out RayPayload payload)
+    public void traceMaterialRay(out MaterialRayPayload payload)
     {
         path.vertexIndex += 1u;
 
         // TLAS instance flags encode object-space source winding and instance-wide facing-cull policy.
         // Non-opaque candidates use any-hit for alpha coverage and mixed-mesh back-face filtering.
         payload = {};
-        HitObject hitObject = HitObject::TraceRay(
-            scene,
-            RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
-            0xFF,
-            0,
-            1,
-            0,
-            pathStateRayDesc(path),
-            payload);
-        ReorderThread(
-            hitObject,
-            materialRayCoherenceHint(path.vertexIndex),
-            kMaterialRayCoherenceHintBitCount);
+        HitObject hitObject =
+            HitObject::TraceRay(scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, uint(RtRayType.material),
+                                uint(RtRayType.count), uint(RtRayType.material), pathStateRayDesc(path), payload);
+        ReorderThread(hitObject, materialRayCoherenceHint(path.vertexIndex), kMaterialRayCoherenceHintBitCount);
 
         float4 scatterRandomValues = path.rng.rand4();
         RandomSequence materialFilterSequence = path.rng;
@@ -483,26 +437,19 @@ public struct Pt
         // rand4() evolves five seed keys per packet. This one closed-form jump
         // is exactly equivalent to discarding the three complete packets.
         path.rng.advanceThreeRand4Packets();
-        initializeMaterialRayPayload(
-            payload,
-            scatterRandomValues,
-            materialFilterSequence,
-            pathCurrentMediumIor(path),
-            pathExteriorMediumIor(path));
+        initializeMaterialRayPayload(payload, scatterRandomValues, materialFilterSequence, pathCurrentMediumIor(path),
+                                     pathExteriorMediumIor(path));
         HitObject::Invoke(scene, hitObject, payload);
     }
 
     [mutating]
-    public void handleTraceResult(RayPayload payload)
+    public void handleTraceResult(MaterialRayPayload payload)
     {
         if (payload.hit)
         {
-            ResolvedMaterialPayload material = resolvedMaterialFromRayPayload(
-                payload,
-                pathCurrentMediumIor(path),
-                pathExteriorMediumIor(path));
-            ResolvedMaterialScatter scatter =
-                resolvedMaterialScatterFromRayPayload(payload);
+            ResolvedMaterialPayload material =
+                resolvedMaterialFromRayPayload(payload, pathCurrentMediumIor(path), pathExteriorMediumIor(path));
+            ResolvedMaterialScatter scatter = resolvedMaterialScatterFromRayPayload(payload);
             handleHit(material, scatter);
         }
         else

@@ -47,13 +47,13 @@ public struct SceneLightAliasGpuRecord
     public float4 probabilities;
 };
 
-[[vk::binding(0, 6)]]
+[[vk::binding(0, 5)]]
 public ConstantBuffer<SceneLightGpuHeader> gSceneLightHeader;
 
-[[vk::binding(1, 6)]]
+[[vk::binding(1, 5)]]
 public StructuredBuffer<SceneLightGpuRecord> gSceneLights;
 
-[[vk::binding(2, 6)]]
+[[vk::binding(2, 5)]]
 public StructuredBuffer<SceneLightAliasGpuRecord> gSceneLightAliasTable;
 
 public static const float kSceneLightMinDistanceSquared = 1.0e-6f;

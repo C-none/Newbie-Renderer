@@ -10,9 +10,7 @@ public extern static const bool kEnableFilterAfterShading;
 //   packet 0: baseColor, metallicRoughness, emissive, base normal
 //   packet 1: anisotropy, clearcoat, clearcoat roughness, clearcoat normal
 //   packet 2: sheen color, sheen roughness, transmission, padding
-public bool selectStochasticFilterUpperTap(
-    float upperWeight,
-    inout float uniformValue)
+public bool selectStochasticFilterUpperTap(float upperWeight, inout float uniformValue)
 {
     if (upperWeight <= 0.0f)
     {
@@ -24,9 +22,7 @@ public bool selectStochasticFilterUpperTap(
     }
 
     bool selectUpper = uniformValue < upperWeight;
-    uniformValue = selectUpper
-        ? uniformValue / upperWeight
-        : (uniformValue - upperWeight) / (1.0f - upperWeight);
+    uniformValue = selectUpper ? uniformValue / upperWeight : (uniformValue - upperWeight) / (1.0f - upperWeight);
     return selectUpper;
 }
 
@@ -34,24 +30,15 @@ public bool selectStochasticFilterUpperTap(
 // to its bilinear weight. The remapped scalar remains uniform after the X
 // decision and is reused for Y, preserving the one-dimensional stratification
 // of the semantic slot.
-public float2 stochasticBilinearTexelCenterUv(
-    float2 uv,
-    uint2 dimensions,
-    float uniformValue)
+public float2 stochasticBilinearTexelCenterUv(float2 uv, uint2 dimensions, float uniformValue)
 {
     float2 safeDimensions = float2(max(dimensions, uint2(1u)));
     float2 texelPosition = uv * safeDimensions - 0.5f;
     float2 lowerTexel = floor(texelPosition);
     float2 upperWeight = texelPosition - lowerTexel;
 
-    bool selectUpperX = selectStochasticFilterUpperTap(
-        upperWeight.x,
-        uniformValue);
-    bool selectUpperY = selectStochasticFilterUpperTap(
-        upperWeight.y,
-        uniformValue);
-    float2 selectedTexel =
-        lowerTexel +
-        float2(selectUpperX ? 1.0f : 0.0f, selectUpperY ? 1.0f : 0.0f);
+    bool selectUpperX = selectStochasticFilterUpperTap(upperWeight.x, uniformValue);
+    bool selectUpperY = selectStochasticFilterUpperTap(upperWeight.y, uniformValue);
+    float2 selectedTexel = lowerTexel + float2(selectUpperX ? 1.0f : 0.0f, selectUpperY ? 1.0f : 0.0f);
     return (selectedTexel + 0.5f) / safeDimensions;
 }

@@ -70,7 +70,8 @@ class FrameContext
   public:
     /// Compile-time upper bound for worker-secondary pools on amd64 builds.
     inline static constexpr std::uint32_t kMaxSecondaryWorkers = nr::maxThreads;
-    static_assert(kMaxSecondaryWorkers > 1, "FrameContext requires slot 0 plus at least one worker-only secondary pool slot.");
+    static_assert(kMaxSecondaryWorkers > 1,
+                  "FrameContext requires slot 0 plus at least one worker-only secondary pool slot.");
 
     /**
      * @brief Configuration for per-queue command pools
@@ -90,7 +91,8 @@ class FrameContext
      * @param computeConfig Compute queue pool configuration
      * @param transferConfig Dedicated transfer queue pool configuration
      */
-    FrameContext(const vk::raii::Device &device, const PoolConfig &graphicsConfig, const PoolConfig &computeConfig, const PoolConfig &transferConfig);
+    FrameContext(const vk::raii::Device &device, const PoolConfig &graphicsConfig, const PoolConfig &computeConfig,
+                 const PoolConfig &transferConfig);
 
     // Move-only semantics
     FrameContext(const FrameContext &) = delete;
@@ -140,7 +142,9 @@ class FrameContext
      * Call from frame-begin on the main thread before worker recording starts.
      * Recording-time access (`secondary<T>()`) never grows storage or acquires locks.
      */
-    void prepareSecondaryPools(std::uint32_t graphicsWorkerCount = kMaxSecondaryWorkers, std::uint32_t computeWorkerCount = kMaxSecondaryWorkers, std::uint32_t transferWorkerCount = 0);
+    void prepareSecondaryPools(std::uint32_t graphicsWorkerCount = kMaxSecondaryWorkers,
+                               std::uint32_t computeWorkerCount = kMaxSecondaryWorkers,
+                               std::uint32_t transferWorkerCount = 0);
 
     /**
      * @brief Get primary command pool for queue
@@ -162,9 +166,9 @@ class FrameContext
         static_assert(isSupportedQueueRole<T>(), "Unsupported QueueRole template argument");
         const auto preparedWorkers = preparedSecondaryWorkers<T>();
         auto &slots = secondarySlots<T>();
-        nrAssert(
-            threadId < preparedWorkers,
-            std::format("FrameContext::secondary {} threadId {} out of prepared range {}", queueRoleName<T>(), threadId, preparedWorkers));
+        nrAssert(threadId < preparedWorkers,
+                 std::format("FrameContext::secondary {} threadId {} out of prepared range {}", queueRoleName<T>(),
+                             threadId, preparedWorkers));
         nrAssert(slots[threadId].has_value(), secondaryPoolNotPreparedMessage<T>());
         return *slots[threadId];
     }
@@ -213,9 +217,11 @@ class FrameContext
     /**
      * @brief Ensure queue-specific secondary pool slots are materialized for [0, workerCount).
      */
-    static void resetPreparedSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t preparedWorkerCount);
+    static void resetPreparedSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots,
+                                            std::uint32_t preparedWorkerCount);
 
-    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots, std::uint32_t queueFamilyIndex, std::uint32_t workerCount);
+    void prepareQueueSecondaryPools(std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> &slots,
+                                    std::uint32_t queueFamilyIndex, std::uint32_t workerCount);
 
     template <QueueRole T> [[nodiscard]] static consteval bool isSupportedQueueRole() noexcept
     {
@@ -360,7 +366,8 @@ class FrameManager
      * @param computeConfig Compute pool configuration
      * @param transferConfig Dedicated transfer pool configuration
      */
-    FrameManager(const vk::raii::Device &device, const FrameContext::PoolConfig &graphicsConfig, const FrameContext::PoolConfig &computeConfig, const FrameContext::PoolConfig &transferConfig);
+    FrameManager(const vk::raii::Device &device, const FrameContext::PoolConfig &graphicsConfig,
+                 const FrameContext::PoolConfig &computeConfig, const FrameContext::PoolConfig &transferConfig);
 
     // Move-only semantics
     FrameManager(const FrameManager &) = delete;
@@ -408,7 +415,9 @@ class FrameManager
      */
     void waitAll()
     {
-        std::ranges::for_each(frames_ | std::views::all, [](FrameContext &frame) { nrAssert(frame.waitForFence(), std::format("Timeout waiting for frame fence")); });
+        std::ranges::for_each(frames_ | std::views::all, [](FrameContext &frame) {
+            nrAssert(frame.waitForFence(), std::format("Timeout waiting for frame fence"));
+        });
     }
 
   private:

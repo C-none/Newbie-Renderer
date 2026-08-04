@@ -27,10 +27,7 @@ public struct RussianRouletteEnabledPolicy : IRussianRoulettePolicy
             return 0.0f;
         }
 
-        return clamp(
-            probability,
-            kRussianRouletteMinSurvivalProbability,
-            kRussianRouletteMaxSurvivalProbability);
+        return clamp(probability, kRussianRouletteMinSurvivalProbability, kRussianRouletteMaxSurvivalProbability);
     }
 
     public bool survives(float randomValue, float survivalProbability)

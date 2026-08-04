@@ -142,7 +142,7 @@ enum class SubrectSlot : std::size_t
 };
 static_assert(static_cast<std::size_t>(SubrectSlot::Count) == NR_DLSS_BRIDGE_RR_SUBRECT_COUNT);
 
-void resetStatus(NrDlssBridgeStatus* status) noexcept
+void resetStatus(NrDlssBridgeStatus *status) noexcept
 {
     if (status == nullptr || status->structSize < sizeof(NrDlssBridgeStatus))
         return;
@@ -151,12 +151,8 @@ void resetStatus(NrDlssBridgeStatus* status) noexcept
     status->structSize = size;
 }
 
-uint32_t setStatus(
-    NrDlssBridgeStatus* status,
-    NrDlssBridgeStatusCode code,
-    uint32_t nativeCode,
-    const char* format,
-    ...) noexcept
+uint32_t setStatus(NrDlssBridgeStatus *status, NrDlssBridgeStatusCode code, uint32_t nativeCode, const char *format,
+                   ...) noexcept
 {
     if (status != nullptr && status->structSize >= sizeof(NrDlssBridgeStatus))
     {
@@ -169,36 +165,24 @@ uint32_t setStatus(
         {
             va_list arguments;
             va_start(arguments, format);
-            static_cast<void>(vsnprintf_s(
-                status->message,
-                NR_DLSS_BRIDGE_STATUS_MESSAGE_CAPACITY,
-                _TRUNCATE,
-                format,
-                arguments));
+            static_cast<void>(
+                vsnprintf_s(status->message, NR_DLSS_BRIDGE_STATUS_MESSAGE_CAPACITY, _TRUNCATE, format, arguments));
             va_end(arguments);
         }
     }
     return static_cast<uint32_t>(code);
 }
 
-uint32_t fromNgxResult(
-    NVSDK_NGX_Result result,
-    std::string_view operation,
-    NrDlssBridgeStatus* status) noexcept
+uint32_t fromNgxResult(NVSDK_NGX_Result result, std::string_view operation, NrDlssBridgeStatus *status) noexcept
 {
     if (NVSDK_NGX_SUCCEED(result))
     {
         resetStatus(status);
         return NR_DLSS_BRIDGE_STATUS_SUCCESS;
     }
-    return setStatus(
-        status,
-        NR_DLSS_BRIDGE_STATUS_API_FAILURE,
-        static_cast<uint32_t>(result),
-        "%.*s failed with NGX result 0x%08x.",
-        static_cast<int>(operation.size()),
-        operation.data(),
-        static_cast<uint32_t>(result));
+    return setStatus(status, NR_DLSS_BRIDGE_STATUS_API_FAILURE, static_cast<uint32_t>(result),
+                     "%.*s failed with NGX result 0x%08x.", static_cast<int>(operation.size()), operation.data(),
+                     static_cast<uint32_t>(result));
 }
 
 bool validDimensions(NrDlssBridgeDimensions dimensions) noexcept
@@ -206,23 +190,16 @@ bool validDimensions(NrDlssBridgeDimensions dimensions) noexcept
     return dimensions.width != 0u && dimensions.height != 0u;
 }
 
-bool utf8ToWide(
-    const char* input,
-    std::array<wchar_t, kMaximumWindowsPathLength>& output) noexcept
+bool utf8ToWide(const char *input, std::array<wchar_t, kMaximumWindowsPathLength> &output) noexcept
 {
     if (input == nullptr || input[0] == '\0')
         return false;
-    auto const length = MultiByteToWideChar(
-        CP_UTF8,
-        MB_ERR_INVALID_CHARS,
-        input,
-        -1,
-        output.data(),
-        static_cast<int>(output.size()));
+    auto const length =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input, -1, output.data(), static_cast<int>(output.size()));
     return length > 0;
 }
 
-bool currentNgxDataPath(std::filesystem::path& output) noexcept
+bool currentNgxDataPath(std::filesystem::path &output) noexcept
 {
     auto error = std::error_code{};
     output = std::filesystem::current_path(error);
@@ -293,7 +270,7 @@ NVSDK_NGX_Application_Identifier makeIdentifier() noexcept
     return identifier;
 }
 
-NVSDK_NGX_FeatureDiscoveryInfo makeDiscoveryInfo(const std::filesystem::path& dataPath) noexcept
+NVSDK_NGX_FeatureDiscoveryInfo makeDiscoveryInfo(const std::filesystem::path &dataPath) noexcept
 {
     auto result = NVSDK_NGX_FeatureDiscoveryInfo{};
     result.SDKVersion = NVSDK_NGX_Version_API;
@@ -303,7 +280,7 @@ NVSDK_NGX_FeatureDiscoveryInfo makeDiscoveryInfo(const std::filesystem::path& da
     return result;
 }
 
-NVSDK_NGX_Resource_VK makeNativeImage(const NrDlssBridgeVulkanImage& image) noexcept
+NVSDK_NGX_Resource_VK makeNativeImage(const NrDlssBridgeVulkanImage &image) noexcept
 {
     auto result = NVSDK_NGX_Resource_VK{};
     result.Resource.ImageViewInfo.ImageView = image.view;
@@ -322,18 +299,15 @@ NVSDK_NGX_Coordinates toNativeCoordinates(NrDlssBridgeCoordinates value) noexcep
     return NVSDK_NGX_Coordinates{value.x, value.y};
 }
 
-template<typename Query>
-uint32_t queryExtensions(
-    uint32_t* count,
-    NrDlssBridgeExtensionName* names,
-    NrDlssBridgeStatus* status,
-    Query&& query) noexcept
+template <typename Query>
+uint32_t queryExtensions(uint32_t *count, NrDlssBridgeExtensionName *names, NrDlssBridgeStatus *status,
+                         Query &&query) noexcept
 {
     if (count == nullptr)
         return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u, "Extension count is required.");
 
     auto required = uint32_t{0u};
-    auto* properties = static_cast<VkExtensionProperties*>(nullptr);
+    auto *properties = static_cast<VkExtensionProperties *>(nullptr);
     auto const result = query(&required, &properties);
     if (NVSDK_NGX_FAILED(result))
         return fromNgxResult(result, "NGX extension discovery", status);
@@ -350,22 +324,14 @@ uint32_t queryExtensions(
     *count = required;
     if (capacity < required)
     {
-        return setStatus(
-            status,
-            NR_DLSS_BRIDGE_STATUS_BUFFER_TOO_SMALL,
-            0u,
-            "Extension output capacity %u is smaller than required count %u.",
-            capacity,
-            required);
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_BUFFER_TOO_SMALL, 0u,
+                         "Extension output capacity %u is smaller than required count %u.", capacity, required);
     }
 
     auto const indices = std::views::iota(uint32_t{0u}, required);
     std::ranges::for_each(indices, [&](uint32_t index) {
-        static_cast<void>(strncpy_s(
-            names[index].value,
-            NR_DLSS_BRIDGE_EXTENSION_NAME_CAPACITY,
-            properties[index].extensionName,
-            _TRUNCATE));
+        static_cast<void>(strncpy_s(names[index].value, NR_DLSS_BRIDGE_EXTENSION_NAME_CAPACITY,
+                                    properties[index].extensionName, _TRUNCATE));
     });
     resetStatus(status);
     return NR_DLSS_BRIDGE_STATUS_SUCCESS;
@@ -375,61 +341,51 @@ uint32_t queryExtensions(
 struct NrDlssBridgeContext
 {
     VkDevice device = VK_NULL_HANDLE;
-    NVSDK_NGX_Parameter* capabilityParameters = nullptr;
+    NVSDK_NGX_Parameter *capabilityParameters = nullptr;
     bool available = false;
 };
 
 struct NrDlssBridgeFeature
 {
-    NVSDK_NGX_Handle* handle = nullptr;
-    NVSDK_NGX_Parameter* parameters = nullptr;
+    NVSDK_NGX_Handle *handle = nullptr;
+    NVSDK_NGX_Parameter *parameters = nullptr;
 };
 
 namespace
 {
-uint32_t NR_DLSS_BRIDGE_CALL getInstanceExtensions(
-    uint32_t* count,
-    NrDlssBridgeExtensionName* names,
-    NrDlssBridgeStatus* status) noexcept
+uint32_t NR_DLSS_BRIDGE_CALL getInstanceExtensions(uint32_t *count, NrDlssBridgeExtensionName *names,
+                                                   NrDlssBridgeStatus *status) noexcept
 {
     auto dataPath = std::filesystem::path{};
     if (!currentNgxDataPath(dataPath))
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_API_FAILURE, GetLastError(), "Could not create the NGX data directory.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_API_FAILURE, GetLastError(),
+                         "Could not create the NGX data directory.");
     auto discovery = makeDiscoveryInfo(dataPath);
     std::scoped_lock lock(ngxMutex);
-    return queryExtensions(count, names, status, [&](uint32_t* nativeCount, VkExtensionProperties** properties) {
-        return NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(
-            &discovery,
-            nativeCount,
-            properties);
+    return queryExtensions(count, names, status, [&](uint32_t *nativeCount, VkExtensionProperties **properties) {
+        return NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&discovery, nativeCount, properties);
     });
 }
 
-uint32_t NR_DLSS_BRIDGE_CALL getDeviceExtensions(
-    VkInstance instance,
-    VkPhysicalDevice physicalDevice,
-    uint32_t* count,
-    NrDlssBridgeExtensionName* names,
-    NrDlssBridgeStatus* status) noexcept
+uint32_t NR_DLSS_BRIDGE_CALL getDeviceExtensions(VkInstance instance, VkPhysicalDevice physicalDevice, uint32_t *count,
+                                                 NrDlssBridgeExtensionName *names, NrDlssBridgeStatus *status) noexcept
 {
     if (instance == VK_NULL_HANDLE || physicalDevice == VK_NULL_HANDLE)
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u, "Vulkan instance and physical device are required.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u,
+                         "Vulkan instance and physical device are required.");
     auto dataPath = std::filesystem::path{};
     if (!currentNgxDataPath(dataPath))
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_API_FAILURE, GetLastError(), "Could not create the NGX data directory.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_API_FAILURE, GetLastError(),
+                         "Could not create the NGX data directory.");
     auto discovery = makeDiscoveryInfo(dataPath);
     std::scoped_lock lock(ngxMutex);
-    return queryExtensions(count, names, status, [&](uint32_t* nativeCount, VkExtensionProperties** properties) {
-        return NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(
-            instance,
-            physicalDevice,
-            &discovery,
-            nativeCount,
-            properties);
+    return queryExtensions(count, names, status, [&](uint32_t *nativeCount, VkExtensionProperties **properties) {
+        return NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(instance, physicalDevice, &discovery, nativeCount,
+                                                                      properties);
     });
 }
 
-void destroyContextUnlocked(NrDlssBridgeContext* context) noexcept
+void destroyContextUnlocked(NrDlssBridgeContext *context) noexcept
 {
     if (context->capabilityParameters != nullptr)
     {
@@ -444,10 +400,8 @@ void destroyContextUnlocked(NrDlssBridgeContext* context) noexcept
     delete context;
 }
 
-uint32_t NR_DLSS_BRIDGE_CALL createContext(
-    const NrDlssBridgeContextDesc* desc,
-    NrDlssBridgeContext** output,
-    NrDlssBridgeStatus* status) noexcept
+uint32_t NR_DLSS_BRIDGE_CALL createContext(const NrDlssBridgeContextDesc *desc, NrDlssBridgeContext **output,
+                                           NrDlssBridgeStatus *status) noexcept
 {
     if (output != nullptr)
         *output = nullptr;
@@ -455,31 +409,24 @@ uint32_t NR_DLSS_BRIDGE_CALL createContext(
         desc->instance == VK_NULL_HANDLE || desc->physicalDevice == VK_NULL_HANDLE || desc->device == VK_NULL_HANDLE ||
         desc->applicationDataPathUtf8 == nullptr)
     {
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u, "A complete DLSS Vulkan context descriptor is required.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u,
+                         "A complete DLSS Vulkan context descriptor is required.");
     }
 
     auto dataPath = std::array<wchar_t, kMaximumWindowsPathLength>{};
     if (!utf8ToWide(desc->applicationDataPathUtf8, dataPath))
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, GetLastError(), "The NGX data path is not valid UTF-8.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, GetLastError(),
+                         "The NGX data path is not valid UTF-8.");
 
-    auto* context = new (std::nothrow) NrDlssBridgeContext{};
+    auto *context = new (std::nothrow) NrDlssBridgeContext{};
     if (context == nullptr)
         return setStatus(status, NR_DLSS_BRIDGE_STATUS_OUT_OF_MEMORY, 0u, "Could not allocate the DLSS context.");
 
     std::scoped_lock lock(ngxMutex);
     context->device = desc->device;
     auto const initResult = NVSDK_NGX_VULKAN_Init_with_ProjectID(
-        kProjectId.data(),
-        NVSDK_NGX_ENGINE_TYPE_CUSTOM,
-        kEngineVersion.data(),
-        dataPath.data(),
-        desc->instance,
-        desc->physicalDevice,
-        context->device,
-        nullptr,
-        nullptr,
-        nullptr,
-        NVSDK_NGX_Version_API);
+        kProjectId.data(), NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion.data(), dataPath.data(), desc->instance,
+        desc->physicalDevice, context->device, nullptr, nullptr, nullptr, NVSDK_NGX_Version_API);
     auto result = fromNgxResult(initResult, "NVSDK_NGX_VULKAN_Init_with_ProjectID", status);
     if (result != NR_DLSS_BRIDGE_STATUS_SUCCESS)
     {
@@ -498,9 +445,7 @@ uint32_t NR_DLSS_BRIDGE_CALL createContext(
 
     auto available = 0;
     auto const availabilityResult = NVSDK_NGX_Parameter_GetI(
-        context->capabilityParameters,
-        NVSDK_NGX_Parameter_SuperSamplingDenoising_Available,
-        &available);
+        context->capabilityParameters, NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &available);
     result = fromNgxResult(availabilityResult, "DLSS Ray Reconstruction capability query", status);
     if (result != NR_DLSS_BRIDGE_STATUS_SUCCESS)
     {
@@ -511,12 +456,13 @@ uint32_t NR_DLSS_BRIDGE_CALL createContext(
     context->available = available != 0;
     *output = context;
     if (!context->available)
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_UNAVAILABLE, 0u, "NGX reports that DLSS Ray Reconstruction is unavailable on this system.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_UNAVAILABLE, 0u,
+                         "NGX reports that DLSS Ray Reconstruction is unavailable on this system.");
     resetStatus(status);
     return NR_DLSS_BRIDGE_STATUS_SUCCESS;
 }
 
-void NR_DLSS_BRIDGE_CALL destroyContext(NrDlssBridgeContext* context) noexcept
+void NR_DLSS_BRIDGE_CALL destroyContext(NrDlssBridgeContext *context) noexcept
 {
     if (context == nullptr)
         return;
@@ -524,23 +470,21 @@ void NR_DLSS_BRIDGE_CALL destroyContext(NrDlssBridgeContext* context) noexcept
     destroyContextUnlocked(context);
 }
 
-uint32_t NR_DLSS_BRIDGE_CALL contextAvailable(const NrDlssBridgeContext* context) noexcept
+uint32_t NR_DLSS_BRIDGE_CALL contextAvailable(const NrDlssBridgeContext *context) noexcept
 {
     return context != nullptr && context->available ? 1u : 0u;
 }
 
-uint32_t NR_DLSS_BRIDGE_CALL getOptimalSettings(
-    NrDlssBridgeContext* context,
-    NrDlssBridgeDimensions targetSize,
-    uint32_t quality,
-    NrDlssBridgeOptimalSettings* settings,
-    NrDlssBridgeStatus* status) noexcept
+uint32_t NR_DLSS_BRIDGE_CALL getOptimalSettings(NrDlssBridgeContext *context, NrDlssBridgeDimensions targetSize,
+                                                uint32_t quality, NrDlssBridgeOptimalSettings *settings,
+                                                NrDlssBridgeStatus *status) noexcept
 {
     if (context == nullptr || !context->available || !validDimensions(targetSize) ||
         quality >= NR_DLSS_BRIDGE_RR_QUALITY_COUNT || settings == nullptr ||
         settings->structSize < sizeof(NrDlssBridgeOptimalSettings))
     {
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u, "Valid context, dimensions, quality, and output settings are required.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u,
+                         "Valid context, dimensions, quality, and output settings are required.");
     }
 
     auto output = NrDlssBridgeOptimalSettings{};
@@ -548,16 +492,9 @@ uint32_t NR_DLSS_BRIDGE_CALL getOptimalSettings(
     auto ignoredSharpness = 0.0f;
     std::scoped_lock lock(ngxMutex);
     auto const result = NGX_DLSSD_GET_OPTIMAL_SETTINGS(
-        context->capabilityParameters,
-        targetSize.width,
-        targetSize.height,
-        toNativeQuality(quality),
-        &output.optimalRenderSize.width,
-        &output.optimalRenderSize.height,
-        &output.maximumRenderSize.width,
-        &output.maximumRenderSize.height,
-        &output.minimumRenderSize.width,
-        &output.minimumRenderSize.height,
+        context->capabilityParameters, targetSize.width, targetSize.height, toNativeQuality(quality),
+        &output.optimalRenderSize.width, &output.optimalRenderSize.height, &output.maximumRenderSize.width,
+        &output.maximumRenderSize.height, &output.minimumRenderSize.width, &output.minimumRenderSize.height,
         &ignoredSharpness);
     auto const code = fromNgxResult(result, "NGX_DLSSD_GET_OPTIMAL_SETTINGS", status);
     if (code == NR_DLSS_BRIDGE_STATUS_SUCCESS)
@@ -565,29 +502,22 @@ uint32_t NR_DLSS_BRIDGE_CALL getOptimalSettings(
     return code;
 }
 
-void setPresets(
-    NVSDK_NGX_Parameter& parameters,
-    const NrDlssBridgeRayReconstructionCreateDesc& desc) noexcept
+void setPresets(NVSDK_NGX_Parameter &parameters, const NrDlssBridgeRayReconstructionCreateDesc &desc) noexcept
 {
-    auto set = [&](uint32_t quality, const char* parameterName) {
-        NVSDK_NGX_Parameter_SetI(
-            &parameters,
-            parameterName,
-            static_cast<int>(toNativePreset(desc.presets[quality])));
+    auto set = [&](uint32_t quality, const char *parameterName) {
+        NVSDK_NGX_Parameter_SetI(&parameters, parameterName, static_cast<int>(toNativePreset(desc.presets[quality])));
     };
     set(NR_DLSS_BRIDGE_QUALITY_DLAA, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA);
     set(NR_DLSS_BRIDGE_QUALITY_QUALITY, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality);
     set(NR_DLSS_BRIDGE_QUALITY_BALANCED, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced);
     set(NR_DLSS_BRIDGE_QUALITY_PERFORMANCE, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance);
-    set(NR_DLSS_BRIDGE_QUALITY_ULTRA_PERFORMANCE, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance);
+    set(NR_DLSS_BRIDGE_QUALITY_ULTRA_PERFORMANCE,
+        NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance);
 }
 
-uint32_t NR_DLSS_BRIDGE_CALL createRayReconstruction(
-    NrDlssBridgeContext* context,
-    VkCommandBuffer commandBuffer,
-    const NrDlssBridgeRayReconstructionCreateDesc* desc,
-    NrDlssBridgeFeature** output,
-    NrDlssBridgeStatus* status) noexcept
+uint32_t NR_DLSS_BRIDGE_CALL createRayReconstruction(NrDlssBridgeContext *context, VkCommandBuffer commandBuffer,
+                                                     const NrDlssBridgeRayReconstructionCreateDesc *desc,
+                                                     NrDlssBridgeFeature **output, NrDlssBridgeStatus *status) noexcept
 {
     if (output != nullptr)
         *output = nullptr;
@@ -596,10 +526,11 @@ uint32_t NR_DLSS_BRIDGE_CALL createRayReconstruction(
         !validDimensions(desc->renderSize) || !validDimensions(desc->targetSize) ||
         desc->quality >= NR_DLSS_BRIDGE_RR_QUALITY_COUNT)
     {
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u, "A valid DLSS RR creation descriptor is required.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u,
+                         "A valid DLSS RR creation descriptor is required.");
     }
 
-    auto* feature = new (std::nothrow) NrDlssBridgeFeature{};
+    auto *feature = new (std::nothrow) NrDlssBridgeFeature{};
     if (feature == nullptr)
         return setStatus(status, NR_DLSS_BRIDGE_STATUS_OUT_OF_MEMORY, 0u, "Could not allocate the DLSS RR feature.");
 
@@ -618,9 +549,8 @@ uint32_t NR_DLSS_BRIDGE_CALL createRayReconstruction(
     native.InRoughnessMode = desc->roughnessMode == NR_DLSS_BRIDGE_ROUGHNESS_PACKED
                                  ? NVSDK_NGX_DLSS_Roughness_Mode_Packed
                                  : NVSDK_NGX_DLSS_Roughness_Mode_Unpacked;
-    native.InUseHWDepth = desc->depthType == NR_DLSS_BRIDGE_DEPTH_HARDWARE
-                              ? NVSDK_NGX_DLSS_Depth_Type_HW
-                              : NVSDK_NGX_DLSS_Depth_Type_Linear;
+    native.InUseHWDepth = desc->depthType == NR_DLSS_BRIDGE_DEPTH_HARDWARE ? NVSDK_NGX_DLSS_Depth_Type_HW
+                                                                           : NVSDK_NGX_DLSS_Depth_Type_Linear;
     native.InWidth = desc->renderSize.width;
     native.InHeight = desc->renderSize.height;
     native.InTargetWidth = desc->targetSize.width;
@@ -629,14 +559,8 @@ uint32_t NR_DLSS_BRIDGE_CALL createRayReconstruction(
     native.InFeatureCreateFlags = toNativeFlags(desc->createFlags);
     native.InEnableOutputSubrects = desc->enableOutputSubrects != 0u;
 
-    auto const createResult = NGX_VULKAN_CREATE_DLSSD_EXT1(
-        context->device,
-        commandBuffer,
-        1u,
-        1u,
-        &feature->handle,
-        feature->parameters,
-        &native);
+    auto const createResult = NGX_VULKAN_CREATE_DLSSD_EXT1(context->device, commandBuffer, 1u, 1u, &feature->handle,
+                                                           feature->parameters, &native);
     result = fromNgxResult(createResult, "NGX_VULKAN_CREATE_DLSSD_EXT1", status);
     if (result != NR_DLSS_BRIDGE_STATUS_SUCCESS)
     {
@@ -649,7 +573,7 @@ uint32_t NR_DLSS_BRIDGE_CALL createRayReconstruction(
     return NR_DLSS_BRIDGE_STATUS_SUCCESS;
 }
 
-void NR_DLSS_BRIDGE_CALL destroyFeature(NrDlssBridgeFeature* feature) noexcept
+void NR_DLSS_BRIDGE_CALL destroyFeature(NrDlssBridgeFeature *feature) noexcept
 {
     if (feature == nullptr)
         return;
@@ -667,17 +591,16 @@ void NR_DLSS_BRIDGE_CALL destroyFeature(NrDlssBridgeFeature* feature) noexcept
     delete feature;
 }
 
-uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(
-    NrDlssBridgeFeature* feature,
-    VkCommandBuffer commandBuffer,
-    const NrDlssBridgeRayReconstructionEvalDesc* desc,
-    NrDlssBridgeStatus* status) noexcept
+uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(NrDlssBridgeFeature *feature, VkCommandBuffer commandBuffer,
+                                                       const NrDlssBridgeRayReconstructionEvalDesc *desc,
+                                                       NrDlssBridgeStatus *status) noexcept
 {
     if (feature == nullptr || feature->handle == nullptr || feature->parameters == nullptr ||
         commandBuffer == VK_NULL_HANDLE || desc == nullptr ||
         desc->structSize < sizeof(NrDlssBridgeRayReconstructionEvalDesc))
     {
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u, "A valid DLSS RR evaluation descriptor is required.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u,
+                         "A valid DLSS RR evaluation descriptor is required.");
     }
 
     auto nativeResources = std::array<NVSDK_NGX_Resource_VK, NR_DLSS_BRIDGE_RR_RESOURCE_COUNT>{};
@@ -685,11 +608,12 @@ uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(
     auto const indices = std::views::iota(std::size_t{0u}, std::size_t{NR_DLSS_BRIDGE_RR_RESOURCE_COUNT});
     auto invalidResource = false;
     std::ranges::for_each(indices, [&](std::size_t index) {
-        auto const& resource = desc->resources[index];
+        auto const &resource = desc->resources[index];
         if (resource.present == 0u)
             return;
         if (resource.structSize < sizeof(NrDlssBridgeVulkanImage) || resource.image == VK_NULL_HANDLE ||
-            resource.view == VK_NULL_HANDLE || resource.format == VK_FORMAT_UNDEFINED || !validDimensions(resource.extent))
+            resource.view == VK_NULL_HANDLE || resource.format == VK_FORMAT_UNDEFINED ||
+            !validDimensions(resource.extent))
         {
             invalidResource = true;
             return;
@@ -698,9 +622,10 @@ uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(
         resourcePresent[index] = true;
     });
     if (invalidResource)
-        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u, "A present DLSS RR image descriptor is invalid.");
+        return setStatus(status, NR_DLSS_BRIDGE_STATUS_INVALID_ARGUMENT, 0u,
+                         "A present DLSS RR image descriptor is invalid.");
 
-    auto image = [&](ResourceSlot slot) -> NVSDK_NGX_Resource_VK* {
+    auto image = [&](ResourceSlot slot) -> NVSDK_NGX_Resource_VK * {
         auto const index = static_cast<std::size_t>(slot);
         return resourcePresent[index] ? &nativeResources[index] : nullptr;
     };
@@ -777,8 +702,10 @@ uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(
     NR_DLSS_ASSIGN_SUBRECT(InColorBeforeFogSubrectBase, ColorBeforeFog);
     NR_DLSS_ASSIGN_SUBRECT(InColorAfterFogSubrectBase, ColorAfterFog);
     NR_DLSS_ASSIGN_SUBRECT(InScreenSpaceSubsurfaceScatteringGuideSubrectBase, ScreenSpaceSubsurfaceScatteringGuide);
-    NR_DLSS_ASSIGN_SUBRECT(InColorBeforeScreenSpaceSubsurfaceScatteringSubrectBase, ColorBeforeScreenSpaceSubsurfaceScattering);
-    NR_DLSS_ASSIGN_SUBRECT(InColorAfterScreenSpaceSubsurfaceScatteringSubrectBase, ColorAfterScreenSpaceSubsurfaceScattering);
+    NR_DLSS_ASSIGN_SUBRECT(InColorBeforeScreenSpaceSubsurfaceScatteringSubrectBase,
+                           ColorBeforeScreenSpaceSubsurfaceScattering);
+    NR_DLSS_ASSIGN_SUBRECT(InColorAfterScreenSpaceSubsurfaceScatteringSubrectBase,
+                           ColorAfterScreenSpaceSubsurfaceScattering);
     NR_DLSS_ASSIGN_SUBRECT(InScreenSpaceRefractionGuideSubrectBase, ScreenSpaceRefractionGuide);
     NR_DLSS_ASSIGN_SUBRECT(InColorBeforeScreenSpaceRefractionSubrectBase, ColorBeforeScreenSpaceRefraction);
     NR_DLSS_ASSIGN_SUBRECT(InColorAfterScreenSpaceRefractionSubrectBase, ColorAfterScreenSpaceRefraction);
@@ -797,12 +724,8 @@ uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(
     std::ranges::for_each(gBufferIndices, [&](std::size_t index) {
         native.GBufferSurface.pInAttrib[index] = image(static_cast<ResourceSlot>(gBufferFirst + index));
     });
-    native.pInWorldToViewMatrix = desc->hasWorldToView != 0u
-                                      ? const_cast<float*>(desc->worldToViewRowMajor)
-                                      : nullptr;
-    native.pInViewToClipMatrix = desc->hasViewToClip != 0u
-                                     ? const_cast<float*>(desc->viewToClipRowMajor)
-                                     : nullptr;
+    native.pInWorldToViewMatrix = desc->hasWorldToView != 0u ? const_cast<float *>(desc->worldToViewRowMajor) : nullptr;
+    native.pInViewToClipMatrix = desc->hasViewToClip != 0u ? const_cast<float *>(desc->viewToClipRowMajor) : nullptr;
     native.InToneMapperType = static_cast<NVSDK_NGX_ToneMapperType>(desc->toneMapper);
     NR_DLSS_ASSIGN_RESOURCE(pInMotionVectors3D, MotionVectors3D);
     NR_DLSS_ASSIGN_RESOURCE(pInIsParticleMask, ParticleMask);
@@ -811,11 +734,10 @@ uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(
     NR_DLSS_ASSIGN_RESOURCE(pInPositionViewSpace, PositionViewSpace);
     native.InFrameTimeDeltaInMsec = desc->frameTimeDeltaMilliseconds;
     NR_DLSS_ASSIGN_RESOURCE(pInRayTracingHitDistance, RayTracingHitDistance);
-    auto* explicitReflectionMotionVectors = image(ResourceSlot::ReflectionMotionVectors);
-    auto* gBufferSpecularMotionVectors = image(ResourceSlot::GBufferSpecularMotionVectors);
-    native.pInMotionVectorsReflections = explicitReflectionMotionVectors != nullptr
-                                             ? explicitReflectionMotionVectors
-                                             : gBufferSpecularMotionVectors;
+    auto *explicitReflectionMotionVectors = image(ResourceSlot::ReflectionMotionVectors);
+    auto *gBufferSpecularMotionVectors = image(ResourceSlot::GBufferSpecularMotionVectors);
+    native.pInMotionVectorsReflections =
+        explicitReflectionMotionVectors != nullptr ? explicitReflectionMotionVectors : gBufferSpecularMotionVectors;
     NR_DLSS_ASSIGN_RESOURCE(pInTransparencyLayer, TransparencyLayer);
     NR_DLSS_ASSIGN_SUBRECT(InTransparencyLayerSubrectBase, TransparencyLayer);
     NR_DLSS_ASSIGN_RESOURCE(pInTransparencyLayerOpacity, TransparencyLayerOpacity);
@@ -830,22 +752,14 @@ uint32_t NR_DLSS_BRIDGE_CALL evaluateRayReconstruction(
 #undef NR_DLSS_ASSIGN_RESOURCE
 
     std::scoped_lock lock(ngxMutex);
-    NVSDK_NGX_Parameter_SetVoidPointer(
-        feature->parameters,
-        "GBuffer.Attrib.16",
-        native.GBufferSurface.pInAttrib[16]);
-    auto const result = NGX_VULKAN_EVALUATE_DLSSD_EXT(
-        commandBuffer,
-        feature->handle,
-        feature->parameters,
-        &native);
+    NVSDK_NGX_Parameter_SetVoidPointer(feature->parameters, "GBuffer.Attrib.16", native.GBufferSurface.pInAttrib[16]);
+    auto const result = NGX_VULKAN_EVALUATE_DLSSD_EXT(commandBuffer, feature->handle, feature->parameters, &native);
     return fromNgxResult(result, "NGX_VULKAN_EVALUATE_DLSSD_EXT", status);
 }
 } // namespace
 
-extern "C" NR_DLSS_BRIDGE_API uint32_t NR_DLSS_BRIDGE_CALL nrDlssBridgeGetApi(
-    uint32_t requestedAbiVersion,
-    NrDlssBridgeApi* api)
+extern "C" NR_DLSS_BRIDGE_API uint32_t NR_DLSS_BRIDGE_CALL nrDlssBridgeGetApi(uint32_t requestedAbiVersion,
+                                                                              NrDlssBridgeApi *api)
 {
     if (requestedAbiVersion != NR_DLSS_BRIDGE_ABI_VERSION || api == nullptr ||
         api->structSize < sizeof(NrDlssBridgeApi))

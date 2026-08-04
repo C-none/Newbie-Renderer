@@ -10,8 +10,7 @@ export namespace nr::renderer
 {
 inline constexpr std::uint32_t kInvalidGraphHandleValue = std::numeric_limits<std::uint32_t>::max();
 
-template <typename TTag>
-struct GraphHandle
+template <typename TTag> struct GraphHandle
 {
     std::uint32_t value = kInvalidGraphHandleValue;
 
@@ -20,7 +19,7 @@ struct GraphHandle
         return value != kInvalidGraphHandleValue;
     }
 
-    auto operator<=>(const GraphHandle&) const = default;
+    auto operator<=>(const GraphHandle &) const = default;
 };
 
 using GraphResourceHandle = GraphHandle<struct GraphResourceTag>;
@@ -76,7 +75,7 @@ struct AccessScope
     vk::AccessFlags2 access = vk::AccessFlags2{};
 
     [[nodiscard]] bool resolved() const noexcept;
-    [[nodiscard]] bool operator==(const AccessScope&) const = default;
+    [[nodiscard]] bool operator==(const AccessScope &) const = default;
 };
 
 struct RetainedExternalResourceState
@@ -182,13 +181,9 @@ struct GraphTransientImageDesc
     ImageAspectIntent aspect = ImageAspectIntent::Color;
 };
 
-using GraphResourceDescVariant = std::variant<
-    GraphImportedBufferDesc,
-    GraphImportedImageDesc,
-    GraphImportedAccelerationStructureDesc,
-    GraphImportedSwapchainImageDesc,
-    GraphTransientBufferDesc,
-    GraphTransientImageDesc>;
+using GraphResourceDescVariant =
+    std::variant<GraphImportedBufferDesc, GraphImportedImageDesc, GraphImportedAccelerationStructureDesc,
+                 GraphImportedSwapchainImageDesc, GraphTransientBufferDesc, GraphTransientImageDesc>;
 
 struct GraphResourceDesc
 {
@@ -230,7 +225,7 @@ struct CopyBufferToBufferPassDesc
     vk::BufferCopy region{};
     CopyBufferDestinationIntent destinationIntent = CopyBufferDestinationIntent::TransferDst;
 
-    [[nodiscard]] bool operator==(const CopyBufferToBufferPassDesc&) const = default;
+    [[nodiscard]] bool operator==(const CopyBufferToBufferPassDesc &) const = default;
 };
 
 struct CopyBufferToImagePassDesc
@@ -240,7 +235,7 @@ struct CopyBufferToImagePassDesc
     vk::BufferImageCopy region{};
     std::optional<ImageAspectIntent> imageAspect{};
 
-    [[nodiscard]] bool operator==(const CopyBufferToImagePassDesc&) const = default;
+    [[nodiscard]] bool operator==(const CopyBufferToImagePassDesc &) const = default;
 };
 
 struct CopyImageToBufferPassDesc
@@ -252,7 +247,7 @@ struct CopyImageToBufferPassDesc
     CopyBufferDestinationIntent destinationIntent = CopyBufferDestinationIntent::TransferDst;
     vk::DeviceSize destinationBufferRangeSize = 0;
 
-    [[nodiscard]] bool operator==(const CopyImageToBufferPassDesc&) const = default;
+    [[nodiscard]] bool operator==(const CopyImageToBufferPassDesc &) const = default;
 };
 
 struct CopyImageToImagePassDesc
@@ -264,14 +259,11 @@ struct CopyImageToImagePassDesc
     std::optional<ImageAspectIntent> destinationAspect{};
     bool presentDestination = false;
 
-    [[nodiscard]] bool operator==(const CopyImageToImagePassDesc&) const = default;
+    [[nodiscard]] bool operator==(const CopyImageToImagePassDesc &) const = default;
 };
 
-using CopyPassDesc = std::variant<
-    CopyBufferToBufferPassDesc,
-    CopyBufferToImagePassDesc,
-    CopyImageToBufferPassDesc,
-    CopyImageToImagePassDesc>;
+using CopyPassDesc = std::variant<CopyBufferToBufferPassDesc, CopyBufferToImagePassDesc, CopyImageToBufferPassDesc,
+                                  CopyImageToImagePassDesc>;
 
 namespace use
 {
@@ -279,17 +271,12 @@ namespace use
 
 [[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(std::span<const ShaderStageIntent> intents) noexcept;
 
-[[nodiscard]] PassResourceUseDesc withShaderStages(
-    PassResourceUseDesc use,
-    vk::PipelineStageFlags2 stages) noexcept;
+[[nodiscard]] PassResourceUseDesc withShaderStages(PassResourceUseDesc use, vk::PipelineStageFlags2 stages) noexcept;
 
-[[nodiscard]] PassResourceUseDesc withShaderStages(
-    PassResourceUseDesc use,
-    ShaderStageIntent stage) noexcept;
+[[nodiscard]] PassResourceUseDesc withShaderStages(PassResourceUseDesc use, ShaderStageIntent stage) noexcept;
 
-[[nodiscard]] PassResourceUseDesc withShaderStages(
-    PassResourceUseDesc use,
-    std::initializer_list<ShaderStageIntent> stages) noexcept;
+[[nodiscard]] PassResourceUseDesc withShaderStages(PassResourceUseDesc use,
+                                                   std::initializer_list<ShaderStageIntent> stages) noexcept;
 
 struct ImageUseSpecDesc
 {
@@ -329,16 +316,17 @@ struct BufferUseOptions
 };
 
 template <typename TSpec>
-concept ImageUseSpec = requires { TSpec::imageUse; } &&
-                       std::same_as<std::remove_cvref_t<decltype(TSpec::imageUse)>, ImageUseSpecDesc>;
+concept ImageUseSpec =
+    requires { TSpec::imageUse; } && std::same_as<std::remove_cvref_t<decltype(TSpec::imageUse)>, ImageUseSpecDesc>;
 
 template <typename TSpec>
-concept BufferUseSpec = requires { TSpec::bufferUse; } &&
-                        std::same_as<std::remove_cvref_t<decltype(TSpec::bufferUse)>, BufferUseSpecDesc>;
+concept BufferUseSpec =
+    requires { TSpec::bufferUse; } && std::same_as<std::remove_cvref_t<decltype(TSpec::bufferUse)>, BufferUseSpecDesc>;
 
 template <typename TSpec>
-concept AccelerationStructureUseSpec = requires { TSpec::accelerationStructureUse; } &&
-                                       std::same_as<std::remove_cvref_t<decltype(TSpec::accelerationStructureUse)>, AccelerationStructureUseSpecDesc>;
+concept AccelerationStructureUseSpec = requires {
+    TSpec::accelerationStructureUse;
+} && std::same_as<std::remove_cvref_t<decltype(TSpec::accelerationStructureUse)>, AccelerationStructureUseSpecDesc>;
 
 namespace spec
 {
@@ -732,8 +720,7 @@ struct ReadbackWrite
 };
 } // namespace spec
 
-template <ImageUseSpec TSpec>
-[[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource) noexcept
+template <ImageUseSpec TSpec> [[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource) noexcept
 {
     auto result = PassResourceUseDesc{
         .resource = resource,
@@ -771,8 +758,7 @@ template <ImageUseSpec TSpec>
     return result;
 }
 
-template <BufferUseSpec TSpec>
-[[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource) noexcept
+template <BufferUseSpec TSpec> [[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource) noexcept
 {
     auto result = PassResourceUseDesc{
         .resource = resource,
@@ -851,9 +837,8 @@ template <AccelerationStructureUseSpec TSpec>
 
 [[nodiscard]] PassResourceUseDesc depthReadWrite(GraphResourceHandle resource) noexcept;
 
-[[nodiscard]] PassResourceUseDesc sampledRead(
-    GraphResourceHandle resource,
-    ImageAspectIntent aspect = ImageAspectIntent::Color) noexcept;
+[[nodiscard]] PassResourceUseDesc sampledRead(GraphResourceHandle resource,
+                                              ImageAspectIntent aspect = ImageAspectIntent::Color) noexcept;
 
 [[nodiscard]] PassResourceUseDesc storageRead(GraphResourceHandle resource) noexcept;
 
@@ -861,9 +846,8 @@ template <AccelerationStructureUseSpec TSpec>
 
 [[nodiscard]] PassResourceUseDesc storageReadWrite(GraphResourceHandle resource) noexcept;
 
-[[nodiscard]] PassResourceUseDesc inputAttachmentRead(
-    GraphResourceHandle resource,
-    ImageAspectIntent aspect = ImageAspectIntent::Color) noexcept;
+[[nodiscard]] PassResourceUseDesc inputAttachmentRead(GraphResourceHandle resource,
+                                                      ImageAspectIntent aspect = ImageAspectIntent::Color) noexcept;
 
 [[nodiscard]] PassResourceUseDesc uniformRead(GraphResourceHandle resource) noexcept;
 
@@ -929,9 +913,8 @@ template <AccelerationStructureUseSpec TSpec>
 
 [[nodiscard]] PassResourceUseDesc presentRead(GraphResourceHandle resource) noexcept;
 
-[[nodiscard]] PassResourceUseDesc presentRead(
-    GraphResourceHandle resource,
-    ResourceOwnershipDomain ownershipDomain) noexcept;
+[[nodiscard]] PassResourceUseDesc presentRead(GraphResourceHandle resource,
+                                              ResourceOwnershipDomain ownershipDomain) noexcept;
 } // namespace use
 
 struct PassBufferResource
@@ -947,11 +930,7 @@ struct PassImageResource
     vk::ImageView view = vk::ImageView{};
     vk::Extent3D extent{1, 1, 1};
     vk::ImageSubresourceRange subresourceRange{
-        vk::ImageAspectFlagBits::eColor,
-        0,
-        1,
-        0,
-        1,
+        vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1,
     };
     std::optional<std::reference_wrapper<const nr::rhi::Image>> resource{};
 };
@@ -974,7 +953,8 @@ struct PassPrepareContext
     std::function<std::optional<PassBufferResource>(GraphResourceHandle)> resolveBuffer{};
     std::function<std::optional<PassImageResource>(GraphResourceHandle)> resolveImage{};
     std::function<std::optional<PassAccelerationStructureResource>(GraphResourceHandle)> resolveAccelerationStructure{};
-    std::function<std::optional<std::reference_wrapper<const std::any>>(GraphFrameDataHandle)> resolveFrameDataPayload{};
+    std::function<std::optional<std::reference_wrapper<const std::any>>(GraphFrameDataHandle)>
+        resolveFrameDataPayload{};
 
     template <typename TPayload>
     [[nodiscard]] std::optional<std::reference_wrapper<const std::remove_cvref_t<TPayload>>> resolveFrameData(
@@ -983,9 +963,8 @@ struct PassPrepareContext
         using Payload = std::remove_cvref_t<TPayload>;
 
         nrAssert(handle.valid(), "PassPrepareContext::resolveFrameData requires a valid frame data handle.");
-        nrAssert(
-            static_cast<bool>(resolveFrameDataPayload),
-            "PassPrepareContext::resolveFrameData requires a frame data resolver callback.");
+        nrAssert(static_cast<bool>(resolveFrameDataPayload),
+                 "PassPrepareContext::resolveFrameData requires a frame data resolver callback.");
 
         auto payload = resolveFrameDataPayload(handle);
         if (!payload.has_value())
@@ -994,26 +973,24 @@ struct PassPrepareContext
         }
 
         auto const typedPayload = std::any_cast<Payload>(&payload->get());
-        nrAssert(
-            typedPayload != nullptr,
-            std::format(
-                "PassPrepareContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
-                handle.value));
+        nrAssert(typedPayload != nullptr,
+                 std::format(
+                     "PassPrepareContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
+                     handle.value));
         return std::cref(*typedPayload);
     }
 
     template <typename TPayload>
-    [[nodiscard]] const std::remove_cvref_t<TPayload>& frameData(GraphFrameDataHandle handle) const
+    [[nodiscard]] const std::remove_cvref_t<TPayload> &frameData(GraphFrameDataHandle handle) const
     {
         auto resolved = resolveFrameData<TPayload>(handle);
-        nrAssert(
-            resolved.has_value(),
-            std::format("PassPrepareContext::frameData failed to resolve frame data handle {}.", handle.value));
+        nrAssert(resolved.has_value(),
+                 std::format("PassPrepareContext::frameData failed to resolve frame data handle {}.", handle.value));
         return resolved->get();
     }
 };
 
-using PassPrepareCallback = std::function<void(const PassPrepareContext&)>;
+using PassPrepareCallback = std::function<void(const PassPrepareContext &)>;
 
 struct PassRecordContext
 {
@@ -1024,7 +1001,8 @@ struct PassRecordContext
     std::function<std::optional<PassBufferResource>(GraphResourceHandle)> resolveBuffer{};
     std::function<std::optional<PassImageResource>(GraphResourceHandle)> resolveImage{};
     std::function<std::optional<PassAccelerationStructureResource>(GraphResourceHandle)> resolveAccelerationStructure{};
-    std::function<std::optional<std::reference_wrapper<const std::any>>(GraphFrameDataHandle)> resolveFrameDataPayload{};
+    std::function<std::optional<std::reference_wrapper<const std::any>>(GraphFrameDataHandle)>
+        resolveFrameDataPayload{};
 
     template <typename TPayload>
     [[nodiscard]] std::optional<std::reference_wrapper<const std::remove_cvref_t<TPayload>>> resolveFrameData(
@@ -1033,9 +1011,8 @@ struct PassRecordContext
         using Payload = std::remove_cvref_t<TPayload>;
 
         nrAssert(handle.valid(), "PassRecordContext::resolveFrameData requires a valid frame data handle.");
-        nrAssert(
-            static_cast<bool>(resolveFrameDataPayload),
-            "PassRecordContext::resolveFrameData requires a frame data resolver callback.");
+        nrAssert(static_cast<bool>(resolveFrameDataPayload),
+                 "PassRecordContext::resolveFrameData requires a frame data resolver callback.");
 
         auto payload = resolveFrameDataPayload(handle);
         if (!payload.has_value())
@@ -1044,26 +1021,24 @@ struct PassRecordContext
         }
 
         auto const typedPayload = std::any_cast<Payload>(&payload->get());
-        nrAssert(
-            typedPayload != nullptr,
-            std::format(
-                "PassRecordContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
-                handle.value));
+        nrAssert(typedPayload != nullptr,
+                 std::format(
+                     "PassRecordContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
+                     handle.value));
         return std::cref(*typedPayload);
     }
 
     template <typename TPayload>
-    [[nodiscard]] const std::remove_cvref_t<TPayload>& frameData(GraphFrameDataHandle handle) const
+    [[nodiscard]] const std::remove_cvref_t<TPayload> &frameData(GraphFrameDataHandle handle) const
     {
         auto resolved = resolveFrameData<TPayload>(handle);
-        nrAssert(
-            resolved.has_value(),
-            std::format("PassRecordContext::frameData failed to resolve frame data handle {}.", handle.value));
+        nrAssert(resolved.has_value(),
+                 std::format("PassRecordContext::frameData failed to resolve frame data handle {}.", handle.value));
         return resolved->get();
     }
 };
 
-using PassRecordCallback = std::function<void(const PassRecordContext&)>;
+using PassRecordCallback = std::function<void(const PassRecordContext &)>;
 
 enum class ParallelRecordReplaySemantics : std::uint8_t
 {
@@ -1115,9 +1090,8 @@ struct PassDynamicRenderingSecondaryScope
             .layerCount = layerCount,
             .viewMask = viewMask,
             .flags = flags | vk::RenderingFlagBits::eContentsSecondaryCommandBuffers,
-            .colorAttachments = std::span<const nr::rhi::ops::RenderingAttachmentDesc>{
-                colorAttachments.data(),
-                colorAttachments.size()},
+            .colorAttachments = std::span<const nr::rhi::ops::RenderingAttachmentDesc>{colorAttachments.data(),
+                                                                                       colorAttachments.size()},
             .depthAttachment = depthAttachment,
             .stencilAttachment = stencilAttachment,
         };
@@ -1145,9 +1119,8 @@ struct PassPrimaryRecordScope
 
 struct ParallelRecordPlanner
 {
-    [[nodiscard]] static PassParallelRecordPlan planContiguousRanges(
-        std::size_t itemCount,
-        std::uint32_t availableRecordWorkers);
+    [[nodiscard]] static PassParallelRecordPlan planContiguousRanges(std::size_t itemCount,
+                                                                     std::uint32_t availableRecordWorkers);
 };
 
 struct PassRangeRecordContext
@@ -1159,9 +1132,9 @@ struct PassRangeRecordContext
     ParallelRecordRange range{};
 };
 
-using PassParallelRecordItemCountCallback = std::function<std::size_t(const PassRecordContext&)>;
-using PassParallelRecordPrimaryScopeCallback = std::function<PassPrimaryRecordScope(const PassRecordContext&)>;
-using PassParallelRecordRangeCallback = std::function<void(const PassRangeRecordContext&)>;
+using PassParallelRecordItemCountCallback = std::function<std::size_t(const PassRecordContext &)>;
+using PassParallelRecordPrimaryScopeCallback = std::function<PassPrimaryRecordScope(const PassRecordContext &)>;
+using PassParallelRecordRangeCallback = std::function<void(const PassRangeRecordContext &)>;
 
 struct PassParallelRecordDesc
 {
@@ -1285,7 +1258,8 @@ struct CompiledResourceDesc
 
     /// Optional reference to a pre-built acceleration structure held by the node or renderer cache.
     /// Populated from GraphImportedAccelerationStructureDesc::importedResource during compilation.
-    std::optional<std::reference_wrapper<const nr::rhi::AccelerationStructureResource>> importedAccelerationStructureResource{};
+    std::optional<std::reference_wrapper<const nr::rhi::AccelerationStructureResource>>
+        importedAccelerationStructureResource{};
 };
 
 struct CompiledPass

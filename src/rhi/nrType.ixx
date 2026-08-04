@@ -34,7 +34,7 @@ enum class QueueFamilyKind : std::size_t
     videoDecode,
     videoEncode,
     opticalFlow,
-    size  ///< Sentinel value for array sizing
+    size ///< Sentinel value for array sizing
 };
 
 /**
@@ -48,7 +48,7 @@ enum class QueueFamilyKind : std::size_t
  * Note: This is a high-level abstraction for queue access.
  * For physical queue family selection, see QueueFamilyKind.
  */
-enum class QueueRole: unsigned
+enum class QueueRole : unsigned
 {
     Graphics,
     Compute,
@@ -63,10 +63,10 @@ enum class QueueRole: unsigned
  */
 enum class MemoryUsage : unsigned
 {
-    GpuOnly,   ///< Device-local, no host access (textures, RT targets, BLAS/TLAS)
-    CpuToGpu,  ///< Host-visible, sequential write (staging uploads, dynamic UBOs)
-    GpuToCpu,  ///< Host-visible, random read (readback, query results)
-    CpuOnly    ///< Host-visible, persistently mapped (debug, CPU-side scratch)
+    GpuOnly,  ///< Device-local, no host access (textures, RT targets, BLAS/TLAS)
+    CpuToGpu, ///< Host-visible, sequential write (staging uploads, dynamic UBOs)
+    GpuToCpu, ///< Host-visible, random read (readback, query results)
+    CpuOnly   ///< Host-visible, persistently mapped (debug, CPU-side scratch)
 };
 
 /**
@@ -77,8 +77,8 @@ enum class MemoryUsage : unsigned
  */
 enum class AllocationStrategy : unsigned
 {
-    CrossFrame, ///< Long-lived, survives multiple frames (default pool, standard alloc)
-    PerFrame,   ///< Single-frame lifetime, allocated from linear pool, bulk-reset each frame
+    CrossFrame,      ///< Long-lived, survives multiple frames (default pool, standard alloc)
+    PerFrame,        ///< Single-frame lifetime, allocated from linear pool, bulk-reset each frame
     StagingTransient ///< Immediate/short-lived staging, allocated from dedicated staging pool
 };
 
@@ -90,10 +90,10 @@ enum class PipelineType : unsigned
     RayTracing,
 };
 
-enum class GraphicsPipelineMode : unsigned 
+enum class GraphicsPipelineMode : unsigned
 {
-    StandardGraphics,  // Requires vertex shader
-    Mesh,              // Requires mesh shader (task optional)
+    StandardGraphics, // Requires vertex shader
+    Mesh,             // Requires mesh shader (task optional)
 };
 
 struct RayTracingCapabilitySnapshot

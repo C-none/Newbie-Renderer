@@ -83,7 +83,7 @@ struct Dimensions
         return width > 0u && height > 0u;
     }
 
-    auto operator<=>(const Dimensions&) const = default;
+    auto operator<=>(const Dimensions &) const = default;
 };
 
 struct Coordinates
@@ -91,7 +91,7 @@ struct Coordinates
     std::uint32_t x = 0u;
     std::uint32_t y = 0u;
 
-    auto operator<=>(const Coordinates&) const = default;
+    auto operator<=>(const Coordinates &) const = default;
 };
 
 struct RayReconstructionCreateFlags
@@ -103,7 +103,7 @@ struct RayReconstructionCreateFlags
     bool autoExposure = false;
     bool alphaUpscaling = false;
 
-    auto operator<=>(const RayReconstructionCreateFlags&) const = default;
+    auto operator<=>(const RayReconstructionCreateFlags &) const = default;
 };
 
 struct RayReconstructionCreateDesc
@@ -117,7 +117,7 @@ struct RayReconstructionCreateDesc
     RayReconstructionCreateFlags flags{};
     bool enableOutputSubrects = false;
 
-    auto operator<=>(const RayReconstructionCreateDesc&) const = default;
+    auto operator<=>(const RayReconstructionCreateDesc &) const = default;
 };
 
 struct OptimalSettings
@@ -133,11 +133,7 @@ struct VulkanImage
     vk::Image image{};
     vk::ImageView view{};
     vk::ImageSubresourceRange subresourceRange{
-        vk::ImageAspectFlagBits::eColor,
-        0u,
-        1u,
-        0u,
-        1u,
+        vk::ImageAspectFlagBits::eColor, 0u, 1u, 0u, 1u,
     };
     vk::Format format = vk::Format::eUndefined;
     Dimensions extent{};
@@ -145,8 +141,8 @@ struct VulkanImage
 
     [[nodiscard]] bool valid() const noexcept
     {
-        return static_cast<bool>(image) && static_cast<bool>(view) &&
-               format != vk::Format::eUndefined && extent.valid();
+        return static_cast<bool>(image) && static_cast<bool>(view) && format != vk::Format::eUndefined &&
+               extent.valid();
     }
 };
 
@@ -304,21 +300,20 @@ class RayReconstructionFeature;
 class Context
 {
   public:
-    explicit Context(const VulkanContextDesc& desc);
+    explicit Context(const VulkanContextDesc &desc);
     ~Context();
 
-    Context(const Context&) = delete;
-    Context& operator=(const Context&) = delete;
-    Context(Context&&) noexcept;
-    Context& operator=(Context&&) noexcept;
+    Context(const Context &) = delete;
+    Context &operator=(const Context &) = delete;
+    Context(Context &&) noexcept;
+    Context &operator=(Context &&) noexcept;
 
     [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] const Status& status() const noexcept;
+    [[nodiscard]] const Status &status() const noexcept;
     [[nodiscard]] bool rayReconstructionAvailable() const noexcept;
     [[nodiscard]] OptimalSettings optimalSettings(Dimensions targetSize, Quality quality);
     [[nodiscard]] std::unique_ptr<RayReconstructionFeature> createRayReconstruction(
-        vk::CommandBuffer commandBuffer,
-        const RayReconstructionCreateDesc& desc);
+        vk::CommandBuffer commandBuffer, const RayReconstructionCreateDesc &desc);
 
   private:
     struct Impl;
@@ -330,14 +325,14 @@ class RayReconstructionFeature
   public:
     ~RayReconstructionFeature();
 
-    RayReconstructionFeature(const RayReconstructionFeature&) = delete;
-    RayReconstructionFeature& operator=(const RayReconstructionFeature&) = delete;
-    RayReconstructionFeature(RayReconstructionFeature&&) noexcept;
-    RayReconstructionFeature& operator=(RayReconstructionFeature&&) noexcept;
+    RayReconstructionFeature(const RayReconstructionFeature &) = delete;
+    RayReconstructionFeature &operator=(const RayReconstructionFeature &) = delete;
+    RayReconstructionFeature(RayReconstructionFeature &&) noexcept;
+    RayReconstructionFeature &operator=(RayReconstructionFeature &&) noexcept;
 
     [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] const Status& status() const noexcept;
-    [[nodiscard]] Status evaluate(vk::CommandBuffer commandBuffer, const RayReconstructionEvalDesc& desc);
+    [[nodiscard]] const Status &status() const noexcept;
+    [[nodiscard]] Status evaluate(vk::CommandBuffer commandBuffer, const RayReconstructionEvalDesc &desc);
 
   private:
     friend class Context;
@@ -348,9 +343,8 @@ class RayReconstructionFeature
 
 [[nodiscard]] bool sdkCompiled() noexcept;
 [[nodiscard]] ExtensionQueryResult rayReconstructionInstanceExtensions();
-[[nodiscard]] ExtensionQueryResult rayReconstructionDeviceExtensions(
-    vk::Instance instance,
-    vk::PhysicalDevice physicalDevice);
+[[nodiscard]] ExtensionQueryResult rayReconstructionDeviceExtensions(vk::Instance instance,
+                                                                     vk::PhysicalDevice physicalDevice);
 [[nodiscard]] std::string_view qualityName(Quality quality) noexcept;
 [[nodiscard]] std::string_view presetName(Preset preset) noexcept;
 [[nodiscard]] std::string_view resourceSlotName(RayReconstructionResourceSlot slot) noexcept;

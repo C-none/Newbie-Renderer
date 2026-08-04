@@ -19,15 +19,19 @@ namespace nr::renderer::detail
 
 namespace nr::renderer
 {
-[[nodiscard]] nr::rhi::LogicalDescriptorResolver makeDefaultLogicalDescriptorResolver(const PassRecordContext &recordContext)
+[[nodiscard]] nr::rhi::LogicalDescriptorResolver makeDefaultLogicalDescriptorResolver(
+    const PassRecordContext &recordContext)
 {
-    return [&recordContext](const nr::rhi::LogicalResourceDescriptorWrite &logicalResource, const nr::rhi::DescriptorBindingInfo &binding, std::uint32_t arrayElement) -> std::optional<nr::rhi::DescriptorWritePayload> {
+    return [&recordContext](const nr::rhi::LogicalResourceDescriptorWrite &logicalResource,
+                            const nr::rhi::DescriptorBindingInfo &binding,
+                            std::uint32_t arrayElement) -> std::optional<nr::rhi::DescriptorWritePayload> {
         return resolveLogicalDescriptorWriteDefault(logicalResource, binding, arrayElement, recordContext);
     };
 }
 
-[[nodiscard]] PassRecordContext RenderGraphExecutor::makePassRecordContext(std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer, std::uint32_t frameIndex, nr::rhi::Device &device, const RuntimeBindingMap &runtimeBindings,
-                                                                           const CompiledFrameDataLookup &frameDataByHandle)
+[[nodiscard]] PassRecordContext RenderGraphExecutor::makePassRecordContext(
+    std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer, std::uint32_t frameIndex,
+    nr::rhi::Device &device, const RuntimeBindingMap &runtimeBindings, const CompiledFrameDataLookup &frameDataByHandle)
 {
     auto const *runtimeBindingsPtr = std::addressof(runtimeBindings);
     auto const *frameDataByHandlePtr = std::addressof(frameDataByHandle);
@@ -64,7 +68,8 @@ namespace nr::renderer
                 .resource = bindingIt->second.imageResource,
             };
         },
-        .resolveAccelerationStructure = [runtimeBindingsPtr](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
+        .resolveAccelerationStructure =
+            [runtimeBindingsPtr](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
             auto bindingIt = runtimeBindingsPtr->find(handle);
             if (bindingIt == runtimeBindingsPtr->end() || !bindingIt->second.isAccelerationStructure)
             {
@@ -80,7 +85,8 @@ namespace nr::renderer
                 .resource = bindingIt->second.accelerationStructureResource,
             };
         },
-        .resolveFrameDataPayload = [frameDataByHandlePtr](GraphFrameDataHandle handle) -> std::optional<std::reference_wrapper<const std::any>> {
+        .resolveFrameDataPayload = [frameDataByHandlePtr](GraphFrameDataHandle handle)
+            -> std::optional<std::reference_wrapper<const std::any>> {
             auto frameDataIt = frameDataByHandlePtr->find(handle);
             if (frameDataIt == frameDataByHandlePtr->end())
             {
@@ -94,7 +100,8 @@ namespace nr::renderer
 
 [[nodiscard]] RecordTaskResult RenderGraphExecutor::recordPassToSecondary(const RecordTaskDesc &desc)
 {
-    nrAssert(desc.secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase, "RenderGraphExecutor::recordPassToSecondary requires a worker-only secondary pool slot.");
+    nrAssert(desc.secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase,
+             "RenderGraphExecutor::recordPassToSecondary requires a worker-only secondary pool slot.");
 
     auto result = RecordTaskResult{
         .batchOrdinal = desc.batchOrdinal,
@@ -115,7 +122,8 @@ namespace nr::renderer
 
     commandBuffer.reset();
     auto inheritanceInfo = vk::CommandBufferInheritanceInfo{};
-    nr::rhi::CommandRecorder::beginSecondary(commandBuffer, inheritanceInfo, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    nr::rhi::CommandRecorder::beginSecondary(commandBuffer, inheritanceInfo,
+                                             vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     {
         auto nodeDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
             commandBuffer,
@@ -131,12 +139,17 @@ namespace nr::renderer
             }
 
             auto resourceIt = compiledResourceByHandle.find(transition.resource);
-            nrAssert(resourceIt != compiledResourceByHandle.end(), "RenderGraphExecutor::recordPassToSecondary pass barrier references an unknown resource handle.");
+            nrAssert(resourceIt != compiledResourceByHandle.end(),
+                     "RenderGraphExecutor::recordPassToSecondary pass barrier references an unknown resource handle.");
 
             auto bindingIt = runtimeBindings.find(transition.resource);
-            nrAssert(bindingIt != runtimeBindings.end(), "RenderGraphExecutor::recordPassToSecondary pass barrier cannot resolve runtime resource binding.");
+            nrAssert(
+                bindingIt != runtimeBindings.end(),
+                "RenderGraphExecutor::recordPassToSecondary pass barrier cannot resolve runtime resource binding.");
 
-            auto const addedBarrier = addTransitionBarrier(inPassBarriers, resourceIt->second.get(), bindingIt->second, transition, TransitionPlacement::InPass, nr::rhi::ops::kIgnoredQueueFamilyIndex, nr::rhi::ops::kIgnoredQueueFamilyIndex);
+            auto const addedBarrier = addTransitionBarrier(
+                inPassBarriers, resourceIt->second.get(), bindingIt->second, transition, TransitionPlacement::InPass,
+                nr::rhi::ops::kIgnoredQueueFamilyIndex, nr::rhi::ops::kIgnoredQueueFamilyIndex);
 
             if (addedBarrier)
             {
@@ -151,7 +164,8 @@ namespace nr::renderer
 
         if (pass.record)
         {
-            auto recordContext = makePassRecordContext(std::cref(commandBuffer), desc.frameIndex, desc.device.get(), runtimeBindings, frameDataByHandle);
+            auto recordContext = makePassRecordContext(std::cref(commandBuffer), desc.frameIndex, desc.device.get(),
+                                                       runtimeBindings, frameDataByHandle);
             pass.record(recordContext);
             ++result.invokedPassRecordCount;
         }
@@ -167,7 +181,8 @@ namespace nr::renderer
 
 [[nodiscard]] RecordTaskResult RenderGraphExecutor::recordPassRangeToSecondary(const RecordTaskDesc &desc)
 {
-    nrAssert(desc.secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase, "RenderGraphExecutor::recordPassRangeToSecondary requires a worker-only secondary pool slot.");
+    nrAssert(desc.secondaryPoolSlot >= detail::kWorkerSecondaryPoolSlotBase,
+             "RenderGraphExecutor::recordPassRangeToSecondary requires a worker-only secondary pool slot.");
     nrAssert(desc.parallel, "RenderGraphExecutor::recordPassRangeToSecondary requires a parallel task descriptor.");
 
     auto result = RecordTaskResult{
@@ -186,7 +201,8 @@ namespace nr::renderer
     auto const &runtimeBindings = desc.runtimeBindings.get();
     auto const &frameDataByHandle = desc.frameDataByHandle.get();
 
-    nrAssert(pass.parallelRecord.has_value() && static_cast<bool>(pass.parallelRecord->recordRange), "RenderGraphExecutor::recordPassRangeToSecondary requires a parallel range record callback.");
+    nrAssert(pass.parallelRecord.has_value() && static_cast<bool>(pass.parallelRecord->recordRange),
+             "RenderGraphExecutor::recordPassRangeToSecondary requires a parallel range record callback.");
 
     commandBuffer.reset();
 
@@ -211,7 +227,8 @@ namespace nr::renderer
             std::format("{}[{}]", pass.debugName, desc.chunkIndex),
         };
 
-        auto recordContext = makePassRecordContext(std::cref(commandBuffer), desc.frameIndex, desc.device.get(), runtimeBindings, frameDataByHandle);
+        auto recordContext = makePassRecordContext(std::cref(commandBuffer), desc.frameIndex, desc.device.get(),
+                                                   runtimeBindings, frameDataByHandle);
         pass.parallelRecord->recordRange(PassRangeRecordContext{
             .pass = std::move(recordContext),
             .commandBuffer = std::cref(commandBuffer),
@@ -226,18 +243,24 @@ namespace nr::renderer
     return result;
 }
 
-[[nodiscard]] std::uint32_t RenderGraphExecutor::timestampValidBitsForQueue(const nr::rhi::Device &device, QueueDomain queue)
+[[nodiscard]] std::uint32_t RenderGraphExecutor::timestampValidBitsForQueue(const nr::rhi::Device &device,
+                                                                            QueueDomain queue)
 {
     auto const queueFamilyIndex = queueFamilyIndexFor(device, queue);
     auto const queueFamilyProperties = device.physicalDevice.getQueueFamilyProperties();
-    nrAssert(queueFamilyIndex < queueFamilyProperties.size(), "RenderGraphExecutor timestamp query queue family index is out of range.");
+    nrAssert(queueFamilyIndex < queueFamilyProperties.size(),
+             "RenderGraphExecutor timestamp query queue family index is out of range.");
 
     auto const validBits = queueFamilyProperties[queueFamilyIndex].timestampValidBits;
-    nrAssert(validBits > 0u, std::format("RenderGraphExecutor timestamp queries require non-zero timestampValidBits for {} queue family {}.", detail::queueDomainLabel(queue), queueFamilyIndex));
+    nrAssert(
+        validBits > 0u,
+        std::format("RenderGraphExecutor timestamp queries require non-zero timestampValidBits for {} queue family {}.",
+                    detail::queueDomainLabel(queue), queueFamilyIndex));
     return validBits;
 }
 
-[[nodiscard]] std::map<QueueDomain, std::uint32_t> RenderGraphExecutor::timestampValidBitsForQueues(const nr::rhi::Device &device, std::span<const GpuPassTimingSample> passes)
+[[nodiscard]] std::map<QueueDomain, std::uint32_t> RenderGraphExecutor::timestampValidBitsForQueues(
+    const nr::rhi::Device &device, std::span<const GpuPassTimingSample> passes)
 {
     auto validBitsByQueue = std::map<QueueDomain, std::uint32_t>{};
     std::ranges::for_each(passes, [&](const GpuPassTimingSample &pass) {
@@ -251,7 +274,8 @@ namespace nr::renderer
     return validBitsByQueue;
 }
 
-[[nodiscard]] std::uint64_t RenderGraphExecutor::timestampDeltaTicks(std::uint64_t begin, std::uint64_t end, std::uint32_t validBits) noexcept
+[[nodiscard]] std::uint64_t RenderGraphExecutor::timestampDeltaTicks(std::uint64_t begin, std::uint64_t end,
+                                                                     std::uint32_t validBits) noexcept
 {
     if (validBits >= 64u)
     {
@@ -262,7 +286,8 @@ namespace nr::renderer
     return ((end & mask) - (begin & mask)) & mask;
 }
 
-[[nodiscard]] std::vector<GpuPassTimingSample> RenderGraphExecutor::buildPassTimingSamples(const CompiledGraphFrame &compiled)
+[[nodiscard]] std::vector<GpuPassTimingSample> RenderGraphExecutor::buildPassTimingSamples(
+    const CompiledGraphFrame &compiled)
 {
     auto samples = std::vector<GpuPassTimingSample>{};
     auto batchIndices = std::views::iota(std::size_t{0u}, compiled.submitBatches.size());
@@ -281,7 +306,8 @@ namespace nr::renderer
     return samples;
 }
 
-void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, FrameGpuPassTimingState &state, std::uint32_t requiredQueryCount)
+void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, FrameGpuPassTimingState &state,
+                                                std::uint32_t requiredQueryCount)
 {
     if (requiredQueryCount == 0u)
     {
@@ -302,7 +328,8 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
     state.pendingPasses.clear();
 }
 
-[[nodiscard]] std::optional<GpuPassTimingFrame> RenderGraphExecutor::collectCompletedGpuPassTimings(const nr::rhi::Device &device, FrameGpuPassTimingState &state)
+[[nodiscard]] std::optional<GpuPassTimingFrame> RenderGraphExecutor::collectCompletedGpuPassTimings(
+    const nr::rhi::Device &device, FrameGpuPassTimingState &state)
 {
     if (state.pendingPasses.empty() || *state.queryPool == vk::QueryPool{})
     {
@@ -313,15 +340,19 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
     auto const queryCount = timingQueryCountForPassCount(state.pendingPasses.size());
     auto const valuesPerQuery = std::size_t{2};
     auto const resultStride = static_cast<vk::DeviceSize>(sizeof(std::uint64_t) * valuesPerQuery);
-    auto [result, data] = state.queryPool.getResults<std::uint64_t>(0u, queryCount, sizeof(std::uint64_t) * valuesPerQuery * queryCount, resultStride, vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWithAvailability);
+    auto [result, data] = state.queryPool.getResults<std::uint64_t>(
+        0u, queryCount, sizeof(std::uint64_t) * valuesPerQuery * queryCount, resultStride,
+        vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWithAvailability);
 
     if (result != vk::Result::eSuccess && result != vk::Result::eNotReady)
     {
         nrAssert(false, std::format("RenderGraphExecutor timestamp query read failed: {}", vk::to_string(result)));
     }
 
-    auto const validBitsByQueue = timestampValidBitsForQueues(device, std::span<const GpuPassTimingSample>{state.pendingPasses.data(), state.pendingPasses.size()});
-    auto const timestampPeriodNanoseconds = static_cast<double>(device.physicalDevice.getProperties().limits.timestampPeriod);
+    auto const validBitsByQueue = timestampValidBitsForQueues(
+        device, std::span<const GpuPassTimingSample>{state.pendingPasses.data(), state.pendingPasses.size()});
+    auto const timestampPeriodNanoseconds =
+        static_cast<double>(device.physicalDevice.getProperties().limits.timestampPeriod);
 
     auto frame = GpuPassTimingFrame{
         .frameOrdinal = state.pendingFrameOrdinal,
@@ -334,7 +365,8 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
         auto const beginQuery = beginTimingQueryForPass(passIndex);
         auto const beginOffset = beginQuery * valuesPerQuery;
         auto const endOffset = (beginQuery + 1u) * valuesPerQuery;
-        nrAssert(endOffset + 1u < data.size(), "RenderGraphExecutor timestamp query result buffer is smaller than the recorded query range.");
+        nrAssert(endOffset + 1u < data.size(),
+                 "RenderGraphExecutor timestamp query result buffer is smaller than the recorded query range.");
 
         auto const beginAvailable = data[beginOffset + 1u] != 0u;
         auto const endAvailable = data[endOffset + 1u] != 0u;
@@ -358,11 +390,15 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
     return frame;
 }
 
-[[nodiscard]] RenderGraphExecutor::RecordBatchTasks RenderGraphExecutor::launchRecordTasksForBatch(const ExecuteContext &context, std::size_t frameSlot, std::size_t batchOrdinal, const CompiledGraphFrame &compiled, const CompiledResourceLookup &compiledResourceByHandle,
-                                                                                                   const RuntimeBindingMap &runtimeBindings, const CompiledFrameDataLookup &frameDataByHandle, ExecuteReport &report)
+[[nodiscard]] RenderGraphExecutor::RecordBatchTasks RenderGraphExecutor::launchRecordTasksForBatch(
+    const ExecuteContext &context, std::size_t frameSlot, std::size_t batchOrdinal, const CompiledGraphFrame &compiled,
+    const CompiledResourceLookup &compiledResourceByHandle, const RuntimeBindingMap &runtimeBindings,
+    const CompiledFrameDataLookup &frameDataByHandle, ExecuteReport &report)
 {
-    nrAssert(report.plan.batches.size() == compiled.submitBatches.size(), "RenderGraphExecutor::launchRecordTasksForBatch requires plan and compiled batch counts to match.");
-    nrAssert(batchOrdinal < compiled.submitBatches.size(), "RenderGraphExecutor::launchRecordTasksForBatch batch ordinal is out of range.");
+    nrAssert(report.plan.batches.size() == compiled.submitBatches.size(),
+             "RenderGraphExecutor::launchRecordTasksForBatch requires plan and compiled batch counts to match.");
+    nrAssert(batchOrdinal < compiled.submitBatches.size(),
+             "RenderGraphExecutor::launchRecordTasksForBatch batch ordinal is out of range.");
 
     auto &frame = context.device.frameManager.current();
     auto usedWorkerIds = std::set<std::uint32_t>{};
@@ -380,20 +416,25 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
 
     if (!compiledBatch.passes.empty())
     {
-        auto queueWorkerCount = std::min(recordThreadPool_.workerCount(), preparedRecordWorkerCountForQueue(frame, planBatch.queue));
-        nrAssert(queueWorkerCount > 0, "RenderGraphExecutor::launchRecordTasksForBatch requires at least one worker-only secondary command pool for the batch queue.");
+        auto queueWorkerCount =
+            std::min(recordThreadPool_.workerCount(), preparedRecordWorkerCountForQueue(frame, planBatch.queue));
+        nrAssert(queueWorkerCount > 0, "RenderGraphExecutor::launchRecordTasksForBatch requires at least one "
+                                       "worker-only secondary command pool for the batch queue.");
 
         auto passOrdinals = std::views::iota(std::size_t{0}, compiledBatch.passes.size());
         std::ranges::for_each(passOrdinals, [&](std::size_t passOrdinal) {
             auto const &pass = compiledBatch.passes[passOrdinal];
             if (pass.parallelRecord.has_value())
             {
-                auto planningContext = makePassRecordContext(std::nullopt, context.frameIndex, context.device, runtimeBindings, frameDataByHandle);
+                auto planningContext = makePassRecordContext(std::nullopt, context.frameIndex, context.device,
+                                                             runtimeBindings, frameDataByHandle);
                 auto const itemCount = pass.parallelRecord->itemCount(planningContext);
-                auto const parallelAvailableThreadCount = queueWorkerCount > 1u ? queueWorkerCount - 1u : queueWorkerCount;
+                auto const parallelAvailableThreadCount =
+                    queueWorkerCount > 1u ? queueWorkerCount - 1u : queueWorkerCount;
                 auto passPlan = RecordPassExecutionPlan{
                     .parallel = true,
-                    .parallelPlan = ParallelRecordPlanner::planContiguousRanges(itemCount, parallelAvailableThreadCount),
+                    .parallelPlan =
+                        ParallelRecordPlanner::planContiguousRanges(itemCount, parallelAvailableThreadCount),
                 };
                 if (pass.parallelRecord->primaryScope)
                 {
@@ -407,7 +448,8 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
                     usedWorkerIds.insert(workerId);
 
                     auto secondaryPoolSlot = detail::secondaryPoolSlotForRecordWorker(workerId);
-                    auto &secondaryCommandBuffer = secondaryCommandBufferForPass(context, frameSlot, planBatch.queue, batchOrdinal, passOrdinal, chunkIndex, secondaryPoolSlot);
+                    auto &secondaryCommandBuffer = secondaryCommandBufferForPass(
+                        context, frameSlot, planBatch.queue, batchOrdinal, passOrdinal, chunkIndex, secondaryPoolSlot);
 
                     auto desc = RecordTaskDesc{
                         .batchOrdinal = batchOrdinal,
@@ -443,7 +485,8 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
             usedWorkerIds.insert(workerId);
 
             auto secondaryPoolSlot = detail::secondaryPoolSlotForRecordWorker(workerId);
-            auto &secondaryCommandBuffer = secondaryCommandBufferForPass(context, frameSlot, planBatch.queue, batchOrdinal, passOrdinal, std::size_t{0}, secondaryPoolSlot);
+            auto &secondaryCommandBuffer = secondaryCommandBufferForPass(
+                context, frameSlot, planBatch.queue, batchOrdinal, passOrdinal, std::size_t{0}, secondaryPoolSlot);
 
             auto desc = RecordTaskDesc{
                 .batchOrdinal = batchOrdinal,
@@ -468,11 +511,13 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
     std::ranges::for_each(batchTaskDescriptions, [&](RecordTaskDesc const &desc) {
         if (desc.parallel)
         {
-            batchTasks.futures.push_back(recordThreadPool_.submitTo(desc.workerId, [desc]() { return recordPassRangeToSecondary(desc); }));
+            batchTasks.futures.push_back(
+                recordThreadPool_.submitTo(desc.workerId, [desc]() { return recordPassRangeToSecondary(desc); }));
         }
         else
         {
-            batchTasks.futures.push_back(recordThreadPool_.submitTo(desc.workerId, [desc]() { return recordPassToSecondary(desc); }));
+            batchTasks.futures.push_back(
+                recordThreadPool_.submitTo(desc.workerId, [desc]() { return recordPassToSecondary(desc); }));
         }
         ++report.submittedRecordTaskCount;
     });
@@ -481,9 +526,12 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
     return batchTasks;
 }
 
-[[nodiscard]] std::vector<RecordTaskResult> RenderGraphExecutor::collectRecordTaskResults(RecordBatchTasks &tasks, std::size_t batchOrdinal, ExecuteReport &report)
+[[nodiscard]] std::vector<RecordTaskResult> RenderGraphExecutor::collectRecordTaskResults(RecordBatchTasks &tasks,
+                                                                                          std::size_t batchOrdinal,
+                                                                                          ExecuteReport &report)
 {
-    nrAssert(tasks.batchOrdinal == batchOrdinal, "RenderGraphExecutor::collectRecordTaskResults received a task group for the wrong submit batch.");
+    nrAssert(tasks.batchOrdinal == batchOrdinal,
+             "RenderGraphExecutor::collectRecordTaskResults received a task group for the wrong submit batch.");
 
     auto results = std::vector<RecordTaskResult>{};
     results.reserve(tasks.futures.size());
@@ -495,28 +543,41 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
         results.push_back(result);
     });
 
-    std::ranges::sort(results, [](const RecordTaskResult &lhs, const RecordTaskResult &rhs) { return std::tie(lhs.passOrdinal, lhs.chunkIndex) < std::tie(rhs.passOrdinal, rhs.chunkIndex); });
-    std::ranges::for_each(results, [&](const RecordTaskResult &result) { nrAssert(result.batchOrdinal == batchOrdinal, "RenderGraphExecutor::collectRecordTaskResults collected a task result for the wrong submit batch."); });
+    std::ranges::sort(results, [](const RecordTaskResult &lhs, const RecordTaskResult &rhs) {
+        return std::tie(lhs.passOrdinal, lhs.chunkIndex) < std::tie(rhs.passOrdinal, rhs.chunkIndex);
+    });
+    std::ranges::for_each(results, [&](const RecordTaskResult &result) {
+        nrAssert(result.batchOrdinal == batchOrdinal,
+                 "RenderGraphExecutor::collectRecordTaskResults collected a task result for the wrong submit batch.");
+    });
 
     tasks.futures.clear();
     return results;
 }
 
-void RenderGraphExecutor::executeRecordedSecondaries(const vk::raii::CommandBuffer &primaryCommandBuffer, const CompiledSubmitBatch &batch, std::span<const RecordPassExecutionPlan> passPlans, std::span<const RecordTaskResult> results, vk::QueryPool timingQueryPool, std::size_t firstTimedPassIndex,
-                                                     const CompiledResourceLookup &compiledResourceByHandle, const RuntimeBindingMap &runtimeBindings, ExecuteReport &report)
+void RenderGraphExecutor::executeRecordedSecondaries(const vk::raii::CommandBuffer &primaryCommandBuffer,
+                                                     const CompiledSubmitBatch &batch,
+                                                     std::span<const RecordPassExecutionPlan> passPlans,
+                                                     std::span<const RecordTaskResult> results,
+                                                     vk::QueryPool timingQueryPool, std::size_t firstTimedPassIndex,
+                                                     const CompiledResourceLookup &compiledResourceByHandle,
+                                                     const RuntimeBindingMap &runtimeBindings, ExecuteReport &report)
 {
     if (batch.passes.empty())
     {
         return;
     }
 
-    nrAssert(passPlans.size() == batch.passes.size(), "RenderGraphExecutor::executeRecordedSecondaries requires one execution plan per compiled pass.");
-    nrAssert(timingQueryPool != vk::QueryPool{}, "RenderGraphExecutor::executeRecordedSecondaries requires a valid timestamp query pool.");
+    nrAssert(passPlans.size() == batch.passes.size(),
+             "RenderGraphExecutor::executeRecordedSecondaries requires one execution plan per compiled pass.");
+    nrAssert(timingQueryPool != vk::QueryPool{},
+             "RenderGraphExecutor::executeRecordedSecondaries requires a valid timestamp query pool.");
 
     auto resultCursor = std::size_t{0};
     auto passOrdinals = std::views::iota(std::size_t{0}, batch.passes.size());
     std::ranges::for_each(passOrdinals, [&](std::size_t passOrdinal) {
-        nrAssert(resultCursor == results.size() || results[resultCursor].passOrdinal >= passOrdinal, "RenderGraphExecutor::executeRecordedSecondaries received a result for an earlier compiled pass.");
+        nrAssert(resultCursor == results.size() || results[resultCursor].passOrdinal >= passOrdinal,
+                 "RenderGraphExecutor::executeRecordedSecondaries received a result for an earlier compiled pass.");
 
         auto const resultBegin = resultCursor;
         while (resultCursor < results.size() && results[resultCursor].passOrdinal == passOrdinal)
@@ -532,7 +593,9 @@ void RenderGraphExecutor::executeRecordedSecondaries(const vk::raii::CommandBuff
 
         if (passPlan.parallel)
         {
-            nrAssert(passResults.size() == passPlan.parallelPlan.ranges.size(), "RenderGraphExecutor::executeRecordedSecondaries requires one recorded secondary per planned parallel range.");
+            nrAssert(passResults.size() == passPlan.parallelPlan.ranges.size(),
+                     "RenderGraphExecutor::executeRecordedSecondaries requires one recorded secondary per planned "
+                     "parallel range.");
 
             auto inPassBarriers = nr::rhi::ops::BarrierBatch{};
             std::ranges::for_each(pass.preBarriers, [&](const ResourceStateTransition &transition) {
@@ -542,12 +605,18 @@ void RenderGraphExecutor::executeRecordedSecondaries(const vk::raii::CommandBuff
                 }
 
                 auto resourceIt = compiledResourceByHandle.find(transition.resource);
-                nrAssert(resourceIt != compiledResourceByHandle.end(), "RenderGraphExecutor::executeRecordedSecondaries pass barrier references an unknown resource handle.");
+                nrAssert(resourceIt != compiledResourceByHandle.end(),
+                         "RenderGraphExecutor::executeRecordedSecondaries pass barrier references an unknown resource "
+                         "handle.");
 
                 auto bindingIt = runtimeBindings.find(transition.resource);
-                nrAssert(bindingIt != runtimeBindings.end(), "RenderGraphExecutor::executeRecordedSecondaries pass barrier cannot resolve runtime resource binding.");
+                nrAssert(bindingIt != runtimeBindings.end(), "RenderGraphExecutor::executeRecordedSecondaries pass "
+                                                             "barrier cannot resolve runtime resource binding.");
 
-                auto const addedBarrier = addTransitionBarrier(inPassBarriers, resourceIt->second.get(), bindingIt->second, transition, TransitionPlacement::InPass, nr::rhi::ops::kIgnoredQueueFamilyIndex, nr::rhi::ops::kIgnoredQueueFamilyIndex);
+                auto const addedBarrier =
+                    addTransitionBarrier(inPassBarriers, resourceIt->second.get(), bindingIt->second, transition,
+                                         TransitionPlacement::InPass, nr::rhi::ops::kIgnoredQueueFamilyIndex,
+                                         nr::rhi::ops::kIgnoredQueueFamilyIndex);
 
                 if (addedBarrier)
                 {
@@ -560,13 +629,15 @@ void RenderGraphExecutor::executeRecordedSecondaries(const vk::raii::CommandBuff
                 nr::rhi::ops::pipelineBarrier(primaryCommandBuffer, inPassBarriers);
             }
 
-            auto commandBuffers = passResults | std::views::transform(&RecordTaskResult::commandBuffer) | std::ranges::to<std::vector>();
+            auto commandBuffers =
+                passResults | std::views::transform(&RecordTaskResult::commandBuffer) | std::ranges::to<std::vector>();
             if constexpr (nr::isDebugMode)
             {
                 if (commandBuffers.size() > 1u)
                 {
                     auto const rotateOffset = (firstTimedPassIndex + passOrdinal) % commandBuffers.size();
-                    std::ranges::rotate(commandBuffers, commandBuffers.begin() + static_cast<std::ptrdiff_t>(rotateOffset));
+                    std::ranges::rotate(commandBuffers,
+                                        commandBuffers.begin() + static_cast<std::ptrdiff_t>(rotateOffset));
                 }
             }
 
@@ -591,15 +662,19 @@ void RenderGraphExecutor::executeRecordedSecondaries(const vk::raii::CommandBuff
         }
         else
         {
-            nrAssert(passResults.size() == 1u, "RenderGraphExecutor::executeRecordedSecondaries requires exactly one recorded secondary for a serial pass.");
+            nrAssert(passResults.size() == 1u, "RenderGraphExecutor::executeRecordedSecondaries requires exactly one "
+                                               "recorded secondary for a serial pass.");
             auto commandBuffers = std::array{passResults.front().commandBuffer};
             primaryCommandBuffer.executeCommands(commandBuffers);
             report.replayedSecondaryCommandBufferCount += commandBuffers.size();
         }
 
-        primaryCommandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, timingQueryPool, beginQuery + 1u);
+        primaryCommandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, timingQueryPool,
+                                             beginQuery + 1u);
     });
 
-    nrAssert(resultCursor == results.size(), "RenderGraphExecutor::executeRecordedSecondaries received trailing task results after replaying all passes.");
+    nrAssert(
+        resultCursor == results.size(),
+        "RenderGraphExecutor::executeRecordedSecondaries received trailing task results after replaying all passes.");
 }
 } // namespace nr::renderer

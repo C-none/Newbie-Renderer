@@ -19,7 +19,8 @@ namespace nr::platform_detail
     return NrPlatformNsightGraphicsActivity::Off;
 }
 
-[[nodiscard]] NrPlatformNsightGraphicsCaptureDelimiter toPlatform(nr::platform::NsightGraphicsCaptureDelimiter delimiter) noexcept
+[[nodiscard]] NrPlatformNsightGraphicsCaptureDelimiter toPlatform(
+    nr::platform::NsightGraphicsCaptureDelimiter delimiter) noexcept
 {
     switch (delimiter)
     {
@@ -65,7 +66,7 @@ namespace nr::platform
     return nrPlatformNsightGraphicsSdkCompiled();
 }
 
-[[nodiscard]] NsightGraphicsResult injectNsightGraphics(const NsightGraphicsConfig& config) noexcept
+[[nodiscard]] NsightGraphicsResult injectNsightGraphics(const NsightGraphicsConfig &config) noexcept
 {
     auto desc = NrPlatformNsightGraphicsInjectDesc{
         .activity = nr::platform_detail::toPlatform(config.activity),
@@ -79,7 +80,8 @@ namespace nr::platform
 
 [[nodiscard]] NsightGraphicsResult initializeNsightGraphics(NsightGraphicsActivity activity) noexcept
 {
-    return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsInitialize(nr::platform_detail::toPlatform(activity)));
+    return nr::platform_detail::toNsightGraphicsResult(
+        nrPlatformNsightGraphicsInitialize(nr::platform_detail::toPlatform(activity)));
 }
 
 [[nodiscard]] NsightGraphicsResult activateNsightTrace(VkQueue queue) noexcept
@@ -87,7 +89,7 @@ namespace nr::platform
     return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsActivateTrace(queue));
 }
 
-[[nodiscard]] NsightGraphicsResult requestNsightCapture(const NsightGraphicsCaptureRequest& request) noexcept
+[[nodiscard]] NsightGraphicsResult requestNsightCapture(const NsightGraphicsCaptureRequest &request) noexcept
 {
     auto platformRequest = NrPlatformNsightGraphicsCaptureRequest{
         .delimiter = nr::platform_detail::toPlatform(request.delimiter),
@@ -102,7 +104,7 @@ namespace nr::platform
     return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsStartTrace());
 }
 
-[[nodiscard]] NsightGraphicsResult stopNsightTrace(const NsightGraphicsTraceStop& desc) noexcept
+[[nodiscard]] NsightGraphicsResult stopNsightTrace(const NsightGraphicsTraceStop &desc) noexcept
 {
     auto platformDesc = NrPlatformNsightGraphicsTraceStop{
         .queue = desc.queue,
@@ -113,7 +115,7 @@ namespace nr::platform
     return nr::platform_detail::toNsightGraphicsResult(nrPlatformNsightGraphicsStopTrace(&platformDesc));
 }
 
-[[nodiscard]] NsightGraphicsResult markNsightFrameBoundary(const NsightGraphicsFrameBoundary& desc) noexcept
+[[nodiscard]] NsightGraphicsResult markNsightFrameBoundary(const NsightGraphicsFrameBoundary &desc) noexcept
 {
     auto platformDesc = NrPlatformNsightGraphicsFrameBoundary{
         .queue = desc.queue,

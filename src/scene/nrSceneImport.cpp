@@ -37,17 +37,20 @@ struct MetallicRoughnessFactorSet
     return std::sqrt(0.299f * color.r * color.r + 0.587f * color.g * color.g + 0.114f * color.b * color.b);
 }
 
-[[nodiscard]] float solveMetallic(float diffuseBrightness, float specularBrightness, float oneMinusSpecularStrength) noexcept
+[[nodiscard]] float solveMetallic(float diffuseBrightness, float specularBrightness,
+                                  float oneMinusSpecularStrength) noexcept
 {
     constexpr auto dielectricSpecular = 0.04f;
     auto a = dielectricSpecular;
-    auto b = diffuseBrightness * oneMinusSpecularStrength / (1.0f - dielectricSpecular) + specularBrightness - 2.0f * dielectricSpecular;
+    auto b = diffuseBrightness * oneMinusSpecularStrength / (1.0f - dielectricSpecular) + specularBrightness -
+             2.0f * dielectricSpecular;
     auto c = dielectricSpecular - specularBrightness;
     auto discriminant = std::max((b * b) - (4.0f * a * c), 0.0f);
     return clamp01((-b + std::sqrt(discriminant)) / (2.0f * a));
 }
 
-[[nodiscard]] MetallicRoughnessFactorSet convertSpecularGlossinessToMetallicRoughness(const nr::load::MaterialAsset &material) noexcept
+[[nodiscard]] MetallicRoughnessFactorSet convertSpecularGlossinessToMetallicRoughness(
+    const nr::load::MaterialAsset &material) noexcept
 {
     constexpr auto dielectricSpecular = 0.04f;
     constexpr auto epsilon = 1.0e-6f;
@@ -72,12 +75,16 @@ struct MetallicRoughnessFactorSet
     auto const glossiness = clamp01(material.glossinessFactor.value_or(1.0f));
     auto const specularStrength = std::max({specular.r, specular.g, specular.b});
     auto const oneMinusSpecularStrength = 1.0f - specularStrength;
-    auto const metallic = solveMetallic(perceivedBrightness(diffuse), perceivedBrightness(specular), oneMinusSpecularStrength);
+    auto const metallic =
+        solveMetallic(perceivedBrightness(diffuse), perceivedBrightness(specular), oneMinusSpecularStrength);
 
     auto const oneMinusMetallic = 1.0f - metallic;
-    auto const baseColorFromDiffuse = diffuse * (oneMinusSpecularStrength / ((1.0f - dielectricSpecular) * std::max(oneMinusMetallic, epsilon)));
+    auto const baseColorFromDiffuse =
+        diffuse * (oneMinusSpecularStrength / ((1.0f - dielectricSpecular) * std::max(oneMinusMetallic, epsilon)));
 
-    auto const baseColorFromSpecular = (specular - glm::vec3{dielectricSpecular * oneMinusMetallic * oneMinusMetallic}) / std::max(1.0f - oneMinusMetallic * oneMinusMetallic, epsilon);
+    auto const baseColorFromSpecular =
+        (specular - glm::vec3{dielectricSpecular * oneMinusMetallic * oneMinusMetallic}) /
+        std::max(1.0f - oneMinusMetallic * oneMinusMetallic, epsilon);
 
     auto const baseColor = clamp01(glm::mix(baseColorFromDiffuse, baseColorFromSpecular, metallic * metallic));
     return MetallicRoughnessFactorSet{
@@ -96,23 +103,29 @@ struct MetallicRoughnessFactorSet
 
 namespace nr::scene
 {
-void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan, std::vector<nr::resource::TextureHandle> &textureHandlesBySource)
+void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                           std::vector<nr::resource::TextureHandle> &textureHandlesBySource)
 {
     auto const colorHints = detail::buildTextureColorSpaceHints(sceneAsset);
 
     std::ranges::for_each(plan.textures, [&](const TextureBridgeInput &entry) {
         if (entry.sourceIndex >= sceneAsset.textures.size())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::texture, std::format("Texture bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey, entry.sourceIndex), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::texture,
+                std::format("Texture bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey,
+                            entry.sourceIndex),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
-        auto [handle, created] = textures_.getOrCreate(entry.canonicalKey, [](nr::resource::TextureHandle newHandle, const std::string &key) {
-            return TextureAssetRecord{
-                .handle = newHandle,
-                .stableKey = key,
-            };
-        });
+        auto [handle, created] = textures_.getOrCreate(
+            entry.canonicalKey, [](nr::resource::TextureHandle newHandle, const std::string &key) {
+                return TextureAssetRecord{
+                    .handle = newHandle,
+                    .stableKey = key,
+                };
+            });
 
         if (created)
         {
@@ -124,7 +137,9 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
         auto *record = textures_.tryGet(handle);
         if (record == nullptr)
         {
-            reportImport<nr::LogLevel::error>(ImportStage::texture, std::format("Texture storage lookup failed for key '{}'.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::texture, std::format("Texture storage lookup failed for key '{}'.", entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -134,10 +149,15 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
         }
 
         auto const &sourceTexture = sceneAsset.textures[entry.sourceIndex];
-        auto const hint = entry.sourceIndex < colorHints.size() ? colorHints[entry.sourceIndex] : detail::TextureColorSpaceHint{};
+        auto const hint =
+            entry.sourceIndex < colorHints.size() ? colorHints[entry.sourceIndex] : detail::TextureColorSpaceHint{};
         if (hint.hasColor && hint.hasLinear)
         {
-            reportImport<nr::LogLevel::warning>(ImportStage::texture, std::format("Texture '{}' is referenced by both color and linear slots; forcing linear sampling.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::texture,
+                std::format("Texture '{}' is referenced by both color and linear slots; forcing linear sampling.",
+                            entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
         }
 
         auto texture = nr::resource::Texture{};
@@ -150,7 +170,10 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
             auto prepared = detail::prepareDecodedImageLevel(*sourceTexture.decodedImage);
             if (!prepared.has_value())
             {
-                reportImport<nr::LogLevel::error>(ImportStage::texture, std::format("Decoded texture '{}' failed canonical image-level preparation.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::texture,
+                    std::format("Decoded texture '{}' failed canonical image-level preparation.", entry.canonicalKey),
+                    entry.canonicalKey, entry.sourceIndex);
                 return;
             }
 
@@ -164,7 +187,10 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
             auto const &raw = *sourceTexture.rawRgba8;
             if (raw.width == 0u || raw.height == 0u)
             {
-                reportImport<nr::LogLevel::error>(ImportStage::texture, std::format("Embedded raw texture '{}' has invalid dimensions {}x{}.", entry.canonicalKey, raw.width, raw.height), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(ImportStage::texture,
+                                                  std::format("Embedded raw texture '{}' has invalid dimensions {}x{}.",
+                                                              entry.canonicalKey, raw.width, raw.height),
+                                                  entry.canonicalKey, entry.sourceIndex);
                 return;
             }
 
@@ -182,7 +208,10 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
 
         if (!texture.valid())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::texture, std::format("Canonical texture '{}' failed resource::Texture::valid() validation.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::texture,
+                std::format("Canonical texture '{}' failed resource::Texture::valid() validation.", entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -196,9 +225,12 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
     });
 }
 
-void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan, const std::vector<nr::resource::TextureHandle> &textureHandlesBySource, std::vector<nr::resource::MaterialHandle> &materialHandlesBySource)
+void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                            const std::vector<nr::resource::TextureHandle> &textureHandlesBySource,
+                            std::vector<nr::resource::MaterialHandle> &materialHandlesBySource)
 {
-    auto ensureExtensionForSlot = [](nr::resource::Material &material, nr::resource::MaterialTextureSlotSemantic semantic) {
+    auto ensureExtensionForSlot = [](nr::resource::Material &material,
+                                     nr::resource::MaterialTextureSlotSemantic semantic) {
         switch (semantic)
         {
         case nr::resource::MaterialTextureSlotSemantic::clearcoat:
@@ -236,16 +268,21 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
     std::ranges::for_each(plan.materials, [&](const MaterialBridgeInput &entry) {
         if (entry.sourceIndex >= sceneAsset.materials.size())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::material, std::format("Material bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey, entry.sourceIndex), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::material,
+                std::format("Material bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey,
+                            entry.sourceIndex),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
-        auto [handle, created] = materials_.getOrCreate(entry.canonicalKey, [](nr::resource::MaterialHandle newHandle, const std::string &key) {
-            return MaterialAssetRecord{
-                .handle = newHandle,
-                .stableKey = key,
-            };
-        });
+        auto [handle, created] = materials_.getOrCreate(
+            entry.canonicalKey, [](nr::resource::MaterialHandle newHandle, const std::string &key) {
+                return MaterialAssetRecord{
+                    .handle = newHandle,
+                    .stableKey = key,
+                };
+            });
 
         if (created)
         {
@@ -257,7 +294,9 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
         auto *record = materials_.tryGet(handle);
         if (record == nullptr)
         {
-            reportImport<nr::LogLevel::error>(ImportStage::material, std::format("Material storage lookup failed for key '{}'.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::material, std::format("Material storage lookup failed for key '{}'.", entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -285,7 +324,12 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
         if (detail::hasSpecularGlossinessFactors(sourceMaterial))
         {
             convertedFactors = detail::convertSpecularGlossinessToMetallicRoughness(sourceMaterial);
-            reportImport<nr::LogLevel::warning>(ImportStage::material, std::format("Material '{}' uses specular-glossiness factors; converted approximately to metallic-roughness.", material.name), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::material,
+                std::format(
+                    "Material '{}' uses specular-glossiness factors; converted approximately to metallic-roughness.",
+                    material.name),
+                entry.canonicalKey, entry.sourceIndex);
         }
 
         material.core.baseColorFactor = convertedFactors.baseColorFactor;
@@ -298,9 +342,12 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
         material.core.roughnessFactor = convertedFactors.roughnessFactor;
         material.core.doubleSided = sourceMaterial.doubleSided;
         material.unlit = sourceMaterial.unlit;
-        assignIfPresent(sourceMaterial.normalScale, [&](float normalScale) { material.core.normalScale = normalScale; });
-        assignIfPresent(sourceMaterial.occlusionStrength, [&](float occlusionStrength) { material.core.occlusionStrength = occlusionStrength; });
-        assignIfPresent(sourceMaterial.alphaCutoff, [&](float alphaCutoff) { material.core.alphaCutoff = alphaCutoff; });
+        assignIfPresent(sourceMaterial.normalScale,
+                        [&](float normalScale) { material.core.normalScale = normalScale; });
+        assignIfPresent(sourceMaterial.occlusionStrength,
+                        [&](float occlusionStrength) { material.core.occlusionStrength = occlusionStrength; });
+        assignIfPresent(sourceMaterial.alphaCutoff,
+                        [&](float alphaCutoff) { material.core.alphaCutoff = alphaCutoff; });
 
         material.core.alphaMode = resolveMaterialAlphaMode(sourceMaterial);
 
@@ -370,10 +417,15 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
 
         auto materialHasError = false;
         std::ranges::for_each(sourceMaterial.textures, [&](const nr::load::MaterialTextureBinding &binding) {
-            auto const sourceSemantic = binding.sourceSemanticName.empty() ? nr::resource::materialTextureSlotSemanticName(binding.semantic) : std::string_view{binding.sourceSemanticName};
+            auto const sourceSemantic = binding.sourceSemanticName.empty()
+                                            ? nr::resource::materialTextureSlotSemanticName(binding.semantic)
+                                            : std::string_view{binding.sourceSemanticName};
             if (binding.textureIndex >= textureHandlesBySource.size())
             {
-                reportImport<nr::LogLevel::error>(ImportStage::material, std::format("Material '{}' references out-of-range texture index {}.", material.name, binding.textureIndex), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(ImportStage::material,
+                                                  std::format("Material '{}' references out-of-range texture index {}.",
+                                                              material.name, binding.textureIndex),
+                                                  entry.canonicalKey, entry.sourceIndex);
                 materialHasError = true;
                 return;
             }
@@ -381,41 +433,54 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
             auto textureHandle = textureHandlesBySource[binding.textureIndex];
             if (!textureHandle.valid())
             {
-                reportImport<nr::LogLevel::error>(ImportStage::material, std::format("Material '{}' references unresolved texture index {}.", material.name, binding.textureIndex), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(ImportStage::material,
+                                                  std::format("Material '{}' references unresolved texture index {}.",
+                                                              material.name, binding.textureIndex),
+                                                  entry.canonicalKey, entry.sourceIndex);
                 materialHasError = true;
                 return;
             }
 
             if (textures_.tryGet(textureHandle) == nullptr)
             {
-                reportImport<nr::LogLevel::error>(ImportStage::material, std::format("Material '{}' references unknown texture handle (slot={}, generation={}).", material.name, textureHandle.slot, textureHandle.generation), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::material,
+                    std::format("Material '{}' references unknown texture handle (slot={}, generation={}).",
+                                material.name, textureHandle.slot, textureHandle.generation),
+                    entry.canonicalKey, entry.sourceIndex);
                 materialHasError = true;
                 return;
             }
 
             if (!nr::resource::materialTextureSlotSemanticValid(binding.semantic))
             {
-                auto const specGlossTexture = sourceSemantic == "specular" || sourceSemantic == "shininess" || sourceSemantic == "maya_specular" || sourceSemantic == "maya_specular_color" || sourceSemantic == "maya_specular_roughness";
+                auto const specGlossTexture = sourceSemantic == "specular" || sourceSemantic == "shininess" ||
+                                              sourceSemantic == "maya_specular" ||
+                                              sourceSemantic == "maya_specular_color" ||
+                                              sourceSemantic == "maya_specular_roughness";
                 auto const volumeThicknessTexture = sourceSemantic == "volume_thickness";
-                reportImport<nr::LogLevel::warning>(ImportStage::material,
-                                                    specGlossTexture ? std::format("Material '{}' ignored specular-glossiness texture semantic '{}' because texture baking to metallic-roughness is not implemented.", material.name, sourceSemantic)
-                                                    : volumeThicknessTexture ? std::format("Material '{}' ignored volume thickness texture semantic '{}'; only scalar thicknessFactor boundary classification is supported.", material.name, sourceSemantic)
-                                                                     : std::format("Material '{}' ignored unsupported texture semantic '{}'.", material.name, sourceSemantic),
-                                                    entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::warning>(
+                    ImportStage::material,
+                    specGlossTexture ? std::format("Material '{}' ignored specular-glossiness texture semantic '{}' "
+                                                   "because texture baking to metallic-roughness is not implemented.",
+                                                   material.name, sourceSemantic)
+                    : volumeThicknessTexture
+                        ? std::format("Material '{}' ignored volume thickness texture semantic '{}'; only scalar "
+                                      "thicknessFactor boundary classification is supported.",
+                                      material.name, sourceSemantic)
+                        : std::format("Material '{}' ignored unsupported texture semantic '{}'.", material.name,
+                                      sourceSemantic),
+                    entry.canonicalKey, entry.sourceIndex);
                 return;
             }
 
             if (binding.uvChannel > 1u)
             {
-                reportImport<nr::LogLevel::error>(
-                    ImportStage::material,
-                    std::format(
-                        "Material '{}' texture semantic '{}' selects unsupported UV set {}; only UV sets 0 and 1 are supported.",
-                        material.name,
-                        sourceSemantic,
-                        binding.uvChannel),
-                    entry.canonicalKey,
-                    entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(ImportStage::material,
+                                                  std::format("Material '{}' texture semantic '{}' selects unsupported "
+                                                              "UV set {}; only UV sets 0 and 1 are supported.",
+                                                              material.name, sourceSemantic, binding.uvChannel),
+                                                  entry.canonicalKey, entry.sourceIndex);
                 materialHasError = true;
                 return;
             }
@@ -430,8 +495,13 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
                     return;
                 }
 
-                reportImport<nr::LogLevel::warning>(ImportStage::material, std::format("Material '{}' has duplicate semantic '{}' with a different texture; keeping first slot assignment for {}.", material.name, sourceSemantic, nr::resource::materialTextureSlotSemanticName(binding.semantic)),
-                                                    entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::warning>(
+                    ImportStage::material,
+                    std::format("Material '{}' has duplicate semantic '{}' with a different texture; keeping first "
+                                "slot assignment for {}.",
+                                material.name, sourceSemantic,
+                                nr::resource::materialTextureSlotSemanticName(binding.semantic)),
+                    entry.canonicalKey, entry.sourceIndex);
                 return;
             }
 
@@ -450,7 +520,12 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
             if (textures_.tryGet(textureHandle) == nullptr)
             {
                 materialHasError = true;
-                reportImport<nr::LogLevel::error>(ImportStage::material, std::format("Material '{}' resolved to texture handle (slot={}, generation={}) missing from registry.", material.name, textureHandle.slot, textureHandle.generation), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::material,
+                    std::format(
+                        "Material '{}' resolved to texture handle (slot={}, generation={}) missing from registry.",
+                        material.name, textureHandle.slot, textureHandle.generation),
+                    entry.canonicalKey, entry.sourceIndex);
             }
         });
 
@@ -469,7 +544,9 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
     });
 }
 
-void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan, const std::vector<nr::resource::MaterialHandle> &materialHandlesBySource, std::vector<nr::resource::MeshHandle> &meshHandlesBySource)
+void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                         const std::vector<nr::resource::MaterialHandle> &materialHandlesBySource,
+                         std::vector<nr::resource::MeshHandle> &meshHandlesBySource)
 {
     auto defaultMaterialHandle = std::optional<nr::resource::MaterialHandle>{};
     auto ensureDefaultMaterial = [&]() -> nr::resource::MaterialHandle {
@@ -478,13 +555,16 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             return *defaultMaterialHandle;
         }
 
-        auto defaultKey = sceneAsset.sourcePath.empty() ? std::string{"<scene>::material[default]"} : std::format("{}::material[default]", sceneAsset.sourcePath.generic_string());
-        auto [handle, created] = materials_.getOrCreate(defaultKey, [](nr::resource::MaterialHandle newHandle, const std::string &key) {
-            return MaterialAssetRecord{
-                .handle = newHandle,
-                .stableKey = key,
-            };
-        });
+        auto defaultKey = sceneAsset.sourcePath.empty()
+                              ? std::string{"<scene>::material[default]"}
+                              : std::format("{}::material[default]", sceneAsset.sourcePath.generic_string());
+        auto [handle, created] =
+            materials_.getOrCreate(defaultKey, [](nr::resource::MaterialHandle newHandle, const std::string &key) {
+                return MaterialAssetRecord{
+                    .handle = newHandle,
+                    .stableKey = key,
+                };
+            });
 
         if (created)
         {
@@ -512,16 +592,21 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
     std::ranges::for_each(plan.meshes, [&](const MeshBridgeInput &entry) {
         if (entry.sourceIndex >= sceneAsset.meshes.size())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::mesh, std::format("Mesh bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey, entry.sourceIndex), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::mesh,
+                std::format("Mesh bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey,
+                            entry.sourceIndex),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
-        auto [handle, created] = meshes_.getOrCreate(entry.canonicalKey, [](nr::resource::MeshHandle newHandle, const std::string &key) {
-            return MeshAssetRecord{
-                .handle = newHandle,
-                .stableKey = key,
-            };
-        });
+        auto [handle, created] =
+            meshes_.getOrCreate(entry.canonicalKey, [](nr::resource::MeshHandle newHandle, const std::string &key) {
+                return MeshAssetRecord{
+                    .handle = newHandle,
+                    .stableKey = key,
+                };
+            });
 
         if (created)
         {
@@ -533,7 +618,9 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         auto *record = meshes_.tryGet(handle);
         if (record == nullptr)
         {
-            reportImport<nr::LogLevel::error>(ImportStage::mesh, std::format("Mesh storage lookup failed for key '{}'.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::mesh, std::format("Mesh storage lookup failed for key '{}'.", entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -552,10 +639,12 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             auto vertex = nr::resource::Vertex{};
             vertex.position = glm::vec3{sourceVertex.position[0], sourceVertex.position[1], sourceVertex.position[2]};
             vertex.normal = glm::vec3{sourceVertex.normal[0], sourceVertex.normal[1], sourceVertex.normal[2]};
-            vertex.tangent = glm::vec4{sourceVertex.tangent[0], sourceVertex.tangent[1], sourceVertex.tangent[2], sourceVertex.tangent[3]};
+            vertex.tangent = glm::vec4{sourceVertex.tangent[0], sourceVertex.tangent[1], sourceVertex.tangent[2],
+                                       sourceVertex.tangent[3]};
             vertex.texCoord0 = glm::vec2{sourceVertex.texCoord0[0], sourceVertex.texCoord0[1]};
             vertex.texCoord1 = glm::vec2{sourceVertex.texCoord1[0], sourceVertex.texCoord1[1]};
-            vertex.color0 = glm::vec4{sourceVertex.color0[0], sourceVertex.color0[1], sourceVertex.color0[2], sourceVertex.color0[3]};
+            vertex.color0 = glm::vec4{sourceVertex.color0[0], sourceVertex.color0[1], sourceVertex.color0[2],
+                                      sourceVertex.color0[3]};
             mesh.vertices.push_back(vertex);
         });
 
@@ -563,7 +652,9 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
 
         if (sourceMesh.geometries.empty())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::mesh, std::format("Mesh '{}' has no geometry records.", sourceMesh.name), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(ImportStage::mesh,
+                                              std::format("Mesh '{}' has no geometry records.", sourceMesh.name),
+                                              entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -572,13 +663,21 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             if (sourceGeometry.materialIndex == nr::load::invalidIndex)
             {
                 auto handle = ensureDefaultMaterial();
-                reportImport<nr::LogLevel::warning>(ImportStage::mesh, std::format("Mesh '{}' geometry '{}' has no source material; using default material.", sourceMesh.name, sourceGeometry.name), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::warning>(
+                    ImportStage::mesh,
+                    std::format("Mesh '{}' geometry '{}' has no source material; using default material.",
+                                sourceMesh.name, sourceGeometry.name),
+                    entry.canonicalKey, entry.sourceIndex);
                 return handle;
             }
 
             if (sourceGeometry.materialIndex >= materialHandlesBySource.size())
             {
-                reportImport<nr::LogLevel::error>(ImportStage::mesh, std::format("Mesh '{}' geometry '{}' references out-of-range material index {}.", sourceMesh.name, sourceGeometry.name, sourceGeometry.materialIndex), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::mesh,
+                    std::format("Mesh '{}' geometry '{}' references out-of-range material index {}.", sourceMesh.name,
+                                sourceGeometry.name, sourceGeometry.materialIndex),
+                    entry.canonicalKey, entry.sourceIndex);
                 meshHasError = true;
                 return nr::resource::MaterialHandle{};
             }
@@ -586,15 +685,23 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             auto materialHandle = materialHandlesBySource[sourceGeometry.materialIndex];
             if (!materialHandle.valid())
             {
-                reportImport<nr::LogLevel::error>(ImportStage::mesh, std::format("Mesh '{}' geometry '{}' references unresolved material index {}.", sourceMesh.name, sourceGeometry.name, sourceGeometry.materialIndex), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::mesh,
+                    std::format("Mesh '{}' geometry '{}' references unresolved material index {}.", sourceMesh.name,
+                                sourceGeometry.name, sourceGeometry.materialIndex),
+                    entry.canonicalKey, entry.sourceIndex);
                 meshHasError = true;
                 return nr::resource::MaterialHandle{};
             }
 
             if (materials_.tryGet(materialHandle) == nullptr)
             {
-                reportImport<nr::LogLevel::error>(ImportStage::mesh, std::format("Mesh '{}' geometry '{}' resolved material handle (slot={}, generation={}) missing in registry.", sourceMesh.name, sourceGeometry.name, materialHandle.slot, materialHandle.generation), entry.canonicalKey,
-                                                  entry.sourceIndex);
+                reportImport<nr::LogLevel::error>(ImportStage::mesh,
+                                                  std::format("Mesh '{}' geometry '{}' resolved material handle "
+                                                              "(slot={}, generation={}) missing in registry.",
+                                                              sourceMesh.name, sourceGeometry.name, materialHandle.slot,
+                                                              materialHandle.generation),
+                                                  entry.canonicalKey, entry.sourceIndex);
                 meshHasError = true;
                 return nr::resource::MaterialHandle{};
             }
@@ -610,8 +717,10 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
                 auto end = begin + static_cast<std::size_t>(geometry.indexCount);
                 if (end <= mesh.vertices.size())
                 {
-                    auto vertexRange = std::ranges::subrange(mesh.vertices.begin() + static_cast<std::ptrdiff_t>(begin), mesh.vertices.begin() + static_cast<std::ptrdiff_t>(end));
-                    std::ranges::for_each(vertexRange, [&](const nr::resource::Vertex &vertex) { bounds.expand(vertex.position); });
+                    auto vertexRange = std::ranges::subrange(mesh.vertices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                                             mesh.vertices.begin() + static_cast<std::ptrdiff_t>(end));
+                    std::ranges::for_each(vertexRange,
+                                          [&](const nr::resource::Vertex &vertex) { bounds.expand(vertex.position); });
                 }
                 return bounds;
             }
@@ -620,9 +729,11 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             auto end = begin + static_cast<std::size_t>(geometry.indexCount);
             if (end <= mesh.indices.size())
             {
-                auto indexRange = std::ranges::subrange(mesh.indices.begin() + static_cast<std::ptrdiff_t>(begin), mesh.indices.begin() + static_cast<std::ptrdiff_t>(end));
+                auto indexRange = std::ranges::subrange(mesh.indices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                                        mesh.indices.begin() + static_cast<std::ptrdiff_t>(end));
                 std::ranges::for_each(indexRange, [&](std::uint32_t localIndex) {
-                    auto vertexIndex = static_cast<std::uint64_t>(localIndex) + static_cast<std::uint64_t>(geometry.vertexOffset);
+                    auto vertexIndex =
+                        static_cast<std::uint64_t>(localIndex) + static_cast<std::uint64_t>(geometry.vertexOffset);
                     if (vertexIndex < mesh.vertices.size())
                     {
                         bounds.expand(mesh.vertices[static_cast<std::size_t>(vertexIndex)].position);
@@ -643,7 +754,10 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             }
 
             auto geometry = nr::resource::MeshGeometry{};
-            geometry.name = sourceGeometry.name.empty() ? std::format("{}_geometry_{}", sourceMesh.name.empty() ? "mesh" : sourceMesh.name, geometryIndex) : sourceGeometry.name;
+            geometry.name =
+                sourceGeometry.name.empty()
+                    ? std::format("{}_geometry_{}", sourceMesh.name.empty() ? "mesh" : sourceMesh.name, geometryIndex)
+                    : sourceGeometry.name;
             geometry.firstIndex = sourceGeometry.firstIndex;
             geometry.indexCount = sourceGeometry.indexCount;
             geometry.vertexOffset = sourceGeometry.vertexOffset;
@@ -658,11 +772,16 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
 
         mesh.rebuildLocalBounds();
         mesh.rebuildLocalSphere();
-        std::ranges::for_each(mesh.geometries, [&](nr::resource::MeshGeometry &geometry) { geometry.localBounds = buildGeometryBounds(geometry); });
+        std::ranges::for_each(mesh.geometries, [&](nr::resource::MeshGeometry &geometry) {
+            geometry.localBounds = buildGeometryBounds(geometry);
+        });
 
         if (!mesh.validate())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::mesh, std::format("Canonical mesh '{}' failed validate() after normalization.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::mesh,
+                std::format("Canonical mesh '{}' failed validate() after normalization.", entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -676,7 +795,8 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
     });
 }
 
-void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan, std::vector<nr::resource::CameraAssetHandle> &cameraHandlesBySource)
+void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                          std::vector<nr::resource::CameraAssetHandle> &cameraHandlesBySource)
 {
     constexpr auto kEpsilon = 1e-4f;
     constexpr auto kFallbackFov = glm::radians(60.0f);
@@ -684,16 +804,21 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
     std::ranges::for_each(plan.cameras, [&](const CameraBridgeInput &entry) {
         if (entry.sourceIndex >= sceneAsset.cameras.size())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::camera, std::format("Camera bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey, entry.sourceIndex), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::camera,
+                std::format("Camera bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey,
+                            entry.sourceIndex),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
-        auto [handle, created] = cameras_.getOrCreate(entry.canonicalKey, [](nr::resource::CameraAssetHandle newHandle, const std::string &key) {
-            return CameraAssetRecord{
-                .handle = newHandle,
-                .stableKey = key,
-            };
-        });
+        auto [handle, created] = cameras_.getOrCreate(
+            entry.canonicalKey, [](nr::resource::CameraAssetHandle newHandle, const std::string &key) {
+                return CameraAssetRecord{
+                    .handle = newHandle,
+                    .stableKey = key,
+                };
+            });
 
         if (created)
         {
@@ -705,7 +830,9 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
         auto *record = cameras_.tryGet(handle);
         if (record == nullptr)
         {
-            reportImport<nr::LogLevel::error>(ImportStage::camera, std::format("Camera storage lookup failed for key '{}'.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::camera, std::format("Camera storage lookup failed for key '{}'.", entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -731,12 +858,19 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
             else if (aspect == 0.0f)
             {
                 aspect = 1.0f;
-                reportImport<nr::LogLevel::info>(ImportStage::camera, std::format("Camera '{}' does not contain an authored aspect; using viewport aspect.", camera.name), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::info>(
+                    ImportStage::camera,
+                    std::format("Camera '{}' does not contain an authored aspect; using viewport aspect.", camera.name),
+                    entry.canonicalKey, entry.sourceIndex);
             }
             else
             {
                 aspect = 1.0f;
-                reportImport<nr::LogLevel::warning>(ImportStage::camera, std::format("Camera '{}' has invalid aspect {} on orthographic path; falling back to aspect=1.", camera.name, sourceCamera.aspect), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::warning>(
+                    ImportStage::camera,
+                    std::format("Camera '{}' has invalid aspect {} on orthographic path; falling back to aspect=1.",
+                                camera.name, sourceCamera.aspect),
+                    entry.canonicalKey, entry.sourceIndex);
             }
 
             camera.orthoHeight = sourceCamera.orthographicWidth / aspect;
@@ -749,7 +883,12 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
             if (!(std::isfinite(horizontalFov) && horizontalFov > kEpsilon))
             {
                 horizontalFov = kFallbackFov;
-                reportImport<nr::LogLevel::warning>(ImportStage::camera, std::format("Camera '{}' has invalid horizontalFov {} on perspective path; falling back to 60 degrees.", camera.name, sourceCamera.horizontalFov), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::warning>(
+                    ImportStage::camera,
+                    std::format(
+                        "Camera '{}' has invalid horizontalFov {} on perspective path; falling back to 60 degrees.",
+                        camera.name, sourceCamera.horizontalFov),
+                    entry.canonicalKey, entry.sourceIndex);
             }
 
             auto aspect = sourceCamera.aspect;
@@ -761,12 +900,20 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
             else if (aspect == 0.0f)
             {
                 camera.verticalFovRadians = horizontalFov;
-                reportImport<nr::LogLevel::info>(ImportStage::camera, std::format("Camera '{}' does not contain an authored aspect; using viewport aspect.", camera.name), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::info>(
+                    ImportStage::camera,
+                    std::format("Camera '{}' does not contain an authored aspect; using viewport aspect.", camera.name),
+                    entry.canonicalKey, entry.sourceIndex);
             }
             else
             {
                 camera.verticalFovRadians = horizontalFov;
-                reportImport<nr::LogLevel::warning>(ImportStage::camera, std::format("Camera '{}' has invalid aspect {} on perspective path; using horizontalFov as verticalFov.", camera.name, sourceCamera.aspect), entry.canonicalKey, entry.sourceIndex);
+                reportImport<nr::LogLevel::warning>(
+                    ImportStage::camera,
+                    std::format(
+                        "Camera '{}' has invalid aspect {} on perspective path; using horizontalFov as verticalFov.",
+                        camera.name, sourceCamera.aspect),
+                    entry.canonicalKey, entry.sourceIndex);
             }
         }
 
@@ -774,14 +921,22 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
         if (!(std::isfinite(nearPlane) && nearPlane > kEpsilon))
         {
             nearPlane = 0.1f;
-            reportImport<nr::LogLevel::warning>(ImportStage::camera, std::format("Camera '{}' has invalid near plane {}; falling back to 0.1.", camera.name, sourceCamera.nearPlane), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::camera,
+                std::format("Camera '{}' has invalid near plane {}; falling back to 0.1.", camera.name,
+                            sourceCamera.nearPlane),
+                entry.canonicalKey, entry.sourceIndex);
         }
 
         auto farPlane = sourceCamera.farPlane;
         if (!(std::isfinite(farPlane) && farPlane > nearPlane + kEpsilon))
         {
             farPlane = nearPlane + 1000.0f;
-            reportImport<nr::LogLevel::warning>(ImportStage::camera, std::format("Camera '{}' has invalid far plane {}; falling back to near+1000.", camera.name, sourceCamera.farPlane), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::camera,
+                std::format("Camera '{}' has invalid far plane {}; falling back to near+1000.", camera.name,
+                            sourceCamera.farPlane),
+                entry.canonicalKey, entry.sourceIndex);
         }
 
         camera.nearPlane = nearPlane;
@@ -797,14 +952,19 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
     });
 }
 
-void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan, std::vector<nr::resource::LightAssetHandle> &lightHandlesBySource)
+void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                         std::vector<nr::resource::LightAssetHandle> &lightHandlesBySource)
 {
     constexpr auto kEpsilon = 1e-4f;
 
     std::ranges::for_each(plan.lights, [&](const LightBridgeInput &entry) {
         if (entry.sourceIndex >= sceneAsset.lights.size())
         {
-            reportImport<nr::LogLevel::error>(ImportStage::light, std::format("Light bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey, entry.sourceIndex), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::light,
+                std::format("Light bridge entry '{}' references out-of-range source index {}.", entry.canonicalKey,
+                            entry.sourceIndex),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -812,16 +972,21 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         auto mappedType = detail::mapLightType(sourceLight.type);
         if (!mappedType.has_value())
         {
-            reportImport<nr::LogLevel::warning>(ImportStage::light, std::format("Light '{}' uses unsupported type '{}' (raw={}) and will be skipped.", sourceLight.name, sourceLight.type, sourceLight.typeRaw), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::light,
+                std::format("Light '{}' uses unsupported type '{}' (raw={}) and will be skipped.", sourceLight.name,
+                            sourceLight.type, sourceLight.typeRaw),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
-        auto [handle, created] = lights_.getOrCreate(entry.canonicalKey, [](nr::resource::LightAssetHandle newHandle, const std::string &key) {
-            return LightAssetRecord{
-                .handle = newHandle,
-                .stableKey = key,
-            };
-        });
+        auto [handle, created] = lights_.getOrCreate(
+            entry.canonicalKey, [](nr::resource::LightAssetHandle newHandle, const std::string &key) {
+                return LightAssetRecord{
+                    .handle = newHandle,
+                    .stableKey = key,
+                };
+            });
 
         if (created)
         {
@@ -833,7 +998,9 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         auto *record = lights_.tryGet(handle);
         if (record == nullptr)
         {
-            reportImport<nr::LogLevel::error>(ImportStage::light, std::format("Light storage lookup failed for key '{}'.", entry.canonicalKey), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::light, std::format("Light storage lookup failed for key '{}'.", entry.canonicalKey),
+                entry.canonicalKey, entry.sourceIndex);
             return;
         }
 
@@ -879,7 +1046,8 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             light.intensity = intensity;
         }
 
-        if (*mappedType != nr::resource::LightType::directional && std::isfinite(sourceLight.range) && sourceLight.range > 0.0f)
+        if (*mappedType != nr::resource::LightType::directional && std::isfinite(sourceLight.range) &&
+            sourceLight.range > 0.0f)
         {
             light.range = sourceLight.range;
         }
@@ -899,7 +1067,10 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         if (outerCone < innerCone)
         {
             outerCone = innerCone;
-            reportImport<nr::LogLevel::warning>(ImportStage::light, std::format("Light '{}' has outer cone smaller than inner cone; clamping outer to inner.", light.name), entry.canonicalKey, entry.sourceIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::light,
+                std::format("Light '{}' has outer cone smaller than inner cone; clamping outer to inner.", light.name),
+                entry.canonicalKey, entry.sourceIndex);
         }
 
         light.innerConeRadians = innerCone;
@@ -915,8 +1086,12 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
     });
 }
 
-[[nodiscard]] TemplateResourcePinSet Scene::buildTemplatePinSet(std::span<const nr::resource::MeshHandle> meshHandles, std::span<const nr::resource::MaterialHandle> materialHandles, std::span<const nr::resource::TextureHandle> textureHandles,
-                                                                std::span<const nr::resource::CameraAssetHandle> cameraHandles, std::span<const nr::resource::LightAssetHandle> lightHandles) const
+[[nodiscard]] TemplateResourcePinSet Scene::buildTemplatePinSet(
+    std::span<const nr::resource::MeshHandle> meshHandles,
+    std::span<const nr::resource::MaterialHandle> materialHandles,
+    std::span<const nr::resource::TextureHandle> textureHandles,
+    std::span<const nr::resource::CameraAssetHandle> cameraHandles,
+    std::span<const nr::resource::LightAssetHandle> lightHandles) const
 {
     auto pinSet = TemplateResourcePinSet{};
     auto appendHandles = [&](const auto &handles, auto &collection) { appendValidUniqueHandles(handles, collection); };
@@ -955,7 +1130,9 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
 
 void Scene::retainTemplatePins(const TemplateResourcePinSet &pinSet)
 {
-    auto incrementPins = [&](const auto &collection, auto &storage) { incrementTemplatePins(std::span{collection}, storage); };
+    auto incrementPins = [&](const auto &collection, auto &storage) {
+        incrementTemplatePins(std::span{collection}, storage);
+    };
 
     incrementPins(pinSet.meshes, meshes_);
     incrementPins(pinSet.materials, materials_);
@@ -966,7 +1143,9 @@ void Scene::retainTemplatePins(const TemplateResourcePinSet &pinSet)
 
 void Scene::releaseTemplatePins(const TemplateResourcePinSet &pinSet)
 {
-    auto decrementPins = [&](const auto &collection, auto &storage) { decrementTemplatePins(std::span{collection}, storage); };
+    auto decrementPins = [&](const auto &collection, auto &storage) {
+        decrementTemplatePins(std::span{collection}, storage);
+    };
 
     decrementPins(pinSet.meshes, meshes_);
     decrementPins(pinSet.materials, materials_);
@@ -974,6 +1153,5 @@ void Scene::releaseTemplatePins(const TemplateResourcePinSet &pinSet)
     decrementPins(pinSet.cameras, cameras_);
     decrementPins(pinSet.lights, lights_);
 }
-
 
 } // namespace nr::scene

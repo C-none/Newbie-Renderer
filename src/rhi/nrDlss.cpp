@@ -6,11 +6,8 @@ import std;
 
 namespace nr::rhi
 {
-DlssContext::DlssContext(
-    vk::Instance instance,
-    vk::PhysicalDevice physicalDevice,
-    vk::Device device,
-    std::filesystem::path applicationDataPath)
+DlssContext::DlssContext(vk::Instance instance, vk::PhysicalDevice physicalDevice, vk::Device device,
+                         std::filesystem::path applicationDataPath)
     : context_(nr::dependency::dlss::VulkanContextDesc{
           .instance = instance,
           .physicalDevice = physicalDevice,
@@ -25,7 +22,7 @@ bool DlssContext::valid() const noexcept
     return context_.valid();
 }
 
-const DlssStatus& DlssContext::status() const noexcept
+const DlssStatus &DlssContext::status() const noexcept
 {
     return context_.status();
 }
@@ -35,21 +32,18 @@ DlssOptimalSettings DlssContext::optimalSettings(DlssDimensions targetSize, Dlss
     return context_.optimalSettings(targetSize, quality);
 }
 
-DlssRayReconstructionFeature::DlssRayReconstructionFeature(
-    std::shared_ptr<DlssContext> context,
-    const vk::raii::CommandBuffer& commandBuffer,
-    const DlssRayReconstructionCreateDesc& desc)
+DlssRayReconstructionFeature::DlssRayReconstructionFeature(std::shared_ptr<DlssContext> context,
+                                                           const vk::raii::CommandBuffer &commandBuffer,
+                                                           const DlssRayReconstructionCreateDesc &desc)
     : context_(std::move(context))
 {
     nrAssert(static_cast<bool>(context_), "DLSS RR feature creation requires a shared device context.");
-    feature_ = context_->context_.createRayReconstruction(
-        static_cast<vk::CommandBuffer>(*commandBuffer),
-        desc);
+    feature_ = context_->context_.createRayReconstruction(static_cast<vk::CommandBuffer>(*commandBuffer), desc);
 }
 
 DlssRayReconstructionFeature::~DlssRayReconstructionFeature() = default;
-DlssRayReconstructionFeature::DlssRayReconstructionFeature(DlssRayReconstructionFeature&&) noexcept = default;
-DlssRayReconstructionFeature& DlssRayReconstructionFeature::operator=(DlssRayReconstructionFeature&& other) noexcept
+DlssRayReconstructionFeature::DlssRayReconstructionFeature(DlssRayReconstructionFeature &&) noexcept = default;
+DlssRayReconstructionFeature &DlssRayReconstructionFeature::operator=(DlssRayReconstructionFeature &&other) noexcept
 {
     if (this == &other)
     {
@@ -68,15 +62,14 @@ bool DlssRayReconstructionFeature::valid() const noexcept
     return feature_ && feature_->valid();
 }
 
-const DlssStatus& DlssRayReconstructionFeature::status() const noexcept
+const DlssStatus &DlssRayReconstructionFeature::status() const noexcept
 {
     nrAssert(static_cast<bool>(feature_), "DLSS RR status requires a feature object.");
     return feature_->status();
 }
 
-DlssStatus DlssRayReconstructionFeature::evaluate(
-    const vk::raii::CommandBuffer& commandBuffer,
-    const DlssRayReconstructionEvalDesc& desc)
+DlssStatus DlssRayReconstructionFeature::evaluate(const vk::raii::CommandBuffer &commandBuffer,
+                                                  const DlssRayReconstructionEvalDesc &desc)
 {
     nrAssert(valid(), "DLSS RR evaluation requires a valid feature.");
     return feature_->evaluate(static_cast<vk::CommandBuffer>(*commandBuffer), desc);

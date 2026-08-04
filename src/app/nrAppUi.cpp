@@ -102,65 +102,56 @@ inline constexpr std::array kUiKeyBindings{
     return std::clamp(40.0f + static_cast<float>(digitCount) * 8.0f, 64.0f, 140.0f);
 }
 
-int resizeInputTextBuffer(ImGuiInputTextCallbackData* data)
+int resizeInputTextBuffer(ImGuiInputTextCallbackData *data)
 {
     nrAssert(data != nullptr, "resizeInputTextBuffer requires ImGui callback data.");
-    nrAssert(data->EventFlag == ImGuiInputTextFlags_CallbackResize, "resizeInputTextBuffer only handles resize callbacks.");
+    nrAssert(data->EventFlag == ImGuiInputTextFlags_CallbackResize,
+             "resizeInputTextBuffer only handles resize callbacks.");
 
-    auto* value = static_cast<std::string*>(data->UserData);
+    auto *value = static_cast<std::string *>(data->UserData);
     nrAssert(value != nullptr, "resizeInputTextBuffer requires a string user data pointer.");
     value->resize(static_cast<std::size_t>(data->BufTextLen));
     data->Buf = value->data();
     return 0;
 }
 
-void submitKeyboardInput(auto& io, const nr::rhi::PresentationContext& presentation)
+void submitKeyboardInput(auto &io, const nr::rhi::PresentationContext &presentation)
 {
-    auto const controlDown = presentation.keyDown(kKeyLeftControl) ||
-                             presentation.keyDown(kKeyRightControl);
-    auto const shiftDown = presentation.keyDown(kKeyLeftShift) ||
-                           presentation.keyDown(kKeyRightShift);
-    auto const altDown = presentation.keyDown(kKeyLeftAlt) ||
-                         presentation.keyDown(kKeyRightAlt);
-    auto const superDown = presentation.keyDown(kKeyLeftSuper) ||
-                           presentation.keyDown(kKeyRightSuper);
+    auto const controlDown = presentation.keyDown(kKeyLeftControl) || presentation.keyDown(kKeyRightControl);
+    auto const shiftDown = presentation.keyDown(kKeyLeftShift) || presentation.keyDown(kKeyRightShift);
+    auto const altDown = presentation.keyDown(kKeyLeftAlt) || presentation.keyDown(kKeyRightAlt);
+    auto const superDown = presentation.keyDown(kKeyLeftSuper) || presentation.keyDown(kKeyRightSuper);
 
     io.AddKeyEvent(imgui::keyModCtrl, controlDown);
     io.AddKeyEvent(imgui::keyModShift, shiftDown);
     io.AddKeyEvent(imgui::keyModAlt, altDown);
     io.AddKeyEvent(imgui::keyModSuper, superDown);
 
-    std::ranges::for_each(kUiKeyBindings, [&](const UiKeyBinding& binding) {
+    std::ranges::for_each(kUiKeyBindings, [&](const UiKeyBinding &binding) {
         io.AddKeyEvent(binding.key, presentation.keyDown(binding.glfwKey));
     });
 
     auto codepoints = presentation.consumeTextInputCodepoints();
-    std::ranges::for_each(codepoints, [&](std::uint32_t codepoint) {
-        io.AddInputCharacter(codepoint);
-    });
+    std::ranges::for_each(codepoints, [&](std::uint32_t codepoint) { io.AddInputCharacter(codepoint); });
 }
 } // namespace nr::app::detail
 
 namespace nr::app
 {
-UiSystem::WindowScope::WindowScope(UiSystem& owner, bool visible, bool closesWindow) noexcept
-    : owner_(std::ref(owner))
-    , visible_(visible)
-    , closesWindow_(closesWindow)
+UiSystem::WindowScope::WindowScope(UiSystem &owner, bool visible, bool closesWindow) noexcept
+    : owner_(std::ref(owner)), visible_(visible), closesWindow_(closesWindow)
 {
 }
 
-UiSystem::WindowScope::WindowScope(WindowScope&& other) noexcept
-    : owner_(other.owner_)
-    , visible_(other.visible_)
-    , closesWindow_(other.closesWindow_)
+UiSystem::WindowScope::WindowScope(WindowScope &&other) noexcept
+    : owner_(other.owner_), visible_(other.visible_), closesWindow_(other.closesWindow_)
 {
     other.owner_.reset();
     other.visible_ = false;
     other.closesWindow_ = false;
 }
 
-UiSystem::WindowScope& UiSystem::WindowScope::operator=(WindowScope&& other) noexcept
+UiSystem::WindowScope &UiSystem::WindowScope::operator=(WindowScope &&other) noexcept
 {
     if (this == &other)
     {
@@ -216,7 +207,7 @@ void UiSystem::initialize()
     nrAssert(context_ != nullptr, "UiSystem::initialize failed to create ImGui context.");
 
     setCurrentContext();
-    auto& io = ImGui::GetIO();
+    auto &io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
     io.BackendPlatformName = "NewbieRenderer.UiSystem";
@@ -264,7 +255,7 @@ bool UiSystem::initialized() const noexcept
     return context_ != nullptr;
 }
 
-void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, float deltaSeconds)
+void UiSystem::beginFrame(const nr::rhi::PresentationContext &presentation, float deltaSeconds)
 {
     nrAssert(initialized(), "UiSystem::beginFrame requires initialize() first.");
 
@@ -280,20 +271,17 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, floa
     ++fpsSampleFrameCount_;
     if (fpsSampleFrameCount_ >= nr::statistics::sampleFrameCount())
     {
-        auto const averagedDeltaSeconds =
-            fpsSampleAccumulatedDeltaSeconds_ / static_cast<float>(fpsSampleFrameCount_);
+        auto const averagedDeltaSeconds = fpsSampleAccumulatedDeltaSeconds_ / static_cast<float>(fpsSampleFrameCount_);
         frameStats_.smoothedDeltaSeconds = averagedDeltaSeconds;
         frameStats_.frameTimeMilliseconds = averagedDeltaSeconds * 1000.0f;
-        frameStats_.framesPerSecond = averagedDeltaSeconds > 0.0f
-                                          ? 1.0f / averagedDeltaSeconds
-                                          : 0.0f;
+        frameStats_.framesPerSecond = averagedDeltaSeconds > 0.0f ? 1.0f / averagedDeltaSeconds : 0.0f;
         nr::statistics::refreshSampleFrameCount(frameStats_.framesPerSecond);
         fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
         fpsSampleFrameCount_ = 0u;
     }
     ++frameStats_.frameCounter;
 
-    auto& io = ImGui::GetIO();
+    auto &io = ImGui::GetIO();
     auto const swapchainExtent = presentation.swapchainExtent();
     io.DisplaySize = ImVec2{
         static_cast<float>(std::max(1u, swapchainExtent.width)),
@@ -303,9 +291,7 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext& presentation, floa
     io.DeltaTime = sanitizedDelta;
 
     auto const cursorPosition = presentation.cursorPosition();
-    io.AddMousePosEvent(
-        static_cast<float>(cursorPosition.x),
-        static_cast<float>(cursorPosition.y));
+    io.AddMousePosEvent(static_cast<float>(cursorPosition.x), static_cast<float>(cursorPosition.y));
     io.AddMouseButtonEvent(0, presentation.mouseButtonDown(detail::kMouseButtonLeft));
     io.AddMouseButtonEvent(1, presentation.mouseButtonDown(detail::kMouseButtonRight));
     io.AddMouseButtonEvent(2, presentation.mouseButtonDown(detail::kMouseButtonMiddle));
@@ -344,7 +330,7 @@ void UiSystem::finalizeFrame()
     queuedSections_.clear();
     ImGui::Render();
 
-    auto& io = ImGui::GetIO();
+    auto &io = ImGui::GetIO();
     captureState_ = UiCaptureState{
         .wantsMouse = io.WantCaptureMouse,
         .wantsKeyboard = io.WantCaptureKeyboard,
@@ -379,16 +365,11 @@ void UiSystem::queueSection(UiSection section)
 
 void UiSystem::renderSections(std::span<const UiSection> sections, ImGuiWindowFlags flags)
 {
-    renderSections(
-        sections,
-        std::span<const UiSection>{},
-        flags);
+    renderSections(sections, std::span<const UiSection>{}, flags);
 }
 
-void UiSystem::renderSections(
-    std::span<const UiSection> leadingSections,
-    std::span<const UiSection> trailingSections,
-    ImGuiWindowFlags flags)
+void UiSystem::renderSections(std::span<const UiSection> leadingSections, std::span<const UiSection> trailingSections,
+                              ImGuiWindowFlags flags)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::renderSections requires an active UI frame.");
     setCurrentContext();
@@ -411,7 +392,7 @@ void UiSystem::renderSections(
         return;
     }
 
-    auto drawAppSection = [&](const UiSection& section) {
+    auto drawAppSection = [&](const UiSection &section) {
         if (!beginSection(section.id, section.title, section.defaultOpen) || !section.draw)
         {
             return;
@@ -447,7 +428,7 @@ void UiSystem::text(std::string_view content)
     ImGui::TextUnformatted(content.data(), content.data() + content.size());
 }
 
-bool UiSystem::checkbox(std::string_view label, bool& value)
+bool UiSystem::checkbox(std::string_view label, bool &value)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::checkbox requires an active UI frame.");
     setCurrentContext();
@@ -465,19 +446,14 @@ bool UiSystem::button(std::string_view label)
     return ImGui::Button(ownedLabel.c_str());
 }
 
-bool UiSystem::inputText(std::string_view label, std::string& value)
+bool UiSystem::inputText(std::string_view label, std::string &value)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputText requires an active UI frame.");
     setCurrentContext();
 
     auto const ownedLabel = std::string{label};
-    return ImGui::InputText(
-        ownedLabel.c_str(),
-        value.data(),
-        value.capacity() + 1u,
-        ImGuiInputTextFlags_CallbackResize,
-        detail::resizeInputTextBuffer,
-        std::addressof(value));
+    return ImGui::InputText(ownedLabel.c_str(), value.data(), value.capacity() + 1u, ImGuiInputTextFlags_CallbackResize,
+                            detail::resizeInputTextBuffer, std::addressof(value));
 }
 
 bool UiSystem::beginCombo(std::string_view label, std::string_view preview)
@@ -506,7 +482,7 @@ bool UiSystem::selectable(std::string_view label, bool selected)
     return ImGui::Selectable(ownedLabel.c_str(), selected);
 }
 
-bool UiSystem::sliderFloat(std::string_view label, float& value, float minValue, float maxValue)
+bool UiSystem::sliderFloat(std::string_view label, float &value, float minValue, float maxValue)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::sliderFloat requires an active UI frame.");
     nrAssert(minValue <= maxValue, "UiSystem::sliderFloat requires minValue <= maxValue.");
@@ -516,7 +492,7 @@ bool UiSystem::sliderFloat(std::string_view label, float& value, float minValue,
     return ImGui::SliderFloat(ownedLabel.c_str(), &value, minValue, maxValue);
 }
 
-bool UiSystem::inputFloat(std::string_view label, float& value, float minValue, float maxValue)
+bool UiSystem::inputFloat(std::string_view label, float &value, float minValue, float maxValue)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputFloat requires an active UI frame.");
     nrAssert(minValue <= maxValue, "UiSystem::inputFloat requires minValue <= maxValue.");
@@ -533,11 +509,7 @@ bool UiSystem::inputFloat(std::string_view label, float& value, float minValue, 
     return changed;
 }
 
-bool UiSystem::inputInt32(
-    std::string_view label,
-    std::int32_t& value,
-    std::int32_t minValue,
-    std::int32_t maxValue)
+bool UiSystem::inputInt32(std::string_view label, std::int32_t &value, std::int32_t minValue, std::int32_t maxValue)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputInt32 requires an active UI frame.");
     nrAssert(minValue <= maxValue, "UiSystem::inputInt32 requires minValue <= maxValue.");
@@ -549,23 +521,13 @@ bool UiSystem::inputInt32(
     ImGui::TextUnformatted(ownedLabel.data(), ownedLabel.data() + ownedLabel.size());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(96.0f);
-    auto const changed = ImGui::InputScalar(
-        inputId.c_str(),
-        ImGuiDataType_S32,
-        std::addressof(inputValue),
-        nullptr,
-        nullptr,
-        "%d",
-        ImGuiInputTextFlags_CharsDecimal);
+    auto const changed = ImGui::InputScalar(inputId.c_str(), ImGuiDataType_S32, std::addressof(inputValue), nullptr,
+                                            nullptr, "%d", ImGuiInputTextFlags_CharsDecimal);
     value = std::clamp(inputValue, minValue, maxValue);
     return changed;
 }
 
-bool UiSystem::inputUInt(
-    std::string_view label,
-    std::uint32_t& value,
-    std::uint32_t minValue,
-    std::uint32_t maxValue)
+bool UiSystem::inputUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue, std::uint32_t maxValue)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputUInt requires an active UI frame.");
     nrAssert(minValue <= maxValue, "UiSystem::inputUInt requires minValue <= maxValue.");
@@ -577,23 +539,13 @@ bool UiSystem::inputUInt(
     ImGui::TextUnformatted(ownedLabel.data(), ownedLabel.data() + ownedLabel.size());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(detail::compactUIntInputWidth(maxValue));
-    auto const changed = ImGui::InputScalar(
-        inputId.c_str(),
-        ImGuiDataType_U32,
-        std::addressof(inputValue),
-        nullptr,
-        nullptr,
-        "%u",
-        ImGuiInputTextFlags_CharsDecimal);
+    auto const changed = ImGui::InputScalar(inputId.c_str(), ImGuiDataType_U32, std::addressof(inputValue), nullptr,
+                                            nullptr, "%u", ImGuiInputTextFlags_CharsDecimal);
     value = std::clamp(inputValue, minValue, maxValue);
     return changed;
 }
 
-bool UiSystem::sliderUInt(
-    std::string_view label,
-    std::uint32_t& value,
-    std::uint32_t minValue,
-    std::uint32_t maxValue)
+bool UiSystem::sliderUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue, std::uint32_t maxValue)
 {
     nrAssert(frameActive_ && !frameFinalized_, "UiSystem::sliderUInt requires an active UI frame.");
     nrAssert(minValue <= maxValue, "UiSystem::sliderUInt requires minValue <= maxValue.");
@@ -626,13 +578,10 @@ void UiSystem::endDisabled()
 
 bool UiSystem::itemEditCommitted() const
 {
-    nrAssert(frameActive_ && !frameFinalized_,
-             "UiSystem::itemEditCommitted requires an active UI frame.");
+    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::itemEditCommitted requires an active UI frame.");
     setCurrentContext();
-    auto const enterPressed =
-        ImGui::IsItemActive() &&
-        (ImGui::IsKeyPressed(imgui::keyEnter, false) ||
-         ImGui::IsKeyPressed(imgui::keyKeypadEnter, false));
+    auto const enterPressed = ImGui::IsItemActive() && (ImGui::IsKeyPressed(imgui::keyEnter, false) ||
+                                                        ImGui::IsKeyPressed(imgui::keyKeypadEnter, false));
     return ImGui::IsItemDeactivatedAfterEdit() || enterPressed;
 }
 
@@ -643,37 +592,37 @@ void UiSystem::setItemDefaultFocus()
     ImGui::SetItemDefaultFocus();
 }
 
-const UiFrameStats& UiSystem::stats() const noexcept
+const UiFrameStats &UiSystem::stats() const noexcept
 {
     return frameStats_;
 }
 
-void UiSystem::setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame& cameraFrame) noexcept
+void UiSystem::setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame &cameraFrame) noexcept
 {
     cameraFrame_ = cameraFrame;
 }
 
-const nr::renderer::ViewerPerspectiveCameraFrame& UiSystem::cameraFrame() const noexcept
+const nr::renderer::ViewerPerspectiveCameraFrame &UiSystem::cameraFrame() const noexcept
 {
     return cameraFrame_;
 }
 
-void UiSystem::setCpuStatistics(const nr::renderer::RendererCpuStatistics& statistics) noexcept
+void UiSystem::setCpuStatistics(const nr::renderer::RendererCpuStatistics &statistics) noexcept
 {
     cpuStatistics_ = statistics;
 }
 
-const nr::renderer::RendererCpuStatistics& UiSystem::cpuStatistics() const noexcept
+const nr::renderer::RendererCpuStatistics &UiSystem::cpuStatistics() const noexcept
 {
     return cpuStatistics_;
 }
 
-void UiSystem::setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistics& statistics) noexcept
+void UiSystem::setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistics &statistics) noexcept
 {
     gpuPassStatistics_ = statistics;
 }
 
-const nr::renderer::RendererGpuPassStatistics& UiSystem::gpuPassStatistics() const noexcept
+const nr::renderer::RendererGpuPassStatistics &UiSystem::gpuPassStatistics() const noexcept
 {
     return gpuPassStatistics_;
 }
@@ -691,7 +640,7 @@ std::optional<std::reference_wrapper<const ImDrawData>> UiSystem::drawData() con
     }
 
     setCurrentContext();
-    auto* drawData = ImGui::GetDrawData();
+    auto *drawData = ImGui::GetDrawData();
     if (drawData == nullptr)
     {
         return std::nullopt;
@@ -736,31 +685,31 @@ bool UiSystem::beginSection(std::string_view id, std::string_view title, bool de
         label += id;
     }
 
-    auto const flags = defaultOpen
-                           ? ImGuiTreeNodeFlags_DefaultOpen
-                           : ImGuiTreeNodeFlags_None;
+    auto const flags = defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
     return ImGui::CollapsingHeader(label.c_str(), flags);
 }
 
 void UiSystem::prepareWindowDefaults()
 {
-    auto& io = ImGui::GetIO();
-    auto const displayWidth = std::max(io.DisplaySize.x, detail::kUiWindowDefaultWidth + detail::kUiWindowMargin * 2.0f);
-    auto const displayHeight = std::max(io.DisplaySize.y, detail::kUiWindowDefaultHeight + detail::kUiWindowMargin * 2.0f);
+    auto &io = ImGui::GetIO();
+    auto const displayWidth =
+        std::max(io.DisplaySize.x, detail::kUiWindowDefaultWidth + detail::kUiWindowMargin * 2.0f);
+    auto const displayHeight =
+        std::max(io.DisplaySize.y, detail::kUiWindowDefaultHeight + detail::kUiWindowMargin * 2.0f);
 
     auto const columnIndex = windowsOpenedThisFrame_ / 4u;
     auto const rowIndex = windowsOpenedThisFrame_ % 4u;
-    auto const positionX = std::min(
-        displayWidth - detail::kUiWindowDefaultWidth - detail::kUiWindowMargin,
-        detail::kUiWindowMargin + static_cast<float>(columnIndex) * (detail::kUiWindowDefaultWidth + detail::kUiWindowMargin));
-    auto const positionY = std::min(
-        displayHeight - detail::kUiWindowDefaultHeight - detail::kUiWindowMargin,
-        detail::kUiWindowMargin + static_cast<float>(rowIndex) * detail::kUiWindowVerticalStride);
+    auto const positionX =
+        std::min(displayWidth - detail::kUiWindowDefaultWidth - detail::kUiWindowMargin,
+                 detail::kUiWindowMargin +
+                     static_cast<float>(columnIndex) * (detail::kUiWindowDefaultWidth + detail::kUiWindowMargin));
+    auto const positionY =
+        std::min(displayHeight - detail::kUiWindowDefaultHeight - detail::kUiWindowMargin,
+                 detail::kUiWindowMargin + static_cast<float>(rowIndex) * detail::kUiWindowVerticalStride);
 
     ImGui::SetNextWindowPos(ImVec2{positionX, positionY}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(
-        ImVec2{detail::kUiWindowDefaultWidth, detail::kUiWindowDefaultHeight},
-        ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2{detail::kUiWindowDefaultWidth, detail::kUiWindowDefaultHeight},
+                             ImGuiCond_FirstUseEver);
     ++windowsOpenedThisFrame_;
 }
 } // namespace nr::app

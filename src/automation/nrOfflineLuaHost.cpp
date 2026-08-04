@@ -85,13 +85,15 @@ using HostCallResult = dependency::lua::HostCallResult;
             {
                 auto result = LuaArray{};
                 result.reserve(stored.size());
-                std::ranges::transform(stored, std::back_inserter(result), [](auto const &element) { return wireToLua(element); });
+                std::ranges::transform(stored, std::back_inserter(result),
+                                       [](auto const &element) { return wireToLua(element); });
                 return LuaValue{std::move(result)};
             }
             else
             {
                 auto result = LuaObject{};
-                std::ranges::for_each(stored, [&](auto const &entry) { result.emplace(entry.first, wireToLua(entry.second)); });
+                std::ranges::for_each(stored,
+                                      [&](auto const &entry) { result.emplace(entry.first, wireToLua(entry.second)); });
                 return LuaValue{std::move(result)};
             }
         },
@@ -131,7 +133,8 @@ using HostCallResult = dependency::lua::HostCallResult;
     {
         auto values = LuaArray{};
         values.reserve(schema.allowedStrings.size());
-        std::ranges::transform(schema.allowedStrings, std::back_inserter(values), [](const std::string &value) { return LuaValue{value}; });
+        std::ranges::transform(schema.allowedStrings, std::back_inserter(values),
+                               [](const std::string &value) { return LuaValue{value}; });
         result.emplace("enum", LuaValue{std::move(values)});
     }
     if (schema.type == nr::options::OptionValueType::array && schema.elementSchema)
@@ -157,7 +160,8 @@ using HostCallResult = dependency::lua::HostCallResult;
     return LuaValue{std::move(result)};
 }
 
-[[nodiscard]] LuaValue optionRecord(const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition)
+[[nodiscard]] LuaValue optionRecord(const nr::options::OptionFrameSnapshot &snapshot,
+                                    const nr::options::OptionDefinition &definition)
 {
     auto const *value = snapshot.findValue(definition.id);
     auto const *availability = snapshot.findAvailability(definition.id);
@@ -187,7 +191,8 @@ using HostCallResult = dependency::lua::HostCallResult;
     options.reserve(snapshot.catalog ? snapshot.catalog->definitions().size() : 0u);
     if (snapshot.catalog)
     {
-        std::ranges::transform(snapshot.catalog->definitions(), std::back_inserter(options), [&](auto const &entry) { return optionRecord(snapshot, entry.second); });
+        std::ranges::transform(snapshot.catalog->definitions(), std::back_inserter(options),
+                               [&](auto const &entry) { return optionRecord(snapshot, entry.second); });
     }
 
     return LuaValue{LuaObject{
@@ -201,7 +206,8 @@ using HostCallResult = dependency::lua::HostCallResult;
     }};
 }
 
-[[nodiscard]] std::expected<nr::options::OptionWireValue, std::string> luaToWire(const LuaValue &value, const nr::options::OptionSchema &schema, std::size_t depth = 0u)
+[[nodiscard]] std::expected<nr::options::OptionWireValue, std::string> luaToWire(
+    const LuaValue &value, const nr::options::OptionSchema &schema, std::size_t depth = 0u)
 {
     if (depth > 16u)
     {
@@ -213,15 +219,22 @@ using HostCallResult = dependency::lua::HostCallResult;
     {
     case boolean: {
         auto const *stored = std::get_if<bool>(&value.storage);
-        return stored != nullptr ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{*stored}} : std::unexpected("Option value must be a boolean.");
+        return stored != nullptr
+                   ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{*stored}}
+                   : std::unexpected("Option value must be a boolean.");
     }
     case signedInteger: {
         auto const *stored = std::get_if<std::int64_t>(&value.storage);
-        return stored != nullptr ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{*stored}} : std::unexpected("Option value must be an integer.");
+        return stored != nullptr
+                   ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{*stored}}
+                   : std::unexpected("Option value must be an integer.");
     }
     case unsignedInteger: {
         auto const *stored = std::get_if<std::int64_t>(&value.storage);
-        return stored != nullptr && *stored >= 0 ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{static_cast<std::uint64_t>(*stored)}} : std::unexpected("Option value must be a non-negative integer.");
+        return stored != nullptr && *stored >= 0
+                   ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{
+                         static_cast<std::uint64_t>(*stored)}}
+                   : std::unexpected("Option value must be a non-negative integer.");
     }
     case number: {
         if (auto const *stored = std::get_if<double>(&value.storage))
@@ -236,7 +249,9 @@ using HostCallResult = dependency::lua::HostCallResult;
     }
     case string: {
         auto const *stored = std::get_if<std::string>(&value.storage);
-        return stored != nullptr ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{*stored}} : std::unexpected("Option value must be a string.");
+        return stored != nullptr
+                   ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{*stored}}
+                   : std::unexpected("Option value must be a string.");
     }
     case array: {
         auto const *stored = std::get_if<LuaArray>(&value.storage);
@@ -260,7 +275,9 @@ using HostCallResult = dependency::lua::HostCallResult;
             }
             result.push_back(std::move(*converted));
         });
-        return error.empty() ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{std::move(result)}} : std::unexpected(std::move(error));
+        return error.empty() ? std::expected<nr::options::OptionWireValue, std::string>{nr::options::OptionWireValue{
+                                   std::move(result)}}
+                             : std::unexpected(std::move(error));
     }
     case object: {
         auto const *stored = std::get_if<LuaObject>(&value.storage);
@@ -295,7 +312,8 @@ using HostCallResult = dependency::lua::HostCallResult;
         }
         auto wire = nr::options::OptionWireValue{std::move(result)};
         auto validation = schema.validate(wire);
-        return validation.valid ? std::expected<nr::options::OptionWireValue, std::string>{std::move(wire)} : std::unexpected(std::format("{}: {}", validation.path, validation.detail));
+        return validation.valid ? std::expected<nr::options::OptionWireValue, std::string>{std::move(wire)}
+                                : std::unexpected(std::format("{}: {}", validation.path, validation.detail));
     }
     }
     std::unreachable();
@@ -303,7 +321,9 @@ using HostCallResult = dependency::lua::HostCallResult;
 
 [[nodiscard]] bool forbiddenPathForm(std::string_view text) noexcept
 {
-    return text.starts_with("//") || text.starts_with(R"(\\)") || text.starts_with(R"(\\?\)") || text.starts_with(R"(\\.\)") || text.contains('\0') || text.contains("://") || text.find_first_of("|&;:<>%!?^()\n\r\t\"'`$*") != std::string_view::npos;
+    return text.starts_with("//") || text.starts_with(R"(\\)") || text.starts_with(R"(\\?\)") ||
+           text.starts_with(R"(\\.\)") || text.contains('\0') || text.contains("://") ||
+           text.find_first_of("|&;:<>%!?^()\n\r\t\"'`$*") != std::string_view::npos;
 }
 
 [[nodiscard]] std::string_view luaRejectionReason(nr::options::ScheduleRejectReason reason) noexcept
@@ -342,9 +362,11 @@ std::filesystem::path automationRootPath()
     return std::filesystem::path{std::string{nr::projectRoot}} / "automation";
 }
 
-std::expected<std::filesystem::path, std::string> resolveAutomationScriptPath(const std::filesystem::path &rootRelativePath)
+std::expected<std::filesystem::path, std::string> resolveAutomationScriptPath(
+    const std::filesystem::path &rootRelativePath)
 {
-    if (rootRelativePath.empty() || rootRelativePath.is_absolute() || rootRelativePath.has_root_name() || rootRelativePath.extension() != ".lua")
+    if (rootRelativePath.empty() || rootRelativePath.is_absolute() || rootRelativePath.has_root_name() ||
+        rootRelativePath.extension() != ".lua")
     {
         return std::unexpected("Automation script must be a root-relative .lua path.");
     }
@@ -358,7 +380,8 @@ std::expected<std::filesystem::path, std::string> resolveAutomationScriptPath(co
     auto const root = std::filesystem::canonical(automationRootPath(), error);
     if (error)
     {
-        return std::unexpected(std::format("Failed to resolve automation root '{}': {}", automationRootPath().generic_string(), error.message()));
+        return std::unexpected(std::format("Failed to resolve automation root '{}': {}",
+                                           automationRootPath().generic_string(), error.message()));
     }
     auto const resolved = std::filesystem::canonical(root / rootRelativePath, error);
     if (error)
@@ -381,7 +404,8 @@ std::expected<std::filesystem::path, std::string> resolveAutomationScriptPath(co
 class OfflineLuaHost::Impl
 {
   public:
-    [[nodiscard]] OfflineLuaStartResult start(nr::options::OptionSystem &optionSystem, const std::filesystem::path &rootRelativeScript)
+    [[nodiscard]] OfflineLuaStartResult start(nr::options::OptionSystem &optionSystem,
+                                              const std::filesystem::path &rootRelativeScript)
     {
         if (sandbox_.started())
         {
@@ -407,7 +431,8 @@ class OfflineLuaHost::Impl
         {
             return OfflineLuaStartResult{
                 .error = OfflineLuaStartError::sourceReadFailed,
-                .detail = error ? std::format("Failed to inspect Lua source: {}", error.message()) : "Lua source exceeds 256 KiB.",
+                .detail = error ? std::format("Failed to inspect Lua source: {}", error.message())
+                                : "Lua source exceeds 256 KiB.",
             };
         }
 
@@ -446,7 +471,11 @@ class OfflineLuaHost::Impl
             },
             dependency::lua::HostFunctionBinding{
                 .dottedName = "nr.frame.next",
-                .function = [](std::span<const LuaValue> arguments) { return arguments.empty() ? HostCallResult::suspend() : HostCallResult::failure("nr.frame.next expects no arguments."); },
+                .function =
+                    [](std::span<const LuaValue> arguments) {
+                        return arguments.empty() ? HostCallResult::suspend()
+                                                 : HostCallResult::failure("nr.frame.next expects no arguments.");
+                    },
             },
             dependency::lua::HostFunctionBinding{
                 .dottedName = "nr.log.info",
@@ -643,7 +672,8 @@ class OfflineLuaHost::Impl
         });
         if (!validBinding || (!proof.bindingEpoch && !proof.snapshotToken))
         {
-            return HostCallResult::failure(bindingError.empty() ? "Binding requires binding_epoch or snapshot_token." : std::move(bindingError));
+            return HostCallResult::failure(bindingError.empty() ? "Binding requires binding_epoch or snapshot_token."
+                                                                : std::move(bindingError));
         }
 
         auto scheduled = optionSystem_->get().trySchedule(nr::options::OptionMutationRequest{
@@ -674,7 +704,8 @@ class OfflineLuaHost::Impl
         {
             return HostCallResult::failure("nr.log.info message exceeds 1 KiB.");
         }
-        if (logCallsThisResume_ >= kMaximumLogCallsPerResume || logBytesThisResume_ > kMaximumLogBytesPerResume - text->size())
+        if (logCallsThisResume_ >= kMaximumLogCallsPerResume ||
+            logBytesThisResume_ > kMaximumLogBytesPerResume - text->size())
         {
             return HostCallResult::failure("nr.log.info exceeded the per-resume log quota.");
         }
@@ -701,7 +732,8 @@ OfflineLuaHost::OfflineLuaHost() : impl_(std::make_unique<Impl>())
 
 OfflineLuaHost::~OfflineLuaHost() = default;
 
-OfflineLuaStartResult OfflineLuaHost::start(nr::options::OptionSystem &optionSystem, const std::filesystem::path &rootRelativeScript)
+OfflineLuaStartResult OfflineLuaHost::start(nr::options::OptionSystem &optionSystem,
+                                            const std::filesystem::path &rootRelativeScript)
 {
     return impl_->start(optionSystem, rootRelativeScript);
 }

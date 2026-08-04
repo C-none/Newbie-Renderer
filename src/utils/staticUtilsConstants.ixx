@@ -86,7 +86,8 @@ enum class LogLevel : std::uint32_t
 
 inline constexpr LogLevel globalLogLevel = NR_GLOBAL_LOG_LEVEL;
 
-inline constexpr std::array<std::string_view, static_cast<std::size_t>(LogLevel::number)> logLevelNames = {"INFO", "WARNING", "ERROR"};
+inline constexpr std::array<std::string_view, static_cast<std::size_t>(LogLevel::number)> logLevelNames = {
+    "INFO", "WARNING", "ERROR"};
 
 inline constexpr std::string_view projectRoot = NR_PROJECT_ROOT;
 inline constexpr std::string_view shaderCacheRoot = NR_SHADER_CACHE_ROOT;

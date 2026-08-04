@@ -25,16 +25,23 @@ namespace
 [[nodiscard]] OptionValueMap defaultValues(const OptionCatalog &catalog)
 {
     auto values = OptionValueMap{};
-    std::ranges::for_each(catalog.definitions(), [&](auto const &entry) { values.emplace(entry.first, entry.second.defaultValue); });
+    std::ranges::for_each(catalog.definitions(),
+                          [&](auto const &entry) { values.emplace(entry.first, entry.second.defaultValue); });
     return values;
 }
 } // namespace
 
-ScheduledMutation::ScheduledMutation(OptionMutationRequest request, std::uint64_t sequence, std::uint64_t bindingEpoch, std::uint64_t graphGeneration) noexcept : request_(std::move(request)), sequence_(sequence), admittedBindingEpoch_(bindingEpoch), admittedGraphGeneration_(graphGeneration)
+ScheduledMutation::ScheduledMutation(OptionMutationRequest request, std::uint64_t sequence, std::uint64_t bindingEpoch,
+                                     std::uint64_t graphGeneration) noexcept
+    : request_(std::move(request)), sequence_(sequence), admittedBindingEpoch_(bindingEpoch),
+      admittedGraphGeneration_(graphGeneration)
 {
 }
 
-ScheduledMutation::ScheduledMutation(ScheduledMutation &&other) noexcept : request_(std::move(other.request_)), sequence_(other.sequence_), admittedBindingEpoch_(other.admittedBindingEpoch_), admittedGraphGeneration_(other.admittedGraphGeneration_), consumed_(other.consumed_)
+ScheduledMutation::ScheduledMutation(ScheduledMutation &&other) noexcept
+    : request_(std::move(other.request_)), sequence_(other.sequence_),
+      admittedBindingEpoch_(other.admittedBindingEpoch_), admittedGraphGeneration_(other.admittedGraphGeneration_),
+      consumed_(other.consumed_)
 {
     other.consumed_ = true;
 }
@@ -53,7 +60,8 @@ ScheduledMutation &ScheduledMutation::operator=(ScheduledMutation &&other) noexc
     return *this;
 }
 
-OptionSystem::OptionSystem(AuthorityMode authorityMode) : sessionIdentity_(makeSessionIdentity()), authorityMode_(authorityMode)
+OptionSystem::OptionSystem(AuthorityMode authorityMode)
+    : sessionIdentity_(makeSessionIdentity()), authorityMode_(authorityMode)
 {
     sessionCatalog_ = emptyCatalog();
     graphCatalog_ = emptyCatalog();
@@ -80,12 +88,15 @@ CatalogBuildResult OptionSystem::combineCatalogs(const OptionCatalog &session, c
     return builder.build();
 }
 
-CatalogCommitResult OptionSystem::initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog, const OptionAvailabilityMap &initialAvailability)
+CatalogCommitResult OptionSystem::initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog,
+                                                    const OptionAvailabilityMap &initialAvailability)
 {
     return initializeSession(std::move(sessionCatalog), emptyCatalog(), initialAvailability);
 }
 
-CatalogCommitResult OptionSystem::initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog, std::shared_ptr<const OptionCatalog> graphCatalog, const OptionAvailabilityMap &initialAvailability)
+CatalogCommitResult OptionSystem::initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog,
+                                                    std::shared_ptr<const OptionCatalog> graphCatalog,
+                                                    const OptionAvailabilityMap &initialAvailability)
 {
     auto lock = std::scoped_lock{stateMutex_};
     if (gateState_ == GateState::shutdown)
@@ -159,16 +170,21 @@ CatalogCommitResult OptionSystem::replaceGraphCatalog(std::shared_ptr<const Opti
     auto combined = combineCatalogs(*sessionCatalog_, *graphCatalog);
     if (!combined.valid())
     {
-        auto const duplicate = std::ranges::any_of(combined.issues, [](auto const &issue) { return issue.code == CatalogIssueCode::duplicateId; });
-        return CatalogCommitResult::rejected(duplicate ? CatalogCommitRejectReason::duplicateId : CatalogCommitRejectReason::invalidCatalog, "candidate graph catalog cannot be combined with the session catalog");
+        auto const duplicate = std::ranges::any_of(
+            combined.issues, [](auto const &issue) { return issue.code == CatalogIssueCode::duplicateId; });
+        return CatalogCommitResult::rejected(duplicate ? CatalogCommitRejectReason::duplicateId
+                                                       : CatalogCommitRejectReason::invalidCatalog,
+                                             "candidate graph catalog cannot be combined with the session catalog");
     }
 
     auto nextValues = OptionValueMap{};
     std::ranges::for_each(sessionCatalog_->definitions(), [&](auto const &entry) {
         auto const existing = canonicalValues_.find(entry.first);
-        nextValues.emplace(entry.first, existing != canonicalValues_.end() ? existing->second : entry.second.defaultValue);
+        nextValues.emplace(entry.first,
+                           existing != canonicalValues_.end() ? existing->second : entry.second.defaultValue);
     });
-    std::ranges::for_each(graphCatalog->definitions(), [&](auto const &entry) { nextValues.emplace(entry.first, entry.second.defaultValue); });
+    std::ranges::for_each(graphCatalog->definitions(),
+                          [&](auto const &entry) { nextValues.emplace(entry.first, entry.second.defaultValue); });
 
     nrAssert(bindingEpoch_ != std::numeric_limits<std::uint64_t>::max(), "Option binding epoch exhausted");
     nrAssert(graphGeneration_ != std::numeric_limits<std::uint64_t>::max(), "Option graph generation exhausted");
@@ -180,7 +196,8 @@ CatalogCommitResult OptionSystem::replaceGraphCatalog(std::shared_ptr<const Opti
     return CatalogCommitResult::success();
 }
 
-CatalogCommitResult OptionSystem::commitGraphReplacement(ScheduledMutation &&mutation, std::shared_ptr<const OptionCatalog> graphCatalog)
+CatalogCommitResult OptionSystem::commitGraphReplacement(ScheduledMutation &&mutation,
+                                                         std::shared_ptr<const OptionCatalog> graphCatalog)
 {
     auto lock = std::scoped_lock{stateMutex_};
     auto const consumeAndReject = [&](CatalogCommitRejectReason reason, std::string detail = {}) {
@@ -198,9 +215,11 @@ CatalogCommitResult OptionSystem::commitGraphReplacement(ScheduledMutation &&mut
         return consumeAndReject(CatalogCommitRejectReason::admissionMustBeClosed);
     }
     auto const *mutationDefinition = combinedCatalog_->find(mutation.request_.id);
-    if (mutationDefinition == nullptr || mutationDefinition->scope != OptionScope::session || mutationDefinition->lifetime != OptionValueLifetime::canonical)
+    if (mutationDefinition == nullptr || mutationDefinition->scope != OptionScope::session ||
+        mutationDefinition->lifetime != OptionValueLifetime::canonical)
     {
-        return consumeAndReject(CatalogCommitRejectReason::invalidMutation, "graph replacement must be committed by a canonical session option");
+        return consumeAndReject(CatalogCommitRejectReason::invalidMutation,
+                                "graph replacement must be committed by a canonical session option");
     }
     if (!graphCatalog)
     {
@@ -214,17 +233,22 @@ CatalogCommitResult OptionSystem::commitGraphReplacement(ScheduledMutation &&mut
     auto combined = combineCatalogs(*sessionCatalog_, *graphCatalog);
     if (!combined.valid())
     {
-        auto const duplicate = std::ranges::any_of(combined.issues, [](auto const &issue) { return issue.code == CatalogIssueCode::duplicateId; });
-        return consumeAndReject(duplicate ? CatalogCommitRejectReason::duplicateId : CatalogCommitRejectReason::invalidCatalog, "candidate graph catalog cannot be combined with the session catalog");
+        auto const duplicate = std::ranges::any_of(
+            combined.issues, [](auto const &issue) { return issue.code == CatalogIssueCode::duplicateId; });
+        return consumeAndReject(duplicate ? CatalogCommitRejectReason::duplicateId
+                                          : CatalogCommitRejectReason::invalidCatalog,
+                                "candidate graph catalog cannot be combined with the session catalog");
     }
 
     auto nextValues = OptionValueMap{};
     std::ranges::for_each(sessionCatalog_->definitions(), [&](auto const &entry) {
         auto const existing = canonicalValues_.find(entry.first);
-        nextValues.emplace(entry.first, existing != canonicalValues_.end() ? existing->second : entry.second.defaultValue);
+        nextValues.emplace(entry.first,
+                           existing != canonicalValues_.end() ? existing->second : entry.second.defaultValue);
     });
     nextValues.insert_or_assign(mutation.request_.id, mutation.request_.value);
-    std::ranges::for_each(graphCatalog->definitions(), [&](auto const &entry) { nextValues.emplace(entry.first, entry.second.defaultValue); });
+    std::ranges::for_each(graphCatalog->definitions(),
+                          [&](auto const &entry) { nextValues.emplace(entry.first, entry.second.defaultValue); });
 
     nrAssert(bindingEpoch_ != std::numeric_limits<std::uint64_t>::max(), "Option binding epoch exhausted");
     nrAssert(graphGeneration_ != std::numeric_limits<std::uint64_t>::max(), "Option graph generation exhausted");
@@ -310,7 +334,8 @@ ScheduleResult OptionSystem::trySchedule(OptionMutationRequest request)
         }
     }
 
-    nrAssert(nextSequence_ != 0u && nextSequence_ != std::numeric_limits<std::uint64_t>::max(), "Option log sequence exhausted");
+    nrAssert(nextSequence_ != 0u && nextSequence_ != std::numeric_limits<std::uint64_t>::max(),
+             "Option log sequence exhausted");
     auto const sequence = nextSequence_++;
     pendingMutation_ = ScheduledMutation{std::move(request), sequence, bindingEpoch_, graphGeneration_};
     return ScheduleResult::accepted(sequence);
@@ -408,7 +433,9 @@ MutationCommitResult OptionSystem::commitModelAndCameraReset(ScheduledMutation &
     };
     auto const validDerived = std::ranges::all_of(derived, [&](auto const &entry) {
         auto const *definition = combinedCatalog_->find(entry.first);
-        return definition != nullptr && definition->scope == OptionScope::session && definition->lifetime == OptionValueLifetime::canonical && definition->schema.validate(entry.second).valid;
+        return definition != nullptr && definition->scope == OptionScope::session &&
+               definition->lifetime == OptionValueLifetime::canonical &&
+               definition->schema.validate(entry.second).valid;
     });
     if (!validDerived)
     {
@@ -417,7 +444,8 @@ MutationCommitResult OptionSystem::commitModelAndCameraReset(ScheduledMutation &
     }
 
     canonicalValues_.insert_or_assign(mutation.request_.id, mutation.request_.value);
-    std::ranges::for_each(derived, [&](auto const &entry) { canonicalValues_.insert_or_assign(entry.first, entry.second); });
+    std::ranges::for_each(derived,
+                          [&](auto const &entry) { canonicalValues_.insert_or_assign(entry.first, entry.second); });
     mutation.consumed_ = true;
     return MutationCommitResult{.committed = true};
 }
@@ -470,7 +498,9 @@ std::shared_ptr<const OptionFrameSnapshot> OptionSystem::snapshotForCollection(s
     return makeSnapshotLocked({}, std::move(effect));
 }
 
-OptionAvailabilityMap OptionSystem::normalizedAvailability(const OptionCatalog &catalog, const OptionAvailabilityMap &availability, const std::optional<FrameEffect> &effect) const
+OptionAvailabilityMap OptionSystem::normalizedAvailability(const OptionCatalog &catalog,
+                                                           const OptionAvailabilityMap &availability,
+                                                           const std::optional<FrameEffect> &effect) const
 {
     static const auto reasonSchema = OptionSchema::string(maximumAvailabilityReasonBytes);
     auto normalizeReason = [](OptionAvailability value) {
@@ -483,7 +513,8 @@ OptionAvailabilityMap OptionSystem::normalizedAvailability(const OptionCatalog &
     auto normalized = OptionAvailabilityMap{};
     std::ranges::for_each(catalog.definitions(), [&](auto const &entry) {
         auto const provided = availability.find(entry.first);
-        normalized.emplace(entry.first, normalizeReason(provided != availability.end() ? provided->second : unavailable("not_collected")));
+        normalized.emplace(entry.first, normalizeReason(provided != availability.end() ? provided->second
+                                                                                       : unavailable("not_collected")));
     });
     if (effect)
     {
@@ -492,7 +523,8 @@ OptionAvailabilityMap OptionSystem::normalizedAvailability(const OptionCatalog &
     return normalized;
 }
 
-std::shared_ptr<const OptionFrameSnapshot> OptionSystem::makeSnapshotLocked(const OptionAvailabilityMap &availability, std::optional<FrameEffect> effect) const
+std::shared_ptr<const OptionFrameSnapshot> OptionSystem::makeSnapshotLocked(const OptionAvailabilityMap &availability,
+                                                                            std::optional<FrameEffect> effect) const
 {
     return std::make_shared<const OptionFrameSnapshot>(OptionFrameSnapshot{
         .catalog = combinedCatalog_,
@@ -507,7 +539,8 @@ std::shared_ptr<const OptionFrameSnapshot> OptionSystem::makeSnapshotLocked(cons
     });
 }
 
-std::shared_ptr<const OptionFrameSnapshot> OptionSystem::publishRenderableFrame(const OptionAvailabilityMap &availability, std::optional<FrameEffect> effect)
+std::shared_ptr<const OptionFrameSnapshot> OptionSystem::publishRenderableFrame(
+    const OptionAvailabilityMap &availability, std::optional<FrameEffect> effect)
 {
     auto lock = std::scoped_lock{stateMutex_};
     if (gateState_ != GateState::closed || !initialized_)
@@ -600,7 +633,8 @@ std::string OptionSystem::makeSessionIdentity()
     static auto nextSession = std::atomic<std::uint64_t>{1u};
     static auto const processNonce = [] {
         auto const wallClock = static_cast<std::uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-        auto const monotonicClock = static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        auto const monotonicClock =
+            static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
         return std::rotl(wallClock, 23) ^ monotonicClock ^ 0x9e3779b97f4a7c15ull;
     }();
     auto const session = nextSession.fetch_add(1u, std::memory_order_relaxed);

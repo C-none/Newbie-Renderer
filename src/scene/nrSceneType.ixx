@@ -34,8 +34,11 @@ enum class SceneRtRevisionDomain : std::uint8_t
 };
 
 using SceneRtStructuralRevisionProjection =
-    nr::revision::RevisionProjection<SceneRtRevisionDomain::topology, SceneRtRevisionDomain::visibility, SceneRtRevisionDomain::meshBinding, SceneRtRevisionDomain::meshContent, SceneRtRevisionDomain::meshLayout, SceneRtRevisionDomain::materialBinding, SceneRtRevisionDomain::materialPayload,
-                                     SceneRtRevisionDomain::textureBinding, SceneRtRevisionDomain::textureContent, SceneRtRevisionDomain::textureResidency>;
+    nr::revision::RevisionProjection<SceneRtRevisionDomain::topology, SceneRtRevisionDomain::visibility,
+                                     SceneRtRevisionDomain::meshBinding, SceneRtRevisionDomain::meshContent,
+                                     SceneRtRevisionDomain::meshLayout, SceneRtRevisionDomain::materialBinding,
+                                     SceneRtRevisionDomain::materialPayload, SceneRtRevisionDomain::textureBinding,
+                                     SceneRtRevisionDomain::textureContent, SceneRtRevisionDomain::textureResidency>;
 
 enum class SceneRevisionMutation : std::uint8_t
 {
@@ -73,7 +76,8 @@ struct SceneRevisionMutationPolicy
         {
         case SceneRevisionMutation::templateRegistered:
         case SceneRevisionMutation::templateDestroyed:
-            return Mask::of<topology, meshBinding, meshContent, meshLayout, materialBinding, materialPayload, textureBinding, textureContent>();
+            return Mask::of<topology, meshBinding, meshContent, meshLayout, materialBinding, materialPayload,
+                            textureBinding, textureContent>();
         case SceneRevisionMutation::instanceAdded:
         case SceneRevisionMutation::instanceRemoved:
             return Mask::of<topology, transform, visibility, traceMask, meshBinding>();
@@ -108,7 +112,8 @@ struct SceneRevisionMutationPolicy
         case SceneRevisionMutation::externalTextureContent:
             return Mask::of<textureContent>();
         case SceneRevisionMutation::externalEcsMutation:
-            return Mask::of<topology, transform, visibility, traceMask, meshBinding, meshContent, meshLayout, materialBinding, materialPayload, textureBinding, textureContent, textureResidency>();
+            return Mask::of<topology, transform, visibility, traceMask, meshBinding, meshContent, meshLayout,
+                            materialBinding, materialPayload, textureBinding, textureContent, textureResidency>();
         default:
             return {};
         }
@@ -125,7 +130,8 @@ struct SceneRevisionSnapshot
         return sceneIdentity != 0u;
     }
 
-    [[nodiscard]] friend bool operator==(const SceneRevisionSnapshot &, const SceneRevisionSnapshot &) noexcept = default;
+    [[nodiscard]] friend bool operator==(const SceneRevisionSnapshot &,
+                                         const SceneRevisionSnapshot &) noexcept = default;
 };
 
 enum class DestroyTemplateResult : std::uint8_t
@@ -359,21 +365,34 @@ using SceneMaterialTextureSlot = nr::shader::share::MaterialTextureSlot;
 inline constexpr auto sceneMaterialTextureSlotCount = static_cast<std::size_t>(SceneMaterialTextureSlot::count);
 using SceneTextureId = std::uint16_t;
 inline constexpr SceneTextureId kDefaultSceneTextureId = 0u;
-inline constexpr std::uint32_t kMaxSceneTextureId = static_cast<std::uint32_t>(std::numeric_limits<SceneTextureId>::max());
+inline constexpr std::uint32_t kMaxSceneTextureId =
+    static_cast<std::uint32_t>(std::numeric_limits<SceneTextureId>::max());
 
 static_assert(sceneMaterialTextureSlotCount == nr::resource::materialTextureSlotCount);
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::baseColor) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::baseColor));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::normal) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::normal));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::metallicRoughness) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::metallicRoughness));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::occlusion) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::occlusion));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::emissive) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::emissive));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoat) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoat));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoatRoughness) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoatNormal) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoatNormal));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::sheenColor) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::sheenColor));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::sheenRoughness) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::sheenRoughness));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::transmission) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::transmission));
-static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::anisotropy) == static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::anisotropy));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::baseColor) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::baseColor));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::normal) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::normal));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::metallicRoughness) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::metallicRoughness));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::occlusion) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::occlusion));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::emissive) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::emissive));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoat) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoat));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoatRoughness) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::clearcoatNormal) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::clearcoatNormal));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::sheenColor) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::sheenColor));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::sheenRoughness) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::sheenRoughness));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::transmission) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::transmission));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::anisotropy) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::anisotropy));
 
 using SceneMaterialTextureIds = std::array<SceneTextureId, sceneMaterialTextureSlotCount>;
 

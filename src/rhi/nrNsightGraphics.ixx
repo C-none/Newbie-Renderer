@@ -39,7 +39,7 @@ class NsightGraphicsFrameHelper
         bool frameBoundaryFailureLogged = false;
     };
 
-    [[nodiscard]] static std::optional<std::string> readEnvironmentVariable(const char* name);
+    [[nodiscard]] static std::optional<std::string> readEnvironmentVariable(const char *name);
 
     [[nodiscard]] static bool textEqualsAny(std::string_view text, std::initializer_list<std::string_view> candidates);
 
@@ -53,7 +53,8 @@ class NsightGraphicsFrameHelper
 
     [[nodiscard]] static std::string_view resultName(nr::platform::NsightGraphicsResult result) noexcept;
 
-    [[nodiscard]] static nr::platform::NsightGraphicsCaptureDelimiter captureDelimiter(bool vkFrameBoundaryEnabled) noexcept;
+    [[nodiscard]] static nr::platform::NsightGraphicsCaptureDelimiter captureDelimiter(
+        bool vkFrameBoundaryEnabled) noexcept;
 
     void disableActivity() noexcept;
 

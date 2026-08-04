@@ -12,31 +12,31 @@ namespace nr::scene
 {
 [[nodiscard]] bool SceneBridgeGeometryBuffers::hasVertexBuffer() const noexcept
 {
-        return vertexBuffer.buffer.has_value();
-    }
+    return vertexBuffer.buffer.has_value();
+}
 
 [[nodiscard]] bool SceneBridgeGeometryBuffers::hasIndexBuffer() const noexcept
 {
-        return indexBuffer.buffer.has_value();
-    }
+    return indexBuffer.buffer.has_value();
+}
 
 [[nodiscard]] bool SceneBridgeDrawGeometry::hasVertexBuffer() const noexcept
 {
-        return vertexBuffer.buffer.has_value();
-    }
+    return vertexBuffer.buffer.has_value();
+}
 
 [[nodiscard]] bool SceneBridgeDrawGeometry::hasIndexBuffer() const noexcept
 {
-        return indexBuffer.buffer.has_value() && indexCount > 0;
-    }
+    return indexBuffer.buffer.has_value() && indexCount > 0;
+}
 
 [[nodiscard]] bool SceneAccelerationStructureMesh::hasVertexBuffer() const noexcept
 {
-        return vertexBuffer.buffer.has_value();
-    }
+    return vertexBuffer.buffer.has_value();
+}
 
 [[nodiscard]] bool SceneAccelerationStructureMesh::hasIndexBuffer() const noexcept
 {
-        return indexBuffer.buffer.has_value();
-    }
+    return indexBuffer.buffer.has_value();
+}
 } // namespace nr::scene

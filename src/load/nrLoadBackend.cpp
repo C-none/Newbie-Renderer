@@ -8,16 +8,13 @@ namespace nr::load
 [[nodiscard]] std::string normalizedExtension(const std::filesystem::path &path)
 {
     auto extension = path.extension().string();
-    std::ranges::transform(extension, extension.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    std::ranges::transform(extension, extension.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return extension;
 }
 
-[[nodiscard]] LoadError makeLoadError(LoadErrorCode code,
-                                             std::string_view backend,
-                                             const std::filesystem::path &sourcePath,
-                                             std::string message)
+[[nodiscard]] LoadError makeLoadError(LoadErrorCode code, std::string_view backend,
+                                      const std::filesystem::path &sourcePath, std::string message)
 {
     return LoadError{
         .code = code,

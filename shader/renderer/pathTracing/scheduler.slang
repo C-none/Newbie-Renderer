@@ -10,7 +10,7 @@ public struct Scheduler
         Pt pt = makePt(pixel, dimensions);
         while (pt.isActive())
         {
-            RayPayload payload;
+            MaterialRayPayload payload;
             pt.traceMaterialRay(payload);
             pt.handleTraceResult(payload);
         }
@@ -18,4 +18,3 @@ public struct Scheduler
         pt.writeOutput();
     }
 };
-

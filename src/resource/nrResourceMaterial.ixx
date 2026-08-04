@@ -100,7 +100,8 @@ enum class MaterialTextureSlotSemantic : std::uint8_t
     unsupported,
 };
 
-inline constexpr std::size_t materialTextureSlotCount = static_cast<std::size_t>(MaterialTextureSlotSemantic::unsupported);
+inline constexpr std::size_t materialTextureSlotCount =
+    static_cast<std::size_t>(MaterialTextureSlotSemantic::unsupported);
 
 [[nodiscard]] constexpr bool materialTextureSlotSemanticValid(MaterialTextureSlotSemantic semantic) noexcept
 {

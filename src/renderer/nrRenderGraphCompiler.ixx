@@ -11,7 +11,7 @@ export namespace nr::renderer
 class RenderGraphCompiler
 {
   public:
-    [[nodiscard]] static bool hasExplicitSubmitBoundariesForQueueTransitions(const RenderGraphFrameDescription& frame);
+    [[nodiscard]] static bool hasExplicitSubmitBoundariesForQueueTransitions(const RenderGraphFrameDescription &frame);
 
     [[nodiscard]] static vk::BufferUsageFlags mapBufferUsageIntent(BufferUsageIntent intent);
 
@@ -35,9 +35,8 @@ class RenderGraphCompiler
      * Mapping follows the declared intent exactly; it does not widen writes to
      * include implicit reads. An unset/None intent yields an unresolved scope.
      */
-    [[nodiscard]] static AccessScope mapBufferAccessIntent(
-        BufferAccessIntent intent,
-        vk::PipelineStageFlags2 shaderStages);
+    [[nodiscard]] static AccessScope mapBufferAccessIntent(BufferAccessIntent intent,
+                                                           vk::PipelineStageFlags2 shaderStages);
 
     [[nodiscard]] static AccessScope mapBufferAccessIntent(BufferAccessIntent intent, QueueDomain queue);
 
@@ -48,9 +47,8 @@ class RenderGraphCompiler
      * to include implicit reads. `PresentRead` maps to the bottom-of-pipe boundary
      * with no access, since presentation is ordered by semaphore, not a barrier.
      */
-    [[nodiscard]] static AccessScope mapImageAccessIntent(
-        ImageAccessIntent intent,
-        vk::PipelineStageFlags2 shaderStages);
+    [[nodiscard]] static AccessScope mapImageAccessIntent(ImageAccessIntent intent,
+                                                          vk::PipelineStageFlags2 shaderStages);
 
     [[nodiscard]] static AccessScope mapImageAccessIntent(ImageAccessIntent intent, QueueDomain queue);
 
@@ -63,22 +61,19 @@ class RenderGraphCompiler
      * on the use. Returns an unresolved scope when no access intent is set,
      * leaving conservative fallback to the barrier emitter.
      */
-    [[nodiscard]] static AccessScope resolveUseAccessScope(
-        const PassResourceUseDesc& use,
-        QueueDomain queue,
-        vk::PipelineStageFlags2 passShaderStages);
+    [[nodiscard]] static AccessScope resolveUseAccessScope(const PassResourceUseDesc &use, QueueDomain queue,
+                                                           vk::PipelineStageFlags2 passShaderStages);
 
-    [[nodiscard]] CompiledGraphFrame compile(const RenderGraphFrameDescription& frame) const;
+    [[nodiscard]] CompiledGraphFrame compile(const RenderGraphFrameDescription &frame) const;
 
-    [[nodiscard]] CompiledGraphFrame compileConsuming(RenderGraphFrameDescription& frame) const;
+    [[nodiscard]] CompiledGraphFrame compileConsuming(RenderGraphFrameDescription &frame) const;
 
   private:
-    template <bool MoveFramePayloads, typename FrameT>
-    [[nodiscard]] CompiledGraphFrame compileImpl(FrameT& frame) const
+    template <bool MoveFramePayloads, typename FrameT> [[nodiscard]] CompiledGraphFrame compileImpl(FrameT &frame) const
     {
-        nrAssert(
-            hasExplicitSubmitBoundariesForQueueTransitions(frame),
-            "RenderGraphCompiler::compile requires explicit submitNode boundaries before cross-queue pass transitions.");
+        nrAssert(hasExplicitSubmitBoundariesForQueueTransitions(frame),
+                 "RenderGraphCompiler::compile requires explicit submitNode boundaries before cross-queue pass "
+                 "transitions.");
 
         auto resources = compileResources<MoveFramePayloads>(frame);
         auto frameData = transferPayload<MoveFramePayloads>(frame.frameData);
@@ -104,14 +99,12 @@ class RenderGraphCompiler
         AccessScope scope{};
     };
 
-    template <bool MovePayload, typename T>
-    [[nodiscard]] static std::remove_cvref_t<T> transferPayload(T& value)
+    template <bool MovePayload, typename T> [[nodiscard]] static std::remove_cvref_t<T> transferPayload(T &value)
     {
         if constexpr (MovePayload)
         {
-            static_assert(
-                !std::is_const_v<std::remove_reference_t<T>>,
-                "RenderGraphCompiler::transferPayload cannot move from const input.");
+            static_assert(!std::is_const_v<std::remove_reference_t<T>>,
+                          "RenderGraphCompiler::transferPayload cannot move from const input.");
             return std::move(value);
         }
         else
@@ -121,9 +114,7 @@ class RenderGraphCompiler
     }
 
     template <typename IntentRange>
-    static void mergeUsageIntents(
-        CompiledResourceDesc& resource,
-        const IntentRange& usageIntents)
+    static void mergeUsageIntents(CompiledResourceDesc &resource, const IntentRange &usageIntents)
     {
         using IntentT = std::ranges::range_value_t<IntentRange>;
 
@@ -140,18 +131,18 @@ class RenderGraphCompiler
     }
 
     template <bool MoveFramePayloads, typename FrameT>
-    [[nodiscard]] static std::vector<CompiledResourceDesc> compileResources(FrameT& frame)
+    [[nodiscard]] static std::vector<CompiledResourceDesc> compileResources(FrameT &frame)
     {
         auto resources = std::vector<CompiledResourceDesc>{};
         resources.reserve(frame.resources.size());
 
-        std::ranges::for_each(frame.resources, [&](auto& resource) {
+        std::ranges::for_each(frame.resources, [&](auto &resource) {
             auto compiledResource = CompiledResourceDesc{
                 .handle = resource.handle,
             };
 
             std::visit(
-                [&](auto& desc) {
+                [&](auto &desc) {
                     using DescT = std::remove_cvref_t<decltype(desc)>;
                     compiledResource.debugName = transferPayload<MoveFramePayloads>(desc.debugName);
 
@@ -167,7 +158,7 @@ class RenderGraphCompiler
                         compiledResource.retainedBufferState = desc.retainedState;
                         if (desc.retainedState.has_value())
                         {
-                            const auto& retained = desc.retainedState->get().common;
+                            const auto &retained = desc.retainedState->get().common;
                             if (retained.initialized)
                             {
                                 compiledResource.initialOwnership = retained.ownership;
@@ -205,7 +196,7 @@ class RenderGraphCompiler
                         compiledResource.retainedState = desc.retainedState;
                         if (desc.retainedState.has_value())
                         {
-                            const auto& retainedState = desc.retainedState->get();
+                            const auto &retainedState = desc.retainedState->get();
                             if (retainedState.common.initialized)
                             {
                                 compiledResource.initialLayout = retainedState.layout;
@@ -239,7 +230,7 @@ class RenderGraphCompiler
                         compiledResource.retainedAccelerationStructureState = desc.retainedState;
                         if (desc.retainedState.has_value())
                         {
-                            const auto& retained = desc.retainedState->get().common;
+                            const auto &retained = desc.retainedState->get().common;
                             if (retained.initialized)
                             {
                                 compiledResource.initialOwnership = retained.ownership;
@@ -293,15 +284,15 @@ class RenderGraphCompiler
 
         auto indexByHandle = std::map<GraphResourceHandle, std::size_t>{};
         auto resourceIndices = std::views::iota(std::size_t{0}, resources.size());
-        std::ranges::for_each(resourceIndices, [&](std::size_t index) {
-            indexByHandle.emplace(resources[index].handle, index);
-        });
+        std::ranges::for_each(resourceIndices,
+                              [&](std::size_t index) { indexByHandle.emplace(resources[index].handle, index); });
 
-        std::ranges::for_each(frame.passes, [&](const PassExecutionDesc& pass) {
-            std::ranges::for_each(pass.resourceUses, [&](const PassResourceUseDesc& use) {
+        std::ranges::for_each(frame.passes, [&](const PassExecutionDesc &pass) {
+            std::ranges::for_each(pass.resourceUses, [&](const PassResourceUseDesc &use) {
                 auto indexIt = indexByHandle.find(use.resource);
-                nrAssert(indexIt != indexByHandle.end(), "RenderGraphCompiler::compileResources found pass use for unknown resource.");
-                auto& compiledResource = resources[indexIt->second];
+                nrAssert(indexIt != indexByHandle.end(),
+                         "RenderGraphCompiler::compileResources found pass use for unknown resource.");
+                auto &compiledResource = resources[indexIt->second];
 
                 if (use.bufferUsage.has_value())
                 {
@@ -338,22 +329,19 @@ class RenderGraphCompiler
     }
 
     [[nodiscard]] static std::vector<std::size_t> resolvePassResourceIndices(
-        const std::vector<PassResourceUseDesc>& resourceUses,
-        const std::map<GraphResourceHandle, std::size_t>& resourceIndexByHandle);
+        const std::vector<PassResourceUseDesc> &resourceUses,
+        const std::map<GraphResourceHandle, std::size_t> &resourceIndexByHandle);
 
     template <bool MovePassPayloads, typename FrameT>
     [[nodiscard]] static std::vector<CompiledSubmitBatch> compileSubmitBatches(
-        FrameT& frame,
-        const std::vector<CompiledResourceDesc>& compiledResources)
+        FrameT &frame, const std::vector<CompiledResourceDesc> &compiledResources)
     {
         using PassRef = std::conditional_t<MovePassPayloads, PassExecutionDesc, const PassExecutionDesc>;
         auto passByHandle = std::map<GraphPassHandle, std::reference_wrapper<PassRef>>{};
-        std::ranges::for_each(frame.passes, [&](auto& pass) {
-            passByHandle.emplace(pass.handle, std::ref(pass));
-        });
+        std::ranges::for_each(frame.passes, [&](auto &pass) { passByHandle.emplace(pass.handle, std::ref(pass)); });
 
         auto submitBoundaryByHandle = std::map<GraphSubmitHandle, std::reference_wrapper<const SubmitBoundaryDesc>>{};
-        std::ranges::for_each(frame.submitBoundaries, [&](const SubmitBoundaryDesc& boundary) {
+        std::ranges::for_each(frame.submitBoundaries, [&](const SubmitBoundaryDesc &boundary) {
             submitBoundaryByHandle.emplace(boundary.handle, std::cref(boundary));
         });
 
@@ -376,7 +364,7 @@ class RenderGraphCompiler
             }
         };
 
-        std::ranges::for_each(frame.executionOrder, [&](const GraphExecutionStep& step) {
+        std::ranges::for_each(frame.executionOrder, [&](const GraphExecutionStep &step) {
             if (std::holds_alternative<GraphSubmitHandle>(step))
             {
                 auto submitHandle = std::get<GraphSubmitHandle>(step);
@@ -390,21 +378,18 @@ class RenderGraphCompiler
 
             auto passHandle = std::get<GraphPassHandle>(step);
             auto passIt = passByHandle.find(passHandle);
-            nrAssert(passIt != passByHandle.end(), "RenderGraphCompiler::compileSubmitBatches execution order references unknown pass handle.");
-            auto& pass = passIt->second.get();
+            nrAssert(passIt != passByHandle.end(),
+                     "RenderGraphCompiler::compileSubmitBatches execution order references unknown pass handle.");
+            auto &pass = passIt->second.get();
 
-            if (currentBatch.has_value() &&
-                currentBatch->queue != pass.queue &&
-                !pendingBoundary.has_value())
+            if (currentBatch.has_value() && currentBatch->queue != pass.queue && !pendingBoundary.has_value())
             {
-                nrAssert(
-                    false,
-                    "RenderGraphCompiler::compileSubmitBatches requires explicit submitNode before queue-domain transition.");
+                nrAssert(false, "RenderGraphCompiler::compileSubmitBatches requires explicit submitNode before "
+                                "queue-domain transition.");
             }
 
-            auto mustStartNewBatch = !currentBatch.has_value() ||
-                                     currentBatch->queue != pass.queue ||
-                                     pendingBoundary.has_value();
+            auto mustStartNewBatch =
+                !currentBatch.has_value() || currentBatch->queue != pass.queue || pendingBoundary.has_value();
 
             if (mustStartNewBatch)
             {
@@ -416,9 +401,8 @@ class RenderGraphCompiler
                 if (pendingBoundary.has_value())
                 {
                     auto boundaryIt = submitBoundaryByHandle.find(*pendingBoundary);
-                    nrAssert(
-                        boundaryIt != submitBoundaryByHandle.end(),
-                        "RenderGraphCompiler::compileSubmitBatches pending submit boundary disappeared.");
+                    nrAssert(boundaryIt != submitBoundaryByHandle.end(),
+                             "RenderGraphCompiler::compileSubmitBatches pending submit boundary disappeared.");
                     batch.openedBySubmitNode = pendingBoundary;
                     batch.openedBySubmitNodeDebugName = boundaryIt->second.get().debugName;
                     batch.openedBySubmitNodeKind = boundaryIt->second.get().kind;
@@ -449,10 +433,10 @@ class RenderGraphCompiler
         return batches;
     }
 
-    static void annotateResourceTransitions(CompiledGraphFrame& compiled);
+    static void annotateResourceTransitions(CompiledGraphFrame &compiled);
 
     [[nodiscard]] static std::string_view queueName(QueueDomain queue);
 
-    [[nodiscard]] static std::string makeDebugView(const CompiledGraphFrame& compiled);
+    [[nodiscard]] static std::string makeDebugView(const CompiledGraphFrame &compiled);
 };
 } // namespace nr::renderer

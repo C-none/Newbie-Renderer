@@ -24,6 +24,5 @@ using EnvironmentMapLoadResult = std::expected<nr::resource::EnvironmentMap, Loa
  * stored as RGBA16F; radianceDecodeScale restores source radiance in shaders.
  * Alpha and unrelated extra channels are ignored, and output alpha is one.
  */
-[[nodiscard]] EnvironmentMapLoadResult loadExrEnvironmentMap(
-    const ExrEnvironmentLoadRequest& request);
+[[nodiscard]] EnvironmentMapLoadResult loadExrEnvironmentMap(const ExrEnvironmentLoadRequest &request);
 } // namespace nr::load

@@ -69,12 +69,16 @@ class UniqueHandle
 
 [[nodiscard]] std::string windowsFailure(std::string_view operation, DWORD error)
 {
-    return std::format("{} failed: {}", operation, std::error_code{static_cast<int>(error), std::system_category()}.message());
+    return std::format("{} failed: {}", operation,
+                       std::error_code{static_cast<int>(error), std::system_category()}.message());
 }
 
-[[nodiscard]] std::expected<std::wstring, ExclusiveDirectoryLeaseFailure> finalDirectoryPath(const std::filesystem::path &directory)
+[[nodiscard]] std::expected<std::wstring, ExclusiveDirectoryLeaseFailure> finalDirectoryPath(
+    const std::filesystem::path &directory)
 {
-    auto directoryHandle = UniqueHandle{CreateFileW(directory.c_str(), 0u, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr)};
+    auto directoryHandle =
+        UniqueHandle{CreateFileW(directory.c_str(), 0u, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                 OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr)};
     if (directoryHandle.get() == INVALID_HANDLE_VALUE)
     {
         auto const error = GetLastError();
@@ -83,7 +87,8 @@ class UniqueHandle
         }};
     }
 
-    auto const requiredCharacters = GetFinalPathNameByHandleW(directoryHandle.get(), nullptr, 0u, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    auto const requiredCharacters =
+        GetFinalPathNameByHandleW(directoryHandle.get(), nullptr, 0u, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
     if (requiredCharacters == 0u)
     {
         auto const error = GetLastError();
@@ -93,12 +98,15 @@ class UniqueHandle
     }
 
     auto path = std::wstring(static_cast<std::size_t>(requiredCharacters), L'\0');
-    auto const writtenCharacters = GetFinalPathNameByHandleW(directoryHandle.get(), path.data(), requiredCharacters, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    auto const writtenCharacters = GetFinalPathNameByHandleW(directoryHandle.get(), path.data(), requiredCharacters,
+                                                             FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
     if (writtenCharacters == 0u || writtenCharacters >= requiredCharacters)
     {
         auto const error = GetLastError();
         return std::unexpected{ExclusiveDirectoryLeaseFailure{
-            .detail = writtenCharacters == 0u ? windowsFailure("Resolving the canonical log directory", error) : "Resolving the canonical log directory returned an unstable path length.",
+            .detail = writtenCharacters == 0u
+                          ? windowsFailure("Resolving the canonical log directory", error)
+                          : "Resolving the canonical log directory returned an unstable path length.",
         }};
     }
     path.resize(static_cast<std::size_t>(writtenCharacters));
@@ -143,7 +151,8 @@ ExclusiveDirectoryLease::~ExclusiveDirectoryLease() = default;
 ExclusiveDirectoryLease::ExclusiveDirectoryLease(ExclusiveDirectoryLease &&) noexcept = default;
 ExclusiveDirectoryLease &ExclusiveDirectoryLease::operator=(ExclusiveDirectoryLease &&) noexcept = default;
 
-std::expected<void, ExclusiveDirectoryLeaseFailure> ExclusiveDirectoryLease::acquire(const std::filesystem::path &canonicalDirectory)
+std::expected<void, ExclusiveDirectoryLeaseFailure> ExclusiveDirectoryLease::acquire(
+    const std::filesystem::path &canonicalDirectory)
 {
     release();
 

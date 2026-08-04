@@ -7,15 +7,13 @@ export namespace nr::renderer
 class FrameServices
 {
   public:
-    template <typename T>
-    void set(std::reference_wrapper<T> service)
+    template <typename T> void set(std::reference_wrapper<T> service)
     {
         using ServiceType = std::remove_cvref_t<T>;
         services_.insert_or_assign(std::type_index(typeid(ServiceType)), std::ref(service.get()));
     }
 
-    template <typename T>
-    [[nodiscard]] std::optional<std::reference_wrapper<T>> tryGet() noexcept
+    template <typename T> [[nodiscard]] std::optional<std::reference_wrapper<T>> tryGet() noexcept
     {
         using ServiceType = std::remove_cvref_t<T>;
         auto it = services_.find(std::type_index(typeid(ServiceType)));
@@ -24,7 +22,7 @@ class FrameServices
             return std::nullopt;
         }
 
-        auto* service = std::any_cast<std::reference_wrapper<ServiceType>>(&it->second);
+        auto *service = std::any_cast<std::reference_wrapper<ServiceType>>(&it->second);
         if (service == nullptr)
         {
             return std::nullopt;
@@ -33,8 +31,7 @@ class FrameServices
         return std::ref(service->get());
     }
 
-    template <typename T>
-    [[nodiscard]] std::optional<std::reference_wrapper<const T>> tryGet() const noexcept
+    template <typename T> [[nodiscard]] std::optional<std::reference_wrapper<const T>> tryGet() const noexcept
     {
         using ServiceType = std::remove_cvref_t<T>;
         auto it = services_.find(std::type_index(typeid(ServiceType)));
@@ -43,7 +40,7 @@ class FrameServices
             return std::nullopt;
         }
 
-        auto* service = std::any_cast<std::reference_wrapper<ServiceType>>(&it->second);
+        auto *service = std::any_cast<std::reference_wrapper<ServiceType>>(&it->second);
         if (service == nullptr)
         {
             return std::nullopt;

@@ -23,20 +23,13 @@ public float misBalanceHeuristicFromWeights(float selectedWeight, float otherWei
 
 public float misBalanceHeuristic(float selectedPdf, float otherPdf)
 {
-    return misBalanceHeuristicFromWeights(
-        misWeightedPdf(1u, selectedPdf),
-        misWeightedPdf(1u, otherPdf));
+    return misBalanceHeuristicFromWeights(misWeightedPdf(1u, selectedPdf), misWeightedPdf(1u, otherPdf));
 }
 
-public float misBalanceHeuristic(
-    uint selectedSampleCount,
-    float selectedPdf,
-    uint otherSampleCount,
-    float otherPdf)
+public float misBalanceHeuristic(uint selectedSampleCount, float selectedPdf, uint otherSampleCount, float otherPdf)
 {
-    return misBalanceHeuristicFromWeights(
-        misWeightedPdf(selectedSampleCount, selectedPdf),
-        misWeightedPdf(otherSampleCount, otherPdf));
+    return misBalanceHeuristicFromWeights(misWeightedPdf(selectedSampleCount, selectedPdf),
+                                          misWeightedPdf(otherSampleCount, otherPdf));
 }
 
 public float misPowerHeuristicFromWeights(float selectedWeight, float otherWeight)
@@ -54,18 +47,11 @@ public float misPowerHeuristicFromWeights(float selectedWeight, float otherWeigh
 
 public float misPowerHeuristic(float selectedPdf, float otherPdf)
 {
-    return misPowerHeuristicFromWeights(
-        misWeightedPdf(1u, selectedPdf),
-        misWeightedPdf(1u, otherPdf));
+    return misPowerHeuristicFromWeights(misWeightedPdf(1u, selectedPdf), misWeightedPdf(1u, otherPdf));
 }
 
-public float misPowerHeuristic(
-    uint selectedSampleCount,
-    float selectedPdf,
-    uint otherSampleCount,
-    float otherPdf)
+public float misPowerHeuristic(uint selectedSampleCount, float selectedPdf, uint otherSampleCount, float otherPdf)
 {
-    return misPowerHeuristicFromWeights(
-        misWeightedPdf(selectedSampleCount, selectedPdf),
-        misWeightedPdf(otherSampleCount, otherPdf));
+    return misPowerHeuristicFromWeights(misWeightedPdf(selectedSampleCount, selectedPdf),
+                                        misWeightedPdf(otherSampleCount, otherPdf));
 }

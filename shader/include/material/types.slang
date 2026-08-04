@@ -68,20 +68,13 @@ public float2 selectMaterialUv(uint uvSet, float2 texCoord0, float2 texCoord1)
 
 public float2 transformMaterialUv(float2 uv, float4 uvLinear, float2 uvOffset)
 {
-    return float2(
-        dot(uvLinear.xy, uv),
-        dot(uvLinear.zw, uv)) + uvOffset;
+    return float2(dot(uvLinear.xy, uv), dot(uvLinear.zw, uv)) + uvOffset;
 }
 
-public float2 materialTextureUv(
-    RtMaterialTextureRef textureRef,
-    float2 texCoord0,
-    float2 texCoord1)
+public float2 materialTextureUv(RtMaterialTextureRef textureRef, float2 texCoord0, float2 texCoord1)
 {
-    return transformMaterialUv(
-        selectMaterialUv(textureRef.uvSet, texCoord0, texCoord1),
-        textureRef.uvLinear,
-        textureRef.uvOffset);
+    return transformMaterialUv(selectMaterialUv(textureRef.uvSet, texCoord0, texCoord1), textureRef.uvLinear,
+                               textureRef.uvOffset);
 }
 
 public float3 orthogonalTangent(float3 normal)

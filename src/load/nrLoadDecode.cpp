@@ -26,9 +26,8 @@ struct DecodedPayload
 [[nodiscard]] std::string lowercase(std::string_view value)
 {
     std::string normalized{value};
-    std::ranges::transform(normalized, normalized.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    std::ranges::transform(normalized, normalized.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return normalized;
 }
 
@@ -51,8 +50,7 @@ struct DecodedPayload
         return false;
     }
 
-    return std::to_integer<unsigned char>(bytes[0]) == 0xFFu &&
-           std::to_integer<unsigned char>(bytes[1]) == 0xD8u;
+    return std::to_integer<unsigned char>(bytes[0]) == 0xFFu && std::to_integer<unsigned char>(bytes[1]) == 0xD8u;
 }
 
 [[nodiscard]] std::expected<std::vector<std::byte>, std::string> readBinaryFile(const std::filesystem::path &path)
@@ -61,7 +59,8 @@ struct DecodedPayload
     auto fileSize = std::filesystem::file_size(path, fileSizeError);
     if (fileSizeError)
     {
-        return std::unexpected(std::format("Failed to query file size '{}': {}", path.generic_string(), fileSizeError.message()));
+        return std::unexpected(
+            std::format("Failed to query file size '{}': {}", path.generic_string(), fileSizeError.message()));
     }
 
     if (fileSize == 0)
@@ -71,7 +70,8 @@ struct DecodedPayload
 
     if (fileSize > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max()))
     {
-        return std::unexpected(std::format("Texture file '{}' exceeds host addressable memory.", path.generic_string()));
+        return std::unexpected(
+            std::format("Texture file '{}' exceeds host addressable memory.", path.generic_string()));
     }
 
     auto byteCount = static_cast<std::size_t>(fileSize);
@@ -97,7 +97,7 @@ struct DecodedPayload
 }
 
 [[nodiscard]] std::expected<Image, std::string> decodeWithStb(std::span<const std::byte> encodedBytes,
-                                                                      std::uint32_t requestedChannels)
+                                                              std::uint32_t requestedChannels)
 {
     if (encodedBytes.empty())
     {
@@ -114,13 +114,9 @@ struct DecodedPayload
     int width = 0;
     int height = 0;
     int sourceChannels = 0;
-    auto *decoded = stbi_load_from_memory(
-        reinterpret_cast<const stbi_uc *>(encodedBytes.data()),
-        static_cast<int>(encodedBytes.size()),
-        &width,
-        &height,
-        &sourceChannels,
-        static_cast<int>(channelCount));
+    auto *decoded = stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(encodedBytes.data()),
+                                          static_cast<int>(encodedBytes.size()), &width, &height, &sourceChannels,
+                                          static_cast<int>(channelCount));
 
     if (decoded == nullptr)
     {
@@ -192,14 +188,9 @@ struct TurboJpegHandleDeleter
     int height = 0;
     int jpegSubsample = 0;
     int jpegColorSpace = 0;
-    auto headerResult = tjDecompressHeader3(
-        handle.get(),
-        reinterpret_cast<const unsigned char *>(encodedBytes.data()),
-        static_cast<unsigned long>(encodedBytes.size()),
-        &width,
-        &height,
-        &jpegSubsample,
-        &jpegColorSpace);
+    auto headerResult = tjDecompressHeader3(handle.get(), reinterpret_cast<const unsigned char *>(encodedBytes.data()),
+                                            static_cast<unsigned long>(encodedBytes.size()), &width, &height,
+                                            &jpegSubsample, &jpegColorSpace);
     if (headerResult != 0)
     {
         return std::unexpected(turboJpegError(handle.get()));
@@ -223,16 +214,9 @@ struct TurboJpegHandleDeleter
     image.channels = 4;
     image.pixels.resize(static_cast<std::size_t>(byteCount));
 
-    auto decodeResult = tjDecompress2(
-        handle.get(),
-        reinterpret_cast<const unsigned char *>(encodedBytes.data()),
-        static_cast<unsigned long>(encodedBytes.size()),
-        image.pixels.data(),
-        width,
-        0,
-        height,
-        TJPF_RGBA,
-        TJFLAG_FASTDCT);
+    auto decodeResult = tjDecompress2(handle.get(), reinterpret_cast<const unsigned char *>(encodedBytes.data()),
+                                      static_cast<unsigned long>(encodedBytes.size()), image.pixels.data(), width, 0,
+                                      height, TJPF_RGBA, TJFLAG_FASTDCT);
     if (decodeResult != 0)
     {
         return std::unexpected(turboJpegError(handle.get()));
@@ -264,16 +248,15 @@ struct TurboJpegHandleDeleter
     image.height = raw.height;
     image.channels = 4;
     image.pixels.resize(raw.rgba8.size());
-    std::ranges::transform(raw.rgba8, image.pixels.begin(), [](std::byte value) {
-        return std::to_integer<std::uint8_t>(value);
-    });
+    std::ranges::transform(raw.rgba8, image.pixels.begin(),
+                           [](std::byte value) { return std::to_integer<std::uint8_t>(value); });
 
     return image;
 }
 
 [[nodiscard]] std::expected<DecodedPayload, std::string> decodeEncodedTexture(const TextureAsset &texture,
-                                                                                      std::span<const std::byte> encodedBytes,
-                                                                                      std::uint32_t requestedChannels)
+                                                                              std::span<const std::byte> encodedBytes,
+                                                                              std::uint32_t requestedChannels)
 {
     auto decodeAsJpeg = false;
     if (texture.payloadKind == TexturePayloadKind::externalReference)
@@ -312,9 +295,8 @@ struct TurboJpegHandleDeleter
     };
 }
 
-[[nodiscard]] TextureDecodeTaskResult decodeTextureTask(std::uint32_t textureIndex,
-                                                               const TextureAsset &texture,
-                                                               const TextureDecodeOptions &options)
+[[nodiscard]] TextureDecodeTaskResult decodeTextureTask(std::uint32_t textureIndex, const TextureAsset &texture,
+                                                        const TextureDecodeOptions &options)
 {
     TextureDecodeTaskResult result{};
     result.textureIndex = textureIndex;
@@ -415,11 +397,9 @@ struct TurboJpegHandleDeleter
 
 } // namespace nr::load::detail
 
-
 namespace nr::load
 {
-std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene,
-                                                                              const TextureDecodeOptions &options)
+std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene, const TextureDecodeOptions &options)
 {
     auto decodeIndices = detail::collectReferencedTextureIndices(scene);
     if (decodeIndices.empty())
@@ -436,9 +416,8 @@ std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene,
 
     std::ranges::for_each(decodeIndices, [&](std::uint32_t textureIndex) {
         auto const *texture = &scene.textures[textureIndex];
-        futures.push_back(threadPool.submit([textureIndex, texture, options]() {
-            return detail::decodeTextureTask(textureIndex, *texture, options);
-        }));
+        futures.push_back(threadPool.submit(
+            [textureIndex, texture, options]() { return detail::decodeTextureTask(textureIndex, *texture, options); }));
     });
 
     auto failures = std::vector<std::string>{};
@@ -465,12 +444,10 @@ std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene,
 
     if (!failures.empty())
     {
-        auto message = std::format("Texture decode failed for {} texture(s):\n{}", failures.size(), detail::joinLines(failures));
-        return std::unexpected(makeLoadError(
-            LoadErrorCode::textureDataUnsupported,
-            "decode",
-            scene.sourcePath,
-            std::move(message)));
+        auto message =
+            std::format("Texture decode failed for {} texture(s):\n{}", failures.size(), detail::joinLines(failures));
+        return std::unexpected(
+            makeLoadError(LoadErrorCode::textureDataUnsupported, "decode", scene.sourcePath, std::move(message)));
     }
 
     return {};

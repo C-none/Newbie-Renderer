@@ -9,6 +9,7 @@ public struct EnvironmentMapParameters
     float padding;
 };
 
+[[vk::binding(0, 1)]]
 public Sampler2D<float4> gEnvironmentMap;
 
 [[vk::push_constant]]
@@ -22,9 +23,8 @@ public float3 sampleEnvironment(float3 direction)
 
     float3 unitDirection = normalize(direction);
     float longitude = atan2(unitDirection.x, -unitDirection.z);
-    float2 uv = float2(
-        frac(0.5f + (longitude + gEnvironment.yawRadians) * kInverseTwoPi),
-        acos(clamp(unitDirection.y, -1.0f, 1.0f)) * kInversePi);
+    float2 uv = float2(frac(0.5f + (longitude + gEnvironment.yawRadians) * kInverseTwoPi),
+                       acos(clamp(unitDirection.y, -1.0f, 1.0f)) * kInversePi);
     float3 encodedRadiance = gEnvironmentMap.SampleLevel(uv, 0.0f).rgb;
     return encodedRadiance * gEnvironment.radianceDecodeScale * gEnvironment.intensity;
 }

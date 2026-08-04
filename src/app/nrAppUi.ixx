@@ -24,7 +24,7 @@ struct UiFrameStats
     std::uint64_t frameCounter = 0;
 };
 
-using UiSectionDrawCallback = std::function<void(UiSystem&)>;
+using UiSectionDrawCallback = std::function<void(UiSystem &)>;
 
 struct UiSection
 {
@@ -41,13 +41,13 @@ class UiSystem
     {
       public:
         WindowScope() = default;
-        WindowScope(UiSystem& owner, bool visible, bool closesWindow) noexcept;
+        WindowScope(UiSystem &owner, bool visible, bool closesWindow) noexcept;
 
-        WindowScope(const WindowScope&) = delete;
-        WindowScope& operator=(const WindowScope&) = delete;
+        WindowScope(const WindowScope &) = delete;
+        WindowScope &operator=(const WindowScope &) = delete;
 
-        WindowScope(WindowScope&& other) noexcept;
-        WindowScope& operator=(WindowScope&& other) noexcept;
+        WindowScope(WindowScope &&other) noexcept;
+        WindowScope &operator=(WindowScope &&other) noexcept;
         ~WindowScope();
 
         [[nodiscard]] explicit operator bool() const noexcept;
@@ -61,10 +61,10 @@ class UiSystem
     };
 
     UiSystem() = default;
-    UiSystem(const UiSystem&) = delete;
-    UiSystem& operator=(const UiSystem&) = delete;
-    UiSystem(UiSystem&&) = delete;
-    UiSystem& operator=(UiSystem&&) = delete;
+    UiSystem(const UiSystem &) = delete;
+    UiSystem &operator=(const UiSystem &) = delete;
+    UiSystem(UiSystem &&) = delete;
+    UiSystem &operator=(UiSystem &&) = delete;
 
     ~UiSystem();
 
@@ -72,59 +72,47 @@ class UiSystem
     void shutdown();
 
     [[nodiscard]] bool initialized() const noexcept;
-    void beginFrame(const nr::rhi::PresentationContext& presentation, float deltaSeconds);
+    void beginFrame(const nr::rhi::PresentationContext &presentation, float deltaSeconds);
     void finalizeFrame();
 
     [[nodiscard]] WindowScope window(std::string_view title, ImGuiWindowFlags flags = 0);
     void queueSection(UiSection section);
     void renderSections(std::span<const UiSection> sections, ImGuiWindowFlags flags = 0);
-    void renderSections(
-        std::span<const UiSection> leadingSections,
-        std::span<const UiSection> trailingSections,
-        ImGuiWindowFlags flags = 0);
+    void renderSections(std::span<const UiSection> leadingSections, std::span<const UiSection> trailingSections,
+                        ImGuiWindowFlags flags = 0);
     void separator();
     void text(std::string_view content);
 
-    template <typename... TArgs>
-    void textFmt(std::format_string<TArgs...> format, TArgs&&... args)
+    template <typename... TArgs> void textFmt(std::format_string<TArgs...> format, TArgs &&...args)
     {
         text(std::format(format, std::forward<TArgs>(args)...));
     }
 
-    [[nodiscard]] bool checkbox(std::string_view label, bool& value);
+    [[nodiscard]] bool checkbox(std::string_view label, bool &value);
     [[nodiscard]] bool button(std::string_view label);
-    [[nodiscard]] bool inputText(std::string_view label, std::string& value);
+    [[nodiscard]] bool inputText(std::string_view label, std::string &value);
     [[nodiscard]] bool beginCombo(std::string_view label, std::string_view preview);
     void endCombo();
     [[nodiscard]] bool selectable(std::string_view label, bool selected = false);
-    [[nodiscard]] bool sliderFloat(std::string_view label, float& value, float minValue, float maxValue);
-    [[nodiscard]] bool inputFloat(std::string_view label, float& value, float minValue, float maxValue);
-    [[nodiscard]] bool inputInt32(
-        std::string_view label,
-        std::int32_t& value,
-        std::int32_t minValue,
-        std::int32_t maxValue);
-    [[nodiscard]] bool inputUInt(
-        std::string_view label,
-        std::uint32_t& value,
-        std::uint32_t minValue,
-        std::uint32_t maxValue);
-    [[nodiscard]] bool sliderUInt(
-        std::string_view label,
-        std::uint32_t& value,
-        std::uint32_t minValue,
-        std::uint32_t maxValue);
+    [[nodiscard]] bool sliderFloat(std::string_view label, float &value, float minValue, float maxValue);
+    [[nodiscard]] bool inputFloat(std::string_view label, float &value, float minValue, float maxValue);
+    [[nodiscard]] bool inputInt32(std::string_view label, std::int32_t &value, std::int32_t minValue,
+                                  std::int32_t maxValue);
+    [[nodiscard]] bool inputUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue,
+                                 std::uint32_t maxValue);
+    [[nodiscard]] bool sliderUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue,
+                                  std::uint32_t maxValue);
     void beginDisabled(bool disabled = true);
     void endDisabled();
     [[nodiscard]] bool itemEditCommitted() const;
     void setItemDefaultFocus();
-    [[nodiscard]] const UiFrameStats& stats() const noexcept;
-    void setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame& cameraFrame) noexcept;
-    [[nodiscard]] const nr::renderer::ViewerPerspectiveCameraFrame& cameraFrame() const noexcept;
-    void setCpuStatistics(const nr::renderer::RendererCpuStatistics& statistics) noexcept;
-    [[nodiscard]] const nr::renderer::RendererCpuStatistics& cpuStatistics() const noexcept;
-    void setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistics& statistics) noexcept;
-    [[nodiscard]] const nr::renderer::RendererGpuPassStatistics& gpuPassStatistics() const noexcept;
+    [[nodiscard]] const UiFrameStats &stats() const noexcept;
+    void setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame &cameraFrame) noexcept;
+    [[nodiscard]] const nr::renderer::ViewerPerspectiveCameraFrame &cameraFrame() const noexcept;
+    void setCpuStatistics(const nr::renderer::RendererCpuStatistics &statistics) noexcept;
+    [[nodiscard]] const nr::renderer::RendererCpuStatistics &cpuStatistics() const noexcept;
+    void setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistics &statistics) noexcept;
+    [[nodiscard]] const nr::renderer::RendererGpuPassStatistics &gpuPassStatistics() const noexcept;
     [[nodiscard]] UiCaptureState captureState() const noexcept;
     [[nodiscard]] std::optional<std::reference_wrapper<const ImDrawData>> drawData() const noexcept;
 
@@ -134,7 +122,7 @@ class UiSystem
     [[nodiscard]] bool beginSection(std::string_view id, std::string_view title, bool defaultOpen = true);
     void prepareWindowDefaults();
 
-    ImGuiContext* context_ = nullptr;
+    ImGuiContext *context_ = nullptr;
     bool frameActive_ = false;
     bool frameFinalized_ = false;
     UiCaptureState captureState_{};

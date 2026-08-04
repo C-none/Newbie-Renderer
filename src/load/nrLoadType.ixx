@@ -109,19 +109,19 @@ enum class MaterialWorkflowFlags : std::uint8_t
 struct MaterialAsset
 {
     std::string name{};
-    
+
     // Authoring: Base color and emissive
     std::array<float, 4> baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
     std::array<float, 3> emissiveFactor{0.0f, 0.0f, 0.0f};
-    
+
     // Authoring: Metallic/Roughness workflow
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
-    
+
     // Authoring: Specular/Glossiness workflow
     std::optional<std::array<float, 3>> specularFactor{};
     std::optional<float> glossinessFactor{};
-    
+
     // Authoring: Anisotropy
     std::optional<float> anisotropyFactor{};
     std::optional<float> anisotropyRotation{};
@@ -134,21 +134,21 @@ struct MaterialAsset
     std::optional<float> transmissionFactor{};
     std::optional<float> ior{};
     std::optional<float> thicknessFactor{};
-    
+
     // Authoring: Transparency and rendering
     float opacity = 1.0f;
     MaterialAlphaModeHint alphaModeHint = MaterialAlphaModeHint::opaque;
     std::optional<float> alphaCutoff{};
-    
+
     // Authoring: Surface properties
     bool doubleSided = false;
     bool unlit = false;
     std::optional<float> normalScale{};
     std::optional<float> occlusionStrength{};
-    
+
     // Authoring: Texture bindings
     std::vector<MaterialTextureBinding> textures{};
-    
+
     // Workflow classification (populated by bridge/loader)
     MaterialWorkflowFlags workflowFlags = MaterialWorkflowFlags::metallicRoughness;
 };
@@ -188,22 +188,7 @@ struct NodeAsset
     std::vector<std::uint32_t> childIndices{};
     std::vector<std::uint32_t> meshIndices{};
     std::array<float, 16> localTransform{
-        1.0f,
-        0.0f,
-        0.0f,
-        0.0f,
-        0.0f,
-        1.0f,
-        0.0f,
-        0.0f,
-        0.0f,
-        0.0f,
-        1.0f,
-        0.0f,
-        0.0f,
-        0.0f,
-        0.0f,
-        1.0f,
+        1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
     };
 };
 

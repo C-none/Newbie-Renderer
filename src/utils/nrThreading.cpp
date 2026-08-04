@@ -8,11 +8,11 @@ namespace nr::threading::detail
 {
 struct WorkerIdentity
 {
-    const StaticThreadPool* pool = nullptr;
+    const StaticThreadPool *pool = nullptr;
     std::uint32_t workerIndex = invalidWorkerIndex;
 };
 
-[[nodiscard]] WorkerIdentity& currentWorkerIdentity() noexcept
+[[nodiscard]] WorkerIdentity &currentWorkerIdentity() noexcept
 {
     static thread_local WorkerIdentity identity{};
     return identity;
@@ -21,7 +21,7 @@ struct WorkerIdentity
 class ScopedWorkerIdentity
 {
   public:
-    ScopedWorkerIdentity(const StaticThreadPool& pool, std::uint32_t workerIndex) noexcept
+    ScopedWorkerIdentity(const StaticThreadPool &pool, std::uint32_t workerIndex) noexcept
         : previous_{currentWorkerIdentity()}
     {
         currentWorkerIdentity() = WorkerIdentity{
@@ -30,8 +30,8 @@ class ScopedWorkerIdentity
         };
     }
 
-    ScopedWorkerIdentity(const ScopedWorkerIdentity&) = delete;
-    ScopedWorkerIdentity& operator=(const ScopedWorkerIdentity&) = delete;
+    ScopedWorkerIdentity(const ScopedWorkerIdentity &) = delete;
+    ScopedWorkerIdentity &operator=(const ScopedWorkerIdentity &) = delete;
 
     ~ScopedWorkerIdentity()
     {
@@ -45,9 +45,7 @@ class ScopedWorkerIdentity
 
 namespace nr::threading
 {
-[[nodiscard]] WorkRangePlan planContiguousRanges(
-    std::size_t itemCount,
-    std::uint32_t availableWorkers)
+[[nodiscard]] WorkRangePlan planContiguousRanges(std::size_t itemCount, std::uint32_t availableWorkers)
 {
     auto plan = WorkRangePlan{
         .itemCount = itemCount,
@@ -63,8 +61,7 @@ namespace nr::threading
     auto const baseRangeSize = itemCount / assignedWorkerCount;
     auto const remainder = itemCount % assignedWorkerCount;
     auto rangeIndices = std::views::iota(std::size_t{0}, assignedWorkerCount);
-    plan.ranges = rangeIndices |
-                  std::views::transform([&](std::size_t rangeIndex) {
+    plan.ranges = rangeIndices | std::views::transform([&](std::size_t rangeIndex) {
                       auto const begin = rangeIndex * baseRangeSize + std::min(rangeIndex, remainder);
                       auto const rangeSize = baseRangeSize + (rangeIndex < remainder ? 1u : 0u);
                       return WorkRange{
@@ -76,9 +73,7 @@ namespace nr::threading
     return plan;
 }
 
-[[nodiscard]] std::uint32_t resolveWorkerCount(
-    std::uint32_t requestedWorkers,
-    std::size_t taskCount) noexcept
+[[nodiscard]] std::uint32_t resolveWorkerCount(std::uint32_t requestedWorkers, std::size_t taskCount) noexcept
 {
     if (taskCount == 0)
     {
@@ -117,25 +112,17 @@ void StaticThreadPool::ensureWorkerCount(std::uint32_t workerCount)
 {
     auto const targetWorkerCount = std::min<std::uint32_t>(std::max(workerCount, 1u), nr::maxThreads);
 
-    auto workerIds = std::vector<std::uint32_t>{};
+    std::scoped_lock lock(mutex_);
+    nrAssert(acceptingTasks_ && !stopping_, "StaticThreadPool::ensureWorkerCount cannot grow a stopped pool.");
+
+    auto const currentCount = static_cast<std::uint32_t>(workers_.size());
+    if (targetWorkerCount <= currentCount)
     {
-        std::scoped_lock lock(mutex_);
-        nrAssert(acceptingTasks_ && !stopping_, "StaticThreadPool::ensureWorkerCount cannot grow a stopped pool.");
-
-        auto const currentCount = static_cast<std::uint32_t>(workers_.size());
-        if (targetWorkerCount <= currentCount)
-        {
-            return;
-        }
-
-        auto ids = std::views::iota(currentCount, targetWorkerCount);
-        workerIds = ids | std::ranges::to<std::vector>();
+        return;
     }
-
+    auto workerIds = std::views::iota(currentCount, targetWorkerCount);
     std::ranges::for_each(workerIds, [&](std::uint32_t workerId) {
-        workers_.emplace_back([this, workerId](std::stop_token stopToken) {
-            workerLoop(workerId, stopToken);
-        });
+        workers_.emplace_back([this, workerId](std::stop_token stopToken) { workerLoop(workerId, stopToken); });
         workerCount_.store(static_cast<std::uint32_t>(workers_.size()));
     });
 }
@@ -148,22 +135,18 @@ void StaticThreadPool::ensureWorkerCount(std::uint32_t workerCount)
 void StaticThreadPool::waitIdle()
 {
     auto const identity = detail::currentWorkerIdentity();
-    nrAssert(
-        identity.pool != this,
-        "StaticThreadPool::waitIdle cannot be called from one of the same pool's worker threads.");
+    nrAssert(identity.pool != this,
+             "StaticThreadPool::waitIdle cannot be called from one of the same pool's worker threads.");
 
     std::unique_lock lock(mutex_);
-    idle_.wait(lock, [&]() {
-        return queuedTaskCount_ == 0 && runningTaskCount_ == 0;
-    });
+    idle_.wait(lock, [&]() { return queuedTaskCount_ == 0 && runningTaskCount_ == 0; });
 }
 
 void StaticThreadPool::stop()
 {
     auto const identity = detail::currentWorkerIdentity();
-    nrAssert(
-        identity.pool != this,
-        "StaticThreadPool::stop cannot be called from one of the same pool's worker threads.");
+    nrAssert(identity.pool != this,
+             "StaticThreadPool::stop cannot be called from one of the same pool's worker threads.");
 
     {
         std::scoped_lock lock(mutex_);
@@ -216,8 +199,8 @@ void StaticThreadPool::enqueueTo(std::uint32_t workerId, Task task)
 
 [[nodiscard]] StaticThreadPool::Task StaticThreadPool::popTaskFor(std::uint32_t workerId)
 {
-    auto& localQueue = workerQueues_[workerId].tasks;
-    auto& queue = localQueue.empty() ? sharedTasks_ : localQueue;
+    auto &localQueue = workerQueues_[workerId].tasks;
+    auto &queue = localQueue.empty() ? sharedTasks_ : localQueue;
 
     auto task = std::move(queue.front());
     queue.pop();
@@ -226,16 +209,15 @@ void StaticThreadPool::enqueueTo(std::uint32_t workerId, Task task)
     return task;
 }
 
-void StaticThreadPool::workerLoop(std::uint32_t workerId, const std::stop_token& stopToken)
+void StaticThreadPool::workerLoop(std::uint32_t workerId, const std::stop_token &stopToken)
 {
     while (true)
     {
         auto task = Task{};
         {
             std::unique_lock lock(mutex_);
-            taskAvailable_.wait(lock, [&]() {
-                return stopping_ || stopToken.stop_requested() || hasPendingWorkFor(workerId);
-            });
+            taskAvailable_.wait(
+                lock, [&]() { return stopping_ || stopToken.stop_requested() || hasPendingWorkFor(workerId); });
 
             if ((stopping_ || stopToken.stop_requested()) && !hasPendingWorkFor(workerId))
             {

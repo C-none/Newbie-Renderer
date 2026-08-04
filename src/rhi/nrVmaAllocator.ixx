@@ -37,7 +37,7 @@ export namespace nr::rhi
  */
 struct VmaBuffer
 {
-    VmaAllocator  allocator  = nullptr;
+    VmaAllocator allocator = nullptr;
     VkBuffer buffer = nullptr;
     VmaAllocation allocation = nullptr;
     VmaAllocationInfo info{};
@@ -76,7 +76,7 @@ struct VmaBuffer
      * Requires the buffer to have been created with
      * VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT.
      */
-    [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device& device) const noexcept;
+    [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device &device) const noexcept;
 
     /**
      * @brief Query the actual memory property flags for this allocation
@@ -114,8 +114,8 @@ struct VmaBuffer
  */
 struct VmaImage
 {
-    VmaAllocator  allocator  = nullptr;
-    VkImage       image      = nullptr;
+    VmaAllocator allocator = nullptr;
+    VkImage image = nullptr;
     VmaAllocation allocation = nullptr;
     VmaAllocationInfo info{};
 
@@ -159,7 +159,7 @@ struct VmaImage
 struct VmaPoolHandle
 {
     VmaAllocator allocator = nullptr;
-    VmaPool      pool      = nullptr;
+    VmaPool pool = nullptr;
     std::optional<VmaPoolCreateInfo> createInfo{};
 
     VmaPoolHandle() = default;
@@ -230,7 +230,8 @@ class VmaAllocatorWrapper
      * - Maintenance5 (core 1.3)
      * - EXT memory budget query integration
      */
-    VmaAllocatorWrapper(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device);
+    VmaAllocatorWrapper(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
+                        const vk::raii::Device &device);
 
     ~VmaAllocatorWrapper();
 
@@ -255,7 +256,8 @@ class VmaAllocatorWrapper
      * @param allocInfo   VMA allocation create info (usage, flags, priority, pool)
      * @return RAII VmaBuffer owning both the buffer and allocation
      */
-    [[nodiscard]] VmaBuffer createBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const;
+    [[nodiscard]] VmaBuffer createBuffer(const vk::BufferCreateInfo &bufferInfo,
+                                         const VmaAllocationCreateInfo &allocInfo) const;
 
     /**
      * @brief Create a VkImage with VMA allocation
@@ -263,7 +265,8 @@ class VmaAllocatorWrapper
      * @param allocInfo   VMA allocation create info
      * @return RAII VmaImage owning both the image and allocation
      */
-    [[nodiscard]] VmaImage createImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const;
+    [[nodiscard]] VmaImage createImage(const vk::ImageCreateInfo &imageInfo,
+                                       const VmaAllocationCreateInfo &allocInfo) const;
 
     /**
      * @brief Create a custom VMA pool
@@ -278,7 +281,8 @@ class VmaAllocatorWrapper
      * @param allocInfo   Desired allocation properties
      * @return Memory type index for VmaPoolCreateInfo
      */
-    [[nodiscard]] std::uint32_t findMemoryTypeIndexForBuffer(const vk::BufferCreateInfo &bufferInfo, const VmaAllocationCreateInfo &allocInfo) const;
+    [[nodiscard]] std::uint32_t findMemoryTypeIndexForBuffer(const vk::BufferCreateInfo &bufferInfo,
+                                                             const VmaAllocationCreateInfo &allocInfo) const;
 
     /**
      * @brief Find the memory type index suitable for an image configuration
@@ -286,7 +290,8 @@ class VmaAllocatorWrapper
      * @param allocInfo   Desired allocation properties
      * @return Memory type index for VmaPoolCreateInfo
      */
-    [[nodiscard]] std::uint32_t findMemoryTypeIndexForImage(const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const;
+    [[nodiscard]] std::uint32_t findMemoryTypeIndexForImage(const vk::ImageCreateInfo &imageInfo,
+                                                            const VmaAllocationCreateInfo &allocInfo) const;
 
     // =====================================================================
     // Statistics & Budget

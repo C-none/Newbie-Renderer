@@ -25,13 +25,9 @@ struct WorkRangePlan
     std::vector<WorkRange> ranges{};
 };
 
-[[nodiscard]] WorkRangePlan planContiguousRanges(
-    std::size_t itemCount,
-    std::uint32_t availableWorkers);
+[[nodiscard]] WorkRangePlan planContiguousRanges(std::size_t itemCount, std::uint32_t availableWorkers);
 
-[[nodiscard]] std::uint32_t resolveWorkerCount(
-    std::uint32_t requestedWorkers,
-    std::size_t taskCount) noexcept;
+[[nodiscard]] std::uint32_t resolveWorkerCount(std::uint32_t requestedWorkers, std::size_t taskCount) noexcept;
 
 [[nodiscard]] std::optional<std::uint32_t> currentWorkerIndex() noexcept;
 } // namespace nr::threading
@@ -60,8 +56,8 @@ class StaticThreadPool
   public:
     StaticThreadPool();
 
-    StaticThreadPool(const StaticThreadPool&) = delete;
-    StaticThreadPool& operator=(const StaticThreadPool&) = delete;
+    StaticThreadPool(const StaticThreadPool &) = delete;
+    StaticThreadPool &operator=(const StaticThreadPool &) = delete;
 
     ~StaticThreadPool();
 
@@ -70,34 +66,29 @@ class StaticThreadPool
     [[nodiscard]] std::uint32_t workerCount() const noexcept;
 
     template <typename Fn>
-    requires std::invocable<std::decay_t<Fn>&>
-    [[nodiscard]] auto submit(Fn&& fn) -> std::future<std::invoke_result_t<std::decay_t<Fn>&>>
+        requires std::invocable<std::decay_t<Fn> &>
+    [[nodiscard]] auto submit(Fn &&fn) -> std::future<std::invoke_result_t<std::decay_t<Fn> &>>
     {
         using Function = std::decay_t<Fn>;
-        using Result = std::invoke_result_t<Function&>;
+        using Result = std::invoke_result_t<Function &>;
 
         auto task = std::packaged_task<Result()>{std::forward<Fn>(fn)};
         auto future = task.get_future();
-        enqueueShared(Task{[task = std::move(task)]() mutable {
-            task();
-        }});
+        enqueueShared(Task{[task = std::move(task)]() mutable { task(); }});
         return future;
     }
 
     template <typename Fn>
-    requires std::invocable<std::decay_t<Fn>&>
-    [[nodiscard]] auto submitTo(
-        std::uint32_t workerId,
-        Fn&& fn) -> std::future<std::invoke_result_t<std::decay_t<Fn>&>>
+        requires std::invocable<std::decay_t<Fn> &>
+    [[nodiscard]] auto submitTo(std::uint32_t workerId, Fn &&fn)
+        -> std::future<std::invoke_result_t<std::decay_t<Fn> &>>
     {
         using Function = std::decay_t<Fn>;
-        using Result = std::invoke_result_t<Function&>;
+        using Result = std::invoke_result_t<Function &>;
 
         auto task = std::packaged_task<Result()>{std::forward<Fn>(fn)};
         auto future = task.get_future();
-        enqueueTo(workerId, Task{[task = std::move(task)]() mutable {
-            task();
-        }});
+        enqueueTo(workerId, Task{[task = std::move(task)]() mutable { task(); }});
         return future;
     }
 
@@ -114,7 +105,7 @@ class StaticThreadPool
 
     [[nodiscard]] Task popTaskFor(std::uint32_t workerId);
 
-    void workerLoop(std::uint32_t workerId, const std::stop_token& stopToken);
+    void workerLoop(std::uint32_t workerId, const std::stop_token &stopToken);
 
     std::array<WorkerQueue, nr::maxThreads> workerQueues_{};
     std::queue<Task> sharedTasks_{};

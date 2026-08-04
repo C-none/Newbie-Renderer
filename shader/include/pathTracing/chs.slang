@@ -3,18 +3,12 @@ implementing common;
 // The material variant mask combines the four physical layer bits with the anisotropic base-lobe
 // specialization bit. The CPU validates the "non-zero implies baseSurface" invariant.
 public static const RtMaterialLayerFlag kKnownRtMaterialVariantMask =
-    RtMaterialLayerFlag.baseSurface |
-    RtMaterialLayerFlag.clearcoat |
-    RtMaterialLayerFlag.sheen |
-    RtMaterialLayerFlag.transmission |
-    RtMaterialLayerFlag.anisotropicBaseLobe;
+    RtMaterialLayerFlag.baseSurface | RtMaterialLayerFlag.clearcoat | RtMaterialLayerFlag.sheen |
+    RtMaterialLayerFlag.transmission | RtMaterialLayerFlag.anisotropicBaseLobe;
 
 public static const RtMaterialFeatureFlag kKnownRtMaterialFeatureMask =
-    RtMaterialFeatureFlag.alphaMask |
-    RtMaterialFeatureFlag.alphaBlend |
-    RtMaterialFeatureFlag.doubleSided |
-    RtMaterialFeatureFlag.emissive |
-    RtMaterialFeatureFlag.volumeBoundary;
+    RtMaterialFeatureFlag.alphaMask | RtMaterialFeatureFlag.alphaBlend | RtMaterialFeatureFlag.doubleSided |
+    RtMaterialFeatureFlag.emissive | RtMaterialFeatureFlag.volumeBoundary;
 
 public struct ClosestHitInput
 {
@@ -60,13 +54,9 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
         {
             // Unlit (KHR_materials_unlit): base color coverage only, no PBR resolve and no scatter.
             // Raygen treats layerFlags == none as terminal surface radiance.
-            result.material = resolveUnlitMaterialPayload(
-                rtMaterialTextureRefs,
-                input.material,
-                input.surface,
-                input.viewDirection,
-                input.materialIndex,
-                input.materialFilterSequence);
+            result.material =
+                resolveUnlitMaterialPayload(rtMaterialTextureRefs, input.material, input.surface, input.viewDirection,
+                                            input.materialIndex, input.materialFilterSequence);
             result.material.geometryNormal = input.geometryNormal;
             result.material.frontFace = input.frontFace;
             result.material.incidentMediumIor = input.incidentMediumIor;
@@ -77,23 +67,16 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
         }
 
         result.material = resolveLitMaterialPayloadVariant<LayerFlags>(
-            rtMaterialTextureRefs,
-            rtMaterialLayers,
-            input.material,
-            input.surface,
-            input.viewDirection,
-            input.materialIndex,
-            input.materialFilterSequence);
+            rtMaterialTextureRefs, rtMaterialLayers, input.material, input.surface, input.viewDirection,
+            input.materialIndex, input.materialFilterSequence);
         result.material.geometryNormal = input.geometryNormal;
         result.material.frontFace = input.frontFace;
         result.material.incidentMediumIor = input.incidentMediumIor;
         result.material.exteriorMediumIor = input.exteriorMediumIor;
         result.material.instanceMetadataIndex = input.instanceMetadataIndex;
         result.material.geometryIndex = input.geometryIndex;
-        result.scatter = sampleResolvedMaterialScatterVariant<LayerFlags>(
-            result.material,
-            input.viewDirection,
-            input.scatterRandomValues);
+        result.scatter = sampleResolvedMaterialScatterVariant<LayerFlags>(result.material, input.viewDirection,
+                                                                          input.scatterRandomValues);
         return result;
     }
 }

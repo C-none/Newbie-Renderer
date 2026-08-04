@@ -10,8 +10,13 @@ struct AccumulatePushConstants
     uint maxHistorySampleCount;
 };
 
+[[vk::binding(0, 1)]]
 Texture2D<float4> gCurrentColor;
+
+[[vk::binding(1, 1)]]
 Texture2D<float4> gHistoryColor;
+
+[[vk::binding(0, 2)]]
 RWTexture2D<float4> gAccumulatedColor;
 
 [[vk::push_constant]]
@@ -19,7 +24,7 @@ ConstantBuffer<AccumulatePushConstants> gAccumulate;
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void accumulateMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+void accumulateMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     if (dispatchThreadID.x >= gAccumulate.width || dispatchThreadID.y >= gAccumulate.height)
     {

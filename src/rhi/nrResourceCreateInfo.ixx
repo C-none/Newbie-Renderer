@@ -6,12 +6,9 @@ export namespace nr::rhi
 {
 
 template <vk::ImageType ImageType = vk::ImageType::e2D>
-[[nodiscard]] constexpr vk::ImageCreateInfo makeImageCreateInfo(
-    vk::Format format,
-    vk::Extent3D extent,
-    vk::ImageUsageFlags usage,
-    std::uint32_t mipLevels = 1u,
-    std::uint32_t arrayLayers = 1u) noexcept
+[[nodiscard]] constexpr vk::ImageCreateInfo makeImageCreateInfo(vk::Format format, vk::Extent3D extent,
+                                                                vk::ImageUsageFlags usage, std::uint32_t mipLevels = 1u,
+                                                                std::uint32_t arrayLayers = 1u) noexcept
 {
     auto imageInfo = vk::ImageCreateInfo{};
     imageInfo.imageType = ImageType;
@@ -24,24 +21,16 @@ template <vk::ImageType ImageType = vk::ImageType::e2D>
 }
 
 template <vk::ImageType ImageType = vk::ImageType::e2D>
-[[nodiscard]] constexpr vk::ImageCreateInfo makeImageCreateInfo(
-    vk::Format format,
-    vk::Extent2D extent,
-    vk::ImageUsageFlags usage,
-    std::uint32_t mipLevels = 1u,
-    std::uint32_t arrayLayers = 1u) noexcept
+[[nodiscard]] constexpr vk::ImageCreateInfo makeImageCreateInfo(vk::Format format, vk::Extent2D extent,
+                                                                vk::ImageUsageFlags usage, std::uint32_t mipLevels = 1u,
+                                                                std::uint32_t arrayLayers = 1u) noexcept
 {
-    return makeImageCreateInfo<ImageType>(
-        format,
-        vk::Extent3D{extent.width, extent.height, 1u},
-        usage,
-        mipLevels,
-        arrayLayers);
+    return makeImageCreateInfo<ImageType>(format, vk::Extent3D{extent.width, extent.height, 1u}, usage, mipLevels,
+                                          arrayLayers);
 }
 
-[[nodiscard]] constexpr vk::BufferCreateInfo makeBufferCreateInfo(
-    vk::DeviceSize size,
-    vk::BufferUsageFlags usage) noexcept
+[[nodiscard]] constexpr vk::BufferCreateInfo makeBufferCreateInfo(vk::DeviceSize size,
+                                                                  vk::BufferUsageFlags usage) noexcept
 {
     auto bufferInfo = vk::BufferCreateInfo{};
     bufferInfo.size = size;

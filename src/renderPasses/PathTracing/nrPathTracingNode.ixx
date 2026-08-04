@@ -24,7 +24,8 @@ struct PathTracingVariantKey
     bool enableRussianRoulette = true;
     bool enableFilterAfterShading = false;
 
-    [[nodiscard]] friend auto operator<=>(const PathTracingVariantKey &, const PathTracingVariantKey &) noexcept = default;
+    [[nodiscard]] friend auto operator<=>(const PathTracingVariantKey &,
+                                          const PathTracingVariantKey &) noexcept = default;
 };
 
 struct PathTracingNodeInput
@@ -44,19 +45,24 @@ class PathTracingNode final : public Node
     {
         return "render.path_tracing";
     }
-    void declareOptions(nr::options::OptionCatalogBuilder& builder) const override;
-    void collectOptionAvailability(
-        const nr::options::OptionFrameSnapshot& snapshot,
-        nr::options::OptionAvailabilityMap& availability) const override;
-    void initialize(NodeInitContext& context) override;
-    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
-    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;
-    void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
-    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext& context, const NodeFrameParameters& frameParameters, const StructuralSnapshot& snapshot) override;
-    void shutdown(NodeShutdownContext& context) override;
+    void declareOptions(nr::options::OptionCatalogBuilder &builder) const override;
+    void collectOptionAvailability(const nr::options::OptionFrameSnapshot &snapshot,
+                                   nr::options::OptionAvailabilityMap &availability) const override;
+    void initialize(NodeInitContext &context) override;
+    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override
+    {
+        return true;
+    }
+    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(
+        const NodeFrameParameters &frameParameters) const override;
+    void build(NodeBuildContext &context, const NodeFrameParameters &frameParameters) override;
+    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
+                                        const NodeFrameParameters &frameParameters,
+                                        const StructuralSnapshot &snapshot) override;
+    void shutdown(NodeShutdownContext &context) override;
 
   private:
-    void materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters);
+    void materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters);
     std::shared_ptr<detail::PathTracingRuntimeCache> runtime_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
 };

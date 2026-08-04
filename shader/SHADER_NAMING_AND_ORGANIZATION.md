@@ -81,7 +81,7 @@ This is a project-level invariant, not an optional authoring convention:
 - Pipeline assembly records the entry point name reported by Slang for Vulkan and logical shader-group lookup; that discovered name is output metadata, not compile-request input.
 - Link-time assignments belong only to the entry-point file whose code consumes them. A miss shader with no assignments therefore has no material or ray-generation variant identity.
 
-For example, PathTracing uses the separate roots `renderer/pathTracing/raygen.slang`, `renderer/pathTracing/miss.slang`, `renderer/pathTracing/anyHit.slang`, and `renderer/pathTracing/closestHit.slang` instead of collecting those stages in one module.
+For example, PathTracing uses separate roots for `raygen.slang`, material `miss.slang` / `anyHit.slang`, `shadowMiss.slang` / `shadowAnyHit.slang`, and `closestHit.slang` instead of collecting stages in one module. Entry-free `anyHitPolicy.slang` and `shadowPayload.slang` hold shared policy and payload declarations.
 
 ## Naming Conventions (`module` / `import` / `implementing`)
 
@@ -157,11 +157,11 @@ Shader-side `extern` values used as link-time scalar assignments must never spec
 
 ```slang
 public struct GlobalFrameUniforms { /* ... */ }
-[[vk::binding(0, 5)]]
+[[vk::binding(0, 3)]]
 public ConstantBuffer<GlobalFrameUniforms> gFrame;
 ```
 
-The global frame uniform uses Vulkan descriptor set 5, binding 0, and carries current camera matrices, previous view data for future motion-vector work, camera world position, and frame state. `frameState.xy` carries the monotonic 64-bit sample-frame ordinal used for per-frame shader sampling, while `frameState.z` preserves the resource frame slot. Keep set 0-4 available for the existing semantic descriptor-array conventions and local fixed bindings unless a shader-specific ABI document says otherwise. Set 6 is reserved by the common ABI for scene lights.
+The global frame uniform uses Vulkan descriptor set 3, binding 0, and carries current camera matrices, previous view data for future motion-vector work, camera world position, and frame state. `frameState.xy` carries the monotonic 64-bit sample-frame ordinal used for per-frame shader sampling, while `frameState.z` preserves the resource frame slot. Project shader resources follow one semantic set convention: standalone samplers use set 0, sampled or combined images use set 1, storage images use set 2, uniform/storage/texel buffers use set 3, and acceleration structures use set 4. In the shared set 3 ABI, `gFrame` owns binding 0 and the seven RT scene-sideband buffers own bindings 1 through 7. Set 5 is reserved by the common ABI for scene lights; set 6 is currently unused.
 
 Only shaders that actually reference `gFrame` require a matching C++ descriptor binding. Pass code should bind it through the reflection-backed `shaderCursor` path, normally via renderer pass builders such as:
 
@@ -172,20 +172,22 @@ Only shaders that actually reference `gFrame` require a matching C++ descriptor 
 `shader/include/sceneTextures.slang` declares the global scene material texture table:
 
 ```slang
-[[vk::binding(0, 1)]]
+[[vk::binding(2, 1)]]
 public Sampler2D<float4> gSceneTextures[];
 ```
+
+Set 1 bindings 0 and 1 are reserved for pass-local fixed sampled images, keeping this variable descriptor array at the numerically largest binding in every pipeline that imports `common`. The independent AppUi ABI uses set 1, binding 0 for `gUiTextures[]` because that array is its only set 1 binding.
 
 All material texture types share this single runtime descriptor array. `shader/include/share/materialTextureIds.slang` defines the common `MaterialTextureSlot` order, while `shader/include/materialTextureIds.slang` retains the packed `uint16` helper for shaders that actually use packed IDs. Texture ID 0 is the renderer-owned neutral white fallback (1x1 linear RGBA(1,1,1,1)); resident scene texture IDs are renderer-assigned descriptor indices. RT materials store one dense texture reference per slot with UV0/UV1 selection and an identity-default row-major 2x2 affine transform plus offset, so unauthored slots hold ID 0 and shaders always sample (a missing texture multiplies through as a neutral 1 factor, and a missing normal map decodes to tangent-space (0,0,1) via a zero effective normal scale) without a texture-presence branch. An authored but unavailable anisotropy texture is the explicit exception: RT keeps ID 0 and decodes the semantic fallback `(1, 0.5, 1)` instead of treating generic white as anisotropy data. The occlusion slot retains the same transport metadata but remains intentionally unsampled by current material shading. PSOs that consume this table install a nearest immutable sampler clamped to LOD0 during pipeline layout creation, so per-frame descriptor updates provide only image views and layouts. Raster shaders retain their authored texture coordinates but now observe the same nearest scene sampler. RT FAS-off reads sample those transformed coordinates directly at LOD0; FAS-on reads use `material/stochasticTextureFiltering.slang` to select one bilinear reconstruction tap with a semantic-specific scalar, move to that texel center, and perform the same nearest LOD0 fetch. The first-stage implementation has no mip, derivative, or ray-cone path. The PathTracing environment uses a separate linear immutable sampler.
 
 `shader/include/sceneLights.slang` declares the global scene light buffers:
 
 ```slang
-[[vk::binding(0, 6)]]
+[[vk::binding(0, 5)]]
 public ConstantBuffer<SceneLightGpuHeader> gSceneLightHeader;
-[[vk::binding(1, 6)]]
+[[vk::binding(1, 5)]]
 public StructuredBuffer<SceneLightGpuRecord> gSceneLights;
-[[vk::binding(2, 6)]]
+[[vk::binding(2, 5)]]
 public StructuredBuffer<SceneLightAliasGpuRecord> gSceneLightAliasTable;
 ```
 
@@ -194,6 +196,8 @@ public StructuredBuffer<SceneLightAliasGpuRecord> gSceneLightAliasTable;
 RT material shading declarations live in `shader/include/material`. The `[Flags] RtMaterialLayerFlag` value combines four physical layer bits with the `anisotropicBaseLobe` static-shading modifier (`none` == unlit; non-zero masks always contain `baseSurface`). The eight physical lit masks each have an isotropic form without the modifier and an anisotropic form with it. `payload.slang` owns the single material-variant dimension used by its specialized resolvers and BSDF variants; optional lobes remain inside static layer-flag blocks, while `BaseGgxDistribution<LayerFlags>` derives the base reflection/thin-transmission/volume-transmission GGX implementation from the same combined flag value. `pathTracing/chs.slang` exposes only `MaterialCHS<LayerFlags>`, which the PathTracing node binds through the link-time `CHS` alias. The common-visible extern bool `kEnableFilterAfterShading` is assigned only by the closest-hit entry variant and is used as that entry's compile-time filtering policy. It is a closest-hit codegen dimension, but it does not become another CHS generic or material/SBT key dimension. One CHS can sample eleven shading texture semantics. `payload.slang` and `sampling.slang` map them onto three packets drawn from a by-value `RandomSequence` copy in fixed order, leaving packet 2 W as padding; `stochasticTextureFiltering.slang` owns the scalar-remapped bilinear tap selection. Raygen advances the live path sequence by the same three packets for every material segment. Optional layers therefore do not shift later random dimensions. Any-hit alpha coverage uses the deterministic non-variant nearest sample and has no FAS input. Anisotropy texture presence, UV selection, affine transform, RG direction, B strength, and scalar rotation remain runtime material data, and clearcoat remains isotropic. Base and clearcoat GGX use joint correlated Smith masking-shadowing. Opaque base reflection and clearcoat construct UE-style `Spec.W` and `Spec.E` from the resource-free analytic split-sum directional-albedo fit: `Spec.W` compensates missing rough microfacet multiple scattering, while `Spec.E` drives diffuse/lower-layer preservation and lobe selection. Active thin and volume transmission deliberately retain their existing energy model because UE applies distinct reflection/transmission and eta-dependent glass compensation. Base, sheen, and clearcoat reflection keep their independently adjusted shading normals, then push their sampled directions forward onto the view-facing geometry hemisphere by mirroring directions below its tangent plane. Their evaluation and PDF paths sum the exterior direction and mirrored preimage with the same unit solid-angle Jacobian, so the fold preserves the rough-lobe probability and projected estimator kernel instead of absorbing the portion below the geometry normal. Diffuse remains in the raw shading frame, while transmission retains the complementary geometry-boundary test and is not folded. `RtMaterialLayerRecord.layer` remains restricted to the four physical single-bit layer values.
 
 RT resource declarations and hit reconstruction helpers live under `shader/include/rt`. `resources.slang` is an `implementing common;` fragment aggregated by `common.slang` and declares the shared RT scene-sideband bindings, so entry roots obtain that stable global ABI by importing `common` rather than importing the implementing file directly. `hitSurface.slang` remains an importable helper module that depends on ray-tracing builtins and reconstructs hit-surface data from those resources; only RT helper/entry code imports and calls it.
+
+PathTracing has two ray types in one Vulkan RT pipeline. `RtRayType` is a shared generated ABI with `material = 0`, `shadow = 1`, and `count = 2`; every trace call uses those names for SBT offset, geometry stride, and miss index. Material traversal uses the 128-byte `MaterialRayPayload`, `msMaterial`, optional `ahMaterialPolicy`, and a material closest-hit permutation. Visibility traversal uses the four-byte `ShadowRayPayload`, `msShadow`, and the fixed `ahShadow` group, with no closest-hit stage. Both any-hit entries call the payload-independent policy in `anyHitPolicy.slang`, which rejects single-sided back faces and failed alpha masks. Do not reintroduce a shared ray-kind field or numeric `0, 1, 0` routing literals.
 
 ## End-to-End Shader Build Pipeline
 
@@ -240,7 +244,7 @@ This section describes the runtime pipeline used by `ShaderService` from source 
 - Use the opaque Slang entry-point hash as the persistent target-artifact identity. Do not recreate Slang's dependency, build-version, option, or specialization hash in project code.
 - Probe the project-owned persistent SPIR-V cache before requesting backend code generation.
 - On a miss, dispatch only `linkedProgram->getEntryPointCode(0, 0)` to the dedicated bounded backend pool, copy the returned blob into project-owned storage on that worker, and publish it to the persistent cache atomically.
-- The backend pool defaults to six workers. Configuration may lower the limit, including one worker for diagnostics, but active backend jobs never exceed the configured limit.
+- The backend pool defaults dynamically to the device hardware-concurrency limit, capped by `nr::maxThreads`. Configuration may lower the limit, including one worker for diagnostics, but active backend jobs never exceed the configured limit.
 - Identical hashes within one `ShaderService` batch/process share one in-flight result, so the local backend pool compiles each artifact at most once. Separate processes may race, but each uses atomic publication and validates the winning artifact instead of relying on a cross-process in-flight registry.
 
 ### 7) Batch completion and pipeline construction

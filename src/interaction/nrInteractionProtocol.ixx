@@ -9,9 +9,12 @@ export namespace nr::interaction
 class OptionRpcProtocol
 {
   public:
-    explicit OptionRpcProtocol(nr::options::OptionSystem &optionSystem, std::size_t maximumResponseBytes = 256u * 1024u) noexcept;
+    explicit OptionRpcProtocol(nr::options::OptionSystem &optionSystem,
+                               std::size_t maximumResponseBytes = 256u * 1024u) noexcept;
 
-    [[nodiscard]] dependency::network::TextMessageResult handleText(std::string_view payload, const dependency::network::MessageContext &context, std::string &responseSlot) const;
+    [[nodiscard]] dependency::network::TextMessageResult handleText(std::string_view payload,
+                                                                    const dependency::network::MessageContext &context,
+                                                                    std::string &responseSlot) const;
 
   private:
     std::reference_wrapper<nr::options::OptionSystem> optionSystem_;

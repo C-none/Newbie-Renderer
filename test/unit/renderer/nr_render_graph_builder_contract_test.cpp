@@ -8,30 +8,24 @@ namespace
 {
 [[nodiscard]] bool hasImageFields(const nr::renderer::PassResourceUseDesc &use) noexcept
 {
-    return use.imageUsage.has_value() &&
-           use.imageAccess.has_value() &&
-           use.imageLayout.has_value() &&
+    return use.imageUsage.has_value() && use.imageAccess.has_value() && use.imageLayout.has_value() &&
            use.imageAspect.has_value();
 }
 
 [[nodiscard]] bool hasBufferFields(const nr::renderer::PassResourceUseDesc &use) noexcept
 {
-    return use.bufferUsage.has_value() &&
-           use.bufferAccess.has_value();
+    return use.bufferUsage.has_value() && use.bufferAccess.has_value();
 }
 
 [[nodiscard]] bool hasAccelerationStructureFields(const nr::renderer::PassResourceUseDesc &use) noexcept
 {
-    return use.accelerationStructureUsage.has_value() &&
-           use.accelerationStructureAccess.has_value();
+    return use.accelerationStructureUsage.has_value() && use.accelerationStructureAccess.has_value();
 }
 
-void requireContiguousCoverage(
-    const nr::renderer::PassParallelRecordPlan& plan,
-    std::size_t itemCount)
+void requireContiguousCoverage(const nr::renderer::PassParallelRecordPlan &plan, std::size_t itemCount)
 {
     auto expectedBegin = std::size_t{0};
-    std::ranges::for_each(plan.ranges, [&](const nr::renderer::ParallelRecordRange& range) {
+    std::ranges::for_each(plan.ranges, [&](const nr::renderer::ParallelRecordRange &range) {
         nr::test::requireEqual(range.begin, expectedBegin, "parallel ranges should be contiguous");
         nr::test::require(range.end >= range.begin, "parallel ranges should be non-inverted");
         expectedBegin = range.end;
@@ -40,8 +34,7 @@ void requireContiguousCoverage(
 }
 
 const nr::test::CaseRegistrar useFactoryCase{
-    "render graph resource-use factories encode stable intents",
-    [] {
+    "render graph resource-use factories encode stable intents", [] {
         auto handle = nr::renderer::GraphResourceHandle{3u};
 
         auto color = nr::renderer::use::colorWrite(handle);
@@ -71,9 +64,7 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(sampled.imageLayout == nr::renderer::ImageLayoutIntent::ShaderReadOnly);
         nr::test::require(sampled.readOnly, "sampled read should be read-only");
 
-        auto fragmentSampled = nr::renderer::use::withShaderStages(
-            sampled,
-            nr::renderer::ShaderStageIntent::Fragment);
+        auto fragmentSampled = nr::renderer::use::withShaderStages(sampled, nr::renderer::ShaderStageIntent::Fragment);
         nr::test::require(fragmentSampled.shaderStages == vk::PipelineStageFlagBits2::eFragmentShader);
         nr::test::require(fragmentSampled.imageAccess == sampled.imageAccess);
 
@@ -83,14 +74,12 @@ const nr::test::CaseRegistrar useFactoryCase{
         };
         auto graphicsShaderStages = nr::renderer::use::shaderStageScope(graphicsStageIntents);
         nr::test::require(graphicsShaderStages ==
-                          (vk::PipelineStageFlagBits2::eVertexShader |
-                           vk::PipelineStageFlagBits2::eFragmentShader));
+                          (vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader));
 
         auto sampledDepth = nr::renderer::use::make<nr::renderer::use::spec::SampledRead>(
-            handle,
-            nr::renderer::use::ImageUseOptions{
-                .aspect = nr::renderer::ImageAspectIntent::Depth,
-            });
+            handle, nr::renderer::use::ImageUseOptions{
+                        .aspect = nr::renderer::ImageAspectIntent::Depth,
+                    });
         nr::test::require(sampledDepth.imageAspect == nr::renderer::ImageAspectIntent::Depth);
         nr::test::require(sampledDepth.readOnly, "customized sampled read should preserve read-only intent");
 
@@ -124,20 +113,24 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(shaderBindingTable.readOnly, "shader binding table read should be read-only");
 
         auto accelerationStructureTrace = nr::renderer::use::accelerationStructureTraceRead(handle);
-        nr::test::require(hasAccelerationStructureFields(accelerationStructureTrace), "AS trace read should fill acceleration-structure fields");
-        nr::test::require(accelerationStructureTrace.accelerationStructureUsage == nr::renderer::AccelerationStructureUsageIntent::TraceInput);
-        nr::test::require(accelerationStructureTrace.accelerationStructureAccess == nr::renderer::AccelerationStructureAccessIntent::TraceRead);
+        nr::test::require(hasAccelerationStructureFields(accelerationStructureTrace),
+                          "AS trace read should fill acceleration-structure fields");
+        nr::test::require(accelerationStructureTrace.accelerationStructureUsage ==
+                          nr::renderer::AccelerationStructureUsageIntent::TraceInput);
+        nr::test::require(accelerationStructureTrace.accelerationStructureAccess ==
+                          nr::renderer::AccelerationStructureAccessIntent::TraceRead);
         nr::test::require(accelerationStructureTrace.readOnly, "AS trace read should be read-only");
 
         auto accelerationStructureStorage = nr::renderer::use::accelerationStructureStorageWrite(handle);
         nr::test::require(hasBufferFields(accelerationStructureStorage), "AS storage write should remain a buffer use");
-        nr::test::require(accelerationStructureStorage.bufferUsage == nr::renderer::BufferUsageIntent::AccelerationStructureStorage);
-        nr::test::require(accelerationStructureStorage.bufferAccess == nr::renderer::BufferAccessIntent::AccelerationStructureWrite);
+        nr::test::require(accelerationStructureStorage.bufferUsage ==
+                          nr::renderer::BufferUsageIntent::AccelerationStructureStorage);
+        nr::test::require(accelerationStructureStorage.bufferAccess ==
+                          nr::renderer::BufferAccessIntent::AccelerationStructureWrite);
     }};
 
 const nr::test::CaseRegistrar parallelPlannerCase{
-    "render graph parallel planner splits contiguous unordered ranges",
-    [] {
+    "render graph parallel planner splits contiguous unordered ranges", [] {
         auto zero = nr::renderer::ParallelRecordPlanner::planContiguousRanges(0, 4);
         nr::test::requireEqual(zero.itemCount, std::size_t{0});
         nr::test::requireEqual(zero.assignedThreadCount, std::uint32_t{0});
@@ -161,9 +154,8 @@ const nr::test::CaseRegistrar parallelPlannerCase{
 
         auto twenty = nr::renderer::ParallelRecordPlanner::planContiguousRanges(20, 10);
         nr::test::requireEqual(twenty.assignedThreadCount, std::uint32_t{10});
-        nr::test::require(std::ranges::all_of(twenty.ranges, [](const nr::renderer::ParallelRecordRange& range) {
-            return range.size() == 2u;
-        }));
+        nr::test::require(std::ranges::all_of(
+            twenty.ranges, [](const nr::renderer::ParallelRecordRange &range) { return range.size() == 2u; }));
         requireContiguousCoverage(twenty, 20);
 
         auto large = nr::renderer::ParallelRecordPlanner::planContiguousRanges(1000, 4);
@@ -172,8 +164,7 @@ const nr::test::CaseRegistrar parallelPlannerCase{
     }};
 
 const nr::test::CaseRegistrar accelerationStructureResourceCase{
-    "render graph builder accepts acceleration structure resources",
-    [] {
+    "render graph builder accepts acceleration structure resources", [] {
         auto builder = nr::renderer::RenderGraphBuilder{};
         auto node = builder.addNode("RayTracing", nr::renderer::QueueDomain::Compute);
 
@@ -184,23 +175,19 @@ const nr::test::CaseRegistrar accelerationStructureResourceCase{
         });
 
         auto uses = std::array{nr::renderer::use::accelerationStructureTraceRead(tlas)};
-        auto pass = builder.addPass(
-            "RayTracing.Trace",
-            node,
-            uses,
-            [](const nr::renderer::PassRecordContext &) {});
+        auto pass = builder.addPass("RayTracing.Trace", node, uses, [](const nr::renderer::PassRecordContext &) {});
 
         auto frame = builder.build();
         nr::test::require(pass.valid(), "AS pass should be valid");
         nr::test::requireEqual(frame.resources.size(), std::size_t{1});
-        nr::test::require(std::holds_alternative<nr::renderer::GraphImportedAccelerationStructureDesc>(frame.resources.front().desc));
+        nr::test::require(
+            std::holds_alternative<nr::renderer::GraphImportedAccelerationStructureDesc>(frame.resources.front().desc));
         nr::test::require(frame.passes.front().resourceUses.front().accelerationStructureAccess ==
                           nr::renderer::AccelerationStructureAccessIntent::TraceRead);
     }};
 
 const nr::test::CaseRegistrar builderFrameCase{
-    "render graph builder records resources passes submits and execution order",
-    [] {
+    "render graph builder records resources passes submits and execution order", [] {
         auto builder = nr::renderer::RenderGraphBuilder{};
         auto graphicsNode = builder.addNode("Geometry", nr::renderer::QueueDomain::Graphics);
         auto computeNode = builder.addNode("Compute", nr::renderer::QueueDomain::Compute);
@@ -223,20 +210,14 @@ const nr::test::CaseRegistrar builderFrameCase{
             nr::renderer::use::colorWrite(color),
             nr::renderer::use::uniformRead(constants),
         };
-        auto graphicsPass = builder.addPass(
-            "Geometry.Main",
-            graphicsNode,
-            graphicsUses,
-            [](const nr::renderer::PassRecordContext &) {});
+        auto graphicsPass = builder.addPass("Geometry.Main", graphicsNode, graphicsUses,
+                                            [](const nr::renderer::PassRecordContext &) {});
 
         auto submit = builder.addSubmitNode("GraphicsToCompute");
 
         auto computeUses = std::array{nr::renderer::use::sampledRead(color)};
-        auto computePass = builder.addPass(
-            "Compute.Sample",
-            computeNode,
-            computeUses,
-            [](const nr::renderer::PassRecordContext &) {});
+        auto computePass =
+            builder.addPass("Compute.Sample", computeNode, computeUses, [](const nr::renderer::PassRecordContext &) {});
 
         auto frame = builder.build();
         nr::test::requireEqual(frame.resources.size(), std::size_t{2});
@@ -263,8 +244,7 @@ const nr::test::CaseRegistrar builderFrameCase{
     }};
 
 const nr::test::CaseRegistrar builderParallelPassCase{
-    "render graph builder accepts unordered parallel record passes",
-    [] {
+    "render graph builder accepts unordered parallel record passes", [] {
         auto builder = nr::renderer::RenderGraphBuilder{};
         auto node = builder.addNode("Parallel", nr::renderer::QueueDomain::Graphics);
         auto color = builder.addResource(nr::renderer::GraphTransientImageDesc{
@@ -274,29 +254,26 @@ const nr::test::CaseRegistrar builderParallelPassCase{
         });
 
         auto uses = std::array{nr::renderer::use::colorWrite(color)};
-        auto pass = builder.addPass(
-            "Parallel.Draws",
-            node,
-            uses,
-            nr::renderer::PassParallelRecordDesc{
-                .itemCount = [](const nr::renderer::PassRecordContext&) {
-                    return std::size_t{128};
-                },
-                .recordRange = [](const nr::renderer::PassRangeRecordContext&) {},
-            },
-            [](const nr::renderer::PassPrepareContext&) {});
+        auto pass =
+            builder.addPass("Parallel.Draws", node, uses,
+                            nr::renderer::PassParallelRecordDesc{
+                                .itemCount = [](const nr::renderer::PassRecordContext &) { return std::size_t{128}; },
+                                .recordRange = [](const nr::renderer::PassRangeRecordContext &) {},
+                            },
+                            [](const nr::renderer::PassPrepareContext &) {});
         nr::test::require(pass.valid(), "parallel pass should be valid");
 
         auto frame = builder.build();
         nr::test::requireEqual(frame.passes.size(), std::size_t{1});
         nr::test::require(!frame.passes.front().record, "parallel pass should not retain a serial record callback");
-        nr::test::require(frame.passes.front().parallelRecord.has_value(), "parallel pass should retain a parallel record desc");
-        nr::test::require(static_cast<bool>(frame.passes.front().prepare), "parallel pass should retain prepare callback");
+        nr::test::require(frame.passes.front().parallelRecord.has_value(),
+                          "parallel pass should retain a parallel record desc");
+        nr::test::require(static_cast<bool>(frame.passes.front().prepare),
+                          "parallel pass should retain prepare callback");
     }};
 
 const nr::test::CaseRegistrar transferOpsClearCase{
-    "renderer transfer clear helpers encode stable pass uses",
-    [] {
+    "renderer transfer clear helpers encode stable pass uses", [] {
         auto builder = nr::renderer::RenderGraphBuilder{};
         auto node = builder.addNode("TransferOps", nr::renderer::QueueDomain::Compute);
         auto bindlessCache = nr::renderer::BindlessImageTableCache{};
@@ -331,33 +308,30 @@ const nr::test::CaseRegistrar transferOpsClearCase{
             .aspect = nr::renderer::ImageAspectIntent::DepthStencil,
         });
 
-        static_cast<void>(nr::renderer::ops::clearBuffer(
-            context,
-            "Clear.Buffer",
-            nr::renderer::ops::ClearBufferPassDesc{.buffer = buffer}));
+        static_cast<void>(nr::renderer::ops::clearBuffer(context, "Clear.Buffer",
+                                                         nr::renderer::ops::ClearBufferPassDesc{.buffer = buffer}));
         static_cast<void>(nr::renderer::ops::clearColorImage(
-            context,
-            "Clear.Color",
-            nr::renderer::ops::ClearColorImagePassDesc{.image = color}));
+            context, "Clear.Color", nr::renderer::ops::ClearColorImagePassDesc{.image = color}));
         static_cast<void>(nr::renderer::ops::clearDepthStencilImage(
-            context,
-            "Clear.DepthStencil",
-            nr::renderer::ops::ClearDepthStencilImagePassDesc{.image = depthStencil}));
+            context, "Clear.DepthStencil", nr::renderer::ops::ClearDepthStencilImagePassDesc{.image = depthStencil}));
 
         auto frame = builder.build();
         nr::test::requireEqual(frame.passes.size(), std::size_t{3});
         nr::test::require(!frame.passes[0].isCopyPass, "clear buffer should be a recorded transfer pass");
         nr::test::require(static_cast<bool>(frame.passes[0].record), "clear buffer should retain record callback");
-        nr::test::require(frame.passes[0].resourceUses.front().bufferUsage == nr::renderer::BufferUsageIntent::TransferDst);
-        nr::test::require(frame.passes[1].resourceUses.front().imageUsage == nr::renderer::ImageUsageIntent::TransferDst);
+        nr::test::require(frame.passes[0].resourceUses.front().bufferUsage ==
+                          nr::renderer::BufferUsageIntent::TransferDst);
+        nr::test::require(frame.passes[1].resourceUses.front().imageUsage ==
+                          nr::renderer::ImageUsageIntent::TransferDst);
         nr::test::require(frame.passes[1].resourceUses.front().imageAspect == nr::renderer::ImageAspectIntent::Color);
-        nr::test::require(frame.passes[2].resourceUses.front().imageUsage == nr::renderer::ImageUsageIntent::TransferDst);
-        nr::test::require(frame.passes[2].resourceUses.front().imageAspect == nr::renderer::ImageAspectIntent::DepthStencil);
+        nr::test::require(frame.passes[2].resourceUses.front().imageUsage ==
+                          nr::renderer::ImageUsageIntent::TransferDst);
+        nr::test::require(frame.passes[2].resourceUses.front().imageAspect ==
+                          nr::renderer::ImageAspectIntent::DepthStencil);
     }};
 
 const nr::test::CaseRegistrar transferOpsCopyCase{
-    "renderer transfer copy helpers encode buffer image combinations",
-    [] {
+    "renderer transfer copy helpers encode buffer image combinations", [] {
         auto builder = nr::renderer::RenderGraphBuilder{};
         auto node = builder.addNode("TransferOps", nr::renderer::QueueDomain::Compute);
         auto bindlessCache = nr::renderer::BindlessImageTableCache{};
@@ -376,8 +350,10 @@ const nr::test::CaseRegistrar transferOpsCopyCase{
             .frameDataResources = std::ref(frameDataResources),
         };
 
-        auto sourceBuffer = context.addResource(nr::renderer::GraphTransientBufferDesc{.debugName = "Copy.SourceBuffer", .size = 256});
-        auto destinationBuffer = context.addResource(nr::renderer::GraphTransientBufferDesc{.debugName = "Copy.DestinationBuffer", .size = 256});
+        auto sourceBuffer =
+            context.addResource(nr::renderer::GraphTransientBufferDesc{.debugName = "Copy.SourceBuffer", .size = 256});
+        auto destinationBuffer = context.addResource(
+            nr::renderer::GraphTransientBufferDesc{.debugName = "Copy.DestinationBuffer", .size = 256});
         auto sourceImage = context.addResource(nr::renderer::GraphTransientImageDesc{
             .debugName = "Copy.SourceImage",
             .extent = vk::Extent3D{32, 16, 1},
@@ -396,16 +372,14 @@ const nr::test::CaseRegistrar transferOpsCopyCase{
         });
 
         static_cast<void>(nr::renderer::ops::copyBufferToBuffer(
-            context,
-            "Copy.BufferToBuffer",
+            context, "Copy.BufferToBuffer",
             nr::renderer::CopyBufferToBufferPassDesc{.source = sourceBuffer, .destination = destinationBuffer}));
         static_cast<void>(nr::renderer::ops::copyBufferToImage(
-            context,
-            "Copy.BufferToImage",
-            nr::renderer::CopyBufferToImagePassDesc{.sourceBuffer = sourceBuffer, .destinationImage = destinationImage}));
+            context, "Copy.BufferToImage",
+            nr::renderer::CopyBufferToImagePassDesc{.sourceBuffer = sourceBuffer,
+                                                    .destinationImage = destinationImage}));
         static_cast<void>(nr::renderer::ops::copyImageToBuffer(
-            context,
-            "Copy.ImageToReadback",
+            context, "Copy.ImageToReadback",
             nr::renderer::CopyImageToBufferPassDesc{
                 .sourceImage = depthStencilImage,
                 .destinationBuffer = destinationBuffer,
@@ -413,24 +387,25 @@ const nr::test::CaseRegistrar transferOpsCopyCase{
                 .destinationIntent = nr::renderer::CopyBufferDestinationIntent::Readback,
                 .destinationBufferRangeSize = 128,
             }));
-        static_cast<void>(nr::renderer::ops::copyImageToImage(
-            context,
-            "Copy.ImageToPresent",
-            nr::renderer::CopyImageToImagePassDesc{
-                .source = sourceImage,
-                .destination = destinationImage,
-                .presentDestination = true,
-            }));
+        static_cast<void>(nr::renderer::ops::copyImageToImage(context, "Copy.ImageToPresent",
+                                                              nr::renderer::CopyImageToImagePassDesc{
+                                                                  .source = sourceImage,
+                                                                  .destination = destinationImage,
+                                                                  .presentDestination = true,
+                                                              }));
 
         auto frame = builder.build();
         nr::test::requireEqual(frame.passes.size(), std::size_t{4});
-        nr::test::require(std::ranges::all_of(frame.passes, [](const nr::renderer::PassExecutionDesc& pass) {
-            return pass.isCopyPass && pass.copy.has_value() && !pass.record;
-        }), "copy helpers should emit implicit copy passes");
+        nr::test::require(std::ranges::all_of(frame.passes,
+                                              [](const nr::renderer::PassExecutionDesc &pass) {
+                                                  return pass.isCopyPass && pass.copy.has_value() && !pass.record;
+                                              }),
+                          "copy helpers should emit implicit copy passes");
         nr::test::require(frame.passes[0].resourceUses[0].bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
         nr::test::require(frame.passes[0].resourceUses[1].bufferUsage == nr::renderer::BufferUsageIntent::TransferDst);
         nr::test::require(frame.passes[1].resourceUses[0].bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
-        nr::test::require(frame.passes[1].resourceUses[1].imageUsage == nr::renderer::ImageUsageIntent::CopyDestination);
+        nr::test::require(frame.passes[1].resourceUses[1].imageUsage ==
+                          nr::renderer::ImageUsageIntent::CopyDestination);
         nr::test::require(frame.passes[1].resourceUses[1].imageAspect == nr::renderer::ImageAspectIntent::Color);
         nr::test::require(frame.passes[2].resourceUses[0].imageUsage == nr::renderer::ImageUsageIntent::CopySource);
         nr::test::require(frame.passes[2].resourceUses[0].imageAspect == nr::renderer::ImageAspectIntent::Depth);

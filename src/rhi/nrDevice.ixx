@@ -85,9 +85,12 @@ struct Vulkan14PropertySnapshot
     bool blockTexelViewCompatibleMultipleLayers = false;
     std::uint32_t maxCombinedImageSamplerDescriptorCount = 0;
     bool fragmentShadingRateClampCombinerInputs = false;
-    vk::PipelineRobustnessBufferBehavior defaultRobustnessStorageBuffers = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
-    vk::PipelineRobustnessBufferBehavior defaultRobustnessUniformBuffers = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
-    vk::PipelineRobustnessBufferBehavior defaultRobustnessVertexInputs = vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
+    vk::PipelineRobustnessBufferBehavior defaultRobustnessStorageBuffers =
+        vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
+    vk::PipelineRobustnessBufferBehavior defaultRobustnessUniformBuffers =
+        vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
+    vk::PipelineRobustnessBufferBehavior defaultRobustnessVertexInputs =
+        vk::PipelineRobustnessBufferBehavior::eDeviceDefault;
     vk::PipelineRobustnessImageBehavior defaultRobustnessImages = vk::PipelineRobustnessImageBehavior::eDeviceDefault;
     std::vector<vk::ImageLayout> hostImageCopySrcLayouts{};
     std::vector<vk::ImageLayout> hostImageCopyDstLayouts{};
@@ -161,21 +164,21 @@ class Device
 
     [[nodiscard]] bool hasEnabledDeviceExtension(std::string_view extension) const;
 
-    void initialize(
-        std::string const &_appName = {"DefaultApp"},
-        std::string const &_engineName = {"DefaultEngine"},
-        PipelineCacheConfig pipelineCache = {});
+    void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"},
+                    PipelineCacheConfig pipelineCache = {});
 
     [[nodiscard]] FrameBeginResult beginFrame();
 
     [[nodiscard]] FrameAcquireResult acquireFrameImage(
         std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max());
 
-    void submitFrameBatch(CommandBatch&& batch, QueueRole submitRole, bool signalForPresent, vk::PipelineStageFlags2 imageAvailableWaitStage);
+    void submitFrameBatch(CommandBatch &&batch, QueueRole submitRole, bool signalForPresent,
+                          vk::PipelineStageFlags2 imageAvailableWaitStage);
 
-    void submitFrameBatch(CommandBatch&& batch, QueueRole submitRole = QueueRole::Compute, bool signalForPresent = false);
+    void submitFrameBatch(CommandBatch &&batch, QueueRole submitRole = QueueRole::Compute,
+                          bool signalForPresent = false);
 
-    void submitFrame(CommandBatch&& batch, QueueRole submitRole = QueueRole::Compute);
+    void submitFrame(CommandBatch &&batch, QueueRole submitRole = QueueRole::Compute);
 
     [[nodiscard]] bool canPresentCurrentFrame() const noexcept;
 
@@ -185,7 +188,7 @@ class Device
 
     [[nodiscard]] PresentResult presentFrame();
 
-    [[nodiscard]] PresentResult endFrame(CommandBatch&& batch, QueueRole submitRole = QueueRole::Compute);
+    [[nodiscard]] PresentResult endFrame(CommandBatch &&batch, QueueRole submitRole = QueueRole::Compute);
 
     vk::raii::Instance makeInstance(std::uint32_t apiVersion = vk::ApiVersion14) const;
 
@@ -212,7 +215,7 @@ class Device
     [[nodiscard]] std::shared_ptr<DlssContext> dlssContext();
 
     [[nodiscard]] std::unique_ptr<DlssRayReconstructionFeature> createDlssRayReconstructionFeature(
-        const DlssRayReconstructionCreateDesc& desc);
+        const DlssRayReconstructionCreateDesc &desc);
 
     ~Device();
 
@@ -236,11 +239,14 @@ class Device
     std::vector<std::string> instanceEnabledLayers{};
     std::vector<std::string> instanceEnabledExtensions{};
     std::vector<std::string> deviceEnabledExtensions{
-        vk::KHRSwapchainExtensionName,          vk::KHRDeferredHostOperationsExtensionName,      vk::EXTMeshShaderExtensionName,       vk::KHRAccelerationStructureExtensionName,
-        vk::KHRRayTracingPipelineExtensionName, vk::KHRRayTracingMaintenance1ExtensionName,      vk::KHRPipelineLibraryExtensionName,  vk::KHRRayQueryExtensionName,
-        vk::EXTOpacityMicromapExtensionName,    vk::EXTRayTracingInvocationReorderExtensionName, vk::NVCooperativeVectorExtensionName, vk::EXTExtendedDynamicState3ExtensionName,
-        vk::EXTMemoryBudgetExtensionName,       vk::KHRMaintenance8ExtensionName,                 vk::KHRMaintenance9ExtensionName,
-        vk::EXTFullScreenExclusiveExtensionName,
+        vk::KHRSwapchainExtensionName,          vk::KHRDeferredHostOperationsExtensionName,
+        vk::EXTMeshShaderExtensionName,         vk::KHRAccelerationStructureExtensionName,
+        vk::KHRRayTracingPipelineExtensionName, vk::KHRRayTracingMaintenance1ExtensionName,
+        vk::KHRPipelineLibraryExtensionName,    vk::KHRRayQueryExtensionName,
+        vk::EXTOpacityMicromapExtensionName,    vk::EXTRayTracingInvocationReorderExtensionName,
+        vk::NVCooperativeVectorExtensionName,   vk::EXTExtendedDynamicState3ExtensionName,
+        vk::EXTMemoryBudgetExtensionName,       vk::KHRMaintenance8ExtensionName,
+        vk::KHRMaintenance9ExtensionName,       vk::EXTFullScreenExclusiveExtensionName,
     };
     RayTracingCapabilitySnapshot rtCapabilities_{};
     DescriptorIndexingCapabilitySnapshot descriptorIndexingCapabilities_{};

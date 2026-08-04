@@ -7,11 +7,13 @@ import :type;
 
 namespace nr::rhi
 {
-GpuQueue::GpuQueue(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, QueueRole type) : queue_(device.getQueue(queueFamilyIndex, queueIndex_)), queueFamilyIndex_(queueFamilyIndex), type_(type)
+GpuQueue::GpuQueue(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, QueueRole type)
+    : queue_(device.getQueue(queueFamilyIndex, queueIndex_)), queueFamilyIndex_(queueFamilyIndex), type_(type)
 {
 }
 
-void GpuQueue::submit(const vk::raii::CommandBuffer &commandBuffer, std::optional<std::reference_wrapper<const vk::raii::Fence>> fence)
+void GpuQueue::submit(const vk::raii::CommandBuffer &commandBuffer,
+                      std::optional<std::reference_wrapper<const vk::raii::Fence>> fence)
 {
     std::array<vk::CommandBufferSubmitInfo, 1> commandBufferInfos{
         vk::CommandBufferSubmitInfo{*commandBuffer, 0},
@@ -24,7 +26,7 @@ void GpuQueue::submit(const vk::raii::CommandBuffer &commandBuffer, std::optiona
     queue_.submit2(submitInfo, fence ? *fence.value().get() : vk::Fence{});
 }
 
-void GpuQueue::submit(CommandBatch&& batch, std::optional<std::reference_wrapper<const vk::raii::Fence>> fence)
+void GpuQueue::submit(CommandBatch &&batch, std::optional<std::reference_wrapper<const vk::raii::Fence>> fence)
 {
     auto frameBoundary = batch.frameBoundarySubmitInfo();
     auto submitInfo = batch.submitInfo2View(frameBoundary.has_value() ? std::addressof(*frameBoundary) : nullptr);
@@ -57,7 +59,8 @@ void GpuQueue::waitIdle()
     return *queue_ != nullptr;
 }
 
-QueueManager::QueueManager(GpuQueue graphics, GpuQueue compute, GpuQueue transfer) : graphics_(std::move(graphics)), compute_(std::move(compute)), transfer_(std::move(transfer))
+QueueManager::QueueManager(GpuQueue graphics, GpuQueue compute, GpuQueue transfer)
+    : graphics_(std::move(graphics)), compute_(std::move(compute)), transfer_(std::move(transfer))
 {
 }
 

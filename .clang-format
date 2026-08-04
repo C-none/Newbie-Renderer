@@ -1,7 +1,36 @@
+---
 Language: Cpp
 BasedOnStyle: Microsoft
-# IndentWidth: 4
-# TabWidth: 4
-UseTab: Never
 
-ColumnLimit: 300
+Standard: Latest
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+LineEnding: CRLF
+
+DerivePointerAlignment: false
+PointerAlignment: Right
+ReferenceAlignment: Pointer
+ReflowComments: Never
+InsertNewlineAtEOF: true
+SortIncludes:
+  Enabled: false
+...
+---
+Language: CSharp
+BasedOnStyle: Microsoft
+
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+LineEnding: CRLF
+
+ReflowComments: Never
+InsertNewlineAtEOF: true
+SortIncludes:
+  Enabled: false
+...

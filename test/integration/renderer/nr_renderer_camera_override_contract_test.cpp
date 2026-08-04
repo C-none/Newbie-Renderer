@@ -33,10 +33,7 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
 [[nodiscard]] std::array<float, 16> identityTransform() noexcept
 {
     return {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f,
+        1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
     };
 }
 
@@ -48,19 +45,21 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
     scene.materials.push_back(nr::load::MaterialAsset{.name = "camera_override_material"});
     scene.meshes.push_back(nr::load::MeshAsset{
         .name = "camera_override_triangle",
-        .vertices = {
-            nr::load::VertexAsset{.position = {-0.5f, -0.5f, 0.0f}},
-            nr::load::VertexAsset{.position = {0.5f, -0.5f, 0.0f}},
-            nr::load::VertexAsset{.position = {0.0f, 0.5f, 0.0f}},
-        },
-        .indices = {0u, 1u, 2u},
-        .geometries = {
-            nr::load::MeshGeometryAsset{
-                .name = "camera_override_triangle_geometry_0",
-                .indexCount = 3,
-                .materialIndex = 0,
+        .vertices =
+            {
+                nr::load::VertexAsset{.position = {-0.5f, -0.5f, 0.0f}},
+                nr::load::VertexAsset{.position = {0.5f, -0.5f, 0.0f}},
+                nr::load::VertexAsset{.position = {0.0f, 0.5f, 0.0f}},
             },
-        },
+        .indices = {0u, 1u, 2u},
+        .geometries =
+            {
+                nr::load::MeshGeometryAsset{
+                    .name = "camera_override_triangle_geometry_0",
+                    .indexCount = 3,
+                    .materialIndex = 0,
+                },
+            },
     });
 
     scene.nodes.resize(3);
@@ -106,46 +105,49 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
 
     return nr::renderer::RendererGraphSpec{
-        .nodes = {
-            nr::renderer::NodeCreateInfo{
-                .runtime = normalBuffer,
-                .config = nr::renderer::NodeConfig{
-                    .instanceName = "NormalBuffer",
+        .nodes =
+            {
+                nr::renderer::NodeCreateInfo{
+                    .runtime = normalBuffer,
+                    .config =
+                        nr::renderer::NodeConfig{
+                            .instanceName = "NormalBuffer",
+                        },
+                },
+                nr::renderer::NodeCreateInfo{
+                    .runtime = ui,
+                    .config =
+                        nr::renderer::NodeConfig{
+                            .instanceName = "Ui",
+                        },
+                },
+                nr::renderer::NodeCreateInfo{
+                    .runtime = present,
+                    .config =
+                        nr::renderer::NodeConfig{
+                            .instanceName = "Present",
+                            .queue = nr::renderer::QueueDomain::Compute,
+                        },
                 },
             },
-            nr::renderer::NodeCreateInfo{
-                .runtime = ui,
-                .config = nr::renderer::NodeConfig{
-                    .instanceName = "Ui",
+        .submitNodes =
+            {
+                nr::renderer::SubmitNodeSpec{
+                    .debugName = "CameraOverride.GraphicsToCompute",
+                    .afterNodeIndex = 1,
                 },
             },
-            nr::renderer::NodeCreateInfo{
-                .runtime = present,
-                .config = nr::renderer::NodeConfig{
-                    .instanceName = "Present",
-                    .queue = nr::renderer::QueueDomain::Compute,
-                },
-            },
-        },
-        .submitNodes = {
-            nr::renderer::SubmitNodeSpec{
-                .debugName = "CameraOverride.GraphicsToCompute",
-                .afterNodeIndex = 1,
-            },
-        },
     };
 }
 
 [[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult& preflight)
+    const nr::renderer::RendererGraphPreflightResult &preflight)
 {
     auto values = nr::options::OptionValueMap{};
     auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
         values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(
-            entry.first,
-            nr::options::OptionAvailability{.available = true, .reason = {}});
+        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
     });
     return nr::options::OptionFrameSnapshot{
         .catalog = preflight.optionCatalog,
@@ -160,8 +162,7 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
 }
 
 const nr::test::CaseRegistrar cameraOverrideCase{
-    "renderer camera override switches scene extraction to override frustum",
-    [] {
+    "renderer camera override switches scene extraction to override frustum", [] {
         auto renderer = nr::renderer::Renderer{};
 
         renderer.initialize(nr::renderer::RendererCreateInfo{
@@ -183,9 +184,7 @@ const nr::test::CaseRegistrar cameraOverrideCase{
 
         auto graphSpec = makeGraphSpec(renderer.device().presentationContext.swapchainFormat());
         auto const preflight = renderer.preflightGraph(graphSpec);
-        nr::test::require(
-            static_cast<bool>(preflight),
-            "camera override graph should pass preflight");
+        nr::test::require(static_cast<bool>(preflight), "camera override graph should pass preflight");
         nr::test::require(renderer.installGraph(graphSpec), "camera override graph should install");
         auto const optionSnapshot = makeDefaultSnapshot(preflight);
 
@@ -209,12 +208,9 @@ const nr::test::CaseRegistrar cameraOverrideCase{
 
         auto overrideCamera = viewerCamera.buildRendererCameraOverride();
         overrideCamera.frustum.planes = {
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
+            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f}, glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
+            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f}, glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
+            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f}, glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
         };
 
         auto overridden = renderer.renderFrame(nr::renderer::RendererFrameInput{
@@ -230,15 +226,12 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         nr::test::require(overridden.usedCameraOverride, "override frame should report camera override usage");
         nr::test::requireEqual(overridden.sceneBridgeDrawCount, std::uint32_t{0},
                                "override custom frustum should be able to cull all bridge draws");
-        nr::test::requireEqual(
-            overridden.sceneTlasPacketCount,
-            baseline.sceneTlasPacketCount,
-            "RT/TLAS extraction must ignore camera override frustum culling");
+        nr::test::requireEqual(overridden.sceneTlasPacketCount, baseline.sceneTlasPacketCount,
+                               "RT/TLAS extraction must ignore camera override frustum culling");
     }};
 
 const nr::test::CaseRegistrar rendererDestructorCase{
-    "renderer destructor shuts installed nodes down exactly once",
-    [] {
+    "renderer destructor shuts installed nodes down exactly once", [] {
         auto shutdownCount = std::make_shared<std::size_t>(0u);
         {
             auto renderer = nr::renderer::Renderer{};
@@ -248,23 +241,22 @@ const nr::test::CaseRegistrar rendererDestructorCase{
             });
 
             auto runtime = std::make_shared<ShutdownCountingNode>(shutdownCount);
-            nr::test::require(
-                renderer.installGraph(nr::renderer::RendererGraphSpec{
-                    .nodes = {
-                        nr::renderer::NodeCreateInfo{
-                            .runtime = std::move(runtime),
-                            .config = nr::renderer::NodeConfig{
-                                .instanceName = "ShutdownCounting",
-                            },
-                        },
-                    },
-                }),
-                "renderer lifetime graph should install");
+            nr::test::require(renderer.installGraph(nr::renderer::RendererGraphSpec{
+                                  .nodes =
+                                      {
+                                          nr::renderer::NodeCreateInfo{
+                                              .runtime = std::move(runtime),
+                                              .config =
+                                                  nr::renderer::NodeConfig{
+                                                      .instanceName = "ShutdownCounting",
+                                                  },
+                                          },
+                                      },
+                              }),
+                              "renderer lifetime graph should install");
         }
 
-        nr::test::requireEqual(
-            *shutdownCount,
-            std::size_t{1u},
-            "Renderer RAII teardown should invoke each installed node shutdown exactly once");
+        nr::test::requireEqual(*shutdownCount, std::size_t{1u},
+                               "Renderer RAII teardown should invoke each installed node shutdown exactly once");
     }};
 } // namespace

@@ -24,25 +24,20 @@ export namespace nr::scene::detail
 
 [[nodiscard]] nr::resource::ImageLevel prepareRawImageLevel(const nr::load::EmbeddedRawTexture &raw);
 
-[[nodiscard]] std::string makeDeterministicChildName(SiblingNameTable &namesByParent,
-                                                             flecs::entity_t parent,
-                                                             std::string_view sourceName);
+[[nodiscard]] std::string makeDeterministicChildName(SiblingNameTable &namesByParent, flecs::entity_t parent,
+                                                     std::string_view sourceName);
 
-[[nodiscard]] std::string makeTemplateNodeEntityName(SceneTemplateHandle handle,
-                                                             std::uint32_t sourceNodeIndex,
-                                                             std::string_view resolvedName);
+[[nodiscard]] std::string makeTemplateNodeEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                     std::string_view resolvedName);
 
-[[nodiscard]] std::string makeTemplateMeshEntityName(SceneTemplateHandle handle,
-                                                             std::uint32_t sourceNodeIndex,
-                                                             std::uint32_t meshSlot);
+[[nodiscard]] std::string makeTemplateMeshEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                     std::uint32_t meshSlot);
 
-[[nodiscard]] std::string makeTemplateCameraEntityName(SceneTemplateHandle handle,
-                                                               std::uint32_t sourceNodeIndex,
-                                                               std::uint32_t cameraSlot);
+[[nodiscard]] std::string makeTemplateCameraEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                       std::uint32_t cameraSlot);
 
-[[nodiscard]] std::string makeTemplateLightEntityName(SceneTemplateHandle handle,
-                                                              std::uint32_t sourceNodeIndex,
-                                                              std::uint32_t lightSlot);
+[[nodiscard]] std::string makeTemplateLightEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                      std::uint32_t lightSlot);
 
 [[nodiscard]] glm::vec3 toVec3(std::array<float, 3> const &value);
 
@@ -52,15 +47,12 @@ export namespace nr::scene::detail
 
 [[nodiscard]] glm::vec3 transformPoint(const glm::mat4 &matrix, const glm::vec3 &point);
 
-[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds,
-                                                       const glm::mat4 &matrix);
+[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds, const glm::mat4 &matrix);
 
 [[nodiscard]] std::optional<nr::resource::LightType> mapLightType(std::string_view typeName);
 
 template <typename HandleT>
-inline void appendUniqueHandle(std::vector<HandleT> &handles,
-                               std::set<std::uint64_t> &seen,
-                               HandleT handle)
+inline void appendUniqueHandle(std::vector<HandleT> &handles, std::set<std::uint64_t> &seen, HandleT handle)
 {
     if (seen.emplace(handle.packed()).second)
     {

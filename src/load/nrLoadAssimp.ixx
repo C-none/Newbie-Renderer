@@ -8,7 +8,7 @@ import std;
 export namespace nr::load
 {
 [[nodiscard]] nr::resource::MaterialTextureSlotSemantic assimpTextureSlotSemantic(std::uint32_t textureTypeRaw,
-                                                                                 std::uint32_t textureSlot) noexcept;
+                                                                                  std::uint32_t textureSlot) noexcept;
 
 struct AssimpSceneImporter : SceneImporterBackendBase<AssimpSceneImporter>
 {
@@ -21,6 +21,6 @@ struct AssimpSceneImporter : SceneImporterBackendBase<AssimpSceneImporter>
     };
 
     [[nodiscard]] static bool supportsExtension(std::string_view extension);
-    [[nodiscard]] static SceneImportResult importScene(const SceneLoadRequest& request);
+    [[nodiscard]] static SceneImportResult importScene(const SceneLoadRequest &request);
 };
 } // namespace nr::load

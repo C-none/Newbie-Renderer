@@ -26,30 +26,25 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
     };
 
     const auto hasFlags = [&](std::size_t index, vk::QueueFlags flags) {
-        const auto& family = queueFamilyProperties[index];
+        const auto &family = queueFamilyProperties[index];
         return family.queueCount > 0 && (family.queueFlags & flags) == flags;
     };
 
-    auto graphicsFamily = findFirst([&](std::size_t index) {
-        return hasFlags(index, vk::QueueFlagBits::eGraphics);
-    });
+    auto graphicsFamily = findFirst([&](std::size_t index) { return hasFlags(index, vk::QueueFlagBits::eGraphics); });
     if (!graphicsFamily.has_value())
     {
         return std::nullopt;
     }
 
     auto dedicatedComputeFamily = findFirst([&](std::size_t index) {
-        const auto& family = queueFamilyProperties[index];
-        return family.queueCount > 0 &&
-               (family.queueFlags & vk::QueueFlagBits::eCompute) &&
+        const auto &family = queueFamilyProperties[index];
+        return family.queueCount > 0 && (family.queueFlags & vk::QueueFlagBits::eCompute) &&
                !(family.queueFlags & vk::QueueFlagBits::eGraphics);
     });
     auto computeFamily = dedicatedComputeFamily;
     if (!computeFamily.has_value())
     {
-        computeFamily = findFirst([&](std::size_t index) {
-            return hasFlags(index, vk::QueueFlagBits::eCompute);
-        });
+        computeFamily = findFirst([&](std::size_t index) { return hasFlags(index, vk::QueueFlagBits::eCompute); });
     }
     if (!computeFamily.has_value())
     {
@@ -57,9 +52,8 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
     }
 
     auto transferFamily = findFirst([&](std::size_t index) {
-        const auto& family = queueFamilyProperties[index];
-        return family.queueCount > 0 &&
-               (family.queueFlags & vk::QueueFlagBits::eTransfer) &&
+        const auto &family = queueFamilyProperties[index];
+        return family.queueCount > 0 && (family.queueFlags & vk::QueueFlagBits::eTransfer) &&
                !(family.queueFlags & vk::QueueFlagBits::eCompute) &&
                !(family.queueFlags & vk::QueueFlagBits::eGraphics);
     });
@@ -80,11 +74,11 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
     vk::raii::PhysicalDevices physicalDevices(instance);
     nrAssert(!physicalDevices.empty(), "No Vulkan physical devices are available.");
 
-    auto supportsRequiredQueues = [](const vk::raii::PhysicalDevice& device) {
+    auto supportsRequiredQueues = [](const vk::raii::PhysicalDevice &device) {
         auto queueFamilies = device.getQueueFamilyProperties();
         return selectRequiredQueueFamilies(queueFamilies).has_value();
     };
-    auto deviceRank = [](const vk::raii::PhysicalDevice& device) {
+    auto deviceRank = [](const vk::raii::PhysicalDevice &device) {
         auto props = device.getProperties();
         return std::tuple{
             props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu,
@@ -93,7 +87,7 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
     };
 
     std::optional<std::reference_wrapper<const vk::raii::PhysicalDevice>> bestDevice{};
-    std::ranges::for_each(physicalDevices, [&](const vk::raii::PhysicalDevice& device) {
+    std::ranges::for_each(physicalDevices, [&](const vk::raii::PhysicalDevice &device) {
         if (!supportsRequiredQueues(device))
         {
             return;
@@ -103,9 +97,8 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
             bestDevice = std::cref(device);
         }
     });
-    nrAssert(
-        bestDevice.has_value(),
-        "No GPU exposes the required graphics, compute, and dedicated physical copy/transfer queue families.");
+    nrAssert(bestDevice.has_value(),
+             "No GPU exposes the required graphics, compute, and dedicated physical copy/transfer queue families.");
     return bestDevice->get();
 }
 
@@ -113,14 +106,15 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
 {
     std::set<std::string_view> uniqueLayers(layers.begin(), layers.end());
     const auto layerProperties = vk::enumerateInstanceLayerProperties();
-    
+
     std::vector<char const *> enabledLayers;
     enabledLayers.reserve(uniqueLayers.size());
-    
+
     for (std::string_view layer : uniqueLayers)
     {
-        bool found = std::ranges::any_of(layerProperties, 
-            [layer](const vk::LayerProperties &lp) { return layer == std::string_view(lp.layerName); });
+        bool found = std::ranges::any_of(layerProperties, [layer](const vk::LayerProperties &lp) {
+            return layer == std::string_view(lp.layerName);
+        });
         nrAssert(found, std::format("Requested layer '{}' is not available.", layer));
         enabledLayers.emplace_back(layer.data());
     }
@@ -130,24 +124,24 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
 [[nodiscard]] bool hasInstanceLayer(std::string_view layer)
 {
     const auto layerProperties = vk::enumerateInstanceLayerProperties();
-    return std::ranges::any_of(layerProperties,
-                               [layer](const vk::LayerProperties &property) {
-                                   return layer == std::string_view(property.layerName);
-                               });
+    return std::ranges::any_of(layerProperties, [layer](const vk::LayerProperties &property) {
+        return layer == std::string_view(property.layerName);
+    });
 }
 
 [[nodiscard]] std::vector<char const *> gatherInstanceExtensions(std::span<const std::string> extensions)
 {
     std::set<std::string_view> uniqueExtensions(extensions.begin(), extensions.end());
     const auto extensionProperties = vk::enumerateInstanceExtensionProperties();
-    
+
     std::vector<char const *> enabledExtensions;
     enabledExtensions.reserve(uniqueExtensions.size());
-    
+
     for (std::string_view extension : uniqueExtensions)
     {
-        bool found = std::ranges::any_of(extensionProperties,
-            [extension](const vk::ExtensionProperties &ep) { return extension == std::string_view(ep.extensionName); });
+        bool found = std::ranges::any_of(extensionProperties, [extension](const vk::ExtensionProperties &ep) {
+            return extension == std::string_view(ep.extensionName);
+        });
         nrAssert(found, std::format("Requested extension '{}' is not available.", extension));
         enabledExtensions.emplace_back(extension.data());
     }
@@ -157,13 +151,15 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
 [[nodiscard]] bool hasInstanceExtension(std::string_view extension)
 {
     const auto extensionProperties = vk::enumerateInstanceExtensionProperties();
-    return std::ranges::any_of(extensionProperties,
-                               [extension](const vk::ExtensionProperties &property) {
-                                   return extension == std::string_view(property.extensionName);
-                               });
+    return std::ranges::any_of(extensionProperties, [extension](const vk::ExtensionProperties &property) {
+        return extension == std::string_view(property.extensionName);
+    });
 }
 
-vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity, vk::DebugUtilsMessageTypeFlagsEXT messageTypes, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void * /*pUserData*/)
+vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                       vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
+                                       const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                                       void * /*pUserData*/)
 {
     if constexpr (isDebugMode)
     {
@@ -189,11 +185,7 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
     const char *message = pCallbackData->pMessage ? pCallbackData->pMessage : "";
 
     std::string logMessage = std::format("severity={} types={} messageIDName=<{}> messageIdNumber={} message=<{}>",
-                                         severityStr,
-                                         typesStr,
-                                         idName,
-                                         pCallbackData->messageIdNumber,
-                                         message);
+                                         severityStr, typesStr, idName, pCallbackData->messageIdNumber, message);
 
     auto queueLabels = std::span(pCallbackData->pQueueLabels, pCallbackData->queueLabelCount);
     if (!queueLabels.empty())
@@ -216,8 +208,9 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
     {
         auto objectIndices = std::views::iota(std::size_t{0}, objects.size());
         std::ranges::for_each(objectIndices, [&](std::size_t i) {
-            auto const& obj = objects[i];
-            logMessage += std::format("\nobject[{}]: type={} handle={}", i, vk::to_string(obj.objectType), obj.objectHandle);
+            auto const &obj = objects[i];
+            logMessage +=
+                std::format("\nobject[{}]: type={} handle={}", i, vk::to_string(obj.objectType), obj.objectHandle);
             if (obj.pObjectName)
             {
                 logMessage += std::format(" name=<{}>", obj.pObjectName);
@@ -241,15 +234,13 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
 
 vk::DebugUtilsMessengerCreateInfoEXT makeDebugUtilsMessengerCreateInfoEXT()
 {
-    constexpr auto severityFlags = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
-                                   vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
-                                   vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-                                   vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
+    constexpr auto severityFlags =
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
     constexpr auto messageTypeFlags = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
                                       vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
                                       vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation;
-    return {
-        {}, severityFlags, messageTypeFlags, &debugUtilsMessengerCallback};
+    return {{}, severityFlags, messageTypeFlags, &debugUtilsMessengerCallback};
 }
 
 DebugValidationLayerSettings::DebugValidationLayerSettings()
@@ -257,21 +248,12 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
     settings_.reserve(64);
 
     auto addSetting = [this](const char *settingName, vk::LayerSettingTypeEXT type, const auto &values) {
-        settings_.emplace_back(
-            validationLayerName,
-            settingName,
-            type,
-            static_cast<std::uint32_t>(values.size()),
-            values.data());
+        settings_.emplace_back(validationLayerName, settingName, type, static_cast<std::uint32_t>(values.size()),
+                               values.data());
     };
 
     auto addEmptyStringSetting = [this](const char *settingName) {
-        settings_.emplace_back(
-            validationLayerName,
-            settingName,
-            vk::LayerSettingTypeEXT::eString,
-            0u,
-            nullptr);
+        settings_.emplace_back(validationLayerName, settingName, vk::LayerSettingTypeEXT::eString, 0u, nullptr);
     };
 
     auto addBoolSetting = [&](const char *settingName, bool enabled) {
@@ -280,9 +262,7 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
     };
 
     auto addBoolSettings = [&](std::initializer_list<const char *> settingNames, bool enabled) {
-        std::ranges::for_each(settingNames, [&](const char *settingName) {
-            addBoolSetting(settingName, enabled);
-        });
+        std::ranges::for_each(settingNames, [&](const char *settingName) { addBoolSetting(settingName, enabled); });
     };
 
     addBoolSettings(

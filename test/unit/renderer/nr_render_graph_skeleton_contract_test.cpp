@@ -7,7 +7,7 @@ import nr.test;
 
 namespace
 {
-[[nodiscard]] const nr::options::OptionFrameSnapshot& emptyOptionSnapshot()
+[[nodiscard]] const nr::options::OptionFrameSnapshot &emptyOptionSnapshot()
 {
     static auto const catalog = nr::options::OptionCatalogBuilder{}.build().catalog;
     static auto const snapshot = nr::options::OptionFrameSnapshot{
@@ -23,9 +23,8 @@ namespace
     };
 }
 
-[[nodiscard]] nr::renderer::RenderGraphFrameDescription makeFrame(
-    std::uint32_t dynamicValue,
-    bool addSecondPass = false)
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription makeFrame(std::uint32_t dynamicValue,
+                                                                  bool addSecondPass = false)
 {
     auto builder = nr::renderer::RenderGraphBuilder{};
     auto node = builder.addNode("Skeleton.Node", nr::renderer::QueueDomain::Compute);
@@ -36,29 +35,21 @@ namespace
     });
     static_cast<void>(builder.addFrameData("Skeleton.Dynamic", dynamicValue));
     auto uses = std::array{nr::renderer::use::storageBufferWrite(buffer)};
-    static_cast<void>(builder.addPass(
-        std::format("Skeleton.Pass.{}", dynamicValue),
-        node,
-        uses,
-        [dynamicValue](const nr::renderer::PassRecordContext&) {
-            static_cast<void>(dynamicValue);
-        }));
+    static_cast<void>(
+        builder.addPass(std::format("Skeleton.Pass.{}", dynamicValue), node, uses,
+                        [dynamicValue](const nr::renderer::PassRecordContext &) { static_cast<void>(dynamicValue); }));
     if (addSecondPass)
     {
-        static_cast<void>(builder.addPass(
-            "Skeleton.Second",
-            node,
-            uses,
-            [](const nr::renderer::PassRecordContext&) {}));
+        static_cast<void>(
+            builder.addPass("Skeleton.Second", node, uses, [](const nr::renderer::PassRecordContext &) {}));
     }
     return builder.build();
 }
 
-[[nodiscard]] nr::renderer::RenderGraphSkeletonKey makeKey(
-    std::uint64_t configRevision = 1u,
-    std::uint64_t shaderGeneration = 3u,
-    std::uint64_t swapchainGeneration = 5u,
-    std::string branch = "stable")
+[[nodiscard]] nr::renderer::RenderGraphSkeletonKey makeKey(std::uint64_t configRevision = 1u,
+                                                           std::uint64_t shaderGeneration = 3u,
+                                                           std::uint64_t swapchainGeneration = 5u,
+                                                           std::string branch = "stable")
 {
     return nr::renderer::RenderGraphSkeletonKey{
         .installedGraphGeneration = 2u,
@@ -70,22 +61,21 @@ namespace
         .shaderSessionGeneration = shaderGeneration,
         .swapchainRecreationGeneration = swapchainGeneration,
         .submitAcquirePolicyRevision = 2u,
-        .nodes = {
-            nr::renderer::RenderGraphSkeletonNodeKey{
-                .configurationRevision = configRevision,
-                .runtimeConfigurationRevision = 7u,
-                .structuralBranchKey = std::move(branch),
+        .nodes =
+            {
+                nr::renderer::RenderGraphSkeletonNodeKey{
+                    .configurationRevision = configRevision,
+                    .runtimeConfigurationRevision = 7u,
+                    .structuralBranchKey = std::move(branch),
+                },
             },
-        },
     };
 }
 
 class UnsupportedNode final : public nr::renderer::NodeRuntime
 {
   public:
-    void build(
-        nr::renderer::NodeBuildContext&,
-        const nr::renderer::NodeFrameParameters&) override
+    void build(nr::renderer::NodeBuildContext &, const nr::renderer::NodeFrameParameters &) override
     {
     }
 };
@@ -101,17 +91,13 @@ class CountingSkeletonNode final : public nr::renderer::NodeRuntime
         return true;
     }
 
-    void build(
-        nr::renderer::NodeBuildContext&,
-        const nr::renderer::NodeFrameParameters&) override
+    void build(nr::renderer::NodeBuildContext &, const nr::renderer::NodeFrameParameters &) override
     {
         ++buildCalls;
     }
 
-    bool materializeRenderGraphSkeleton(
-        nr::renderer::RenderGraphSkeletonPatchContext&,
-        const nr::renderer::NodeFrameParameters&,
-        const StructuralSnapshot&) override
+    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &,
+                                        const nr::renderer::NodeFrameParameters &, const StructuralSnapshot &) override
     {
         ++materializeCalls;
         return true;
@@ -126,9 +112,7 @@ class FailingSkeletonNode final : public nr::renderer::NodeRuntime
         return true;
     }
 
-    void build(
-        nr::renderer::NodeBuildContext& context,
-        const nr::renderer::NodeFrameParameters&) override
+    void build(nr::renderer::NodeBuildContext &context, const nr::renderer::NodeFrameParameters &) override
     {
         auto resource = context.addResource(nr::renderer::GraphTransientBufferDesc{
             .debugName = "Fallback.Buffer",
@@ -136,21 +120,18 @@ class FailingSkeletonNode final : public nr::renderer::NodeRuntime
             .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
         });
         auto uses = std::array{nr::renderer::use::storageBufferWrite(resource)};
-        static_cast<void>(context.addPass(uses, "Fallback.Pass", [](const nr::renderer::PassRecordContext&) {}));
+        static_cast<void>(context.addPass(uses, "Fallback.Pass", [](const nr::renderer::PassRecordContext &) {}));
     }
 
-    bool materializeRenderGraphSkeleton(
-        nr::renderer::RenderGraphSkeletonPatchContext&,
-        const nr::renderer::NodeFrameParameters&,
-        const StructuralSnapshot&) override
+    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &,
+                                        const nr::renderer::NodeFrameParameters &, const StructuralSnapshot &) override
     {
         return false;
     }
 };
 
 const nr::test::CaseRegistrar exactKeyAndDynamicPatchCase{
-    "render graph Skeleton exact key hits while dynamic payloads stay outside cached structure",
-    [] {
+    "render graph Skeleton exact key hits while dynamic payloads stay outside cached structure", [] {
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
         auto first = makeFrame(11u);
         auto firstResult = cache.acceptMaterialized(makeKey(), first);
@@ -167,8 +148,7 @@ const nr::test::CaseRegistrar exactKeyAndDynamicPatchCase{
     }};
 
 const nr::test::CaseRegistrar ownedTemplateAndPatchOnlyContextCase{
-    "Skeleton owns a stripped static template and patch context substitutes current dynamic slots",
-    [] {
+    "Skeleton owns a stripped static template and patch context substitutes current dynamic slots", [] {
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
         auto cold = makeFrame(11u);
         static_cast<void>(cache.acceptMaterialized(makeKey(), cold));
@@ -204,34 +184,25 @@ const nr::test::CaseRegistrar ownedTemplateAndPatchOnlyContextCase{
         };
         auto recorded = std::uint32_t{0u};
         patch.patchResource(0u, nr::renderer::GraphTransientBufferDesc{
-            .debugName = "Current.Buffer",
-            .size = 128u,
-            .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
-        });
+                                    .debugName = "Current.Buffer",
+                                    .size = 128u,
+                                    .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
+                                });
         patch.patchFrameData(0u, "Current.Dynamic", std::make_any<std::uint32_t>(22u));
-        patch.patchPass(
-            0u,
-            "Current.Pass",
-            nullptr,
-            [&recorded](const nr::renderer::PassRecordContext&) {
-                recorded = 22u;
-            });
-        nr::test::requireEqual(
-            std::any_cast<std::uint32_t>(current.frameData.front().payload),
-            std::uint32_t{22u});
+        patch.patchPass(0u, "Current.Pass", nullptr,
+                        [&recorded](const nr::renderer::PassRecordContext &) { recorded = 22u; });
+        nr::test::requireEqual(std::any_cast<std::uint32_t>(current.frameData.front().payload), std::uint32_t{22u});
         nr::test::requireEqual(patch.namedResource("output"), current.resources.front().handle);
         nr::test::requireEqual(patch.namedFrameData("dynamic"), current.frameData.front().handle);
-        nr::test::requireEqual(
-            patch.resolveFrameData<std::uint32_t>(patch.namedFrameData("dynamic"))->get(),
-            std::uint32_t{22u});
+        nr::test::requireEqual(patch.resolveFrameData<std::uint32_t>(patch.namedFrameData("dynamic"))->get(),
+                               std::uint32_t{22u});
         nr::test::require(std::addressof(patch.globalResources()) == std::addressof(globals));
         current.passes.front().record(nr::renderer::PassRecordContext{});
         nr::test::requireEqual(recorded, std::uint32_t{22u});
     }};
 
 const nr::test::CaseRegistrar exactInvalidationDimensionsCase{
-    "render graph Skeleton key distinguishes branch config shader and swapchain generations",
-    [] {
+    "render graph Skeleton key distinguishes branch config shader and swapchain generations", [] {
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
         auto frame = makeFrame(1u);
         static_cast<void>(cache.acceptMaterialized(makeKey(), frame));
@@ -245,8 +216,7 @@ const nr::test::CaseRegistrar exactInvalidationDimensionsCase{
     }};
 
 const nr::test::CaseRegistrar explicitCaptureAndZeroDeclarationHitCase{
-    "Skeleton explicit capture restores exact ranges and a synthetic chain hit declares no structure",
-    [] {
+    "Skeleton explicit capture restores exact ranges and a synthetic chain hit declares no structure", [] {
         auto coldBuilder = nr::renderer::RenderGraphBuilder{};
         auto firstNode = coldBuilder.addNode("First", nr::renderer::QueueDomain::Compute);
         auto firstResource = coldBuilder.addResource(nr::renderer::GraphTransientBufferDesc{
@@ -256,11 +226,8 @@ const nr::test::CaseRegistrar explicitCaptureAndZeroDeclarationHitCase{
         });
         auto firstData = coldBuilder.addFrameData("First.Data", std::uint32_t{1u});
         auto firstUses = std::array{nr::renderer::use::storageBufferWrite(firstResource)};
-        static_cast<void>(coldBuilder.addPass(
-            "First.Pass",
-            firstNode,
-            firstUses,
-            [](const nr::renderer::PassRecordContext&) {}));
+        static_cast<void>(
+            coldBuilder.addPass("First.Pass", firstNode, firstUses, [](const nr::renderer::PassRecordContext &) {}));
         auto secondNode = coldBuilder.addNode("Second", nr::renderer::QueueDomain::Compute);
         auto secondResource = coldBuilder.addResource(nr::renderer::GraphTransientBufferDesc{
             .debugName = "Second.Buffer",
@@ -268,35 +235,35 @@ const nr::test::CaseRegistrar explicitCaptureAndZeroDeclarationHitCase{
             .usageIntents = {nr::renderer::BufferUsageIntent::StorageRead},
         });
         auto secondUses = std::array{nr::renderer::use::storageBufferRead(secondResource)};
-        static_cast<void>(coldBuilder.addPass(
-            "Second.Pass",
-            secondNode,
-            secondUses,
-            [](const nr::renderer::PassRecordContext&) {}));
+        static_cast<void>(
+            coldBuilder.addPass("Second.Pass", secondNode, secondUses, [](const nr::renderer::PassRecordContext &) {}));
         static_cast<void>(coldBuilder.addSubmitNode("After.Second"));
 
         auto capture = nr::renderer::RenderGraphSkeletonCapture{
-            .nodePatchLayouts = {
-                nr::renderer::RenderGraphSkeletonNodePatchLayout{
-                    .resourceCount = 1u,
-                    .frameDataCount = 1u,
-                    .passCount = 1u,
+            .nodePatchLayouts =
+                {
+                    nr::renderer::RenderGraphSkeletonNodePatchLayout{
+                        .resourceCount = 1u,
+                        .frameDataCount = 1u,
+                        .passCount = 1u,
+                    },
+                    nr::renderer::RenderGraphSkeletonNodePatchLayout{
+                        .resourceBegin = 1u,
+                        .resourceCount = 1u,
+                        .frameDataBegin = 1u,
+                        .passBegin = 1u,
+                        .passCount = 1u,
+                    },
                 },
-                nr::renderer::RenderGraphSkeletonNodePatchLayout{
-                    .resourceBegin = 1u,
-                    .resourceCount = 1u,
-                    .frameDataBegin = 1u,
-                    .passBegin = 1u,
-                    .passCount = 1u,
+            .namedFrameResources =
+                {
+                    {"first", firstResource},
+                    {"second", secondResource},
                 },
-            },
-            .namedFrameResources = {
-                {"first", firstResource},
-                {"second", secondResource},
-            },
-            .namedFrameData = {
-                {"first", firstData},
-            },
+            .namedFrameData =
+                {
+                    {"first", firstData},
+                },
         };
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
         static_cast<void>(cache.acceptMaterialized(makeKey(), coldBuilder.frame(), std::move(capture)));
@@ -319,32 +286,30 @@ const nr::test::CaseRegistrar explicitCaptureAndZeroDeclarationHitCase{
             skeleton->namedFrameData,
         };
         firstPatch.patchResource(0u, nr::renderer::GraphTransientBufferDesc{
-            .debugName = "First.Current",
-            .size = 64u,
-            .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
-        });
+                                         .debugName = "First.Current",
+                                         .size = 64u,
+                                         .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
+                                     });
         firstPatch.patchFrameData(0u, "First.CurrentData", std::make_any<std::uint32_t>(9u));
-        firstPatch.patchPass(0u, "First.CurrentPass", nullptr, [](const nr::renderer::PassRecordContext&) {});
+        firstPatch.patchPass(0u, "First.CurrentPass", nullptr, [](const nr::renderer::PassRecordContext &) {});
         secondPatch.patchResource(0u, nr::renderer::GraphTransientBufferDesc{
-            .debugName = "Second.Current",
-            .size = 96u,
-            .usageIntents = {nr::renderer::BufferUsageIntent::StorageRead},
-        });
-        secondPatch.patchPass(0u, "Second.CurrentPass", nullptr, [](const nr::renderer::PassRecordContext&) {});
+                                          .debugName = "Second.Current",
+                                          .size = 96u,
+                                          .usageIntents = {nr::renderer::BufferUsageIntent::StorageRead},
+                                      });
+        secondPatch.patchPass(0u, "Second.CurrentPass", nullptr, [](const nr::renderer::PassRecordContext &) {});
 
         auto hitBuilder = nr::renderer::RenderGraphBuilder{};
         hitBuilder.clear();
         hitBuilder.mutableFrame() = std::move(current);
         nr::test::requireEqual(hitBuilder.declarationCounts().total(), std::size_t{0u});
-        nr::test::requireEqual(
-            std::any_cast<std::uint32_t>(hitBuilder.frame().frameData.front().payload),
-            std::uint32_t{9u});
+        nr::test::requireEqual(std::any_cast<std::uint32_t>(hitBuilder.frame().frameData.front().payload),
+                               std::uint32_t{9u});
         nr::test::requireEqual(hitBuilder.frame().submitBoundaries.size(), std::size_t{1u});
     }};
 
 const nr::test::CaseRegistrar patchFailureColdFallbackCase{
-    "Skeleton patch failure discards the partial instance before a fresh cold declaration",
-    [] {
+    "Skeleton patch failure discards the partial instance before a fresh cold declaration", [] {
         auto cached = makeFrame(1u);
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
         static_cast<void>(cache.acceptMaterialized(makeKey(), cached));
@@ -384,8 +349,7 @@ const nr::test::CaseRegistrar patchFailureColdFallbackCase{
     }};
 
 const nr::test::CaseRegistrar structureMismatchCase{
-    "render graph Skeleton Differential cold comparison refreshes an authoritative structural mismatch",
-    [] {
+    "render graph Skeleton Differential cold comparison refreshes an authoritative structural mismatch", [] {
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
         auto cold = makeFrame(1u);
         static_cast<void>(cache.acceptMaterialized(makeKey(), cold));
@@ -399,12 +363,9 @@ const nr::test::CaseRegistrar structureMismatchCase{
         auto const afterMismatch = cache.statistics();
         nr::test::requireEqual(afterMismatch.hitCount, beforeMismatch.hitCount);
         nr::test::requireEqual(afterMismatch.missCount, beforeMismatch.missCount + 1u);
-        nr::test::requireEqual(
-            afterMismatch.structureMismatchCount,
-            beforeMismatch.structureMismatchCount + 1u);
-        nr::test::requireEqual(
-            afterMismatch.lastMissReason,
-            nr::renderer::RenderGraphSkeletonMissReason::StructureMismatch);
+        nr::test::requireEqual(afterMismatch.structureMismatchCount, beforeMismatch.structureMismatchCount + 1u);
+        nr::test::requireEqual(afterMismatch.lastMissReason,
+                               nr::renderer::RenderGraphSkeletonMissReason::StructureMismatch);
 
         auto refreshed = cache.lookup(makeKey());
         nr::test::require(static_cast<bool>(refreshed));
@@ -418,24 +379,20 @@ const nr::test::CaseRegistrar structureMismatchCase{
         auto const afterHit = cache.statistics();
         nr::test::requireEqual(afterHit.hitCount, afterMismatch.hitCount + 1u);
         nr::test::requireEqual(afterHit.missCount, afterMismatch.missCount);
-        nr::test::requireEqual(
-            afterHit.structureMismatchCount,
-            afterMismatch.structureMismatchCount);
+        nr::test::requireEqual(afterHit.structureMismatchCount, afterMismatch.structureMismatchCount);
         nr::test::requireEqual(afterHit.entryCount, std::size_t{1u});
         nr::test::requireEqual(afterHit.lastMissReason, nr::renderer::RenderGraphSkeletonMissReason::None);
     }};
 
-const nr::test::CaseRegistrar unsupportedNodeCase{
-    "node without Skeleton contract reports unsupported snapshot",
-    [] {
-        auto node = UnsupportedNode{};
-        nr::test::require(!node.supportsRenderGraphSkeleton());
-        nr::test::require(!node.structuralSnapshot(nodeFrameParameters()).has_value());
-    }};
+const nr::test::CaseRegistrar unsupportedNodeCase{"node without Skeleton contract reports unsupported snapshot", [] {
+                                                      auto node = UnsupportedNode{};
+                                                      nr::test::require(!node.supportsRenderGraphSkeleton());
+                                                      nr::test::require(
+                                                          !node.structuralSnapshot(nodeFrameParameters()).has_value());
+                                                  }};
 
 const nr::test::CaseRegistrar hitMaterializationBypassesBuildEntryCase{
-    "Skeleton hit materialization does not call the node cold-build entrypoint",
-    [] {
+    "Skeleton hit materialization does not call the node cold-build entrypoint", [] {
         auto builder = nr::renderer::RenderGraphBuilder{};
         static_cast<void>(builder.addNode("Counting", nr::renderer::QueueDomain::Compute));
         auto current = builder.build();
@@ -467,29 +424,32 @@ const nr::test::CaseRegistrar hitMaterializationBypassesBuildEntryCase{
     }};
 
 const nr::test::CaseRegistrar retainedBufferAndAccelerationStructureCase{
-    "compiler and compile cache consume and patch retained buffer and acceleration-structure state",
-    [] {
+    "compiler and compile cache consume and patch retained buffer and acceleration-structure state", [] {
         auto bufferState = nr::renderer::RetainedBufferState{
-            .common = nr::renderer::RetainedExternalResourceState{
-                .initialized = true,
-                .ownership = nr::renderer::ResourceOwnershipDomain::Graphics,
-                .access = nr::renderer::AccessScope{
-                    .stages = vk::PipelineStageFlagBits2::eVertexShader,
-                    .access = vk::AccessFlagBits2::eShaderRead,
+            .common =
+                nr::renderer::RetainedExternalResourceState{
+                    .initialized = true,
+                    .ownership = nr::renderer::ResourceOwnershipDomain::Graphics,
+                    .access =
+                        nr::renderer::AccessScope{
+                            .stages = vk::PipelineStageFlagBits2::eVertexShader,
+                            .access = vk::AccessFlagBits2::eShaderRead,
+                        },
+                    .lastSubmissionTimelineValue = 17u,
                 },
-                .lastSubmissionTimelineValue = 17u,
-            },
         };
         auto accelerationStructureState = nr::renderer::RetainedAccelerationStructureState{
-            .common = nr::renderer::RetainedExternalResourceState{
-                .initialized = true,
-                .ownership = nr::renderer::ResourceOwnershipDomain::Transfer,
-                .access = nr::renderer::AccessScope{
-                    .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-                    .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+            .common =
+                nr::renderer::RetainedExternalResourceState{
+                    .initialized = true,
+                    .ownership = nr::renderer::ResourceOwnershipDomain::Transfer,
+                    .access =
+                        nr::renderer::AccessScope{
+                            .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+                            .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+                        },
+                    .lastSubmissionTimelineValue = 19u,
                 },
-                .lastSubmissionTimelineValue = 19u,
-            },
         };
         auto builder = nr::renderer::RenderGraphBuilder{};
         auto node = builder.addNode("Retained.External", nr::renderer::QueueDomain::Compute);
@@ -509,11 +469,7 @@ const nr::test::CaseRegistrar retainedBufferAndAccelerationStructureCase{
             nr::renderer::use::storageBufferRead(buffer),
             nr::renderer::use::accelerationStructureTraceRead(accelerationStructure),
         };
-        static_cast<void>(builder.addPass(
-            "Retained.Use",
-            node,
-            uses,
-            [](const nr::renderer::PassRecordContext&) {}));
+        static_cast<void>(builder.addPass("Retained.Use", node, uses, [](const nr::renderer::PassRecordContext &) {}));
         auto frame = builder.build();
         auto compiled = nr::renderer::RenderGraphCompiler{}.compile(frame);
         nr::test::requireEqual(compiled.resources[0].initialOwnership, nr::renderer::ResourceOwnershipDomain::Graphics);
@@ -528,8 +484,7 @@ const nr::test::CaseRegistrar retainedBufferAndAccelerationStructureCase{
         std::get<nr::renderer::GraphImportedBufferDesc>(frame.resources[0].desc).retainedState =
             std::ref(currentBufferState);
         auto current = cache.compileConsumingCached(frame);
-        nr::test::require(
-            std::addressof(current.resources[0].retainedBufferState->get()) ==
-            std::addressof(currentBufferState));
+        nr::test::require(std::addressof(current.resources[0].retainedBufferState->get()) ==
+                          std::addressof(currentBufferState));
     }};
 } // namespace

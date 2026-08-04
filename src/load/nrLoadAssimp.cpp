@@ -59,16 +59,12 @@ struct AssimpTextureTransform
     float rotation = 0.0f;
 };
 
-[[nodiscard]] bool readMaterialColor4(const aiMaterial &material,
-                                             const MaterialPropertyKey &key,
-                                             aiColor4D &value)
+[[nodiscard]] bool readMaterialColor4(const aiMaterial &material, const MaterialPropertyKey &key, aiColor4D &value)
 {
     return aiGetMaterialColor(&material, key.name, key.type, key.index, &value) == aiReturn_SUCCESS;
 }
 
-[[nodiscard]] bool readMaterialColor3(const aiMaterial &material,
-                                             const MaterialPropertyKey &key,
-                                             aiColor3D &value)
+[[nodiscard]] bool readMaterialColor3(const aiMaterial &material, const MaterialPropertyKey &key, aiColor3D &value)
 {
     auto color = aiColor4D{};
     if (aiGetMaterialColor(&material, key.name, key.type, key.index, &color) != aiReturn_SUCCESS)
@@ -80,9 +76,7 @@ struct AssimpTextureTransform
     return true;
 }
 
-[[nodiscard]] bool readMaterialFloat(const aiMaterial &material,
-                                            const MaterialPropertyKey &key,
-                                            float &value)
+[[nodiscard]] bool readMaterialFloat(const aiMaterial &material, const MaterialPropertyKey &key, float &value)
 {
     auto raw = ai_real{};
     auto count = 1u;
@@ -96,9 +90,7 @@ struct AssimpTextureTransform
     return true;
 }
 
-[[nodiscard]] bool readMaterialInteger(const aiMaterial &material,
-                                              const MaterialPropertyKey &key,
-                                              int &value)
+[[nodiscard]] bool readMaterialInteger(const aiMaterial &material, const MaterialPropertyKey &key, int &value)
 {
     auto count = 1u;
     if (aiGetMaterialIntegerArray(&material, key.name, key.type, key.index, &value, &count) != aiReturn_SUCCESS ||
@@ -110,9 +102,7 @@ struct AssimpTextureTransform
     return true;
 }
 
-[[nodiscard]] bool readMaterialString(const aiMaterial &material,
-                                      const MaterialPropertyKey &key,
-                                      std::string &value)
+[[nodiscard]] bool readMaterialString(const aiMaterial &material, const MaterialPropertyKey &key, std::string &value)
 {
     auto raw = aiString{};
     if (aiGetMaterialString(&material, key.name, key.type, key.index, &raw) != aiReturn_SUCCESS)
@@ -125,20 +115,13 @@ struct AssimpTextureTransform
     return !value.empty();
 }
 
-[[nodiscard]] bool readMaterialTextureTransform(const aiMaterial &material,
-                                                aiTextureType textureType,
-                                                unsigned int textureSlot,
-                                                AssimpTextureTransform &value)
+[[nodiscard]] bool readMaterialTextureTransform(const aiMaterial &material, aiTextureType textureType,
+                                                unsigned int textureSlot, AssimpTextureTransform &value)
 {
     auto raw = std::array<ai_real, 5>{};
     auto count = static_cast<unsigned int>(raw.size());
-    if (aiGetMaterialFloatArray(
-            &material,
-            kMatKeyUvTransform,
-            static_cast<unsigned int>(textureType),
-            textureSlot,
-            raw.data(),
-            &count) != aiReturn_SUCCESS ||
+    if (aiGetMaterialFloatArray(&material, kMatKeyUvTransform, static_cast<unsigned int>(textureType), textureSlot,
+                                raw.data(), &count) != aiReturn_SUCCESS ||
         count != static_cast<unsigned int>(raw.size()))
     {
         return false;
@@ -154,9 +137,8 @@ struct AssimpTextureTransform
     return true;
 }
 
-[[nodiscard]] nr::resource::MaterialTextureTransform makeTextureTransform(
-    const AssimpTextureTransform &source,
-    bool restoreGltfTextureCoordinateV) noexcept
+[[nodiscard]] nr::resource::MaterialTextureTransform makeTextureTransform(const AssimpTextureTransform &source,
+                                                                          bool restoreGltfTextureCoordinateV) noexcept
 {
     if (restoreGltfTextureCoordinateV)
     {
@@ -166,22 +148,18 @@ struct AssimpTextureTransform
         auto const rotation = -source.rotation;
         auto const rotationCos = std::cos(rotation);
         auto const rotationSin = std::sin(rotation);
-        auto const offsetU =
-            source.translationU -
-            0.5f * source.scaleU * (-rotationCos + rotationSin + 1.0f);
+        auto const offsetU = source.translationU - 0.5f * source.scaleU * (-rotationCos + rotationSin + 1.0f);
         auto const offsetV =
-            0.5f * source.scaleV * (rotationSin + rotationCos - 1.0f) +
-            1.0f -
-            source.scaleV -
-            source.translationV;
+            0.5f * source.scaleV * (rotationSin + rotationCos - 1.0f) + 1.0f - source.scaleV - source.translationV;
 
         return nr::resource::MaterialTextureTransform{
-            .linear = glm::vec4{
-                rotationCos * source.scaleU,
-                -rotationSin * source.scaleV,
-                rotationSin * source.scaleU,
-                rotationCos * source.scaleV,
-            },
+            .linear =
+                glm::vec4{
+                    rotationCos * source.scaleU,
+                    -rotationSin * source.scaleV,
+                    rotationSin * source.scaleU,
+                    rotationCos * source.scaleV,
+                },
             .offset = glm::vec2{offsetU, offsetV},
         };
     }
@@ -194,21 +172,19 @@ struct AssimpTextureTransform
     auto const m11 = source.scaleV * rotationCos;
     return nr::resource::MaterialTextureTransform{
         .linear = glm::vec4{m00, m01, m10, m11},
-        .offset = glm::vec2{
-            0.5f + m00 * (source.translationU - 0.5f) + m01 * (source.translationV - 0.5f),
-            0.5f + m10 * (source.translationU - 0.5f) + m11 * (source.translationV - 0.5f),
-        },
+        .offset =
+            glm::vec2{
+                0.5f + m00 * (source.translationU - 0.5f) + m01 * (source.translationV - 0.5f),
+                0.5f + m10 * (source.translationU - 0.5f) + m11 * (source.translationV - 0.5f),
+            },
     };
 }
 
 [[nodiscard]] bool textureTransformFinite(const nr::resource::MaterialTextureTransform &transform) noexcept
 {
-    return std::isfinite(transform.linear.x) &&
-           std::isfinite(transform.linear.y) &&
-           std::isfinite(transform.linear.z) &&
-           std::isfinite(transform.linear.w) &&
-           std::isfinite(transform.offset.x) &&
-           std::isfinite(transform.offset.y);
+    return std::isfinite(transform.linear.x) && std::isfinite(transform.linear.y) &&
+           std::isfinite(transform.linear.z) && std::isfinite(transform.linear.w) &&
+           std::isfinite(transform.offset.x) && std::isfinite(transform.offset.y);
 }
 
 [[nodiscard]] std::string toStdString(const aiString &value)
@@ -259,7 +235,8 @@ void collectGltfLightRangesByNodeName(const aiNode &node, std::map<std::string, 
     auto const nodeName = toStdString(node.mName);
     if (!nodeName.empty())
     {
-        if (auto range = readMetadataFinitePositiveFloat(node.mMetaData, kAssimpGltfLightRangeMetadataKey); range.has_value())
+        if (auto range = readMetadataFinitePositiveFloat(node.mMetaData, kAssimpGltfLightRangeMetadataKey);
+            range.has_value())
         {
             rangesByNodeName.insert_or_assign(nodeName, *range);
         }
@@ -313,66 +290,52 @@ struct TangentUvSelection
 {
     std::uint32_t uvChannel = 0u;
     nr::resource::MaterialTextureTransform transform{};
-    nr::resource::MaterialTextureSlotSemantic semantic =
-        nr::resource::MaterialTextureSlotSemantic::unsupported;
+    nr::resource::MaterialTextureSlotSemantic semantic = nr::resource::MaterialTextureSlotSemantic::unsupported;
     bool hasNormalTexture = false;
 };
 
-[[nodiscard]] const MaterialTextureBinding* findTextureBinding(
-    const MaterialAsset& material,
-    nr::resource::MaterialTextureSlotSemantic semantic) noexcept
+[[nodiscard]] const MaterialTextureBinding *findTextureBinding(
+    const MaterialAsset &material, nr::resource::MaterialTextureSlotSemantic semantic) noexcept
 {
     auto binding = std::ranges::find(material.textures, semantic, &MaterialTextureBinding::semantic);
     return binding == material.textures.end() ? nullptr : std::addressof(*binding);
 }
 
-[[nodiscard]] bool tangentMappingsEquivalent(
-    const MaterialTextureBinding& lhs,
-    const MaterialTextureBinding& rhs,
-    float tolerance = 1e-6f) noexcept
+[[nodiscard]] bool tangentMappingsEquivalent(const MaterialTextureBinding &lhs, const MaterialTextureBinding &rhs,
+                                             float tolerance = 1e-6f) noexcept
 {
-    auto const near = [tolerance](float a, float b) noexcept {
-        return std::abs(a - b) <= tolerance;
-    };
-    return lhs.uvChannel == rhs.uvChannel &&
-           near(lhs.transform.linear.x, rhs.transform.linear.x) &&
+    auto const near = [tolerance](float a, float b) noexcept { return std::abs(a - b) <= tolerance; };
+    return lhs.uvChannel == rhs.uvChannel && near(lhs.transform.linear.x, rhs.transform.linear.x) &&
            near(lhs.transform.linear.y, rhs.transform.linear.y) &&
-           near(lhs.transform.linear.z, rhs.transform.linear.z) &&
-           near(lhs.transform.linear.w, rhs.transform.linear.w);
+           near(lhs.transform.linear.z, rhs.transform.linear.z) && near(lhs.transform.linear.w, rhs.transform.linear.w);
 }
 
-[[nodiscard]] TangentUvSelection selectTangentUv(
-    const SceneAsset& scene,
-    std::uint32_t materialIndex,
-    std::string_view meshName)
+[[nodiscard]] TangentUvSelection selectTangentUv(const SceneAsset &scene, std::uint32_t materialIndex,
+                                                 std::string_view meshName)
 {
     if (materialIndex >= scene.materials.size())
     {
         return {};
     }
 
-    auto const& material = scene.materials[materialIndex];
-    auto const* baseNormal =
-        findTextureBinding(material, nr::resource::MaterialTextureSlotSemantic::normal);
-    auto const* clearcoatNormal =
+    auto const &material = scene.materials[materialIndex];
+    auto const *baseNormal = findTextureBinding(material, nr::resource::MaterialTextureSlotSemantic::normal);
+    auto const *clearcoatNormal =
         findTextureBinding(material, nr::resource::MaterialTextureSlotSemantic::clearcoatNormal);
 
-    if (baseNormal != nullptr &&
-        clearcoatNormal != nullptr &&
+    if (baseNormal != nullptr && clearcoatNormal != nullptr &&
         !tangentMappingsEquivalent(*baseNormal, *clearcoatNormal))
     {
         nr::nrLog(
-            nr::LogLevel::warning,
-            "LOAD",
+            nr::LogLevel::warning, "LOAD",
             std::format(
                 "Mesh '{}' material '{}' uses different effective UV mappings for base and clearcoat normal textures. "
                 "A vertex stores one tangent frame; generated tangents use the base normal mapping, so the clearcoat "
                 "normal tangent orientation cannot also be exact.",
-                meshName,
-                material.name));
+                meshName, material.name));
     }
 
-    auto const* selected = baseNormal != nullptr ? baseNormal : clearcoatNormal;
+    auto const *selected = baseNormal != nullptr ? baseNormal : clearcoatNormal;
     if (selected == nullptr)
     {
         return {};
@@ -386,42 +349,35 @@ struct TangentUvSelection
     };
 }
 
-[[nodiscard]] std::array<float, 2> tangentTexCoord(
-    const VertexAsset& vertex,
-    const TangentUvSelection& selection) noexcept
+[[nodiscard]] std::array<float, 2> tangentTexCoord(const VertexAsset &vertex,
+                                                   const TangentUvSelection &selection) noexcept
 {
-    auto const& source = selection.uvChannel == 1u ? vertex.texCoord1 : vertex.texCoord0;
+    auto const &source = selection.uvChannel == 1u ? vertex.texCoord1 : vertex.texCoord0;
     return {
-        selection.transform.linear.x * source[0] +
-            selection.transform.linear.y * source[1] +
+        selection.transform.linear.x * source[0] + selection.transform.linear.y * source[1] +
             selection.transform.offset.x,
-        selection.transform.linear.z * source[0] +
-            selection.transform.linear.w * source[1] +
+        selection.transform.linear.z * source[0] + selection.transform.linear.w * source[1] +
             selection.transform.offset.y,
     };
 }
 
-[[nodiscard]] bool tangentDirectionFinite(
-    const nr::dependency::mikktspace::Tangent& tangent) noexcept
+[[nodiscard]] bool tangentDirectionFinite(const nr::dependency::mikktspace::Tangent &tangent) noexcept
 {
-    return std::ranges::all_of(tangent.direction, [](float component) {
-               return std::isfinite(component);
-           }) &&
+    return std::ranges::all_of(tangent.direction, [](float component) { return std::isfinite(component); }) &&
            std::isfinite(tangent.sign);
 }
 
 [[nodiscard]] std::optional<std::array<float, 4>> normalizedTangent(
-    const nr::dependency::mikktspace::Tangent& tangent) noexcept
+    const nr::dependency::mikktspace::Tangent &tangent) noexcept
 {
     if (!tangentDirectionFinite(tangent))
     {
         return std::nullopt;
     }
 
-    auto const lengthSquared =
-        tangent.direction[0] * tangent.direction[0] +
-        tangent.direction[1] * tangent.direction[1] +
-        tangent.direction[2] * tangent.direction[2];
+    auto const lengthSquared = tangent.direction[0] * tangent.direction[0] +
+                               tangent.direction[1] * tangent.direction[1] +
+                               tangent.direction[2] * tangent.direction[2];
     if (!std::isfinite(lengthSquared) || lengthSquared <= 1e-12f)
     {
         return std::nullopt;
@@ -436,15 +392,10 @@ struct TangentUvSelection
     };
 }
 
-[[nodiscard]] bool tangentsCompatible(
-    const std::array<float, 4>& lhs,
-    const std::array<float, 4>& rhs) noexcept
+[[nodiscard]] bool tangentsCompatible(const std::array<float, 4> &lhs, const std::array<float, 4> &rhs) noexcept
 {
     constexpr float directionTolerance = 1e-5f;
-    auto const directionDot =
-        lhs[0] * rhs[0] +
-        lhs[1] * rhs[1] +
-        lhs[2] * rhs[2];
+    auto const directionDot = lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2];
     return lhs[3] == rhs[3] && directionDot >= 1.0f - directionTolerance;
 }
 
@@ -454,11 +405,10 @@ struct VertexTangentVariant
     std::uint32_t vertexIndex = 0u;
 };
 
-[[nodiscard]] std::optional<LoadError> generateMikkTangents(
-    MeshAsset& mesh,
-    std::span<const std::uint32_t> faceVertexCounts,
-    const TangentUvSelection& selection,
-    const std::filesystem::path& sourcePath)
+[[nodiscard]] std::optional<LoadError> generateMikkTangents(MeshAsset &mesh,
+                                                            std::span<const std::uint32_t> faceVertexCounts,
+                                                            const TangentUvSelection &selection,
+                                                            const std::filesystem::path &sourcePath)
 {
     auto corners = std::vector<nr::dependency::mikktspace::Corner>{};
     corners.reserve(mesh.indices.size());
@@ -467,37 +417,24 @@ struct VertexTangentVariant
         if (vertexIndex >= mesh.vertices.size())
         {
             return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                sourcePath,
+                LoadErrorCode::invalidScene, "assimp", sourcePath,
                 std::format(
                     "Mesh '{}' references vertex {} while generating tangent space, but only {} vertices exist.",
-                    mesh.name,
-                    vertexIndex,
-                    mesh.vertices.size()));
+                    mesh.name, vertexIndex, mesh.vertices.size()));
         }
 
-        auto const& vertex = mesh.vertices[vertexIndex];
+        auto const &vertex = mesh.vertices[vertexIndex];
         auto const texCoord = tangentTexCoord(vertex, selection);
         auto const finiteCorner =
-            std::ranges::all_of(vertex.position, [](float component) {
-                return std::isfinite(component);
-            }) &&
-            std::ranges::all_of(vertex.normal, [](float component) {
-                return std::isfinite(component);
-            }) &&
-            std::ranges::all_of(texCoord, [](float component) {
-                return std::isfinite(component);
-            });
+            std::ranges::all_of(vertex.position, [](float component) { return std::isfinite(component); }) &&
+            std::ranges::all_of(vertex.normal, [](float component) { return std::isfinite(component); }) &&
+            std::ranges::all_of(texCoord, [](float component) { return std::isfinite(component); });
         if (!finiteCorner)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                sourcePath,
-                std::format(
-                    "Mesh '{}' contains non-finite position, normal, or effective normal-map UV data required by MikkTSpace.",
-                    mesh.name));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", sourcePath,
+                                 std::format("Mesh '{}' contains non-finite position, normal, or effective normal-map "
+                                             "UV data required by MikkTSpace.",
+                                             mesh.name));
         }
 
         corners.push_back(nr::dependency::mikktspace::Corner{
@@ -507,25 +444,17 @@ struct VertexTangentVariant
         });
     }
 
-    auto cornerTangents =
-        std::vector<nr::dependency::mikktspace::Tangent>(corners.size());
-    if (!nr::dependency::mikktspace::generateTangents(
-            faceVertexCounts,
-            corners,
-            cornerTangents))
+    auto cornerTangents = std::vector<nr::dependency::mikktspace::Tangent>(corners.size());
+    if (!nr::dependency::mikktspace::generateTangents(faceVertexCounts, corners, cornerTangents))
     {
         return makeLoadError(
-            LoadErrorCode::invalidScene,
-            "assimp",
-            sourcePath,
-            std::format(
-                "MikkTSpace failed to generate tangent space for mesh '{}' from its effective normal-map UVs.",
-                mesh.name));
+            LoadErrorCode::invalidScene, "assimp", sourcePath,
+            std::format("MikkTSpace failed to generate tangent space for mesh '{}' from its effective normal-map UVs.",
+                        mesh.name));
     }
 
     auto const originalVertexCount = mesh.vertices.size();
-    auto tangentVariants =
-        std::vector<std::vector<VertexTangentVariant>>(originalVertexCount);
+    auto tangentVariants = std::vector<std::vector<VertexTangentVariant>>(originalVertexCount);
     auto cornerIndices = std::views::iota(std::size_t{0}, mesh.indices.size());
     for (auto cornerIndex : cornerIndices)
     {
@@ -533,18 +462,13 @@ struct VertexTangentVariant
         auto tangent = normalizedTangent(cornerTangents[cornerIndex]);
         if (!tangent.has_value())
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                sourcePath,
-                std::format(
-                    "MikkTSpace generated an invalid tangent frame for mesh '{}' corner {}.",
-                    mesh.name,
-                    cornerIndex));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", sourcePath,
+                                 std::format("MikkTSpace generated an invalid tangent frame for mesh '{}' corner {}.",
+                                             mesh.name, cornerIndex));
         }
 
-        auto& variants = tangentVariants[originalVertexIndex];
-        auto compatible = std::ranges::find_if(variants, [&](const VertexTangentVariant& variant) {
+        auto &variants = tangentVariants[originalVertexIndex];
+        auto compatible = std::ranges::find_if(variants, [&](const VertexTangentVariant &variant) {
             return tangentsCompatible(variant.tangent, *tangent);
         });
         if (compatible != variants.end())
@@ -558,13 +482,10 @@ struct VertexTangentVariant
         {
             if (mesh.vertices.size() >= std::numeric_limits<std::uint32_t>::max())
             {
-                return makeLoadError(
-                    LoadErrorCode::invalidScene,
-                    "assimp",
-                    sourcePath,
-                    std::format(
-                        "Mesh '{}' exceeds the 32-bit vertex index range while splitting incompatible MikkTSpace corners.",
-                        mesh.name));
+                return makeLoadError(LoadErrorCode::invalidScene, "assimp", sourcePath,
+                                     std::format("Mesh '{}' exceeds the 32-bit vertex index range while splitting "
+                                                 "incompatible MikkTSpace corners.",
+                                                 mesh.name));
             }
 
             targetVertexIndex = static_cast<std::uint32_t>(mesh.vertices.size());
@@ -586,54 +507,90 @@ struct VertexTangentVariant
 {
     switch (textureType)
     {
-    case aiTextureType_NONE: return "none";
-    case aiTextureType_DIFFUSE: return "diffuse";
-    case aiTextureType_SPECULAR: return "specular";
-    case aiTextureType_AMBIENT: return "ambient";
-    case aiTextureType_EMISSIVE: return "emissive";
-    case aiTextureType_HEIGHT: return "height";
-    case aiTextureType_NORMALS: return "normals";
-    case aiTextureType_SHININESS: return "shininess";
-    case aiTextureType_OPACITY: return "opacity";
-    case aiTextureType_DISPLACEMENT: return "displacement";
-    case aiTextureType_LIGHTMAP: return "lightmap";
-    case aiTextureType_REFLECTION: return "reflection";
-    case aiTextureType_BASE_COLOR: return "base_color";
-    case aiTextureType_NORMAL_CAMERA: return "normal_camera";
-    case aiTextureType_EMISSION_COLOR: return "emission_color";
-    case aiTextureType_METALNESS: return "metalness";
-    case aiTextureType_DIFFUSE_ROUGHNESS: return "diffuse_roughness";
-    case aiTextureType_AMBIENT_OCCLUSION: return "ambient_occlusion";
-    case aiTextureType_UNKNOWN: return "unknown";
+    case aiTextureType_NONE:
+        return "none";
+    case aiTextureType_DIFFUSE:
+        return "diffuse";
+    case aiTextureType_SPECULAR:
+        return "specular";
+    case aiTextureType_AMBIENT:
+        return "ambient";
+    case aiTextureType_EMISSIVE:
+        return "emissive";
+    case aiTextureType_HEIGHT:
+        return "height";
+    case aiTextureType_NORMALS:
+        return "normals";
+    case aiTextureType_SHININESS:
+        return "shininess";
+    case aiTextureType_OPACITY:
+        return "opacity";
+    case aiTextureType_DISPLACEMENT:
+        return "displacement";
+    case aiTextureType_LIGHTMAP:
+        return "lightmap";
+    case aiTextureType_REFLECTION:
+        return "reflection";
+    case aiTextureType_BASE_COLOR:
+        return "base_color";
+    case aiTextureType_NORMAL_CAMERA:
+        return "normal_camera";
+    case aiTextureType_EMISSION_COLOR:
+        return "emission_color";
+    case aiTextureType_METALNESS:
+        return "metalness";
+    case aiTextureType_DIFFUSE_ROUGHNESS:
+        return "diffuse_roughness";
+    case aiTextureType_AMBIENT_OCCLUSION:
+        return "ambient_occlusion";
+    case aiTextureType_UNKNOWN:
+        return "unknown";
     case aiTextureType_SHEEN:
         switch (textureSlot)
         {
-        case 0u: return "sheen_color";
-        case 1u: return "sheen_roughness";
-        default: return std::format("sheen_{}", textureSlot);
+        case 0u:
+            return "sheen_color";
+        case 1u:
+            return "sheen_roughness";
+        default:
+            return std::format("sheen_{}", textureSlot);
         }
     case aiTextureType_CLEARCOAT:
         switch (textureSlot)
         {
-        case 0u: return "clearcoat";
-        case 1u: return "clearcoat_roughness";
-        case 2u: return "clearcoat_normal";
-        default: return std::format("clearcoat_{}", textureSlot);
+        case 0u:
+            return "clearcoat";
+        case 1u:
+            return "clearcoat_roughness";
+        case 2u:
+            return "clearcoat_normal";
+        default:
+            return std::format("clearcoat_{}", textureSlot);
         }
     case aiTextureType_TRANSMISSION:
         switch (textureSlot)
         {
-        case 0u: return "transmission";
-        case 1u: return "volume_thickness";
-        default: return std::format("transmission_{}", textureSlot);
+        case 0u:
+            return "transmission";
+        case 1u:
+            return "volume_thickness";
+        default:
+            return std::format("transmission_{}", textureSlot);
         }
-    case aiTextureType_MAYA_BASE: return "maya_base";
-    case aiTextureType_MAYA_SPECULAR: return "maya_specular";
-    case aiTextureType_MAYA_SPECULAR_COLOR: return "maya_specular_color";
-    case aiTextureType_MAYA_SPECULAR_ROUGHNESS: return "maya_specular_roughness";
-    case aiTextureType_ANISOTROPY: return "anisotropy";
-    case aiTextureType_GLTF_METALLIC_ROUGHNESS: return "gltf_metallic_roughness";
-    default: return std::format("type_{}", static_cast<unsigned>(textureType));
+    case aiTextureType_MAYA_BASE:
+        return "maya_base";
+    case aiTextureType_MAYA_SPECULAR:
+        return "maya_specular";
+    case aiTextureType_MAYA_SPECULAR_COLOR:
+        return "maya_specular_color";
+    case aiTextureType_MAYA_SPECULAR_ROUGHNESS:
+        return "maya_specular_roughness";
+    case aiTextureType_ANISOTROPY:
+        return "anisotropy";
+    case aiTextureType_GLTF_METALLIC_ROUGHNESS:
+        return "gltf_metallic_roughness";
+    default:
+        return std::format("type_{}", static_cast<unsigned>(textureType));
     }
 }
 
@@ -646,37 +603,52 @@ struct VertexTangentVariant
     {
     case aiTextureType_DIFFUSE:
     case aiTextureType_BASE_COLOR:
-    case aiTextureType_MAYA_BASE: return baseColor;
+    case aiTextureType_MAYA_BASE:
+        return baseColor;
     case aiTextureType_HEIGHT:
     case aiTextureType_NORMALS:
     case aiTextureType_DISPLACEMENT:
-    case aiTextureType_NORMAL_CAMERA: return normal;
+    case aiTextureType_NORMAL_CAMERA:
+        return normal;
     case aiTextureType_AMBIENT:
     case aiTextureType_LIGHTMAP:
-    case aiTextureType_AMBIENT_OCCLUSION: return occlusion;
+    case aiTextureType_AMBIENT_OCCLUSION:
+        return occlusion;
     case aiTextureType_EMISSIVE:
-    case aiTextureType_EMISSION_COLOR: return emissive;
+    case aiTextureType_EMISSION_COLOR:
+        return emissive;
     case aiTextureType_METALNESS:
     case aiTextureType_DIFFUSE_ROUGHNESS:
-    case aiTextureType_GLTF_METALLIC_ROUGHNESS: return metallicRoughness;
+    case aiTextureType_GLTF_METALLIC_ROUGHNESS:
+        return metallicRoughness;
     case aiTextureType_CLEARCOAT:
         switch (textureSlot)
         {
-        case 0u: return clearcoat;
-        case 1u: return clearcoatRoughness;
-        case 2u: return clearcoatNormal;
-        default: return unsupported;
+        case 0u:
+            return clearcoat;
+        case 1u:
+            return clearcoatRoughness;
+        case 2u:
+            return clearcoatNormal;
+        default:
+            return unsupported;
         }
     case aiTextureType_SHEEN:
         switch (textureSlot)
         {
-        case 0u: return sheenColor;
-        case 1u: return sheenRoughness;
-        default: return unsupported;
+        case 0u:
+            return sheenColor;
+        case 1u:
+            return sheenRoughness;
+        default:
+            return unsupported;
         }
-    case aiTextureType_TRANSMISSION: return textureSlot == 0u ? transmission : unsupported;
-    case aiTextureType_ANISOTROPY: return textureSlot == 0u ? anisotropy : unsupported;
-    default: return unsupported;
+    case aiTextureType_TRANSMISSION:
+        return textureSlot == 0u ? transmission : unsupported;
+    case aiTextureType_ANISOTROPY:
+        return textureSlot == 0u ? anisotropy : unsupported;
+    default:
+        return unsupported;
     }
 }
 
@@ -684,22 +656,28 @@ struct VertexTangentVariant
 {
     switch (lightType)
     {
-    case aiLightSource_UNDEFINED: return "undefined";
-    case aiLightSource_DIRECTIONAL: return "directional";
-    case aiLightSource_POINT: return "point";
-    case aiLightSource_SPOT: return "spot";
-    case aiLightSource_AMBIENT: return "ambient";
-    case aiLightSource_AREA: return "area";
-    default: return std::format("type_{}", static_cast<unsigned>(lightType));
+    case aiLightSource_UNDEFINED:
+        return "undefined";
+    case aiLightSource_DIRECTIONAL:
+        return "directional";
+    case aiLightSource_POINT:
+        return "point";
+    case aiLightSource_SPOT:
+        return "spot";
+    case aiLightSource_AMBIENT:
+        return "ambient";
+    case aiLightSource_AREA:
+        return "area";
+    default:
+        return std::format("type_{}", static_cast<unsigned>(lightType));
     }
 }
 
 [[nodiscard]] std::string normalizeTextureKey(std::string_view key)
 {
     std::string normalized{key};
-    std::ranges::transform(normalized, normalized.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    std::ranges::transform(normalized, normalized.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return normalized;
 }
 
@@ -737,22 +715,8 @@ struct VertexTangentVariant
 [[nodiscard]] std::array<float, 16> toMatrix(const aiMatrix4x4 &matrix)
 {
     return {
-        matrix.a1,
-        matrix.a2,
-        matrix.a3,
-        matrix.a4,
-        matrix.b1,
-        matrix.b2,
-        matrix.b3,
-        matrix.b4,
-        matrix.c1,
-        matrix.c2,
-        matrix.c3,
-        matrix.c4,
-        matrix.d1,
-        matrix.d2,
-        matrix.d3,
-        matrix.d4,
+        matrix.a1, matrix.a2, matrix.a3, matrix.a4, matrix.b1, matrix.b2, matrix.b3, matrix.b4,
+        matrix.c1, matrix.c2, matrix.c3, matrix.c4, matrix.d1, matrix.d2, matrix.d3, matrix.d4,
     };
 }
 
@@ -767,7 +731,7 @@ struct VertexTangentVariant
 }
 
 [[nodiscard]] std::filesystem::path resolveTexturePath(const std::filesystem::path &baseDirectory,
-                                                              std::string_view sourcePath)
+                                                       std::string_view sourcePath)
 {
     auto path = std::filesystem::path{sourcePath};
     if (path.is_absolute())
@@ -777,9 +741,8 @@ struct VertexTangentVariant
     return (baseDirectory / path).lexically_normal();
 }
 
-[[nodiscard]] std::optional<LoadError> appendEmbeddedTexture(const aiTexture &texture,
-                                                                     std::uint32_t textureIndex,
-                                                                     SceneAsset &scene)
+[[nodiscard]] std::optional<LoadError> appendEmbeddedTexture(const aiTexture &texture, std::uint32_t textureIndex,
+                                                             SceneAsset &scene)
 {
     TextureAsset textureAsset{};
     textureAsset.key = std::format("*{}", textureIndex);
@@ -791,9 +754,7 @@ struct VertexTangentVariant
         if (byteCount > 0 && byteSource == nullptr)
         {
             return makeLoadError(
-                LoadErrorCode::textureDataUnsupported,
-                "assimp",
-                scene.sourcePath,
+                LoadErrorCode::textureDataUnsupported, "assimp", scene.sourcePath,
                 std::format("Embedded compressed texture {} has null data pointer.", textureAsset.key));
         }
 
@@ -816,9 +777,7 @@ struct VertexTangentVariant
     if (width == 0 || height == 0 || texture.pcData == nullptr)
     {
         return makeLoadError(
-            LoadErrorCode::textureDataUnsupported,
-            "assimp",
-            scene.sourcePath,
+            LoadErrorCode::textureDataUnsupported, "assimp", scene.sourcePath,
             std::format("Embedded raw texture {} has invalid dimensions or null data.", textureAsset.key));
     }
 
@@ -826,9 +785,7 @@ struct VertexTangentVariant
     if (texelCount > std::numeric_limits<std::size_t>::max() / 4)
     {
         return makeLoadError(
-            LoadErrorCode::textureDataUnsupported,
-            "assimp",
-            scene.sourcePath,
+            LoadErrorCode::textureDataUnsupported, "assimp", scene.sourcePath,
             std::format("Embedded raw texture {} size overflows host memory limits.", textureAsset.key));
     }
 
@@ -863,11 +820,8 @@ struct VertexTangentVariant
         auto const *texture = assimpScene.mTextures[textureIndex];
         if (texture == nullptr)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                scene.sourcePath,
-                std::format("Scene texture {} is null.", textureIndex));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                 std::format("Scene texture {} is null.", textureIndex));
         }
 
         auto error = appendEmbeddedTexture(*texture, textureIndex, scene);
@@ -881,7 +835,7 @@ struct VertexTangentVariant
 }
 
 [[nodiscard]] std::uint32_t textureIndexFromKey(const std::map<std::string, std::uint32_t> &indexByKey,
-                                                  std::string_view key)
+                                                std::string_view key)
 {
     auto found = indexByKey.find(std::string{key});
     if (found == indexByKey.end())
@@ -894,8 +848,7 @@ struct VertexTangentVariant
 [[nodiscard]] bool shouldFlipAssimpTextureCoordinateV(const std::filesystem::path &sourcePath);
 
 [[nodiscard]] std::optional<LoadError> appendMaterials(const aiScene &assimpScene,
-                                                              const std::filesystem::path &baseDirectory,
-                                                              SceneAsset &scene)
+                                                       const std::filesystem::path &baseDirectory, SceneAsset &scene)
 {
     auto textureIndexByKey = std::map<std::string, std::uint32_t>{};
     for (auto textureIndex : std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(scene.textures.size())))
@@ -910,11 +863,8 @@ struct VertexTangentVariant
         auto const *material = assimpScene.mMaterials[materialIndex];
         if (material == nullptr)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                scene.sourcePath,
-                std::format("Scene material {} is null.", materialIndex));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                 std::format("Scene material {} is null.", materialIndex));
         }
 
         MaterialAsset materialAsset{};
@@ -1004,12 +954,10 @@ struct VertexTangentVariant
             (attenuationColor.r != 1.0f || attenuationColor.g != 1.0f || attenuationColor.b != 1.0f);
         if (hasUnsupportedAttenuationDistance || hasUnsupportedAttenuationColor)
         {
-            nr::nrLog(
-                nr::LogLevel::warning,
-                "LOAD",
-                std::format(
-                    "Material '{}' uses volume attenuation/absorption properties; Beer-Lambert absorption is unsupported and will be ignored.",
-                    materialAsset.name));
+            nr::nrLog(nr::LogLevel::warning, "LOAD",
+                      std::format("Material '{}' uses volume attenuation/absorption properties; Beer-Lambert "
+                                  "absorption is unsupported and will be ignored.",
+                                  materialAsset.name));
         }
 
         // Read specular factor (for specular-glossiness workflow)
@@ -1082,21 +1030,20 @@ struct VertexTangentVariant
         // Classify workflow flags based on properties
         auto classifyWorkflow = [&]() {
             MaterialWorkflowFlags flags = MaterialWorkflowFlags::metallicRoughness;
-            
-            if (materialAsset.specularFactor.has_value()  && materialAsset.glossinessFactor.has_value())
+
+            if (materialAsset.specularFactor.has_value() && materialAsset.glossinessFactor.has_value())
             {
                 flags = static_cast<MaterialWorkflowFlags>(
-                    static_cast<std::uint8_t>(flags) | static_cast<std::uint8_t>(MaterialWorkflowFlags::specularGlossiness)
-                );
+                    static_cast<std::uint8_t>(flags) |
+                    static_cast<std::uint8_t>(MaterialWorkflowFlags::specularGlossiness));
             }
-            
+
             if (materialAsset.anisotropyFactor.has_value() && *materialAsset.anisotropyFactor > 0.0f)
             {
                 flags = static_cast<MaterialWorkflowFlags>(
-                    static_cast<std::uint8_t>(flags) | static_cast<std::uint8_t>(MaterialWorkflowFlags::anisotropy)
-                );
+                    static_cast<std::uint8_t>(flags) | static_cast<std::uint8_t>(MaterialWorkflowFlags::anisotropy));
             }
-            
+
             return flags;
         };
         materialAsset.workflowFlags = classifyWorkflow();
@@ -1112,7 +1059,8 @@ struct VertexTangentVariant
             {
                 aiString texturePath{};
                 unsigned int uvChannel = 0;
-                auto textureQuery = material->GetTexture(textureType, slotIndex, &texturePath, nullptr, &uvChannel, nullptr, nullptr, nullptr);
+                auto textureQuery = material->GetTexture(textureType, slotIndex, &texturePath, nullptr, &uvChannel,
+                                                         nullptr, nullptr, nullptr);
                 if (textureQuery != aiReturn_SUCCESS)
                 {
                     continue;
@@ -1120,33 +1068,24 @@ struct VertexTangentVariant
 
                 if (uvChannel > 1u)
                 {
-                    return makeLoadError(
-                        LoadErrorCode::invalidScene,
-                        "assimp",
-                        scene.sourcePath,
-                        std::format(
-                            "Material '{}' texture semantic '{}' selects unsupported UV set {}; only UV sets 0 and 1 are supported.",
-                            materialAsset.name,
-                            textureTypeName(textureType, slotIndex),
-                            uvChannel));
+                    return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                         std::format("Material '{}' texture semantic '{}' selects unsupported UV set "
+                                                     "{}; only UV sets 0 and 1 are supported.",
+                                                     materialAsset.name, textureTypeName(textureType, slotIndex),
+                                                     uvChannel));
                 }
 
                 auto textureTransform = nr::resource::MaterialTextureTransform{};
                 auto assimpTextureTransform = AssimpTextureTransform{};
                 if (readMaterialTextureTransform(*material, textureType, slotIndex, assimpTextureTransform))
                 {
-                    textureTransform =
-                        makeTextureTransform(assimpTextureTransform, restoreGltfTextureCoordinateV);
+                    textureTransform = makeTextureTransform(assimpTextureTransform, restoreGltfTextureCoordinateV);
                     if (!textureTransformFinite(textureTransform))
                     {
                         return makeLoadError(
-                            LoadErrorCode::invalidScene,
-                            "assimp",
-                            scene.sourcePath,
-                            std::format(
-                                "Material '{}' texture semantic '{}' has a non-finite UV transform.",
-                                materialAsset.name,
-                                textureTypeName(textureType, slotIndex)));
+                            LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                            std::format("Material '{}' texture semantic '{}' has a non-finite UV transform.",
+                                        materialAsset.name, textureTypeName(textureType, slotIndex)));
                     }
                 }
 
@@ -1164,11 +1103,9 @@ struct VertexTangentVariant
                     resolvedTextureIndex = textureIndexFromKey(textureIndexByKey, embeddedKey);
                     if (resolvedTextureIndex == invalidIndex)
                     {
-                        return makeLoadError(
-                            LoadErrorCode::invalidScene,
-                            "assimp",
-                            scene.sourcePath,
-                            std::format("Material '{}' references missing embedded texture '{}'.", materialAsset.name, embeddedKey));
+                        return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                             std::format("Material '{}' references missing embedded texture '{}'.",
+                                                         materialAsset.name, embeddedKey));
                     }
                 }
                 else
@@ -1205,10 +1142,8 @@ struct VertexTangentVariant
     return std::nullopt;
 }
 
-[[nodiscard]] std::optional<LoadError> appendMeshes(const aiScene &assimpScene,
-                                                     SceneAsset &scene,
-                                                     bool strict,
-                                                     bool generateMissingGltfTangents)
+[[nodiscard]] std::optional<LoadError> appendMeshes(const aiScene &assimpScene, SceneAsset &scene, bool strict,
+                                                    bool generateMissingGltfTangents)
 {
     auto meshIndices = std::views::iota(0u, assimpScene.mNumMeshes);
     for (auto meshIndex : meshIndices)
@@ -1216,20 +1151,14 @@ struct VertexTangentVariant
         auto const *mesh = assimpScene.mMeshes[meshIndex];
         if (mesh == nullptr)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                scene.sourcePath,
-                std::format("Scene mesh {} is null.", meshIndex));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                 std::format("Scene mesh {} is null.", meshIndex));
         }
 
         if ((mesh->mNumVertices == 0 || mesh->mVertices == nullptr) && strict)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                scene.sourcePath,
-                std::format("Mesh {} has no vertex data.", meshIndex));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                 std::format("Mesh {} has no vertex data.", meshIndex));
         }
 
         MeshAsset meshAsset{};
@@ -1239,24 +1168,19 @@ struct VertexTangentVariant
             meshAsset.name = std::format("mesh_{}", meshIndex);
         }
         meshAsset.clockwiseFrontFace = false;
-        auto const materialIndex = mesh->mMaterialIndex < assimpScene.mNumMaterials
-                                       ? mesh->mMaterialIndex
-                                       : invalidIndex;
+        auto const materialIndex =
+            mesh->mMaterialIndex < assimpScene.mNumMaterials ? mesh->mMaterialIndex : invalidIndex;
 
         meshAsset.vertices.reserve(mesh->mNumVertices);
         auto const flipTextureCoordinateV = shouldFlipAssimpTextureCoordinateV(scene.sourcePath);
         auto const hasSourceTangents = mesh->HasTangentsAndBitangents();
-        if (generateMissingGltfTangents &&
-            (mesh->mTangents != nullptr || mesh->mBitangents != nullptr) &&
+        if (generateMissingGltfTangents && (mesh->mTangents != nullptr || mesh->mBitangents != nullptr) &&
             !hasSourceTangents)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                scene.sourcePath,
-                std::format(
-                    "Mesh '{}' contains incomplete authored tangent data; both tangent and bitangent arrays are required.",
-                    meshAsset.name));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                 std::format("Mesh '{}' contains incomplete authored tangent data; both tangent and "
+                                             "bitangent arrays are required.",
+                                             meshAsset.name));
         }
 
         auto invalidTangentFrameCount = 0u;
@@ -1277,15 +1201,14 @@ struct VertexTangentVariant
 
             if (hasSourceTangents)
             {
-                if (mesh->mTangents == nullptr || mesh->mBitangents == nullptr || !mesh->HasNormals() || mesh->mNormals == nullptr)
+                if (mesh->mTangents == nullptr || mesh->mBitangents == nullptr || !mesh->HasNormals() ||
+                    mesh->mNormals == nullptr)
                 {
                     return makeLoadError(
-                        LoadErrorCode::invalidScene,
-                        "assimp",
-                        scene.sourcePath,
-                        std::format(
-                            "Mesh '{}' reports tangent space but is missing tangent, bitangent, or normal arrays required to preserve tangent handedness.",
-                            meshAsset.name));
+                        LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                        std::format("Mesh '{}' reports tangent space but is missing tangent, bitangent, or normal "
+                                    "arrays required to preserve tangent handedness.",
+                                    meshAsset.name));
                 }
 
                 auto const &tangent = mesh->mTangents[vertexIndex];
@@ -1300,12 +1223,9 @@ struct VertexTangentVariant
                     ++invalidTangentFrameCount;
                     if (!firstInvalidTangentFrame.has_value())
                     {
-                        firstInvalidTangentFrame = std::format(
-                            "vertex {} cross(normal,tangent)^2={} bitangent^2={} signSource={}",
-                            vertexIndex,
-                            tangentFrameBitangentLength2,
-                            bitangentLength2,
-                            signSource);
+                        firstInvalidTangentFrame =
+                            std::format("vertex {} cross(normal,tangent)^2={} bitangent^2={} signSource={}",
+                                        vertexIndex, tangentFrameBitangentLength2, bitangentLength2, signSource);
                     }
 
                     vertex.tangent = {tangent.x, tangent.y, tangent.z, 1.0f};
@@ -1339,14 +1259,11 @@ struct VertexTangentVariant
 
         if (invalidTangentFrameCount > 0u)
         {
-            nr::nrLog(
-                nr::LogLevel::warning,
-                "LOAD",
-                std::format(
-                    "Mesh '{}' contains {} vertices with undefined tangent handedness; using +1 tangent sign for those vertices. First invalid frame: {}.",
-                    meshAsset.name,
-                    invalidTangentFrameCount,
-                    firstInvalidTangentFrame.value_or("unavailable")));
+            nr::nrLog(nr::LogLevel::warning, "LOAD",
+                      std::format("Mesh '{}' contains {} vertices with undefined tangent handedness; using +1 tangent "
+                                  "sign for those vertices. First invalid frame: {}.",
+                                  meshAsset.name, invalidTangentFrameCount,
+                                  firstInvalidTangentFrame.value_or("unavailable")));
         }
 
         meshAsset.indices.reserve(static_cast<std::size_t>(mesh->mNumFaces) * 3u);
@@ -1364,9 +1281,7 @@ struct VertexTangentVariant
             if (strict && face.mNumIndices < 3)
             {
                 return makeLoadError(
-                    LoadErrorCode::invalidScene,
-                    "assimp",
-                    scene.sourcePath,
+                    LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
                     std::format("Mesh '{}' contains a face with fewer than 3 indices.", meshAsset.name));
             }
 
@@ -1383,35 +1298,23 @@ struct VertexTangentVariant
             auto const selection = selectTangentUv(scene, materialIndex, meshAsset.name);
             auto const hasNormals = mesh->HasNormals() && mesh->mNormals != nullptr;
             auto const hasSelectedTexCoords =
-                mesh->HasTextureCoords(selection.uvChannel) &&
-                mesh->mTextureCoords[selection.uvChannel] != nullptr;
+                mesh->HasTextureCoords(selection.uvChannel) && mesh->mTextureCoords[selection.uvChannel] != nullptr;
             auto const hasSupportedFaces =
-                std::ranges::all_of(faceVertexCounts, [](std::uint32_t count) {
-                    return count >= 3u;
-                });
+                std::ranges::all_of(faceVertexCounts, [](std::uint32_t count) { return count >= 3u; });
 
-            if (selection.hasNormalTexture &&
-                (!hasNormals || !hasSelectedTexCoords || !hasSupportedFaces))
+            if (selection.hasNormalTexture && (!hasNormals || !hasSelectedTexCoords || !hasSupportedFaces))
             {
                 return makeLoadError(
-                    LoadErrorCode::invalidScene,
-                    "assimp",
-                    scene.sourcePath,
-                    std::format(
-                        "Mesh '{}' requires generated tangents for its {} texture, but normals, TEXCOORD_{}, "
-                        "or triangle/polygon face data is missing.",
-                        meshAsset.name,
-                        nr::resource::materialTextureSlotSemanticName(selection.semantic),
-                        selection.uvChannel));
+                    LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                    std::format("Mesh '{}' requires generated tangents for its {} texture, but normals, TEXCOORD_{}, "
+                                "or triangle/polygon face data is missing.",
+                                meshAsset.name, nr::resource::materialTextureSlotSemanticName(selection.semantic),
+                                selection.uvChannel));
             }
 
             if (hasNormals && hasSelectedTexCoords && hasSupportedFaces)
             {
-                if (auto error = generateMikkTangents(
-                        meshAsset,
-                        faceVertexCounts,
-                        selection,
-                        scene.sourcePath);
+                if (auto error = generateMikkTangents(meshAsset, faceVertexCounts, selection, scene.sourcePath);
                     error.has_value())
                 {
                     return error;
@@ -1420,11 +1323,11 @@ struct VertexTangentVariant
         }
 
         meshAsset.geometries.push_back(MeshGeometryAsset{
-            .name = meshAsset.name.empty()
-                        ? std::format("mesh_{}_geometry_0", meshIndex)
-                        : std::format("{}_geometry_0", meshAsset.name),
+            .name = meshAsset.name.empty() ? std::format("mesh_{}_geometry_0", meshIndex)
+                                           : std::format("{}_geometry_0", meshAsset.name),
             .firstIndex = 0,
-            .indexCount = static_cast<std::uint32_t>(meshAsset.indices.empty() ? meshAsset.vertices.size() : meshAsset.indices.size()),
+            .indexCount = static_cast<std::uint32_t>(meshAsset.indices.empty() ? meshAsset.vertices.size()
+                                                                               : meshAsset.indices.size()),
             .materialIndex = materialIndex,
         });
 
@@ -1434,9 +1337,7 @@ struct VertexTangentVariant
     return std::nullopt;
 }
 
-[[nodiscard]] std::uint32_t appendNodeRecursive(const aiNode &node,
-                                                  std::uint32_t parentIndex,
-                                                  SceneAsset &scene)
+[[nodiscard]] std::uint32_t appendNodeRecursive(const aiNode &node, std::uint32_t parentIndex, SceneAsset &scene)
 {
     auto nodeIndex = static_cast<std::uint32_t>(scene.nodes.size());
 
@@ -1478,11 +1379,8 @@ struct VertexTangentVariant
 {
     if (assimpScene.mRootNode == nullptr)
     {
-        return makeLoadError(
-            LoadErrorCode::invalidScene,
-            "assimp",
-            scene.sourcePath,
-            "Assimp scene root node is null.");
+        return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                             "Assimp scene root node is null.");
     }
 
     scene.rootNodeIndex = appendNodeRecursive(*assimpScene.mRootNode, invalidIndex, scene);
@@ -1509,12 +1407,8 @@ struct VertexTangentVariant
 }
 
 [[nodiscard]] std::optional<LoadError> resolveNodeIndexByName(
-    const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
-    std::string_view nodeName,
-    std::string_view assetKind,
-    std::uint32_t assetIndex,
-    bool strict,
-    const SceneAsset &scene,
+    const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName, std::string_view nodeName,
+    std::string_view assetKind, std::uint32_t assetIndex, bool strict, const SceneAsset &scene,
     std::uint32_t &resolvedNodeIndex)
 {
     resolvedNodeIndex = invalidIndex;
@@ -1531,11 +1425,8 @@ struct VertexTangentVariant
             return std::nullopt;
         }
 
-        return makeLoadError(
-            LoadErrorCode::invalidScene,
-            "assimp",
-            scene.sourcePath,
-            std::format("{} {} references missing node '{}'.", assetKind, assetIndex, nodeName));
+        return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                             std::format("{} {} references missing node '{}'.", assetKind, assetIndex, nodeName));
     }
 
     auto const &matches = found->second;
@@ -1547,21 +1438,17 @@ struct VertexTangentVariant
     resolvedNodeIndex = matches.front();
     if (matches.size() > 1 && strict)
     {
-        return makeLoadError(
-            LoadErrorCode::invalidScene,
-            "assimp",
-            scene.sourcePath,
-            std::format("{} {} references non-unique node name '{}' ({} matches).", assetKind, assetIndex, nodeName, matches.size()));
+        return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                             std::format("{} {} references non-unique node name '{}' ({} matches).", assetKind,
+                                         assetIndex, nodeName, matches.size()));
     }
 
     return std::nullopt;
 }
 
 [[nodiscard]] std::optional<LoadError> appendCameras(
-    const aiScene &assimpScene,
-    const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
-    SceneAsset &scene,
-    bool strict)
+    const aiScene &assimpScene, const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
+    SceneAsset &scene, bool strict)
 {
     auto cameraIndices = std::views::iota(0u, assimpScene.mNumCameras);
     for (auto cameraIndex : cameraIndices)
@@ -1569,11 +1456,8 @@ struct VertexTangentVariant
         auto const *camera = assimpScene.mCameras[cameraIndex];
         if (camera == nullptr)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                scene.sourcePath,
-                std::format("Scene camera {} is null.", cameraIndex));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                 std::format("Scene camera {} is null.", cameraIndex));
         }
 
         auto sourceNodeName = toStdString(camera->mName);
@@ -1590,12 +1474,7 @@ struct VertexTangentVariant
         cameraAsset.farPlane = camera->mClipPlaneFar;
         cameraAsset.orthographicWidth = camera->mOrthographicWidth;
 
-        if (auto error = resolveNodeIndexByName(nodeIndicesByName,
-                                                sourceNodeName,
-                                                "camera",
-                                                cameraIndex,
-                                                strict,
-                                                scene,
+        if (auto error = resolveNodeIndexByName(nodeIndicesByName, sourceNodeName, "camera", cameraIndex, strict, scene,
                                                 cameraAsset.nodeIndex);
             error.has_value())
         {
@@ -1609,11 +1488,8 @@ struct VertexTangentVariant
 }
 
 [[nodiscard]] std::optional<LoadError> appendLights(
-    const aiScene &assimpScene,
-    const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
-    const std::map<std::string, float> &gltfLightRangesByNodeName,
-    SceneAsset &scene,
-    bool strict)
+    const aiScene &assimpScene, const std::map<std::string, std::vector<std::uint32_t>> &nodeIndicesByName,
+    const std::map<std::string, float> &gltfLightRangesByNodeName, SceneAsset &scene, bool strict)
 {
     auto lightIndices = std::views::iota(0u, assimpScene.mNumLights);
     for (auto lightIndex : lightIndices)
@@ -1621,11 +1497,8 @@ struct VertexTangentVariant
         auto const *light = assimpScene.mLights[lightIndex];
         if (light == nullptr)
         {
-            return makeLoadError(
-                LoadErrorCode::invalidScene,
-                "assimp",
-                scene.sourcePath,
-                std::format("Scene light {} is null.", lightIndex));
+            return makeLoadError(LoadErrorCode::invalidScene, "assimp", scene.sourcePath,
+                                 std::format("Scene light {} is null.", lightIndex));
         }
 
         auto sourceNodeName = toStdString(light->mName);
@@ -1652,12 +1525,7 @@ struct VertexTangentVariant
         lightAsset.outerCone = light->mAngleOuterCone;
         lightAsset.areaSize = {light->mSize.x, light->mSize.y};
 
-        if (auto error = resolveNodeIndexByName(nodeIndicesByName,
-                                                sourceNodeName,
-                                                "light",
-                                                lightIndex,
-                                                strict,
-                                                scene,
+        if (auto error = resolveNodeIndexByName(nodeIndicesByName, sourceNodeName, "light", lightIndex, strict, scene,
                                                 lightAsset.nodeIndex);
             error.has_value())
         {
@@ -1673,8 +1541,8 @@ struct VertexTangentVariant
 [[nodiscard]] std::uint32_t totalVertexCount(const SceneAsset &scene)
 {
     auto vertexSizes = scene.meshes | std::views::transform([](const MeshAsset &mesh) {
-        return static_cast<std::uint64_t>(mesh.vertices.size());
-    });
+                           return static_cast<std::uint64_t>(mesh.vertices.size());
+                       });
     auto total = std::accumulate(vertexSizes.begin(), vertexSizes.end(), std::uint64_t{0});
     return static_cast<std::uint32_t>(std::min<std::uint64_t>(total, std::numeric_limits<std::uint32_t>::max()));
 }
@@ -1682,8 +1550,8 @@ struct VertexTangentVariant
 [[nodiscard]] std::uint32_t totalIndexCount(const SceneAsset &scene)
 {
     auto indexSizes = scene.meshes | std::views::transform([](const MeshAsset &mesh) {
-        return static_cast<std::uint64_t>(mesh.indices.size());
-    });
+                          return static_cast<std::uint64_t>(mesh.indices.size());
+                      });
     auto total = std::accumulate(indexSizes.begin(), indexSizes.end(), std::uint64_t{0});
     return static_cast<std::uint32_t>(std::min<std::uint64_t>(total, std::numeric_limits<std::uint32_t>::max()));
 }
@@ -1694,9 +1562,7 @@ struct VertexTangentVariant
     return extension == ".gltf" || extension == ".glb";
 }
 
-[[nodiscard]] aiPostProcessSteps buildPostProcessFlags(
-    const SceneLoadRequest &request,
-    bool gltfSource)
+[[nodiscard]] aiPostProcessSteps buildPostProcessFlags(const SceneLoadRequest &request, bool gltfSource)
 {
     std::uint32_t flags = aiProcess_SortByPType;
 
@@ -1741,123 +1607,108 @@ struct VertexTangentVariant
 namespace nr::load
 {
 [[nodiscard]] nr::resource::MaterialTextureSlotSemantic assimpTextureSlotSemantic(std::uint32_t textureTypeRaw,
-                                                                                 std::uint32_t textureSlot) noexcept
+                                                                                  std::uint32_t textureSlot) noexcept
 {
-        return detail::textureSlotSemantic(static_cast<aiTextureType>(textureTypeRaw), textureSlot);
-    }
+    return detail::textureSlotSemantic(static_cast<aiTextureType>(textureTypeRaw), textureSlot);
+}
 
 bool AssimpSceneImporter::supportsExtension(std::string_view extension)
 {
-        return std::ranges::find(kSupportedExtensions, extension) != kSupportedExtensions.end();
-    }
+    return std::ranges::find(kSupportedExtensions, extension) != kSupportedExtensions.end();
+}
 
-SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest& request)
+SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest &request)
 {
-        if (request.sourcePath.empty())
-        {
-            return SceneImportResult{
-                std::unexpected(makeError(
-                    LoadErrorCode::invalidArgument,
-                    request.sourcePath,
-                    "Scene source path is empty."))};
-        }
-
-        auto extension = normalizedExtension(request.sourcePath);
-        if (!supportsExtension(extension))
-        {
-            return SceneImportResult{
-                std::unexpected(makeError(
-                    LoadErrorCode::unsupportedFormat,
-                    request.sourcePath,
-                    std::format("Unsupported file extension '{}' for assimp backend.", extension)))};
-        }
-
-        if (!std::filesystem::exists(request.sourcePath))
-        {
-            return SceneImportResult{
-                std::unexpected(makeError(
-                    LoadErrorCode::fileNotFound,
-                    request.sourcePath,
-                    "Source asset file does not exist."))};
-        }
-
-        Assimp::Importer importer{};
-        auto const gltfSource = detail::shouldFlipAssimpTextureCoordinateV(request.sourcePath);
-        auto flags = detail::buildPostProcessFlags(request, gltfSource);
-        auto const *assimpScene = importer.ReadFile(request.sourcePath.string(), flags);
-        if (assimpScene == nullptr)
-        {
-            return SceneImportResult{
-                std::unexpected(makeError(
-                    LoadErrorCode::importFailed,
-                    request.sourcePath,
-                    std::format("Assimp import failed: {}", importer.GetErrorString())))};
-        }
-
-        if ((assimpScene->mFlags & detail::assimpSceneFlagIncomplete) != 0 || assimpScene->mRootNode == nullptr)
-        {
-            return SceneImportResult{
-                std::unexpected(makeError(
-                    LoadErrorCode::invalidScene,
-                    request.sourcePath,
-                    "Assimp returned an incomplete scene graph."))};
-        }
-
-        SceneAsset scene{};
-        scene.sourcePath = request.sourcePath;
-
-        if (auto error = detail::appendEmbeddedTextures(*assimpScene, scene); error.has_value())
-        {
-            return SceneImportResult{std::unexpected(std::move(*error))};
-        }
-
-        auto baseDirectory = request.searchRoot.empty() ? request.sourcePath.parent_path() : request.searchRoot;
-        if (auto error = detail::appendMaterials(*assimpScene, baseDirectory, scene); error.has_value())
-        {
-            return SceneImportResult{std::unexpected(std::move(*error))};
-        }
-
-        if (auto decodeResult = decodeSceneTextureImages(scene); !decodeResult.has_value())
-        {
-            return SceneImportResult{std::unexpected(std::move(decodeResult.error()))};
-        }
-
-        if (auto error = detail::appendMeshes(
-                *assimpScene,
-                scene,
-                request.strict,
-                request.generateTangents && gltfSource);
-            error.has_value())
-        {
-            return SceneImportResult{std::unexpected(std::move(*error))};
-        }
-
-        if (auto error = detail::appendNodes(*assimpScene, scene); error.has_value())
-        {
-            return SceneImportResult{std::unexpected(std::move(*error))};
-        }
-
-        auto nodeIndicesByName = detail::buildNodeIndicesByName(scene);
-        auto gltfLightRangesByNodeName = detail::buildGltfLightRangesByNodeName(*assimpScene);
-        if (auto error = detail::appendCameras(*assimpScene, nodeIndicesByName, scene, request.strict); error.has_value())
-        {
-            return SceneImportResult{std::unexpected(std::move(*error))};
-        }
-
-        if (auto error = detail::appendLights(*assimpScene, nodeIndicesByName, gltfLightRangesByNodeName, scene, request.strict); error.has_value())
-        {
-            return SceneImportResult{std::unexpected(std::move(*error))};
-        }
-
-        scene.stats.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
-        scene.stats.meshCount = static_cast<std::uint32_t>(scene.meshes.size());
-        scene.stats.materialCount = static_cast<std::uint32_t>(scene.materials.size());
-        scene.stats.textureCount = static_cast<std::uint32_t>(scene.textures.size());
-        scene.stats.cameraCount = static_cast<std::uint32_t>(scene.cameras.size());
-        scene.stats.lightCount = static_cast<std::uint32_t>(scene.lights.size());
-        scene.stats.vertexCount = detail::totalVertexCount(scene);
-        scene.stats.indexCount = detail::totalIndexCount(scene);
-
-        return scene;
+    if (request.sourcePath.empty())
+    {
+        return SceneImportResult{std::unexpected(
+            makeError(LoadErrorCode::invalidArgument, request.sourcePath, "Scene source path is empty."))};
     }
+
+    auto extension = normalizedExtension(request.sourcePath);
+    if (!supportsExtension(extension))
+    {
+        return SceneImportResult{
+            std::unexpected(makeError(LoadErrorCode::unsupportedFormat, request.sourcePath,
+                                      std::format("Unsupported file extension '{}' for assimp backend.", extension)))};
+    }
+
+    if (!std::filesystem::exists(request.sourcePath))
+    {
+        return SceneImportResult{std::unexpected(
+            makeError(LoadErrorCode::fileNotFound, request.sourcePath, "Source asset file does not exist."))};
+    }
+
+    Assimp::Importer importer{};
+    auto const gltfSource = detail::shouldFlipAssimpTextureCoordinateV(request.sourcePath);
+    auto flags = detail::buildPostProcessFlags(request, gltfSource);
+    auto const *assimpScene = importer.ReadFile(request.sourcePath.string(), flags);
+    if (assimpScene == nullptr)
+    {
+        return SceneImportResult{
+            std::unexpected(makeError(LoadErrorCode::importFailed, request.sourcePath,
+                                      std::format("Assimp import failed: {}", importer.GetErrorString())))};
+    }
+
+    if ((assimpScene->mFlags & detail::assimpSceneFlagIncomplete) != 0 || assimpScene->mRootNode == nullptr)
+    {
+        return SceneImportResult{std::unexpected(
+            makeError(LoadErrorCode::invalidScene, request.sourcePath, "Assimp returned an incomplete scene graph."))};
+    }
+
+    SceneAsset scene{};
+    scene.sourcePath = request.sourcePath;
+
+    if (auto error = detail::appendEmbeddedTextures(*assimpScene, scene); error.has_value())
+    {
+        return SceneImportResult{std::unexpected(std::move(*error))};
+    }
+
+    auto baseDirectory = request.searchRoot.empty() ? request.sourcePath.parent_path() : request.searchRoot;
+    if (auto error = detail::appendMaterials(*assimpScene, baseDirectory, scene); error.has_value())
+    {
+        return SceneImportResult{std::unexpected(std::move(*error))};
+    }
+
+    if (auto decodeResult = decodeSceneTextureImages(scene); !decodeResult.has_value())
+    {
+        return SceneImportResult{std::unexpected(std::move(decodeResult.error()))};
+    }
+
+    if (auto error = detail::appendMeshes(*assimpScene, scene, request.strict, request.generateTangents && gltfSource);
+        error.has_value())
+    {
+        return SceneImportResult{std::unexpected(std::move(*error))};
+    }
+
+    if (auto error = detail::appendNodes(*assimpScene, scene); error.has_value())
+    {
+        return SceneImportResult{std::unexpected(std::move(*error))};
+    }
+
+    auto nodeIndicesByName = detail::buildNodeIndicesByName(scene);
+    auto gltfLightRangesByNodeName = detail::buildGltfLightRangesByNodeName(*assimpScene);
+    if (auto error = detail::appendCameras(*assimpScene, nodeIndicesByName, scene, request.strict); error.has_value())
+    {
+        return SceneImportResult{std::unexpected(std::move(*error))};
+    }
+
+    if (auto error =
+            detail::appendLights(*assimpScene, nodeIndicesByName, gltfLightRangesByNodeName, scene, request.strict);
+        error.has_value())
+    {
+        return SceneImportResult{std::unexpected(std::move(*error))};
+    }
+
+    scene.stats.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
+    scene.stats.meshCount = static_cast<std::uint32_t>(scene.meshes.size());
+    scene.stats.materialCount = static_cast<std::uint32_t>(scene.materials.size());
+    scene.stats.textureCount = static_cast<std::uint32_t>(scene.textures.size());
+    scene.stats.cameraCount = static_cast<std::uint32_t>(scene.cameras.size());
+    scene.stats.lightCount = static_cast<std::uint32_t>(scene.lights.size());
+    scene.stats.vertexCount = detail::totalVertexCount(scene);
+    scene.stats.indexCount = detail::totalIndexCount(scene);
+
+    return scene;
+}
 } // namespace nr::load

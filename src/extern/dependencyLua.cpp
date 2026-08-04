@@ -29,7 +29,8 @@ inline constexpr std::array kTableMembers{
 };
 
 inline constexpr std::array kMathMembers{
-    "abs", "acos", "asin", "atan", "ceil", "cos", "deg", "exp", "floor", "fmod", "log", "max", "min", "modf", "rad", "sin", "sqrt", "tan", "tointeger", "type", "ult", "maxinteger", "mininteger", "pi",
+    "abs", "acos", "asin", "atan", "ceil", "cos", "deg",       "exp",  "floor", "fmod",       "log",        "max",
+    "min", "modf", "rad",  "sin",  "sqrt", "tan", "tointeger", "type", "ult",   "maxinteger", "mininteger", "pi",
 };
 
 inline constexpr std::array kUtf8Members{
@@ -73,7 +74,9 @@ void *cappedAllocator(void *userData, void *pointer, std::size_t oldSize, std::s
     {
         return false;
     }
-    return std::ranges::all_of(segment.substr(1u), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '_'; });
+    return std::ranges::all_of(segment.substr(1u), [](char value) {
+        return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '_';
+    });
 }
 
 [[nodiscard]] std::vector<std::string> splitDottedName(std::string_view name)
@@ -297,10 +300,17 @@ class Sandbox::Impl
     [[nodiscard]] static bool validateConfig(const SandboxConfig &config) noexcept
     {
         auto const &limits = config.limits;
-        return limits.maximumAllocatedBytes > 0u && limits.maximumSourceBytes > 0u && limits.maximumInstructionsPerResume > 0u && limits.hookInstructionInterval > 0u && limits.hookInstructionInterval <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
-               limits.hookInstructionInterval <= limits.maximumInstructionsPerResume && limits.softWallBudget > std::chrono::milliseconds::zero() && limits.maximumConversionDepth > 0u && limits.maximumTableEntries > 0u &&
-               limits.maximumTableEntries <= static_cast<std::size_t>(std::numeric_limits<int>::max()) && limits.maximumConvertedNodes > 0u && limits.maximumStringBytes > 0u &&
-               std::ranges::all_of(config.hostFunctions, [](auto const &binding) { return !binding.dottedName.empty() && static_cast<bool>(binding.function); });
+        return limits.maximumAllocatedBytes > 0u && limits.maximumSourceBytes > 0u &&
+               limits.maximumInstructionsPerResume > 0u && limits.hookInstructionInterval > 0u &&
+               limits.hookInstructionInterval <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+               limits.hookInstructionInterval <= limits.maximumInstructionsPerResume &&
+               limits.softWallBudget > std::chrono::milliseconds::zero() && limits.maximumConversionDepth > 0u &&
+               limits.maximumTableEntries > 0u &&
+               limits.maximumTableEntries <= static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
+               limits.maximumConvertedNodes > 0u && limits.maximumStringBytes > 0u &&
+               std::ranges::all_of(config.hostFunctions, [](auto const &binding) {
+                   return !binding.dottedName.empty() && static_cast<bool>(binding.function);
+               });
     }
 
     [[nodiscard]] static bool buildNamespaceTree(std::span<const HostFunctionBinding> bindings, NamespaceNode &root)
@@ -320,7 +330,8 @@ class Sandbox::Impl
             }
 
             auto *node = std::addressof(root);
-            std::ranges::for_each(segments, [&](const std::string &segment) { node = std::addressof(node->children[segment]); });
+            std::ranges::for_each(segments,
+                                  [&](const std::string &segment) { node = std::addressof(node->children[segment]); });
             if (node->functionIndex || !node->children.empty())
             {
                 valid = false;
@@ -415,7 +426,9 @@ class Sandbox::Impl
         lua_setmetatable(state, proxyIndex);
     }
 
-    template <std::size_t Size> static bool copyMembers(lua_State *state, int sourceIndex, int targetIndex, const std::array<const char *, Size> &names)
+    template <std::size_t Size>
+    static bool copyMembers(lua_State *state, int sourceIndex, int targetIndex,
+                            const std::array<const char *, Size> &names)
     {
         sourceIndex = lua_absindex(state, sourceIndex);
         targetIndex = lua_absindex(state, targetIndex);
@@ -437,7 +450,9 @@ class Sandbox::Impl
         return valid;
     }
 
-    template <std::size_t Size> [[nodiscard]] bool installLibrary(int allowlistBackingIndex, const char *name, lua_CFunction openFunction, const std::array<const char *, Size> &members)
+    template <std::size_t Size>
+    [[nodiscard]] bool installLibrary(int allowlistBackingIndex, const char *name, lua_CFunction openFunction,
+                                      const std::array<const char *, Size> &members)
     {
         allowlistBackingIndex = lua_absindex(state_, allowlistBackingIndex);
         luaL_requiref(state_, name, openFunction, 0);
@@ -508,7 +523,9 @@ class Sandbox::Impl
             return false;
         }
 
-        if (!installLibrary(allowlistBackingIndex, LUA_STRLIBNAME, luaopen_string, kStringMembers) || !installLibrary(allowlistBackingIndex, LUA_TABLIBNAME, luaopen_table, kTableMembers) || !installLibrary(allowlistBackingIndex, LUA_MATHLIBNAME, luaopen_math, kMathMembers) ||
+        if (!installLibrary(allowlistBackingIndex, LUA_STRLIBNAME, luaopen_string, kStringMembers) ||
+            !installLibrary(allowlistBackingIndex, LUA_TABLIBNAME, luaopen_table, kTableMembers) ||
+            !installLibrary(allowlistBackingIndex, LUA_MATHLIBNAME, luaopen_math, kMathMembers) ||
             !installLibrary(allowlistBackingIndex, LUA_UTF8LIBNAME, luaopen_utf8, kUtf8Members))
         {
             return false;
@@ -542,7 +559,8 @@ class Sandbox::Impl
         return environmentReference_ != LUA_NOREF && environmentReference_ != LUA_REFNIL;
     }
 
-    [[nodiscard]] std::expected<Value, std::string> readValue(lua_State *state, int index, std::size_t depth, ConversionState &conversion) const
+    [[nodiscard]] std::expected<Value, std::string> readValue(lua_State *state, int index, std::size_t depth,
+                                                              ConversionState &conversion) const
     {
         if (depth > config_.limits.maximumConversionDepth)
         {
@@ -586,11 +604,13 @@ class Sandbox::Impl
         case LUA_TTABLE:
             return readTable(state, index, depth, conversion);
         default:
-            return std::unexpected(std::format("Lua value type '{}' cannot cross the host boundary.", luaL_typename(state, index)));
+            return std::unexpected(
+                std::format("Lua value type '{}' cannot cross the host boundary.", luaL_typename(state, index)));
         }
     }
 
-    [[nodiscard]] std::expected<Value, std::string> readTable(lua_State *state, int index, std::size_t depth, ConversionState &conversion) const
+    [[nodiscard]] std::expected<Value, std::string> readTable(lua_State *state, int index, std::size_t depth,
+                                                              ConversionState &conversion) const
     {
         index = lua_absindex(state, index);
         auto const identity = lua_topointer(state, index);
@@ -659,7 +679,8 @@ class Sandbox::Impl
         {
             return Value{std::move(object)};
         }
-        if (indexed.size() != entryCount || (!indexed.empty() && indexed.rbegin()->first != static_cast<std::int64_t>(indexed.size())))
+        if (indexed.size() != entryCount ||
+            (!indexed.empty() && indexed.rbegin()->first != static_cast<std::int64_t>(indexed.size())))
         {
             return std::unexpected("Lua array keys must be contiguous.");
         }
@@ -860,7 +881,8 @@ class Sandbox::Impl
             lua_error(state);
             return;
         }
-        if (std::chrono::steady_clock::now() - implementation->resumeStartedAt_ > implementation->config_.limits.softWallBudget)
+        if (std::chrono::steady_clock::now() - implementation->resumeStartedAt_ >
+            implementation->config_.limits.softWallBudget)
         {
             lua_pushliteral(state, "Lua resume exceeded the soft wall-time budget.");
             lua_error(state);

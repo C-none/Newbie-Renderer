@@ -24,19 +24,24 @@ class LightPrepareNode final : public Node
 
     ~LightPrepareNode() override;
 
+    void initialize(NodeInitContext &context) override;
 
-    void initialize(NodeInitContext& context) override;
+    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override
+    {
+        return true;
+    }
+    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(
+        const NodeFrameParameters &frameParameters) const override;
 
-    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
-    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;
+    void build(NodeBuildContext &context, const NodeFrameParameters &frameParameters) override;
+    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
+                                        const NodeFrameParameters &frameParameters,
+                                        const StructuralSnapshot &snapshot) override;
 
-    void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
-    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext& context, const NodeFrameParameters& frameParameters, const StructuralSnapshot& snapshot) override;
-
-    void shutdown(NodeShutdownContext& context) override;
+    void shutdown(NodeShutdownContext &context) override;
 
   private:
-    void materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters);
+    void materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters);
     std::shared_ptr<detail::LightPrepareRuntimeCache> runtime_{};
     std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
 };

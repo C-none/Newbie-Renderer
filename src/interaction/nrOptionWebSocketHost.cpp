@@ -49,7 +49,8 @@ inline constexpr std::size_t maximumSerializedEndpointRecordBytes = 1024u;
     {
         unpadded.remove_suffix(1u);
     }
-    if (unpadded.size() != 43u || !std::ranges::all_of(unpadded, [](char value) { return base64UrlValue(value).has_value(); }))
+    if (unpadded.size() != 43u ||
+        !std::ranges::all_of(unpadded, [](char value) { return base64UrlValue(value).has_value(); }))
     {
         return false;
     }
@@ -92,11 +93,17 @@ class OptionWebSocketHost::Impl
         }
 
         auto result = server_.start(
-            network::WebSocketServerConfig{.bearerToken = std::move(*token)}, [this](std::string_view payload, const network::MessageContext &context, std::string &responseSlot) { return protocol_.handleText(payload, context, responseSlot); },
+            network::WebSocketServerConfig{.bearerToken = std::move(*token)},
+            [this](std::string_view payload, const network::MessageContext &context, std::string &responseSlot) {
+                return protocol_.handleText(payload, context, responseSlot);
+            },
             [](const network::TransportEvent &event) {
                 if (event.kind == network::TransportEventKind::responseWriteFailed)
                 {
-                    nrLog(LogLevel::warning, "OPTION_WS", event.startedResponseLost ? "WebSocket response transport failed after a mutation may have started." : "WebSocket response transport failed.");
+                    nrLog(LogLevel::warning, "OPTION_WS",
+                          event.startedResponseLost
+                              ? "WebSocket response transport failed after a mutation may have started."
+                              : "WebSocket response transport failed.");
                 }
                 else if (event.kind == network::TransportEventKind::listenerError)
                 {
@@ -104,7 +111,9 @@ class OptionWebSocketHost::Impl
                 }
                 else if (event.kind == network::TransportEventKind::connectionClosed && event.startedResponseLost)
                 {
-                    nrLog(LogLevel::warning, "OPTION_WS", "WebSocket connection closed after a mutation started response was prepared but not delivered.");
+                    nrLog(LogLevel::warning, "OPTION_WS",
+                          "WebSocket connection closed after a mutation started response was prepared but not "
+                          "delivered.");
                 }
             });
         if (!result.started)
@@ -117,12 +126,10 @@ class OptionWebSocketHost::Impl
 
         auto uri = result.endpoint.uri();
         auto endpointRecord = std::string{};
-        auto const serializationError = json::serializeJson(
-            json::JsonValue{json::JsonValue::Object{
-                {"endpoint", json::JsonValue{uri}},
-            }},
-            endpointRecord,
-            maximumSerializedEndpointRecordBytes);
+        auto const serializationError = json::serializeJson(json::JsonValue{json::JsonValue::Object{
+                                                                {"endpoint", json::JsonValue{uri}},
+                                                            }},
+                                                            endpointRecord, maximumSerializedEndpointRecordBytes);
         if (serializationError != json::JsonError::none)
         {
             server_.stop();
@@ -159,7 +166,8 @@ class OptionWebSocketHost::Impl
     network::LoopbackWebSocketServer server_;
 };
 
-OptionWebSocketHost::OptionWebSocketHost(options::OptionSystem &optionSystem) : impl_(std::make_unique<Impl>(optionSystem))
+OptionWebSocketHost::OptionWebSocketHost(options::OptionSystem &optionSystem)
+    : impl_(std::make_unique<Impl>(optionSystem))
 {
 }
 

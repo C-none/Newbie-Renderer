@@ -40,37 +40,16 @@ inline constexpr PixelType halfPixelType = ::OPENEXR_IMF_NAMESPACE::HALF;
 inline constexpr PixelType floatPixelType = ::OPENEXR_IMF_NAMESPACE::FLOAT;
 inline constexpr PixelType uintPixelType = ::OPENEXR_IMF_NAMESPACE::UINT;
 
-inline bool inspectFile(
-    const char* fileName,
-    bool& tiled,
-    bool& deep,
-    bool& multiPart)
+inline bool inspectFile(const char *fileName, bool &tiled, bool &deep, bool &multiPart)
 {
     return ::OPENEXR_IMF_NAMESPACE::isOpenExrFile(fileName, tiled, deep, multiPart);
 }
 
-inline Slice makeSlice(
-    PixelType type,
-    const void* pixels,
-    int originX,
-    int originY,
-    std::int64_t width,
-    std::int64_t height,
-    std::size_t xStride,
-    std::size_t yStride,
-    double fillValue = 0.0)
+inline Slice makeSlice(PixelType type, const void *pixels, int originX, int originY, std::int64_t width,
+                       std::int64_t height, std::size_t xStride, std::size_t yStride, double fillValue = 0.0)
 {
-    return Slice::Make(
-        type,
-        pixels,
-        IMATH_NAMESPACE::V2i{originX, originY},
-        width,
-        height,
-        xStride,
-        yStride,
-        1,
-        1,
-        fillValue);
+    return Slice::Make(type, pixels, IMATH_NAMESPACE::V2i{originX, originY}, width, height, xStride, yStride, 1, 1,
+                       fillValue);
 }
 } // namespace nr::dependency::openexr
 
@@ -94,12 +73,9 @@ struct Tangent
     float sign = 1.0f;
 };
 
-[[nodiscard]] bool generateTangents(
-    std::span<const std::uint32_t> faceVertexCounts,
-    std::span<const Corner> corners,
-    std::span<Tangent> tangents);
+[[nodiscard]] bool generateTangents(std::span<const std::uint32_t> faceVertexCounts, std::span<const Corner> corners,
+                                    std::span<Tangent> tangents);
 } // namespace nr::dependency::mikktspace
-
 
 export using ::ai_real;
 export using ::aiColor3D;
@@ -184,7 +160,6 @@ export using ::tjGetErrorStr2;
 export using ::tjhandle;
 export using ::tjInitDecompress;
 export using ::TJPF_RGBA;
-
 
 #ifdef TJFLAG_FASTDCT
 #undef TJFLAG_FASTDCT

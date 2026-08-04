@@ -30,56 +30,33 @@ struct ClearDepthStencilImagePassDesc
     std::optional<ImageAspectIntent> aspect{};
 };
 
-[[nodiscard]] GraphPassHandle clearBuffer(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    ClearBufferPassDesc desc);
+[[nodiscard]] GraphPassHandle clearBuffer(NodeBuildContext &context, std::string_view debugName,
+                                          ClearBufferPassDesc desc);
 
-[[nodiscard]] GraphPassHandle clearColorImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    ClearColorImagePassDesc desc);
+[[nodiscard]] GraphPassHandle clearColorImage(NodeBuildContext &context, std::string_view debugName,
+                                              ClearColorImagePassDesc desc);
 
-[[nodiscard]] GraphPassHandle clearDepthStencilImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    ClearDepthStencilImagePassDesc desc);
+[[nodiscard]] GraphPassHandle clearDepthStencilImage(NodeBuildContext &context, std::string_view debugName,
+                                                     ClearDepthStencilImagePassDesc desc);
 
-[[nodiscard]] GraphPassHandle copyBufferToBuffer(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyBufferToBufferPassDesc desc);
+[[nodiscard]] GraphPassHandle copyBufferToBuffer(NodeBuildContext &context, std::string_view debugName,
+                                                 CopyBufferToBufferPassDesc desc);
 
-[[nodiscard]] GraphPassHandle copyBufferToImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyBufferToImagePassDesc desc);
+[[nodiscard]] GraphPassHandle copyBufferToImage(NodeBuildContext &context, std::string_view debugName,
+                                                CopyBufferToImagePassDesc desc);
 
-[[nodiscard]] GraphPassHandle copyImageToBuffer(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyImageToBufferPassDesc desc);
+[[nodiscard]] GraphPassHandle copyImageToBuffer(NodeBuildContext &context, std::string_view debugName,
+                                                CopyImageToBufferPassDesc desc);
 
-[[nodiscard]] GraphPassHandle copyImageToImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyImageToImagePassDesc desc);
+[[nodiscard]] GraphPassHandle copyImageToImage(NodeBuildContext &context, std::string_view debugName,
+                                               CopyImageToImagePassDesc desc);
 
-void patchClearColorImage(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    ClearColorImagePassDesc desc);
+void patchClearColorImage(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
+                          ClearColorImagePassDesc desc);
 
-void patchCopyImageToBuffer(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    CopyImageToBufferPassDesc desc);
+void patchCopyImageToBuffer(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
+                            CopyImageToBufferPassDesc desc);
 
-void patchCopyImageToImage(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    CopyImageToImagePassDesc desc);
+void patchCopyImageToImage(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
+                           CopyImageToImagePassDesc desc);
 } // namespace nr::renderer::ops

@@ -14,8 +14,7 @@ namespace
 {
     if (queue == QueueDomain::Compute)
     {
-        return vk::PipelineStageFlagBits2::eComputeShader |
-               vk::PipelineStageFlagBits2::eRayTracingShaderKHR;
+        return vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eRayTracingShaderKHR;
     }
     if (queue == QueueDomain::Graphics)
     {
@@ -55,7 +54,8 @@ namespace
                                                       });
 }
 
-[[nodiscard]] PassResourceUseDesc imageCopyDestinationUse(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
+[[nodiscard]] PassResourceUseDesc imageCopyDestinationUse(GraphResourceHandle resource,
+                                                          ImageAspectIntent aspect) noexcept
 {
     return use::make<use::spec::CopyDestination>(resource, use::ImageUseOptions{
                                                                .aspect = aspect,
@@ -63,855 +63,787 @@ namespace
 }
 } // namespace
 
-RenderGraphNodeContext::RenderGraphNodeContext(RenderGraphBuilder& builder, GraphNodeHandle node) noexcept
-        : builder_(builder)
-        , node(node)
+RenderGraphNodeContext::RenderGraphNodeContext(RenderGraphBuilder &builder, GraphNodeHandle node) noexcept
+    : builder_(builder), node(node)
 {
-    }
+}
 
 [[nodiscard]] GraphNodeHandle RenderGraphNodeContext::nodeHandle() const noexcept
 {
-        return node;
-    }
+    return node;
+}
 
-[[nodiscard]] RenderGraphBuilder& RenderGraphNodeContext::builder() noexcept
+[[nodiscard]] RenderGraphBuilder &RenderGraphNodeContext::builder() noexcept
 {
-        return builder_.get();
-    }
+    return builder_.get();
+}
 
 void RenderGraphBuilder::clear()
 {
-        // Release per-pass payload before clearing the top-level pass list.
-        std::ranges::for_each(frame_.passes, [](PassExecutionDesc& pass) {
-            pass.resourceUses.clear();
-            pass.copy.reset();
-            pass.record = nullptr;
-            pass.parallelRecord.reset();
-            pass.prepare = nullptr;
-        });
+    // Release per-pass payload before clearing the top-level pass list.
+    std::ranges::for_each(frame_.passes, [](PassExecutionDesc &pass) {
+        pass.resourceUses.clear();
+        pass.copy.reset();
+        pass.record = nullptr;
+        pass.parallelRecord.reset();
+        pass.prepare = nullptr;
+    });
 
-        // Clear top-level vectors without releasing their heap storage.
-        frame_.resources.clear();
-        frame_.frameData.clear();
-        frame_.nodes.clear();
-        frame_.passes.clear();
-        frame_.submitBoundaries.clear();
-        frame_.executionOrder.clear();
-        resourceIndexByHandle_.clear();
+    // Clear top-level vectors without releasing their heap storage.
+    frame_.resources.clear();
+    frame_.frameData.clear();
+    frame_.nodes.clear();
+    frame_.passes.clear();
+    frame_.submitBoundaries.clear();
+    frame_.executionOrder.clear();
+    resourceIndexByHandle_.clear();
 
-        nextResource_ = 0;
-        nextFrameData_ = 0;
-        nextPass_ = 0;
-        nextNode_ = 0;
-        nextSubmit_ = 0;
-        declarationCounts_ = {};
-    }
+    nextResource_ = 0;
+    nextFrameData_ = 0;
+    nextPass_ = 0;
+    nextNode_ = 0;
+    nextSubmit_ = 0;
+    declarationCounts_ = {};
+}
 
-[[nodiscard]] GraphNodeHandle RenderGraphBuilder::addNode(
-        std::string_view debugName,
-        QueueDomain queue)
+[[nodiscard]] GraphNodeHandle RenderGraphBuilder::addNode(std::string_view debugName, QueueDomain queue)
 {
-        ++declarationCounts_.nodes;
-        auto handle = GraphNodeHandle{nextNode_++};
-        frame_.nodes.push_back(GraphNodeDesc{
-            .handle = handle,
-            .debugName = std::string(debugName),
-            .queue = queue,
-        });
-        return handle;
-    }
+    ++declarationCounts_.nodes;
+    auto handle = GraphNodeHandle{nextNode_++};
+    frame_.nodes.push_back(GraphNodeDesc{
+        .handle = handle,
+        .debugName = std::string(debugName),
+        .queue = queue,
+    });
+    return handle;
+}
 
 [[nodiscard]] GraphNodeHandle RenderGraphBuilder::addPresentNode(std::string_view debugName)
 {
-        ++declarationCounts_.nodes;
-        auto handle = GraphNodeHandle{nextNode_++};
-        frame_.nodes.push_back(GraphNodeDesc{
-            .handle = handle,
-            .debugName = std::string(debugName),
-            .queue = QueueDomain::Compute,
-        });
-        return handle;
-    }
+    ++declarationCounts_.nodes;
+    auto handle = GraphNodeHandle{nextNode_++};
+    frame_.nodes.push_back(GraphNodeDesc{
+        .handle = handle,
+        .debugName = std::string(debugName),
+        .queue = QueueDomain::Compute,
+    });
+    return handle;
+}
 
 [[nodiscard]] RenderGraphNodeContext RenderGraphBuilder::makeNodeContext(GraphNodeHandle node)
 {
-        nrAssert(node.valid(), "RenderGraphBuilder::makeNodeContext requires a valid node handle.");
-        nrAssert(containsNode(node), "RenderGraphBuilder::makeNodeContext requires an existing node handle.");
-        return RenderGraphNodeContext{*this, node};
-    }
+    nrAssert(node.valid(), "RenderGraphBuilder::makeNodeContext requires a valid node handle.");
+    nrAssert(containsNode(node), "RenderGraphBuilder::makeNodeContext requires an existing node handle.");
+    return RenderGraphNodeContext{*this, node};
+}
 
-[[nodiscard]] GraphPassHandle RenderGraphBuilder::addPass(
-        std::string_view debugName,
-        GraphNodeHandle node,
-        std::span<const PassResourceUseDesc> intentList,
-        PassRecordCallback executeLambda,
-        PassPrepareCallback prepareCallback,
-        bool isCopyPass,
-        vk::PipelineStageFlags2 shaderStages)
+[[nodiscard]] GraphPassHandle RenderGraphBuilder::addPass(std::string_view debugName, GraphNodeHandle node,
+                                                          std::span<const PassResourceUseDesc> intentList,
+                                                          PassRecordCallback executeLambda,
+                                                          PassPrepareCallback prepareCallback, bool isCopyPass,
+                                                          vk::PipelineStageFlags2 shaderStages)
 {
-        validatePassCallbackContract(executeLambda, std::nullopt, isCopyPass);
-        validatePassResourceUses(intentList, isCopyPass);
+    validatePassCallbackContract(executeLambda, std::nullopt, isCopyPass);
+    validatePassResourceUses(intentList, isCopyPass);
 
-        auto passHandle = addPassCore(debugName, node, isCopyPass, shaderStages);
-        auto& pass = frame_.passes.back();
-        nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
+    auto passHandle = addPassCore(debugName, node, isCopyPass, shaderStages);
+    auto &pass = frame_.passes.back();
+    nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
 
-        pass.resourceUses.reserve(intentList.size());
-        std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
-        pass.prepare = std::move(prepareCallback);
-        pass.record = std::move(executeLambda);
+    pass.resourceUses.reserve(intentList.size());
+    std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
+    pass.prepare = std::move(prepareCallback);
+    pass.record = std::move(executeLambda);
 
-        return passHandle;
-    }
+    return passHandle;
+}
 
-[[nodiscard]] GraphPassHandle RenderGraphBuilder::addPass(
-        std::string_view debugName,
-        GraphNodeHandle node,
-        std::span<const PassResourceUseDesc> intentList,
-        PassParallelRecordDesc parallelRecord,
-        PassPrepareCallback prepareCallback,
-        vk::PipelineStageFlags2 shaderStages)
+[[nodiscard]] GraphPassHandle RenderGraphBuilder::addPass(std::string_view debugName, GraphNodeHandle node,
+                                                          std::span<const PassResourceUseDesc> intentList,
+                                                          PassParallelRecordDesc parallelRecord,
+                                                          PassPrepareCallback prepareCallback,
+                                                          vk::PipelineStageFlags2 shaderStages)
 {
-        validatePassCallbackContract(PassRecordCallback{}, parallelRecord, false);
-        validatePassResourceUses(intentList, false);
+    validatePassCallbackContract(PassRecordCallback{}, parallelRecord, false);
+    validatePassResourceUses(intentList, false);
 
-        auto passHandle = addPassCore(debugName, node, false, shaderStages);
-        auto& pass = frame_.passes.back();
-        nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
+    auto passHandle = addPassCore(debugName, node, false, shaderStages);
+    auto &pass = frame_.passes.back();
+    nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
 
-        pass.resourceUses.reserve(intentList.size());
-        std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
-        pass.prepare = std::move(prepareCallback);
-        pass.parallelRecord = std::move(parallelRecord);
+    pass.resourceUses.reserve(intentList.size());
+    std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
+    pass.prepare = std::move(prepareCallback);
+    pass.parallelRecord = std::move(parallelRecord);
 
-        return passHandle;
-    }
+    return passHandle;
+}
 
-[[nodiscard]] GraphPassHandle RenderGraphBuilder::addCopyPass(
-        std::string_view debugName,
-        GraphNodeHandle node,
-        CopyPassDesc copy)
+[[nodiscard]] GraphPassHandle RenderGraphBuilder::addCopyPass(std::string_view debugName, GraphNodeHandle node,
+                                                              CopyPassDesc copy)
 {
-        auto resourceUses = makeCopyPassResourceUses(copy);
-        validatePassCallbackContract(PassRecordCallback{}, std::nullopt, true);
-        validatePassResourceUses(
-            std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
-            true);
+    auto resourceUses = makeCopyPassResourceUses(copy);
+    validatePassCallbackContract(PassRecordCallback{}, std::nullopt, true);
+    validatePassResourceUses(std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, true);
 
-        auto passHandle = addPassCore(
-            debugName,
-            node,
-            true,
-            vk::PipelineStageFlagBits2::eTransfer);
-        auto& pass = frame_.passes.back();
-        nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addCopyPass pass insertion invariant failed.");
+    auto passHandle = addPassCore(debugName, node, true, vk::PipelineStageFlagBits2::eTransfer);
+    auto &pass = frame_.passes.back();
+    nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addCopyPass pass insertion invariant failed.");
 
-        pass.copy = std::move(copy);
-        pass.resourceUses = std::move(resourceUses);
+    pass.copy = std::move(copy);
+    pass.resourceUses = std::move(resourceUses);
 
-        return passHandle;
-    }
+    return passHandle;
+}
 
-[[nodiscard]] GraphSubmitHandle RenderGraphBuilder::addSubmitNode(
-        std::string_view debugName,
-        SubmitBoundaryKind kind)
+[[nodiscard]] GraphSubmitHandle RenderGraphBuilder::addSubmitNode(std::string_view debugName, SubmitBoundaryKind kind)
 {
-        ++declarationCounts_.submitNodes;
-        auto handle = GraphSubmitHandle{nextSubmit_++};
-        frame_.submitBoundaries.push_back(SubmitBoundaryDesc{
-            .handle = handle,
-            .debugName = std::string(debugName),
-            .kind = kind,
-        });
-        frame_.executionOrder.push_back(handle);
-        return handle;
-    }
+    ++declarationCounts_.submitNodes;
+    auto handle = GraphSubmitHandle{nextSubmit_++};
+    frame_.submitBoundaries.push_back(SubmitBoundaryDesc{
+        .handle = handle,
+        .debugName = std::string(debugName),
+        .kind = kind,
+    });
+    frame_.executionOrder.push_back(handle);
+    return handle;
+}
 
-[[nodiscard]] const RenderGraphFrameDescription& RenderGraphBuilder::frame() const noexcept
+[[nodiscard]] const RenderGraphFrameDescription &RenderGraphBuilder::frame() const noexcept
 {
-        return frame_;
-    }
+    return frame_;
+}
 
-[[nodiscard]] RenderGraphFrameDescription& RenderGraphBuilder::mutableFrame() noexcept
+[[nodiscard]] RenderGraphFrameDescription &RenderGraphBuilder::mutableFrame() noexcept
 {
-        return frame_;
-    }
+    return frame_;
+}
 
 [[nodiscard]] RenderGraphFrameDescription RenderGraphBuilder::build() const
 {
-        return frame_;
+    return frame_;
 }
 
 [[nodiscard]] RenderGraphDeclarationCounts RenderGraphBuilder::declarationCounts() const noexcept
 {
-        return declarationCounts_;
+    return declarationCounts_;
 }
 
-[[nodiscard]] GraphPassHandle RenderGraphBuilder::addPassCore(
-        std::string_view debugName,
-        GraphNodeHandle node,
-        bool isCopyPass,
-        vk::PipelineStageFlags2 shaderStages)
+[[nodiscard]] GraphPassHandle RenderGraphBuilder::addPassCore(std::string_view debugName, GraphNodeHandle node,
+                                                              bool isCopyPass, vk::PipelineStageFlags2 shaderStages)
 {
-        ++declarationCounts_.passes;
-        nrAssert(node.valid(), "RenderGraphBuilder::addPass requires a valid node handle.");
+    ++declarationCounts_.passes;
+    nrAssert(node.valid(), "RenderGraphBuilder::addPass requires a valid node handle.");
 
-        auto nodeIt = findNode(node);
-        nrAssert(nodeIt != frame_.nodes.end(), "RenderGraphBuilder::addPass requires a registered node handle.");
+    auto nodeIt = findNode(node);
+    nrAssert(nodeIt != frame_.nodes.end(), "RenderGraphBuilder::addPass requires a registered node handle.");
 
-        auto handle = GraphPassHandle{nextPass_++};
-        frame_.passes.push_back(PassExecutionDesc{
-            .handle = handle,
-            .node = node,
-            .debugName = std::string(debugName),
-            .isCopyPass = isCopyPass,
-            .queue = nodeIt->queue,
-            .shaderStages = shaderStages != vk::PipelineStageFlags2{}
-                                ? shaderStages
-                                : defaultShaderStagesForQueue(nodeIt->queue),
-        });
-        frame_.executionOrder.push_back(handle);
-        return handle;
-    }
+    auto handle = GraphPassHandle{nextPass_++};
+    frame_.passes.push_back(PassExecutionDesc{
+        .handle = handle,
+        .node = node,
+        .debugName = std::string(debugName),
+        .isCopyPass = isCopyPass,
+        .queue = nodeIt->queue,
+        .shaderStages =
+            shaderStages != vk::PipelineStageFlags2{} ? shaderStages : defaultShaderStagesForQueue(nodeIt->queue),
+    });
+    frame_.executionOrder.push_back(handle);
+    return handle;
+}
 
 [[nodiscard]] std::vector<PassExecutionDesc>::iterator RenderGraphBuilder::findPass(GraphPassHandle handle)
 {
-        return std::ranges::find_if(frame_.passes, [handle](const PassExecutionDesc& desc) {
-            return desc.handle == handle;
-        });
-    }
+    return std::ranges::find_if(frame_.passes,
+                                [handle](const PassExecutionDesc &desc) { return desc.handle == handle; });
+}
 
-[[nodiscard]] const GraphResourceDesc& RenderGraphBuilder::resourceDesc(GraphResourceHandle handle) const
+[[nodiscard]] const GraphResourceDesc &RenderGraphBuilder::resourceDesc(GraphResourceHandle handle) const
 {
-        nrAssert(handle.valid(), "RenderGraphBuilder::resourceDesc requires a valid resource handle.");
-        auto resourceIt = resourceIndexByHandle_.find(handle);
-        nrAssert(resourceIt != resourceIndexByHandle_.end(), "RenderGraphBuilder::resourceDesc resource handle validation failed.");
-        nrAssert(resourceIt->second < frame_.resources.size(), "RenderGraphBuilder::resourceDesc resource index cache is out of range.");
-        auto const& resource = frame_.resources[resourceIt->second];
-        nrAssert(resource.handle == handle, "RenderGraphBuilder::resourceDesc resource index cache is stale.");
-        return resource;
-    }
+    nrAssert(handle.valid(), "RenderGraphBuilder::resourceDesc requires a valid resource handle.");
+    auto resourceIt = resourceIndexByHandle_.find(handle);
+    nrAssert(resourceIt != resourceIndexByHandle_.end(),
+             "RenderGraphBuilder::resourceDesc resource handle validation failed.");
+    nrAssert(resourceIt->second < frame_.resources.size(),
+             "RenderGraphBuilder::resourceDesc resource index cache is out of range.");
+    auto const &resource = frame_.resources[resourceIt->second];
+    nrAssert(resource.handle == handle, "RenderGraphBuilder::resourceDesc resource index cache is stale.");
+    return resource;
+}
 
-[[nodiscard]] ImageAspectIntent RenderGraphBuilder::imageAspectFor(
-        GraphResourceHandle resource,
-        std::optional<ImageAspectIntent> requestedAspect,
-        vk::ImageAspectFlags regionAspect) const
+[[nodiscard]] ImageAspectIntent RenderGraphBuilder::imageAspectFor(GraphResourceHandle resource,
+                                                                   std::optional<ImageAspectIntent> requestedAspect,
+                                                                   vk::ImageAspectFlags regionAspect) const
 {
-        if (requestedAspect.has_value())
-        {
-            return *requestedAspect;
-        }
-
-        auto maskedAspect = imageAspectFromMask(regionAspect);
-        if (maskedAspect.has_value())
-        {
-            return *maskedAspect;
-        }
-
-        return std::visit(
-            [](const auto& desc) {
-                using DescT = std::remove_cvref_t<decltype(desc)>;
-                if constexpr (std::same_as<DescT, GraphImportedImageDesc> ||
-                              std::same_as<DescT, GraphTransientImageDesc>)
-                {
-                    return desc.aspect;
-                }
-                else
-                {
-                    return ImageAspectIntent::Color;
-                }
-            },
-            resourceDesc(resource).desc);
+    if (requestedAspect.has_value())
+    {
+        return *requestedAspect;
     }
+
+    auto maskedAspect = imageAspectFromMask(regionAspect);
+    if (maskedAspect.has_value())
+    {
+        return *maskedAspect;
+    }
+
+    return std::visit(
+        [](const auto &desc) {
+            using DescT = std::remove_cvref_t<decltype(desc)>;
+            if constexpr (std::same_as<DescT, GraphImportedImageDesc> || std::same_as<DescT, GraphTransientImageDesc>)
+            {
+                return desc.aspect;
+            }
+            else
+            {
+                return ImageAspectIntent::Color;
+            }
+        },
+        resourceDesc(resource).desc);
+}
 
 [[nodiscard]] std::vector<PassResourceUseDesc> RenderGraphBuilder::makeCopyPassResourceUses(
-        const CopyPassDesc& copy) const
+    const CopyPassDesc &copy) const
 {
-        return std::visit(
-            [&](const auto& desc) -> std::vector<PassResourceUseDesc> {
-                using DescT = std::remove_cvref_t<decltype(desc)>;
-                if constexpr (std::same_as<DescT, CopyBufferToBufferPassDesc>)
+    return std::visit(
+        [&](const auto &desc) -> std::vector<PassResourceUseDesc> {
+            using DescT = std::remove_cvref_t<decltype(desc)>;
+            if constexpr (std::same_as<DescT, CopyBufferToBufferPassDesc>)
+            {
+                auto destinationUse = desc.destinationIntent == CopyBufferDestinationIntent::Readback
+                                          ? use::readbackWrite(desc.destination)
+                                          : use::bufferTransferDst(desc.destination);
+                return {
+                    use::bufferTransferSrc(desc.source),
+                    destinationUse,
+                };
+            }
+            else if constexpr (std::same_as<DescT, CopyBufferToImagePassDesc>)
+            {
+                auto aspect =
+                    imageAspectFor(desc.destinationImage, desc.imageAspect, desc.region.imageSubresource.aspectMask);
+                return {
+                    use::bufferTransferSrc(desc.sourceBuffer),
+                    imageCopyDestinationUse(desc.destinationImage, aspect),
+                };
+            }
+            else if constexpr (std::same_as<DescT, CopyImageToBufferPassDesc>)
+            {
+                auto aspect =
+                    imageAspectFor(desc.sourceImage, desc.imageAspect, desc.region.imageSubresource.aspectMask);
+                auto destinationUse = desc.destinationIntent == CopyBufferDestinationIntent::Readback
+                                          ? use::readbackWrite(desc.destinationBuffer)
+                                          : use::bufferTransferDst(desc.destinationBuffer);
+                return {
+                    imageCopySourceUse(desc.sourceImage, aspect),
+                    destinationUse,
+                };
+            }
+            else
+            {
+                auto sourceAspect =
+                    imageAspectFor(desc.source, desc.sourceAspect, desc.region.srcSubresource.aspectMask);
+                auto destinationAspect =
+                    imageAspectFor(desc.destination, desc.destinationAspect, desc.region.dstSubresource.aspectMask);
+                auto result = std::vector<PassResourceUseDesc>{
+                    imageCopySourceUse(desc.source, sourceAspect),
+                    imageCopyDestinationUse(desc.destination, destinationAspect),
+                };
+                if (desc.presentDestination)
                 {
-                    auto destinationUse = desc.destinationIntent == CopyBufferDestinationIntent::Readback
-                                              ? use::readbackWrite(desc.destination)
-                                              : use::bufferTransferDst(desc.destination);
-                    return {
-                        use::bufferTransferSrc(desc.source),
-                        destinationUse,
-                    };
+                    result.push_back(use::presentRead(desc.destination));
                 }
-                else if constexpr (std::same_as<DescT, CopyBufferToImagePassDesc>)
-                {
-                    auto aspect = imageAspectFor(
-                        desc.destinationImage,
-                        desc.imageAspect,
-                        desc.region.imageSubresource.aspectMask);
-                    return {
-                        use::bufferTransferSrc(desc.sourceBuffer),
-                        imageCopyDestinationUse(desc.destinationImage, aspect),
-                    };
-                }
-                else if constexpr (std::same_as<DescT, CopyImageToBufferPassDesc>)
-                {
-                    auto aspect = imageAspectFor(
-                        desc.sourceImage,
-                        desc.imageAspect,
-                        desc.region.imageSubresource.aspectMask);
-                    auto destinationUse = desc.destinationIntent == CopyBufferDestinationIntent::Readback
-                                              ? use::readbackWrite(desc.destinationBuffer)
-                                              : use::bufferTransferDst(desc.destinationBuffer);
-                    return {
-                        imageCopySourceUse(desc.sourceImage, aspect),
-                        destinationUse,
-                    };
-                }
-                else
-                {
-                    auto sourceAspect = imageAspectFor(
-                        desc.source,
-                        desc.sourceAspect,
-                        desc.region.srcSubresource.aspectMask);
-                    auto destinationAspect = imageAspectFor(
-                        desc.destination,
-                        desc.destinationAspect,
-                        desc.region.dstSubresource.aspectMask);
-                    auto result = std::vector<PassResourceUseDesc>{
-                        imageCopySourceUse(desc.source, sourceAspect),
-                        imageCopyDestinationUse(desc.destination, destinationAspect),
-                    };
-                    if (desc.presentDestination)
-                    {
-                        result.push_back(use::presentRead(desc.destination));
-                    }
-                    return result;
-                }
-            },
-            copy);
-    }
+                return result;
+            }
+        },
+        copy);
+}
 
-[[nodiscard]] bool RenderGraphBuilder::isBufferResourceDesc(const GraphResourceDesc& desc) noexcept
+[[nodiscard]] bool RenderGraphBuilder::isBufferResourceDesc(const GraphResourceDesc &desc) noexcept
 {
-        return std::holds_alternative<GraphImportedBufferDesc>(desc.desc) ||
-               std::holds_alternative<GraphTransientBufferDesc>(desc.desc);
-    }
+    return std::holds_alternative<GraphImportedBufferDesc>(desc.desc) ||
+           std::holds_alternative<GraphTransientBufferDesc>(desc.desc);
+}
 
-[[nodiscard]] bool RenderGraphBuilder::isImageResourceDesc(const GraphResourceDesc& desc) noexcept
+[[nodiscard]] bool RenderGraphBuilder::isImageResourceDesc(const GraphResourceDesc &desc) noexcept
 {
-        return std::holds_alternative<GraphImportedImageDesc>(desc.desc) ||
-               std::holds_alternative<GraphImportedSwapchainImageDesc>(desc.desc) ||
-               std::holds_alternative<GraphTransientImageDesc>(desc.desc);
-    }
+    return std::holds_alternative<GraphImportedImageDesc>(desc.desc) ||
+           std::holds_alternative<GraphImportedSwapchainImageDesc>(desc.desc) ||
+           std::holds_alternative<GraphTransientImageDesc>(desc.desc);
+}
 
-[[nodiscard]] bool RenderGraphBuilder::isAccelerationStructureResourceDesc(const GraphResourceDesc& desc) noexcept
+[[nodiscard]] bool RenderGraphBuilder::isAccelerationStructureResourceDesc(const GraphResourceDesc &desc) noexcept
 {
-        return std::holds_alternative<GraphImportedAccelerationStructureDesc>(desc.desc);
-    }
+    return std::holds_alternative<GraphImportedAccelerationStructureDesc>(desc.desc);
+}
 
-[[nodiscard]] bool RenderGraphBuilder::hasBufferIntentFields(const PassResourceUseDesc& use) noexcept
+[[nodiscard]] bool RenderGraphBuilder::hasBufferIntentFields(const PassResourceUseDesc &use) noexcept
 {
-        return use.bufferUsage.has_value() || use.bufferAccess.has_value();
-    }
+    return use.bufferUsage.has_value() || use.bufferAccess.has_value();
+}
 
-[[nodiscard]] bool RenderGraphBuilder::hasAccelerationStructureIntentFields(const PassResourceUseDesc& use) noexcept
+[[nodiscard]] bool RenderGraphBuilder::hasAccelerationStructureIntentFields(const PassResourceUseDesc &use) noexcept
 {
-        return use.accelerationStructureUsage.has_value() || use.accelerationStructureAccess.has_value();
-    }
+    return use.accelerationStructureUsage.has_value() || use.accelerationStructureAccess.has_value();
+}
 
-[[nodiscard]] bool RenderGraphBuilder::hasImageIntentFields(const PassResourceUseDesc& use) noexcept
+[[nodiscard]] bool RenderGraphBuilder::hasImageIntentFields(const PassResourceUseDesc &use) noexcept
 {
-        return use.imageUsage.has_value() ||
-               use.imageAccess.has_value() ||
-               use.imageLayout.has_value() ||
-               use.imageAspect.has_value();
-    }
+    return use.imageUsage.has_value() || use.imageAccess.has_value() || use.imageLayout.has_value() ||
+           use.imageAspect.has_value();
+}
 
 [[nodiscard]] bool RenderGraphBuilder::bufferAccessReads(BufferAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case BufferAccessIntent::TransferRead:
-        case BufferAccessIntent::UniformRead:
-        case BufferAccessIntent::ShaderSampleRead:
-        case BufferAccessIntent::ShaderStorageRead:
-        case BufferAccessIntent::ShaderStorageReadWrite:
-        case BufferAccessIntent::VertexRead:
-        case BufferAccessIntent::IndexRead:
-        case BufferAccessIntent::IndirectRead:
-        case BufferAccessIntent::TexelRead:
-        case BufferAccessIntent::TexelReadWrite:
-        case BufferAccessIntent::AccelerationStructureRead:
-        case BufferAccessIntent::AccelerationStructureBuildInputRead:
-        case BufferAccessIntent::AccelerationStructureScratchReadWrite:
-        case BufferAccessIntent::ShaderBindingTableRead:
-        case BufferAccessIntent::HostRead:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case BufferAccessIntent::TransferRead:
+    case BufferAccessIntent::UniformRead:
+    case BufferAccessIntent::ShaderSampleRead:
+    case BufferAccessIntent::ShaderStorageRead:
+    case BufferAccessIntent::ShaderStorageReadWrite:
+    case BufferAccessIntent::VertexRead:
+    case BufferAccessIntent::IndexRead:
+    case BufferAccessIntent::IndirectRead:
+    case BufferAccessIntent::TexelRead:
+    case BufferAccessIntent::TexelReadWrite:
+    case BufferAccessIntent::AccelerationStructureRead:
+    case BufferAccessIntent::AccelerationStructureBuildInputRead:
+    case BufferAccessIntent::AccelerationStructureScratchReadWrite:
+    case BufferAccessIntent::ShaderBindingTableRead:
+    case BufferAccessIntent::HostRead:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::bufferAccessWrites(BufferAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case BufferAccessIntent::TransferWrite:
-        case BufferAccessIntent::ShaderStorageWrite:
-        case BufferAccessIntent::ShaderStorageReadWrite:
-        case BufferAccessIntent::TexelWrite:
-        case BufferAccessIntent::TexelReadWrite:
-        case BufferAccessIntent::AccelerationStructureWrite:
-        case BufferAccessIntent::AccelerationStructureScratchReadWrite:
-        case BufferAccessIntent::HostWrite:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case BufferAccessIntent::TransferWrite:
+    case BufferAccessIntent::ShaderStorageWrite:
+    case BufferAccessIntent::ShaderStorageReadWrite:
+    case BufferAccessIntent::TexelWrite:
+    case BufferAccessIntent::TexelReadWrite:
+    case BufferAccessIntent::AccelerationStructureWrite:
+    case BufferAccessIntent::AccelerationStructureScratchReadWrite:
+    case BufferAccessIntent::HostWrite:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::imageAccessReads(ImageAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case ImageAccessIntent::TransferRead:
-        case ImageAccessIntent::SampledRead:
-        case ImageAccessIntent::StorageRead:
-        case ImageAccessIntent::StorageReadWrite:
-        case ImageAccessIntent::ColorAttachmentRead:
-        case ImageAccessIntent::ColorAttachmentReadWrite:
-        case ImageAccessIntent::DepthStencilRead:
-        case ImageAccessIntent::DepthStencilReadWrite:
-        case ImageAccessIntent::InputAttachmentRead:
-        case ImageAccessIntent::PresentRead:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case ImageAccessIntent::TransferRead:
+    case ImageAccessIntent::SampledRead:
+    case ImageAccessIntent::StorageRead:
+    case ImageAccessIntent::StorageReadWrite:
+    case ImageAccessIntent::ColorAttachmentRead:
+    case ImageAccessIntent::ColorAttachmentReadWrite:
+    case ImageAccessIntent::DepthStencilRead:
+    case ImageAccessIntent::DepthStencilReadWrite:
+    case ImageAccessIntent::InputAttachmentRead:
+    case ImageAccessIntent::PresentRead:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::imageAccessWrites(ImageAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case ImageAccessIntent::TransferWrite:
-        case ImageAccessIntent::StorageWrite:
-        case ImageAccessIntent::StorageReadWrite:
-        case ImageAccessIntent::ColorAttachmentWrite:
-        case ImageAccessIntent::ColorAttachmentReadWrite:
-        case ImageAccessIntent::DepthStencilWrite:
-        case ImageAccessIntent::DepthStencilReadWrite:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case ImageAccessIntent::TransferWrite:
+    case ImageAccessIntent::StorageWrite:
+    case ImageAccessIntent::StorageReadWrite:
+    case ImageAccessIntent::ColorAttachmentWrite:
+    case ImageAccessIntent::ColorAttachmentReadWrite:
+    case ImageAccessIntent::DepthStencilWrite:
+    case ImageAccessIntent::DepthStencilReadWrite:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::bufferAccessUsesShaderStages(BufferAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case BufferAccessIntent::UniformRead:
-        case BufferAccessIntent::ShaderSampleRead:
-        case BufferAccessIntent::ShaderStorageRead:
-        case BufferAccessIntent::ShaderStorageWrite:
-        case BufferAccessIntent::ShaderStorageReadWrite:
-        case BufferAccessIntent::TexelRead:
-        case BufferAccessIntent::TexelWrite:
-        case BufferAccessIntent::TexelReadWrite:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case BufferAccessIntent::UniformRead:
+    case BufferAccessIntent::ShaderSampleRead:
+    case BufferAccessIntent::ShaderStorageRead:
+    case BufferAccessIntent::ShaderStorageWrite:
+    case BufferAccessIntent::ShaderStorageReadWrite:
+    case BufferAccessIntent::TexelRead:
+    case BufferAccessIntent::TexelWrite:
+    case BufferAccessIntent::TexelReadWrite:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::imageAccessUsesShaderStages(ImageAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case ImageAccessIntent::SampledRead:
-        case ImageAccessIntent::StorageRead:
-        case ImageAccessIntent::StorageWrite:
-        case ImageAccessIntent::StorageReadWrite:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case ImageAccessIntent::SampledRead:
+    case ImageAccessIntent::StorageRead:
+    case ImageAccessIntent::StorageWrite:
+    case ImageAccessIntent::StorageReadWrite:
+        return true;
+    default:
+        return false;
     }
+}
 
-[[nodiscard]] bool RenderGraphBuilder::accelerationStructureAccessReads(AccelerationStructureAccessIntent intent) noexcept
+[[nodiscard]] bool RenderGraphBuilder::accelerationStructureAccessReads(
+    AccelerationStructureAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case AccelerationStructureAccessIntent::BuildRead:
-        case AccelerationStructureAccessIntent::TraceRead:
-        case AccelerationStructureAccessIntent::CopyRead:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case AccelerationStructureAccessIntent::BuildRead:
+    case AccelerationStructureAccessIntent::TraceRead:
+    case AccelerationStructureAccessIntent::CopyRead:
+        return true;
+    default:
+        return false;
     }
+}
 
-[[nodiscard]] bool RenderGraphBuilder::accelerationStructureAccessWrites(AccelerationStructureAccessIntent intent) noexcept
+[[nodiscard]] bool RenderGraphBuilder::accelerationStructureAccessWrites(
+    AccelerationStructureAccessIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case AccelerationStructureAccessIntent::BuildWrite:
-        case AccelerationStructureAccessIntent::CopyWrite:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case AccelerationStructureAccessIntent::BuildWrite:
+    case AccelerationStructureAccessIntent::CopyWrite:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::accelerationStructureUsageReads(AccelerationStructureUsageIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case AccelerationStructureUsageIntent::BuildInput:
-        case AccelerationStructureUsageIntent::TraceInput:
-        case AccelerationStructureUsageIntent::CopySource:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case AccelerationStructureUsageIntent::BuildInput:
+    case AccelerationStructureUsageIntent::TraceInput:
+    case AccelerationStructureUsageIntent::CopySource:
+        return true;
+    default:
+        return false;
     }
+}
 
-[[nodiscard]] bool RenderGraphBuilder::accelerationStructureUsageWrites(AccelerationStructureUsageIntent intent) noexcept
+[[nodiscard]] bool RenderGraphBuilder::accelerationStructureUsageWrites(
+    AccelerationStructureUsageIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case AccelerationStructureUsageIntent::BuildOutput:
-        case AccelerationStructureUsageIntent::CopyDestination:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case AccelerationStructureUsageIntent::BuildOutput:
+    case AccelerationStructureUsageIntent::CopyDestination:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::bufferUsageReads(BufferUsageIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case BufferUsageIntent::TransferSrc:
-        case BufferUsageIntent::Uniform:
-        case BufferUsageIntent::StorageRead:
-        case BufferUsageIntent::StorageReadWrite:
-        case BufferUsageIntent::Vertex:
-        case BufferUsageIntent::Index:
-        case BufferUsageIntent::Indirect:
-        case BufferUsageIntent::UniformTexel:
-        case BufferUsageIntent::StorageTexelRead:
-        case BufferUsageIntent::StorageTexelReadWrite:
-        case BufferUsageIntent::AccelerationStructureBuildInput:
-        case BufferUsageIntent::HostUpload:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case BufferUsageIntent::TransferSrc:
+    case BufferUsageIntent::Uniform:
+    case BufferUsageIntent::StorageRead:
+    case BufferUsageIntent::StorageReadWrite:
+    case BufferUsageIntent::Vertex:
+    case BufferUsageIntent::Index:
+    case BufferUsageIntent::Indirect:
+    case BufferUsageIntent::UniformTexel:
+    case BufferUsageIntent::StorageTexelRead:
+    case BufferUsageIntent::StorageTexelReadWrite:
+    case BufferUsageIntent::AccelerationStructureBuildInput:
+    case BufferUsageIntent::HostUpload:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::bufferUsageWrites(BufferUsageIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case BufferUsageIntent::TransferDst:
-        case BufferUsageIntent::StorageWrite:
-        case BufferUsageIntent::StorageReadWrite:
-        case BufferUsageIntent::StorageTexelWrite:
-        case BufferUsageIntent::StorageTexelReadWrite:
-        case BufferUsageIntent::AccelerationStructureStorage:
-        case BufferUsageIntent::AccelerationStructureScratch:
-        case BufferUsageIntent::Readback:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case BufferUsageIntent::TransferDst:
+    case BufferUsageIntent::StorageWrite:
+    case BufferUsageIntent::StorageReadWrite:
+    case BufferUsageIntent::StorageTexelWrite:
+    case BufferUsageIntent::StorageTexelReadWrite:
+    case BufferUsageIntent::AccelerationStructureStorage:
+    case BufferUsageIntent::AccelerationStructureScratch:
+    case BufferUsageIntent::Readback:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::imageUsageReads(ImageUsageIntent intent) noexcept
 {
-        switch (intent)
-        {
-        case ImageUsageIntent::TransferSrc:
-        case ImageUsageIntent::Sampled:
-        case ImageUsageIntent::StorageRead:
-        case ImageUsageIntent::StorageReadWrite:
-        case ImageUsageIntent::DepthStencilReadOnly:
-        case ImageUsageIntent::InputAttachment:
-        case ImageUsageIntent::ResolveSrc:
-        case ImageUsageIntent::PresentSource:
-        case ImageUsageIntent::CopySource:
-            return true;
-        default:
-            return false;
-        }
+    switch (intent)
+    {
+    case ImageUsageIntent::TransferSrc:
+    case ImageUsageIntent::Sampled:
+    case ImageUsageIntent::StorageRead:
+    case ImageUsageIntent::StorageReadWrite:
+    case ImageUsageIntent::DepthStencilReadOnly:
+    case ImageUsageIntent::InputAttachment:
+    case ImageUsageIntent::ResolveSrc:
+    case ImageUsageIntent::PresentSource:
+    case ImageUsageIntent::CopySource:
+        return true;
+    default:
+        return false;
     }
+}
 
 [[nodiscard]] bool RenderGraphBuilder::imageUsageWrites(ImageUsageIntent intent) noexcept
 {
-        switch (intent)
+    switch (intent)
+    {
+    case ImageUsageIntent::TransferDst:
+    case ImageUsageIntent::StorageWrite:
+    case ImageUsageIntent::StorageReadWrite:
+    case ImageUsageIntent::ColorAttachment:
+    case ImageUsageIntent::DepthStencilAttachment:
+    case ImageUsageIntent::ResolveDst:
+    case ImageUsageIntent::CopyDestination:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool RenderGraphBuilder::isCopySourceUse(const PassResourceUseDesc &use) noexcept
+{
+    return use.bufferUsage == BufferUsageIntent::TransferSrc || use.bufferUsage == BufferUsageIntent::HostUpload ||
+           use.imageUsage == ImageUsageIntent::TransferSrc || use.imageUsage == ImageUsageIntent::CopySource;
+}
+
+[[nodiscard]] bool RenderGraphBuilder::isCopyDestinationUse(const PassResourceUseDesc &use) noexcept
+{
+    return use.bufferUsage == BufferUsageIntent::TransferDst || use.bufferUsage == BufferUsageIntent::Readback ||
+           use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination;
+}
+
+[[nodiscard]] bool RenderGraphBuilder::isImageCopyDestinationUse(const PassResourceUseDesc &use) noexcept
+{
+    return use.imageUsage == ImageUsageIntent::TransferDst || use.imageUsage == ImageUsageIntent::CopyDestination;
+}
+
+[[nodiscard]] bool RenderGraphBuilder::isPresentUse(const PassResourceUseDesc &use) noexcept
+{
+    return use.imageUsage == ImageUsageIntent::PresentSource;
+}
+
+void RenderGraphBuilder::validatePassCallbackContract(const PassRecordCallback &executeLambda,
+                                                      const std::optional<PassParallelRecordDesc> &parallelRecord,
+                                                      bool isCopyPass)
+{
+    auto const hasRecord = static_cast<bool>(executeLambda);
+    auto const hasParallelRecord = parallelRecord.has_value();
+    nrAssert(
+        isCopyPass || hasRecord != hasParallelRecord,
+        "RenderGraphBuilder::addPass requires exactly one record or parallel record callback for non-copy passes.");
+    nrAssert(
+        !isCopyPass || (!hasRecord && !hasParallelRecord),
+        "RenderGraphBuilder::addPass copy passes use the implicit copy path and must not provide record callbacks.");
+    if (hasParallelRecord)
+    {
+        nrAssert(parallelRecord->replaySemantics == ParallelRecordReplaySemantics::Unordered,
+                 "RenderGraphBuilder::addPass only supports unordered parallel record replay.");
+        nrAssert(static_cast<bool>(parallelRecord->itemCount),
+                 "RenderGraphBuilder::addPass parallel record requires an item-count callback.");
+        nrAssert(static_cast<bool>(parallelRecord->recordRange),
+                 "RenderGraphBuilder::addPass parallel record requires a range-record callback.");
+    }
+}
+
+void RenderGraphBuilder::validatePassUseReadOnlyContract(const PassResourceUseDesc &use)
+{
+    auto hasExplicitAccess = false;
+    auto reads = false;
+    auto writes = false;
+
+    if (use.bufferAccess.has_value() && *use.bufferAccess != BufferAccessIntent::None)
+    {
+        hasExplicitAccess = true;
+        reads = bufferAccessReads(*use.bufferAccess);
+        writes = bufferAccessWrites(*use.bufferAccess);
+    }
+    else if (use.imageAccess.has_value() && *use.imageAccess != ImageAccessIntent::None)
+    {
+        hasExplicitAccess = true;
+        reads = imageAccessReads(*use.imageAccess);
+        writes = imageAccessWrites(*use.imageAccess);
+    }
+    else if (use.accelerationStructureAccess.has_value() &&
+             *use.accelerationStructureAccess != AccelerationStructureAccessIntent::None)
+    {
+        hasExplicitAccess = true;
+        reads = accelerationStructureAccessReads(*use.accelerationStructureAccess);
+        writes = accelerationStructureAccessWrites(*use.accelerationStructureAccess);
+    }
+
+    if (!hasExplicitAccess)
+    {
+        if (use.bufferUsage.has_value())
         {
-        case ImageUsageIntent::TransferDst:
-        case ImageUsageIntent::StorageWrite:
-        case ImageUsageIntent::StorageReadWrite:
-        case ImageUsageIntent::ColorAttachment:
-        case ImageUsageIntent::DepthStencilAttachment:
-        case ImageUsageIntent::ResolveDst:
-        case ImageUsageIntent::CopyDestination:
+            reads = bufferUsageReads(*use.bufferUsage);
+            writes = bufferUsageWrites(*use.bufferUsage);
+        }
+        else if (use.imageUsage.has_value())
+        {
+            reads = imageUsageReads(*use.imageUsage);
+            writes = imageUsageWrites(*use.imageUsage);
+        }
+        else if (use.accelerationStructureUsage.has_value())
+        {
+            reads = accelerationStructureUsageReads(*use.accelerationStructureUsage);
+            writes = accelerationStructureUsageWrites(*use.accelerationStructureUsage);
+        }
+    }
+
+    if (!reads && !writes)
+    {
+        return;
+    }
+
+    nrAssert(use.readOnly == (reads && !writes),
+             "RenderGraphBuilder::addPass resource use readOnly flag does not match declared access intent.");
+}
+
+void RenderGraphBuilder::validatePassResourceUse(const PassResourceUseDesc &use) const
+{
+    nrAssert(use.resource.valid(), "RenderGraphBuilder::addPass requires a valid resource handle.");
+    auto resourceIt = resourceIndexByHandle_.find(use.resource);
+    nrAssert(resourceIt != resourceIndexByHandle_.end(),
+             "RenderGraphBuilder::addPass resource handle validation failed.");
+    nrAssert(resourceIt->second < frame_.resources.size(),
+             "RenderGraphBuilder::addPass resource index cache is out of range.");
+
+    const auto &resource = frame_.resources[resourceIt->second];
+    nrAssert(resource.handle == use.resource, "RenderGraphBuilder::addPass resource index cache is stale.");
+
+    auto hasBufferFields = hasBufferIntentFields(use);
+    auto hasAccelerationStructureFields = hasAccelerationStructureIntentFields(use);
+    auto hasImageFields = hasImageIntentFields(use);
+    nrAssert(
+        hasBufferFields || hasAccelerationStructureFields || hasImageFields,
+        "RenderGraphBuilder::addPass resource use requires buffer, acceleration-structure, or image intent fields.");
+    nrAssert(
+        static_cast<int>(hasBufferFields) + static_cast<int>(hasAccelerationStructureFields) +
+                static_cast<int>(hasImageFields) ==
+            1,
+        "RenderGraphBuilder::addPass resource use cannot mix buffer, acceleration-structure, and image intent fields.");
+
+    nrAssert(!hasBufferFields || isBufferResourceDesc(resource),
+             "RenderGraphBuilder::addPass buffer intent targets a non-buffer resource.");
+    nrAssert(
+        !hasAccelerationStructureFields || isAccelerationStructureResourceDesc(resource),
+        "RenderGraphBuilder::addPass acceleration-structure intent targets a non-acceleration-structure resource.");
+    nrAssert(!hasImageFields || isImageResourceDesc(resource),
+             "RenderGraphBuilder::addPass image intent targets a non-image resource.");
+
+    if (use.shaderStages != vk::PipelineStageFlags2{})
+    {
+        auto const shaderStageCompatible =
+            (use.bufferAccess.has_value() && bufferAccessUsesShaderStages(*use.bufferAccess)) ||
+            (use.imageAccess.has_value() && imageAccessUsesShaderStages(*use.imageAccess));
+        nrAssert(shaderStageCompatible,
+                 "RenderGraphBuilder::addPass shader stage override requires a buffer/image shader access intent.");
+    }
+
+    validatePassUseReadOnlyContract(use);
+}
+
+void RenderGraphBuilder::validatePassResourceUses(std::span<const PassResourceUseDesc> intentList,
+                                                  bool isCopyPass) const
+{
+    std::ranges::for_each(intentList, [this](const PassResourceUseDesc &use) { validatePassResourceUse(use); });
+
+    if (!isCopyPass)
+    {
+        return;
+    }
+
+    auto hasSource = std::ranges::any_of(intentList, isCopySourceUse);
+    auto hasDestination = std::ranges::any_of(intentList, isCopyDestinationUse);
+    nrAssert(hasSource, "RenderGraphBuilder::addPass copy pass requires a source copy intent.");
+    nrAssert(hasDestination, "RenderGraphBuilder::addPass copy pass requires a destination copy intent.");
+
+    auto presentTargetsDestination = std::ranges::all_of(intentList, [&](const PassResourceUseDesc &use) {
+        if (!isPresentUse(use))
+        {
             return true;
-        default:
-            return false;
-        }
-    }
-
-[[nodiscard]] bool RenderGraphBuilder::isCopySourceUse(const PassResourceUseDesc& use) noexcept
-{
-        return use.bufferUsage == BufferUsageIntent::TransferSrc ||
-               use.bufferUsage == BufferUsageIntent::HostUpload ||
-               use.imageUsage == ImageUsageIntent::TransferSrc ||
-               use.imageUsage == ImageUsageIntent::CopySource;
-    }
-
-[[nodiscard]] bool RenderGraphBuilder::isCopyDestinationUse(const PassResourceUseDesc& use) noexcept
-{
-        return use.bufferUsage == BufferUsageIntent::TransferDst ||
-               use.bufferUsage == BufferUsageIntent::Readback ||
-               use.imageUsage == ImageUsageIntent::TransferDst ||
-               use.imageUsage == ImageUsageIntent::CopyDestination;
-    }
-
-[[nodiscard]] bool RenderGraphBuilder::isImageCopyDestinationUse(const PassResourceUseDesc& use) noexcept
-{
-        return use.imageUsage == ImageUsageIntent::TransferDst ||
-               use.imageUsage == ImageUsageIntent::CopyDestination;
-    }
-
-[[nodiscard]] bool RenderGraphBuilder::isPresentUse(const PassResourceUseDesc& use) noexcept
-{
-        return use.imageUsage == ImageUsageIntent::PresentSource;
-    }
-
-void RenderGraphBuilder::validatePassCallbackContract(
-        const PassRecordCallback& executeLambda,
-        const std::optional<PassParallelRecordDesc>& parallelRecord,
-        bool isCopyPass)
-{
-        auto const hasRecord = static_cast<bool>(executeLambda);
-        auto const hasParallelRecord = parallelRecord.has_value();
-        nrAssert(
-            isCopyPass || hasRecord != hasParallelRecord,
-            "RenderGraphBuilder::addPass requires exactly one record or parallel record callback for non-copy passes.");
-        nrAssert(
-            !isCopyPass || (!hasRecord && !hasParallelRecord),
-            "RenderGraphBuilder::addPass copy passes use the implicit copy path and must not provide record callbacks.");
-        if (hasParallelRecord)
-        {
-            nrAssert(
-                parallelRecord->replaySemantics == ParallelRecordReplaySemantics::Unordered,
-                "RenderGraphBuilder::addPass only supports unordered parallel record replay.");
-            nrAssert(
-                static_cast<bool>(parallelRecord->itemCount),
-                "RenderGraphBuilder::addPass parallel record requires an item-count callback.");
-            nrAssert(
-                static_cast<bool>(parallelRecord->recordRange),
-                "RenderGraphBuilder::addPass parallel record requires a range-record callback.");
-        }
-    }
-
-void RenderGraphBuilder::validatePassUseReadOnlyContract(const PassResourceUseDesc& use)
-{
-        auto hasExplicitAccess = false;
-        auto reads = false;
-        auto writes = false;
-
-        if (use.bufferAccess.has_value() && *use.bufferAccess != BufferAccessIntent::None)
-        {
-            hasExplicitAccess = true;
-            reads = bufferAccessReads(*use.bufferAccess);
-            writes = bufferAccessWrites(*use.bufferAccess);
-        }
-        else if (use.imageAccess.has_value() && *use.imageAccess != ImageAccessIntent::None)
-        {
-            hasExplicitAccess = true;
-            reads = imageAccessReads(*use.imageAccess);
-            writes = imageAccessWrites(*use.imageAccess);
-        }
-        else if (use.accelerationStructureAccess.has_value() &&
-                 *use.accelerationStructureAccess != AccelerationStructureAccessIntent::None)
-        {
-            hasExplicitAccess = true;
-            reads = accelerationStructureAccessReads(*use.accelerationStructureAccess);
-            writes = accelerationStructureAccessWrites(*use.accelerationStructureAccess);
         }
 
-        if (!hasExplicitAccess)
-        {
-            if (use.bufferUsage.has_value())
-            {
-                reads = bufferUsageReads(*use.bufferUsage);
-                writes = bufferUsageWrites(*use.bufferUsage);
-            }
-            else if (use.imageUsage.has_value())
-            {
-                reads = imageUsageReads(*use.imageUsage);
-                writes = imageUsageWrites(*use.imageUsage);
-            }
-            else if (use.accelerationStructureUsage.has_value())
-            {
-                reads = accelerationStructureUsageReads(*use.accelerationStructureUsage);
-                writes = accelerationStructureUsageWrites(*use.accelerationStructureUsage);
-            }
-        }
-
-        if (!reads && !writes)
-        {
-            return;
-        }
-
-        nrAssert(
-            use.readOnly == (reads && !writes),
-            "RenderGraphBuilder::addPass resource use readOnly flag does not match declared access intent.");
-    }
-
-void RenderGraphBuilder::validatePassResourceUse(const PassResourceUseDesc& use) const
-{
-        nrAssert(use.resource.valid(), "RenderGraphBuilder::addPass requires a valid resource handle.");
-        auto resourceIt = resourceIndexByHandle_.find(use.resource);
-        nrAssert(resourceIt != resourceIndexByHandle_.end(), "RenderGraphBuilder::addPass resource handle validation failed.");
-        nrAssert(resourceIt->second < frame_.resources.size(), "RenderGraphBuilder::addPass resource index cache is out of range.");
-
-        const auto& resource = frame_.resources[resourceIt->second];
-        nrAssert(resource.handle == use.resource, "RenderGraphBuilder::addPass resource index cache is stale.");
-
-        auto hasBufferFields = hasBufferIntentFields(use);
-        auto hasAccelerationStructureFields = hasAccelerationStructureIntentFields(use);
-        auto hasImageFields = hasImageIntentFields(use);
-        nrAssert(
-            hasBufferFields || hasAccelerationStructureFields || hasImageFields,
-            "RenderGraphBuilder::addPass resource use requires buffer, acceleration-structure, or image intent fields.");
-        nrAssert(
-            static_cast<int>(hasBufferFields) + static_cast<int>(hasAccelerationStructureFields) + static_cast<int>(hasImageFields) == 1,
-            "RenderGraphBuilder::addPass resource use cannot mix buffer, acceleration-structure, and image intent fields.");
-
-        nrAssert(
-            !hasBufferFields || isBufferResourceDesc(resource),
-            "RenderGraphBuilder::addPass buffer intent targets a non-buffer resource.");
-        nrAssert(
-            !hasAccelerationStructureFields || isAccelerationStructureResourceDesc(resource),
-            "RenderGraphBuilder::addPass acceleration-structure intent targets a non-acceleration-structure resource.");
-        nrAssert(
-            !hasImageFields || isImageResourceDesc(resource),
-            "RenderGraphBuilder::addPass image intent targets a non-image resource.");
-
-        if (use.shaderStages != vk::PipelineStageFlags2{})
-        {
-            auto const shaderStageCompatible =
-                (use.bufferAccess.has_value() && bufferAccessUsesShaderStages(*use.bufferAccess)) ||
-                (use.imageAccess.has_value() && imageAccessUsesShaderStages(*use.imageAccess));
-            nrAssert(
-                shaderStageCompatible,
-                "RenderGraphBuilder::addPass shader stage override requires a buffer/image shader access intent.");
-        }
-
-        validatePassUseReadOnlyContract(use);
-    }
-
-void RenderGraphBuilder::validatePassResourceUses(
-        std::span<const PassResourceUseDesc> intentList,
-        bool isCopyPass) const
-{
-        std::ranges::for_each(intentList, [this](const PassResourceUseDesc& use) {
-            validatePassResourceUse(use);
+        return std::ranges::any_of(intentList, [&](const PassResourceUseDesc &dstUse) {
+            return isImageCopyDestinationUse(dstUse) && dstUse.resource == use.resource;
         });
-
-        if (!isCopyPass)
-        {
-            return;
-        }
-
-        auto hasSource = std::ranges::any_of(intentList, isCopySourceUse);
-        auto hasDestination = std::ranges::any_of(intentList, isCopyDestinationUse);
-        nrAssert(hasSource, "RenderGraphBuilder::addPass copy pass requires a source copy intent.");
-        nrAssert(hasDestination, "RenderGraphBuilder::addPass copy pass requires a destination copy intent.");
-
-        auto presentTargetsDestination = std::ranges::all_of(intentList, [&](const PassResourceUseDesc& use) {
-            if (!isPresentUse(use))
-            {
-                return true;
-            }
-
-            return std::ranges::any_of(intentList, [&](const PassResourceUseDesc& dstUse) {
-                return isImageCopyDestinationUse(dstUse) && dstUse.resource == use.resource;
-            });
-        });
-        nrAssert(
-            presentTargetsDestination,
-            "RenderGraphBuilder::addPass copy pass present intent must target the copy destination resource.");
-    }
+    });
+    nrAssert(presentTargetsDestination,
+             "RenderGraphBuilder::addPass copy pass present intent must target the copy destination resource.");
+}
 
 [[nodiscard]] std::vector<GraphNodeDesc>::const_iterator RenderGraphBuilder::findNode(GraphNodeHandle handle) const
 {
-        return std::ranges::find_if(frame_.nodes, [handle](const GraphNodeDesc& desc) {
-            return desc.handle == handle;
-        });
-    }
+    return std::ranges::find_if(frame_.nodes, [handle](const GraphNodeDesc &desc) { return desc.handle == handle; });
+}
 
 [[nodiscard]] bool RenderGraphBuilder::containsNode(GraphNodeHandle handle) const
 {
-        return findNode(handle) != frame_.nodes.end();
-    }
+    return findNode(handle) != frame_.nodes.end();
+}
 
 [[nodiscard]] bool RenderGraphBuilder::containsResource(GraphResourceHandle handle) const
 {
-        return resourceIndexByHandle_.contains(handle);
-    }
-
-GraphPassHandle RenderGraphNodeContext::addPass(
-    std::span<const PassResourceUseDesc> intentList,
-    std::string_view debugName,
-    PassRecordCallback executeLambda,
-    PassPrepareCallback prepareCallback,
-    bool isCopyPass,
-    vk::PipelineStageFlags2 shaderStages)
-{
-    return builder_.get().addPass(
-        debugName,
-        node,
-        intentList,
-        std::move(executeLambda),
-        std::move(prepareCallback),
-        isCopyPass,
-        shaderStages);
+    return resourceIndexByHandle_.contains(handle);
 }
 
-GraphPassHandle RenderGraphNodeContext::addPass(
-    std::span<const PassResourceUseDesc> intentList,
-    std::string_view debugName,
-    PassParallelRecordDesc parallelRecord,
-    PassPrepareCallback prepareCallback,
-    vk::PipelineStageFlags2 shaderStages)
+GraphPassHandle RenderGraphNodeContext::addPass(std::span<const PassResourceUseDesc> intentList,
+                                                std::string_view debugName, PassRecordCallback executeLambda,
+                                                PassPrepareCallback prepareCallback, bool isCopyPass,
+                                                vk::PipelineStageFlags2 shaderStages)
 {
-    return builder_.get().addPass(
-        debugName,
-        node,
-        intentList,
-        std::move(parallelRecord),
-        std::move(prepareCallback),
-        shaderStages);
+    return builder_.get().addPass(debugName, node, intentList, std::move(executeLambda), std::move(prepareCallback),
+                                  isCopyPass, shaderStages);
 }
 
-GraphPassHandle RenderGraphNodeContext::addCopyPass(
-    std::string_view debugName,
-    CopyPassDesc copy)
+GraphPassHandle RenderGraphNodeContext::addPass(std::span<const PassResourceUseDesc> intentList,
+                                                std::string_view debugName, PassParallelRecordDesc parallelRecord,
+                                                PassPrepareCallback prepareCallback,
+                                                vk::PipelineStageFlags2 shaderStages)
 {
-    return builder_.get().addCopyPass(
-        debugName,
-        node,
-        std::move(copy));
+    return builder_.get().addPass(debugName, node, intentList, std::move(parallelRecord), std::move(prepareCallback),
+                                  shaderStages);
 }
 
-GraphSubmitHandle RenderGraphNodeContext::addSubmitNode(
-    std::string_view debugName,
-    SubmitBoundaryKind kind)
+GraphPassHandle RenderGraphNodeContext::addCopyPass(std::string_view debugName, CopyPassDesc copy)
+{
+    return builder_.get().addCopyPass(debugName, node, std::move(copy));
+}
+
+GraphSubmitHandle RenderGraphNodeContext::addSubmitNode(std::string_view debugName, SubmitBoundaryKind kind)
 {
     return builder_.get().addSubmitNode(debugName, kind);
 }

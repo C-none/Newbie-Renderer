@@ -76,7 +76,8 @@ class ScheduledMutation
   private:
     friend class OptionSystem;
 
-    ScheduledMutation(OptionMutationRequest request, std::uint64_t sequence, std::uint64_t bindingEpoch, std::uint64_t graphGeneration) noexcept;
+    ScheduledMutation(OptionMutationRequest request, std::uint64_t sequence, std::uint64_t bindingEpoch,
+                      std::uint64_t graphGeneration) noexcept;
 
     OptionMutationRequest request_{};
     std::uint64_t sequence_ = 0u;
@@ -129,21 +130,28 @@ class OptionSystem
     OptionSystem(OptionSystem &&) = delete;
     OptionSystem &operator=(OptionSystem &&) = delete;
 
-    [[nodiscard]] CatalogCommitResult initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog, const OptionAvailabilityMap &initialAvailability = {});
-    [[nodiscard]] CatalogCommitResult initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog, std::shared_ptr<const OptionCatalog> graphCatalog, const OptionAvailabilityMap &initialAvailability = {});
+    [[nodiscard]] CatalogCommitResult initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog,
+                                                        const OptionAvailabilityMap &initialAvailability = {});
+    [[nodiscard]] CatalogCommitResult initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog,
+                                                        std::shared_ptr<const OptionCatalog> graphCatalog,
+                                                        const OptionAvailabilityMap &initialAvailability = {});
     [[nodiscard]] CatalogCommitResult replaceGraphCatalog(std::shared_ptr<const OptionCatalog> graphCatalog);
-    [[nodiscard]] CatalogCommitResult commitGraphReplacement(ScheduledMutation &&mutation, std::shared_ptr<const OptionCatalog> graphCatalog);
+    [[nodiscard]] CatalogCommitResult commitGraphReplacement(ScheduledMutation &&mutation,
+                                                             std::shared_ptr<const OptionCatalog> graphCatalog);
     [[nodiscard]] CatalogCommitResult clearGraphCatalog();
 
     [[nodiscard]] ScheduleResult trySchedule(OptionMutationRequest request);
     [[nodiscard]] std::optional<RenderableFrameStart> beginRenderableFrame();
     [[nodiscard]] ScheduleRejectReason validateForExecution(const ScheduledMutation &mutation) const;
     [[nodiscard]] MutationCommitResult commitCanonical(ScheduledMutation &&mutation);
-    [[nodiscard]] MutationCommitResult commitModelAndCameraReset(ScheduledMutation &&mutation, CameraResetValues camera);
+    [[nodiscard]] MutationCommitResult commitModelAndCameraReset(ScheduledMutation &&mutation,
+                                                                 CameraResetValues camera);
     [[nodiscard]] EffectMaterializationResult materializeFrameEffect(ScheduledMutation &&mutation);
     [[nodiscard]] bool discardMutation(ScheduledMutation &&mutation) noexcept;
-    [[nodiscard]] std::shared_ptr<const OptionFrameSnapshot> snapshotForCollection(std::optional<FrameEffect> effect = {}) const;
-    [[nodiscard]] std::shared_ptr<const OptionFrameSnapshot> publishRenderableFrame(const OptionAvailabilityMap &availability, std::optional<FrameEffect> effect = {});
+    [[nodiscard]] std::shared_ptr<const OptionFrameSnapshot> snapshotForCollection(
+        std::optional<FrameEffect> effect = {}) const;
+    [[nodiscard]] std::shared_ptr<const OptionFrameSnapshot> publishRenderableFrame(
+        const OptionAvailabilityMap &availability, std::optional<FrameEffect> effect = {});
 
     [[nodiscard]] std::shared_ptr<const OptionFrameSnapshot> snapshot() const noexcept;
     [[nodiscard]] std::shared_ptr<const OptionCatalog> activeCatalog() const;
@@ -165,8 +173,11 @@ class OptionSystem
     [[nodiscard]] static std::shared_ptr<const OptionCatalog> emptyCatalog();
     [[nodiscard]] CatalogBuildResult combineCatalogs(const OptionCatalog &session, const OptionCatalog &graph) const;
     [[nodiscard]] ScheduleRejectReason validateForExecutionLocked(const ScheduledMutation &mutation) const;
-    [[nodiscard]] OptionAvailabilityMap normalizedAvailability(const OptionCatalog &catalog, const OptionAvailabilityMap &availability, const std::optional<FrameEffect> &effect) const;
-    [[nodiscard]] std::shared_ptr<const OptionFrameSnapshot> makeSnapshotLocked(const OptionAvailabilityMap &availability, std::optional<FrameEffect> effect) const;
+    [[nodiscard]] OptionAvailabilityMap normalizedAvailability(const OptionCatalog &catalog,
+                                                               const OptionAvailabilityMap &availability,
+                                                               const std::optional<FrameEffect> &effect) const;
+    [[nodiscard]] std::shared_ptr<const OptionFrameSnapshot> makeSnapshotLocked(
+        const OptionAvailabilityMap &availability, std::optional<FrameEffect> effect) const;
     [[nodiscard]] static std::string makeSessionIdentity();
     [[nodiscard]] std::string makeSnapshotToken(std::uint64_t bindingEpoch, std::uint64_t graphGeneration) const;
     [[nodiscard]] bool originAllowed(MutationOrigin origin) const noexcept;

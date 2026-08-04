@@ -15,21 +15,21 @@ using AddressMode = vk::SamplerAddressMode;
 
 enum class AlphaMode : std::uint8_t
 {
-	opaque,
-	mask,
-	blend,
+    opaque,
+    mask,
+    blend,
 };
 
 enum class CameraProjection : std::uint8_t
 {
-	perspective,
-	orthographic,
+    perspective,
+    orthographic,
 };
 
 enum class LightType : std::uint8_t
 {
-	directional,
-	point,
-	spot,
+    directional,
+    point,
+    spot,
 };
 } // namespace nr::resource

@@ -49,9 +49,7 @@ public float smithGGX(float alpha, float noV, float noL)
     float a2 = alpha * alpha;
     float lenV = sqrt(max(a2 + (1.0f - a2) * noV * noV, 0.0f));
     float lenL = sqrt(max(a2 + (1.0f - a2) * noL * noL, 0.0f));
-    return
-        2.0f * noV * noL /
-        max(noL * lenV + noV * lenL, 1.0e-7f);
+    return 2.0f * noV * noL / max(noL * lenV + noV * lenL, 1.0e-7f);
 }
 
 public struct GgxSpecularEnergyTerms
@@ -67,35 +65,19 @@ public float2 ggxDirectionalAlbedoAnalytic(float roughness, float noV)
 {
     float r = max(roughness, kMaterialMinRoughness);
     float c = saturate(noV);
-    float directionalAlbedo =
-        1.0f -
-        saturate(
-            pow(r, c / r) *
-            ((r * c + 0.0266916f) / (0.466495f + c)));
-    float fresnelDirectionalAlbedo =
-        schlickWeight(c) *
-        pow(
-            2.36651f * pow(c, 4.7703f * r) + 0.0387332f,
-            r);
+    float directionalAlbedo = 1.0f - saturate(pow(r, c / r) * ((r * c + 0.0266916f) / (0.466495f + c)));
+    float fresnelDirectionalAlbedo = schlickWeight(c) * pow(2.36651f * pow(c, 4.7703f * r) + 0.0387332f, r);
     return float2(directionalAlbedo, fresnelDirectionalAlbedo);
 }
 
-public GgxSpecularEnergyTerms computeGgxSpecularEnergyTerms(
-    float roughness,
-    float noV,
-    float3 f0,
-    float3 f90)
+public GgxSpecularEnergyTerms computeGgxSpecularEnergyTerms(float roughness, float noV, float3 f0, float3 f90)
 {
     float2 splitSum = ggxDirectionalAlbedoAnalytic(roughness, noV);
     float safeDirectionalAlbedo = max(splitSum.x, 1.0e-4f);
 
     GgxSpecularEnergyTerms result;
-    result.W =
-        float3(1.0f) +
-        f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
-    result.E =
-        result.W *
-        (splitSum.x * f0 + splitSum.y * (f90 - f0));
+    result.W = float3(1.0f) + f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
+    result.E = result.W * (splitSum.x * f0 + splitSum.y * (f90 - f0));
     return result;
 }
 
@@ -104,11 +86,8 @@ public float3 metallicRoughnessF0(MaterialSample material)
     return lerp(float3(0.04f), material.baseColor.rgb, material.metallic);
 }
 
-public float3 evaluateMetallicRoughnessDiffuse(
-    MaterialSample material,
-    float3 normal,
-    float3 viewDirection,
-    float3 lightDirection)
+public float3 evaluateMetallicRoughnessDiffuse(MaterialSample material, float3 normal, float3 viewDirection,
+                                               float3 lightDirection)
 {
     float noV = saturate(dot(normal, viewDirection));
     float noL = saturate(dot(normal, lightDirection));
@@ -126,11 +105,8 @@ public float3 evaluateMetallicRoughnessDiffuse(
     return (float3(1.0f) - fresnel) * cDiff * kMaterialInvPi;
 }
 
-public float3 evaluateMetallicRoughnessSpecular(
-    MaterialSample material,
-    float3 normal,
-    float3 viewDirection,
-    float3 lightDirection)
+public float3 evaluateMetallicRoughnessSpecular(MaterialSample material, float3 normal, float3 viewDirection,
+                                                float3 lightDirection)
 {
     float noV = saturate(dot(normal, viewDirection));
     float noL = saturate(dot(normal, lightDirection));
@@ -151,14 +127,11 @@ public float3 evaluateMetallicRoughnessSpecular(
     return fresnel * distribution * geometry / max(4.0f * noV * noL, 1.0e-6f);
 }
 
-public float3 evaluateMetallicRoughnessBsdf(
-    MaterialSample material,
-    float3 normal,
-    float3 viewDirection,
-    float3 lightDirection)
+public float3 evaluateMetallicRoughnessBsdf(MaterialSample material, float3 normal, float3 viewDirection,
+                                            float3 lightDirection)
 {
     return evaluateMetallicRoughnessDiffuse(material, normal, viewDirection, lightDirection) +
-        evaluateMetallicRoughnessSpecular(material, normal, viewDirection, lightDirection);
+           evaluateMetallicRoughnessSpecular(material, normal, viewDirection, lightDirection);
 }
 
 public float sheenDistribution(float roughness, float noH)
@@ -202,11 +175,7 @@ public float sheenVisibility(float roughness, float noV, float noL)
     return 1.0f / (1.0f + pow(lambdaV, 1.0f + 2.0f * pow(1.0f - noV, 8.0f)) + lambdaL);
 }
 
-public float3 evaluateSheenBsdf(
-    MaterialLayerStack layers,
-    float3 normal,
-    float3 viewDirection,
-    float3 lightDirection)
+public float3 evaluateSheenBsdf(MaterialLayerStack layers, float3 normal, float3 viewDirection, float3 lightDirection)
 {
     if (max(max(layers.sheenColor.r, layers.sheenColor.g), layers.sheenColor.b) <= 0.0f)
     {
@@ -227,12 +196,8 @@ public float3 evaluateSheenBsdf(
     return layers.sheenColor * distribution * visibility / max(4.0f * noV * noL, 1.0e-6f);
 }
 
-public float evaluateClearcoatSpecular(
-    float clearcoatRoughness,
-    float3 normal,
-    float3 viewDirection,
-    float3 lightDirection,
-    float energyWeight)
+public float evaluateClearcoatSpecular(float clearcoatRoughness, float3 normal, float3 viewDirection,
+                                       float3 lightDirection, float energyWeight)
 {
     float noV = saturate(dot(normal, viewDirection));
     float noL = saturate(dot(normal, lightDirection));
@@ -248,47 +213,29 @@ public float evaluateClearcoatSpecular(
     float fresnel = fresnelSchlick(0.04f, voH);
     float distribution = ggxDistribution(alpha, noH);
     float geometry = smithGGX(alpha, noV, noL);
-    return
-        energyWeight * fresnel * distribution * geometry /
-        max(4.0f * noV * noL, 1.0e-6f);
+    return energyWeight * fresnel * distribution * geometry / max(4.0f * noV * noL, 1.0e-6f);
 }
 
-public GgxSpecularEnergyTerms clearcoatGgxEnergyTerms(
-    MaterialLayerStack layers,
-    float3 clearcoatSpecularNormal,
-    float3 viewDirection)
+public GgxSpecularEnergyTerms clearcoatGgxEnergyTerms(MaterialLayerStack layers, float3 clearcoatSpecularNormal,
+                                                      float3 viewDirection)
 {
     float noV = saturate(dot(clearcoatSpecularNormal, viewDirection));
-    return computeGgxSpecularEnergyTerms(
-        layers.clearcoatRoughness,
-        noV,
-        float3(0.04f),
-        float3(1.0f));
+    return computeGgxSpecularEnergyTerms(layers.clearcoatRoughness, noV, float3(0.04f), float3(1.0f));
 }
 
-public float clearcoatBaseAttenuation(
-    MaterialLayerStack layers,
-    float3 clearcoatSpecularNormal,
-    float3 viewDirection)
+public float clearcoatBaseAttenuation(MaterialLayerStack layers, float3 clearcoatSpecularNormal, float3 viewDirection)
 {
     if (layers.clearcoat <= 0.0f)
     {
         return 1.0f;
     }
 
-    GgxSpecularEnergyTerms energy = clearcoatGgxEnergyTerms(
-        layers,
-        clearcoatSpecularNormal,
-        viewDirection);
+    GgxSpecularEnergyTerms energy = clearcoatGgxEnergyTerms(layers, clearcoatSpecularNormal, viewDirection);
     return saturate(1.0f - layers.clearcoat * energy.E.x);
 }
 
-public float3 evaluateClearcoatDirect(
-    MaterialLayerStack layers,
-    float3 clearcoatSpecularNormal,
-    float3 viewDirection,
-    float3 lightDirection,
-    float3 lightRadiance)
+public float3 evaluateClearcoatDirect(MaterialLayerStack layers, float3 clearcoatSpecularNormal, float3 viewDirection,
+                                      float3 lightDirection, float3 lightRadiance)
 {
     if (layers.clearcoat <= 0.0f)
     {
@@ -296,15 +243,9 @@ public float3 evaluateClearcoatDirect(
     }
 
     float noL = saturate(dot(clearcoatSpecularNormal, lightDirection));
-    GgxSpecularEnergyTerms energy = clearcoatGgxEnergyTerms(
-        layers,
-        clearcoatSpecularNormal,
-        viewDirection);
-    float coatSpecular = evaluateClearcoatSpecular(
-        layers.clearcoatRoughness,
-        clearcoatSpecularNormal,
-        viewDirection,
-        lightDirection,
-        energy.W.x) * layers.clearcoat;
+    GgxSpecularEnergyTerms energy = clearcoatGgxEnergyTerms(layers, clearcoatSpecularNormal, viewDirection);
+    float coatSpecular = evaluateClearcoatSpecular(layers.clearcoatRoughness, clearcoatSpecularNormal, viewDirection,
+                                                   lightDirection, energy.W.x) *
+                         layers.clearcoat;
     return float3(coatSpecular) * lightRadiance * noL;
 }

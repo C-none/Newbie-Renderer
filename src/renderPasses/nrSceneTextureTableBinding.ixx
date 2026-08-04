@@ -10,7 +10,7 @@ import std;
 export namespace nr::renderPasses::detail
 {
 inline constexpr std::uint32_t kSceneTextureTableSet = 1u;
-inline constexpr std::uint32_t kSceneTextureTableBinding = 0u;
+inline constexpr std::uint32_t kSceneTextureTableBinding = 2u;
 
 enum class SceneTextureTableBindingRequirement
 {
@@ -47,7 +47,7 @@ struct SceneTextureTableBindingInput
 }
 
 [[nodiscard]] inline SceneTextureTableBindingInput makeSceneTextureTableBindingInput(
-    const nr::renderer::FrameGlobalResources& globalResources)
+    const nr::renderer::FrameGlobalResources &globalResources)
 {
     return SceneTextureTableBindingInput{
         .descriptorsById = globalResources.sceneTextureDescriptorsById,
@@ -65,27 +65,23 @@ struct SceneTextureTableBindingInput
 }
 
 [[nodiscard]] inline nr::renderer::BindlessImageTableRequest makeSceneTextureTableBindingRequest(
-    const SceneTextureTableBindingInput& bindingInput,
+    const SceneTextureTableBindingInput &bindingInput,
     SceneTextureTableBindingRequirement requirement = SceneTextureTableBindingRequirement::required)
 {
-    nr::nrAssert(
-        bindingInput.descriptorCapacity == nr::renderer::kSceneTextureDescriptorCapacity,
-        "Scene texture table descriptor capacity must match renderer ABI.");
+    nr::nrAssert(bindingInput.descriptorCapacity == nr::renderer::kSceneTextureDescriptorCapacity,
+                 "Scene texture table descriptor capacity must match renderer ABI.");
 
     auto fallbackIt = bindingInput.descriptorsById.find(nr::scene::kDefaultSceneTextureId);
-    nr::nrAssert(
-        fallbackIt != bindingInput.descriptorsById.end(),
-        "Scene texture table requires default texture id 0.");
+    nr::nrAssert(fallbackIt != bindingInput.descriptorsById.end(),
+                 "Scene texture table requires default texture id 0.");
 
     auto descriptorsById = std::map<std::uint32_t, nr::renderer::BindlessImageDescriptor>{};
-    std::ranges::for_each(bindingInput.descriptorsById, [&](const auto& entry) {
-        auto const& descriptor = entry.second;
-        descriptorsById.insert_or_assign(
-            entry.first,
-            nr::renderer::BindlessImageDescriptor{
-                .image = std::cref(descriptor.image.get()),
-                .layout = descriptor.layout,
-            });
+    std::ranges::for_each(bindingInput.descriptorsById, [&](const auto &entry) {
+        auto const &descriptor = entry.second;
+        descriptorsById.insert_or_assign(entry.first, nr::renderer::BindlessImageDescriptor{
+                                                          .image = std::cref(descriptor.image.get()),
+                                                          .layout = descriptor.layout,
+                                                      });
     });
 
     return nr::renderer::BindlessImageTableRequest{
@@ -98,39 +94,31 @@ struct SceneTextureTableBindingInput
         .usesImmutableSampler = true,
         .tableVersion = bindingInput.tableVersion,
         .descriptorsById = std::move(descriptorsById),
-        .fallbackDescriptor = nr::renderer::BindlessImageDescriptor{
-            .image = std::cref(fallbackIt->second.image.get()),
-            .layout = fallbackIt->second.layout,
-        },
+        .fallbackDescriptor =
+            nr::renderer::BindlessImageDescriptor{
+                .image = std::cref(fallbackIt->second.image.get()),
+                .layout = fallbackIt->second.layout,
+            },
         .requirement = rendererRequirement(requirement),
     };
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 void prepareSceneTextureTableBindingForFrame(
-    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount>& pipeline,
-    nr::renderer::BindlessImageTableCache& cache,
-    std::uint32_t frameIndex,
-    const SceneTextureTableBindingInput& bindingInput,
+    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount> &pipeline, nr::renderer::BindlessImageTableCache &cache,
+    std::uint32_t frameIndex, const SceneTextureTableBindingInput &bindingInput,
     SceneTextureTableBindingRequirement requirement = SceneTextureTableBindingRequirement::required)
 {
-    cache.ensureTableForFrame(
-        pipeline,
-        frameIndex,
-        makeSceneTextureTableBindingRequest(bindingInput, requirement));
+    cache.ensureTableForFrame(pipeline, frameIndex, makeSceneTextureTableBindingRequest(bindingInput, requirement));
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] nr::rhi::ShaderBindingSnapshot makeSceneTextureTableBindingSnapshot(
-    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount>& pipeline,
-    nr::renderer::BindlessImageTableCache& cache,
-    std::uint32_t frameIndex,
-    const SceneTextureTableBindingInput& bindingInput,
+    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount> &pipeline, nr::renderer::BindlessImageTableCache &cache,
+    std::uint32_t frameIndex, const SceneTextureTableBindingInput &bindingInput,
     SceneTextureTableBindingRequirement requirement = SceneTextureTableBindingRequirement::required)
 {
-    return cache.makeSnapshotForFrame(
-        pipeline,
-        frameIndex,
-        makeSceneTextureTableBindingRequest(bindingInput, requirement));
+    return cache.makeSnapshotForFrame(pipeline, frameIndex,
+                                      makeSceneTextureTableBindingRequest(bindingInput, requirement));
 }
 } // namespace nr::renderPasses::detail

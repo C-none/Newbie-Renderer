@@ -50,9 +50,7 @@ public struct ResolvedMaterialRayPayload
 
 public float2 oct32NonzeroSign(float2 value)
 {
-    return float2(
-        value.x >= 0.0f ? 1.0f : -1.0f,
-        value.y >= 0.0f ? 1.0f : -1.0f);
+    return float2(value.x >= 0.0f ? 1.0f : -1.0f, value.y >= 0.0f ? 1.0f : -1.0f);
 }
 
 public float3 safePayloadDirection(float3 value, float3 fallback)
@@ -87,13 +85,10 @@ public uint packPayloadOct32(float3 value, float3 fallback)
 public float3 unpackPayloadOct32(uint value, float3 fallback)
 {
     float2 encoded = unpackSnorm2x16ToFloat(value);
-    float3 direction = float3(
-        encoded,
-        1.0f - abs(encoded.x) - abs(encoded.y));
+    float3 direction = float3(encoded, 1.0f - abs(encoded.x) - abs(encoded.y));
     if (direction.z < 0.0f)
     {
-        direction.xy =
-            (1.0f - abs(direction.yx)) * oct32NonzeroSign(direction.xy);
+        direction.xy = (1.0f - abs(direction.yx)) * oct32NonzeroSign(direction.xy);
     }
     return safePayloadDirection(direction, fallback);
 }
@@ -103,49 +98,39 @@ public uint packPayloadUnorm2x16(float2 value)
     return packUnorm2x16(saturate(value));
 }
 
-public struct RayPayload
+public struct MaterialRayPayload
 {
     public ResolvedMaterialRayPayload resolved = {};
 
-    public property RayKind kind
-    {
-        get
-        {
-            return resolved.flags.has(ResolvedMaterialFlag.visibilityRay)
-                ? RayKind.visibility
-                : RayKind.material;
-        }
-        set(value)
-        {
-            resolved.flags = resolved.flags.withFlag(
-                ResolvedMaterialFlag.visibilityRay,
-                value == RayKind.visibility);
-        }
-    }
-
     public property bool hit
     {
-        get { return resolved.flags.has(ResolvedMaterialFlag.hit); }
-        set(value) { resolved.flags = resolved.flags.withFlag(ResolvedMaterialFlag.hit, value); }
+        get {
+            return resolved.flags.has(ResolvedMaterialFlag.hit);
+        }
+        set(value) {
+            resolved.flags = resolved.flags.withFlag(ResolvedMaterialFlag.hit, value);
+        }
     }
 
     public property float4 scatterRandomValues
     {
-        get { return resolved.baseColor; }
-        set(value) { resolved.baseColor = value; }
+        get {
+            return resolved.baseColor;
+        }
+        set(value) {
+            resolved.baseColor = value;
+        }
     }
 
     public property RandomSequence materialFilterSequence
     {
-        get
-        {
+        get {
             RandomSequence result;
             result.sampleIndex = resolved.materialIndex;
             result.sampleSeed = resolved.instanceMetadataIndex;
             return result;
         }
-        set(value)
-        {
+        set(value) {
             resolved.materialIndex = value.sampleIndex;
             resolved.instanceMetadataIndex = value.sampleSeed;
         }
@@ -153,31 +138,40 @@ public struct RayPayload
 
     public property float incidentMediumIor
     {
-        get { return asfloat(resolved.geometryIndex); }
-        set(value) { resolved.geometryIndex = asuint(value); }
+        get {
+            return asfloat(resolved.geometryIndex);
+        }
+        set(value) {
+            resolved.geometryIndex = asuint(value);
+        }
     }
 
     public property float exteriorMediumIor
     {
-        get { return resolved.transmissionIor; }
-        set(value) { resolved.transmissionIor = value; }
+        get {
+            return resolved.transmissionIor;
+        }
+        set(value) {
+            resolved.transmissionIor = value;
+        }
     }
 
     public property float3 missRadiance
     {
-        get { return resolved.position; }
-        set(value) { resolved.position = value; }
+        get {
+            return resolved.position;
+        }
+        set(value) {
+            resolved.position = value;
+        }
     }
 };
 
 // Invoke input and hit output have disjoint lifetimes. Store the transient CHS input in output slots,
 // then copy every input to ClosestHitInput before writeResolvedMaterialRayPayload overwrites them.
-public void initializeMaterialRayPayload(
-    inout RayPayload payload,
-    float4 scatterRandomValues,
-    RandomSequence materialFilterSequence,
-    float incidentMediumIor,
-    float exteriorMediumIor)
+public void initializeMaterialRayPayload(inout MaterialRayPayload payload, float4 scatterRandomValues,
+                                         RandomSequence materialFilterSequence, float incidentMediumIor,
+                                         float exteriorMediumIor)
 {
     payload = {};
     payload.scatterRandomValues = scatterRandomValues;
@@ -186,25 +180,12 @@ public void initializeMaterialRayPayload(
     payload.exteriorMediumIor = exteriorMediumIor;
 }
 
-public void initializeVisibilityRayPayload(inout RayPayload payload)
+public void writeResolvedMaterialRayPayload(inout MaterialRayPayload payload, ResolvedMaterialPayload material,
+                                            ResolvedMaterialScatter scatter)
 {
-    payload = {};
-    payload.kind = RayKind.visibility;
-    payload.hit = true;
-}
-
-public void writeResolvedMaterialRayPayload(
-    inout RayPayload payload,
-    ResolvedMaterialPayload material,
-    ResolvedMaterialScatter scatter)
-{
-    ResolvedMaterialFlag rayState =
-        payload.resolved.flags & ResolvedMaterialFlag.rayStateMask;
     payload.resolved = {};
     payload.resolved.flags =
-        rayState |
-        (material.flags & ResolvedMaterialFlag.materialMask) |
-        (scatter.flags & ResolvedMaterialFlag.scatterMask);
+        (material.flags & ResolvedMaterialFlag.materialMask) | (scatter.flags & ResolvedMaterialFlag.scatterMask);
     if (material.layers.transmissionMode == RtTransmissionMode.volume)
     {
         payload.resolved.flags |= ResolvedMaterialFlag.volumeTransmission;
@@ -220,61 +201,38 @@ public void writeResolvedMaterialRayPayload(
     payload.resolved.scatterDiffuseWeight = scatter.diffuseWeight;
     payload.resolved.scatterSpecularWeight = scatter.specularWeight;
     payload.resolved.scatterEtaRatio = scatter.etaRatio;
-    payload.resolved.geometryNormalOct32 = packPayloadOct32(
-        material.geometryNormal,
-        float3(0.0f, 1.0f, 0.0f));
-    payload.resolved.shadingNormalOct32 = packPayloadOct32(
-        material.shadingNormal,
-        float3(0.0f, 1.0f, 0.0f));
-    payload.resolved.anisotropyTangentOct32 = packPayloadOct32(
-        material.anisotropyTangent,
-        float3(1.0f, 0.0f, 0.0f));
-    payload.resolved.clearcoatNormalOct32 = packPayloadOct32(
-        material.layers.clearcoatNormal,
-        float3(0.0f, 1.0f, 0.0f));
-    payload.resolved.scatterDirectionOct32 = packPayloadOct32(
-        scatter.direction,
-        float3(0.0f, 1.0f, 0.0f));
-    payload.resolved.anisotropyStrengthMetallicUnorm2x16 = packPayloadUnorm2x16(
-        float2(material.anisotropyStrength, material.metallic));
-    payload.resolved.roughnessClearcoatUnorm2x16 = packPayloadUnorm2x16(
-        float2(material.roughness, material.layers.clearcoat));
-    payload.resolved.clearcoatRoughnessSheenColorXUnorm2x16 = packPayloadUnorm2x16(
-        float2(material.layers.clearcoatRoughness, material.layers.sheenColor.x));
-    payload.resolved.sheenColorYZUnorm2x16 = packPayloadUnorm2x16(
-        material.layers.sheenColor.yz);
-    payload.resolved.sheenRoughnessTransmissionUnorm2x16 = packPayloadUnorm2x16(
-        float2(material.layers.sheenRoughness, material.layers.transmission));
+    payload.resolved.geometryNormalOct32 = packPayloadOct32(material.geometryNormal, float3(0.0f, 1.0f, 0.0f));
+    payload.resolved.shadingNormalOct32 = packPayloadOct32(material.shadingNormal, float3(0.0f, 1.0f, 0.0f));
+    payload.resolved.anisotropyTangentOct32 = packPayloadOct32(material.anisotropyTangent, float3(1.0f, 0.0f, 0.0f));
+    payload.resolved.clearcoatNormalOct32 = packPayloadOct32(material.layers.clearcoatNormal, float3(0.0f, 1.0f, 0.0f));
+    payload.resolved.scatterDirectionOct32 = packPayloadOct32(scatter.direction, float3(0.0f, 1.0f, 0.0f));
+    payload.resolved.anisotropyStrengthMetallicUnorm2x16 =
+        packPayloadUnorm2x16(float2(material.anisotropyStrength, material.metallic));
+    payload.resolved.roughnessClearcoatUnorm2x16 =
+        packPayloadUnorm2x16(float2(material.roughness, material.layers.clearcoat));
+    payload.resolved.clearcoatRoughnessSheenColorXUnorm2x16 =
+        packPayloadUnorm2x16(float2(material.layers.clearcoatRoughness, material.layers.sheenColor.x));
+    payload.resolved.sheenColorYZUnorm2x16 = packPayloadUnorm2x16(material.layers.sheenColor.yz);
+    payload.resolved.sheenRoughnessTransmissionUnorm2x16 =
+        packPayloadUnorm2x16(float2(material.layers.sheenRoughness, material.layers.transmission));
     payload.hit = true;
 }
 
-public ResolvedMaterialPayload resolvedMaterialFromRayPayload(
-    RayPayload payload,
-    float incidentMediumIor,
-    float exteriorMediumIor)
+public ResolvedMaterialPayload resolvedMaterialFromRayPayload(MaterialRayPayload payload, float incidentMediumIor,
+                                                              float exteriorMediumIor)
 {
-    float3 geometryNormal = unpackPayloadOct32(
-        payload.resolved.geometryNormalOct32,
-        float3(0.0f, 1.0f, 0.0f));
-    float3 shadingNormal = unpackPayloadOct32(
-        payload.resolved.shadingNormalOct32,
-        geometryNormal);
-    float3 anisotropyTangent = unpackPayloadOct32(
-        payload.resolved.anisotropyTangentOct32,
-        orthogonalTangent(shadingNormal));
-    anisotropyTangent = safeNormalize(
-        anisotropyTangent - shadingNormal * dot(shadingNormal, anisotropyTangent),
-        orthogonalTangent(shadingNormal));
-    float2 anisotropyStrengthMetallic = unpackUnorm2x16ToFloat(
-        payload.resolved.anisotropyStrengthMetallicUnorm2x16);
-    float2 roughnessClearcoat = unpackUnorm2x16ToFloat(
-        payload.resolved.roughnessClearcoatUnorm2x16);
-    float2 clearcoatRoughnessSheenColorX = unpackUnorm2x16ToFloat(
-        payload.resolved.clearcoatRoughnessSheenColorXUnorm2x16);
-    float2 sheenColorYZ = unpackUnorm2x16ToFloat(
-        payload.resolved.sheenColorYZUnorm2x16);
-    float2 sheenRoughnessTransmission = unpackUnorm2x16ToFloat(
-        payload.resolved.sheenRoughnessTransmissionUnorm2x16);
+    float3 geometryNormal = unpackPayloadOct32(payload.resolved.geometryNormalOct32, float3(0.0f, 1.0f, 0.0f));
+    float3 shadingNormal = unpackPayloadOct32(payload.resolved.shadingNormalOct32, geometryNormal);
+    float3 anisotropyTangent =
+        unpackPayloadOct32(payload.resolved.anisotropyTangentOct32, orthogonalTangent(shadingNormal));
+    anisotropyTangent = safeNormalize(anisotropyTangent - shadingNormal * dot(shadingNormal, anisotropyTangent),
+                                      orthogonalTangent(shadingNormal));
+    float2 anisotropyStrengthMetallic = unpackUnorm2x16ToFloat(payload.resolved.anisotropyStrengthMetallicUnorm2x16);
+    float2 roughnessClearcoat = unpackUnorm2x16ToFloat(payload.resolved.roughnessClearcoatUnorm2x16);
+    float2 clearcoatRoughnessSheenColorX =
+        unpackUnorm2x16ToFloat(payload.resolved.clearcoatRoughnessSheenColorXUnorm2x16);
+    float2 sheenColorYZ = unpackUnorm2x16ToFloat(payload.resolved.sheenColorYZUnorm2x16);
+    float2 sheenRoughnessTransmission = unpackUnorm2x16ToFloat(payload.resolved.sheenRoughnessTransmissionUnorm2x16);
 
     ResolvedMaterialPayload material;
     material.flags = payload.resolved.flags & ResolvedMaterialFlag.materialMask;
@@ -291,23 +249,14 @@ public ResolvedMaterialPayload resolvedMaterialFromRayPayload(
     material.roughness = max(roughnessClearcoat.x, kMaterialMinRoughness);
     material.emissive = payload.resolved.emissive;
     material.layers.clearcoat = roughnessClearcoat.y;
-    material.layers.clearcoatRoughness = max(
-        clearcoatRoughnessSheenColorX.x,
-        kMaterialMinRoughness);
-    material.layers.clearcoatNormal = unpackPayloadOct32(
-        payload.resolved.clearcoatNormalOct32,
-        shadingNormal);
-    material.layers.sheenColor = float3(
-        clearcoatRoughnessSheenColorX.y,
-        sheenColorYZ);
-    material.layers.sheenRoughness = max(
-        sheenRoughnessTransmission.x,
-        kMaterialMinRoughness);
+    material.layers.clearcoatRoughness = max(clearcoatRoughnessSheenColorX.x, kMaterialMinRoughness);
+    material.layers.clearcoatNormal = unpackPayloadOct32(payload.resolved.clearcoatNormalOct32, shadingNormal);
+    material.layers.sheenColor = float3(clearcoatRoughnessSheenColorX.y, sheenColorYZ);
+    material.layers.sheenRoughness = max(sheenRoughnessTransmission.x, kMaterialMinRoughness);
     material.layers.transmission = sheenRoughnessTransmission.y;
-    material.layers.transmissionMode =
-        payload.resolved.flags.has(ResolvedMaterialFlag.volumeTransmission)
-            ? RtTransmissionMode.volume
-            : RtTransmissionMode.thin;
+    material.layers.transmissionMode = payload.resolved.flags.has(ResolvedMaterialFlag.volumeTransmission)
+                                           ? RtTransmissionMode.volume
+                                           : RtTransmissionMode.thin;
     material.layers.transmissionIor = payload.resolved.transmissionIor;
     // These values remain authoritative in PathState while the ray is in flight. Restoring them at
     // decode preserves direct-light volume evaluation without spending two output payload lanes.
@@ -316,14 +265,11 @@ public ResolvedMaterialPayload resolvedMaterialFromRayPayload(
     return material;
 }
 
-public ResolvedMaterialScatter resolvedMaterialScatterFromRayPayload(
-    RayPayload payload)
+public ResolvedMaterialScatter resolvedMaterialScatterFromRayPayload(MaterialRayPayload payload)
 {
     ResolvedMaterialScatter scatter;
     scatter.flags = payload.resolved.flags & ResolvedMaterialFlag.scatterMask;
-    scatter.direction = unpackPayloadOct32(
-        payload.resolved.scatterDirectionOct32,
-        float3(0.0f, 1.0f, 0.0f));
+    scatter.direction = unpackPayloadOct32(payload.resolved.scatterDirectionOct32, float3(0.0f, 1.0f, 0.0f));
     scatter.diffuseWeight = payload.resolved.scatterDiffuseWeight;
     scatter.specularWeight = payload.resolved.scatterSpecularWeight;
     scatter.weight = scatter.diffuseWeight + scatter.specularWeight;
@@ -353,12 +299,11 @@ public struct PathState
 
     public property bool active
     {
-        get { return flags & PathFlag.active; }
-        set(value)
-        {
-            flags = value
-                ? flags | PathFlag.active
-                : flags & ~PathFlag.active;
+        get {
+            return flags & PathFlag.active;
+        }
+        set(value) {
+            flags = value ? flags | PathFlag.active : flags & ~PathFlag.active;
         }
     }
 };
@@ -388,11 +333,7 @@ public float pathExteriorMediumIor(PathState path)
     return path.mediumDepth < 2u ? 1.0f : path.mediumStack[path.mediumDepth - 2u].ior;
 }
 
-public bool pathMediumTopMatches(
-    PathState path,
-    uint instanceMetadataIndex,
-    uint geometryIndex,
-    uint materialIndex)
+public bool pathMediumTopMatches(PathState path, uint instanceMetadataIndex, uint geometryIndex, uint materialIndex)
 {
     if (path.mediumDepth == 0u)
     {
@@ -400,21 +341,14 @@ public bool pathMediumTopMatches(
     }
 
     PathMediumBoundary top = path.mediumStack[path.mediumDepth - 1u];
-    return top.instanceMetadataIndex == instanceMetadataIndex &&
-        top.geometryIndex == geometryIndex &&
-        top.materialIndex == materialIndex;
+    return top.instanceMetadataIndex == instanceMetadataIndex && top.geometryIndex == geometryIndex &&
+           top.materialIndex == materialIndex;
 }
 
-public bool pushPathMediumBoundary(
-    inout PathState path,
-    uint instanceMetadataIndex,
-    uint geometryIndex,
-    uint materialIndex,
-    float ior)
+public bool pushPathMediumBoundary(inout PathState path, uint instanceMetadataIndex, uint geometryIndex,
+                                   uint materialIndex, float ior)
 {
-    if (path.mediumDepth >= kPathMediumStackCapacity ||
-        !isfinite(ior) ||
-        ior <= 0.0f)
+    if (path.mediumDepth >= kPathMediumStackCapacity || !isfinite(ior) || ior <= 0.0f)
     {
         return false;
     }
@@ -429,11 +363,8 @@ public bool pushPathMediumBoundary(
     return true;
 }
 
-public bool popPathMediumBoundary(
-    inout PathState path,
-    uint instanceMetadataIndex,
-    uint geometryIndex,
-    uint materialIndex)
+public bool popPathMediumBoundary(inout PathState path, uint instanceMetadataIndex, uint geometryIndex,
+                                  uint materialIndex)
 {
     if (!pathMediumTopMatches(path, instanceMetadataIndex, geometryIndex, materialIndex))
     {
@@ -456,10 +387,7 @@ public void addDiffusePathContribution(inout PathState path, float3 radiance)
     path.diffuseRadiance += path.diffuseThroughput * radiance;
 }
 
-public void addPrimaryPathContribution(
-    inout PathState path,
-    float3 specularRadiance,
-    float3 diffuseRadiance)
+public void addPrimaryPathContribution(inout PathState path, float3 specularRadiance, float3 diffuseRadiance)
 {
     path.specularRadiance += path.diffuseThroughput * specularRadiance;
     path.diffuseRadiance += path.diffuseThroughput * diffuseRadiance;
@@ -471,10 +399,7 @@ public void updatePathThroughput(inout PathState path, float3 weight)
     path.diffuseThroughput *= weight;
 }
 
-public void initializePrimaryPathThroughput(
-    inout PathState path,
-    float3 specularWeight,
-    float3 diffuseWeight)
+public void initializePrimaryPathThroughput(inout PathState path, float3 specularWeight, float3 diffuseWeight)
 {
     float3 prefixThroughput = path.diffuseThroughput;
     path.specularThroughput = prefixThroughput * specularWeight;

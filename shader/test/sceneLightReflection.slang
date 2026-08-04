@@ -1,11 +1,12 @@
 module sceneLightReflection;
 import common;
 
+[[vk::binding(8, 3)]]
 RWStructuredBuffer<uint> outputValues;
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
-void main(uint3 dispatchThreadId : SV_DispatchThreadID)
+void main(uint3 dispatchThreadId: SV_DispatchThreadID)
 {
     uint value = gSceneLightHeader.lightCount + dispatchThreadId.x;
     if (gSceneLightHeader.lightCount > 0u)

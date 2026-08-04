@@ -8,15 +8,13 @@ import nr.renderPasses;
 namespace
 {
 [[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult& preflight)
+    const nr::renderer::RendererGraphPreflightResult &preflight)
 {
     auto values = nr::options::OptionValueMap{};
     auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
         values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(
-            entry.first,
-            nr::options::OptionAvailability{.available = true, .reason = {}});
+        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
     });
     return nr::options::OptionFrameSnapshot{
         .catalog = preflight.optionCatalog,
@@ -40,15 +38,14 @@ void printUsage()
     std::println("  Rotate: hold mouse left or right button and move cursor");
 }
 
-[[nodiscard]] bool hasFlag(std::span<char*> args, std::string_view expected)
+[[nodiscard]] bool hasFlag(std::span<char *> args, std::string_view expected)
 {
-    return std::ranges::any_of(args, [expected](const char* token) {
-        return token != nullptr && std::string_view{token} == expected;
-    });
+    return std::ranges::any_of(
+        args, [expected](const char *token) { return token != nullptr && std::string_view{token} == expected; });
 }
 
 [[nodiscard]] nr::renderer::RendererGraphSpec buildMainGraphSpec(
-    const std::shared_ptr<nr::renderPasses::EmbeddedTriangleNode>& embeddedTriangle)
+    const std::shared_ptr<nr::renderPasses::EmbeddedTriangleNode> &embeddedTriangle)
 {
     if (!embeddedTriangle)
     {
@@ -62,22 +59,25 @@ void printUsage()
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
             .runtime = embeddedTriangle,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "EmbeddedTriangle",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "EmbeddedTriangle",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = ui,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "Ui",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "Ui",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = present,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "Present",
-                .queue = nr::renderer::QueueDomain::Compute,
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "Present",
+                    .queue = nr::renderer::QueueDomain::Compute,
+                },
         },
     };
 
@@ -103,9 +103,9 @@ void printUsage()
             .engineName = "NewbieRenderer",
         });
 
-        auto& renderer = app.renderer();
+        auto &renderer = app.renderer();
         {
-            auto& presentation = renderer.device().presentationContext;
+            auto &presentation = renderer.device().presentationContext;
             auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
             auto defaultCameraView = nr::app::AppCameraDefaultView{};
             defaultCameraView.lens.farPlane = 100.0f;
@@ -157,9 +157,7 @@ void printUsage()
 
                     if (frameResult.presentResult != vk::Result::eSuccess)
                     {
-                        std::println(
-                            "[error] unexpected present result: {}",
-                            vk::to_string(frameResult.presentResult));
+                        std::println("[error] unexpected present result: {}", vk::to_string(frameResult.presentResult));
                         exitCode = 1;
                         break;
                     }
@@ -170,7 +168,7 @@ void printUsage()
         app.shutdown();
         return exitCode;
     }
-    catch (const std::exception& error)
+    catch (const std::exception &error)
     {
         std::println("[error] exception in main: {}", error.what());
         if (app.initialized())
@@ -182,12 +180,12 @@ void printUsage()
 }
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
-    auto args = std::span<char*>{};
+    auto args = std::span<char *>{};
     if (argc > 1)
     {
-        args = std::span<char*>{argv + 1, static_cast<std::size_t>(argc - 1)};
+        args = std::span<char *>{argv + 1, static_cast<std::size_t>(argc - 1)};
     }
 
     if (hasFlag(args, "--help") || hasFlag(args, "-h"))

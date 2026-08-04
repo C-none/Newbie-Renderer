@@ -36,12 +36,9 @@ public float2 pathTracingGuideSurfaceMotionVector(float3 position, uint2 dimensi
 {
     float4 currentClip = mul(gFrame.viewProjection, float4(position, 1.0f));
     float4 previousClip = mul(gFrame.previousViewProjection, float4(position, 1.0f));
-    float2 motion = pathTracingGuideClipToPixel(previousClip, dimensions) -
-                    pathTracingGuideClipToPixel(currentClip, dimensions);
-    return clamp(
-        motion,
-        float2(-kPathTracingGuideHalfMax),
-        float2(kPathTracingGuideHalfMax));
+    float2 motion =
+        pathTracingGuideClipToPixel(previousClip, dimensions) - pathTracingGuideClipToPixel(currentClip, dimensions);
+    return clamp(motion, float2(-kPathTracingGuideHalfMax), float2(kPathTracingGuideHalfMax));
 }
 
 public float2 pathTracingGuideSkyMotionVector(float3 worldDirection, uint2 dimensions)
@@ -49,12 +46,9 @@ public float2 pathTracingGuideSkyMotionVector(float3 worldDirection, uint2 dimen
     float4 direction = float4(worldDirection, 0.0f);
     float4 currentClip = mul(gFrame.viewProjection, direction);
     float4 previousClip = mul(gFrame.previousViewProjection, direction);
-    float2 motion = pathTracingGuideClipToPixel(previousClip, dimensions) -
-                    pathTracingGuideClipToPixel(currentClip, dimensions);
-    return clamp(
-        motion,
-        float2(-kPathTracingGuideHalfMax),
-        float2(kPathTracingGuideHalfMax));
+    float2 motion =
+        pathTracingGuideClipToPixel(previousClip, dimensions) - pathTracingGuideClipToPixel(currentClip, dimensions);
+    return clamp(motion, float2(-kPathTracingGuideHalfMax), float2(kPathTracingGuideHalfMax));
 }
 
 public float3 pathTracingGuideEnvBrdfApprox2(float3 specularColor, float alpha, float noV)
@@ -63,45 +57,26 @@ public float3 pathTracingGuideEnvBrdfApprox2(float3 specularColor, float alpha, 
     float4 x = float4(1.0f, noV, noV * noV, noV * noV * noV);
     float4 y = float4(1.0f, alpha, alpha * alpha, alpha * alpha * alpha);
 
-    float2x2 m1 = float2x2(
-        0.99044f, -1.28514f,
-        1.29678f, -0.755907f);
-    float3x3 m2 = float3x3(
-        1.0f, 2.92338f, 59.4188f,
-        20.3225f, -27.0302f, 222.592f,
-        121.563f, 626.13f, 316.627f);
-    float2x2 m3 = float2x2(
-        0.0365463f, 3.32707f,
-        9.0632f, -9.04756f);
-    float3x3 m4 = float3x3(
-        1.0f, 3.59685f, -1.36772f,
-        9.04401f, -16.3174f, 9.22949f,
-        5.56589f, 19.7886f, -20.2123f);
+    float2x2 m1 = float2x2(0.99044f, -1.28514f, 1.29678f, -0.755907f);
+    float3x3 m2 = float3x3(1.0f, 2.92338f, 59.4188f, 20.3225f, -27.0302f, 222.592f, 121.563f, 626.13f, 316.627f);
+    float2x2 m3 = float2x2(0.0365463f, 3.32707f, 9.0632f, -9.04756f);
+    float3x3 m4 = float3x3(1.0f, 3.59685f, -1.36772f, 9.04401f, -16.3174f, 9.22949f, 5.56589f, 19.7886f, -20.2123f);
 
     float biasDenominator = dot(mul(m2, x.xyw), y.xyw);
     float scaleDenominator = dot(mul(m4, x.xzw), y.xyw);
-    float bias = dot(mul(m1, x.xy), y.xy) /
-                 pathTracingGuideSafeDivideW(biasDenominator);
-    float scale = dot(mul(m3, x.xy), y.xy) /
-                  pathTracingGuideSafeDivideW(scaleDenominator);
+    float bias = dot(mul(m1, x.xy), y.xy) / pathTracingGuideSafeDivideW(biasDenominator);
+    float scale = dot(mul(m3, x.xy), y.xy) / pathTracingGuideSafeDivideW(scaleDenominator);
     bias *= saturate(specularColor.g * 50.0f);
     return specularColor * max(0.0f, scale) + max(0.0f, bias);
 }
 
-public void initializePathTracingSkyGuides(
-    inout PathTracingGuideState guides,
-    float3 rayDirection,
-    uint2 dimensions)
+public void initializePathTracingSkyGuides(inout PathTracingGuideState guides, float3 rayDirection, uint2 dimensions)
 {
-    guides.normalRoughness = float4(
-        safeNormalize(-rayDirection, float3(0.0f, 0.0f, 1.0f)),
-        1.0f);
+    guides.normalRoughness = float4(safeNormalize(-rayDirection, float3(0.0f, 0.0f, 1.0f)), 1.0f);
     guides.motionVectors = pathTracingGuideSkyMotionVector(rayDirection, dimensions);
 }
 
-public float3 pathTracingGuidePrimarySpecularF0(
-    ResolvedMaterialPayload material,
-    MaterialSample core)
+public float3 pathTracingGuidePrimarySpecularF0(ResolvedMaterialPayload material, MaterialSample core)
 {
     if (uint(material.layerFlags & RtMaterialLayerFlag.transmission) == 0u)
     {
@@ -118,11 +93,8 @@ public float3 pathTracingGuidePrimarySpecularF0(
     return lerp(float3(dielectricF0), core.baseColor.rgb, core.metallic);
 }
 
-public void capturePathTracingPrimarySurfaceGuides(
-    inout PathTracingGuideState guides,
-    ResolvedMaterialPayload material,
-    float3 viewDirection,
-    uint2 dimensions)
+public void capturePathTracingPrimarySurfaceGuides(inout PathTracingGuideState guides, ResolvedMaterialPayload material,
+                                                   float3 viewDirection, uint2 dimensions)
 {
     float3 normal = safeNormalize(material.shadingNormal, material.geometryNormal);
     float4 clip = mul(gFrame.viewProjection, float4(material.position, 1.0f));
@@ -139,48 +111,35 @@ public void capturePathTracingPrimarySurfaceGuides(
         return;
     }
 
-    guides.diffuseAlbedo = max(
-        material.baseColor.rgb * (1.0f - saturate(material.metallic)),
-        float3(0.0f));
+    guides.diffuseAlbedo = max(material.baseColor.rgb * (1.0f - saturate(material.metallic)), float3(0.0f));
 
     MaterialSample core = materialSampleFromResolvedPayload(material);
     float3 specularColor = pathTracingGuidePrimarySpecularF0(material, core);
     float alpha = material.roughness * material.roughness;
-    float3 specularNormal = adjustMaterialPayloadSpecularNormal(
-        material.shadingNormal,
-        material.geometryNormal,
-        viewDirection);
+    float3 specularNormal =
+        adjustMaterialPayloadSpecularNormal(material.shadingNormal, material.geometryNormal, viewDirection);
     float noV = saturate(dot(specularNormal, viewDirection));
-    guides.specularAlbedo = max(
-        pathTracingGuideEnvBrdfApprox2(specularColor, alpha, noV),
-        float3(0.0f));
+    guides.specularAlbedo = max(pathTracingGuideEnvBrdfApprox2(specularColor, alpha, noV), float3(0.0f));
 }
 
 public bool pathTracingGuideIsSpecularReflection(ResolvedMaterialScatterKind kind)
 {
-    return kind == ResolvedMaterialScatterKind.specular ||
-           kind == ResolvedMaterialScatterKind.clearcoat;
+    return kind == ResolvedMaterialScatterKind.specular || kind == ResolvedMaterialScatterKind.clearcoat;
 }
 
-public void beginPathTracingSpecularHitTracking(
-    inout PathTracingGuideState guides,
-    ResolvedMaterialScatterKind kind)
+public void beginPathTracingSpecularHitTracking(inout PathTracingGuideState guides, ResolvedMaterialScatterKind kind)
 {
     guides.awaitingSpecularHit = pathTracingGuideIsSpecularReflection(kind) ? 1u : 0u;
 }
 
-public void resolvePathTracingSpecularHit(
-    inout PathTracingGuideState guides,
-    float3 hitPosition)
+public void resolvePathTracingSpecularHit(inout PathTracingGuideState guides, float3 hitPosition)
 {
     if (guides.awaitingSpecularHit == 0u)
     {
         return;
     }
 
-    guides.specularHitDistance = min(
-        length(hitPosition - guides.primaryPosition),
-        kPathTracingGuideHalfMax);
+    guides.specularHitDistance = min(length(hitPosition - guides.primaryPosition), kPathTracingGuideHalfMax);
     guides.awaitingSpecularHit = 0u;
 }
 

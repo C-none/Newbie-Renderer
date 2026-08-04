@@ -41,7 +41,8 @@ inline constexpr std::size_t maximumWireDepth = 16u;
 
 [[nodiscard]] bool hasExactFields(const JsonObject &value, std::initializer_list<std::string_view> expected) noexcept
 {
-    return value.size() == expected.size() && std::ranges::all_of(expected, [&](std::string_view name) { return value.contains(name); });
+    return value.size() == expected.size() &&
+           std::ranges::all_of(expected, [&](std::string_view name) { return value.contains(name); });
 }
 
 [[nodiscard]] bool validRequestId(const Json &value) noexcept
@@ -93,18 +94,21 @@ inline constexpr std::size_t maximumWireDepth = 16u;
     }};
 }
 
-[[nodiscard]] network::TextMessageResult writeError(const Json &id, std::int64_t code, std::string message, std::string reason, std::string &slot, std::size_t maximumBytes)
+[[nodiscard]] network::TextMessageResult writeError(const Json &id, std::int64_t code, std::string message,
+                                                    std::string reason, std::string &slot, std::size_t maximumBytes)
 {
     auto const written = writeJson(rpcError(id, code, std::move(message), std::move(reason)), slot, maximumBytes);
     return network::TextMessageResult{.responseReady = written};
 }
 
-[[nodiscard]] network::TextMessageResult invalidRequest(std::string &slot, std::size_t maximumBytes, const Json &id = Json{nullptr})
+[[nodiscard]] network::TextMessageResult invalidRequest(std::string &slot, std::size_t maximumBytes,
+                                                        const Json &id = Json{nullptr})
 {
     return writeError(id, -32600, "Invalid Request.", "invalid_request", slot, maximumBytes);
 }
 
-[[nodiscard]] network::TextMessageResult invalidParams(const Json &id, std::string reason, std::string &slot, std::size_t maximumBytes)
+[[nodiscard]] network::TextMessageResult invalidParams(const Json &id, std::string reason, std::string &slot,
+                                                       std::size_t maximumBytes)
 {
     return writeError(id, -32602, "Invalid method parameters.", std::move(reason), slot, maximumBytes);
 }
@@ -191,7 +195,8 @@ inline constexpr std::size_t maximumWireDepth = 16u;
         {
             auto values = JsonArray{};
             values.reserve(schema.allowedStrings.size());
-            std::ranges::transform(schema.allowedStrings, std::back_inserter(values), [](auto const &entry) { return Json{entry}; });
+            std::ranges::transform(schema.allowedStrings, std::back_inserter(values),
+                                   [](auto const &entry) { return Json{entry}; });
             result.emplace("enum", Json{std::move(values)});
         }
     }
@@ -230,7 +235,9 @@ inline constexpr std::size_t maximumWireDepth = 16u;
     return std::visit(
         [](auto const &stored) -> Json {
             using Stored = std::remove_cvref_t<decltype(stored)>;
-            if constexpr (std::same_as<Stored, bool> || std::same_as<Stored, std::int64_t> || std::same_as<Stored, std::uint64_t> || std::same_as<Stored, double> || std::same_as<Stored, std::string>)
+            if constexpr (std::same_as<Stored, bool> || std::same_as<Stored, std::int64_t> ||
+                          std::same_as<Stored, std::uint64_t> || std::same_as<Stored, double> ||
+                          std::same_as<Stored, std::string>)
             {
                 return Json{stored};
             }
@@ -238,20 +245,23 @@ inline constexpr std::size_t maximumWireDepth = 16u;
             {
                 auto result = JsonArray{};
                 result.reserve(stored.size());
-                std::ranges::transform(stored, std::back_inserter(result), [](auto const &entry) { return wireToJson(entry); });
+                std::ranges::transform(stored, std::back_inserter(result),
+                                       [](auto const &entry) { return wireToJson(entry); });
                 return Json{std::move(result)};
             }
             else
             {
                 auto result = JsonObject{};
-                std::ranges::for_each(stored, [&](auto const &entry) { result.emplace(entry.first, wireToJson(entry.second)); });
+                std::ranges::for_each(
+                    stored, [&](auto const &entry) { result.emplace(entry.first, wireToJson(entry.second)); });
                 return Json{std::move(result)};
             }
         },
         value.storage);
 }
 
-[[nodiscard]] Json optionRecord(const options::OptionDefinition &definition, const options::OptionFrameSnapshot &snapshot)
+[[nodiscard]] Json optionRecord(const options::OptionDefinition &definition,
+                                const options::OptionFrameSnapshot &snapshot)
 {
     auto const *value = snapshot.findValue(definition.id);
     auto const *availability = snapshot.findAvailability(definition.id);
@@ -263,7 +273,8 @@ inline constexpr std::size_t maximumWireDepth = 16u;
         {"id", Json{definition.id.value()}},
         {"input_schema", schemaToJson(definition.schema)},
         {"order", Json{static_cast<std::int64_t>(definition.presentation.order)}},
-        {"title", Json{definition.presentation.label.empty() ? std::string{definition.id.value()} : definition.presentation.label}},
+        {"title", Json{definition.presentation.label.empty() ? std::string{definition.id.value()}
+                                                             : definition.presentation.label}},
         {"unavailable_reason", available || availability == nullptr ? Json{nullptr} : Json{availability->reason}},
         {"value", value != nullptr ? wireToJson(*value) : Json{nullptr}},
     }};
@@ -285,13 +296,15 @@ inline constexpr std::size_t maximumWireDepth = 16u;
 {
     auto records = JsonArray{};
     records.reserve(snapshot.catalog->definitions().size());
-    std::ranges::transform(snapshot.catalog->definitions(), std::back_inserter(records), [&](auto const &entry) { return optionRecord(entry.second, snapshot); });
+    std::ranges::transform(snapshot.catalog->definitions(), std::back_inserter(records),
+                           [&](auto const &entry) { return optionRecord(entry.second, snapshot); });
     auto result = std::get<JsonObject>(snapshotMetadata(snapshot).storage);
     result.emplace("options", Json{std::move(records)});
     return Json{std::move(result)};
 }
 
-[[nodiscard]] std::optional<options::OptionWireValue> jsonToWire(const Json &value, const options::OptionSchema &schema, std::size_t depth = 0u)
+[[nodiscard]] std::optional<options::OptionWireValue> jsonToWire(const Json &value, const options::OptionSchema &schema,
+                                                                 std::size_t depth = 0u)
 {
     if (depth > maximumWireDepth)
     {
@@ -310,7 +323,8 @@ inline constexpr std::size_t maximumWireDepth = 16u;
         {
             return options::OptionWireValue{*stored};
         }
-        if (auto const *stored = std::get_if<std::uint64_t>(&value.storage); stored && *stored <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        if (auto const *stored = std::get_if<std::uint64_t>(&value.storage);
+            stored && *stored <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
         {
             return options::OptionWireValue{static_cast<std::int64_t>(*stored)};
         }
@@ -340,7 +354,8 @@ inline constexpr std::size_t maximumWireDepth = 16u;
         }
         return {};
     case options::OptionValueType::string:
-        if (auto const *stored = std::get_if<std::string>(&value.storage); stored && stored->size() <= maximumOrdinaryStringBytes)
+        if (auto const *stored = std::get_if<std::string>(&value.storage);
+            stored && stored->size() <= maximumOrdinaryStringBytes)
         {
             return options::OptionWireValue{*stored};
         }
@@ -465,11 +480,14 @@ struct Rejection
 }
 } // namespace
 
-OptionRpcProtocol::OptionRpcProtocol(options::OptionSystem &optionSystem, std::size_t maximumResponseBytes) noexcept : optionSystem_(optionSystem), maximumResponseBytes_(maximumResponseBytes)
+OptionRpcProtocol::OptionRpcProtocol(options::OptionSystem &optionSystem, std::size_t maximumResponseBytes) noexcept
+    : optionSystem_(optionSystem), maximumResponseBytes_(maximumResponseBytes)
 {
 }
 
-network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payload, const network::MessageContext &context, std::string &responseSlot) const
+network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payload,
+                                                         const network::MessageContext &context,
+                                                         std::string &responseSlot) const
 {
     if (responseSlot.capacity() < maximumResponseBytes_)
     {
@@ -482,7 +500,8 @@ network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payloa
         return writeError(Json{nullptr}, -32700, "Parse error.", "parse_error", responseSlot, maximumResponseBytes_);
     }
     auto const *request = object(*parsed.value);
-    if (request != nullptr && request->contains("jsonrpc") && request->contains("method") && request->contains("params") && !request->contains("id"))
+    if (request != nullptr && request->contains("jsonrpc") && request->contains("method") &&
+        request->contains("params") && !request->contains("id"))
     {
         return {};
     }
@@ -498,13 +517,15 @@ network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payloa
     auto const *version = versionValue != nullptr ? string(*versionValue) : nullptr;
     auto const *method = methodValue != nullptr ? string(*methodValue) : nullptr;
     auto const *params = paramsValue != nullptr ? object(*paramsValue) : nullptr;
-    if (version == nullptr || *version != "2.0" || id == nullptr || !validRequestId(*id) || method == nullptr || params == nullptr)
+    if (version == nullptr || *version != "2.0" || id == nullptr || !validRequestId(*id) || method == nullptr ||
+        params == nullptr)
     {
         return invalidRequest(responseSlot, maximumResponseBytes_);
     }
     if (context.rateLimited)
     {
-        return writeError(*id, -32017, "Request rate limit exceeded.", "rate_limited", responseSlot, maximumResponseBytes_);
+        return writeError(*id, -32017, "Request rate limit exceeded.", "rate_limited", responseSlot,
+                          maximumResponseBytes_);
     }
 
     auto &system = optionSystem_.get();
@@ -536,7 +557,8 @@ network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payloa
     auto snapshot = system.snapshot();
     if (!snapshotReady(snapshot))
     {
-        return writeError(*id, -32015, "Initial option snapshot is not ready.", "snapshot_not_ready", responseSlot, maximumResponseBytes_);
+        return writeError(*id, -32015, "Initial option snapshot is not ready.", "snapshot_not_ready", responseSlot,
+                          maximumResponseBytes_);
     }
 
     if (*method == "option.snapshot")
@@ -549,7 +571,8 @@ network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payloa
         {
             return network::TextMessageResult{.responseReady = true};
         }
-        return writeError(*id, -32603, "Snapshot response exceeded its bound.", "internal_error", responseSlot, maximumResponseBytes_);
+        return writeError(*id, -32603, "Snapshot response exceeded its bound.", "internal_error", responseSlot,
+                          maximumResponseBytes_);
     }
 
     if (*method == "option.get")
@@ -579,8 +602,13 @@ network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payloa
 
     if (*method == "option.apply")
     {
-        auto const validShape = params->size() >= 3u && params->size() <= 4u && params->contains("id") && params->contains("value") && (params->contains("binding_epoch") || params->contains("snapshot_token")) &&
-                                std::ranges::all_of(*params, [](auto const &entry) { return entry.first == "id" || entry.first == "value" || entry.first == "binding_epoch" || entry.first == "snapshot_token"; });
+        auto const validShape = params->size() >= 3u && params->size() <= 4u && params->contains("id") &&
+                                params->contains("value") &&
+                                (params->contains("binding_epoch") || params->contains("snapshot_token")) &&
+                                std::ranges::all_of(*params, [](auto const &entry) {
+                                    return entry.first == "id" || entry.first == "value" ||
+                                           entry.first == "binding_epoch" || entry.first == "snapshot_token";
+                                });
         if (!validShape)
         {
             return invalidParams(*id, "invalid_params", responseSlot, maximumResponseBytes_);
@@ -627,7 +655,8 @@ network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payloa
         auto const startedResponse = rpcResult(*id, Json{JsonObject{{"status", Json{"started"}}}});
         if (!writeJson(startedResponse, responseSlot, maximumResponseBytes_))
         {
-            return writeError(*id, -32603, "Response preparation failed.", "internal_error", responseSlot, maximumResponseBytes_);
+            return writeError(*id, -32603, "Response preparation failed.", "internal_error", responseSlot,
+                              maximumResponseBytes_);
         }
 
         auto schedule = system.trySchedule(options::OptionMutationRequest{
@@ -646,7 +675,8 @@ network::TextMessageResult OptionRpcProtocol::handleText(std::string_view payloa
         }
 
         auto const rejection = rejectionFor(schedule.reason);
-        return writeError(*id, rejection.code, "Operation was not started.", std::string{rejection.reason}, responseSlot, maximumResponseBytes_);
+        return writeError(*id, rejection.code, "Operation was not started.", std::string{rejection.reason},
+                          responseSlot, maximumResponseBytes_);
     }
 
     return writeError(*id, -32601, "Method not found.", "method_not_found", responseSlot, maximumResponseBytes_);

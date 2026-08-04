@@ -3,7 +3,8 @@ import dependency.vulkan;
 import nr.utils;
 import std;
 
-export namespace nr::rhi {
+export namespace nr::rhi
+{
 
 /**
  * @brief Lightweight helper for command buffer recording
@@ -21,8 +22,9 @@ export namespace nr::rhi {
  *   // ... vk::raii::CommandBuffer member calls ...
  *   CommandRecorder::end(cb.front());
  */
-class CommandRecorder {
-public:
+class CommandRecorder
+{
+  public:
     // Stateless - all methods are static
 
     /**
@@ -30,10 +32,7 @@ public:
      * @param commandBuffer RAII command buffer to begin
      * @param flags Optional begin flags (e.g., ONE_TIME_SUBMIT)
      */
-    static void beginPrimary(
-        const vk::raii::CommandBuffer& commandBuffer,
-        vk::CommandBufferUsageFlags flags = {}
-    );
+    static void beginPrimary(const vk::raii::CommandBuffer &commandBuffer, vk::CommandBufferUsageFlags flags = {});
 
     /**
      * @brief Begin recording secondary command buffer
@@ -45,17 +44,15 @@ public:
      * They do not inherit ordinary graphics state such as pipeline, descriptor sets,
      * push constants, vertex/index buffers, viewport, scissor, or dynamic raster state.
      */
-    static void beginSecondary(
-        const vk::raii::CommandBuffer& commandBuffer,
-        const vk::CommandBufferInheritanceInfo& inheritanceInfo,
-        vk::CommandBufferUsageFlags flags={}
-    );
+    static void beginSecondary(const vk::raii::CommandBuffer &commandBuffer,
+                               const vk::CommandBufferInheritanceInfo &inheritanceInfo,
+                               vk::CommandBufferUsageFlags flags = {});
 
     /**
      * @brief End command buffer recording
      * @param commandBuffer RAII command buffer to end
      */
-    static void end(const vk::raii::CommandBuffer& commandBuffer);
+    static void end(const vk::raii::CommandBuffer &commandBuffer);
 };
 
 /**
@@ -74,8 +71,9 @@ public:
  *   } // Automatically calls end()
  *   // cb still valid, can be submitted
  */
-class ScopedCommandBuffer {
-public:
+class ScopedCommandBuffer
+{
+  public:
     /**
      * @brief Begin primary command buffer, end on destruction
      * @param commandBuffer RAII command buffer (manages memory lifetime)
@@ -85,10 +83,7 @@ public:
      *   vk::raii::CommandBuffer cb = ...;  // memory RAII
      *   ScopedCommandBuffer scoped(cb);    // recording RAII
      */
-    explicit ScopedCommandBuffer(
-        const vk::raii::CommandBuffer& commandBuffer,
-        vk::CommandBufferUsageFlags flags = {}
-    );
+    explicit ScopedCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, vk::CommandBufferUsageFlags flags = {});
 
     /**
      * @brief Begin secondary command buffer, end on destruction
@@ -96,27 +91,25 @@ public:
      * @param inheritanceInfo Render pass inheritance information
      * @param flags Recording flags provided by caller
      */
-    ScopedCommandBuffer(
-        const vk::raii::CommandBuffer& commandBuffer,
-        const vk::CommandBufferInheritanceInfo& inheritanceInfo,
-        vk::CommandBufferUsageFlags flags={}
-    );
+    ScopedCommandBuffer(const vk::raii::CommandBuffer &commandBuffer,
+                        const vk::CommandBufferInheritanceInfo &inheritanceInfo,
+                        vk::CommandBufferUsageFlags flags = {});
 
     ~ScopedCommandBuffer();
 
     // Non-copyable, non-movable (RAII lifetime bound to scope)
-    ScopedCommandBuffer(const ScopedCommandBuffer&) = delete;
-    ScopedCommandBuffer& operator=(const ScopedCommandBuffer&) = delete;
-    ScopedCommandBuffer(ScopedCommandBuffer&&) = delete;
-    ScopedCommandBuffer& operator=(ScopedCommandBuffer&&) = delete;
+    ScopedCommandBuffer(const ScopedCommandBuffer &) = delete;
+    ScopedCommandBuffer &operator=(const ScopedCommandBuffer &) = delete;
+    ScopedCommandBuffer(ScopedCommandBuffer &&) = delete;
+    ScopedCommandBuffer &operator=(ScopedCommandBuffer &&) = delete;
 
     /**
      * @brief Get the wrapped command buffer for recording commands
      */
-    [[nodiscard]] const vk::raii::CommandBuffer& get() const noexcept;
+    [[nodiscard]] const vk::raii::CommandBuffer &get() const noexcept;
 
-private:
-    const vk::raii::CommandBuffer& commandBuffer_;
+  private:
+    const vk::raii::CommandBuffer &commandBuffer_;
 };
 
 /**
@@ -132,21 +125,22 @@ private:
  *       // ... shadow pass commands ...
  *   } // Automatically ends debug label
  */
-class ScopedCommandBufferDebugLabel {
-public:
-    ScopedCommandBufferDebugLabel(const vk::raii::CommandBuffer& commandBuffer, std::string_view label);
+class ScopedCommandBufferDebugLabel
+{
+  public:
+    ScopedCommandBufferDebugLabel(const vk::raii::CommandBuffer &commandBuffer, std::string_view label);
 
     ~ScopedCommandBufferDebugLabel();
 
     // Non-copyable, non-movable (RAII lifetime bound to scope)
-    ScopedCommandBufferDebugLabel(const ScopedCommandBufferDebugLabel&) = delete;
-    ScopedCommandBufferDebugLabel& operator=(const ScopedCommandBufferDebugLabel&) = delete;
-    ScopedCommandBufferDebugLabel(ScopedCommandBufferDebugLabel&&) = delete;
-    ScopedCommandBufferDebugLabel& operator=(ScopedCommandBufferDebugLabel&&) = delete;
+    ScopedCommandBufferDebugLabel(const ScopedCommandBufferDebugLabel &) = delete;
+    ScopedCommandBufferDebugLabel &operator=(const ScopedCommandBufferDebugLabel &) = delete;
+    ScopedCommandBufferDebugLabel(ScopedCommandBufferDebugLabel &&) = delete;
+    ScopedCommandBufferDebugLabel &operator=(ScopedCommandBufferDebugLabel &&) = delete;
 
     void close();
 
-private:
+  private:
     std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer_{};
     std::string label_{};
     bool active_ = false;

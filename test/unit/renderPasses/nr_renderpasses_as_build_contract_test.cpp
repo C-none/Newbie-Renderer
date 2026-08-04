@@ -6,15 +6,51 @@ import nr.test;
 namespace
 {
 const nr::test::CaseRegistrar asBuildInputCase{
-    "renderpasses AS build input keeps cache retirement latency positive",
-    [] {
+    "renderpasses AS build input keeps cache retirement latency positive", [] {
         auto input = nr::renderPasses::AccelerationStructureBuildNodeInput{};
-        nr::test::require(input.unusedFrameRetireLatency > 0u, "AS build cache retirement latency should stay positive");
+        nr::test::require(input.unusedFrameRetireLatency > 0u,
+                          "AS build cache retirement latency should stay positive");
+    }};
+
+const nr::test::CaseRegistrar rtRayTypePhysicalMappingCase{
+    "renderpasses RT ray-type ABI maps logical hit records to interleaved physical records", [] {
+        using nr::renderPasses::RtRayType;
+
+        static_assert(std::same_as<std::underlying_type_t<RtRayType>, std::uint32_t>);
+        static_assert(static_cast<std::uint32_t>(RtRayType::material) == 0u);
+        static_assert(static_cast<std::uint32_t>(RtRayType::shadow) == 1u);
+        static_assert(static_cast<std::uint32_t>(RtRayType::count) == 2u);
+        static_assert(nr::renderPasses::kRtRayTypeCount <= 16u);
+
+        auto const logicalRecords = std::views::iota(std::uint32_t{0u}, std::uint32_t{8u});
+        nr::test::require(std::ranges::all_of(logicalRecords, [](std::uint32_t logicalIndex) {
+                              return nr::renderPasses::rtPhysicalHitRecordIndex(logicalIndex,
+                                                                               RtRayType::material) ==
+                                         static_cast<std::uint64_t>(logicalIndex) * 2u &&
+                                     nr::renderPasses::rtPhysicalHitRecordIndex(logicalIndex, RtRayType::shadow) ==
+                                         static_cast<std::uint64_t>(logicalIndex) * 2u + 1u;
+                          }),
+                          "each logical geometry record must expand to [material, shadow]");
+        nr::test::requireEqual(nr::renderPasses::rtPhysicalHitRecordCount(8u), std::uint64_t{16u});
+
+        constexpr auto largestLogicalBaseWith24BitPhysicalBase = std::uint32_t{0x007f'ffffu};
+        constexpr auto firstLogicalBaseBeyond24BitPhysicalBase = std::uint32_t{0x0080'0000u};
+        nr::test::require(
+            nr::renderPasses::rtPhysicalHitRecordIndex(largestLogicalBaseWith24BitPhysicalBase,
+                                                        RtRayType::material) <= 0x00ff'ffffu,
+            "largest accepted logical TLAS base must fit Vulkan's 24-bit physical record field");
+        nr::test::require(
+            nr::renderPasses::rtPhysicalHitRecordIndex(firstLogicalBaseBeyond24BitPhysicalBase,
+                                                        RtRayType::material) > 0x00ff'ffffu,
+            "next logical TLAS base must be rejected by the 24-bit physical record boundary");
+        nr::test::require(
+            nr::renderPasses::rtPhysicalHitRecordCount(std::numeric_limits<std::uint32_t>::max()) >
+                std::numeric_limits<std::uint32_t>::max(),
+            "physical record count must use a 64-bit intermediate before uint32 validation");
     }};
 
 const nr::test::CaseRegistrar rtHitSbtPlanCase{
-    "renderpasses RT hit SBT plan keeps per-geometry records while deduping permutations",
-    [] {
+    "renderpasses RT hit SBT plan keeps per-geometry records while deduping permutations", [] {
         auto plan = nr::renderPasses::SceneRtHitSbtPlan{};
         auto lookup = std::map<nr::renderPasses::RtHitPermutationKey, std::uint32_t>{};
 
@@ -35,16 +71,12 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
         auto const mixedInstancePolicyKey =
             nr::renderPasses::makeRtHitPermutationKey(baseLayer, runtimeOnlyFeatures, true);
         auto const anisotropicBaseKey =
-            nr::renderPasses::makeRtHitPermutationKey(
-                anisotropicBaseLayer,
-                opaqueFeatures,
-                false);
+            nr::renderPasses::makeRtHitPermutationKey(anisotropicBaseLayer, opaqueFeatures, false);
 
         nr::test::requireEqual(nr::renderPasses::kRtBsdfVariantHardUpperBound, 17u);
         nr::test::requireEqual(nr::renderPasses::kRtHitGroupVariantHardUpperBound, 34u);
-        nr::test::require(
-            nr::renderPasses::rtHitPermutationUsesAnyHit(mixedInstancePolicyKey),
-            "mixed-instance single-sided geometry should select the shared any-hit material policy");
+        nr::test::require(nr::renderPasses::rtHitPermutationUsesAnyHit(mixedInstancePolicyKey),
+                          "mixed-instance single-sided geometry should select the shared any-hit material policy");
 
         // Per-geometry permutation keys are built from (layerFlags, featureFlags): the CHS variant is
         // keyed only by layerFlags, while featureFlags contribute only the alpha hit-group policy.
@@ -68,24 +100,22 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
         nr::test::requireEqual(plan.instances.size(), std::size_t{2u});
         nr::test::requireEqual(plan.permutations.size(), std::size_t{4u});
         nr::test::requireEqual(plan.records[0].permutationIndex, plan.records[2].permutationIndex);
-        nr::test::require(!nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[0].permutationIndex].key));
-        nr::test::require(nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[1].permutationIndex].key));
-        nr::test::require(nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[4].permutationIndex].key));
-        nr::test::requireEqual(
-            plan.permutations[plan.records[0].permutationIndex].key.bsdf.layerFlags,
-            baseLayer,
-            "runtime-only material flags should not enter the BSDF variant key");
-        nr::test::requireEqual(
-            plan.permutations[plan.records[4].permutationIndex].key.bsdf.layerFlags,
-            clearcoatLayer,
-            "layer flags should enter the BSDF variant key");
-        nr::test::requireEqual(
-            plan.permutations[plan.records[3].permutationIndex].key.bsdf.layerFlags,
-            anisotropicBaseLayer,
-            "anisotropy should enter the combined material layer flag key");
+        nr::test::require(
+            !nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[0].permutationIndex].key));
+        nr::test::require(
+            nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[1].permutationIndex].key));
+        nr::test::require(
+            nr::renderPasses::rtHitPermutationUsesAnyHit(plan.permutations[plan.records[4].permutationIndex].key));
+        nr::test::requireEqual(plan.permutations[plan.records[0].permutationIndex].key.bsdf.layerFlags, baseLayer,
+                               "runtime-only material flags should not enter the BSDF variant key");
+        nr::test::requireEqual(plan.permutations[plan.records[4].permutationIndex].key.bsdf.layerFlags, clearcoatLayer,
+                               "layer flags should enter the BSDF variant key");
+        nr::test::requireEqual(plan.permutations[plan.records[3].permutationIndex].key.bsdf.layerFlags,
+                               anisotropicBaseLayer, "anisotropy should enter the combined material layer flag key");
         nr::test::require(
             nr::renderPasses::rtHitClosestHitEntryPointName(plan.permutations[plan.records[3].permutationIndex].key) !=
-                nr::renderPasses::rtHitClosestHitEntryPointName(plan.permutations[plan.records[0].permutationIndex].key),
+                nr::renderPasses::rtHitClosestHitEntryPointName(
+                    plan.permutations[plan.records[0].permutationIndex].key),
             "anisotropic and isotropic base lobes should use distinct closest-hit stages");
         nr::test::requireEqual(
             nr::renderPasses::rtHitClosestHitEntryPointName(plan.permutations[plan.records[1].permutationIndex].key),
@@ -94,8 +124,7 @@ const nr::test::CaseRegistrar rtHitSbtPlanCase{
     }};
 
 const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
-    "renderpasses RT hit SBT domain has exactly 17 BSDF and 34 hit-group keys",
-    [] {
+    "renderpasses RT hit SBT domain has exactly 17 BSDF and 34 hit-group keys", [] {
         using Layer = nr::scene::RtMaterialLayerFlag;
         using AnyHit = nr::renderPasses::RtHitAnyHitPolicy;
 
@@ -120,66 +149,48 @@ const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
                 .layerFlags = layerFlags,
             });
             bsdfKeys.push_back(nr::renderPasses::RtBsdfVariantKey{
-                .layerFlags = static_cast<Layer>(
-                    static_cast<std::uint32_t>(layerFlags) |
-                    static_cast<std::uint32_t>(Layer::anisotropicBaseLobe)),
+                .layerFlags = static_cast<Layer>(static_cast<std::uint32_t>(layerFlags) |
+                                                 static_cast<std::uint32_t>(Layer::anisotropicBaseLobe)),
             });
         });
 
         nr::test::requireEqual(bsdfKeys.size(), std::size_t{17u});
-        nr::test::require(
-            std::ranges::all_of(bsdfKeys, nr::renderPasses::rtBsdfVariantKeyValid),
-            "all 17 enumerated BSDF keys must be valid");
-        nr::test::requireEqual(
-            std::ranges::to<std::set>(bsdfKeys).size(),
-            std::size_t{17u},
-            "the BSDF domain must contain 17 unique keys");
+        nr::test::require(std::ranges::all_of(bsdfKeys, nr::renderPasses::rtBsdfVariantKeyValid),
+                          "all 17 enumerated BSDF keys must be valid");
+        nr::test::requireEqual(std::ranges::to<std::set>(bsdfKeys).size(), std::size_t{17u},
+                               "the BSDF domain must contain 17 unique keys");
 
-        auto hitKeys =
-            bsdfKeys |
-            std::views::transform([](const nr::renderPasses::RtBsdfVariantKey& bsdf) {
-                return std::array{
-                    nr::renderPasses::RtHitPermutationKey{
-                        .bsdf = bsdf,
-                        .anyHitPolicy = AnyHit::none,
-                    },
-                    nr::renderPasses::RtHitPermutationKey{
-                        .bsdf = bsdf,
-                        .anyHitPolicy = AnyHit::materialPolicy,
-                    },
-                };
-            }) |
-            std::views::join |
-            std::ranges::to<std::vector>();
+        auto hitKeys = bsdfKeys | std::views::transform([](const nr::renderPasses::RtBsdfVariantKey &bsdf) {
+                           return std::array{
+                               nr::renderPasses::RtHitPermutationKey{
+                                   .bsdf = bsdf,
+                                   .anyHitPolicy = AnyHit::none,
+                               },
+                               nr::renderPasses::RtHitPermutationKey{
+                                   .bsdf = bsdf,
+                                   .anyHitPolicy = AnyHit::materialPolicy,
+                               },
+                           };
+                       }) |
+                       std::views::join | std::ranges::to<std::vector>();
         nr::test::requireEqual(hitKeys.size(), std::size_t{34u});
-        nr::test::require(
-            std::ranges::all_of(hitKeys, nr::renderPasses::rtHitPermutationKeyValid),
-            "all 34 BSDF/any-hit keys must be valid");
-        nr::test::requireEqual(
-            std::ranges::to<std::set>(hitKeys).size(),
-            std::size_t{34u},
-            "the hit-group domain must contain 34 unique keys");
+        nr::test::require(std::ranges::all_of(hitKeys, nr::renderPasses::rtHitPermutationKeyValid),
+                          "all 34 BSDF/any-hit keys must be valid");
+        nr::test::requireEqual(std::ranges::to<std::set>(hitKeys).size(), std::size_t{34u},
+                               "the hit-group domain must contain 34 unique keys");
 
         auto const invalidLayers = std::array{
-            static_cast<Layer>(2u),
-            static_cast<Layer>(4u),
-            static_cast<Layer>(8u),
-            static_cast<Layer>(16u),
-            static_cast<Layer>(32u),
-            static_cast<Layer>(33u),
+            static_cast<Layer>(2u),  static_cast<Layer>(4u),  static_cast<Layer>(8u),
+            static_cast<Layer>(16u), static_cast<Layer>(32u), static_cast<Layer>(33u),
         };
-        nr::test::require(
-            std::ranges::none_of(invalidLayers, nr::renderPasses::rtMaterialLayerFlagsValid),
-            "missing-base and unknown-bit layer masks must be rejected");
-        nr::test::require(
-            !nr::renderPasses::rtBsdfVariantKeyValid(
-                nr::renderPasses::RtBsdfVariantKey{
-                    .layerFlags = Layer::anisotropicBaseLobe,
-                }),
-            "unlit anisotropic BSDF key must be rejected");
-        nr::test::require(
-            !nr::renderPasses::rtHitAnyHitPolicyValid(static_cast<AnyHit>(2u)),
-            "unknown any-hit enum values must be rejected");
+        nr::test::require(std::ranges::none_of(invalidLayers, nr::renderPasses::rtMaterialLayerFlagsValid),
+                          "missing-base and unknown-bit layer masks must be rejected");
+        nr::test::require(!nr::renderPasses::rtBsdfVariantKeyValid(nr::renderPasses::RtBsdfVariantKey{
+                              .layerFlags = Layer::anisotropicBaseLobe,
+                          }),
+                          "unlit anisotropic BSDF key must be rejected");
+        nr::test::require(!nr::renderPasses::rtHitAnyHitPolicyValid(static_cast<AnyHit>(2u)),
+                          "unknown any-hit enum values must be rejected");
 
         auto const isotropicOpaque = nr::renderPasses::RtHitPermutationKey{
             .bsdf = {.layerFlags = Layer::baseSurface},
@@ -190,47 +201,39 @@ const nr::test::CaseRegistrar rtHitSbtExactDomainCase{
             .anyHitPolicy = AnyHit::materialPolicy,
         };
         auto const anisotropicOpaque = nr::renderPasses::RtHitPermutationKey{
-            .bsdf = {
-                .layerFlags = static_cast<Layer>(
-                    static_cast<std::uint32_t>(Layer::baseSurface) |
-                    static_cast<std::uint32_t>(Layer::anisotropicBaseLobe)),
-            },
+            .bsdf =
+                {
+                    .layerFlags = static_cast<Layer>(static_cast<std::uint32_t>(Layer::baseSurface) |
+                                                     static_cast<std::uint32_t>(Layer::anisotropicBaseLobe)),
+                },
             .anyHitPolicy = AnyHit::none,
         };
         auto const anisotropicAnyHit = nr::renderPasses::RtHitPermutationKey{
             .bsdf = anisotropicOpaque.bsdf,
             .anyHitPolicy = AnyHit::materialPolicy,
         };
-        nr::test::requireEqual(
-            nr::renderPasses::rtHitClosestHitEntryPointName(isotropicOpaque),
-            nr::renderPasses::rtHitClosestHitEntryPointName(isotropicAnyHit),
-            "opaque and any-hit isotropic groups must share their CHS name");
-        nr::test::requireEqual(
-            nr::renderPasses::rtHitClosestHitEntryPointName(anisotropicOpaque),
-            nr::renderPasses::rtHitClosestHitEntryPointName(anisotropicAnyHit),
-            "opaque and any-hit anisotropic groups must share their CHS name");
-        nr::test::require(
-            nr::renderPasses::rtHitClosestHitEntryPointName(isotropicOpaque) !=
-                nr::renderPasses::rtHitClosestHitEntryPointName(anisotropicOpaque),
-            "isotropic and anisotropic groups must have distinct CHS names");
+        nr::test::requireEqual(nr::renderPasses::rtHitClosestHitEntryPointName(isotropicOpaque),
+                               nr::renderPasses::rtHitClosestHitEntryPointName(isotropicAnyHit),
+                               "opaque and any-hit isotropic groups must share their CHS name");
+        nr::test::requireEqual(nr::renderPasses::rtHitClosestHitEntryPointName(anisotropicOpaque),
+                               nr::renderPasses::rtHitClosestHitEntryPointName(anisotropicAnyHit),
+                               "opaque and any-hit anisotropic groups must share their CHS name");
+        nr::test::require(nr::renderPasses::rtHitClosestHitEntryPointName(isotropicOpaque) !=
+                              nr::renderPasses::rtHitClosestHitEntryPointName(anisotropicOpaque),
+                          "isotropic and anisotropic groups must have distinct CHS names");
     }};
 
 const nr::test::CaseRegistrar rtHitSbtPlanValidationCase{
-    "renderpasses RT hit SBT plan rejects duplicate mutated and stale plans",
-    [] {
+    "renderpasses RT hit SBT plan rejects duplicate mutated and stale plans", [] {
         using Layer = nr::scene::RtMaterialLayerFlag;
         auto plan = nr::renderPasses::SceneRtHitSbtPlan{};
         auto lookup = std::map<nr::renderPasses::RtHitPermutationKey, std::uint32_t>{};
         auto keys = std::array{
-            nr::renderPasses::makeRtHitPermutationKey(
-                Layer::baseSurface,
-                nr::scene::RtMaterialFeatureFlag::none),
-            nr::renderPasses::makeRtHitPermutationKey(
-                static_cast<Layer>(1u | 2u),
-                nr::scene::RtMaterialFeatureFlag::alphaMask),
+            nr::renderPasses::makeRtHitPermutationKey(Layer::baseSurface, nr::scene::RtMaterialFeatureFlag::none),
+            nr::renderPasses::makeRtHitPermutationKey(static_cast<Layer>(1u | 2u),
+                                                      nr::scene::RtMaterialFeatureFlag::alphaMask),
         };
-        static_cast<void>(
-            nr::renderPasses::appendRtHitSbtPlanInstance(plan, lookup, 7u, keys));
+        static_cast<void>(nr::renderPasses::appendRtHitSbtPlanInstance(plan, lookup, 7u, keys));
         nr::renderPasses::finalizeSceneRtHitSbtPlan(plan);
         nr::test::require(plan.valid(), "freshly finalized plan must validate");
 

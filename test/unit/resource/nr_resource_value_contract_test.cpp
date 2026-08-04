@@ -45,8 +45,7 @@ namespace
 }
 
 const nr::test::CaseRegistrar handleIdentityCase{
-    "resource handles pack slot and generation",
-    [] {
+    "resource handles pack slot and generation", [] {
         auto empty = nr::resource::MeshHandle{};
         nr::test::require(!empty.valid(), "default handle should be invalid");
 
@@ -55,12 +54,12 @@ const nr::test::CaseRegistrar handleIdentityCase{
         nr::test::requireEqual(handle.packed(), (std::uint64_t{3u} << 32u) | std::uint64_t{7u});
 
         auto otherTag = nr::resource::MaterialHandle{7u, 3u};
-        nr::test::requireEqual(otherTag.packed(), handle.packed(), "typed handles should share the packed identity contract");
+        nr::test::requireEqual(otherTag.packed(), handle.packed(),
+                               "typed handles should share the packed identity contract");
     }};
 
 const nr::test::CaseRegistrar geometryCase{
-    "geometry helpers validate bounds and triangles",
-    [] {
+    "geometry helpers validate bounds and triangles", [] {
         auto bounds = nr::resource::Aabb{};
         nr::test::require(!bounds.valid(), "default AABB should be invalid until expanded");
         bounds.expand(glm::vec3{-1.0f, 2.0f, 0.0f});
@@ -85,8 +84,7 @@ const nr::test::CaseRegistrar geometryCase{
     }};
 
 const nr::test::CaseRegistrar meshCase{
-    "mesh rebuild and validation contracts",
-    [] {
+    "mesh rebuild and validation contracts", [] {
         auto mesh = triangleMesh();
         nr::test::require(mesh.indexed(), "triangle mesh should be indexed");
         nr::test::requireEqual(mesh.vertexCount(), std::size_t{3});
@@ -96,7 +94,8 @@ const nr::test::CaseRegistrar meshCase{
         nr::test::require(vec3Near(mesh.localBounds.min, glm::vec3{-1.0f, -1.0f, 0.0f}), "mesh bounds min mismatch");
         nr::test::require(vec3Near(mesh.localBounds.max, glm::vec3{1.0f, 1.0f, 0.0f}), "mesh bounds max mismatch");
         nr::test::require(mesh.localSphere.valid(), "mesh sphere should be valid");
-        nr::test::require(vec3Near(mesh.triangle(0).centroid(), glm::vec3{0.0f, -1.0f / 3.0f, 0.0f}), "mesh triangle centroid mismatch");
+        nr::test::require(vec3Near(mesh.triangle(0).centroid(), glm::vec3{0.0f, -1.0f / 3.0f, 0.0f}),
+                          "mesh triangle centroid mismatch");
 
         mesh.vertices.front().skin.weights = glm::vec4{-1.0f, 0.0f, 3.0f, 0.0f};
         mesh.normalizeSkinWeights();
@@ -104,8 +103,7 @@ const nr::test::CaseRegistrar meshCase{
     }};
 
 const nr::test::CaseRegistrar textureMaterialCase{
-    "texture and material value helpers stay local",
-    [] {
+    "texture and material value helpers stay local", [] {
         auto texture = nr::resource::Texture{};
         texture.width = 8;
         texture.height = 4;
@@ -128,17 +126,18 @@ const nr::test::CaseRegistrar textureMaterialCase{
         nr::test::require(material.isOpaque(), "default material should be opaque");
         nr::test::requireEqual(material.core.metallicFactor, 1.0f);
         nr::test::requireEqual(nr::resource::materialTextureSlotCount, std::size_t{12});
-        nr::test::require(nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::baseColor),
-                          "baseColor should be a valid material texture slot semantic");
-        nr::test::require(!nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::unsupported),
-                          "unsupported should be rejected before Material::slot access");
+        nr::test::require(
+            nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::baseColor),
+            "baseColor should be a valid material texture slot semantic");
+        nr::test::require(
+            !nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::unsupported),
+            "unsupported should be rejected before Material::slot access");
 
         auto const &defaultTextureTransform =
             material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform;
-        nr::test::require(
-            defaultTextureTransform.linear == glm::vec4{1.0f, 0.0f, 0.0f, 1.0f} &&
-                defaultTextureTransform.offset == glm::vec2{0.0f},
-            "material texture transforms should default to identity");
+        nr::test::require(defaultTextureTransform.linear == glm::vec4{1.0f, 0.0f, 0.0f, 1.0f} &&
+                              defaultTextureTransform.offset == glm::vec2{0.0f},
+                          "material texture transforms should default to identity");
 
         material.transmission.emplace();
         material.ior.emplace();
@@ -148,9 +147,7 @@ const nr::test::CaseRegistrar textureMaterialCase{
         nr::test::require(!material.hasVolumeTransmissionBoundary(),
                           "zero factor and thickness should remain a thin boundary");
         nr::test::require(
-            !nr::resource::hasAnyFeature(
-                material.featureFlags(),
-                nr::resource::MaterialFeatureFlag::transmission),
+            !nr::resource::hasAnyFeature(material.featureFlags(), nr::resource::MaterialFeatureFlag::transmission),
             "zero-factor transmission should not enable the material feature");
         material.transmission->factor = 0.5f;
         material.volumeBoundary->thicknessFactor = 0.25f;
@@ -179,11 +176,10 @@ const nr::test::CaseRegistrar textureMaterialCase{
         nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::anisotropy),
                           "feature flags should include anisotropy");
         nr::test::requireEqual(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet, 1u);
-        nr::test::require(
-            material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear ==
-                    glm::vec4{2.0f, 0.25f, -0.5f, 0.75f} &&
-                material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.offset ==
-                    glm::vec2{0.125f, 0.625f},
-            "material texture slots should retain their affine transform metadata");
+        nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear ==
+                                  glm::vec4{2.0f, 0.25f, -0.5f, 0.75f} &&
+                              material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.offset ==
+                                  glm::vec2{0.125f, 0.625f},
+                          "material texture slots should retain their affine transform metadata");
     }};
 } // namespace

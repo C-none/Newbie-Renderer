@@ -3,7 +3,7 @@ import common;
 import renderer.embeddedTriangle.abi;
 
 [shader("vertex")]
-EmbeddedTriangleVertexOutput vertexMain(uint vertexId : SV_VertexID)
+EmbeddedTriangleVertexOutput vertexMain(uint vertexId: SV_VertexID)
 {
     float3 positions[3] = {
         float3(-0.75f, -0.55f, 0.15f),

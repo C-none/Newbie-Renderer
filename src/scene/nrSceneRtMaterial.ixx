@@ -27,14 +27,14 @@ using nr::shader::share::RtTransmissionMode;
 
 inline constexpr auto kRtMaterialFallbackIndex = nr::shader::share::kRtMaterialFallbackIndex;
 inline constexpr auto kRtGeometryFlagIndexed = RtGeometryFlag::indexed;
-inline constexpr auto kRtMaterialPhysicalLayerMask = static_cast<RtMaterialLayerFlag>(
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::baseSurface) |
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::clearcoat) |
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::sheen) |
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::transmission));
-inline constexpr auto kRtMaterialVariantMask = static_cast<RtMaterialLayerFlag>(
-    static_cast<std::uint32_t>(kRtMaterialPhysicalLayerMask) |
-    static_cast<std::uint32_t>(RtMaterialLayerFlag::anisotropicBaseLobe));
+inline constexpr auto kRtMaterialPhysicalLayerMask =
+    static_cast<RtMaterialLayerFlag>(static_cast<std::uint32_t>(RtMaterialLayerFlag::baseSurface) |
+                                     static_cast<std::uint32_t>(RtMaterialLayerFlag::clearcoat) |
+                                     static_cast<std::uint32_t>(RtMaterialLayerFlag::sheen) |
+                                     static_cast<std::uint32_t>(RtMaterialLayerFlag::transmission));
+inline constexpr auto kRtMaterialVariantMask =
+    static_cast<RtMaterialLayerFlag>(static_cast<std::uint32_t>(kRtMaterialPhysicalLayerMask) |
+                                     static_cast<std::uint32_t>(RtMaterialLayerFlag::anisotropicBaseLobe));
 
 [[nodiscard]] constexpr bool hasAnyRtMaterialFeature(RtMaterialFeatureFlag flags, RtMaterialFeatureFlag mask) noexcept
 {
@@ -60,11 +60,11 @@ struct RtMaterialTable
     std::vector<RtMaterialTextureRef> textureRefs{};
 };
 
-[[nodiscard]] RtCompiledMaterial compileRtMaterial(
-    const nr::resource::Material& material,
-    const SceneMaterialTextureIds& textureIds = {});
+[[nodiscard]] RtCompiledMaterial compileRtMaterial(const nr::resource::Material &material,
+                                                   const SceneMaterialTextureIds &textureIds = {});
 
-[[nodiscard]] RtMaterialTable makeRtMaterialTable(std::span<const std::reference_wrapper<const RtCompiledMaterial>> materials);
+[[nodiscard]] RtMaterialTable makeRtMaterialTable(
+    std::span<const std::reference_wrapper<const RtCompiledMaterial>> materials);
 
 [[nodiscard]] RtCompiledMaterial makeFallbackRtMaterial();
 
@@ -81,7 +81,9 @@ static_assert(sizeof(RtInstanceMetadata) == 32u);
 static_assert(static_cast<std::uint32_t>(RtMaterialLayerFlag::anisotropicBaseLobe) == 16u);
 static_assert(static_cast<std::uint32_t>(RtTransmissionMode::thin) == 0u);
 static_assert(static_cast<std::uint32_t>(RtTransmissionMode::volume) == 1u);
-static_assert(static_cast<std::uint32_t>(AlphaMode::opaque) == static_cast<std::uint32_t>(nr::resource::AlphaMode::opaque));
+static_assert(static_cast<std::uint32_t>(AlphaMode::opaque) ==
+              static_cast<std::uint32_t>(nr::resource::AlphaMode::opaque));
 static_assert(static_cast<std::uint32_t>(AlphaMode::mask) == static_cast<std::uint32_t>(nr::resource::AlphaMode::mask));
-static_assert(static_cast<std::uint32_t>(AlphaMode::blend) == static_cast<std::uint32_t>(nr::resource::AlphaMode::blend));
+static_assert(static_cast<std::uint32_t>(AlphaMode::blend) ==
+              static_cast<std::uint32_t>(nr::resource::AlphaMode::blend));
 } // namespace nr::scene

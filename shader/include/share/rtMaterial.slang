@@ -18,12 +18,12 @@ public enum RtInstanceFlag : uint
 [Flags]
 public enum RtMaterialLayerFlag : uint
 {
-    none                    = 0u,
-    baseSurface             = 1u << 0u,
-    clearcoat               = 1u << 1u,
-    sheen                   = 1u << 2u,
-    transmission            = 1u << 3u,
-    anisotropicBaseLobe     = 1u << 4u,
+    none = 0u,
+    baseSurface = 1u << 0u,
+    clearcoat = 1u << 1u,
+    sheen = 1u << 2u,
+    transmission = 1u << 3u,
+    anisotropicBaseLobe = 1u << 4u,
 }
 
 public enum RtTransmissionMode : uint
@@ -103,4 +103,3 @@ public struct RtInstanceMetadata
     public uint vertexStride = 0u;
     public uint reserved0 = 0u;
 };
-

@@ -94,7 +94,7 @@ struct StructInfo
 
 struct ShareDecl
 {
-    slang::DeclReflection* decl = nullptr;
+    slang::DeclReflection *decl = nullptr;
     SourceSite site{};
 };
 
@@ -113,14 +113,14 @@ struct Model
     return SLANG_FAILED(result);
 }
 
-[[nodiscard]] std::string blobText(slang::IBlob* blob)
+[[nodiscard]] std::string blobText(slang::IBlob *blob)
 {
     if (!blob || !blob->getBufferPointer() || blob->getBufferSize() == 0)
     {
         return {};
     }
 
-    return std::string(static_cast<const char*>(blob->getBufferPointer()), blob->getBufferSize());
+    return std::string(static_cast<const char *>(blob->getBufferPointer()), blob->getBufferSize());
 }
 
 [[nodiscard]] std::string trim(std::string_view text)
@@ -156,12 +156,12 @@ struct Model
     return result.lexically_normal();
 }
 
-[[nodiscard]] std::string genericPathString(const std::filesystem::path& path)
+[[nodiscard]] std::string genericPathString(const std::filesystem::path &path)
 {
     return path.generic_string();
 }
 
-[[nodiscard]] bool pathIsUnder(const std::filesystem::path& path, const std::filesystem::path& root)
+[[nodiscard]] bool pathIsUnder(const std::filesystem::path &path, const std::filesystem::path &root)
 {
     auto ec = std::error_code{};
     auto relative = std::filesystem::relative(path, root, ec);
@@ -174,12 +174,12 @@ struct Model
     return iterator != relative.end() && *iterator != "..";
 }
 
-[[nodiscard]] std::optional<std::string> buildShareRootModuleSource(const Options& options)
+[[nodiscard]] std::optional<std::string> buildShareRootModuleSource(const Options &options)
 {
     if (!pathIsUnder(options.shareRoot, options.shaderRoot))
     {
-        std::cerr << "Share root '" << genericPathString(options.shareRoot)
-                  << "' must be inside shader root '" << genericPathString(options.shaderRoot) << "'.\n";
+        std::cerr << "Share root '" << genericPathString(options.shareRoot) << "' must be inside shader root '"
+                  << genericPathString(options.shaderRoot) << "'.\n";
         return std::nullopt;
     }
 
@@ -188,15 +188,15 @@ struct Model
     auto iterator = std::filesystem::recursive_directory_iterator{options.shareRoot, ec};
     if (ec)
     {
-        std::cerr << "Failed to enumerate share root '" << genericPathString(options.shareRoot)
-                  << "': " << ec.message() << "\n";
+        std::cerr << "Failed to enumerate share root '" << genericPathString(options.shareRoot) << "': " << ec.message()
+                  << "\n";
         return std::nullopt;
     }
 
     auto const end = std::filesystem::recursive_directory_iterator{};
     while (iterator != end)
     {
-        auto const& entry = *iterator;
+        auto const &entry = *iterator;
         auto entryEc = std::error_code{};
         auto const isSlangFile = entry.is_regular_file(entryEc) && entry.path().extension() == ".slang";
         if (entryEc)
@@ -230,8 +230,8 @@ struct Model
 
     if (includePaths.empty())
     {
-        std::cerr << "No Slang source files were found under share root '"
-                  << genericPathString(options.shareRoot) << "'.\n";
+        std::cerr << "No Slang source files were found under share root '" << genericPathString(options.shareRoot)
+                  << "'.\n";
         return std::nullopt;
     }
 
@@ -239,14 +239,14 @@ struct Model
 
     auto source = std::ostringstream{};
     source << "module " << options.rootModule << ";\n\n";
-    for (auto const& includePath : includePaths)
+    for (auto const &includePath : includePaths)
     {
         source << "__include \"" << includePath << "\";\n";
     }
     return source.str();
 }
 
-[[nodiscard]] std::string locationText(const SourceSite& site)
+[[nodiscard]] std::string locationText(const SourceSite &site)
 {
     auto stream = std::ostringstream{};
     stream << site.normalizedPath;
@@ -261,7 +261,7 @@ struct Model
     return stream.str();
 }
 
-[[nodiscard]] std::string declName(slang::DeclReflection* decl)
+[[nodiscard]] std::string declName(slang::DeclReflection *decl)
 {
     if (!decl || !decl->getName())
     {
@@ -270,7 +270,7 @@ struct Model
     return decl->getName();
 }
 
-[[nodiscard]] std::string typeName(slang::TypeReflection* type)
+[[nodiscard]] std::string typeName(slang::TypeReflection *type)
 {
     if (!type || !type->getName())
     {
@@ -296,7 +296,7 @@ struct Model
     return name;
 }
 
-[[nodiscard]] std::optional<SourceSite> sourceSite(slang::ISession* session, slang::DeclReflection* decl)
+[[nodiscard]] std::optional<SourceSite> sourceSite(slang::ISession *session, slang::DeclReflection *decl)
 {
     auto location = slang::SourceLocation{};
     if (!session || !decl || failed(session->getDeclSourceLocation(decl, &location)) || !location.filePath)
@@ -313,7 +313,7 @@ struct Model
     };
 }
 
-[[nodiscard]] std::vector<std::string> readLines(const std::filesystem::path& path)
+[[nodiscard]] std::vector<std::string> readLines(const std::filesystem::path &path)
 {
     auto input = std::ifstream{path};
     auto result = std::vector<std::string>{};
@@ -325,9 +325,8 @@ struct Model
     return result;
 }
 
-[[nodiscard]] bool hasFlagsAttribute(
-    const SourceSite& site,
-    std::map<std::string, std::vector<std::string>>& sourceLineCache)
+[[nodiscard]] bool hasFlagsAttribute(const SourceSite &site,
+                                     std::map<std::string, std::vector<std::string>> &sourceLineCache)
 {
     if (site.line <= 0)
     {
@@ -340,7 +339,7 @@ struct Model
         it->second = readLines(site.path);
     }
 
-    auto const& lines = it->second;
+    auto const &lines = it->second;
     auto lineIndex = static_cast<std::size_t>(site.line - 1);
     if (lineIndex > lines.size())
     {
@@ -372,10 +371,9 @@ struct Model
     return false;
 }
 
-[[nodiscard]] bool sourceLineContains(
-    const SourceSite& site,
-    std::map<std::string, std::vector<std::string>>& sourceLineCache,
-    std::string_view needle)
+[[nodiscard]] bool sourceLineContains(const SourceSite &site,
+                                      std::map<std::string, std::vector<std::string>> &sourceLineCache,
+                                      std::string_view needle)
 {
     if (site.line <= 0)
     {
@@ -396,12 +394,18 @@ struct Model
 {
     switch (scalarType)
     {
-    case slang::TypeReflection::ScalarType::Int32: return "std::int32_t";
-    case slang::TypeReflection::ScalarType::UInt32: return "std::uint32_t";
-    case slang::TypeReflection::ScalarType::Int64: return "std::int64_t";
-    case slang::TypeReflection::ScalarType::UInt64: return "std::uint64_t";
-    case slang::TypeReflection::ScalarType::Float32: return "float";
-    default: return {};
+    case slang::TypeReflection::ScalarType::Int32:
+        return "std::int32_t";
+    case slang::TypeReflection::ScalarType::UInt32:
+        return "std::uint32_t";
+    case slang::TypeReflection::ScalarType::Int64:
+        return "std::int64_t";
+    case slang::TypeReflection::ScalarType::UInt64:
+        return "std::uint64_t";
+    case slang::TypeReflection::ScalarType::Float32:
+        return "float";
+    default:
+        return {};
     }
 }
 
@@ -415,17 +419,18 @@ struct Model
     auto suffix = std::to_string(count);
     switch (scalarType)
     {
-    case slang::TypeReflection::ScalarType::Float32: return "glm::vec" + suffix;
-    case slang::TypeReflection::ScalarType::UInt32: return "glm::uvec" + suffix;
-    case slang::TypeReflection::ScalarType::Int32: return "glm::ivec" + suffix;
-    default: return {};
+    case slang::TypeReflection::ScalarType::Float32:
+        return "glm::vec" + suffix;
+    case slang::TypeReflection::ScalarType::UInt32:
+        return "glm::uvec" + suffix;
+    case slang::TypeReflection::ScalarType::Int32:
+        return "glm::ivec" + suffix;
+    default:
+        return {};
     }
 }
 
-[[nodiscard]] std::optional<CppType> mapType(
-    slang::TypeReflection* type,
-    const Model& model,
-    std::string& error)
+[[nodiscard]] std::optional<CppType> mapType(slang::TypeReflection *type, const Model &model, std::string &error)
 {
     if (!type)
     {
@@ -448,7 +453,7 @@ struct Model
 
     if (kind == slang::TypeReflection::Kind::Vector)
     {
-        auto* elementType = type->getElementType();
+        auto *elementType = type->getElementType();
         auto const scalarType = elementType ? elementType->getScalarType() : slang::TypeReflection::ScalarType::None;
         auto const count = type->getElementCount();
         auto name = vectorCppName(scalarType, count);
@@ -499,10 +504,8 @@ struct Model
     return text;
 }
 
-[[nodiscard]] std::optional<std::string> defaultLiteral(
-    slang::VariableReflection* variable,
-    const CppType& type,
-    const std::vector<EnumInfo>& enums)
+[[nodiscard]] std::optional<std::string> defaultLiteral(slang::VariableReflection *variable, const CppType &type,
+                                                        const std::vector<EnumInfo> &enums)
 {
     if (!variable || !variable->hasDefaultValue())
     {
@@ -555,14 +558,11 @@ struct Model
         }
 
         auto const enumValue = static_cast<std::uint32_t>(value);
-        auto const enumIt = std::ranges::find_if(enums, [&](const EnumInfo& info) {
-            return info.name == type.name;
-        });
+        auto const enumIt = std::ranges::find_if(enums, [&](const EnumInfo &info) { return info.name == type.name; });
         if (enumIt != enums.end())
         {
-            auto const caseIt = std::ranges::find_if(enumIt->cases, [&](const EnumCase& enumCase) {
-                return enumCase.value == enumValue;
-            });
+            auto const caseIt = std::ranges::find_if(
+                enumIt->cases, [&](const EnumCase &enumCase) { return enumCase.value == enumValue; });
             if (caseIt != enumIt->cases.end())
             {
                 return type.name + "::" + caseIt->name;
@@ -574,9 +574,9 @@ struct Model
     return std::nullopt;
 }
 
-[[nodiscard]] bool parseOptions(int argc, char** argv, Options& options)
+[[nodiscard]] bool parseOptions(int argc, char **argv, Options &options)
 {
-    auto takeValue = [&](int& index, std::string_view optionName) -> const char* {
+    auto takeValue = [&](int &index, std::string_view optionName) -> const char * {
         if (index + 1 >= argc)
         {
             std::cerr << optionName << " requires a value.\n";
@@ -675,7 +675,7 @@ struct Model
     return true;
 }
 
-[[nodiscard]] Slang::ComPtr<slang::ISession> createSession(const Options& options)
+[[nodiscard]] Slang::ComPtr<slang::ISession> createSession(const Options &options)
 {
     Slang::ComPtr<slang::IGlobalSession> globalSession;
     if (failed(slang::createGlobalSession(globalSession.writeRef())) || !globalSession)
@@ -685,7 +685,7 @@ struct Model
     }
 
     auto shaderRootString = genericPathString(options.shaderRoot);
-    auto searchPaths = std::vector<const char*>{shaderRootString.c_str()};
+    auto searchPaths = std::vector<const char *>{shaderRootString.c_str()};
 
     auto targetDesc = slang::TargetDesc{};
     targetDesc.format = SLANG_SPIRV;
@@ -716,7 +716,7 @@ struct Model
     return session;
 }
 
-[[nodiscard]] Slang::ComPtr<slang::IModule> loadRootModule(slang::ISession* session, const Options& options)
+[[nodiscard]] Slang::ComPtr<slang::IModule> loadRootModule(slang::ISession *session, const Options &options)
 {
     auto source = buildShareRootModuleSource(options);
     if (!source.has_value())
@@ -730,10 +730,7 @@ struct Model
     try
     {
         module = Slang::ComPtr<slang::IModule>(session->loadModuleFromSourceString(
-            options.rootModule.c_str(),
-            virtualPath.c_str(),
-            source->c_str(),
-            diagnostics.writeRef()));
+            options.rootModule.c_str(), virtualPath.c_str(), source->c_str(), diagnostics.writeRef()));
     }
     catch (...)
     {
@@ -759,12 +756,9 @@ struct Model
     return module;
 }
 
-[[nodiscard]] bool collectShareDeclarationsFromModule(
-    slang::ISession* session,
-    slang::DeclReflection* moduleDecl,
-    const std::filesystem::path& shareRoot,
-    Model& model,
-    std::set<std::string>& seenDeclarations)
+[[nodiscard]] bool collectShareDeclarationsFromModule(slang::ISession *session, slang::DeclReflection *moduleDecl,
+                                                      const std::filesystem::path &shareRoot, Model &model,
+                                                      std::set<std::string> &seenDeclarations)
 {
     if (!moduleDecl)
     {
@@ -773,7 +767,7 @@ struct Model
 
     for (auto childIndex = 0u; childIndex < moduleDecl->getChildrenCount(); ++childIndex)
     {
-        auto* child = moduleDecl->getChild(childIndex);
+        auto *child = moduleDecl->getChild(childIndex);
         auto site = sourceSite(session, child);
         auto const kind = child->getKind();
         auto const name = declName(child);
@@ -812,26 +806,20 @@ struct Model
     return true;
 }
 
-[[nodiscard]] bool collectShareDeclarations(
-    slang::ISession* session,
-    const std::filesystem::path& shareRoot,
-    Model& model)
+[[nodiscard]] bool collectShareDeclarations(slang::ISession *session, const std::filesystem::path &shareRoot,
+                                            Model &model)
 {
     auto seenDeclarations = std::set<std::string>{};
     auto const moduleCount = session->getLoadedModuleCount();
     for (auto moduleIndex = SlangInt{0}; moduleIndex < moduleCount; ++moduleIndex)
     {
-        auto* module = session->getLoadedModule(moduleIndex);
+        auto *module = session->getLoadedModule(moduleIndex);
         if (!module)
         {
             continue;
         }
-        if (!collectShareDeclarationsFromModule(
-                session,
-                module->getModuleReflection(),
-                shareRoot,
-                model,
-                seenDeclarations))
+        if (!collectShareDeclarationsFromModule(session, module->getModuleReflection(), shareRoot, model,
+                                                seenDeclarations))
         {
             std::cerr << "A loaded Slang module did not expose declaration reflection.\n";
             return false;
@@ -847,12 +835,10 @@ struct Model
     return true;
 }
 
-[[nodiscard]] bool buildEnumInfo(
-    const ShareDecl& shareDecl,
-    std::map<std::string, std::vector<std::string>>& sourceLineCache,
-    EnumInfo& result)
+[[nodiscard]] bool buildEnumInfo(const ShareDecl &shareDecl,
+                                 std::map<std::string, std::vector<std::string>> &sourceLineCache, EnumInfo &result)
 {
-    auto* type = shareDecl.decl->getType();
+    auto *type = shareDecl.decl->getType();
     if (!type || type->getKind() != slang::TypeReflection::Kind::Enum)
     {
         std::cerr << locationText(shareDecl.site) << ": enum declaration has no enum type reflection.\n";
@@ -870,7 +856,7 @@ struct Model
 
     for (auto fieldIndex = 0u; fieldIndex < type->getFieldCount(); ++fieldIndex)
     {
-        auto* field = type->getFieldByIndex(fieldIndex);
+        auto *field = type->getFieldByIndex(fieldIndex);
         if (!field || !field->getName())
         {
             std::cerr << locationText(shareDecl.site) << ": enum has an unnamed case.\n";
@@ -886,8 +872,7 @@ struct Model
         }
         if (static_cast<std::uint64_t>(value) > std::numeric_limits<std::uint32_t>::max())
         {
-            std::cerr << locationText(shareDecl.site) << ": enum case '" << field->getName()
-                      << "' exceeds uint32.\n";
+            std::cerr << locationText(shareDecl.site) << ": enum case '" << field->getName() << "' exceeds uint32.\n";
             return false;
         }
 
@@ -900,9 +885,9 @@ struct Model
     return true;
 }
 
-[[nodiscard]] bool buildConstantInfo(const ShareDecl& shareDecl, const Model& model, ConstantInfo& result)
+[[nodiscard]] bool buildConstantInfo(const ShareDecl &shareDecl, const Model &model, ConstantInfo &result)
 {
-    auto* variable = shareDecl.decl->asVariable();
+    auto *variable = shareDecl.decl->asVariable();
     if (!variable)
     {
         std::cerr << locationText(shareDecl.site) << ": variable declaration has no variable reflection.\n";
@@ -910,7 +895,8 @@ struct Model
     }
     if (!variable->findModifier(slang::Modifier::Static) || !variable->findModifier(slang::Modifier::Const))
     {
-        std::cerr << locationText(shareDecl.site) << ": only public static const variables are allowed in shader/include/share.\n";
+        std::cerr << locationText(shareDecl.site)
+                  << ": only public static const variables are allowed in shader/include/share.\n";
         return false;
     }
 
@@ -940,13 +926,10 @@ struct Model
     return true;
 }
 
-[[nodiscard]] bool buildStructInfo(
-    slang::ISession* session,
-    const ShareDecl& shareDecl,
-    const Model& model,
-    StructInfo& result)
+[[nodiscard]] bool buildStructInfo(slang::ISession *session, const ShareDecl &shareDecl, const Model &model,
+                                   StructInfo &result)
 {
-    auto* type = shareDecl.decl->getType();
+    auto *type = shareDecl.decl->getType();
     if (!type || type->getKind() != slang::TypeReflection::Kind::Struct)
     {
         std::cerr << locationText(shareDecl.site) << ": struct declaration has no struct type reflection.\n";
@@ -954,14 +937,11 @@ struct Model
     }
 
     Slang::ComPtr<slang::IBlob> diagnostics;
-    slang::TypeLayoutReflection* typeLayout = nullptr;
+    slang::TypeLayoutReflection *typeLayout = nullptr;
     try
     {
-        typeLayout = session->getTypeLayout(
-            type,
-            0,
-            slang::LayoutRules::DefaultStructuredBuffer,
-            diagnostics.writeRef());
+        typeLayout =
+            session->getTypeLayout(type, 0, slang::LayoutRules::DefaultStructuredBuffer, diagnostics.writeRef());
     }
     catch (...)
     {
@@ -987,7 +967,8 @@ struct Model
     auto const alignment = typeLayout->getAlignment();
     if (alignment <= 0)
     {
-        std::cerr << locationText(shareDecl.site) << ": struct '" << result.name << "' has invalid reflected alignment.\n";
+        std::cerr << locationText(shareDecl.site) << ": struct '" << result.name
+                  << "' has invalid reflected alignment.\n";
         return false;
     }
     result.alignment = static_cast<std::size_t>(alignment);
@@ -1001,8 +982,8 @@ struct Model
 
     for (auto fieldIndex = 0u; fieldIndex < type->getFieldCount(); ++fieldIndex)
     {
-        auto* field = type->getFieldByIndex(fieldIndex);
-        auto* fieldLayout = typeLayout->getFieldByIndex(fieldIndex);
+        auto *field = type->getFieldByIndex(fieldIndex);
+        auto *fieldLayout = typeLayout->getFieldByIndex(fieldIndex);
         if (!field || !fieldLayout || !field->getName())
         {
             std::cerr << locationText(shareDecl.site) << ": struct '" << result.name << "' has an invalid field.\n";
@@ -1029,13 +1010,13 @@ struct Model
     return true;
 }
 
-[[nodiscard]] bool buildModel(slang::ISession* session, Model& model)
+[[nodiscard]] bool buildModel(slang::ISession *session, Model &model)
 {
     auto sourceLineCache = std::map<std::string, std::vector<std::string>>{};
 
-    for (auto const& shareDecl : model.declarations)
+    for (auto const &shareDecl : model.declarations)
     {
-        auto* decl = shareDecl.decl;
+        auto *decl = shareDecl.decl;
         auto const kind = decl->getKind();
         if (kind == slang::DeclReflection::Kind::Enum)
         {
@@ -1048,9 +1029,9 @@ struct Model
         }
     }
 
-    for (auto const& shareDecl : model.declarations)
+    for (auto const &shareDecl : model.declarations)
     {
-        auto* decl = shareDecl.decl;
+        auto *decl = shareDecl.decl;
         auto const kind = decl->getKind();
         if (kind == slang::DeclReflection::Kind::Variable)
         {
@@ -1085,11 +1066,11 @@ struct Model
     return true;
 }
 
-void emitEnum(std::ostream& output, const EnumInfo& info)
+void emitEnum(std::ostream &output, const EnumInfo &info)
 {
     output << "enum class " << info.name << " : std::uint32_t\n";
     output << "{\n";
-    for (auto const& enumCase : info.cases)
+    for (auto const &enumCase : info.cases)
     {
         output << "    " << enumCase.name << " = " << enumCase.value << "u,\n";
     }
@@ -1102,11 +1083,12 @@ void emitEnum(std::ostream& output, const EnumInfo& info)
     output << "struct SlangEnumMeta<" << info.name << ">\n";
     output << "{\n";
     output << "    static constexpr std::string_view slangTypeName = \"" << info.name << "\";\n\n";
-    output << "    [[nodiscard]] static constexpr std::string_view enumeratorName(" << info.name << " value) noexcept\n";
+    output << "    [[nodiscard]] static constexpr std::string_view enumeratorName(" << info.name
+           << " value) noexcept\n";
     output << "    {\n";
     output << "        switch (value)\n";
     output << "        {\n";
-    for (auto const& enumCase : info.cases)
+    for (auto const &enumCase : info.cases)
     {
         output << "        case " << info.name << "::" << enumCase.name << ":\n";
         output << "            return \"" << enumCase.name << "\";\n";
@@ -1127,11 +1109,11 @@ void emitEnum(std::ostream& output, const EnumInfo& info)
     output << "constexpr void flagEnumTag(" << info.name << ") noexcept {}\n\n";
 }
 
-void emitStruct(std::ostream& output, const StructInfo& info)
+void emitStruct(std::ostream &output, const StructInfo &info)
 {
     output << "struct alignas(" << info.alignment << ") " << info.name << "\n";
     output << "{\n";
-    for (auto const& field : info.fields)
+    for (auto const &field : info.fields)
     {
         output << "    " << field.type.name << ' ' << field.name;
         if (field.defaultValue.has_value())
@@ -1147,18 +1129,18 @@ void emitStruct(std::ostream& output, const StructInfo& info)
     output << "};\n\n";
 }
 
-void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
+void emitLayoutAssertions(std::ostream &output, const StructInfo &info)
 {
     output << "static_assert(sizeof(" << info.name << ") == " << info.size << "u);\n";
     output << "static_assert(alignof(" << info.name << ") == " << info.alignment << "u);\n";
-    for (auto const& field : info.fields)
+    for (auto const &field : info.fields)
     {
         output << "static_assert(offsetof(" << info.name << ", " << field.name << ") == " << field.offset << "u);\n";
     }
     output << '\n';
 }
 
-[[nodiscard]] std::string generatedText(const Options& options, const Model& model)
+[[nodiscard]] std::string generatedText(const Options &options, const Model &model)
 {
     auto output = std::ostringstream{};
     output << "// Generated by nrShaderShareCodegen from shader/include/share. Do not edit.\n";
@@ -1187,11 +1169,12 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
         output << "template<class Enum>\n";
         output << "[[nodiscard]] std::string slangEnumLiteral(Enum value)\n";
         output << "{\n";
-        output << "    return std::format(\"{}.{}\", SlangEnumMeta<Enum>::slangTypeName, SlangEnumMeta<Enum>::enumeratorName(value));\n";
+        output << "    return std::format(\"{}.{}\", SlangEnumMeta<Enum>::slangTypeName, "
+                  "SlangEnumMeta<Enum>::enumeratorName(value));\n";
         output << "}\n\n";
     }
 
-    if (std::ranges::any_of(model.enums, [](const EnumInfo& info) { return info.flags; }))
+    if (std::ranges::any_of(model.enums, [](const EnumInfo &info) { return info.flags; }))
     {
         // Bitmask operators for flagged shared enums. A flagged enum opts in by declaring a
         // flagEnumTag overload (emitted by emitEnum); the FlagEnum concept finds it via ADL, so
@@ -1202,12 +1185,14 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
         output << "template<FlagEnum Enum>\n";
         output << "[[nodiscard]] constexpr Enum operator|(Enum lhs, Enum rhs) noexcept\n";
         output << "{\n";
-        output << "    return static_cast<Enum>(static_cast<std::underlying_type_t<Enum>>(lhs) | static_cast<std::underlying_type_t<Enum>>(rhs));\n";
+        output << "    return static_cast<Enum>(static_cast<std::underlying_type_t<Enum>>(lhs) | "
+                  "static_cast<std::underlying_type_t<Enum>>(rhs));\n";
         output << "}\n\n";
         output << "template<FlagEnum Enum>\n";
         output << "[[nodiscard]] constexpr Enum operator&(Enum lhs, Enum rhs) noexcept\n";
         output << "{\n";
-        output << "    return static_cast<Enum>(static_cast<std::underlying_type_t<Enum>>(lhs) & static_cast<std::underlying_type_t<Enum>>(rhs));\n";
+        output << "    return static_cast<Enum>(static_cast<std::underlying_type_t<Enum>>(lhs) & "
+                  "static_cast<std::underlying_type_t<Enum>>(rhs));\n";
         output << "}\n\n";
         output << "template<FlagEnum Enum>\n";
         output << "constexpr Enum& operator|=(Enum& lhs, Enum rhs) noexcept\n";
@@ -1217,15 +1202,14 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
         output << "}\n\n";
     }
 
-    for (auto const& shareDecl : model.declarations)
+    for (auto const &shareDecl : model.declarations)
     {
         auto const kind = shareDecl.decl->getKind();
         auto const name = declName(shareDecl.decl);
         if (kind == slang::DeclReflection::Kind::Variable)
         {
-            auto const it = std::ranges::find_if(model.constants, [&](const ConstantInfo& info) {
-                return info.name == name;
-            });
+            auto const it =
+                std::ranges::find_if(model.constants, [&](const ConstantInfo &info) { return info.name == name; });
             if (it != model.constants.end())
             {
                 output << "inline constexpr " << it->type.name << ' ' << it->name << " = " << it->value << ";\n\n";
@@ -1233,9 +1217,7 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
         }
         else if (kind == slang::DeclReflection::Kind::Enum)
         {
-            auto const it = std::ranges::find_if(model.enums, [&](const EnumInfo& info) {
-                return info.name == name;
-            });
+            auto const it = std::ranges::find_if(model.enums, [&](const EnumInfo &info) { return info.name == name; });
             if (it != model.enums.end())
             {
                 emitEnum(output, *it);
@@ -1243,9 +1225,8 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
         }
         else if (kind == slang::DeclReflection::Kind::Struct)
         {
-            auto const it = std::ranges::find_if(model.structs, [&](const StructInfo& info) {
-                return info.name == name;
-            });
+            auto const it =
+                std::ranges::find_if(model.structs, [&](const StructInfo &info) { return info.name == name; });
             if (it != model.structs.end())
             {
                 emitStruct(output, *it);
@@ -1253,7 +1234,7 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
         }
     }
 
-    for (auto const& structInfo : model.structs)
+    for (auto const &structInfo : model.structs)
     {
         emitLayoutAssertions(output, structInfo);
     }
@@ -1262,7 +1243,7 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
     return output.str();
 }
 
-[[nodiscard]] bool writeOutput(const std::filesystem::path& path, const std::string& text)
+[[nodiscard]] bool writeOutput(const std::filesystem::path &path, const std::string &text)
 {
     auto ec = std::error_code{};
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -1295,7 +1276,7 @@ void emitLayoutAssertions(std::ostream& output, const StructInfo& info)
 }
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     auto options = Options{};
     if (!parseOptions(argc, argv, options))

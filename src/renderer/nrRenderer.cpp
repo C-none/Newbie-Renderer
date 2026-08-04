@@ -55,7 +55,8 @@ struct RendererGlobalFrameUniforms
     glm::uvec4 frameState{0u, 0u, 0u, 0u};
 };
 
-static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrameUniforms must match shader/include/globalUniform.slang.");
+static_assert(sizeof(RendererGlobalFrameUniforms) == 416u,
+              "Renderer.GlobalFrameUniforms must match shader/include/globalUniform.slang.");
 
 [[nodiscard]] vk::Extent2D sanitizeViewportExtent(vk::Extent2D extent) noexcept
 {
@@ -65,7 +66,10 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrame
     };
 }
 
-[[nodiscard]] RendererGlobalFrameUniforms makeGlobalFrameUniforms(const nr::scene::SceneBridgeFrameConstants &frameConstants, const nr::scene::SceneBridgeFrameConstants &previousFrameConstants, std::uint32_t frameIndex, std::uint64_t sampleFrameOrdinal) noexcept
+[[nodiscard]] RendererGlobalFrameUniforms makeGlobalFrameUniforms(
+    const nr::scene::SceneBridgeFrameConstants &frameConstants,
+    const nr::scene::SceneBridgeFrameConstants &previousFrameConstants, std::uint32_t frameIndex,
+    std::uint64_t sampleFrameOrdinal) noexcept
 {
     auto inverseViewProjection = glm::mat4{1.0f};
     auto const determinant = glm::determinant(frameConstants.viewProjection);
@@ -89,7 +93,8 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u, "Renderer.GlobalFrame
     };
 }
 
-[[nodiscard]] double elapsedMilliseconds(std::chrono::steady_clock::time_point begin, std::chrono::steady_clock::time_point end) noexcept
+[[nodiscard]] double elapsedMilliseconds(std::chrono::steady_clock::time_point begin,
+                                         std::chrono::steady_clock::time_point end) noexcept
 {
     return std::chrono::duration<double, std::milli>(end - begin).count();
 }
@@ -101,16 +106,20 @@ enum class MissingMaterialTexturePolicy : std::uint8_t
 };
 
 [[nodiscard]] std::optional<nr::scene::SceneMaterialTextureBindings> collectSceneMaterialTextures(
-    const nr::scene::Scene &scene,
-    nr::resource::MaterialHandle materialHandle,
+    const nr::scene::Scene &scene, nr::resource::MaterialHandle materialHandle,
     std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById,
     MissingMaterialTexturePolicy missingTexturePolicy = MissingMaterialTexturePolicy::strict)
 {
     auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
-    nrAssert(materialRecordRef.has_value(), std::format("Renderer scene texture collection expected material handle (slot={}, generation={}) to resolve.", materialHandle.slot, materialHandle.generation));
+    nrAssert(
+        materialRecordRef.has_value(),
+        std::format("Renderer scene texture collection expected material handle (slot={}, generation={}) to resolve.",
+                    materialHandle.slot, materialHandle.generation));
 
     auto const &materialRecord = materialRecordRef->get();
-    nrAssert(materialRecord.cpuReady, std::format("Renderer scene texture collection expected material '{}' to be CPU ready.", materialRecord.cpu.name));
+    nrAssert(materialRecord.cpuReady,
+             std::format("Renderer scene texture collection expected material '{}' to be CPU ready.",
+                         materialRecord.cpu.name));
 
     auto textures = nr::scene::SceneMaterialTextureBindings{};
     auto slotIndices = std::views::iota(std::size_t{0}, materialRecord.cpu.textureSlots.size());
@@ -124,30 +133,34 @@ enum class MissingMaterialTexturePolicy : std::uint8_t
         auto binding = scene.tryGetSampledTextureBinding(textureHandle);
         auto const anisotropySlotIndex =
             nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::anisotropy);
-        if (!binding.has_value() &&
-            missingTexturePolicy == MissingMaterialTexturePolicy::allowUnavailableAnisotropy &&
+        if (!binding.has_value() && missingTexturePolicy == MissingMaterialTexturePolicy::allowUnavailableAnisotropy &&
             slotIndex == anisotropySlotIndex)
         {
             return;
         }
 
-        nrAssert(binding.has_value(), std::format("Renderer scene texture collection expected resident sampled texture for material '{}' slot {}.", materialRecord.cpu.name, slotIndex));
-        nrAssert(binding->descriptorIndex < kSceneTextureDescriptorCapacity, std::format("Scene texture descriptor id {} exceeds capacity {}.", binding->descriptorIndex, kSceneTextureDescriptorCapacity));
-        nrAssert(binding->descriptorIndex <= nr::scene::kMaxSceneTextureId, std::format("Scene texture descriptor id {} exceeds packed uint16 id capacity {}.", binding->descriptorIndex, nr::scene::kMaxSceneTextureId));
+        nrAssert(binding.has_value(),
+                 std::format(
+                     "Renderer scene texture collection expected resident sampled texture for material '{}' slot {}.",
+                     materialRecord.cpu.name, slotIndex));
+        nrAssert(binding->descriptorIndex < kSceneTextureDescriptorCapacity,
+                 std::format("Scene texture descriptor id {} exceeds capacity {}.", binding->descriptorIndex,
+                             kSceneTextureDescriptorCapacity));
+        nrAssert(binding->descriptorIndex <= nr::scene::kMaxSceneTextureId,
+                 std::format("Scene texture descriptor id {} exceeds packed uint16 id capacity {}.",
+                             binding->descriptorIndex, nr::scene::kMaxSceneTextureId));
 
         auto const textureId = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
         textures.ids[slotIndex] = textureId;
         sceneTextureHandlesById.insert_or_assign(binding->descriptorIndex, textureHandle);
     });
 
-    auto const normalSlotIndex = nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::normal);
-    auto const& normalSlot = materialRecord.cpu.textureSlots[normalSlotIndex];
-    nrAssert(
-        normalSlot.uvSet <= 1u,
-        std::format(
-            "Renderer normal texture sampling expected material '{}' UV set to be 0 or 1, got {}.",
-            materialRecord.cpu.name,
-            normalSlot.uvSet));
+    auto const normalSlotIndex =
+        nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::normal);
+    auto const &normalSlot = materialRecord.cpu.textureSlots[normalSlotIndex];
+    nrAssert(normalSlot.uvSet <= 1u,
+             std::format("Renderer normal texture sampling expected material '{}' UV set to be 0 or 1, got {}.",
+                         materialRecord.cpu.name, normalSlot.uvSet));
     textures.normal = nr::scene::SceneMaterialNormalTextureBinding{
         .textureId = textures.ids[normalSlotIndex],
         .uvSet = normalSlot.uvSet,
@@ -158,28 +171,35 @@ enum class MissingMaterialTexturePolicy : std::uint8_t
     return textures;
 }
 
-void collectTlasSceneTextureHandles(const nr::scene::Scene &scene, std::span<const nr::scene::TlasBuildInputPacket> tlasPackets, std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
+void collectTlasSceneTextureHandles(const nr::scene::Scene &scene,
+                                    std::span<const nr::scene::TlasBuildInputPacket> tlasPackets,
+                                    std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
 {
     std::ranges::for_each(tlasPackets, [&](const nr::scene::TlasBuildInputPacket &packet) {
         auto meshRecordRef = scene.tryGetMeshAsset(packet.mesh);
-        nrAssert(meshRecordRef.has_value(), std::format("Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to resolve.", packet.mesh.slot, packet.mesh.generation));
+        nrAssert(
+            meshRecordRef.has_value(),
+            std::format("Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to resolve.",
+                        packet.mesh.slot, packet.mesh.generation));
         auto const &meshRecord = meshRecordRef->get();
-        nrAssert(meshRecord.cpuReady, std::format("Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to be CPU ready.", packet.mesh.slot, packet.mesh.generation));
+        nrAssert(meshRecord.cpuReady,
+                 std::format(
+                     "Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to be CPU ready.",
+                     packet.mesh.slot, packet.mesh.generation));
 
         std::ranges::for_each(meshRecord.cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
             if (geometry.material.valid())
             {
-                static_cast<void>(collectSceneMaterialTextures(
-                    scene,
-                    geometry.material,
-                    sceneTextureHandlesById,
-                    MissingMaterialTexturePolicy::allowUnavailableAnisotropy));
+                static_cast<void>(
+                    collectSceneMaterialTextures(scene, geometry.material, sceneTextureHandlesById,
+                                                 MissingMaterialTexturePolicy::allowUnavailableAnisotropy));
             }
         });
     });
 }
 
-[[nodiscard]] RendererTlasTextureCollectionKey makeTlasTextureCollectionKey(const nr::scene::SceneRevisionSnapshot &revisions, std::span<const nr::scene::TlasBuildInputPacket> packets)
+[[nodiscard]] RendererTlasTextureCollectionKey makeTlasTextureCollectionKey(
+    const nr::scene::SceneRevisionSnapshot &revisions, std::span<const nr::scene::TlasBuildInputPacket> packets)
 {
     auto identities = packets | std::views::transform([](const nr::scene::TlasBuildInputPacket &packet) {
                           return RendererTlasTexturePacketIdentity{
@@ -215,7 +235,9 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene, std::span<con
     return result;
 }
 
-[[nodiscard]] RendererCameraJitterSample makeHalton23CameraJitterSample(std::uint64_t frameOrdinal, vk::Extent2D viewportExtent, std::uint32_t cycleLength) noexcept
+[[nodiscard]] RendererCameraJitterSample makeHalton23CameraJitterSample(std::uint64_t frameOrdinal,
+                                                                        vk::Extent2D viewportExtent,
+                                                                        std::uint32_t cycleLength) noexcept
 {
     auto const extent = sanitizeViewportExtent(viewportExtent);
     auto const cycle = std::max(1u, cycleLength);
@@ -245,7 +267,9 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene, std::span<con
     return result;
 }
 
-[[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(const RendererCameraJitterConfig &jitterConfig, std::uint64_t frameOrdinal, vk::Extent2D viewportExtent) noexcept
+[[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(const RendererCameraJitterConfig &jitterConfig,
+                                                                    std::uint64_t frameOrdinal,
+                                                                    vk::Extent2D viewportExtent) noexcept
 {
     auto const extent = sanitizeViewportExtent(viewportExtent);
     auto state = RendererCameraFrameState{
@@ -272,22 +296,25 @@ void NodeRuntime::initialize(NodeInitContext &)
 {
 }
 
+void NodeRuntime::finalizeInitialization()
+{
+}
+
 [[nodiscard]] std::string_view NodeRuntime::actionableSemantic() const noexcept
 {
     return {};
 }
 
-FrameEffectSink::FrameEffectSink(std::optional<nr::options::FrameEffect> effect)
-    : effect_(std::move(effect))
+FrameEffectSink::FrameEffectSink(std::optional<nr::options::FrameEffect> effect) : effect_(std::move(effect))
 {
 }
 
-[[nodiscard]] const std::optional<nr::options::FrameEffect>& FrameEffectSink::effect() const noexcept
+[[nodiscard]] const std::optional<nr::options::FrameEffect> &FrameEffectSink::effect() const noexcept
 {
     return effect_;
 }
 
-[[nodiscard]] bool FrameEffectSink::claim(NodeRuntime& runtime, GraphPassHandle targetPass) noexcept
+[[nodiscard]] bool FrameEffectSink::claim(NodeRuntime &runtime, GraphPassHandle targetPass) noexcept
 {
     if (!effect_.has_value() || claimedRuntime_.has_value() || !targetPass.valid())
     {
@@ -303,8 +330,7 @@ FrameEffectSink::FrameEffectSink(std::optional<nr::options::FrameEffect> effect)
     return claimedRuntime_.has_value() && targetPass_.valid();
 }
 
-[[nodiscard]] std::optional<std::reference_wrapper<NodeRuntime>>
-FrameEffectSink::claimedRuntime() const noexcept
+[[nodiscard]] std::optional<std::reference_wrapper<NodeRuntime>> FrameEffectSink::claimedRuntime() const noexcept
 {
     return claimedRuntime_;
 }
@@ -314,13 +340,12 @@ FrameEffectSink::claimedRuntime() const noexcept
     return targetPass_;
 }
 
-void NodeRuntime::declareOptions(nr::options::OptionCatalogBuilder&) const
+void NodeRuntime::declareOptions(nr::options::OptionCatalogBuilder &) const
 {
 }
 
-void NodeRuntime::collectOptionAvailability(
-    const nr::options::OptionFrameSnapshot&,
-    nr::options::OptionAvailabilityMap&) const
+void NodeRuntime::collectOptionAvailability(const nr::options::OptionFrameSnapshot &,
+                                            nr::options::OptionAvailabilityMap &) const
 {
 }
 
@@ -335,7 +360,7 @@ void NodeRuntime::collectOptionAvailability(
 }
 
 [[nodiscard]] std::optional<NodeRuntime::StructuralSnapshot> NodeRuntime::structuralSnapshot(
-    const NodeFrameParameters& frameParameters) const
+    const NodeFrameParameters &frameParameters) const
 {
     if (!supportsRenderGraphSkeleton())
     {
@@ -344,13 +369,11 @@ void NodeRuntime::collectOptionAvailability(
 
     return StructuralSnapshot{
         .branchKey = std::format(
-            "display={}x{};render={}x{};swapchain={}x{};format={};colorSpace={};reset={};scenePackets={};tlasPackets={}",
-            frameParameters.resolutionPlan.displayExtent.width,
-            frameParameters.resolutionPlan.displayExtent.height,
-            frameParameters.resolutionPlan.renderExtent.width,
-            frameParameters.resolutionPlan.renderExtent.height,
-            frameParameters.swapchainExtent.width,
-            frameParameters.swapchainExtent.height,
+            "display={}x{};render={}x{};swapchain={}x{};format={};colorSpace={};reset={};scenePackets={};tlasPackets={"
+            "}",
+            frameParameters.resolutionPlan.displayExtent.width, frameParameters.resolutionPlan.displayExtent.height,
+            frameParameters.resolutionPlan.renderExtent.width, frameParameters.resolutionPlan.renderExtent.height,
+            frameParameters.swapchainExtent.width, frameParameters.swapchainExtent.height,
             static_cast<std::uint32_t>(frameParameters.swapchainFormat),
             static_cast<std::uint32_t>(frameParameters.swapchainColorSpace),
             frameParameters.resolutionPlan.resetHistory ? 1 : 0,
@@ -359,10 +382,8 @@ void NodeRuntime::collectOptionAvailability(
     };
 }
 
-bool NodeRuntime::materializeRenderGraphSkeleton(
-    RenderGraphSkeletonPatchContext&,
-    const NodeFrameParameters&,
-    const StructuralSnapshot&)
+bool NodeRuntime::materializeRenderGraphSkeleton(RenderGraphSkeletonPatchContext &, const NodeFrameParameters &,
+                                                 const StructuralSnapshot &)
 {
     return false;
 }
@@ -375,14 +396,11 @@ void NodeRuntime::flushContinuations()
 {
 }
 
-[[nodiscard]] FrameEffectFinalizeDisposition NodeRuntime::finalizeFrameEffect(
-    const nr::options::FrameEffect&,
-    bool targetBatchSubmitted,
-    std::uint32_t)
+[[nodiscard]] FrameEffectFinalizeDisposition NodeRuntime::finalizeFrameEffect(const nr::options::FrameEffect &,
+                                                                              bool targetBatchSubmitted, std::uint32_t)
 {
-    return targetBatchSubmitted
-               ? FrameEffectFinalizeDisposition::terminalSucceeded
-               : FrameEffectFinalizeDisposition::terminalFailed;
+    return targetBatchSubmitted ? FrameEffectFinalizeDisposition::terminalSucceeded
+                                : FrameEffectFinalizeDisposition::terminalFailed;
 }
 
 void NodeRuntime::shutdown(NodeShutdownContext &)
@@ -398,8 +416,11 @@ void Renderer::ensureSceneTextureFallback()
         return;
     }
 
-    auto imageInfo = nr::rhi::makeImageCreateInfo(vk::Format::eR8G8B8A8Unorm, vk::Extent2D{1u, 1u}, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    sceneTextureFallback_ = device_->resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly, "Renderer.SceneTextureFallback.Neutral");
+    auto imageInfo =
+        nr::rhi::makeImageCreateInfo(vk::Format::eR8G8B8A8Unorm, vk::Extent2D{1u, 1u},
+                                     vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+    sceneTextureFallback_ = device_->resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly,
+                                                                 "Renderer.SceneTextureFallback.Neutral");
     nrAssert(sceneTextureFallback_.valid(), "Renderer failed to create neutral scene texture fallback.");
 
     uploadSceneTextureFallback();
@@ -448,19 +469,21 @@ void Renderer::ensureEnvironmentMapFallback()
     auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
 
     auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{};
-    plan.releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(transferQueueFamily, graphicsQueueFamily,
-                                                                         nr::rhi::ops::QueueAccessScope{
-                                                                             .stages = vk::PipelineStageFlagBits2::eTransfer,
-                                                                             .access = vk::AccessFlagBits2::eTransferWrite,
-                                                                         },
-                                                                         nr::rhi::ops::QueueAccessScope{
-                                                                             .stages = vk::PipelineStageFlagBits2::eAllCommands,
-                                                                             .access = vk::AccessFlagBits2::eShaderSampledRead,
-                                                                         });
+    plan.releaseToDestination =
+        nr::rhi::ops::makeQueueOwnershipTransfer(transferQueueFamily, graphicsQueueFamily,
+                                                 nr::rhi::ops::QueueAccessScope{
+                                                     .stages = vk::PipelineStageFlagBits2::eTransfer,
+                                                     .access = vk::AccessFlagBits2::eTransferWrite,
+                                                 },
+                                                 nr::rhi::ops::QueueAccessScope{
+                                                     .stages = vk::PipelineStageFlagBits2::eAllCommands,
+                                                     .access = vk::AccessFlagBits2::eShaderSampledRead,
+                                                 });
     return plan;
 }
 
-void Renderer::synchronizeSampledImageUpload(const nr::rhi::ops::ImageUploadTicket &uploadTicket, std::string_view debugName)
+void Renderer::synchronizeSampledImageUpload(const nr::rhi::ops::ImageUploadTicket &uploadTicket,
+                                             std::string_view debugName)
 {
     nrAssert(static_cast<bool>(device_), "Renderer::synchronizeSampledImageUpload requires initialized device.");
     nrAssert(uploadTicket.valid(), std::format("{} upload ticket is invalid.", debugName));
@@ -488,13 +511,15 @@ void Renderer::synchronizeSampledImageUpload(const nr::rhi::ops::ImageUploadTick
     nr::rhi::CommandRecorder::end(commandBuffer);
 
     auto syncBatch = nr::rhi::CommandBatch{};
-    syncBatch.addWait(uploadContext.uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands, uploadTicket.signalValue);
+    syncBatch.addWait(uploadContext.uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
+                      uploadTicket.signalValue);
     syncBatch.addCommandBuffer(commandBuffer);
 
     auto fence = vk::raii::Fence(device_->device, vk::FenceCreateInfo{});
     device_->queueManager.graphics().submit(std::move(syncBatch), std::cref(fence));
     auto const waitResult = device_->device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
-    nrAssert(waitResult == vk::Result::eSuccess, std::format("Renderer failed waiting for {} upload synchronization.", debugName));
+    nrAssert(waitResult == vk::Result::eSuccess,
+             std::format("Renderer failed waiting for {} upload synchronization.", debugName));
     uploadContext.reclaimCompletedUploads();
 }
 
@@ -516,19 +541,24 @@ void Renderer::uploadSceneTextureFallback()
 
     auto &uploadContext = device_->uploadReadback();
     auto const uploadPlan = makeSampledImageUploadPlan();
-    auto uploadTicket = uploadContext.uploadImage(std::span<const std::byte>{neutralPixel}, sceneTextureFallback_, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal, uploadPlan);
+    auto uploadTicket =
+        uploadContext.uploadImage(std::span<const std::byte>{neutralPixel}, sceneTextureFallback_,
+                                  vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal, uploadPlan);
     nrAssert(uploadTicket.valid(), "Renderer failed to upload neutral scene texture fallback.");
     synchronizeSampledImageUpload(uploadTicket, "neutral scene texture fallback");
 }
 
-[[nodiscard]] RendererSceneTextureDescriptorTable Renderer::buildSceneTextureDescriptorTable(const NodeFrameParameters &frameParameters, const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
+[[nodiscard]] RendererSceneTextureDescriptorTable Renderer::buildSceneTextureDescriptorTable(
+    const NodeFrameParameters &frameParameters,
+    const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
 {
     ensureSceneTextureFallback();
-    return cacheSuite_.globalDescriptorTableCache.buildSceneTextureDescriptorTable(RendererSceneTextureDescriptorTableInput{
-        .fallbackImage = std::cref(sceneTextureFallback_),
-        .scene = frameParameters.scene,
-        .sceneTextureHandlesById = sceneTextureHandlesById,
-    });
+    return cacheSuite_.globalDescriptorTableCache.buildSceneTextureDescriptorTable(
+        RendererSceneTextureDescriptorTableInput{
+            .fallbackImage = std::cref(sceneTextureFallback_),
+            .scene = frameParameters.scene,
+            .sceneTextureHandlesById = sceneTextureHandlesById,
+        });
 }
 
 Renderer::~Renderer() noexcept
@@ -564,12 +594,17 @@ void Renderer::setEnvironmentMap(nr::resource::EnvironmentMap environment)
     executor_.clearRetainedState();
     cacheSuite_.clear();
     auto const &texture = environment.radiance;
-    auto imageInfo = nr::rhi::makeImageCreateInfo(texture.format, vk::Extent2D{texture.width, texture.height}, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    auto image = device_->resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly, std::format("Renderer.EnvironmentMap.{}", texture.name));
+    auto imageInfo =
+        nr::rhi::makeImageCreateInfo(texture.format, vk::Extent2D{texture.width, texture.height},
+                                     vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+    auto image = device_->resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly,
+                                                      std::format("Renderer.EnvironmentMap.{}", texture.name));
     nrAssert(image.valid(), "Renderer::setEnvironmentMap failed to create the GPU image.");
 
     auto &uploadContext = device_->uploadReadback();
-    auto uploadTicket = uploadContext.uploadImage(texture.levels.front().bytes, image, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal, makeSampledImageUploadPlan());
+    auto uploadTicket =
+        uploadContext.uploadImage(texture.levels.front().bytes, image, vk::ImageLayout::eUndefined,
+                                  vk::ImageLayout::eShaderReadOnlyOptimal, makeSampledImageUploadPlan());
     synchronizeSampledImageUpload(uploadTicket, "environment map");
 
     environmentMapImage_ = std::move(image);
@@ -599,8 +634,7 @@ void Renderer::requestTemporalHistoryReset() noexcept
     temporalHistoryResetPending_ = true;
 }
 
-[[nodiscard]] RendererGraphPreflightResult Renderer::preflightGraph(
-    const RendererGraphSpec& spec) const
+[[nodiscard]] RendererGraphPreflightResult Renderer::preflightGraph(const RendererGraphSpec &spec) const
 {
     if (!device_)
     {
@@ -619,36 +653,28 @@ void Renderer::requestTemporalHistoryReset() noexcept
             return;
         }
 
-        auto const& createInfo = spec.nodes[nodeIndex];
+        auto const &createInfo = spec.nodes[nodeIndex];
         if (!createInfo.runtime)
         {
-            validationError = std::format(
-                "Renderer graph node {} has no runtime.",
-                nodeIndex);
+            validationError = std::format("Renderer graph node {} has no runtime.", nodeIndex);
             return;
         }
         if (createInfo.config.instanceName.empty())
         {
-            validationError = std::format(
-                "Renderer graph node {} has an empty instance name.",
-                nodeIndex);
+            validationError = std::format("Renderer graph node {} has an empty instance name.", nodeIndex);
             return;
         }
         if (!knownNames.emplace(createInfo.config.instanceName).second)
         {
-            validationError = std::format(
-                "Renderer graph contains duplicate node name '{}'.",
-                createInfo.config.instanceName);
+            validationError =
+                std::format("Renderer graph contains duplicate node name '{}'.", createInfo.config.instanceName);
             return;
         }
 
         auto const semantic = createInfo.runtime->actionableSemantic();
-        if (!semantic.empty() &&
-            !knownSemantics.emplace(semantic).second)
+        if (!semantic.empty() && !knownSemantics.emplace(semantic).second)
         {
-            validationError = std::format(
-                "Renderer graph contains duplicate actionable semantic '{}'.",
-                semantic);
+            validationError = std::format("Renderer graph contains duplicate actionable semantic '{}'.", semantic);
         }
     });
     if (!validationError.empty())
@@ -658,77 +684,57 @@ void Renderer::requestTemporalHistoryReset() noexcept
         };
     }
 
-    auto const invalidSubmit = std::ranges::find_if(
-        spec.submitNodes,
-        [&](const SubmitNodeSpec& submitSpec) {
-            return submitSpec.afterNodeIndex >= spec.nodes.size();
-        });
+    auto const invalidSubmit = std::ranges::find_if(spec.submitNodes, [&](const SubmitNodeSpec &submitSpec) {
+        return submitSpec.afterNodeIndex >= spec.nodes.size();
+    });
     if (invalidSubmit != spec.submitNodes.end())
     {
         return RendererGraphPreflightResult{
-            .message = std::format(
-                "Renderer graph submit '{}' references node index {} but the graph has {} node(s).",
-                invalidSubmit->debugName,
-                invalidSubmit->afterNodeIndex,
-                spec.nodes.size()),
+            .message = std::format("Renderer graph submit '{}' references node index {} but the graph has {} node(s).",
+                                   invalidSubmit->debugName, invalidSubmit->afterNodeIndex, spec.nodes.size()),
         };
     }
 
     auto optionBuilder = nr::options::OptionCatalogBuilder{};
-    std::ranges::for_each(
-        spec.nodes,
-        [&](const NodeCreateInfo& createInfo) {
-            createInfo.runtime->declareOptions(optionBuilder);
-        });
+    std::ranges::for_each(spec.nodes,
+                          [&](const NodeCreateInfo &createInfo) { createInfo.runtime->declareOptions(optionBuilder); });
     auto optionCatalog = optionBuilder.build();
     if (!optionCatalog.valid())
     {
-        auto const& issue = optionCatalog.issues.front();
+        auto const &issue = optionCatalog.issues.front();
         return RendererGraphPreflightResult{
-            .message = issue.id.has_value()
-                           ? std::format(
-                                 "Renderer graph option '{}' failed preflight: {}.",
-                                 issue.id->value(),
-                                 issue.detail)
-                           : std::format(
-                                 "Renderer graph option catalog failed preflight: {}.",
-                                 issue.detail),
+            .message =
+                issue.id.has_value()
+                    ? std::format("Renderer graph option '{}' failed preflight: {}.", issue.id->value(), issue.detail)
+                    : std::format("Renderer graph option catalog failed preflight: {}.", issue.detail),
         };
     }
-    auto const nonGraphOption = std::ranges::find_if(
-        optionCatalog.catalog->definitions(),
-        [](auto const& entry) {
-            return entry.second.scope != nr::options::OptionScope::graph;
-        });
+    auto const nonGraphOption = std::ranges::find_if(optionCatalog.catalog->definitions(), [](auto const &entry) {
+        return entry.second.scope != nr::options::OptionScope::graph;
+    });
     if (nonGraphOption != optionCatalog.catalog->definitions().end())
     {
         return RendererGraphPreflightResult{
-            .message = std::format(
-                "Renderer node option '{}' must use graph scope.",
-                nonGraphOption->first.value()),
+            .message = std::format("Renderer node option '{}' must use graph scope.", nonGraphOption->first.value()),
         };
     }
 
     if (!spec.frameResolutionOptionRequirements.empty() &&
-        (!spec.frameResolutionResolver.has_value() ||
-         !static_cast<bool>(*spec.frameResolutionResolver)))
+        (!spec.frameResolutionResolver.has_value() || !static_cast<bool>(*spec.frameResolutionResolver)))
     {
         return RendererGraphPreflightResult{
-            .message =
-                "Renderer graph declares frame-resolution option requirements without a resolver.",
+            .message = "Renderer graph declares frame-resolution option requirements without a resolver.",
         };
     }
-    auto const missingResolverOption = std::ranges::find_if(
-        spec.frameResolutionOptionRequirements,
-        [&](const nr::options::OptionId& id) {
+    auto const missingResolverOption =
+        std::ranges::find_if(spec.frameResolutionOptionRequirements, [&](const nr::options::OptionId &id) {
             return optionCatalog.catalog->find(id) == nullptr;
         });
     if (missingResolverOption != spec.frameResolutionOptionRequirements.end())
     {
         return RendererGraphPreflightResult{
-            .message = std::format(
-                "Frame resolution resolver requires undeclared graph option '{}'.",
-                missingResolverOption->value()),
+            .message = std::format("Frame resolution resolver requires undeclared graph option '{}'.",
+                                   missingResolverOption->value()),
         };
     }
 
@@ -770,39 +776,27 @@ void Renderer::requestTemporalHistoryReset() noexcept
                               : nr::rhi::ShaderService::instance().compileProgramsByFile(shaderRequests);
     if (shaderPrograms.size() != shaderRequests.size())
     {
-        nr::nrLog(
-            nr::LogLevel::error,
-            "RENDERER",
-            std::format(
-                "Static shader batch returned {} programs for {} requests.",
-                shaderPrograms.size(),
-                shaderRequests.size()));
+        nr::nrLog(nr::LogLevel::error, "RENDERER",
+                  std::format("Static shader batch returned {} programs for {} requests.", shaderPrograms.size(),
+                              shaderRequests.size()));
         return false;
     }
 
-    auto const invalidProgram = std::ranges::find_if(
-        shaderPrograms,
-        [](const nr::rhi::SlangProgram &program) { return !program.valid(); });
+    auto const invalidProgram =
+        std::ranges::find_if(shaderPrograms, [](const nr::rhi::SlangProgram &program) { return !program.valid(); });
     if (invalidProgram != shaderPrograms.end())
     {
         auto const invalidIndex = static_cast<std::size_t>(std::distance(shaderPrograms.begin(), invalidProgram));
         auto const nodeIndices = std::views::iota(std::size_t{0u}, shaderSlices.size());
-        auto const ownerIt = std::ranges::find_if(
-            nodeIndices,
-            [&](std::size_t index) {
-                auto const &slice = shaderSlices[index];
-                return invalidIndex >= slice.offset && invalidIndex < slice.offset + slice.count;
-            });
-        auto const ownerName = ownerIt != nodeIndices.end()
-                                   ? spec.nodes[*ownerIt].config.instanceName
-                                   : std::string{"<unknown>"};
-        nr::nrLog(
-            nr::LogLevel::error,
-            "RENDERER",
-            std::format(
-                "Static shader '{}' failed while installing node '{}'.",
-                shaderRequests[invalidIndex].sourcePath.generic_string(),
-                ownerName));
+        auto const ownerIt = std::ranges::find_if(nodeIndices, [&](std::size_t index) {
+            auto const &slice = shaderSlices[index];
+            return invalidIndex >= slice.offset && invalidIndex < slice.offset + slice.count;
+        });
+        auto const ownerName =
+            ownerIt != nodeIndices.end() ? spec.nodes[*ownerIt].config.instanceName : std::string{"<unknown>"};
+        nr::nrLog(nr::LogLevel::error, "RENDERER",
+                  std::format("Static shader '{}' failed while installing node '{}'.",
+                              shaderRequests[invalidIndex].sourcePath.generic_string(), ownerName));
         return false;
     }
 
@@ -820,9 +814,8 @@ void Renderer::requestTemporalHistoryReset() noexcept
         auto initContext = NodeInitContext{
             .device = std::ref(*device_),
             .runtimeName = createInfo.config.instanceName,
-            .shaderPrograms = std::span<const nr::rhi::SlangProgram>{shaderPrograms}.subspan(
-                shaderSlice.offset,
-                shaderSlice.count),
+            .shaderPrograms =
+                std::span<const nr::rhi::SlangProgram>{shaderPrograms}.subspan(shaderSlice.offset, shaderSlice.count),
         };
         createInfo.runtime->initialize(initContext);
 
@@ -831,6 +824,8 @@ void Renderer::requestTemporalHistoryReset() noexcept
             .config = createInfo.config,
         });
     });
+    device_->pipeline().waitForBuilds();
+    std::ranges::for_each(installed, [](InstalledNode &node) { node.runtime->finalizeInitialization(); });
 
     auto submitNodesByAfterIndex = std::multimap<std::size_t, SubmitNodeSpec>{};
     std::ranges::for_each(spec.submitNodes, [&](const SubmitNodeSpec &submitSpec) {
@@ -927,15 +922,12 @@ void Renderer::resetSceneBinding() noexcept
     previousGlobalFrameConstants_.reset();
 }
 
-void Renderer::collectOptionAvailability(
-    const nr::options::OptionFrameSnapshot& snapshot,
-    nr::options::OptionAvailabilityMap& availability) const
+void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot &snapshot,
+                                         nr::options::OptionAvailabilityMap &availability) const
 {
-    std::ranges::for_each(
-        installedNodes_,
-        [&](const InstalledNode& installedNode) {
-            installedNode.runtime->collectOptionAvailability(snapshot, availability);
-        });
+    std::ranges::for_each(installedNodes_, [&](const InstalledNode &installedNode) {
+        installedNode.runtime->collectOptionAvailability(snapshot, availability);
+    });
 }
 
 [[nodiscard]] RendererFrameResult Renderer::renderFrame(const RendererFrameInput &input)
@@ -951,7 +943,7 @@ void Renderer::collectOptionAvailability(
             return;
         }
 
-        auto const& effect = *frameEffectSink.effect();
+        auto const &effect = *frameEffectSink.effect();
         auto disposition = FrameEffectFinalizeDisposition::terminalFailed;
         if (!frameEffectSink.claimed())
         {
@@ -963,8 +955,7 @@ void Renderer::collectOptionAvailability(
         }
         else
         {
-            if (frameEffectTargetSubmitted &&
-                effect.id == nr::options::optionId(nr::options::keys::presentCaptureExr))
+            if (frameEffectTargetSubmitted && effect.id == nr::options::optionId(nr::options::keys::presentCaptureExr))
             {
                 nr::options::emitMachineRecord(nr::options::OptionMachineRecord{
                     .sequence = effect.sequence,
@@ -977,16 +968,12 @@ void Renderer::collectOptionAvailability(
                 });
             }
             disposition = frameEffectSink.claimedRuntime()->get().finalizeFrameEffect(
-                effect,
-                frameEffectTargetSubmitted,
-                *frameEffectFrameSlot);
-            if (!frameEffectTargetSubmitted &&
-                disposition == FrameEffectFinalizeDisposition::continuationArmed)
+                effect, frameEffectTargetSubmitted, *frameEffectFrameSlot);
+            if (!frameEffectTargetSubmitted && disposition == FrameEffectFinalizeDisposition::continuationArmed)
             {
                 disposition = FrameEffectFinalizeDisposition::terminalFailed;
             }
-            if (frameEffectTargetSubmitted &&
-                disposition == FrameEffectFinalizeDisposition::terminalFailed)
+            if (frameEffectTargetSubmitted && disposition == FrameEffectFinalizeDisposition::terminalFailed)
             {
                 frameEffectFailureReason = "effect_finalize_failed";
             }
@@ -1000,17 +987,15 @@ void Renderer::collectOptionAvailability(
             .sequence = effect.sequence,
             .id = effect.id,
             .phase = nr::options::OptionLogPhase::terminal,
-            .status =
-                disposition == FrameEffectFinalizeDisposition::terminalSucceeded
-                    ? nr::options::OptionLogStatus::succeeded
-                    : nr::options::OptionLogStatus::failed,
+            .status = disposition == FrameEffectFinalizeDisposition::terminalSucceeded
+                          ? nr::options::OptionLogStatus::succeeded
+                          : nr::options::OptionLogStatus::failed,
             .frameIndex = input.optionSnapshot.get().frameIndex,
             .origin = effect.origin,
             .requestId = effect.requestId,
-            .reason =
-                disposition == FrameEffectFinalizeDisposition::terminalSucceeded
-                    ? std::nullopt
-                    : std::optional<std::string>{frameEffectFailureReason},
+            .reason = disposition == FrameEffectFinalizeDisposition::terminalSucceeded
+                          ? std::nullopt
+                          : std::optional<std::string>{frameEffectFailureReason},
         });
     }};
 
@@ -1023,11 +1008,9 @@ void Renderer::collectOptionAvailability(
     auto const beginFrameStart = std::chrono::steady_clock::now();
     auto begin = device_->beginFrame();
     frameEffectFrameSlot = begin.frameIndex;
-    std::ranges::for_each(
-        installedNodes_,
-        [&](InstalledNode& installedNode) {
-            installedNode.runtime->advanceContinuations(begin.frameIndex);
-        });
+    std::ranges::for_each(installedNodes_, [&](InstalledNode &installedNode) {
+        installedNode.runtime->advanceContinuations(begin.frameIndex);
+    });
     auto invalidateForSwapchainRecreation = [&] {
         auto const generation = device_->swapchainRecreationGeneration();
         if (generation == observedSwapchainRecreationGeneration_)
@@ -1039,7 +1022,8 @@ void Renderer::collectOptionAvailability(
         observedSwapchainRecreationGeneration_ = generation;
     };
     invalidateForSwapchainRecreation();
-    auto const hasFrameResolutionResolver = frameResolutionResolver_.has_value() && static_cast<bool>(*frameResolutionResolver_);
+    auto const hasFrameResolutionResolver =
+        frameResolutionResolver_.has_value() && static_cast<bool>(*frameResolutionResolver_);
     auto preAcquiredFrameImage = std::optional<nr::rhi::Device::FrameAcquireResult>{};
     if (hasFrameResolutionResolver)
     {
@@ -1047,7 +1031,8 @@ void Renderer::collectOptionAvailability(
         invalidateForSwapchainRecreation();
     }
     auto const currentDisplayExtent = device_->presentationContext.swapchainExtent();
-    nrAssert(currentDisplayExtent.width > 0u && currentDisplayExtent.height > 0u, "Renderer::renderFrame requires a non-zero display extent after beginFrame().");
+    nrAssert(currentDisplayExtent.width > 0u && currentDisplayExtent.height > 0u,
+             "Renderer::renderFrame requires a non-zero display extent after beginFrame().");
     auto const displayExtent = sanitizeViewportExtent(currentDisplayExtent);
     auto resolutionPlan = FrameResolutionPlan{
         .displayExtent = displayExtent,
@@ -1055,13 +1040,14 @@ void Renderer::collectOptionAvailability(
     };
     if (hasFrameResolutionResolver)
     {
-        resolutionPlan = (*frameResolutionResolver_)(
-            *device_,
-            displayExtent,
-            input.optionSnapshot.get());
+        resolutionPlan = (*frameResolutionResolver_)(*device_, displayExtent, input.optionSnapshot.get());
     }
-    nrAssert(resolutionPlan.displayExtent.width > 0u && resolutionPlan.displayExtent.height > 0u && resolutionPlan.renderExtent.width > 0u && resolutionPlan.renderExtent.height > 0u, "Renderer::renderFrame resolution resolver returned a zero display or render extent.");
-    nrAssert(resolutionPlan.displayExtent == displayExtent, "Renderer::renderFrame resolution resolver display extent does not match the current presentation extent.");
+    nrAssert(resolutionPlan.displayExtent.width > 0u && resolutionPlan.displayExtent.height > 0u &&
+                 resolutionPlan.renderExtent.width > 0u && resolutionPlan.renderExtent.height > 0u,
+             "Renderer::renderFrame resolution resolver returned a zero display or render extent.");
+    nrAssert(
+        resolutionPlan.displayExtent == displayExtent,
+        "Renderer::renderFrame resolution resolver display extent does not match the current presentation extent.");
     resolutionPlan.resetHistory = resolutionPlan.resetHistory || temporalHistoryResetPending_;
     temporalHistoryResetPending_ = false;
     auto const sampleFrameOrdinal = sampleFrameOrdinal_;
@@ -1072,7 +1058,8 @@ void Renderer::collectOptionAvailability(
     frameUniformArena_.beginFrame(begin.frameIndex);
     auto cpuTimings = RendererCpuFrameTimings{
         .cpuWaitGpuMilliseconds = begin.cpuWaitGpuMilliseconds,
-        .frameSetupMilliseconds = std::max(0.0, elapsedMilliseconds(beginFrameStart, std::chrono::steady_clock::now()) - begin.cpuWaitGpuMilliseconds),
+        .frameSetupMilliseconds = std::max(0.0, elapsedMilliseconds(beginFrameStart, std::chrono::steady_clock::now()) -
+                                                    begin.cpuWaitGpuMilliseconds),
     };
 
     auto scenePackets = std::optional<nr::scene::ScenePacketSet>{};
@@ -1132,16 +1119,23 @@ void Renderer::collectOptionAvailability(
             .packetSet = std::cref(*scenePackets),
         };
         auto rasterGeometryBuffers = scene.tryGetRasterGeometryBuffers();
-        bridgeBuildInput.resolveGeometryBuffers = [rasterGeometryBuffers]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> { return rasterGeometryBuffers; };
+        bridgeBuildInput.resolveGeometryBuffers =
+            [rasterGeometryBuffers]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> {
+            return rasterGeometryBuffers;
+        };
 
-        bridgeBuildInput.resolveMaterialTextures = [&](nr::resource::MaterialHandle materialHandle) -> std::optional<nr::scene::SceneMaterialTextureBindings> { return collectSceneMaterialTextures(scene, materialHandle, sceneTextureHandlesById); };
+        bridgeBuildInput.resolveMaterialTextures =
+            [&](nr::resource::MaterialHandle materialHandle) -> std::optional<nr::scene::SceneMaterialTextureBindings> {
+            return collectSceneMaterialTextures(scene, materialHandle, sceneTextureHandlesById);
+        };
 
         if (sceneCameraOverride.has_value())
         {
             bridgeBuildInput.frameConstantsOverride = sceneCameraOverride->frameConstants;
         }
 
-        bridgeBuildInput.resolveMaterialRasterState = [&](nr::resource::MaterialHandle materialHandle) -> std::optional<nr::scene::SceneBridgeMaterialRasterState> {
+        bridgeBuildInput.resolveMaterialRasterState = [&](nr::resource::MaterialHandle materialHandle)
+            -> std::optional<nr::scene::SceneBridgeMaterialRasterState> {
             auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
             if (!materialRecordRef.has_value())
             {
@@ -1161,7 +1155,9 @@ void Renderer::collectOptionAvailability(
             };
         };
 
-        bridgeBuildInput.resolveRasterDrawGeometry = [&](nr::resource::MeshHandle meshHandle, std::uint32_t geometryIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
+        bridgeBuildInput.resolveRasterDrawGeometry =
+            [&](nr::resource::MeshHandle meshHandle,
+                std::uint32_t geometryIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
             auto meshRecordRef = scene.tryGetMeshAsset(meshHandle);
             if (!meshRecordRef.has_value())
             {
@@ -1188,18 +1184,21 @@ void Renderer::collectOptionAvailability(
             auto const &atlas = meshRecord.gpu->atlas;
             auto checkedAddUint32 = [](std::uint32_t base, std::uint32_t offset, std::string_view label) {
                 auto const value = static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(offset);
-                nrAssert(value <= std::numeric_limits<std::uint32_t>::max(), std::format("{} value {} exceeds uint32_t range.", label, value));
+                nrAssert(value <= std::numeric_limits<std::uint32_t>::max(),
+                         std::format("{} value {} exceeds uint32_t range.", label, value));
                 return static_cast<std::uint32_t>(value);
             };
             auto checkedAddInt32 = [](std::uint32_t base, std::uint32_t offset, std::string_view label) {
                 auto const value = static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(offset);
-                nrAssert(value <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()), std::format("{} value {} exceeds int32_t range.", label, value));
+                nrAssert(value <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()),
+                         std::format("{} value {} exceeds int32_t range.", label, value));
                 return static_cast<std::int32_t>(value);
             };
 
             auto drawGeometry = nr::scene::SceneBridgeDrawGeometry{};
             drawGeometry.vertexBuffer = rasterGeometryBuffers->vertexBuffer;
-            drawGeometry.frontFace = meshRecord.cpu.clockwiseFrontFace ? vk::FrontFace::eClockwise : vk::FrontFace::eCounterClockwise;
+            drawGeometry.frontFace =
+                meshRecord.cpu.clockwiseFrontFace ? vk::FrontFace::eClockwise : vk::FrontFace::eCounterClockwise;
 
             auto const indexedGeometry = atlas.indexCount > 0u;
             if (indexedGeometry)
@@ -1211,13 +1210,16 @@ void Renderer::collectOptionAvailability(
 
                 drawGeometry.indexBuffer = rasterGeometryBuffers->indexBuffer;
                 drawGeometry.indexType = rasterGeometryBuffers->indexType;
-                drawGeometry.firstIndex = checkedAddUint32(atlas.indexBase, meshGeometry.firstIndex, "Scene raster draw firstIndex");
+                drawGeometry.firstIndex =
+                    checkedAddUint32(atlas.indexBase, meshGeometry.firstIndex, "Scene raster draw firstIndex");
                 drawGeometry.indexCount = meshGeometry.indexCount > 0 ? meshGeometry.indexCount : atlas.indexCount;
-                drawGeometry.vertexOffset = checkedAddInt32(atlas.vertexBase, meshGeometry.vertexOffset, "Scene raster draw vertexOffset");
+                drawGeometry.vertexOffset =
+                    checkedAddInt32(atlas.vertexBase, meshGeometry.vertexOffset, "Scene raster draw vertexOffset");
                 return drawGeometry;
             }
 
-            drawGeometry.firstVertex = checkedAddUint32(atlas.vertexBase, meshGeometry.firstIndex, "Scene raster draw firstVertex");
+            drawGeometry.firstVertex =
+                checkedAddUint32(atlas.vertexBase, meshGeometry.firstIndex, "Scene raster draw firstVertex");
             drawGeometry.vertexCount = meshGeometry.indexCount > 0 ? meshGeometry.indexCount : atlas.vertexCount;
             return drawGeometry;
         };
@@ -1277,8 +1279,11 @@ void Renderer::collectOptionAvailability(
             tlasTextureHandlesById_ = std::move(collected);
             tlasTextureCollectionKey_ = std::move(key);
         }
-        std::ranges::for_each(tlasTextureHandlesById_, [&](const auto &entry) { sceneTextureHandlesById.insert_or_assign(entry.first, entry.second); });
-        tlasTextureCollectionMilliseconds = elapsedMilliseconds(tlasTextureCollectionStart, std::chrono::steady_clock::now());
+        std::ranges::for_each(tlasTextureHandlesById_, [&](const auto &entry) {
+            sceneTextureHandlesById.insert_or_assign(entry.first, entry.second);
+        });
+        tlasTextureCollectionMilliseconds =
+            elapsedMilliseconds(tlasTextureCollectionStart, std::chrono::steady_clock::now());
     }
 
     if (primaryCamera.has_value())
@@ -1303,17 +1308,21 @@ void Renderer::collectOptionAvailability(
     }
     frameParameters.renderCameraConstants = globalFrameConstants;
 
-    auto const cameraFrameState = makeRendererCameraFrameState(cameraJitter_, sampleFrameOrdinal, frameParameters.resolutionPlan.renderExtent);
+    auto const cameraFrameState =
+        makeRendererCameraFrameState(cameraJitter_, sampleFrameOrdinal, frameParameters.resolutionPlan.renderExtent);
     auto renderingFrameConstants = globalFrameConstants;
     if (cameraFrameState.jitterEnabled)
     {
-        renderingFrameConstants.projection = applyCameraProjectionJitter(globalFrameConstants.projection, cameraFrameState.jitter.ndcOffset);
+        renderingFrameConstants.projection =
+            applyCameraProjectionJitter(globalFrameConstants.projection, cameraFrameState.jitter.ndcOffset);
         renderingFrameConstants.viewProjection = renderingFrameConstants.projection * renderingFrameConstants.view;
     }
 
     auto const buildStart = std::chrono::steady_clock::now();
     cpuTimings.postSceneMilliseconds = elapsedMilliseconds(postSceneStart, buildStart);
-    auto const graphBuildTimings = buildInstalledGraph(frameParameters, renderingFrameConstants, cameraFrameState, sampleFrameOrdinal, sceneBridgeFrameRef, sceneTextureHandlesById);
+    auto const graphBuildTimings =
+        buildInstalledGraph(frameParameters, renderingFrameConstants, cameraFrameState, sampleFrameOrdinal,
+                            sceneBridgeFrameRef, sceneTextureHandlesById);
     cpuTimings.buildMilliseconds = elapsedMilliseconds(buildStart, std::chrono::steady_clock::now());
 
     auto const compileStart = std::chrono::steady_clock::now();
@@ -1321,21 +1330,14 @@ void Renderer::collectOptionAvailability(
     if (frameEffectSink.claimed())
     {
         auto const targetPass = frameEffectSink.targetPass();
-        std::ranges::for_each(
-            compiled.submitBatches,
-            [&](const CompiledSubmitBatch& batch) {
-                if (std::ranges::any_of(
-                        batch.passes,
-                        [&](const CompiledPass& pass) {
-                            return pass.handle == targetPass;
-                        }))
-                {
-                    nrAssert(
-                        !frameEffectTargetBatch.has_value(),
-                        "A frame-effect target pass must belong to exactly one compiled submit batch.");
-                    frameEffectTargetBatch = batch.batchIndex;
-                }
-            });
+        std::ranges::for_each(compiled.submitBatches, [&](const CompiledSubmitBatch &batch) {
+            if (std::ranges::any_of(batch.passes, [&](const CompiledPass &pass) { return pass.handle == targetPass; }))
+            {
+                nrAssert(!frameEffectTargetBatch.has_value(),
+                         "A frame-effect target pass must belong to exactly one compiled submit batch.");
+                frameEffectTargetBatch = batch.batchIndex;
+            }
+        });
         if (!frameEffectTargetBatch.has_value())
         {
             frameEffectFailureReason = "target_pass_not_compiled";
@@ -1351,8 +1353,13 @@ void Renderer::collectOptionAvailability(
         .frameOrdinal = sampleFrameOrdinal,
         .acquireTimeout = input.acquireTimeout,
         .preAcquiredFrameImage = preAcquiredFrameImage,
-        .submissionTimelines = submissionTimelines_.valid() ? std::optional<std::reference_wrapper<RendererSubmissionTimelines>>(std::ref(submissionTimelines_)) : std::nullopt,
-        .benchmarkTelemetry = benchmarkCapturing ? std::optional<std::reference_wrapper<ExecutorBenchmarkTelemetry>>(std::ref(executorBenchmarkTelemetry)) : std::nullopt,
+        .submissionTimelines =
+            submissionTimelines_.valid()
+                ? std::optional<std::reference_wrapper<RendererSubmissionTimelines>>(std::ref(submissionTimelines_))
+                : std::nullopt,
+        .benchmarkTelemetry = benchmarkCapturing ? std::optional<std::reference_wrapper<ExecutorBenchmarkTelemetry>>(
+                                                       std::ref(executorBenchmarkTelemetry))
+                                                 : std::nullopt,
     };
 
     auto const prepareStart = std::chrono::steady_clock::now();
@@ -1363,11 +1370,11 @@ void Renderer::collectOptionAvailability(
     auto executeReport = executor_.executePrepared(prepared, executeContext);
     if (frameEffectTargetBatch.has_value())
     {
-        frameEffectTargetSubmitted = std::ranges::contains(
-            executeReport.submittedCompiledBatchIndices,
-            *frameEffectTargetBatch);
+        frameEffectTargetSubmitted =
+            std::ranges::contains(executeReport.submittedCompiledBatchIndices, *frameEffectTargetBatch);
     }
-    nrAssert(executeReport.swapchainImageIndex.has_value(), "Renderer::renderFrame expected the graph to acquire one swapchain image before presentation.");
+    nrAssert(executeReport.swapchainImageIndex.has_value(),
+             "Renderer::renderFrame expected the graph to acquire one swapchain image before presentation.");
     cpuTimings.executeMilliseconds = elapsedMilliseconds(executeStart, std::chrono::steady_clock::now());
     if (executeReport.completedGpuPassTimingFrame.has_value())
     {
@@ -1381,8 +1388,10 @@ void Renderer::collectOptionAvailability(
     cpuTimings.totalMilliseconds = elapsedMilliseconds(totalStart, std::chrono::steady_clock::now());
     if (benchmarkCapturing)
     {
-        auto const executeAccountedMainThreadMilliseconds = rendererBenchmarkExecuteAccountedMainThreadMilliseconds(executorBenchmarkTelemetry);
-        auto const executeResidualMilliseconds = cpuTimings.executeMilliseconds - executeAccountedMainThreadMilliseconds;
+        auto const executeAccountedMainThreadMilliseconds =
+            rendererBenchmarkExecuteAccountedMainThreadMilliseconds(executorBenchmarkTelemetry);
+        auto const executeResidualMilliseconds =
+            cpuTimings.executeMilliseconds - executeAccountedMainThreadMilliseconds;
         benchmarkFrames_.push_back(RendererBenchmarkFrame{
             .frameOrdinal = sampleFrameOrdinal,
             .frameSlot = begin.frameIndex % nr::maxFrameInFlight,
@@ -1397,22 +1406,24 @@ void Renderer::collectOptionAvailability(
             .graphPreludeMilliseconds = graphBuildTimings.preludeMilliseconds,
             .uiCollectMilliseconds = graphBuildTimings.uiCollectMilliseconds,
             .nodeLoopMilliseconds = graphBuildTimings.nodeLoopMilliseconds,
-            .skeletonPatchMilliseconds =
-                graphBuildTimings.skeletonPatchMilliseconds,
-            .skeletonRebuildMilliseconds =
-                graphBuildTimings.skeletonRebuildMilliseconds,
+            .skeletonPatchMilliseconds = graphBuildTimings.skeletonPatchMilliseconds,
+            .skeletonRebuildMilliseconds = graphBuildTimings.skeletonRebuildMilliseconds,
             .skeletonHit = graphBuildTimings.skeletonHit,
             .skeletonMissReason = graphBuildTimings.skeletonMissReason,
             .execute = executorBenchmarkTelemetry,
             .executeAccountedMainThreadMilliseconds = executeAccountedMainThreadMilliseconds,
-            .executeUnclassifiedMilliseconds = executeResidualMilliseconds >= -0.001 ? std::max(0.0, executeResidualMilliseconds) : executeResidualMilliseconds,
+            .executeUnclassifiedMilliseconds = executeResidualMilliseconds >= -0.001
+                                                   ? std::max(0.0, executeResidualMilliseconds)
+                                                   : executeResidualMilliseconds,
             .sceneRasterPacketCount = scenePackets.has_value() ? scenePackets->rasterDraws.size() : 0u,
             .sceneRtPacketCount = scenePackets.has_value() ? scenePackets->rtInstances.size() : 0u,
             .sceneTlasPacketCount = sceneTlasPackets.has_value() ? sceneTlasPackets->tlasBuildInputs.size() : 0u,
             .submitBatchCount = executeReport.submittedBatchCount,
             .recordTaskCount = executeReport.submittedRecordTaskCount,
         });
-        benchmarkNodeBuildMilliseconds_.insert(benchmarkNodeBuildMilliseconds_.end(), benchmarkCurrentNodeBuildMilliseconds_.begin(), benchmarkCurrentNodeBuildMilliseconds_.end());
+        benchmarkNodeBuildMilliseconds_.insert(benchmarkNodeBuildMilliseconds_.end(),
+                                               benchmarkCurrentNodeBuildMilliseconds_.begin(),
+                                               benchmarkCurrentNodeBuildMilliseconds_.end());
         benchmarkAsTelemetry_.push_back(benchmarkCurrentAsTelemetry_);
         if (benchmarkFrames_.size() >= benchmarkConfig_.measureFrames)
         {
@@ -1494,8 +1505,11 @@ void Renderer::collectOptionAvailability(
     return gpuPassStatistics_;
 }
 
-[[nodiscard]] RendererGraphBuildTimings Renderer::buildInstalledGraph(const NodeFrameParameters &frameParameters, const nr::scene::SceneBridgeFrameConstants &frameConstants, const RendererCameraFrameState &cameraFrameState, std::uint64_t sampleFrameOrdinal,
-                                                                      std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame, const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
+[[nodiscard]] RendererGraphBuildTimings Renderer::buildInstalledGraph(
+    const NodeFrameParameters &frameParameters, const nr::scene::SceneBridgeFrameConstants &frameConstants,
+    const RendererCameraFrameState &cameraFrameState, std::uint64_t sampleFrameOrdinal,
+    std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
+    const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
 {
     nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
@@ -1509,24 +1523,28 @@ void Renderer::collectOptionAvailability(
             .accelerationStructure = std::ref(benchmarkCurrentAsTelemetry_),
         };
     }
-    auto const graphPreludeStart = telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    auto const graphPreludeStart =
+        telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     auto const previousFrameConstants = previousGlobalFrameConstants_.value_or(frameConstants);
-    auto const globalFrameUniforms = makeGlobalFrameUniforms(frameConstants, previousFrameConstants, frameParameters.frameIndex, sampleFrameOrdinal);
+    auto const globalFrameUniforms =
+        makeGlobalFrameUniforms(frameConstants, previousFrameConstants, frameParameters.frameIndex, sampleFrameOrdinal);
     previousGlobalFrameConstants_ = frameConstants;
-    nrAssert(environmentMapImage_.valid() && environmentMapState_.common.initialized, "Renderer::buildInstalledGraph requires a resident environment map.");
+    nrAssert(environmentMapImage_.valid() && environmentMapState_.common.initialized,
+             "Renderer::buildInstalledGraph requires a resident environment map.");
     auto sceneTextureDescriptorTable = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
     auto nodeFrameParameters = frameParameters;
-    nodeFrameParameters.benchmarkTelemetry = telemetry.has_value()
-                                                 ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{
-                                                       std::ref(*telemetry)}
-                                                 : std::nullopt;
+    nodeFrameParameters.benchmarkTelemetry =
+        telemetry.has_value()
+            ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{std::ref(*telemetry)}
+            : std::nullopt;
 
-    auto const nodeBuildStart = telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    auto const nodeBuildStart =
+        telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     auto structuralSnapshots = std::vector<NodeRuntime::StructuralSnapshot>{};
     structuralSnapshots.reserve(installedNodes_.size());
     auto skeletonEligible = renderGraphSkeletonMode_ != RenderGraphSkeletonMode::Legacy;
-    std::ranges::for_each(installedNodes_, [&](const InstalledNode& installedNode) {
+    std::ranges::for_each(installedNodes_, [&](const InstalledNode &installedNode) {
         if (!skeletonEligible)
         {
             return;
@@ -1567,10 +1585,9 @@ void Renderer::collectOptionAvailability(
     }
     else
     {
-        cacheSuite_.skeletonCache.recordMiss(
-            renderGraphSkeletonMode_ == RenderGraphSkeletonMode::Legacy
-                ? RenderGraphSkeletonMissReason::Disabled
-                : RenderGraphSkeletonMissReason::UnsupportedNode);
+        cacheSuite_.skeletonCache.recordMiss(renderGraphSkeletonMode_ == RenderGraphSkeletonMode::Legacy
+                                                 ? RenderGraphSkeletonMissReason::Disabled
+                                                 : RenderGraphSkeletonMissReason::UnsupportedNode);
     }
 
     auto timings = RendererGraphBuildTimings{};
@@ -1594,21 +1611,19 @@ void Renderer::collectOptionAvailability(
                 namedFrameData,
             };
             globalPatch.patchResource(0u, GraphImportedImageDesc{
-                .debugName = "Renderer.EnvironmentMap",
-                .lifetime = ResourceLifetime::RendererPersistent,
-                .initialOwnership = environmentMapState_.common.ownership,
-                .extent = environmentMapImage_.extent(),
-                .format = environmentMapImage_.format(),
-                .usageIntents = {ImageUsageIntent::Sampled},
-                .initialLayout = environmentMapState_.layout,
-                .initialAccessScope = environmentMapState_.common.access,
-                .importedResource = std::cref(environmentMapImage_),
-                .retainedState = std::ref(environmentMapState_),
-            });
+                                              .debugName = "Renderer.EnvironmentMap",
+                                              .lifetime = ResourceLifetime::RendererPersistent,
+                                              .initialOwnership = environmentMapState_.common.ownership,
+                                              .extent = environmentMapImage_.extent(),
+                                              .format = environmentMapImage_.format(),
+                                              .usageIntents = {ImageUsageIntent::Sampled},
+                                              .initialLayout = environmentMapState_.layout,
+                                              .initialAccessScope = environmentMapState_.common.access,
+                                              .importedResource = std::cref(environmentMapImage_),
+                                              .retainedState = std::ref(environmentMapState_),
+                                          });
             auto const frameUniform = frameUniformArena_.patchUploadBytes(
-                globalPatch,
-                1u,
-                "Renderer.GlobalFrameUniforms",
+                globalPatch, 1u, "Renderer.GlobalFrameUniforms",
                 std::as_bytes(std::span{std::addressof(globalFrameUniforms), std::size_t{1u}}));
             auto const globalResources = FrameGlobalResources{
                 .frameUniform = frameUniform,
@@ -1621,7 +1636,8 @@ void Renderer::collectOptionAvailability(
             };
             if (sceneBridgeFrame.has_value())
             {
-                globalPatch.patchFrameData(0u, "SceneBridgeFrame", std::make_any<nr::scene::SceneBridgeFrame>(sceneBridgeFrame->get()));
+                globalPatch.patchFrameData(0u, "SceneBridgeFrame",
+                                           std::make_any<nr::scene::SceneBridgeFrame>(sceneBridgeFrame->get()));
                 nodeFrameParameters.sceneBridgeFrameHandle = globalPatch.namedFrameData("SceneBridgeFrame");
             }
             patched = true;
@@ -1632,20 +1648,17 @@ void Renderer::collectOptionAvailability(
                     return;
                 }
                 auto nodePatch = RenderGraphSkeletonPatchContext{
-                    currentFrame,
-                    skeleton->nodePatchLayouts[nodeIndex],
-                    namedFrameResources,
-                    namedFrameData,
-                    std::addressof(globalResources),
+                    currentFrame,   skeleton->nodePatchLayouts[nodeIndex], namedFrameResources,
+                    namedFrameData, std::addressof(globalResources),
                 };
-                auto const nodeStart = telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+                auto const nodeStart =
+                    telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
                 patched = installedNodes_[nodeIndex].runtime->materializeRenderGraphSkeleton(
-                    nodePatch,
-                    nodeFrameParameters,
-                    structuralSnapshots[nodeIndex]);
+                    nodePatch, nodeFrameParameters, structuralSnapshots[nodeIndex]);
                 if (telemetry.has_value())
                 {
-                    telemetry->nodeBuildMilliseconds[nodeIndex] = elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
+                    telemetry->nodeBuildMilliseconds[nodeIndex] =
+                        elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
                 }
             });
             if (patched)
@@ -1701,7 +1714,8 @@ void Renderer::collectOptionAvailability(
         frameResources.emplace("Renderer.GlobalFrameUniforms", globalResources.frameUniform.resource);
         if (sceneBridgeFrame.has_value())
         {
-            nodeFrameParameters.sceneBridgeFrameHandle = builder_.addFrameData("SceneBridgeFrame", sceneBridgeFrame->get());
+            nodeFrameParameters.sceneBridgeFrameHandle =
+                builder_.addFrameData("SceneBridgeFrame", sceneBridgeFrame->get());
             frameDataResources.emplace("SceneBridgeFrame", *nodeFrameParameters.sceneBridgeFrameHandle);
         }
         capture.globalPatchLayout = RenderGraphSkeletonNodePatchLayout{
@@ -1713,8 +1727,9 @@ void Renderer::collectOptionAvailability(
 
         auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
         std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
-            auto& installedNode = installedNodes_[nodeIndex];
-            auto const nodeStart = telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+            auto &installedNode = installedNodes_[nodeIndex];
+            auto const nodeStart =
+                telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             auto const resourceBegin = builder_.frame().resources.size();
             auto const frameDataBegin = builder_.frame().frameData.size();
             auto const passBegin = builder_.frame().passes.size();
@@ -1732,9 +1747,10 @@ void Renderer::collectOptionAvailability(
                 .globalResources = std::cref(globalResources),
                 .frameResources = std::ref(frameResources),
                 .frameDataResources = std::ref(frameDataResources),
-                .benchmarkTelemetry = telemetry.has_value()
-                                          ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{std::ref(*telemetry)}
-                                          : std::nullopt,
+                .benchmarkTelemetry =
+                    telemetry.has_value()
+                        ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{std::ref(*telemetry)}
+                        : std::nullopt,
             };
             installedNode.runtime->build(buildContext, nodeFrameParameters);
             capture.nodePatchLayouts.push_back(RenderGraphSkeletonNodePatchLayout{
@@ -1748,12 +1764,16 @@ void Renderer::collectOptionAvailability(
             });
             if (telemetry.has_value())
             {
-                telemetry->nodeBuildMilliseconds[nodeIndex] = elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
+                telemetry->nodeBuildMilliseconds[nodeIndex] =
+                    elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
             }
             auto boundaries = submitNodesByAfterIndex_.equal_range(nodeIndex);
-            std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto& entry) {
-                auto debugName = entry.second.debugName.empty() ? std::format("Submit.After.{}", installedNode.config.instanceName) : entry.second.debugName;
-                nrAssert(builder_.addSubmitNode(debugName).valid(), "Renderer::buildInstalledGraph failed to add a valid submit node.");
+            std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto &entry) {
+                auto debugName = entry.second.debugName.empty()
+                                     ? std::format("Submit.After.{}", installedNode.config.instanceName)
+                                     : entry.second.debugName;
+                nrAssert(builder_.addSubmitNode(debugName).valid(),
+                         "Renderer::buildInstalledGraph failed to add a valid submit node.");
             });
         });
         capture.namedFrameResources = std::move(frameResources);
@@ -1770,10 +1790,8 @@ void Renderer::collectOptionAvailability(
             }
             else
             {
-                skeletonProbe = cacheSuite_.skeletonCache.acceptMaterialized(
-                    skeletonKey,
-                    builder_.frame(),
-                    std::move(capture));
+                skeletonProbe =
+                    cacheSuite_.skeletonCache.acceptMaterialized(skeletonKey, builder_.frame(), std::move(capture));
             }
         }
         timings.nodeLoopMilliseconds = elapsedMilliseconds(coldBuildStart, std::chrono::steady_clock::now());
@@ -1785,11 +1803,10 @@ void Renderer::collectOptionAvailability(
         timings.preludeMilliseconds = elapsedMilliseconds(graphPreludeStart, nodeBuildStart);
     }
     timings.skeletonHit = skeletonProbe.structureMatches;
-    timings.skeletonMissReason = skeletonEligible
-                                     ? skeletonProbe.missReason
-                                     : renderGraphSkeletonMode_ == RenderGraphSkeletonMode::Legacy
-                                           ? RenderGraphSkeletonMissReason::Disabled
-                                           : RenderGraphSkeletonMissReason::UnsupportedNode;
+    timings.skeletonMissReason = skeletonEligible ? skeletonProbe.missReason
+                                 : renderGraphSkeletonMode_ == RenderGraphSkeletonMode::Legacy
+                                     ? RenderGraphSkeletonMissReason::Disabled
+                                     : RenderGraphSkeletonMissReason::UnsupportedNode;
     if (patchFailed)
     {
         timings.skeletonMissReason = RenderGraphSkeletonMissReason::PatchFailed;
@@ -1819,7 +1836,8 @@ void Renderer::teardownInstalledGraph()
     graphInstalled_ = false;
 }
 
-[[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> Renderer::ensureSceneExtractProfile(nr::scene::Scene &scene)
+[[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> Renderer::ensureSceneExtractProfile(
+    nr::scene::Scene &scene)
 {
     auto const sceneIdentity = scene.revisionsSnapshot().sceneIdentity;
     auto const sameScene = activeSceneIdentity_ == sceneIdentity;
@@ -1844,7 +1862,8 @@ void Renderer::teardownInstalledGraph()
     return {*sceneExtractProfile_, false};
 }
 
-[[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> Renderer::ensureSceneTlasExtractProfile(nr::scene::Scene &scene)
+[[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> Renderer::ensureSceneTlasExtractProfile(
+    nr::scene::Scene &scene)
 {
     auto const sceneIdentity = scene.revisionsSnapshot().sceneIdentity;
     auto const sameScene = activeSceneIdentity_ == sceneIdentity;

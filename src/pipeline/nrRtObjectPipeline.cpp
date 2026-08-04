@@ -53,16 +53,16 @@ namespace
     };
     if (dlssResolutionController)
     {
-        graphSpec.frameResolutionResolver = [controller = dlssResolutionController](
-                                                nr::rhi::Device &device,
-                                                vk::Extent2D displayExtent,
-                                                const nr::options::OptionFrameSnapshot& snapshot) {
-            auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{[&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) { return device.dlssContext()->optimalSettings(targetSize, quality); }};
-            return controller->resolve(
-                nr::renderPasses::dlssResolutionRequestFromSnapshot(snapshot),
-                displayExtent,
-                query);
-        };
+        graphSpec.frameResolutionResolver =
+            [controller = dlssResolutionController](nr::rhi::Device &device, vk::Extent2D displayExtent,
+                                                    const nr::options::OptionFrameSnapshot &snapshot) {
+                auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{
+                    [&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) {
+                        return device.dlssContext()->optimalSettings(targetSize, quality);
+                    }};
+                return controller->resolve(nr::renderPasses::dlssResolutionRequestFromSnapshot(snapshot), displayExtent,
+                                           query);
+            };
         graphSpec.frameResolutionOptionRequirements = {
             nr::options::optionId(nr::options::keys::dlssEnabled),
             nr::options::optionId(nr::options::keys::dlssQuality),

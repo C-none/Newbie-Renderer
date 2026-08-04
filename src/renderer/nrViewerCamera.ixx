@@ -63,21 +63,22 @@ class ViewerPerspectiveCamera
 
     [[nodiscard]] glm::uvec2 viewportExtent() const noexcept;
 
-    void setLens(const ViewerPerspectiveLens& lens) noexcept;
+    void setLens(const ViewerPerspectiveLens &lens) noexcept;
 
-    [[nodiscard]] const ViewerPerspectiveLens& lens() const noexcept;
+    [[nodiscard]] const ViewerPerspectiveLens &lens() const noexcept;
 
-    void setPose(const ViewerCameraPose& pose) noexcept;
+    void setPose(const ViewerCameraPose &pose) noexcept;
 
-    [[nodiscard]] const ViewerCameraPose& pose() const noexcept;
+    [[nodiscard]] const ViewerCameraPose &pose() const noexcept;
 
-    void setPoseFromLookAt(glm::vec3 position, glm::vec3 target, glm::vec3 worldUp = glm::vec3{0.0f, 1.0f, 0.0f}) noexcept;
+    void setPoseFromLookAt(glm::vec3 position, glm::vec3 target,
+                           glm::vec3 worldUp = glm::vec3{0.0f, 1.0f, 0.0f}) noexcept;
 
-    void setControlConfig(const ViewerCameraControlConfig& config) noexcept;
+    void setControlConfig(const ViewerCameraControlConfig &config) noexcept;
 
-    [[nodiscard]] const ViewerCameraControlConfig& controlConfig() const noexcept;
+    [[nodiscard]] const ViewerCameraControlConfig &controlConfig() const noexcept;
 
-    void applyControl(const ViewerCameraControlInput& input) noexcept;
+    void applyControl(const ViewerCameraControlInput &input) noexcept;
 
     [[nodiscard]] ViewerPerspectiveCameraFrame frame() const noexcept;
 

@@ -48,7 +48,9 @@ std::mutex &logWriteMutex() noexcept
 
 [[nodiscard]] std::int64_t unixTimestampNanoseconds() noexcept
 {
-    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+    return static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
 }
 
 [[nodiscard]] std::string makeGeneratedSessionId()
@@ -67,7 +69,9 @@ std::mutex &logWriteMutex() noexcept
     return output;
 }
 
-[[nodiscard]] std::expected<std::string, std::string> makeSessionRecord(const RotatingNdjsonLogConfig &config, std::string_view stream, const std::filesystem::path &activePath)
+[[nodiscard]] std::expected<std::string, std::string> makeSessionRecord(const RotatingNdjsonLogConfig &config,
+                                                                        std::string_view stream,
+                                                                        const std::filesystem::path &activePath)
 {
     return serializeRecord(JsonObject{
         {"active_path", Json{activePath.generic_string()}},
@@ -80,10 +84,16 @@ std::mutex &logWriteMutex() noexcept
     });
 }
 
-[[nodiscard]] std::expected<std::string, std::string> makeEngineRecord(LogLevel level, std::string_view channel, std::string_view context, std::optional<std::source_location> location)
+[[nodiscard]] std::expected<std::string, std::string> makeEngineRecord(LogLevel level, std::string_view channel,
+                                                                       std::string_view context,
+                                                                       std::optional<std::source_location> location)
 {
     auto record = JsonObject{
-        {"channel", Json{channel}}, {"level", Json{logLevelNames[static_cast<std::size_t>(level)]}}, {"message", Json{context.empty() ? std::string_view{"(none)"} : context}}, {"schema", Json{"NR_LOG_V1"}}, {"timestamp_unix_ns", Json{unixTimestampNanoseconds()}},
+        {"channel", Json{channel}},
+        {"level", Json{logLevelNames[static_cast<std::size_t>(level)]}},
+        {"message", Json{context.empty() ? std::string_view{"(none)"} : context}},
+        {"schema", Json{"NR_LOG_V1"}},
+        {"timestamp_unix_ns", Json{unixTimestampNanoseconds()}},
     };
     if (location.has_value())
     {
@@ -96,7 +106,8 @@ std::mutex &logWriteMutex() noexcept
     return serializeRecord(std::move(record));
 }
 
-[[nodiscard]] std::expected<std::string, std::string> makeCompactRecord(LogLevel level, std::string_view schema, std::string_view payload)
+[[nodiscard]] std::expected<std::string, std::string> makeCompactRecord(LogLevel level, std::string_view schema,
+                                                                        std::string_view payload)
 {
     auto parsed = json::parseJson(payload);
     auto record = JsonObject{};
@@ -115,7 +126,8 @@ std::mutex &logWriteMutex() noexcept
     return serializeRecord(std::move(record));
 }
 
-[[nodiscard]] std::string filesystemFailure(std::string_view operation, const std::filesystem::path &path, const std::error_code &error)
+[[nodiscard]] std::string filesystemFailure(std::string_view operation, const std::filesystem::path &path,
+                                            const std::error_code &error)
 {
     return std::format("{} '{}' failed: {}", operation, path.generic_string(), error.message());
 }
@@ -131,7 +143,9 @@ class ActiveLogDirectoryLease
 
     ActiveLogDirectoryLease(const ActiveLogDirectoryLease &) = delete;
     ActiveLogDirectoryLease &operator=(const ActiveLogDirectoryLease &) = delete;
-    ActiveLogDirectoryLease(ActiveLogDirectoryLease &&other) noexcept : path_(std::move(other.path_)), kernelLease_(std::move(other.kernelLease_)), acquired_(std::exchange(other.acquired_, false))
+    ActiveLogDirectoryLease(ActiveLogDirectoryLease &&other) noexcept
+        : path_(std::move(other.path_)), kernelLease_(std::move(other.kernelLease_)),
+          acquired_(std::exchange(other.acquired_, false))
     {
     }
     ActiveLogDirectoryLease &operator=(ActiveLogDirectoryLease &&other) noexcept
@@ -153,9 +167,11 @@ class ActiveLogDirectoryLease
         {
             if (kernelAcquired.error().error == dependency::process::ExclusiveDirectoryLeaseError::alreadyOwned)
             {
-                return std::unexpected{std::format("NDJSON log directory '{}' is already owned by another viewer.", directory.generic_string())};
+                return std::unexpected{std::format("NDJSON log directory '{}' is already owned by another viewer.",
+                                                   directory.generic_string())};
             }
-            return std::unexpected{std::format("Acquiring the NDJSON log-directory kernel lease failed: {}", kernelAcquired.error().detail)};
+            return std::unexpected{std::format("Acquiring the NDJSON log-directory kernel lease failed: {}",
+                                               kernelAcquired.error().detail)};
         }
 
         path_ = directory / ".active-viewer";
@@ -170,7 +186,8 @@ class ActiveLogDirectoryLease
         {
             if (!std::filesystem::is_directory(status))
             {
-                return std::unexpected{std::format("NDJSON viewer marker '{}' is not a directory.", path_.generic_string())};
+                return std::unexpected{
+                    std::format("NDJSON viewer marker '{}' is not a directory.", path_.generic_string())};
             }
             auto const markerEmpty = std::filesystem::is_empty(path_, error);
             if (error)
@@ -179,7 +196,8 @@ class ActiveLogDirectoryLease
             }
             if (!markerEmpty)
             {
-                return std::unexpected{std::format("NDJSON viewer marker '{}' is not empty; refusing automatic recovery.", path_.generic_string())};
+                return std::unexpected{std::format(
+                    "NDJSON viewer marker '{}' is not empty; refusing automatic recovery.", path_.generic_string())};
             }
             auto const removed = std::filesystem::remove(path_, error);
             if (error)
@@ -188,7 +206,8 @@ class ActiveLogDirectoryLease
             }
             if (!removed)
             {
-                return std::unexpected{std::format("Removing stale NDJSON viewer marker '{}' did not remove a directory.", path_.generic_string())};
+                return std::unexpected{std::format(
+                    "Removing stale NDJSON viewer marker '{}' did not remove a directory.", path_.generic_string())};
             }
         }
 
@@ -199,7 +218,8 @@ class ActiveLogDirectoryLease
         }
         if (!created)
         {
-            return std::unexpected{std::format("Creating NDJSON viewer marker '{}' did not create a directory.", path_.generic_string())};
+            return std::unexpected{
+                std::format("Creating NDJSON viewer marker '{}' did not create a directory.", path_.generic_string())};
         }
 
         acquired_ = true;
@@ -229,7 +249,9 @@ class ActiveLogDirectoryLease
 class RotatingNdjsonFile
 {
   public:
-    [[nodiscard]] std::expected<void, std::string> start(std::filesystem::path activePath, std::uintmax_t maximumFileBytes, std::size_t retainedFileCount, std::string sessionRecord)
+    [[nodiscard]] std::expected<void, std::string> start(std::filesystem::path activePath,
+                                                         std::uintmax_t maximumFileBytes, std::size_t retainedFileCount,
+                                                         std::string sessionRecord)
     {
         static_cast<void>(closeChecked());
         activePath_ = std::move(activePath);
@@ -271,7 +293,8 @@ class RotatingNdjsonFile
     {
         auto const lineBytes = static_cast<std::uintmax_t>(line.size());
         auto const requiredBytes = lineBytes == std::numeric_limits<std::uintmax_t>::max() ? lineBytes : lineBytes + 1u;
-        auto const wouldExceedLimit = currentBytes_ > maximumFileBytes_ || requiredBytes > maximumFileBytes_ - std::min(currentBytes_, maximumFileBytes_);
+        auto const wouldExceedLimit = currentBytes_ > maximumFileBytes_ ||
+                                      requiredBytes > maximumFileBytes_ - std::min(currentBytes_, maximumFileBytes_);
         if (currentBytes_ > sessionRecordBytes_ && wouldExceedLimit)
         {
             auto rotated = rotateCurrent();
@@ -296,7 +319,8 @@ class RotatingNdjsonFile
         stream_.flush();
         if (!stream_)
         {
-            return std::unexpected{std::format("Flushing active NDJSON log '{}' failed.", activePath_.generic_string())};
+            return std::unexpected{
+                std::format("Flushing active NDJSON log '{}' failed.", activePath_.generic_string())};
         }
         return {};
     }
@@ -309,7 +333,8 @@ class RotatingNdjsonFile
             stream_.flush();
             if (!stream_)
             {
-                failure = std::format("Flushing active NDJSON log '{}' before close failed.", activePath_.generic_string());
+                failure =
+                    std::format("Flushing active NDJSON log '{}' before close failed.", activePath_.generic_string());
             }
             stream_.close();
             if (stream_.fail() && !failure.has_value())
@@ -329,7 +354,8 @@ class RotatingNdjsonFile
   private:
     [[nodiscard]] std::filesystem::path rotatedPath(std::size_t index) const
     {
-        return activePath_.parent_path() / std::format("{}.{}{}", activePath_.stem().string(), index, activePath_.extension().string());
+        return activePath_.parent_path() /
+               std::format("{}.{}{}", activePath_.stem().string(), index, activePath_.extension().string());
     }
 
     [[nodiscard]] std::expected<void, std::string> rotateHistory()
@@ -353,7 +379,8 @@ class RotatingNdjsonFile
             }
             if (sourceExists)
             {
-                std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
+                std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing,
+                                           error);
                 if (error)
                 {
                     failure = filesystemFailure("Copying NDJSON rotation file", destination, error);
@@ -413,7 +440,8 @@ class RotatingNdjsonFile
         if (!stream_)
         {
             static_cast<void>(closeChecked());
-            return std::unexpected{std::format("Writing NDJSON session record to '{}' failed.", activePath_.generic_string())};
+            return std::unexpected{
+                std::format("Writing NDJSON session record to '{}' failed.", activePath_.generic_string())};
         }
         sessionRecordBytes_ = static_cast<std::uintmax_t>(sessionRecord_.size()) + 1u;
         currentBytes_ = sessionRecordBytes_;
@@ -460,11 +488,13 @@ class NdjsonSink
         }
         if (config.maximumFileBytes < minimumNdjsonFileBytes)
         {
-            return std::unexpected{std::format("The NDJSON maximum file size must be at least {} bytes.", minimumNdjsonFileBytes)};
+            return std::unexpected{
+                std::format("The NDJSON maximum file size must be at least {} bytes.", minimumNdjsonFileBytes)};
         }
         if (config.retainedFileCount > maximumRetainedFileCount)
         {
-            return std::unexpected{std::format("The NDJSON retained file count must not exceed {}.", maximumRetainedFileCount)};
+            return std::unexpected{
+                std::format("The NDJSON retained file count must not exceed {}.", maximumRetainedFileCount)};
         }
         if (config.queueCapacity == 0u || config.queueCapacity > maximumQueueCapacity)
         {
@@ -514,12 +544,14 @@ class NdjsonSink
             return std::unexpected{std::move(optionSessionRecord.error())};
         }
 
-        auto engineStarted = engine_.start(enginePath, config.maximumFileBytes, config.retainedFileCount, std::move(*engineSessionRecord));
+        auto engineStarted = engine_.start(enginePath, config.maximumFileBytes, config.retainedFileCount,
+                                           std::move(*engineSessionRecord));
         if (!engineStarted)
         {
             return engineStarted;
         }
-        auto optionStarted = options_.start(optionPath, config.maximumFileBytes, config.retainedFileCount, std::move(*optionSessionRecord));
+        auto optionStarted = options_.start(optionPath, config.maximumFileBytes, config.retainedFileCount,
+                                            std::move(*optionSessionRecord));
         if (!optionStarted)
         {
             static_cast<void>(engine_.closeChecked());
@@ -593,7 +625,8 @@ class NdjsonSink
             }
             if (leaseError)
             {
-                std::print(std::cerr, "{}[NR LOG:ERROR]{} Releasing the NDJSON viewer lease failed: {}\n", ansiRed, ansiReset, leaseError.message());
+                std::print(std::cerr, "{}[NR LOG:ERROR]{} Releasing the NDJSON viewer lease failed: {}\n", ansiRed,
+                           ansiReset, leaseError.message());
             }
             std::cerr.flush();
         }
@@ -641,7 +674,8 @@ class NdjsonSink
                 {
                     return;
                 }
-                auto appended = record.target == NdjsonTarget::engine ? engine_.append(record.line) : options_.append(record.line);
+                auto appended =
+                    record.target == NdjsonTarget::engine ? engine_.append(record.line) : options_.append(record.line);
                 if (!appended)
                 {
                     failure = std::move(appended.error());
@@ -681,8 +715,10 @@ class NdjsonSink
             if (failure.has_value())
             {
                 auto consoleLock = std::scoped_lock{logWriteMutex()};
-                std::print(std::cerr, "{}[NR LOG:ERROR]{} Rotating NDJSON sink disabled: {}\n", ansiRed, ansiReset, *failure);
-                std::ranges::for_each(fallbackRecords, [](const PendingRecord &record) { std::println(std::cerr, "{}", record.line); });
+                std::print(std::cerr, "{}[NR LOG:ERROR]{} Rotating NDJSON sink disabled: {}\n", ansiRed, ansiReset,
+                           *failure);
+                std::ranges::for_each(fallbackRecords,
+                                      [](const PendingRecord &record) { std::println(std::cerr, "{}", record.line); });
                 std::cerr.flush();
                 return;
             }
@@ -702,7 +738,8 @@ class NdjsonSink
         if (failure.has_value())
         {
             auto consoleLock = std::scoped_lock{logWriteMutex()};
-            std::print(std::cerr, "{}[NR LOG:ERROR]{} Rotating NDJSON final flush failed: {}\n", ansiRed, ansiReset, *failure);
+            std::print(std::cerr, "{}[NR LOG:ERROR]{} Rotating NDJSON final flush failed: {}\n", ansiRed, ansiReset,
+                       *failure);
             std::cerr.flush();
         }
     }
@@ -735,7 +772,9 @@ void writeConsoleLog(LogLevel level, std::string_view channel, std::string_view 
     auto const location = std::format("{}:{}", loc.file_name(), loc.line());
     auto lock = std::scoped_lock{logWriteMutex()};
     auto &stream = levelStream(level);
-    std::print(stream, "{}[NR {}:{}]{} {}\n{}{}{}\n{}\n", levelColor(level), channel, logLevelNames[static_cast<std::size_t>(level)], ansiReset, location, ansiPaleYellow, loc.function_name(), ansiReset, context.empty() ? "(none)" : context);
+    std::print(stream, "{}[NR {}:{}]{} {}\n{}{}{}\n{}\n", levelColor(level), channel,
+               logLevelNames[static_cast<std::size_t>(level)], ansiReset, location, ansiPaleYellow, loc.function_name(),
+               ansiReset, context.empty() ? "(none)" : context);
     stream.flush();
 }
 
@@ -743,7 +782,8 @@ void writeCompactConsoleLog(LogLevel level, std::string_view channel, std::strin
 {
     auto lock = std::scoped_lock{logWriteMutex()};
     auto &stream = levelStream(level);
-    std::print(stream, "{}[NR {}:{}]{} {}\n", levelColor(level), channel, logLevelNames[static_cast<std::size_t>(level)], ansiReset, context.empty() ? "(none)" : context);
+    std::print(stream, "{}[NR {}:{}]{} {}\n", levelColor(level), channel,
+               logLevelNames[static_cast<std::size_t>(level)], ansiReset, context.empty() ? "(none)" : context);
     stream.flush();
 }
 } // namespace
@@ -799,7 +839,8 @@ void emitAssertion(std::string_view context, std::source_location loc)
     auto const location = std::format("{}:{}", loc.file_name(), loc.line());
     {
         auto lock = std::scoped_lock{logWriteMutex()};
-        std::print(std::cerr, "{}[NR ASSERT]{} {}\n{}{}{}\n{}\n", ansiRedBold, ansiReset, location, ansiPaleYellow, loc.function_name(), ansiReset, context.empty() ? "(none)" : context);
+        std::print(std::cerr, "{}[NR ASSERT]{} {}\n{}{}{}\n{}\n", ansiRedBold, ansiReset, location, ansiPaleYellow,
+                   loc.function_name(), ansiReset, context.empty() ? "(none)" : context);
         std::cerr.flush();
     }
     shutdownNdjsonLogs();
@@ -844,7 +885,8 @@ RotatingNdjsonLogSession::~RotatingNdjsonLogSession()
     }
 }
 
-RotatingNdjsonLogSession::RotatingNdjsonLogSession(RotatingNdjsonLogSession &&other) noexcept : active_(std::exchange(other.active_, false))
+RotatingNdjsonLogSession::RotatingNdjsonLogSession(RotatingNdjsonLogSession &&other) noexcept
+    : active_(std::exchange(other.active_, false))
 {
 }
 

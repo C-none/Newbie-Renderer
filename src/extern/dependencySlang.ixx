@@ -9,7 +9,6 @@ export namespace Slang
 using ::Slang::ComPtr;
 } // namespace Slang
 
-
 export namespace slang
 {
 using ::slang::BindingType;
@@ -34,7 +33,6 @@ using ::slang::TypeLayoutReflection;
 using ::slang::TypeReflection;
 using ::slang::VariableLayoutReflection;
 } // namespace slang
-
 
 export using ::SlangCompileTarget;
 export using ::SlangInt;

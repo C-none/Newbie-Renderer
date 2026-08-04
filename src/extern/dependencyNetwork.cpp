@@ -99,7 +99,8 @@ using ErrorCode = boost::system::error_code;
 class TokenBucket
 {
   public:
-    TokenBucket(double rate, double burst) : rate_(rate), capacity_(burst), tokens_(burst), updated_(std::chrono::steady_clock::now())
+    TokenBucket(double rate, double burst)
+        : rate_(rate), capacity_(burst), tokens_(burst), updated_(std::chrono::steady_clock::now())
     {
     }
 
@@ -124,7 +125,8 @@ class TokenBucket
         }
         auto const deficit = amount - tokens_;
         tokens_ = 0.0;
-        return std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>{deficit / rate_});
+        return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>{deficit / rate_});
     }
 
   private:
@@ -167,8 +169,11 @@ class Connection final : public std::enable_shared_from_this<Connection>
 {
   public:
     Connection(Tcp::socket socket, std::shared_ptr<ServerState> state)
-        : webSocket_(std::move(socket)), headerBuffer_(state->config.limits.maximumHeaderBytes), messageBuffer_(messageBufferLimit(state->config.limits.maximumMessageBytes)), idleTimer_(webSocket_.get_executor()), outboundTimer_(webSocket_.get_executor()), state_(std::move(state)),
-          requestBucket_(state_->config.limits.requestsPerSecond, state_->config.limits.requestBurst), inboundBucket_(state_->config.limits.inboundBytesPerSecond, state_->config.limits.inboundBurstBytes),
+        : webSocket_(std::move(socket)), headerBuffer_(state->config.limits.maximumHeaderBytes),
+          messageBuffer_(messageBufferLimit(state->config.limits.maximumMessageBytes)),
+          idleTimer_(webSocket_.get_executor()), outboundTimer_(webSocket_.get_executor()), state_(std::move(state)),
+          requestBucket_(state_->config.limits.requestsPerSecond, state_->config.limits.requestBurst),
+          inboundBucket_(state_->config.limits.inboundBytesPerSecond, state_->config.limits.inboundBurstBytes),
           outboundBucket_(state_->config.limits.outboundBytesPerSecond, state_->config.limits.outboundBurstBytes)
     {
         responseSlot_.reserve(state_->config.limits.maximumResponseBytes);
@@ -179,7 +184,8 @@ class Connection final : public std::enable_shared_from_this<Connection>
     void start()
     {
         beast::get_lowest_layer(webSocket_).expires_after(state_->config.limits.handshakeTimeout);
-        http::async_read(beast::get_lowest_layer(webSocket_), headerBuffer_, requestParser_, [self = shared_from_this()](ErrorCode error, std::size_t) { self->onHttpRequest(error); });
+        http::async_read(beast::get_lowest_layer(webSocket_), headerBuffer_, requestParser_,
+                         [self = shared_from_this()](ErrorCode error, std::size_t) { self->onHttpRequest(error); });
     }
 
     void stopFromServer() noexcept
@@ -205,7 +211,9 @@ class Connection final : public std::enable_shared_from_this<Connection>
         auto const &request = *request_;
         auto const authorizationIt = request.find(http::field::authorization);
         auto const originIt = request.find(http::field::origin);
-        auto const authorization = authorizationIt != request.end() ? std::string_view{authorizationIt->value().data(), authorizationIt->value().size()} : std::string_view{};
+        auto const authorization = authorizationIt != request.end() ? std::string_view{authorizationIt->value().data(),
+                                                                                       authorizationIt->value().size()}
+                                                                    : std::string_view{};
         auto const target = std::string_view{request.target().data(), request.target().size()};
         auto const decision = evaluateHandshake(
             HandshakeRequest{
@@ -240,7 +248,8 @@ class Connection final : public std::enable_shared_from_this<Connection>
                 self->onControlFrame(kind);
             }
         });
-        webSocket_.async_accept(*request_, [self = shared_from_this()](ErrorCode acceptError) { self->onWebSocketAccepted(acceptError); });
+        webSocket_.async_accept(
+            *request_, [self = shared_from_this()](ErrorCode acceptError) { self->onWebSocketAccepted(acceptError); });
     }
 
     void rejectHandshake(HandshakeRejectReason reason)
@@ -264,7 +273,8 @@ class Connection final : public std::enable_shared_from_this<Connection>
         response.prepare_payload();
         httpResponse_.emplace(std::move(response));
         beast::get_lowest_layer(webSocket_).expires_after(state_->config.limits.handshakeTimeout);
-        http::async_write(beast::get_lowest_layer(webSocket_), *httpResponse_, [self = shared_from_this()](ErrorCode, std::size_t) { self->finish("handshake_rejected"); });
+        http::async_write(beast::get_lowest_layer(webSocket_), *httpResponse_,
+                          [self = shared_from_this()](ErrorCode, std::size_t) { self->finish("handshake_rejected"); });
     }
 
     void onWebSocketAccepted(const ErrorCode &error)
@@ -288,7 +298,9 @@ class Connection final : public std::enable_shared_from_this<Connection>
             return;
         }
         messageBuffer_.consume(messageBuffer_.size());
-        webSocket_.async_read(messageBuffer_, [self = shared_from_this()](ErrorCode error, std::size_t bytes) { self->onMessage(error, bytes); });
+        webSocket_.async_read(messageBuffer_, [self = shared_from_this()](ErrorCode error, std::size_t bytes) {
+            self->onMessage(error, bytes);
+        });
     }
 
     void onMessage(const ErrorCode &error, std::size_t bytes)
@@ -301,7 +313,10 @@ class Connection final : public std::enable_shared_from_this<Connection>
             }
             else if (error == websocket::error::message_too_big || error == websocket::error::bad_frame_payload)
             {
-                finishProtocolReadError(error == websocket::error::message_too_big ? WebSocketCloseCode::messageTooBig : WebSocketCloseCode::invalidPayload, error == websocket::error::message_too_big ? "message_too_big" : "invalid_utf8");
+                finishProtocolReadError(error == websocket::error::message_too_big ? WebSocketCloseCode::messageTooBig
+                                                                                   : WebSocketCloseCode::invalidPayload,
+                                        error == websocket::error::message_too_big ? "message_too_big"
+                                                                                   : "invalid_utf8");
             }
             else if (error == websocket::error::buffer_overflow)
             {
@@ -332,7 +347,9 @@ class Connection final : public std::enable_shared_from_this<Connection>
         auto const inboundAllowed = inboundBucket_.consume(static_cast<double>(bytes));
         auto payload = beast::buffers_to_string(messageBuffer_.data());
         responseSlot_.clear();
-        auto const result = state_->messageHandler(std::string_view{payload}, MessageContext{.rateLimited = !requestAllowed || !inboundAllowed}, responseSlot_);
+        auto const result =
+            state_->messageHandler(std::string_view{payload},
+                                   MessageContext{.rateLimited = !requestAllowed || !inboundAllowed}, responseSlot_);
         if (!result.responseReady)
         {
             readNext();
@@ -384,7 +401,9 @@ class Connection final : public std::enable_shared_from_this<Connection>
         }
         responseWriteInProgress_ = true;
         webSocket_.text(true);
-        webSocket_.async_write(asio::buffer(responseSlot_), [self = shared_from_this()](ErrorCode error, std::size_t) { self->onResponseWritten(error); });
+        webSocket_.async_write(asio::buffer(responseSlot_), [self = shared_from_this()](ErrorCode error, std::size_t) {
+            self->onResponseWritten(error);
+        });
     }
 
     void onResponseWritten(const ErrorCode &error)
@@ -443,7 +462,8 @@ class Connection final : public std::enable_shared_from_this<Connection>
             finish("pong_timeout");
             return;
         }
-        if (!pingOutstanding_ && !controlWriteInProgress_ && !responsePending_ && !responseWriteInProgress_ && now - lastInbound_ >= state_->config.limits.idleBeforePing)
+        if (!pingOutstanding_ && !controlWriteInProgress_ && !responsePending_ && !responseWriteInProgress_ &&
+            now - lastInbound_ >= state_->config.limits.idleBeforePing)
         {
             controlWriteInProgress_ = true;
             pingSentAt_ = now;
@@ -545,7 +565,8 @@ class Connection final : public std::enable_shared_from_this<Connection>
 class Listener final : public std::enable_shared_from_this<Listener>
 {
   public:
-    Listener(asio::io_context &context, std::shared_ptr<ServerState> state) : context_(context), acceptor_(context), state_(std::move(state))
+    Listener(asio::io_context &context, std::shared_ptr<ServerState> state)
+        : context_(context), acceptor_(context), state_(std::move(state))
     {
     }
 
@@ -587,7 +608,8 @@ class Listener final : public std::enable_shared_from_this<Listener>
 
     void startAccepting()
     {
-        acceptor_.async_accept(asio::make_strand(context_.get()), [self = shared_from_this()](ErrorCode error, Tcp::socket socket) {
+        acceptor_.async_accept(asio::make_strand(context_.get()), [self = shared_from_this()](ErrorCode error,
+                                                                                              Tcp::socket socket) {
             if (!error)
             {
                 std::erase_if(self->state_->connections, [](auto const &connection) { return connection.expired(); });
@@ -648,7 +670,8 @@ class Listener final : public std::enable_shared_from_this<Listener>
 };
 } // namespace
 
-HandshakeRejectReason evaluateHandshake(const HandshakeRequest &request, std::string_view bearerToken, const WebSocketLimits &limits) noexcept
+HandshakeRejectReason evaluateHandshake(const HandshakeRequest &request, std::string_view bearerToken,
+                                        const WebSocketLimits &limits) noexcept
 {
     if (!request.websocketUpgrade)
     {
@@ -683,7 +706,8 @@ HandshakeRejectReason evaluateHandshake(const HandshakeRequest &request, std::st
     return HandshakeRejectReason::none;
 }
 
-PayloadDecision evaluatePayload(PayloadKind kind, bool validUtf8, std::size_t reassembledBytes, const WebSocketLimits &limits) noexcept
+PayloadDecision evaluatePayload(PayloadKind kind, bool validUtf8, std::size_t reassembledBytes,
+                                const WebSocketLimits &limits) noexcept
 {
     if (kind == PayloadKind::binary)
     {
@@ -708,14 +732,18 @@ std::string WebSocketEndpoint::uri() const
 class LoopbackWebSocketServer::Impl
 {
   public:
-    [[nodiscard]] ServerStartResult start(WebSocketServerConfig config, TextMessageHandler messageHandler, TransportEventHandler eventHandler)
+    [[nodiscard]] ServerStartResult start(WebSocketServerConfig config, TextMessageHandler messageHandler,
+                                          TransportEventHandler eventHandler)
     {
         if (running_.load(std::memory_order_acquire))
         {
             return ServerStartResult{.error = ServerStartError::alreadyRunning};
         }
-        if (config.bearerToken.empty() || !messageHandler || config.limits.maximumMessageBytes == 0u || config.limits.maximumResponseBytes == 0u || config.limits.requestsPerSecond <= 0.0 || config.limits.requestBurst <= 0.0 || config.limits.inboundBytesPerSecond <= 0.0 ||
-            config.limits.inboundBurstBytes <= 0.0 || config.limits.outboundBytesPerSecond <= 0.0 || config.limits.outboundBurstBytes < static_cast<double>(config.limits.maximumResponseBytes))
+        if (config.bearerToken.empty() || !messageHandler || config.limits.maximumMessageBytes == 0u ||
+            config.limits.maximumResponseBytes == 0u || config.limits.requestsPerSecond <= 0.0 ||
+            config.limits.requestBurst <= 0.0 || config.limits.inboundBytesPerSecond <= 0.0 ||
+            config.limits.inboundBurstBytes <= 0.0 || config.limits.outboundBytesPerSecond <= 0.0 ||
+            config.limits.outboundBurstBytes < static_cast<double>(config.limits.maximumResponseBytes))
         {
             return ServerStartResult{.error = ServerStartError::invalidConfiguration};
         }
@@ -801,7 +829,8 @@ LoopbackWebSocketServer::~LoopbackWebSocketServer()
     stop();
 }
 
-ServerStartResult LoopbackWebSocketServer::start(WebSocketServerConfig config, TextMessageHandler messageHandler, TransportEventHandler eventHandler)
+ServerStartResult LoopbackWebSocketServer::start(WebSocketServerConfig config, TextMessageHandler messageHandler,
+                                                 TransportEventHandler eventHandler)
 {
     return impl_->start(std::move(config), std::move(messageHandler), std::move(eventHandler));
 }

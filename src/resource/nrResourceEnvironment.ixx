@@ -27,11 +27,8 @@ struct EnvironmentMap
 
     [[nodiscard]] bool valid() const noexcept
     {
-        if (!radiance.valid() ||
-            radiance.dimension != vk::ImageType::e2D ||
-            radiance.format != vk::Format::eR16G16B16A16Sfloat ||
-            radiance.srgb ||
-            radiance.mipCount != 1u ||
+        if (!radiance.valid() || radiance.dimension != vk::ImageType::e2D ||
+            radiance.format != vk::Format::eR16G16B16A16Sfloat || radiance.srgb || radiance.mipCount != 1u ||
             radiance.levels.size() != 1u)
         {
             return false;
@@ -46,9 +43,8 @@ struct EnvironmentMap
             return false;
         }
 
-        return std::isfinite(radianceDecodeScale) && radianceDecodeScale > 0.0f &&
-               std::isfinite(intensity) && intensity >= 0.0f &&
-               std::isfinite(yawRadians);
+        return std::isfinite(radianceDecodeScale) && radianceDecodeScale > 0.0f && std::isfinite(intensity) &&
+               intensity >= 0.0f && std::isfinite(yawRadians);
     }
 };
 } // namespace nr::resource

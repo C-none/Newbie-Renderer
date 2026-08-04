@@ -115,7 +115,10 @@ struct OptionWireValue
 };
 
 template <typename T>
-concept WireValueAlternative = std::same_as<T, bool> || std::same_as<T, std::int64_t> || std::same_as<T, std::uint64_t> || std::same_as<T, double> || std::same_as<T, std::string> || std::same_as<T, OptionWireValue::Array> || std::same_as<T, OptionWireValue::Object>;
+concept WireValueAlternative =
+    std::same_as<T, bool> || std::same_as<T, std::int64_t> || std::same_as<T, std::uint64_t> ||
+    std::same_as<T, double> || std::same_as<T, std::string> || std::same_as<T, OptionWireValue::Array> ||
+    std::same_as<T, OptionWireValue::Object>;
 
 template <WireValueAlternative T> class OptionKey
 {
@@ -204,7 +207,8 @@ struct OptionSchema
     [[nodiscard]] static OptionSchema number(double minimum, double maximum) noexcept;
     [[nodiscard]] static OptionSchema string(std::size_t maximumBytes, std::vector<std::string> allowed = {});
     [[nodiscard]] static OptionSchema array(OptionSchema element, std::size_t minimumItems, std::size_t maximumItems);
-    [[nodiscard]] static OptionSchema object(std::map<std::string, OptionObjectField, std::less<>> fields, ObjectValidator validator = {});
+    [[nodiscard]] static OptionSchema object(std::map<std::string, OptionObjectField, std::less<>> fields,
+                                             ObjectValidator validator = {});
     [[nodiscard]] static OptionSchema emptyObject();
 
     [[nodiscard]] SchemaValidation validate(const OptionWireValue &value, std::size_t maximumDepth = 16u) const;
@@ -242,7 +246,8 @@ struct OptionPresentation
 };
 
 using OptionValueMap = std::map<OptionId, OptionWireValue>;
-using OptionAdmissionValidator = std::function<std::optional<std::string>(const OptionWireValue &, const OptionValueMap &)>;
+using OptionAdmissionValidator =
+    std::function<std::optional<std::string>(const OptionWireValue &, const OptionValueMap &)>;
 
 struct OptionDefinition
 {

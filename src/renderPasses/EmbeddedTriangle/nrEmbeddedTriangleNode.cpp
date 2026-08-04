@@ -16,17 +16,16 @@ struct EmbeddedTriangleRuntimeCache
 };
 
 [[nodiscard]] std::shared_ptr<EmbeddedTriangleRuntimeCache> ensureEmbeddedTriangleRuntime(
-    nr::rhi::Device& device,
-    std::span<const nr::rhi::SlangProgram> programs,
-    vk::Format colorFormat)
+    nr::rhi::Device &device, std::span<const nr::rhi::SlangProgram> programs, vk::Format colorFormat,
+    std::string debugName)
 {
     auto pipelineDesc = nr::rhi::GraphicsPipelineDesc{};
     pipelineDesc.colorAttachmentFormats = {colorFormat};
 
     auto runtime = std::make_shared<EmbeddedTriangleRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createGraphicsPipeline(programs, pipelineDesc));
-    nr::nrAssert(runtime->pipeline->valid(), "EmbeddedTriangle pass failed to create graphics pipeline.");
+    runtime->pipeline->initialize(
+        device.pipeline().createGraphicsPipeline(programs, pipelineDesc, 64u, {}, std::move(debugName)));
 
     return runtime;
 }
@@ -48,31 +47,29 @@ EmbeddedTriangleNode::~EmbeddedTriangleNode() = default;
     };
 }
 
-void EmbeddedTriangleNode::initialize(NodeInitContext& context)
+void EmbeddedTriangleNode::initialize(NodeInitContext &context)
 {
-    nr::nrAssert(
-        context.shaderPrograms.size() == 2u &&
-            context.shaderPrograms[0].entryPoint() != nullptr &&
-            context.shaderPrograms[0].entryPoint()->stage == SLANG_STAGE_VERTEX &&
-            context.shaderPrograms[1].entryPoint() != nullptr &&
-            context.shaderPrograms[1].entryPoint()->stage == SLANG_STAGE_FRAGMENT,
-        "EmbeddedTriangle initialization requires ordered vertex and fragment shaders.");
+    nr::nrAssert(context.shaderPrograms.size() == 2u && context.shaderPrograms[0].entryPoint() != nullptr &&
+                     context.shaderPrograms[0].entryPoint()->stage == SLANG_STAGE_VERTEX &&
+                     context.shaderPrograms[1].entryPoint() != nullptr &&
+                     context.shaderPrograms[1].entryPoint()->stage == SLANG_STAGE_FRAGMENT,
+                 "EmbeddedTriangle initialization requires ordered vertex and fragment shaders.");
     auto colorFormat = input.colorFormat;
     if (colorFormat == vk::Format::eUndefined)
     {
         colorFormat = context.device.get().presentationContext.swapchainFormat();
     }
-    runtime_ = detail::ensureEmbeddedTriangleRuntime(
-        context.device.get(),
-        context.shaderPrograms,
-        colorFormat);
-    nr::rhi::setPipelineDebugName(
-        context.device.get().device,
-        runtime_->pipeline->pipeline().raw(),
-        context.runtimeName + ".Pipeline");
+    runtime_ = detail::ensureEmbeddedTriangleRuntime(context.device.get(), context.shaderPrograms, colorFormat,
+                                                     context.runtimeName + ".Pipeline");
 }
 
-void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
+void EmbeddedTriangleNode::finalizeInitialization()
+{
+    nr::nrAssert(runtime_ && runtime_->pipeline && runtime_->pipeline->valid(),
+                 "EmbeddedTriangle async graphics PSO construction failed.");
+}
+
+void EmbeddedTriangleNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     nr::nrAssert(static_cast<bool>(runtime_), "EmbeddedTriangle build stage requires initialized runtime state.");
 
@@ -86,25 +83,16 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
 
     auto color = context.transientColor("EmbeddedTriangle.Color", viewportExtent, colorFormat);
 
-    auto rasterPass = nr::renderer::RasterPassBuilder{
-        context,
-        "EmbeddedTriangle.Raster",
-        runtime_->pipeline};
-    rasterPass
-        .viewport(viewportExtent)
+    auto rasterPass = nr::renderer::RasterPassBuilder{context, "EmbeddedTriangle.Raster", runtime_->pipeline};
+    rasterPass.viewport(viewportExtent)
         .viewportYMode(nr::renderer::RasterViewportYMode::ClipSpaceYUp)
-        .colorAttachment(
-            color,
-            vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}})
-        .uniform(
-            "gFrame",
-            context.globalResources.get().frameUniform,
-            "Renderer.GlobalFrameUniforms",
-            nr::renderer::ShaderStageIntent::Vertex)
+        .colorAttachment(color, vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}})
+        .uniform("gFrame", context.globalResources.get().frameUniform, "Renderer.GlobalFrameUniforms",
+                 nr::renderer::ShaderStageIntent::Vertex)
         .rasterState(nr::rhi::MeshRasterState{
             .cullMode = vk::CullModeFlagBits::eNone,
         })
-        .record([](const nr::renderer::RasterPassRecordContext& rasterContext) {
+        .record([](const nr::renderer::RasterPassRecordContext &rasterContext) {
             rasterContext.commandBuffer.draw(3, 1, 0, 0);
         });
 
@@ -113,7 +101,7 @@ void EmbeddedTriangleNode::build(NodeBuildContext& context, const NodeFrameParam
     context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, color);
 }
 
-void EmbeddedTriangleNode::shutdown(NodeShutdownContext&)
+void EmbeddedTriangleNode::shutdown(NodeShutdownContext &)
 {
     if (runtime_ && runtime_->pipeline)
     {

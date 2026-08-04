@@ -11,8 +11,7 @@ static_assert(!std::is_move_assignable_v<nr::renderer::Renderer>);
 static_assert(std::is_nothrow_destructible_v<nr::renderer::Renderer>);
 
 const nr::test::CaseRegistrar defaultShutdownCase{
-    "default renderer shutdown is idempotent",
-    [] {
+    "default renderer shutdown is idempotent", [] {
         auto renderer = nr::renderer::Renderer{};
 
         nr::test::require(!renderer.initialized(), "default renderer should not be initialized");

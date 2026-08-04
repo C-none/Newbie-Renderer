@@ -10,8 +10,7 @@ export namespace nr::resource::math
     return std::isfinite(value);
 }
 
-template <typename... TValues>
-[[nodiscard]] inline bool finiteComponents(TValues... values) noexcept
+template <typename... TValues> [[nodiscard]] inline bool finiteComponents(TValues... values) noexcept
 {
     return (... && finiteFloat(static_cast<float>(values)));
 }

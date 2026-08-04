@@ -35,21 +35,16 @@ inline constexpr std::uint32_t kToneMappingAcesFilmic = 2u;
 inline constexpr std::uint32_t kToneMappingBt2390 = 3u;
 
 template <typename T>
-[[nodiscard]] const T& requiredOption(
-    const nr::options::OptionFrameSnapshot& snapshot,
-    nr::options::OptionKey<T> key)
+[[nodiscard]] const T &requiredOption(const nr::options::OptionFrameSnapshot &snapshot, nr::options::OptionKey<T> key)
 {
-    auto const* value = snapshot.find(key);
-    nr::nrAssert(
-        value != nullptr,
-        std::format("Present requires option '{}' in the frame snapshot.", key.id()));
+    auto const *value = snapshot.find(key);
+    nr::nrAssert(value != nullptr, std::format("Present requires option '{}' in the frame snapshot.", key.id()));
     return *value;
 }
 
-[[nodiscard]] std::uint32_t toneMappingSelection(
-    const nr::options::OptionFrameSnapshot& snapshot)
+[[nodiscard]] std::uint32_t toneMappingSelection(const nr::options::OptionFrameSnapshot &snapshot)
 {
-    auto const& value = requiredOption(snapshot, nr::options::keys::presentToneMapping);
+    auto const &value = requiredOption(snapshot, nr::options::keys::presentToneMapping);
     if (value == "auto")
     {
         return 0u;
@@ -70,18 +65,15 @@ template <typename T>
     return 4u;
 }
 
-[[nodiscard]] float uiOpacity(const nr::options::OptionFrameSnapshot& snapshot)
+[[nodiscard]] float uiOpacity(const nr::options::OptionFrameSnapshot &snapshot)
 {
-    return static_cast<float>(
-        requiredOption(snapshot, nr::options::keys::presentUiOpacity));
+    return static_cast<float>(requiredOption(snapshot, nr::options::keys::presentUiOpacity));
 }
 
-[[nodiscard]] bool hasCaptureEffect(
-    const nr::options::OptionFrameSnapshot& snapshot)
+[[nodiscard]] bool hasCaptureEffect(const nr::options::OptionFrameSnapshot &snapshot)
 {
     return snapshot.effect.has_value() &&
-           snapshot.effect->id ==
-               nr::options::optionId(nr::options::keys::presentCaptureExr);
+           snapshot.effect->id == nr::options::optionId(nr::options::keys::presentCaptureExr);
 }
 
 // Defaults follow the color-space research: SDR sRGB -> ACES filmic, HDR10 ST2084 -> BT.2390 EETF,
@@ -125,9 +117,8 @@ struct PresentRuntimeCache
     vk::Format allocatedFormat = vk::Format::eUndefined;
 };
 
-[[nodiscard]] std::optional<PresentFormatConversion> resolvePresentFormatConversion(
-    vk::Format format,
-    vk::ColorSpaceKHR colorSpace)
+[[nodiscard]] std::optional<PresentFormatConversion> resolvePresentFormatConversion(vk::Format format,
+                                                                                    vk::ColorSpaceKHR colorSpace)
 {
     switch (format)
     {
@@ -166,14 +157,13 @@ struct PresentRuntimeCache
     }
 }
 
-[[nodiscard]] std::shared_ptr<PresentRuntimeCache> ensurePresentRuntime(
-    nr::rhi::Device& device,
-    const nr::rhi::SlangProgram& program)
+[[nodiscard]] std::shared_ptr<PresentRuntimeCache> ensurePresentRuntime(nr::rhi::Device &device,
+                                                                        const nr::rhi::SlangProgram &program,
+                                                                        std::string debugName)
 {
     auto runtime = std::make_shared<PresentRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program));
-    nr::nrAssert(runtime->pipeline->valid(), "Present pass failed to create compute pipeline.");
+    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program, {}, 64u, {}, std::move(debugName)));
 
     return runtime;
 }
@@ -200,17 +190,15 @@ struct PresentRuntimeCache
     case vk::Format::eR32G32B32A32Sfloat:
         return 16u;
     default:
-        nr::nrAssert(
-            false,
-            std::format("Present readback unsupported format for size estimation: {}", vk::to_string(format)));
+        nr::nrAssert(false,
+                     std::format("Present readback unsupported format for size estimation: {}", vk::to_string(format)));
         return 0u;
     }
 }
 
 [[nodiscard]] vk::DeviceSize presentReadbackByteSize(vk::Extent2D extent, vk::Format format) noexcept
 {
-    return static_cast<vk::DeviceSize>(extent.width) *
-           static_cast<vk::DeviceSize>(extent.height) *
+    return static_cast<vk::DeviceSize>(extent.width) * static_cast<vk::DeviceSize>(extent.height) *
            presentReadbackBytesPerPixel(format);
 }
 
@@ -230,39 +218,31 @@ struct PresentRuntimeCache
     }
 }
 
-[[nodiscard]] std::filesystem::path makeScreenshotPath(
-    const PresentScreenshotConfig& config,
-    std::uint64_t sequence,
-    std::uint64_t frameIndex)
+[[nodiscard]] std::filesystem::path makeScreenshotPath(const PresentScreenshotConfig &config, std::uint64_t sequence,
+                                                       std::uint64_t frameIndex)
 {
-    auto outputDirectory = config.outputDirectory.empty()
-                               ? std::filesystem::path{"screenshots"}
-                               : config.outputDirectory;
-    auto const sessionId = config.sessionId.empty()
-                               ? std::string{"session"}
-                               : config.sessionId;
-    return outputDirectory /
-           sessionId /
-           std::format("capture_{}_frame_{}.exr", sequence, frameIndex);
+    auto outputDirectory =
+        config.outputDirectory.empty() ? std::filesystem::path{"screenshots"} : config.outputDirectory;
+    auto const sessionId = config.sessionId.empty() ? std::string{"session"} : config.sessionId;
+    return outputDirectory / sessionId / std::format("capture_{}_frame_{}.exr", sequence, frameIndex);
 }
 
-[[nodiscard]] nr::renderer::GraphResourceHandle makeTransparentUiFallback(
-    nr::renderer::NodeBuildContext& context,
-    vk::Extent2D extent)
+[[nodiscard]] nr::renderer::GraphResourceHandle makeTransparentUiFallback(nr::renderer::NodeBuildContext &context,
+                                                                          vk::Extent2D extent)
 {
     auto fallback = context.addResource(nr::renderer::GraphTransientImageDesc{
         .debugName = "Present.TransparentUiFallback",
         .extent = vk::Extent3D{extent.width, extent.height, 1u},
         .format = vk::Format::eR8G8B8A8Unorm,
-        .usageIntents = {
-            nr::renderer::ImageUsageIntent::TransferDst,
-            nr::renderer::ImageUsageIntent::Sampled,
-        },
+        .usageIntents =
+            {
+                nr::renderer::ImageUsageIntent::TransferDst,
+                nr::renderer::ImageUsageIntent::Sampled,
+            },
     });
 
     [[maybe_unused]] auto clearPassHandle = nr::renderer::ops::clearColorImage(
-        context,
-        "Present.ClearTransparentUiFallback",
+        context, "Present.ClearTransparentUiFallback",
         nr::renderer::ops::ClearColorImagePassDesc{
             .image = fallback,
             .value = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}},
@@ -271,28 +251,19 @@ struct PresentRuntimeCache
     return fallback;
 }
 
-void ensureConvertedColorImage(
-    nr::rhi::Device& device,
-    PresentRuntimeCache& runtime,
-    vk::Extent2D extent,
-    vk::Format format)
+void ensureConvertedColorImage(nr::rhi::Device &device, PresentRuntimeCache &runtime, vk::Extent2D extent,
+                               vk::Format format)
 {
-    if (runtime.allocatedExtent == extent &&
-        runtime.allocatedFormat == format &&
-        runtime.convertedColorImage.valid())
+    if (runtime.allocatedExtent == extent && runtime.allocatedFormat == format && runtime.convertedColorImage.valid())
     {
         return;
     }
 
     auto imageInfo = nr::rhi::makeImageCreateInfo(
-        format,
-        extent,
-        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc);
+        format, extent, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc);
 
-    runtime.convertedColorImage = device.resourceFactory.createImage(
-        imageInfo,
-        nr::rhi::MemoryUsage::GpuOnly,
-        "Present.ConvertedColor");
+    runtime.convertedColorImage =
+        device.resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly, "Present.ConvertedColor");
     nr::nrAssert(runtime.convertedColorImage.valid(), "Present failed to allocate convertedColor image.");
     runtime.convertedColorState.reset();
 
@@ -300,65 +271,47 @@ void ensureConvertedColorImage(
     runtime.allocatedFormat = format;
 }
 
-void ensureScreenshotReadbackBuffer(
-    nr::rhi::Device& device,
-    nr::rhi::Buffer& buffer,
-    vk::DeviceSize requiredBytes)
+void ensureScreenshotReadbackBuffer(nr::rhi::Device &device, nr::rhi::Buffer &buffer, vk::DeviceSize requiredBytes)
 {
     if (buffer.valid() && buffer.size() >= requiredBytes)
     {
         return;
     }
 
-    auto bufferInfo = nr::rhi::makeBufferCreateInfo(
-        requiredBytes,
-        vk::BufferUsageFlagBits::eTransferDst);
-    buffer = device.resourceFactory.createBuffer(
-        bufferInfo,
-        nr::rhi::MemoryUsage::GpuToCpu,
-        "Present.ScreenshotReadback");
+    auto bufferInfo = nr::rhi::makeBufferCreateInfo(requiredBytes, vk::BufferUsageFlagBits::eTransferDst);
+    buffer =
+        device.resourceFactory.createBuffer(bufferInfo, nr::rhi::MemoryUsage::GpuToCpu, "Present.ScreenshotReadback");
     nr::nrAssert(buffer.valid(), "Present failed to allocate screenshot readback buffer.");
 }
 
-[[nodiscard]] nr::renderer::GraphPassHandle addPresentReadbackCopyPass(
-    nr::renderer::NodeBuildContext& context,
-    nr::renderer::GraphResourceHandle sourceImage,
-    PresentReadbackTarget readbackTarget,
-    vk::Extent2D extent,
-    vk::Format format,
-    std::string_view bufferDebugName,
-    std::string_view passDebugName)
+[[nodiscard]] nr::renderer::GraphPassHandle addPresentReadbackCopyPass(nr::renderer::NodeBuildContext &context,
+                                                                       nr::renderer::GraphResourceHandle sourceImage,
+                                                                       PresentReadbackTarget readbackTarget,
+                                                                       vk::Extent2D extent, vk::Format format,
+                                                                       std::string_view bufferDebugName,
+                                                                       std::string_view passDebugName)
 {
-    nr::nrAssert(
-        context.queue == nr::renderer::QueueDomain::Compute,
-        "Present readback copy must be recorded by a Present node running on the compute queue.");
+    nr::nrAssert(context.queue == nr::renderer::QueueDomain::Compute,
+                 "Present readback copy must be recorded by a Present node running on the compute queue.");
 
     auto const requiredReadbackBytes = presentReadbackByteSize(extent, format);
-    auto const& readbackBuffer = readbackTarget.buffer.get();
+    auto const &readbackBuffer = readbackTarget.buffer.get();
     nr::nrAssert(readbackBuffer.valid(), "Present readback target requires a valid buffer.");
-    nr::nrAssert(
-        (readbackBuffer.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
-        "Present readback target buffer must include eTransferDst usage.");
-    nr::nrAssert(
-        readbackBuffer.mapped() != nullptr,
-        "Present readback target buffer must be host visible and persistently mapped.");
-    nr::nrAssert(
-        readbackTarget.offset <= readbackBuffer.size() &&
-            requiredReadbackBytes <= readbackBuffer.size() - readbackTarget.offset,
-        std::format(
-            "Present readback target range [{}..{}) exceeds buffer size {}.",
-            readbackTarget.offset,
-            readbackTarget.offset + requiredReadbackBytes,
-            readbackBuffer.size()));
+    nr::nrAssert((readbackBuffer.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
+                 "Present readback target buffer must include eTransferDst usage.");
+    nr::nrAssert(readbackBuffer.mapped() != nullptr,
+                 "Present readback target buffer must be host visible and persistently mapped.");
+    nr::nrAssert(readbackTarget.offset <= readbackBuffer.size() &&
+                     requiredReadbackBytes <= readbackBuffer.size() - readbackTarget.offset,
+                 std::format("Present readback target range [{}..{}) exceeds buffer size {}.", readbackTarget.offset,
+                             readbackTarget.offset + requiredReadbackBytes, readbackBuffer.size()));
 
-    auto readbackResource = context.importBuffer(
-        readbackBuffer,
-        bufferDebugName,
-        nr::renderer::ResourceLifetime::RendererPersistent,
-        {
-            nr::renderer::BufferUsageIntent::Readback,
-        },
-        nr::renderer::ResourceOwnershipDomain::Compute);
+    auto readbackResource =
+        context.importBuffer(readbackBuffer, bufferDebugName, nr::renderer::ResourceLifetime::RendererPersistent,
+                             {
+                                 nr::renderer::BufferUsageIntent::Readback,
+                             },
+                             nr::renderer::ResourceOwnershipDomain::Compute);
 
     auto copyRegion = vk::BufferImageCopy{};
     copyRegion.bufferOffset = readbackTarget.offset;
@@ -375,8 +328,7 @@ void ensureScreenshotReadbackBuffer(
     };
 
     return nr::renderer::ops::copyImageToBuffer(
-        context,
-        passDebugName,
+        context, passDebugName,
         nr::renderer::CopyImageToBufferPassDesc{
             .sourceImage = sourceImage,
             .destinationBuffer = readbackResource,
@@ -506,60 +458,32 @@ struct ExrFloatRgba
 }
 
 template <typename Pixel>
-void insertRgbaSlices(
-    nr::dependency::openexr::FrameBuffer& frameBuffer,
-    nr::dependency::openexr::PixelType pixelType,
-    std::vector<Pixel>& pixels,
-    std::uint32_t width)
+void insertRgbaSlices(nr::dependency::openexr::FrameBuffer &frameBuffer, nr::dependency::openexr::PixelType pixelType,
+                      std::vector<Pixel> &pixels, std::uint32_t width)
 {
     nr::nrAssert(!pixels.empty(), "Present EXR write requires at least one pixel.");
 
     auto const xStride = sizeof(Pixel);
     auto const yStride = xStride * static_cast<std::size_t>(width);
-    auto* base = pixels.data();
-    frameBuffer.insert(
-        "R",
-        nr::dependency::openexr::Slice(
-            pixelType,
-            reinterpret_cast<char*>(&base->r),
-            xStride,
-            yStride));
-    frameBuffer.insert(
-        "G",
-        nr::dependency::openexr::Slice(
-            pixelType,
-            reinterpret_cast<char*>(&base->g),
-            xStride,
-            yStride));
-    frameBuffer.insert(
-        "B",
-        nr::dependency::openexr::Slice(
-            pixelType,
-            reinterpret_cast<char*>(&base->b),
-            xStride,
-            yStride));
-    frameBuffer.insert(
-        "A",
-        nr::dependency::openexr::Slice(
-            pixelType,
-            reinterpret_cast<char*>(&base->a),
-            xStride,
-            yStride));
+    auto *base = pixels.data();
+    frameBuffer.insert("R",
+                       nr::dependency::openexr::Slice(pixelType, reinterpret_cast<char *>(&base->r), xStride, yStride));
+    frameBuffer.insert("G",
+                       nr::dependency::openexr::Slice(pixelType, reinterpret_cast<char *>(&base->g), xStride, yStride));
+    frameBuffer.insert("B",
+                       nr::dependency::openexr::Slice(pixelType, reinterpret_cast<char *>(&base->b), xStride, yStride));
+    frameBuffer.insert("A",
+                       nr::dependency::openexr::Slice(pixelType, reinterpret_cast<char *>(&base->a), xStride, yStride));
 }
 
 template <typename Pixel>
-[[nodiscard]] bool writeOpenExrRgba(
-    const std::filesystem::path& path,
-    vk::Extent2D extent,
-    nr::dependency::openexr::PixelType pixelType,
-    std::vector<Pixel>& pixels)
+[[nodiscard]] bool writeOpenExrRgba(const std::filesystem::path &path, vk::Extent2D extent,
+                                    nr::dependency::openexr::PixelType pixelType, std::vector<Pixel> &pixels)
 {
     auto const pathString = path.string();
     try
     {
-        auto header = nr::dependency::openexr::Header{
-            static_cast<int>(extent.width),
-            static_cast<int>(extent.height)};
+        auto header = nr::dependency::openexr::Header{static_cast<int>(extent.width), static_cast<int>(extent.height)};
         header.channels().insert("R", nr::dependency::openexr::Channel(pixelType));
         header.channels().insert("G", nr::dependency::openexr::Channel(pixelType));
         header.channels().insert("B", nr::dependency::openexr::Channel(pixelType));
@@ -573,29 +497,23 @@ template <typename Pixel>
         file.writePixels(static_cast<int>(extent.height));
         return true;
     }
-    catch (const std::exception& error)
+    catch (const std::exception &error)
     {
-        nr::nrInfo<nr::LogLevel::error, false>(std::format(
-            "Present failed to write EXR screenshot '{}': {}",
-            path.generic_string(),
-            error.what()));
+        nr::nrInfo<nr::LogLevel::error, false>(
+            std::format("Present failed to write EXR screenshot '{}': {}", path.generic_string(), error.what()));
         return false;
     }
     catch (...)
     {
-        nr::nrInfo<nr::LogLevel::error, false>(std::format(
-            "Present failed to write EXR screenshot '{}': unknown OpenEXR error.",
-            path.generic_string()));
+        nr::nrInfo<nr::LogLevel::error, false>(
+            std::format("Present failed to write EXR screenshot '{}': unknown OpenEXR error.", path.generic_string()));
         return false;
     }
 }
 
 template <typename Pixel, typename LoadPixel>
-[[nodiscard]] std::vector<Pixel> decodeScreenshotPixels(
-    std::span<const std::byte> bytes,
-    vk::Extent2D extent,
-    vk::DeviceSize bytesPerPixel,
-    LoadPixel loadPixel)
+[[nodiscard]] std::vector<Pixel> decodeScreenshotPixels(std::span<const std::byte> bytes, vk::Extent2D extent,
+                                                        vk::DeviceSize bytesPerPixel, LoadPixel loadPixel)
 {
     auto const width = static_cast<std::size_t>(extent.width);
     auto pixels = std::vector<Pixel>(width * static_cast<std::size_t>(extent.height));
@@ -613,60 +531,42 @@ template <typename Pixel, typename LoadPixel>
     return pixels;
 }
 
-[[nodiscard]] bool writeLinearScreenshotExr(
-    const std::filesystem::path& path,
-    vk::Extent2D extent,
-    vk::Format format,
-    std::span<const std::byte> bytes)
+[[nodiscard]] bool writeLinearScreenshotExr(const std::filesystem::path &path, vk::Extent2D extent, vk::Format format,
+                                            std::span<const std::byte> bytes)
 {
     nr::nrAssert(extent.width > 0u && extent.height > 0u, "Present EXR screenshot requires a non-empty extent.");
     auto const expectedByteSize = presentReadbackByteSize(extent, format);
-    nr::nrAssert(
-        bytes.size_bytes() >= expectedByteSize,
-        "Present EXR screenshot readback payload is smaller than the expected image size.");
+    nr::nrAssert(bytes.size_bytes() >= expectedByteSize,
+                 "Present EXR screenshot readback payload is smaller than the expected image size.");
 
     switch (format)
     {
-    case vk::Format::eR16G16B16A16Sfloat:
-    {
+    case vk::Format::eR16G16B16A16Sfloat: {
         auto pixels = decodeScreenshotPixels<ExrHalfRgba>(
-            bytes,
-            extent,
-            presentReadbackBytesPerPixel(format),
-            [](std::span<const std::byte> payload, std::size_t offset) {
-                return loadHalfRgba16(payload, offset);
-            });
+            bytes, extent, presentReadbackBytesPerPixel(format),
+            [](std::span<const std::byte> payload, std::size_t offset) { return loadHalfRgba16(payload, offset); });
         return writeOpenExrRgba(path, extent, nr::dependency::openexr::halfPixelType, pixels);
     }
-    case vk::Format::eR32G32B32A32Sfloat:
-    {
+    case vk::Format::eR32G32B32A32Sfloat: {
         auto pixels = decodeScreenshotPixels<ExrFloatRgba>(
-            bytes,
-            extent,
-            presentReadbackBytesPerPixel(format),
-            [](std::span<const std::byte> payload, std::size_t offset) {
-                return loadFloatRgba32(payload, offset);
-            });
+            bytes, extent, presentReadbackBytesPerPixel(format),
+            [](std::span<const std::byte> payload, std::size_t offset) { return loadFloatRgba32(payload, offset); });
         return writeOpenExrRgba(path, extent, nr::dependency::openexr::floatPixelType, pixels);
     }
     case vk::Format::eR8G8B8A8Unorm:
     case vk::Format::eR8G8B8A8Srgb:
     case vk::Format::eB8G8R8A8Unorm:
-    case vk::Format::eB8G8R8A8Srgb:
-    {
-        auto pixels = decodeScreenshotPixels<ExrHalfRgba>(
-            bytes,
-            extent,
-            presentReadbackBytesPerPixel(format),
-            [format](std::span<const std::byte> payload, std::size_t offset) {
-                return loadUnorm8Rgba(payload, offset, format);
-            });
+    case vk::Format::eB8G8R8A8Srgb: {
+        auto pixels =
+            decodeScreenshotPixels<ExrHalfRgba>(bytes, extent, presentReadbackBytesPerPixel(format),
+                                                [format](std::span<const std::byte> payload, std::size_t offset) {
+                                                    return loadUnorm8Rgba(payload, offset, format);
+                                                });
         return writeOpenExrRgba(path, extent, nr::dependency::openexr::halfPixelType, pixels);
     }
     default:
-        nr::nrInfo<nr::LogLevel::error, false>(std::format(
-            "Present EXR screenshot unsupported source format: {}.",
-            vk::to_string(format)));
+        nr::nrInfo<nr::LogLevel::error, false>(
+            std::format("Present EXR screenshot unsupported source format: {}.", vk::to_string(format)));
         return false;
     }
 }
@@ -676,39 +576,28 @@ namespace nr::renderPasses
 {
 PresentNode::~PresentNode() = default;
 
-void PresentNode::declareOptions(nr::options::OptionCatalogBuilder& builder) const
+void PresentNode::declareOptions(nr::options::OptionCatalogBuilder &builder) const
 {
-    std::ranges::for_each(
-        nr::options::makePresentDefinitions(),
-        [&](nr::options::OptionDefinition definition) {
-            static_cast<void>(builder.add(std::move(definition)));
-        });
+    std::ranges::for_each(nr::options::makePresentDefinitions(), [&](nr::options::OptionDefinition definition) {
+        static_cast<void>(builder.add(std::move(definition)));
+    });
 }
 
-void PresentNode::collectOptionAvailability(
-    const nr::options::OptionFrameSnapshot&,
-    nr::options::OptionAvailabilityMap& availability) const
+void PresentNode::collectOptionAvailability(const nr::options::OptionFrameSnapshot &,
+                                            nr::options::OptionAvailabilityMap &availability) const
 {
     auto const scalarIds = std::array{
         nr::options::optionId(nr::options::keys::presentToneMapping),
         nr::options::optionId(nr::options::keys::presentUiOpacity),
     };
-    std::ranges::for_each(
-        scalarIds,
-        [&](const nr::options::OptionId& id) {
-            availability.insert_or_assign(
-                id,
-                nr::options::OptionAvailability{.available = true, .reason = {}});
-        });
-    auto const captureAvailable =
-        runtime_ &&
-        !screenshotPrepared_.has_value() &&
-        !screenshotPendingSave_.has_value();
-    availability.insert_or_assign(
-        nr::options::optionId(nr::options::keys::presentCaptureExr),
-        captureAvailable
-            ? nr::options::OptionAvailability{.available = true, .reason = {}}
-            : nr::options::OptionAvailability{.available = false, .reason = "capture_busy"});
+    std::ranges::for_each(scalarIds, [&](const nr::options::OptionId &id) {
+        availability.insert_or_assign(id, nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    auto const captureAvailable = runtime_ && !screenshotPrepared_.has_value() && !screenshotPendingSave_.has_value();
+    availability.insert_or_assign(nr::options::optionId(nr::options::keys::presentCaptureExr),
+                                  captureAvailable
+                                      ? nr::options::OptionAvailability{.available = true, .reason = {}}
+                                      : nr::options::OptionAvailability{.available = false, .reason = "capture_busy"});
 }
 
 [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> PresentNode::shaderRequests() const
@@ -720,31 +609,31 @@ void PresentNode::collectOptionAvailability(
     };
 }
 
-void PresentNode::initialize(NodeInitContext& context)
+void PresentNode::initialize(NodeInitContext &context)
 {
-    nr::nrAssert(
-        context.shaderPrograms.size() == 1u &&
-            context.shaderPrograms.front().entryPoint() != nullptr &&
-            context.shaderPrograms.front().entryPoint()->stage == SLANG_STAGE_COMPUTE,
-        "Present initialization requires one compiled compute shader.");
+    nr::nrAssert(context.shaderPrograms.size() == 1u && context.shaderPrograms.front().entryPoint() != nullptr &&
+                     context.shaderPrograms.front().entryPoint()->stage == SLANG_STAGE_COMPUTE,
+                 "Present initialization requires one compiled compute shader.");
     device_ = context.device;
-    runtime_ = detail::ensurePresentRuntime(context.device.get(), context.shaderPrograms.front());
-    nr::rhi::setPipelineDebugName(
-        context.device.get().device,
-        runtime_->pipeline->pipeline().raw(),
-        context.runtimeName + ".Pipeline");
+    runtime_ = detail::ensurePresentRuntime(context.device.get(), context.shaderPrograms.front(),
+                                            context.runtimeName + ".Pipeline");
 }
 
-void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
+void PresentNode::finalizeInitialization()
+{
+    nr::nrAssert(runtime_ && runtime_->pipeline && runtime_->pipeline->valid(),
+                 "Present async compute PSO construction failed.");
+}
+
+void PresentNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     materializeCurrentFrame(context, frameParameters);
 }
 
 [[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> PresentNode::structuralSnapshot(
-    const NodeFrameParameters& frameParameters) const
+    const NodeFrameParameters &frameParameters) const
 {
-    if (detail::hasCaptureEffect(frameParameters.optionSnapshot.get()) &&
-        screenshotPendingSave_.has_value())
+    if (detail::hasCaptureEffect(frameParameters.optionSnapshot.get()) && screenshotPendingSave_.has_value())
     {
         nr::nrInfo<nr::LogLevel::error, false>(
             "Present capture effect reached the node while a previous capture was still in flight.");
@@ -753,34 +642,29 @@ void PresentNode::build(NodeBuildContext& context, const NodeFrameParameters& fr
     {
         return std::nullopt;
     }
-    auto const swapchainFormat = frameParameters.swapchainFormat == vk::Format::eUndefined
-                                     ? input.format
-                                     : frameParameters.swapchainFormat;
+    auto const swapchainFormat =
+        frameParameters.swapchainFormat == vk::Format::eUndefined ? input.format : frameParameters.swapchainFormat;
     auto const opacity = detail::uiOpacity(frameParameters.optionSnapshot.get());
     auto const toneMapping = detail::toneMappingSelection(frameParameters.optionSnapshot.get());
-    auto branch = std::format(
-        "format={};colorSpace={};uiOpacity={};tone={};readback={};readbackOffset={}",
-        static_cast<std::uint32_t>(swapchainFormat),
-        static_cast<std::uint32_t>(frameParameters.swapchainColorSpace),
-        std::bit_cast<std::uint32_t>(opacity),
-        toneMapping,
-        input.readback.has_value() ? 1u : 0u,
-        input.readback.has_value() ? input.readback->offset : 0u);
+    auto branch = std::format("format={};colorSpace={};uiOpacity={};tone={};readback={};readbackOffset={}",
+                              static_cast<std::uint32_t>(swapchainFormat),
+                              static_cast<std::uint32_t>(frameParameters.swapchainColorSpace),
+                              std::bit_cast<std::uint32_t>(opacity), toneMapping, input.readback.has_value() ? 1u : 0u,
+                              input.readback.has_value() ? input.readback->offset : 0u);
     return StructuralSnapshot{
         .configurationRevision = std::max<std::uint64_t>(1u, std::hash<std::string>{}(branch)),
         .branchKey = std::move(branch),
     };
 }
 
-bool PresentNode::materializeRenderGraphSkeleton(
-    nr::renderer::RenderGraphSkeletonPatchContext& context,
-    const NodeFrameParameters& frameParameters,
-    const StructuralSnapshot& snapshot)
+bool PresentNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
+                                                 const NodeFrameParameters &frameParameters,
+                                                 const StructuralSnapshot &snapshot)
 {
-    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "Present Skeleton patch requires initialized state.");
+    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(),
+                 "Present Skeleton patch requires initialized state.");
     auto const expectedSnapshot = structuralSnapshot(frameParameters);
-    if (!expectedSnapshot.has_value() ||
-        expectedSnapshot->configurationRevision != snapshot.configurationRevision ||
+    if (!expectedSnapshot.has_value() || expectedSnapshot->configurationRevision != snapshot.configurationRevision ||
         expectedSnapshot->branchKey != snapshot.branchKey)
     {
         return false;
@@ -788,9 +672,8 @@ bool PresentNode::materializeRenderGraphSkeleton(
 
     auto const sourceColor = context.namedResource(nr::renderer::frameResource::presentSourceColor);
     auto const viewportExtent = frameParameters.swapchainExtent;
-    auto const swapchainFormat = frameParameters.swapchainFormat == vk::Format::eUndefined
-                                     ? input.format
-                                     : frameParameters.swapchainFormat;
+    auto const swapchainFormat =
+        frameParameters.swapchainFormat == vk::Format::eUndefined ? input.format : frameParameters.swapchainFormat;
     auto const swapchainColorSpace = frameParameters.swapchainColorSpace;
     auto const formatConversion = detail::resolvePresentFormatConversion(swapchainFormat, swapchainColorSpace);
     if (!formatConversion.has_value())
@@ -799,31 +682,32 @@ bool PresentNode::materializeRenderGraphSkeleton(
     }
     detail::ensureConvertedColorImage(device_->get(), *runtime_, viewportExtent, formatConversion->convertedFormat);
     context.patchResource(0u, nr::renderer::GraphImportedImageDesc{
-        .debugName = "Present.ConvertedColor",
-        .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-        .initialOwnership = runtime_->convertedColorState.common.initialized
-                                ? runtime_->convertedColorState.common.ownership
-                                : nr::renderer::ResourceOwnershipDomain::Undefined,
-        .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
-        .format = formatConversion->convertedFormat,
-        .usageIntents = {
-            nr::renderer::ImageUsageIntent::StorageWrite,
-            nr::renderer::ImageUsageIntent::TransferSrc,
-        },
-        .initialLayout = runtime_->convertedColorState.common.initialized
-                             ? runtime_->convertedColorState.layout
-                             : nr::renderer::ImageLayoutIntent::Undefined,
-        .initialAccessScope = runtime_->convertedColorState.common.initialized
-                                  ? runtime_->convertedColorState.common.access
-                                  : nr::renderer::AccessScope{},
-        .importedResource = std::cref(runtime_->convertedColorImage),
-        .retainedState = std::ref(runtime_->convertedColorState),
-    });
+                                  .debugName = "Present.ConvertedColor",
+                                  .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+                                  .initialOwnership = runtime_->convertedColorState.common.initialized
+                                                          ? runtime_->convertedColorState.common.ownership
+                                                          : nr::renderer::ResourceOwnershipDomain::Undefined,
+                                  .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
+                                  .format = formatConversion->convertedFormat,
+                                  .usageIntents =
+                                      {
+                                          nr::renderer::ImageUsageIntent::StorageWrite,
+                                          nr::renderer::ImageUsageIntent::TransferSrc,
+                                      },
+                                  .initialLayout = runtime_->convertedColorState.common.initialized
+                                                       ? runtime_->convertedColorState.layout
+                                                       : nr::renderer::ImageLayoutIntent::Undefined,
+                                  .initialAccessScope = runtime_->convertedColorState.common.initialized
+                                                            ? runtime_->convertedColorState.common.access
+                                                            : nr::renderer::AccessScope{},
+                                  .importedResource = std::cref(runtime_->convertedColorImage),
+                                  .retainedState = std::ref(runtime_->convertedColorState),
+                              });
     context.patchResource(1u, nr::renderer::GraphImportedSwapchainImageDesc{
-        .debugName = "Swapchain.Image",
-        .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
-        .format = swapchainFormat,
-    });
+                                  .debugName = "Swapchain.Image",
+                                  .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
+                                  .format = swapchainFormat,
+                              });
 
     auto const conversionExtent = vk::Extent2D{
         std::max(1u, viewportExtent.width),
@@ -832,61 +716,55 @@ bool PresentNode::materializeRenderGraphSkeleton(
     auto resourceSlot = std::size_t{2u};
     auto passSlot = std::size_t{0u};
     auto const hasUiBuffer = context.hasNamedResource(nr::renderer::frameResource::uiColor);
-    auto uiBuffer = hasUiBuffer
-                        ? context.namedResource(nr::renderer::frameResource::uiColor)
-                        : context.resource(resourceSlot);
+    auto uiBuffer =
+        hasUiBuffer ? context.namedResource(nr::renderer::frameResource::uiColor) : context.resource(resourceSlot);
     if (!hasUiBuffer)
     {
-        context.patchResource(resourceSlot++, nr::renderer::GraphTransientImageDesc{
-            .debugName = "Present.TransparentUiFallback",
-            .extent = vk::Extent3D{conversionExtent.width, conversionExtent.height, 1u},
-            .format = vk::Format::eR8G8B8A8Unorm,
-            .usageIntents = {
-                nr::renderer::ImageUsageIntent::TransferDst,
-                nr::renderer::ImageUsageIntent::Sampled,
-            },
-        });
+        context.patchResource(resourceSlot++,
+                              nr::renderer::GraphTransientImageDesc{
+                                  .debugName = "Present.TransparentUiFallback",
+                                  .extent = vk::Extent3D{conversionExtent.width, conversionExtent.height, 1u},
+                                  .format = vk::Format::eR8G8B8A8Unorm,
+                                  .usageIntents =
+                                      {
+                                          nr::renderer::ImageUsageIntent::TransferDst,
+                                          nr::renderer::ImageUsageIntent::Sampled,
+                                      },
+                              });
         nr::renderer::ops::patchClearColorImage(
-            context,
-            passSlot++,
-            "Present.ClearTransparentUiFallback",
+            context, passSlot++, "Present.ClearTransparentUiFallback",
             nr::renderer::ops::ClearColorImagePassDesc{
                 .image = uiBuffer,
                 .value = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}},
             });
     }
 
-    auto patchReadback = [&](nr::renderer::GraphResourceHandle readbackSource, const PresentReadbackTarget& target, std::string_view resourceName, std::string_view passName, vk::Extent2D extent) {
-        auto const& buffer = target.buffer.get();
+    auto patchReadback = [&](nr::renderer::GraphResourceHandle readbackSource, const PresentReadbackTarget &target,
+                             std::string_view resourceName, std::string_view passName, vk::Extent2D extent) {
+        auto const &buffer = target.buffer.get();
         auto const requiredBytes = detail::presentReadbackByteSize(
-            extent,
-            readbackSource == sourceColor
-                ? context.describeImageResource(sourceColor)->format
-                : formatConversion->convertedFormat);
+            extent, readbackSource == sourceColor ? context.describeImageResource(sourceColor)->format
+                                                  : formatConversion->convertedFormat);
         nr::nrAssert(buffer.valid(), "Present Skeleton readback target requires a valid buffer.");
-        nr::nrAssert(
-            (buffer.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
-            "Present Skeleton readback target must include eTransferDst usage.");
+        nr::nrAssert((buffer.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
+                     "Present Skeleton readback target must include eTransferDst usage.");
         nr::nrAssert(buffer.mapped() != nullptr, "Present Skeleton readback target must be persistently mapped.");
-        nr::nrAssert(
-            target.offset <= buffer.size() && requiredBytes <= buffer.size() - target.offset,
-            "Present Skeleton readback target range exceeds the buffer size.");
+        nr::nrAssert(target.offset <= buffer.size() && requiredBytes <= buffer.size() - target.offset,
+                     "Present Skeleton readback target range exceeds the buffer size.");
         context.patchResource(resourceSlot++, nr::renderer::GraphImportedBufferDesc{
-            .debugName = std::string(resourceName),
-            .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-            .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
-            .size = buffer.size(),
-            .usageIntents = {nr::renderer::BufferUsageIntent::Readback},
-            .importedResource = std::cref(buffer),
-        });
+                                                  .debugName = std::string(resourceName),
+                                                  .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+                                                  .initialOwnership = nr::renderer::ResourceOwnershipDomain::Compute,
+                                                  .size = buffer.size(),
+                                                  .usageIntents = {nr::renderer::BufferUsageIntent::Readback},
+                                                  .importedResource = std::cref(buffer),
+                                              });
         auto region = vk::BufferImageCopy{};
         region.bufferOffset = target.offset;
         region.imageSubresource = vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0u, 0u, 1u};
         region.imageExtent = vk::Extent3D{extent.width, extent.height, 1u};
         nr::renderer::ops::patchCopyImageToBuffer(
-            context,
-            passSlot++,
-            passName,
+            context, passSlot++, passName,
             nr::renderer::CopyImageToBufferPassDesc{
                 .sourceImage = readbackSource,
                 .destinationBuffer = context.resource(resourceSlot - 1u),
@@ -906,42 +784,33 @@ bool PresentNode::materializeRenderGraphSkeleton(
         .toneMapping = detail::resolveToneMappingMethod(toneMapping, swapchainColorSpace),
         .uiOpacity = hasUiBuffer ? opacity : 0.0f,
     };
-    auto convertPatch = nr::renderer::ComputePassPatchBuilder{context, passSlot++, "Present.Convert", runtime_->pipeline};
-    convertPatch
-        .sampledImage("gSourceColor", sourceColor, "Present.SourceColor")
+    auto convertPatch =
+        nr::renderer::ComputePassPatchBuilder{context, passSlot++, "Present.Convert", runtime_->pipeline};
+    convertPatch.sampledImage("gSourceColor", sourceColor, "Present.SourceColor")
         .sampledImage("gUiColor", uiBuffer, "Present.UiBuffer")
         .storageImage("gConvertedColor", context.resource(0u), "Present.ConvertedColor")
         .pushConstants("gPresentConvert", pushConstants)
-        .record([conversionExtent](const nr::renderer::ComputePassRecordContext& computeContext) {
+        .record([conversionExtent](const nr::renderer::ComputePassRecordContext &computeContext) {
             constexpr auto kThreadGroupSize = 16u;
-            computeContext.commandBuffer.dispatch(
-                detail::divideRoundUp(conversionExtent.width, kThreadGroupSize),
-                detail::divideRoundUp(conversionExtent.height, kThreadGroupSize),
-                1u);
+            computeContext.commandBuffer.dispatch(detail::divideRoundUp(conversionExtent.width, kThreadGroupSize),
+                                                  detail::divideRoundUp(conversionExtent.height, kThreadGroupSize), 1u);
         });
     convertPatch.patch();
     if (input.readback.has_value())
     {
-        patchReadback(
-            context.resource(0u),
-            *input.readback,
-            "Present.ReadbackBuffer",
-            "Present.CopyToReadback",
-            conversionExtent);
+        patchReadback(context.resource(0u), *input.readback, "Present.ReadbackBuffer", "Present.CopyToReadback",
+                      conversionExtent);
     }
-    nr::renderer::ops::patchCopyImageToImage(
-        context,
-        passSlot,
-        "Present.CopyToSwapchain",
-        nr::renderer::CopyImageToImagePassDesc{
-            .source = context.resource(0u),
-            .destination = context.resource(1u),
-            .presentDestination = true,
-        });
+    nr::renderer::ops::patchCopyImageToImage(context, passSlot, "Present.CopyToSwapchain",
+                                             nr::renderer::CopyImageToImagePassDesc{
+                                                 .source = context.resource(0u),
+                                                 .destination = context.resource(1u),
+                                                 .presentDestination = true,
+                                             });
     return true;
 }
 
-void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
+void PresentNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     nr::nrAssert(static_cast<bool>(runtime_), "Present build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "Present build stage requires device reference from initialize stage.");
@@ -950,26 +819,20 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
 
     auto viewportExtent = frameParameters.swapchainExtent;
 
-    auto swapchainFormat = frameParameters.swapchainFormat == vk::Format::eUndefined
-                               ? input.format
-                               : frameParameters.swapchainFormat;
+    auto swapchainFormat =
+        frameParameters.swapchainFormat == vk::Format::eUndefined ? input.format : frameParameters.swapchainFormat;
     auto swapchainColorSpace = frameParameters.swapchainColorSpace;
     auto formatConversion = detail::resolvePresentFormatConversion(swapchainFormat, swapchainColorSpace);
-    nr::nrAssert(
-        formatConversion.has_value(),
-        std::format(
-            "Present node only supports SDR RGBA8/BGRA8, HDR10 A2R/A2B10G10B10, or scRGB R16G16B16A16 swapchain output. got format={} colorSpace={}",
-            vk::to_string(swapchainFormat),
-            vk::to_string(swapchainColorSpace)));
+    nr::nrAssert(formatConversion.has_value(),
+                 std::format("Present node only supports SDR RGBA8/BGRA8, HDR10 A2R/A2B10G10B10, or scRGB R16G16B16A16 "
+                             "swapchain output. got format={} colorSpace={}",
+                             vk::to_string(swapchainFormat), vk::to_string(swapchainColorSpace)));
 
     detail::ensureConvertedColorImage(device_->get(), *runtime_, viewportExtent, formatConversion->convertedFormat);
 
-    auto convertedColor = context.importRetainedStorageColor(
-        runtime_->convertedColorImage,
-        runtime_->convertedColorState,
-        "Present.ConvertedColor",
-        viewportExtent,
-        formatConversion->convertedFormat);
+    auto convertedColor =
+        context.importRetainedStorageColor(runtime_->convertedColorImage, runtime_->convertedColorState,
+                                           "Present.ConvertedColor", viewportExtent, formatConversion->convertedFormat);
 
     auto swapchainFrameParameters = frameParameters;
     swapchainFrameParameters.swapchainExtent = viewportExtent;
@@ -999,9 +862,8 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
         .uiOpacity = hasUiBuffer ? opacity : 0.0f,
     };
 
-    nr::nrAssert(
-        !screenshotPrepared_.has_value(),
-        "Present must finalize a provisional screenshot before building another frame.");
+    nr::nrAssert(!screenshotPrepared_.has_value(),
+                 "Present must finalize a provisional screenshot before building another frame.");
     if (detail::hasCaptureEffect(frameParameters.optionSnapshot.get()))
     {
         auto sourceDesc = context.describeImageResource(sourceColor);
@@ -1012,10 +874,9 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
         }
         else if (!detail::supportsLinearExrScreenshotFormat(sourceDesc->format))
         {
-            nr::nrInfo<nr::LogLevel::error, false>(std::format(
-                "Present EXR screenshot unsupported source format for '{}': {}.",
-                sourceDesc->debugName,
-                vk::to_string(sourceDesc->format)));
+            nr::nrInfo<nr::LogLevel::error, false>(
+                std::format("Present EXR screenshot unsupported source format for '{}': {}.", sourceDesc->debugName,
+                            vk::to_string(sourceDesc->format)));
         }
         else
         {
@@ -1027,76 +888,56 @@ void PresentNode::materializeCurrentFrame(NodeBuildContext& context, const NodeF
             detail::ensureScreenshotReadbackBuffer(device_->get(), screenshotReadbackBuffer_, screenshotByteSize);
 
             auto const readbackPass = detail::addPresentReadbackCopyPass(
-                context,
-                sourceColor,
+                context, sourceColor,
                 PresentReadbackTarget{
                     .buffer = std::cref(screenshotReadbackBuffer_),
                 },
-                screenshotExtent,
-                sourceDesc->format,
-                "Present.ScreenshotReadbackBuffer",
+                screenshotExtent, sourceDesc->format, "Present.ScreenshotReadbackBuffer",
                 "Present.CopyScreenshotToReadback");
-            auto const& effect = *frameParameters.optionSnapshot.get().effect;
+            auto const &effect = *frameParameters.optionSnapshot.get().effect;
             screenshotPrepared_ = detail::PresentScreenshotPrepared{
                 .extent = screenshotExtent,
                 .format = sourceDesc->format,
                 .byteSize = screenshotByteSize,
-                .path = detail::makeScreenshotPath(
-                    input.screenshot,
-                    effect.sequence,
-                    frameParameters.optionSnapshot.get().frameIndex),
+                .path = detail::makeScreenshotPath(input.screenshot, effect.sequence,
+                                                   frameParameters.optionSnapshot.get().frameIndex),
                 .frameIndex = frameParameters.optionSnapshot.get().frameIndex,
                 .effect = effect,
             };
-            nr::nrAssert(
-                frameParameters.frameEffectSink.has_value() &&
-                    frameParameters.frameEffectSink->get().claim(*this, readbackPass),
-                "Present capture effect must claim its image-to-readback copy pass exactly once.");
+            nr::nrAssert(frameParameters.frameEffectSink.has_value() &&
+                             frameParameters.frameEffectSink->get().claim(*this, readbackPass),
+                         "Present capture effect must claim its image-to-readback copy pass exactly once.");
         }
     }
 
-    auto convertPass = nr::renderer::ComputePassBuilder{
-        context,
-        "Present.Convert",
-        runtime_->pipeline};
-    convertPass
-        .sampledImage("gSourceColor", sourceColor, "Present.SourceColor")
+    auto convertPass = nr::renderer::ComputePassBuilder{context, "Present.Convert", runtime_->pipeline};
+    convertPass.sampledImage("gSourceColor", sourceColor, "Present.SourceColor")
         .sampledImage("gUiColor", uiBuffer, "Present.UiBuffer")
         .storageImage("gConvertedColor", convertedColor, "Present.ConvertedColor")
         .pushConstants("gPresentConvert", pushConstants)
-        .record([conversionExtent](const nr::renderer::ComputePassRecordContext& computeContext) {
+        .record([conversionExtent](const nr::renderer::ComputePassRecordContext &computeContext) {
             constexpr auto kThreadGroupSize = 16u;
-            computeContext.commandBuffer.dispatch(
-                detail::divideRoundUp(conversionExtent.width, kThreadGroupSize),
-                detail::divideRoundUp(conversionExtent.height, kThreadGroupSize),
-                1u);
+            computeContext.commandBuffer.dispatch(detail::divideRoundUp(conversionExtent.width, kThreadGroupSize),
+                                                  detail::divideRoundUp(conversionExtent.height, kThreadGroupSize), 1u);
         });
 
     [[maybe_unused]] auto convertPassHandle = convertPass.build();
 
     if (input.readback.has_value())
     {
-        static_cast<void>(detail::addPresentReadbackCopyPass(
-            context,
-            convertedColor,
-            *input.readback,
-            conversionExtent,
-            formatConversion->convertedFormat,
-            "Present.ReadbackBuffer",
-            "Present.CopyToReadback"));
+        static_cast<void>(detail::addPresentReadbackCopyPass(context, convertedColor, *input.readback, conversionExtent,
+                                                             formatConversion->convertedFormat,
+                                                             "Present.ReadbackBuffer", "Present.CopyToReadback"));
     }
 
-    [[maybe_unused]] auto acquireNodeHandle = context.addSwapchainAcquireNode(
-        "Present.AcquireSwapchainImage");
+    [[maybe_unused]] auto acquireNodeHandle = context.addSwapchainAcquireNode("Present.AcquireSwapchainImage");
 
-    [[maybe_unused]] auto copyPassHandle = nr::renderer::ops::copyImageToImage(
-        context,
-        "Present.CopyToSwapchain",
-        nr::renderer::CopyImageToImagePassDesc{
-            .source = convertedColor,
-            .destination = swapchainImage,
-            .presentDestination = true,
-        });
+    [[maybe_unused]] auto copyPassHandle = nr::renderer::ops::copyImageToImage(context, "Present.CopyToSwapchain",
+                                                                               nr::renderer::CopyImageToImagePassDesc{
+                                                                                   .source = convertedColor,
+                                                                                   .destination = swapchainImage,
+                                                                                   .presentDestination = true,
+                                                                               });
 
     context.publishFrameResource(nr::renderer::frameResource::swapchainImage, swapchainImage);
 }
@@ -1111,14 +952,10 @@ void PresentNode::flushContinuations()
     savePendingScreenshot();
 }
 
-[[nodiscard]] nr::renderer::FrameEffectFinalizeDisposition
-PresentNode::finalizeFrameEffect(
-    const nr::options::FrameEffect& effect,
-    bool targetBatchSubmitted,
-    std::uint32_t frameSlot)
+[[nodiscard]] nr::renderer::FrameEffectFinalizeDisposition PresentNode::finalizeFrameEffect(
+    const nr::options::FrameEffect &effect, bool targetBatchSubmitted, std::uint32_t frameSlot)
 {
-    if (effect.id != nr::options::optionId(nr::options::keys::presentCaptureExr) ||
-        !screenshotPrepared_.has_value() ||
+    if (effect.id != nr::options::optionId(nr::options::keys::presentCaptureExr) || !screenshotPrepared_.has_value() ||
         screenshotPrepared_->effect.sequence != effect.sequence)
     {
         screenshotPrepared_.reset();
@@ -1175,12 +1012,10 @@ void PresentNode::savePendingScreenshot()
         });
     };
     nr::nrAssert(screenshotReadbackBuffer_.valid(), "Present screenshot save requires a valid readback buffer.");
-    nr::nrAssert(
-        screenshotReadbackBuffer_.mapped() != nullptr,
-        "Present screenshot save requires a persistently mapped readback buffer.");
-    nr::nrAssert(
-        pending.byteSize <= screenshotReadbackBuffer_.size(),
-        "Present screenshot pending save exceeds readback buffer size.");
+    nr::nrAssert(screenshotReadbackBuffer_.mapped() != nullptr,
+                 "Present screenshot save requires a persistently mapped readback buffer.");
+    nr::nrAssert(pending.byteSize <= screenshotReadbackBuffer_.size(),
+                 "Present screenshot pending save exceeds readback buffer size.");
 
     screenshotReadbackBuffer_.invalidate(0, pending.byteSize);
 
@@ -1191,41 +1026,29 @@ void PresentNode::savePendingScreenshot()
         std::filesystem::create_directories(parentPath, directoryError);
         if (directoryError)
         {
-            nr::nrInfo<nr::LogLevel::error, false>(std::format(
-                "Present failed to create screenshot directory '{}': {}",
-                parentPath.generic_string(),
-                directoryError.message()));
-            emitTerminal(
-                nr::options::OptionLogStatus::failed,
-                std::format("create_directory_failed:{}", directoryError.message()));
+            nr::nrInfo<nr::LogLevel::error, false>(std::format("Present failed to create screenshot directory '{}': {}",
+                                                               parentPath.generic_string(), directoryError.message()));
+            emitTerminal(nr::options::OptionLogStatus::failed,
+                         std::format("create_directory_failed:{}", directoryError.message()));
             screenshotPendingSave_.reset();
             return;
         }
     }
 
-    nr::nrAssert(
-        pending.extent.width <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
-            pending.extent.height <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()),
-        "Present EXR screenshot dimensions exceed OpenEXR int limits.");
-    nr::nrAssert(
-        pending.byteSize <= static_cast<vk::DeviceSize>(std::numeric_limits<std::size_t>::max()),
-        "Present EXR screenshot byte size exceeds std::size_t range.");
+    nr::nrAssert(pending.extent.width <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+                     pending.extent.height <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()),
+                 "Present EXR screenshot dimensions exceed OpenEXR int limits.");
+    nr::nrAssert(pending.byteSize <= static_cast<vk::DeviceSize>(std::numeric_limits<std::size_t>::max()),
+                 "Present EXR screenshot byte size exceeds std::size_t range.");
 
-    auto const* pixels = static_cast<const std::byte*>(screenshotReadbackBuffer_.mapped());
+    auto const *pixels = static_cast<const std::byte *>(screenshotReadbackBuffer_.mapped());
     auto const bytes = std::span<const std::byte>{pixels, static_cast<std::size_t>(pending.byteSize)};
-    auto const writeResult = detail::writeLinearScreenshotExr(
-        pending.path,
-        pending.extent,
-        pending.format,
-        bytes);
+    auto const writeResult = detail::writeLinearScreenshotExr(pending.path, pending.extent, pending.format, bytes);
     if (!writeResult)
     {
-        nr::nrInfo<nr::LogLevel::error, false>(std::format(
-            "Present failed to write EXR screenshot '{}'.",
-            pending.path.generic_string()));
-        emitTerminal(
-            nr::options::OptionLogStatus::failed,
-            "exr_write_failed");
+        nr::nrInfo<nr::LogLevel::error, false>(
+            std::format("Present failed to write EXR screenshot '{}'.", pending.path.generic_string()));
+        emitTerminal(nr::options::OptionLogStatus::failed, "exr_write_failed");
         screenshotPendingSave_.reset();
         return;
     }
@@ -1235,7 +1058,7 @@ void PresentNode::savePendingScreenshot()
     screenshotPendingSave_.reset();
 }
 
-void PresentNode::shutdown(NodeShutdownContext&)
+void PresentNode::shutdown(NodeShutdownContext &)
 {
     if (runtime_ && runtime_->pipeline)
     {

@@ -35,8 +35,10 @@ namespace nr::scene::detail
     {
     case nr::resource::MaterialTextureSlotSemantic::baseColor:
     case nr::resource::MaterialTextureSlotSemantic::emissive:
-    case nr::resource::MaterialTextureSlotSemantic::sheenColor: return true;
-    default: return false;
+    case nr::resource::MaterialTextureSlotSemantic::sheenColor:
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -70,9 +72,7 @@ namespace nr::scene::detail
         });
     });
 
-    std::ranges::for_each(hints, [](TextureColorSpaceHint &hint) {
-        hint.preferSrgb = !hint.hasLinear;
-    });
+    std::ranges::for_each(hints, [](TextureColorSpaceHint &hint) { hint.preferSrgb = !hint.hasLinear; });
 
     return hints;
 }
@@ -81,9 +81,12 @@ namespace nr::scene::detail
 {
     switch (channels)
     {
-    case 1u: return vk::Format::eR8Unorm;
-    case 2u: return vk::Format::eR8G8Unorm;
-    default: return srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+    case 1u:
+        return vk::Format::eR8Unorm;
+    case 2u:
+        return vk::Format::eR8G8Unorm;
+    default:
+        return srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
     }
 }
 
@@ -123,9 +126,8 @@ namespace nr::scene::detail
 
     prepared.channelCount = image.channels;
     prepared.level.bytes.resize(image.pixels.size());
-    std::ranges::transform(image.pixels, prepared.level.bytes.begin(), [](std::uint8_t value) {
-        return std::byte{value};
-    });
+    std::ranges::transform(image.pixels, prepared.level.bytes.begin(),
+                           [](std::uint8_t value) { return std::byte{value}; });
     return prepared;
 }
 
@@ -138,9 +140,8 @@ namespace nr::scene::detail
     return level;
 }
 
-[[nodiscard]] std::string makeDeterministicChildName(SiblingNameTable &namesByParent,
-                                                             flecs::entity_t parent,
-                                                             std::string_view sourceName)
+[[nodiscard]] std::string makeDeterministicChildName(SiblingNameTable &namesByParent, flecs::entity_t parent,
+                                                     std::string_view sourceName)
 {
     auto const baseName = sanitizeEntityName(sourceName.empty() ? std::string_view{"node"} : sourceName);
     auto &nameCounters = namesByParent[parent];
@@ -156,47 +157,31 @@ namespace nr::scene::detail
     return std::format("{}_{}", baseName, suffix);
 }
 
-[[nodiscard]] std::string makeTemplateNodeEntityName(SceneTemplateHandle handle,
-                                                             std::uint32_t sourceNodeIndex,
-                                                             std::string_view resolvedName)
+[[nodiscard]] std::string makeTemplateNodeEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                     std::string_view resolvedName)
 {
-    return std::format("scene_template_{}_{}_node_{}_{}",
-                       handle.slot,
-                       handle.generation,
-                       sourceNodeIndex,
+    return std::format("scene_template_{}_{}_node_{}_{}", handle.slot, handle.generation, sourceNodeIndex,
                        sanitizeEntityName(resolvedName));
 }
 
-[[nodiscard]] std::string makeTemplateMeshEntityName(SceneTemplateHandle handle,
-                                                             std::uint32_t sourceNodeIndex,
-                                                             std::uint32_t meshSlot)
+[[nodiscard]] std::string makeTemplateMeshEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                     std::uint32_t meshSlot)
 {
-    return std::format("scene_template_{}_{}_node_{}_mesh_{}",
-                       handle.slot,
-                       handle.generation,
-                       sourceNodeIndex,
+    return std::format("scene_template_{}_{}_node_{}_mesh_{}", handle.slot, handle.generation, sourceNodeIndex,
                        meshSlot);
 }
 
-[[nodiscard]] std::string makeTemplateCameraEntityName(SceneTemplateHandle handle,
-                                                               std::uint32_t sourceNodeIndex,
-                                                               std::uint32_t cameraSlot)
+[[nodiscard]] std::string makeTemplateCameraEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                       std::uint32_t cameraSlot)
 {
-    return std::format("scene_template_{}_{}_node_{}_camera_{}",
-                       handle.slot,
-                       handle.generation,
-                       sourceNodeIndex,
+    return std::format("scene_template_{}_{}_node_{}_camera_{}", handle.slot, handle.generation, sourceNodeIndex,
                        cameraSlot);
 }
 
-[[nodiscard]] std::string makeTemplateLightEntityName(SceneTemplateHandle handle,
-                                                              std::uint32_t sourceNodeIndex,
-                                                              std::uint32_t lightSlot)
+[[nodiscard]] std::string makeTemplateLightEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
+                                                      std::uint32_t lightSlot)
 {
-    return std::format("scene_template_{}_{}_node_{}_light_{}",
-                       handle.slot,
-                       handle.generation,
-                       sourceNodeIndex,
+    return std::format("scene_template_{}_{}_node_{}_light_{}", handle.slot, handle.generation, sourceNodeIndex,
                        lightSlot);
 }
 
@@ -224,9 +209,7 @@ namespace nr::scene::detail
 [[nodiscard]] bool finiteMat4(const glm::mat4 &value) noexcept
 {
     auto const columnIndices = std::views::iota(0, 4);
-    return std::ranges::all_of(columnIndices, [&](int column) {
-        return nr::resource::math::finiteVec(value[column]);
-    });
+    return std::ranges::all_of(columnIndices, [&](int column) { return nr::resource::math::finiteVec(value[column]); });
 }
 
 [[nodiscard]] glm::vec3 transformPoint(const glm::mat4 &matrix, const glm::vec3 &point)
@@ -235,8 +218,7 @@ namespace nr::scene::detail
     return glm::vec3{transformed.x, transformed.y, transformed.z};
 }
 
-[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds,
-                                                       const glm::mat4 &matrix)
+[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds, const glm::mat4 &matrix)
 {
     if (!bounds.valid() || !finiteMat4(matrix))
     {

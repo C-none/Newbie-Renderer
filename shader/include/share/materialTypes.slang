@@ -6,4 +6,3 @@ public enum AlphaMode : uint
     mask = 1u,
     blend = 2u,
 }
-

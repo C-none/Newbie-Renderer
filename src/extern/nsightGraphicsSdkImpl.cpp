@@ -57,7 +57,8 @@ void ensureLibraryLoadFn() noexcept
     return NrPlatformNsightGraphicsResult::Failed;
 }
 
-[[nodiscard]] NGFX_GraphicsCapture_Delimiter toNgfxDelimiter(NrPlatformNsightGraphicsCaptureDelimiter delimiter) noexcept
+[[nodiscard]] NGFX_GraphicsCapture_Delimiter toNgfxDelimiter(
+    NrPlatformNsightGraphicsCaptureDelimiter delimiter) noexcept
 {
     switch (delimiter)
     {
@@ -71,17 +72,17 @@ void ensureLibraryLoadFn() noexcept
     return NGFX_GraphicsCapture_Delimiter_FrameBoundary;
 }
 
-[[nodiscard]] bool hasText(const wchar_t* value) noexcept
+[[nodiscard]] bool hasText(const wchar_t *value) noexcept
 {
     return value != nullptr && value[0] != L'\0';
 }
 
-[[nodiscard]] bool hasText(const char* value) noexcept
+[[nodiscard]] bool hasText(const char *value) noexcept
 {
     return value != nullptr && value[0] != '\0';
 }
 
-void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraphicsInstallation& destination) noexcept
+void copyInstallation(const NGFX_InstallationInfo &source, NrPlatformNsightGraphicsInstallation &destination) noexcept
 {
     destination = {};
     destination.versionMajor = source.versionMajor;
@@ -109,7 +110,8 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
 #endif
 }
 
-[[nodiscard]] NrPlatformNsightGraphicsResult resolveInstallationPath(NrPlatformNsightGraphicsInstallation& outInstallation) noexcept
+[[nodiscard]] NrPlatformNsightGraphicsResult resolveInstallationPath(
+    NrPlatformNsightGraphicsInstallation &outInstallation) noexcept
 {
     ensureLibraryLoadFn();
 
@@ -118,9 +120,7 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
     auto installationCount = std::uint32_t{0};
 
     auto const result = NGFX_EnumerateInstallations(
-        installations.data(),
-        static_cast<std::uint32_t>(installations.size()),
-        &installationCount);
+        installations.data(), static_cast<std::uint32_t>(installations.size()), &installationCount);
 
     if (installationCount > 0)
     {
@@ -136,10 +136,9 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
     return toPlatformResult(result);
 }
 
-[[nodiscard]] NrPlatformNsightGraphicsResult resolveInstallationPath(
-    const wchar_t* requestedPath,
-    NrPlatformNsightGraphicsInstallation& fallback,
-    const wchar_t*& resolvedPath) noexcept
+[[nodiscard]] NrPlatformNsightGraphicsResult resolveInstallationPath(const wchar_t *requestedPath,
+                                                                     NrPlatformNsightGraphicsInstallation &fallback,
+                                                                     const wchar_t *&resolvedPath) noexcept
 {
     if (hasText(requestedPath))
     {
@@ -164,12 +163,14 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
     return resource;
 }
 
-[[nodiscard]] NrPlatformNsightGraphicsResult injectGraphicsCapture(const NrPlatformNsightGraphicsInjectDesc& desc, const wchar_t* installationPath) noexcept
+[[nodiscard]] NrPlatformNsightGraphicsResult injectGraphicsCapture(const NrPlatformNsightGraphicsInjectDesc &desc,
+                                                                   const wchar_t *installationPath) noexcept
 {
     ensureLibraryLoadFn();
 
     auto settings = NGFX_GraphicsCapture_InjectionSettings{};
-    if (auto const result = NGFX_GraphicsCapture_InjectionSettings_SetDefaults(&settings); result != NGFX_Result_Success)
+    if (auto const result = NGFX_GraphicsCapture_InjectionSettings_SetDefaults(&settings);
+        result != NGFX_Result_Success)
     {
         return toPlatformResult(result);
     }
@@ -191,7 +192,8 @@ void copyInstallation(const NGFX_InstallationInfo& source, NrPlatformNsightGraph
     return toPlatformResult(NGFX_GraphicsCapture_Inject_Vulkan(&params));
 }
 
-[[nodiscard]] NrPlatformNsightGraphicsResult injectGpuTrace(const NrPlatformNsightGraphicsInjectDesc& desc, const wchar_t* installationPath) noexcept
+[[nodiscard]] NrPlatformNsightGraphicsResult injectGpuTrace(const NrPlatformNsightGraphicsInjectDesc &desc,
+                                                            const wchar_t *installationPath) noexcept
 {
     ensureLibraryLoadFn();
 
@@ -220,7 +222,8 @@ extern "C" bool nrPlatformNsightGraphicsSdkCompiled() noexcept
     return true;
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsFindLatestInstallation(NrPlatformNsightGraphicsInstallation* outInstallation) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsFindLatestInstallation(
+    NrPlatformNsightGraphicsInstallation *outInstallation) noexcept
 {
     if (outInstallation == nullptr)
     {
@@ -229,7 +232,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsFindLatestInst
     return resolveInstallationPath(*outInstallation);
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInject(const NrPlatformNsightGraphicsInjectDesc* desc) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInject(
+    const NrPlatformNsightGraphicsInjectDesc *desc) noexcept
 {
     if (desc == nullptr)
     {
@@ -241,7 +245,7 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInject(const N
     }
 
     auto fallbackInstallation = NrPlatformNsightGraphicsInstallation{};
-    auto* installationPath = static_cast<const wchar_t*>(nullptr);
+    auto *installationPath = static_cast<const wchar_t *>(nullptr);
     auto const resolveResult = resolveInstallationPath(desc->installationPath, fallbackInstallation, installationPath);
     if (resolveResult != NrPlatformNsightGraphicsResult::Success)
     {
@@ -260,20 +264,19 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInject(const N
     return NrPlatformNsightGraphicsResult::InvalidParameter;
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInitialize(NrPlatformNsightGraphicsActivity activity) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInitialize(
+    NrPlatformNsightGraphicsActivity activity) noexcept
 {
     ensureLibraryLoadFn();
 
     switch (activity)
     {
-    case NrPlatformNsightGraphicsActivity::Capture:
-    {
+    case NrPlatformNsightGraphicsActivity::Capture: {
         auto params = NGFX_GraphicsCapture_InitializeActivity_Vulkan_Params{};
         params.version = NGFX_GraphicsCapture_InitializeActivity_Vulkan_Params_VER;
         return toPlatformResult(NGFX_GraphicsCapture_InitializeActivity_Vulkan(&params));
     }
-    case NrPlatformNsightGraphicsActivity::Trace:
-    {
+    case NrPlatformNsightGraphicsActivity::Trace: {
         auto params = NGFX_GPUTrace_InitializeActivity_Vulkan_Params{};
         params.version = NGFX_GPUTrace_InitializeActivity_Vulkan_Params_VER;
         return toPlatformResult(NGFX_GPUTrace_InitializeActivity_Vulkan(&params));
@@ -299,7 +302,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsActivateTrace(
     return toPlatformResult(NGFX_GPUTrace_ActivateTrace_Vulkan(&params));
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsRequestCapture(const NrPlatformNsightGraphicsCaptureRequest* request) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsRequestCapture(
+    const NrPlatformNsightGraphicsCaptureRequest *request) noexcept
 {
     ensureLibraryLoadFn();
 
@@ -325,7 +329,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStartTrace() n
     return toPlatformResult(NGFX_GPUTrace_StartTrace_Vulkan(&params));
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStopTrace(const NrPlatformNsightGraphicsTraceStop* desc) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStopTrace(
+    const NrPlatformNsightGraphicsTraceStop *desc) noexcept
 {
     ensureLibraryLoadFn();
 
@@ -337,14 +342,16 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStopTrace(cons
     auto outputResource = makeImageResource(desc->outputImage);
     auto params = NGFX_GPUTrace_StopTrace_Vulkan_Params{};
     params.version = NGFX_GPUTrace_StopTrace_Vulkan_Params_VER;
-    params.flags = desc->stopOnNextFrameBoundary ? NGFX_GPUTrace_StopTraceFlag_NextFrameBoundary : NGFX_GPUTrace_StopTraceFlag_None;
+    params.flags = desc->stopOnNextFrameBoundary ? NGFX_GPUTrace_StopTraceFlag_NextFrameBoundary
+                                                 : NGFX_GPUTrace_StopTraceFlag_None;
     params.queue = desc->queue;
     params.outputResources = desc->hasOutputImage ? &outputResource : nullptr;
     params.numOutputResources = desc->hasOutputImage ? 1 : 0;
     return toPlatformResult(NGFX_GPUTrace_StopTrace_Vulkan(&params));
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsMarkFrameBoundary(const NrPlatformNsightGraphicsFrameBoundary* desc) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsMarkFrameBoundary(
+    const NrPlatformNsightGraphicsFrameBoundary *desc) noexcept
 {
     ensureLibraryLoadFn();
 
@@ -369,7 +376,8 @@ extern "C" bool nrPlatformNsightGraphicsSdkCompiled() noexcept
     return false;
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsFindLatestInstallation(NrPlatformNsightGraphicsInstallation* outInstallation) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsFindLatestInstallation(
+    NrPlatformNsightGraphicsInstallation *outInstallation) noexcept
 {
     if (outInstallation != nullptr)
     {
@@ -378,7 +386,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsFindLatestInst
     return NrPlatformNsightGraphicsResult::Unavailable;
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInject(const NrPlatformNsightGraphicsInjectDesc*) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsInject(
+    const NrPlatformNsightGraphicsInjectDesc *) noexcept
 {
     return NrPlatformNsightGraphicsResult::Unavailable;
 }
@@ -393,7 +402,8 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsActivateTrace(
     return NrPlatformNsightGraphicsResult::Unavailable;
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsRequestCapture(const NrPlatformNsightGraphicsCaptureRequest*) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsRequestCapture(
+    const NrPlatformNsightGraphicsCaptureRequest *) noexcept
 {
     return NrPlatformNsightGraphicsResult::Unavailable;
 }
@@ -403,12 +413,14 @@ extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStartTrace() n
     return NrPlatformNsightGraphicsResult::Unavailable;
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStopTrace(const NrPlatformNsightGraphicsTraceStop*) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsStopTrace(
+    const NrPlatformNsightGraphicsTraceStop *) noexcept
 {
     return NrPlatformNsightGraphicsResult::Unavailable;
 }
 
-extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsMarkFrameBoundary(const NrPlatformNsightGraphicsFrameBoundary*) noexcept
+extern "C" NrPlatformNsightGraphicsResult nrPlatformNsightGraphicsMarkFrameBoundary(
+    const NrPlatformNsightGraphicsFrameBoundary *) noexcept
 {
     return NrPlatformNsightGraphicsResult::Unavailable;
 }

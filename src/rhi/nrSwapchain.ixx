@@ -48,53 +48,42 @@ struct SwapChain
     vk::Extent2D extent = {0, 0};
 
     SwapChain() = default;
-    SwapChain(const SwapChain&) = delete;
-    SwapChain& operator=(const SwapChain&) = delete;
-    SwapChain(SwapChain&&) = default;
-    SwapChain& operator=(SwapChain&&) = default;
+    SwapChain(const SwapChain &) = delete;
+    SwapChain &operator=(const SwapChain &) = delete;
+    SwapChain(SwapChain &&) = default;
+    SwapChain &operator=(SwapChain &&) = default;
 
-    [[nodiscard]] static SwapChain create(
-        const vk::raii::PhysicalDevice& physicalDevice,
-        const vk::raii::Device& device,
-        const vk::raii::SurfaceKHR& surface,
-        vk::Extent2D surfaceExtent,
-        const SwapChainConfig& config = {});
+    [[nodiscard]] static SwapChain create(const vk::raii::PhysicalDevice &physicalDevice,
+                                          const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface,
+                                          vk::Extent2D surfaceExtent, const SwapChainConfig &config = {});
 
-    [[nodiscard]] static SwapChain recreate(
-        const vk::raii::PhysicalDevice& physicalDevice,
-        const vk::raii::Device& device,
-        const vk::raii::SurfaceKHR& surface,
-        vk::Extent2D surfaceExtent,
-        vk::SwapchainKHR oldSwapchain,
-        const SwapChainConfig& config = {});
+    [[nodiscard]] static SwapChain recreate(const vk::raii::PhysicalDevice &physicalDevice,
+                                            const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface,
+                                            vk::Extent2D surfaceExtent, vk::SwapchainKHR oldSwapchain,
+                                            const SwapChainConfig &config = {});
 
     [[nodiscard]] AcquireResult acquireNextImage(
-        const vk::raii::Semaphore& imageAvailable,
+        const vk::raii::Semaphore &imageAvailable,
         std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max()) const;
 
-    [[nodiscard]] PresentResult present(
-        const vk::raii::Queue& presentQueue,
-        std::uint32_t imageIndex,
-        const vk::raii::Semaphore& waitSemaphore,
-        std::optional<std::uint64_t> frameBoundaryFrameID) const;
+    [[nodiscard]] PresentResult present(const vk::raii::Queue &presentQueue, std::uint32_t imageIndex,
+                                        const vk::raii::Semaphore &waitSemaphore,
+                                        std::optional<std::uint64_t> frameBoundaryFrameID) const;
 
   private:
-    [[nodiscard]] static SwapChain createImpl(
-        const vk::raii::PhysicalDevice& physicalDevice,
-        const vk::raii::Device& device,
-        const vk::raii::SurfaceKHR& surface,
-        vk::Extent2D surfaceExtent,
-        const SwapChainConfig& config,
-        vk::SwapchainKHR oldSwapchain);
+    [[nodiscard]] static SwapChain createImpl(const vk::raii::PhysicalDevice &physicalDevice,
+                                              const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface,
+                                              vk::Extent2D surfaceExtent, const SwapChainConfig &config,
+                                              vk::SwapchainKHR oldSwapchain);
 };
 
 class AcquireSemaphorePool
 {
   public:
-    void initialize(const vk::raii::Device& device, std::uint32_t capacity);
+    void initialize(const vk::raii::Device &device, std::uint32_t capacity);
     [[nodiscard]] std::uint32_t borrow();
     void returnSlot(std::uint32_t slot);
-    [[nodiscard]] const vk::raii::Semaphore& semaphore(std::uint32_t slot) const;
+    [[nodiscard]] const vk::raii::Semaphore &semaphore(std::uint32_t slot) const;
     [[nodiscard]] bool empty() const noexcept;
 
   private:
@@ -109,26 +98,19 @@ class PresentationContext
 
     ~PresentationContext();
 
-    void initialize(
-        const vk::raii::Instance& instance,
-        const vk::raii::PhysicalDevice& physicalDevice,
-        const vk::raii::Device& device,
-        std::string_view appName,
-        const SwapChainConfig& config,
-        std::uint32_t presentQueueFamily);
+    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice,
+                    const vk::raii::Device &device, std::string_view appName, const SwapChainConfig &config,
+                    std::uint32_t presentQueueFamily);
 
-    [[nodiscard]] AcquireResult acquireNextImage(
-        std::uint32_t frameSlot,
-        std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max());
+    [[nodiscard]] AcquireResult acquireNextImage(std::uint32_t frameSlot,
+                                                 std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max());
     void setAcquireOutOfDateTestHook(AcquireOutOfDateTestHook hook);
     void clearAcquireOutOfDateTestHook() noexcept;
     void returnAcquireSemaphore(std::uint32_t frameSlot);
-    [[nodiscard]] const vk::raii::Semaphore& borrowedAcquireSemaphore(std::uint32_t frameSlot) const;
+    [[nodiscard]] const vk::raii::Semaphore &borrowedAcquireSemaphore(std::uint32_t frameSlot) const;
 
-    [[nodiscard]] PresentResult present(
-        const QueueManager& queueManager,
-        const vk::raii::Semaphore& waitSemaphore,
-        std::optional<std::uint64_t> frameBoundaryFrameID) const;
+    [[nodiscard]] PresentResult present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore,
+                                        std::optional<std::uint64_t> frameBoundaryFrameID) const;
 
     void rebuildAcquirePool();
 
@@ -162,14 +144,12 @@ class PresentationContext
 
     [[nodiscard]] static bool needsSwapchainRecreate(vk::Result result);
 
-    void recreate(
-        const vk::raii::PhysicalDevice& physicalDevice,
-        const vk::raii::Device& device,
-        QueueManager& queueManager);
+    void recreate(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
+                  QueueManager &queueManager);
 
   private:
-    void ensurePresentSupport(const vk::raii::PhysicalDevice& physicalDevice) const;
-    void ensureFullScreenExclusiveSupport(const vk::raii::PhysicalDevice& physicalDevice) const;
+    void ensurePresentSupport(const vk::raii::PhysicalDevice &physicalDevice) const;
+    void ensureFullScreenExclusiveSupport(const vk::raii::PhysicalDevice &physicalDevice) const;
     void refreshFullScreenExclusiveMonitor() noexcept;
     void acquireFullScreenExclusiveIfNeeded();
     void releaseFullScreenExclusiveIfNeeded() noexcept;

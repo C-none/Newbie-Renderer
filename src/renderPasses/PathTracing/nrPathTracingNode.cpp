@@ -25,8 +25,10 @@ struct PathTracingHitProgram
 struct PathTracingProgramBatch
 {
     nr::rhi::SlangProgram raygen{};
-    nr::rhi::SlangProgram miss{};
-    std::optional<nr::rhi::SlangProgram> anyHit{};
+    nr::rhi::SlangProgram materialMiss{};
+    nr::rhi::SlangProgram shadowMiss{};
+    nr::rhi::SlangProgram shadowAnyHit{};
+    std::optional<nr::rhi::SlangProgram> materialAnyHit{};
     std::vector<PathTracingHitProgram> hitPrograms{};
 };
 
@@ -36,7 +38,8 @@ struct PathTracingPipelineKey
     std::uint64_t chsPermutationSetHash = 0u;
     std::uint64_t shaderSessionGeneration = 0u;
 
-    [[nodiscard]] friend auto operator<=>(const PathTracingPipelineKey &, const PathTracingPipelineKey &) noexcept = default;
+    [[nodiscard]] friend auto operator<=>(const PathTracingPipelineKey &,
+                                          const PathTracingPipelineKey &) noexcept = default;
 };
 
 struct PathTracingSbtKey
@@ -86,7 +89,8 @@ struct PathTracingGuideFrameSlot
 
 struct PathTracingRuntimeCache
 {
-    std::map<PathTracingPipelineKey, std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>> pipelines{};
+    std::map<PathTracingPipelineKey, std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>>
+        pipelines{};
     std::map<PathTracingSbtKey, nr::rhi::ShaderBindingTable> shaderBindingTables{};
     std::array<PathTracingGuideFrameSlot, nr::maxFrameInFlight> guideFrameSlots{};
 };
@@ -96,7 +100,8 @@ struct PathTracingRuntimeCache
     return static_cast<std::size_t>(resource);
 }
 
-[[nodiscard]] std::array<PathTracingGuideSpec, kPathTracingGuideResourceCount> makePathTracingGuideSpecs(vk::Format colorFormat)
+[[nodiscard]] std::array<PathTracingGuideSpec, kPathTracingGuideResourceCount> makePathTracingGuideSpecs(
+    vk::Format colorFormat)
 {
     using DlssSlot = nr::rhi::DlssRayReconstructionResourceSlot;
     return {
@@ -187,65 +192,57 @@ inline constexpr std::string_view kRussianRouletteDisabledPolicy = "RussianRoule
 
 [[nodiscard]] PathTracingVariantKey normalizePathTracingVariantKey(PathTracingVariantKey key) noexcept
 {
-    key.maxSurfaceBounces = std::clamp(key.maxSurfaceBounces, kPathTracingMinSurfaceBounces, kPathTracingMaxSurfaceBouncesLimit);
+    key.maxSurfaceBounces =
+        std::clamp(key.maxSurfaceBounces, kPathTracingMinSurfaceBounces, kPathTracingMaxSurfaceBouncesLimit);
     return key;
 }
 
 [[nodiscard]] std::string describePathTracingVariantKey(const PathTracingVariantKey &key)
 {
     auto normalizedKey = normalizePathTracingVariantKey(key);
-    return std::format(
-        "PathTracing[maxBounces={},russianRoulette={},filterAfterShading={}]",
-        normalizedKey.maxSurfaceBounces,
-        normalizedKey.enableRussianRoulette ? "enabled" : "disabled",
-        normalizedKey.enableFilterAfterShading ? "enabled" : "disabled");
+    return std::format("PathTracing[maxBounces={},russianRoulette={},filterAfterShading={}]",
+                       normalizedKey.maxSurfaceBounces, normalizedKey.enableRussianRoulette ? "enabled" : "disabled",
+                       normalizedKey.enableFilterAfterShading ? "enabled" : "disabled");
 }
 
 [[nodiscard]] std::string describePathTracingPipelineKey(const PathTracingPipelineKey &key)
 {
-    return std::format("{},chsPermutations={},shaderSession={}", describePathTracingVariantKey(key.variant), nr::hash::toHexString(key.chsPermutationSetHash), key.shaderSessionGeneration);
+    return std::format("{},chsPermutations={},shaderSession={}", describePathTracingVariantKey(key.variant),
+                       nr::hash::toHexString(key.chsPermutationSetHash), key.shaderSessionGeneration);
 }
 
 [[nodiscard]] std::string describePathTracingSbtKey(const PathTracingSbtKey &key)
 {
-    return std::format("{},hitRecords={}", describePathTracingPipelineKey(key.pipeline), nr::hash::toHexString(key.hitRecordPlanHash));
+    return std::format("{},hitRecords={}", describePathTracingPipelineKey(key.pipeline),
+                       nr::hash::toHexString(key.hitRecordPlanHash));
 }
 
-[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingRaygenVariantDesc(
-    const PathTracingVariantKey &key)
+[[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingRaygenVariantDesc(const PathTracingVariantKey &key)
 {
     auto normalizedKey = normalizePathTracingVariantKey(key);
     auto variant = nr::rhi::SlangProgramVariantDesc{};
-    variant
-        .assign(kMaxSurfaceBouncesVariantName, "uint", normalizedKey.maxSurfaceBounces)
-        .assign(
-            kRussianRoulettePolicyVariantName,
-            kRussianRoulettePolicyType,
-            std::string{pathTracingRussianRoulettePolicy(normalizedKey.enableRussianRoulette)});
+    variant.assign(kMaxSurfaceBouncesVariantName, "uint", normalizedKey.maxSurfaceBounces)
+        .assign(kRussianRoulettePolicyVariantName, kRussianRoulettePolicyType,
+                std::string{pathTracingRussianRoulettePolicy(normalizedKey.enableRussianRoulette)});
     return variant;
 }
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingClosestHitVariantDesc(
-    const PathTracingVariantKey &variantKey,
-    const PathTracingChsVariantKey &chsKey)
+    const PathTracingVariantKey &variantKey, const PathTracingChsVariantKey &chsKey)
 {
     auto variant = nr::rhi::SlangProgramVariantDesc{};
     variant
-        .assign(
-            kFilterAfterShadingVariantName,
-            "bool",
-            normalizePathTracingVariantKey(variantKey).enableFilterAfterShading)
-        .assign(
-            "CHS",
-            "ICHS",
-            std::format(
-                "MaterialCHS<RtMaterialLayerFlag({}u)>",
-                static_cast<std::uint32_t>(chsKey.layerFlags)));
+        .assign(kFilterAfterShadingVariantName, "bool",
+                normalizePathTracingVariantKey(variantKey).enableFilterAfterShading)
+        .assign("CHS", "ICHS",
+                std::format("MaterialCHS<RtMaterialLayerFlag({}u)>", static_cast<std::uint32_t>(chsKey.layerFlags)));
     return variant;
 }
 
 inline constexpr std::string_view kPathTracingRaygenGroupName = "raygen";
-inline constexpr std::string_view kPathTracingMissGroupName = "miss";
+inline constexpr std::string_view kPathTracingMaterialMissGroupName = "miss_material";
+inline constexpr std::string_view kPathTracingShadowMissGroupName = "miss_shadow";
+inline constexpr std::string_view kPathTracingShadowHitGroupName = "hit_shadow";
 
 [[nodiscard]] std::string pathTracingHitGroupName(const RtHitPermutationKey &key)
 {
@@ -260,23 +257,30 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
 }
 
 [[nodiscard]] nr::rhi::RayTracingProgramAssemblyDesc makePathTracingProgramAssembly(
-    const PathTracingProgramBatch &programs,
-    const SceneRtHitSbtPlan &hitSbtPlan)
+    const PathTracingProgramBatch &programs, const SceneRtHitSbtPlan &hitSbtPlan)
 {
     auto assembly = nr::rhi::RayTracingProgramAssemblyDesc{};
-    assembly.stages.reserve(2u + (programs.anyHit.has_value() ? 1u : 0u) + programs.hitPrograms.size());
+    assembly.stages.reserve(4u + (programs.materialAnyHit.has_value() ? 1u : 0u) + programs.hitPrograms.size());
     assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
         .program = std::cref(programs.raygen),
         .logicalEntryPointName = "rgMain",
     });
     assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
-        .program = std::cref(programs.miss),
-        .logicalEntryPointName = "msMain",
+        .program = std::cref(programs.materialMiss),
+        .logicalEntryPointName = "msMaterial",
     });
-    if (programs.anyHit.has_value())
+    assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
+        .program = std::cref(programs.shadowMiss),
+        .logicalEntryPointName = "msShadow",
+    });
+    assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
+        .program = std::cref(programs.shadowAnyHit),
+        .logicalEntryPointName = "ahShadow",
+    });
+    if (programs.materialAnyHit.has_value())
     {
         assembly.stages.push_back(nr::rhi::RayTracingPipelineStageSelection{
-            .program = std::cref(*programs.anyHit),
+            .program = std::cref(*programs.materialAnyHit),
             .logicalEntryPointName = "ahMaterialPolicy",
         });
     }
@@ -287,14 +291,23 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
         });
     });
 
-    assembly.groups.reserve(2u + hitSbtPlan.permutations.size());
+    assembly.groups.reserve(4u + hitSbtPlan.permutations.size());
     assembly.groups.push_back(nr::rhi::RayTracingShaderGroupDesc{
         .name = std::string{kPathTracingRaygenGroupName},
         .generalEntryPoint = "rgMain",
     });
     assembly.groups.push_back(nr::rhi::RayTracingShaderGroupDesc{
-        .name = std::string{kPathTracingMissGroupName},
-        .generalEntryPoint = "msMain",
+        .name = std::string{kPathTracingMaterialMissGroupName},
+        .generalEntryPoint = "msMaterial",
+    });
+    assembly.groups.push_back(nr::rhi::RayTracingShaderGroupDesc{
+        .name = std::string{kPathTracingShadowMissGroupName},
+        .generalEntryPoint = "msShadow",
+    });
+    assembly.groups.push_back(nr::rhi::RayTracingShaderGroupDesc{
+        .name = std::string{kPathTracingShadowHitGroupName},
+        .type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup,
+        .anyHitEntryPoint = "ahShadow",
     });
     std::ranges::for_each(hitSbtPlan.permutations, [&](const SceneRtHitSbtPermutation &permutation) {
         auto hitGroup = nr::rhi::RayTracingShaderGroupDesc{
@@ -311,22 +324,20 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     return assembly;
 }
 
-[[nodiscard]] PathTracingProgramBatch compilePathTracingPrograms(
-    nr::rhi::ShaderService &shaderService,
-    const nr::rhi::RayTracingPipelineDesc &pipelineDesc,
-    const PathTracingVariantKey &variantKey,
-    const SceneRtHitSbtPlan &hitSbtPlan)
+[[nodiscard]] PathTracingProgramBatch compilePathTracingPrograms(nr::rhi::ShaderService &shaderService,
+                                                                 const nr::rhi::RayTracingPipelineDesc &pipelineDesc,
+                                                                 const PathTracingVariantKey &variantKey,
+                                                                 const SceneRtHitSbtPlan &hitSbtPlan)
 {
-    auto chsKeys = hitSbtPlan.permutations |
-                   std::views::transform([](const SceneRtHitSbtPermutation &permutation) {
-                       return permutation.key.bsdf;
-                   }) |
-                   std::ranges::to<std::vector>();
+    auto chsKeys =
+        hitSbtPlan.permutations |
+        std::views::transform([](const SceneRtHitSbtPermutation &permutation) { return permutation.key.bsdf; }) |
+        std::ranges::to<std::vector>();
     std::ranges::sort(chsKeys);
     chsKeys.erase(std::ranges::unique(chsKeys).begin(), chsKeys.end());
 
     auto requests = std::vector<nr::rhi::SlangProgramCompileFileRequest>{};
-    requests.reserve(4u + chsKeys.size());
+    requests.reserve(6u + chsKeys.size());
     auto appendRequest = [&](std::filesystem::path sourcePath, nr::rhi::SlangProgramVariantDesc variant = {}) {
         auto const index = requests.size();
         requests.push_back(nr::rhi::SlangProgramCompileFileRequest{
@@ -338,85 +349,78 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
 
     auto const baselineRaygenVariant = makePathTracingRaygenVariantDesc(PathTracingVariantKey{});
     auto const raygenVariant = makePathTracingRaygenVariantDesc(variantKey);
-    auto const baselineRaygenIndex = appendRequest(
-        std::filesystem::path{"renderer/pathTracing/raygen"},
-        baselineRaygenVariant);
+    auto const baselineRaygenIndex =
+        appendRequest(std::filesystem::path{"renderer/pathTracing/raygen"}, baselineRaygenVariant);
     auto const raygenIndex = raygenVariant.hashValue() == baselineRaygenVariant.hashValue()
                                  ? baselineRaygenIndex
-                                 : appendRequest(
-                                       std::filesystem::path{"renderer/pathTracing/raygen"},
-                                       raygenVariant);
-    auto const missIndex = appendRequest(std::filesystem::path{"renderer/pathTracing/miss"});
-    auto const usesAnyHit = std::ranges::any_of(
-        hitSbtPlan.permutations,
-        [](const SceneRtHitSbtPermutation &permutation) {
+                                 : appendRequest(std::filesystem::path{"renderer/pathTracing/raygen"}, raygenVariant);
+    auto const materialMissIndex = appendRequest(std::filesystem::path{"renderer/pathTracing/miss"});
+    auto const shadowMissIndex = appendRequest(std::filesystem::path{"renderer/pathTracing/shadowMiss"});
+    auto const shadowAnyHitIndex = appendRequest(std::filesystem::path{"renderer/pathTracing/shadowAnyHit"});
+    auto const usesMaterialAnyHit =
+        std::ranges::any_of(hitSbtPlan.permutations, [](const SceneRtHitSbtPermutation &permutation) {
             return rtHitPermutationUsesAnyHit(permutation.key);
         });
-    auto const anyHitIndex = usesAnyHit
-                                 ? std::optional{appendRequest(std::filesystem::path{"renderer/pathTracing/anyHit"})}
-                                 : std::optional<std::size_t>{};
+    auto const materialAnyHitIndex =
+        usesMaterialAnyHit ? std::optional{appendRequest(std::filesystem::path{"renderer/pathTracing/anyHit"})}
+                           : std::optional<std::size_t>{};
     auto const firstClosestHitIndex = requests.size();
     std::ranges::for_each(chsKeys, [&](const PathTracingChsVariantKey &chsKey) {
-        appendRequest(
-            std::filesystem::path{"renderer/pathTracing/closestHit"},
-            makePathTracingClosestHitVariantDesc(variantKey, chsKey));
+        appendRequest(std::filesystem::path{"renderer/pathTracing/closestHit"},
+                      makePathTracingClosestHitVariantDesc(variantKey, chsKey));
     });
 
     auto compiledPrograms = shaderService.compileProgramsByFile(requests);
-    nr::nrAssert(
-        compiledPrograms.size() == requests.size() &&
-            std::ranges::all_of(compiledPrograms, &nr::rhi::SlangProgram::valid),
-        "Path tracing pass failed to compile its shader batch.");
-    nr::nrAssert(
-        compiledPrograms[baselineRaygenIndex].entryPoint()->stage == SLANG_STAGE_RAY_GENERATION &&
-            compiledPrograms[raygenIndex].entryPoint()->stage == SLANG_STAGE_RAY_GENERATION,
-        "Path tracing ray-generation files must each define one ray-generation entrypoint.");
-    nr::nrAssert(
-        compiledPrograms[missIndex].entryPoint()->stage == SLANG_STAGE_MISS,
-        "Path tracing miss file must define one miss entrypoint.");
-    if (anyHitIndex.has_value())
+    nr::nrAssert(compiledPrograms.size() == requests.size() &&
+                     std::ranges::all_of(compiledPrograms, &nr::rhi::SlangProgram::valid),
+                 "Path tracing pass failed to compile its shader batch.");
+    nr::nrAssert(compiledPrograms[baselineRaygenIndex].entryPoint()->stage == SLANG_STAGE_RAY_GENERATION &&
+                     compiledPrograms[raygenIndex].entryPoint()->stage == SLANG_STAGE_RAY_GENERATION,
+                 "Path tracing ray-generation files must each define one ray-generation entrypoint.");
+    nr::nrAssert(compiledPrograms[materialMissIndex].entryPoint()->stage == SLANG_STAGE_MISS,
+                 "Path tracing material miss file must define one miss entrypoint.");
+    nr::nrAssert(compiledPrograms[shadowMissIndex].entryPoint()->stage == SLANG_STAGE_MISS,
+                 "Path tracing shadow miss file must define one miss entrypoint.");
+    nr::nrAssert(compiledPrograms[shadowAnyHitIndex].entryPoint()->stage == SLANG_STAGE_ANY_HIT,
+                 "Path tracing shadow any-hit file must define one any-hit entrypoint.");
+    if (materialAnyHitIndex.has_value())
     {
-        nr::nrAssert(
-            compiledPrograms[*anyHitIndex].entryPoint()->stage == SLANG_STAGE_ANY_HIT,
-            "Path tracing any-hit file must define one any-hit entrypoint.");
+        nr::nrAssert(compiledPrograms[*materialAnyHitIndex].entryPoint()->stage == SLANG_STAGE_ANY_HIT,
+                     "Path tracing material any-hit file must define one any-hit entrypoint.");
     }
-    nr::nrAssert(
-        std::ranges::all_of(
-            std::views::iota(firstClosestHitIndex, compiledPrograms.size()),
-            [&](std::size_t index) {
-                return compiledPrograms[index].entryPoint()->stage == SLANG_STAGE_CLOSEST_HIT;
-            }),
-        "Path tracing closest-hit files must each define one closest-hit entrypoint.");
+    nr::nrAssert(std::ranges::all_of(std::views::iota(firstClosestHitIndex, compiledPrograms.size()),
+                                     [&](std::size_t index) {
+                                         return compiledPrograms[index].entryPoint()->stage == SLANG_STAGE_CLOSEST_HIT;
+                                     }),
+                 "Path tracing closest-hit files must each define one closest-hit entrypoint.");
 
     if (raygenIndex != baselineRaygenIndex)
     {
-        nr::rhi::assertShaderLayoutAbiStable(
-            compiledPrograms[baselineRaygenIndex],
-            compiledPrograms[raygenIndex],
-            pipelineDesc.descriptorBindingPolicy,
-            describePathTracingVariantKey(variantKey));
+        nr::rhi::assertShaderLayoutAbiStable(compiledPrograms[baselineRaygenIndex], compiledPrograms[raygenIndex],
+                                             pipelineDesc.descriptorBindingPolicy,
+                                             describePathTracingVariantKey(variantKey));
     }
     if (!chsKeys.empty())
     {
-        auto const& baselineClosestHit = compiledPrograms[firstClosestHitIndex];
+        auto const &baselineClosestHit = compiledPrograms[firstClosestHitIndex];
         auto const variantIndices = std::views::iota(firstClosestHitIndex + 1u, compiledPrograms.size());
         std::ranges::for_each(variantIndices, [&](std::size_t index) {
             auto const keyIndex = index - firstClosestHitIndex;
-            nr::rhi::assertShaderLayoutAbiStable(
-                baselineClosestHit,
-                compiledPrograms[index],
-                pipelineDesc.descriptorBindingPolicy,
-                rtHitClosestHitEntryPointName(chsKeys[keyIndex]));
+            nr::rhi::assertShaderLayoutAbiStable(baselineClosestHit, compiledPrograms[index],
+                                                 pipelineDesc.descriptorBindingPolicy,
+                                                 rtHitClosestHitEntryPointName(chsKeys[keyIndex]));
         });
     }
 
     auto result = PathTracingProgramBatch{
         .raygen = compiledPrograms[raygenIndex],
-        .miss = compiledPrograms[missIndex],
+        .materialMiss = compiledPrograms[materialMissIndex],
+        .shadowMiss = compiledPrograms[shadowMissIndex],
+        .shadowAnyHit = compiledPrograms[shadowAnyHitIndex],
     };
-    if (anyHitIndex.has_value())
+    if (materialAnyHitIndex.has_value())
     {
-        result.anyHit.emplace(compiledPrograms[*anyHitIndex]);
+        result.materialAnyHit.emplace(compiledPrograms[*materialAnyHitIndex]);
     }
     result.hitPrograms = std::views::iota(std::size_t{0u}, chsKeys.size()) |
                          std::views::transform([&](std::size_t index) {
@@ -429,31 +433,34 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     return result;
 }
 
-[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> createPathTracingPipelineRuntime(nr::rhi::Device &device, const PathTracingPipelineKey &pipelineKey, const SceneRtHitSbtPlan &hitSbtPlan)
+[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>
+createPathTracingPipelineRuntime(nr::rhi::Device &device, const PathTracingPipelineKey &pipelineKey,
+                                 const SceneRtHitSbtPlan &hitSbtPlan)
 {
-    nr::nrAssert(pipelineKey.chsPermutationSetHash == hitSbtPlan.permutationSetHash, "Path tracing pipeline key must match the hit SBT permutation set.");
-    nr::nrAssert(!hitSbtPlan.permutations.empty(), "Path tracing pipeline creation requires at least one active hit permutation.");
+    nr::nrAssert(pipelineKey.chsPermutationSetHash == hitSbtPlan.permutationSetHash,
+                 "Path tracing pipeline key must match the hit SBT permutation set.");
+    nr::nrAssert(!hitSbtPlan.permutations.empty(),
+                 "Path tracing pipeline creation requires at least one active hit permutation.");
 
     auto pipelineDesc = makePathTracingPipelineDesc();
-    auto programs = compilePathTracingPrograms(
-        nr::rhi::ShaderService::instance(),
-        pipelineDesc,
-        pipelineKey.variant,
-        hitSbtPlan);
+    auto programs =
+        compilePathTracingPrograms(nr::rhi::ShaderService::instance(), pipelineDesc, pipelineKey.variant, hitSbtPlan);
     auto programAssembly = makePathTracingProgramAssembly(programs, hitSbtPlan);
 
-    auto descriptorLayout = nr::rhi::ShaderDescriptorLayout::create(programs.raygen, pipelineDesc.descriptorBindingPolicy);
+    auto descriptorLayout =
+        nr::rhi::ShaderDescriptorLayout::create(programs.raygen, pipelineDesc.descriptorBindingPolicy);
     nr::nrAssert(descriptorLayout.valid(), "Path tracing environment sampler reflection failed.");
-    auto environmentSampler = descriptorLayout.rootCursor()["gEnvironmentMap"].makeImmutableSamplerBinding(nr::rhi::SlangSamplerDesc{
-        .magFilter = vk::Filter::eLinear,
-        .minFilter = vk::Filter::eLinear,
-        .mipmapMode = vk::SamplerMipmapMode::eLinear,
-        .addressModeU = vk::SamplerAddressMode::eRepeat,
-        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
-        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
-        .minLod = 0.0f,
-        .maxLod = 0.0f,
-    });
+    auto environmentSampler =
+        descriptorLayout.rootCursor()["gEnvironmentMap"].makeImmutableSamplerBinding(nr::rhi::SlangSamplerDesc{
+            .magFilter = vk::Filter::eLinear,
+            .minFilter = vk::Filter::eLinear,
+            .mipmapMode = vk::SamplerMipmapMode::eLinear,
+            .addressModeU = vk::SamplerAddressMode::eRepeat,
+            .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+            .minLod = 0.0f,
+            .maxLod = 0.0f,
+        });
     nr::nrAssert(environmentSampler.has_value(), "Path tracing gEnvironmentMap must support an immutable sampler.");
 
     auto pipelineRuntime = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>();
@@ -462,82 +469,120 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
         *environmentSampler,
     };
     pipelineRuntime->initializeDeferred(device.pipeline().createRayTracingPipeline(
-        programs.raygen,
-        programAssembly,
-        pipelineDesc,
-        64u,
-        immutableSamplers));
-    nr::nrAssert(pipelineRuntime->valid(), "Path tracing pass failed to create ray tracing pipeline.");
-    nr::rhi::setPipelineDebugName(device.device, pipelineRuntime->pipeline().raw(), describePathTracingPipelineKey(pipelineKey) + ".Pipeline");
+        programs.raygen, programAssembly, pipelineDesc, 64u, immutableSamplers,
+        describePathTracingPipelineKey(pipelineKey) + ".Pipeline"));
 
     return pipelineRuntime;
 }
 
-[[nodiscard]] nr::rhi::ShaderBindingTable createPathTracingShaderBindingTable(nr::rhi::Device &device, const std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &pipelineRuntime, const PathTracingSbtKey &sbtKey, const SceneRtHitSbtPlan &hitSbtPlan)
+[[nodiscard]] nr::rhi::ShaderBindingTable createPathTracingShaderBindingTable(
+    nr::rhi::Device &device,
+    const std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &pipelineRuntime,
+    const PathTracingSbtKey &sbtKey, const SceneRtHitSbtPlan &hitSbtPlan)
 {
-    nr::nrAssert(sbtKey.pipeline.chsPermutationSetHash == hitSbtPlan.permutationSetHash, "Path tracing SBT key must match the hit SBT permutation set.");
-    nr::nrAssert(sbtKey.hitRecordPlanHash == hitSbtPlan.recordPlanHash, "Path tracing SBT key must match the hit SBT record plan.");
-    nr::nrAssert(pipelineRuntime && pipelineRuntime->valid(), "Path tracing SBT creation requires a valid ray tracing pipeline.");
+    nr::nrAssert(sbtKey.pipeline.chsPermutationSetHash == hitSbtPlan.permutationSetHash,
+                 "Path tracing SBT key must match the hit SBT permutation set.");
+    nr::nrAssert(sbtKey.hitRecordPlanHash == hitSbtPlan.recordPlanHash,
+                 "Path tracing SBT key must match the hit SBT record plan.");
+    nr::nrAssert(pipelineRuntime && pipelineRuntime->valid(),
+                 "Path tracing SBT creation requires a valid ray tracing pipeline.");
 
     auto const &pipeline = pipelineRuntime->pipeline();
-    auto hitRecords = hitSbtPlan.records | std::views::transform([&](const SceneRtHitSbtRecord &record) {
-                          nr::nrAssert(record.permutationIndex < hitSbtPlan.permutations.size(), "Path tracing SBT record references an invalid hit permutation.");
-                          return nr::rhi::ShaderBindingTableRecordDesc{
-                              .groupIndex = pipeline.shaderGroupIndex(pathTracingHitGroupName(hitSbtPlan.permutations[record.permutationIndex].key)),
-                          };
-                      }) |
-                      std::ranges::to<std::vector>();
+    nr::nrAssert(hitSbtPlan.records.size() <=
+                     static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
+                 "Path tracing logical hit SBT record count exceeds uint32 ABI.");
+    auto const physicalHitRecordCount =
+        rtPhysicalHitRecordCount(static_cast<std::uint32_t>(hitSbtPlan.records.size()));
+    nr::nrAssert(physicalHitRecordCount <= std::numeric_limits<std::uint32_t>::max(),
+                 "Path tracing physical hit SBT record count exceeds uint32 ABI.");
 
-    auto shaderBindingTable = nr::rhi::ShaderBindingTable::create(device.resourceFactory, nr::rhi::ShaderBindingTableBuildDesc{
-                                                                                              .pipeline = pipeline,
-                                                                                              .capabilities = device.rayTracingCapabilities(),
-                                                                                              .raygen =
-                                                                                                  nr::rhi::ShaderBindingTableSectionDesc{
-                                                                                                      .firstGroup = pipeline.shaderGroupIndex(kPathTracingRaygenGroupName),
-                                                                                                      .groupCount = 1u,
-                                                                                                  },
-                                                                                              .miss =
-                                                                                                  nr::rhi::ShaderBindingTableSectionDesc{
-                                                                                                      .firstGroup = pipeline.shaderGroupIndex(kPathTracingMissGroupName),
-                                                                                                      .groupCount = 1u,
-                                                                                                  },
-                                                                                              .hit =
-                                                                                                  nr::rhi::ShaderBindingTableSectionDesc{
-                                                                                                      .records = std::span<const nr::rhi::ShaderBindingTableRecordDesc>{hitRecords.data(), hitRecords.size()},
-                                                                                                  },
-                                                                                              .debugName = describePathTracingSbtKey(sbtKey) + ".SBT",
-                                                                                          });
+    auto hitRecords = std::vector<nr::rhi::ShaderBindingTableRecordDesc>{};
+    hitRecords.reserve(static_cast<std::size_t>(physicalHitRecordCount));
+    auto const shadowHitGroupIndex = pipeline.shaderGroupIndex(kPathTracingShadowHitGroupName);
+    std::ranges::for_each(hitSbtPlan.records, [&](const SceneRtHitSbtRecord &record) {
+        nr::nrAssert(record.permutationIndex < hitSbtPlan.permutations.size(),
+                     "Path tracing SBT record references an invalid hit permutation.");
+        hitRecords.push_back(nr::rhi::ShaderBindingTableRecordDesc{
+            .groupIndex = pipeline.shaderGroupIndex(
+                pathTracingHitGroupName(hitSbtPlan.permutations[record.permutationIndex].key)),
+        });
+        hitRecords.push_back(nr::rhi::ShaderBindingTableRecordDesc{
+            .groupIndex = shadowHitGroupIndex,
+        });
+    });
+    nr::nrAssert(hitRecords.size() == physicalHitRecordCount,
+                 "Path tracing physical hit SBT record expansion is inconsistent with the ray-type ABI.");
+
+    auto const missRecords = std::array{
+        nr::rhi::ShaderBindingTableRecordDesc{
+            .groupIndex = pipeline.shaderGroupIndex(kPathTracingMaterialMissGroupName),
+        },
+        nr::rhi::ShaderBindingTableRecordDesc{
+            .groupIndex = pipeline.shaderGroupIndex(kPathTracingShadowMissGroupName),
+        },
+    };
+
+    auto shaderBindingTable = nr::rhi::ShaderBindingTable::create(
+        device.resourceFactory,
+        nr::rhi::ShaderBindingTableBuildDesc{
+            .pipeline = pipeline,
+            .capabilities = device.rayTracingCapabilities(),
+            .raygen =
+                nr::rhi::ShaderBindingTableSectionDesc{
+                    .firstGroup = pipeline.shaderGroupIndex(kPathTracingRaygenGroupName),
+                    .groupCount = 1u,
+                },
+            .miss =
+                nr::rhi::ShaderBindingTableSectionDesc{
+                    .records = std::span<const nr::rhi::ShaderBindingTableRecordDesc>{missRecords},
+                },
+            .hit =
+                nr::rhi::ShaderBindingTableSectionDesc{
+                    .records =
+                        std::span<const nr::rhi::ShaderBindingTableRecordDesc>{hitRecords.data(), hitRecords.size()},
+                },
+            .debugName = describePathTracingSbtKey(sbtKey) + ".SBT",
+        });
     nr::nrAssert(shaderBindingTable.valid(), "Path tracing pass failed to create SBT.");
 
     return shaderBindingTable;
 }
 
-[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &ensurePathTracingPipelineRuntime(PathTracingRuntimeCache &cache, nr::rhi::Device &device, const PathTracingPipelineKey &pipelineKey, const SceneRtHitSbtPlan &hitSbtPlan)
+[[nodiscard]] std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &
+ensurePathTracingPipelineRuntime(PathTracingRuntimeCache &cache, nr::rhi::Device &device,
+                                 const PathTracingPipelineKey &pipelineKey, const SceneRtHitSbtPlan &hitSbtPlan)
 {
     if (auto runtimeIt = cache.pipelines.find(pipelineKey); runtimeIt != cache.pipelines.end())
     {
         return runtimeIt->second;
     }
 
-    auto [runtimeIt, inserted] = cache.pipelines.try_emplace(pipelineKey, createPathTracingPipelineRuntime(device, pipelineKey, hitSbtPlan));
+    auto [runtimeIt, inserted] =
+        cache.pipelines.try_emplace(pipelineKey, createPathTracingPipelineRuntime(device, pipelineKey, hitSbtPlan));
     nr::nrAssert(inserted, "Path tracing pipeline runtime cache insertion failed.");
     return runtimeIt->second;
 }
 
-[[nodiscard]] nr::rhi::ShaderBindingTable &ensurePathTracingShaderBindingTable(PathTracingRuntimeCache &cache, nr::rhi::Device &device, const PathTracingSbtKey &sbtKey, const std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &pipelineRuntime,
-                                                                               const SceneRtHitSbtPlan &hitSbtPlan)
+[[nodiscard]] nr::rhi::ShaderBindingTable &ensurePathTracingShaderBindingTable(
+    PathTracingRuntimeCache &cache, nr::rhi::Device &device, const PathTracingSbtKey &sbtKey,
+    const std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &pipelineRuntime,
+    const SceneRtHitSbtPlan &hitSbtPlan)
 {
     if (auto sbtIt = cache.shaderBindingTables.find(sbtKey); sbtIt != cache.shaderBindingTables.end())
     {
         return sbtIt->second;
     }
 
-    auto [sbtIt, inserted] = cache.shaderBindingTables.try_emplace(sbtKey, createPathTracingShaderBindingTable(device, pipelineRuntime, sbtKey, hitSbtPlan));
+    auto [sbtIt, inserted] = cache.shaderBindingTables.try_emplace(
+        sbtKey, createPathTracingShaderBindingTable(device, pipelineRuntime, sbtKey, hitSbtPlan));
     nr::nrAssert(inserted, "Path tracing SBT cache insertion failed.");
     return sbtIt->second;
 }
 
-[[nodiscard]] PathTracingFrameRuntime ensurePathTracingFrameRuntime(PathTracingRuntimeCache &cache, nr::rhi::Device &device, const PathTracingVariantKey &key, const SceneRtHitSbtPlan &hitSbtPlan)
+[[nodiscard]] PathTracingFrameRuntime ensurePathTracingFrameRuntime(PathTracingRuntimeCache &cache,
+                                                                    nr::rhi::Device &device,
+                                                                    const PathTracingVariantKey &key,
+                                                                    const SceneRtHitSbtPlan &hitSbtPlan)
 {
     auto pipelineKey = PathTracingPipelineKey{
         .variant = normalizePathTracingVariantKey(key),
@@ -557,7 +602,8 @@ inline constexpr std::string_view kPathTracingMissGroupName = "miss";
     };
 }
 
-void ensurePathTracingGuideImages(nr::rhi::Device &device, PathTracingGuideFrameSlot &frameSlot, std::size_t frameSlotIndex, vk::Extent2D requestedExtent, vk::Format colorFormat)
+void ensurePathTracingGuideImages(nr::rhi::Device &device, PathTracingGuideFrameSlot &frameSlot,
+                                  std::size_t frameSlotIndex, vk::Extent2D requestedExtent, vk::Format colorFormat)
 {
     nr::nrAssert(colorFormat != vk::Format::eUndefined, "PathTracing guide color format must be defined.");
     requestedExtent.width = std::max(1u, requestedExtent.width);
@@ -565,8 +611,11 @@ void ensurePathTracingGuideImages(nr::rhi::Device &device, PathTracingGuideFrame
 
     auto specs = makePathTracingGuideSpecs(colorFormat);
     auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
-    auto resourcesValid = std::ranges::all_of(guideIndices, [&](std::size_t index) { return frameSlot.images[index].valid() && frameSlot.images[index].format() == specs[index].format; });
-    auto extentFits = frameSlot.allocatedExtent.width >= requestedExtent.width && frameSlot.allocatedExtent.height >= requestedExtent.height;
+    auto resourcesValid = std::ranges::all_of(guideIndices, [&](std::size_t index) {
+        return frameSlot.images[index].valid() && frameSlot.images[index].format() == specs[index].format;
+    });
+    auto extentFits = frameSlot.allocatedExtent.width >= requestedExtent.width &&
+                      frameSlot.allocatedExtent.height >= requestedExtent.height;
     if (resourcesValid && extentFits && frameSlot.allocatedColorFormat == colorFormat)
     {
         return;
@@ -576,13 +625,18 @@ void ensurePathTracingGuideImages(nr::rhi::Device &device, PathTracingGuideFrame
         std::max(requestedExtent.width, frameSlot.allocatedExtent.width),
         std::max(requestedExtent.height, frameSlot.allocatedExtent.height),
     };
-    auto imageUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc;
+    auto imageUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                      vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc;
 
     std::ranges::for_each(guideIndices, [&](std::size_t guideResourceIndex) {
         auto const &spec = specs[guideResourceIndex];
         auto imageInfo = nr::rhi::makeImageCreateInfo(spec.format, allocatedExtent, imageUsage);
-        frameSlot.images[guideResourceIndex] = device.resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly, std::format("PathTracing.{}[{}]", spec.debugName, frameSlotIndex));
-        nr::nrAssert(frameSlot.images[guideResourceIndex].valid(), std::format("PathTracing failed to allocate {} guide for frame slot {}.", spec.debugName, frameSlotIndex));
+        frameSlot.images[guideResourceIndex] =
+            device.resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly,
+                                               std::format("PathTracing.{}[{}]", spec.debugName, frameSlotIndex));
+        nr::nrAssert(
+            frameSlot.images[guideResourceIndex].valid(),
+            std::format("PathTracing failed to allocate {} guide for frame slot {}.", spec.debugName, frameSlotIndex));
         frameSlot.states[guideResourceIndex].reset();
     });
 
@@ -590,8 +644,9 @@ void ensurePathTracingGuideImages(nr::rhi::Device &device, PathTracingGuideFrame
     frameSlot.allocatedColorFormat = colorFormat;
 }
 
-[[nodiscard]] std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> importPathTracingGuides(NodeBuildContext &context, PathTracingGuideFrameSlot &frameSlot, vk::Extent2D extent, std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs,
-                                                                                                                    std::size_t frameSlotIndex)
+[[nodiscard]] std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> importPathTracingGuides(
+    NodeBuildContext &context, PathTracingGuideFrameSlot &frameSlot, vk::Extent2D extent,
+    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs, std::size_t frameSlotIndex)
 {
     auto resources = std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount>{};
     auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
@@ -600,7 +655,8 @@ void ensurePathTracingGuideImages(nr::rhi::Device &device, PathTracingGuideFrame
         resources[index] = context.addResource(nr::renderer::GraphImportedImageDesc{
             .debugName = std::format("PathTracing.{}[{}]", specs[index].debugName, frameSlotIndex),
             .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-            .initialOwnership = state.common.initialized ? state.common.ownership : nr::renderer::ResourceOwnershipDomain::Undefined,
+            .initialOwnership =
+                state.common.initialized ? state.common.ownership : nr::renderer::ResourceOwnershipDomain::Undefined,
             .extent = vk::Extent3D{extent.width, extent.height, 1u},
             .format = specs[index].format,
             .usageIntents =
@@ -619,51 +675,52 @@ void ensurePathTracingGuideImages(nr::rhi::Device &device, PathTracingGuideFrame
     return resources;
 }
 
-[[nodiscard]] std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount>
-patchPathTracingGuides(
-    nr::renderer::RenderGraphSkeletonPatchContext& context,
-    PathTracingGuideFrameSlot& frameSlot,
-    vk::Extent2D extent,
-    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs,
-    std::size_t frameSlotIndex)
+[[nodiscard]] std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> patchPathTracingGuides(
+    nr::renderer::RenderGraphSkeletonPatchContext &context, PathTracingGuideFrameSlot &frameSlot, vk::Extent2D extent,
+    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs, std::size_t frameSlotIndex)
 {
     auto resources = std::array<nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount>{};
     auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
     std::ranges::for_each(guideIndices, [&](std::size_t index) {
-        auto& state = frameSlot.states[index];
+        auto &state = frameSlot.states[index];
         resources[index] = context.resource(index);
-        context.patchResource(index, nr::renderer::GraphImportedImageDesc{
-            .debugName = std::format("PathTracing.{}[{}]", specs[index].debugName, frameSlotIndex),
-            .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-            .initialOwnership = state.common.initialized
-                                    ? state.common.ownership
-                                    : nr::renderer::ResourceOwnershipDomain::Undefined,
-            .extent = vk::Extent3D{extent.width, extent.height, 1u},
-            .format = specs[index].format,
-            .usageIntents = {
-                nr::renderer::ImageUsageIntent::StorageWrite,
-                nr::renderer::ImageUsageIntent::Sampled,
-                nr::renderer::ImageUsageIntent::TransferDst,
-                nr::renderer::ImageUsageIntent::TransferSrc,
-            },
-            .initialLayout = state.common.initialized
-                                 ? state.layout
-                                 : nr::renderer::ImageLayoutIntent::Undefined,
-            .initialAccessScope = state.common.initialized
-                                      ? state.common.access
-                                      : nr::renderer::AccessScope{},
-            .importedResource = std::cref(frameSlot.images[index]),
-            .retainedState = std::ref(state),
-        });
+        context.patchResource(
+            index,
+            nr::renderer::GraphImportedImageDesc{
+                .debugName = std::format("PathTracing.{}[{}]", specs[index].debugName, frameSlotIndex),
+                .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+                .initialOwnership = state.common.initialized ? state.common.ownership
+                                                             : nr::renderer::ResourceOwnershipDomain::Undefined,
+                .extent = vk::Extent3D{extent.width, extent.height, 1u},
+                .format = specs[index].format,
+                .usageIntents =
+                    {
+                        nr::renderer::ImageUsageIntent::StorageWrite,
+                        nr::renderer::ImageUsageIntent::Sampled,
+                        nr::renderer::ImageUsageIntent::TransferDst,
+                        nr::renderer::ImageUsageIntent::TransferSrc,
+                    },
+                .initialLayout = state.common.initialized ? state.layout : nr::renderer::ImageLayoutIntent::Undefined,
+                .initialAccessScope = state.common.initialized ? state.common.access : nr::renderer::AccessScope{},
+                .importedResource = std::cref(frameSlot.images[index]),
+                .retainedState = std::ref(state),
+            });
     });
     return resources;
 }
 
-void publishPathTracingGuides(NodeBuildContext &context, std::span<const nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> resources, std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs)
+void publishPathTracingGuides(
+    NodeBuildContext &context,
+    std::span<const nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> resources,
+    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs)
 {
     auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
-    std::ranges::for_each(guideIndices, [&](std::size_t index) { context.publishFrameResource(std::format("dlss.rr.input.{}", nr::rhi::dlssResourceSlotName(specs[index].dlssSlot)), resources[index]); });
-    context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, resources[guideIndex(PathTracingGuideResource::color)]);
+    std::ranges::for_each(guideIndices, [&](std::size_t index) {
+        context.publishFrameResource(
+            std::format("dlss.rr.input.{}", nr::rhi::dlssResourceSlotName(specs[index].dlssSlot)), resources[index]);
+    });
+    context.publishFrameResource(nr::renderer::frameResource::presentSourceColor,
+                                 resources[guideIndex(PathTracingGuideResource::color)]);
 }
 
 [[nodiscard]] std::shared_ptr<PathTracingRuntimeCache> makePathTracingRuntimeCache()
@@ -687,7 +744,8 @@ void publishPathTracingGuides(NodeBuildContext &context, std::span<const nr::ren
     return "Unknown";
 }
 
-[[nodiscard]] std::expected<PathTracingFrameInputs, PathTracingUnavailableReason> resolvePathTracingFrameInputs(const NodeBuildContext &context)
+[[nodiscard]] std::expected<PathTracingFrameInputs, PathTracingUnavailableReason> resolvePathTracingFrameInputs(
+    const NodeBuildContext &context)
 {
     auto sceneTlas = context.resolveFrameResource(nr::renderer::frameResource::sceneTlas);
     if (!sceneTlas.valid())
@@ -707,9 +765,12 @@ void publishPathTracingGuides(NodeBuildContext &context, std::span<const nr::ren
     auto sceneLightAliasTable = context.resolveFrameResource(nr::renderer::frameResource::sceneLightAliasTable);
     auto rtHitSbtPlanHandle = context.resolveFrameData(nr::renderer::frameData::sceneRtHitSbtPlan);
     auto sidebandResources = std::array{
-        rtInstanceMetadata, rtGeometryMetadata, rtMaterialHeaders, rtMaterialLayers, rtMaterialTextureRefs, rtVertexAtlas, rtIndexAtlas, sceneLightHeader, sceneLights, sceneLightAliasTable,
+        rtInstanceMetadata, rtGeometryMetadata, rtMaterialHeaders, rtMaterialLayers, rtMaterialTextureRefs,
+        rtVertexAtlas,      rtIndexAtlas,       sceneLightHeader,  sceneLights,      sceneLightAliasTable,
     };
-    if (!rtHitSbtPlanHandle.valid() || std::ranges::any_of(sidebandResources, [](nr::renderer::GraphResourceHandle resource) { return !resource.valid(); }))
+    if (!rtHitSbtPlanHandle.valid() ||
+        std::ranges::any_of(sidebandResources,
+                            [](nr::renderer::GraphResourceHandle resource) { return !resource.valid(); }))
     {
         return std::unexpected(PathTracingUnavailableReason::incompleteRtSideband);
     }
@@ -740,15 +801,21 @@ void publishPathTracingGuides(NodeBuildContext &context, std::span<const nr::ren
     };
 }
 
-void clearUnavailableGuides(NodeBuildContext &context, std::span<const nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> resources, std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs, PathTracingUnavailableReason reason)
+void clearUnavailableGuides(
+    NodeBuildContext &context,
+    std::span<const nr::renderer::GraphResourceHandle, kPathTracingGuideResourceCount> resources,
+    std::span<const PathTracingGuideSpec, kPathTracingGuideResourceCount> specs, PathTracingUnavailableReason reason)
 {
     auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
     std::ranges::for_each(guideIndices, [&](std::size_t index) {
-        [[maybe_unused]] auto clearPass = nr::renderer::ops::clearColorImage(context, std::format("PathTracing.ClearUnavailable.{}.{}", pathTracingUnavailableReasonName(reason), specs[index].debugName),
-                                                                             nr::renderer::ops::ClearColorImagePassDesc{
-                                                                                 .image = resources[index],
-                                                                                 .value = vk::ClearColorValue{specs[index].unavailableClear},
-                                                                             });
+        [[maybe_unused]] auto clearPass = nr::renderer::ops::clearColorImage(
+            context,
+            std::format("PathTracing.ClearUnavailable.{}.{}", pathTracingUnavailableReasonName(reason),
+                        specs[index].debugName),
+            nr::renderer::ops::ClearColorImagePassDesc{
+                .image = resources[index],
+                .value = vk::ClearColorValue{specs[index].unavailableClear},
+            });
     });
 }
 } // namespace nr::renderPasses::detail
@@ -757,20 +824,13 @@ namespace nr::renderPasses
 {
 namespace
 {
-[[nodiscard]] PathTracingVariantKey pathTracingVariant(
-    const nr::options::OptionFrameSnapshot& snapshot)
+[[nodiscard]] PathTracingVariantKey pathTracingVariant(const nr::options::OptionFrameSnapshot &snapshot)
 {
-    auto const* maxBounces =
-        snapshot.find(nr::options::keys::pathTracingMaxSurfaceBounces);
-    auto const* russianRoulette =
-        snapshot.find(nr::options::keys::pathTracingRussianRouletteEnabled);
-    auto const* filterAfterShading =
-        snapshot.find(nr::options::keys::pathTracingFilterAfterShadingEnabled);
-    nrAssert(
-        maxBounces != nullptr &&
-            russianRoulette != nullptr &&
-            filterAfterShading != nullptr,
-        "PathTracing requires its option values in the frame snapshot.");
+    auto const *maxBounces = snapshot.find(nr::options::keys::pathTracingMaxSurfaceBounces);
+    auto const *russianRoulette = snapshot.find(nr::options::keys::pathTracingRussianRouletteEnabled);
+    auto const *filterAfterShading = snapshot.find(nr::options::keys::pathTracingFilterAfterShadingEnabled);
+    nrAssert(maxBounces != nullptr && russianRoulette != nullptr && filterAfterShading != nullptr,
+             "PathTracing requires its option values in the frame snapshot.");
     return detail::normalizePathTracingVariantKey(PathTracingVariantKey{
         .maxSurfaceBounces = static_cast<std::uint32_t>(*maxBounces),
         .enableRussianRoulette = *russianRoulette,
@@ -781,31 +841,24 @@ namespace
 
 PathTracingNode::~PathTracingNode() = default;
 
-void PathTracingNode::declareOptions(nr::options::OptionCatalogBuilder& builder) const
+void PathTracingNode::declareOptions(nr::options::OptionCatalogBuilder &builder) const
 {
-    std::ranges::for_each(
-        nr::options::makePathTracingDefinitions(),
-        [&](nr::options::OptionDefinition definition) {
-            static_cast<void>(builder.add(std::move(definition)));
-        });
+    std::ranges::for_each(nr::options::makePathTracingDefinitions(), [&](nr::options::OptionDefinition definition) {
+        static_cast<void>(builder.add(std::move(definition)));
+    });
 }
 
-void PathTracingNode::collectOptionAvailability(
-    const nr::options::OptionFrameSnapshot&,
-    nr::options::OptionAvailabilityMap& availability) const
+void PathTracingNode::collectOptionAvailability(const nr::options::OptionFrameSnapshot &,
+                                                nr::options::OptionAvailabilityMap &availability) const
 {
     auto const definitions = std::array{
         nr::options::optionId(nr::options::keys::pathTracingMaxSurfaceBounces),
         nr::options::optionId(nr::options::keys::pathTracingRussianRouletteEnabled),
         nr::options::optionId(nr::options::keys::pathTracingFilterAfterShadingEnabled),
     };
-    std::ranges::for_each(
-        definitions,
-        [&](const nr::options::OptionId& id) {
-            availability.insert_or_assign(
-                id,
-                nr::options::OptionAvailability{.available = true, .reason = {}});
-        });
+    std::ranges::for_each(definitions, [&](const nr::options::OptionId &id) {
+        availability.insert_or_assign(id, nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
 }
 
 void PathTracingNode::initialize(NodeInitContext &context)
@@ -820,27 +873,21 @@ void PathTracingNode::build(NodeBuildContext &context, const NodeFrameParameters
     materializeCurrentFrame(context, frameParameters);
 }
 
-[[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot>
-PathTracingNode::structuralSnapshot(const NodeFrameParameters& frameParameters) const
+[[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> PathTracingNode::structuralSnapshot(
+    const NodeFrameParameters &frameParameters) const
 {
     auto const variant = pathTracingVariant(frameParameters.optionSnapshot.get());
-    auto const hasTraceInputs =
-        frameParameters.scene.has_value() &&
-        frameParameters.sceneTlasBuildInputs.has_value() &&
-        !frameParameters.sceneTlasBuildInputs->get().empty();
-    auto branch = std::format(
-        "{};format={};bounces={};roulette={};filterAfterShading={};scene={}",
-        hasTraceInputs ? "trace" : "clear-MissingTLAS",
-        static_cast<std::uint32_t>(input.outputFormat),
-        variant.maxSurfaceBounces,
-        variant.enableRussianRoulette ? 1u : 0u,
-        variant.enableFilterAfterShading ? 1u : 0u,
-        frameParameters.sceneRevisions.sceneIdentity);
+    auto const hasTraceInputs = frameParameters.scene.has_value() && frameParameters.sceneTlasBuildInputs.has_value() &&
+                                !frameParameters.sceneTlasBuildInputs->get().empty();
+    auto branch =
+        std::format("{};format={};bounces={};roulette={};filterAfterShading={};scene={}",
+                    hasTraceInputs ? "trace" : "clear-MissingTLAS", static_cast<std::uint32_t>(input.outputFormat),
+                    variant.maxSurfaceBounces, variant.enableRussianRoulette ? 1u : 0u,
+                    variant.enableFilterAfterShading ? 1u : 0u, frameParameters.sceneRevisions.sceneIdentity);
     auto const structuralRevisions =
         nr::scene::SceneRtStructuralRevisionProjection::capture(frameParameters.sceneRevisions.rt);
-    std::ranges::for_each(structuralRevisions.values, [&](auto revision) {
-        branch += std::format(";{}", revision.value);
-    });
+    std::ranges::for_each(structuralRevisions.values,
+                          [&](auto revision) { branch += std::format(";{}", revision.value); });
     return StructuralSnapshot{
         .configurationRevision = std::max<std::uint64_t>(1u, std::hash<std::string>{}(branch)),
         .branchKey = std::move(branch),
@@ -849,8 +896,8 @@ PathTracingNode::structuralSnapshot(const NodeFrameParameters& frameParameters) 
 
 namespace detail
 {
-[[nodiscard]] std::expected<PathTracingFrameInputs, PathTracingUnavailableReason>
-resolvePathTracingFrameInputs(const nr::renderer::RenderGraphSkeletonPatchContext& context)
+[[nodiscard]] std::expected<PathTracingFrameInputs, PathTracingUnavailableReason> resolvePathTracingFrameInputs(
+    const nr::renderer::RenderGraphSkeletonPatchContext &context)
 {
     if (!context.hasNamedResource(nr::renderer::frameResource::sceneTlas))
     {
@@ -869,9 +916,7 @@ resolvePathTracingFrameInputs(const nr::renderer::RenderGraphSkeletonPatchContex
         nr::renderer::frameResource::sceneLights,
         nr::renderer::frameResource::sceneLightAliasTable,
     };
-    if (std::ranges::any_of(resourceNames, [&](std::string_view name) {
-            return !context.hasNamedResource(name);
-        }))
+    if (std::ranges::any_of(resourceNames, [&](std::string_view name) { return !context.hasNamedResource(name); }))
     {
         return std::unexpected(PathTracingUnavailableReason::incompleteRtSideband);
     }
@@ -906,27 +951,27 @@ resolvePathTracingFrameInputs(const nr::renderer::RenderGraphSkeletonPatchContex
 }
 } // namespace detail
 
-bool PathTracingNode::materializeRenderGraphSkeleton(
-    nr::renderer::RenderGraphSkeletonPatchContext& context,
-    const NodeFrameParameters& frameParameters,
-    const StructuralSnapshot& snapshot)
+bool PathTracingNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
+                                                     const NodeFrameParameters &frameParameters,
+                                                     const StructuralSnapshot &snapshot)
 {
-    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "PathTracing Skeleton patch requires initialized state.");
+    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(),
+                 "PathTracing Skeleton patch requires initialized state.");
     auto const variant = pathTracingVariant(frameParameters.optionSnapshot.get());
     auto const renderExtent = frameParameters.resolutionPlan.renderExtent;
     auto const frameSlotIndex = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-    auto& guideFrameSlot = runtime_->guideFrameSlots[frameSlotIndex];
-    detail::ensurePathTracingGuideImages(
-        device_->get(), guideFrameSlot, frameSlotIndex, renderExtent, input.outputFormat);
+    auto &guideFrameSlot = runtime_->guideFrameSlots[frameSlotIndex];
+    detail::ensurePathTracingGuideImages(device_->get(), guideFrameSlot, frameSlotIndex, renderExtent,
+                                         input.outputFormat);
     auto const guideSpecs = detail::makePathTracingGuideSpecs(input.outputFormat);
-    auto const guideResources = detail::patchPathTracingGuides(
-        context, guideFrameSlot, renderExtent, guideSpecs, frameSlotIndex);
+    auto const guideResources =
+        detail::patchPathTracingGuides(context, guideFrameSlot, renderExtent, guideSpecs, frameSlotIndex);
 
     auto frameInputs = detail::resolvePathTracingFrameInputs(context);
     if (!frameInputs.has_value())
     {
-        auto const expectedBranch = std::format(
-            "clear-{}", detail::pathTracingUnavailableReasonName(frameInputs.error()));
+        auto const expectedBranch =
+            std::format("clear-{}", detail::pathTracingUnavailableReasonName(frameInputs.error()));
         if (!snapshot.branchKey.starts_with(expectedBranch))
         {
             return false;
@@ -935,10 +980,8 @@ bool PathTracingNode::materializeRenderGraphSkeleton(
         std::ranges::for_each(indices, [&](std::size_t index) {
             nr::renderer::ops::patchClearColorImage(
                 context, index,
-                std::format(
-                    "PathTracing.ClearUnavailable.{}.{}",
-                    detail::pathTracingUnavailableReasonName(frameInputs.error()),
-                    guideSpecs[index].debugName),
+                std::format("PathTracing.ClearUnavailable.{}.{}",
+                            detail::pathTracingUnavailableReasonName(frameInputs.error()), guideSpecs[index].debugName),
                 nr::renderer::ops::ClearColorImagePassDesc{
                     .image = guideResources[index],
                     .value = vk::ClearColorValue{guideSpecs[index].unavailableClear},
@@ -951,21 +994,22 @@ bool PathTracingNode::materializeRenderGraphSkeleton(
         return false;
     }
 
-    auto const& inputs = *frameInputs;
-    auto activeRuntime = detail::ensurePathTracingFrameRuntime(
-        *runtime_, device_->get(), variant, *inputs.hitSbtPlan);
-    auto const& sbtBuffer = activeRuntime.shaderBindingTable.get().buffer();
-    context.patchResource(detail::kPathTracingGuideResourceCount, nr::renderer::GraphImportedBufferDesc{
-        .debugName = "PathTracing.SBT",
-        .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-        .initialOwnership = nr::renderer::ownershipDomainFromQueue(context.queue()),
-        .size = sbtBuffer.size(),
-        .usageIntents = {
-            nr::renderer::BufferUsageIntent::ShaderBindingTable,
-            nr::renderer::BufferUsageIntent::ShaderDeviceAddress,
-        },
-        .importedResource = std::cref(sbtBuffer),
-    });
+    auto const &inputs = *frameInputs;
+    auto activeRuntime = detail::ensurePathTracingFrameRuntime(*runtime_, device_->get(), variant, *inputs.hitSbtPlan);
+    auto const &sbtBuffer = activeRuntime.shaderBindingTable.get().buffer();
+    context.patchResource(detail::kPathTracingGuideResourceCount,
+                          nr::renderer::GraphImportedBufferDesc{
+                              .debugName = "PathTracing.SBT",
+                              .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+                              .initialOwnership = nr::renderer::ownershipDomainFromQueue(context.queue()),
+                              .size = sbtBuffer.size(),
+                              .usageIntents =
+                                  {
+                                      nr::renderer::BufferUsageIntent::ShaderBindingTable,
+                                      nr::renderer::BufferUsageIntent::ShaderDeviceAddress,
+                                  },
+                              .importedResource = std::cref(sbtBuffer),
+                          });
 
     auto const dimensions = nr::rhi::TraceRaysDimensions{
         .width = renderExtent.width,
@@ -974,17 +1018,15 @@ bool PathTracingNode::materializeRenderGraphSkeleton(
     };
     auto const queueRole = nr::renderer::rhiQueueRoleFromDomain(context.queue());
     nr::nrAssert(queueRole != nr::rhi::QueueRole::Transfer, "PathTracing cannot run on the transfer queue.");
-    auto const& globals = context.globalResources();
+    auto const &globals = context.globalResources();
     auto sceneTextureTableBinding = detail::makeSceneTextureTableBindingInput(globals);
-    auto& bindlessImageTableCache = globals.bindlessImageTableCache.get();
-    auto patch = nr::renderer::RayTracingPassPatchBuilder{
-        context, 0u, "PathTracing.Trace", activeRuntime.pipeline};
+    auto &bindlessImageTableCache = globals.bindlessImageTableCache.get();
+    auto patch = nr::renderer::RayTracingPassPatchBuilder{context, 0u, "PathTracing.Trace", activeRuntime.pipeline};
     patch.accelerationStructure("scene", inputs.sceneTlas, "PathTracing.SceneTLAS");
     auto const indices = std::views::iota(std::size_t{0u}, detail::kPathTracingGuideResourceCount);
     std::ranges::for_each(indices, [&](std::size_t index) {
-        patch.storageImage(
-            guideSpecs[index].shaderBinding, guideResources[index],
-            std::format("PathTracing.{}", guideSpecs[index].debugName));
+        patch.storageImage(guideSpecs[index].shaderBinding, guideResources[index],
+                           std::format("PathTracing.{}", guideSpecs[index].debugName));
     });
     patch.storageBuffer("rtInstanceMetadata", inputs.rtInstanceMetadata, "PathTracing.InstanceMetadata")
         .storageBuffer("rtGeometryMetadata", inputs.rtGeometryMetadata, "PathTracing.GeometryMetadata")
@@ -1000,31 +1042,29 @@ bool PathTracingNode::materializeRenderGraphSkeleton(
         .storageBuffer("gSceneLights", inputs.sceneLights, "PathTracing.SceneLights")
         .storageBuffer("gSceneLightAliasTable", inputs.sceneLightAliasTable, "PathTracing.SceneLightAliasTable")
         .prepare([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
-                  cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
-            detail::prepareSceneTextureTableBindingForFrame(
-                *pipeline, cache.get(), prepareContext.frameIndex, sceneTextureTableBinding,
-                detail::SceneTextureTableBindingRequirement::optional);
+                  cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
+            detail::prepareSceneTextureTableBindingForFrame(*pipeline, cache.get(), prepareContext.frameIndex,
+                                                            sceneTextureTableBinding,
+                                                            detail::SceneTextureTableBindingRequirement::optional);
         })
-        .dynamicBindingSnapshot(
-            [pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
-             cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext& prepareContext) {
-                return detail::makeSceneTextureTableBindingSnapshot(
-                    *pipeline, cache.get(), prepareContext.frameIndex, sceneTextureTableBinding,
-                    detail::SceneTextureTableBindingRequirement::optional);
-            })
-        .record([pipeline = activeRuntime.pipeline,
-                 shaderBindingTable = activeRuntime.shaderBindingTable,
-                 dimensions, queueRole,
-                 device = std::cref(device_->get())](const nr::renderer::RayTracingPassRecordContext& rayContext) {
-            nr::rhi::traceRays(
-                rayContext.commandBuffer,
-                nr::rhi::TraceRaysDesc{
-                    .pipeline = pipeline->pipeline(),
-                    .shaderBindingTable = shaderBindingTable.get(),
-                    .dimensions = dimensions,
-                    .recordingQueueRole = queueRole,
-                },
-                device.get().rayTracingCapabilities());
+        .dynamicBindingSnapshot([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
+                                 cache = std::ref(bindlessImageTableCache)](
+                                    const nr::renderer::PassPrepareContext &prepareContext) {
+            return detail::makeSceneTextureTableBindingSnapshot(*pipeline, cache.get(), prepareContext.frameIndex,
+                                                                sceneTextureTableBinding,
+                                                                detail::SceneTextureTableBindingRequirement::optional);
+        })
+        .record([pipeline = activeRuntime.pipeline, shaderBindingTable = activeRuntime.shaderBindingTable, dimensions,
+                 queueRole,
+                 device = std::cref(device_->get())](const nr::renderer::RayTracingPassRecordContext &rayContext) {
+            nr::rhi::traceRays(rayContext.commandBuffer,
+                               nr::rhi::TraceRaysDesc{
+                                   .pipeline = pipeline->pipeline(),
+                                   .shaderBindingTable = shaderBindingTable.get(),
+                                   .dimensions = dimensions,
+                                   .recordingQueueRole = queueRole,
+                               },
+                               device.get().rayTracingCapabilities());
         });
     patch.patch();
     return true;
@@ -1037,13 +1077,16 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
     auto const variant = pathTracingVariant(frameParameters.optionSnapshot.get());
 
     auto const renderExtent = frameParameters.resolutionPlan.renderExtent;
-    nr::nrAssert(renderExtent.width > 0u && renderExtent.height > 0u, "PathTracing requires a non-zero renderer frame render extent.");
+    nr::nrAssert(renderExtent.width > 0u && renderExtent.height > 0u,
+                 "PathTracing requires a non-zero renderer frame render extent.");
 
     auto frameSlotIndex = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-    auto& guideFrameSlot = runtime_->guideFrameSlots[frameSlotIndex];
-    detail::ensurePathTracingGuideImages(device_->get(), guideFrameSlot, frameSlotIndex, renderExtent, input.outputFormat);
+    auto &guideFrameSlot = runtime_->guideFrameSlots[frameSlotIndex];
+    detail::ensurePathTracingGuideImages(device_->get(), guideFrameSlot, frameSlotIndex, renderExtent,
+                                         input.outputFormat);
     auto guideSpecs = detail::makePathTracingGuideSpecs(input.outputFormat);
-    auto guideResources = detail::importPathTracingGuides(context, guideFrameSlot, renderExtent, guideSpecs, frameSlotIndex);
+    auto guideResources =
+        detail::importPathTracingGuides(context, guideFrameSlot, renderExtent, guideSpecs, frameSlotIndex);
     detail::publishPathTracingGuides(context, guideResources, guideSpecs);
 
     auto frameInputs = detail::resolvePathTracingFrameInputs(context);
@@ -1055,7 +1098,8 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
     auto const &inputs = *frameInputs;
     auto activeRuntime = detail::ensurePathTracingFrameRuntime(*runtime_, device_->get(), variant, *inputs.hitSbtPlan);
 
-    auto sbtResource = context.importBuffer(activeRuntime.shaderBindingTable.get().buffer(), "PathTracing.SBT", nr::renderer::ResourceLifetime::RendererPersistent,
+    auto sbtResource = context.importBuffer(activeRuntime.shaderBindingTable.get().buffer(), "PathTracing.SBT",
+                                            nr::renderer::ResourceLifetime::RendererPersistent,
                                             {
                                                 nr::renderer::BufferUsageIntent::ShaderBindingTable,
                                                 nr::renderer::BufferUsageIntent::ShaderDeviceAddress,
@@ -1078,7 +1122,10 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
     auto tracePass = nr::renderer::RayTracingPassBuilder{context, "PathTracing.Trace", activeRuntime.pipeline};
     tracePass.accelerationStructure("scene", inputs.sceneTlas, "PathTracing.SceneTLAS");
     auto guideIndices = std::views::iota(std::size_t{0u}, detail::kPathTracingGuideResourceCount);
-    std::ranges::for_each(guideIndices, [&](std::size_t index) { tracePass.storageImage(guideSpecs[index].shaderBinding, guideResources[index], std::format("PathTracing.{}", guideSpecs[index].debugName)); });
+    std::ranges::for_each(guideIndices, [&](std::size_t index) {
+        tracePass.storageImage(guideSpecs[index].shaderBinding, guideResources[index],
+                               std::format("PathTracing.{}", guideSpecs[index].debugName));
+    });
     tracePass.storageBuffer("rtInstanceMetadata", inputs.rtInstanceMetadata, "PathTracing.InstanceMetadata")
         .storageBuffer("rtGeometryMetadata", inputs.rtGeometryMetadata, "PathTracing.GeometryMetadata")
         .storageBuffer("rtMaterialHeaders", inputs.rtMaterialHeaders, "PathTracing.MaterialHeaders")
@@ -1093,13 +1140,22 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
         .uniform("gSceneLightHeader", inputs.sceneLightHeader, "PathTracing.SceneLightHeader")
         .storageBuffer("gSceneLights", inputs.sceneLights, "PathTracing.SceneLights")
         .storageBuffer("gSceneLightAliasTable", inputs.sceneLightAliasTable, "PathTracing.SceneLightAliasTable")
-        .prepare([pipeline = activeRuntime.pipeline, sceneTextureTableBinding, cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
-            detail::prepareSceneTextureTableBindingForFrame(*pipeline, cache.get(), prepareContext.frameIndex, sceneTextureTableBinding, detail::SceneTextureTableBindingRequirement::optional);
+        .prepare([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
+                  cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
+            detail::prepareSceneTextureTableBindingForFrame(*pipeline, cache.get(), prepareContext.frameIndex,
+                                                            sceneTextureTableBinding,
+                                                            detail::SceneTextureTableBindingRequirement::optional);
         })
-        .dynamicBindingSnapshot([pipeline = activeRuntime.pipeline, sceneTextureTableBinding, cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
-            return detail::makeSceneTextureTableBindingSnapshot(*pipeline, cache.get(), prepareContext.frameIndex, sceneTextureTableBinding, detail::SceneTextureTableBindingRequirement::optional);
+        .dynamicBindingSnapshot([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
+                                 cache = std::ref(bindlessImageTableCache)](
+                                    const nr::renderer::PassPrepareContext &prepareContext) {
+            return detail::makeSceneTextureTableBindingSnapshot(*pipeline, cache.get(), prepareContext.frameIndex,
+                                                                sceneTextureTableBinding,
+                                                                detail::SceneTextureTableBindingRequirement::optional);
         })
-        .record([pipeline = activeRuntime.pipeline, shaderBindingTable = activeRuntime.shaderBindingTable, dimensions, queueRole, device = std::cref(device_->get())](const nr::renderer::RayTracingPassRecordContext &rayContext) {
+        .record([pipeline = activeRuntime.pipeline, shaderBindingTable = activeRuntime.shaderBindingTable, dimensions,
+                 queueRole,
+                 device = std::cref(device_->get())](const nr::renderer::RayTracingPassRecordContext &rayContext) {
             nr::rhi::traceRays(rayContext.commandBuffer,
                                nr::rhi::TraceRaysDesc{
                                    .pipeline = pipeline->pipeline(),
@@ -1117,12 +1173,14 @@ void PathTracingNode::shutdown(NodeShutdownContext &)
 {
     if (runtime_)
     {
-        std::ranges::for_each(runtime_->pipelines | std::views::values, [](std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &pipelineRuntime) {
-            if (pipelineRuntime)
-            {
-                pipelineRuntime->clearBindingSets();
-            }
-        });
+        std::ranges::for_each(
+            runtime_->pipelines | std::views::values,
+            [](std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>> &pipelineRuntime) {
+                if (pipelineRuntime)
+                {
+                    pipelineRuntime->clearBindingSets();
+                }
+            });
     }
     runtime_.reset();
     device_.reset();

@@ -7,10 +7,8 @@ export namespace nr::load
 {
 [[nodiscard]] std::string normalizedExtension(const std::filesystem::path &path);
 
-[[nodiscard]] LoadError makeLoadError(LoadErrorCode code,
-                                             std::string_view backend,
-                                             const std::filesystem::path &sourcePath,
-                                             std::string message);
+[[nodiscard]] LoadError makeLoadError(LoadErrorCode code, std::string_view backend,
+                                      const std::filesystem::path &sourcePath, std::string message);
 
 template <typename T>
 concept SceneImporterBackend = requires(const SceneLoadRequest &request) {
@@ -19,8 +17,7 @@ concept SceneImporterBackend = requires(const SceneLoadRequest &request) {
     { T::importScene(request) } -> std::same_as<SceneImportResult>;
 };
 
-template <typename Derived>
-struct SceneImporterBackendBase
+template <typename Derived> struct SceneImporterBackendBase
 {
     [[nodiscard]] static std::string_view backendName()
     {
@@ -32,8 +29,7 @@ struct SceneImporterBackendBase
         return Derived::supportsExtension(normalizedExtension(request.sourcePath));
     }
 
-    [[nodiscard]] static LoadError makeError(LoadErrorCode code,
-                                             const std::filesystem::path &sourcePath,
+    [[nodiscard]] static LoadError makeError(LoadErrorCode code, const std::filesystem::path &sourcePath,
                                              std::string message)
     {
         return makeLoadError(code, backendName(), sourcePath, std::move(message));
@@ -47,12 +43,9 @@ template <typename RegistryTuple, std::size_t Index = 0>
 {
     if constexpr (Index >= std::tuple_size_v<RegistryTuple>)
     {
-        return SceneImportResult{
-            std::unexpected(makeLoadError(
-                LoadErrorCode::unsupportedFormat,
-                "registry",
-                request.sourcePath,
-                std::format("No importer backend accepts extension '{}'.", normalizedExtension(request.sourcePath))))};
+        return SceneImportResult{std::unexpected(makeLoadError(
+            LoadErrorCode::unsupportedFormat, "registry", request.sourcePath,
+            std::format("No importer backend accepts extension '{}'.", normalizedExtension(request.sourcePath))))};
     }
     else
     {
@@ -69,27 +62,22 @@ template <typename RegistryTuple, std::size_t Index = 0>
 }
 } // namespace detail
 
-template <typename RegistryTuple>
-struct SceneImporterRegistry
+template <typename RegistryTuple> struct SceneImporterRegistry
 {
     [[nodiscard]] static SceneImportResult import(const SceneLoadRequest &request)
     {
         if (request.sourcePath.empty())
         {
             return SceneImportResult{
-                std::unexpected(makeLoadError(
-                    LoadErrorCode::invalidArgument,
-                    "registry",
-                    request.sourcePath,
-                    "SceneLoadRequest.sourcePath must not be empty."))};
+                std::unexpected(makeLoadError(LoadErrorCode::invalidArgument, "registry", request.sourcePath,
+                                              "SceneLoadRequest.sourcePath must not be empty."))};
         }
 
         return detail::dispatchSceneImport<RegistryTuple>(request);
     }
 };
 
-template <typename RegistryTuple>
-[[nodiscard]] inline SceneImportResult importScene(const SceneLoadRequest &request)
+template <typename RegistryTuple> [[nodiscard]] inline SceneImportResult importScene(const SceneLoadRequest &request)
 {
     return SceneImporterRegistry<RegistryTuple>::import(request);
 }

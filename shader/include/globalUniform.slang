@@ -13,5 +13,5 @@ public struct GlobalFrameUniforms
     public uint4 frameState;
 };
 
-[[vk::binding(0, 5)]]
+[[vk::binding(0, 3)]]
 public ConstantBuffer<GlobalFrameUniforms> gFrame;

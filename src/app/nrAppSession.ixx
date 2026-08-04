@@ -19,35 +19,34 @@ class AppSession
 {
   public:
     AppSession() = default;
-    AppSession(const AppSession&) = delete;
-    AppSession& operator=(const AppSession&) = delete;
-    AppSession(AppSession&&) = delete;
-    AppSession& operator=(AppSession&&) = delete;
+    AppSession(const AppSession &) = delete;
+    AppSession &operator=(const AppSession &) = delete;
+    AppSession(AppSession &&) = delete;
+    AppSession &operator=(AppSession &&) = delete;
 
     ~AppSession();
 
-    void initialize(const nr::renderer::RendererCreateInfo& createInfo = {});
+    void initialize(const nr::renderer::RendererCreateInfo &createInfo = {});
     void shutdown();
     void destroyScene();
-    [[nodiscard]] std::unique_ptr<nr::scene::Scene> makeSceneCandidate(
-        const SceneSessionCreateInfo& createInfo = {});
+    [[nodiscard]] std::unique_ptr<nr::scene::Scene> makeSceneCandidate(const SceneSessionCreateInfo &createInfo = {});
     void commitScene(std::unique_ptr<nr::scene::Scene> candidate);
-    [[nodiscard]] nr::scene::Scene& createScene(const SceneSessionCreateInfo& createInfo = {});
+    [[nodiscard]] nr::scene::Scene &createScene(const SceneSessionCreateInfo &createInfo = {});
     [[nodiscard]] bool initialized() const noexcept;
     [[nodiscard]] bool hasScene() const noexcept;
-    void resetCameraFromSceneOrDefault(const AppCameraDefaultView& defaults = {});
+    void resetCameraFromSceneOrDefault(const AppCameraDefaultView &defaults = {});
 
-    [[nodiscard]] nr::renderer::Renderer& renderer() noexcept;
-    [[nodiscard]] const nr::renderer::Renderer& renderer() const noexcept;
-    [[nodiscard]] nr::options::OptionSystem& options() noexcept;
-    [[nodiscard]] const nr::options::OptionSystem& options() const noexcept;
-    [[nodiscard]] AppCamera& camera() noexcept;
-    [[nodiscard]] const AppCamera& camera() const noexcept;
-    [[nodiscard]] UiSystem& ui() noexcept;
-    [[nodiscard]] const UiSystem& ui() const noexcept;
+    [[nodiscard]] nr::renderer::Renderer &renderer() noexcept;
+    [[nodiscard]] const nr::renderer::Renderer &renderer() const noexcept;
+    [[nodiscard]] nr::options::OptionSystem &options() noexcept;
+    [[nodiscard]] const nr::options::OptionSystem &options() const noexcept;
+    [[nodiscard]] AppCamera &camera() noexcept;
+    [[nodiscard]] const AppCamera &camera() const noexcept;
+    [[nodiscard]] UiSystem &ui() noexcept;
+    [[nodiscard]] const UiSystem &ui() const noexcept;
     [[nodiscard]] nr::renderer::FrameServices makeFrameServices() noexcept;
-    [[nodiscard]] nr::scene::Scene& scene() noexcept;
-    [[nodiscard]] const nr::scene::Scene& scene() const noexcept;
+    [[nodiscard]] nr::scene::Scene &scene() noexcept;
+    [[nodiscard]] const nr::scene::Scene &scene() const noexcept;
     [[nodiscard]] std::optional<std::reference_wrapper<nr::scene::Scene>> tryScene() noexcept;
     [[nodiscard]] std::optional<std::reference_wrapper<const nr::scene::Scene>> tryScene() const noexcept;
 

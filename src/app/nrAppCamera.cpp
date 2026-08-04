@@ -31,22 +31,22 @@ inline constexpr int kKeyE = 'E';
     return std::clamp(deltaSeconds, 1.0f / 240.0f, 0.1f);
 }
 
-[[nodiscard]] bool finiteVec3(const glm::vec3& value) noexcept
+[[nodiscard]] bool finiteVec3(const glm::vec3 &value) noexcept
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
-[[nodiscard]] bool finiteVec4(const glm::vec4& value) noexcept
+[[nodiscard]] bool finiteVec4(const glm::vec4 &value) noexcept
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) && std::isfinite(value.w);
 }
 
-[[nodiscard]] bool finiteMat4(const glm::mat4& value) noexcept
+[[nodiscard]] bool finiteMat4(const glm::mat4 &value) noexcept
 {
     return finiteVec4(value[0]) && finiteVec4(value[1]) && finiteVec4(value[2]) && finiteVec4(value[3]);
 }
 
-[[nodiscard]] glm::uvec2 viewportExtentFrom(const nr::rhi::PresentationContext& presentation) noexcept
+[[nodiscard]] glm::uvec2 viewportExtentFrom(const nr::rhi::PresentationContext &presentation) noexcept
 {
     auto const extent = presentation.swapchainExtent();
     if (extent.width == 0u || extent.height == 0u)
@@ -57,7 +57,7 @@ inline constexpr int kKeyE = 'E';
     return glm::uvec2{extent.width, extent.height};
 }
 
-[[nodiscard]] glm::vec3 cameraForwardFromWorld(const glm::mat4& world) noexcept
+[[nodiscard]] glm::vec3 cameraForwardFromWorld(const glm::mat4 &world) noexcept
 {
     auto const forward = glm::vec3{-world[2].x, -world[2].y, -world[2].z};
     auto const length = glm::length(forward);
@@ -69,7 +69,7 @@ inline constexpr int kKeyE = 'E';
     return forward / length;
 }
 
-[[nodiscard]] nr::renderer::ViewerPerspectiveLens sanitizeLens(const nr::renderer::ViewerPerspectiveLens& lens) noexcept
+[[nodiscard]] nr::renderer::ViewerPerspectiveLens sanitizeLens(const nr::renderer::ViewerPerspectiveLens &lens) noexcept
 {
     auto result = lens;
     if (!std::isfinite(result.verticalFovRadians) || result.verticalFovRadians <= 1e-3f ||
@@ -92,9 +92,8 @@ inline constexpr int kKeyE = 'E';
 }
 
 [[nodiscard]] nr::renderer::ViewerPerspectiveLens lensFromSceneCamera(
-    const nr::scene::Scene& scene,
-    const nr::scene::SceneResolvedCamera& resolvedCamera,
-    const nr::renderer::ViewerPerspectiveLens& fallback) noexcept
+    const nr::scene::Scene &scene, const nr::scene::SceneResolvedCamera &resolvedCamera,
+    const nr::renderer::ViewerPerspectiveLens &fallback) noexcept
 {
     auto lens = sanitizeLens(fallback);
 
@@ -104,7 +103,7 @@ inline constexpr int kKeyE = 'E';
         return lens;
     }
 
-    auto const& cameraAsset = cameraRecord->get().cpu;
+    auto const &cameraAsset = cameraRecord->get().cpu;
     lens.verticalFovRadians = cameraAsset.verticalFovRadians;
     lens.nearPlane = cameraAsset.nearPlane;
     lens.farPlane = cameraAsset.farPlane;
@@ -112,15 +111,12 @@ inline constexpr int kKeyE = 'E';
 }
 
 [[nodiscard]] nr::renderer::ViewerCameraControlInput sampleControlInput(
-    const nr::rhi::PresentationContext& presentation,
-    float deltaSeconds,
-    nr::app::AppCameraCursorTrackingState& cursorTracking,
-    const nr::app::UiCaptureState& captureState) noexcept
+    const nr::rhi::PresentationContext &presentation, float deltaSeconds,
+    nr::app::AppCameraCursorTrackingState &cursorTracking, const nr::app::UiCaptureState &captureState) noexcept
 {
     auto const cursor = presentation.cursorPosition();
-    auto const rotateActive = !captureState.wantsMouse &&
-                              (presentation.mouseButtonDown(kMouseButtonLeft) ||
-                               presentation.mouseButtonDown(kMouseButtonRight));
+    auto const rotateActive = !captureState.wantsMouse && (presentation.mouseButtonDown(kMouseButtonLeft) ||
+                                                           presentation.mouseButtonDown(kMouseButtonRight));
 
     auto cursorDelta = glm::vec2{0.0f, 0.0f};
     if (rotateActive)
@@ -166,8 +162,7 @@ inline constexpr int kKeyE = 'E';
     return normalized - glm::pi<float>();
 }
 
-[[nodiscard]] nr::options::OptionWireValue::Object poseValue(
-    const nr::renderer::ViewerCameraPose& pose)
+[[nodiscard]] nr::options::OptionWireValue::Object poseValue(const nr::renderer::ViewerCameraPose &pose)
 {
     return {
         {"position",
@@ -176,18 +171,13 @@ inline constexpr int kKeyE = 'E';
              static_cast<double>(pose.position.y),
              static_cast<double>(pose.position.z),
          }},
-        {"yaw_degrees",
-         static_cast<double>(glm::degrees(normalizedYawRadians(pose.yawRadians)))},
+        {"yaw_degrees", static_cast<double>(glm::degrees(normalizedYawRadians(pose.yawRadians)))},
         {"pitch_degrees",
-         static_cast<double>(glm::degrees(std::clamp(
-             pose.pitchRadians,
-             -glm::radians(89.0f),
-             glm::radians(89.0f))))},
+         static_cast<double>(glm::degrees(std::clamp(pose.pitchRadians, -glm::radians(89.0f), glm::radians(89.0f))))},
     };
 }
 
-[[nodiscard]] nr::options::OptionWireValue::Object clipValue(
-    const nr::renderer::ViewerPerspectiveLens& lens)
+[[nodiscard]] nr::options::OptionWireValue::Object clipValue(const nr::renderer::ViewerPerspectiveLens &lens)
 {
     return {
         {"near", static_cast<double>(lens.nearPlane)},
@@ -195,54 +185,50 @@ inline constexpr int kKeyE = 'E';
     };
 }
 
-[[nodiscard]] const nr::options::OptionWireValue& requiredValue(
-    const nr::options::OptionFrameSnapshot& snapshot,
-    std::string_view id) noexcept
+[[nodiscard]] const nr::options::OptionWireValue &requiredValue(const nr::options::OptionFrameSnapshot &snapshot,
+                                                                std::string_view id) noexcept
 {
-    auto const* value = snapshot.findValue(id);
+    auto const *value = snapshot.findValue(id);
     nrAssert(value != nullptr, std::format("Camera snapshot is missing required option '{}'.", id));
     return *value;
 }
 
-[[nodiscard]] nr::renderer::ViewerCameraPose poseFromSnapshot(
-    const nr::options::OptionFrameSnapshot& snapshot) noexcept
+[[nodiscard]] nr::renderer::ViewerCameraPose poseFromSnapshot(const nr::options::OptionFrameSnapshot &snapshot) noexcept
 {
-    auto const& wire = requiredValue(snapshot, nr::options::keys::viewerCameraPose.id());
-    auto const* object = std::get_if<nr::options::OptionWireValue::Object>(&wire.storage);
+    auto const &wire = requiredValue(snapshot, nr::options::keys::viewerCameraPose.id());
+    auto const *object = std::get_if<nr::options::OptionWireValue::Object>(&wire.storage);
     nrAssert(object != nullptr, "viewer.camera.pose must be an object.");
-    auto const* position = std::get_if<nr::options::OptionWireValue::Array>(
-        &object->at("position").storage);
-    nrAssert(position != nullptr && position->size() == 3u,
-             "viewer.camera.pose.position must contain three numbers.");
+    auto const *position = std::get_if<nr::options::OptionWireValue::Array>(&object->at("position").storage);
+    nrAssert(position != nullptr && position->size() == 3u, "viewer.camera.pose.position must contain three numbers.");
 
-    auto numberAt = [](const nr::options::OptionWireValue& value) noexcept {
-        auto const* number = std::get_if<double>(&value.storage);
+    auto numberAt = [](const nr::options::OptionWireValue &value) noexcept {
+        auto const *number = std::get_if<double>(&value.storage);
         nrAssert(number != nullptr, "Camera snapshot number has an invalid wire type.");
         return static_cast<float>(*number);
     };
     return nr::renderer::ViewerCameraPose{
-        .position = glm::vec3{
-            numberAt((*position)[0]),
-            numberAt((*position)[1]),
-            numberAt((*position)[2]),
-        },
+        .position =
+            glm::vec3{
+                numberAt((*position)[0]),
+                numberAt((*position)[1]),
+                numberAt((*position)[2]),
+            },
         .yawRadians = glm::radians(numberAt(object->at("yaw_degrees"))),
         .pitchRadians = glm::radians(numberAt(object->at("pitch_degrees"))),
     };
 }
 
 [[nodiscard]] nr::renderer::ViewerPerspectiveLens lensFromSnapshot(
-    const nr::options::OptionFrameSnapshot& snapshot) noexcept
+    const nr::options::OptionFrameSnapshot &snapshot) noexcept
 {
-    auto const* fov = snapshot.find(nr::options::keys::viewerCameraVerticalFovDegrees);
+    auto const *fov = snapshot.find(nr::options::keys::viewerCameraVerticalFovDegrees);
     nrAssert(fov != nullptr, "Camera snapshot is missing viewer.camera.vertical_fov_degrees.");
-    auto const& clipWire = requiredValue(snapshot, nr::options::keys::viewerCameraClipPlanes.id());
-    auto const* clip = std::get_if<nr::options::OptionWireValue::Object>(&clipWire.storage);
+    auto const &clipWire = requiredValue(snapshot, nr::options::keys::viewerCameraClipPlanes.id());
+    auto const *clip = std::get_if<nr::options::OptionWireValue::Object>(&clipWire.storage);
     nrAssert(clip != nullptr, "viewer.camera.clip_planes must be an object.");
-    auto const* nearPlane = std::get_if<double>(&clip->at("near").storage);
-    auto const* farPlane = std::get_if<double>(&clip->at("far").storage);
-    nrAssert(nearPlane != nullptr && farPlane != nullptr,
-             "viewer.camera.clip_planes fields must be numbers.");
+    auto const *nearPlane = std::get_if<double>(&clip->at("near").storage);
+    auto const *farPlane = std::get_if<double>(&clip->at("far").storage);
+    nrAssert(nearPlane != nullptr && farPlane != nullptr, "viewer.camera.clip_planes fields must be numbers.");
     return nr::renderer::ViewerPerspectiveLens{
         .verticalFovRadians = glm::radians(static_cast<float>(*fov)),
         .nearPlane = static_cast<float>(*nearPlane),
@@ -250,34 +236,30 @@ inline constexpr int kKeyE = 'E';
     };
 }
 
-[[nodiscard]] float movementSpeedFromSnapshot(
-    const nr::options::OptionFrameSnapshot& snapshot) noexcept
+[[nodiscard]] float movementSpeedFromSnapshot(const nr::options::OptionFrameSnapshot &snapshot) noexcept
 {
-    auto const& wire =
-        requiredValue(snapshot, nr::options::keys::viewerCameraMovementSpeed.id());
-    auto const* movementSpeed = std::get_if<double>(&wire.storage);
+    auto const &wire = requiredValue(snapshot, nr::options::keys::viewerCameraMovementSpeed.id());
+    auto const *movementSpeed = std::get_if<double>(&wire.storage);
     nrAssert(movementSpeed != nullptr, "viewer.camera.movement_speed must be a number.");
-    nrAssert(
-        std::isfinite(*movementSpeed) && *movementSpeed >= 0.01 && *movementSpeed <= 1000.0,
-        "viewer.camera.movement_speed must be finite and within [0.01, 1000].");
+    nrAssert(std::isfinite(*movementSpeed) && *movementSpeed >= 0.01 && *movementSpeed <= 1000.0,
+             "viewer.camera.movement_speed must be finite and within [0.01, 1000].");
     return static_cast<float>(*movementSpeed);
 }
 
-[[nodiscard]] bool hasCameraInput(const nr::renderer::ViewerCameraControlInput& input) noexcept
+[[nodiscard]] bool hasCameraInput(const nr::renderer::ViewerCameraControlInput &input) noexcept
 {
-    auto const moves = input.moveForward || input.moveBackward || input.moveLeft ||
-                       input.moveRight || input.moveUp || input.moveDown;
+    auto const moves =
+        input.moveForward || input.moveBackward || input.moveLeft || input.moveRight || input.moveUp || input.moveDown;
     auto const rotates =
-        input.rotateActive &&
-        (std::abs(input.cursorDelta.x) > 0.0f || std::abs(input.cursorDelta.y) > 0.0f);
+        input.rotateActive && (std::abs(input.cursorDelta.x) > 0.0f || std::abs(input.cursorDelta.y) > 0.0f);
     return moves || rotates;
 }
 } // namespace nr::app::detail
 
 namespace nr::app
 {
-void AppCamera::initializeDefault(const nr::rhi::PresentationContext& presentation,
-                                  const AppCameraDefaultView& defaults) noexcept
+void AppCamera::initializeDefault(const nr::rhi::PresentationContext &presentation,
+                                  const AppCameraDefaultView &defaults) noexcept
 {
     auto position = detail::finiteVec3(defaults.position) ? defaults.position : glm::vec3{0.0f, 0.0f, 3.0f};
     auto target = detail::finiteVec3(defaults.target) ? defaults.target : glm::vec3{0.0f, 0.0f, 0.0f};
@@ -292,9 +274,9 @@ void AppCamera::initializeDefault(const nr::rhi::PresentationContext& presentati
     cursorTracking_ = {};
 }
 
-void AppCamera::initializeFromSceneOrDefault(const nr::scene::Scene& scene,
-                                             const nr::rhi::PresentationContext& presentation,
-                                             const AppCameraDefaultView& defaults) noexcept
+void AppCamera::initializeFromSceneOrDefault(const nr::scene::Scene &scene,
+                                             const nr::rhi::PresentationContext &presentation,
+                                             const AppCameraDefaultView &defaults) noexcept
 {
     auto const viewportExtent = detail::viewportExtentFrom(presentation);
     if (auto primaryCamera = scene.tryGetPrimaryCamera(std::optional<glm::uvec2>{viewportExtent});
@@ -317,14 +299,13 @@ void AppCamera::initializeFromSceneOrDefault(const nr::scene::Scene& scene,
     initializeDefault(presentation, defaults);
 }
 
-void AppCamera::syncViewportExtent(const nr::rhi::PresentationContext& presentation) noexcept
+void AppCamera::syncViewportExtent(const nr::rhi::PresentationContext &presentation) noexcept
 {
     viewer_.setViewportExtent(detail::viewportExtentFrom(presentation));
 }
 
-void AppCamera::syncFromSnapshot(
-    const nr::options::OptionFrameSnapshot& snapshot,
-    const nr::rhi::PresentationContext& presentation) noexcept
+void AppCamera::syncFromSnapshot(const nr::options::OptionFrameSnapshot &snapshot,
+                                 const nr::rhi::PresentationContext &presentation) noexcept
 {
     syncViewportExtent(presentation);
     viewer_.setPose(detail::poseFromSnapshot(snapshot));
@@ -334,15 +315,12 @@ void AppCamera::syncFromSnapshot(
     viewer_.setControlConfig(controlConfig);
 }
 
-bool AppCamera::tryScheduleFromPresentation(
-    nr::options::OptionSystem& options,
-    const nr::options::OptionFrameSnapshot& snapshot,
-    const nr::rhi::PresentationContext& presentation,
-    float deltaSeconds,
-    const UiCaptureState& captureState) noexcept
+bool AppCamera::tryScheduleFromPresentation(nr::options::OptionSystem &options,
+                                            const nr::options::OptionFrameSnapshot &snapshot,
+                                            const nr::rhi::PresentationContext &presentation, float deltaSeconds,
+                                            const UiCaptureState &captureState) noexcept
 {
-    auto const control =
-        detail::sampleControlInput(presentation, deltaSeconds, cursorTracking_, captureState);
+    auto const control = detail::sampleControlInput(presentation, deltaSeconds, cursorTracking_, captureState);
     if (!detail::hasCameraInput(control))
     {
         return false;
@@ -364,34 +342,23 @@ bool AppCamera::tryScheduleFromPresentation(
     return result.started;
 }
 
-void AppCamera::discardPresentationInput(
-    const nr::rhi::PresentationContext& presentation,
-    float deltaSeconds,
-    const UiCaptureState& captureState) noexcept
+void AppCamera::discardPresentationInput(const nr::rhi::PresentationContext &presentation, float deltaSeconds,
+                                         const UiCaptureState &captureState) noexcept
 {
-    static_cast<void>(
-        detail::sampleControlInput(
-            presentation,
-            deltaSeconds,
-            cursorTracking_,
-            captureState));
+    static_cast<void>(detail::sampleControlInput(presentation, deltaSeconds, cursorTracking_, captureState));
 }
 
 nr::options::CameraResetValues AppCamera::optionResetValues() const
 {
     return nr::options::CameraResetValues{
         .pose = detail::poseValue(viewer_.pose()),
-        .verticalFovDegrees =
-            static_cast<std::uint64_t>(
-                std::clamp(
-                    std::lround(glm::degrees(viewer_.lens().verticalFovRadians)),
-                    1l,
-                    179l)),
+        .verticalFovDegrees = static_cast<std::uint64_t>(
+            std::clamp(std::lround(glm::degrees(viewer_.lens().verticalFovRadians)), 1l, 179l)),
         .clipPlanes = detail::clipValue(viewer_.lens()),
     };
 }
 
-const nr::renderer::ViewerPerspectiveCamera& AppCamera::viewer() const noexcept
+const nr::renderer::ViewerPerspectiveCamera &AppCamera::viewer() const noexcept
 {
     return viewer_;
 }

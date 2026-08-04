@@ -21,14 +21,15 @@ using ::ImGui::EndFrame;
 using ::ImGui::GetDrawData;
 using ::ImGui::GetIO;
 using ::ImGui::Indent;
-using ::ImGui::InputScalar;
 using ::ImGui::InputFloat;
+using ::ImGui::InputScalar;
 using ::ImGui::InputText;
 using ::ImGui::IsItemActive;
 using ::ImGui::IsItemDeactivatedAfterEdit;
 using ::ImGui::IsKeyPressed;
 using ::ImGui::NewFrame;
 using ::ImGui::Render;
+using ::ImGui::SameLine;
 using ::ImGui::Selectable;
 using ::ImGui::Separator;
 using ::ImGui::SetCurrentContext;
@@ -36,7 +37,6 @@ using ::ImGui::SetItemDefaultFocus;
 using ::ImGui::SetNextItemWidth;
 using ::ImGui::SetNextWindowPos;
 using ::ImGui::SetNextWindowSize;
-using ::ImGui::SameLine;
 using ::ImGui::SliderFloat;
 using ::ImGui::SliderInt;
 using ::ImGui::Spacing;
@@ -44,7 +44,6 @@ using ::ImGui::StyleColorsDark;
 using ::ImGui::TextUnformatted;
 using ::ImGui::Unindent;
 } // namespace ImGui
-
 
 export using ::ImDrawData;
 export using ::ImDrawIdx;
@@ -74,7 +73,6 @@ export using ::ImTextureStatus_WantCreate;
 export using ::ImTextureStatus_WantDestroy;
 export using ::ImTextureStatus_WantUpdates;
 export using ::ImVec2;
-
 
 export namespace imgui
 {

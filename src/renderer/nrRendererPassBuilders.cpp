@@ -49,7 +49,8 @@ namespace nr::renderer
 
 void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceHandle resource) const
 {
-    nrAssert(resource.valid(), std::format("NodeBuildContext::publishFrameResource requires a valid resource for '{}'.", key));
+    nrAssert(resource.valid(),
+             std::format("NodeBuildContext::publishFrameResource requires a valid resource for '{}'.", key));
     nrAssert(!key.empty(), "NodeBuildContext::publishFrameResource requires a non-empty key.");
     frameResources.get().insert_or_assign(std::string(key), resource);
 }
@@ -64,16 +65,19 @@ void NodeBuildContext::publishFrameResource(std::string_view key, GraphResourceH
     return resourceIt->second;
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::requireFrameResource(std::string_view key, std::string_view consumerDebugName) const
+[[nodiscard]] GraphResourceHandle NodeBuildContext::requireFrameResource(std::string_view key,
+                                                                         std::string_view consumerDebugName) const
 {
     auto resource = resolveFrameResource(key);
-    nrAssert(resource.valid(), std::format("{} requires frame resource '{}', but it has not been published.", consumerDebugName, key));
+    nrAssert(resource.valid(),
+             std::format("{} requires frame resource '{}', but it has not been published.", consumerDebugName, key));
     return resource;
 }
 
 void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHandle frameData) const
 {
-    nrAssert(frameData.valid(), std::format("NodeBuildContext::publishFrameData requires valid frame data for '{}'.", key));
+    nrAssert(frameData.valid(),
+             std::format("NodeBuildContext::publishFrameData requires valid frame data for '{}'.", key));
     nrAssert(!key.empty(), "NodeBuildContext::publishFrameData requires a non-empty key.");
     frameDataResources.get().insert_or_assign(std::string(key), frameData);
 }
@@ -88,14 +92,17 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     return frameDataIt->second;
 }
 
-[[nodiscard]] GraphFrameDataHandle NodeBuildContext::requireFrameData(std::string_view key, std::string_view consumerDebugName) const
+[[nodiscard]] GraphFrameDataHandle NodeBuildContext::requireFrameData(std::string_view key,
+                                                                      std::string_view consumerDebugName) const
 {
     auto frameData = resolveFrameData(key);
-    nrAssert(frameData.valid(), std::format("{} requires frame data '{}', but it has not been published.", consumerDebugName, key));
+    nrAssert(frameData.valid(),
+             std::format("{} requires frame data '{}', but it has not been published.", consumerDebugName, key));
     return frameData;
 }
 
-[[nodiscard]] std::optional<std::reference_wrapper<const std::any>> NodeBuildContext::resolveFrameDataPayload(GraphFrameDataHandle handle) const
+[[nodiscard]] std::optional<std::reference_wrapper<const std::any>> NodeBuildContext::resolveFrameDataPayload(
+    GraphFrameDataHandle handle) const
 {
     if (!handle.valid())
     {
@@ -103,7 +110,8 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     }
 
     auto const &frameData = graphBuilder.get().frame().frameData;
-    auto const frameDataIt = std::ranges::find_if(frameData, [handle](const GraphFrameDataDesc &desc) { return desc.handle == handle; });
+    auto const frameDataIt =
+        std::ranges::find_if(frameData, [handle](const GraphFrameDataDesc &desc) { return desc.handle == handle; });
     if (frameDataIt == frameData.end())
     {
         return {};
@@ -111,7 +119,8 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     return std::cref(frameDataIt->payload);
 }
 
-[[nodiscard]] std::optional<NodeImageResourceDesc> NodeBuildContext::describeImageResource(GraphResourceHandle resource) const
+[[nodiscard]] std::optional<NodeImageResourceDesc> NodeBuildContext::describeImageResource(
+    GraphResourceHandle resource) const
 {
     if (!resource.valid())
     {
@@ -119,7 +128,8 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     }
 
     auto const &resources = graphBuilder.get().frame().resources;
-    auto const resourceIt = std::ranges::find_if(resources, [resource](const GraphResourceDesc &desc) { return desc.handle == resource; });
+    auto const resourceIt =
+        std::ranges::find_if(resources, [resource](const GraphResourceDesc &desc) { return desc.handle == resource; });
     if (resourceIt == resources.end())
     {
         return std::nullopt;
@@ -128,7 +138,8 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     return describeGraphImageResource(*resourceIt);
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::transientColor(std::string_view debugName, vk::Extent2D extent, vk::Format format)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::transientColor(std::string_view debugName, vk::Extent2D extent,
+                                                                   vk::Format format)
 {
     return addResource(GraphTransientImageDesc{
         .debugName = std::string(debugName),
@@ -144,7 +155,9 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importColor(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importColor(const nr::rhi::Image &image, std::string_view debugName,
+                                                                vk::Extent2D extent, vk::Format format,
+                                                                ResourceLifetime lifetime)
 {
     return importImage(image, debugName, extent, format, lifetime,
                        {
@@ -154,7 +167,9 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
                        });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importStorageColor(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importStorageColor(const nr::rhi::Image &image,
+                                                                       std::string_view debugName, vk::Extent2D extent,
+                                                                       vk::Format format, ResourceLifetime lifetime)
 {
     return importImage(image, debugName, extent, format, lifetime,
                        {
@@ -163,7 +178,11 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
                        });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importRetainedStorageColor(const nr::rhi::Image &image, RetainedImageState &state, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importRetainedStorageColor(const nr::rhi::Image &image,
+                                                                               RetainedImageState &state,
+                                                                               std::string_view debugName,
+                                                                               vk::Extent2D extent, vk::Format format,
+                                                                               ResourceLifetime lifetime)
 {
     nrAssert(image.valid(), std::format("{} image is invalid.", debugName));
 
@@ -185,7 +204,9 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importSampledColor(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importSampledColor(const nr::rhi::Image &image,
+                                                                       std::string_view debugName, vk::Extent2D extent,
+                                                                       vk::Format format, ResourceLifetime lifetime)
 {
     return importImage(image, debugName, extent, format, lifetime,
                        {
@@ -194,7 +215,10 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
                        });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importSampledImage(const nr::rhi::Image &image, std::string_view debugName, vk::Extent3D extent, vk::Format format, ResourceLifetime lifetime, ResourceOwnershipDomain initialOwnership)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importSampledImage(const nr::rhi::Image &image,
+                                                                       std::string_view debugName, vk::Extent3D extent,
+                                                                       vk::Format format, ResourceLifetime lifetime,
+                                                                       ResourceOwnershipDomain initialOwnership)
 {
     nrAssert(image.valid(), std::format("{} image is invalid.", debugName));
 
@@ -213,7 +237,9 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importDepth(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importDepth(const nr::rhi::Image &image, std::string_view debugName,
+                                                                vk::Extent2D extent, vk::Format format,
+                                                                ResourceLifetime lifetime)
 {
     return importImage(image, debugName, extent, format, lifetime,
                        {
@@ -222,7 +248,10 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
                        ImageAspectIntent::Depth);
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importBuffer(const nr::rhi::Buffer &buffer, std::string_view debugName, ResourceLifetime lifetime, std::initializer_list<BufferUsageIntent> usageIntents, ResourceOwnershipDomain initialOwnership)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importBuffer(const nr::rhi::Buffer &buffer,
+                                                                 std::string_view debugName, ResourceLifetime lifetime,
+                                                                 std::initializer_list<BufferUsageIntent> usageIntents,
+                                                                 ResourceOwnershipDomain initialOwnership)
 {
     nrAssert(buffer.valid(), std::format("{} buffer is invalid.", debugName));
 
@@ -236,7 +265,9 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importAccelerationStructure(const nr::rhi::AccelerationStructureResource &accelerationStructure, std::string_view debugName, ResourceLifetime lifetime, ResourceOwnershipDomain initialOwnership)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importAccelerationStructure(
+    const nr::rhi::AccelerationStructureResource &accelerationStructure, std::string_view debugName,
+    ResourceLifetime lifetime, ResourceOwnershipDomain initialOwnership)
 {
     nrAssert(accelerationStructure.valid(), std::format("{} acceleration structure is invalid.", debugName));
 
@@ -250,7 +281,8 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     });
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importSwapchain(std::string_view debugName, const NodeFrameParameters &frameParameters)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importSwapchain(std::string_view debugName,
+                                                                    const NodeFrameParameters &frameParameters)
 {
     return addResource(GraphImportedSwapchainImageDesc{
         .debugName = std::string(debugName),
@@ -264,14 +296,23 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     });
 }
 
-[[nodiscard]] GraphPassHandle NodeBuildContext::addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName, PassRecordCallback executeLambda, PassPrepareCallback prepareCallback, bool isCopyPass, vk::PipelineStageFlags2 shaderStages)
+[[nodiscard]] GraphPassHandle NodeBuildContext::addPass(std::span<const PassResourceUseDesc> intentList,
+                                                        std::string_view debugName, PassRecordCallback executeLambda,
+                                                        PassPrepareCallback prepareCallback, bool isCopyPass,
+                                                        vk::PipelineStageFlags2 shaderStages)
 {
-    return graphBuilder.get().addPass(debugName, nodeHandle, intentList, std::move(executeLambda), std::move(prepareCallback), isCopyPass, shaderStages);
+    return graphBuilder.get().addPass(debugName, nodeHandle, intentList, std::move(executeLambda),
+                                      std::move(prepareCallback), isCopyPass, shaderStages);
 }
 
-[[nodiscard]] GraphPassHandle NodeBuildContext::addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName, PassParallelRecordDesc parallelRecord, PassPrepareCallback prepareCallback, vk::PipelineStageFlags2 shaderStages)
+[[nodiscard]] GraphPassHandle NodeBuildContext::addPass(std::span<const PassResourceUseDesc> intentList,
+                                                        std::string_view debugName,
+                                                        PassParallelRecordDesc parallelRecord,
+                                                        PassPrepareCallback prepareCallback,
+                                                        vk::PipelineStageFlags2 shaderStages)
 {
-    return graphBuilder.get().addPass(debugName, nodeHandle, intentList, std::move(parallelRecord), std::move(prepareCallback), shaderStages);
+    return graphBuilder.get().addPass(debugName, nodeHandle, intentList, std::move(parallelRecord),
+                                      std::move(prepareCallback), shaderStages);
 }
 
 [[nodiscard]] GraphSubmitHandle NodeBuildContext::addSubmitNode(std::string_view debugName)
@@ -284,7 +325,11 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     return graphBuilder.get().addSubmitNode(debugName, SubmitBoundaryKind::SwapchainAcquire);
 }
 
-[[nodiscard]] GraphResourceHandle NodeBuildContext::importImage(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime, std::initializer_list<ImageUsageIntent> usageIntents, ImageAspectIntent aspect)
+[[nodiscard]] GraphResourceHandle NodeBuildContext::importImage(const nr::rhi::Image &image, std::string_view debugName,
+                                                                vk::Extent2D extent, vk::Format format,
+                                                                ResourceLifetime lifetime,
+                                                                std::initializer_list<ImageUsageIntent> usageIntents,
+                                                                ImageAspectIntent aspect)
 {
     nrAssert(image.valid(), std::format("{} image is invalid.", debugName));
 
@@ -349,15 +394,22 @@ void FrameUniformArena::beginFrame(std::uint32_t frameIndex)
     return buffer_.valid() && frameSliceSize_ > 0u;
 }
 
-[[nodiscard]] FrameUniformBinding FrameUniformArena::uploadBytes(RenderGraphBuilder &graphBuilder, std::string_view debugName, std::span<const std::byte> bytes)
+[[nodiscard]] FrameUniformBinding FrameUniformArena::uploadBytes(RenderGraphBuilder &graphBuilder,
+                                                                 std::string_view debugName,
+                                                                 std::span<const std::byte> bytes)
 {
     nrAssert(valid(), "FrameUniformArena::uploadBytes requires initialized uniform buffer.");
     nrAssert(!bytes.empty(), "FrameUniformArena::uploadBytes requires a non-empty payload.");
 
     auto const range = static_cast<vk::DeviceSize>(bytes.size_bytes());
-    nrAssert(range <= maxUniformBufferRange_, std::format("FrameUniformArena payload exceeds maxUniformBufferRange. debugName='{}' range={} max={}", debugName, range, maxUniformBufferRange_));
+    nrAssert(range <= maxUniformBufferRange_,
+             std::format("FrameUniformArena payload exceeds maxUniformBufferRange. debugName='{}' range={} max={}",
+                         debugName, range, maxUniformBufferRange_));
     auto const allocationSize = alignUp(range, uniformOffsetAlignment_);
-    nrAssert(currentFrameCursor_ + allocationSize <= frameSliceSize_, std::format("FrameUniformArena frame slice overflow. debugName='{}' cursor={} allocation={} frameSliceSize={}", debugName, currentFrameCursor_, allocationSize, frameSliceSize_));
+    nrAssert(
+        currentFrameCursor_ + allocationSize <= frameSliceSize_,
+        std::format("FrameUniformArena frame slice overflow. debugName='{}' cursor={} allocation={} frameSliceSize={}",
+                    debugName, currentFrameCursor_, allocationSize, frameSliceSize_));
 
     auto const offset = currentFrameBaseOffset_ + currentFrameCursor_;
     buffer_.writeMappedAndFlush(bytes, offset);
@@ -381,11 +433,10 @@ void FrameUniformArena::beginFrame(std::uint32_t frameIndex)
     };
 }
 
-[[nodiscard]] FrameUniformBinding FrameUniformArena::patchUploadBytes(
-    RenderGraphSkeletonPatchContext& patchContext,
-    std::size_t resourceSlot,
-    std::string_view debugName,
-    std::span<const std::byte> bytes)
+[[nodiscard]] FrameUniformBinding FrameUniformArena::patchUploadBytes(RenderGraphSkeletonPatchContext &patchContext,
+                                                                      std::size_t resourceSlot,
+                                                                      std::string_view debugName,
+                                                                      std::span<const std::byte> bytes)
 {
     nrAssert(valid(), "FrameUniformArena::patchUploadBytes requires initialized uniform buffer.");
     nrAssert(!bytes.empty(), "FrameUniformArena::patchUploadBytes requires a non-empty payload.");
@@ -399,12 +450,12 @@ void FrameUniformArena::beginFrame(std::uint32_t frameIndex)
     buffer_.writeMappedAndFlush(bytes, offset);
     currentFrameCursor_ += allocationSize;
     patchContext.patchResource(resourceSlot, GraphImportedBufferDesc{
-        .debugName = std::format("{}@{}", debugName, offset),
-        .lifetime = ResourceLifetime::FrameLocal,
-        .size = buffer_.size(),
-        .usageIntents = {BufferUsageIntent::Uniform},
-        .importedResource = std::cref(buffer_),
-    });
+                                                 .debugName = std::format("{}@{}", debugName, offset),
+                                                 .lifetime = ResourceLifetime::FrameLocal,
+                                                 .size = buffer_.size(),
+                                                 .usageIntents = {BufferUsageIntent::Uniform},
+                                                 .importedResource = std::cref(buffer_),
+                                             });
     return FrameUniformBinding{
         .resource = patchContext.namedResource("Renderer.GlobalFrameUniforms"),
         .offset = offset,
@@ -422,7 +473,9 @@ void FrameUniformArena::beginFrame(std::uint32_t frameIndex)
     return remainder == 0u ? value : value + (alignment - remainder);
 }
 
-RasterPassBuilder::RasterPassBuilder(NodeBuildContext &context, std::string_view debugName, std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime) : Base(context, debugName, std::move(runtime), "RasterPassBuilder")
+RasterPassBuilder::RasterPassBuilder(NodeBuildContext &context, std::string_view debugName,
+                                     std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime)
+    : Base(context, debugName, std::move(runtime), "RasterPassBuilder")
 {
 }
 
@@ -475,45 +528,58 @@ RasterPassBuilder &RasterPassBuilder::primitiveTopology(vk::PrimitiveTopology to
 
 RasterPassBuilder &RasterPassBuilder::record(RasterPassRecordCallback callback)
 {
-    nrAssert(!parallelItemCountCallback_ && !parallelRangeRecordCallback_, "RasterPassBuilder::record conflicts with recordParallel.");
+    nrAssert(!parallelItemCountCallback_ && !parallelRangeRecordCallback_,
+             "RasterPassBuilder::record conflicts with recordParallel.");
     recordCallback_ = std::move(callback);
     return *this;
 }
 
-RasterPassBuilder &RasterPassBuilder::recordParallel(RasterPassItemCountCallback itemCountCallback, RasterPassRangeRecordCallback rangeRecordCallback)
+RasterPassBuilder &RasterPassBuilder::recordParallel(RasterPassItemCountCallback itemCountCallback,
+                                                     RasterPassRangeRecordCallback rangeRecordCallback)
 {
-    nrAssert(static_cast<bool>(itemCountCallback), "RasterPassBuilder::recordParallel requires an item-count callback.");
-    nrAssert(static_cast<bool>(rangeRecordCallback), "RasterPassBuilder::recordParallel requires a range-record callback.");
+    nrAssert(static_cast<bool>(itemCountCallback),
+             "RasterPassBuilder::recordParallel requires an item-count callback.");
+    nrAssert(static_cast<bool>(rangeRecordCallback),
+             "RasterPassBuilder::recordParallel requires a range-record callback.");
     nrAssert(!recordCallback_, "RasterPassBuilder::recordParallel conflicts with record.");
     parallelItemCountCallback_ = std::move(itemCountCallback);
     parallelRangeRecordCallback_ = std::move(rangeRecordCallback);
     return *this;
 }
 
-[[nodiscard]] RasterPassBuilder::RasterPassRenderingSetup RasterPassBuilder::makeRenderingSetup(const PassRecordContext &recordContext, std::span<const RasterColorAttachment> colorAttachments, const std::optional<RasterDepthAttachment> &depthAttachment, std::optional<vk::Extent2D> viewportExtent,
-                                                                                                std::string_view debugName)
+[[nodiscard]] RasterPassBuilder::RasterPassRenderingSetup RasterPassBuilder::makeRenderingSetup(
+    const PassRecordContext &recordContext, std::span<const RasterColorAttachment> colorAttachments,
+    const std::optional<RasterDepthAttachment> &depthAttachment, std::optional<vk::Extent2D> viewportExtent,
+    std::string_view debugName)
 {
-    nrAssert(static_cast<bool>(recordContext.resolveImage), "RasterPassBuilder record requires image resolver callback.");
+    nrAssert(static_cast<bool>(recordContext.resolveImage),
+             "RasterPassBuilder record requires image resolver callback.");
 
     auto setup = RasterPassRenderingSetup{};
-    setup.resolvedColors = colorAttachments | std::views::transform([&](const RasterColorAttachment &attachment) {
-                               auto image = recordContext.resolveImage(attachment.resource);
-                               nrAssert(image.has_value(), std::format("RasterPassBuilder failed to resolve color image for pass '{}'.", debugName));
-                               nrAssert(image->view != vk::ImageView{}, std::format("RasterPassBuilder pass '{}' requires a valid color image view.", debugName));
-                               return *image;
-                           }) |
-                           std::ranges::to<std::vector>();
+    setup.resolvedColors =
+        colorAttachments | std::views::transform([&](const RasterColorAttachment &attachment) {
+            auto image = recordContext.resolveImage(attachment.resource);
+            nrAssert(image.has_value(),
+                     std::format("RasterPassBuilder failed to resolve color image for pass '{}'.", debugName));
+            nrAssert(image->view != vk::ImageView{},
+                     std::format("RasterPassBuilder pass '{}' requires a valid color image view.", debugName));
+            return *image;
+        }) |
+        std::ranges::to<std::vector>();
 
     if (depthAttachment.has_value())
     {
         auto depthImage = recordContext.resolveImage(depthAttachment->resource);
-        nrAssert(depthImage.has_value(), std::format("RasterPassBuilder failed to resolve depth image for pass '{}'.", debugName));
-        nrAssert(depthImage->view != vk::ImageView{}, std::format("RasterPassBuilder pass '{}' requires a valid depth image view.", debugName));
+        nrAssert(depthImage.has_value(),
+                 std::format("RasterPassBuilder failed to resolve depth image for pass '{}'.", debugName));
+        nrAssert(depthImage->view != vk::ImageView{},
+                 std::format("RasterPassBuilder pass '{}' requires a valid depth image view.", debugName));
         setup.resolvedDepth = *depthImage;
     }
 
     setup.targetExtent = resolveTargetExtent(viewportExtent, setup.resolvedColors, setup.resolvedDepth);
-    setup.colorAttachments = std::views::iota(std::size_t{0}, colorAttachments.size()) | std::views::transform([&](std::size_t attachmentIndex) {
+    setup.colorAttachments = std::views::iota(std::size_t{0}, colorAttachments.size()) |
+                             std::views::transform([&](std::size_t attachmentIndex) {
                                  auto const &attachment = colorAttachments[attachmentIndex];
                                  auto const &image = setup.resolvedColors[attachmentIndex];
                                  return nr::rhi::ops::RenderingAttachmentDesc{
@@ -540,10 +606,14 @@ RasterPassBuilder &RasterPassBuilder::recordParallel(RasterPassItemCountCallback
     return setup;
 }
 
-[[nodiscard]] PassPrimaryRecordScope RasterPassBuilder::makeDynamicRenderingSecondaryScope(const RasterPassRenderingSetup &setup, const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime, std::string_view debugName)
+[[nodiscard]] PassPrimaryRecordScope RasterPassBuilder::makeDynamicRenderingSecondaryScope(
+    const RasterPassRenderingSetup &setup, const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime,
+    std::string_view debugName)
 {
     auto const &graphicsDesc = runtime.state().graphicsDesc;
-    nrAssert(graphicsDesc.has_value(), std::format("RasterPassBuilder pass '{}' requires retained graphics pipeline dynamic-rendering state.", debugName));
+    nrAssert(graphicsDesc.has_value(),
+             std::format("RasterPassBuilder pass '{}' requires retained graphics pipeline dynamic-rendering state.",
+                         debugName));
 
     auto dynamicRendering = PassDynamicRenderingSecondaryScope{
         .renderArea = vk::Rect2D{vk::Offset2D{0, 0}, setup.targetExtent},
@@ -565,8 +635,12 @@ RasterPassBuilder &RasterPassBuilder::recordParallel(RasterPassItemCountCallback
     };
 }
 
-void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &commandBuffer, const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime, const nr::rhi::ShaderBindingSnapshot &bindingSnapshot, std::uint32_t frameIndex, vk::Extent2D targetExtent, RasterViewportYMode viewportYMode,
-                                          nr::rhi::MeshRasterState rasterState, vk::PrimitiveTopology primitiveTopology)
+void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &commandBuffer,
+                                          const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime,
+                                          const nr::rhi::ShaderBindingSnapshot &bindingSnapshot,
+                                          std::uint32_t frameIndex, vk::Extent2D targetExtent,
+                                          RasterViewportYMode viewportYMode, nr::rhi::MeshRasterState rasterState,
+                                          vk::PrimitiveTopology primitiveTopology)
 {
     Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, runtime, bindingSnapshot, frameIndex);
 
@@ -595,9 +669,12 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
 {
     nrAssert(!colorAttachments_.empty(), "RasterPassBuilder::build requires at least one color attachment.");
     auto const hasSerialRecord = static_cast<bool>(recordCallback_);
-    auto const hasParallelRecord = static_cast<bool>(parallelItemCountCallback_) || static_cast<bool>(parallelRangeRecordCallback_);
-    nrAssert(hasSerialRecord != hasParallelRecord, "RasterPassBuilder::build requires exactly one serial record or parallel record callback.");
-    nrAssert(!hasParallelRecord || (parallelItemCountCallback_ && parallelRangeRecordCallback_), "RasterPassBuilder::build parallel record requires both item-count and range-record callbacks.");
+    auto const hasParallelRecord =
+        static_cast<bool>(parallelItemCountCallback_) || static_cast<bool>(parallelRangeRecordCallback_);
+    nrAssert(hasSerialRecord != hasParallelRecord,
+             "RasterPassBuilder::build requires exactly one serial record or parallel record callback.");
+    nrAssert(!hasParallelRecord || (parallelItemCountCallback_ && parallelRangeRecordCallback_),
+             "RasterPassBuilder::build parallel record requires both item-count and range-record callbacks.");
 
     auto common = takeCommonBuildState();
     auto resourceUses = std::move(common.resourceUses);
@@ -620,18 +697,31 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
         auto parallelRecord = PassParallelRecordDesc{
             .itemCount = std::move(parallelItemCountCallback),
             .primaryScope =
-                [runtime, colorAttachments, depthAttachment, viewportExtent, debugName](const PassRecordContext &recordContext) {
-                    nrAssert(static_cast<bool>(runtime), "RasterPassBuilder primary scope requires initialized runtime state.");
-                    auto setup = makeRenderingSetup(recordContext, std::span<const RasterColorAttachment>{colorAttachments.data(), colorAttachments.size()}, depthAttachment, viewportExtent, debugName);
+                [runtime, colorAttachments, depthAttachment, viewportExtent,
+                 debugName](const PassRecordContext &recordContext) {
+                    nrAssert(static_cast<bool>(runtime),
+                             "RasterPassBuilder primary scope requires initialized runtime state.");
+                    auto setup = makeRenderingSetup(
+                        recordContext,
+                        std::span<const RasterColorAttachment>{colorAttachments.data(), colorAttachments.size()},
+                        depthAttachment, viewportExtent, debugName);
                     return makeDynamicRenderingSecondaryScope(setup, *runtime, debugName);
                 },
             .recordRange =
-                [runtime, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode, rasterState, primitiveTopology, debugName, rangeRecordCallback = std::move(parallelRangeRecordCallback)](const PassRangeRecordContext &rangeContext) {
-                    nrAssert(static_cast<bool>(runtime), "RasterPassBuilder range record requires initialized runtime state.");
+                [runtime, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode,
+                 rasterState, primitiveTopology, debugName,
+                 rangeRecordCallback =
+                     std::move(parallelRangeRecordCallback)](const PassRangeRecordContext &rangeContext) {
+                    nrAssert(static_cast<bool>(runtime),
+                             "RasterPassBuilder range record requires initialized runtime state.");
 
-                    auto setup = makeRenderingSetup(rangeContext.pass, std::span<const RasterColorAttachment>{colorAttachments.data(), colorAttachments.size()}, depthAttachment, viewportExtent, debugName);
+                    auto setup = makeRenderingSetup(
+                        rangeContext.pass,
+                        std::span<const RasterColorAttachment>{colorAttachments.data(), colorAttachments.size()},
+                        depthAttachment, viewportExtent, debugName);
                     auto &commandBuffer = rangeContext.commandBuffer.get();
-                    bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, rangeContext.pass.frameIndex, setup.targetExtent, viewportYMode, rasterState, primitiveTopology);
+                    bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, rangeContext.pass.frameIndex,
+                                      setup.targetExtent, viewportYMode, rasterState, primitiveTopology);
 
                     rangeRecordCallback(RasterPassRangeRecordContext{
                         .pass = rangeContext.pass,
@@ -646,27 +736,37 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
                 },
         };
 
-        return context_.get().addPass(std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName, std::move(parallelRecord), std::move(prepareCallback), vk::PipelineStageFlagBits2::eAllGraphics);
+        return context_.get().addPass(std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
+                                      debugName, std::move(parallelRecord), std::move(prepareCallback),
+                                      vk::PipelineStageFlagBits2::eAllGraphics);
     }
 
     return context_.get().addPass(
         std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
-        [runtime, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode, rasterState, primitiveTopology, debugName, recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "RasterPassBuilder record requires RAII command buffer access.");
+        [runtime, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode, rasterState,
+         primitiveTopology, debugName,
+         recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
+            nrAssert(recordContext.commandBuffer.has_value(),
+                     "RasterPassBuilder record requires RAII command buffer access.");
             nrAssert(static_cast<bool>(runtime), "RasterPassBuilder record requires initialized runtime state.");
 
-            auto setup = makeRenderingSetup(recordContext, std::span<const RasterColorAttachment>{colorAttachments.data(), colorAttachments.size()}, depthAttachment, viewportExtent, debugName);
+            auto setup = makeRenderingSetup(
+                recordContext, std::span<const RasterColorAttachment>{colorAttachments.data(), colorAttachments.size()},
+                depthAttachment, viewportExtent, debugName);
 
             auto renderingScope = nr::rhi::ops::RenderingScopeDesc{
                 .renderArea = vk::Rect2D{vk::Offset2D{0, 0}, setup.targetExtent},
-                .colorAttachments = std::span<const nr::rhi::ops::RenderingAttachmentDesc>{setup.colorAttachments.data(), setup.colorAttachments.size()},
+                .colorAttachments =
+                    std::span<const nr::rhi::ops::RenderingAttachmentDesc>{setup.colorAttachments.data(),
+                                                                           setup.colorAttachments.size()},
                 .depthAttachment = setup.depthAttachment,
                 .stencilAttachment = setup.stencilAttachment,
             };
 
             auto &commandBuffer = recordContext.commandBuffer->get();
             auto scopedRendering = nr::rhi::ops::ScopedRendering(commandBuffer, renderingScope);
-            bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex, setup.targetExtent, viewportYMode, rasterState, primitiveTopology);
+            bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex, setup.targetExtent,
+                              viewportYMode, rasterState, primitiveTopology);
 
             recordCallback(RasterPassRecordContext{
                 .pass = recordContext,
@@ -679,27 +779,23 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
         std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eAllGraphics);
 }
 
-RasterPassPatchBuilder::RasterPassPatchBuilder(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime)
-    : context_(context)
-    , passSlot_(passSlot)
-    , debugName_(debugName)
-    , runtime_(std::move(runtime))
+RasterPassPatchBuilder::RasterPassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot,
+                                               std::string_view debugName,
+                                               std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime)
+    : context_(context), passSlot_(passSlot), debugName_(debugName), runtime_(std::move(runtime))
 {
-    nrAssert(static_cast<bool>(runtime_) && runtime_->valid(), "RasterPassPatchBuilder requires initialized runtime state.");
+    nrAssert(static_cast<bool>(runtime_) && runtime_->valid(),
+             "RasterPassPatchBuilder requires initialized runtime state.");
     rootCursor_ = runtime_->rootCursor();
 }
 
-RasterPassPatchBuilder& RasterPassPatchBuilder::viewport(vk::Extent2D extent)
+RasterPassPatchBuilder &RasterPassPatchBuilder::viewport(vk::Extent2D extent)
 {
     viewportExtent_ = extent;
     return *this;
 }
 
-RasterPassPatchBuilder& RasterPassPatchBuilder::colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue)
+RasterPassPatchBuilder &RasterPassPatchBuilder::colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue)
 {
     nrAssert(resource.valid(), "RasterPassPatchBuilder::colorAttachment requires a valid resource.");
     colorAttachments_.push_back(RasterColorAttachment{
@@ -710,21 +806,20 @@ RasterPassPatchBuilder& RasterPassPatchBuilder::colorAttachment(GraphResourceHan
     return *this;
 }
 
-RasterPassPatchBuilder& RasterPassPatchBuilder::rasterState(nr::rhi::MeshRasterState state)
+RasterPassPatchBuilder &RasterPassPatchBuilder::rasterState(nr::rhi::MeshRasterState state)
 {
     rasterState_ = state;
     return *this;
 }
 
-RasterPassPatchBuilder& RasterPassPatchBuilder::prepare(RasterPassPrepareCallback callback)
+RasterPassPatchBuilder &RasterPassPatchBuilder::prepare(RasterPassPrepareCallback callback)
 {
     prepareCallbacks_.push_back(std::move(callback));
     return *this;
 }
 
-RasterPassPatchBuilder& RasterPassPatchBuilder::dynamicBindingSnapshot(
-    PassBindingSnapshotCallback callback,
-    nr::rhi::LogicalDescriptorResolver resolver)
+RasterPassPatchBuilder &RasterPassPatchBuilder::dynamicBindingSnapshot(PassBindingSnapshotCallback callback,
+                                                                       nr::rhi::LogicalDescriptorResolver resolver)
 {
     nrAssert(static_cast<bool>(callback), "RasterPassPatchBuilder requires a dynamic snapshot callback.");
     dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
@@ -734,7 +829,7 @@ RasterPassPatchBuilder& RasterPassPatchBuilder::dynamicBindingSnapshot(
     return *this;
 }
 
-RasterPassPatchBuilder& RasterPassPatchBuilder::record(RasterPassRecordCallback callback)
+RasterPassPatchBuilder &RasterPassPatchBuilder::record(RasterPassRecordCallback callback)
 {
     recordCallback_ = std::move(callback);
     return *this;
@@ -754,43 +849,43 @@ void RasterPassPatchBuilder::patch()
     auto prepareCallbacks = std::move(prepareCallbacks_);
     auto dynamicSnapshots = std::move(dynamicBindingSnapshots_);
     auto prepareCallback = [runtime, bindingSnapshot, prepareCallbacks = std::move(prepareCallbacks),
-                            dynamicSnapshots = std::move(dynamicSnapshots)](const PassPrepareContext& prepareContext) {
-        std::ranges::for_each(prepareCallbacks, [&](const RasterPassPrepareCallback& callback) {
+                            dynamicSnapshots = std::move(dynamicSnapshots)](const PassPrepareContext &prepareContext) {
+        std::ranges::for_each(prepareCallbacks, [&](const RasterPassPrepareCallback &callback) {
             if (callback)
             {
                 callback(prepareContext);
             }
         });
-        auto& cache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
+        auto &cache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
         nr::rhi::updateResourcesForBindingSnapshot(
-            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex),
-            cache, bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
-        std::ranges::for_each(dynamicSnapshots, [&](const DynamicBindingSnapshotDesc& desc) {
+            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+            bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
+        std::ranges::for_each(dynamicSnapshots, [&](const DynamicBindingSnapshotDesc &desc) {
             auto snapshot = desc.snapshot(prepareContext);
             auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
-            nr::rhi::updateResourcesForBindingSnapshot(
-                runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex),
-                cache, snapshot, std::move(resolver));
+            nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool,
+                                                       runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+                                                       snapshot, std::move(resolver));
         });
     };
     context_.get().patchPass(
         passSlot_, debugName_, std::move(prepareCallback),
-        [runtime, bindingSnapshot, colorAttachments = std::move(colorAttachments), viewportExtent,
-         rasterState, debugName = std::move(debugName),
-         recordCallback = std::move(recordCallback_)](const PassRecordContext& recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "RasterPassPatchBuilder record requires a command buffer.");
-            auto setup = RasterPassBuilder::makeRenderingSetup(
-                recordContext, colorAttachments, std::nullopt, viewportExtent, debugName);
+        [runtime, bindingSnapshot, colorAttachments = std::move(colorAttachments), viewportExtent, rasterState,
+         debugName = std::move(debugName),
+         recordCallback = std::move(recordCallback_)](const PassRecordContext &recordContext) {
+            nrAssert(recordContext.commandBuffer.has_value(),
+                     "RasterPassPatchBuilder record requires a command buffer.");
+            auto setup = RasterPassBuilder::makeRenderingSetup(recordContext, colorAttachments, std::nullopt,
+                                                               viewportExtent, debugName);
             auto renderingScope = nr::rhi::ops::RenderingScopeDesc{
                 .renderArea = vk::Rect2D{vk::Offset2D{0, 0}, setup.targetExtent},
                 .colorAttachments = setup.colorAttachments,
             };
-            auto& commandBuffer = recordContext.commandBuffer->get();
+            auto &commandBuffer = recordContext.commandBuffer->get();
             auto scopedRendering = nr::rhi::ops::ScopedRendering(commandBuffer, renderingScope);
-            RasterPassBuilder::bindGraphicsSetup(
-                commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex,
-                setup.targetExtent, RasterViewportYMode::FramebufferTopLeft,
-                rasterState, vk::PrimitiveTopology::eTriangleList);
+            RasterPassBuilder::bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex,
+                                                 setup.targetExtent, RasterViewportYMode::FramebufferTopLeft,
+                                                 rasterState, vk::PrimitiveTopology::eTriangleList);
             recordCallback(RasterPassRecordContext{
                 .pass = recordContext,
                 .commandBuffer = commandBuffer,
@@ -801,9 +896,12 @@ void RasterPassPatchBuilder::patch()
         });
 }
 
-[[nodiscard]] vk::Extent2D RasterPassBuilder::resolveTargetExtent(std::optional<vk::Extent2D> viewportExtent, std::span<const PassImageResource> resolvedColors, const std::optional<PassImageResource> &resolvedDepth)
+[[nodiscard]] vk::Extent2D RasterPassBuilder::resolveTargetExtent(std::optional<vk::Extent2D> viewportExtent,
+                                                                  std::span<const PassImageResource> resolvedColors,
+                                                                  const std::optional<PassImageResource> &resolvedDepth)
 {
-    nrAssert(!resolvedColors.empty(), "RasterPassBuilder::resolveTargetExtent requires at least one resolved color image.");
+    nrAssert(!resolvedColors.empty(),
+             "RasterPassBuilder::resolveTargetExtent requires at least one resolved color image.");
 
     auto targetExtent = viewportExtent.value_or(vk::Extent2D{
         resolvedColors.front().extent.width,
@@ -828,7 +926,9 @@ void RasterPassPatchBuilder::patch()
     return targetExtent;
 }
 
-ComputePassBuilder::ComputePassBuilder(NodeBuildContext &context, std::string_view debugName, std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime) : Base(context, debugName, std::move(runtime), "ComputePassBuilder")
+ComputePassBuilder::ComputePassBuilder(NodeBuildContext &context, std::string_view debugName,
+                                       std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime)
+    : Base(context, debugName, std::move(runtime), "ComputePassBuilder")
 {
 }
 
@@ -853,11 +953,13 @@ ComputePassBuilder &ComputePassBuilder::record(ComputePassRecordCallback callbac
     return context_.get().addPass(
         std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
         [runtime, bindingSnapshot, recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "ComputePassBuilder record requires RAII command buffer access.");
+            nrAssert(recordContext.commandBuffer.has_value(),
+                     "ComputePassBuilder record requires RAII command buffer access.");
             nrAssert(static_cast<bool>(runtime), "ComputePassBuilder record requires initialized runtime state.");
 
             auto &commandBuffer = recordContext.commandBuffer->get();
-            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex);
+            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, bindingSnapshot,
+                                                                recordContext.frameIndex);
 
             recordCallback(ComputePassRecordContext{
                 .pass = recordContext,
@@ -869,24 +971,18 @@ ComputePassBuilder &ComputePassBuilder::record(ComputePassRecordCallback callbac
         std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eComputeShader);
 }
 
-ComputePassPatchBuilder::ComputePassPatchBuilder(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime)
-    : context_(context)
-    , passSlot_(passSlot)
-    , debugName_(debugName)
-    , runtime_(std::move(runtime))
+ComputePassPatchBuilder::ComputePassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot,
+                                                 std::string_view debugName,
+                                                 std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime)
+    : context_(context), passSlot_(passSlot), debugName_(debugName), runtime_(std::move(runtime))
 {
-    nrAssert(static_cast<bool>(runtime_) && runtime_->valid(), "ComputePassPatchBuilder requires initialized runtime state.");
+    nrAssert(static_cast<bool>(runtime_) && runtime_->valid(),
+             "ComputePassPatchBuilder requires initialized runtime state.");
     rootCursor_ = runtime_->rootCursor();
 }
 
-ComputePassPatchBuilder& ComputePassPatchBuilder::sampledImage(
-    std::string_view shaderPath,
-    GraphResourceHandle resource,
-    std::string_view debugName)
+ComputePassPatchBuilder &ComputePassPatchBuilder::sampledImage(std::string_view shaderPath,
+                                                               GraphResourceHandle resource, std::string_view debugName)
 {
     nrAssert(resource.valid(), "ComputePassPatchBuilder::sampledImage requires a valid resource.");
     auto cursor = rootCursor_.getPath(shaderPath);
@@ -898,10 +994,8 @@ ComputePassPatchBuilder& ComputePassPatchBuilder::sampledImage(
     return *this;
 }
 
-ComputePassPatchBuilder& ComputePassPatchBuilder::storageImage(
-    std::string_view shaderPath,
-    GraphResourceHandle resource,
-    std::string_view debugName)
+ComputePassPatchBuilder &ComputePassPatchBuilder::storageImage(std::string_view shaderPath,
+                                                               GraphResourceHandle resource, std::string_view debugName)
 {
     nrAssert(resource.valid(), "ComputePassPatchBuilder::storageImage requires a valid resource.");
     auto cursor = rootCursor_.getPath(shaderPath);
@@ -912,7 +1006,7 @@ ComputePassPatchBuilder& ComputePassPatchBuilder::storageImage(
     return *this;
 }
 
-ComputePassPatchBuilder& ComputePassPatchBuilder::record(ComputePassRecordCallback callback)
+ComputePassPatchBuilder &ComputePassPatchBuilder::record(ComputePassRecordCallback callback)
 {
     recordCallback_ = std::move(callback);
     return *this;
@@ -925,28 +1019,22 @@ void ComputePassPatchBuilder::patch()
     rootCursor_.clearSnapshot();
     auto runtime = std::move(runtime_);
     auto recordCallback = std::move(recordCallback_);
-    auto prepareCallback = [runtime, bindingSnapshot](const PassPrepareContext& prepareContext) {
-        auto& descriptorWriteCache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
+    auto prepareCallback = [runtime, bindingSnapshot](const PassPrepareContext &prepareContext) {
+        auto &descriptorWriteCache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
         nr::rhi::updateResourcesForBindingSnapshot(
-            runtime->state().bindingPool,
-            runtime->bindingSetsForFrame(prepareContext.frameIndex),
-            descriptorWriteCache,
-            bindingSnapshot,
-            makeDefaultLogicalDescriptorResolver(prepareContext));
+            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), descriptorWriteCache,
+            bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
     };
     context_.get().patchPass(
-        passSlot_,
-        debugName_,
-        std::move(prepareCallback),
-        [runtime, bindingSnapshot, recordCallback = std::move(recordCallback)](const PassRecordContext& recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "ComputePassPatchBuilder record requires RAII command buffer access.");
-            auto& commandBuffer = recordContext.commandBuffer->get();
+        passSlot_, debugName_, std::move(prepareCallback),
+        [runtime, bindingSnapshot, recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
+            nrAssert(recordContext.commandBuffer.has_value(),
+                     "ComputePassPatchBuilder record requires RAII command buffer access.");
+            auto &commandBuffer = recordContext.commandBuffer->get();
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, runtime->pipeline().raw());
-            nr::rhi::bindPreparedResourcesToCommandBuffer(
-                commandBuffer,
-                vk::PipelineBindPoint::eCompute,
-                runtime->state().layout,
-                runtime->bindingSetsForFrame(recordContext.frameIndex));
+            nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, vk::PipelineBindPoint::eCompute,
+                                                          runtime->state().layout,
+                                                          runtime->bindingSetsForFrame(recordContext.frameIndex));
             nr::rhi::pushConstantsToCommandBuffer(commandBuffer, runtime->state().layout, bindingSnapshot);
             recordCallback(ComputePassRecordContext{
                 .pass = recordContext,
@@ -957,7 +1045,9 @@ void ComputePassPatchBuilder::patch()
         });
 }
 
-RayTracingPassBuilder::RayTracingPassBuilder(NodeBuildContext &context, std::string_view debugName, std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime) : Base(context, debugName, std::move(runtime), "RayTracingPassBuilder")
+RayTracingPassBuilder::RayTracingPassBuilder(NodeBuildContext &context, std::string_view debugName,
+                                             std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime)
+    : Base(context, debugName, std::move(runtime), "RayTracingPassBuilder")
 {
 }
 
@@ -982,11 +1072,13 @@ RayTracingPassBuilder &RayTracingPassBuilder::record(RayTracingPassRecordCallbac
     return context_.get().addPass(
         std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
         [runtime, bindingSnapshot, recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "RayTracingPassBuilder record requires RAII command buffer access.");
+            nrAssert(recordContext.commandBuffer.has_value(),
+                     "RayTracingPassBuilder record requires RAII command buffer access.");
             nrAssert(static_cast<bool>(runtime), "RayTracingPassBuilder record requires initialized runtime state.");
 
             auto &commandBuffer = recordContext.commandBuffer->get();
-            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex);
+            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, bindingSnapshot,
+                                                                recordContext.frameIndex);
 
             recordCallback(RayTracingPassRecordContext{
                 .pass = recordContext,
@@ -999,22 +1091,20 @@ RayTracingPassBuilder &RayTracingPassBuilder::record(RayTracingPassRecordCallbac
 }
 
 RayTracingPassPatchBuilder::RayTracingPassPatchBuilder(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
+    RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
     std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime)
-    : context_(context)
-    , passSlot_(passSlot)
-    , debugName_(debugName)
-    , runtime_(std::move(runtime))
+    : context_(context), passSlot_(passSlot), debugName_(debugName), runtime_(std::move(runtime))
 {
-    nrAssert(static_cast<bool>(runtime_) && runtime_->valid(), "RayTracingPassPatchBuilder requires initialized runtime state.");
+    nrAssert(static_cast<bool>(runtime_) && runtime_->valid(),
+             "RayTracingPassPatchBuilder requires initialized runtime state.");
     rootCursor_ = runtime_->rootCursor();
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::descriptor(
-    std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
-    vk::ImageLayout imageLayout, vk::DeviceSize offset, vk::DeviceSize range)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::descriptor(std::string_view shaderPath,
+                                                                   GraphResourceHandle resource,
+                                                                   std::string_view debugName,
+                                                                   vk::ImageLayout imageLayout, vk::DeviceSize offset,
+                                                                   vk::DeviceSize range)
 {
     nrAssert(resource.valid(), "RayTracingPassPatchBuilder descriptor requires a valid resource.");
     auto cursor = rootCursor_.getPath(shaderPath);
@@ -1028,52 +1118,57 @@ RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::descriptor(
     return *this;
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::accelerationStructure(
-    std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::accelerationStructure(std::string_view shaderPath,
+                                                                              GraphResourceHandle resource,
+                                                                              std::string_view debugName)
 {
     return descriptor(shaderPath, resource, debugName);
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::sampledImage(
-    std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::sampledImage(std::string_view shaderPath,
+                                                                     GraphResourceHandle resource,
+                                                                     std::string_view debugName)
 {
     return descriptor(shaderPath, resource, debugName, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::storageImage(
-    std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::storageImage(std::string_view shaderPath,
+                                                                     GraphResourceHandle resource,
+                                                                     std::string_view debugName)
 {
     return descriptor(shaderPath, resource, debugName);
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::storageBuffer(
-    std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::storageBuffer(std::string_view shaderPath,
+                                                                      GraphResourceHandle resource,
+                                                                      std::string_view debugName)
 {
     return descriptor(shaderPath, resource, debugName);
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::uniform(
-    std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::uniform(std::string_view shaderPath,
+                                                                GraphResourceHandle resource,
+                                                                std::string_view debugName)
 {
     return descriptor(shaderPath, resource, debugName);
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::uniform(
-    std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::uniform(std::string_view shaderPath,
+                                                                FrameUniformBinding binding, std::string_view debugName)
 {
     nrAssert(binding.range > 0u, "RayTracingPassPatchBuilder uniform requires a non-zero range.");
-    return descriptor(shaderPath, binding.resource, debugName, vk::ImageLayout::eGeneral, binding.offset, binding.range);
+    return descriptor(shaderPath, binding.resource, debugName, vk::ImageLayout::eGeneral, binding.offset,
+                      binding.range);
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::prepare(ShaderVisiblePassPrepareCallback callback)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::prepare(ShaderVisiblePassPrepareCallback callback)
 {
     prepareCallbacks_.push_back(std::move(callback));
     return *this;
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::dynamicBindingSnapshot(
-    PassBindingSnapshotCallback callback,
-    nr::rhi::LogicalDescriptorResolver resolver)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::dynamicBindingSnapshot(
+    PassBindingSnapshotCallback callback, nr::rhi::LogicalDescriptorResolver resolver)
 {
     nrAssert(static_cast<bool>(callback), "RayTracingPassPatchBuilder requires a dynamic snapshot callback.");
     dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
@@ -1083,7 +1178,7 @@ RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::dynamicBindingSnapshot(
     return *this;
 }
 
-RayTracingPassPatchBuilder& RayTracingPassPatchBuilder::record(RayTracingPassRecordCallback callback)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::record(RayTracingPassRecordCallback callback)
 {
     recordCallback_ = std::move(callback);
     return *this;
@@ -1098,35 +1193,36 @@ void RayTracingPassPatchBuilder::patch()
     auto prepareCallbacks = std::move(prepareCallbacks_);
     auto dynamicSnapshots = std::move(dynamicBindingSnapshots_);
     auto prepareCallback = [runtime, bindingSnapshot, prepareCallbacks = std::move(prepareCallbacks),
-                            dynamicSnapshots = std::move(dynamicSnapshots)](const PassPrepareContext& prepareContext) {
-        std::ranges::for_each(prepareCallbacks, [&](const ShaderVisiblePassPrepareCallback& callback) {
+                            dynamicSnapshots = std::move(dynamicSnapshots)](const PassPrepareContext &prepareContext) {
+        std::ranges::for_each(prepareCallbacks, [&](const ShaderVisiblePassPrepareCallback &callback) {
             if (callback)
             {
                 callback(prepareContext);
             }
         });
-        auto& cache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
+        auto &cache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
         nr::rhi::updateResourcesForBindingSnapshot(
-            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex),
-            cache, bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
-        std::ranges::for_each(dynamicSnapshots, [&](const DynamicBindingSnapshotDesc& desc) {
+            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+            bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
+        std::ranges::for_each(dynamicSnapshots, [&](const DynamicBindingSnapshotDesc &desc) {
             auto snapshot = desc.snapshot(prepareContext);
             auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
-            nr::rhi::updateResourcesForBindingSnapshot(
-                runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex),
-                cache, snapshot, std::move(resolver));
+            nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool,
+                                                       runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+                                                       snapshot, std::move(resolver));
         });
     };
     context_.get().patchPass(
         passSlot_, debugName_, std::move(prepareCallback),
-        [runtime, bindingSnapshot, recordCallback = std::move(recordCallback_)](
-            const PassRecordContext& recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "RayTracingPassPatchBuilder record requires a command buffer.");
-            auto& commandBuffer = recordContext.commandBuffer->get();
+        [runtime, bindingSnapshot,
+         recordCallback = std::move(recordCallback_)](const PassRecordContext &recordContext) {
+            nrAssert(recordContext.commandBuffer.has_value(),
+                     "RayTracingPassPatchBuilder record requires a command buffer.");
+            auto &commandBuffer = recordContext.commandBuffer->get();
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, runtime->pipeline().raw());
-            nr::rhi::bindPreparedResourcesToCommandBuffer(
-                commandBuffer, vk::PipelineBindPoint::eRayTracingKHR, runtime->state().layout,
-                runtime->bindingSetsForFrame(recordContext.frameIndex));
+            nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, vk::PipelineBindPoint::eRayTracingKHR,
+                                                          runtime->state().layout,
+                                                          runtime->bindingSetsForFrame(recordContext.frameIndex));
             nr::rhi::pushConstantsToCommandBuffer(commandBuffer, runtime->state().layout, bindingSnapshot);
             recordCallback(RayTracingPassRecordContext{
                 .pass = recordContext,

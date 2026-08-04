@@ -27,9 +27,7 @@ struct MutationFrameResult
     bool exitRequested = false;
 };
 
-void drawFrameStatusSection(
-    nr::app::UiSystem &ui,
-    const nr::rhi::PresentationContext &presentation)
+void drawFrameStatusSection(nr::app::UiSystem &ui, const nr::rhi::PresentationContext &presentation)
 {
     auto const &stats = ui.stats();
     ui.textFmt("FPS: {:.1f}", stats.framesPerSecond);
@@ -47,23 +45,17 @@ void drawFrameStatusSection(
     ui.textFmt("Color Space: {}", vk::to_string(presentation.swapchainColorSpace()));
 
     ui.separator();
-    ui.textFmt(
-        "Window Mode: {}",
-        presentation.fullscreenEnabled()
-            ? std::string_view{"Exclusive Fullscreen"}
-            : std::string_view{"Windowed"});
+    ui.textFmt("Window Mode: {}", presentation.fullscreenEnabled() ? std::string_view{"Exclusive Fullscreen"}
+                                                                   : std::string_view{"Windowed"});
 }
 
-void queueFrameStatusSection(
-    nr::app::UiSystem &ui,
-    const nr::rhi::PresentationContext &presentation)
+void queueFrameStatusSection(nr::app::UiSystem &ui, const nr::rhi::PresentationContext &presentation)
 {
     ui.queueSection(nr::app::UiSection{
         .id = "frame.status",
         .title = "Frame Status",
-        .draw = [presentation = std::cref(presentation)](nr::app::UiSystem &sectionUi) {
-            drawFrameStatusSection(sectionUi, presentation.get());
-        },
+        .draw = [presentation = std::cref(presentation)](
+                    nr::app::UiSystem &sectionUi) { drawFrameStatusSection(sectionUi, presentation.get()); },
     });
 }
 
@@ -72,7 +64,9 @@ void queueFrameStatusSection(
     return value == "accumulate" ? RtPostProcessingMode::accumulate : RtPostProcessingMode::dlssRayReconstruction;
 }
 
-[[nodiscard]] std::expected<PreparedPipelineGraph, std::string> preparePipelineGraph(nr::renderer::Renderer &renderer, const RenderPipelineRegistry &registry, std::string_view pipelineId, RtPostProcessingMode mode, RtDlssQuality dlssQuality, std::string_view captureSessionId)
+[[nodiscard]] std::expected<PreparedPipelineGraph, std::string> preparePipelineGraph(
+    nr::renderer::Renderer &renderer, const RenderPipelineRegistry &registry, std::string_view pipelineId,
+    RtPostProcessingMode mode, RtDlssQuality dlssQuality, std::string_view captureSessionId)
 {
     auto pipeline = registry.find(pipelineId);
     if (!pipeline.has_value())
@@ -105,14 +99,16 @@ void queueFrameStatusSection(
     };
 }
 
-void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const PreparedPipelineGraph &prepared, bool reloadShaderSession)
+void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const PreparedPipelineGraph &prepared,
+                                  bool reloadShaderSession)
 {
     if (reloadShaderSession && renderer.graphInstalled())
     {
         renderer.uninstallGraph();
         nr::rhi::ShaderService::instance().reloadSession();
     }
-    nrAssert(renderer.installGraph(prepared.spec), "Renderer graph initialization failed after the destructive graph replacement barrier.");
+    nrAssert(renderer.installGraph(prepared.spec),
+             "Renderer graph initialization failed after the destructive graph replacement barrier.");
 }
 
 [[nodiscard]] bool isRootRelativeOptionPath(std::string_view value)
@@ -123,19 +119,19 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
 
 [[nodiscard]] std::string makeCaptureSessionId()
 {
-    auto const ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto const ticks =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
     return std::format("run_{}", ticks);
 }
 
 [[nodiscard]] std::shared_ptr<const nr::options::OptionCatalog> buildSessionCatalog(
-    const RenderPipelineRegistry &registry,
-    std::string selectedPipeline,
-    std::string modelSource,
-    std::string environmentName,
-    std::vector<std::string> environmentNames,
-    const nr::app::AppSession &app)
+    const RenderPipelineRegistry &registry, std::string selectedPipeline, std::string modelSource,
+    std::string environmentName, std::vector<std::string> environmentNames, const nr::app::AppSession &app)
 {
-    auto pipelineIds = registry.pipelines() | std::views::transform([](const RenderPipelineDesc &pipeline) { return pipeline.id; }) | std::ranges::to<std::vector>();
+    auto pipelineIds = registry.pipelines() |
+                       std::views::transform([](const RenderPipelineDesc &pipeline) { return pipeline.id; }) |
+                       std::ranges::to<std::vector>();
     auto const camera = app.camera().optionResetValues();
     auto definitions = nr::options::makeSessionDefinitions(nr::options::SessionDefinitionSeed{
         .pipelineIds = std::move(pipelineIds),
@@ -150,17 +146,24 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
         .clipPlanes = camera.clipPlanes,
     });
     auto builder = nr::options::OptionCatalogBuilder{};
-    std::ranges::for_each(definitions, [&](nr::options::OptionDefinition &definition) { static_cast<void>(builder.add(std::move(definition))); });
+    std::ranges::for_each(definitions, [&](nr::options::OptionDefinition &definition) {
+        static_cast<void>(builder.add(std::move(definition)));
+    });
     auto built = builder.build();
     nrAssert(built.valid(), "The fixed session option catalog must pass preflight.");
     return std::move(built.catalog);
 }
 
-[[nodiscard]] std::expected<void, std::string> validateSessionAndGraphCatalog(const nr::options::OptionCatalog &catalogWithSessionDefinitions, const nr::options::OptionCatalog &graphCatalog)
+[[nodiscard]] std::expected<void, std::string> validateSessionAndGraphCatalog(
+    const nr::options::OptionCatalog &catalogWithSessionDefinitions, const nr::options::OptionCatalog &graphCatalog)
 {
     auto builder = nr::options::OptionCatalogBuilder{};
-    std::ranges::for_each(catalogWithSessionDefinitions.definitions() | std::views::filter([](const auto &entry) { return entry.second.scope == nr::options::OptionScope::session; }), [&](const auto &entry) { static_cast<void>(builder.add(entry.second)); });
-    std::ranges::for_each(graphCatalog.definitions(), [&](const auto &entry) { static_cast<void>(builder.add(entry.second)); });
+    std::ranges::for_each(catalogWithSessionDefinitions.definitions() | std::views::filter([](const auto &entry) {
+                              return entry.second.scope == nr::options::OptionScope::session;
+                          }),
+                          [&](const auto &entry) { static_cast<void>(builder.add(entry.second)); });
+    std::ranges::for_each(graphCatalog.definitions(),
+                          [&](const auto &entry) { static_cast<void>(builder.add(entry.second)); });
     auto combined = builder.build();
     if (combined.valid())
     {
@@ -168,10 +171,13 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
     }
 
     auto const &issue = combined.issues.front();
-    return std::unexpected(issue.id ? std::format("Combined option catalog rejected '{}': {}", issue.id->value(), issue.detail) : std::format("Combined option catalog rejected: {}", issue.detail));
+    return std::unexpected(
+        issue.id ? std::format("Combined option catalog rejected '{}': {}", issue.id->value(), issue.detail)
+                 : std::format("Combined option catalog rejected: {}", issue.detail));
 }
 
-[[nodiscard]] nr::options::OptionAvailabilityMap fullyAvailable(const nr::options::OptionCatalog &session, const nr::options::OptionCatalog &graph)
+[[nodiscard]] nr::options::OptionAvailabilityMap fullyAvailable(const nr::options::OptionCatalog &session,
+                                                                const nr::options::OptionCatalog &graph)
 {
     auto availability = nr::options::OptionAvailabilityMap{};
     auto add = [&](const nr::options::OptionCatalog &catalog) {
@@ -187,7 +193,9 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
     return availability;
 }
 
-void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::uint64_t frameIndex, nr::options::MutationOrigin origin, const std::optional<std::string> &requestId, bool succeeded, std::optional<std::string> reason = {})
+void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::uint64_t frameIndex,
+                  nr::options::MutationOrigin origin, const std::optional<std::string> &requestId, bool succeeded,
+                  std::optional<std::string> reason = {})
 {
     auto record = nr::options::OptionMachineRecord{
         .sequence = sequence,
@@ -209,8 +217,11 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     }
 }
 
-[[nodiscard]] MutationFrameResult executeMutation(nr::app::AppSession &app, const RenderPipelineRegistry &registry, ModelHistory &history, SceneModelController &modelController, RtDlssQuality initialDlssQuality, std::string_view captureSessionId,
-                                                  const nr::options::OptionFrameSnapshot &previousSnapshot, std::uint64_t frameIndex, nr::options::ScheduledMutation mutation)
+[[nodiscard]] MutationFrameResult executeMutation(nr::app::AppSession &app, const RenderPipelineRegistry &registry,
+                                                  ModelHistory &history, SceneModelController &modelController,
+                                                  RtDlssQuality initialDlssQuality, std::string_view captureSessionId,
+                                                  const nr::options::OptionFrameSnapshot &previousSnapshot,
+                                                  std::uint64_t frameIndex, nr::options::ScheduledMutation mutation)
 {
     auto &options = app.options();
     auto const sequence = mutation.sequence();
@@ -234,7 +245,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
         auto materialized = options.materializeFrameEffect(std::move(mutation));
         if (!materialized.effect)
         {
-            emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::string{nr::options::wireName(materialized.reason)});
+            emitTerminal(sequence, id, frameIndex, origin, requestId, false,
+                         std::string{nr::options::wireName(materialized.reason)});
             return {};
         }
         emitTerminal(sequence, id, frameIndex, origin, requestId, true);
@@ -247,15 +259,19 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     {
         auto const *currentPipeline = previousSnapshot.find(nr::options::keys::viewerPipelineSelected);
         auto const *currentMode = previousSnapshot.find(nr::options::keys::viewerRtPostProcessingMode);
-        nrAssert(currentPipeline != nullptr && currentMode != nullptr, "Graph mutation requires the session pipeline options.");
-        auto pipelineId = id == pipelineOption ? std::get<std::string>(mutation.request().value.storage) : *currentPipeline;
-        auto modeName = id == postProcessingOption ? std::get<std::string>(mutation.request().value.storage) : *currentMode;
+        nrAssert(currentPipeline != nullptr && currentMode != nullptr,
+                 "Graph mutation requires the session pipeline options.");
+        auto pipelineId =
+            id == pipelineOption ? std::get<std::string>(mutation.request().value.storage) : *currentPipeline;
+        auto modeName =
+            id == postProcessingOption ? std::get<std::string>(mutation.request().value.storage) : *currentMode;
         if (id == postProcessingOption && pipelineId != rtObjectPipelineId)
         {
             return fail("unavailable");
         }
 
-        auto prepared = preparePipelineGraph(app.renderer(), registry, pipelineId, postProcessingMode(modeName), initialDlssQuality, captureSessionId);
+        auto prepared = preparePipelineGraph(app.renderer(), registry, pipelineId, postProcessingMode(modeName),
+                                             initialDlssQuality, captureSessionId);
         if (!prepared)
         {
             return fail(std::move(prepared.error()));
@@ -311,7 +327,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
         auto materialized = options.materializeFrameEffect(std::move(mutation));
         if (!materialized.effect)
         {
-            emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::string{nr::options::wireName(materialized.reason)});
+            emitTerminal(sequence, id, frameIndex, origin, requestId, false,
+                         std::string{nr::options::wireName(materialized.reason)});
             return {};
         }
         return MutationFrameResult{.effect = std::move(materialized.effect)};
@@ -321,7 +338,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     auto committed = options.commitCanonical(std::move(mutation));
     if (!committed.committed)
     {
-        emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::string{nr::options::wireName(committed.reason)});
+        emitTerminal(sequence, id, frameIndex, origin, requestId, false,
+                     std::string{nr::options::wireName(committed.reason)});
         return {};
     }
     if (resetsTemporalHistory)
@@ -332,7 +350,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     return {};
 }
 
-[[nodiscard]] nr::options::OptionAvailabilityMap collectAvailability(nr::app::AppSession &app, const nr::options::OptionFrameSnapshot &collectionSnapshot)
+[[nodiscard]] nr::options::OptionAvailabilityMap collectAvailability(
+    nr::app::AppSession &app, const nr::options::OptionFrameSnapshot &collectionSnapshot)
 {
     auto availability = nr::options::OptionAvailabilityMap{};
     std::ranges::for_each(collectionSnapshot.catalog->definitions(), [&](auto const &entry) {
@@ -344,9 +363,10 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     auto const *pipeline = collectionSnapshot.find(nr::options::keys::viewerPipelineSelected);
     if (pipeline != nullptr && *pipeline != rtObjectPipelineId)
     {
-        availability.insert_or_assign(nr::options::optionId(nr::options::keys::viewerRtPostProcessingMode), nr::options::OptionAvailability{
-                                                                                                                .reason = "pipeline_not_rtobject",
-                                                                                                            });
+        availability.insert_or_assign(nr::options::optionId(nr::options::keys::viewerRtPostProcessingMode),
+                                      nr::options::OptionAvailability{
+                                          .reason = "pipeline_not_rtobject",
+                                      });
     }
     app.renderer().collectOptionAvailability(collectionSnapshot, availability);
     return availability;
@@ -361,7 +381,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
 
     if (presentResult != vk::Result::eSuccess)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Unexpected present result: {}", vk::to_string(presentResult)));
+        nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                  std::format("Unexpected present result: {}", vk::to_string(presentResult)));
         return false;
     }
 
@@ -372,7 +393,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
 [[nodiscard]] ViewerCommandLineOptions parseViewerCommandLine(std::span<char *> args)
 {
     auto options = ViewerCommandLineOptions{};
-    auto tokens = args | std::views::transform([](const char *token) { return std::string_view{token}; }) | std::ranges::to<std::vector>();
+    auto tokens = args | std::views::transform([](const char *token) { return std::string_view{token}; }) |
+                  std::ranges::to<std::vector>();
 
     auto consumed = std::vector<bool>(tokens.size(), false);
     auto indices = std::views::iota(std::size_t{0u}, tokens.size());
@@ -459,7 +481,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
                 return;
             }
             auto value = std::uint32_t{};
-            auto const [end, parseError] = std::from_chars(tokens[valueIndex].data(), tokens[valueIndex].data() + tokens[valueIndex].size(), value);
+            auto const [end, parseError] = std::from_chars(
+                tokens[valueIndex].data(), tokens[valueIndex].data() + tokens[valueIndex].size(), value);
             if (parseError != std::errc{} || end != tokens[valueIndex].data() + tokens[valueIndex].size())
             {
                 options.errorMessage = std::format("{} requires a non-negative integer value.", option);
@@ -512,24 +535,20 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
             auto const valueIndex = index + 1u;
             if (valueIndex >= tokens.size())
             {
-                options.errorMessage =
-                    "--render-graph-skeleton requires 'legacy' or 'enabled'.";
+                options.errorMessage = "--render-graph-skeleton requires 'legacy' or 'enabled'.";
                 return;
             }
             if (tokens[valueIndex] == "legacy")
             {
-                options.benchmarkRenderGraphSkeletonMode =
-                    nr::renderer::RenderGraphSkeletonMode::Legacy;
+                options.benchmarkRenderGraphSkeletonMode = nr::renderer::RenderGraphSkeletonMode::Legacy;
             }
             else if (tokens[valueIndex] == "enabled")
             {
-                options.benchmarkRenderGraphSkeletonMode =
-                    nr::renderer::RenderGraphSkeletonMode::Enabled;
+                options.benchmarkRenderGraphSkeletonMode = nr::renderer::RenderGraphSkeletonMode::Enabled;
             }
             else
             {
-                options.errorMessage =
-                    "--render-graph-skeleton accepts only 'legacy' or 'enabled'.";
+                options.errorMessage = "--render-graph-skeleton accepts only 'legacy' or 'enabled'.";
                 return;
             }
             consumed[valueIndex] = true;
@@ -570,11 +589,9 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     {
         options.errorMessage = "--script is valid only with --interaction offline-lua.";
     }
-    if (!options.benchmark &&
-        options.benchmarkRenderGraphSkeletonMode.has_value())
+    if (!options.benchmark && options.benchmarkRenderGraphSkeletonMode.has_value())
     {
-        options.errorMessage =
-            "--render-graph-skeleton is available only with --benchmark.";
+        options.errorMessage = "--render-graph-skeleton is available only with --benchmark.";
     }
     return options;
 }
@@ -585,11 +602,10 @@ void printViewerUsage(std::string_view executableName)
     std::println("  {} [model_path] [--pipeline normalview|rtobject]", executableName);
     std::println("  {} [model_path] --interaction agent", executableName);
     std::println("  {} [model_path] --interaction offline-lua --script <path.lua>", executableName);
-    std::println(
-        "  {} --benchmark --warmup-frames N --measure-frames N --output <directory> "
-        "[--dlss-quality ultra-performance] "
-        "[--render-graph-skeleton legacy|enabled]",
-        executableName);
+    std::println("  {} --benchmark --warmup-frames N --measure-frames N --output <directory> "
+                 "[--dlss-quality ultra-performance] "
+                 "[--render-graph-skeleton legacy|enabled]",
+                 executableName);
     std::println("  {} --help", executableName);
     std::println("Controls:");
     std::println("  Move: W/S/A/D/Q/E");
@@ -602,17 +618,16 @@ void printViewerUsage(std::string_view executableName)
 {
     if (config.benchmark && !benchmarkExecutionSupported)
     {
-        nr::nrLog(
-            nr::LogLevel::error,
-            "PIPELINE",
-            "--benchmark requires an optimized Release executable with validation disabled.");
+        nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                  "--benchmark requires an optimized Release executable with validation disabled.");
         return 2;
     }
 
     auto registry = makeDefaultPipelineRegistry();
     if (!registry.contains(config.initialPipelineId))
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Unknown initial pipeline: {}", config.initialPipelineId));
+        nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                  std::format("Unknown initial pipeline: {}", config.initialPipelineId));
         return 2;
     }
     if (config.benchmark && config.initialPipelineId != rtObjectPipelineId)
@@ -621,13 +636,10 @@ void printViewerUsage(std::string_view executableName)
         return 2;
     }
     if (config.benchmark &&
-        config.benchmarkRenderGraphSkeletonMode ==
-            nr::renderer::RenderGraphSkeletonMode::Differential)
+        config.benchmarkRenderGraphSkeletonMode == nr::renderer::RenderGraphSkeletonMode::Differential)
     {
-        nr::nrLog(
-            nr::LogLevel::error,
-            "PIPELINE",
-            "--benchmark does not support Differential RenderGraph Skeleton timing.");
+        nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                  "--benchmark does not support Differential RenderGraph Skeleton timing.");
         return 2;
     }
 
@@ -648,20 +660,14 @@ void printViewerUsage(std::string_view executableName)
     }
     if (environmentNames->empty())
     {
-        nr::nrLog(
-            nr::LogLevel::error,
-            "PIPELINE",
-            "No OpenEXR environment maps were found under assets/envMap.");
+        nr::nrLog(nr::LogLevel::error, "PIPELINE", "No OpenEXR environment maps were found under assets/envMap.");
         return 1;
     }
     if (!std::ranges::contains(*environmentNames, config.initialEnvironmentMapName))
     {
-        nr::nrLog(
-            nr::LogLevel::error,
-            "PIPELINE",
-            std::format(
-                "Initial environment map '{}' was not found under assets/envMap.",
-                config.initialEnvironmentMapName));
+        nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                  std::format("Initial environment map '{}' was not found under assets/envMap.",
+                              config.initialEnvironmentMapName));
         return 1;
     }
 
@@ -682,10 +688,10 @@ void printViewerUsage(std::string_view executableName)
         }
         std::unreachable();
     }();
-    nrAssert(app.options().setAuthorityMode(authorityMode), "Option authority mode must be selected before session initialization.");
+    nrAssert(app.options().setAuthorityMode(authorityMode),
+             "Option authority mode must be selected before session initialization.");
 
-    auto environmentLoad =
-        detail::loadEnvironmentMap(app.renderer(), config.initialEnvironmentMapName);
+    auto environmentLoad = detail::loadEnvironmentMap(app.renderer(), config.initialEnvironmentMapName);
     if (!environmentLoad)
     {
         nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentLoad.error());
@@ -706,7 +712,9 @@ void printViewerUsage(std::string_view executableName)
     }
 
     auto const captureSessionId = makeCaptureSessionId();
-    auto initialGraph = preparePipelineGraph(app.renderer(), registry, config.initialPipelineId, RtPostProcessingMode::dlssRayReconstruction, config.dlssQuality, captureSessionId);
+    auto initialGraph =
+        preparePipelineGraph(app.renderer(), registry, config.initialPipelineId,
+                             RtPostProcessingMode::dlssRayReconstruction, config.dlssQuality, captureSessionId);
     if (!initialGraph)
     {
         nr::nrLog(nr::LogLevel::error, "PIPELINE", initialGraph.error());
@@ -714,13 +722,9 @@ void printViewerUsage(std::string_view executableName)
         return 2;
     }
 
-    auto sessionCatalog = buildSessionCatalog(
-        registry,
-        config.initialPipelineId,
-        initialLoad.modelPath.generic_string(),
-        config.initialEnvironmentMapName,
-        std::move(*environmentNames),
-        app);
+    auto sessionCatalog =
+        buildSessionCatalog(registry, config.initialPipelineId, initialLoad.modelPath.generic_string(),
+                            config.initialEnvironmentMapName, std::move(*environmentNames), app);
     auto combinedCatalog = validateSessionAndGraphCatalog(*sessionCatalog, *initialGraph->optionCatalog);
     if (!combinedCatalog)
     {
@@ -731,10 +735,12 @@ void printViewerUsage(std::string_view executableName)
     installPreparedPipelineGraph(app.renderer(), *initialGraph, false);
 
     auto initialAvailability = fullyAvailable(*sessionCatalog, *initialGraph->optionCatalog);
-    auto initializedOptions = app.options().initializeSession(std::move(sessionCatalog), initialGraph->optionCatalog, initialAvailability);
+    auto initializedOptions =
+        app.options().initializeSession(std::move(sessionCatalog), initialGraph->optionCatalog, initialAvailability);
     if (!initializedOptions.committed)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Failed to initialize OptionSystem: {}", initializedOptions.detail));
+        nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                  std::format("Failed to initialize OptionSystem: {}", initializedOptions.detail));
         app.shutdown();
         return 2;
     }
@@ -745,7 +751,8 @@ void printViewerUsage(std::string_view executableName)
         auto started = webSocketHost.start();
         if (!started.started)
         {
-            nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Failed to start the option WebSocket host: {}", started.detail));
+            nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                      std::format("Failed to start the option WebSocket host: {}", started.detail));
             app.shutdown();
             return 2;
         }
@@ -757,7 +764,8 @@ void printViewerUsage(std::string_view executableName)
         auto started = luaHost.start(app.options(), config.automationScript);
         if (!started.started)
         {
-            nr::nrLog(nr::LogLevel::error, "PIPELINE", std::format("Failed to start offline Lua automation: {}", started.detail));
+            nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                      std::format("Failed to start offline Lua automation: {}", started.detail));
             webSocketHost.stop();
             app.shutdown();
             return 2;
@@ -766,8 +774,7 @@ void printViewerUsage(std::string_view executableName)
 
     if (config.benchmark)
     {
-        app.renderer().configureRenderGraphSkeletonMode(
-            config.benchmarkRenderGraphSkeletonMode);
+        app.renderer().configureRenderGraphSkeletonMode(config.benchmarkRenderGraphSkeletonMode);
         app.renderer().configureBenchmark(nr::renderer::RendererBenchmarkConfig{
             .enabled = true,
             .warmupFrames = config.warmupFrames,
@@ -776,8 +783,7 @@ void printViewerUsage(std::string_view executableName)
             .dlssQuality = "ultra-performance",
             .modelPath = initialLoad.modelPath.string(),
             .pipelineId = config.initialPipelineId,
-            .renderGraphSkeletonMode =
-                config.benchmarkRenderGraphSkeletonMode,
+            .renderGraphSkeletonMode = config.benchmarkRenderGraphSkeletonMode,
             .commandLine = config.commandLine,
         });
     }
@@ -812,7 +818,8 @@ void printViewerUsage(std::string_view executableName)
 
         if (!app.renderer().initialized() || !app.renderer().graphInstalled())
         {
-            nr::nrLog(nr::LogLevel::error, "PIPELINE", "Renderable viewer iteration requires an initialized renderer and installed graph.");
+            nr::nrLog(nr::LogLevel::error, "PIPELINE",
+                      "Renderable viewer iteration requires an initialized renderer and installed graph.");
             exitCode = 1;
             break;
         }
@@ -824,7 +831,9 @@ void printViewerUsage(std::string_view executableName)
         auto mutationResult = MutationFrameResult{};
         if (frameStart->mutation.has_value())
         {
-            mutationResult = executeMutation(app, registry, history, modelController, config.dlssQuality, captureSessionId, *previousSnapshot, frameStart->frameIndex, std::move(*frameStart->mutation));
+            mutationResult =
+                executeMutation(app, registry, history, modelController, config.dlssQuality, captureSessionId,
+                                *previousSnapshot, frameStart->frameIndex, std::move(*frameStart->mutation));
         }
         stopAfterCurrentFrame = stopAfterCurrentFrame || mutationResult.exitRequested;
 
@@ -841,9 +850,11 @@ void printViewerUsage(std::string_view executableName)
             {
                 stopAfterCurrentFrame = true;
             }
-            else if (luaFrame.status == nr::automation::OfflineLuaFrameStatus::failed || luaFrame.status == nr::automation::OfflineLuaFrameStatus::notStarted)
+            else if (luaFrame.status == nr::automation::OfflineLuaFrameStatus::failed ||
+                     luaFrame.status == nr::automation::OfflineLuaFrameStatus::notStarted)
             {
-                nr::nrLog(nr::LogLevel::error, "LUA", luaFrame.detail.empty() ? "Offline Lua automation stopped unexpectedly." : luaFrame.detail);
+                nr::nrLog(nr::LogLevel::error, "LUA",
+                          luaFrame.detail.empty() ? "Offline Lua automation stopped unexpectedly." : luaFrame.detail);
                 exitCode = 1;
                 stopAfterCurrentFrame = true;
             }
@@ -855,7 +866,9 @@ void printViewerUsage(std::string_view executableName)
         queueFrameStatusSection(app.ui(), presentation);
         if (!config.benchmark)
         {
-            auto const uiInteractionPolicy = config.interactionMode == ViewerInteractionMode::human ? nr::app::OptionUiInteractionPolicy::interactive : nr::app::OptionUiInteractionPolicy::readOnly;
+            auto const uiInteractionPolicy = config.interactionMode == ViewerInteractionMode::human
+                                                 ? nr::app::OptionUiInteractionPolicy::interactive
+                                                 : nr::app::OptionUiInteractionPolicy::readOnly;
             auto uiResult = optionUiPresenter.present(app.ui(), app.options(), optionSnapshot, uiInteractionPolicy);
             if (uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)
             {
@@ -865,7 +878,8 @@ void printViewerUsage(std::string_view executableName)
                 }
                 else
                 {
-                    static_cast<void>(app.camera().tryScheduleFromPresentation(app.options(), *optionSnapshot, presentation, deltaSeconds, app.ui().captureState()));
+                    static_cast<void>(app.camera().tryScheduleFromPresentation(
+                        app.options(), *optionSnapshot, presentation, deltaSeconds, app.ui().captureState()));
                 }
             }
         }
@@ -941,7 +955,8 @@ void printViewerUsage(std::string_view executableName)
     auto logSession = nr::RotatingNdjsonLogSession::start({});
     if (!logSession)
     {
-        nr::nrLog(nr::LogLevel::error, "LOG", std::format("Failed to start rotating NDJSON logs: {}", logSession.error()));
+        nr::nrLog(nr::LogLevel::error, "LOG",
+                  std::format("Failed to start rotating NDJSON logs: {}", logSession.error()));
         return 2;
     }
 
@@ -966,8 +981,7 @@ void printViewerUsage(std::string_view executableName)
         .interactionMode = options.interactionMode,
         .automationScript = options.automationScript,
         .benchmarkRenderGraphSkeletonMode =
-            options.benchmarkRenderGraphSkeletonMode.value_or(
-                nr::renderer::RenderGraphSkeletonMode::Enabled),
+            options.benchmarkRenderGraphSkeletonMode.value_or(nr::renderer::RenderGraphSkeletonMode::Enabled),
         .commandLine = std::move(commandLine),
     });
 }

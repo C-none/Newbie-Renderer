@@ -109,9 +109,8 @@ template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t Compi
     hash::hashAppend(state, static_cast<std::uint32_t>(options.target));
     hash::hashAppendString(state, options.profile);
 
-    std::ranges::for_each(options.searchPaths, [&](std::string_view path) constexpr noexcept {
-        hash::hashAppendString(state, path);
-    });
+    std::ranges::for_each(options.searchPaths,
+                          [&](std::string_view path) constexpr noexcept { hash::hashAppendString(state, path); });
     std::ranges::for_each(options.macros, [&](const SlangMacro &macro) constexpr noexcept {
         hash::hashAppendString(state, macro.name);
         hash::hashAppendString(state, macro.value);
@@ -136,14 +135,12 @@ template <std::size_t SearchPathCount, std::size_t MacroCount, std::size_t Compi
     return options;
 }
 
-static_assert(
-    shaderOptimizationLevel >= SLANG_OPTIMIZATION_LEVEL_NONE &&
-        shaderOptimizationLevel <= SLANG_OPTIMIZATION_LEVEL_MAXIMAL,
-    "shaderOptimizationLevel must map to a valid Slang optimization level.");
-static_assert(
-    shaderDebugInfoLevel >= SLANG_DEBUG_INFO_LEVEL_NONE &&
-        shaderDebugInfoLevel <= SLANG_DEBUG_INFO_LEVEL_MAXIMAL,
-    "shaderDebugInfoLevel must map to a valid Slang debug information level.");
+static_assert(shaderOptimizationLevel >= SLANG_OPTIMIZATION_LEVEL_NONE &&
+                  shaderOptimizationLevel <= SLANG_OPTIMIZATION_LEVEL_MAXIMAL,
+              "shaderOptimizationLevel must map to a valid Slang optimization level.");
+static_assert(shaderDebugInfoLevel >= SLANG_DEBUG_INFO_LEVEL_NONE &&
+                  shaderDebugInfoLevel <= SLANG_DEBUG_INFO_LEVEL_MAXIMAL,
+              "shaderDebugInfoLevel must map to a valid Slang debug information level.");
 
 [[nodiscard]] consteval std::array<SlangCompilerOption, 7> makeBaseCompilerOptions() noexcept
 {
@@ -166,8 +163,7 @@ static_assert(
 }
 
 inline constexpr std::size_t kDefaultSlangCompilerOptionCount =
-    std::size_t{7} +
-    (shaderDumpReproOnError ? std::size_t{1} : std::size_t{0}) +
+    std::size_t{7} + (shaderDumpReproOnError ? std::size_t{1} : std::size_t{0}) +
     (!shaderWarningsAsErrors.empty() ? std::size_t{1} : std::size_t{0});
 
 [[nodiscard]] consteval auto defaultCompilerOptions() noexcept
@@ -251,7 +247,8 @@ class SlangSampler
     /**
      * @brief Create a Vulkan sampler from `SlangSamplerDesc`.
      */
-    [[nodiscard]] static SlangSampler create(const vk::raii::Device &device, SlangSamplerDesc desc = {}, std::string_view debugName = {});
+    [[nodiscard]] static SlangSampler create(const vk::raii::Device &device, SlangSamplerDesc desc = {},
+                                             std::string_view debugName = {});
 
     /**
      * @brief Return whether this sampler owns a valid Vulkan handle.
@@ -343,10 +340,7 @@ struct SlangProgramVariantDesc
 {
     std::map<std::string, SlangVariantAssignment> assignments{};
 
-    SlangProgramVariantDesc& assign(
-        std::string_view name,
-        std::string_view type,
-        SlangVariantAssignmentValue value);
+    SlangProgramVariantDesc &assign(std::string_view name, std::string_view type, SlangVariantAssignmentValue value);
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::uint64_t hashValue() const noexcept;
@@ -362,7 +356,7 @@ struct SlangProgramCompileFileRequest
 
 struct ShaderServiceConfig
 {
-    std::uint32_t backendWorkerCount = 6;
+    std::uint32_t backendWorkerCount = nr::threading::resolveWorkerCount(0, nr::maxThreads);
     bool persistentSpirvCache = true;
 };
 
@@ -469,8 +463,7 @@ class ShaderService
         runtimeOptions.searchPaths = options.searchPaths |
                                      std::views::transform([](std::string_view value) { return std::string(value); }) |
                                      std::ranges::to<std::vector>();
-        runtimeOptions.macros = options.macros |
-                                std::views::transform([](const SlangMacro &macro) {
+        runtimeOptions.macros = options.macros | std::views::transform([](const SlangMacro &macro) {
                                     return RuntimeSlangMacro{
                                         .name = std::string(macro.name),
                                         .value = std::string(macro.value),
@@ -512,7 +505,6 @@ class ShaderService
 
         ensureGlobalSessionLocked();
         recreateSessionLocked();
-
     }
 
     // Requires m_mutex.
@@ -568,7 +560,6 @@ class ShaderService
     ShaderServiceConfig m_serviceConfig{};
     ShaderCompileBatchStats m_lastCompileBatchStats{};
     std::unique_ptr<nr::threading::StaticThreadPool> m_backendPool{};
-
 };
 
 } // namespace nr::rhi

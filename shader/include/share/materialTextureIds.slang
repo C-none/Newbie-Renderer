@@ -16,4 +16,3 @@ public enum MaterialTextureSlot : uint
     anisotropy = 11u,
     count = 12u,
 }
-

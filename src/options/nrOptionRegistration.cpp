@@ -16,7 +16,9 @@ namespace
         return true;
     }
     auto const path = std::filesystem::path{value};
-    return path.is_absolute() || path.has_root_name() || path.has_root_directory() || value.starts_with("//") || value.starts_with(R"(\\)") || value.starts_with(R"(\\?\)") || value.starts_with(R"(\\.\)") || value.contains("://") || value.find_first_of("|&;<>\n\r\t\"'`$*?") != std::string_view::npos;
+    return path.is_absolute() || path.has_root_name() || path.has_root_directory() || value.starts_with("//") ||
+           value.starts_with(R"(\\)") || value.starts_with(R"(\\?\)") || value.starts_with(R"(\\.\)") ||
+           value.contains("://") || value.find_first_of("|&;<>\n\r\t\"'`$*?") != std::string_view::npos;
 }
 
 [[nodiscard]] bool isRegularFileBelow(const std::filesystem::path &resolved, const std::filesystem::path &root)
@@ -58,7 +60,8 @@ namespace
         }
 
         auto error = std::error_code{};
-        auto const root = std::filesystem::canonical(std::filesystem::path{std::string{nr::projectRoot}} / "assets", error);
+        auto const root =
+            std::filesystem::canonical(std::filesystem::path{std::string{nr::projectRoot}} / "assets", error);
         if (error)
         {
             return "model_asset_root_unavailable";
@@ -74,7 +77,8 @@ namespace
 
 [[nodiscard]] constexpr std::size_t saturatedAdd(std::size_t left, std::size_t right) noexcept
 {
-    return right > std::numeric_limits<std::size_t>::max() - left ? std::numeric_limits<std::size_t>::max() : left + right;
+    return right > std::numeric_limits<std::size_t>::max() - left ? std::numeric_limits<std::size_t>::max()
+                                                                  : left + right;
 }
 
 [[nodiscard]] constexpr std::size_t saturatedMultiply(std::size_t left, std::size_t right) noexcept
@@ -83,7 +87,8 @@ namespace
     {
         return 0u;
     }
-    return right > std::numeric_limits<std::size_t>::max() / left ? std::numeric_limits<std::size_t>::max() : left * right;
+    return right > std::numeric_limits<std::size_t>::max() / left ? std::numeric_limits<std::size_t>::max()
+                                                                  : left * right;
 }
 
 [[nodiscard]] std::size_t estimateWireBytes(const OptionWireValue &value)
@@ -105,11 +110,15 @@ namespace
             }
             else if constexpr (std::same_as<Stored, OptionWireValue::Array>)
             {
-                return 2u + std::transform_reduce(stored.begin(), stored.end(), std::size_t{0u}, std::plus{}, [](auto const &element) { return estimateWireBytes(element) + 1u; });
+                return 2u + std::transform_reduce(stored.begin(), stored.end(), std::size_t{0u}, std::plus{},
+                                                  [](auto const &element) { return estimateWireBytes(element) + 1u; });
             }
             else
             {
-                return 2u + std::transform_reduce(stored.begin(), stored.end(), std::size_t{0u}, std::plus{}, [](auto const &entry) { return entry.first.size() * 6u + estimateWireBytes(entry.second) + 4u; });
+                return 2u + std::transform_reduce(
+                                stored.begin(), stored.end(), std::size_t{0u}, std::plus{}, [](auto const &entry) {
+                                    return entry.first.size() * 6u + estimateWireBytes(entry.second) + 4u;
+                                });
             }
         },
         value.storage);
@@ -129,7 +138,8 @@ namespace
         auto maximumBytes = schema.maximumSize;
         if (!schema.allowedStrings.empty())
         {
-            maximumBytes = std::ranges::max(schema.allowedStrings | std::views::transform([](const std::string &value) { return value.size(); }));
+            maximumBytes = std::ranges::max(
+                schema.allowedStrings | std::views::transform([](const std::string &value) { return value.size(); }));
         }
         return saturatedAdd(saturatedMultiply(maximumBytes, 6u), 2u);
     }
@@ -144,8 +154,10 @@ namespace
     case OptionValueType::object: {
         auto result = std::size_t{2u};
         std::ranges::for_each(schema.objectFields, [&](auto const &entry) {
-            auto const fieldBytes = entry.second.schema ? estimateMaximumWireBytes(*entry.second.schema) : std::numeric_limits<std::size_t>::max();
-            result = saturatedAdd(result, saturatedAdd(saturatedMultiply(entry.first.size(), 6u), saturatedAdd(fieldBytes, 4u)));
+            auto const fieldBytes = entry.second.schema ? estimateMaximumWireBytes(*entry.second.schema)
+                                                        : std::numeric_limits<std::size_t>::max();
+            result = saturatedAdd(
+                result, saturatedAdd(saturatedMultiply(entry.first.size(), 6u), saturatedAdd(fieldBytes, 4u)));
         });
         return result;
     }
@@ -156,7 +168,9 @@ namespace
 [[nodiscard]] std::size_t estimateSchemaBytes(const OptionSchema &schema)
 {
     auto estimate = std::size_t{256u};
-    std::ranges::for_each(schema.allowedStrings, [&](const std::string &value) { estimate = saturatedAdd(estimate, saturatedAdd(saturatedMultiply(value.size(), 6u), 3u)); });
+    std::ranges::for_each(schema.allowedStrings, [&](const std::string &value) {
+        estimate = saturatedAdd(estimate, saturatedAdd(saturatedMultiply(value.size(), 6u), 3u));
+    });
     if (schema.elementSchema)
     {
         estimate = saturatedAdd(estimate, estimateSchemaBytes(*schema.elementSchema));
@@ -179,7 +193,8 @@ namespace
     estimate = saturatedAdd(estimate, saturatedMultiply(definition.presentation.label.size(), 6u));
     estimate = saturatedAdd(estimate, estimateSchemaBytes(definition.schema));
     estimate = saturatedAdd(estimate, saturatedAdd(saturatedMultiply(maximumAvailabilityReasonBytes, 6u), 64u));
-    estimate = saturatedAdd(estimate, std::max(estimateWireBytes(definition.defaultValue), estimateMaximumWireBytes(definition.schema)));
+    estimate = saturatedAdd(
+        estimate, std::max(estimateWireBytes(definition.defaultValue), estimateMaximumWireBytes(definition.schema)));
     return estimate;
 }
 
@@ -207,7 +222,8 @@ namespace
         }
         return {};
     case OptionValueType::number:
-        if (!schema.numberMinimum || !schema.numberMaximum || !std::isfinite(*schema.numberMinimum) || !std::isfinite(*schema.numberMaximum) || *schema.numberMinimum > *schema.numberMaximum)
+        if (!schema.numberMinimum || !schema.numberMaximum || !std::isfinite(*schema.numberMinimum) ||
+            !std::isfinite(*schema.numberMaximum) || *schema.numberMinimum > *schema.numberMaximum)
         {
             return "number schema requires an ordered finite closed range";
         }
@@ -251,8 +267,10 @@ namespace
         {
             return "option objects must be closed";
         }
-        auto const requiredCount = static_cast<std::size_t>(std::ranges::count_if(schema.objectFields, [](const auto &entry) { return entry.second.required; }));
-        if (schema.minimumSize > schema.maximumSize || requiredCount > schema.maximumSize || schema.maximumSize > schema.objectFields.size())
+        auto const requiredCount = static_cast<std::size_t>(
+            std::ranges::count_if(schema.objectFields, [](const auto &entry) { return entry.second.required; }));
+        if (schema.minimumSize > schema.maximumSize || requiredCount > schema.maximumSize ||
+            schema.maximumSize > schema.objectFields.size())
         {
             return "object schema field bounds do not match its closed fields";
         }
@@ -365,7 +383,9 @@ CatalogBuildResult OptionCatalogBuilder::build(std::size_t maximumSnapshotBytes)
     }
 
     auto estimate = std::size_t{256u};
-    std::ranges::for_each(definitions_, [&](auto const &entry) { estimate = saturatedAdd(estimate, estimateDefinitionBytes(entry.second)); });
+    std::ranges::for_each(definitions_, [&](auto const &entry) {
+        estimate = saturatedAdd(estimate, estimateDefinitionBytes(entry.second));
+    });
     if (estimate > maximumSnapshotBytes)
     {
         result.issues.push_back(CatalogIssue{
@@ -382,45 +402,53 @@ CatalogBuildResult OptionCatalogBuilder::build(std::size_t maximumSnapshotBytes)
     return result;
 }
 
-OptionDefinition makeBooleanDefinition(OptionKey<bool> key, bool defaultValue, OptionScope scope, OptionPresentation presentation)
+OptionDefinition makeBooleanDefinition(OptionKey<bool> key, bool defaultValue, OptionScope scope,
+                                       OptionPresentation presentation)
 {
     return makeDefinition(key, OptionSchema::boolean(), defaultValue, scope, std::move(presentation));
 }
 
-OptionDefinition makeUnsignedDefinition(OptionKey<std::uint64_t> key, std::uint64_t defaultValue, std::uint64_t minimum, std::uint64_t maximum, OptionScope scope, OptionPresentation presentation)
+OptionDefinition makeUnsignedDefinition(OptionKey<std::uint64_t> key, std::uint64_t defaultValue, std::uint64_t minimum,
+                                        std::uint64_t maximum, OptionScope scope, OptionPresentation presentation)
 {
-    return makeDefinition(key, OptionSchema::unsignedInteger(minimum, maximum), defaultValue, scope, std::move(presentation));
+    return makeDefinition(key, OptionSchema::unsignedInteger(minimum, maximum), defaultValue, scope,
+                          std::move(presentation));
 }
 
-OptionDefinition makeNumberDefinition(OptionKey<double> key, double defaultValue, double minimum, double maximum, OptionScope scope, OptionPresentation presentation)
+OptionDefinition makeNumberDefinition(OptionKey<double> key, double defaultValue, double minimum, double maximum,
+                                      OptionScope scope, OptionPresentation presentation)
 {
     return makeDefinition(key, OptionSchema::number(minimum, maximum), defaultValue, scope, std::move(presentation));
 }
 
-OptionDefinition makeEnumDefinition(OptionKey<std::string> key, std::string defaultValue, std::vector<std::string> allowed, OptionScope scope, OptionPresentation presentation, OptionAdmissionValidator validator)
+OptionDefinition makeEnumDefinition(OptionKey<std::string> key, std::string defaultValue,
+                                    std::vector<std::string> allowed, OptionScope scope,
+                                    OptionPresentation presentation, OptionAdmissionValidator validator)
 {
-    return makeDefinition(key, OptionSchema::string(4u * 1024u, std::move(allowed)), std::move(defaultValue), scope, std::move(presentation), std::move(validator));
+    return makeDefinition(key, OptionSchema::string(4u * 1024u, std::move(allowed)), std::move(defaultValue), scope,
+                          std::move(presentation), std::move(validator));
 }
 
-OptionDefinition makeEmptyEffectDefinition(OptionKey<OptionWireValue::Object> key, OptionScope scope, OptionPresentation presentation)
+OptionDefinition makeEmptyEffectDefinition(OptionKey<OptionWireValue::Object> key, OptionScope scope,
+                                           OptionPresentation presentation)
 {
-    auto definition = makeDefinition(key, OptionSchema::emptyObject(), OptionWireValue::Object{}, scope, std::move(presentation));
+    auto definition =
+        makeDefinition(key, OptionSchema::emptyObject(), OptionWireValue::Object{}, scope, std::move(presentation));
     definition.lifetime = OptionValueLifetime::frameEffect;
     return definition;
 }
 
 std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed &seed)
 {
-    nrAssert(
-        !seed.environmentNames.empty() &&
-            std::ranges::contains(seed.environmentNames, seed.environmentName),
-        "Session environment name must be one of the discovered environment names.");
+    nrAssert(!seed.environmentNames.empty() && std::ranges::contains(seed.environmentNames, seed.environmentName),
+             "Session environment name must be one of the discovered environment names.");
 
     auto const floatMaximum = static_cast<double>(std::numeric_limits<float>::max());
     auto positionSchema = OptionSchema::array(OptionSchema::number(-floatMaximum, floatMaximum), 3u, 3u);
     auto cameraSchema = OptionSchema::object({
         {"position", OptionObjectField{.schema = schema(std::move(positionSchema))}},
-        {"yaw_degrees", OptionObjectField{.schema = schema(OptionSchema::number(-180.0, std::nextafter(180.0, -180.0)))}},
+        {"yaw_degrees",
+         OptionObjectField{.schema = schema(OptionSchema::number(-180.0, std::nextafter(180.0, -180.0)))}},
         {"pitch_degrees", OptionObjectField{.schema = schema(OptionSchema::number(-89.0, 89.0))}},
     });
     auto clipSchema = OptionSchema::object(
@@ -433,34 +461,47 @@ std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed
             auto const farIt = object.find("far");
             auto const *nearPlane = nearIt != object.end() ? std::get_if<double>(&nearIt->second.storage) : nullptr;
             auto const *farPlane = farIt != object.end() ? std::get_if<double>(&farIt->second.storage) : nullptr;
-            return nearPlane != nullptr && farPlane != nullptr && *farPlane > *nearPlane ? std::nullopt : std::optional{std::string{"far must be greater than near"}};
+            return nearPlane != nullptr && farPlane != nullptr && *farPlane > *nearPlane
+                       ? std::nullopt
+                       : std::optional{std::string{"far must be greater than near"}};
         });
 
     return {
-        makeEnumDefinition(keys::viewerPipelineSelected, seed.selectedPipeline, seed.pipelineIds, OptionScope::session, ui("Viewer", "Pipeline", OptionUiControl::combo, 10)),
-        makeDefinition(keys::viewerModelSource, OptionSchema::string(4u * 1024u), seed.modelSource, OptionScope::session, ui("Viewer", "Model", OptionUiControl::input, 20), modelSourceValidator()),
-        makeEnumDefinition(keys::viewerEnvironmentSource, seed.environmentName, seed.environmentNames, OptionScope::session, ui("Viewer", "Environment", OptionUiControl::combo, 30)),
-        makeEnumDefinition(keys::viewerRtPostProcessingMode, seed.postProcessingMode, {"accumulate", "dlss_ray_reconstruction"}, OptionScope::session, ui("Viewer", "RT post processing", OptionUiControl::combo, 40)),
-        makeBooleanDefinition(keys::viewerWindowFullscreen, seed.fullscreen, OptionScope::session, ui("Viewer", "Fullscreen", OptionUiControl::checkbox, 50)),
-        makeEmptyEffectDefinition(keys::viewerExit, OptionScope::session, ui("Viewer", "Exit", OptionUiControl::button, 60)),
-        makeDefinition(keys::viewerCameraPose, std::move(cameraSchema), seed.cameraPose, OptionScope::session, ui("Camera", "Pose", OptionUiControl::hidden, 10)),
-        makeUnsignedDefinition(keys::viewerCameraVerticalFovDegrees, seed.verticalFovDegrees, 1u, 179u, OptionScope::session, ui("Camera", "Vertical FOV", OptionUiControl::slider, 20)),
-        makeDefinition(keys::viewerCameraClipPlanes, std::move(clipSchema), seed.clipPlanes, OptionScope::session, ui("Camera", "Clip planes", OptionUiControl::input, 30)),
-        makeNumberDefinition(keys::viewerCameraMovementSpeed, seed.cameraMovementSpeed, 0.01, 1000.0, OptionScope::session, ui("Camera", "Movement speed", OptionUiControl::input, 40)),
+        makeEnumDefinition(keys::viewerPipelineSelected, seed.selectedPipeline, seed.pipelineIds, OptionScope::session,
+                           ui("Viewer", "Pipeline", OptionUiControl::combo, 10)),
+        makeDefinition(keys::viewerModelSource, OptionSchema::string(4u * 1024u), seed.modelSource,
+                       OptionScope::session, ui("Viewer", "Model", OptionUiControl::input, 20), modelSourceValidator()),
+        makeEnumDefinition(keys::viewerEnvironmentSource, seed.environmentName, seed.environmentNames,
+                           OptionScope::session, ui("Viewer", "Environment", OptionUiControl::combo, 30)),
+        makeEnumDefinition(keys::viewerRtPostProcessingMode, seed.postProcessingMode,
+                           {"accumulate", "dlss_ray_reconstruction"}, OptionScope::session,
+                           ui("Viewer", "RT post processing", OptionUiControl::combo, 40)),
+        makeBooleanDefinition(keys::viewerWindowFullscreen, seed.fullscreen, OptionScope::session,
+                              ui("Viewer", "Fullscreen", OptionUiControl::checkbox, 50)),
+        makeEmptyEffectDefinition(keys::viewerExit, OptionScope::session,
+                                  ui("Viewer", "Exit", OptionUiControl::button, 60)),
+        makeDefinition(keys::viewerCameraPose, std::move(cameraSchema), seed.cameraPose, OptionScope::session,
+                       ui("Camera", "Pose", OptionUiControl::hidden, 10)),
+        makeUnsignedDefinition(keys::viewerCameraVerticalFovDegrees, seed.verticalFovDegrees, 1u, 179u,
+                               OptionScope::session, ui("Camera", "Vertical FOV", OptionUiControl::slider, 20)),
+        makeDefinition(keys::viewerCameraClipPlanes, std::move(clipSchema), seed.clipPlanes, OptionScope::session,
+                       ui("Camera", "Clip planes", OptionUiControl::input, 30)),
+        makeNumberDefinition(keys::viewerCameraMovementSpeed, seed.cameraMovementSpeed, 0.01, 1000.0,
+                             OptionScope::session, ui("Camera", "Movement speed", OptionUiControl::input, 40)),
     };
 }
 
 std::vector<OptionDefinition> makePathTracingDefinitions()
 {
-    auto filterAfterShading = makeBooleanDefinition(
-        keys::pathTracingFilterAfterShadingEnabled,
-        false,
-        OptionScope::graph,
-        ui("Path tracing", "Filter after shading", OptionUiControl::checkbox, 30));
+    auto filterAfterShading =
+        makeBooleanDefinition(keys::pathTracingFilterAfterShadingEnabled, false, OptionScope::graph,
+                              ui("Path tracing", "Filter after shading", OptionUiControl::checkbox, 30));
     filterAfterShading.resetsTemporalHistory = true;
     return {
-        makeUnsignedDefinition(keys::pathTracingMaxSurfaceBounces, 16u, 1u, 64u, OptionScope::graph, ui("Path tracing", "Max surface bounces", OptionUiControl::slider, 10)),
-        makeBooleanDefinition(keys::pathTracingRussianRouletteEnabled, true, OptionScope::graph, ui("Path tracing", "Russian roulette", OptionUiControl::checkbox, 20)),
+        makeUnsignedDefinition(keys::pathTracingMaxSurfaceBounces, 16u, 1u, 64u, OptionScope::graph,
+                               ui("Path tracing", "Max surface bounces", OptionUiControl::slider, 10)),
+        makeBooleanDefinition(keys::pathTracingRussianRouletteEnabled, true, OptionScope::graph,
+                              ui("Path tracing", "Russian roulette", OptionUiControl::checkbox, 20)),
         std::move(filterAfterShading),
     };
 }
@@ -468,28 +509,38 @@ std::vector<OptionDefinition> makePathTracingDefinitions()
 std::vector<OptionDefinition> makeAccumulateDefinitions()
 {
     return {
-        makeUnsignedDefinition(keys::accumulateMaxHistorySamples, 1024u, 1u, 4096u, OptionScope::graph, ui("Accumulation", "Max history samples", OptionUiControl::slider, 10)),
+        makeUnsignedDefinition(keys::accumulateMaxHistorySamples, 1024u, 1u, 4096u, OptionScope::graph,
+                               ui("Accumulation", "Max history samples", OptionUiControl::slider, 10)),
     };
 }
 
 std::vector<OptionDefinition> makeDlssDefinitions(std::string initialQuality)
 {
-    auto qualityValidator = [](const OptionWireValue &candidate, const OptionValueMap &values) -> std::optional<std::string> {
+    auto qualityValidator = [](const OptionWireValue &candidate,
+                               const OptionValueMap &values) -> std::optional<std::string> {
         auto const *quality = std::get_if<std::string>(&candidate.storage);
         auto const bypassIt = values.find(optionId(keys::dlssBypass));
         auto const *bypass = bypassIt != values.end() ? std::get_if<bool>(&bypassIt->second.storage) : nullptr;
-        return quality != nullptr && bypass != nullptr && *bypass && *quality != "dlaa" ? std::optional{std::string{"DLSS bypass requires DLAA quality"}} : std::nullopt;
+        return quality != nullptr && bypass != nullptr && *bypass && *quality != "dlaa"
+                   ? std::optional{std::string{"DLSS bypass requires DLAA quality"}}
+                   : std::nullopt;
     };
-    auto bypassValidator = [](const OptionWireValue &candidate, const OptionValueMap &values) -> std::optional<std::string> {
+    auto bypassValidator = [](const OptionWireValue &candidate,
+                              const OptionValueMap &values) -> std::optional<std::string> {
         auto const *bypass = std::get_if<bool>(&candidate.storage);
         auto const *quality = stringValue(values, keys::dlssQuality);
-        return bypass != nullptr && *bypass && (quality == nullptr || *quality != "dlaa") ? std::optional{std::string{"DLSS bypass can only be enabled in DLAA quality"}} : std::nullopt;
+        return bypass != nullptr && *bypass && (quality == nullptr || *quality != "dlaa")
+                   ? std::optional{std::string{"DLSS bypass can only be enabled in DLAA quality"}}
+                   : std::nullopt;
     };
-    auto const qualityValues = std::vector<std::string>{"performance", "balanced", "quality", "ultra_performance", "dlaa"};
+    auto const qualityValues =
+        std::vector<std::string>{"performance", "balanced", "quality", "ultra_performance", "dlaa"};
 
     return {
-        makeBooleanDefinition(keys::dlssEnabled, true, OptionScope::graph, ui("DLSS", "Enabled", OptionUiControl::checkbox, 10)),
-        makeEnumDefinition(keys::dlssQuality, std::move(initialQuality), qualityValues, OptionScope::graph, ui("DLSS", "Quality", OptionUiControl::combo, 20), std::move(qualityValidator)),
+        makeBooleanDefinition(keys::dlssEnabled, true, OptionScope::graph,
+                              ui("DLSS", "Enabled", OptionUiControl::checkbox, 10)),
+        makeEnumDefinition(keys::dlssQuality, std::move(initialQuality), qualityValues, OptionScope::graph,
+                           ui("DLSS", "Quality", OptionUiControl::combo, 20), std::move(qualityValidator)),
         OptionDefinition{
             .id = optionId(keys::dlssBypass),
             .schema = OptionSchema::boolean(),
@@ -498,17 +549,22 @@ std::vector<OptionDefinition> makeDlssDefinitions(std::string initialQuality)
             .presentation = ui("DLSS", "Bypass", OptionUiControl::checkbox, 30),
             .admissionValidator = std::move(bypassValidator),
         },
-        makeBooleanDefinition(keys::dlssVisualizeMotionVectors, false, OptionScope::graph, ui("DLSS", "Visualize motion vectors", OptionUiControl::checkbox, 40)),
-        makeEmptyEffectDefinition(keys::dlssResetHistory, OptionScope::graph, ui("DLSS", "Reset history", OptionUiControl::button, 50)),
+        makeBooleanDefinition(keys::dlssVisualizeMotionVectors, false, OptionScope::graph,
+                              ui("DLSS", "Visualize motion vectors", OptionUiControl::checkbox, 40)),
+        makeEmptyEffectDefinition(keys::dlssResetHistory, OptionScope::graph,
+                                  ui("DLSS", "Reset history", OptionUiControl::button, 50)),
     };
 }
 
 std::vector<OptionDefinition> makePresentDefinitions()
 {
     return {
-        makeEnumDefinition(keys::presentToneMapping, "auto", {"auto", "none", "reinhard", "aces_filmic", "bt2390_eetf"}, OptionScope::graph, ui("Present", "Tone mapping", OptionUiControl::combo, 10)),
-        makeNumberDefinition(keys::presentUiOpacity, 1.0, 0.0, 1.0, OptionScope::graph, ui("Present", "UI opacity", OptionUiControl::slider, 20)),
-        makeEmptyEffectDefinition(keys::presentCaptureExr, OptionScope::graph, ui("Present", "Capture EXR", OptionUiControl::button, 30)),
+        makeEnumDefinition(keys::presentToneMapping, "auto", {"auto", "none", "reinhard", "aces_filmic", "bt2390_eetf"},
+                           OptionScope::graph, ui("Present", "Tone mapping", OptionUiControl::combo, 10)),
+        makeNumberDefinition(keys::presentUiOpacity, 1.0, 0.0, 1.0, OptionScope::graph,
+                             ui("Present", "UI opacity", OptionUiControl::slider, 20)),
+        makeEmptyEffectDefinition(keys::presentCaptureExr, OptionScope::graph,
+                                  ui("Present", "Capture EXR", OptionUiControl::button, 30)),
     };
 }
 } // namespace nr::options

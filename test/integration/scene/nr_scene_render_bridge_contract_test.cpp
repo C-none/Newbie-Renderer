@@ -18,9 +18,7 @@ namespace
     auto rows = std::views::iota(0, 4);
     auto columns = std::views::iota(0, 4);
     return std::ranges::all_of(columns, [&](int column) {
-        return std::ranges::all_of(rows, [&](int row) {
-            return near(left[column][row], right[column][row], epsilon);
-        });
+        return std::ranges::all_of(rows, [&](int row) { return near(left[column][row], right[column][row], epsilon); });
     });
 }
 
@@ -34,29 +32,29 @@ namespace
     translated[3] = glm::vec4{1.0f, 2.0f, 3.0f, 1.0f};
 
     return nr::scene::ScenePacketSet{
-        .rasterDraws = {
-            nr::scene::RasterDrawPacket{
-                .mesh = meshA,
-                .material = material,
-                .world = glm::mat4{1.0f},
-                .worldBounds = nr::resource::Aabb{glm::vec3{-1.0f, -1.0f, -1.0f}, glm::vec3{1.0f, 1.0f, 1.0f}},
-                .sortKey = 10,
+        .rasterDraws =
+            {
+                nr::scene::RasterDrawPacket{
+                    .mesh = meshA,
+                    .material = material,
+                    .world = glm::mat4{1.0f},
+                    .worldBounds = nr::resource::Aabb{glm::vec3{-1.0f, -1.0f, -1.0f}, glm::vec3{1.0f, 1.0f, 1.0f}},
+                    .sortKey = 10,
+                },
+                nr::scene::RasterDrawPacket{
+                    .mesh = meshB,
+                    .material = material,
+                    .geometryIndex = 1,
+                    .world = translated,
+                    .worldBounds = nr::resource::Aabb{glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{2.0f, 2.0f, 2.0f}},
+                    .sortKey = 20,
+                },
             },
-            nr::scene::RasterDrawPacket{
-                .mesh = meshB,
-                .material = material,
-                .geometryIndex = 1,
-                .world = translated,
-                .worldBounds = nr::resource::Aabb{glm::vec3{0.0f, 0.0f, 0.0f}, glm::vec3{2.0f, 2.0f, 2.0f}},
-                .sortKey = 20,
-            },
-        },
     };
 }
 
 const nr::test::CaseRegistrar rasterFrameCase{
-    "scene render bridge converts raster packets into frame draws and material groups",
-    [] {
+    "scene render bridge converts raster packets into frame draws and material groups", [] {
         auto packetSet = makeRasterPacketSet();
         auto frameConstants = nr::scene::SceneBridgeFrameConstants{
             .view = glm::mat4{2.0f},
@@ -76,12 +74,15 @@ const nr::test::CaseRegistrar rasterFrameCase{
             .resolveMaterialBindless = [](nr::resource::MaterialHandle handle) -> std::optional<std::uint32_t> {
                 return handle.slot + 200u;
             },
-            .resolveMaterialTextures = [](nr::resource::MaterialHandle) -> std::optional<nr::scene::SceneMaterialTextureBindings> {
+            .resolveMaterialTextures =
+                [](nr::resource::MaterialHandle) -> std::optional<nr::scene::SceneMaterialTextureBindings> {
                 auto bindings = nr::scene::SceneMaterialTextureBindings{};
-                bindings.ids[nr::resource::materialTextureSlotIndex(
-                    nr::resource::MaterialTextureSlotSemantic::normal)] = 17u;
-                bindings.ids[nr::resource::materialTextureSlotIndex(
-                    nr::resource::MaterialTextureSlotSemantic::occlusion)] = 23u;
+                bindings
+                    .ids[nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::normal)] =
+                    17u;
+                bindings
+                    .ids[nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::occlusion)] =
+                    23u;
                 bindings.normal = nr::scene::SceneMaterialNormalTextureBinding{
                     .textureId = 17u,
                     .uvSet = 1u,
@@ -97,7 +98,8 @@ const nr::test::CaseRegistrar rasterFrameCase{
                     .indexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(indexAtlas)},
                 };
             },
-            .resolveRasterDrawGeometry = [&](nr::resource::MeshHandle handle, std::uint32_t geometryIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
+            .resolveRasterDrawGeometry = [&](nr::resource::MeshHandle handle, std::uint32_t geometryIndex)
+                -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
                 return nr::scene::SceneBridgeDrawGeometry{
                     .vertexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(vertexAtlas)},
                     .indexBuffer = nr::scene::SceneBridgeBufferBinding{.buffer = std::cref(indexAtlas)},
@@ -112,21 +114,23 @@ const nr::test::CaseRegistrar rasterFrameCase{
 
         nr::test::requireEqual(frame.domain, nr::scene::ScenePacketDomain::rasterDraw);
         nr::test::require(frame.hasPrimaryCamera, "frame constants override should mark camera data present");
-        nr::test::require(frame.geometryBuffers.hasVertexBuffer(), "raster bridge frame should carry the scene vertex atlas binding");
-        nr::test::require(frame.geometryBuffers.hasIndexBuffer(), "raster bridge frame should carry the scene index atlas binding");
+        nr::test::require(frame.geometryBuffers.hasVertexBuffer(),
+                          "raster bridge frame should carry the scene vertex atlas binding");
+        nr::test::require(frame.geometryBuffers.hasIndexBuffer(),
+                          "raster bridge frame should carry the scene index atlas binding");
         nr::test::requireEqual(frame.geometryBuffers.indexType, vk::IndexType::eUint32);
         nr::test::requireEqual(frame.rasterDraws.size(), std::size_t{2});
         nr::test::requireEqual(frame.materialGroups.size(), std::size_t{1});
         nr::test::requireEqual(frame.materialGroups.front().drawIndices, std::vector<std::uint32_t>{0u, 1u});
         nr::test::requireEqual(frame.frameConstants.drawCount, 2.0f);
-        nr::test::require(mat4Near(frame.frameConstants.view, frameConstants.view), "view matrix should come from override");
+        nr::test::require(mat4Near(frame.frameConstants.view, frameConstants.view),
+                          "view matrix should come from override");
         nr::test::requireEqual(frame.rasterDraws[0].meshBindless, 103u);
         nr::test::requireEqual(frame.rasterDraws[1].meshBindless, 104u);
         nr::test::requireEqual(frame.rasterDraws[0].materialBindless, 209u);
-        nr::test::requireEqual(
-            frame.rasterDraws[0].materialTextures.ids[nr::resource::materialTextureSlotIndex(
-                nr::resource::MaterialTextureSlotSemantic::occlusion)],
-            nr::scene::SceneTextureId{23u});
+        nr::test::requireEqual(frame.rasterDraws[0].materialTextures.ids[nr::resource::materialTextureSlotIndex(
+                                   nr::resource::MaterialTextureSlotSemantic::occlusion)],
+                               nr::scene::SceneTextureId{23u});
         nr::test::requireEqual(frame.rasterDraws[0].materialTextures.normal.textureId, nr::scene::SceneTextureId{17u});
         nr::test::requireEqual(frame.rasterDraws[0].materialTextures.normal.uvSet, 1u);
         nr::test::require(near(frame.rasterDraws[0].materialTextures.normal.uvLinear.x, 2.0f) &&
@@ -139,35 +143,40 @@ const nr::test::CaseRegistrar rasterFrameCase{
                           "normal texture UV offset should cross the bridge");
         nr::test::require(near(frame.rasterDraws[0].materialTextures.normal.normalScale, 0.75f),
                           "normal scale should cross the bridge");
-        nr::test::requireEqual(frame.rasterDraws[0].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
-        nr::test::require(!frame.rasterDraws[0].materialRaster.doubleSided, "default material raster state should be single-sided");
-        nr::test::requireEqual(frame.materialGroups.front().materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
-        nr::test::require(!frame.materialGroups.front().materialRaster.doubleSided, "material group should carry default raster state");
+        nr::test::requireEqual(frame.rasterDraws[0].materialRaster.cullMode,
+                               vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::require(!frame.rasterDraws[0].materialRaster.doubleSided,
+                          "default material raster state should be single-sided");
+        nr::test::requireEqual(frame.materialGroups.front().materialRaster.cullMode,
+                               vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::require(!frame.materialGroups.front().materialRaster.doubleSided,
+                          "material group should carry default raster state");
         nr::test::requireEqual(frame.rasterDraws[1].geometry.firstVertex, 4u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.vertexCount, 4u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.firstIndex, 3u);
         nr::test::requireEqual(frame.rasterDraws[1].geometry.frontFace, vk::FrontFace::eClockwise);
         nr::test::require(
-            std::ranges::all_of(frame.rasterDraws, [&](const nr::scene::SceneBridgeDrawPacket &draw) {
-                return draw.geometry.vertexBuffer.buffer.has_value() &&
-                       draw.geometry.indexBuffer.buffer.has_value() &&
-                       std::addressof(draw.geometry.vertexBuffer.buffer->get()) ==
-                           std::addressof(frame.geometryBuffers.vertexBuffer.buffer->get()) &&
-                       std::addressof(draw.geometry.indexBuffer.buffer->get()) ==
-                           std::addressof(frame.geometryBuffers.indexBuffer.buffer->get());
-            }),
+            std::ranges::all_of(frame.rasterDraws,
+                                [&](const nr::scene::SceneBridgeDrawPacket &draw) {
+                                    return draw.geometry.vertexBuffer.buffer.has_value() &&
+                                           draw.geometry.indexBuffer.buffer.has_value() &&
+                                           std::addressof(draw.geometry.vertexBuffer.buffer->get()) ==
+                                               std::addressof(frame.geometryBuffers.vertexBuffer.buffer->get()) &&
+                                           std::addressof(draw.geometry.indexBuffer.buffer->get()) ==
+                                               std::addressof(frame.geometryBuffers.indexBuffer.buffer->get());
+                                }),
             "all raster bridge draws should reference the shared frame geometry atlas buffers");
     }};
 
 const nr::test::CaseRegistrar materialRasterStateCase{
-    "scene render bridge resolves material raster state per draw and group",
-    [] {
+    "scene render bridge resolves material raster state per draw and group", [] {
         auto packetSet = makeRasterPacketSet();
         packetSet.rasterDraws[1].material = nr::resource::MaterialHandle{10u, 2u};
 
         auto frame = nr::scene::SceneRenderBridge::buildFrame(nr::scene::SceneRenderBridgeBuildInput{
             .packetSet = std::cref(packetSet),
-            .resolveMaterialRasterState = [](nr::resource::MaterialHandle handle) -> std::optional<nr::scene::SceneBridgeMaterialRasterState> {
+            .resolveMaterialRasterState =
+                [](nr::resource::MaterialHandle handle) -> std::optional<nr::scene::SceneBridgeMaterialRasterState> {
                 auto const doubleSided = handle.slot == 10u;
                 return nr::scene::SceneBridgeMaterialRasterState{
                     .cullMode = doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack,
@@ -178,18 +187,23 @@ const nr::test::CaseRegistrar materialRasterStateCase{
 
         nr::test::requireEqual(frame.rasterDraws.size(), std::size_t{2});
         nr::test::requireEqual(frame.materialGroups.size(), std::size_t{2});
-        nr::test::requireEqual(frame.rasterDraws[0].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
-        nr::test::require(!frame.rasterDraws[0].materialRaster.doubleSided, "single-sided draw should keep back-face culling");
-        nr::test::requireEqual(frame.rasterDraws[1].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eNone});
+        nr::test::requireEqual(frame.rasterDraws[0].materialRaster.cullMode,
+                               vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::require(!frame.rasterDraws[0].materialRaster.doubleSided,
+                          "single-sided draw should keep back-face culling");
+        nr::test::requireEqual(frame.rasterDraws[1].materialRaster.cullMode,
+                               vk::CullModeFlags{vk::CullModeFlagBits::eNone});
         nr::test::require(frame.rasterDraws[1].materialRaster.doubleSided, "double-sided draw should disable culling");
-        nr::test::requireEqual(frame.materialGroups[0].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eBack});
-        nr::test::requireEqual(frame.materialGroups[1].materialRaster.cullMode, vk::CullModeFlags{vk::CullModeFlagBits::eNone});
-        nr::test::require(frame.materialGroups[1].materialRaster.doubleSided, "double-sided material group should carry raster state");
+        nr::test::requireEqual(frame.materialGroups[0].materialRaster.cullMode,
+                               vk::CullModeFlags{vk::CullModeFlagBits::eBack});
+        nr::test::requireEqual(frame.materialGroups[1].materialRaster.cullMode,
+                               vk::CullModeFlags{vk::CullModeFlagBits::eNone});
+        nr::test::require(frame.materialGroups[1].materialRaster.doubleSided,
+                          "double-sided material group should carry raster state");
     }};
 
 const nr::test::CaseRegistrar cameraPrecedenceCase{
-    "scene render bridge imported primary camera overrides frame constant override",
-    [] {
+    "scene render bridge imported primary camera overrides frame constant override", [] {
         auto packetSet = makeRasterPacketSet();
         auto cameraWorld = glm::mat4{1.0f};
         cameraWorld[3] = glm::vec4{2.0f, 3.0f, 4.0f, 1.0f};
@@ -214,7 +228,8 @@ const nr::test::CaseRegistrar cameraPrecedenceCase{
 
         nr::test::require(frame.hasPrimaryCamera, "primary camera should mark camera data present");
         nr::test::require(mat4Near(frame.frameConstants.view, camera.view), "primary camera view should win");
-        nr::test::require(mat4Near(frame.frameConstants.projection, camera.projection), "primary camera projection should win");
+        nr::test::require(mat4Near(frame.frameConstants.projection, camera.projection),
+                          "primary camera projection should win");
         nr::test::require(mat4Near(frame.frameConstants.viewProjection, camera.projection * camera.view),
                           "primary camera should derive viewProjection");
         nr::test::require(near(frame.frameConstants.cameraWorld.x, 2.0f) &&
@@ -224,13 +239,13 @@ const nr::test::CaseRegistrar cameraPrecedenceCase{
     }};
 
 const nr::test::CaseRegistrar nonRasterCase{
-    "scene render bridge ignores draw conversion for non-raster packet domains",
-    [] {
+    "scene render bridge ignores draw conversion for non-raster packet domains", [] {
         auto packetSet = nr::scene::ScenePacketSet{
             .domain = nr::scene::ScenePacketDomain::rayTracingInstance,
-            .rtInstances = {
-                nr::scene::RayTracingInstancePacket{.mesh = nr::resource::MeshHandle{7u, 1u}},
-            },
+            .rtInstances =
+                {
+                    nr::scene::RayTracingInstancePacket{.mesh = nr::resource::MeshHandle{7u, 1u}},
+                },
         };
 
         auto frame = nr::scene::SceneRenderBridge::buildFrame(nr::scene::SceneRenderBridgeBuildInput{

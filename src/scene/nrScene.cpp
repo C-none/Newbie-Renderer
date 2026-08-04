@@ -58,19 +58,34 @@ void registerSceneComponents(flecs::world &world)
 
 namespace nr::scene
 {
-Scene::Scene(const SceneCreateInfo &createInfo) : device_(createInfo.device), identity_(detail::nextSceneIdentity()), uploadBudgetBytesPerFrame_(createInfo.uploadBudgetBytesPerFrame), cpuRetention_(createInfo.cpuRetention)
+Scene::Scene(const SceneCreateInfo &createInfo)
+    : device_(createInfo.device), identity_(detail::nextSceneIdentity()),
+      uploadBudgetBytesPerFrame_(createInfo.uploadBudgetBytesPerFrame), cpuRetention_(createInfo.cpuRetention)
 {
     detail::registerSceneComponents(world_);
 
     runtimeRootQuery_ = world_.query_builder<const SceneInstanceRef>().cached().build();
 
-    rasterCandidatesQuery_ = world_.query_builder<const RenderableBinding, const SceneSelectionBits, const ScenePartitionId, const TlasBucketId, const WorldTransform, const WorldBounds>().cached().without(EcsPrefab).build();
+    rasterCandidatesQuery_ =
+        world_
+            .query_builder<const RenderableBinding, const SceneSelectionBits, const ScenePartitionId,
+                           const TlasBucketId, const WorldTransform, const WorldBounds>()
+            .cached()
+            .without(EcsPrefab)
+            .build();
 
-    rtCandidatesQuery_ = world_.query_builder<const RenderableBinding, const SceneSelectionBits, const ScenePartitionId, const TlasBucketId, const WorldTransform, const WorldBounds>().cached().without(EcsPrefab).build();
+    rtCandidatesQuery_ = world_
+                             .query_builder<const RenderableBinding, const SceneSelectionBits, const ScenePartitionId,
+                                            const TlasBucketId, const WorldTransform, const WorldBounds>()
+                             .cached()
+                             .without(EcsPrefab)
+                             .build();
 
-    cameraCandidatesQuery_ = world_.query_builder<const SceneCameraBinding, const WorldTransform>().cached().without(EcsPrefab).build();
+    cameraCandidatesQuery_ =
+        world_.query_builder<const SceneCameraBinding, const WorldTransform>().cached().without(EcsPrefab).build();
 
-    lightCandidatesQuery_ = world_.query_builder<const SceneLightBinding, const WorldTransform>().cached().without(EcsPrefab).build();
+    lightCandidatesQuery_ =
+        world_.query_builder<const SceneLightBinding, const WorldTransform>().cached().without(EcsPrefab).build();
 }
 
 Scene::~Scene() noexcept
@@ -111,7 +126,8 @@ Scene::~Scene() noexcept
 
 void Scene::commitMutation(SceneRevisionMutation mutation) noexcept
 {
-    auto batch = nr::revision::RevisionBatch<SceneRtRevisionDomain, SceneRevisionMutation, SceneRevisionMutationPolicy>{revisions.get<SceneRtRevisionDomain>()};
+    auto batch = nr::revision::RevisionBatch<SceneRtRevisionDomain, SceneRevisionMutation, SceneRevisionMutationPolicy>{
+        revisions.get<SceneRtRevisionDomain>()};
     batch.apply(mutation);
     batch.commit();
 }
@@ -129,16 +145,20 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
     };
 }
 
-[[nodiscard]] SceneTemplateHandle Scene::registerTemplate(const nr::load::SceneAsset &sceneAsset, const SceneTemplateCreateInfo &createInfo)
+[[nodiscard]] SceneTemplateHandle Scene::registerTemplate(const nr::load::SceneAsset &sceneAsset,
+                                                          const SceneTemplateCreateInfo &createInfo)
 {
     hasImportErrors_ = false;
     auto bridgePlan = SceneBridge::buildPlan(sceneAsset);
     hasImportErrors_ = !bridgePlan.valid();
 
-    auto templateStableKey = createInfo.stableKey.empty() ? sceneAsset.sourcePath.generic_string() : createInfo.stableKey;
+    auto templateStableKey =
+        createInfo.stableKey.empty() ? sceneAsset.sourcePath.generic_string() : createInfo.stableKey;
     if (templateStableKey.empty())
     {
-        reportImport<nr::LogLevel::error>(ImportStage::templateRegistration, "Template stable key is empty. Provide SceneTemplateCreateInfo.stableKey or SceneAsset.sourcePath.");
+        reportImport<nr::LogLevel::error>(
+            ImportStage::templateRegistration,
+            "Template stable key is empty. Provide SceneTemplateCreateInfo.stableKey or SceneAsset.sourcePath.");
     }
 
     if (hasImportErrors_)
@@ -171,7 +191,8 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
         return {};
     }
 
-    auto pinSet = buildTemplatePinSet(meshHandlesBySource, materialHandlesBySource, textureHandlesBySource, cameraHandlesBySource, lightHandlesBySource);
+    auto pinSet = buildTemplatePinSet(meshHandlesBySource, materialHandlesBySource, textureHandlesBySource,
+                                      cameraHandlesBySource, lightHandlesBySource);
 
     auto const debugName = createInfo.debugName.empty() ? sceneAsset.sourcePath.stem().string() : createInfo.debugName;
     auto handle = templates_.emplace([&](SceneTemplateHandle newHandle) {
@@ -191,11 +212,14 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
     auto *templateRecord = templates_.tryGet(handle);
     if (templateRecord == nullptr)
     {
-        reportImport<nr::LogLevel::error>(ImportStage::templateRegistration, "Failed to create SceneTemplateRecord from slot-map storage.", templateStableKey);
+        reportImport<nr::LogLevel::error>(ImportStage::templateRegistration,
+                                          "Failed to create SceneTemplateRecord from slot-map storage.",
+                                          templateStableKey);
         return {};
     }
 
-    auto hierarchyBuilt = buildTemplateHierarchy(handle, *templateRecord, sceneAsset, meshHandlesBySource, materialHandlesBySource, cameraHandlesBySource, lightHandlesBySource);
+    auto hierarchyBuilt = buildTemplateHierarchy(handle, *templateRecord, sceneAsset, meshHandlesBySource,
+                                                 materialHandlesBySource, cameraHandlesBySource, lightHandlesBySource);
 
     if (!hierarchyBuilt || hasImportErrors_)
     {
@@ -212,22 +236,27 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
     templateCameraBindingCount_ += templateRecord->templateCameraBindingCount;
     templateLightBindingCount_ += templateRecord->templateLightBindingCount;
 
-    reportImport<nr::LogLevel::info>(ImportStage::templateRegistration,
-                                     std::format("Registered template '{}' with {} node(s), {} mesh-binding entity(ies), {} camera-binding entity(ies) and {} light-binding entity(ies).", templateStableKey, templateRecord->templateNodeCount, templateRecord->templateMeshBindingCount,
-                                                 templateRecord->templateCameraBindingCount, templateRecord->templateLightBindingCount),
-                                     templateStableKey);
+    reportImport<nr::LogLevel::info>(
+        ImportStage::templateRegistration,
+        std::format("Registered template '{}' with {} node(s), {} mesh-binding entity(ies), {} camera-binding "
+                    "entity(ies) and {} light-binding entity(ies).",
+                    templateStableKey, templateRecord->templateNodeCount, templateRecord->templateMeshBindingCount,
+                    templateRecord->templateCameraBindingCount, templateRecord->templateLightBindingCount),
+        templateStableKey);
 
     commitMutation(SceneRevisionMutation::templateRegistered);
     return handle;
 }
 
-[[nodiscard]] SceneInstanceHandle Scene::instantiate(SceneTemplateHandle templateHandle, const SceneInstantiateInfo &createInfo)
+[[nodiscard]] SceneInstanceHandle Scene::instantiate(SceneTemplateHandle templateHandle,
+                                                     const SceneInstantiateInfo &createInfo)
 {
     hasImportErrors_ = false;
     auto *templateRecord = templates_.tryGet(templateHandle);
     if (templateRecord == nullptr)
     {
-        reportImport<nr::LogLevel::error>(ImportStage::instanceRegistration, "Cannot instantiate an unknown SceneTemplateHandle.");
+        reportImport<nr::LogLevel::error>(ImportStage::instanceRegistration,
+                                          "Cannot instantiate an unknown SceneTemplateHandle.");
         return {};
     }
 
@@ -261,7 +290,9 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
             .templateHandle = templateHandle,
             .root = root,
             .active = createInfo.activate,
-            .expectedEntityCount = templateRecord->templateNodeCount + templateRecord->templateMeshBindingCount + templateRecord->templateCameraBindingCount + templateRecord->templateLightBindingCount + 1u,
+            .expectedEntityCount = templateRecord->templateNodeCount + templateRecord->templateMeshBindingCount +
+                                   templateRecord->templateCameraBindingCount +
+                                   templateRecord->templateLightBindingCount + 1u,
         };
     });
 
@@ -331,7 +362,8 @@ void Scene::destroyInstance(SceneInstanceHandle instanceHandle)
         return;
     }
 
-    if (auto *templateRecord = templates_.tryGet(instanceRecord->templateHandle); templateRecord != nullptr && templateRecord->liveInstanceCount > 0u)
+    if (auto *templateRecord = templates_.tryGet(instanceRecord->templateHandle);
+        templateRecord != nullptr && templateRecord->liveInstanceCount > 0u)
     {
         --templateRecord->liveInstanceCount;
     }
@@ -380,7 +412,8 @@ void Scene::beginFrame(std::uint32_t frameSlot)
     queueGpuUploadsForFrame();
 }
 
-[[nodiscard]] bool Scene::useParentHierarchyStorage(const nr::load::SceneAsset &sceneAsset, TemplateHierarchyPolicy policy) noexcept
+[[nodiscard]] bool Scene::useParentHierarchyStorage(const nr::load::SceneAsset &sceneAsset,
+                                                    TemplateHierarchyPolicy policy) noexcept
 {
     switch (policy)
     {
@@ -409,7 +442,8 @@ void Scene::attachHierarchyRelation(flecs::entity child, flecs::entity parent, b
     child.add(EcsChildOf, parent.id());
 }
 
-[[nodiscard]] nr::resource::AlphaMode Scene::resolveMaterialAlphaMode(const nr::load::MaterialAsset &sourceMaterial) noexcept
+[[nodiscard]] nr::resource::AlphaMode Scene::resolveMaterialAlphaMode(
+    const nr::load::MaterialAsset &sourceMaterial) noexcept
 {
     if (sourceMaterial.alphaModeHint == nr::load::MaterialAlphaModeHint::mask)
     {
@@ -488,12 +522,14 @@ void Scene::attachHierarchyRelation(flecs::entity child, flecs::entity parent, b
     // does NOT affect whether an object goes into graphics path - all materials are renderable
     if (materialRecord->cpu.isAlphaBlended())
     {
-        return bits | sceneSelectionMask(SceneSelectionBit::rasterTransparent) | sceneSelectionMask(SceneSelectionBit::rtTransparent);
+        return bits | sceneSelectionMask(SceneSelectionBit::rasterTransparent) |
+               sceneSelectionMask(SceneSelectionBit::rtTransparent);
     }
 
     if (materialRecord->cpu.isAlphaMasked())
     {
-        return bits | sceneSelectionMask(SceneSelectionBit::rasterOpaque) | sceneSelectionMask(SceneSelectionBit::alphaTest);
+        return bits | sceneSelectionMask(SceneSelectionBit::rasterOpaque) |
+               sceneSelectionMask(SceneSelectionBit::alphaTest);
     }
 
     // All other cases (opaque, specular/glossiness, anisotropy, etc.) go to raster opaque
@@ -673,7 +709,8 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
     if (parentId != 0)
     {
         auto parentEntity = flecs::entity{world_.c_ptr(), parentId};
-        if (auto parentTransform = parentEntity.try_get<WorldTransform>(); parentTransform != nullptr && detail::finiteMat4(parentTransform->value))
+        if (auto parentTransform = parentEntity.try_get<WorldTransform>();
+            parentTransform != nullptr && detail::finiteMat4(parentTransform->value))
         {
             parentWorld = parentTransform->value;
         }
@@ -682,8 +719,13 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
     [[maybe_unused]] auto const instanceBounds = updateHierarchyNode(instanceRecord.root, parentWorld);
 }
 
-[[nodiscard]] bool Scene::buildTemplateHierarchy(SceneTemplateHandle templateHandle, SceneTemplateRecord &templateRecord, const nr::load::SceneAsset &sceneAsset, std::span<const nr::resource::MeshHandle> meshHandlesBySource, std::span<const nr::resource::MaterialHandle> materialHandlesBySource,
-                                                 std::span<const nr::resource::CameraAssetHandle> cameraHandlesBySource, std::span<const nr::resource::LightAssetHandle> lightHandlesBySource)
+[[nodiscard]] bool Scene::buildTemplateHierarchy(SceneTemplateHandle templateHandle,
+                                                 SceneTemplateRecord &templateRecord,
+                                                 const nr::load::SceneAsset &sceneAsset,
+                                                 std::span<const nr::resource::MeshHandle> meshHandlesBySource,
+                                                 std::span<const nr::resource::MaterialHandle> materialHandlesBySource,
+                                                 std::span<const nr::resource::CameraAssetHandle> cameraHandlesBySource,
+                                                 std::span<const nr::resource::LightAssetHandle> lightHandlesBySource)
 {
     (void)materialHandlesBySource;
 
@@ -704,7 +746,9 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
 
     if (sceneAsset.rootNodeIndex == nr::load::invalidIndex || sceneAsset.rootNodeIndex >= sceneAsset.nodes.size())
     {
-        reportImport<nr::LogLevel::error>(ImportStage::templateRegistration, "SceneAsset root node index is invalid for template hierarchy construction.", templateRecord.stableKey, sceneAsset.rootNodeIndex);
+        reportImport<nr::LogLevel::error>(ImportStage::templateRegistration,
+                                          "SceneAsset root node index is invalid for template hierarchy construction.",
+                                          templateRecord.stableKey, sceneAsset.rootNodeIndex);
         return false;
     }
 
@@ -718,11 +762,15 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
 
     if (templateRecord.hierarchyPolicy == TemplateHierarchyPolicy::autoSelect)
     {
-        reportImport<nr::LogLevel::info>(ImportStage::templateRegistration, std::format("Template '{}' auto-selected {} hierarchy storage.", templateRecord.stableKey, useParentStorage ? "Parent" : "ChildOf"), templateRecord.stableKey);
+        reportImport<nr::LogLevel::info>(ImportStage::templateRegistration,
+                                         std::format("Template '{}' auto-selected {} hierarchy storage.",
+                                                     templateRecord.stableKey, useParentStorage ? "Parent" : "ChildOf"),
+                                         templateRecord.stableKey);
     }
 
     auto cameraIndicesByNode = std::map<std::uint32_t, std::vector<std::uint32_t>>{};
-    auto const cameraIndices = std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(sceneAsset.cameras.size()));
+    auto const cameraIndices =
+        std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(sceneAsset.cameras.size()));
     std::ranges::for_each(cameraIndices, [&](std::uint32_t cameraIndex) {
         if (cameraIndex >= cameraHandlesBySource.size())
         {
@@ -738,7 +786,12 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
         auto const &cameraAsset = sceneAsset.cameras[cameraIndex];
         if (cameraAsset.nodeIndex == nr::load::invalidIndex || cameraAsset.nodeIndex >= sceneAsset.nodes.size())
         {
-            reportImport<nr::LogLevel::warning>(ImportStage::camera, std::format("Camera '{}' resolved to invalid node index {} and will not be bound to template hierarchy.", cameraAsset.name, cameraAsset.nodeIndex), {}, cameraIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::camera,
+                std::format(
+                    "Camera '{}' resolved to invalid node index {} and will not be bound to template hierarchy.",
+                    cameraAsset.name, cameraAsset.nodeIndex),
+                {}, cameraIndex);
             return;
         }
 
@@ -762,7 +815,11 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
         auto const &lightAsset = sceneAsset.lights[lightIndex];
         if (lightAsset.nodeIndex == nr::load::invalidIndex || lightAsset.nodeIndex >= sceneAsset.nodes.size())
         {
-            reportImport<nr::LogLevel::warning>(ImportStage::light, std::format("Light '{}' resolved to invalid node index {} and will not be bound to template hierarchy.", lightAsset.name, lightAsset.nodeIndex), {}, lightIndex);
+            reportImport<nr::LogLevel::warning>(
+                ImportStage::light,
+                std::format("Light '{}' resolved to invalid node index {} and will not be bound to template hierarchy.",
+                            lightAsset.name, lightAsset.nodeIndex),
+                {}, lightIndex);
             return;
         }
 
@@ -773,7 +830,10 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
         if (nodeIndex >= sceneAsset.nodes.size())
         {
             hierarchyHasError = true;
-            reportImport<nr::LogLevel::error>(ImportStage::templateRegistration, std::format("Template hierarchy references out-of-range node index {}.", nodeIndex), templateRecord.stableKey, nodeIndex);
+            reportImport<nr::LogLevel::error>(
+                ImportStage::templateRegistration,
+                std::format("Template hierarchy references out-of-range node index {}.", nodeIndex),
+                templateRecord.stableKey, nodeIndex);
             return;
         }
 
@@ -806,7 +866,10 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
             if (sourceMeshIndex >= meshHandlesBySource.size())
             {
                 hierarchyHasError = true;
-                reportImport<nr::LogLevel::error>(ImportStage::templateRegistration, std::format("Node '{}' references out-of-range mesh index {}.", nodeAsset.name, sourceMeshIndex), templateRecord.stableKey, nodeIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::templateRegistration,
+                    std::format("Node '{}' references out-of-range mesh index {}.", nodeAsset.name, sourceMeshIndex),
+                    templateRecord.stableKey, nodeIndex);
                 return;
             }
 
@@ -814,7 +877,10 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
             if (!meshHandle.valid())
             {
                 hierarchyHasError = true;
-                reportImport<nr::LogLevel::error>(ImportStage::templateRegistration, std::format("Node '{}' references unresolved mesh index {}.", nodeAsset.name, sourceMeshIndex), templateRecord.stableKey, nodeIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::templateRegistration,
+                    std::format("Node '{}' references unresolved mesh index {}.", nodeAsset.name, sourceMeshIndex),
+                    templateRecord.stableKey, nodeIndex);
                 return;
             }
 
@@ -825,7 +891,8 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                 materialHandle = meshRecord->cpu.geometries.front().material;
             }
 
-            auto const meshEntityName = detail::makeTemplateMeshEntityName(templateHandle, nodeIndex, static_cast<std::uint32_t>(meshSlot));
+            auto const meshEntityName =
+                detail::makeTemplateMeshEntityName(templateHandle, nodeIndex, static_cast<std::uint32_t>(meshSlot));
 
             auto meshEntity = world_.entity(meshEntityName.c_str());
             meshEntity.add(EcsPrefab);
@@ -868,7 +935,8 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                     return;
                 }
 
-                auto const cameraEntityName = detail::makeTemplateCameraEntityName(templateHandle, nodeIndex, static_cast<std::uint32_t>(cameraSlot));
+                auto const cameraEntityName = detail::makeTemplateCameraEntityName(
+                    templateHandle, nodeIndex, static_cast<std::uint32_t>(cameraSlot));
 
                 auto cameraEntity = world_.entity(cameraEntityName.c_str());
                 cameraEntity.add(EcsPrefab);
@@ -904,7 +972,8 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                     return;
                 }
 
-                auto const lightEntityName = detail::makeTemplateLightEntityName(templateHandle, nodeIndex, static_cast<std::uint32_t>(lightSlot));
+                auto const lightEntityName = detail::makeTemplateLightEntityName(templateHandle, nodeIndex,
+                                                                                 static_cast<std::uint32_t>(lightSlot));
 
                 auto lightEntity = world_.entity(lightEntityName.c_str());
                 lightEntity.add(EcsPrefab);
@@ -933,7 +1002,10 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
             if (childIndex >= sceneAsset.nodes.size())
             {
                 hierarchyHasError = true;
-                reportImport<nr::LogLevel::error>(ImportStage::templateRegistration, std::format("Node '{}' references out-of-range child index {}.", nodeAsset.name, childIndex), templateRecord.stableKey, nodeIndex);
+                reportImport<nr::LogLevel::error>(
+                    ImportStage::templateRegistration,
+                    std::format("Node '{}' references out-of-range child index {}.", nodeAsset.name, childIndex),
+                    templateRecord.stableKey, nodeIndex);
                 return;
             }
 
@@ -946,8 +1018,12 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
     auto const reachableNodeCount = static_cast<std::size_t>(std::ranges::count(visited, true));
     if (reachableNodeCount != sceneAsset.nodes.size())
     {
-        reportImport<nr::LogLevel::warning>(ImportStage::templateRegistration, std::format("Template '{}' contains {} node(s), but only {} are reachable from root index {}.", templateRecord.stableKey, sceneAsset.nodes.size(), reachableNodeCount, sceneAsset.rootNodeIndex), templateRecord.stableKey,
-                                            sceneAsset.rootNodeIndex);
+        reportImport<nr::LogLevel::warning>(
+            ImportStage::templateRegistration,
+            std::format("Template '{}' contains {} node(s), but only {} are reachable from root index {}.",
+                        templateRecord.stableKey, sceneAsset.nodes.size(), reachableNodeCount,
+                        sceneAsset.rootNodeIndex),
+            templateRecord.stableKey, sceneAsset.rootNodeIndex);
     }
 
     templateRecord.templateNodeCount = reachableNodeCount;
@@ -1031,7 +1107,8 @@ void Scene::syncFallbackCameraInfrastructure()
     destroyFallbackCameraInfrastructureIfUnused();
 }
 
-[[nodiscard]] flecs::entity Scene::makeTemplatePrefab(SceneTemplateHandle handle, std::string_view stableKey, std::string_view debugName)
+[[nodiscard]] flecs::entity Scene::makeTemplatePrefab(SceneTemplateHandle handle, std::string_view stableKey,
+                                                      std::string_view debugName)
 {
     auto label = debugName.empty() ? stableKey : debugName;
     auto sanitized = detail::sanitizeEntityName(label);
@@ -1057,12 +1134,13 @@ void Scene::syncFallbackCameraInfrastructure()
 
 void Scene::initializeFallbackCameraInfrastructure()
 {
-    auto [cameraHandle, created] = cameras_.getOrCreate(std::string{kFallbackCameraStableKey}, [](nr::resource::CameraAssetHandle newHandle, const std::string &key) {
-        return CameraAssetRecord{
-            .handle = newHandle,
-            .stableKey = key,
-        };
-    });
+    auto [cameraHandle, created] = cameras_.getOrCreate(
+        std::string{kFallbackCameraStableKey}, [](nr::resource::CameraAssetHandle newHandle, const std::string &key) {
+            return CameraAssetRecord{
+                .handle = newHandle,
+                .stableKey = key,
+            };
+        });
 
     if (created)
     {
@@ -1083,7 +1161,8 @@ void Scene::initializeFallbackCameraInfrastructure()
     fallbackCameraHandle_ = cameraHandle;
     if (!fallbackCameraEntity_.is_alive())
     {
-        auto const fallbackEntityName = std::format("scene_runtime_fallback_camera_{}_{}", cameraHandle.slot, cameraHandle.generation);
+        auto const fallbackEntityName =
+            std::format("scene_runtime_fallback_camera_{}_{}", cameraHandle.slot, cameraHandle.generation);
         fallbackCameraEntity_ = world_.entity(fallbackEntityName.c_str());
     }
 

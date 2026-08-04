@@ -65,25 +65,24 @@ struct NsightGraphicsTraceStop
 };
 } // namespace nr::platform
 
-
 namespace nr::platform_detail
 {
 [[nodiscard]] NrPlatformNsightGraphicsActivity toPlatform(nr::platform::NsightGraphicsActivity activity) noexcept;
-[[nodiscard]] NrPlatformNsightGraphicsCaptureDelimiter toPlatform(nr::platform::NsightGraphicsCaptureDelimiter delimiter) noexcept;
+[[nodiscard]] NrPlatformNsightGraphicsCaptureDelimiter toPlatform(
+    nr::platform::NsightGraphicsCaptureDelimiter delimiter) noexcept;
 [[nodiscard]] nr::platform::NsightGraphicsResult toNsightGraphicsResult(NrPlatformNsightGraphicsResult result) noexcept;
 } // namespace nr::platform_detail
-
 
 export namespace nr::platform
 {
 [[nodiscard]] bool nsightGraphicsSdkCompiled() noexcept;
-[[nodiscard]] NsightGraphicsResult injectNsightGraphics(const NsightGraphicsConfig& config) noexcept;
+[[nodiscard]] NsightGraphicsResult injectNsightGraphics(const NsightGraphicsConfig &config) noexcept;
 [[nodiscard]] NsightGraphicsResult initializeNsightGraphics(NsightGraphicsActivity activity) noexcept;
 [[nodiscard]] NsightGraphicsResult activateNsightTrace(VkQueue queue) noexcept;
-[[nodiscard]] NsightGraphicsResult requestNsightCapture(const NsightGraphicsCaptureRequest& request) noexcept;
+[[nodiscard]] NsightGraphicsResult requestNsightCapture(const NsightGraphicsCaptureRequest &request) noexcept;
 [[nodiscard]] NsightGraphicsResult startNsightTrace() noexcept;
-[[nodiscard]] NsightGraphicsResult stopNsightTrace(const NsightGraphicsTraceStop& desc) noexcept;
-[[nodiscard]] NsightGraphicsResult markNsightFrameBoundary(const NsightGraphicsFrameBoundary& desc) noexcept;
+[[nodiscard]] NsightGraphicsResult stopNsightTrace(const NsightGraphicsTraceStop &desc) noexcept;
+[[nodiscard]] NsightGraphicsResult markNsightFrameBoundary(const NsightGraphicsFrameBoundary &desc) noexcept;
 
 /**
  * @brief Whether NVIDIA Nsight Graphics is intercepting the current process.

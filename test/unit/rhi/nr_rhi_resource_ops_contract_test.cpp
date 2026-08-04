@@ -6,39 +6,37 @@ import nr.test;
 namespace
 {
 const nr::test::CaseRegistrar ownershipTransferCase{
-    "rhi upload ownership plans validate same and cross queue handoff",
-    [] {
-        auto transfer = nr::rhi::ops::makeQueueOwnershipTransfer(
-            2u,
-            0u,
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eVertexAttributeInput,
-                .access = vk::AccessFlagBits2::eVertexAttributeRead,
-            });
+    "rhi upload ownership plans validate same and cross queue handoff", [] {
+        auto transfer =
+            nr::rhi::ops::makeQueueOwnershipTransfer(2u, 0u,
+                                                     nr::rhi::ops::QueueAccessScope{
+                                                         .stages = vk::PipelineStageFlagBits2::eTransfer,
+                                                         .access = vk::AccessFlagBits2::eTransferWrite,
+                                                     },
+                                                     nr::rhi::ops::QueueAccessScope{
+                                                         .stages = vk::PipelineStageFlagBits2::eVertexAttributeInput,
+                                                         .access = vk::AccessFlagBits2::eVertexAttributeRead,
+                                                     });
 
         nr::test::require(transfer.valid(), "cross queue transfer should validate");
         nr::test::require(!transfer.hasWait(), "plain transfer should not carry a wait");
 
         auto buffer = nr::rhi::Buffer{};
-        auto releaseBarrier = nr::rhi::ops::makeBufferOwnershipTransferBarrier<
-            nr::rhi::ops::OwnershipBarrierPhase::Release>(buffer, transfer);
-        nr::test::require(
-            releaseBarrier.srcStageMask == vk::PipelineStageFlagBits2::eTransfer &&
-                releaseBarrier.dstStageMask == vk::PipelineStageFlagBits2::eTransfer,
-            "maintenance8 release should use the producer stage in both scopes");
+        auto releaseBarrier =
+            nr::rhi::ops::makeBufferOwnershipTransferBarrier<nr::rhi::ops::OwnershipBarrierPhase::Release>(buffer,
+                                                                                                           transfer);
+        nr::test::require(releaseBarrier.srcStageMask == vk::PipelineStageFlagBits2::eTransfer &&
+                              releaseBarrier.dstStageMask == vk::PipelineStageFlagBits2::eTransfer,
+                          "maintenance8 release should use the producer stage in both scopes");
         nr::test::require(releaseBarrier.srcAccessMask == vk::AccessFlagBits2::eTransferWrite);
         nr::test::require(releaseBarrier.dstAccessMask == vk::AccessFlags2{});
 
-        auto acquireBarrier = nr::rhi::ops::makeBufferOwnershipTransferBarrier<
-            nr::rhi::ops::OwnershipBarrierPhase::Acquire>(buffer, transfer);
-        nr::test::require(
-            acquireBarrier.srcStageMask == vk::PipelineStageFlagBits2::eVertexAttributeInput &&
-                acquireBarrier.dstStageMask == vk::PipelineStageFlagBits2::eVertexAttributeInput,
-            "maintenance8 acquire should use the consumer stage in both scopes");
+        auto acquireBarrier =
+            nr::rhi::ops::makeBufferOwnershipTransferBarrier<nr::rhi::ops::OwnershipBarrierPhase::Acquire>(buffer,
+                                                                                                           transfer);
+        nr::test::require(acquireBarrier.srcStageMask == vk::PipelineStageFlagBits2::eVertexAttributeInput &&
+                              acquireBarrier.dstStageMask == vk::PipelineStageFlagBits2::eVertexAttributeInput,
+                          "maintenance8 acquire should use the consumer stage in both scopes");
         nr::test::require(acquireBarrier.srcAccessMask == vk::AccessFlags2{});
         nr::test::require(acquireBarrier.dstAccessMask == vk::AccessFlagBits2::eVertexAttributeRead);
 
@@ -49,14 +47,16 @@ const nr::test::CaseRegistrar ownershipTransferCase{
         auto sameQueue = nr::rhi::ops::QueueOwnershipTransfer{
             .srcQueueFamilyIndex = 2u,
             .dstQueueFamilyIndex = 2u,
-            .release = nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            .acquire = nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferRead,
-            },
+            .release =
+                nr::rhi::ops::QueueAccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferWrite,
+                },
+            .acquire =
+                nr::rhi::ops::QueueAccessScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferRead,
+                },
         };
         auto sameQueuePlan = nr::rhi::ops::BufferUploadOwnershipPlan{.releaseToDestination = sameQueue};
         nr::test::require(sameQueuePlan.isSameQueueFamily(), "same queue plan should use the same-family path");
@@ -64,72 +64,47 @@ const nr::test::CaseRegistrar ownershipTransferCase{
     }};
 
 const nr::test::CaseRegistrar maintenance9TransferPolicyCase{
-    "rhi maintenance9 transfer policy identifies omittable queue ownership transfers",
-    [] {
+    "rhi maintenance9 transfer policy identifies omittable queue ownership transfers", [] {
         auto policy = nr::rhi::ops::QueueFamilyTransferPolicy{
             .maintenance9 = true,
             .optimalImageTransferToQueueFamilies = std::vector<std::uint32_t>{1u << 2u},
         };
 
-        nr::test::require(
-            policy.canOmitBufferQueueFamilyTransfer(0u, 2u),
-            "maintenance9 should allow buffer ownership transfer omission");
-        nr::test::require(
-            policy.canOmitImageQueueFamilyTransfer(
-                0u,
-                2u,
-                vk::ImageTiling::eLinear,
-                vk::ImageUsageFlagBits::eTransferDst),
-            "maintenance9 should allow linear image ownership transfer omission");
-        nr::test::require(
-            policy.canOmitImageQueueFamilyTransfer(
-                0u,
-                2u,
-                vk::ImageTiling::eOptimal,
-                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled),
-            "maintenance9 should allow eligible optimal sampled image ownership transfer omission");
+        nr::test::require(policy.canOmitBufferQueueFamilyTransfer(0u, 2u),
+                          "maintenance9 should allow buffer ownership transfer omission");
+        nr::test::require(policy.canOmitImageQueueFamilyTransfer(0u, 2u, vk::ImageTiling::eLinear,
+                                                                 vk::ImageUsageFlagBits::eTransferDst),
+                          "maintenance9 should allow linear image ownership transfer omission");
+        nr::test::require(policy.canOmitImageQueueFamilyTransfer(0u, 2u, vk::ImageTiling::eOptimal,
+                                                                 vk::ImageUsageFlagBits::eTransferDst |
+                                                                     vk::ImageUsageFlagBits::eSampled),
+                          "maintenance9 should allow eligible optimal sampled image ownership transfer omission");
 
         auto pathTracingGuidePolicy = nr::rhi::ops::QueueFamilyTransferPolicy{
             .maintenance9 = true,
             .optimalImageTransferToQueueFamilies = std::vector<std::uint32_t>{0u, 0u, 1u << 0u},
         };
-        auto const pathTracingGuideUsage = vk::ImageUsageFlagBits::eStorage |
-                                           vk::ImageUsageFlagBits::eSampled |
-                                           vk::ImageUsageFlagBits::eTransferDst |
-                                           vk::ImageUsageFlagBits::eTransferSrc;
-        nr::test::require(
-            pathTracingGuidePolicy.canOmitImageQueueFamilyTransfer(
-                2u,
-                0u,
-                vk::ImageTiling::eOptimal,
-                pathTracingGuideUsage),
-            "maintenance9 should allow the retained PathTracing guide transfer from compute to graphics");
-        nr::test::require(
-            !policy.canOmitImageQueueFamilyTransfer(
-                0u,
-                2u,
-                vk::ImageTiling::eOptimal,
-                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment),
-            "attachment images should retain explicit ownership transfer");
-        nr::test::require(
-            !policy.canOmitImageQueueFamilyTransfer(
-                0u,
-                1u,
-                vk::ImageTiling::eOptimal,
-                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled),
-            "optimal image omission should require the destination queue-family bit");
+        auto const pathTracingGuideUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                                           vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc;
+        nr::test::require(pathTracingGuidePolicy.canOmitImageQueueFamilyTransfer(2u, 0u, vk::ImageTiling::eOptimal,
+                                                                                 pathTracingGuideUsage),
+                          "maintenance9 should allow the retained PathTracing guide transfer from compute to graphics");
+        nr::test::require(!policy.canOmitImageQueueFamilyTransfer(0u, 2u, vk::ImageTiling::eOptimal,
+                                                                  vk::ImageUsageFlagBits::eTransferDst |
+                                                                      vk::ImageUsageFlagBits::eColorAttachment),
+                          "attachment images should retain explicit ownership transfer");
+        nr::test::require(!policy.canOmitImageQueueFamilyTransfer(0u, 1u, vk::ImageTiling::eOptimal,
+                                                                  vk::ImageUsageFlagBits::eTransferDst |
+                                                                      vk::ImageUsageFlagBits::eSampled),
+                          "optimal image omission should require the destination queue-family bit");
 
         auto disabledPolicy = nr::rhi::ops::QueueFamilyTransferPolicy{};
-        nr::test::require(
-            !disabledPolicy.canOmitBufferQueueFamilyTransfer(0u, 2u),
-            "disabled maintenance9 policy should not omit buffer ownership transfer");
-        nr::test::require(
-            !disabledPolicy.canOmitImageQueueFamilyTransfer(
-                0u,
-                2u,
-                vk::ImageTiling::eOptimal,
-                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled),
-            "unknown optimal image policy should not omit ownership transfer");
+        nr::test::require(!disabledPolicy.canOmitBufferQueueFamilyTransfer(0u, 2u),
+                          "disabled maintenance9 policy should not omit buffer ownership transfer");
+        nr::test::require(!disabledPolicy.canOmitImageQueueFamilyTransfer(0u, 2u, vk::ImageTiling::eOptimal,
+                                                                          vk::ImageUsageFlagBits::eTransferDst |
+                                                                              vk::ImageUsageFlagBits::eSampled),
+                          "unknown optimal image policy should not omit ownership transfer");
 
         auto image = nr::rhi::Image{};
         auto ticket = nr::rhi::ops::ImageUploadTicket{
@@ -141,8 +116,7 @@ const nr::test::CaseRegistrar maintenance9TransferPolicyCase{
     }};
 
 const nr::test::CaseRegistrar accelerationStructureBarrierCase{
-    "rhi acceleration-structure barriers carry precise sync scopes",
-    [] {
+    "rhi acceleration-structure barriers carry precise sync scopes", [] {
         auto buildToTrace = nr::rhi::ops::makeAccelerationStructureBuildToTraceReadBarrier();
         nr::test::require(buildToTrace.srcStageMask == vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR);
         nr::test::require(buildToTrace.srcAccessMask == vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
@@ -156,8 +130,7 @@ const nr::test::CaseRegistrar accelerationStructureBarrierCase{
     }};
 
 const nr::test::CaseRegistrar barrierBatchCase{
-    "rhi barrier batch owns dependency-info backing arrays",
-    [] {
+    "rhi barrier batch owns dependency-info backing arrays", [] {
         auto batch = nr::rhi::ops::BarrierBatch{};
         nr::test::require(batch.empty(), "new barrier batch should be empty");
         batch.add(vk::MemoryBarrier2{
@@ -184,31 +157,27 @@ const nr::test::CaseRegistrar barrierBatchCase{
         nr::test::requireEqual(packet.bufferBarriers.size(), std::size_t{1});
         nr::test::requireEqual(packet.imageBarriers.size(), std::size_t{0});
         nr::test::requireEqual(packet.dependencyInfo().memoryBarrierCount, 1u);
-        nr::test::require(packet.dependencyInfo().pMemoryBarriers == packet.memoryBarriers.data(), "dependency info should point at packet-owned memory");
-        nr::test::require(
-            (packet.dependencyInfo().dependencyFlags &
-             vk::DependencyFlagBits::eQueueFamilyOwnershipTransferUseAllStagesKHR) != vk::DependencyFlags{},
-            "dependency info should preserve maintenance8 QFOT stage semantics");
+        nr::test::require(packet.dependencyInfo().pMemoryBarriers == packet.memoryBarriers.data(),
+                          "dependency info should point at packet-owned memory");
+        nr::test::require((packet.dependencyInfo().dependencyFlags &
+                           vk::DependencyFlagBits::eQueueFamilyOwnershipTransferUseAllStagesKHR) !=
+                              vk::DependencyFlags{},
+                          "dependency info should preserve maintenance8 QFOT stage semantics");
 
         batch.clear();
         nr::test::require(batch.empty(), "clear should empty all barrier arrays");
-        nr::test::require(
-            batch.buildDependencyInfo().dependencyInfo().dependencyFlags == vk::DependencyFlags{},
-            "clear should reset dependency flags");
+        nr::test::require(batch.buildDependencyInfo().dependencyInfo().dependencyFlags == vk::DependencyFlags{},
+                          "clear should reset dependency flags");
     }};
 
 const nr::test::CaseRegistrar commandBatchFrameBoundaryCase{
-    "rhi command batch owns frame-boundary submit metadata",
-    [] {
+    "rhi command batch owns frame-boundary submit metadata", [] {
         auto batch = nr::rhi::CommandBatch{};
         auto flags = vk::FrameBoundaryFlagsEXT{};
         flags |= vk::FrameBoundaryFlagBitsEXT::eFrameEnd;
 
         auto images = std::array{vk::Image{}};
-        batch.setFrameBoundary(
-            42u,
-            flags,
-            std::span<const vk::Image>{images.data(), images.size()});
+        batch.setFrameBoundary(42u, flags, std::span<const vk::Image>{images.data(), images.size()});
 
         auto frameBoundary = batch.frameBoundarySubmitInfo();
         nr::test::require(batch.hasFrameBoundary(), "batch should retain frame-boundary metadata");
@@ -216,12 +185,11 @@ const nr::test::CaseRegistrar commandBatchFrameBoundaryCase{
         auto submitInfo = batch.submitInfo2View(std::addressof(*frameBoundary));
         nr::test::require(submitInfo.pNext != nullptr, "submit info should expose frame-boundary pNext");
 
-        auto const* boundary = static_cast<const vk::FrameBoundaryEXT*>(submitInfo.pNext);
+        auto const *boundary = static_cast<const vk::FrameBoundaryEXT *>(submitInfo.pNext);
         nr::test::require(boundary->sType == vk::StructureType::eFrameBoundaryEXT);
         nr::test::requireEqual(boundary->frameID, std::uint64_t{42});
-        nr::test::require(
-            (boundary->flags & vk::FrameBoundaryFlagBitsEXT::eFrameEnd) != vk::FrameBoundaryFlagsEXT{},
-            "final submit should carry eFrameEnd");
+        nr::test::require((boundary->flags & vk::FrameBoundaryFlagBitsEXT::eFrameEnd) != vk::FrameBoundaryFlagsEXT{},
+                          "final submit should carry eFrameEnd");
         nr::test::requireEqual(boundary->imageCount, 1u);
         nr::test::require(boundary->pImages != nullptr, "frame-boundary images should point to batch-owned storage");
 
@@ -234,8 +202,7 @@ const nr::test::CaseRegistrar commandBatchFrameBoundaryCase{
     }};
 
 const nr::test::CaseRegistrar readbackSyncPlanCase{
-    "rhi readback sync plan requires producer and host-visible scopes",
-    [] {
+    "rhi readback sync plan requires producer and host-visible scopes", [] {
         auto plan = nr::rhi::ops::ReadbackSyncPlan{};
         nr::test::require(!plan.valid(), "empty readback plan should be invalid");
         plan.preCopy = nr::rhi::ops::ReadbackSyncScope{
@@ -250,8 +217,7 @@ const nr::test::CaseRegistrar readbackSyncPlanCase{
     }};
 
 const nr::test::CaseRegistrar linearImageUploadChunkCase{
-    "rhi linear image uploads split into ring-sized row chunks",
-    [] {
+    "rhi linear image uploads split into ring-sized row chunks", [] {
         auto region = vk::BufferImageCopy{};
         region.imageSubresource = vk::ImageSubresourceLayers{
             vk::ImageAspectFlagBits::eColor,
@@ -281,8 +247,7 @@ const nr::test::CaseRegistrar linearImageUploadChunkCase{
     }};
 
 const nr::test::CaseRegistrar paddedLinearImageUploadChunkCase{
-    "rhi linear image upload chunks preserve padded slice offsets",
-    [] {
+    "rhi linear image upload chunks preserve padded slice offsets", [] {
         auto region = vk::BufferImageCopy{};
         region.bufferRowLength = 4u;
         region.bufferImageHeight = 4u;
@@ -315,8 +280,7 @@ const nr::test::CaseRegistrar paddedLinearImageUploadChunkCase{
     }};
 
 const nr::test::CaseRegistrar eightKEnvironmentUploadChunkCase{
-    "rhi 8K RGBA16F environment upload fits the default ring in two row chunks",
-    [] {
+    "rhi 8K RGBA16F environment upload fits the default ring in two row chunks", [] {
         auto region = vk::BufferImageCopy{};
         region.imageSubresource = vk::ImageSubresourceLayers{
             vk::ImageAspectFlagBits::eColor,
@@ -327,10 +291,8 @@ const nr::test::CaseRegistrar eightKEnvironmentUploadChunkCase{
         region.imageExtent = vk::Extent3D{8192u, 4096u, 1u};
 
         constexpr auto defaultRingSize = vk::DeviceSize{128u * 1024u * 1024u};
-        auto const chunks = nr::rhi::ops::planLinearImageUploadChunks(
-            region,
-            4u * sizeof(std::uint16_t),
-            defaultRingSize);
+        auto const chunks =
+            nr::rhi::ops::planLinearImageUploadChunks(region, 4u * sizeof(std::uint16_t), defaultRingSize);
 
         nr::test::requireEqual(chunks.size(), std::size_t{2u});
         nr::test::requireEqual(chunks[0].sourceOffset, vk::DeviceSize{0u});

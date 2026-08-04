@@ -11,8 +11,7 @@ namespace
 }
 
 const nr::test::CaseRegistrar scRgbPriorityCase{
-    "rhi swapchain format selection prefers R16 scRGB",
-    [] {
+    "rhi swapchain format selection prefers R16 scRGB", [] {
         auto formats = std::array{
             vk::SurfaceFormatKHR{
                 vk::Format::eB8G8R8A8Srgb,
@@ -39,8 +38,7 @@ const nr::test::CaseRegistrar scRgbPriorityCase{
     }};
 
 const nr::test::CaseRegistrar scRgbFallbackCase{
-    "rhi swapchain format selection uses scRGB when HDR10 is absent",
-    [] {
+    "rhi swapchain format selection uses scRGB when HDR10 is absent", [] {
         auto formats = std::array{
             vk::SurfaceFormatKHR{
                 vk::Format::eB8G8R8A8Srgb,
@@ -59,8 +57,7 @@ const nr::test::CaseRegistrar scRgbFallbackCase{
     }};
 
 const nr::test::CaseRegistrar sdrFallbackCase{
-    "rhi swapchain format selection falls back to SDR BGRA",
-    [] {
+    "rhi swapchain format selection falls back to SDR BGRA", [] {
         auto formats = std::array{
             vk::SurfaceFormatKHR{
                 vk::Format::eR8G8B8A8Unorm,

@@ -2,6 +2,7 @@ import std;
 import dependency.vulkan;
 import nr.rhi;
 import nr.test;
+import nr.utils;
 
 namespace
 {
@@ -22,16 +23,24 @@ namespace
 }
 
 const nr::test::CaseRegistrar alignCase{
-    "rhi rt alignUp handles device-size and uint32 inputs",
-    [] {
+    "rhi rt alignUp handles device-size and uint32 inputs", [] {
         nr::test::requireEqual(nr::rhi::alignUp(vk::DeviceSize{0}, vk::DeviceSize{16}), vk::DeviceSize{0});
         nr::test::requireEqual(nr::rhi::alignUp(vk::DeviceSize{17}, vk::DeviceSize{16}), vk::DeviceSize{32});
         nr::test::requireEqual(nr::rhi::alignUp(std::uint32_t{33}, std::uint32_t{32}), std::uint32_t{64});
     }};
 
+const nr::test::CaseRegistrar deferredHostWorkerPolicyCase{
+    "rhi rt deferred host creation rejects incompatible early-return policy", [] {
+        auto defaultDesc = nr::rhi::RayTracingPipelineDesc{};
+        nr::test::require(!nr::rhi::validateRayTracingPipelineDesc(defaultDesc).has_value());
+
+        auto earlyReturnDesc = nr::rhi::RayTracingPipelineDesc{};
+        earlyReturnDesc.flags = vk::PipelineCreateFlagBits::eEarlyReturnOnFailure;
+        nr::test::require(nr::rhi::validateRayTracingPipelineDesc(earlyReturnDesc).has_value());
+    }};
+
 const nr::test::CaseRegistrar sbtPlanCase{
-    "rhi rt SBT layout plan aligns sections and record payloads",
-    [] {
+    "rhi rt SBT layout plan aligns sections and record payloads", [] {
         auto payloadA = std::array<std::uint8_t, 12>{};
         auto payloadB = std::array<std::uint8_t, 20>{};
         auto missRecords = std::array{
@@ -63,8 +72,7 @@ const nr::test::CaseRegistrar sbtPlanCase{
     }};
 
 const nr::test::CaseRegistrar sbtRepeatedGroupRecordsCase{
-    "rhi rt SBT explicit records preserve repeated shader group indices",
-    [] {
+    "rhi rt SBT explicit records preserve repeated shader group indices", [] {
         auto hitRecords = std::array{
             nr::rhi::ShaderBindingTableRecordDesc{.groupIndex = 2},
             nr::rhi::ShaderBindingTableRecordDesc{.groupIndex = 2},

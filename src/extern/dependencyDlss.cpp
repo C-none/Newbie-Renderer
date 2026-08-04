@@ -21,7 +21,8 @@ namespace
 {
     return Status{
         .code = StatusCode::SdkNotCompiled,
-        .message = "The DLSS bridge is not available in this process. Enable NR_ENABLE_DLSS_NGX_SDK and deploy nr_dlss_bridge.dll.",
+        .message = "The DLSS bridge is not available in this process. Enable NR_ENABLE_DLSS_NGX_SDK and deploy "
+                   "nr_dlss_bridge.dll.",
     };
 }
 
@@ -48,24 +49,20 @@ struct BridgeRuntime
     }
 }
 
-[[nodiscard]] Status fromBridgeStatus(uint32_t code, const NrDlssBridgeStatus& native)
+[[nodiscard]] Status fromBridgeStatus(uint32_t code, const NrDlssBridgeStatus &native)
 {
     return Status{
         .code = fromBridgeCode(code),
         .nativeCode = native.nativeCode,
-        .message = native.message[0] != '\0'
-                       ? std::string{native.message}
-                       : std::format("The DLSS bridge failed with status code {}.", code),
+        .message = native.message[0] != '\0' ? std::string{native.message}
+                                             : std::format("The DLSS bridge failed with status code {}.", code),
     };
 }
 
 [[nodiscard]] std::wstring bridgeAbsolutePath()
 {
     auto executablePath = std::array<wchar_t, 32768u>{};
-    auto const length = GetModuleFileNameW(
-        nullptr,
-        executablePath.data(),
-        static_cast<DWORD>(executablePath.size()));
+    auto const length = GetModuleFileNameW(nullptr, executablePath.data(), static_cast<DWORD>(executablePath.size()));
     if (length == 0u || length >= static_cast<DWORD>(executablePath.size()))
         return {};
     auto const view = std::wstring_view{executablePath.data(), length};
@@ -92,27 +89,22 @@ struct BridgeRuntime
         return result;
     }
 
-    result.module = LoadLibraryExW(
-        path.c_str(),
-        nullptr,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    result.module =
+        LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (result.module == nullptr)
     {
         auto const error = GetLastError();
         result.status = Status{
             .code = StatusCode::SdkNotCompiled,
             .nativeCode = error,
-            .message = std::format(
-                "Could not load the deployed DLSS bridge (Windows error {}).",
-                error),
+            .message = std::format("Could not load the deployed DLSS bridge (Windows error {}).", error),
         };
         return result;
     }
 
     auto const getApiAddress = GetProcAddress(result.module, "nrDlssBridgeGetApi");
-    auto const getApi = getApiAddress != nullptr
-                            ? std::bit_cast<decltype(&nrDlssBridgeGetApi)>(getApiAddress)
-                            : nullptr;
+    auto const getApi =
+        getApiAddress != nullptr ? std::bit_cast<decltype(&nrDlssBridgeGetApi)>(getApiAddress) : nullptr;
     if (getApi == nullptr)
     {
         result.status = Status{
@@ -126,20 +118,15 @@ struct BridgeRuntime
     }
 
     auto const code = getApi(NR_DLSS_BRIDGE_ABI_VERSION, &result.api);
-    auto const functionsPresent = result.api.getInstanceExtensions != nullptr &&
-                                  result.api.getDeviceExtensions != nullptr &&
-                                  result.api.createContext != nullptr &&
-                                  result.api.destroyContext != nullptr &&
-                                  result.api.contextAvailable != nullptr &&
-                                  result.api.getOptimalSettings != nullptr &&
-                                  result.api.createRayReconstruction != nullptr &&
-                                  result.api.destroyFeature != nullptr &&
-                                  result.api.evaluateRayReconstruction != nullptr;
-    if (code != NR_DLSS_BRIDGE_STATUS_SUCCESS ||
-        result.api.structSize < sizeof(NrDlssBridgeApi) ||
+    auto const functionsPresent =
+        result.api.getInstanceExtensions != nullptr && result.api.getDeviceExtensions != nullptr &&
+        result.api.createContext != nullptr && result.api.destroyContext != nullptr &&
+        result.api.contextAvailable != nullptr && result.api.getOptimalSettings != nullptr &&
+        result.api.createRayReconstruction != nullptr && result.api.destroyFeature != nullptr &&
+        result.api.evaluateRayReconstruction != nullptr;
+    if (code != NR_DLSS_BRIDGE_STATUS_SUCCESS || result.api.structSize < sizeof(NrDlssBridgeApi) ||
         result.api.abiVersion != NR_DLSS_BRIDGE_ABI_VERSION ||
-        result.api.ngxSdkVersion != NR_DLSS_BRIDGE_NGX_SDK_VERSION ||
-        !functionsPresent)
+        result.api.ngxSdkVersion != NR_DLSS_BRIDGE_NGX_SDK_VERSION || !functionsPresent)
     {
         result.status = Status{
             .code = StatusCode::ApiFailure,
@@ -157,7 +144,7 @@ struct BridgeRuntime
     return result;
 }
 
-[[nodiscard]] BridgeRuntime& bridgeRuntime()
+[[nodiscard]] BridgeRuntime &bridgeRuntime()
 {
     static auto runtime = initializeBridge();
     return runtime;
@@ -180,7 +167,7 @@ struct BridgeRuntime
     return static_cast<NrDlssBridgePreset>(preset);
 }
 
-[[nodiscard]] uint32_t toBridgeFlags(const RayReconstructionCreateFlags& flags) noexcept
+[[nodiscard]] uint32_t toBridgeFlags(const RayReconstructionCreateFlags &flags) noexcept
 {
     auto result = uint32_t{0u};
     if (flags.hdr)
@@ -198,19 +185,17 @@ struct BridgeRuntime
     return result;
 }
 
-[[nodiscard]] NrDlssBridgeVulkanImage toBridge(const VulkanImage& image) noexcept
+[[nodiscard]] NrDlssBridgeVulkanImage toBridge(const VulkanImage &image) noexcept
 {
     return NrDlssBridgeVulkanImage{
         .structSize = sizeof(NrDlssBridgeVulkanImage),
         .present = 1u,
         .image = static_cast<VkImage>(image.image),
         .view = static_cast<VkImageView>(image.view),
-        .subresourceRange = VkImageSubresourceRange{
-            static_cast<VkImageAspectFlags>(image.subresourceRange.aspectMask),
-            image.subresourceRange.baseMipLevel,
-            image.subresourceRange.levelCount,
-            image.subresourceRange.baseArrayLayer,
-            image.subresourceRange.layerCount},
+        .subresourceRange =
+            VkImageSubresourceRange{static_cast<VkImageAspectFlags>(image.subresourceRange.aspectMask),
+                                    image.subresourceRange.baseMipLevel, image.subresourceRange.levelCount,
+                                    image.subresourceRange.baseArrayLayer, image.subresourceRange.layerCount},
         .format = static_cast<VkFormat>(image.format),
         .extent = NrDlssBridgeDimensions{image.extent.width, image.extent.height},
         .readWrite = image.readWrite ? 1u : 0u,
@@ -224,7 +209,7 @@ struct Context::Impl
     Status status = bridgeNotAvailableStatus();
     bool available = false;
 #if NR_DLSS_BRIDGE_ENABLED
-    NrDlssBridgeContext* context = nullptr;
+    NrDlssBridgeContext *context = nullptr;
 
     ~Impl()
     {
@@ -240,7 +225,7 @@ struct RayReconstructionFeature::Impl
 {
     Status status = bridgeNotAvailableStatus();
 #if NR_DLSS_BRIDGE_ENABLED
-    NrDlssBridgeFeature* feature = nullptr;
+    NrDlssBridgeFeature *feature = nullptr;
 
     ~Impl()
     {
@@ -252,11 +237,10 @@ struct RayReconstructionFeature::Impl
 #endif
 };
 
-Context::Context(const VulkanContextDesc& desc)
-    : impl_(std::make_unique<Impl>())
+Context::Context(const VulkanContextDesc &desc) : impl_(std::make_unique<Impl>())
 {
 #if NR_DLSS_BRIDGE_ENABLED
-    auto& runtime = bridgeRuntime();
+    auto &runtime = bridgeRuntime();
     if (!runtime.status.success())
     {
         impl_->status = runtime.status;
@@ -290,9 +274,7 @@ Context::Context(const VulkanContextDesc& desc)
     }
 
     auto const pathUtf8 = applicationDataPath.u8string();
-    auto const pathBytes = std::string{
-        reinterpret_cast<const char*>(pathUtf8.data()),
-        pathUtf8.size()};
+    auto const pathBytes = std::string{reinterpret_cast<const char *>(pathUtf8.data()), pathUtf8.size()};
     auto const nativeDesc = NrDlssBridgeContextDesc{
         .structSize = sizeof(NrDlssBridgeContextDesc),
         .instance = static_cast<VkInstance>(desc.instance),
@@ -311,15 +293,15 @@ Context::Context(const VulkanContextDesc& desc)
 
 Context::~Context() = default;
 
-Context::Context(Context&&) noexcept = default;
-Context& Context::operator=(Context&&) noexcept = default;
+Context::Context(Context &&) noexcept = default;
+Context &Context::operator=(Context &&) noexcept = default;
 
 bool Context::valid() const noexcept
 {
     return impl_ && impl_->status.success() && impl_->available;
 }
 
-const Status& Context::status() const noexcept
+const Status &Context::status() const noexcept
 {
     static const auto movedFrom = Status{
         .code = StatusCode::Unavailable,
@@ -339,21 +321,20 @@ OptimalSettings Context::optimalSettings(Dimensions targetSize, Quality quality)
 #if NR_DLSS_BRIDGE_ENABLED
     if (!valid() || !targetSize.valid() || quality == Quality::Count)
     {
-        result.status = !valid() ? status() : Status{
-            .code = StatusCode::InvalidArgument,
-            .message = "DLSS optimal-settings query requires valid target dimensions and quality.",
-        };
+        result.status =
+            !valid() ? status()
+                     : Status{
+                           .code = StatusCode::InvalidArgument,
+                           .message = "DLSS optimal-settings query requires valid target dimensions and quality.",
+                       };
         return result;
     }
     auto native = NrDlssBridgeOptimalSettings{};
     native.structSize = sizeof(NrDlssBridgeOptimalSettings);
     auto nativeStatus = emptyBridgeStatus();
     auto const code = bridgeRuntime().api.getOptimalSettings(
-        impl_->context,
-        NrDlssBridgeDimensions{targetSize.width, targetSize.height},
-        static_cast<uint32_t>(toBridge(quality)),
-        &native,
-        &nativeStatus);
+        impl_->context, NrDlssBridgeDimensions{targetSize.width, targetSize.height},
+        static_cast<uint32_t>(toBridge(quality)), &native, &nativeStatus);
     result.status = code == NR_DLSS_BRIDGE_STATUS_SUCCESS ? Status{} : fromBridgeStatus(code, nativeStatus);
     if (result.status.success())
     {
@@ -369,19 +350,20 @@ OptimalSettings Context::optimalSettings(Dimensions targetSize, Quality quality)
     return result;
 }
 
-std::unique_ptr<RayReconstructionFeature> Context::createRayReconstruction(
-    vk::CommandBuffer commandBuffer,
-    const RayReconstructionCreateDesc& desc)
+std::unique_ptr<RayReconstructionFeature> Context::createRayReconstruction(vk::CommandBuffer commandBuffer,
+                                                                           const RayReconstructionCreateDesc &desc)
 {
     auto featureImpl = std::make_unique<RayReconstructionFeature::Impl>();
 #if NR_DLSS_BRIDGE_ENABLED
     if (!valid() || !commandBuffer || !desc.renderSize.valid() || !desc.targetSize.valid() ||
         desc.quality == Quality::Count)
     {
-        featureImpl->status = !valid() ? status() : Status{
-            .code = StatusCode::InvalidArgument,
-            .message = "DLSS Ray Reconstruction creation requires a valid context, command buffer, dimensions, and quality.",
-        };
+        featureImpl->status = !valid() ? status()
+                                       : Status{
+                                             .code = StatusCode::InvalidArgument,
+                                             .message = "DLSS Ray Reconstruction creation requires a valid context, "
+                                                        "command buffer, dimensions, and quality.",
+                                         };
         return std::unique_ptr<RayReconstructionFeature>(new RayReconstructionFeature(std::move(featureImpl)));
     }
 
@@ -400,11 +382,7 @@ std::unique_ptr<RayReconstructionFeature> Context::createRayReconstruction(
     });
     auto nativeStatus = emptyBridgeStatus();
     auto const code = bridgeRuntime().api.createRayReconstruction(
-        impl_->context,
-        static_cast<VkCommandBuffer>(commandBuffer),
-        &native,
-        &featureImpl->feature,
-        &nativeStatus);
+        impl_->context, static_cast<VkCommandBuffer>(commandBuffer), &native, &featureImpl->feature, &nativeStatus);
     featureImpl->status = code == NR_DLSS_BRIDGE_STATUS_SUCCESS ? Status{} : fromBridgeStatus(code, nativeStatus);
 #else
     static_cast<void>(commandBuffer);
@@ -413,15 +391,14 @@ std::unique_ptr<RayReconstructionFeature> Context::createRayReconstruction(
     return std::unique_ptr<RayReconstructionFeature>(new RayReconstructionFeature(std::move(featureImpl)));
 }
 
-RayReconstructionFeature::RayReconstructionFeature(std::unique_ptr<Impl> impl) noexcept
-    : impl_(std::move(impl))
+RayReconstructionFeature::RayReconstructionFeature(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl))
 {
 }
 
 RayReconstructionFeature::~RayReconstructionFeature() = default;
 
-RayReconstructionFeature::RayReconstructionFeature(RayReconstructionFeature&&) noexcept = default;
-RayReconstructionFeature& RayReconstructionFeature::operator=(RayReconstructionFeature&&) noexcept = default;
+RayReconstructionFeature::RayReconstructionFeature(RayReconstructionFeature &&) noexcept = default;
+RayReconstructionFeature &RayReconstructionFeature::operator=(RayReconstructionFeature &&) noexcept = default;
 
 bool RayReconstructionFeature::valid() const noexcept
 {
@@ -432,7 +409,7 @@ bool RayReconstructionFeature::valid() const noexcept
 #endif
 }
 
-const Status& RayReconstructionFeature::status() const noexcept
+const Status &RayReconstructionFeature::status() const noexcept
 {
     static const auto movedFrom = Status{
         .code = StatusCode::Unavailable,
@@ -441,15 +418,16 @@ const Status& RayReconstructionFeature::status() const noexcept
     return impl_ ? impl_->status : movedFrom;
 }
 
-Status RayReconstructionFeature::evaluate(vk::CommandBuffer commandBuffer, const RayReconstructionEvalDesc& desc)
+Status RayReconstructionFeature::evaluate(vk::CommandBuffer commandBuffer, const RayReconstructionEvalDesc &desc)
 {
 #if NR_DLSS_BRIDGE_ENABLED
     if (!valid() || !commandBuffer)
     {
-        return !valid() ? status() : Status{
-            .code = StatusCode::InvalidArgument,
-            .message = "DLSS Ray Reconstruction evaluation requires a valid command buffer.",
-        };
+        return !valid() ? status()
+                        : Status{
+                              .code = StatusCode::InvalidArgument,
+                              .message = "DLSS Ray Reconstruction evaluation requires a valid command buffer.",
+                          };
     }
 
     auto native = NrDlssBridgeRayReconstructionEvalDesc{};
@@ -485,10 +463,7 @@ Status RayReconstructionFeature::evaluate(vk::CommandBuffer commandBuffer, const
 
     auto nativeStatus = emptyBridgeStatus();
     auto const code = bridgeRuntime().api.evaluateRayReconstruction(
-        impl_->feature,
-        static_cast<VkCommandBuffer>(commandBuffer),
-        &native,
-        &nativeStatus);
+        impl_->feature, static_cast<VkCommandBuffer>(commandBuffer), &native, &nativeStatus);
     return code == NR_DLSS_BRIDGE_STATUS_SUCCESS ? Status{} : fromBridgeStatus(code, nativeStatus);
 #else
     static_cast<void>(commandBuffer);
@@ -507,8 +482,7 @@ bool sdkCompiled() noexcept
 }
 
 #if NR_DLSS_BRIDGE_ENABLED
-template<typename Query>
-[[nodiscard]] ExtensionQueryResult queryExtensionNames(Query&& query)
+template <typename Query> [[nodiscard]] ExtensionQueryResult queryExtensionNames(Query &&query)
 {
     auto count = uint32_t{0u};
     auto status = emptyBridgeStatus();
@@ -532,11 +506,8 @@ template<typename Query>
     }
 
     return ExtensionQueryResult{
-        .names = nativeNames |
-                 std::views::take(capacity) |
-                 std::views::transform([](const NrDlssBridgeExtensionName& name) {
-                     return std::string{name.value};
-                 }) |
+        .names = nativeNames | std::views::take(capacity) |
+                 std::views::transform([](const NrDlssBridgeExtensionName &name) { return std::string{name.value}; }) |
                  std::ranges::to<std::vector>(),
     };
 }
@@ -545,12 +516,12 @@ template<typename Query>
 ExtensionQueryResult rayReconstructionInstanceExtensions()
 {
 #if NR_DLSS_BRIDGE_ENABLED
-    auto& runtime = bridgeRuntime();
+    auto &runtime = bridgeRuntime();
     if (!runtime.status.success())
     {
         return ExtensionQueryResult{.status = bridgeNotAvailableStatus()};
     }
-    return queryExtensionNames([&](uint32_t* count, NrDlssBridgeExtensionName* names, NrDlssBridgeStatus* status) {
+    return queryExtensionNames([&](uint32_t *count, NrDlssBridgeExtensionName *names, NrDlssBridgeStatus *status) {
         return runtime.api.getInstanceExtensions(count, names, status);
     });
 #else
@@ -558,12 +529,10 @@ ExtensionQueryResult rayReconstructionInstanceExtensions()
 #endif
 }
 
-ExtensionQueryResult rayReconstructionDeviceExtensions(
-    vk::Instance instance,
-    vk::PhysicalDevice physicalDevice)
+ExtensionQueryResult rayReconstructionDeviceExtensions(vk::Instance instance, vk::PhysicalDevice physicalDevice)
 {
 #if NR_DLSS_BRIDGE_ENABLED
-    auto& runtime = bridgeRuntime();
+    auto &runtime = bridgeRuntime();
     if (!runtime.status.success())
     {
         return ExtensionQueryResult{.status = bridgeNotAvailableStatus()};
@@ -571,19 +540,17 @@ ExtensionQueryResult rayReconstructionDeviceExtensions(
     if (!instance || !physicalDevice)
     {
         return ExtensionQueryResult{
-            .status = Status{
-                .code = StatusCode::InvalidArgument,
-                .message = "DLSS device-extension query requires valid Vulkan instance and physical-device handles.",
-            },
+            .status =
+                Status{
+                    .code = StatusCode::InvalidArgument,
+                    .message =
+                        "DLSS device-extension query requires valid Vulkan instance and physical-device handles.",
+                },
         };
     }
-    return queryExtensionNames([&](uint32_t* count, NrDlssBridgeExtensionName* names, NrDlssBridgeStatus* status) {
-        return runtime.api.getDeviceExtensions(
-            static_cast<VkInstance>(instance),
-            static_cast<VkPhysicalDevice>(physicalDevice),
-            count,
-            names,
-            status);
+    return queryExtensionNames([&](uint32_t *count, NrDlssBridgeExtensionName *names, NrDlssBridgeStatus *status) {
+        return runtime.api.getDeviceExtensions(static_cast<VkInstance>(instance),
+                                               static_cast<VkPhysicalDevice>(physicalDevice), count, names, status);
     });
 #else
     static_cast<void>(instance);
@@ -595,11 +562,8 @@ ExtensionQueryResult rayReconstructionDeviceExtensions(
 std::string_view qualityName(Quality quality) noexcept
 {
     constexpr auto names = std::array{
-        std::string_view{"Performance"},
-        std::string_view{"Balanced"},
-        std::string_view{"Quality"},
-        std::string_view{"Ultra Performance"},
-        std::string_view{"DLAA"},
+        std::string_view{"Performance"},       std::string_view{"Balanced"}, std::string_view{"Quality"},
+        std::string_view{"Ultra Performance"}, std::string_view{"DLAA"},
     };
     auto const index = static_cast<std::size_t>(quality);
     return index < names.size() ? names[index] : std::string_view{"Invalid"};
@@ -619,20 +583,70 @@ std::string_view presetName(Preset preset) noexcept
 std::string_view resourceSlotName(RayReconstructionResourceSlot slot) noexcept
 {
     constexpr auto names = std::array{
-        "diffuseAlbedo", "specularAlbedo", "normals", "roughness", "color", "alpha", "output", "outputAlpha",
-        "depth", "motionVectors", "transparencyMask", "exposureTexture", "biasCurrentColorMask", "reflectedAlbedo",
-        "colorBeforeParticles", "colorAfterParticles", "colorBeforeTransparency", "colorAfterTransparency", "colorBeforeFog",
-        "colorAfterFog", "screenSpaceSubsurfaceScatteringGuide", "colorBeforeScreenSpaceSubsurfaceScattering",
-        "colorAfterScreenSpaceSubsurfaceScattering", "screenSpaceRefractionGuide", "colorBeforeScreenSpaceRefraction",
-        "colorAfterScreenSpaceRefraction", "depthOfFieldGuide", "colorBeforeDepthOfField", "colorAfterDepthOfField",
-        "diffuseHitDistance", "specularHitDistance", "diffuseRayDirection", "specularRayDirection",
-        "diffuseRayDirectionHitDistance", "specularRayDirectionHitDistance", "gBufferAlbedo", "gBufferRoughness",
-        "gBufferMetallic", "gBufferSpecular", "gBufferSubsurface", "gBufferNormals", "gBufferShadingModelId",
-        "gBufferMaterialId", "gBufferSpecularAlbedo", "gBufferIndirectAlbedo", "gBufferSpecularMotionVectors",
-        "gBufferDisocclusionMask", "gBufferEmissive", "gBufferResponsivityMask", "gBufferReserved14", "gBufferReserved15",
-        "gBufferReserved16", "motionVectors3D", "particleMask", "animatedTextureMask", "depthHighResolution",
-        "positionViewSpace", "rayTracingHitDistance", "reflectionMotionVectors", "transparencyLayer",
-        "transparencyLayerOpacity", "transparencyLayerMotionVectors", "disocclusionMask", "responsivityMask",
+        "diffuseAlbedo",
+        "specularAlbedo",
+        "normals",
+        "roughness",
+        "color",
+        "alpha",
+        "output",
+        "outputAlpha",
+        "depth",
+        "motionVectors",
+        "transparencyMask",
+        "exposureTexture",
+        "biasCurrentColorMask",
+        "reflectedAlbedo",
+        "colorBeforeParticles",
+        "colorAfterParticles",
+        "colorBeforeTransparency",
+        "colorAfterTransparency",
+        "colorBeforeFog",
+        "colorAfterFog",
+        "screenSpaceSubsurfaceScatteringGuide",
+        "colorBeforeScreenSpaceSubsurfaceScattering",
+        "colorAfterScreenSpaceSubsurfaceScattering",
+        "screenSpaceRefractionGuide",
+        "colorBeforeScreenSpaceRefraction",
+        "colorAfterScreenSpaceRefraction",
+        "depthOfFieldGuide",
+        "colorBeforeDepthOfField",
+        "colorAfterDepthOfField",
+        "diffuseHitDistance",
+        "specularHitDistance",
+        "diffuseRayDirection",
+        "specularRayDirection",
+        "diffuseRayDirectionHitDistance",
+        "specularRayDirectionHitDistance",
+        "gBufferAlbedo",
+        "gBufferRoughness",
+        "gBufferMetallic",
+        "gBufferSpecular",
+        "gBufferSubsurface",
+        "gBufferNormals",
+        "gBufferShadingModelId",
+        "gBufferMaterialId",
+        "gBufferSpecularAlbedo",
+        "gBufferIndirectAlbedo",
+        "gBufferSpecularMotionVectors",
+        "gBufferDisocclusionMask",
+        "gBufferEmissive",
+        "gBufferResponsivityMask",
+        "gBufferReserved14",
+        "gBufferReserved15",
+        "gBufferReserved16",
+        "motionVectors3D",
+        "particleMask",
+        "animatedTextureMask",
+        "depthHighResolution",
+        "positionViewSpace",
+        "rayTracingHitDistance",
+        "reflectionMotionVectors",
+        "transparencyLayer",
+        "transparencyLayerOpacity",
+        "transparencyLayerMotionVectors",
+        "disocclusionMask",
+        "responsivityMask",
     };
     static_assert(names.size() == rayReconstructionResourceSlotCount);
     auto const index = static_cast<std::size_t>(slot);
@@ -642,15 +656,45 @@ std::string_view resourceSlotName(RayReconstructionResourceSlot slot) noexcept
 std::string_view subrectSlotName(RayReconstructionSubrectSlot slot) noexcept
 {
     constexpr auto names = std::array{
-        "alpha", "outputAlpha", "diffuseAlbedo", "specularAlbedo", "normals", "roughness", "color", "depth",
-        "motionVectors", "translucency", "biasCurrentColor", "output", "reflectedAlbedo", "colorBeforeParticles",
-        "colorAfterParticles", "colorBeforeTransparency", "colorAfterTransparency", "colorBeforeFog", "colorAfterFog",
-        "screenSpaceSubsurfaceScatteringGuide", "colorBeforeScreenSpaceSubsurfaceScattering",
-        "colorAfterScreenSpaceSubsurfaceScattering", "screenSpaceRefractionGuide", "colorBeforeScreenSpaceRefraction",
-        "colorAfterScreenSpaceRefraction", "depthOfFieldGuide", "colorBeforeDepthOfField", "colorAfterDepthOfField",
-        "diffuseHitDistance", "specularHitDistance", "diffuseRayDirection", "specularRayDirection",
-        "diffuseRayDirectionHitDistance", "specularRayDirectionHitDistance", "transparencyLayer",
-        "transparencyLayerOpacity", "transparencyLayerMotionVectors", "disocclusionMask", "responsivityMask",
+        "alpha",
+        "outputAlpha",
+        "diffuseAlbedo",
+        "specularAlbedo",
+        "normals",
+        "roughness",
+        "color",
+        "depth",
+        "motionVectors",
+        "translucency",
+        "biasCurrentColor",
+        "output",
+        "reflectedAlbedo",
+        "colorBeforeParticles",
+        "colorAfterParticles",
+        "colorBeforeTransparency",
+        "colorAfterTransparency",
+        "colorBeforeFog",
+        "colorAfterFog",
+        "screenSpaceSubsurfaceScatteringGuide",
+        "colorBeforeScreenSpaceSubsurfaceScattering",
+        "colorAfterScreenSpaceSubsurfaceScattering",
+        "screenSpaceRefractionGuide",
+        "colorBeforeScreenSpaceRefraction",
+        "colorAfterScreenSpaceRefraction",
+        "depthOfFieldGuide",
+        "colorBeforeDepthOfField",
+        "colorAfterDepthOfField",
+        "diffuseHitDistance",
+        "specularHitDistance",
+        "diffuseRayDirection",
+        "specularRayDirection",
+        "diffuseRayDirectionHitDistance",
+        "specularRayDirectionHitDistance",
+        "transparencyLayer",
+        "transparencyLayerOpacity",
+        "transparencyLayerMotionVectors",
+        "disocclusionMask",
+        "responsivityMask",
     };
     static_assert(names.size() == rayReconstructionSubrectSlotCount);
     auto const index = static_cast<std::size_t>(slot);

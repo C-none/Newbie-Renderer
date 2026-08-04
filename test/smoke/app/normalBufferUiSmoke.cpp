@@ -12,15 +12,13 @@ import nr.utils;
 namespace
 {
 [[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult& preflight)
+    const nr::renderer::RendererGraphPreflightResult &preflight)
 {
     auto values = nr::options::OptionValueMap{};
     auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
         values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(
-            entry.first,
-            nr::options::OptionAvailability{.available = true, .reason = {}});
+        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
     });
     return nr::options::OptionFrameSnapshot{
         .catalog = preflight.optionCatalog,
@@ -35,7 +33,7 @@ namespace
 }
 
 [[nodiscard]] nr::renderer::RendererGraphSpec buildNormalBufferGraphSpec(
-    const std::shared_ptr<nr::renderPasses::NormalBufferNode>& normalBuffer)
+    const std::shared_ptr<nr::renderPasses::NormalBufferNode> &normalBuffer)
 {
     if (!normalBuffer)
     {
@@ -49,22 +47,25 @@ namespace
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
             .runtime = normalBuffer,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "NormalBuffer",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "NormalBuffer",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = ui,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "Ui",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "Ui",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = present,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "Present",
-                .queue = nr::renderer::QueueDomain::Compute,
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "Present",
+                    .queue = nr::renderer::QueueDomain::Compute,
+                },
         },
     };
 
@@ -80,30 +81,18 @@ namespace
 
 [[nodiscard]] std::filesystem::path defaultModelPath()
 {
-    return std::filesystem::path{std::string{nr::projectRoot}} /
-           "assets" /
-           "glTF-Sample-Assets" /
-           "Models" /
-           "Box" /
-           "glTF" /
-           "Box.gltf";
+    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" / "Box" /
+           "glTF" / "Box.gltf";
 }
 
 [[nodiscard]] std::filesystem::path replacementModelPath()
 {
-    return std::filesystem::path{std::string{nr::projectRoot}} /
-           "assets" /
-           "glTF-Sample-Assets" /
-           "Models" /
-           "Triangle" /
-           "glTF" /
-           "Triangle.gltf";
+    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" /
+           "Triangle" / "glTF" / "Triangle.gltf";
 }
 
 [[nodiscard]] std::optional<std::reference_wrapper<nr::scene::Scene>> loadModelIntoApp(
-    nr::app::AppSession& app,
-    const std::filesystem::path& modelPath,
-    std::string_view label)
+    nr::app::AppSession &app, const std::filesystem::path &modelPath, std::string_view label)
 {
     auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
         .sourcePath = modelPath,
@@ -114,7 +103,7 @@ namespace
         return std::nullopt;
     }
 
-    auto& scene = app.createScene();
+    auto &scene = app.createScene();
     auto templateHandle = scene.registerTemplate(loadResult.value());
     if (!templateHandle.valid())
     {
@@ -134,14 +123,11 @@ namespace
 }
 
 [[nodiscard]] std::optional<nr::renderer::RendererFrameResult> renderOneFrame(
-    nr::app::AppSession& app,
-    nr::scene::Scene& scene,
-    nr::renderer::FrameServices& frameServices,
-    const nr::options::OptionFrameSnapshot& optionSnapshot,
-    float deltaSeconds)
+    nr::app::AppSession &app, nr::scene::Scene &scene, nr::renderer::FrameServices &frameServices,
+    const nr::options::OptionFrameSnapshot &optionSnapshot, float deltaSeconds)
 {
-    auto& renderer = app.renderer();
-    auto& presentation = renderer.device().presentationContext;
+    auto &renderer = app.renderer();
+    auto &presentation = renderer.device().presentationContext;
 
     if (!frameServices.tryGet<nr::app::UiSystem>().has_value())
     {
@@ -194,31 +180,25 @@ namespace
         {
             std::println(
                 "[error] smoke test expected non-empty UI draw data, observed cmdLists={} vertices={} indices={}.",
-                drawData->get().CmdListsCount,
-                drawData->get().TotalVtxCount,
-                drawData->get().TotalIdxCount);
+                drawData->get().CmdListsCount, drawData->get().TotalVtxCount, drawData->get().TotalIdxCount);
         }
         return std::nullopt;
     }
 
     if (frameResult.invokedPassRecordCount < 2u)
     {
-        std::println(
-            "[error] smoke test expected at least the UI and Present passes, observed {} recorded passes.",
-            frameResult.invokedPassRecordCount);
+        std::println("[error] smoke test expected at least the UI and Present passes, observed {} recorded passes.",
+                     frameResult.invokedPassRecordCount);
         return std::nullopt;
     }
 
     return frameResult;
 }
 
-[[nodiscard]] bool renderUntilSceneDraw(
-    nr::app::AppSession& app,
-    nr::scene::Scene& scene,
-    nr::renderer::FrameServices& frameServices,
-    const nr::options::OptionFrameSnapshot& optionSnapshot,
-    float deltaSeconds,
-    std::string_view label)
+[[nodiscard]] bool renderUntilSceneDraw(nr::app::AppSession &app, nr::scene::Scene &scene,
+                                        nr::renderer::FrameServices &frameServices,
+                                        const nr::options::OptionFrameSnapshot &optionSnapshot, float deltaSeconds,
+                                        std::string_view label)
 {
     auto failed = false;
     auto observedDraw = false;
@@ -236,13 +216,12 @@ namespace
             return;
         }
 
-        observedDraw = frameResult->sceneRasterPacketCount > 0u &&
-                       frameResult->sceneBridgeDrawCount > 0u;
+        observedDraw = frameResult->sceneRasterPacketCount > 0u && frameResult->sceneBridgeDrawCount > 0u;
         if (observedDraw && frameResult->invokedPassRecordCount < 3u)
         {
-            std::println(
-                "[error] smoke test observed a scene draw for {} without the expected NormalBuffer, UI and Present passes.",
-                label);
+            std::println("[error] smoke test observed a scene draw for {} without the expected NormalBuffer, UI and "
+                         "Present passes.",
+                         label);
             failed = true;
         }
     });
@@ -289,13 +268,7 @@ namespace
         auto frameServices = app.makeFrameServices();
         constexpr auto deltaSeconds = 1.0f / 60.0f;
 
-        if (!renderUntilSceneDraw(
-                app,
-                firstScene->get(),
-                frameServices,
-                optionSnapshot,
-                deltaSeconds,
-                "initial model"))
+        if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, optionSnapshot, deltaSeconds, "initial model"))
         {
             return false;
         }
@@ -311,13 +284,8 @@ namespace
         }
         auto const switchedSnapshot = makeDefaultSnapshot(switchedPreflight);
 
-        if (!renderUntilSceneDraw(
-                app,
-                firstScene->get(),
-                frameServices,
-                switchedSnapshot,
-                deltaSeconds,
-                "pipeline switch"))
+        if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, switchedSnapshot, deltaSeconds,
+                                  "pipeline switch"))
         {
             return false;
         }
@@ -328,13 +296,8 @@ namespace
             return false;
         }
 
-        if (!renderUntilSceneDraw(
-                app,
-                secondScene->get(),
-                frameServices,
-                switchedSnapshot,
-                deltaSeconds,
-                "replacement model"))
+        if (!renderUntilSceneDraw(app, secondScene->get(), frameServices, switchedSnapshot, deltaSeconds,
+                                  "replacement model"))
         {
             return false;
         }
@@ -342,7 +305,7 @@ namespace
         app.shutdown();
         return true;
     }
-    catch (const std::exception& error)
+    catch (const std::exception &error)
     {
         std::println("[error] smoke test exception: {}", error.what());
         if (app.initialized())

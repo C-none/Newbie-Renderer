@@ -15,8 +15,7 @@ using DefaultSceneLoader = SceneImporterRegistry<DefaultSceneImporterRegistry>;
     return DefaultSceneLoader::import(request);
 }
 
-template <typename RegistryTuple>
-[[nodiscard]] inline SceneImportResult loadSceneWith(const SceneLoadRequest &request)
+template <typename RegistryTuple> [[nodiscard]] inline SceneImportResult loadSceneWith(const SceneLoadRequest &request)
 {
     return SceneImporterRegistry<RegistryTuple>::import(request);
 }

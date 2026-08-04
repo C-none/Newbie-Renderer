@@ -88,12 +88,14 @@ inline constexpr std::size_t maximumSerializedMachineRecordBytes = 32u * 1024u;
 {
     if (!result.valid)
     {
-        result.path = std::format("{}{}", prefix, result.path == "$" ? std::string_view{} : std::string_view{result.path}.substr(1u));
+        result.path = std::format("{}{}", prefix,
+                                  result.path == "$" ? std::string_view{} : std::string_view{result.path}.substr(1u));
     }
     return result;
 }
 
-[[nodiscard]] SchemaValidation validateSchema(const OptionSchema &schema, const OptionWireValue &value, std::size_t depth, std::size_t maximumDepth)
+[[nodiscard]] SchemaValidation validateSchema(const OptionSchema &schema, const OptionWireValue &value,
+                                              std::size_t depth, std::size_t maximumDepth)
 {
     if (depth > maximumDepth)
     {
@@ -110,7 +112,8 @@ inline constexpr std::size_t maximumSerializedMachineRecordBytes = 32u * 1024u;
         {
             return wrongType("signed integer");
         }
-        if ((schema.signedMinimum && *integer < *schema.signedMinimum) || (schema.signedMaximum && *integer > *schema.signedMaximum))
+        if ((schema.signedMinimum && *integer < *schema.signedMinimum) ||
+            (schema.signedMaximum && *integer > *schema.signedMaximum))
         {
             return SchemaValidation::failure("$", "signed integer is outside the allowed range");
         }
@@ -122,7 +125,8 @@ inline constexpr std::size_t maximumSerializedMachineRecordBytes = 32u * 1024u;
         {
             return wrongType("unsigned integer");
         }
-        if ((schema.unsignedMinimum && *integer < *schema.unsignedMinimum) || (schema.unsignedMaximum && *integer > *schema.unsignedMaximum))
+        if ((schema.unsignedMinimum && *integer < *schema.unsignedMinimum) ||
+            (schema.unsignedMaximum && *integer > *schema.unsignedMaximum))
         {
             return SchemaValidation::failure("$", "unsigned integer is outside the allowed range");
         }
@@ -134,7 +138,8 @@ inline constexpr std::size_t maximumSerializedMachineRecordBytes = 32u * 1024u;
         {
             return wrongType("number");
         }
-        if (!std::isfinite(*number) || (schema.numberMinimum && *number < *schema.numberMinimum) || (schema.numberMaximum && *number > *schema.numberMaximum))
+        if (!std::isfinite(*number) || (schema.numberMinimum && *number < *schema.numberMinimum) ||
+            (schema.numberMaximum && *number > *schema.numberMaximum))
         {
             return SchemaValidation::failure("$", "number is outside the allowed finite range");
         }
@@ -234,7 +239,8 @@ inline constexpr std::size_t maximumSerializedMachineRecordBytes = 32u * 1024u;
 
         if (schema.closedObject)
         {
-            auto unknown = std::ranges::find_if(*object, [&](auto const &entry) { return !schema.objectFields.contains(entry.first); });
+            auto unknown = std::ranges::find_if(
+                *object, [&](auto const &entry) { return !schema.objectFields.contains(entry.first); });
             if (unknown != object->end())
             {
                 return SchemaValidation::failure(std::format("$.{}", unknown->first), "unknown field in closed object");
@@ -298,7 +304,9 @@ inline constexpr std::size_t maximumSerializedMachineRecordBytes = 32u * 1024u;
     std::unreachable();
 }
 
-[[nodiscard]] std::string_view boundedMachineField(std::string_view value, std::size_t maximumBytes, std::string_view overflowValue, std::string_view invalidUtf8Value) noexcept
+[[nodiscard]] std::string_view boundedMachineField(std::string_view value, std::size_t maximumBytes,
+                                                   std::string_view overflowValue,
+                                                   std::string_view invalidUtf8Value) noexcept
 {
     if (value.size() > maximumBytes)
     {
@@ -364,11 +372,13 @@ OptionSchema OptionSchema::array(OptionSchema element, std::size_t minimumItems,
     };
 }
 
-OptionSchema OptionSchema::object(std::map<std::string, OptionObjectField, std::less<>> fields, ObjectValidator validator)
+OptionSchema OptionSchema::object(std::map<std::string, OptionObjectField, std::less<>> fields,
+                                  ObjectValidator validator)
 {
     return OptionSchema{
         .type = OptionValueType::object,
-        .minimumSize = static_cast<std::size_t>(std::ranges::count_if(fields, [](auto const &entry) { return entry.second.required; })),
+        .minimumSize = static_cast<std::size_t>(
+            std::ranges::count_if(fields, [](auto const &entry) { return entry.second.required; })),
         .maximumSize = fields.size(),
         .objectFields = std::move(fields),
         .objectValidator = std::move(validator),
@@ -460,11 +470,13 @@ std::string serializeMachineRecord(const OptionMachineRecord &record)
     };
     if (record.requestId)
     {
-        object.emplace("request_id", Json{boundedMachineField(*record.requestId, maximumMachineRequestIdBytes, "request_id_exceeded_limit", "request_id_invalid_utf8")});
+        object.emplace("request_id", Json{boundedMachineField(*record.requestId, maximumMachineRequestIdBytes,
+                                                              "request_id_exceeded_limit", "request_id_invalid_utf8")});
     }
     if (record.reason)
     {
-        object.emplace("reason", Json{boundedMachineField(*record.reason, maximumMachineReasonBytes, "reason_exceeded_limit", "reason_invalid_utf8")});
+        object.emplace("reason", Json{boundedMachineField(*record.reason, maximumMachineReasonBytes,
+                                                          "reason_exceeded_limit", "reason_invalid_utf8")});
     }
 
     auto output = std::string{};

@@ -53,13 +53,10 @@ namespace
 }
 
 [[nodiscard]] vk::ImageSubresourceRange normalizeImageSubresourceRange(
-    vk::ImageSubresourceRange range,
-    const PassImageResource& resolvedImage,
+    vk::ImageSubresourceRange range, const PassImageResource &resolvedImage,
     std::optional<ImageAspectIntent> aspect = std::nullopt)
 {
-    if (range.aspectMask == vk::ImageAspectFlags{} &&
-        range.levelCount == 0u &&
-        range.layerCount == 0u)
+    if (range.aspectMask == vk::ImageAspectFlags{} && range.levelCount == 0u && range.layerCount == 0u)
     {
         range = resolvedImage.subresourceRange;
     }
@@ -86,9 +83,8 @@ namespace
     return range;
 }
 
-[[nodiscard]] ImageAspectIntent clearDepthStencilAspect(
-    NodeBuildContext& context,
-    const ClearDepthStencilImagePassDesc& desc)
+[[nodiscard]] ImageAspectIntent clearDepthStencilAspect(NodeBuildContext &context,
+                                                        const ClearDepthStencilImagePassDesc &desc)
 {
     if (desc.aspect.has_value())
     {
@@ -113,189 +109,129 @@ namespace
 [[nodiscard]] PassResourceUseDesc imageTransferDstUse(GraphResourceHandle image, ImageAspectIntent aspect) noexcept
 {
     return use::make<use::spec::ImageTransferDst>(image, use::ImageUseOptions{
-                                                            .aspect = aspect,
-                                                        });
+                                                             .aspect = aspect,
+                                                         });
 }
 
-[[nodiscard]] GraphPassHandle addCopyPass(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyPassDesc copy)
+[[nodiscard]] GraphPassHandle addCopyPass(NodeBuildContext &context, std::string_view debugName, CopyPassDesc copy)
 {
-    return context.graphBuilder.get().addCopyPass(
-        debugName,
-        context.nodeHandle,
-        std::move(copy));
+    return context.graphBuilder.get().addCopyPass(debugName, context.nodeHandle, std::move(copy));
 }
 } // namespace
 
-[[nodiscard]] GraphPassHandle clearBuffer(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    ClearBufferPassDesc desc)
+[[nodiscard]] GraphPassHandle clearBuffer(NodeBuildContext &context, std::string_view debugName,
+                                          ClearBufferPassDesc desc)
 {
     nrAssert(desc.buffer.valid(), "clearBuffer requires a valid buffer resource.");
     nrAssert(desc.offset % 4u == 0u, "clearBuffer offset must be 4-byte aligned.");
-    nrAssert(
-        desc.size == vk::WholeSize || desc.size % 4u == 0u,
-        "clearBuffer size must be vk::WholeSize or 4-byte aligned.");
+    nrAssert(desc.size == vk::WholeSize || desc.size % 4u == 0u,
+             "clearBuffer size must be vk::WholeSize or 4-byte aligned.");
 
     auto resourceUses = std::array{use::bufferTransferDst(desc.buffer)};
     return context.addPass(
-        std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
-        debugName,
-        [desc](const PassRecordContext& recordContext) {
+        std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
+        [desc](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(), "clearBuffer requires RAII command buffer access.");
             nrAssert(static_cast<bool>(recordContext.resolveBuffer), "clearBuffer requires a buffer resolver.");
             auto resolvedBuffer = recordContext.resolveBuffer(desc.buffer);
             nrAssert(resolvedBuffer.has_value(), "clearBuffer failed to resolve destination buffer.");
-            recordContext.commandBuffer->get().fillBuffer(
-                resolvedBuffer->buffer,
-                desc.offset,
-                desc.size,
-                desc.value);
+            recordContext.commandBuffer->get().fillBuffer(resolvedBuffer->buffer, desc.offset, desc.size, desc.value);
         },
-        nullptr,
-        false,
-        vk::PipelineStageFlagBits2::eTransfer);
+        nullptr, false, vk::PipelineStageFlagBits2::eTransfer);
 }
 
-[[nodiscard]] GraphPassHandle clearColorImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    ClearColorImagePassDesc desc)
+[[nodiscard]] GraphPassHandle clearColorImage(NodeBuildContext &context, std::string_view debugName,
+                                              ClearColorImagePassDesc desc)
 {
     nrAssert(desc.image.valid(), "clearColorImage requires a valid image resource.");
 
     auto resourceUses = std::array{imageTransferDstUse(desc.image, ImageAspectIntent::Color)};
     return context.addPass(
-        std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
-        debugName,
-        [desc](const PassRecordContext& recordContext) {
+        std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
+        [desc](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(), "clearColorImage requires RAII command buffer access.");
             nrAssert(static_cast<bool>(recordContext.resolveImage), "clearColorImage requires an image resolver.");
             auto resolvedImage = recordContext.resolveImage(desc.image);
             nrAssert(resolvedImage.has_value(), "clearColorImage failed to resolve destination image.");
-            auto range = normalizeImageSubresourceRange(
-                desc.subresourceRange,
-                *resolvedImage,
-                ImageAspectIntent::Color);
-            recordContext.commandBuffer->get().clearColorImage(
-                resolvedImage->image,
-                vk::ImageLayout::eTransferDstOptimal,
-                desc.value,
-                range);
+            auto range =
+                normalizeImageSubresourceRange(desc.subresourceRange, *resolvedImage, ImageAspectIntent::Color);
+            recordContext.commandBuffer->get().clearColorImage(resolvedImage->image,
+                                                               vk::ImageLayout::eTransferDstOptimal, desc.value, range);
         },
-        nullptr,
-        false,
-        vk::PipelineStageFlagBits2::eTransfer);
+        nullptr, false, vk::PipelineStageFlagBits2::eTransfer);
 }
 
-[[nodiscard]] GraphPassHandle clearDepthStencilImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    ClearDepthStencilImagePassDesc desc)
+[[nodiscard]] GraphPassHandle clearDepthStencilImage(NodeBuildContext &context, std::string_view debugName,
+                                                     ClearDepthStencilImagePassDesc desc)
 {
     nrAssert(desc.image.valid(), "clearDepthStencilImage requires a valid image resource.");
     auto aspect = clearDepthStencilAspect(context, desc);
-    nrAssert(
-        aspect != ImageAspectIntent::Color,
-        "clearDepthStencilImage requires a depth, stencil, or depth-stencil image aspect.");
+    nrAssert(aspect != ImageAspectIntent::Color,
+             "clearDepthStencilImage requires a depth, stencil, or depth-stencil image aspect.");
 
     auto resourceUses = std::array{imageTransferDstUse(desc.image, aspect)};
     return context.addPass(
-        std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
-        debugName,
-        [desc, aspect](const PassRecordContext& recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "clearDepthStencilImage requires RAII command buffer access.");
-            nrAssert(static_cast<bool>(recordContext.resolveImage), "clearDepthStencilImage requires an image resolver.");
+        std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
+        [desc, aspect](const PassRecordContext &recordContext) {
+            nrAssert(recordContext.commandBuffer.has_value(),
+                     "clearDepthStencilImage requires RAII command buffer access.");
+            nrAssert(static_cast<bool>(recordContext.resolveImage),
+                     "clearDepthStencilImage requires an image resolver.");
             auto resolvedImage = recordContext.resolveImage(desc.image);
             nrAssert(resolvedImage.has_value(), "clearDepthStencilImage failed to resolve destination image.");
             auto range = normalizeImageSubresourceRange(desc.subresourceRange, *resolvedImage, aspect);
             recordContext.commandBuffer->get().clearDepthStencilImage(
-                resolvedImage->image,
-                vk::ImageLayout::eTransferDstOptimal,
-                desc.value,
-                range);
+                resolvedImage->image, vk::ImageLayout::eTransferDstOptimal, desc.value, range);
         },
-        nullptr,
-        false,
-        vk::PipelineStageFlagBits2::eTransfer);
+        nullptr, false, vk::PipelineStageFlagBits2::eTransfer);
 }
 
-[[nodiscard]] GraphPassHandle copyBufferToBuffer(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyBufferToBufferPassDesc desc)
+[[nodiscard]] GraphPassHandle copyBufferToBuffer(NodeBuildContext &context, std::string_view debugName,
+                                                 CopyBufferToBufferPassDesc desc)
 {
     return addCopyPass(context, debugName, CopyPassDesc{desc});
 }
 
-[[nodiscard]] GraphPassHandle copyBufferToImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyBufferToImagePassDesc desc)
+[[nodiscard]] GraphPassHandle copyBufferToImage(NodeBuildContext &context, std::string_view debugName,
+                                                CopyBufferToImagePassDesc desc)
 {
     return addCopyPass(context, debugName, CopyPassDesc{desc});
 }
 
-[[nodiscard]] GraphPassHandle copyImageToBuffer(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyImageToBufferPassDesc desc)
+[[nodiscard]] GraphPassHandle copyImageToBuffer(NodeBuildContext &context, std::string_view debugName,
+                                                CopyImageToBufferPassDesc desc)
 {
     return addCopyPass(context, debugName, CopyPassDesc{desc});
 }
 
-[[nodiscard]] GraphPassHandle copyImageToImage(
-    NodeBuildContext& context,
-    std::string_view debugName,
-    CopyImageToImagePassDesc desc)
+[[nodiscard]] GraphPassHandle copyImageToImage(NodeBuildContext &context, std::string_view debugName,
+                                               CopyImageToImagePassDesc desc)
 {
     return addCopyPass(context, debugName, CopyPassDesc{desc});
 }
 
-void patchClearColorImage(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    ClearColorImagePassDesc desc)
+void patchClearColorImage(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
+                          ClearColorImagePassDesc desc)
 {
-    context.patchPass(
-        passSlot,
-        debugName,
-        nullptr,
-        [desc](const PassRecordContext& recordContext) {
-            nrAssert(recordContext.commandBuffer.has_value(), "patchClearColorImage requires RAII command buffer access.");
-            nrAssert(static_cast<bool>(recordContext.resolveImage), "patchClearColorImage requires an image resolver.");
-            auto resolvedImage = recordContext.resolveImage(desc.image);
-            nrAssert(resolvedImage.has_value(), "patchClearColorImage failed to resolve destination image.");
-            auto range = normalizeImageSubresourceRange(
-                desc.subresourceRange,
-                *resolvedImage,
-                ImageAspectIntent::Color);
-            recordContext.commandBuffer->get().clearColorImage(
-                resolvedImage->image,
-                vk::ImageLayout::eTransferDstOptimal,
-                desc.value,
-                range);
-        });
+    context.patchPass(passSlot, debugName, nullptr, [desc](const PassRecordContext &recordContext) {
+        nrAssert(recordContext.commandBuffer.has_value(), "patchClearColorImage requires RAII command buffer access.");
+        nrAssert(static_cast<bool>(recordContext.resolveImage), "patchClearColorImage requires an image resolver.");
+        auto resolvedImage = recordContext.resolveImage(desc.image);
+        nrAssert(resolvedImage.has_value(), "patchClearColorImage failed to resolve destination image.");
+        auto range = normalizeImageSubresourceRange(desc.subresourceRange, *resolvedImage, ImageAspectIntent::Color);
+        recordContext.commandBuffer->get().clearColorImage(resolvedImage->image, vk::ImageLayout::eTransferDstOptimal,
+                                                           desc.value, range);
+    });
 }
 
-void patchCopyImageToBuffer(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    CopyImageToBufferPassDesc desc)
+void patchCopyImageToBuffer(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
+                            CopyImageToBufferPassDesc desc)
 {
     context.patchCopy(passSlot, debugName, CopyPassDesc{std::move(desc)});
 }
 
-void patchCopyImageToImage(
-    RenderGraphSkeletonPatchContext& context,
-    std::size_t passSlot,
-    std::string_view debugName,
-    CopyImageToImagePassDesc desc)
+void patchCopyImageToImage(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
+                           CopyImageToImagePassDesc desc)
 {
     context.patchCopy(passSlot, debugName, CopyPassDesc{std::move(desc)});
 }

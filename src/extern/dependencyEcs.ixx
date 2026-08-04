@@ -11,7 +11,6 @@ using ::flecs::query;
 using ::flecs::world;
 } // namespace flecs
 
-
 export using ::EcsChildOf;
 export using ::EcsIsA;
 export using ::EcsParent;

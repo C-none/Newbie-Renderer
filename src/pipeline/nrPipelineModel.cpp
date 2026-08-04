@@ -8,7 +8,8 @@ import std;
 
 namespace nr::pipeline
 {
-ModelHistory::ModelHistory(std::filesystem::path storagePath, std::size_t maxEntries) : storagePath_(std::move(storagePath)), maxEntries_(std::max<std::size_t>(1u, maxEntries))
+ModelHistory::ModelHistory(std::filesystem::path storagePath, std::size_t maxEntries)
+    : storagePath_(std::move(storagePath)), maxEntries_(std::max<std::size_t>(1u, maxEntries))
 {
 }
 
@@ -38,7 +39,8 @@ void ModelHistory::load()
         {
             continue;
         }
-        auto duplicate = std::ranges::any_of(entries_, [&](const std::filesystem::path &entry) { return sameStoredPath(entry, normalized); });
+        auto duplicate = std::ranges::any_of(
+            entries_, [&](const std::filesystem::path &entry) { return sameStoredPath(entry, normalized); });
         if (!duplicate)
         {
             entries_.push_back(std::move(normalized));
@@ -53,14 +55,17 @@ void ModelHistory::save() const
     std::filesystem::create_directories(storagePath_.parent_path(), ec);
     if (ec)
     {
-        nr::nrLog(nr::LogLevel::warning, "PIPELINE", std::format("Failed to create model history directory '{}': {}", storagePath_.parent_path().string(), ec.message()));
+        nr::nrLog(nr::LogLevel::warning, "PIPELINE",
+                  std::format("Failed to create model history directory '{}': {}", storagePath_.parent_path().string(),
+                              ec.message()));
         return;
     }
 
     auto output = std::ofstream{storagePath_, std::ios::trunc};
     if (!output)
     {
-        nr::nrLog(nr::LogLevel::warning, "PIPELINE", std::format("Failed to write model history '{}'.", storagePath_.string()));
+        nr::nrLog(nr::LogLevel::warning, "PIPELINE",
+                  std::format("Failed to write model history '{}'.", storagePath_.string()));
         return;
     }
 
@@ -90,7 +95,8 @@ void ModelHistory::noteLoaded(const std::filesystem::path &path)
     return storagePath_;
 }
 
-[[nodiscard]] bool ModelHistory::sameStoredPath(const std::filesystem::path &lhs, const std::filesystem::path &rhs) const
+[[nodiscard]] bool ModelHistory::sameStoredPath(const std::filesystem::path &lhs,
+                                                const std::filesystem::path &rhs) const
 {
     return detail::normalizedModelPathKey(lhs) == detail::normalizedModelPathKey(rhs);
 }
@@ -103,15 +109,15 @@ void ModelHistory::trimToLimit()
     }
 }
 
-[[nodiscard]] ModelLoadReport SceneModelController::loadModel(nr::app::AppSession &app, const std::filesystem::path &modelPath, std::optional<std::reference_wrapper<ModelHistory>> history)
+[[nodiscard]] ModelLoadReport SceneModelController::loadModel(
+    nr::app::AppSession &app, const std::filesystem::path &modelPath,
+    std::optional<std::reference_wrapper<ModelHistory>> history)
 {
     auto normalizedPath = normalizeModelPathForStorage(modelPath);
     if (normalizedPath.empty())
     {
         return ModelLoadReport{
-            .message = std::format(
-                "Model path is invalid or outside the assets root: {}",
-                modelPath.generic_string()),
+            .message = std::format("Model path is invalid or outside the assets root: {}", modelPath.generic_string()),
         };
     }
 
@@ -166,7 +172,8 @@ void ModelHistory::trimToLimit()
         history->get().save();
     }
 
-    auto message = std::format("Loaded: {} meshes, {} vertices, {} indices, {} lights", sceneAsset.stats.meshCount, sceneAsset.stats.vertexCount, sceneAsset.stats.indexCount, sceneAsset.stats.lightCount);
+    auto message = std::format("Loaded: {} meshes, {} vertices, {} indices, {} lights", sceneAsset.stats.meshCount,
+                               sceneAsset.stats.vertexCount, sceneAsset.stats.indexCount, sceneAsset.stats.lightCount);
     nr::nrLog(nr::LogLevel::info, "PIPELINE", message);
     return ModelLoadReport{
         .loaded = true,

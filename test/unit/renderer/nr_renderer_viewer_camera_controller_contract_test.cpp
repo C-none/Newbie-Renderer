@@ -12,8 +12,7 @@ namespace
 
 [[nodiscard]] bool vec3Near(const glm::vec3 &left, const glm::vec3 &right, float epsilon = 1e-4f)
 {
-    return nearlyEqual(left.x, right.x, epsilon) &&
-           nearlyEqual(left.y, right.y, epsilon) &&
+    return nearlyEqual(left.x, right.x, epsilon) && nearlyEqual(left.y, right.y, epsilon) &&
            nearlyEqual(left.z, right.z, epsilon);
 }
 
@@ -23,15 +22,13 @@ namespace
     auto columns = std::views::iota(0, 4);
 
     return std::ranges::all_of(columns, [&](int column) {
-        return std::ranges::all_of(rows, [&](int row) {
-            return nearlyEqual(left[column][row], right[column][row], epsilon);
-        });
+        return std::ranges::all_of(
+            rows, [&](int row) { return nearlyEqual(left[column][row], right[column][row], epsilon); });
     });
 }
 
 const nr::test::CaseRegistrar movementCase{
-    "viewer camera movement uses delta seconds",
-    [] {
+    "viewer camera movement uses delta seconds", [] {
         auto camera = nr::renderer::ViewerPerspectiveCamera{};
         camera.setPose(nr::renderer::ViewerCameraPose{
             .position = glm::vec3{0.0f, 0.0f, 0.0f},
@@ -53,8 +50,7 @@ const nr::test::CaseRegistrar movementCase{
     }};
 
 const nr::test::CaseRegistrar rotationActivationCase{
-    "viewer camera rotation requires active drag",
-    [] {
+    "viewer camera rotation requires active drag", [] {
         auto camera = nr::renderer::ViewerPerspectiveCamera{};
         auto const before = camera.pose();
 
@@ -70,8 +66,7 @@ const nr::test::CaseRegistrar rotationActivationCase{
     }};
 
 const nr::test::CaseRegistrar pitchClampCase{
-    "viewer camera clamps pitch",
-    [] {
+    "viewer camera clamps pitch", [] {
         auto camera = nr::renderer::ViewerPerspectiveCamera{};
         auto config = nr::renderer::ViewerCameraControlConfig{};
         config.lookRadiansPerPixel = 0.01f;
@@ -96,8 +91,7 @@ const nr::test::CaseRegistrar pitchClampCase{
     }};
 
 const nr::test::CaseRegistrar localAxisCase{
-    "viewer camera moves along local axes",
-    [] {
+    "viewer camera moves along local axes", [] {
         auto camera = nr::renderer::ViewerPerspectiveCamera{};
         camera.setPose(nr::renderer::ViewerCameraPose{
             .position = glm::vec3{0.0f},
@@ -128,8 +122,7 @@ const nr::test::CaseRegistrar localAxisCase{
     }};
 
 const nr::test::CaseRegistrar overrideFrameCase{
-    "viewer camera override matches computed frame",
-    [] {
+    "viewer camera override matches computed frame", [] {
         auto camera = nr::renderer::ViewerPerspectiveCamera{};
         camera.setViewportExtent(glm::uvec2{1600u, 900u});
         camera.setLens(nr::renderer::ViewerPerspectiveLens{
@@ -143,9 +136,12 @@ const nr::test::CaseRegistrar overrideFrameCase{
         auto const override = camera.buildRendererCameraOverride();
 
         nr::test::require(mat4Near(override.frameConstants.view, frame.view), "override view should match frame");
-        nr::test::require(mat4Near(override.frameConstants.projection, frame.projection), "override projection should match frame");
-        nr::test::require(mat4Near(override.frameConstants.viewProjection, frame.viewProjection), "override viewProjection should match frame");
-        nr::test::require(vec3Near(override.frameConstants.cameraWorld, frame.position), "override cameraWorld should match frame");
+        nr::test::require(mat4Near(override.frameConstants.projection, frame.projection),
+                          "override projection should match frame");
+        nr::test::require(mat4Near(override.frameConstants.viewProjection, frame.viewProjection),
+                          "override viewProjection should match frame");
+        nr::test::require(vec3Near(override.frameConstants.cameraWorld, frame.position),
+                          "override cameraWorld should match frame");
 
         auto allFinite = std::ranges::all_of(override.frustum.planes, [](const glm::vec4 &plane) {
             return std::isfinite(plane.x) && std::isfinite(plane.y) && std::isfinite(plane.z) && std::isfinite(plane.w);

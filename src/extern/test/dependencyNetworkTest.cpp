@@ -28,7 +28,8 @@ namespace websocket = beast::websocket;
 using Tcp = asio::ip::tcp;
 using ErrorCode = boost::system::error_code;
 
-[[nodiscard]] std::optional<std::uint16_t> closeCode(const websocket::stream<beast::tcp_stream, false> &stream, const ErrorCode &error) noexcept
+[[nodiscard]] std::optional<std::uint16_t> closeCode(const websocket::stream<beast::tcp_stream, false> &stream,
+                                                     const ErrorCode &error) noexcept
 {
     if (error != websocket::error::closed)
     {
@@ -50,7 +51,8 @@ class WebSocketClient::Impl
         close();
     }
 
-    [[nodiscard]] ConnectResult connect(const WebSocketEndpoint &endpoint, std::string bearerToken, std::optional<std::string> origin)
+    [[nodiscard]] ConnectResult connect(const WebSocketEndpoint &endpoint, std::string bearerToken,
+                                        std::optional<std::string> origin)
     {
         if (connectAttempted_)
         {
@@ -82,13 +84,14 @@ class WebSocketClient::Impl
         webSocket_.auto_fragment(false);
 
         auto authorization = std::format("Bearer {}", bearerToken);
-        webSocket_.set_option(websocket::stream_base::decorator([authorization = std::move(authorization), origin = std::move(origin)](websocket::request_type &request) {
-            request.set(http::field::authorization, authorization);
-            if (origin)
-            {
-                request.set(http::field::origin, *origin);
-            }
-        }));
+        webSocket_.set_option(websocket::stream_base::decorator(
+            [authorization = std::move(authorization), origin = std::move(origin)](websocket::request_type &request) {
+                request.set(http::field::authorization, authorization);
+                if (origin)
+                {
+                    request.set(http::field::origin, *origin);
+                }
+            }));
 
         auto response = websocket::response_type{};
         auto const host = std::format("{}:{}", endpoint.address, endpoint.port);
@@ -129,7 +132,8 @@ class WebSocketClient::Impl
         {
             return WriteResult{.detail = "The test WebSocket client is not connected."};
         }
-        if (fragments.size() < 2u || std::ranges::any_of(fragments, [](std::string_view value) { return value.empty(); }))
+        if (fragments.size() < 2u ||
+            std::ranges::any_of(fragments, [](std::string_view value) { return value.empty(); }))
         {
             return WriteResult{.detail = "A fragmented test message requires at least two non-empty fragments."};
         }
@@ -145,7 +149,8 @@ class WebSocketClient::Impl
             }
             auto const fragment = fragments[index];
             auto const finalFragment = index + 1u == fragments.size();
-            static_cast<void>(webSocket_.write_some(finalFragment, asio::buffer(fragment.data(), fragment.size()), error));
+            static_cast<void>(
+                webSocket_.write_some(finalFragment, asio::buffer(fragment.data(), fragment.size()), error));
             written = !error;
         });
         return writeResult(error);
@@ -252,7 +257,8 @@ WebSocketClient::WebSocketClient() : impl_(std::make_unique<Impl>())
 
 WebSocketClient::~WebSocketClient() = default;
 
-ConnectResult WebSocketClient::connect(const WebSocketEndpoint &endpoint, std::string bearerToken, std::optional<std::string> origin)
+ConnectResult WebSocketClient::connect(const WebSocketEndpoint &endpoint, std::string bearerToken,
+                                       std::optional<std::string> origin)
 {
     return impl_->connect(endpoint, std::move(bearerToken), std::move(origin));
 }

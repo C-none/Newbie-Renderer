@@ -27,7 +27,8 @@ class ExclusiveDirectoryLease
     ExclusiveDirectoryLease(ExclusiveDirectoryLease &&) noexcept;
     ExclusiveDirectoryLease &operator=(ExclusiveDirectoryLease &&) noexcept;
 
-    [[nodiscard]] std::expected<void, ExclusiveDirectoryLeaseFailure> acquire(const std::filesystem::path &canonicalDirectory);
+    [[nodiscard]] std::expected<void, ExclusiveDirectoryLeaseFailure> acquire(
+        const std::filesystem::path &canonicalDirectory);
     void release() noexcept;
 
   private:

@@ -35,13 +35,13 @@ class GpuQueue
      * @param queueFamilyIndex Queue family index
      * @param type Logical queue role classification
      */
-    GpuQueue(const vk::raii::Device& device, std::uint32_t queueFamilyIndex, QueueRole type);
+    GpuQueue(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, QueueRole type);
 
     // Move-only semantics
-    GpuQueue(const GpuQueue&) = delete;
-    GpuQueue& operator=(const GpuQueue&) = delete;
-    GpuQueue(GpuQueue&&) noexcept = default;
-    GpuQueue& operator=(GpuQueue&&) noexcept = default;
+    GpuQueue(const GpuQueue &) = delete;
+    GpuQueue &operator=(const GpuQueue &) = delete;
+    GpuQueue(GpuQueue &&) noexcept = default;
+    GpuQueue &operator=(GpuQueue &&) noexcept = default;
 
     /**
      * @brief Submit single command buffer (convenience overload)
@@ -54,10 +54,8 @@ class GpuQueue
     * Uses synchronization2 submit path:
     *   queue.submit2(vk::SubmitInfo2(...), fence);
      */
-    void submit(
-        const vk::raii::CommandBuffer& commandBuffer,
-        std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
-    );
+    void submit(const vk::raii::CommandBuffer &commandBuffer,
+                std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt);
 
     /**
      * @param batch Command batch to submit
@@ -78,10 +76,8 @@ class GpuQueue
      *   batch.addCommandBuffer(cb);       // Build submission
      *   queue.submit(std::move(batch), fence);
      */
-    void submit(
-        CommandBatch&& batch,
-        std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt
-    );
+    void submit(CommandBatch &&batch,
+                std::optional<std::reference_wrapper<const vk::raii::Fence>> fence = std::nullopt);
 
     /**
      * @brief Wait for all operations on this queue to complete
@@ -103,7 +99,7 @@ class GpuQueue
     /**
      * @brief Get the underlying vk::raii::Queue (for direct access if needed)
      */
-    [[nodiscard]] const vk::raii::Queue& handle() const noexcept;
+    [[nodiscard]] const vk::raii::Queue &handle() const noexcept;
 
     /**
      * @brief Check if queue is valid (initialized)
@@ -144,25 +140,24 @@ class QueueManager
     QueueManager(GpuQueue graphics, GpuQueue compute, GpuQueue transfer);
 
     // Move-only semantics
-    QueueManager(const QueueManager&) = delete;
-    QueueManager& operator=(const QueueManager&) = delete;
-    QueueManager(QueueManager&&) noexcept = default;
-    QueueManager& operator=(QueueManager&&) noexcept = default;
+    QueueManager(const QueueManager &) = delete;
+    QueueManager &operator=(const QueueManager &) = delete;
+    QueueManager(QueueManager &&) noexcept = default;
+    QueueManager &operator=(QueueManager &&) noexcept = default;
 
-    [[nodiscard]] GpuQueue& graphics();
-    [[nodiscard]] const GpuQueue& graphics() const;
+    [[nodiscard]] GpuQueue &graphics();
+    [[nodiscard]] const GpuQueue &graphics() const;
 
-    [[nodiscard]] GpuQueue& compute();
-    [[nodiscard]] const GpuQueue& compute() const;
+    [[nodiscard]] GpuQueue &compute();
+    [[nodiscard]] const GpuQueue &compute() const;
 
-    [[nodiscard]] GpuQueue& transfer();
-    [[nodiscard]] const GpuQueue& transfer() const;
+    [[nodiscard]] GpuQueue &transfer();
+    [[nodiscard]] const GpuQueue &transfer() const;
 
     /**
      * @brief Get queue by type
      */
-    template <QueueRole T>
-    [[nodiscard]] GpuQueue& get() noexcept
+    template <QueueRole T> [[nodiscard]] GpuQueue &get() noexcept
     {
         if constexpr (T == QueueRole::Graphics)
             return graphics_;
@@ -176,8 +171,7 @@ class QueueManager
     /**
      * @brief Check if a specific queue type is available
      */
-    template <QueueRole T>
-    [[nodiscard]] bool hasQueue() const noexcept
+    template <QueueRole T> [[nodiscard]] bool hasQueue() const noexcept
     {
         if constexpr (T == QueueRole::Graphics)
             return graphics_.valid();

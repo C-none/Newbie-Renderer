@@ -29,9 +29,7 @@ struct AccumulateCameraTransform
     glm::mat4 projection{1.0f};
 };
 
-[[nodiscard]] bool accumulateMatricesEquivalent(
-    const glm::mat4& left,
-    const glm::mat4& right) noexcept
+[[nodiscard]] bool accumulateMatricesEquivalent(const glm::mat4 &left, const glm::mat4 &right) noexcept
 {
     auto elements = std::views::iota(std::size_t{0}, std::size_t{16});
     return std::ranges::all_of(elements, [&](std::size_t element) {
@@ -41,9 +39,8 @@ struct AccumulateCameraTransform
     });
 }
 
-[[nodiscard]] bool accumulateCameraTransformsEquivalent(
-    const AccumulateCameraTransform& left,
-    const AccumulateCameraTransform& right) noexcept
+[[nodiscard]] bool accumulateCameraTransformsEquivalent(const AccumulateCameraTransform &left,
+                                                        const AccumulateCameraTransform &right) noexcept
 {
     return accumulateMatricesEquivalent(left.view, right.view) &&
            accumulateMatricesEquivalent(left.projection, right.projection);
@@ -68,44 +65,34 @@ struct AccumulateRuntimeCache
     return (value + divisor - 1u) / divisor;
 }
 
-[[nodiscard]] std::shared_ptr<AccumulateRuntimeCache> ensureAccumulateRuntime(
-    nr::rhi::Device& device,
-    const nr::rhi::SlangProgram& program)
+[[nodiscard]] std::shared_ptr<AccumulateRuntimeCache> ensureAccumulateRuntime(nr::rhi::Device &device,
+                                                                              const nr::rhi::SlangProgram &program,
+                                                                              std::string debugName)
 {
     auto runtime = std::make_shared<AccumulateRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
-    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program));
-    nr::nrAssert(runtime->pipeline->valid(), "Accumulate pass failed to create compute pipeline.");
+    runtime->pipeline->initialize(device.pipeline().createComputePipeline(program, {}, 64u, {}, std::move(debugName)));
 
     return runtime;
 }
 
-[[nodiscard]] bool ensureHistoryImages(
-    nr::rhi::Device& device,
-    AccumulateRuntimeCache& runtime,
-    vk::Extent2D extent,
-    vk::Format format)
+[[nodiscard]] bool ensureHistoryImages(nr::rhi::Device &device, AccumulateRuntimeCache &runtime, vk::Extent2D extent,
+                                       vk::Format format)
 {
-    if (runtime.allocatedExtent == extent &&
-        runtime.allocatedFormat == format &&
-        std::ranges::all_of(runtime.historyImages, [](const nr::rhi::Image& image) { return image.valid(); }))
+    if (runtime.allocatedExtent == extent && runtime.allocatedFormat == format &&
+        std::ranges::all_of(runtime.historyImages, [](const nr::rhi::Image &image) { return image.valid(); }))
     {
         return false;
     }
 
-    auto imageInfo = nr::rhi::makeImageCreateInfo(
-        format,
-        extent,
-        vk::ImageUsageFlagBits::eSampled |
-            vk::ImageUsageFlagBits::eStorage |
-            vk::ImageUsageFlagBits::eTransferSrc);
+    auto imageInfo = nr::rhi::makeImageCreateInfo(format, extent,
+                                                  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+                                                      vk::ImageUsageFlagBits::eTransferSrc);
 
     auto slots = std::views::iota(std::size_t{0}, runtime.historyImages.size());
     std::ranges::for_each(slots, [&](std::size_t slot) {
-        runtime.historyImages[slot] = device.resourceFactory.createImage(
-            imageInfo,
-            nr::rhi::MemoryUsage::GpuOnly,
-            std::format("Accumulate.History[{}]", slot));
+        runtime.historyImages[slot] = device.resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly,
+                                                                         std::format("Accumulate.History[{}]", slot));
         nr::nrAssert(runtime.historyImages[slot].valid(), "Accumulate failed to allocate history image.");
         runtime.historyStates[slot].reset();
     });
@@ -119,12 +106,8 @@ struct AccumulateRuntimeCache
 }
 
 [[nodiscard]] nr::renderer::GraphResourceHandle importHistoryImage(
-    nr::renderer::NodeBuildContext& context,
-    const nr::rhi::Image& image,
-    nr::renderer::RetainedImageState& state,
-    std::string_view debugName,
-    vk::Extent2D extent,
-    vk::Format format,
+    nr::renderer::NodeBuildContext &context, const nr::rhi::Image &image, nr::renderer::RetainedImageState &state,
+    std::string_view debugName, vk::Extent2D extent, vk::Format format,
     std::initializer_list<nr::renderer::ImageUsageIntent> usageIntents)
 {
     nr::nrAssert(image.valid(), std::format("{} image is invalid.", debugName));
@@ -132,15 +115,12 @@ struct AccumulateRuntimeCache
     return context.addResource(nr::renderer::GraphImportedImageDesc{
         .debugName = std::string(debugName),
         .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-        .initialOwnership = state.common.initialized
-                                ? state.common.ownership
-                                : nr::renderer::ResourceOwnershipDomain::Undefined,
+        .initialOwnership =
+            state.common.initialized ? state.common.ownership : nr::renderer::ResourceOwnershipDomain::Undefined,
         .extent = vk::Extent3D{extent.width, extent.height, 1u},
         .format = format,
         .usageIntents = std::vector<nr::renderer::ImageUsageIntent>(usageIntents),
-        .initialLayout = state.common.initialized
-                             ? state.layout
-                             : nr::renderer::ImageLayoutIntent::Undefined,
+        .initialLayout = state.common.initialized ? state.layout : nr::renderer::ImageLayoutIntent::Undefined,
         .initialAccessScope = state.common.initialized ? state.common.access : nr::renderer::AccessScope{},
         .importedResource = std::cref(image),
         .retainedState = std::ref(state),
@@ -152,10 +132,9 @@ namespace nr::renderPasses
 {
 namespace
 {
-[[nodiscard]] std::uint32_t maxHistorySampleCount(
-    const nr::options::OptionFrameSnapshot& snapshot)
+[[nodiscard]] std::uint32_t maxHistorySampleCount(const nr::options::OptionFrameSnapshot &snapshot)
 {
-    auto const* value = snapshot.find(nr::options::keys::accumulateMaxHistorySamples);
+    auto const *value = snapshot.find(nr::options::keys::accumulateMaxHistorySamples);
     nr::nrAssert(value != nullptr, "Accumulate requires its max-history option in the frame snapshot.");
     return static_cast<std::uint32_t>(*value);
 }
@@ -163,22 +142,18 @@ namespace
 
 AccumulateNode::~AccumulateNode() = default;
 
-void AccumulateNode::declareOptions(nr::options::OptionCatalogBuilder& builder) const
+void AccumulateNode::declareOptions(nr::options::OptionCatalogBuilder &builder) const
 {
-    std::ranges::for_each(
-        nr::options::makeAccumulateDefinitions(),
-        [&](nr::options::OptionDefinition definition) {
-            static_cast<void>(builder.add(std::move(definition)));
-        });
+    std::ranges::for_each(nr::options::makeAccumulateDefinitions(), [&](nr::options::OptionDefinition definition) {
+        static_cast<void>(builder.add(std::move(definition)));
+    });
 }
 
-void AccumulateNode::collectOptionAvailability(
-    const nr::options::OptionFrameSnapshot&,
-    nr::options::OptionAvailabilityMap& availability) const
+void AccumulateNode::collectOptionAvailability(const nr::options::OptionFrameSnapshot &,
+                                               nr::options::OptionAvailabilityMap &availability) const
 {
-    availability.insert_or_assign(
-        nr::options::optionId(nr::options::keys::accumulateMaxHistorySamples),
-        nr::options::OptionAvailability{.available = true, .reason = {}});
+    availability.insert_or_assign(nr::options::optionId(nr::options::keys::accumulateMaxHistorySamples),
+                                  nr::options::OptionAvailability{.available = true, .reason = {}});
 }
 
 [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> AccumulateNode::shaderRequests() const
@@ -190,53 +165,51 @@ void AccumulateNode::collectOptionAvailability(
     };
 }
 
-void AccumulateNode::initialize(NodeInitContext& context)
+void AccumulateNode::initialize(NodeInitContext &context)
 {
-    nr::nrAssert(
-        context.shaderPrograms.size() == 1u &&
-            context.shaderPrograms.front().entryPoint() != nullptr &&
-            context.shaderPrograms.front().entryPoint()->stage == SLANG_STAGE_COMPUTE,
-        "Accumulate initialization requires one compiled compute shader.");
+    nr::nrAssert(context.shaderPrograms.size() == 1u && context.shaderPrograms.front().entryPoint() != nullptr &&
+                     context.shaderPrograms.front().entryPoint()->stage == SLANG_STAGE_COMPUTE,
+                 "Accumulate initialization requires one compiled compute shader.");
     device_ = context.device;
-    runtime_ = detail::ensureAccumulateRuntime(context.device.get(), context.shaderPrograms.front());
-    nr::rhi::setPipelineDebugName(
-        context.device.get().device,
-        runtime_->pipeline->pipeline().raw(),
-        context.runtimeName + ".Pipeline");
+    runtime_ = detail::ensureAccumulateRuntime(context.device.get(), context.shaderPrograms.front(),
+                                               context.runtimeName + ".Pipeline");
 }
 
-void AccumulateNode::build(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
+void AccumulateNode::finalizeInitialization()
+{
+    nr::nrAssert(runtime_ && runtime_->pipeline && runtime_->pipeline->valid(),
+                 "Accumulate async compute PSO construction failed.");
+}
+
+void AccumulateNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     materializeCurrentFrame(context, frameParameters);
 }
 
 [[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> AccumulateNode::structuralSnapshot(
-    const NodeFrameParameters& frameParameters) const
+    const NodeFrameParameters &frameParameters) const
 {
-    auto const historyFormat = input.historyFormat == vk::Format::eUndefined
-                                   ? vk::Format::eR16G16B16A16Sfloat
-                                   : input.historyFormat;
+    auto const historyFormat =
+        input.historyFormat == vk::Format::eUndefined ? vk::Format::eR16G16B16A16Sfloat : input.historyFormat;
     return StructuralSnapshot{
-        .configurationRevision =
-            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(historyFormat)) << 32u) |
-            maxHistorySampleCount(frameParameters.optionSnapshot.get()),
+        .configurationRevision = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(historyFormat)) << 32u) |
+                                 maxHistorySampleCount(frameParameters.optionSnapshot.get()),
         .branchKey = "compute",
     };
 }
 
-bool AccumulateNode::materializeRenderGraphSkeleton(
-    nr::renderer::RenderGraphSkeletonPatchContext& context,
-    const NodeFrameParameters& frameParameters,
-    const StructuralSnapshot&)
+bool AccumulateNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
+                                                    const NodeFrameParameters &frameParameters,
+                                                    const StructuralSnapshot &)
 {
-    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "Accumulate Skeleton patch requires initialized state.");
+    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(),
+                 "Accumulate Skeleton patch requires initialized state.");
     auto const maximumHistorySamples = maxHistorySampleCount(frameParameters.optionSnapshot.get());
     auto viewportExtent = frameParameters.swapchainExtent;
     viewportExtent.width = std::max(1u, viewportExtent.width);
     viewportExtent.height = std::max(1u, viewportExtent.height);
-    auto const historyFormat = input.historyFormat == vk::Format::eUndefined
-                                   ? vk::Format::eR16G16B16A16Sfloat
-                                   : input.historyFormat;
+    auto const historyFormat =
+        input.historyFormat == vk::Format::eUndefined ? vk::Format::eR16G16B16A16Sfloat : input.historyFormat;
     auto const reallocated = detail::ensureHistoryImages(device_->get(), *runtime_, viewportExtent, historyFormat);
     auto const currentCameraTransform = detail::AccumulateCameraTransform{
         .view = frameParameters.renderCameraConstants.view,
@@ -250,27 +223,33 @@ bool AccumulateNode::materializeRenderGraphSkeleton(
     auto const resetHistory =
         frameParameters.resolutionPlan.resetHistory || cameraReset || reallocated || !runtime_->historyValid;
 
-    auto patchHistory = [&](std::size_t resourceSlot, std::uint32_t imageSlot, std::string debugName, std::vector<nr::renderer::ImageUsageIntent> usages) {
-        auto& state = runtime_->historyStates[imageSlot];
-        context.patchResource(resourceSlot, nr::renderer::GraphImportedImageDesc{
-            .debugName = std::move(debugName),
-            .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-            .initialOwnership = state.common.initialized ? state.common.ownership : nr::renderer::ResourceOwnershipDomain::Undefined,
-            .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
-            .format = historyFormat,
-            .usageIntents = std::move(usages),
-            .initialLayout = state.common.initialized ? state.layout : nr::renderer::ImageLayoutIntent::Undefined,
-            .initialAccessScope = state.common.initialized ? state.common.access : nr::renderer::AccessScope{},
-            .importedResource = std::cref(runtime_->historyImages[imageSlot]),
-            .retainedState = std::ref(state),
-        });
+    auto patchHistory = [&](std::size_t resourceSlot, std::uint32_t imageSlot, std::string debugName,
+                            std::vector<nr::renderer::ImageUsageIntent> usages) {
+        auto &state = runtime_->historyStates[imageSlot];
+        context.patchResource(
+            resourceSlot,
+            nr::renderer::GraphImportedImageDesc{
+                .debugName = std::move(debugName),
+                .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+                .initialOwnership = state.common.initialized ? state.common.ownership
+                                                             : nr::renderer::ResourceOwnershipDomain::Undefined,
+                .extent = vk::Extent3D{viewportExtent.width, viewportExtent.height, 1u},
+                .format = historyFormat,
+                .usageIntents = std::move(usages),
+                .initialLayout = state.common.initialized ? state.layout : nr::renderer::ImageLayoutIntent::Undefined,
+                .initialAccessScope = state.common.initialized ? state.common.access : nr::renderer::AccessScope{},
+                .importedResource = std::cref(runtime_->historyImages[imageSlot]),
+                .retainedState = std::ref(state),
+            });
     };
-    patchHistory(0u, previousSlot, std::format("Accumulate.HistoryRead[{}]", previousSlot), {nr::renderer::ImageUsageIntent::Sampled});
-    patchHistory(1u, currentSlot, std::format("Accumulate.HistoryWrite[{}]", currentSlot), {
-        nr::renderer::ImageUsageIntent::StorageWrite,
-        nr::renderer::ImageUsageIntent::Sampled,
-        nr::renderer::ImageUsageIntent::TransferSrc,
-    });
+    patchHistory(0u, previousSlot, std::format("Accumulate.HistoryRead[{}]", previousSlot),
+                 {nr::renderer::ImageUsageIntent::Sampled});
+    patchHistory(1u, currentSlot, std::format("Accumulate.HistoryWrite[{}]", currentSlot),
+                 {
+                     nr::renderer::ImageUsageIntent::StorageWrite,
+                     nr::renderer::ImageUsageIntent::Sampled,
+                     nr::renderer::ImageUsageIntent::TransferSrc,
+                 });
 
     auto const pushConstants = detail::AccumulatePushConstants{
         .width = viewportExtent.width,
@@ -280,30 +259,27 @@ bool AccumulateNode::materializeRenderGraphSkeleton(
         .maxHistorySampleCount = maximumHistorySamples,
     };
     auto patch = nr::renderer::ComputePassPatchBuilder{context, 0u, "Accumulate.Compute", runtime_->pipeline};
-    patch
-        .sampledImage("gCurrentColor", context.passResource(0u, 0u), "Accumulate.CurrentColor")
+    patch.sampledImage("gCurrentColor", context.passResource(0u, 0u), "Accumulate.CurrentColor")
         .sampledImage("gHistoryColor", context.resource(0u), "Accumulate.HistoryRead")
         .storageImage("gAccumulatedColor", context.resource(1u), "Accumulate.HistoryWrite")
         .pushConstants("gAccumulate", pushConstants)
-        .record([viewportExtent](const nr::renderer::ComputePassRecordContext& computeContext) {
+        .record([viewportExtent](const nr::renderer::ComputePassRecordContext &computeContext) {
             constexpr auto kThreadGroupSize = 16u;
             computeContext.commandBuffer.dispatch(
                 detail::accumulateDivideRoundUp(viewportExtent.width, kThreadGroupSize),
-                detail::accumulateDivideRoundUp(viewportExtent.height, kThreadGroupSize),
-                1u);
+                detail::accumulateDivideRoundUp(viewportExtent.height, kThreadGroupSize), 1u);
         });
     patch.patch();
 
     runtime_->previousCameraTransform = currentCameraTransform;
-    runtime_->historySampleCount = resetHistory
-                                       ? 1u
-                                       : std::min(runtime_->historySampleCount + 1u, maximumHistorySamples);
+    runtime_->historySampleCount =
+        resetHistory ? 1u : std::min(runtime_->historySampleCount + 1u, maximumHistorySamples);
     runtime_->lastWrittenSlot = currentSlot;
     runtime_->historyValid = true;
     return true;
 }
 
-void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters)
+void AccumulateNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     nr::nrAssert(static_cast<bool>(runtime_), "Accumulate build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "Accumulate build stage requires device reference from initialize stage.");
@@ -314,9 +290,8 @@ void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const No
     viewportExtent.width = std::max(1u, viewportExtent.width);
     viewportExtent.height = std::max(1u, viewportExtent.height);
 
-    auto const historyFormat = input.historyFormat == vk::Format::eUndefined
-                                   ? vk::Format::eR16G16B16A16Sfloat
-                                   : input.historyFormat;
+    auto const historyFormat =
+        input.historyFormat == vk::Format::eUndefined ? vk::Format::eR16G16B16A16Sfloat : input.historyFormat;
     auto const reallocated = detail::ensureHistoryImages(device_->get(), *runtime_, viewportExtent, historyFormat);
     auto const currentCameraTransform = detail::AccumulateCameraTransform{
         .view = frameParameters.renderCameraConstants.view,
@@ -326,35 +301,20 @@ void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const No
         !runtime_->previousCameraTransform.has_value() ||
         !detail::accumulateCameraTransformsEquivalent(*runtime_->previousCameraTransform, currentCameraTransform);
 
-    auto const currentSlot = runtime_->historyValid
-                                 ? 1u - runtime_->lastWrittenSlot
-                                 : 0u;
-    auto const previousSlot = runtime_->historyValid
-                                  ? runtime_->lastWrittenSlot
-                                  : 1u - currentSlot;
+    auto const currentSlot = runtime_->historyValid ? 1u - runtime_->lastWrittenSlot : 0u;
+    auto const previousSlot = runtime_->historyValid ? runtime_->lastWrittenSlot : 1u - currentSlot;
     auto const resetHistory =
-        frameParameters.resolutionPlan.resetHistory ||
-        cameraReset ||
-        reallocated ||
-        !runtime_->historyValid;
+        frameParameters.resolutionPlan.resetHistory || cameraReset || reallocated || !runtime_->historyValid;
 
     auto previousHistory = detail::importHistoryImage(
-        context,
-        runtime_->historyImages[previousSlot],
-        runtime_->historyStates[previousSlot],
-        std::format("Accumulate.HistoryRead[{}]", previousSlot),
-        viewportExtent,
-        historyFormat,
+        context, runtime_->historyImages[previousSlot], runtime_->historyStates[previousSlot],
+        std::format("Accumulate.HistoryRead[{}]", previousSlot), viewportExtent, historyFormat,
         {
             nr::renderer::ImageUsageIntent::Sampled,
         });
     auto outputHistory = detail::importHistoryImage(
-        context,
-        runtime_->historyImages[currentSlot],
-        runtime_->historyStates[currentSlot],
-        std::format("Accumulate.HistoryWrite[{}]", currentSlot),
-        viewportExtent,
-        historyFormat,
+        context, runtime_->historyImages[currentSlot], runtime_->historyStates[currentSlot],
+        std::format("Accumulate.HistoryWrite[{}]", currentSlot), viewportExtent, historyFormat,
         {
             nr::renderer::ImageUsageIntent::StorageWrite,
             nr::renderer::ImageUsageIntent::Sampled,
@@ -370,21 +330,16 @@ void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const No
         .maxHistorySampleCount = maximumHistorySamples,
     };
 
-    auto accumulatePass = nr::renderer::ComputePassBuilder{
-        context,
-        "Accumulate.Compute",
-        runtime_->pipeline};
-    accumulatePass
-        .sampledImage("gCurrentColor", sourceColor, "Accumulate.CurrentColor")
+    auto accumulatePass = nr::renderer::ComputePassBuilder{context, "Accumulate.Compute", runtime_->pipeline};
+    accumulatePass.sampledImage("gCurrentColor", sourceColor, "Accumulate.CurrentColor")
         .sampledImage("gHistoryColor", previousHistory, "Accumulate.HistoryRead")
         .storageImage("gAccumulatedColor", outputHistory, "Accumulate.HistoryWrite")
         .pushConstants("gAccumulate", pushConstants)
-        .record([viewportExtent](const nr::renderer::ComputePassRecordContext& computeContext) {
+        .record([viewportExtent](const nr::renderer::ComputePassRecordContext &computeContext) {
             constexpr auto kThreadGroupSize = 16u;
             computeContext.commandBuffer.dispatch(
                 detail::accumulateDivideRoundUp(viewportExtent.width, kThreadGroupSize),
-                detail::accumulateDivideRoundUp(viewportExtent.height, kThreadGroupSize),
-                1u);
+                detail::accumulateDivideRoundUp(viewportExtent.height, kThreadGroupSize), 1u);
         });
 
     [[maybe_unused]] auto accumulatePassHandle = accumulatePass.build();
@@ -403,7 +358,7 @@ void AccumulateNode::materializeCurrentFrame(NodeBuildContext& context, const No
     context.publishFrameResource(nr::renderer::frameResource::presentSourceColor, outputHistory);
 }
 
-void AccumulateNode::shutdown(NodeShutdownContext&)
+void AccumulateNode::shutdown(NodeShutdownContext &)
 {
     if (runtime_ && runtime_->pipeline)
     {

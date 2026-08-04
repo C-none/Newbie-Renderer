@@ -5,6 +5,7 @@ __include include.share.materialTypes;
 __include include.share.materialTextureIds;
 __include include.share.rtMaterial;
 __include include.share.rtHitPolicy;
+__include include.share.rtRayType;
 __include include.globalUniform;
 __include include.sceneTextures;
 __include include.sceneLights;

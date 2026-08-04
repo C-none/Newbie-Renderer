@@ -16,7 +16,7 @@ AppSession::~AppSession()
     shutdown();
 }
 
-void AppSession::initialize(const nr::renderer::RendererCreateInfo& createInfo)
+void AppSession::initialize(const nr::renderer::RendererCreateInfo &createInfo)
 {
     renderer_.initialize(createInfo);
     ui_.initialize();
@@ -28,17 +28,16 @@ void AppSession::shutdown()
     if (auto abandoned = options_.shutdown(); abandoned.has_value())
     {
         auto const snapshot = options_.snapshot();
-        nr::options::emitMachineRecord<nr::LogLevel::warning>(
-            nr::options::OptionMachineRecord{
-                .sequence = abandoned->sequence,
-                .id = abandoned->id,
-                .phase = nr::options::OptionLogPhase::terminal,
-                .status = nr::options::OptionLogStatus::abandoned,
-                .frameIndex = snapshot != nullptr ? snapshot->frameIndex : 0u,
-                .origin = abandoned->origin,
-                .requestId = abandoned->requestId,
-                .reason = "shutdown",
-            });
+        nr::options::emitMachineRecord<nr::LogLevel::warning>(nr::options::OptionMachineRecord{
+            .sequence = abandoned->sequence,
+            .id = abandoned->id,
+            .phase = nr::options::OptionLogPhase::terminal,
+            .status = nr::options::OptionLogStatus::abandoned,
+            .frameIndex = snapshot != nullptr ? snapshot->frameIndex : 0u,
+            .origin = abandoned->origin,
+            .requestId = abandoned->requestId,
+            .reason = "shutdown",
+        });
     }
 
     if (!renderer_.initialized())
@@ -68,8 +67,7 @@ void AppSession::destroyScene()
     scene_.reset();
 }
 
-std::unique_ptr<nr::scene::Scene> AppSession::makeSceneCandidate(
-    const SceneSessionCreateInfo& createInfo)
+std::unique_ptr<nr::scene::Scene> AppSession::makeSceneCandidate(const SceneSessionCreateInfo &createInfo)
 {
     nrAssert(renderer_.initialized(), "AppSession::makeSceneCandidate requires initialize() first.");
 
@@ -84,9 +82,8 @@ void AppSession::commitScene(std::unique_ptr<nr::scene::Scene> candidate)
 {
     nrAssert(renderer_.initialized(), "AppSession::commitScene requires initialize() first.");
     nrAssert(candidate != nullptr, "AppSession::commitScene requires a valid candidate.");
-    nrAssert(
-        &candidate->device() == &renderer_.device(),
-        "AppSession::commitScene candidate belongs to a different renderer device.");
+    nrAssert(&candidate->device() == &renderer_.device(),
+             "AppSession::commitScene candidate belongs to a different renderer device.");
 
     renderer_.device().waitIdle();
     renderer_.resetSceneBinding();
@@ -94,7 +91,7 @@ void AppSession::commitScene(std::unique_ptr<nr::scene::Scene> candidate)
     candidate.reset();
 }
 
-nr::scene::Scene& AppSession::createScene(const SceneSessionCreateInfo& createInfo)
+nr::scene::Scene &AppSession::createScene(const SceneSessionCreateInfo &createInfo)
 {
     auto candidate = makeSceneCandidate(createInfo);
     commitScene(std::move(candidate));
@@ -111,10 +108,9 @@ bool AppSession::hasScene() const noexcept
     return scene_ != nullptr;
 }
 
-void AppSession::resetCameraFromSceneOrDefault(const AppCameraDefaultView& defaults)
+void AppSession::resetCameraFromSceneOrDefault(const AppCameraDefaultView &defaults)
 {
-    nrAssert(renderer_.initialized(),
-             "AppSession::resetCameraFromSceneOrDefault requires initialize() first.");
+    nrAssert(renderer_.initialized(), "AppSession::resetCameraFromSceneOrDefault requires initialize() first.");
 
     if (scene_)
     {
@@ -125,42 +121,42 @@ void AppSession::resetCameraFromSceneOrDefault(const AppCameraDefaultView& defau
     camera_.initializeDefault(renderer_.device().presentationContext, defaults);
 }
 
-nr::renderer::Renderer& AppSession::renderer() noexcept
+nr::renderer::Renderer &AppSession::renderer() noexcept
 {
     return renderer_;
 }
 
-const nr::renderer::Renderer& AppSession::renderer() const noexcept
+const nr::renderer::Renderer &AppSession::renderer() const noexcept
 {
     return renderer_;
 }
 
-nr::options::OptionSystem& AppSession::options() noexcept
+nr::options::OptionSystem &AppSession::options() noexcept
 {
     return options_;
 }
 
-const nr::options::OptionSystem& AppSession::options() const noexcept
+const nr::options::OptionSystem &AppSession::options() const noexcept
 {
     return options_;
 }
 
-AppCamera& AppSession::camera() noexcept
+AppCamera &AppSession::camera() noexcept
 {
     return camera_;
 }
 
-const AppCamera& AppSession::camera() const noexcept
+const AppCamera &AppSession::camera() const noexcept
 {
     return camera_;
 }
 
-UiSystem& AppSession::ui() noexcept
+UiSystem &AppSession::ui() noexcept
 {
     return ui_;
 }
 
-const UiSystem& AppSession::ui() const noexcept
+const UiSystem &AppSession::ui() const noexcept
 {
     return ui_;
 }
@@ -176,13 +172,13 @@ nr::renderer::FrameServices AppSession::makeFrameServices() noexcept
     return services;
 }
 
-nr::scene::Scene& AppSession::scene() noexcept
+nr::scene::Scene &AppSession::scene() noexcept
 {
     nrAssert(scene_ != nullptr, "AppSession::scene requires an active scene.");
     return *scene_;
 }
 
-const nr::scene::Scene& AppSession::scene() const noexcept
+const nr::scene::Scene &AppSession::scene() const noexcept
 {
     nrAssert(scene_ != nullptr, "AppSession::scene requires an active scene.");
     return *scene_;

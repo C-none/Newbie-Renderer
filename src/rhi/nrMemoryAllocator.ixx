@@ -30,7 +30,6 @@ import std;
 export namespace nr::rhi
 {
 
-
 /**
  * @brief Strategy-based memory allocator for the rendering pipeline
  *
@@ -67,7 +66,8 @@ class MemoryAllocator
      * 2. Per-frame linear pools (one per frame-in-flight) for PerFrame strategy
     * 3. Staging pool for StagingTransient uploads
      */
-    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice, const vk::raii::Device &device);
+    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
+                    const vk::raii::Device &device);
 
     // =====================================================================
     // Strategy-Based Buffer Allocation
@@ -84,7 +84,10 @@ class MemoryAllocator
      * @param frameIndex    Frame index for PerFrame strategy (mod maxFrameInFlight)
      * @return RAII VmaBuffer
      */
-    [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const;
+    [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage,
+                                           AllocationStrategy strategy = AllocationStrategy::CrossFrame,
+                                           MemoryUsage usage = MemoryUsage::GpuOnly,
+                                           std::uint32_t frameIndex = 0) const;
 
     /**
      * @brief Allocate a buffer from Vulkan-hpp style create info
@@ -92,7 +95,10 @@ class MemoryAllocator
      * Overload accepting vk::BufferCreateInfo for integration with
      * Vulkan-hpp code paths. Adds BDA flag automatically.
      */
-    [[nodiscard]] VmaBuffer allocateBuffer(const vk::BufferCreateInfo &createInfo, AllocationStrategy strategy = AllocationStrategy::CrossFrame, MemoryUsage usage = MemoryUsage::GpuOnly, std::uint32_t frameIndex = 0) const;
+    [[nodiscard]] VmaBuffer allocateBuffer(const vk::BufferCreateInfo &createInfo,
+                                           AllocationStrategy strategy = AllocationStrategy::CrossFrame,
+                                           MemoryUsage usage = MemoryUsage::GpuOnly,
+                                           std::uint32_t frameIndex = 0) const;
 
     // =====================================================================
     // Image Allocation (always CrossFrame)
@@ -113,7 +119,8 @@ class MemoryAllocator
      * @param usage       Memory usage (typically GpuOnly)
      * @return RAII VmaImage
      */
-    [[nodiscard]] VmaImage allocateImage(const vk::ImageCreateInfo &imageInfo, MemoryUsage usage = MemoryUsage::GpuOnly) const;
+    [[nodiscard]] VmaImage allocateImage(const vk::ImageCreateInfo &imageInfo,
+                                         MemoryUsage usage = MemoryUsage::GpuOnly) const;
 
     /**
      * @brief Allocate a GPU image from Vulkan-hpp create info

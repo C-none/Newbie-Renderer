@@ -18,7 +18,8 @@ import :rendererSubmission;
 export namespace nr::renderer
 {
 inline constexpr std::uint32_t kSceneTextureDescriptorCapacity = 1024u;
-static_assert(kSceneTextureDescriptorCapacity <= nr::scene::kMaxSceneTextureId + 1u, "Scene texture descriptor capacity must fit the packed uint16 material texture id ABI.");
+static_assert(kSceneTextureDescriptorCapacity <= nr::scene::kMaxSceneTextureId + 1u,
+              "Scene texture descriptor capacity must fit the packed uint16 material texture id ABI.");
 
 struct RendererCreateInfo
 {
@@ -43,8 +44,7 @@ enum class RenderGraphSkeletonMode : std::uint8_t
 };
 
 [[nodiscard]] std::string_view renderGraphSkeletonModeName(RenderGraphSkeletonMode mode) noexcept;
-[[nodiscard]] std::string_view renderGraphSkeletonMissReasonName(
-    RenderGraphSkeletonMissReason reason) noexcept;
+[[nodiscard]] std::string_view renderGraphSkeletonMissReasonName(RenderGraphSkeletonMissReason reason) noexcept;
 namespace frameResource
 {
 inline constexpr std::string_view presentSourceColor = "present.sourceColor";
@@ -76,10 +76,8 @@ struct FrameResolutionPlan
     bool resetHistory = false;
 };
 
-using FrameResolutionResolver = std::function<FrameResolutionPlan(
-    nr::rhi::Device&,
-    vk::Extent2D,
-    const nr::options::OptionFrameSnapshot&)>;
+using FrameResolutionResolver =
+    std::function<FrameResolutionPlan(nr::rhi::Device &, vk::Extent2D, const nr::options::OptionFrameSnapshot &)>;
 
 class NodeRuntime;
 
@@ -95,8 +93,8 @@ class FrameEffectSink
   public:
     explicit FrameEffectSink(std::optional<nr::options::FrameEffect> effect = {});
 
-    [[nodiscard]] const std::optional<nr::options::FrameEffect>& effect() const noexcept;
-    [[nodiscard]] bool claim(NodeRuntime& runtime, GraphPassHandle targetPass) noexcept;
+    [[nodiscard]] const std::optional<nr::options::FrameEffect> &effect() const noexcept;
+    [[nodiscard]] bool claim(NodeRuntime &runtime, GraphPassHandle targetPass) noexcept;
     [[nodiscard]] bool claimed() const noexcept;
     [[nodiscard]] std::optional<std::reference_wrapper<NodeRuntime>> claimedRuntime() const noexcept;
     [[nodiscard]] GraphPassHandle targetPass() const noexcept;
@@ -317,16 +315,18 @@ struct RendererGraphBuildTimings
 [[nodiscard]] std::span<const std::string_view> rendererBenchmarkExecuteCsvColumns() noexcept;
 [[nodiscard]] std::span<const std::string_view> rendererBenchmarkExecuteSummarySections() noexcept;
 [[nodiscard]] double rendererBenchmarkClassifiedCpuMilliseconds(const RendererCpuFrameTimings &timings) noexcept;
-[[nodiscard]] double rendererBenchmarkExecuteAccountedMainThreadMilliseconds(const ExecutorBenchmarkTelemetry &telemetry) noexcept;
+[[nodiscard]] double rendererBenchmarkExecuteAccountedMainThreadMilliseconds(
+    const ExecutorBenchmarkTelemetry &telemetry) noexcept;
 [[nodiscard]] bool validateRendererBenchmarkExecuteTelemetry(const RendererBenchmarkFrame &frame) noexcept;
-[[nodiscard]] bool validateRendererBenchmarkSkeletonTelemetry(
-    const RendererBenchmarkFrame &frame,
-    RenderGraphSkeletonMode mode) noexcept;
-[[nodiscard]] bool validateBenchmarkFrames(
-    std::span<const RendererBenchmarkFrame> frames,
-    RenderGraphSkeletonMode mode);
-[[nodiscard]] RendererBenchmarkQualityAudit auditRendererBenchmark(std::span<const RendererBenchmarkFrame> frames, std::span<const RendererBenchmarkGpuPass> passes, std::span<const RendererBenchmarkGpuFrameStatus> statuses, std::size_t expectedNodeCount,
-                                                                   std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry, RenderGraphSkeletonMode skeletonMode);
+[[nodiscard]] bool validateRendererBenchmarkSkeletonTelemetry(const RendererBenchmarkFrame &frame,
+                                                              RenderGraphSkeletonMode mode) noexcept;
+[[nodiscard]] bool validateBenchmarkFrames(std::span<const RendererBenchmarkFrame> frames,
+                                           RenderGraphSkeletonMode mode);
+[[nodiscard]] RendererBenchmarkQualityAudit auditRendererBenchmark(
+    std::span<const RendererBenchmarkFrame> frames, std::span<const RendererBenchmarkGpuPass> passes,
+    std::span<const RendererBenchmarkGpuFrameStatus> statuses, std::size_t expectedNodeCount,
+    std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry,
+    RenderGraphSkeletonMode skeletonMode);
 [[nodiscard]] RendererBenchmarkDistribution makeRendererBenchmarkDistribution(std::vector<double> values);
 
 struct NodeInitContext
@@ -385,11 +385,15 @@ struct RendererCameraFrameState
 
 [[nodiscard]] float haltonSequenceValue(std::uint32_t index, std::uint32_t base) noexcept;
 
-[[nodiscard]] RendererCameraJitterSample makeHalton23CameraJitterSample(std::uint64_t frameOrdinal, vk::Extent2D viewportExtent, std::uint32_t cycleLength = kRendererDefaultCameraJitterCycleLength) noexcept;
+[[nodiscard]] RendererCameraJitterSample makeHalton23CameraJitterSample(
+    std::uint64_t frameOrdinal, vk::Extent2D viewportExtent,
+    std::uint32_t cycleLength = kRendererDefaultCameraJitterCycleLength) noexcept;
 
 [[nodiscard]] glm::mat4 applyCameraProjectionJitter(const glm::mat4 &projection, glm::vec2 ndcOffset) noexcept;
 
-[[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(const RendererCameraJitterConfig &jitterConfig, std::uint64_t frameOrdinal, vk::Extent2D viewportExtent) noexcept;
+[[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(const RendererCameraJitterConfig &jitterConfig,
+                                                                    std::uint64_t frameOrdinal,
+                                                                    vk::Extent2D viewportExtent) noexcept;
 
 struct alignas(16) EnvironmentMapParameters
 {
@@ -437,7 +441,8 @@ struct NodeBuildContext
 
     [[nodiscard]] GraphResourceHandle resolveFrameResource(std::string_view key) const;
 
-    [[nodiscard]] GraphResourceHandle requireFrameResource(std::string_view key, std::string_view consumerDebugName) const;
+    [[nodiscard]] GraphResourceHandle requireFrameResource(std::string_view key,
+                                                           std::string_view consumerDebugName) const;
 
     void publishFrameData(std::string_view key, GraphFrameDataHandle frameData) const;
 
@@ -445,9 +450,12 @@ struct NodeBuildContext
 
     [[nodiscard]] GraphFrameDataHandle requireFrameData(std::string_view key, std::string_view consumerDebugName) const;
 
-    [[nodiscard]] std::optional<std::reference_wrapper<const std::any>> resolveFrameDataPayload(GraphFrameDataHandle handle) const;
+    [[nodiscard]] std::optional<std::reference_wrapper<const std::any>> resolveFrameDataPayload(
+        GraphFrameDataHandle handle) const;
 
-    template <typename TPayload> [[nodiscard]] std::optional<std::reference_wrapper<const std::remove_cvref_t<TPayload>>> resolveBuildFrameData(GraphFrameDataHandle handle) const
+    template <typename TPayload>
+    [[nodiscard]] std::optional<std::reference_wrapper<const std::remove_cvref_t<TPayload>>> resolveBuildFrameData(
+        GraphFrameDataHandle handle) const
     {
         using Payload = std::remove_cvref_t<TPayload>;
 
@@ -459,14 +467,20 @@ struct NodeBuildContext
         }
 
         auto const typedPayload = std::any_cast<Payload>(&payload->get());
-        nrAssert(typedPayload != nullptr, std::format("NodeBuildContext::resolveBuildFrameData resolved unexpected payload type for frame data handle {}.", handle.value));
+        nrAssert(
+            typedPayload != nullptr,
+            std::format(
+                "NodeBuildContext::resolveBuildFrameData resolved unexpected payload type for frame data handle {}.",
+                handle.value));
         return std::cref(*typedPayload);
     }
 
-    template <typename TPayload> [[nodiscard]] const std::remove_cvref_t<TPayload> &buildFrameData(GraphFrameDataHandle handle) const
+    template <typename TPayload>
+    [[nodiscard]] const std::remove_cvref_t<TPayload> &buildFrameData(GraphFrameDataHandle handle) const
     {
         auto resolved = resolveBuildFrameData<TPayload>(handle);
-        nrAssert(resolved.has_value(), std::format("NodeBuildContext::buildFrameData failed to resolve frame data handle {}.", handle.value));
+        nrAssert(resolved.has_value(),
+                 std::format("NodeBuildContext::buildFrameData failed to resolve frame data handle {}.", handle.value));
         return resolved->get();
     }
 
@@ -478,69 +492,111 @@ struct NodeBuildContext
         return graphBuilder.get().addResource(desc);
     }
 
-    template <typename TPayload> [[nodiscard]] GraphFrameDataHandle importFrameData(std::string_view debugName, TPayload &&payload)
+    template <typename TPayload>
+    [[nodiscard]] GraphFrameDataHandle importFrameData(std::string_view debugName, TPayload &&payload)
     {
         return graphBuilder.get().addFrameData(debugName, std::forward<TPayload>(payload));
     }
 
-    [[nodiscard]] GraphResourceHandle transientColor(std::string_view debugName, vk::Extent2D extent, vk::Format format);
+    [[nodiscard]] GraphResourceHandle transientColor(std::string_view debugName, vk::Extent2D extent,
+                                                     vk::Format format);
 
-    [[nodiscard]] GraphResourceHandle importColor(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+    [[nodiscard]] GraphResourceHandle importColor(const nr::rhi::Image &image, std::string_view debugName,
+                                                  vk::Extent2D extent, vk::Format format,
+                                                  ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
 
-    [[nodiscard]] GraphResourceHandle importStorageColor(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+    [[nodiscard]] GraphResourceHandle importStorageColor(
+        const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
 
-    [[nodiscard]] GraphResourceHandle importRetainedStorageColor(const nr::rhi::Image &image, RetainedImageState &state, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+    [[nodiscard]] GraphResourceHandle importRetainedStorageColor(
+        const nr::rhi::Image &image, RetainedImageState &state, std::string_view debugName, vk::Extent2D extent,
+        vk::Format format, ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
 
-    [[nodiscard]] GraphResourceHandle importSampledColor(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+    [[nodiscard]] GraphResourceHandle importSampledColor(
+        const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
 
-    [[nodiscard]] GraphResourceHandle importSampledImage(const nr::rhi::Image &image, std::string_view debugName, vk::Extent3D extent, vk::Format format, ResourceLifetime lifetime = ResourceLifetime::RendererPersistent, ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Graphics);
+    [[nodiscard]] GraphResourceHandle importSampledImage(
+        const nr::rhi::Image &image, std::string_view debugName, vk::Extent3D extent, vk::Format format,
+        ResourceLifetime lifetime = ResourceLifetime::RendererPersistent,
+        ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Graphics);
 
-    [[nodiscard]] GraphResourceHandle importDepth(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
+    [[nodiscard]] GraphResourceHandle importDepth(const nr::rhi::Image &image, std::string_view debugName,
+                                                  vk::Extent2D extent, vk::Format format,
+                                                  ResourceLifetime lifetime = ResourceLifetime::RendererPersistent);
 
-    [[nodiscard]] GraphResourceHandle importBuffer(const nr::rhi::Buffer &buffer, std::string_view debugName, ResourceLifetime lifetime, std::initializer_list<BufferUsageIntent> usageIntents, ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined);
+    [[nodiscard]] GraphResourceHandle importBuffer(
+        const nr::rhi::Buffer &buffer, std::string_view debugName, ResourceLifetime lifetime,
+        std::initializer_list<BufferUsageIntent> usageIntents,
+        ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined);
 
-    template <std::size_t FrameSlotCount> [[nodiscard]] GraphResourceHandle importFrameColor(const std::array<nr::rhi::Image, FrameSlotCount> &images, std::string_view debugName, vk::Extent2D extent, vk::Format format)
+    template <std::size_t FrameSlotCount>
+    [[nodiscard]] GraphResourceHandle importFrameColor(const std::array<nr::rhi::Image, FrameSlotCount> &images,
+                                                       std::string_view debugName, vk::Extent2D extent,
+                                                       vk::Format format)
     {
         auto const frameSlot = frameSlotIndex(FrameSlotCount);
         auto const &image = images[frameSlot];
         nrAssert(image.valid(), std::format("{} frame image slot {} is invalid.", debugName, frameSlot));
 
-        return importColor(image, indexedFrameDebugName(debugName, frameSlot), extent, format, ResourceLifetime::FrameLocal);
+        return importColor(image, indexedFrameDebugName(debugName, frameSlot), extent, format,
+                           ResourceLifetime::FrameLocal);
     }
 
-    template <std::size_t FrameSlotCount> [[nodiscard]] GraphResourceHandle importFrameStorageColor(const std::array<nr::rhi::Image, FrameSlotCount> &images, std::string_view debugName, vk::Extent2D extent, vk::Format format)
+    template <std::size_t FrameSlotCount>
+    [[nodiscard]] GraphResourceHandle importFrameStorageColor(const std::array<nr::rhi::Image, FrameSlotCount> &images,
+                                                              std::string_view debugName, vk::Extent2D extent,
+                                                              vk::Format format)
     {
         auto const frameSlot = frameSlotIndex(FrameSlotCount);
         auto const &image = images[frameSlot];
         nrAssert(image.valid(), std::format("{} frame storage image slot {} is invalid.", debugName, frameSlot));
 
-        return importStorageColor(image, indexedFrameDebugName(debugName, frameSlot), extent, format, ResourceLifetime::FrameLocal);
+        return importStorageColor(image, indexedFrameDebugName(debugName, frameSlot), extent, format,
+                                  ResourceLifetime::FrameLocal);
     }
 
-    template <std::size_t FrameSlotCount> [[nodiscard]] GraphResourceHandle importFrameDepth(const std::array<nr::rhi::Image, FrameSlotCount> &images, std::string_view debugName, vk::Extent2D extent, vk::Format format)
+    template <std::size_t FrameSlotCount>
+    [[nodiscard]] GraphResourceHandle importFrameDepth(const std::array<nr::rhi::Image, FrameSlotCount> &images,
+                                                       std::string_view debugName, vk::Extent2D extent,
+                                                       vk::Format format)
     {
         auto const frameSlot = frameSlotIndex(FrameSlotCount);
         auto const &image = images[frameSlot];
         nrAssert(image.valid(), std::format("{} frame depth image slot {} is invalid.", debugName, frameSlot));
 
-        return importDepth(image, indexedFrameDebugName(debugName, frameSlot), extent, format, ResourceLifetime::FrameLocal);
+        return importDepth(image, indexedFrameDebugName(debugName, frameSlot), extent, format,
+                           ResourceLifetime::FrameLocal);
     }
 
-    [[nodiscard]] GraphResourceHandle importAccelerationStructure(const nr::rhi::AccelerationStructureResource &accelerationStructure, std::string_view debugName, ResourceLifetime lifetime = ResourceLifetime::ScenePersistent,
-                                                                  ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined);
+    [[nodiscard]] GraphResourceHandle importAccelerationStructure(
+        const nr::rhi::AccelerationStructureResource &accelerationStructure, std::string_view debugName,
+        ResourceLifetime lifetime = ResourceLifetime::ScenePersistent,
+        ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined);
 
-    [[nodiscard]] GraphResourceHandle importSwapchain(std::string_view debugName, const NodeFrameParameters &frameParameters);
+    [[nodiscard]] GraphResourceHandle importSwapchain(std::string_view debugName,
+                                                      const NodeFrameParameters &frameParameters);
 
-    [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName, PassRecordCallback executeLambda, PassPrepareCallback prepareCallback = nullptr, bool isCopyPass = false, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
+    [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName,
+                                          PassRecordCallback executeLambda,
+                                          PassPrepareCallback prepareCallback = nullptr, bool isCopyPass = false,
+                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
-    [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName, PassParallelRecordDesc parallelRecord, PassPrepareCallback prepareCallback = nullptr, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
+    [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName,
+                                          PassParallelRecordDesc parallelRecord,
+                                          PassPrepareCallback prepareCallback = nullptr,
+                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(std::string_view debugName);
 
     [[nodiscard]] GraphSubmitHandle addSwapchainAcquireNode(std::string_view debugName);
 
   private:
-    [[nodiscard]] GraphResourceHandle importImage(const nr::rhi::Image &image, std::string_view debugName, vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime, std::initializer_list<ImageUsageIntent> usageIntents, ImageAspectIntent aspect = ImageAspectIntent::Color);
+    [[nodiscard]] GraphResourceHandle importImage(const nr::rhi::Image &image, std::string_view debugName,
+                                                  vk::Extent2D extent, vk::Format format, ResourceLifetime lifetime,
+                                                  std::initializer_list<ImageUsageIntent> usageIntents,
+                                                  ImageAspectIntent aspect = ImageAspectIntent::Color);
 
     [[nodiscard]] std::size_t frameSlotIndex(std::size_t frameSlotCount) const;
 
@@ -563,17 +619,17 @@ class FrameUniformArena
 
     [[nodiscard]] bool valid() const noexcept;
 
-    [[nodiscard]] FrameUniformBinding uploadBytes(RenderGraphBuilder &graphBuilder, std::string_view debugName, std::span<const std::byte> bytes);
+    [[nodiscard]] FrameUniformBinding uploadBytes(RenderGraphBuilder &graphBuilder, std::string_view debugName,
+                                                  std::span<const std::byte> bytes);
 
-    [[nodiscard]] FrameUniformBinding patchUploadBytes(
-        RenderGraphSkeletonPatchContext& patchContext,
-        std::size_t resourceSlot,
-        std::string_view debugName,
-        std::span<const std::byte> bytes);
+    [[nodiscard]] FrameUniformBinding patchUploadBytes(RenderGraphSkeletonPatchContext &patchContext,
+                                                       std::size_t resourceSlot, std::string_view debugName,
+                                                       std::span<const std::byte> bytes);
 
     template <typename TPayload>
         requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
-    [[nodiscard]] FrameUniformBinding upload(RenderGraphBuilder &graphBuilder, std::string_view debugName, const TPayload &value)
+    [[nodiscard]] FrameUniformBinding upload(RenderGraphBuilder &graphBuilder, std::string_view debugName,
+                                             const TPayload &value)
     {
         auto bytes = std::as_bytes(std::span{&value, 1});
         return uploadBytes(graphBuilder, debugName, bytes);
@@ -598,42 +654,51 @@ template <typename TPipeline, std::size_t FrameSlotCount = nr::maxFrameInFlight>
 
     PipelineRuntime(const PipelineRuntime &) = delete;
     PipelineRuntime &operator=(const PipelineRuntime &) = delete;
-    PipelineRuntime(PipelineRuntime &&) noexcept = default;
-    PipelineRuntime &operator=(PipelineRuntime &&) noexcept = default;
+    PipelineRuntime(PipelineRuntime &&) = delete;
+    PipelineRuntime &operator=(PipelineRuntime &&) = delete;
 
     ~PipelineRuntime();
 
-    void initialize(nr::rhi::PipelineState<TPipeline> pipelineState);
+    void initialize(nr::rhi::PipelineBuild<TPipeline> pipelineBuild);
 
-    void initializeDeferred(nr::rhi::PipelineState<TPipeline> pipelineState);
+    void initializeDeferred(nr::rhi::PipelineBuild<TPipeline> pipelineBuild);
 
     void clearBindingSets();
 
-    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] bool valid() const;
 
-    [[nodiscard]] nr::rhi::PipelineState<TPipeline> &state() noexcept;
+    [[nodiscard]] nr::rhi::PipelineState<TPipeline> &state();
 
-    [[nodiscard]] const nr::rhi::PipelineState<TPipeline> &state() const noexcept;
+    [[nodiscard]] const nr::rhi::PipelineState<TPipeline> &state() const;
 
-    [[nodiscard]] TPipeline &pipeline() noexcept;
+    [[nodiscard]] TPipeline &pipeline();
 
-    [[nodiscard]] const TPipeline &pipeline() const noexcept;
+    [[nodiscard]] const TPipeline &pipeline() const;
 
     [[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> bindingSetsForFrame(std::uint32_t frameIndex) const;
 
     [[nodiscard]] nr::rhi::DescriptorWriteCache &descriptorWriteCacheForFrame(std::uint32_t frameIndex) noexcept;
 
-    [[nodiscard]] bool ensureBindingSetsForFrame(std::uint32_t frameIndex, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
+    [[nodiscard]] bool ensureBindingSetsForFrame(
+        std::uint32_t frameIndex, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
 
     [[nodiscard]] nr::rhi::ShaderCursor rootCursor() const;
 
   private:
-    void allocateBindingSetsForFrame(std::size_t frameSlot, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
+    template <bool AllocateDefaultBindingSets> void initializeBuild(nr::rhi::PipelineBuild<TPipeline> pipelineBuild);
 
-    nr::rhi::PipelineState<TPipeline> pipeline_{};
-    std::array<std::vector<nr::rhi::ShaderBindingSet>, FrameSlotCount> bindingSetsByFrame_{};
-    std::array<nr::rhi::DescriptorWriteCache, FrameSlotCount> descriptorWriteCachesByFrame_{};
-    std::array<std::map<std::uint32_t, std::uint32_t>, FrameSlotCount> variableDescriptorCountsByFrame_{};
+    void resolvePipeline() const;
+
+    void allocateBindingSetsForFrame(std::size_t frameSlot,
+                                     const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet) const;
+
+    mutable nr::rhi::PipelineState<TPipeline> pipeline_{};
+    mutable nr::rhi::PipelineBuild<TPipeline> pendingPipeline_{};
+    mutable std::mutex resolutionMutex_{};
+    mutable bool allocateDefaultBindingSetsOnResolve_ = false;
+    mutable std::array<std::vector<nr::rhi::ShaderBindingSet>, FrameSlotCount> bindingSetsByFrame_{};
+    mutable std::array<nr::rhi::DescriptorWriteCache, FrameSlotCount> descriptorWriteCachesByFrame_{};
+    mutable std::array<std::map<std::uint32_t, std::uint32_t>, FrameSlotCount> variableDescriptorCountsByFrame_{};
 };
 
 template <typename TPipeline, std::size_t FrameSlotCount> PipelineRuntime<TPipeline, FrameSlotCount>::~PipelineRuntime()
@@ -641,72 +706,121 @@ template <typename TPipeline, std::size_t FrameSlotCount> PipelineRuntime<TPipel
     clearBindingSets();
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> void PipelineRuntime<TPipeline, FrameSlotCount>::initialize(nr::rhi::PipelineState<TPipeline> pipelineState)
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::initialize(nr::rhi::PipelineBuild<TPipeline> pipelineBuild)
 {
-    clearBindingSets();
-    pipeline_ = std::move(pipelineState);
-    nrAssert(pipeline_.layout.valid(), "PipelineRuntime::initialize requires a valid cursor pipeline layout.");
-
-    auto frameSlots = std::views::iota(std::size_t{0}, bindingSetsByFrame_.size());
-    std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) { allocateBindingSetsForFrame(frameSlot, {}); });
+    initializeBuild<true>(std::move(pipelineBuild));
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> void PipelineRuntime<TPipeline, FrameSlotCount>::initializeDeferred(nr::rhi::PipelineState<TPipeline> pipelineState)
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::initializeDeferred(nr::rhi::PipelineBuild<TPipeline> pipelineBuild)
 {
-    clearBindingSets();
-    pipeline_ = std::move(pipelineState);
-    nrAssert(pipeline_.layout.valid(), "PipelineRuntime::initializeDeferred requires a valid cursor pipeline layout.");
+    initializeBuild<false>(std::move(pipelineBuild));
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> void PipelineRuntime<TPipeline, FrameSlotCount>::clearBindingSets()
+template <typename TPipeline, std::size_t FrameSlotCount>
+template <bool AllocateDefaultBindingSets>
+void PipelineRuntime<TPipeline, FrameSlotCount>::initializeBuild(nr::rhi::PipelineBuild<TPipeline> pipelineBuild)
+{
+    std::scoped_lock lock(resolutionMutex_);
+    clearBindingSets();
+    pipeline_ = {};
+    nrAssert(pipelineBuild.valid(), "PipelineRuntime initialization requires a valid pipeline build.");
+    pendingPipeline_ = std::move(pipelineBuild);
+    allocateDefaultBindingSetsOnResolve_ = AllocateDefaultBindingSets;
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::clearBindingSets()
 {
     std::ranges::for_each(bindingSetsByFrame_, [](auto &bindingSets) { bindingSets.clear(); });
-    std::ranges::for_each(variableDescriptorCountsByFrame_, [](auto &variableDescriptorCounts) { variableDescriptorCounts.clear(); });
-    std::ranges::for_each(descriptorWriteCachesByFrame_, [](auto &descriptorWriteCache) { descriptorWriteCache.clear(); });
+    std::ranges::for_each(variableDescriptorCountsByFrame_,
+                          [](auto &variableDescriptorCounts) { variableDescriptorCounts.clear(); });
+    std::ranges::for_each(descriptorWriteCachesByFrame_,
+                          [](auto &descriptorWriteCache) { descriptorWriteCache.clear(); });
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::valid() const noexcept
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::resolvePipeline() const
 {
+    std::scoped_lock lock(resolutionMutex_);
+    if (!pendingPipeline_.valid())
+    {
+        return;
+    }
+
+    pipeline_ = pendingPipeline_.get();
+    nrAssert(pipeline_.layout.valid() && pipeline_.pipeline.valid(),
+             "PipelineRuntime async construction returned an invalid pipeline state.");
+    if (allocateDefaultBindingSetsOnResolve_)
+    {
+        auto frameSlots = std::views::iota(std::size_t{0}, bindingSetsByFrame_.size());
+        std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) { allocateBindingSetsForFrame(frameSlot, {}); });
+        allocateDefaultBindingSetsOnResolve_ = false;
+    }
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::valid() const
+{
+    resolvePipeline();
     return pipeline_.pipeline.valid();
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] nr::rhi::PipelineState<TPipeline> &PipelineRuntime<TPipeline, FrameSlotCount>::state() noexcept
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] nr::rhi::PipelineState<TPipeline> &PipelineRuntime<TPipeline, FrameSlotCount>::state()
 {
+    resolvePipeline();
     return pipeline_;
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] const nr::rhi::PipelineState<TPipeline> &PipelineRuntime<TPipeline, FrameSlotCount>::state() const noexcept
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] const nr::rhi::PipelineState<TPipeline> &PipelineRuntime<TPipeline, FrameSlotCount>::state() const
 {
+    resolvePipeline();
     return pipeline_;
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] TPipeline &PipelineRuntime<TPipeline, FrameSlotCount>::pipeline() noexcept
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] TPipeline &PipelineRuntime<TPipeline, FrameSlotCount>::pipeline()
 {
+    resolvePipeline();
     return pipeline_.pipeline;
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] const TPipeline &PipelineRuntime<TPipeline, FrameSlotCount>::pipeline() const noexcept
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] const TPipeline &PipelineRuntime<TPipeline, FrameSlotCount>::pipeline() const
 {
+    resolvePipeline();
     return pipeline_.pipeline;
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> PipelineRuntime<TPipeline, FrameSlotCount>::bindingSetsForFrame(std::uint32_t frameIndex) const
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> PipelineRuntime<
+    TPipeline, FrameSlotCount>::bindingSetsForFrame(std::uint32_t frameIndex) const
 {
+    resolvePipeline();
     auto const frameSlot = static_cast<std::size_t>(frameIndex % bindingSetsByFrame_.size());
     auto const &bindingSets = bindingSetsByFrame_[frameSlot];
     return std::span<const nr::rhi::ShaderBindingSet>{bindingSets.data(), bindingSets.size()};
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] nr::rhi::DescriptorWriteCache &PipelineRuntime<TPipeline, FrameSlotCount>::descriptorWriteCacheForFrame(std::uint32_t frameIndex) noexcept
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] nr::rhi::DescriptorWriteCache &PipelineRuntime<TPipeline, FrameSlotCount>::descriptorWriteCacheForFrame(
+    std::uint32_t frameIndex) noexcept
 {
     auto const frameSlot = static_cast<std::size_t>(frameIndex % descriptorWriteCachesByFrame_.size());
     return descriptorWriteCachesByFrame_[frameSlot];
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::ensureBindingSetsForFrame(std::uint32_t frameIndex, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet)
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::ensureBindingSetsForFrame(
+    std::uint32_t frameIndex, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet)
 {
+    resolvePipeline();
     auto const frameSlot = static_cast<std::size_t>(frameIndex % bindingSetsByFrame_.size());
-    if (!bindingSetsByFrame_[frameSlot].empty() && variableDescriptorCountsByFrame_[frameSlot] == variableDescriptorCountsBySet)
+    if (!bindingSetsByFrame_[frameSlot].empty() &&
+        variableDescriptorCountsByFrame_[frameSlot] == variableDescriptorCountsBySet)
     {
         return false;
     }
@@ -715,15 +829,20 @@ template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] bool Pip
     return true;
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> [[nodiscard]] nr::rhi::ShaderCursor PipelineRuntime<TPipeline, FrameSlotCount>::rootCursor() const
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] nr::rhi::ShaderCursor PipelineRuntime<TPipeline, FrameSlotCount>::rootCursor() const
 {
+    resolvePipeline();
     return pipeline_.descriptorLayout.rootCursor();
 }
 
-template <typename TPipeline, std::size_t FrameSlotCount> void PipelineRuntime<TPipeline, FrameSlotCount>::allocateBindingSetsForFrame(std::size_t frameSlot, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet)
+template <typename TPipeline, std::size_t FrameSlotCount>
+void PipelineRuntime<TPipeline, FrameSlotCount>::allocateBindingSetsForFrame(
+    std::size_t frameSlot, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet) const
 {
     nrAssert(frameSlot < bindingSetsByFrame_.size(), "PipelineRuntime frame slot is out of range.");
-    bindingSetsByFrame_[frameSlot] = nr::rhi::allocateBindingSetsForLayout(pipeline_.layout, pipeline_.bindingPool, variableDescriptorCountsBySet);
+    bindingSetsByFrame_[frameSlot] =
+        nr::rhi::allocateBindingSetsForLayout(pipeline_.layout, pipeline_.bindingPool, variableDescriptorCountsBySet);
     variableDescriptorCountsByFrame_[frameSlot] = variableDescriptorCountsBySet;
     descriptorWriteCachesByFrame_[frameSlot].clear();
 }
@@ -762,20 +881,26 @@ struct PushConstantLocation
     }
 };
 
-[[nodiscard]] inline PushConstantLocation resolvePushConstantLocation(const nr::rhi::ShaderDescriptorLayout &descriptorLayout, std::string_view shaderPath)
+[[nodiscard]] inline PushConstantLocation resolvePushConstantLocation(
+    const nr::rhi::ShaderDescriptorLayout &descriptorLayout, std::string_view shaderPath)
 {
     auto cursor = descriptorLayout.rootCursor().getPath(shaderPath);
     auto pushConstantRange = cursor.pushConstantRange();
-    nrAssert(pushConstantRange.has_value(), std::format("Push constant path '{}' must reference push-constant storage.", shaderPath));
+    nrAssert(pushConstantRange.has_value(),
+             std::format("Push constant path '{}' must reference push-constant storage.", shaderPath));
 
     auto const cursorOffset = cursor.address().uniformOffset;
     auto const rangeBegin = static_cast<std::uint64_t>(pushConstantRange->offset);
     auto const rangeEnd = rangeBegin + static_cast<std::uint64_t>(pushConstantRange->size);
-    nrAssert(cursorOffset <= std::numeric_limits<std::uint32_t>::max(), std::format("Push constant cursor offset overflow for '{}': {}", shaderPath, cursorOffset));
-    nrAssert(cursorOffset >= rangeBegin && cursorOffset < rangeEnd, std::format("Push constant path '{}' resolved outside its range. offset={}, rangeBegin={}, rangeEnd={}", shaderPath, cursorOffset, rangeBegin, rangeEnd));
+    nrAssert(cursorOffset <= std::numeric_limits<std::uint32_t>::max(),
+             std::format("Push constant cursor offset overflow for '{}': {}", shaderPath, cursorOffset));
+    nrAssert(cursorOffset >= rangeBegin && cursorOffset < rangeEnd,
+             std::format("Push constant path '{}' resolved outside its range. offset={}, rangeBegin={}, rangeEnd={}",
+                         shaderPath, cursorOffset, rangeBegin, rangeEnd));
 
     auto const remainingBytes = rangeEnd - cursorOffset;
-    nrAssert(remainingBytes <= std::numeric_limits<std::uint32_t>::max(), std::format("Push constant path '{}' remaining byte count overflow: {}", shaderPath, remainingBytes));
+    nrAssert(remainingBytes <= std::numeric_limits<std::uint32_t>::max(),
+             std::format("Push constant path '{}' remaining byte count overflow: {}", shaderPath, remainingBytes));
 
     return PushConstantLocation{
         .stageFlags = pushConstantRange->stageFlags,
@@ -786,14 +911,19 @@ struct PushConstantLocation
 
 template <typename TPayload>
     requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
-void pushConstantsToLocation(const vk::raii::CommandBuffer &commandBuffer, const nr::rhi::CursorPipelineLayout &pipelineLayout, PushConstantLocation location, const TPayload &value)
+void pushConstantsToLocation(const vk::raii::CommandBuffer &commandBuffer,
+                             const nr::rhi::CursorPipelineLayout &pipelineLayout, PushConstantLocation location,
+                             const TPayload &value)
 {
     nrAssert(location.valid(), "pushConstantsToLocation requires a valid push-constant location.");
     auto bytes = std::as_bytes(std::span{std::addressof(value), std::size_t{1}});
-    nrAssert(bytes.size() <= location.maxBytes, std::format("Push constant payload exceeds reflected range. size={}, maxBytes={}, offset={}", bytes.size(), location.maxBytes, location.offset));
+    nrAssert(bytes.size() <= location.maxBytes,
+             std::format("Push constant payload exceeds reflected range. size={}, maxBytes={}, offset={}", bytes.size(),
+                         location.maxBytes, location.offset));
 
     auto const *rawBytes = reinterpret_cast<const std::uint8_t *>(bytes.data());
-    pipelineLayout.pushConstants(commandBuffer, location.stageFlags, location.offset, std::span<const std::uint8_t>{rawBytes, bytes.size()});
+    pipelineLayout.pushConstants(commandBuffer, location.stageFlags, location.offset,
+                                 std::span<const std::uint8_t>{rawBytes, bytes.size()});
 }
 
 struct RasterPassRangeRecordContext
@@ -882,14 +1012,18 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         PassPrepareCallback prepareCallback{};
     };
 
-    ShaderVisiblePassBuilderBase(NodeBuildContext &context, std::string_view debugName, RuntimePtr runtime, std::string_view builderLabel) : context_(context), debugName_(debugName), runtime_(std::move(runtime)), builderLabel_(builderLabel)
+    ShaderVisiblePassBuilderBase(NodeBuildContext &context, std::string_view debugName, RuntimePtr runtime,
+                                 std::string_view builderLabel)
+        : context_(context), debugName_(debugName), runtime_(std::move(runtime)), builderLabel_(builderLabel)
     {
-        nrAssert(static_cast<bool>(runtime_), std::format("{} requires a valid PipelineRuntime shared pointer.", builderLabel_));
+        nrAssert(static_cast<bool>(runtime_),
+                 std::format("{} requires a valid PipelineRuntime shared pointer.", builderLabel_));
         nrAssert(runtime_->valid(), std::format("{} requires initialized PipelineRuntime state.", builderLabel_));
         rootCursor_ = runtime_->rootCursor();
     }
 
-    TDerived &uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    TDerived &uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                      vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::uniform requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -901,15 +1035,19 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, ShaderStageIntent shaderStage)
+    TDerived &uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                      ShaderStageIntent shaderStage)
     {
         return uniform(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
     }
 
-    TDerived &uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    TDerived &uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName,
+                      vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(binding.resource.valid(), std::format("{}::uniform requires a valid frame uniform resource.", builderLabel_));
-        nrAssert(binding.range > 0u, std::format("{}::uniform requires a non-zero frame uniform range.", builderLabel_));
+        nrAssert(binding.resource.valid(),
+                 std::format("{}::uniform requires a valid frame uniform resource.", builderLabel_));
+        nrAssert(binding.range > 0u,
+                 std::format("{}::uniform requires a non-zero frame uniform range.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = binding.resource.value,
@@ -921,12 +1059,14 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName, ShaderStageIntent shaderStage)
+    TDerived &uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName,
+                      ShaderStageIntent shaderStage)
     {
         return uniform(shaderPath, binding, debugName, use::shaderStageScope(shaderStage));
     }
 
-    TDerived &sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    TDerived &sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                           vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::sampledImage requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -939,14 +1079,17 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, ShaderStageIntent shaderStage)
+    TDerived &sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                           ShaderStageIntent shaderStage)
     {
         return sampledImage(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
     }
 
-    TDerived &sampledImageGeneral(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    TDerived &sampledImageGeneral(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                                  vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(resource.valid(), std::format("{}::sampledImageGeneral requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(),
+                 std::format("{}::sampledImageGeneral requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -964,12 +1107,14 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &sampledImageGeneral(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, ShaderStageIntent shaderStage)
+    TDerived &sampledImageGeneral(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                                  ShaderStageIntent shaderStage)
     {
         return sampledImageGeneral(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
     }
 
-    TDerived &storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    TDerived &storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                           vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::storageImage requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -981,12 +1126,14 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, ShaderStageIntent shaderStage)
+    TDerived &storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                           ShaderStageIntent shaderStage)
     {
         return storageImage(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
     }
 
-    TDerived &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    TDerived &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                            vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
         nrAssert(resource.valid(), std::format("{}::storageBuffer requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
@@ -998,14 +1145,17 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName, ShaderStageIntent shaderStage)
+    TDerived &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
+                            ShaderStageIntent shaderStage)
     {
         return storageBuffer(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
     }
 
-    TDerived &accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName)
+    TDerived &accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource,
+                                    std::string_view debugName)
     {
-        nrAssert(resource.valid(), std::format("{}::accelerationStructure requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(),
+                 std::format("{}::accelerationStructure requires a valid graph resource.", builderLabel_));
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -1024,7 +1174,8 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
 
     TDerived &resourceUse(PassResourceUseDesc resourceUse)
     {
-        nrAssert(resourceUse.resource.valid(), std::format("{}::resourceUse requires a valid graph resource.", builderLabel_));
+        nrAssert(resourceUse.resource.valid(),
+                 std::format("{}::resourceUse requires a valid graph resource.", builderLabel_));
         resourceUses_.push_back(resourceUse);
         return derived();
     }
@@ -1035,9 +1186,11 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &dynamicBindingSnapshot(PassBindingSnapshotCallback snapshotCallback, nr::rhi::LogicalDescriptorResolver resolver = {})
+    TDerived &dynamicBindingSnapshot(PassBindingSnapshotCallback snapshotCallback,
+                                     nr::rhi::LogicalDescriptorResolver resolver = {})
     {
-        nrAssert(static_cast<bool>(snapshotCallback), std::format("{}::dynamicBindingSnapshot requires a snapshot callback.", builderLabel_));
+        nrAssert(static_cast<bool>(snapshotCallback),
+                 std::format("{}::dynamicBindingSnapshot requires a snapshot callback.", builderLabel_));
         dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
             .snapshot = std::move(snapshotCallback),
             .resolver = std::move(resolver),
@@ -1051,7 +1204,8 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         rootCursor_.clearSnapshot();
 
         auto runtime = runtime_;
-        auto prepareCallback = makePrepareCallback(runtime, bindingSnapshot, std::move(prepareCallbacks_), std::move(dynamicBindingSnapshots_), builderLabel_);
+        auto prepareCallback = makePrepareCallback(runtime, bindingSnapshot, std::move(prepareCallbacks_),
+                                                   std::move(dynamicBindingSnapshots_), builderLabel_);
 
         return CommonBuildState{
             .resourceUses = std::move(resourceUses_),
@@ -1062,10 +1216,17 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         };
     }
 
-    [[nodiscard]] static PassPrepareCallback makePrepareCallback(RuntimePtr runtime, nr::rhi::ShaderBindingSnapshot bindingSnapshot, std::vector<ShaderVisiblePassPrepareCallback> prepareCallbacks, std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots, std::string builderLabel)
+    [[nodiscard]] static PassPrepareCallback makePrepareCallback(
+        RuntimePtr runtime, nr::rhi::ShaderBindingSnapshot bindingSnapshot,
+        std::vector<ShaderVisiblePassPrepareCallback> prepareCallbacks,
+        std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots, std::string builderLabel)
     {
-        return [runtime = std::move(runtime), bindingSnapshot = std::move(bindingSnapshot), prepareCallbacks = std::move(prepareCallbacks), dynamicBindingSnapshots = std::move(dynamicBindingSnapshots), builderLabel = std::move(builderLabel)](const PassPrepareContext &prepareContext) {
-            nrAssert(static_cast<bool>(runtime), std::format("{} prepare requires initialized runtime state.", builderLabel));
+        return [runtime = std::move(runtime), bindingSnapshot = std::move(bindingSnapshot),
+                prepareCallbacks = std::move(prepareCallbacks),
+                dynamicBindingSnapshots = std::move(dynamicBindingSnapshots),
+                builderLabel = std::move(builderLabel)](const PassPrepareContext &prepareContext) {
+            nrAssert(static_cast<bool>(runtime),
+                     std::format("{} prepare requires initialized runtime state.", builderLabel));
             std::ranges::for_each(prepareCallbacks, [&](const ShaderVisiblePassPrepareCallback &callback) {
                 if (callback)
                 {
@@ -1074,21 +1235,29 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
             });
 
             auto &descriptorWriteCache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
-            nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), descriptorWriteCache, bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
+            nr::rhi::updateResourcesForBindingSnapshot(
+                runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex),
+                descriptorWriteCache, bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
 
             std::ranges::for_each(dynamicBindingSnapshots, [&](const DynamicBindingSnapshotDesc &desc) {
                 auto dynamicSnapshot = desc.snapshot(prepareContext);
                 auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
-                nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), descriptorWriteCache, dynamicSnapshot, std::move(resolver));
+                nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool,
+                                                           runtime->bindingSetsForFrame(prepareContext.frameIndex),
+                                                           descriptorWriteCache, dynamicSnapshot, std::move(resolver));
             });
         };
     }
 
-    static void bindPipelinePreparedResourcesAndPushConstants(const vk::raii::CommandBuffer &commandBuffer, const Runtime &runtime, const nr::rhi::ShaderBindingSnapshot &bindingSnapshot, std::uint32_t frameIndex)
+    static void bindPipelinePreparedResourcesAndPushConstants(const vk::raii::CommandBuffer &commandBuffer,
+                                                              const Runtime &runtime,
+                                                              const nr::rhi::ShaderBindingSnapshot &bindingSnapshot,
+                                                              std::uint32_t frameIndex)
     {
         commandBuffer.bindPipeline(BindPoint, runtime.pipeline().raw());
 
-        nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, BindPoint, runtime.state().layout, runtime.bindingSetsForFrame(frameIndex));
+        nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, BindPoint, runtime.state().layout,
+                                                      runtime.bindingSetsForFrame(frameIndex));
 
         nr::rhi::pushConstantsToCommandBuffer(commandBuffer, runtime.state().layout, bindingSnapshot);
     }
@@ -1096,7 +1265,8 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     std::reference_wrapper<NodeBuildContext> context_;
 
   private:
-    [[nodiscard]] static PassResourceUseDesc withOptionalShaderStages(PassResourceUseDesc resourceUse, vk::PipelineStageFlags2 shaderStages) noexcept
+    [[nodiscard]] static PassResourceUseDesc withOptionalShaderStages(PassResourceUseDesc resourceUse,
+                                                                      vk::PipelineStageFlags2 shaderStages) noexcept
     {
         if (shaderStages != vk::PipelineStageFlags2{})
         {
@@ -1120,9 +1290,11 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
 };
 } // namespace detail
 
-class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPassBuilder, nr::rhi::GraphicsPipeline, vk::PipelineBindPoint::eGraphics>
+class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPassBuilder, nr::rhi::GraphicsPipeline,
+                                                                      vk::PipelineBindPoint::eGraphics>
 {
-    using Base = detail::ShaderVisiblePassBuilderBase<RasterPassBuilder, nr::rhi::GraphicsPipeline, vk::PipelineBindPoint::eGraphics>;
+    using Base = detail::ShaderVisiblePassBuilderBase<RasterPassBuilder, nr::rhi::GraphicsPipeline,
+                                                      vk::PipelineBindPoint::eGraphics>;
 
   public:
     using Base::dynamicBindingSnapshot;
@@ -1135,7 +1307,8 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
     using Base::storageImage;
     using Base::uniform;
 
-    RasterPassBuilder(NodeBuildContext &context, std::string_view debugName, std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime);
+    RasterPassBuilder(NodeBuildContext &context, std::string_view debugName,
+                      std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime);
 
     RasterPassBuilder &viewport(vk::Extent2D extent);
 
@@ -1151,7 +1324,8 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
 
     RasterPassBuilder &record(RasterPassRecordCallback callback);
 
-    RasterPassBuilder &recordParallel(RasterPassItemCountCallback itemCountCallback, RasterPassRangeRecordCallback rangeRecordCallback);
+    RasterPassBuilder &recordParallel(RasterPassItemCountCallback itemCountCallback,
+                                      RasterPassRangeRecordCallback rangeRecordCallback);
 
     [[nodiscard]] GraphPassHandle build();
 
@@ -1168,13 +1342,23 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
         std::optional<nr::rhi::ops::RenderingDepthStencilAttachmentDesc> stencilAttachment{};
     };
 
-    [[nodiscard]] static vk::Extent2D resolveTargetExtent(std::optional<vk::Extent2D> viewportExtent, std::span<const PassImageResource> resolvedColors, const std::optional<PassImageResource> &resolvedDepth);
+    [[nodiscard]] static vk::Extent2D resolveTargetExtent(std::optional<vk::Extent2D> viewportExtent,
+                                                          std::span<const PassImageResource> resolvedColors,
+                                                          const std::optional<PassImageResource> &resolvedDepth);
 
-    [[nodiscard]] static RasterPassRenderingSetup makeRenderingSetup(const PassRecordContext &recordContext, std::span<const RasterColorAttachment> colorAttachments, const std::optional<RasterDepthAttachment> &depthAttachment, std::optional<vk::Extent2D> viewportExtent, std::string_view debugName);
+    [[nodiscard]] static RasterPassRenderingSetup makeRenderingSetup(
+        const PassRecordContext &recordContext, std::span<const RasterColorAttachment> colorAttachments,
+        const std::optional<RasterDepthAttachment> &depthAttachment, std::optional<vk::Extent2D> viewportExtent,
+        std::string_view debugName);
 
-    [[nodiscard]] static PassPrimaryRecordScope makeDynamicRenderingSecondaryScope(const RasterPassRenderingSetup &setup, const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime, std::string_view debugName);
+    [[nodiscard]] static PassPrimaryRecordScope makeDynamicRenderingSecondaryScope(
+        const RasterPassRenderingSetup &setup, const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime,
+        std::string_view debugName);
 
-    static void bindGraphicsSetup(const vk::raii::CommandBuffer &commandBuffer, const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime, const nr::rhi::ShaderBindingSnapshot &bindingSnapshot, std::uint32_t frameIndex, vk::Extent2D targetExtent, RasterViewportYMode viewportYMode,
+    static void bindGraphicsSetup(const vk::raii::CommandBuffer &commandBuffer,
+                                  const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime,
+                                  const nr::rhi::ShaderBindingSnapshot &bindingSnapshot, std::uint32_t frameIndex,
+                                  vk::Extent2D targetExtent, RasterViewportYMode viewportYMode,
                                   nr::rhi::MeshRasterState rasterState, vk::PrimitiveTopology primitiveTopology);
 
     std::optional<vk::Extent2D> viewportExtent_{};
@@ -1191,17 +1375,15 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
 class RasterPassPatchBuilder
 {
   public:
-    RasterPassPatchBuilder(RenderGraphSkeletonPatchContext& context, std::size_t passSlot,
-                           std::string_view debugName,
+    RasterPassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
                            std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime);
-    RasterPassPatchBuilder& viewport(vk::Extent2D extent);
-    RasterPassPatchBuilder& colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue);
-    RasterPassPatchBuilder& rasterState(nr::rhi::MeshRasterState state);
-    RasterPassPatchBuilder& prepare(RasterPassPrepareCallback callback);
-    RasterPassPatchBuilder& dynamicBindingSnapshot(
-        PassBindingSnapshotCallback callback,
-        nr::rhi::LogicalDescriptorResolver resolver = {});
-    RasterPassPatchBuilder& record(RasterPassRecordCallback callback);
+    RasterPassPatchBuilder &viewport(vk::Extent2D extent);
+    RasterPassPatchBuilder &colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue);
+    RasterPassPatchBuilder &rasterState(nr::rhi::MeshRasterState state);
+    RasterPassPatchBuilder &prepare(RasterPassPrepareCallback callback);
+    RasterPassPatchBuilder &dynamicBindingSnapshot(PassBindingSnapshotCallback callback,
+                                                   nr::rhi::LogicalDescriptorResolver resolver = {});
+    RasterPassPatchBuilder &record(RasterPassRecordCallback callback);
     void patch();
 
   private:
@@ -1239,9 +1421,11 @@ struct ComputePassRecordContext
 
 using ComputePassRecordCallback = std::function<void(const ComputePassRecordContext &)>;
 
-class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<ComputePassBuilder, nr::rhi::ComputePipeline, vk::PipelineBindPoint::eCompute>
+class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<ComputePassBuilder, nr::rhi::ComputePipeline,
+                                                                       vk::PipelineBindPoint::eCompute>
 {
-    using Base = detail::ShaderVisiblePassBuilderBase<ComputePassBuilder, nr::rhi::ComputePipeline, vk::PipelineBindPoint::eCompute>;
+    using Base = detail::ShaderVisiblePassBuilderBase<ComputePassBuilder, nr::rhi::ComputePipeline,
+                                                      vk::PipelineBindPoint::eCompute>;
 
   public:
     using Base::dynamicBindingSnapshot;
@@ -1254,7 +1438,8 @@ class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<ComputePa
     using Base::storageImage;
     using Base::uniform;
 
-    ComputePassBuilder(NodeBuildContext &context, std::string_view debugName, std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime);
+    ComputePassBuilder(NodeBuildContext &context, std::string_view debugName,
+                       std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime);
 
     ComputePassBuilder &record(ComputePassRecordCallback callback);
 
@@ -1267,31 +1452,24 @@ class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<ComputePa
 class ComputePassPatchBuilder
 {
   public:
-    ComputePassPatchBuilder(
-        RenderGraphSkeletonPatchContext& context,
-        std::size_t passSlot,
-        std::string_view debugName,
-        std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime);
+    ComputePassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
+                            std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime);
 
-    ComputePassPatchBuilder& sampledImage(
-        std::string_view shaderPath,
-        GraphResourceHandle resource,
-        std::string_view debugName);
+    ComputePassPatchBuilder &sampledImage(std::string_view shaderPath, GraphResourceHandle resource,
+                                          std::string_view debugName);
 
-    ComputePassPatchBuilder& storageImage(
-        std::string_view shaderPath,
-        GraphResourceHandle resource,
-        std::string_view debugName);
+    ComputePassPatchBuilder &storageImage(std::string_view shaderPath, GraphResourceHandle resource,
+                                          std::string_view debugName);
 
     template <typename TPayload>
-    ComputePassPatchBuilder& pushConstants(std::string_view shaderPath, const TPayload& value)
+    ComputePassPatchBuilder &pushConstants(std::string_view shaderPath, const TPayload &value)
     {
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setData(value));
         return *this;
     }
 
-    ComputePassPatchBuilder& record(ComputePassRecordCallback callback);
+    ComputePassPatchBuilder &record(ComputePassRecordCallback callback);
 
     void patch();
 
@@ -1314,9 +1492,12 @@ struct RayTracingPassRecordContext
 
 using RayTracingPassRecordCallback = std::function<void(const RayTracingPassRecordContext &)>;
 
-class RayTracingPassBuilder : public detail::ShaderVisiblePassBuilderBase<RayTracingPassBuilder, nr::rhi::RayTracingPipeline, vk::PipelineBindPoint::eRayTracingKHR>
+class RayTracingPassBuilder
+    : public detail::ShaderVisiblePassBuilderBase<RayTracingPassBuilder, nr::rhi::RayTracingPipeline,
+                                                  vk::PipelineBindPoint::eRayTracingKHR>
 {
-    using Base = detail::ShaderVisiblePassBuilderBase<RayTracingPassBuilder, nr::rhi::RayTracingPipeline, vk::PipelineBindPoint::eRayTracingKHR>;
+    using Base = detail::ShaderVisiblePassBuilderBase<RayTracingPassBuilder, nr::rhi::RayTracingPipeline,
+                                                      vk::PipelineBindPoint::eRayTracingKHR>;
 
   public:
     using Base::accelerationStructure;
@@ -1330,7 +1511,8 @@ class RayTracingPassBuilder : public detail::ShaderVisiblePassBuilderBase<RayTra
     using Base::storageImage;
     using Base::uniform;
 
-    RayTracingPassBuilder(NodeBuildContext &context, std::string_view debugName, std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime);
+    RayTracingPassBuilder(NodeBuildContext &context, std::string_view debugName,
+                          std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime);
 
     RayTracingPassBuilder &record(RayTracingPassRecordCallback callback);
 
@@ -1343,37 +1525,42 @@ class RayTracingPassBuilder : public detail::ShaderVisiblePassBuilderBase<RayTra
 class RayTracingPassPatchBuilder
 {
   public:
-    RayTracingPassPatchBuilder(RenderGraphSkeletonPatchContext& context, std::size_t passSlot,
+    RayTracingPassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot,
                                std::string_view debugName,
                                std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime);
-    RayTracingPassPatchBuilder& accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
-    RayTracingPassPatchBuilder& sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
-    RayTracingPassPatchBuilder& storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
-    RayTracingPassPatchBuilder& storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
-    RayTracingPassPatchBuilder& uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName);
-    RayTracingPassPatchBuilder& uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName);
+    RayTracingPassPatchBuilder &accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource,
+                                                      std::string_view debugName);
+    RayTracingPassPatchBuilder &sampledImage(std::string_view shaderPath, GraphResourceHandle resource,
+                                             std::string_view debugName);
+    RayTracingPassPatchBuilder &storageImage(std::string_view shaderPath, GraphResourceHandle resource,
+                                             std::string_view debugName);
+    RayTracingPassPatchBuilder &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource,
+                                              std::string_view debugName);
+    RayTracingPassPatchBuilder &uniform(std::string_view shaderPath, GraphResourceHandle resource,
+                                        std::string_view debugName);
+    RayTracingPassPatchBuilder &uniform(std::string_view shaderPath, FrameUniformBinding binding,
+                                        std::string_view debugName);
 
     template <typename TPayload>
-    RayTracingPassPatchBuilder& pushConstants(std::string_view shaderPath, const TPayload& value)
+    RayTracingPassPatchBuilder &pushConstants(std::string_view shaderPath, const TPayload &value)
     {
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setData(value));
         return *this;
     }
 
-    RayTracingPassPatchBuilder& prepare(ShaderVisiblePassPrepareCallback callback);
-    RayTracingPassPatchBuilder& dynamicBindingSnapshot(
-        PassBindingSnapshotCallback callback,
-        nr::rhi::LogicalDescriptorResolver resolver = {});
-    RayTracingPassPatchBuilder& record(RayTracingPassRecordCallback callback);
+    RayTracingPassPatchBuilder &prepare(ShaderVisiblePassPrepareCallback callback);
+    RayTracingPassPatchBuilder &dynamicBindingSnapshot(PassBindingSnapshotCallback callback,
+                                                       nr::rhi::LogicalDescriptorResolver resolver = {});
+    RayTracingPassPatchBuilder &record(RayTracingPassRecordCallback callback);
     void patch();
 
   private:
-    RayTracingPassPatchBuilder& descriptor(
-        std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
-        vk::ImageLayout imageLayout = vk::ImageLayout::eGeneral,
-        vk::DeviceSize offset = 0u,
-        vk::DeviceSize range = std::numeric_limits<vk::DeviceSize>::max());
+    RayTracingPassPatchBuilder &descriptor(std::string_view shaderPath, GraphResourceHandle resource,
+                                           std::string_view debugName,
+                                           vk::ImageLayout imageLayout = vk::ImageLayout::eGeneral,
+                                           vk::DeviceSize offset = 0u,
+                                           vk::DeviceSize range = std::numeric_limits<vk::DeviceSize>::max());
 
     std::reference_wrapper<RenderGraphSkeletonPatchContext> context_;
     std::size_t passSlot_ = 0;
@@ -1395,20 +1582,22 @@ class NodeRuntime
     [[nodiscard]] virtual std::string_view actionableSemantic() const noexcept;
 
     // Pure graph registration. Implementations must not access Device or mutable runtime state.
-    virtual void declareOptions(nr::options::OptionCatalogBuilder& builder) const;
+    virtual void declareOptions(nr::options::OptionCatalogBuilder &builder) const;
 
     // Collect conservative live availability for this node's declared options.
-    virtual void collectOptionAvailability(
-        const nr::options::OptionFrameSnapshot& snapshot,
-        nr::options::OptionAvailabilityMap& availability) const;
+    virtual void collectOptionAvailability(const nr::options::OptionFrameSnapshot &snapshot,
+                                           nr::options::OptionAvailabilityMap &availability) const;
 
     // Pure CPU declaration of the ordered static shader artifacts required by initialize().
     // Scene- or frame-derived shader permutations remain deferred to the owning node's build path.
     [[nodiscard]] virtual std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const;
 
     // Stage 1 (initialize): create persistent node state.
-    // Typical work: shader/pipeline creation and long-lived GPU allocations.
+    // Typical work: enqueue pipeline creation and create long-lived GPU allocations.
     virtual void initialize(NodeInitContext &);
+
+    // Stage 1 completion: resolve background pipeline builds before publishing the graph.
+    virtual void finalizeInitialization();
 
     // Stage 2 (build): declare per-frame intents and register execute lambdas.
     // Canonical path: context.addPass(intentList, name, executeLambda[, isCopyPass]).
@@ -1426,21 +1615,19 @@ class NodeRuntime
 
     /// Captures the exact node-owned topology branch before materialization.
     [[nodiscard]] virtual std::optional<StructuralSnapshot> structuralSnapshot(
-        const NodeFrameParameters& frameParameters) const;
+        const NodeFrameParameters &frameParameters) const;
 
     /// Materializes current frame references and callbacks for a cached structural variant.
-    virtual bool materializeRenderGraphSkeleton(
-        RenderGraphSkeletonPatchContext& context,
-        const NodeFrameParameters& frameParameters,
-        const StructuralSnapshot& snapshot);
+    virtual bool materializeRenderGraphSkeleton(RenderGraphSkeletonPatchContext &context,
+                                                const NodeFrameParameters &frameParameters,
+                                                const StructuralSnapshot &snapshot);
 
     // Stage 3 (shutdown): release persistent node state.
     virtual void advanceContinuations(std::uint32_t frameSlot);
     virtual void flushContinuations();
-    [[nodiscard]] virtual FrameEffectFinalizeDisposition finalizeFrameEffect(
-        const nr::options::FrameEffect& effect,
-        bool targetBatchSubmitted,
-        std::uint32_t frameSlot);
+    [[nodiscard]] virtual FrameEffectFinalizeDisposition finalizeFrameEffect(const nr::options::FrameEffect &effect,
+                                                                             bool targetBatchSubmitted,
+                                                                             std::uint32_t frameSlot);
     virtual void shutdown(NodeShutdownContext &);
 };
 
@@ -1529,8 +1716,7 @@ class Renderer
 
     void initialize(const RendererCreateInfo &info = {});
 
-    [[nodiscard]] RendererGraphPreflightResult preflightGraph(
-        const RendererGraphSpec& spec) const;
+    [[nodiscard]] RendererGraphPreflightResult preflightGraph(const RendererGraphSpec &spec) const;
 
     [[nodiscard]] bool installGraph(const RendererGraphSpec &spec);
 
@@ -1550,9 +1736,8 @@ class Renderer
 
     void resetSceneBinding() noexcept;
 
-    void collectOptionAvailability(
-        const nr::options::OptionFrameSnapshot& snapshot,
-        nr::options::OptionAvailabilityMap& availability) const;
+    void collectOptionAvailability(const nr::options::OptionFrameSnapshot &snapshot,
+                                   nr::options::OptionAvailabilityMap &availability) const;
 
     [[nodiscard]] RendererFrameResult renderFrame(const RendererFrameInput &input);
 
@@ -1587,14 +1772,19 @@ class Renderer
         NodeConfig config{};
     };
 
-    [[nodiscard]] RendererGraphBuildTimings buildInstalledGraph(const NodeFrameParameters &frameParameters, const nr::scene::SceneBridgeFrameConstants &frameConstants, const RendererCameraFrameState &cameraFrameState, std::uint64_t sampleFrameOrdinal,
-                                                                std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame, const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById);
+    [[nodiscard]] RendererGraphBuildTimings buildInstalledGraph(
+        const NodeFrameParameters &frameParameters, const nr::scene::SceneBridgeFrameConstants &frameConstants,
+        const RendererCameraFrameState &cameraFrameState, std::uint64_t sampleFrameOrdinal,
+        std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
+        const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById);
 
     void teardownInstalledGraph();
 
-    [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneExtractProfile(nr::scene::Scene &scene);
+    [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneExtractProfile(
+        nr::scene::Scene &scene);
 
-    [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneTlasExtractProfile(nr::scene::Scene &scene);
+    [[nodiscard]] std::pair<nr::scene::SceneExtractProfileHandle, bool> ensureSceneTlasExtractProfile(
+        nr::scene::Scene &scene);
 
     void recordCpuTimingSample(const RendererCpuFrameTimings &timings) noexcept;
 
@@ -1612,7 +1802,9 @@ class Renderer
 
     void uploadSceneTextureFallback();
 
-    [[nodiscard]] RendererSceneTextureDescriptorTable buildSceneTextureDescriptorTable(const NodeFrameParameters &frameParameters, const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById);
+    [[nodiscard]] RendererSceneTextureDescriptorTable buildSceneTextureDescriptorTable(
+        const NodeFrameParameters &frameParameters,
+        const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById);
 
     std::unique_ptr<nr::rhi::Device> device_{};
     RenderGraphBuilder builder_{};

@@ -18,15 +18,15 @@ struct RendererSubmitToken
         return value > 0;
     }
 
-    [[nodiscard]] bool operator==(const RendererSubmitToken&) const = default;
+    [[nodiscard]] bool operator==(const RendererSubmitToken &) const = default;
 };
 
 class RendererSubmissionTimelines
 {
   public:
-    void initialize(const vk::raii::Device& device, std::uint64_t initialValue = 0)
+    void initialize(const vk::raii::Device &device, std::uint64_t initialValue = 0)
     {
-        std::ranges::for_each(timelines_, [&](QueueTimeline& timeline) {
+        std::ranges::for_each(timelines_, [&](QueueTimeline &timeline) {
             timeline.semaphore = nr::rhi::sync::createTimelineSemaphore(device, initialValue);
             timeline.nextSignalValue = initialValue + 1;
         });
@@ -34,9 +34,8 @@ class RendererSubmissionTimelines
 
     [[nodiscard]] bool valid() const noexcept
     {
-        return std::ranges::all_of(timelines_, [](const QueueTimeline& timeline) {
-            return *timeline.semaphore != nullptr;
-        });
+        return std::ranges::all_of(timelines_,
+                                   [](const QueueTimeline &timeline) { return *timeline.semaphore != nullptr; });
     }
 
     [[nodiscard]] bool valid(QueueDomain queue) const noexcept
@@ -47,8 +46,9 @@ class RendererSubmissionTimelines
 
     [[nodiscard]] RendererSubmitToken acquireSignalToken(QueueDomain queue)
     {
-        nrAssert(valid(queue), "RendererSubmissionTimelines::acquireSignalToken requires an initialized queue timeline.");
-        auto& timeline = timelineFor(queue);
+        nrAssert(valid(queue),
+                 "RendererSubmissionTimelines::acquireSignalToken requires an initialized queue timeline.");
+        auto &timeline = timelineFor(queue);
         auto value = timeline.nextSignalValue;
         ++timeline.nextSignalValue;
         return RendererSubmitToken{
@@ -62,7 +62,7 @@ class RendererSubmissionTimelines
         return timelineFor(queue).nextSignalValue;
     }
 
-    [[nodiscard]] const vk::raii::Semaphore& semaphore(QueueDomain queue) const
+    [[nodiscard]] const vk::raii::Semaphore &semaphore(QueueDomain queue) const
     {
         nrAssert(valid(queue), "RendererSubmissionTimelines::semaphore requires an initialized queue timeline.");
         return timelineFor(queue).semaphore;
@@ -82,14 +82,14 @@ class RendererSubmissionTimelines
         return static_cast<std::size_t>(queue);
     }
 
-    [[nodiscard]] QueueTimeline& timelineFor(QueueDomain queue)
+    [[nodiscard]] QueueTimeline &timelineFor(QueueDomain queue)
     {
         auto index = queueIndex(queue);
         nrAssert(index < timelines_.size(), "RendererSubmissionTimelines received an unknown queue domain.");
         return timelines_[index];
     }
 
-    [[nodiscard]] const QueueTimeline& timelineFor(QueueDomain queue) const
+    [[nodiscard]] const QueueTimeline &timelineFor(QueueDomain queue) const
     {
         auto index = queueIndex(queue);
         nrAssert(index < timelines_.size(), "RendererSubmissionTimelines received an unknown queue domain.");

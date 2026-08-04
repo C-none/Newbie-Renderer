@@ -56,10 +56,9 @@ inline constexpr std::uint32_t kSceneLightGpuFlagCastShadow = 1u << 0u;
 
 [[nodiscard]] float sceneLightAliasEnergy(glm::vec3 color, float intensity) noexcept;
 
-[[nodiscard]] float sceneLightAliasEnergy(const SceneLightGpuRecord& record) noexcept;
+[[nodiscard]] float sceneLightAliasEnergy(const SceneLightGpuRecord &record) noexcept;
 
-[[nodiscard]] SceneLightAliasTableBuildResult buildSceneLightAliasTable(
-    std::span<const SceneLightGpuRecord> records);
+[[nodiscard]] SceneLightAliasTableBuildResult buildSceneLightAliasTable(std::span<const SceneLightGpuRecord> records);
 
 static_assert(sizeof(SceneLightGpuHeader) == 16u);
 static_assert(sizeof(SceneLightGpuRecord) == 80u);

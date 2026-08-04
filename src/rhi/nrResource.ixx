@@ -79,16 +79,17 @@ void setResourceDebugName(Resource &resource)
             if constexpr (ImageLike<Resource>)
             {
                 std::string viewName = std::format("{}_defaultView", resource.name_);
-                vk::DebugUtilsObjectNameInfoEXT viewNameInfo{vk::ObjectType::eImageView, reinterpret_cast<std::uint64_t>(static_cast<VkImageView>(*resource.defaultView_)), viewName.c_str()};
+                vk::DebugUtilsObjectNameInfoEXT viewNameInfo{
+                    vk::ObjectType::eImageView,
+                    reinterpret_cast<std::uint64_t>(static_cast<VkImageView>(*resource.defaultView_)),
+                    viewName.c_str()};
                 resource.device_->get().setDebugUtilsObjectNameEXT(viewNameInfo);
             }
         }
         catch (const vk::SystemError &error)
         {
-            nrInfo<LogLevel::error>(std::format(
-                "setResourceDebugName failed for '{}': {}",
-                resource.name_,
-                error.what()));
+            nrInfo<LogLevel::error>(
+                std::format("setResourceDebugName failed for '{}': {}", resource.name_, error.what()));
             nrAssert(false, "setResourceDebugName failed to set a Vulkan debug object name.");
         }
     }
@@ -121,10 +122,7 @@ void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::st
     }
     catch (const vk::SystemError &error)
     {
-        nrInfo<LogLevel::error>(std::format(
-            "setResourceViewDebugName failed for '{}': {}",
-            debugName,
-            error.what()));
+        nrInfo<LogLevel::error>(std::format("setResourceViewDebugName failed for '{}': {}", debugName, error.what()));
         nrAssert(false, "setResourceViewDebugName failed to set a Vulkan debug object name.");
     }
 }
@@ -153,13 +151,13 @@ export namespace nr::rhi
 class Buffer
 {
     // Friend declarations for debug naming helpers
-    template<typename Resource>
+    template <typename Resource>
         requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceDebugName(Resource& resource);
+    friend void setResourceDebugName(Resource &resource);
 
-    template<typename Resource, typename ViewHandle>
+    template <typename Resource, typename ViewHandle>
         requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceViewDebugName(Resource& resource, ViewHandle view, const std::string& debugName);
+    friend void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::string &debugName);
 
   public:
     Buffer() = default;
@@ -183,7 +181,10 @@ class Buffer
      * @param name        Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
      * @return Fully initialized Buffer
      */
-    [[nodiscard]] static Buffer create(const MemoryAllocator &allocator, const vk::raii::Device &device, const vk::BufferCreateInfo &createInfo, std::string_view name, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, AllocationStrategy strategy = AllocationStrategy::CrossFrame,
+    [[nodiscard]] static Buffer create(const MemoryAllocator &allocator, const vk::raii::Device &device,
+                                       const vk::BufferCreateInfo &createInfo, std::string_view name,
+                                       MemoryUsage memoryUsage = MemoryUsage::GpuOnly,
+                                       AllocationStrategy strategy = AllocationStrategy::CrossFrame,
                                        std::uint32_t frameIndex = 0);
     /// Get the vulkan-hpp buffer handle (non-owning)
     [[nodiscard]] vk::Buffer handle() const noexcept;
@@ -256,11 +257,9 @@ class Buffer
      *                 (e.g. "{bufferName}_fmt44_off0_whole" for R32Sfloat at offset 0)
      * @return Reference to the created RAII vk::raii::BufferView
      */
-    std::reference_wrapper<const vk::raii::BufferView> addView(
-        vk::Format format,
-        vk::DeviceSize offset = 0,
-        vk::DeviceSize range = vk::WholeSize,
-        std::string_view viewName = "");
+    std::reference_wrapper<const vk::raii::BufferView> addView(vk::Format format, vk::DeviceSize offset = 0,
+                                                               vk::DeviceSize range = vk::WholeSize,
+                                                               std::string_view viewName = "");
 
     /**
      * @brief Get a named buffer view
@@ -268,7 +267,8 @@ class Buffer
      * @param viewName View key (auto-generated or custom name)
      * @return Reference to the RAII vk::raii::BufferView
      */
-    [[nodiscard]] std::optional<std::reference_wrapper<const vk::raii::BufferView>> view(const std::string &viewName) const;
+    [[nodiscard]] std::optional<std::reference_wrapper<const vk::raii::BufferView>> view(
+        const std::string &viewName) const;
 
     /// Check if a named buffer view exists
     [[nodiscard]] bool hasView(const std::string &viewName) const;
@@ -333,8 +333,8 @@ class Buffer
 
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     mutable std::optional<VkDeviceAddress> cachedAddress_{};
-    std::map<std::string, vk::raii::BufferView> bufferViews_;  ///< Named view map (destroyed before VmaBuffer)
-    std::string name_;  ///< Immutable after creation
+    std::map<std::string, vk::raii::BufferView> bufferViews_; ///< Named view map (destroyed before VmaBuffer)
+    std::string name_;                                        ///< Immutable after creation
 };
 
 // =========================================================================
@@ -358,13 +358,13 @@ class Buffer
 class Image
 {
     // Friend declarations for debug naming helpers
-    template<typename Resource>
+    template <typename Resource>
         requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceDebugName(Resource& resource);
+    friend void setResourceDebugName(Resource &resource);
 
-    template<typename Resource, typename ViewHandle>
+    template <typename Resource, typename ViewHandle>
         requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceViewDebugName(Resource& resource, ViewHandle view, const std::string& debugName);
+    friend void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::string &debugName);
 
   public:
     Image() = default;
@@ -389,7 +389,9 @@ class Image
      * @param name         Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
      * @return Fully initialized Image with default view
      */
-    [[nodiscard]] static Image create(const MemoryAllocator &allocator, const vk::raii::Device &device, const vk::ImageCreateInfo &createInfo, std::string_view name, MemoryUsage memoryUsage = MemoryUsage::GpuOnly);
+    [[nodiscard]] static Image create(const MemoryAllocator &allocator, const vk::raii::Device &device,
+                                      const vk::ImageCreateInfo &createInfo, std::string_view name,
+                                      MemoryUsage memoryUsage = MemoryUsage::GpuOnly);
 
     /// Get the vulkan-hpp image handle (non-owning)
     [[nodiscard]] vk::Image handle() const noexcept;
@@ -461,7 +463,8 @@ class Image
      * @param viewInfo View creation parameters (image field is overwritten)
      * @return Non-owning vk::ImageView handle
      */
-    std::reference_wrapper<const vk::raii::ImageView> addView(const std::string &viewKey, vk::ImageViewCreateInfo viewInfo);
+    std::reference_wrapper<const vk::raii::ImageView> addView(const std::string &viewKey,
+                                                              vk::ImageViewCreateInfo viewInfo);
 
     /**
      * @brief Create a view for a specific mip level range
@@ -473,7 +476,8 @@ class Image
      * @param mipCount  Number of mip levels (default: 1)
      * @param viewName  Optional custom key; if empty, auto-generates from parameters
      */
-    std::reference_wrapper<const vk::raii::ImageView> addMipView(std::uint32_t baseMip, std::uint32_t mipCount = 1, std::string_view viewName = "");
+    std::reference_wrapper<const vk::raii::ImageView> addMipView(std::uint32_t baseMip, std::uint32_t mipCount = 1,
+                                                                 std::string_view viewName = "");
 
     /**
      * @brief Create a view for a specific array layer range
@@ -485,7 +489,9 @@ class Image
      * @param layerCount  Number of array layers (default: 1)
      * @param viewName    Optional custom key; if empty, auto-generates from parameters
      */
-    std::reference_wrapper<const vk::raii::ImageView> addLayerView(std::uint32_t baseLayer, std::uint32_t layerCount = 1, std::string_view viewName = "");
+    std::reference_wrapper<const vk::raii::ImageView> addLayerView(std::uint32_t baseLayer,
+                                                                   std::uint32_t layerCount = 1,
+                                                                   std::string_view viewName = "");
 
     /**
      * @brief Create an aspect-specific view for depth-stencil formats
@@ -504,8 +510,10 @@ class Image
         viewInfo.format = format_;
         if constexpr (Aspect == vk::ImageAspectFlagBits::eDepth)
         {
-            nrAssert(isDepthFormat(format_), std::format("Image::addAspectView<Depth>: format {} is not a depth format", static_cast<unsigned>(format_)));
-            viewInfo.subresourceRange = vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eDepth, 0, mipLevels_, 0, arrayLayers_};
+            nrAssert(isDepthFormat(format_), std::format("Image::addAspectView<Depth>: format {} is not a depth format",
+                                                         static_cast<unsigned>(format_)));
+            viewInfo.subresourceRange =
+                vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eDepth, 0, mipLevels_, 0, arrayLayers_};
             std::string key;
             if (viewName.empty())
                 key = name_.empty() ? std::string{"depthOnly"} : std::format("{}_depthOnly", name_);
@@ -515,8 +523,11 @@ class Image
         }
         else if constexpr (Aspect == vk::ImageAspectFlagBits::eStencil)
         {
-            nrAssert(isStencilFormat(format_), std::format("Image::addAspectView<Stencil>: format {} is not a stencil format", static_cast<unsigned>(format_)));
-            viewInfo.subresourceRange = vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eStencil, 0, mipLevels_, 0, arrayLayers_};
+            nrAssert(isStencilFormat(format_),
+                     std::format("Image::addAspectView<Stencil>: format {} is not a stencil format",
+                                 static_cast<unsigned>(format_)));
+            viewInfo.subresourceRange =
+                vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eStencil, 0, mipLevels_, 0, arrayLayers_};
             std::string key;
             if (viewName.empty())
                 key = name_.empty() ? std::string{"stencilOnly"} : std::format("{}_stencilOnly", name_);
@@ -556,9 +567,9 @@ class Image
     MemoryUsage memoryUsage_ = MemoryUsage::GpuOnly;
 
     vk::raii::ImageView defaultView_ = {nullptr};
-    std::map<std::string, vk::raii::ImageView> imageViews_;  ///< Named auxiliary view map (destroyed before VmaImage)
+    std::map<std::string, vk::raii::ImageView> imageViews_; ///< Named auxiliary view map (destroyed before VmaImage)
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
-    std::string name_;  ///< Immutable after creation
+    std::string name_; ///< Immutable after creation
 };
 
 } // namespace nr::rhi

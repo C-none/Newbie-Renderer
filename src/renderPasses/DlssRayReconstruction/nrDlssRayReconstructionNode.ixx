@@ -12,11 +12,11 @@ namespace nr::renderPasses::detail
 {
 struct DlssRayReconstructionRuntime;
 struct DlssRayReconstructionResolutionControllerImpl;
-}
+} // namespace nr::renderPasses::detail
 
 export namespace nr::renderPasses::detail
 {
-[[nodiscard]] std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4& value) noexcept;
+[[nodiscard]] std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4 &value) noexcept;
 }
 
 export namespace nr::renderPasses
@@ -67,7 +67,8 @@ struct DlssRayReconstructionResolutionRequest
     nr::rhi::DlssQuality quality = nr::rhi::DlssQuality::Quality;
     bool bypass = false;
 
-    [[nodiscard]] friend bool operator==(const DlssRayReconstructionResolutionRequest&, const DlssRayReconstructionResolutionRequest&) noexcept = default;
+    [[nodiscard]] friend bool operator==(const DlssRayReconstructionResolutionRequest &,
+                                         const DlssRayReconstructionResolutionRequest &) noexcept = default;
 };
 
 struct DlssRayReconstructionResolutionSnapshot
@@ -81,20 +82,20 @@ struct DlssRayReconstructionResolutionSnapshot
 class DlssRayReconstructionResolutionController final
 {
   public:
-    using OptimalSettingsQuery = std::function<nr::rhi::DlssOptimalSettings(nr::rhi::DlssDimensions, nr::rhi::DlssQuality)>;
+    using OptimalSettingsQuery =
+        std::function<nr::rhi::DlssOptimalSettings(nr::rhi::DlssDimensions, nr::rhi::DlssQuality)>;
 
     DlssRayReconstructionResolutionController();
     ~DlssRayReconstructionResolutionController();
 
-    DlssRayReconstructionResolutionController(const DlssRayReconstructionResolutionController&) = delete;
-    DlssRayReconstructionResolutionController& operator=(const DlssRayReconstructionResolutionController&) = delete;
-    DlssRayReconstructionResolutionController(DlssRayReconstructionResolutionController&&) noexcept;
-    DlssRayReconstructionResolutionController& operator=(DlssRayReconstructionResolutionController&&) noexcept;
+    DlssRayReconstructionResolutionController(const DlssRayReconstructionResolutionController &) = delete;
+    DlssRayReconstructionResolutionController &operator=(const DlssRayReconstructionResolutionController &) = delete;
+    DlssRayReconstructionResolutionController(DlssRayReconstructionResolutionController &&) noexcept;
+    DlssRayReconstructionResolutionController &operator=(DlssRayReconstructionResolutionController &&) noexcept;
 
-    [[nodiscard]] nr::renderer::FrameResolutionPlan resolve(
-        DlssRayReconstructionResolutionRequest request,
-        vk::Extent2D displayExtent,
-        const OptimalSettingsQuery& optimalSettingsQuery);
+    [[nodiscard]] nr::renderer::FrameResolutionPlan resolve(DlssRayReconstructionResolutionRequest request,
+                                                            vk::Extent2D displayExtent,
+                                                            const OptimalSettingsQuery &optimalSettingsQuery);
 
     [[nodiscard]] std::optional<DlssRayReconstructionResolutionSnapshot> snapshot() const;
 
@@ -105,12 +106,11 @@ class DlssRayReconstructionResolutionController final
 [[nodiscard]] DlssRayReconstructionNodeInput makeDefaultDlssRayReconstructionNodeInput();
 
 [[nodiscard]] DlssRayReconstructionResolutionRequest dlssResolutionRequestFromSnapshot(
-    const nr::options::OptionFrameSnapshot& snapshot);
+    const nr::options::OptionFrameSnapshot &snapshot);
 
-[[nodiscard]] bool dlssRayReconstructionResourceRequired(
-    nr::rhi::DlssRayReconstructionResourceSlot slot,
-    nr::rhi::DlssRoughnessMode roughnessMode,
-    bool alphaUpscaling) noexcept;
+[[nodiscard]] bool dlssRayReconstructionResourceRequired(nr::rhi::DlssRayReconstructionResourceSlot slot,
+                                                         nr::rhi::DlssRoughnessMode roughnessMode,
+                                                         bool alphaUpscaling) noexcept;
 
 class DlssRayReconstructionNode final : public Node
 {
@@ -124,24 +124,31 @@ class DlssRayReconstructionNode final : public Node
     {
         return "render.dlss";
     }
-    void declareOptions(nr::options::OptionCatalogBuilder& builder) const override;
-    void collectOptionAvailability(
-        const nr::options::OptionFrameSnapshot& snapshot,
-        nr::options::OptionAvailabilityMap& availability) const override;
-    void setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController>& controller) noexcept;
+    void declareOptions(nr::options::OptionCatalogBuilder &builder) const override;
+    void collectOptionAvailability(const nr::options::OptionFrameSnapshot &snapshot,
+                                   nr::options::OptionAvailabilityMap &availability) const override;
+    void setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController> &controller) noexcept;
     [[nodiscard]] DlssRayReconstructionResolutionRequest effectiveResolutionRequest(
-        const nr::options::OptionFrameSnapshot& snapshot) const;
+        const nr::options::OptionFrameSnapshot &snapshot) const;
 
     [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const override;
-    void initialize(NodeInitContext& context) override;
-    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override { return true; }
-    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(const NodeFrameParameters& frameParameters) const override;
-    void build(NodeBuildContext& context, const NodeFrameParameters& frameParameters) override;
-    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext& context, const NodeFrameParameters& frameParameters, const StructuralSnapshot& snapshot) override;
-    void shutdown(NodeShutdownContext& context) override;
+    void initialize(NodeInitContext &context) override;
+
+    void finalizeInitialization() override;
+    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override
+    {
+        return true;
+    }
+    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(
+        const NodeFrameParameters &frameParameters) const override;
+    void build(NodeBuildContext &context, const NodeFrameParameters &frameParameters) override;
+    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
+                                        const NodeFrameParameters &frameParameters,
+                                        const StructuralSnapshot &snapshot) override;
+    void shutdown(NodeShutdownContext &context) override;
 
   private:
-    void materializeCurrentFrame(NodeBuildContext& context, const NodeFrameParameters& frameParameters);
+    void materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters);
 
     std::shared_ptr<detail::DlssRayReconstructionRuntime> runtime_{};
     std::weak_ptr<DlssRayReconstructionResolutionController> resolutionController_{};

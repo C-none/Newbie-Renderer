@@ -7,11 +7,26 @@ public uint unpackMaterialTextureId(uint packedPair, uint lane)
 
 public uint materialTextureIdPair(uint4 pairs0, uint2 pairs1, uint pairIndex)
 {
-    if (pairIndex == 0u) { return pairs0.x; }
-    if (pairIndex == 1u) { return pairs0.y; }
-    if (pairIndex == 2u) { return pairs0.z; }
-    if (pairIndex == 3u) { return pairs0.w; }
-    if (pairIndex == 4u) { return pairs1.x; }
+    if (pairIndex == 0u)
+    {
+        return pairs0.x;
+    }
+    if (pairIndex == 1u)
+    {
+        return pairs0.y;
+    }
+    if (pairIndex == 2u)
+    {
+        return pairs0.z;
+    }
+    if (pairIndex == 3u)
+    {
+        return pairs0.w;
+    }
+    if (pairIndex == 4u)
+    {
+        return pairs1.x;
+    }
     return pairs1.y;
 }
 

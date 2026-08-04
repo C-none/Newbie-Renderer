@@ -12,6 +12,5 @@ struct TextureDecodeOptions
 };
 
 [[nodiscard]] std::expected<void, LoadError> decodeSceneTextureImages(
-    SceneAsset& scene,
-    const TextureDecodeOptions& options = TextureDecodeOptions{});
+    SceneAsset &scene, const TextureDecodeOptions &options = TextureDecodeOptions{});
 } // namespace nr::load

@@ -1,12 +1,10 @@
 module anyHit;
 import common;
 import renderer.pathTracing.pathState;
-import renderer.pathTracing.hitShaders;
+import renderer.pathTracing.anyHitPolicy;
 
 [shader("anyhit")]
-void ahMaterialPolicy(
-    inout RayPayload payload,
-    BuiltInTriangleIntersectionAttributes attributes)
+void ahMaterialPolicy(inout MaterialRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
-    handleAnyHit(payload, attributes);
+    handleAnyHitPolicy(attributes);
 }

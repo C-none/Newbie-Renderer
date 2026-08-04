@@ -36,7 +36,6 @@ export using ::glfwTerminate;
 export using ::glfwWindowHint;
 export using ::glfwWindowShouldClose;
 
-
 #ifdef GLFW_NO_API
 #undef GLFW_NO_API
 #endif
@@ -51,18 +50,10 @@ export namespace glfw
 {
 using NativeMonitorHandle = std::uintptr_t;
 
-GLFWwindow* createWindow(
-    int width,
-    int height,
-    const char* title,
-    GLFWmonitor* monitor,
-    GLFWwindow* share);
+GLFWwindow *createWindow(int width, int height, const char *title, GLFWmonitor *monitor, GLFWwindow *share);
 
-vk::Result createWindowSurface(
-    VkInstance instance,
-    GLFWwindow* window,
-    const VkAllocationCallbacks* allocator,
-    VkSurfaceKHR* surface);
+vk::Result createWindowSurface(VkInstance instance, GLFWwindow *window, const VkAllocationCallbacks *allocator,
+                               VkSurfaceKHR *surface);
 
-[[nodiscard]] NativeMonitorHandle nativeMonitorFromWindow(GLFWwindow* window) noexcept;
+[[nodiscard]] NativeMonitorHandle nativeMonitorFromWindow(GLFWwindow *window) noexcept;
 } // namespace glfw

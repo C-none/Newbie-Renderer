@@ -58,7 +58,8 @@ int main(int argc, char **argv)
     auto canonicalDirectory = std::filesystem::canonical(std::filesystem::path{argv[1]}, canonicalError);
     if (canonicalError)
     {
-        std::println(std::cerr, "Failed to canonicalize the rotating NDJSON test directory: {}", canonicalError.message());
+        std::println(std::cerr, "Failed to canonicalize the rotating NDJSON test directory: {}",
+                     canonicalError.message());
         return 4;
     }
     auto const expectedOptionPath = canonicalDirectory / "options.ndjson";
@@ -70,11 +71,9 @@ int main(int argc, char **argv)
 
     if (mode == "--prune")
     {
-        nr::nrCompactRecord<nr::LogLevel::info>(
-            "NR_OPTION_V1",
-            serializePayload(json::JsonValue::Object{
-                {"marker", json::JsonValue{pruneMarker}},
-            }));
+        nr::nrCompactRecord<nr::LogLevel::info>("NR_OPTION_V1", serializePayload(json::JsonValue::Object{
+                                                                    {"marker", json::JsonValue{pruneMarker}},
+                                                                }));
         return 0;
     }
     if (mode == "--conflict-parent")
@@ -84,7 +83,8 @@ int main(int argc, char **argv)
         auto optionsBefore = readFile(expectedOptionPath);
         if (!engineBefore || !optionsBefore)
         {
-            std::println(std::cerr, "Failed to snapshot active logs before the conflict probe: {}{}", engineBefore ? "" : engineBefore.error(), optionsBefore ? "" : optionsBefore.error());
+            std::println(std::cerr, "Failed to snapshot active logs before the conflict probe: {}{}",
+                         engineBefore ? "" : engineBefore.error(), optionsBefore ? "" : optionsBefore.error());
             return 7;
         }
 
@@ -125,12 +125,11 @@ int main(int argc, char **argv)
     auto const recordIndices = std::views::iota(std::uint32_t{0u}, std::uint32_t{12u});
     std::ranges::for_each(recordIndices, [&](std::uint32_t recordIndex) {
         nr::nrCompactRecord<nr::LogLevel::info>(
-            "NR_OPTION_V1",
-            serializePayload(json::JsonValue::Object{
-                {"marker", json::JsonValue{optionMarker}},
-                {"padding", json::JsonValue{optionPadding}},
-                {"record_index", json::JsonValue{static_cast<std::uint64_t>(recordIndex)}},
-            }));
+            "NR_OPTION_V1", serializePayload(json::JsonValue::Object{
+                                {"marker", json::JsonValue{optionMarker}},
+                                {"padding", json::JsonValue{optionPadding}},
+                                {"record_index", json::JsonValue{static_cast<std::uint64_t>(recordIndex)}},
+                            }));
     });
 
     return 0;

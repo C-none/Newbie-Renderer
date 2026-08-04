@@ -28,7 +28,10 @@ struct RequiredQueueFamilySelection
 
 [[nodiscard]] bool hasInstanceExtension(std::string_view extension);
 
-vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity, vk::DebugUtilsMessageTypeFlagsEXT messageTypes, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void * /*pUserData*/);
+vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                       vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
+                                       const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                                       void * /*pUserData*/);
 
 vk::DebugUtilsMessengerCreateInfoEXT makeDebugUtilsMessengerCreateInfoEXT();
 
@@ -52,7 +55,7 @@ struct DebugValidationLayerSettings
 
     [[nodiscard]] vk::LayerSettingsCreateInfoEXT createInfo(const void *pNext = nullptr) const noexcept;
 
-private:
+  private:
     bool gpuAssistedValidationEnabled_ = true;
     bool debugPrintfEnabled_ = true;
     std::array<vk::Bool32, 1> enabledValue_{vk::True};

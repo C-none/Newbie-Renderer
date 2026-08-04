@@ -13,15 +13,13 @@ import nr.utils;
 namespace
 {
 [[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult& preflight)
+    const nr::renderer::RendererGraphPreflightResult &preflight)
 {
     auto values = nr::options::OptionValueMap{};
     auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
         values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(
-            entry.first,
-            nr::options::OptionAvailability{.available = true, .reason = {}});
+        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
     });
     return nr::options::OptionFrameSnapshot{
         .catalog = preflight.optionCatalog,
@@ -61,14 +59,13 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         .cycleLength = nr::renderer::kRendererDefaultCameraJitterCycleLength,
     };
     graphSpec.frameResolutionResolver = [controller = std::move(dlssResolutionController)](
-                                            nr::rhi::Device& device,
-                                            vk::Extent2D displayExtent,
-                                            const nr::options::OptionFrameSnapshot& snapshot) {
-        auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{[&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) { return device.dlssContext()->optimalSettings(targetSize, quality); }};
-        return controller->resolve(
-            nr::renderPasses::dlssResolutionRequestFromSnapshot(snapshot),
-            displayExtent,
-            query);
+                                            nr::rhi::Device &device, vk::Extent2D displayExtent,
+                                            const nr::options::OptionFrameSnapshot &snapshot) {
+        auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{
+            [&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) {
+                return device.dlssContext()->optimalSettings(targetSize, quality);
+            }};
+        return controller->resolve(nr::renderPasses::dlssResolutionRequestFromSnapshot(snapshot), displayExtent, query);
     };
     graphSpec.frameResolutionOptionRequirements = {
         nr::options::optionId(nr::options::keys::dlssEnabled),
@@ -127,7 +124,8 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
 
 [[nodiscard]] std::filesystem::path toyCarPath()
 {
-    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" / "ToyCar" / "glTF" / "ToyCar.gltf";
+    return std::filesystem::path{std::string{nr::projectRoot}} / "assets" / "glTF-Sample-Assets" / "Models" / "ToyCar" /
+           "glTF" / "ToyCar.gltf";
 }
 
 [[nodiscard]] std::optional<std::reference_wrapper<nr::scene::Scene>> loadToyCar(nr::app::AppSession &app)
@@ -161,9 +159,7 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
 }
 
 [[nodiscard]] std::optional<nr::renderer::RendererFrameResult> renderOneFrame(
-    nr::app::AppSession& app,
-    nr::scene::Scene& scene,
-    const nr::options::OptionFrameSnapshot& optionSnapshot,
+    nr::app::AppSession &app, nr::scene::Scene &scene, const nr::options::OptionFrameSnapshot &optionSnapshot,
     std::optional<nr::renderer::RendererCameraOverride> cameraOverride = {})
 {
     auto &renderer = app.renderer();
@@ -192,8 +188,7 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         {
             std::println(
                 "[error] rtobject material smoke frame attempt {}/{} was not rendered within the bounded acquire.",
-                attemptIndex + 1u,
-                totalAttempts);
+                attemptIndex + 1u, totalAttempts);
             failed = true;
             return;
         }
@@ -205,8 +200,7 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
             {
                 std::println(
                     "[error] rtobject material smoke exhausted {} resize retries across {} total frame attempts.",
-                    kMaxResizeRetries,
-                    totalAttempts);
+                    kMaxResizeRetries, totalAttempts);
                 failed = true;
                 return;
             }
@@ -217,11 +211,8 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
 
         if (frameResult.presentResult != vk::Result::eSuccess)
         {
-            std::println(
-                "[error] rtobject material smoke present failed on attempt {}/{} with {}.",
-                attemptIndex + 1u,
-                totalAttempts,
-                vk::to_string(frameResult.presentResult));
+            std::println("[error] rtobject material smoke present failed on attempt {}/{} with {}.", attemptIndex + 1u,
+                         totalAttempts, vk::to_string(frameResult.presentResult));
             failed = true;
             return;
         }
@@ -231,10 +222,8 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
     return result;
 }
 
-[[nodiscard]] bool renderUntilRtSceneReady(
-    nr::app::AppSession& app,
-    nr::scene::Scene& scene,
-    const nr::options::OptionFrameSnapshot& optionSnapshot)
+[[nodiscard]] bool renderUntilRtSceneReady(nr::app::AppSession &app, nr::scene::Scene &scene,
+                                           const nr::options::OptionFrameSnapshot &optionSnapshot)
 {
     auto failed = false;
     auto observedRtFrame = false;
@@ -252,7 +241,8 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
             return;
         }
 
-        observedRtFrame = frameResult->sceneTlasPacketCount > 0u && frameResult->invokedPassPrepareCount >= 3u && frameResult->invokedPassRecordCount >= 6u;
+        observedRtFrame = frameResult->sceneTlasPacketCount > 0u && frameResult->invokedPassPrepareCount >= 3u &&
+                          frameResult->invokedPassRecordCount >= 6u;
     });
 
     if (failed)
@@ -262,19 +252,18 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
 
     if (!observedRtFrame)
     {
-        std::println("[error] rtobject material smoke did not observe ready ToyCar TLAS packets, LightPrepare prepare, and RT/MV-debug graph passes.");
+        std::println("[error] rtobject material smoke did not observe ready ToyCar TLAS packets, LightPrepare prepare, "
+                     "and RT/MV-debug graph passes.");
         return false;
     }
 
     return true;
 }
 
-[[nodiscard]] bool renderFrameExpectingSkeletonHit(
-    nr::app::AppSession &app,
-    nr::scene::Scene &scene,
-    const nr::options::OptionFrameSnapshot& optionSnapshot,
-    std::optional<nr::renderer::RendererCameraOverride> cameraOverride,
-    std::string_view frameLabel)
+[[nodiscard]] bool renderFrameExpectingSkeletonHit(nr::app::AppSession &app, nr::scene::Scene &scene,
+                                                   const nr::options::OptionFrameSnapshot &optionSnapshot,
+                                                   std::optional<nr::renderer::RendererCameraOverride> cameraOverride,
+                                                   std::string_view frameLabel)
 {
     auto const before = app.renderer().renderGraphSkeletonStatistics();
     if (!renderOneFrame(app, scene, optionSnapshot, std::move(cameraOverride)).has_value())
@@ -286,34 +275,25 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
     auto const after = app.renderer().renderGraphSkeletonStatistics();
     if (after.hitCount != before.hitCount + 1u || after.missCount != before.missCount)
     {
-        std::println(
-            "[error] rtobject material smoke {} frame expected exactly one Skeleton hit and no miss: hits {} -> {}, misses {} -> {}, last miss reason '{}'.",
-            frameLabel,
-            before.hitCount,
-            after.hitCount,
-            before.missCount,
-            after.missCount,
-            nr::renderer::renderGraphSkeletonMissReasonName(after.lastMissReason));
+        std::println("[error] rtobject material smoke {} frame expected exactly one Skeleton hit and no miss: hits {} "
+                     "-> {}, misses {} -> {}, last miss reason '{}'.",
+                     frameLabel, before.hitCount, after.hitCount, before.missCount, after.missCount,
+                     nr::renderer::renderGraphSkeletonMissReasonName(after.lastMissReason));
         return false;
     }
     return true;
 }
 
-[[nodiscard]] bool renderSkeletonReuseFrames(
-    nr::app::AppSession &app,
-    nr::scene::Scene &scene,
-    const nr::options::OptionFrameSnapshot& optionSnapshot)
+[[nodiscard]] bool renderSkeletonReuseFrames(nr::app::AppSession &app, nr::scene::Scene &scene,
+                                             const nr::options::OptionFrameSnapshot &optionSnapshot)
 {
     // The first ready frame can carry the one-shot dirty-BLAS branch, and each
     // in-flight slot can expose a distinct retained scratch-buffer capacity.
     // Materialize every steady-state slot variant before requiring exact reuse.
     auto stabilizationFailed = false;
-    std::ranges::for_each(
-        std::views::iota(std::uint32_t{0u}, nr::maxFrameInFlight),
-        [&](std::uint32_t) {
-            stabilizationFailed =
-                stabilizationFailed || !renderOneFrame(app, scene, optionSnapshot).has_value();
-        });
+    std::ranges::for_each(std::views::iota(std::uint32_t{0u}, nr::maxFrameInFlight), [&](std::uint32_t) {
+        stabilizationFailed = stabilizationFailed || !renderOneFrame(app, scene, optionSnapshot).has_value();
+    });
     if (stabilizationFailed)
     {
         std::println(
@@ -321,12 +301,7 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         return false;
     }
 
-    if (!renderFrameExpectingSkeletonHit(
-            app,
-            scene,
-            optionSnapshot,
-            {},
-            "stable warm"))
+    if (!renderFrameExpectingSkeletonHit(app, scene, optionSnapshot, {}, "stable warm"))
     {
         return false;
     }
@@ -344,22 +319,14 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         return false;
     }
 
-    if (!renderFrameExpectingSkeletonHit(
-            app,
-            scene,
-            optionSnapshot,
-            movedCamera.buildRendererCameraOverride(),
-            "camera motion"))
+    if (!renderFrameExpectingSkeletonHit(app, scene, optionSnapshot, movedCamera.buildRendererCameraOverride(),
+                                         "camera motion"))
     {
         return false;
     }
 
-    if (!renderFrameExpectingSkeletonHit(
-            app,
-            scene,
-            optionSnapshot,
-            movedCamera.buildRendererCameraOverride(),
-            "post-motion stationary"))
+    if (!renderFrameExpectingSkeletonHit(app, scene, optionSnapshot, movedCamera.buildRendererCameraOverride(),
+                                         "post-motion stationary"))
     {
         return false;
     }

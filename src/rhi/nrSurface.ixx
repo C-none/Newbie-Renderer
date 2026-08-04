@@ -47,7 +47,8 @@ struct Surface
      *
      * The returned Surface owns both window and vk::raii::SurfaceKHR handles.
      */
-    [[nodiscard]] static Surface create(const vk::raii::Instance &instance, std::string_view windowTitle, vk::Extent2D initialExtent = {1920, 1080});
+    [[nodiscard]] static Surface create(const vk::raii::Instance &instance, std::string_view windowTitle,
+                                        vk::Extent2D initialExtent = {1920, 1080});
 
     /**
      * @brief Refresh extent from current framebuffer size.

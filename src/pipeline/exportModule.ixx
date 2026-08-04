@@ -46,7 +46,7 @@ struct PipelineBuildContext
     std::string captureSessionId{"session"};
 };
 
-using PipelineGraphFactory = std::function<nr::renderer::RendererGraphSpec(const PipelineBuildContext&)>;
+using PipelineGraphFactory = std::function<nr::renderer::RendererGraphSpec(const PipelineBuildContext &)>;
 
 struct RenderPipelineDesc
 {
@@ -59,7 +59,8 @@ class RenderPipelineRegistry
 {
   public:
     [[nodiscard]] bool registerPipeline(RenderPipelineDesc desc);
-    [[nodiscard]] std::optional<std::reference_wrapper<const RenderPipelineDesc>> find(std::string_view id) const noexcept;
+    [[nodiscard]] std::optional<std::reference_wrapper<const RenderPipelineDesc>> find(
+        std::string_view id) const noexcept;
     [[nodiscard]] std::span<const RenderPipelineDesc> pipelines() const noexcept;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool contains(std::string_view id) const noexcept;
@@ -69,7 +70,7 @@ class RenderPipelineRegistry
     std::map<std::string, std::size_t> indexById_{};
 };
 
-void registerDefaultPipelines(RenderPipelineRegistry& registry);
+void registerDefaultPipelines(RenderPipelineRegistry &registry);
 [[nodiscard]] RenderPipelineRegistry makeDefaultPipelineRegistry();
 
 [[nodiscard]] std::filesystem::path defaultModelPath();
@@ -78,27 +79,24 @@ void registerDefaultPipelines(RenderPipelineRegistry& registry);
 [[nodiscard]] std::expected<std::vector<std::string>, std::string> discoverEnvironmentMapNames();
 [[nodiscard]] std::filesystem::path modelHistoryFilePath();
 [[nodiscard]] std::expected<std::filesystem::path, std::string> resolveModelAssetPath(
-    const std::filesystem::path& path);
-[[nodiscard]] std::filesystem::path normalizeModelPathForStorage(const std::filesystem::path& path);
-[[nodiscard]] std::string displayPathLeafFirst(const std::filesystem::path& path);
+    const std::filesystem::path &path);
+[[nodiscard]] std::filesystem::path normalizeModelPathForStorage(const std::filesystem::path &path);
+[[nodiscard]] std::string displayPathLeafFirst(const std::filesystem::path &path);
 
 class ModelHistory
 {
   public:
-    explicit ModelHistory(
-        std::filesystem::path storagePath = modelHistoryFilePath(),
-        std::size_t maxEntries = defaultModelHistoryLimit);
+    explicit ModelHistory(std::filesystem::path storagePath = modelHistoryFilePath(),
+                          std::size_t maxEntries = defaultModelHistoryLimit);
 
     void load();
     void save() const;
-    void noteLoaded(const std::filesystem::path& path);
+    void noteLoaded(const std::filesystem::path &path);
     [[nodiscard]] std::span<const std::filesystem::path> entries() const noexcept;
-    [[nodiscard]] const std::filesystem::path& storagePath() const noexcept;
+    [[nodiscard]] const std::filesystem::path &storagePath() const noexcept;
 
   private:
-    [[nodiscard]] bool sameStoredPath(
-        const std::filesystem::path& lhs,
-        const std::filesystem::path& rhs) const;
+    [[nodiscard]] bool sameStoredPath(const std::filesystem::path &lhs, const std::filesystem::path &rhs) const;
     void trimToLimit();
 
     std::filesystem::path storagePath_{};
@@ -116,12 +114,10 @@ struct ModelLoadReport
 class SceneModelController
 {
   public:
-    [[nodiscard]] ModelLoadReport loadModel(
-        nr::app::AppSession& app,
-        const std::filesystem::path& modelPath,
-        std::optional<std::reference_wrapper<ModelHistory>> history = {});
+    [[nodiscard]] ModelLoadReport loadModel(nr::app::AppSession &app, const std::filesystem::path &modelPath,
+                                            std::optional<std::reference_wrapper<ModelHistory>> history = {});
 
-    [[nodiscard]] const std::optional<std::filesystem::path>& currentModelPath() const noexcept;
+    [[nodiscard]] const std::optional<std::filesystem::path> &currentModelPath() const noexcept;
 
   private:
     std::optional<std::filesystem::path> currentModelPath_{};
@@ -162,19 +158,18 @@ struct ViewerRunConfig
     std::string commandLine{};
 };
 
-[[nodiscard]] ViewerCommandLineOptions parseViewerCommandLine(std::span<char*> args);
+[[nodiscard]] ViewerCommandLineOptions parseViewerCommandLine(std::span<char *> args);
 void printViewerUsage(std::string_view executableName = "main");
 [[nodiscard]] int runViewer(ViewerRunConfig config);
-[[nodiscard]] int runViewerFromCommandLine(std::span<char*> args);
+[[nodiscard]] int runViewerFromCommandLine(std::span<char *> args);
 } // namespace nr::pipeline
 
 namespace nr::pipeline::detail
 {
-void registerNormalViewPipeline(RenderPipelineRegistry& registry);
-void registerRtObjectPipeline(RenderPipelineRegistry& registry);
+void registerNormalViewPipeline(RenderPipelineRegistry &registry);
+void registerRtObjectPipeline(RenderPipelineRegistry &registry);
 
-[[nodiscard]] std::string normalizedModelPathKey(const std::filesystem::path& path);
-[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(
-    nr::renderer::Renderer& renderer,
-    std::string_view environmentMapName);
+[[nodiscard]] std::string normalizedModelPathKey(const std::filesystem::path &path);
+[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(nr::renderer::Renderer &renderer,
+                                                                  std::string_view environmentMapName);
 } // namespace nr::pipeline::detail

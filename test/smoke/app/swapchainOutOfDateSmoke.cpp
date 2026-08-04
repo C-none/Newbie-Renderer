@@ -12,7 +12,7 @@ namespace
 class AcquireOutOfDateHookCleanupGuard
 {
   public:
-    explicit AcquireOutOfDateHookCleanupGuard(nr::rhi::PresentationContext& presentation) noexcept
+    explicit AcquireOutOfDateHookCleanupGuard(nr::rhi::PresentationContext &presentation) noexcept
         : presentation_(presentation)
     {
     }
@@ -25,10 +25,10 @@ class AcquireOutOfDateHookCleanupGuard
         }
     }
 
-    AcquireOutOfDateHookCleanupGuard(const AcquireOutOfDateHookCleanupGuard&) = delete;
-    AcquireOutOfDateHookCleanupGuard& operator=(const AcquireOutOfDateHookCleanupGuard&) = delete;
-    AcquireOutOfDateHookCleanupGuard(AcquireOutOfDateHookCleanupGuard&&) = delete;
-    AcquireOutOfDateHookCleanupGuard& operator=(AcquireOutOfDateHookCleanupGuard&&) = delete;
+    AcquireOutOfDateHookCleanupGuard(const AcquireOutOfDateHookCleanupGuard &) = delete;
+    AcquireOutOfDateHookCleanupGuard &operator=(const AcquireOutOfDateHookCleanupGuard &) = delete;
+    AcquireOutOfDateHookCleanupGuard(AcquireOutOfDateHookCleanupGuard &&) = delete;
+    AcquireOutOfDateHookCleanupGuard &operator=(AcquireOutOfDateHookCleanupGuard &&) = delete;
 
     void release() noexcept
     {
@@ -36,7 +36,7 @@ class AcquireOutOfDateHookCleanupGuard
     }
 
   private:
-    nr::rhi::PresentationContext& presentation_;
+    nr::rhi::PresentationContext &presentation_;
     bool active_ = true;
 };
 
@@ -56,15 +56,13 @@ struct ResolverObservations
 };
 
 [[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult& preflight)
+    const nr::renderer::RendererGraphPreflightResult &preflight)
 {
     auto values = nr::options::OptionValueMap{};
     auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const& entry) {
+    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
         values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(
-            entry.first,
-            nr::options::OptionAvailability{.available = true, .reason = {}});
+        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
     });
     return nr::options::OptionFrameSnapshot{
         .catalog = preflight.optionCatalog,
@@ -79,25 +77,26 @@ struct ResolverObservations
 }
 
 [[nodiscard]] nr::renderer::RendererGraphSpec buildGraphSpec(
-    const std::shared_ptr<nr::renderPasses::EmbeddedTriangleNode>& embeddedTriangle,
-    AcquireObservations& acquire,
-    ResolverObservations& resolver)
+    const std::shared_ptr<nr::renderPasses::EmbeddedTriangleNode> &embeddedTriangle, AcquireObservations &acquire,
+    ResolverObservations &resolver)
 {
     auto present = std::make_shared<nr::renderPasses::PresentNode>();
     auto graphSpec = nr::renderer::RendererGraphSpec{};
     graphSpec.nodes = {
         nr::renderer::NodeCreateInfo{
             .runtime = embeddedTriangle,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "EmbeddedTriangle",
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "EmbeddedTriangle",
+                },
         },
         nr::renderer::NodeCreateInfo{
             .runtime = present,
-            .config = nr::renderer::NodeConfig{
-                .instanceName = "Present",
-                .queue = nr::renderer::QueueDomain::Compute,
-            },
+            .config =
+                nr::renderer::NodeConfig{
+                    .instanceName = "Present",
+                    .queue = nr::renderer::QueueDomain::Compute,
+                },
         },
     };
     graphSpec.submitNodes = {
@@ -106,10 +105,8 @@ struct ResolverObservations
             .afterNodeIndex = 0,
         },
     };
-    graphSpec.frameResolutionResolver = [&acquire, &resolver](
-                                            nr::rhi::Device& device,
-                                            vk::Extent2D displayExtent,
-                                            const nr::options::OptionFrameSnapshot&) {
+    graphSpec.frameResolutionResolver = [&acquire, &resolver](nr::rhi::Device &device, vk::Extent2D displayExtent,
+                                                              const nr::options::OptionFrameSnapshot &) {
         ++resolver.calls;
         resolver.acquireAttemptsAtCall = acquire.attempts;
         resolver.displayExtent = displayExtent;
@@ -122,12 +119,10 @@ struct ResolverObservations
     return graphSpec;
 }
 
-[[nodiscard]] bool validateObservations(
-    const AcquireObservations& acquire,
-    const ResolverObservations& resolver,
-    const nr::renderer::RendererFrameResult& frameResult,
-    std::uint64_t recreationGenerationBefore,
-    std::uint64_t recreationGenerationAfter)
+[[nodiscard]] bool validateObservations(const AcquireObservations &acquire, const ResolverObservations &resolver,
+                                        const nr::renderer::RendererFrameResult &frameResult,
+                                        std::uint64_t recreationGenerationBefore,
+                                        std::uint64_t recreationGenerationAfter)
 {
     auto valid = true;
     auto require = [&](bool condition, std::string_view message) {
@@ -143,18 +138,22 @@ struct ResolverObservations
     require(acquire.nativePassThrough == 1u, "expected exactly one native acquire pass-through");
     require(resolver.calls == 1u, "expected the frame resolution resolver to run exactly once");
     require(resolver.acquireAttemptsAtCall == 2u, "expected the resolver to run after the recreated swapchain acquire");
-    require(resolver.displayExtent.width > 0u && resolver.displayExtent.height > 0u, "expected a non-zero resolver display extent");
-    require(resolver.matchedPresentationExtent, "expected resolver display extent to match the current presentation extent");
+    require(resolver.displayExtent.width > 0u && resolver.displayExtent.height > 0u,
+            "expected a non-zero resolver display extent");
+    require(resolver.matchedPresentationExtent,
+            "expected resolver display extent to match the current presentation extent");
     require(frameResult.rendered, "expected the frame to render");
     require(frameResult.presentResult == vk::Result::eSuccess, "expected presentation to succeed");
     require(frameResult.compiledSubmitBatchCount >= 2u, "expected at least two compiled submit batches");
-    require(frameResult.submittedBatchCount == frameResult.compiledSubmitBatchCount, "expected every compiled submit batch to be submitted");
+    require(frameResult.submittedBatchCount == frameResult.compiledSubmitBatchCount,
+            "expected every compiled submit batch to be submitted");
     require(frameResult.invokedPassPrepareCount >= 2u, "expected at least two pass prepare callbacks to be invoked");
-    require(frameResult.invokedPassRecordCount >= 3u, "expected at least three explicit pass record callbacks to be invoked");
-    require(frameResult.replayedSecondaryCommandBufferCount == 4u, "expected all four fixed graph pass secondary command buffers to be replayed");
-    require(
-        recreationGenerationAfter == recreationGenerationBefore + 1u,
-        "expected the forced acquire out-of-date path to increment swapchain recreation generation exactly once");
+    require(frameResult.invokedPassRecordCount >= 3u,
+            "expected at least three explicit pass record callbacks to be invoked");
+    require(frameResult.replayedSecondaryCommandBufferCount == 4u,
+            "expected all four fixed graph pass secondary command buffers to be replayed");
+    require(recreationGenerationAfter == recreationGenerationBefore + 1u,
+            "expected the forced acquire out-of-date path to increment swapchain recreation generation exactly once");
     return valid;
 }
 
@@ -166,8 +165,8 @@ struct ResolverObservations
         .engineName = "NewbieRenderer",
     });
 
-    auto& renderer = app.renderer();
-    auto& presentation = renderer.device().presentationContext;
+    auto &renderer = app.renderer();
+    auto &presentation = renderer.device().presentationContext;
     auto acquire = AcquireObservations{};
     auto resolver = ResolverObservations{};
 
@@ -200,12 +199,8 @@ struct ResolverObservations
 
     presentation.clearAcquireOutOfDateTestHook();
     hookCleanup.release();
-    auto const valid = validateObservations(
-        acquire,
-        resolver,
-        frameResult,
-        recreationGenerationBefore,
-        recreationGenerationAfter);
+    auto const valid =
+        validateObservations(acquire, resolver, frameResult, recreationGenerationBefore, recreationGenerationAfter);
     auto const attemptsAfterRender = acquire.attempts;
     if (attemptsAfterRender != 2u)
     {

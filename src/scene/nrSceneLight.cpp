@@ -17,26 +17,24 @@ inline constexpr float kSceneLightAliasLuminanceBlue = 0.0722f;
     return std::isfinite(value) && value > 0.0f ? value : 0.0f;
 }
 
-[[nodiscard]] SceneLightAliasGpuRecord makeAliasRecord(
-    std::uint32_t primaryIndex,
-    std::uint32_t aliasIndex,
-    float acceptThreshold,
-    float primaryPdf,
-    float aliasPdf) noexcept
+[[nodiscard]] SceneLightAliasGpuRecord makeAliasRecord(std::uint32_t primaryIndex, std::uint32_t aliasIndex,
+                                                       float acceptThreshold, float primaryPdf, float aliasPdf) noexcept
 {
     return SceneLightAliasGpuRecord{
-        .meta = glm::uvec4{
-            primaryIndex,
-            aliasIndex,
-            0u,
-            0u,
-        },
-        .probabilities = glm::vec4{
-            std::clamp(acceptThreshold, 0.0f, 1.0f),
-            finitePositive(primaryPdf),
-            finitePositive(aliasPdf),
-            0.0f,
-        },
+        .meta =
+            glm::uvec4{
+                primaryIndex,
+                aliasIndex,
+                0u,
+                0u,
+            },
+        .probabilities =
+            glm::vec4{
+                std::clamp(acceptThreshold, 0.0f, 1.0f),
+                finitePositive(primaryPdf),
+                finitePositive(aliasPdf),
+                0.0f,
+            },
     };
 }
 } // namespace
@@ -49,36 +47,32 @@ inline constexpr float kSceneLightAliasLuminanceBlue = 0.0722f;
         finitePositive(color.b),
     };
     auto const positiveIntensity = finitePositive(intensity);
-    auto const luminance =
-        positiveColor.r * kSceneLightAliasLuminanceRed +
-        positiveColor.g * kSceneLightAliasLuminanceGreen +
-        positiveColor.b * kSceneLightAliasLuminanceBlue;
+    auto const luminance = positiveColor.r * kSceneLightAliasLuminanceRed +
+                           positiveColor.g * kSceneLightAliasLuminanceGreen +
+                           positiveColor.b * kSceneLightAliasLuminanceBlue;
     auto const energy = positiveIntensity * luminance;
     return finitePositive(energy);
 }
 
-[[nodiscard]] float sceneLightAliasEnergy(const SceneLightGpuRecord& record) noexcept
+[[nodiscard]] float sceneLightAliasEnergy(const SceneLightGpuRecord &record) noexcept
 {
     return sceneLightAliasEnergy(glm::vec3{record.colorIntensity}, record.colorIntensity.w);
 }
 
-[[nodiscard]] SceneLightAliasTableBuildResult buildSceneLightAliasTable(
-    std::span<const SceneLightGpuRecord> records)
+[[nodiscard]] SceneLightAliasTableBuildResult buildSceneLightAliasTable(std::span<const SceneLightGpuRecord> records)
 {
     auto result = SceneLightAliasTableBuildResult{};
     auto const lightCount = records.size();
-    if (lightCount == 0u ||
-        lightCount > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+    if (lightCount == 0u || lightCount > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
     {
         result.records.push_back(SceneLightAliasGpuRecord{});
         return result;
     }
 
-    auto weights = records |
-                   std::views::transform([](const SceneLightGpuRecord& record) {
-                       return sceneLightAliasEnergy(record);
-                   }) |
-                   std::ranges::to<std::vector>();
+    auto weights =
+        records |
+        std::views::transform([](const SceneLightGpuRecord &record) { return sceneLightAliasEnergy(record); }) |
+        std::ranges::to<std::vector>();
     auto const totalEnergy = std::reduce(weights.begin(), weights.end(), 0.0f);
     result.totalEnergy = finitePositive(totalEnergy);
     if (result.totalEnergy <= 0.0f)
@@ -90,15 +84,13 @@ inline constexpr float kSceneLightAliasLuminanceBlue = 0.0722f;
     result.aliasCount = static_cast<std::uint32_t>(lightCount);
     result.records.resize(lightCount);
 
-    auto pdfs = weights |
-                std::views::transform([total = result.totalEnergy](float weight) {
-                    return finitePositive(weight / total);
-                }) |
-                std::ranges::to<std::vector>();
+    auto pdfs =
+        weights |
+        std::views::transform([total = result.totalEnergy](float weight) { return finitePositive(weight / total); }) |
+        std::ranges::to<std::vector>();
     auto scaled = weights |
-                  std::views::transform([count = static_cast<float>(lightCount), total = result.totalEnergy](float weight) {
-                      return finitePositive(weight * count / total);
-                  }) |
+                  std::views::transform([count = static_cast<float>(lightCount), total = result.totalEnergy](
+                                            float weight) { return finitePositive(weight * count / total); }) |
                   std::ranges::to<std::vector>();
 
     auto small = std::vector<std::uint32_t>{};
@@ -125,12 +117,8 @@ inline constexpr float kSceneLightAliasLuminanceBlue = 0.0722f;
         auto const aliasIndex = large.back();
         large.pop_back();
 
-        result.records[primaryIndex] = makeAliasRecord(
-            primaryIndex,
-            aliasIndex,
-            scaled[primaryIndex],
-            pdfs[primaryIndex],
-            pdfs[aliasIndex]);
+        result.records[primaryIndex] =
+            makeAliasRecord(primaryIndex, aliasIndex, scaled[primaryIndex], pdfs[primaryIndex], pdfs[aliasIndex]);
 
         scaled[aliasIndex] = scaled[aliasIndex] + scaled[primaryIndex] - 1.0f;
         if (scaled[aliasIndex] < 1.0f)

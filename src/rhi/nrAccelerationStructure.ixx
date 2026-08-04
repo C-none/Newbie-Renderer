@@ -121,14 +121,12 @@ class AccelerationStructureResource
     AccelerationStructureResource(AccelerationStructureResource &&) noexcept = default;
     AccelerationStructureResource &operator=(AccelerationStructureResource &&) noexcept = default;
 
-    [[nodiscard]] static AccelerationStructureResource create(
-        const vk::raii::Device &device,
-        const Buffer &storageBuffer,
-        vk::DeviceSize storageOffset,
-        vk::DeviceSize accelerationStructureSize,
-        vk::AccelerationStructureTypeKHR type,
-        std::string_view name = {},
-        vk::AccelerationStructureCreateFlagsKHR createFlags = {});
+    [[nodiscard]] static AccelerationStructureResource create(const vk::raii::Device &device,
+                                                              const Buffer &storageBuffer, vk::DeviceSize storageOffset,
+                                                              vk::DeviceSize accelerationStructureSize,
+                                                              vk::AccelerationStructureTypeKHR type,
+                                                              std::string_view name = {},
+                                                              vk::AccelerationStructureCreateFlagsKHR createFlags = {});
 
     [[nodiscard]] bool valid() const noexcept;
 
@@ -228,15 +226,15 @@ struct ValidationResult
 
 [[nodiscard]] ValidationResult validationFailure(std::string message);
 
-template <typename... Args>
-[[nodiscard]] inline std::string formatMessage(std::string_view format, const Args &...args)
+template <typename... Args> [[nodiscard]] inline std::string formatMessage(std::string_view format, const Args &...args)
 {
     return std::vformat(format, std::make_format_args(args...));
 }
 
 [[nodiscard]] vk::BuildAccelerationStructureModeKHR toVkBuildMode(AsBuildMode mode);
 
-[[nodiscard]] bool hasBuildFlag(vk::BuildAccelerationStructureFlagsKHR flags, vk::BuildAccelerationStructureFlagBitsKHR bit);
+[[nodiscard]] bool hasBuildFlag(vk::BuildAccelerationStructureFlagsKHR flags,
+                                vk::BuildAccelerationStructureFlagBitsKHR bit);
 
 [[nodiscard]] ValidationResult validateBuildFlagCombination(const AsBuildOptions &options);
 
@@ -244,9 +242,12 @@ template <typename... Args>
 
 [[nodiscard]] std::uint32_t geometryPrimitiveCount(const BlasGeometryRecord &record) noexcept;
 
-[[nodiscard]] ValidationResult validateTriangleGeometry(const vk::AccelerationStructureGeometryTrianglesDataKHR &triangles, const vk::AccelerationStructureBuildRangeInfoKHR &range);
+[[nodiscard]] ValidationResult validateTriangleGeometry(
+    const vk::AccelerationStructureGeometryTrianglesDataKHR &triangles,
+    const vk::AccelerationStructureBuildRangeInfoKHR &range);
 
-[[nodiscard]] ValidationResult validateAabbGeometry(const vk::AccelerationStructureGeometryAabbsDataKHR &aabbs, const vk::AccelerationStructureBuildRangeInfoKHR &range);
+[[nodiscard]] ValidationResult validateAabbGeometry(const vk::AccelerationStructureGeometryAabbsDataKHR &aabbs,
+                                                    const vk::AccelerationStructureBuildRangeInfoKHR &range);
 
 [[nodiscard]] ValidationResult validateBlasGeometryRecord(const BlasGeometryRecord &record);
 
@@ -275,14 +276,12 @@ export namespace nr::rhi
 // validate primitive counts, and choose legal alignment.
 [[nodiscard]] AsBuildLimits queryAsBuildLimits(const vk::raii::PhysicalDevice &physicalDevice);
 
-[[nodiscard]] BlasGeometryRecord makeBlasTriangleGeometryRecord(
-    const Buffer &geometryBuffer,
-    const BlasGeometryLayout &layout,
-    const BlasGeometryInput &input);
+[[nodiscard]] BlasGeometryRecord makeBlasTriangleGeometryRecord(const Buffer &geometryBuffer,
+                                                                const BlasGeometryLayout &layout,
+                                                                const BlasGeometryInput &input);
 
-[[nodiscard]] BlasGeometryRecord makeBlasAabbGeometryRecord(
-    const Buffer &geometryBuffer,
-    const BlasAabbGeometryInput &input);
+[[nodiscard]] BlasGeometryRecord makeBlasAabbGeometryRecord(const Buffer &geometryBuffer,
+                                                            const BlasAabbGeometryInput &input);
 
 } // namespace nr::rhi
 
@@ -291,7 +290,8 @@ namespace nr::rhi::detail
 
 [[nodiscard]] ValidationResult validateAsBuildInputs(const BlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment);
 
-[[nodiscard]] ValidationResult validateAsBuildInputs(const BlasGeometriesBuildRecordInfo &info, vk::DeviceSize scratchAlignment);
+[[nodiscard]] ValidationResult validateAsBuildInputs(const BlasGeometriesBuildRecordInfo &info,
+                                                     vk::DeviceSize scratchAlignment);
 
 [[nodiscard]] ValidationResult validateAsBuildInputs(const TlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment);
 
@@ -301,30 +301,22 @@ export namespace nr::rhi
 {
 
 [[nodiscard]] AsBuildSizes queryAccelerationStructureBuildSizes(
-    const vk::raii::Device &device,
-    vk::AccelerationStructureTypeKHR type,
-    std::span<const vk::AccelerationStructureGeometryKHR> geometries,
-    std::span<const std::uint32_t> maxPrimitiveCounts,
+    const vk::raii::Device &device, vk::AccelerationStructureTypeKHR type,
+    std::span<const vk::AccelerationStructureGeometryKHR> geometries, std::span<const std::uint32_t> maxPrimitiveCounts,
     const AsBuildOptions &options = {},
     vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice);
 
 [[nodiscard]] AsBuildSizes queryBlasBuildSizes(
-    const vk::raii::Device &device,
-    const BlasGeometryLayout &layout,
-    std::uint32_t primitiveCount,
+    const vk::raii::Device &device, const BlasGeometryLayout &layout, std::uint32_t primitiveCount,
     const AsBuildOptions &options = {},
     vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice);
 
 [[nodiscard]] AsBuildSizes queryBlasBuildSizes(
-    const vk::raii::Device &device,
-    std::span<const BlasGeometryRecord> geometries,
-    const AsBuildOptions &options = {},
+    const vk::raii::Device &device, std::span<const BlasGeometryRecord> geometries, const AsBuildOptions &options = {},
     vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice);
 
 [[nodiscard]] AsBuildSizes queryTlasBuildSizes(
-    const vk::raii::Device &device,
-    const TlasBuildInput &input,
-    const AsBuildOptions &options = {},
+    const vk::raii::Device &device, const TlasBuildInput &input, const AsBuildOptions &options = {},
     vk::AccelerationStructureBuildTypeKHR buildType = vk::AccelerationStructureBuildTypeKHR::eDevice);
 
 // Record one BLAS build into an existing command buffer.
@@ -351,11 +343,14 @@ export namespace nr::rhi
 //   build before a dependent TLAS build in the same command list.
 // - If source buffers use VK_SHARING_MODE_EXCLUSIVE across different queue
 //   families, caller must perform queue-family release/acquire barriers.
-void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, const BlasGeometriesBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1);
+void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, const BlasGeometriesBuildRecordInfo &info,
+                               vk::DeviceSize scratchAlignment = 1);
 
-void recordBuildBlasBatch(const vk::raii::CommandBuffer &commandBuffer, std::span<const BlasBatchBuildRecordInfo> records, vk::DeviceSize scratchAlignment = 1);
+void recordBuildBlasBatch(const vk::raii::CommandBuffer &commandBuffer,
+                          std::span<const BlasBatchBuildRecordInfo> records, vk::DeviceSize scratchAlignment = 1);
 
-void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const BlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1);
+void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const BlasBuildRecordInfo &info,
+                     vk::DeviceSize scratchAlignment = 1);
 
 // Record one TLAS build into an existing command buffer.
 // This function only records vkCmdBuildAccelerationStructuresKHR and never submits.
@@ -372,127 +367,121 @@ void recordBuildBlas(const vk::raii::CommandBuffer &commandBuffer, const BlasBui
 //   dstStage = eAccelerationStructureBuildKHR,
 //   dstAccess = eAccelerationStructureReadKHR
 // before calling recordBuildTlas().
-void recordBuildTlas(const vk::raii::CommandBuffer &commandBuffer, const TlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment = 1);
+void recordBuildTlas(const vk::raii::CommandBuffer &commandBuffer, const TlasBuildRecordInfo &info,
+                     vk::DeviceSize scratchAlignment = 1);
 
-void recordUpdateBlas(const vk::raii::CommandBuffer &commandBuffer, BlasBuildRecordInfo info, vk::DeviceSize scratchAlignment = 1);
+void recordUpdateBlas(const vk::raii::CommandBuffer &commandBuffer, BlasBuildRecordInfo info,
+                      vk::DeviceSize scratchAlignment = 1);
 
-void recordUpdateTlas(const vk::raii::CommandBuffer &commandBuffer, TlasBuildRecordInfo info, vk::DeviceSize scratchAlignment = 1);
+void recordUpdateTlas(const vk::raii::CommandBuffer &commandBuffer, TlasBuildRecordInfo info,
+                      vk::DeviceSize scratchAlignment = 1);
 
-void recordBuildAccelerationStructuresIndirect(const vk::raii::CommandBuffer &commandBuffer, std::span<const AsIndirectBuildCommand> commands);
+void recordBuildAccelerationStructuresIndirect(const vk::raii::CommandBuffer &commandBuffer,
+                                               std::span<const AsIndirectBuildCommand> commands);
 
 [[nodiscard]] vk::CopyAccelerationStructureInfoKHR makeCopyAccelerationStructureInfo(const AsCopyRecordInfo &record);
 
-[[nodiscard]] vk::CopyAccelerationStructureToMemoryInfoKHR makeCopyAccelerationStructureToMemoryInfo(const AsCopyToDeviceMemoryRecordInfo &record);
+[[nodiscard]] vk::CopyAccelerationStructureToMemoryInfoKHR makeCopyAccelerationStructureToMemoryInfo(
+    const AsCopyToDeviceMemoryRecordInfo &record);
 
-[[nodiscard]] vk::CopyMemoryToAccelerationStructureInfoKHR makeCopyMemoryToAccelerationStructureInfo(const AsCopyFromDeviceMemoryRecordInfo &record);
+[[nodiscard]] vk::CopyMemoryToAccelerationStructureInfoKHR makeCopyMemoryToAccelerationStructureInfo(
+    const AsCopyFromDeviceMemoryRecordInfo &record);
 
-void recordCopyAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const vk::CopyAccelerationStructureInfoKHR &info);
+void recordCopyAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer,
+                                     const vk::CopyAccelerationStructureInfoKHR &info);
 
 void recordCopyAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const AsCopyRecordInfo &record);
 
-void recordCopyAccelerationStructureToMemory(const vk::raii::CommandBuffer &commandBuffer, const vk::CopyAccelerationStructureToMemoryInfoKHR &info);
+void recordCopyAccelerationStructureToMemory(const vk::raii::CommandBuffer &commandBuffer,
+                                             const vk::CopyAccelerationStructureToMemoryInfoKHR &info);
 
-void recordCopyAccelerationStructureToMemory(const vk::raii::CommandBuffer &commandBuffer, const AsCopyToDeviceMemoryRecordInfo &record);
+void recordCopyAccelerationStructureToMemory(const vk::raii::CommandBuffer &commandBuffer,
+                                             const AsCopyToDeviceMemoryRecordInfo &record);
 
-void recordCopyMemoryToAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const vk::CopyMemoryToAccelerationStructureInfoKHR &info);
+void recordCopyMemoryToAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer,
+                                             const vk::CopyMemoryToAccelerationStructureInfoKHR &info);
 
-void recordCopyMemoryToAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer, const AsCopyFromDeviceMemoryRecordInfo &record);
+void recordCopyMemoryToAccelerationStructure(const vk::raii::CommandBuffer &commandBuffer,
+                                             const AsCopyFromDeviceMemoryRecordInfo &record);
 
-[[nodiscard]] vk::Result copyAccelerationStructure(
-    const vk::raii::Device &device,
-    vk::DeferredOperationKHR deferredOperation,
-    const vk::CopyAccelerationStructureInfoKHR &info);
+[[nodiscard]] vk::Result copyAccelerationStructure(const vk::raii::Device &device,
+                                                   vk::DeferredOperationKHR deferredOperation,
+                                                   const vk::CopyAccelerationStructureInfoKHR &info);
 
-[[nodiscard]] vk::Result copyAccelerationStructure(
-    const vk::raii::Device &device,
-    vk::DeferredOperationKHR deferredOperation,
-    const AsCopyRecordInfo &record);
+[[nodiscard]] vk::Result copyAccelerationStructure(const vk::raii::Device &device,
+                                                   vk::DeferredOperationKHR deferredOperation,
+                                                   const AsCopyRecordInfo &record);
 
-[[nodiscard]] vk::Result copyAccelerationStructureToMemory(
-    const vk::raii::Device &device,
-    vk::DeferredOperationKHR deferredOperation,
-    const vk::CopyAccelerationStructureToMemoryInfoKHR &info);
+[[nodiscard]] vk::Result copyAccelerationStructureToMemory(const vk::raii::Device &device,
+                                                           vk::DeferredOperationKHR deferredOperation,
+                                                           const vk::CopyAccelerationStructureToMemoryInfoKHR &info);
 
-[[nodiscard]] vk::Result copyAccelerationStructureToMemory(
-    const vk::raii::Device &device,
-    vk::DeferredOperationKHR deferredOperation,
-    const AsCopyToDeviceMemoryRecordInfo &record);
+[[nodiscard]] vk::Result copyAccelerationStructureToMemory(const vk::raii::Device &device,
+                                                           vk::DeferredOperationKHR deferredOperation,
+                                                           const AsCopyToDeviceMemoryRecordInfo &record);
 
-[[nodiscard]] vk::Result copyMemoryToAccelerationStructure(
-    const vk::raii::Device &device,
-    vk::DeferredOperationKHR deferredOperation,
-    const vk::CopyMemoryToAccelerationStructureInfoKHR &info);
+[[nodiscard]] vk::Result copyMemoryToAccelerationStructure(const vk::raii::Device &device,
+                                                           vk::DeferredOperationKHR deferredOperation,
+                                                           const vk::CopyMemoryToAccelerationStructureInfoKHR &info);
 
-[[nodiscard]] vk::Result copyMemoryToAccelerationStructure(
-    const vk::raii::Device &device,
-    vk::DeferredOperationKHR deferredOperation,
-    const AsCopyFromDeviceMemoryRecordInfo &record);
+[[nodiscard]] vk::Result copyMemoryToAccelerationStructure(const vk::raii::Device &device,
+                                                           vk::DeferredOperationKHR deferredOperation,
+                                                           const AsCopyFromDeviceMemoryRecordInfo &record);
 
 [[nodiscard]] vk::raii::DeferredOperationKHR createDeferredOperation(const vk::raii::Device &device);
 
 template <typename T>
 [[nodiscard]] inline std::vector<T> queryAccelerationStructureProperties(
-    const vk::raii::Device &device,
-    std::span<const vk::AccelerationStructureKHR> accelerationStructures,
+    const vk::raii::Device &device, std::span<const vk::AccelerationStructureKHR> accelerationStructures,
     vk::QueryType queryType)
 {
     nrAssert(*device != nullptr, "queryAccelerationStructureProperties requires a valid device.");
-    nrAssert(!accelerationStructures.empty(), "queryAccelerationStructureProperties requires at least one acceleration structure.");
-    nrAssert(std::ranges::none_of(accelerationStructures, [](vk::AccelerationStructureKHR handle) { return handle == vk::AccelerationStructureKHR{}; }),
+    nrAssert(!accelerationStructures.empty(),
+             "queryAccelerationStructureProperties requires at least one acceleration structure.");
+    nrAssert(std::ranges::none_of(
+                 accelerationStructures,
+                 [](vk::AccelerationStructureKHR handle) { return handle == vk::AccelerationStructureKHR{}; }),
              "queryAccelerationStructureProperties requires valid acceleration structure handles.");
 
-    return device.writeAccelerationStructuresPropertiesKHR<T>(
-        accelerationStructures,
-        queryType,
-        sizeof(T) * accelerationStructures.size(),
-        sizeof(T));
+    return device.writeAccelerationStructuresPropertiesKHR<T>(accelerationStructures, queryType,
+                                                              sizeof(T) * accelerationStructures.size(), sizeof(T));
 }
 
 template <typename T>
-[[nodiscard]] inline T queryAccelerationStructureProperty(
-    const vk::raii::Device &device,
-    const AccelerationStructureResource &accelerationStructure,
-    vk::QueryType queryType)
+[[nodiscard]] inline T queryAccelerationStructureProperty(const vk::raii::Device &device,
+                                                          const AccelerationStructureResource &accelerationStructure,
+                                                          vk::QueryType queryType)
 {
-    nrAssert(accelerationStructure.valid(), "queryAccelerationStructureProperty requires a valid acceleration structure.");
+    nrAssert(accelerationStructure.valid(),
+             "queryAccelerationStructureProperty requires a valid acceleration structure.");
     auto handles = std::array{accelerationStructure.raw()};
     auto values = queryAccelerationStructureProperties<T>(
-        device,
-        std::span<const vk::AccelerationStructureKHR>{handles},
-        queryType);
+        device, std::span<const vk::AccelerationStructureKHR>{handles}, queryType);
     nrAssert(values.size() == 1, "queryAccelerationStructureProperty expected one result.");
     return values.front();
 }
 
 [[nodiscard]] vk::DeviceSize queryAccelerationStructureCompactedSize(
-    const vk::raii::Device &device,
-    const AccelerationStructureResource &accelerationStructure);
+    const vk::raii::Device &device, const AccelerationStructureResource &accelerationStructure);
 
 [[nodiscard]] vk::DeviceSize queryAccelerationStructureSerializationSize(
-    const vk::raii::Device &device,
-    const AccelerationStructureResource &accelerationStructure);
+    const vk::raii::Device &device, const AccelerationStructureResource &accelerationStructure);
 
 [[nodiscard]] vk::DeviceSize queryAccelerationStructureDeviceTimelineSize(
-    const vk::raii::Device &device,
-    const AccelerationStructureResource &accelerationStructure);
+    const vk::raii::Device &device, const AccelerationStructureResource &accelerationStructure);
 
 [[nodiscard]] std::uint64_t queryAccelerationStructureSerializationBottomLevelPointerCount(
-    const vk::raii::Device &device,
-    const AccelerationStructureResource &accelerationStructure);
+    const vk::raii::Device &device, const AccelerationStructureResource &accelerationStructure);
 
-void recordWriteAccelerationStructureProperties(
-    const vk::raii::CommandBuffer &commandBuffer,
-    std::span<const vk::AccelerationStructureKHR> accelerationStructures,
-    vk::QueryType queryType,
-    vk::QueryPool queryPool,
-    std::uint32_t firstQuery);
+void recordWriteAccelerationStructureProperties(const vk::raii::CommandBuffer &commandBuffer,
+                                                std::span<const vk::AccelerationStructureKHR> accelerationStructures,
+                                                vk::QueryType queryType, vk::QueryPool queryPool,
+                                                std::uint32_t firstQuery);
 
-void recordWriteAccelerationStructureProperty(
-    const vk::raii::CommandBuffer &commandBuffer,
-    const AccelerationStructureResource &accelerationStructure,
-    vk::QueryType queryType,
-    vk::QueryPool queryPool,
-    std::uint32_t firstQuery);
+void recordWriteAccelerationStructureProperty(const vk::raii::CommandBuffer &commandBuffer,
+                                              const AccelerationStructureResource &accelerationStructure,
+                                              vk::QueryType queryType, vk::QueryPool queryPool,
+                                              std::uint32_t firstQuery);
 
 // Append AS-related wait/signal metadata into an existing CommandBatch.
 //

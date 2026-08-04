@@ -15,8 +15,7 @@ struct ServiceB
 };
 
 const nr::test::CaseRegistrar frameServicesCase{
-    "renderer frame services store typed non-owning references",
-    [] {
+    "renderer frame services store typed non-owning references", [] {
         auto services = nr::renderer::FrameServices{};
         auto a = ServiceA{.value = 7};
         auto b = ServiceB{.name = "ui"};
@@ -37,6 +36,7 @@ const nr::test::CaseRegistrar frameServicesCase{
 
         services.clear();
         nr::test::require(!services.tryGet<ServiceA>().has_value(), "clear should remove services");
-        nr::test::require(!std::as_const(services).tryGet<ServiceB>().has_value(), "clear should remove const services");
+        nr::test::require(!std::as_const(services).tryGet<ServiceB>().has_value(),
+                          "clear should remove const services");
     }};
 } // namespace

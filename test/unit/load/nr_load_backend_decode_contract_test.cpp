@@ -35,20 +35,21 @@ struct FooImporter : nr::load::SceneImporterBackendBase<FooImporter>
 }
 
 const nr::test::CaseRegistrar backendDispatchCase{
-    "load backend registry validates path and extension",
-    [] {
+    "load backend registry validates path and extension", [] {
         using Registry = std::tuple<FooImporter>;
 
         auto empty = nr::load::SceneImporterRegistry<Registry>::import(nr::load::SceneLoadRequest{});
         nr::test::require(!empty.has_value(), "empty source path should fail");
-        nr::test::require(empty.error().code == nr::load::LoadErrorCode::invalidArgument, "empty source path should be invalidArgument");
+        nr::test::require(empty.error().code == nr::load::LoadErrorCode::invalidArgument,
+                          "empty source path should be invalidArgument");
         nr::test::requireEqual(empty.error().backend, std::string{"registry"});
 
         auto unsupported = nr::load::SceneImporterRegistry<Registry>::import(nr::load::SceneLoadRequest{
             .sourcePath = std::filesystem::path{"asset.bar"},
         });
         nr::test::require(!unsupported.has_value(), "unsupported extension should fail");
-        nr::test::require(unsupported.error().code == nr::load::LoadErrorCode::unsupportedFormat, "unsupported extension should be unsupportedFormat");
+        nr::test::require(unsupported.error().code == nr::load::LoadErrorCode::unsupportedFormat,
+                          "unsupported extension should be unsupportedFormat");
 
         auto imported = nr::load::SceneImporterRegistry<Registry>::import(nr::load::SceneLoadRequest{
             .sourcePath = std::filesystem::path{"Asset.FOO"},
@@ -58,8 +59,7 @@ const nr::test::CaseRegistrar backendDispatchCase{
     }};
 
 const nr::test::CaseRegistrar assimpTextureSemanticCase{
-    "assimp material texture semantics map to resource slots",
-    [] {
+    "assimp material texture semantics map to resource slots", [] {
         using enum nr::resource::MaterialTextureSlotSemantic;
 
         struct SemanticCase
@@ -104,17 +104,15 @@ const nr::test::CaseRegistrar assimpTextureSemanticCase{
         };
 
         std::ranges::for_each(cases, [](SemanticCase semanticCase) {
-            nr::test::require(nr::load::assimpTextureSlotSemantic(semanticCase.textureTypeRaw, semanticCase.textureSlot) ==
-                                  semanticCase.expected,
+            nr::test::require(nr::load::assimpTextureSlotSemantic(semanticCase.textureTypeRaw,
+                                                                  semanticCase.textureSlot) == semanticCase.expected,
                               std::format("unexpected semantic mapping for Assimp type {} slot {}",
-                                          semanticCase.textureTypeRaw,
-                                          semanticCase.textureSlot));
+                                          semanticCase.textureTypeRaw, semanticCase.textureSlot));
         });
     }};
 
 const nr::test::CaseRegistrar embeddedRawDecodeCase{
-    "load texture decode only touches material-referenced textures",
-    [] {
+    "load texture decode only touches material-referenced textures", [] {
         auto scene = nr::load::SceneAsset{};
         scene.sourcePath = std::filesystem::path{"decode_contract.gltf"};
         scene.textures.push_back(rawTexture("referenced", 2u, 1u));
@@ -130,18 +128,19 @@ const nr::test::CaseRegistrar embeddedRawDecodeCase{
 
         auto result = nr::load::decodeSceneTextureImages(scene, nr::load::TextureDecodeOptions{.workerCount = 1});
         nr::test::require(result.has_value(), "referenced embedded raw texture should decode");
-        nr::test::require(scene.textures[0].decodedImage.has_value(), "referenced texture should receive decoded image");
+        nr::test::require(scene.textures[0].decodedImage.has_value(),
+                          "referenced texture should receive decoded image");
         nr::test::requireEqual(scene.textures[0].decodedImage->width, 2u);
         nr::test::requireEqual(scene.textures[0].decodedImage->height, 1u);
         nr::test::requireEqual(scene.textures[0].decodedImage->channels, 4u);
         nr::test::requireEqual(scene.textures[0].decodedImage->pixels.size(), std::size_t{8});
         nr::test::requireEqual(scene.textures[0].decodeBackend, std::string{"assimp-raw-copy"});
-        nr::test::require(!scene.textures[1].decodedImage.has_value(), "unreferenced invalid texture should not be decoded");
+        nr::test::require(!scene.textures[1].decodedImage.has_value(),
+                          "unreferenced invalid texture should not be decoded");
     }};
 
 const nr::test::CaseRegistrar embeddedRawAutoWorkerDecodeCase{
-    "load texture decode supports automatic multi-worker scheduling",
-    [] {
+    "load texture decode supports automatic multi-worker scheduling", [] {
         auto scene = nr::load::SceneAsset{};
         scene.sourcePath = std::filesystem::path{"decode_auto_workers.gltf"};
         scene.textures.push_back(rawTexture("referenced-a", 1u, 1u));
@@ -154,8 +153,10 @@ const nr::test::CaseRegistrar embeddedRawAutoWorkerDecodeCase{
 
         auto result = nr::load::decodeSceneTextureImages(scene, nr::load::TextureDecodeOptions{});
         nr::test::require(result.has_value(), "referenced embedded raw textures should decode with automatic workers");
-        nr::test::require(scene.textures[0].decodedImage.has_value(), "first referenced texture should receive decoded image");
-        nr::test::require(scene.textures[1].decodedImage.has_value(), "second referenced texture should receive decoded image");
+        nr::test::require(scene.textures[0].decodedImage.has_value(),
+                          "first referenced texture should receive decoded image");
+        nr::test::require(scene.textures[1].decodedImage.has_value(),
+                          "second referenced texture should receive decoded image");
         nr::test::requireEqual(scene.textures[0].decodedImage->pixels.size(), std::size_t{4});
         nr::test::requireEqual(scene.textures[1].decodedImage->pixels.size(), std::size_t{16});
         nr::test::requireEqual(scene.textures[0].decodeBackend, std::string{"assimp-raw-copy"});
@@ -163,8 +164,7 @@ const nr::test::CaseRegistrar embeddedRawAutoWorkerDecodeCase{
     }};
 
 const nr::test::CaseRegistrar decodeFailureCase{
-    "load texture decode reports referenced payload failures",
-    [] {
+    "load texture decode reports referenced payload failures", [] {
         auto scene = nr::load::SceneAsset{};
         scene.sourcePath = std::filesystem::path{"decode_failure.gltf"};
 
@@ -178,8 +178,10 @@ const nr::test::CaseRegistrar decodeFailureCase{
 
         auto result = nr::load::decodeSceneTextureImages(scene, nr::load::TextureDecodeOptions{.workerCount = 1});
         nr::test::require(!result.has_value(), "bad referenced raw texture should fail decode");
-        nr::test::require(result.error().code == nr::load::LoadErrorCode::textureDataUnsupported, "decode failure should use textureDataUnsupported");
+        nr::test::require(result.error().code == nr::load::LoadErrorCode::textureDataUnsupported,
+                          "decode failure should use textureDataUnsupported");
         nr::test::requireEqual(result.error().backend, std::string{"decode"});
-        nr::test::require(result.error().message.find("bad-raw") != std::string::npos, "decode failure should include texture key");
+        nr::test::require(result.error().message.find("bad-raw") != std::string::npos,
+                          "decode failure should include texture key");
     }};
 } // namespace

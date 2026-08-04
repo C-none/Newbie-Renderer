@@ -45,7 +45,8 @@ template <RevisionDomain Domain> struct RevisionMask
     constexpr RevisionMask &operator|=(const RevisionMask &other) noexcept
     {
         auto indices = std::views::iota(std::size_t{0}, values.size());
-        std::ranges::for_each(indices, [&](std::size_t index) { values[index] = values[index] || other.values[index]; });
+        std::ranges::for_each(indices,
+                              [&](std::size_t index) { values[index] = values[index] || other.values[index]; });
         return *this;
     }
 
@@ -76,7 +77,8 @@ template <RevisionDomain Domain> struct RevisionSnapshot
         return values[static_cast<std::size_t>(value)];
     }
 
-    [[nodiscard]] friend constexpr bool operator==(const RevisionSnapshot &, const RevisionSnapshot &) noexcept = default;
+    [[nodiscard]] friend constexpr bool operator==(const RevisionSnapshot &,
+                                                   const RevisionSnapshot &) noexcept = default;
 };
 
 template <RevisionDomain Domain> class RevisionSet
@@ -141,7 +143,8 @@ template <RevisionDomain... Domains> struct RevisionBundleSnapshot
         return std::get<RevisionSnapshot<Domain>>(sets);
     }
 
-    [[nodiscard]] friend constexpr bool operator==(const RevisionBundleSnapshot &, const RevisionBundleSnapshot &) noexcept = default;
+    [[nodiscard]] friend constexpr bool operator==(const RevisionBundleSnapshot &,
+                                                   const RevisionBundleSnapshot &) noexcept = default;
 };
 
 template <RevisionDomain... Domains> class RevisionBundle
@@ -185,14 +188,18 @@ template <auto... Domains> struct RevisionProjection
         return RevisionProjection{.values = {snapshot.template get<Domains>()...}};
     }
 
-    [[nodiscard]] friend constexpr auto operator<=>(const RevisionProjection &, const RevisionProjection &) noexcept = default;
+    [[nodiscard]] friend constexpr auto operator<=>(const RevisionProjection &,
+                                                    const RevisionProjection &) noexcept = default;
 };
 
-template <RevisionDomain Domain> [[nodiscard]] constexpr RevisionMask<Domain> diff(const RevisionSnapshot<Domain> &before, const RevisionSnapshot<Domain> &after) noexcept
+template <RevisionDomain Domain>
+[[nodiscard]] constexpr RevisionMask<Domain> diff(const RevisionSnapshot<Domain> &before,
+                                                  const RevisionSnapshot<Domain> &after) noexcept
 {
     auto result = RevisionMask<Domain>{};
     auto indices = std::views::iota(std::size_t{0}, revisionDomainCount<Domain>);
-    std::ranges::for_each(indices, [&](std::size_t index) { result.values[index] = before.values[index] != after.values[index]; });
+    std::ranges::for_each(
+        indices, [&](std::size_t index) { result.values[index] = before.values[index] != after.values[index]; });
     return result;
 }
 

@@ -117,25 +117,20 @@ public uint4 sobolSamplerCore(uint sampleIndex, inout uint seed)
     uint4 result = uint4(sobolIndex, sobolIndex, 0u, 0u);
 
     // Dimension 2 (result.z) via Eq.42.
-    result.z = ((sobolIndex >> 1u) & 0x50550550u) ^
-               ((sobolIndex      ) & 0xaf5af5afu) ^
-               ((sobolIndex << 1u) & 0xa0aa0aa0u);
-    result.z ^=  result.z                << 16u;
-    result.z ^= (result.z & 0x00FF00FFu) <<  8u;
-    result.z ^= (result.z & 0x0F0F0F0Fu) <<  4u;
-    result.z = ((result.z >> 1u) & 0x50550550u) ^
-               ((result.z      ) & 0x5fa5fa5fu) ^
-               ((result.z << 1u) & 0xa4ea4ea4u) ^
-               ((result.z << 2u) & 0xc84c84c8u) ^
-               ((result.z << 3u) & 0x08808808u);
+    result.z = ((sobolIndex >> 1u) & 0x50550550u) ^ ((sobolIndex) & 0xaf5af5afu) ^ ((sobolIndex << 1u) & 0xa0aa0aa0u);
+    result.z ^= result.z << 16u;
+    result.z ^= (result.z & 0x00FF00FFu) << 8u;
+    result.z ^= (result.z & 0x0F0F0F0Fu) << 4u;
+    result.z = ((result.z >> 1u) & 0x50550550u) ^ ((result.z) & 0x5fa5fa5fu) ^ ((result.z << 1u) & 0xa4ea4ea4u) ^
+               ((result.z << 2u) & 0xc84c84c8u) ^ ((result.z << 3u) & 0x08808808u);
     result.zw = reversebits(result.z);
 
     // result.y / result.w derived from result.x / result.z (bit-reversed form).
-    result.yw ^=  result.yw                >> 16u;
-    result.yw ^= (result.yw & 0xFF00FF00u) >>  8u;
-    result.yw ^= (result.yw & 0xF0F0F0F0u) >>  4u;
-    result.yw ^= (result.yw & 0xCCCCCCCCu) >>  2u;
-    result.yw ^= (result.yw & 0xAAAAAAAAu) >>  1u;
+    result.yw ^= result.yw >> 16u;
+    result.yw ^= (result.yw & 0xFF00FF00u) >> 8u;
+    result.yw ^= (result.yw & 0xF0F0F0F0u) >> 4u;
+    result.yw ^= (result.yw & 0xCCCCCCCCu) >> 2u;
+    result.yw ^= (result.yw & 0xAAAAAAAAu) >> 1u;
 
     // Scramble each output to avoid structured artifacts.
     result.x = fastOwenScrambling(result.x, evolveSobolSeed(seed));
@@ -161,11 +156,8 @@ public struct RandomSequence
     public float4 rand4()
     {
         uint4 bits = sobolSamplerCore(sampleIndex, sampleSeed);
-        return float4(
-            float(bits.x >> 8u),
-            float(bits.y >> 8u),
-            float(bits.z >> 8u),
-            float(bits.w >> 8u)) * kInvTwoPow24;
+        return float4(float(bits.x >> 8u), float(bits.y >> 8u), float(bits.z >> 8u), float(bits.w >> 8u)) *
+               kInvTwoPow24;
     }
 
     // Advance exactly as three discarded rand4() packets. sobolSamplerCore()
@@ -183,10 +175,7 @@ public struct RandomSequence
 //   sampleFrameOrdinal : monotonic 64-bit frame ordinal as low/high uint lanes
 //   tileBits           : Hilbert tile size = 2^tileBits per axis (1..15);
 //                        the default 11-bit axes leave 10 frame bits
-public RandomSequence makeErrorDiffusionSequence(
-    uint2 dispatch,
-    uint2 sampleFrameOrdinal,
-    int tileBits = 11)
+public RandomSequence makeErrorDiffusionSequence(uint2 dispatch, uint2 sampleFrameOrdinal, int tileBits = 11)
 {
     RandomSequence seq;
     // Spatial low discrepancy: encode the low dispatch.xy tile coordinates along
@@ -208,10 +197,8 @@ public RandomSequence makeErrorDiffusionSequence(
     // seed. It is independent of dispatch, preserving the tile-local
     // low-discrepancy structure. Era zero deliberately retains the zero seed;
     // with the default tileBits == 11, each era spans 1,024 frames.
-    uint2 frameEra = uint2(
-        (sampleFrameOrdinal.x >> frameBitCount) |
-            (sampleFrameOrdinal.y << spatialBitCount),
-        sampleFrameOrdinal.y >> frameBitCount);
+    uint2 frameEra = uint2((sampleFrameOrdinal.x >> frameBitCount) | (sampleFrameOrdinal.y << spatialBitCount),
+                           sampleFrameOrdinal.y >> frameBitCount);
     // strongIntegerHash(0u) == 0u, so frame era zero naturally keeps the legacy
     // seed while every nonzero era is mixed without a special-case branch.
     seq.sampleSeed = strongIntegerHash(frameEra.x ^ strongIntegerHash(frameEra.y));

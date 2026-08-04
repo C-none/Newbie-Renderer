@@ -16,14 +16,16 @@ inline constexpr std::string_view kViewerUiGroup = "Viewer";
     return definition.presentation.label.empty() ? std::string{definition.id.value()} : definition.presentation.label;
 }
 
-[[nodiscard]] bool optionAvailable(const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition) noexcept
+[[nodiscard]] bool optionAvailable(const nr::options::OptionFrameSnapshot &snapshot,
+                                   const nr::options::OptionDefinition &definition) noexcept
 {
     auto const *availability = snapshot.findAvailability(definition.id);
     return availability != nullptr && availability->available;
 }
 } // namespace
 
-OptionUiPresenter::DraftState &OptionUiPresenter::draftFor(const nr::options::OptionDefinition &definition, const nr::options::OptionWireValue &canonical)
+OptionUiPresenter::DraftState &OptionUiPresenter::draftFor(const nr::options::OptionDefinition &definition,
+                                                           const nr::options::OptionWireValue &canonical)
 {
     auto [iterator, inserted] = drafts_.try_emplace(definition.id, DraftState{
                                                                        .canonical = canonical,
@@ -39,7 +41,9 @@ OptionUiPresenter::DraftState &OptionUiPresenter::draftFor(const nr::options::Op
     return iterator->second;
 }
 
-bool OptionUiPresenter::schedule(nr::options::OptionSystem &system, const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition, nr::options::OptionWireValue value, OptionUiPresentResult &result)
+bool OptionUiPresenter::schedule(nr::options::OptionSystem &system, const nr::options::OptionFrameSnapshot &snapshot,
+                                 const nr::options::OptionDefinition &definition, nr::options::OptionWireValue value,
+                                 OptionUiPresentResult &result)
 {
     result.mutationAttempted = true;
     auto scheduled = system.trySchedule(nr::options::OptionMutationRequest{
@@ -59,7 +63,8 @@ bool OptionUiPresenter::schedule(nr::options::OptionSystem &system, const nr::op
     return true;
 }
 
-void OptionUiPresenter::drawReadOnlyOption(UiSystem &ui, const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition) const
+void OptionUiPresenter::drawReadOnlyOption(UiSystem &ui, const nr::options::OptionFrameSnapshot &snapshot,
+                                           const nr::options::OptionDefinition &definition) const
 {
     auto const *canonical = snapshot.findValue(definition.id);
     if (canonical == nullptr || definition.presentation.control == nr::options::OptionUiControl::hidden)
@@ -106,7 +111,8 @@ void OptionUiPresenter::drawReadOnlyOption(UiSystem &ui, const nr::options::Opti
     case nr::options::OptionValueType::unsignedInteger: {
         auto value = static_cast<std::uint32_t>(std::get<std::uint64_t>(canonical->storage));
         auto const minimum = static_cast<std::uint32_t>(definition.schema.unsignedMinimum.value_or(0u));
-        auto const maximum = static_cast<std::uint32_t>(definition.schema.unsignedMaximum.value_or(std::numeric_limits<std::uint32_t>::max()));
+        auto const maximum = static_cast<std::uint32_t>(
+            definition.schema.unsignedMaximum.value_or(std::numeric_limits<std::uint32_t>::max()));
         if (definition.presentation.control == nr::options::OptionUiControl::slider)
         {
             static_cast<void>(ui.sliderUInt(label, value, minimum, maximum));
@@ -144,8 +150,10 @@ void OptionUiPresenter::drawReadOnlyOption(UiSystem &ui, const nr::options::Opti
         auto const &object = std::get<nr::options::OptionWireValue::Object>(canonical->storage);
         auto nearValue = static_cast<float>(std::get<double>(object.at("near").storage));
         auto farValue = static_cast<float>(std::get<double>(object.at("far").storage));
-        static_cast<void>(ui.inputFloat(std::format("{} Near", label), nearValue, 0.001f, std::max(farValue - 0.001f, 0.001f)));
-        static_cast<void>(ui.inputFloat(std::format("{} Far", label), farValue, std::max(nearValue + 0.001f, 0.002f), std::numeric_limits<float>::max()));
+        static_cast<void>(
+            ui.inputFloat(std::format("{} Near", label), nearValue, 0.001f, std::max(farValue - 0.001f, 0.001f)));
+        static_cast<void>(ui.inputFloat(std::format("{} Far", label), farValue, std::max(nearValue + 0.001f, 0.002f),
+                                        std::numeric_limits<float>::max()));
         closeDisabled();
         return;
     }
@@ -158,7 +166,10 @@ void OptionUiPresenter::drawReadOnlyOption(UiSystem &ui, const nr::options::Opti
     std::unreachable();
 }
 
-bool OptionUiPresenter::drawInteractiveOption(UiSystem &ui, nr::options::OptionSystem &system, const nr::options::OptionFrameSnapshot &snapshot, const nr::options::OptionDefinition &definition, OptionUiPresentResult &result)
+bool OptionUiPresenter::drawInteractiveOption(UiSystem &ui, nr::options::OptionSystem &system,
+                                              const nr::options::OptionFrameSnapshot &snapshot,
+                                              const nr::options::OptionDefinition &definition,
+                                              OptionUiPresentResult &result)
 {
     auto const *canonical = snapshot.findValue(definition.id);
     if (canonical == nullptr || definition.presentation.control == nr::options::OptionUiControl::hidden)
@@ -215,7 +226,8 @@ bool OptionUiPresenter::drawInteractiveOption(UiSystem &ui, nr::options::OptionS
         auto &draft = draftFor(definition, *canonical);
         auto value = static_cast<std::uint32_t>(std::get<std::uint64_t>(draft.value.storage));
         auto const minimum = static_cast<std::uint32_t>(definition.schema.unsignedMinimum.value_or(0u));
-        auto const maximum = static_cast<std::uint32_t>(definition.schema.unsignedMaximum.value_or(std::numeric_limits<std::uint32_t>::max()));
+        auto const maximum = static_cast<std::uint32_t>(
+            definition.schema.unsignedMaximum.value_or(std::numeric_limits<std::uint32_t>::max()));
         if (definition.presentation.control == nr::options::OptionUiControl::slider)
         {
             static_cast<void>(ui.sliderUInt(label, value, minimum, maximum));
@@ -259,9 +271,11 @@ bool OptionUiPresenter::drawInteractiveOption(UiSystem &ui, nr::options::OptionS
         auto &object = std::get<nr::options::OptionWireValue::Object>(draft.value.storage);
         auto nearValue = static_cast<float>(std::get<double>(object.at("near").storage));
         auto farValue = static_cast<float>(std::get<double>(object.at("far").storage));
-        static_cast<void>(ui.inputFloat(std::format("{} Near", label), nearValue, 0.001f, std::max(farValue - 0.001f, 0.001f)));
+        static_cast<void>(
+            ui.inputFloat(std::format("{} Near", label), nearValue, 0.001f, std::max(farValue - 0.001f, 0.001f)));
         auto commit = ui.itemEditCommitted();
-        static_cast<void>(ui.inputFloat(std::format("{} Far", label), farValue, std::max(nearValue + 0.001f, 0.002f), std::numeric_limits<float>::max()));
+        static_cast<void>(ui.inputFloat(std::format("{} Far", label), farValue, std::max(nearValue + 0.001f, 0.002f),
+                                        std::numeric_limits<float>::max()));
         commit = ui.itemEditCommitted() || commit;
         object.insert_or_assign("near", static_cast<double>(nearValue));
         object.insert_or_assign("far", static_cast<double>(farValue));
@@ -277,7 +291,9 @@ bool OptionUiPresenter::drawInteractiveOption(UiSystem &ui, nr::options::OptionS
     std::unreachable();
 }
 
-OptionUiPresentResult OptionUiPresenter::present(UiSystem &ui, nr::options::OptionSystem &system, std::shared_ptr<const nr::options::OptionFrameSnapshot> snapshot, OptionUiInteractionPolicy interactionPolicy)
+OptionUiPresentResult OptionUiPresenter::present(UiSystem &ui, nr::options::OptionSystem &system,
+                                                 std::shared_ptr<const nr::options::OptionFrameSnapshot> snapshot,
+                                                 OptionUiInteractionPolicy interactionPolicy)
 {
     auto result = OptionUiPresentResult{};
     if (!snapshot || !snapshot->catalog)
@@ -295,17 +311,26 @@ OptionUiPresentResult OptionUiPresenter::present(UiSystem &ui, nr::options::Opti
         drafts_.clear();
     }
 
-    auto definitions = snapshot->catalog->definitions() | std::views::values | std::views::filter([](const nr::options::OptionDefinition &definition) { return definition.presentation.control != nr::options::OptionUiControl::hidden; }) |
-                       std::views::transform([](const nr::options::OptionDefinition &definition) { return std::cref(definition); }) | std::ranges::to<std::vector>();
+    auto definitions =
+        snapshot->catalog->definitions() | std::views::values |
+        std::views::filter([](const nr::options::OptionDefinition &definition) {
+            return definition.presentation.control != nr::options::OptionUiControl::hidden;
+        }) |
+        std::views::transform([](const nr::options::OptionDefinition &definition) { return std::cref(definition); }) |
+        std::ranges::to<std::vector>();
     std::ranges::sort(definitions, [](auto lhs, auto rhs) {
         auto const &left = lhs.get();
         auto const &right = rhs.get();
-        return std::tuple{left.presentation.group != kViewerUiGroup, left.presentation.group, left.presentation.order, left.id.value()} <
-               std::tuple{right.presentation.group != kViewerUiGroup, right.presentation.group, right.presentation.order, right.id.value()};
+        return std::tuple{left.presentation.group != kViewerUiGroup, left.presentation.group, left.presentation.order,
+                          left.id.value()} < std::tuple{right.presentation.group != kViewerUiGroup,
+                                                        right.presentation.group, right.presentation.order,
+                                                        right.id.value()};
     });
 
     auto sections = std::vector<UiSection>{};
-    auto groups = definitions | std::views::chunk_by([](auto lhs, auto rhs) { return lhs.get().presentation.group == rhs.get().presentation.group; });
+    auto groups = definitions | std::views::chunk_by([](auto lhs, auto rhs) {
+                      return lhs.get().presentation.group == rhs.get().presentation.group;
+                  });
     std::ranges::for_each(groups, [&](auto group) {
         auto groupDefinitions = group | std::ranges::to<std::vector>();
         auto const &title = groupDefinitions.front().get().presentation.group;
@@ -313,7 +338,8 @@ OptionUiPresentResult OptionUiPresenter::present(UiSystem &ui, nr::options::Opti
             .id = title,
             .title = title,
             .draw =
-                [this, &system, snapshot, interactionPolicy, groupDefinitions = std::move(groupDefinitions), &result](UiSystem &sectionUi) {
+                [this, &system, snapshot, interactionPolicy, groupDefinitions = std::move(groupDefinitions),
+                 &result](UiSystem &sectionUi) {
                     std::ranges::for_each(groupDefinitions, [&](auto definition) {
                         if (interactionPolicy == OptionUiInteractionPolicy::readOnly)
                         {
@@ -321,20 +347,17 @@ OptionUiPresentResult OptionUiPresenter::present(UiSystem &ui, nr::options::Opti
                         }
                         else
                         {
-                            static_cast<void>(drawInteractiveOption(sectionUi, system, *snapshot, definition.get(), result));
+                            static_cast<void>(
+                                drawInteractiveOption(sectionUi, system, *snapshot, definition.get(), result));
                         }
                     });
-            },
+                },
         });
     });
     auto const sectionView = std::span<const UiSection>{sections};
     auto const leadingSectionCount =
-        !sections.empty() && sections.front().id == kViewerUiGroup
-            ? std::size_t{1u}
-            : std::size_t{0u};
-    ui.renderSections(
-        sectionView.first(leadingSectionCount),
-        sectionView.subspan(leadingSectionCount));
+        !sections.empty() && sections.front().id == kViewerUiGroup ? std::size_t{1u} : std::size_t{0u};
+    ui.renderSections(sectionView.first(leadingSectionCount), sectionView.subspan(leadingSectionCount));
     return result;
 }
 } // namespace nr::app

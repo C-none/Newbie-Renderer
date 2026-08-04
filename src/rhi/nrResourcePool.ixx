@@ -49,9 +49,11 @@ class ResourceFactory
 
     [[nodiscard]] bool valid() const noexcept;
 
-    [[nodiscard]] Buffer createBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
+    [[nodiscard]] Buffer createBuffer(const vk::BufferCreateInfo &createInfo,
+                                      MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
 
-    [[nodiscard]] Image createImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
+    [[nodiscard]] Image createImage(const vk::ImageCreateInfo &createInfo,
+                                    MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
 
   private:
     std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_{};
@@ -104,7 +106,8 @@ class ResourcePool
      * @param name         Optional debug name for profiling tools
      * @return Non-owning reference to the allocated buffer (valid until resetFrame)
      */
-    Buffer &allocateTransientBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "");
+    Buffer &allocateTransientBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage,
+                                    std::uint32_t frameIndex, std::string_view name = "");
 
     /**
      * @brief Allocate a per-frame transient image
@@ -119,7 +122,8 @@ class ResourcePool
      * @param name         Optional debug name for profiling tools
      * @return Non-owning reference to the allocated image (valid until resetFrame)
      */
-    Image &allocateTransientImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage, std::uint32_t frameIndex, std::string_view name = "");
+    Image &allocateTransientImage(const vk::ImageCreateInfo &createInfo, MemoryUsage memoryUsage,
+                                  std::uint32_t frameIndex, std::string_view name = "");
 
     // =====================================================================
     // Frame Lifecycle
@@ -134,6 +138,7 @@ class ResourcePool
      * NOT thread-safe — caller must ensure no concurrent access to this frame.
      */
     void resetFrame(std::uint32_t frameIndex);
+
   private:
     // -----------------------------------------------------------------
     // Members
