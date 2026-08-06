@@ -155,11 +155,6 @@ void Surface::GlfwContext::errorCallback(int error, const char *msg)
     return context;
 }
 
-Surface::Surface()
-{
-    ensureGlfwInitialized();
-}
-
 void Surface::ensureGlfwInitialized()
 {
     (void)glfwContext();
@@ -168,6 +163,7 @@ void Surface::ensureGlfwInitialized()
 [[nodiscard]] Surface Surface::create(const vk::raii::Instance &instance, std::string_view windowTitle,
                                       vk::Extent2D initialExtent)
 {
+    ensureGlfwInitialized();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
     Surface result;
@@ -178,8 +174,15 @@ void Surface::ensureGlfwInitialized()
     nrAssert(result.handle != nullptr, "Surface::create failed to create GLFW window.");
 
     VkSurfaceKHR rawSurface{};
-    vk::detail::resultCheck(glfw::createWindowSurface(*instance, result.handle.get(), nullptr, &rawSurface),
-                            "Failed to create window surface");
+    auto const createResult = glfw::createWindowSurface(*instance, result.handle.get(), nullptr, &rawSurface);
+    if (createResult != vk::Result::eSuccess)
+    {
+        auto const resultName = vk::to_string(createResult);
+        nrInfo<LogLevel::error>(std::format("Surface::create GLFW Vulkan surface creation failed with {}.",
+                                            resultName));
+        nrAssert(false, "Surface::create failed to create the Vulkan window surface.");
+        return {};
+    }
     result.surface = vk::raii::SurfaceKHR(instance, rawSurface);
     result.refreshExtentFromFramebuffer();
     return result;

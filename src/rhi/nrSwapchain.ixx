@@ -18,6 +18,7 @@ struct AcquireResult
 struct PresentResult
 {
     vk::Result result = vk::Result::eSuccess;
+    bool queued = false;
 };
 
 struct SwapChainConfig
@@ -44,14 +45,13 @@ struct SwapChain
     std::vector<vk::Image> swapChainImages;
     std::vector<vk::raii::ImageView> imageViews;
     vk::SurfaceFormatKHR surfaceFormat{};
-    vk::Format format = vk::Format::eUndefined;
     vk::Extent2D extent = {0, 0};
 
     SwapChain() = default;
     SwapChain(const SwapChain &) = delete;
     SwapChain &operator=(const SwapChain &) = delete;
     SwapChain(SwapChain &&) = default;
-    SwapChain &operator=(SwapChain &&) = default;
+    SwapChain &operator=(SwapChain &&) = delete;
 
     [[nodiscard]] static SwapChain create(const vk::raii::PhysicalDevice &physicalDevice,
                                           const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface,
@@ -68,7 +68,11 @@ struct SwapChain
 
     [[nodiscard]] PresentResult present(const vk::raii::Queue &presentQueue, std::uint32_t imageIndex,
                                         const vk::raii::Semaphore &waitSemaphore,
+                                        const vk::raii::Fence &presentCompletionFence,
                                         std::optional<std::uint64_t> frameBoundaryFrameID) const;
+
+    [[nodiscard]] static PresentResult resolvePresentResult(vk::Result queueResult,
+                                                            vk::Result swapchainResult) noexcept;
 
   private:
     [[nodiscard]] static SwapChain createImpl(const vk::raii::PhysicalDevice &physicalDevice,
@@ -84,7 +88,6 @@ class AcquireSemaphorePool
     [[nodiscard]] std::uint32_t borrow();
     void returnSlot(std::uint32_t slot);
     [[nodiscard]] const vk::raii::Semaphore &semaphore(std::uint32_t slot) const;
-    [[nodiscard]] bool empty() const noexcept;
 
   private:
     std::vector<vk::raii::Semaphore> semaphores_;
@@ -98,9 +101,11 @@ class PresentationContext
 
     ~PresentationContext();
 
-    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice,
-                    const vk::raii::Device &device, std::string_view appName, const SwapChainConfig &config,
-                    std::uint32_t presentQueueFamily);
+    void createSurface(const vk::raii::Instance &instance, std::string_view appName);
+    void initializeSwapchain(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
+                             const SwapChainConfig &config, std::uint32_t presentQueueFamily);
+
+    [[nodiscard]] const vk::raii::SurfaceKHR &surfaceHandle() const;
 
     [[nodiscard]] AcquireResult acquireNextImage(std::uint32_t frameSlot,
                                                  std::uint64_t timeout = std::numeric_limits<std::uint64_t>::max());
@@ -108,16 +113,16 @@ class PresentationContext
     void clearAcquireOutOfDateTestHook() noexcept;
     void returnAcquireSemaphore(std::uint32_t frameSlot);
     [[nodiscard]] const vk::raii::Semaphore &borrowedAcquireSemaphore(std::uint32_t frameSlot) const;
+    [[nodiscard]] const vk::raii::Semaphore &activePresentSemaphore() const;
 
-    [[nodiscard]] PresentResult present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore,
-                                        std::optional<std::uint64_t> frameBoundaryFrameID) const;
+    [[nodiscard]] PresentResult present(const QueueManager &queueManager,
+                                        std::optional<std::uint64_t> frameBoundaryFrameID);
 
     void rebuildAcquirePool();
 
     [[nodiscard]] vk::Extent2D swapchainExtent() const noexcept;
     [[nodiscard]] vk::Format swapchainFormat() const noexcept;
     [[nodiscard]] vk::ColorSpaceKHR swapchainColorSpace() const noexcept;
-    [[nodiscard]] vk::SurfaceFormatKHR swapchainSurfaceFormat() const noexcept;
     [[nodiscard]] std::uint32_t swapchainImageCount() const noexcept;
     [[nodiscard]] vk::Image swapchainImage(std::uint32_t imageIndex) const;
     [[nodiscard]] vk::ImageView swapchainImageView(std::uint32_t imageIndex) const;
@@ -148,7 +153,26 @@ class PresentationContext
                   QueueManager &queueManager);
 
   private:
-    void ensurePresentSupport(const vk::raii::PhysicalDevice &physicalDevice) const;
+    struct PresentationGeneration
+    {
+        SwapChain swapChain;
+        std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
+        std::vector<vk::raii::Fence> presentCompletionFences;
+        std::vector<bool> presentPending;
+
+        PresentationGeneration(SwapChain &&newSwapChain, const vk::raii::Device &device);
+        ~PresentationGeneration();
+
+        PresentationGeneration(const PresentationGeneration &) = delete;
+        PresentationGeneration &operator=(const PresentationGeneration &) = delete;
+        PresentationGeneration(PresentationGeneration &&) = delete;
+        PresentationGeneration &operator=(PresentationGeneration &&) = delete;
+    };
+
+    [[nodiscard]] PresentationGeneration &generation();
+    [[nodiscard]] const PresentationGeneration &generation() const;
+    void waitForPendingPresent(std::uint32_t imageIndex);
+    void waitForPendingPresents();
     void ensureFullScreenExclusiveSupport(const vk::raii::PhysicalDevice &physicalDevice) const;
     void refreshFullScreenExclusiveMonitor() noexcept;
     void acquireFullScreenExclusiveIfNeeded();
@@ -156,7 +180,7 @@ class PresentationContext
 
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     Surface surface_;
-    SwapChain swapChain_;
+    std::optional<PresentationGeneration> generation_{};
     SwapChainConfig config_{};
     std::uint32_t presentQueueFamily_ = 0;
     std::optional<std::uint32_t> activeSwapchainImageIndex_{};

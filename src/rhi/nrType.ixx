@@ -65,8 +65,7 @@ enum class MemoryUsage : unsigned
 {
     GpuOnly,  ///< Device-local, no host access (textures, RT targets, BLAS/TLAS)
     CpuToGpu, ///< Host-visible, sequential write (staging uploads, dynamic UBOs)
-    GpuToCpu, ///< Host-visible, random read (readback, query results)
-    CpuOnly   ///< Host-visible, persistently mapped (debug, CPU-side scratch)
+    GpuToCpu  ///< Host-visible, random read (readback, query results)
 };
 
 /**
@@ -77,47 +76,18 @@ enum class MemoryUsage : unsigned
  */
 enum class AllocationStrategy : unsigned
 {
-    CrossFrame,      ///< Long-lived, survives multiple frames (default pool, standard alloc)
-    PerFrame,        ///< Single-frame lifetime, allocated from linear pool, bulk-reset each frame
-    StagingTransient ///< Immediate/short-lived staging, allocated from dedicated staging pool
-};
-
-enum class PipelineType : unsigned
-{
-    Graphics,
-    Compute,
-    Mesh,
-    RayTracing,
-};
-
-enum class GraphicsPipelineMode : unsigned
-{
-    StandardGraphics, // Requires vertex shader
-    Mesh,             // Requires mesh shader (task optional)
+    CrossFrame, ///< Long-lived, survives multiple frames (default pool, standard alloc)
+    PerFrame    ///< Single-frame lifetime, allocated from linear pool, bulk-reset each frame
 };
 
 struct RayTracingCapabilitySnapshot
 {
-    bool rayTracingMaintenance1 = false;
-    bool rayTracingPipelineTraceRaysIndirect = false;
-    bool rayTracingPipelineTraceRaysIndirect2 = false;
-    bool rayTracingPipelineShaderGroupHandleCaptureReplay = false;
-    bool rayTracingPipelineShaderGroupHandleCaptureReplayMixed = false;
-    bool rayTraversalPrimitiveCulling = false;
-    bool rayTracingInvocationReorder = false;
-    bool opacityMicromap = false;
-    bool opacityMicromapCaptureReplay = false;
-    bool opacityMicromapHostCommands = false;
-
     std::uint32_t shaderGroupHandleSize = 0;
     std::uint32_t shaderGroupHandleAlignment = 1;
     std::uint32_t shaderGroupBaseAlignment = 1;
-    std::uint32_t shaderGroupHandleCaptureReplaySize = 0;
     std::uint32_t maxShaderGroupStride = 0;
     std::uint32_t maxRayDispatchInvocationCount = 0;
     std::uint32_t maxRayRecursionDepth = 0;
-    std::uint32_t maxRayHitAttributeSize = 0;
-    std::uint32_t maxShaderBindingTableRecordIndex = 0;
 
     std::array<std::uint64_t, 3> maxDispatchDimensions = {0u, 0u, 0u};
 };

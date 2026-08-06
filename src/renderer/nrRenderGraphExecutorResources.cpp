@@ -177,7 +177,7 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
                     binding.accelerationStructure = accelerationStructure.raw();
                     binding.accelerationStructureType = accelerationStructure.type();
                     binding.accelerationStructureSize = accelerationStructure.size();
-                    binding.accelerationStructureStorageBuffer = accelerationStructure.storageBuffer().handle();
+                    binding.accelerationStructureStorageBuffer = accelerationStructure.storageBufferHandle();
                     binding.accelerationStructureStorageOffset = accelerationStructure.storageOffset();
                     binding.accelerationStructureResource = std::cref(accelerationStructure);
                 };
@@ -294,69 +294,10 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
 {
     nrAssert(firstBatchOrdinal <= lastBatchOrdinal && lastBatchOrdinal <= compiled.submitBatches.size(),
              "RenderGraphExecutor::invokePassPrepareCallbacks received an invalid submit-batch range.");
-    auto resolveBuffer = [&](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
-        auto bindingIt = runtimeBindings.find(handle);
-        if (bindingIt == runtimeBindings.end() || !bindingIt->second.isBuffer)
-        {
-            return std::nullopt;
-        }
-
-        return PassBufferResource{
-            .buffer = bindingIt->second.buffer,
-            .size = bindingIt->second.bufferSize,
-            .resource = bindingIt->second.bufferResource,
-        };
-    };
-
-    auto resolveImage = [&](GraphResourceHandle handle) -> std::optional<PassImageResource> {
-        auto bindingIt = runtimeBindings.find(handle);
-        if (bindingIt == runtimeBindings.end() || !bindingIt->second.isImage)
-        {
-            return std::nullopt;
-        }
-
-        return PassImageResource{
-            .image = bindingIt->second.image,
-            .view = bindingIt->second.imageView,
-            .extent = bindingIt->second.extent,
-            .subresourceRange = bindingIt->second.subresourceRange,
-            .resource = bindingIt->second.imageResource,
-        };
-    };
-
-    auto resolveAccelerationStructure =
-        [&](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
-        auto bindingIt = runtimeBindings.find(handle);
-        if (bindingIt == runtimeBindings.end() || !bindingIt->second.isAccelerationStructure)
-        {
-            return std::nullopt;
-        }
-
-        return PassAccelerationStructureResource{
-            .accelerationStructure = bindingIt->second.accelerationStructure,
-            .type = bindingIt->second.accelerationStructureType,
-            .size = bindingIt->second.accelerationStructureSize,
-            .storageBuffer = bindingIt->second.accelerationStructureStorageBuffer,
-            .storageOffset = bindingIt->second.accelerationStructureStorageOffset,
-            .resource = bindingIt->second.accelerationStructureResource,
-        };
-    };
-
     auto frameDataByHandle = CompiledFrameDataLookup{};
     std::ranges::for_each(compiled.frameData, [&](const GraphFrameDataDesc &frameData) {
         frameDataByHandle.emplace(frameData.handle, std::cref(frameData));
     });
-
-    auto resolveFrameDataPayload =
-        [&](GraphFrameDataHandle handle) -> std::optional<std::reference_wrapper<const std::any>> {
-        auto frameDataIt = frameDataByHandle.find(handle);
-        if (frameDataIt == frameDataByHandle.end())
-        {
-            return {};
-        }
-
-        return std::cref(frameDataIt->second.get().payload);
-    };
 
     auto invokedPrepareCount = std::size_t{0};
     auto batchOrdinals = std::views::iota(firstBatchOrdinal, lastBatchOrdinal);
@@ -367,6 +308,78 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
             {
                 return;
             }
+
+            auto resolveBuffer = [&](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
+                nrAssert(passDeclaresResource(pass, handle),
+                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} "
+                                     "(pass handle {}).",
+                                     pass.debugName, handle.value, pass.handle.value));
+                auto bindingIt = runtimeBindings.find(handle);
+                if (bindingIt == runtimeBindings.end() || !bindingIt->second.isBuffer)
+                {
+                    return std::nullopt;
+                }
+
+                return PassBufferResource{
+                    .buffer = bindingIt->second.buffer,
+                    .size = bindingIt->second.bufferSize,
+                    .resource = bindingIt->second.bufferResource,
+                };
+            };
+            auto resolveImage = [&](GraphResourceHandle handle) -> std::optional<PassImageResource> {
+                nrAssert(passDeclaresResource(pass, handle),
+                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} "
+                                     "(pass handle {}).",
+                                     pass.debugName, handle.value, pass.handle.value));
+                auto bindingIt = runtimeBindings.find(handle);
+                if (bindingIt == runtimeBindings.end() || !bindingIt->second.isImage)
+                {
+                    return std::nullopt;
+                }
+
+                return PassImageResource{
+                    .image = bindingIt->second.image,
+                    .view = bindingIt->second.imageView,
+                    .extent = bindingIt->second.extent,
+                    .subresourceRange = bindingIt->second.subresourceRange,
+                    .resource = bindingIt->second.imageResource,
+                };
+            };
+            auto resolveAccelerationStructure =
+                [&](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
+                nrAssert(passDeclaresResource(pass, handle),
+                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} "
+                                     "(pass handle {}).",
+                                     pass.debugName, handle.value, pass.handle.value));
+                auto bindingIt = runtimeBindings.find(handle);
+                if (bindingIt == runtimeBindings.end() || !bindingIt->second.isAccelerationStructure)
+                {
+                    return std::nullopt;
+                }
+
+                return PassAccelerationStructureResource{
+                    .accelerationStructure = bindingIt->second.accelerationStructure,
+                    .type = bindingIt->second.accelerationStructureType,
+                    .size = bindingIt->second.accelerationStructureSize,
+                    .storageBuffer = bindingIt->second.accelerationStructureStorageBuffer,
+                    .storageOffset = bindingIt->second.accelerationStructureStorageOffset,
+                    .resource = bindingIt->second.accelerationStructureResource,
+                };
+            };
+            auto resolveFrameDataPayload =
+                [&](GraphFrameDataHandle handle) -> std::optional<std::reference_wrapper<const std::any>> {
+                nrAssert(passDeclaresFrameData(pass, handle),
+                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared frame-data handle {} "
+                                     "(pass handle {}).",
+                                     pass.debugName, handle.value, pass.handle.value));
+                auto frameDataIt = frameDataByHandle.find(handle);
+                if (frameDataIt == frameDataByHandle.end())
+                {
+                    return {};
+                }
+
+                return std::cref(frameDataIt->second.get().payload);
+            };
 
             pass.prepare(PassPrepareContext{
                 .frameIndex = context.frameIndex,
@@ -381,6 +394,19 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     });
 
     return invokedPrepareCount;
+}
+
+[[nodiscard]] bool RenderGraphExecutor::passDeclaresResource(const CompiledPass &pass,
+                                                              GraphResourceHandle handle) noexcept
+{
+    return std::ranges::any_of(pass.resourceUses,
+                               [handle](const PassResourceUseDesc &use) { return use.resource == handle; });
+}
+
+[[nodiscard]] bool RenderGraphExecutor::passDeclaresFrameData(const CompiledPass &pass,
+                                                               GraphFrameDataHandle handle) noexcept
+{
+    return std::ranges::contains(pass.frameDataUses, handle);
 }
 
 [[nodiscard]] nr::rhi::CommandPool &RenderGraphExecutor::primaryPoolForQueue(nr::rhi::FrameContext &frame,

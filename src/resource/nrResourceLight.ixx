@@ -22,8 +22,6 @@ struct LightAsset
     float outerConeRadians = glm::radians(45.0f);
     bool castShadow = false;
 
-    LightAsset() = default;
-    ~LightAsset() = default;
 };
 
 } // namespace nr::resource

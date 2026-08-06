@@ -363,6 +363,10 @@ const nr::test::CaseRegistrar sceneCandidateCommitOrderingCase{
         requirePresent(appSessionInterface, "std::unique_ptr<nr::scene::Scene> scene_{};",
                        "AppSession must exclusively own the active Scene");
         auto const commitScene = sourceSection(appSession, "void AppSession::commitScene(", "AppSession::createScene(");
+        requirePresent(commitScene, "candidate->usesDevice(renderer_.device())",
+                       "Scene commit must validate device affinity through the narrow predicate");
+        requireAbsent(commitScene, "candidate->device()",
+                      "Scene commit must not require the removed wide Scene device facade");
         requireOrdered(commitScene, "renderer_.device().waitIdle();", "renderer_.resetSceneBinding();",
                        "Scene commit must cross the frame/device boundary before unbinding the old Scene");
         requireOrdered(commitScene, "renderer_.resetSceneBinding();", "scene_.swap(candidate);",
@@ -438,26 +442,35 @@ const nr::test::CaseRegistrar uiCameraAdmissionPriorityCase{
         requireAbsent(readOnlyDrawing, "trySchedule(", "the read-only mirror must not call OptionSystem admission");
         requireAbsent(readOnlyDrawing, "itemEditCommitted(", "the read-only mirror must not observe or commit edits");
 
-        auto const allUiModes =
-            sourceSection(pipeline, "if (!config.benchmark)",
-                          "auto const cameraOverride = app.camera().buildRendererCameraOverride();");
+        auto const allUiModes = sourceSection(
+            pipeline, "auto uiResult = nr::app::OptionUiPresentResult{};",
+            "auto const cameraOverride = app.camera().buildRendererCameraOverride();");
         requirePresent(allUiModes, "config.interactionMode == ViewerInteractionMode::human",
                        "pipeline must derive UI mutability from the active interaction mode");
         requirePresent(allUiModes, "nr::app::OptionUiInteractionPolicy::readOnly",
                        "agent and offline-lua modes must select the read-only mirror");
-        requireOrdered(allUiModes, "auto uiResult = optionUiPresenter.present(",
-                       "if (uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)",
-                       "all modes must render the shared snapshot before only human mode enters admission");
+        requireOrdered(allUiModes, "uiResult = optionUiPresenter.present(",
+                       "auto const uiCaptureState = app.ui().finalizeFrame();",
+                       "the app must finalize the UI after presenting the shared snapshot");
+        requireOrdered(allUiModes, "auto const uiCaptureState = app.ui().finalizeFrame();",
+                       "if (!config.benchmark && uiInteractionPolicy ==",
+                       "current-frame UI capture must be frozen before human camera admission");
 
-        auto const humanInput =
-            sourceSection(pipeline, "if (uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)",
-                          "auto const cameraOverride = app.camera().buildRendererCameraOverride();");
+        auto const humanInput = sourceSection(
+            pipeline, "if (!config.benchmark && uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)",
+            "auto const cameraOverride = app.camera().buildRendererCameraOverride();");
         requireOrdered(humanInput, "if (uiResult.mutationAttempted)", "app.camera().discardPresentationInput(",
                        "every UI mutation attempt, including a rejected one, must consume presentation input");
         requireOrdered(humanInput, "app.camera().discardPresentationInput(", "else",
                        "camera admission must remain in the branch opposite a UI mutation attempt");
         requireOrdered(humanInput, "else", "app.camera().tryScheduleFromPresentation(",
                        "camera mutation may be attempted only when UI did not attempt a mutation");
+        requirePresent(humanInput, "deltaSeconds, uiCaptureState);",
+                       "discarded input must observe the current finalized UI capture state");
+        requirePresent(humanInput, "deltaSeconds, uiCaptureState));",
+                       "camera admission must observe that same current finalized UI capture state");
+        requireAbsent(humanInput, "captureState()",
+                      "camera arbitration must not read a cached capture state from an earlier UI frame");
 
         auto const discardInput = sourceSection(camera, "void AppCamera::discardPresentationInput(",
                                                 "nr::options::CameraResetValues AppCamera::optionResetValues()");
@@ -471,8 +484,11 @@ const nr::test::CaseRegistrar uiSectionOrderCase{
     "viewer and frame status lead while CPU and GPU performance always trail", [] {
         auto const pipeline = readProjectFile("src/pipeline/nrPipeline.cpp");
         auto const presenter = readProjectFile("src/app/nrOptionUiPresenter.cpp");
+        auto const uiInterface = readProjectFile("src/app/nrAppUi.ixx");
         auto const uiSystem = readProjectFile("src/app/nrAppUi.cpp");
         auto const uiNode = readProjectFile("src/renderPasses/Ui/nrUiNode.cpp");
+        auto const normalBufferUiSmoke = readProjectFile("test/smoke/app/normalBufferUiSmoke.cpp");
+        auto const embeddedTriangle = readProjectFile("test/smoke/app/embeddedTriangle.cpp");
 
         auto const mainLoop = sourceSection(pipeline, "while (!presentation.windowShouldClose())",
                                             "if (config.benchmark && exitCode == 0");
@@ -481,6 +497,15 @@ const nr::test::CaseRegistrar uiSectionOrderCase{
                        "frame status must observe the current viewer camera");
         requireOrdered(mainLoop, "queueFrameStatusSection(app.ui(), presentation);", "if (!config.benchmark)",
                        "frame status must be queued in every interaction and benchmark mode");
+        requireOrdered(mainLoop, "auto const uiCaptureState = app.ui().finalizeFrame();",
+                       "auto frameResult = app.renderer().renderFrame(frameInput);",
+                       "the app must finalize UI before renderer graph construction consumes draw data");
+        requireOrdered(mainLoop, "auto frameResult = app.renderer().renderFrame(frameInput);",
+                       "app.ui().setCpuStatistics(frameResult.cpuStatistics);",
+                       "CPU diagnostics published after rendering must describe the last completed frame");
+        requireOrdered(mainLoop, "app.ui().setCpuStatistics(frameResult.cpuStatistics);",
+                       "app.ui().setGpuPassStatistics(frameResult.gpuPassStatistics);",
+                       "completed-frame CPU and GPU diagnostics must be published together");
 
         requirePresent(presenter, "left.presentation.group != kViewerUiGroup",
                        "the Viewer option group must sort before every ordinary option group");
@@ -495,19 +520,143 @@ const nr::test::CaseRegistrar uiSectionOrderCase{
                        "drawAppSections(trailingSections);",
                        "UiSystem must draw remaining option groups after queued frame status");
 
-        auto const performanceSections =
-            sourceSection(uiNode, "makeTrailingPerformanceUiSections()", "makeUiTextureDescriptors(");
+        auto const performanceSections = sourceSection(uiSystem, "UiCaptureState UiSystem::finalizeFrame()",
+                                                       "void UiSystem::queueSection(");
         requireAbsent(performanceSections, "frame.status",
-                      "UiNode must not append frame status with the performance tail");
+                      "UiSystem must not duplicate frame status in its performance tail");
         requireOrdered(performanceSections, "cpu.performance", "gpu.performance",
                        "CPU performance must precede GPU performance at the absolute UI tail");
 
-        auto const uiFinalization = sourceSection(
-            uiNode, "auto trailingSections = makeTrailingPerformanceUiSections();", "synchronizeUiTextures(");
-        requirePresent(uiFinalization, "std::span<const nr::app::UiSection>{},",
-                       "UiNode must reserve no leading section ahead of queued app sections");
-        requireOrdered(uiFinalization, "sectionSpan(trailingSections)", "uiSystem->get().finalizeFrame();",
-                       "performance sections must be the last renderSections input before UI finalization");
+        auto const uiFinalization = performanceSections;
+        requireOrdered(uiFinalization, "auto const performanceSections = std::array{", "renderSections(",
+                       "UiSystem finalization must append the performance tail itself");
+        requireOrdered(uiFinalization, "renderSections(", "ImGui::Render();",
+                       "all app-owned sections must be drawn before the UI frame is finalized");
+        requirePresent(uiFinalization, "return captureState;",
+                       "UI finalization must return the capture state produced by that same frame");
+        requireAbsent(uiInterface, "captureState()",
+                      "UiSystem must not expose a cached capture-state read separate from finalization");
+        requireAbsent(uiNode, "renderSections(", "UiNode must not render app-owned UI sections");
+        requireAbsent(uiNode, "finalizeFrame(", "UiNode must not finalize the app-owned UI frame");
+
+        auto const normalSmokeFrame = sourceSection(normalBufferUiSmoke, "renderOneFrame(",
+                                                    "[[nodiscard]] bool renderUntilSceneDraw(");
+        requireOrdered(normalSmokeFrame, "app.ui().beginFrame(", "app.ui().finalizeFrame()",
+                       "the NormalBuffer smoke path must close each UI transaction");
+        requireOrdered(normalSmokeFrame, "app.ui().finalizeFrame()", "renderer.renderFrame(",
+                       "the NormalBuffer smoke path must finalize UI before rendering");
+        requirePresent(normalSmokeFrame, "drawData->get().TotalVtxCount <= 0",
+                       "the NormalBuffer smoke path must retain non-empty UI draw-data validation");
+        requirePresent(normalSmokeFrame, "frameResult.invokedPassRecordCount < 2u",
+                       "the NormalBuffer smoke path must retain UI and Present pass validation");
+
+        auto const embeddedLoop = sourceSection(embeddedTriangle, "while (!presentation.windowShouldClose())",
+                                                "        app.shutdown();");
+        requireOrdered(embeddedLoop, "app.ui().beginFrame(", "app.ui().finalizeFrame()",
+                       "the embedded-triangle manual loop must close each UI transaction");
+        requireOrdered(embeddedLoop, "app.ui().finalizeFrame()", "renderer.renderFrame(",
+                       "the embedded-triangle manual loop must finalize UI before rendering");
+    }};
+
+const nr::test::CaseRegistrar uiSystemOwnershipAndFrameStateCase{
+    "UiSystem owns queued section strings, its ImGui context, and one explicit frame state", [] {
+        auto const uiInterface = readProjectFile("src/app/nrAppUi.ixx");
+        auto const ui = readProjectFile("src/app/nrAppUi.cpp");
+        auto const presenter = readProjectFile("src/app/nrOptionUiPresenter.cpp");
+
+        requirePresent(uiInterface, "std::string id{};",
+                       "queued UI section identity must own its storage");
+        requirePresent(uiInterface, "std::string title{};",
+                       "queued UI section title must own its storage");
+        requireAbsent(uiInterface, "std::string_view id{};",
+                      "queued section identity must not borrow temporary text");
+        requireAbsent(uiInterface, "std::string_view title{};",
+                      "queued section title must not borrow temporary text");
+        requirePresent(ui, "queuedSections_.push_back(std::move(section));",
+                       "queueSection must move the owning section into frame storage");
+        requirePresent(presenter, ".id = title,",
+                       "the catalog presenter must copy each group identity into its section");
+        requirePresent(presenter, ".title = title,",
+                       "the catalog presenter must copy each group title into its section");
+
+        requirePresent(uiInterface, "struct ImGuiContextDeleter",
+                       "UiSystem must declare an explicit private ImGui context deleter");
+        requirePresent(uiInterface, "std::unique_ptr<ImGuiContext, ImGuiContextDeleter> context_{};",
+                       "UiSystem must own its ImGui context through unique_ptr");
+        requirePresent(ui, "void UiSystem::ImGuiContextDeleter::operator()(ImGuiContext *context) const noexcept",
+                       "the explicit ImGui context deleter must have one implementation");
+        requirePresent(ui, "ImGui::DestroyContext(context);",
+                       "the unique_ptr deleter must destroy the ImGui context");
+        requirePresent(ui, "context_.reset(ImGui::CreateContext());",
+                       "initialization must immediately transfer context ownership to unique_ptr");
+        requireAbsent(uiInterface, "ImGuiContext *context_",
+                      "UiSystem must not retain a raw owning ImGui context pointer");
+        requireAbsent(ui, "ImGui::DestroyContext(context_",
+                      "shutdown must release the context only through its deleter");
+
+        requirePresent(uiInterface, "enum class FrameState : std::uint8_t",
+                       "UiSystem must model frame lifecycle with one explicit state");
+        requirePresent(uiInterface, "FrameState frameState_ = FrameState::idle;",
+                       "UiSystem must begin in the idle frame state");
+        requireAbsent(uiInterface, "frameActive_", "the old active-state boolean must be removed");
+        requireAbsent(uiInterface, "frameFinalized_", "the old finalized-state boolean must be removed");
+        requireAbsent(ui, "frameActive_", "implementation must not retain the old active-state boolean");
+        requireAbsent(ui, "frameFinalized_", "implementation must not retain the old finalized-state boolean");
+
+        auto const shutdown = sourceSection(ui, "void UiSystem::shutdown()", "bool UiSystem::initialized()");
+        requireOrdered(shutdown, "frameState_ == FrameState::active", "ImGui::EndFrame();",
+                       "shutdown must close an active ImGui frame before destroying its context");
+        requireOrdered(shutdown, "ImGui::EndFrame();", "context_.reset();",
+                       "active-frame cleanup must precede RAII context release");
+        requirePresent(shutdown, "frameState_ = FrameState::idle;",
+                       "shutdown must restore the idle state");
+
+        auto const beginFrame = sourceSection(ui, "void UiSystem::beginFrame(",
+                                              "UiCaptureState UiSystem::finalizeFrame()");
+        requireOrdered(beginFrame, "nrAssert(frameState_ != FrameState::active", "ImGui::NewFrame();",
+                       "beginFrame must fail fast on an unfinalized active frame");
+        requireAbsent(beginFrame, "ImGui::EndFrame();",
+                      "beginFrame must not silently discard an unfinalized frame");
+        requirePresent(beginFrame, "frameState_ = FrameState::active;",
+                       "a successful begin must publish the active state");
+
+        auto const activeFrameGuard = sourceSection(ui, "void UiSystem::requireActiveFrame(",
+                                                    "bool UiSystem::beginSection(");
+        requireOrdered(activeFrameGuard, "frameState_ == FrameState::active", "std::format(",
+                       "the normal widget path must return before constructing failure diagnostics");
+        requirePresent(activeFrameGuard, "nrAssert(false, std::format(",
+                       "invalid widget access must retain an operation-specific fail-fast diagnostic");
+
+        auto const finalizeFrame = sourceSection(ui, "UiCaptureState UiSystem::finalizeFrame()",
+                                                 "void UiSystem::queueSection(");
+        requireOrdered(finalizeFrame, "frameState_ == FrameState::active", "ImGui::Render();",
+                       "finalization must require the active state before rendering");
+        requireOrdered(finalizeFrame, "ImGui::Render();", "frameState_ = FrameState::finalized;",
+                       "draw data must be rendered before the finalized state is published");
+
+        auto const drawData = sourceSection(ui, "UiSystem::drawData() const noexcept",
+                                            "void UiSystem::setCurrentContext()");
+        requirePresent(drawData, "frameState_ != FrameState::finalized",
+                       "drawData must explicitly return no data for every state except finalized");
+
+        requireAbsent(uiInterface, "class WindowScope", "the zero-use window scope API must be removed");
+        requireAbsent(ui, "UiSystem::WindowScope", "the zero-use window scope implementation must be removed");
+        requireAbsent(uiInterface, "WindowScope window(", "the zero-use window entrypoint must be removed");
+        requireAbsent(ui, "UiSystem::window(", "the zero-use window implementation must be removed");
+        requireAbsent(uiInterface, "endWindow(", "the zero-use window closer must be removed");
+        requireAbsent(ui, "UiSystem::endWindow(", "the zero-use window closer implementation must be removed");
+        requireAbsent(uiInterface, "void renderSections(std::span<const UiSection> sections",
+                      "the unused single-span renderSections overload must be removed");
+        requireAbsent(ui, "void UiSystem::renderSections(std::span<const UiSection> sections",
+                      "the unused single-span renderSections implementation must be removed");
+        requireAbsent(uiInterface, "cpuStatistics() const",
+                      "CPU statistics must not remain a public implementation-only getter");
+        requireAbsent(uiInterface, "gpuPassStatistics() const",
+                      "GPU statistics must not remain a public implementation-only getter");
+        requireAbsent(ui, "windowsOpenedThisFrame_", "the single-window path must not retain a window counter");
+        requireAbsent(ui, "kUiWindowVerticalStride", "the single-window path must not retain a row stride");
+        requirePresent(ui, "ImVec2{detail::kUiWindowMargin, detail::kUiWindowMargin}",
+                       "the sole UI window must use the fixed margin position");
     }};
 
 const nr::test::CaseRegistrar cameraMovementSpeedBindingCase{
@@ -542,13 +691,13 @@ const nr::test::CaseRegistrar verticalWheelUiOnlyCase{
         requirePresent(swapchainInterface, "double consumeVerticalScrollOffset() const noexcept;",
                        "PresentationContext must expose one-shot vertical scroll consumption");
 
-        auto const initialization = sourceSection(swapchain, "void PresentationContext::initialize(",
-                                                  "AcquireResult PresentationContext::acquireNextImage(");
-        requirePresent(initialization, "glfwSetScrollCallback(",
+        auto const surfaceCreation = sourceSection(swapchain, "void PresentationContext::createSurface(",
+                                                   "void PresentationContext::initializeSwapchain(");
+        requirePresent(surfaceCreation, "glfwSetScrollCallback(",
                        "PresentationContext must register a GLFW scroll callback");
-        requirePresent(initialization, "verticalScrollOffset_ += yOffset;",
+        requirePresent(surfaceCreation, "verticalScrollOffset_ += yOffset;",
                        "all finite vertical events from one poll must accumulate");
-        requireAbsent(initialization, "xOffset",
+        requireAbsent(surfaceCreation, "xOffset",
                       "horizontal scroll input must be discarded at the presentation boundary");
 
         auto const polling = sourceSection(swapchain, "void PresentationContext::pollEvents() const",
@@ -566,7 +715,8 @@ const nr::test::CaseRegistrar verticalWheelUiOnlyCase{
         requirePresent(uiInitialization, "io.FontAllowUserScaling = false;",
                        "Ctrl+wheel window scaling must remain disabled");
 
-        auto const uiFrame = sourceSection(ui, "void UiSystem::beginFrame(", "void UiSystem::finalizeFrame()");
+        auto const uiFrame =
+            sourceSection(ui, "void UiSystem::beginFrame(", "UiCaptureState UiSystem::finalizeFrame()");
         requirePresent(uiFrame, "presentation.consumeVerticalScrollOffset();",
                        "UiSystem must be the sole vertical scroll consumer");
         requirePresent(uiFrame, "io.AddMouseWheelEvent(0.0f,",

@@ -1,5 +1,5 @@
 export module nr.utils:errorHandle;
-import :staticUtils;
+import :staticUtilsConstants;
 import std;
 
 export namespace nr

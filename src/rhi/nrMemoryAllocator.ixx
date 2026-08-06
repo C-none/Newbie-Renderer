@@ -1,6 +1,5 @@
 export module nr.rhi:memoryAllocator;
 import dependency.vma;
-import dependency.nsight;
 import dependency.vulkan;
 import nr.utils;
 import :type;
@@ -12,11 +11,10 @@ import std;
  * @brief High-level strategy-based memory allocator built on VMA
  *
  * Sits above VmaAllocatorWrapper and provides semantic allocation methods
- * that abstract away VMA flag combinations. Three allocation strategies:
+ * that abstract away VMA flag combinations. Two allocation strategies:
  *
  * - CrossFrame:  Standard long-lived allocations (default VMA pool)
  * - PerFrame:    Short-lived per-frame resources (linear pool, bulk-reset)
- * - StagingTransient: Immediate staging uploads (dedicated staging pool)
  *
  * GpuOnly buffers automatically include VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
  * for Buffer Device Address (BDA) support. Host-mapped CpuToGpu buffers do not, so
@@ -33,9 +31,7 @@ export namespace nr::rhi
 /**
  * @brief Strategy-based memory allocator for the rendering pipeline
  *
- * Owns the VMA allocator instance and manages specialized pools:
- * - Per-frame linear pools for O(1) bulk deallocation per frame
- * - A staging pool optimized for CPU->GPU transfers
+ * Owns the VMA allocator instance and per-frame linear pools for O(1) bulk deallocation.
  *
  * Lifecycle:
  * - Constructed after vk::raii::Device creation
@@ -61,10 +57,7 @@ class MemoryAllocator
      * @param physDevice  Vulkan RAII physical device
      * @param device      Vulkan RAII device
      *
-     * Creates:
-     * 1. VMA allocator with Vulkan 1.4
-     * 2. Per-frame linear pools (one per frame-in-flight) for PerFrame strategy
-    * 3. Staging pool for StagingTransient uploads
+     * Creates the VMA allocator and one linear pool per frame in flight.
      */
     void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
                     const vk::raii::Device &device);
@@ -72,22 +65,6 @@ class MemoryAllocator
     // =====================================================================
     // Strategy-Based Buffer Allocation
     // =====================================================================
-
-    /**
-     * @brief Allocate a buffer with semantic strategy and usage
-     *
-     * @param size          Buffer size in bytes
-    * @param bufferUsage   Vulkan buffer usage flags (vk::BufferUsageFlags)
-     *                      SHADER_DEVICE_ADDRESS_BIT is added automatically for GPU buffers
-     * @param strategy      Allocation lifetime strategy
-     * @param usage         Memory usage intent (GPU-only, CPU-to-GPU, etc.)
-     * @param frameIndex    Frame index for PerFrame strategy (mod maxFrameInFlight)
-     * @return RAII VmaBuffer
-     */
-    [[nodiscard]] VmaBuffer allocateBuffer(vk::DeviceSize size, vk::BufferUsageFlags bufferUsage,
-                                           AllocationStrategy strategy = AllocationStrategy::CrossFrame,
-                                           MemoryUsage usage = MemoryUsage::GpuOnly,
-                                           std::uint32_t frameIndex = 0) const;
 
     /**
      * @brief Allocate a buffer from Vulkan-hpp style create info
@@ -140,40 +117,6 @@ class MemoryAllocator
      */
     void resetFramePool(std::uint32_t frameIndex);
 
-    // =====================================================================
-    // Query & Diagnostics
-    // =====================================================================
-
-    /**
-     * @brief Log per-heap budget information
-     *
-     * Outputs allocation and budget stats for each memory heap.
-     * Safe to call every frame (uses fast VMA budget query).
-     */
-    void logBudget() const;
-
-    /**
-     * @brief Log per-frame pool statistics
-     */
-    void logFramePoolStats() const;
-
-    /**
-     * @brief Check if a buffer's memory is host-visible
-     *
-     * Useful for the "try ReBAR, fall back to staging" pattern:
-     * allocate with CpuToGpu + CrossFrame, then check if direct write is possible.
-     */
-    [[nodiscard]] static bool isHostVisible(const VmaBuffer &buffer);
-
-    /// Get the underlying VMA allocator wrapper (for advanced usage)
-    [[nodiscard]] const VmaAllocatorWrapper &vma() const noexcept;
-
-    /// Get raw VMA allocator handle (for interop)
-    [[nodiscard]] VmaAllocator handle() const noexcept;
-
-    /// Check if initialized
-    [[nodiscard]] bool valid() const noexcept;
-
   private:
     [[nodiscard]] static bool nsightGraphicsActivityRequested() noexcept;
 
@@ -189,14 +132,6 @@ class MemoryAllocator
      * One pool per frame-in-flight, sized for typical per-frame scratch work.
      */
     void createPerFramePools();
-
-    /**
-    * @brief Create staging pool for StagingTransient strategy
-     *
-     * Optimized for short-lived CPU->GPU transfer buffers.
-     * Uses linear allocation for fast alloc/free patterns.
-     */
-    void createStagingPool();
 
     /**
      * @brief Create a device-local pool with an explicit block size for Nsight runs.
@@ -234,7 +169,6 @@ class MemoryAllocator
      * - CpuToGpu: HOST_VISIBLE, persistently mapped (ReBAR HOST_VISIBLE+DEVICE_LOCAL
      *             when available, otherwise plain HOST_VISIBLE). Always mappable.
      * - GpuToCpu: HOST_VISIBLE + HOST_CACHED for CPU reads
-     * - CpuOnly:  HOST_VISIBLE + MAPPED
      */
     void configureCrossFrame(VmaAllocationCreateInfo &allocInfo, MemoryUsage usage) const;
 
@@ -257,22 +191,12 @@ class MemoryAllocator
      */
     void configurePerFrame(VmaAllocationCreateInfo &allocInfo, std::uint32_t frameIndex) const;
 
-    /**
-    * @brief Configure VMA allocation info for StagingTransient strategy
-     *
-     * Allocates from the staging pool. Host-visible, sequentially written.
-     */
-    void configureStagingTransient(VmaAllocationCreateInfo &allocInfo) const;
-
     // -----------------------------------------------------------------
     // Members
     // -----------------------------------------------------------------
     VmaAllocatorWrapper vma_;
     std::array<VmaPoolHandle, maxFrameInFlight> perFramePools_;
     mutable std::array<bool, maxFrameInFlight> perFramePoolDirty_{};
-    VmaPoolHandle stagingPool_;
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
-
     // True when NVIDIA Nsight Graphics is intercepting this process. When set,
     // all buffer allocations suppress buffer-specific dedicated-allocation metadata.
     // GpuOnly CrossFrame buffers also route through profilerSafePool_ to keep the

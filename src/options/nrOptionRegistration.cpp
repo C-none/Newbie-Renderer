@@ -493,17 +493,17 @@ std::vector<OptionDefinition> makeSessionDefinitions(const SessionDefinitionSeed
 
 std::vector<OptionDefinition> makePathTracingDefinitions()
 {
-    auto filterAfterShading =
-        makeBooleanDefinition(keys::pathTracingFilterAfterShadingEnabled, false, OptionScope::graph,
-                              ui("Path tracing", "Filter after shading", OptionUiControl::checkbox, 30));
-    filterAfterShading.resetsTemporalHistory = true;
-    return {
+    auto definitions = std::vector<OptionDefinition>{
         makeUnsignedDefinition(keys::pathTracingMaxSurfaceBounces, 16u, 1u, 64u, OptionScope::graph,
                                ui("Path tracing", "Max surface bounces", OptionUiControl::slider, 10)),
         makeBooleanDefinition(keys::pathTracingRussianRouletteEnabled, true, OptionScope::graph,
                               ui("Path tracing", "Russian roulette", OptionUiControl::checkbox, 20)),
-        std::move(filterAfterShading),
+        makeBooleanDefinition(keys::pathTracingFilterAfterShadingEnabled, false, OptionScope::graph,
+                              ui("Path tracing", "Filter after shading", OptionUiControl::checkbox, 30)),
     };
+    std::ranges::for_each(definitions,
+                          [](OptionDefinition &definition) { definition.resetsTemporalHistory = true; });
+    return definitions;
 }
 
 std::vector<OptionDefinition> makeAccumulateDefinitions()

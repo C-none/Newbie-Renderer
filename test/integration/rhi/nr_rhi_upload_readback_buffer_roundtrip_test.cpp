@@ -148,7 +148,8 @@ const nr::test::CaseRegistrar chunkedImageRoundtripCase{
         imageInfo.arrayLayers = 1u;
         imageInfo.samples = vk::SampleCountFlagBits::e1;
         imageInfo.tiling = vk::ImageTiling::eOptimal;
-        imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc;
+        imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc |
+                          vk::ImageUsageFlagBits::eSampled;
         imageInfo.sharingMode = vk::SharingMode::eExclusive;
         imageInfo.initialLayout = vk::ImageLayout::eUndefined;
 
@@ -184,6 +185,62 @@ const nr::test::CaseRegistrar chunkedImageRoundtripCase{
         nr::test::requireEqual(readback.size(), payload.size());
         nr::test::require(std::ranges::equal(readback, payload),
                           "chunked image upload/readback bytes should match the source payload");
+
+        device.waitIdle();
+    }};
+
+const nr::test::CaseRegistrar deferredReadbackConsumptionCase{
+    "rhi readback ring preserves an unread result before reusing its full capacity", [] {
+        auto device = nr::rhi::Device{};
+        device.initialize("nr_rhi_deferred_readback_consumption_test", "NewbieRenderer");
+
+        constexpr auto payloadA = std::array<std::uint32_t, 8>{
+            0x01020304u, 0x11121314u, 0x21222324u, 0x31323334u,
+            0x41424344u, 0x51525354u, 0x61626364u, 0x71727374u,
+        };
+        constexpr auto payloadB = std::array<std::uint32_t, 8>{
+            0x81828384u, 0x91929394u, 0xA1A2A3A4u, 0xB1B2B3B4u,
+            0xC1C2C3C4u, 0xD1D2D3D4u, 0xE1E2E3E4u, 0xF1F2F3F4u,
+        };
+        constexpr auto payloadSize = vk::DeviceSize{sizeof(payloadA)};
+
+        auto uploadReadback = nr::rhi::ops::UploadReadbackContext{
+            device.device, device.resourceFactory, device.queueManager, device.queueFamilyTransferPolicy(),
+            payloadSize, payloadSize,
+        };
+
+        auto bufferInfo = vk::BufferCreateInfo{};
+        bufferInfo.size = payloadSize;
+        bufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+        auto bufferA = device.resourceFactory.createBuffer(bufferInfo, nr::rhi::MemoryUsage::CpuToGpu,
+                                                           "deferred_readback_source_a");
+        auto bufferB = device.resourceFactory.createBuffer(bufferInfo, nr::rhi::MemoryUsage::CpuToGpu,
+                                                           "deferred_readback_source_b");
+        bufferA.writeMappedAndFlush(std::span<const std::uint32_t>{payloadA});
+        bufferB.writeMappedAndFlush(std::span<const std::uint32_t>{payloadB});
+
+        auto const syncPlan = nr::rhi::ops::ReadbackSyncPlan{
+            .preCopy =
+                nr::rhi::ops::ReadbackSyncScope{
+                    .stages = vk::PipelineStageFlagBits2::eHost,
+                    .access = vk::AccessFlagBits2::eHostWrite,
+                },
+            .postCopy =
+                nr::rhi::ops::ReadbackSyncScope{
+                    .stages = vk::PipelineStageFlagBits2::eHost,
+                    .access = vk::AccessFlagBits2::eHostRead,
+                },
+        };
+
+        auto ticketA = uploadReadback.readbackBuffer(bufferA, 0u, payloadSize, nr::rhi::QueueRole::Graphics, syncPlan);
+        auto ticketB = uploadReadback.readbackBuffer(bufferB, 0u, payloadSize, nr::rhi::QueueRole::Graphics, syncPlan);
+
+        auto bytesB = uploadReadback.readbackBytes(ticketB);
+        auto bytesA = uploadReadback.readbackBytes(ticketA);
+        nr::test::require(std::ranges::equal(bytesB, std::as_bytes(std::span{payloadB})),
+                          "the replacement readback must preserve its own bytes");
+        nr::test::require(std::ranges::equal(bytesA, std::as_bytes(std::span{payloadA})),
+                          "the first unread result must survive full-ring reuse and out-of-order consumption");
 
         device.waitIdle();
     }};

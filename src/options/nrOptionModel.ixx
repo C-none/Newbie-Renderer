@@ -153,6 +153,8 @@ enum class OptionValueType : std::uint8_t
     object,
 };
 
+[[nodiscard]] std::string_view wireName(OptionValueType type) noexcept;
+
 struct SchemaValidation
 {
     bool valid = true;

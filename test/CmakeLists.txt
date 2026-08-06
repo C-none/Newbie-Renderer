@@ -18,6 +18,22 @@ target_compile_definitions(nr_test_framework
         NR_TEST_OUTPUT_LEVEL_FLAG=${NR_TEST_OUTPUT_LEVEL_FLAG}
 )
 
+nr_add_library(nr_test_options STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/nr_test_options.cpp
+)
+set_target_properties(nr_test_options PROPERTIES FOLDER "Test/fixtures")
+target_sources(nr_test_options
+    PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/nr_test_options.ixx
+)
+target_link_libraries(nr_test_options
+    PUBLIC
+        nroptions
+    PRIVATE
+        nr_test_framework
+)
+
 add_library(nr_test_main OBJECT
     ${CMAKE_CURRENT_SOURCE_DIR}/framework/nr_test_main.cpp
 )
@@ -25,6 +41,32 @@ set_target_properties(nr_test_main PROPERTIES FOLDER "Test/framework")
 target_link_libraries(nr_test_main PUBLIC
     nr_test_framework
 )
+
+function(nr_set_registered_test_contract test_name labels)
+    set_tests_properties(${test_name} PROPERTIES LABELS "${labels}")
+    if("gpu" IN_LIST labels)
+        set_tests_properties(${test_name} PROPERTIES
+            TIMEOUT 300
+            FAIL_REGULAR_EXPRESSION "\\[NR VULKAN:ERROR\\]"
+        )
+    endif()
+endfunction()
+
+add_executable(nr_test_empty_registry_probe
+    $<TARGET_OBJECTS:nr_test_main>
+)
+set_target_properties(nr_test_empty_registry_probe PROPERTIES FOLDER "Test/framework")
+target_link_libraries(nr_test_empty_registry_probe PRIVATE
+    nr_test_framework
+)
+
+add_test(
+    NAME nr_test_empty_registry_failure_test
+    COMMAND ${CMAKE_COMMAND}
+        "-DNR_TEST_EMPTY_REGISTRY_PROBE=$<TARGET_FILE:nr_test_empty_registry_probe>"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_nr_test_empty_registry_failure.cmake
+)
+nr_set_registered_test_contract(nr_test_empty_registry_failure_test "fast;cpu;test-framework;failure")
 
 function(nr_add_contract_test target_name source_file labels)
     nr_add_executable(${target_name}
@@ -45,7 +87,7 @@ function(nr_add_contract_test target_name source_file labels)
     endif()
 
     add_test(NAME ${target_name} COMMAND ${target_name})
-    set_tests_properties(${target_name} PROPERTIES LABELS "${labels}")
+    nr_set_registered_test_contract(${target_name} "${labels}")
 endfunction()
 
 add_subdirectory(unit/resource)

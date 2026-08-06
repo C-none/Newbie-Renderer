@@ -122,18 +122,19 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($repositoryRoot))
 }
 
 $formatter = Resolve-ClangFormat -RequestedFormatter $ClangFormat
-$trackedFiles = & git -C $repositoryRoot ls-files
+$repositoryFiles = & git -C $repositoryRoot ls-files --cached --others --exclude-standard
 if ($LASTEXITCODE -ne 0)
 {
-    throw "Could not enumerate Git-tracked files."
+    throw "Could not enumerate repository files."
 }
 
 $sourceExtension = '\.(c|cc|cpp|cxx|h|hh|hpp|hxx|ixx|slang)$'
 $thirdPartySource = '^(src/extern/(Aftermath|NsightGraphics|DLSS|slang)/|src/extern/shlobj_core\.h$|tools/ninjatracing/)'
 $sourceFiles = @(
-    $trackedFiles |
+    $repositoryFiles |
+        Where-Object { [System.IO.File]::Exists((Join-Path $repositoryRoot $_)) } |
         Where-Object { $_ -match $sourceExtension -and $_ -notmatch $thirdPartySource } |
-        Sort-Object
+        Sort-Object -Unique
 )
 if ($sourceFiles.Count -eq 0)
 {

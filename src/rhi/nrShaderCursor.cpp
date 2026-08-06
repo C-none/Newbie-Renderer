@@ -56,12 +56,49 @@ void ShaderBindingSnapshot::forceDescriptorWrites() noexcept
 void ShaderCursor::SharedBindingState::writeDescriptor(ShaderBindingRecord record)
 {
     auto key = std::tuple{record.binding.set, record.binding.binding, record.arrayElement};
+    if (auto *inlineWrite = std::get_if<InlineUniformDescriptorWrite>(&record.payload))
+    {
+        auto writeBegin = static_cast<std::uint64_t>(record.arrayElement);
+        auto writeEnd = writeBegin + inlineWrite->data.size();
+        std::ranges::for_each(descriptorWritesByBinding, [&](const auto &entry) {
+            auto const &[set, binding, arrayElement] = entry.first;
+            auto *existingInline = std::get_if<InlineUniformDescriptorWrite>(&entry.second.payload);
+            if (set != record.binding.set || binding != record.binding.binding || !existingInline ||
+                arrayElement == record.arrayElement)
+            {
+                return;
+            }
+
+            auto existingBegin = static_cast<std::uint64_t>(arrayElement);
+            auto existingEnd = existingBegin + existingInline->data.size();
+            nrAssert(writeEnd <= existingBegin || existingEnd <= writeBegin,
+                     std::format("Overlapping inline-uniform writes are ambiguous. set={}, binding={}, existing=[{}, "
+                                 "{}), incoming=[{}, {}).",
+                                 set, binding, existingBegin, existingEnd, writeBegin, writeEnd));
+        });
+    }
     descriptorWritesByBinding.insert_or_assign(key, std::move(record));
 }
 
 void ShaderCursor::SharedBindingState::writePushConstant(PushConstantWriteRecord record)
 {
     auto key = std::tuple{record.range.bindingRangeIndex, record.offset};
+    auto writeBegin = static_cast<std::uint64_t>(record.offset);
+    auto writeEnd = writeBegin + record.data.size();
+    std::ranges::for_each(pushConstantWritesByRangeAndOffset, [&](const auto &entry) {
+        auto const &[bindingRangeIndex, offset] = entry.first;
+        if (bindingRangeIndex != record.range.bindingRangeIndex || offset == record.offset)
+        {
+            return;
+        }
+
+        auto existingBegin = static_cast<std::uint64_t>(offset);
+        auto existingEnd = existingBegin + entry.second.data.size();
+        nrAssert(writeEnd <= existingBegin || existingEnd <= writeBegin,
+                 std::format("Overlapping push-constant writes are ambiguous. range={}, existing=[{}, {}), "
+                             "incoming=[{}, {}).",
+                             bindingRangeIndex, existingBegin, existingEnd, writeBegin, writeEnd));
+    });
     pushConstantWritesByRangeAndOffset.insert_or_assign(key, std::move(record));
 }
 
@@ -102,14 +139,14 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
 [[nodiscard]] vk::DeviceSize ShaderCursor::normalizeBufferRange(const Buffer &buffer, vk::DeviceSize offset,
                                                                 vk::DeviceSize range)
 {
-    nrAssert(offset <= buffer.size(),
+    nrAssert(offset < buffer.size(),
              std::format("Buffer write offset out of range: offset={}, size={}", offset, buffer.size()));
     if (range == vk::WholeSize)
     {
         return buffer.size() - offset;
     }
     nrAssert(
-        offset + range <= buffer.size(),
+        range > 0u && range <= buffer.size() - offset,
         std::format("Buffer write range out of bounds: offset={}, range={}, size={}", offset, range, buffer.size()));
     return range;
 }
@@ -321,10 +358,20 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     auto kind = typeLayout_->getKind();
     if (kind == slang::TypeReflection::Kind::Struct)
     {
-        auto structFieldCount = static_cast<std::uint32_t>(std::max<SlangInt>(0, typeLayout_->getFieldCount()));
+        auto rawStructFieldCount = std::max<SlangInt>(0, typeLayout_->getFieldCount());
+        nrAssert(std::in_range<std::uint32_t>(rawStructFieldCount), [&] {
+            return std::format("ShaderCursor::element struct field count exceeds uint32. fieldCount={}, cursor={}",
+                               rawStructFieldCount, debugSummary());
+        });
+        auto structFieldCount = static_cast<std::uint32_t>(rawStructFieldCount);
+        nrAssert(index < structFieldCount, [&] {
+            return std::format("ShaderCursor::element struct field index out of range. index={}, fieldCount={}, "
+                               "availableFields=[{}], cursor={}",
+                               index, structFieldCount, describeStructFields(typeLayout_), debugSummary());
+        });
         auto *fieldLayout = typeLayout_->getFieldByIndex(index);
         nrAssert(fieldLayout != nullptr, [&] {
-            return std::format("ShaderCursor::element struct field index out of range. index={}, fieldCount={}, "
+            return std::format("ShaderCursor::element received a null Slang field layout. index={}, fieldCount={}, "
                                "availableFields=[{}], cursor={}",
                                index, structFieldCount, describeStructFields(typeLayout_), debugSummary());
         });
@@ -342,13 +389,17 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
                 debugSummary());
         });
 
-        nrAssert(bindingInfo->isRuntimeSized || index < bindingInfo->descriptorCount, [&] {
+        nrAssert(index < bindingInfo->descriptorCount, [&] {
             return std::format(
                 "ShaderCursor::element descriptor array index out of range. index={}, binding={}, cursor={}", index,
                 describeDescriptorBinding(*bindingInfo), debugSummary());
         });
 
         ShaderCursor next = *this;
+        nrAssert(index <= std::numeric_limits<std::uint32_t>::max() - next.address_.bindingArrayIndex, [&] {
+            return std::format("ShaderCursor::element resource array index overflows uint32. index={}, cursor={}",
+                               index, debugSummary());
+        });
         next.address_.bindingArrayIndex += index;
         next.debugPath_ = std::format("{}[{}]", debugPath_, index);
         return next;
@@ -374,14 +425,22 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
 
         auto elementCount =
             detail::tryElementCount(typeLayout_->getElementCount()).value_or(bindingInfo->descriptorCount);
-        nrAssert(bindingInfo->isRuntimeSized || index < elementCount, [&] {
+        nrAssert(index < elementCount && index < bindingInfo->descriptorCount, [&] {
             return std::format("ShaderCursor::element descriptor-backed array index out of range. index={}, "
                                "elementCount={}, binding={}, cursor={}",
                                index, elementCount, describeDescriptorBinding(*bindingInfo), debugSummary());
         });
 
         ShaderCursor next = *this;
-        next.address_.bindingArrayIndex = next.address_.bindingArrayIndex * std::max(elementCount, 1u) + index;
+        auto flattenedIndex = static_cast<std::uint64_t>(next.address_.bindingArrayIndex) *
+                                  static_cast<std::uint64_t>(std::max(elementCount, 1u)) +
+                              index;
+        nrAssert(flattenedIndex <= std::numeric_limits<std::uint32_t>::max(), [&] {
+            return std::format("ShaderCursor::element descriptor array index overflows uint32. index={}, "
+                               "elementCount={}, cursor={}",
+                               index, elementCount, debugSummary());
+        });
+        next.address_.bindingArrayIndex = static_cast<std::uint32_t>(flattenedIndex);
         next.debugPath_ = std::format("{}[{}]", debugPath_, index);
         return next;
     }
@@ -395,11 +454,30 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     });
 
     ShaderCursor next = *this;
+    auto elementStride = typeLayout_->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM);
+    nrAssert(elementStride != std::numeric_limits<std::size_t>::max() &&
+                 (index == 0u || elementStride <= std::numeric_limits<std::size_t>::max() / index),
+             [&] {
+                 return std::format("ShaderCursor::element uniform stride multiplication overflows size_t. index={}, "
+                                    "stride={}, cursor={}",
+                                    index, elementStride, debugSummary());
+             });
+    auto uniformOffsetDelta = static_cast<std::size_t>(index) * elementStride;
+    nrAssert(uniformOffsetDelta <= std::numeric_limits<std::size_t>::max() - next.address_.uniformOffset, [&] {
+        return std::format("ShaderCursor::element uniform offset overflows size_t. index={}, delta={}, cursor={}",
+                           index, uniformOffsetDelta, debugSummary());
+    });
     next.typeLayout_ = elementTypeLayout;
-    next.address_.uniformOffset +=
-        static_cast<std::size_t>(index) * typeLayout_->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM);
-    next.address_.bindingArrayIndex =
-        next.address_.bindingArrayIndex * detail::sanitizeElementCount(typeLayout_->getElementCount()) + index;
+    next.address_.uniformOffset += uniformOffsetDelta;
+
+    auto flattenedIndex = static_cast<std::uint64_t>(next.address_.bindingArrayIndex) *
+                              detail::sanitizeElementCount(typeLayout_->getElementCount()) +
+                          index;
+    nrAssert(flattenedIndex <= std::numeric_limits<std::uint32_t>::max(), [&] {
+        return std::format("ShaderCursor::element binding array index overflows uint32. index={}, cursor={}", index,
+                           debugSummary());
+    });
+    next.address_.bindingArrayIndex = static_cast<std::uint32_t>(flattenedIndex);
     next.debugPath_ = std::format("{}[{}]", debugPath_, index);
     return next;
 }
@@ -480,54 +558,23 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     return layoutRef().pushConstantRange(*this);
 }
 
-[[nodiscard]] ShaderBindingReflection ShaderCursor::bindingReflection() const
-{
-    auto reflection = ShaderBindingReflection{};
-    if (!valid() || isRoot_)
-    {
-        return reflection;
-    }
-
-    if (auto bindingInfo = descriptorBinding(); bindingInfo.has_value())
-    {
-        reflection.kind = ShaderBindingKind::Descriptor;
-        reflection.descriptorBinding = std::move(bindingInfo);
-        return reflection;
-    }
-
-    if (auto pushRange = pushConstantRange(); pushRange.has_value())
-    {
-        reflection.kind = ShaderBindingKind::PushConstant;
-        reflection.pushConstantRange = std::move(pushRange);
-        return reflection;
-    }
-
-    return reflection;
-}
-
 [[nodiscard]] ShaderBindingKind ShaderCursor::bindingKind() const
 {
-    return bindingReflection().kind;
-}
-
-[[nodiscard]] bool ShaderCursor::hasBindingPhase(ShaderBindingPhase phase) const
-{
-    return bindingReflection().hasPhase(phase);
+    if (descriptorBinding().has_value())
+    {
+        return ShaderBindingKind::Descriptor;
+    }
+    if (pushConstantRange().has_value())
+    {
+        return ShaderBindingKind::PushConstant;
+    }
+    return ShaderBindingKind::None;
 }
 
 [[nodiscard]] std::optional<ShaderDescriptorSemantic> ShaderCursor::descriptorSemantic() const
 {
-    return bindingReflection().descriptorSemantic();
-}
-
-[[nodiscard]] bool ShaderCursor::supportsImmutableSampler() const
-{
-    return bindingReflection().supportsImmutableSampler();
-}
-
-[[nodiscard]] bool ShaderCursor::usesDynamicDescriptorOffset() const
-{
-    return bindingReflection().usesDynamicDescriptorOffset();
+    auto bindingInfo = descriptorBinding();
+    return bindingInfo.has_value() ? std::optional{bindingInfo->semantic()} : std::nullopt;
 }
 
 [[nodiscard]] std::optional<SlangImmutableSamplerBinding> ShaderCursor::makeImmutableSamplerBinding(
@@ -588,7 +635,7 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     });
 
     auto arrayElement = explicitArrayElement.value_or(address_.bindingArrayIndex);
-    nrAssert(bindingInfo->isRuntimeSized || arrayElement < bindingInfo->descriptorCount, [&] {
+    nrAssert(arrayElement < bindingInfo->descriptorCount, [&] {
         return std::format("ShaderCursor::writeDescriptorRecord descriptor array element out of range. "
                            "arrayElement={}, binding={}, cursor={}",
                            arrayElement, describeDescriptorBinding(*bindingInfo), debugSummary());
@@ -612,6 +659,23 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     });
 
     auto byteCount = static_cast<std::uint32_t>(bytes.size());
+    auto *dataTypeLayout = typeLayout_;
+    if (auto kind = dataTypeLayout->getKind();
+        kind == slang::TypeReflection::Kind::ConstantBuffer || kind == slang::TypeReflection::Kind::ParameterBlock)
+    {
+        if (auto *elementTypeLayout = dataTypeLayout->getElementTypeLayout())
+        {
+            dataTypeLayout = elementTypeLayout;
+        }
+    }
+    auto reflectedByteSize = detail::tryLayoutSize(dataTypeLayout->getSize(slang::ParameterCategory::Uniform));
+    nrAssert(reflectedByteSize.has_value() && *reflectedByteSize == bytes.size(), [&] {
+        return std::format("ShaderCursor::setData requires an exact reflected field size. payloadSize={}, "
+                           "reflectedSize={}, cursor={}",
+                           bytes.size(),
+                           reflectedByteSize.has_value() ? std::to_string(*reflectedByteSize) : std::string{"<unknown>"},
+                           debugSummary());
+    });
     auto copiedBytes = std::vector<std::uint8_t>{};
     copiedBytes.assign(bytes.begin(), bytes.end());
 
@@ -684,7 +748,7 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     return writeDescriptorRecord(
         BufferDescriptorWrite{.buffer = buffer.handle(), .offset = offset, .range = finalRange},
         {vk::DescriptorType::eUniformBuffer, vk::DescriptorType::eUniformBufferDynamic,
-         vk::DescriptorType::eStorageBuffer});
+         vk::DescriptorType::eStorageBuffer, vk::DescriptorType::eStorageBufferDynamic});
 }
 
 [[nodiscard]] bool ShaderCursor::setObject(vk::BufferView view) const
@@ -765,6 +829,7 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
                                                       vk::DescriptorType::eUniformBuffer,
                                                       vk::DescriptorType::eUniformBufferDynamic,
                                                       vk::DescriptorType::eStorageBuffer,
+                                                      vk::DescriptorType::eStorageBufferDynamic,
                                                       vk::DescriptorType::eUniformTexelBuffer,
                                                       vk::DescriptorType::eStorageTexelBuffer,
                                                       vk::DescriptorType::eSampledImage,
@@ -794,172 +859,4 @@ void ShaderCursor::clearSnapshot() const
     bindingState_->clear();
 }
 
-[[nodiscard]] slang::TypeReflection::Kind ShaderCursor::kind() const noexcept
-{
-    if (!valid() || isRoot_)
-    {
-        return slang::TypeReflection::Kind::None;
-    }
-    return typeLayout_->getKind();
-}
-
-[[nodiscard]] std::string ShaderCursor::typeName() const
-{
-    if (!valid())
-    {
-        return {};
-    }
-    if (isRoot_)
-    {
-        return "$root";
-    }
-
-    auto *type = typeLayout_->getType();
-    if (!type || !type->getName())
-    {
-        return {};
-    }
-    return std::string(type->getName());
-}
-
-[[nodiscard]] std::uint32_t ShaderCursor::fieldCount() const noexcept
-{
-    if (!valid() || isRoot_)
-    {
-        return 0u;
-    }
-    return static_cast<std::uint32_t>(std::max<SlangInt>(0, typeLayout_->getFieldCount()));
-}
-
-[[nodiscard]] std::optional<std::uint32_t> ShaderCursor::elementCount() const
-{
-    if (!valid() || isRoot_)
-    {
-        return std::nullopt;
-    }
-
-    auto kindValue = typeLayout_->getKind();
-    if (kindValue == slang::TypeReflection::Kind::Resource)
-    {
-        auto bindingInfo = descriptorBinding();
-        if (!bindingInfo.has_value())
-        {
-            return std::nullopt;
-        }
-        return bindingInfo->descriptorCount;
-    }
-
-    if (kindValue != slang::TypeReflection::Kind::Array && kindValue != slang::TypeReflection::Kind::Vector &&
-        kindValue != slang::TypeReflection::Kind::Matrix)
-    {
-        return std::nullopt;
-    }
-
-    auto elementCount = detail::tryElementCount(typeLayout_->getElementCount());
-    if (elementCount.has_value())
-    {
-        return elementCount;
-    }
-
-    auto bindingInfo = descriptorBinding();
-    if (!bindingInfo.has_value())
-    {
-        return std::nullopt;
-    }
-    return bindingInfo->descriptorCount;
-}
-
-[[nodiscard]] std::optional<std::size_t> ShaderCursor::size(slang::ParameterCategory category) const
-{
-    if (!valid() || isRoot_)
-    {
-        return std::nullopt;
-    }
-    return detail::tryLayoutSize(typeLayout_->getSize(category));
-}
-
-[[nodiscard]] std::optional<std::size_t> ShaderCursor::stride(slang::ParameterCategory category) const
-{
-    if (!valid() || isRoot_)
-    {
-        return std::nullopt;
-    }
-    return detail::tryLayoutSize(typeLayout_->getStride(category));
-}
-
-[[nodiscard]] std::optional<std::int32_t> ShaderCursor::alignment(slang::ParameterCategory category) const
-{
-    if (!valid() || isRoot_)
-    {
-        return std::nullopt;
-    }
-    return typeLayout_->getAlignment(category);
-}
-
-[[nodiscard]] std::vector<slang::ParameterCategory> ShaderCursor::categories() const
-{
-    if (!valid() || isRoot_)
-    {
-        return {};
-    }
-
-    auto categoryCount = typeLayout_->getCategoryCount();
-    if (categoryCount == 0)
-    {
-        return {};
-    }
-
-    auto result = std::vector<slang::ParameterCategory>{};
-    result.reserve(categoryCount);
-    for (unsigned int i = 0; i < categoryCount; ++i)
-    {
-        result.push_back(typeLayout_->getCategoryByIndex(i));
-    }
-    return result;
-}
-
-[[nodiscard]] std::optional<SlangResourceShape> ShaderCursor::resourceShape() const
-{
-    if (!valid() || isRoot_ || typeLayout_->getKind() != slang::TypeReflection::Kind::Resource)
-    {
-        return std::nullopt;
-    }
-    return typeLayout_->getResourceShape();
-}
-
-[[nodiscard]] std::optional<SlangResourceAccess> ShaderCursor::resourceAccess() const
-{
-    if (!valid() || isRoot_ || typeLayout_->getKind() != slang::TypeReflection::Kind::Resource)
-    {
-        return std::nullopt;
-    }
-    return typeLayout_->getResourceAccess();
-}
-
-[[nodiscard]] slang::TypeReflection *ShaderCursor::resourceResultType() const noexcept
-{
-    if (!valid() || isRoot_ || typeLayout_->getKind() != slang::TypeReflection::Kind::Resource)
-    {
-        return nullptr;
-    }
-    return typeLayout_->getResourceResultType();
-}
-
-[[nodiscard]] std::optional<std::uint32_t> ShaderCursor::resourceResultElementCount() const
-{
-    auto *resultType = resourceResultType();
-    if (!resultType)
-    {
-        return std::nullopt;
-    }
-
-    auto resultKind = resultType->getKind();
-    if (resultKind != slang::TypeReflection::Kind::Array && resultKind != slang::TypeReflection::Kind::Vector &&
-        resultKind != slang::TypeReflection::Kind::Matrix)
-    {
-        return std::nullopt;
-    }
-
-    return detail::tryElementCount(resultType->getElementCount());
-}
 } // namespace nr::rhi

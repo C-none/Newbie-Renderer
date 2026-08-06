@@ -9,18 +9,16 @@ import std;
 
 namespace nr::load::detail
 {
-struct TextureDecodeTaskResult
-{
-    std::uint32_t textureIndex = invalidIndex;
-    std::optional<Image> image{};
-    std::string decoder{};
-    std::string error{};
-};
-
 struct DecodedPayload
 {
     Image image{};
     std::string decoder{};
+};
+
+struct TextureDecodeTaskResult
+{
+    std::uint32_t textureIndex = invalidIndex;
+    std::expected<DecodedPayload, std::string> payload;
 };
 
 [[nodiscard]] std::string lowercase(std::string_view value)
@@ -298,27 +296,33 @@ struct TurboJpegHandleDeleter
 [[nodiscard]] TextureDecodeTaskResult decodeTextureTask(std::uint32_t textureIndex, const TextureAsset &texture,
                                                         const TextureDecodeOptions &options)
 {
-    TextureDecodeTaskResult result{};
-    result.textureIndex = textureIndex;
+    auto failedResult = [textureIndex](std::string error) {
+        return TextureDecodeTaskResult{
+            .textureIndex = textureIndex,
+            .payload = std::unexpected(std::move(error)),
+        };
+    };
 
     if (texture.payloadKind == TexturePayloadKind::embeddedRawRgba8)
     {
         if (!texture.rawRgba8.has_value())
         {
-            result.error = "Texture payload kind is embedded raw, but raw bytes are missing.";
-            return result;
+            return failedResult("Texture payload kind is embedded raw, but raw bytes are missing.");
         }
 
         auto decodeResult = decodeEmbeddedRaw(*texture.rawRgba8);
         if (!decodeResult.has_value())
         {
-            result.error = decodeResult.error();
-            return result;
+            return failedResult(std::move(decodeResult.error()));
         }
 
-        result.image = std::move(decodeResult.value());
-        result.decoder = "assimp-raw-copy";
-        return result;
+        return TextureDecodeTaskResult{
+            .textureIndex = textureIndex,
+            .payload = DecodedPayload{
+                .image = std::move(decodeResult.value()),
+                .decoder = "assimp-raw-copy",
+            },
+        };
     }
 
     auto encodedBytes = std::vector<std::byte>{};
@@ -327,8 +331,7 @@ struct TurboJpegHandleDeleter
         auto fileResult = readBinaryFile(texture.resolvedPath);
         if (!fileResult.has_value())
         {
-            result.error = fileResult.error();
-            return result;
+            return failedResult(std::move(fileResult.error()));
         }
 
         encodedBytes = std::move(fileResult.value());
@@ -337,28 +340,20 @@ struct TurboJpegHandleDeleter
     {
         if (!texture.compressed.has_value())
         {
-            result.error = "Texture payload kind is embedded compressed, but compressed bytes are missing.";
-            return result;
+            return failedResult("Texture payload kind is embedded compressed, but compressed bytes are missing.");
         }
 
         encodedBytes = texture.compressed->bytes;
     }
     else
     {
-        result.error = "Unsupported texture payload kind for decode task.";
-        return result;
+        return failedResult("Unsupported texture payload kind for decode task.");
     }
 
-    auto decodeResult = decodeEncodedTexture(texture, encodedBytes, options.requestedChannels);
-    if (!decodeResult.has_value())
-    {
-        result.error = decodeResult.error();
-        return result;
-    }
-
-    result.image = std::move(decodeResult->image);
-    result.decoder = std::move(decodeResult->decoder);
-    return result;
+    return TextureDecodeTaskResult{
+        .textureIndex = textureIndex,
+        .payload = decodeEncodedTexture(texture, encodedBytes, options.requestedChannels),
+    };
 }
 
 [[nodiscard]] std::vector<std::uint32_t> collectReferencedTextureIndices(const SceneAsset &scene)
@@ -432,14 +427,15 @@ std::expected<void, LoadError> decodeSceneTextureImages(SceneAsset &scene, const
         }
 
         auto &texture = scene.textures[result.textureIndex];
-        if (!result.error.empty())
+        if (!result.payload.has_value())
         {
-            failures.push_back(std::format("Texture '{}' decode failed: {}", texture.key, result.error));
+            failures.push_back(std::format("Texture '{}' decode failed: {}", texture.key, result.payload.error()));
             return;
         }
 
-        texture.decodedImage = std::move(result.image);
-        texture.decodeBackend = std::move(result.decoder);
+        auto payload = std::move(result.payload).value();
+        texture.decodedImage = std::move(payload.image);
+        texture.decodeBackend = std::move(payload.decoder);
     });
 
     if (!failures.empty())

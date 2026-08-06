@@ -10,6 +10,35 @@ namespace nr::renderer
 {
 namespace
 {
+inline constexpr auto kWriteAccessMask =
+    vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderStorageWrite |
+    vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
+    vk::AccessFlagBits2::eTransferWrite | vk::AccessFlagBits2::eHostWrite | vk::AccessFlagBits2::eMemoryWrite |
+    vk::AccessFlagBits2::eAccelerationStructureWriteKHR;
+
+[[nodiscard]] constexpr bool hasWrite(vk::AccessFlags2 access) noexcept
+{
+    return (access & kWriteAccessMask) != vk::AccessFlags2{};
+}
+
+[[nodiscard]] constexpr bool requiresAccessBarrier(const AccessScope &previous, const AccessScope &current) noexcept
+{
+    return hasWrite(previous.access) || hasWrite(current.access);
+}
+
+[[nodiscard]] AccessScope conservativeSourceScope(const AccessScope &scope) noexcept
+{
+    if (scope.resolved())
+    {
+        return scope;
+    }
+
+    return AccessScope{
+        .stages = vk::PipelineStageFlagBits2::eAllCommands,
+        .access = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+    };
+}
+
 [[nodiscard]] std::optional<QueueDomain> queueDomainFromOwnership(ResourceOwnershipDomain ownership) noexcept
 {
     switch (ownership)
@@ -483,6 +512,10 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame &compil
                     {
                         strength = DependencyStrength::BarrierRequired;
                     }
+                    else if (requiresAccessBarrier(previous.scope, currentScope))
+                    {
+                        strength = DependencyStrength::BarrierRequired;
+                    }
 
                     if (strength != DependencyStrength::InOrder)
                     {
@@ -504,6 +537,24 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame &compil
                         }
                     }
                 }
+                else if (previousFromSamePass)
+                {
+                    auto const validImplicitCopyTerminalUse = [&] {
+                        if (!pass.isCopyPass || !pass.copy.has_value() ||
+                            !std::holds_alternative<CopyImageToImagePassDesc>(*pass.copy) ||
+                            use.imageUsage != ImageUsageIntent::PresentSource ||
+                            previousUse->get().layout != ImageLayoutIntent::TransferDst)
+                        {
+                            return false;
+                        }
+
+                        auto const &copy = std::get<CopyImageToImagePassDesc>(*pass.copy);
+                        return copy.presentDestination && copy.destination == use.resource;
+                    }();
+                    nrAssert(validImplicitCopyTerminalUse,
+                             "RenderGraphCompiler found conflicting same-resource uses after builder "
+                             "canonicalization.");
+                }
                 else if (!previousUse.has_value())
                 {
                     auto resourceIt = resourceByHandle.find(use.resource);
@@ -515,7 +566,13 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame &compil
                         auto initialQueue = queueDomainFromOwnership(resource.initialOwnership);
                         auto ownershipChanges = initialQueue.has_value() && *initialQueue != pass.queue;
                         auto layoutChanges = resource.isImage && oldLayout != newLayout;
-                        if (ownershipChanges || layoutChanges)
+                        auto const initialScope = resource.initialStateInitialized
+                                                      ? conservativeSourceScope(resource.initialAccessScope)
+                                                      : resource.initialAccessScope;
+                        auto const accessBarrier =
+                            resource.initialStateInitialized &&
+                            (use.requiresPreviousUseBarrier || requiresAccessBarrier(initialScope, currentScope));
+                        if (ownershipChanges || layoutChanges || accessBarrier)
                         {
                             auto transition = ResourceStateTransition{
                                 .resource = use.resource,
@@ -525,7 +582,7 @@ void RenderGraphCompiler::annotateResourceTransitions(CompiledGraphFrame &compil
                                 .newLayout = newLayout,
                                 .strength = ownershipChanges ? DependencyStrength::ReleaseAcquireRequired
                                                              : DependencyStrength::BarrierRequired,
-                                .srcScope = resource.initialAccessScope,
+                                .srcScope = initialScope,
                                 .dstScope = currentScope,
                             };
                             pass.preBarriers.push_back(transition);

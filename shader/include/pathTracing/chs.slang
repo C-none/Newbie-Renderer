@@ -1,15 +1,5 @@
 implementing common;
 
-// The material variant mask combines the four physical layer bits with the anisotropic base-lobe
-// specialization bit. The CPU validates the "non-zero implies baseSurface" invariant.
-public static const RtMaterialLayerFlag kKnownRtMaterialVariantMask =
-    RtMaterialLayerFlag.baseSurface | RtMaterialLayerFlag.clearcoat | RtMaterialLayerFlag.sheen |
-    RtMaterialLayerFlag.transmission | RtMaterialLayerFlag.anisotropicBaseLobe;
-
-public static const RtMaterialFeatureFlag kKnownRtMaterialFeatureMask =
-    RtMaterialFeatureFlag.alphaMask | RtMaterialFeatureFlag.alphaBlend | RtMaterialFeatureFlag.doubleSided |
-    RtMaterialFeatureFlag.emissive | RtMaterialFeatureFlag.volumeBoundary;
-
 public struct ClosestHitInput
 {
     public bool geometryValid = false;

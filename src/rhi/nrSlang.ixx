@@ -142,15 +142,10 @@ static_assert(shaderDebugInfoLevel >= SLANG_DEBUG_INFO_LEVEL_NONE &&
                   shaderDebugInfoLevel <= SLANG_DEBUG_INFO_LEVEL_MAXIMAL,
               "shaderDebugInfoLevel must map to a valid Slang debug information level.");
 
-[[nodiscard]] consteval std::array<SlangCompilerOption, 7> makeBaseCompilerOptions() noexcept
+[[nodiscard]] consteval std::array<SlangCompilerOption, 6> makeBaseCompilerOptions() noexcept
 {
-    return std::array<SlangCompilerOption, 7>{
+    return std::array<SlangCompilerOption, 6>{
         SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .intValue0 = 1},
-        SlangCompilerOption{
-            .name = slang::CompilerOptionName::Capability,
-            .kind = slang::CompilerOptionValueKind::String,
-            .stringValue0 = "spvShaderInvocationReorderEXT",
-        },
         SlangCompilerOption{.name = slang::CompilerOptionName::VulkanUseEntryPointName, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::UseUpToDateBinaryModule, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .intValue0 = shaderOptimizationLevel},
@@ -163,7 +158,7 @@ static_assert(shaderDebugInfoLevel >= SLANG_DEBUG_INFO_LEVEL_NONE &&
 }
 
 inline constexpr std::size_t kDefaultSlangCompilerOptionCount =
-    std::size_t{7} + (shaderDumpReproOnError ? std::size_t{1} : std::size_t{0}) +
+    std::size_t{6} + (shaderDumpReproOnError ? std::size_t{1} : std::size_t{0}) +
     (!shaderWarningsAsErrors.empty() ? std::size_t{1} : std::size_t{0});
 
 [[nodiscard]] consteval auto defaultCompilerOptions() noexcept

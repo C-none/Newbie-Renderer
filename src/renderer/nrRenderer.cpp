@@ -1,3 +1,6 @@
+module;
+#include <cstddef>
+
 module nr.renderer;
 import :renderer;
 import dependency.assets;
@@ -49,7 +52,7 @@ struct RendererGlobalFrameUniforms
     glm::mat4 projection{1.0f};
     glm::mat4 viewProjection{1.0f};
     glm::mat4 inverseViewProjection{1.0f};
-    glm::mat4 previousView{1.0f};
+    glm::mat4 unjitteredViewProjection{1.0f};
     glm::mat4 previousViewProjection{1.0f};
     glm::vec4 cameraWorld{0.0f, 0.0f, 0.0f, 1.0f};
     glm::uvec4 frameState{0u, 0u, 0u, 0u};
@@ -57,6 +60,14 @@ struct RendererGlobalFrameUniforms
 
 static_assert(sizeof(RendererGlobalFrameUniforms) == 416u,
               "Renderer.GlobalFrameUniforms must match shader/include/globalUniform.slang.");
+static_assert(offsetof(RendererGlobalFrameUniforms, view) == 0u);
+static_assert(offsetof(RendererGlobalFrameUniforms, projection) == 64u);
+static_assert(offsetof(RendererGlobalFrameUniforms, viewProjection) == 128u);
+static_assert(offsetof(RendererGlobalFrameUniforms, inverseViewProjection) == 192u);
+static_assert(offsetof(RendererGlobalFrameUniforms, unjitteredViewProjection) == 256u);
+static_assert(offsetof(RendererGlobalFrameUniforms, previousViewProjection) == 320u);
+static_assert(offsetof(RendererGlobalFrameUniforms, cameraWorld) == 384u);
+static_assert(offsetof(RendererGlobalFrameUniforms, frameState) == 400u);
 
 [[nodiscard]] vk::Extent2D sanitizeViewportExtent(vk::Extent2D extent) noexcept
 {
@@ -67,28 +78,29 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u,
 }
 
 [[nodiscard]] RendererGlobalFrameUniforms makeGlobalFrameUniforms(
-    const nr::scene::SceneBridgeFrameConstants &frameConstants,
-    const nr::scene::SceneBridgeFrameConstants &previousFrameConstants, std::uint32_t frameIndex,
+    const nr::scene::SceneBridgeFrameConstants &renderingFrameConstants,
+    const nr::scene::SceneBridgeFrameConstants &unjitteredFrameConstants,
+    const nr::scene::SceneBridgeFrameConstants &previousUnjitteredFrameConstants, std::uint32_t frameIndex,
     std::uint64_t sampleFrameOrdinal) noexcept
 {
     auto inverseViewProjection = glm::mat4{1.0f};
-    auto const determinant = glm::determinant(frameConstants.viewProjection);
+    auto const determinant = glm::determinant(renderingFrameConstants.viewProjection);
     if (std::isfinite(determinant) && std::abs(determinant) > std::numeric_limits<float>::epsilon())
     {
-        inverseViewProjection = glm::inverse(frameConstants.viewProjection);
+        inverseViewProjection = glm::inverse(renderingFrameConstants.viewProjection);
     }
 
     auto const sampleFrameLow = static_cast<std::uint32_t>(sampleFrameOrdinal);
     auto const sampleFrameHigh = static_cast<std::uint32_t>(sampleFrameOrdinal >> 32u);
 
     return RendererGlobalFrameUniforms{
-        .view = frameConstants.view,
-        .projection = frameConstants.projection,
-        .viewProjection = frameConstants.viewProjection,
+        .view = renderingFrameConstants.view,
+        .projection = renderingFrameConstants.projection,
+        .viewProjection = renderingFrameConstants.viewProjection,
         .inverseViewProjection = inverseViewProjection,
-        .previousView = previousFrameConstants.view,
-        .previousViewProjection = frameConstants.projection * previousFrameConstants.view,
-        .cameraWorld = glm::vec4{frameConstants.cameraWorld, 1.0f},
+        .unjitteredViewProjection = unjitteredFrameConstants.viewProjection,
+        .previousViewProjection = previousUnjitteredFrameConstants.viewProjection,
+        .cameraWorld = glm::vec4{renderingFrameConstants.cameraWorld, 1.0f},
         .frameState = glm::uvec4{sampleFrameLow, sampleFrameHigh, frameIndex, 0u},
     };
 }
@@ -99,16 +111,8 @@ static_assert(sizeof(RendererGlobalFrameUniforms) == 416u,
     return std::chrono::duration<double, std::milli>(end - begin).count();
 }
 
-enum class MissingMaterialTexturePolicy : std::uint8_t
-{
-    strict,
-    allowUnavailableAnisotropy,
-};
-
-[[nodiscard]] std::optional<nr::scene::SceneMaterialTextureBindings> collectSceneMaterialTextures(
-    const nr::scene::Scene &scene, nr::resource::MaterialHandle materialHandle,
-    std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById,
-    MissingMaterialTexturePolicy missingTexturePolicy = MissingMaterialTexturePolicy::strict)
+void collectTlasMaterialTextureHandles(const nr::scene::Scene &scene, nr::resource::MaterialHandle materialHandle,
+                                       std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
 {
     auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
     nrAssert(
@@ -121,7 +125,6 @@ enum class MissingMaterialTexturePolicy : std::uint8_t
              std::format("Renderer scene texture collection expected material '{}' to be CPU ready.",
                          materialRecord.cpu.name));
 
-    auto textures = nr::scene::SceneMaterialTextureBindings{};
     auto slotIndices = std::views::iota(std::size_t{0}, materialRecord.cpu.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
         auto textureHandle = materialRecord.cpu.textureSlots[slotIndex].texture;
@@ -133,8 +136,7 @@ enum class MissingMaterialTexturePolicy : std::uint8_t
         auto binding = scene.tryGetSampledTextureBinding(textureHandle);
         auto const anisotropySlotIndex =
             nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::anisotropy);
-        if (!binding.has_value() && missingTexturePolicy == MissingMaterialTexturePolicy::allowUnavailableAnisotropy &&
-            slotIndex == anisotropySlotIndex)
+        if (!binding.has_value() && slotIndex == anisotropySlotIndex)
         {
             return;
         }
@@ -150,25 +152,8 @@ enum class MissingMaterialTexturePolicy : std::uint8_t
                  std::format("Scene texture descriptor id {} exceeds packed uint16 id capacity {}.",
                              binding->descriptorIndex, nr::scene::kMaxSceneTextureId));
 
-        auto const textureId = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
-        textures.ids[slotIndex] = textureId;
         sceneTextureHandlesById.insert_or_assign(binding->descriptorIndex, textureHandle);
     });
-
-    auto const normalSlotIndex =
-        nr::resource::materialTextureSlotIndex(nr::resource::MaterialTextureSlotSemantic::normal);
-    auto const &normalSlot = materialRecord.cpu.textureSlots[normalSlotIndex];
-    nrAssert(normalSlot.uvSet <= 1u,
-             std::format("Renderer normal texture sampling expected material '{}' UV set to be 0 or 1, got {}.",
-                         materialRecord.cpu.name, normalSlot.uvSet));
-    textures.normal = nr::scene::SceneMaterialNormalTextureBinding{
-        .textureId = textures.ids[normalSlotIndex],
-        .uvSet = normalSlot.uvSet,
-        .uvLinear = normalSlot.transform.linear,
-        .uvOffset = normalSlot.transform.offset,
-        .normalScale = materialRecord.cpu.core.normalScale,
-    };
-    return textures;
 }
 
 void collectTlasSceneTextureHandles(const nr::scene::Scene &scene,
@@ -190,9 +175,7 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene,
         std::ranges::for_each(meshRecord.cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
             if (geometry.material.valid())
             {
-                static_cast<void>(
-                    collectSceneMaterialTextures(scene, geometry.material, sceneTextureHandlesById,
-                                                 MissingMaterialTexturePolicy::allowUnavailableAnisotropy));
+                collectTlasMaterialTextureHandles(scene, geometry.material, sceneTextureHandlesById);
             }
         });
     });
@@ -836,7 +819,7 @@ void Renderer::requestTemporalHistoryReset() noexcept
     submitNodesByAfterIndex_ = std::move(submitNodesByAfterIndex);
     cameraJitter_ = spec.cameraJitter;
     frameResolutionResolver_ = spec.frameResolutionResolver;
-    previousGlobalFrameConstants_.reset();
+    acceptedTemporalFrameState_.reset();
     ++installedGraphGeneration_;
     observedSwapchainRecreationGeneration_ = device_->swapchainRecreationGeneration();
     graphInstalled_ = true;
@@ -858,7 +841,7 @@ void Renderer::uninstallGraph()
     cpuStatistics_ = {};
     gpuPassTimingAccumulator_.clear();
     gpuPassStatistics_ = {};
-    previousGlobalFrameConstants_.reset();
+    acceptedTemporalFrameState_.reset();
     ++installedGraphGeneration_;
 }
 
@@ -909,7 +892,7 @@ void Renderer::resize()
     observedSwapchainRecreationGeneration_ = device_->swapchainRecreationGeneration();
     cacheSuite_.skeletonCache.clear(RenderGraphSkeletonMissReason::Invalidated);
     cacheSuite_.compileCache.clear();
-    previousGlobalFrameConstants_.reset();
+    acceptedTemporalFrameState_.reset();
 }
 
 void Renderer::resetSceneBinding() noexcept
@@ -919,7 +902,7 @@ void Renderer::resetSceneBinding() noexcept
     tlasTextureHandlesById_.clear();
     sceneExtractProfile_.reset();
     sceneTlasExtractProfile_.reset();
-    previousGlobalFrameConstants_.reset();
+    acceptedTemporalFrameState_.reset();
 }
 
 void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot &snapshot,
@@ -1064,7 +1047,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
 
     auto scenePackets = std::optional<nr::scene::ScenePacketSet>{};
     auto sceneTlasPackets = std::optional<nr::scene::ScenePacketSet>{};
-    auto primaryCamera = std::optional<nr::scene::SceneResolvedCamera>{};
     auto sceneBridgeFrame = std::optional<nr::scene::SceneBridgeFrame>{};
     auto sceneTextureHandlesById = std::map<std::uint32_t, nr::resource::TextureHandle>{};
     auto sceneExtractProfileCreated = false;
@@ -1110,128 +1092,36 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
         auto const tlasExtractStart = std::chrono::steady_clock::now();
         sceneTlasPackets = scene.extractPackets(tlasProfile, tlasExtractInput);
         sceneTlasExtractMilliseconds = elapsedMilliseconds(tlasExtractStart, std::chrono::steady_clock::now());
-        if (!sceneCameraOverride.has_value())
         {
-            primaryCamera = scene.tryGetPrimaryCamera(extractInput.viewportExtent);
-        }
-
-        auto bridgeBuildInput = nr::scene::SceneRenderBridgeBuildInput{
-            .packetSet = std::cref(*scenePackets),
-        };
-        auto rasterGeometryBuffers = scene.tryGetRasterGeometryBuffers();
-        bridgeBuildInput.resolveGeometryBuffers =
-            [rasterGeometryBuffers]() -> std::optional<nr::scene::SceneBridgeGeometryBuffers> {
-            return rasterGeometryBuffers;
-        };
-
-        bridgeBuildInput.resolveMaterialTextures =
-            [&](nr::resource::MaterialHandle materialHandle) -> std::optional<nr::scene::SceneMaterialTextureBindings> {
-            return collectSceneMaterialTextures(scene, materialHandle, sceneTextureHandlesById);
-        };
-
-        if (sceneCameraOverride.has_value())
-        {
-            bridgeBuildInput.frameConstantsOverride = sceneCameraOverride->frameConstants;
-        }
-
-        bridgeBuildInput.resolveMaterialRasterState = [&](nr::resource::MaterialHandle materialHandle)
-            -> std::optional<nr::scene::SceneBridgeMaterialRasterState> {
-            auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
-            if (!materialRecordRef.has_value())
-            {
-                return std::nullopt;
-            }
-
-            auto const &materialRecord = materialRecordRef->get();
-            if (!materialRecord.cpuReady)
-            {
-                return std::nullopt;
-            }
-
-            auto const doubleSided = materialRecord.cpu.core.doubleSided;
-            return nr::scene::SceneBridgeMaterialRasterState{
-                .cullMode = doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack,
-                .doubleSided = doubleSided,
-            };
-        };
-
-        bridgeBuildInput.resolveRasterDrawGeometry =
-            [&](nr::resource::MeshHandle meshHandle,
-                std::uint32_t geometryIndex) -> std::optional<nr::scene::SceneBridgeDrawGeometry> {
-            auto meshRecordRef = scene.tryGetMeshAsset(meshHandle);
-            if (!meshRecordRef.has_value())
-            {
-                return std::nullopt;
-            }
-
-            auto const &meshRecord = meshRecordRef->get();
-            if (!meshRecord.cpuReady || !meshRecord.gpu.has_value())
-            {
-                return std::nullopt;
-            }
-
-            if (!rasterGeometryBuffers.has_value() || !rasterGeometryBuffers->hasVertexBuffer())
-            {
-                return std::nullopt;
-            }
-
-            if (geometryIndex >= meshRecord.cpu.geometries.size())
-            {
-                return std::nullopt;
-            }
-
-            auto const &meshGeometry = meshRecord.cpu.geometries[geometryIndex];
-            auto const &atlas = meshRecord.gpu->atlas;
-            auto checkedAddUint32 = [](std::uint32_t base, std::uint32_t offset, std::string_view label) {
-                auto const value = static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(offset);
-                nrAssert(value <= std::numeric_limits<std::uint32_t>::max(),
-                         std::format("{} value {} exceeds uint32_t range.", label, value));
-                return static_cast<std::uint32_t>(value);
-            };
-            auto checkedAddInt32 = [](std::uint32_t base, std::uint32_t offset, std::string_view label) {
-                auto const value = static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(offset);
-                nrAssert(value <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()),
-                         std::format("{} value {} exceeds int32_t range.", label, value));
-                return static_cast<std::int32_t>(value);
+            auto primaryCamera = sceneCameraOverride.has_value()
+                                     ? std::optional<nr::scene::SceneResolvedCamera>{}
+                                     : scene.tryGetPrimaryCamera(extractInput.viewportExtent);
+            auto bridgeBuildInput = nr::scene::SceneRenderBridgeBuildInput{
+                .packetSet = std::cref(*scenePackets),
             };
 
-            auto drawGeometry = nr::scene::SceneBridgeDrawGeometry{};
-            drawGeometry.vertexBuffer = rasterGeometryBuffers->vertexBuffer;
-            drawGeometry.frontFace =
-                meshRecord.cpu.clockwiseFrontFace ? vk::FrontFace::eClockwise : vk::FrontFace::eCounterClockwise;
-
-            auto const indexedGeometry = atlas.indexCount > 0u;
-            if (indexedGeometry)
+            if (sceneCameraOverride.has_value())
             {
-                if (!rasterGeometryBuffers->hasIndexBuffer())
-                {
-                    return std::nullopt;
-                }
-
-                drawGeometry.indexBuffer = rasterGeometryBuffers->indexBuffer;
-                drawGeometry.indexType = rasterGeometryBuffers->indexType;
-                drawGeometry.firstIndex =
-                    checkedAddUint32(atlas.indexBase, meshGeometry.firstIndex, "Scene raster draw firstIndex");
-                drawGeometry.indexCount = meshGeometry.indexCount > 0 ? meshGeometry.indexCount : atlas.indexCount;
-                drawGeometry.vertexOffset =
-                    checkedAddInt32(atlas.vertexBase, meshGeometry.vertexOffset, "Scene raster draw vertexOffset");
-                return drawGeometry;
+                bridgeBuildInput.frameConstantsOverride = sceneCameraOverride->frameConstants;
             }
 
-            drawGeometry.firstVertex =
-                checkedAddUint32(atlas.vertexBase, meshGeometry.firstIndex, "Scene raster draw firstVertex");
-            drawGeometry.vertexCount = meshGeometry.indexCount > 0 ? meshGeometry.indexCount : atlas.vertexCount;
-            return drawGeometry;
-        };
+            if (primaryCamera.has_value())
+            {
+                bridgeBuildInput.primaryCamera = std::cref(*primaryCamera);
+            }
 
-        if (primaryCamera.has_value())
-        {
-            bridgeBuildInput.primaryCamera = std::cref(*primaryCamera);
+            auto const sceneBridgeStart = std::chrono::steady_clock::now();
+            sceneBridgeFrame = nr::scene::SceneRenderBridge::buildFrame(bridgeBuildInput);
+            sceneBridgeMilliseconds = elapsedMilliseconds(sceneBridgeStart, std::chrono::steady_clock::now());
         }
-
-        auto const sceneBridgeStart = std::chrono::steady_clock::now();
-        sceneBridgeFrame = nr::scene::SceneRenderBridge::buildFrame(bridgeBuildInput);
-        sceneBridgeMilliseconds = elapsedMilliseconds(sceneBridgeStart, std::chrono::steady_clock::now());
+        std::ranges::for_each(sceneBridgeFrame->rasterTextureHandlesById, [&](const auto &entry) {
+            nrAssert(entry.first < kSceneTextureDescriptorCapacity,
+                     std::format("Scene texture descriptor id {} exceeds capacity {}.", entry.first,
+                                 kSceneTextureDescriptorCapacity));
+            auto [it, inserted] = sceneTextureHandlesById.try_emplace(entry.first, entry.second);
+            nrAssert(inserted || it->second == entry.second,
+                     std::format("Scene texture descriptor id {} resolved to conflicting handles.", entry.first));
+        });
     }
     cpuTimings.sceneMilliseconds = elapsedMilliseconds(sceneStart, std::chrono::steady_clock::now());
     auto const postSceneStart = std::chrono::steady_clock::now();
@@ -1280,15 +1170,12 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
             tlasTextureCollectionKey_ = std::move(key);
         }
         std::ranges::for_each(tlasTextureHandlesById_, [&](const auto &entry) {
-            sceneTextureHandlesById.insert_or_assign(entry.first, entry.second);
+            auto [it, inserted] = sceneTextureHandlesById.try_emplace(entry.first, entry.second);
+            nrAssert(inserted || it->second == entry.second,
+                     std::format("Scene texture descriptor id {} resolved to conflicting handles.", entry.first));
         });
         tlasTextureCollectionMilliseconds =
             elapsedMilliseconds(tlasTextureCollectionStart, std::chrono::steady_clock::now());
-    }
-
-    if (primaryCamera.has_value())
-    {
-        frameParameters.primaryCamera = std::cref(*primaryCamera);
     }
 
     auto sceneBridgeFrameRef = std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>>{};
@@ -1306,6 +1193,16 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     {
         globalFrameConstants = sceneCameraOverride->frameConstants;
     }
+    auto currentTemporalFrameState = AcceptedTemporalFrameState{
+        .unjitteredCameraConstants = globalFrameConstants,
+        .sceneRevisions = sceneTlasPackets.has_value()
+                              ? std::optional<nr::scene::SceneRevisionSnapshot>{sceneTlasPackets->revisions}
+                              : std::nullopt,
+    };
+    resolutionPlan.resetHistory =
+        resolutionPlan.resetHistory || !acceptedTemporalFrameState_.has_value() ||
+        acceptedTemporalFrameState_->sceneRevisions != currentTemporalFrameState.sceneRevisions;
+    frameParameters.resolutionPlan = resolutionPlan;
     frameParameters.renderCameraConstants = globalFrameConstants;
 
     auto const cameraFrameState =
@@ -1321,8 +1218,8 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     auto const buildStart = std::chrono::steady_clock::now();
     cpuTimings.postSceneMilliseconds = elapsedMilliseconds(postSceneStart, buildStart);
     auto const graphBuildTimings =
-        buildInstalledGraph(frameParameters, renderingFrameConstants, cameraFrameState, sampleFrameOrdinal,
-                            sceneBridgeFrameRef, sceneTextureHandlesById);
+        buildInstalledGraph(frameParameters, renderingFrameConstants, globalFrameConstants, cameraFrameState,
+                            sampleFrameOrdinal, sceneBridgeFrameRef, sceneTextureHandlesById);
     cpuTimings.buildMilliseconds = elapsedMilliseconds(buildStart, std::chrono::steady_clock::now());
 
     auto const compileStart = std::chrono::steady_clock::now();
@@ -1375,6 +1272,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     }
     nrAssert(executeReport.swapchainImageIndex.has_value(),
              "Renderer::renderFrame expected the graph to acquire one swapchain image before presentation.");
+    acceptedTemporalFrameState_ = std::move(currentTemporalFrameState);
     cpuTimings.executeMilliseconds = elapsedMilliseconds(executeStart, std::chrono::steady_clock::now());
     if (executeReport.completedGpuPassTimingFrame.has_value())
     {
@@ -1506,7 +1404,9 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
 }
 
 [[nodiscard]] RendererGraphBuildTimings Renderer::buildInstalledGraph(
-    const NodeFrameParameters &frameParameters, const nr::scene::SceneBridgeFrameConstants &frameConstants,
+    const NodeFrameParameters &frameParameters,
+    const nr::scene::SceneBridgeFrameConstants &renderingFrameConstants,
+    const nr::scene::SceneBridgeFrameConstants &unjitteredFrameConstants,
     const RendererCameraFrameState &cameraFrameState, std::uint64_t sampleFrameOrdinal,
     std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
     const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
@@ -1525,10 +1425,12 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     }
     auto const graphPreludeStart =
         telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    auto const previousFrameConstants = previousGlobalFrameConstants_.value_or(frameConstants);
-    auto const globalFrameUniforms =
-        makeGlobalFrameUniforms(frameConstants, previousFrameConstants, frameParameters.frameIndex, sampleFrameOrdinal);
-    previousGlobalFrameConstants_ = frameConstants;
+    auto const &previousUnjitteredFrameConstants = acceptedTemporalFrameState_.has_value()
+                                                      ? acceptedTemporalFrameState_->unjitteredCameraConstants
+                                                      : unjitteredFrameConstants;
+    auto const globalFrameUniforms = makeGlobalFrameUniforms(
+        renderingFrameConstants, unjitteredFrameConstants, previousUnjitteredFrameConstants,
+        frameParameters.frameIndex, sampleFrameOrdinal);
     nrAssert(environmentMapImage_.valid() && environmentMapState_.common.initialized,
              "Renderer::buildInstalledGraph requires a resident environment map.");
     auto sceneTextureDescriptorTable = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
@@ -1649,7 +1551,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
                 }
                 auto nodePatch = RenderGraphSkeletonPatchContext{
                     currentFrame,   skeleton->nodePatchLayouts[nodeIndex], namedFrameResources,
-                    namedFrameData, std::addressof(globalResources),
+                    namedFrameData, std::addressof(globalResources), installedNodes_[nodeIndex].config.instanceName,
                 };
                 auto const nodeStart =
                     telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -1845,7 +1747,7 @@ void Renderer::teardownInstalledGraph()
     {
         sceneExtractProfile_.reset();
         sceneTlasExtractProfile_.reset();
-        previousGlobalFrameConstants_.reset();
+        acceptedTemporalFrameState_.reset();
     }
 
     auto needsCreate = !sameScene || !sceneExtractProfile_.has_value() || !sceneExtractProfile_->valid();
@@ -1871,7 +1773,7 @@ void Renderer::teardownInstalledGraph()
     {
         sceneExtractProfile_.reset();
         sceneTlasExtractProfile_.reset();
-        previousGlobalFrameConstants_.reset();
+        acceptedTemporalFrameState_.reset();
     }
 
     auto needsCreate = !sameScene || !sceneTlasExtractProfile_.has_value() || !sceneTlasExtractProfile_->valid();

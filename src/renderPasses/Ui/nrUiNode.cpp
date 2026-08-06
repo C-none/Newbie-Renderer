@@ -1,3 +1,6 @@
+module;
+#include <cstddef>
+
 module nr.renderPasses;
 import dependency.math;
 import dependency.ui;
@@ -21,7 +24,36 @@ struct UiPushConstants
     std::array<std::uint32_t, 3> padding{};
 };
 
+static_assert(std::is_standard_layout_v<UiPushConstants>);
+static_assert(sizeof(UiPushConstants) == 32u);
+static_assert(offsetof(UiPushConstants, scale) == 0u);
+static_assert(offsetof(UiPushConstants, translate) == 8u);
+static_assert(offsetof(UiPushConstants, textureIndex) == 16u);
+static_assert(offsetof(UiPushConstants, padding) == 20u);
+static_assert(sizeof(UiPushConstants) <= nr::rhi::kMaxPushConstantBytes,
+              "UiNode push constants exceed the RHI maximum.");
+
+static_assert(std::is_standard_layout_v<ImDrawVert>);
+static_assert(sizeof(ImDrawVert) == 20u);
+static_assert(imgui::drawVertPosOffset == 0u);
+static_assert(imgui::drawVertUvOffset == 8u);
+static_assert(imgui::drawVertColorOffset == 16u);
+static_assert(offsetof(ImDrawVert, pos) == 0u);
+static_assert(offsetof(ImDrawVert, uv) == 8u);
+static_assert(offsetof(ImDrawVert, col) == 16u);
+
+static_assert(std::is_unsigned_v<ImDrawIdx>);
+static_assert(sizeof(ImDrawIdx) == 2u || sizeof(ImDrawIdx) == 4u);
+
+inline constexpr vk::IndexType kUiIndexType =
+    sizeof(ImDrawIdx) == 2u ? vk::IndexType::eUint16 : vk::IndexType::eUint32;
 inline constexpr std::uint32_t kUiTextureDescriptorCapacity = 1024u;
+inline constexpr std::size_t kUiRgbaBytesPerPixel = 4u;
+
+[[nodiscard]] constexpr vk::Format resolveUiBufferFormat(const UiNodeInput &input) noexcept
+{
+    return input.bufferFormat == vk::Format::eUndefined ? vk::Format::eR8G8B8A8Unorm : input.bufferFormat;
+}
 
 /// Initial vertex buffer capacity per frame slot (64 KiB = ~1.5k ImDrawVert)
 /// Pre-allocating avoids per-frame vkAllocateMemory calls in typical UI scenarios.
@@ -29,8 +61,6 @@ inline constexpr vk::DeviceSize kInitialUiVertexBufferCapacity = 64u * 1024u;
 
 /// Initial index buffer capacity per frame slot (32 KiB = ~10k ImDrawIdx)
 inline constexpr vk::DeviceSize kInitialUiIndexBufferCapacity = 32u * 1024u;
-
-static_assert(sizeof(UiPushConstants) <= nr::rhi::kMaxPushConstantBytes, "UiNode push constants exceed 128 bytes.");
 
 struct UiDrawCommand
 {
@@ -50,18 +80,19 @@ struct UiFrameDrawData
     UiPushConstants pushConstants{};
 };
 
+using UiDrawFramePayload = std::shared_ptr<const UiFrameDrawData>;
+
 struct UiTextureEntry
 {
     nr::rhi::Image image{};
     nr::renderer::RetainedImageState state{};
-    std::uint64_t textureKey = 0u;
 };
 
 struct UiRetiredTexture
 {
     nr::rhi::Image image{};
     std::uint32_t slot = 0u;
-    std::uint64_t retiredFrameIndex = 0u;
+    std::bitset<nr::maxFrameInFlight> pendingFrameSlots{};
     bool releaseSlot = true;
 };
 
@@ -74,14 +105,24 @@ struct UiRuntimeCache
     std::array<nr::rhi::Buffer, nr::maxFrameInFlight> indexBuffers{};
     // Per-frame GPU-only UI overlay images avoid cross-frame read/write overlap.
     std::array<nr::rhi::Image, nr::maxFrameInFlight> uiBuffers{};
+    vk::Format frozenBufferFormat = vk::Format::eUndefined;
     vk::Extent2D allocatedUiExtent{0, 0};
-    vk::Format allocatedUiFormat = vk::Format::eUndefined;
     std::vector<UiTextureEntry> texturesBySlot{};
     std::map<std::uint64_t, std::uint32_t> textureSlotByKey{};
     std::vector<std::uint32_t> freeTextureSlots{};
     std::vector<UiRetiredTexture> retiredTextures{};
-    std::optional<UiFrameDrawData> preparedDrawFrame{};
+    UiDrawFramePayload preparedDrawFrame{};
 };
+
+[[nodiscard]] vk::Format validatedFrozenUiBufferFormat(const UiNodeInput &input, const UiRuntimeCache &runtime)
+{
+    auto const resolvedFormat = resolveUiBufferFormat(input);
+    nr::nrAssert(
+        resolvedFormat == runtime.frozenBufferFormat,
+        std::format("UiNode buffer format cannot change after initialization. frozen={} requested={}",
+                    vk::to_string(runtime.frozenBufferFormat), vk::to_string(resolvedFormat)));
+    return runtime.frozenBufferFormat;
+}
 
 [[nodiscard]] vk::PipelineColorBlendAttachmentState makeUiBlendAttachment()
 {
@@ -133,10 +174,10 @@ struct UiRuntimeCache
     };
 }
 
-void ensureUiBufferImage(nr::rhi::Device &device, UiRuntimeCache &runtime, vk::Extent2D extent, vk::Format format)
+void ensureUiBufferImage(nr::rhi::Device &device, UiRuntimeCache &runtime, vk::Extent2D extent)
 {
     auto const needsRealloc =
-        runtime.allocatedUiExtent != extent || runtime.allocatedUiFormat != format ||
+        runtime.allocatedUiExtent != extent ||
         std::ranges::any_of(runtime.uiBuffers, [](const nr::rhi::Image &image) { return !image.valid(); });
 
     if (!needsRealloc)
@@ -144,8 +185,9 @@ void ensureUiBufferImage(nr::rhi::Device &device, UiRuntimeCache &runtime, vk::E
         return;
     }
 
-    auto imageInfo = nr::rhi::makeImageCreateInfo(
-        format, extent, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled);
+    auto imageInfo = nr::rhi::makeImageCreateInfo(runtime.frozenBufferFormat, extent,
+                                                  vk::ImageUsageFlagBits::eColorAttachment |
+                                                      vk::ImageUsageFlagBits::eSampled);
 
     auto frameSlots = std::views::iota(std::size_t{0}, runtime.uiBuffers.size());
     std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) {
@@ -155,33 +197,23 @@ void ensureUiBufferImage(nr::rhi::Device &device, UiRuntimeCache &runtime, vk::E
     });
 
     runtime.allocatedUiExtent = extent;
-    runtime.allocatedUiFormat = format;
 }
 
 [[nodiscard]] std::shared_ptr<UiRuntimeCache> ensureUiRuntime(nr::rhi::Device &device,
                                                               std::span<const nr::rhi::SlangProgram> programs,
-                                                              vk::Format colorFormat, std::string debugName)
+                                                              vk::Format frozenBufferFormat, std::string debugName)
 {
+    auto runtime = std::make_shared<UiRuntimeCache>();
+    runtime->frozenBufferFormat = frozenBufferFormat;
+
     auto pipelineDesc = nr::rhi::GraphicsPipelineDesc{};
-    pipelineDesc.colorAttachmentFormats = {colorFormat};
+    pipelineDesc.colorAttachmentFormats = {runtime->frozenBufferFormat};
     pipelineDesc.cullMode = vk::CullModeFlagBits::eNone;
     pipelineDesc.vertexBindings = makeUiVertexBindings();
     pipelineDesc.vertexAttributes = makeUiVertexAttributes();
     pipelineDesc.colorBlendAttachments = {makeUiBlendAttachment()};
-    auto const &descriptorCaps = device.descriptorIndexingCapabilities();
-    nr::nrAssert(descriptorCaps.maxDescriptorSetUpdateAfterBindSampledImages >= kUiTextureDescriptorCapacity,
-                 std::format("UiNode requires at least {} update-after-bind sampled/combined image descriptors per "
-                             "set; device reports {}.",
-                             kUiTextureDescriptorCapacity,
-                             descriptorCaps.maxDescriptorSetUpdateAfterBindSampledImages));
-    nr::nrAssert(descriptorCaps.maxPerStageDescriptorUpdateAfterBindSampledImages >= kUiTextureDescriptorCapacity,
-                 std::format("UiNode requires at least {} update-after-bind sampled/combined image descriptors per "
-                             "stage; device reports {}.",
-                             kUiTextureDescriptorCapacity,
-                             descriptorCaps.maxPerStageDescriptorUpdateAfterBindSampledImages));
     pipelineDesc.descriptorBindingPolicy.defaultRuntimeDescriptorCount = kUiTextureDescriptorCapacity;
 
-    auto runtime = std::make_shared<UiRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
     runtime->pipeline->initializeDeferred(
         device.pipeline().createGraphicsPipeline(programs, pipelineDesc, 64u, {}, std::move(debugName)));
@@ -284,57 +316,109 @@ void markBindlessTextureTableDirty(UiRuntimeCache &runtime) noexcept
                  std::format("UiNode bindless texture slot {} exceeds fixed descriptor capacity {}.", slot,
                              kUiTextureDescriptorCapacity));
 
-    runtime.texturesBySlot[slot].textureKey = textureKey;
     runtime.textureSlotByKey.insert_or_assign(textureKey, slot);
-    markBindlessTextureTableDirty(runtime);
     return slot;
 }
 
-[[nodiscard]] vk::Extent2D makeTextureExtent(const ImTextureData &textureData)
+struct UiTexturePayloadLayout
+{
+    vk::Extent2D extent{};
+    std::size_t pixelCount = 0u;
+    std::size_t rgbaByteCount = 0u;
+};
+
+struct UiTextureUploadPayload
+{
+    vk::Extent2D extent{};
+    std::vector<std::byte> bytes{};
+};
+
+[[nodiscard]] UiTexturePayloadLayout checkedUiTexturePayloadLayout(const ImTextureData &textureData)
 {
     nr::nrAssert(textureData.Width > 0, "UiNode requires textures with positive width.");
     nr::nrAssert(textureData.Height > 0, "UiNode requires textures with positive height.");
+    nr::nrAssert(std::in_range<std::size_t>(textureData.Width),
+                 "UiNode texture width cannot be represented as a host byte count.");
+    nr::nrAssert(std::in_range<std::size_t>(textureData.Height),
+                 "UiNode texture height cannot be represented as a host byte count.");
 
-    return vk::Extent2D{
-        static_cast<std::uint32_t>(textureData.Width),
-        static_cast<std::uint32_t>(textureData.Height),
+    auto const textureWidth = static_cast<std::size_t>(textureData.Width);
+    auto const textureHeight = static_cast<std::size_t>(textureData.Height);
+    auto constexpr maxByteCount = std::numeric_limits<std::size_t>::max();
+    nr::nrAssert(textureHeight <= maxByteCount / textureWidth,
+                 std::format("UiNode texture extent {}x{} overflows its pixel count.", textureWidth, textureHeight));
+    auto const pixelCount = textureWidth * textureHeight;
+    nr::nrAssert(pixelCount <= maxByteCount / kUiRgbaBytesPerPixel,
+                 std::format("UiNode texture extent {}x{} overflows its RGBA upload byte count.", textureWidth,
+                             textureHeight));
+    nr::nrAssert(std::in_range<std::uint32_t>(textureWidth),
+                 "UiNode texture width exceeds the Vulkan image extent range.");
+    nr::nrAssert(std::in_range<std::uint32_t>(textureHeight),
+                 "UiNode texture height exceeds the Vulkan image extent range.");
+
+    return UiTexturePayloadLayout{
+        .extent =
+            vk::Extent2D{
+                static_cast<std::uint32_t>(textureWidth),
+                static_cast<std::uint32_t>(textureHeight),
+            },
+        .pixelCount = pixelCount,
+        .rgbaByteCount = pixelCount * kUiRgbaBytesPerPixel,
     };
 }
 
-[[nodiscard]] std::vector<std::byte> makeTextureUploadBytes(const ImTextureData &textureData)
+[[nodiscard]] UiTextureUploadPayload makeTextureUploadPayload(ImTextureData &textureData)
 {
+    auto const payloadLayout = checkedUiTexturePayloadLayout(textureData);
+    nr::nrAssert(textureData.Format == ImTextureFormat_RGBA32 || textureData.Format == ImTextureFormat_Alpha8,
+                 std::format("UiNode encountered unsupported ImGui texture format {}.",
+                             static_cast<int>(textureData.Format)));
+
+    auto const rgbaSource = textureData.Format == ImTextureFormat_RGBA32;
+    auto const expectedBytesPerPixel = rgbaSource ? static_cast<int>(kUiRgbaBytesPerPixel) : 1;
+    auto const expectedSourceByteCount = rgbaSource ? payloadLayout.rgbaByteCount : payloadLayout.pixelCount;
+    nr::nrAssert(textureData.BytesPerPixel == expectedBytesPerPixel,
+                 std::format("UiNode ImGui texture format requires {} bytes per pixel, but the payload reports {}.",
+                             expectedBytesPerPixel, textureData.BytesPerPixel));
+    nr::nrAssert(expectedSourceByteCount <= static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                 std::format("UiNode ImGui texture payload requires {} source bytes, exceeding its API byte-count range.",
+                             expectedSourceByteCount));
+
+    auto const reportedSourceByteCount = textureData.GetSizeInBytes();
+    nr::nrAssert(reportedSourceByteCount >= 0 &&
+                     static_cast<std::size_t>(reportedSourceByteCount) == expectedSourceByteCount,
+                 std::format("UiNode ImGui texture payload reports {} bytes; expected exactly {}.",
+                             reportedSourceByteCount, expectedSourceByteCount));
     nr::nrAssert(textureData.Pixels != nullptr, "UiNode requires CPU-visible ImGui texture pixels.");
+    auto const *sourcePixels = static_cast<const unsigned char *>(textureData.GetPixels());
+    nr::nrAssert(sourcePixels != nullptr, "UiNode requires non-empty ImGui texture pixel storage.");
 
-    auto const textureExtent = makeTextureExtent(textureData);
-    auto const pixelCount =
-        static_cast<std::size_t>(textureExtent.width) * static_cast<std::size_t>(textureExtent.height);
-
-    if (textureData.Format == ImTextureFormat_RGBA32)
+    if (rgbaSource)
     {
-        auto const sourceBytes = static_cast<std::size_t>(textureData.GetSizeInBytes());
-        auto const *sourceFirst = reinterpret_cast<const std::byte *>(textureData.Pixels);
-        return std::vector<std::byte>{sourceFirst, sourceFirst + sourceBytes};
+        auto const *sourceFirst = reinterpret_cast<const std::byte *>(sourcePixels);
+        return UiTextureUploadPayload{
+            .extent = payloadLayout.extent,
+            .bytes = std::vector<std::byte>{sourceFirst, sourceFirst + payloadLayout.rgbaByteCount},
+        };
     }
 
-    nr::nrAssert(
-        textureData.Format == ImTextureFormat_Alpha8,
-        std::format("UiNode encountered unsupported ImGui texture format {}.", static_cast<int>(textureData.Format)));
-
     auto uploadBytes = std::vector<std::byte>{};
-    uploadBytes.resize(pixelCount * 4u);
+    uploadBytes.resize(payloadLayout.rgbaByteCount);
 
-    auto const *sourceAlpha = textureData.Pixels;
     auto destinationIndex = std::size_t{0u};
-    auto sourceIndexRange = std::views::iota(std::size_t{0u}, pixelCount);
+    auto sourceIndexRange = std::views::iota(std::size_t{0u}, payloadLayout.pixelCount);
     std::ranges::for_each(sourceIndexRange, [&](std::size_t sourceIndex) {
         uploadBytes[destinationIndex + 0u] = static_cast<std::byte>(0xff);
         uploadBytes[destinationIndex + 1u] = static_cast<std::byte>(0xff);
         uploadBytes[destinationIndex + 2u] = static_cast<std::byte>(0xff);
-        uploadBytes[destinationIndex + 3u] = static_cast<std::byte>(sourceAlpha[sourceIndex]);
-        destinationIndex += 4u;
+        uploadBytes[destinationIndex + 3u] = static_cast<std::byte>(sourcePixels[sourceIndex]);
+        destinationIndex += kUiRgbaBytesPerPixel;
     });
 
-    return uploadBytes;
+    return UiTextureUploadPayload{
+        .extent = payloadLayout.extent,
+        .bytes = std::move(uploadBytes),
+    };
 }
 
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUiTextureUploadPlan(const nr::rhi::Device &device)
@@ -400,15 +484,29 @@ void uploadUiTextureThroughRing(nr::rhi::Device &device, const nr::rhi::Image &i
     submitAndWaitUiTextureUploadSync(device, uploadContext, uploadTicket);
 }
 
-void createOrUpdateUiTexture(nr::rhi::Device &device, UiRuntimeCache &runtime, ImTextureData &textureData,
-                             std::uint64_t currentFrameIndex)
+void retireUiTexture(UiRuntimeCache &runtime, nr::rhi::Image image, std::uint32_t slot,
+                     std::size_t currentFrameSlot, bool releaseSlot)
 {
-    auto const wasOwnedByRuntime = textureOwnedByRuntime(runtime, textureData);
+    nr::nrAssert(image.valid(), "UiNode can retire only a valid texture image.");
+    nr::nrAssert(currentFrameSlot < nr::maxFrameInFlight, "UiNode texture retirement requires a valid frame slot.");
+
+    auto pendingFrameSlots = std::bitset<nr::maxFrameInFlight>{};
+    pendingFrameSlots.set();
+    pendingFrameSlots.reset(currentFrameSlot);
+    runtime.retiredTextures.push_back(UiRetiredTexture{
+        .image = std::move(image),
+        .slot = slot,
+        .pendingFrameSlots = pendingFrameSlots,
+        .releaseSlot = releaseSlot,
+    });
+}
+
+void createOrUpdateUiTexture(nr::rhi::Device &device, UiRuntimeCache &runtime, ImTextureData &textureData,
+                             std::size_t currentFrameSlot)
+{
     auto const textureKey = makeManagedTextureKey(textureData);
-    auto const hadRuntimeSlot = runtime.textureSlotByKey.contains(textureKey);
     auto const textureSlot = acquireUiTextureSlot(runtime, textureKey);
-    auto const textureExtent = makeTextureExtent(textureData);
-    auto uploadBytes = makeTextureUploadBytes(textureData);
+    auto uploadPayload = makeTextureUploadPayload(textureData);
 
     auto &textureEntry = runtime.texturesBySlot[textureSlot];
     auto needsReplacement = !textureEntry.image.valid() || textureData.Status == ImTextureStatus_WantCreate ||
@@ -416,24 +514,20 @@ void createOrUpdateUiTexture(nr::rhi::Device &device, UiRuntimeCache &runtime, I
     if (!needsReplacement)
     {
         auto const currentExtent = textureEntry.image.extent();
-        needsReplacement = currentExtent.width != textureExtent.width || currentExtent.height != textureExtent.height;
+        needsReplacement = currentExtent.width != uploadPayload.extent.width ||
+                           currentExtent.height != uploadPayload.extent.height;
     }
 
     if (needsReplacement)
     {
         if (textureEntry.image.valid())
         {
-            runtime.retiredTextures.push_back(UiRetiredTexture{
-                .image = std::move(textureEntry.image),
-                .slot = textureSlot,
-                .retiredFrameIndex = currentFrameIndex,
-                .releaseSlot = false,
-            });
+            retireUiTexture(runtime, std::move(textureEntry.image), textureSlot, currentFrameSlot, false);
         }
 
         auto const debugName = std::format("Ui.Texture[{}:{}]", textureData.UniqueID, textureSlot);
         auto imageCreateInfo =
-            nr::rhi::makeImageCreateInfo(vk::Format::eR8G8B8A8Unorm, textureExtent,
+            nr::rhi::makeImageCreateInfo(vk::Format::eR8G8B8A8Unorm, uploadPayload.extent,
                                          vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
         auto textureImage =
             device.resourceFactory.createImage(imageCreateInfo, nr::rhi::MemoryUsage::GpuOnly, debugName);
@@ -441,13 +535,12 @@ void createOrUpdateUiTexture(nr::rhi::Device &device, UiRuntimeCache &runtime, I
 
         textureEntry = UiTextureEntry{
             .image = std::move(textureImage),
-            .textureKey = textureKey,
         };
         markBindlessTextureTableDirty(runtime);
     }
 
     uploadUiTextureThroughRing(device, textureEntry.image,
-                               std::span<const std::byte>{uploadBytes.data(), uploadBytes.size()});
+                               std::span<const std::byte>{uploadPayload.bytes.data(), uploadPayload.bytes.size()});
     textureEntry.state.common.initialized = true;
     textureEntry.state.layout = nr::renderer::ImageLayoutIntent::ShaderReadOnly;
     textureEntry.state.common.ownership = nr::renderer::ResourceOwnershipDomain::Graphics;
@@ -456,16 +549,12 @@ void createOrUpdateUiTexture(nr::rhi::Device &device, UiRuntimeCache &runtime, I
         .access = vk::AccessFlagBits2::eShaderSampledRead,
     };
 
-    if (!wasOwnedByRuntime && hadRuntimeSlot)
-    {
-        markBindlessTextureTableDirty(runtime);
-    }
     textureData.BackendUserData = uiTextureBackendMarker(runtime);
     textureData.SetTexID(makeTextureIdFromSlot(textureSlot));
     textureData.SetStatus(ImTextureStatus_OK);
 }
 
-void destroyUiTexture(UiRuntimeCache &runtime, ImTextureData &textureData, std::uint64_t currentFrameIndex)
+void destroyUiTexture(UiRuntimeCache &runtime, ImTextureData &textureData, std::size_t currentFrameSlot)
 {
     auto const ownedByRuntime = textureOwnedByRuntime(runtime, textureData);
     auto const textureKey = makeManagedTextureKey(textureData);
@@ -478,11 +567,7 @@ void destroyUiTexture(UiRuntimeCache &runtime, ImTextureData &textureData, std::
             auto &textureEntry = runtime.texturesBySlot[slot];
             if (textureEntry.image.valid())
             {
-                runtime.retiredTextures.push_back(UiRetiredTexture{
-                    .image = std::move(textureEntry.image),
-                    .slot = slot,
-                    .retiredFrameIndex = currentFrameIndex,
-                });
+                retireUiTexture(runtime, std::move(textureEntry.image), slot, currentFrameSlot, true);
             }
             textureEntry = UiTextureEntry{};
         }
@@ -515,33 +600,30 @@ void destroyUiTexture(UiRuntimeCache &runtime, ImTextureData &textureData, std::
     return slot < runtime.texturesBySlot.size() && runtime.texturesBySlot[slot].image.valid();
 }
 
-void cleanupRetiredTextures(UiRuntimeCache &runtime, std::uint64_t currentFrameIndex)
+void cleanupRetiredTextures(UiRuntimeCache &runtime, std::size_t currentFrameSlot)
 {
-    constexpr auto kRetirementFrameCount = static_cast<std::uint64_t>(nr::maxFrameInFlight + 1u);
+    nr::nrAssert(currentFrameSlot < nr::maxFrameInFlight, "UiNode texture cleanup requires a valid frame slot.");
 
-    std::erase_if(runtime.retiredTextures, [&](const UiRetiredTexture &retired) {
-        auto const frameLatencySatisfied = currentFrameIndex >= retired.retiredFrameIndex + kRetirementFrameCount;
-        if (frameLatencySatisfied)
+    std::erase_if(runtime.retiredTextures, [&](UiRetiredTexture &retired) {
+        retired.pendingFrameSlots.reset(currentFrameSlot);
+        if (retired.pendingFrameSlots.any())
         {
-            if (retired.releaseSlot &&
-                std::ranges::find(runtime.freeTextureSlots, retired.slot) == runtime.freeTextureSlots.end())
-            {
-                if (retired.slot < runtime.texturesBySlot.size() && !runtime.texturesBySlot[retired.slot].image.valid())
-                {
-                    runtime.freeTextureSlots.push_back(retired.slot);
-                }
-            }
-            return true;
+            return false;
         }
-        return false;
+
+        if (retired.releaseSlot && retired.slot < runtime.texturesBySlot.size() &&
+            !runtime.texturesBySlot[retired.slot].image.valid() &&
+            std::ranges::find(runtime.freeTextureSlots, retired.slot) == runtime.freeTextureSlots.end())
+        {
+            runtime.freeTextureSlots.push_back(retired.slot);
+        }
+        return true;
     });
 }
 
 void synchronizeUiTextures(nr::rhi::Device &device, UiRuntimeCache &runtime, const ImDrawData &drawData,
-                           std::uint64_t currentFrameIndex)
+                           std::size_t currentFrameSlot)
 {
-    cleanupRetiredTextures(runtime, currentFrameIndex);
-
     if (drawData.Textures == nullptr)
     {
         return;
@@ -558,15 +640,15 @@ void synchronizeUiTextures(nr::rhi::Device &device, UiRuntimeCache &runtime, con
         case ImTextureStatus_OK:
             if (!runtimeHasValidTextureFor(runtime, *textureData))
             {
-                createOrUpdateUiTexture(device, runtime, *textureData, currentFrameIndex);
+                createOrUpdateUiTexture(device, runtime, *textureData, currentFrameSlot);
             }
             break;
         case ImTextureStatus_WantCreate:
         case ImTextureStatus_WantUpdates:
-            createOrUpdateUiTexture(device, runtime, *textureData, currentFrameIndex);
+            createOrUpdateUiTexture(device, runtime, *textureData, currentFrameSlot);
             break;
         case ImTextureStatus_WantDestroy:
-            destroyUiTexture(runtime, *textureData, currentFrameIndex);
+            destroyUiTexture(runtime, *textureData, currentFrameSlot);
             break;
         default:
             break;
@@ -574,10 +656,10 @@ void synchronizeUiTextures(nr::rhi::Device &device, UiRuntimeCache &runtime, con
     });
 }
 
-[[nodiscard]] std::map<std::uint32_t, nr::renderer::GraphResourceHandle> registerUiTextureImageResources(
+[[nodiscard]] std::vector<nr::renderer::GraphResourceHandle> registerUiTextureImageResources(
     nr::renderer::NodeBuildContext &context, UiRuntimeCache &runtime)
 {
-    auto graphResourceBySlot = std::map<std::uint32_t, nr::renderer::GraphResourceHandle>{};
+    auto graphResources = std::vector<nr::renderer::GraphResourceHandle>{};
     auto slotRange = std::views::iota(std::size_t{0}, runtime.texturesBySlot.size());
     std::ranges::for_each(slotRange, [&](std::size_t slot) {
         auto &textureEntry = runtime.texturesBySlot[slot];
@@ -590,7 +672,6 @@ void synchronizeUiTextures(nr::rhi::Device &device, UiRuntimeCache &runtime, con
                      std::format("UiNode graph resource registration found slot {} beyond descriptor capacity {}.",
                                  slot, kUiTextureDescriptorCapacity));
 
-        auto const textureSlot = static_cast<std::uint32_t>(slot);
         auto resource = context.addResource(nr::renderer::GraphImportedImageDesc{
             .debugName = std::format("Ui.TextureResource[{}]", slot),
             .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
@@ -609,22 +690,30 @@ void synchronizeUiTextures(nr::rhi::Device &device, UiRuntimeCache &runtime, con
             .retainedState = std::ref(textureEntry.state),
         });
 
-        graphResourceBySlot.insert_or_assign(textureSlot, resource);
+        graphResources.push_back(resource);
     });
 
-    return graphResourceBySlot;
+    return graphResources;
 }
 
-[[nodiscard]] std::string uiSkeletonBranchKey(const UiRuntimeCache &runtime, vk::Format format)
+[[nodiscard]] std::string uiSkeletonBranchKey(const UiRuntimeCache &runtime)
 {
-    auto key = std::format("overlay;format={};revision={};slots={}", static_cast<std::uint32_t>(format),
-                           runtime.textureTableRevision, runtime.texturesBySlot.size());
-    auto const slots = std::views::iota(std::size_t{0u}, runtime.texturesBySlot.size());
-    std::ranges::for_each(slots, [&](std::size_t slot) {
-        auto const &entry = runtime.texturesBySlot[slot];
-        key += std::format(";{}:{}:{}", slot, entry.textureKey, entry.image.valid() ? 1u : 0u);
-    });
-    return key;
+    auto const activeTextureCount = static_cast<std::size_t>(std::ranges::count_if(
+        runtime.texturesBySlot, [](const UiTextureEntry &entry) { return entry.image.valid(); }));
+    return std::format("overlay;textures={}", activeTextureCount);
+}
+
+[[nodiscard]] vk::DeviceSize checkedUiUploadByteSize(std::size_t elementCount, std::size_t elementByteSize,
+                                                     std::string_view payloadName)
+{
+    nr::nrAssert(elementByteSize > 0u,
+                 std::format("UiNode {} upload requires a non-zero element byte size.", payloadName));
+    nr::nrAssert(elementCount <= std::numeric_limits<std::size_t>::max() / elementByteSize,
+                 std::format("UiNode {} upload byte size exceeds the host size range.", payloadName));
+    auto const byteSize = elementCount * elementByteSize;
+    nr::nrAssert(std::in_range<vk::DeviceSize>(byteSize),
+                 std::format("UiNode {} upload byte size exceeds the Vulkan buffer size range.", payloadName));
+    return static_cast<vk::DeviceSize>(byteSize);
 }
 
 void ensureFrameUploadBuffer(nr::rhi::Device &device, nr::rhi::Buffer &buffer, vk::DeviceSize requiredSize,
@@ -641,15 +730,41 @@ void ensureFrameUploadBuffer(nr::rhi::Device &device, nr::rhi::Buffer &buffer, v
     }
 
     auto capacity = std::max<vk::DeviceSize>(buffer.valid() ? buffer.size() : 1u, 1u);
-    while (capacity < requiredSize)
+    if (capacity < requiredSize)
     {
-        capacity = std::max(requiredSize, capacity * 2u);
+        auto constexpr maximumCapacity = std::numeric_limits<vk::DeviceSize>::max();
+        auto const cappedDoubledCapacity =
+            capacity > maximumCapacity / 2u ? maximumCapacity : capacity * 2u;
+        capacity = std::max(requiredSize, cappedDoubledCapacity);
     }
 
     auto bufferInfo = nr::rhi::makeBufferCreateInfo(capacity, usage);
 
     buffer = device.resourceFactory.createBuffer(bufferInfo, nr::rhi::MemoryUsage::CpuToGpu, debugName);
     nr::nrAssert(buffer.valid(), std::format("UiNode failed to create upload buffer '{}'.", debugName));
+}
+
+void uploadUiDrawFrameBuffers(nr::rhi::Device &device, UiRuntimeCache &runtime, std::size_t frameSlot,
+                              const UiFrameDrawData &drawFrame)
+{
+    auto const vertexBytes = checkedUiUploadByteSize(drawFrame.vertices.size(), sizeof(ImDrawVert), "vertex");
+    auto const indexBytes = checkedUiUploadByteSize(drawFrame.indices.size(), sizeof(ImDrawIdx), "index");
+
+    ensureFrameUploadBuffer(device, runtime.vertexBuffers[frameSlot], vertexBytes,
+                            vk::BufferUsageFlagBits::eVertexBuffer,
+                            std::format("Ui.VertexBuffer[{}]", frameSlot));
+    ensureFrameUploadBuffer(device, runtime.indexBuffers[frameSlot], indexBytes,
+                            vk::BufferUsageFlagBits::eIndexBuffer,
+                            std::format("Ui.IndexBuffer[{}]", frameSlot));
+
+    if (vertexBytes > 0u)
+    {
+        runtime.vertexBuffers[frameSlot].writeMappedAndFlush(std::span<const ImDrawVert>{drawFrame.vertices});
+    }
+    if (indexBytes > 0u)
+    {
+        runtime.indexBuffers[frameSlot].writeMappedAndFlush(std::span<const ImDrawIdx>{drawFrame.indices});
+    }
 }
 
 [[nodiscard]] std::optional<std::reference_wrapper<nr::app::UiSystem>> tryGetUiOverlaySystem(
@@ -661,107 +776,6 @@ void ensureFrameUploadBuffer(nr::rhi::Device &device, nr::rhi::Buffer &buffer, v
     }
 
     return frameParameters.frameServices->get().tryGet<nr::app::UiSystem>();
-}
-
-void drawCpuTimingLine(nr::app::UiSystem &ui, std::string_view label, double milliseconds)
-{
-    ui.textFmt("{}: {:.3f} ms", label, milliseconds);
-}
-
-template <typename Statistics> [[nodiscard]] bool hasPerformanceSample(const Statistics &statistics) noexcept
-{
-    return statistics.valid;
-}
-
-[[nodiscard]] std::string_view queueDomainLabel(nr::renderer::QueueDomain queue) noexcept
-{
-    if (queue == nr::renderer::QueueDomain::Graphics)
-    {
-        return "Graphics";
-    }
-    if (queue == nr::renderer::QueueDomain::Compute)
-    {
-        return "Compute";
-    }
-    return "Transfer";
-}
-
-void drawGpuPassTimingLine(nr::app::UiSystem &ui, const nr::renderer::RendererGpuPassAverage &timing,
-                           std::uint32_t averagedFrameCount)
-{
-    auto const passName = timing.debugName.empty() ? std::format("Pass {}", timing.pass.value) : timing.debugName;
-    auto const passKind = timing.isCopyPass ? std::string_view{"Copy"} : queueDomainLabel(timing.queue);
-    if (timing.sampleCount == averagedFrameCount)
-    {
-        ui.textFmt("{} [{}]: {:.3f} ms", passName, passKind, timing.milliseconds);
-        return;
-    }
-
-    ui.textFmt("{} [{}]: {:.3f} ms ({} samples)", passName, passKind, timing.milliseconds, timing.sampleCount);
-}
-
-void drawCpuPerformanceSection(nr::app::UiSystem &ui)
-{
-    auto const &statistics = ui.cpuStatistics();
-    if (!hasPerformanceSample(statistics))
-    {
-        return;
-    }
-
-    auto const &average = statistics.average;
-    drawCpuTimingLine(ui, "CPU Wait GPU", average.cpuWaitGpuMilliseconds);
-    drawCpuTimingLine(ui, "Frame Setup", average.frameSetupMilliseconds);
-    drawCpuTimingLine(ui, "Scene", average.sceneMilliseconds);
-    drawCpuTimingLine(ui, "Post Scene", average.postSceneMilliseconds);
-    drawCpuTimingLine(ui, "Build", average.buildMilliseconds);
-    drawCpuTimingLine(ui, "Compile", average.compileMilliseconds);
-    drawCpuTimingLine(ui, "Prepare", average.prepareMilliseconds);
-    drawCpuTimingLine(ui, "Execute", average.executeMilliseconds);
-    drawCpuTimingLine(ui, "Present", average.presentMilliseconds);
-    drawCpuTimingLine(ui, "Total", average.totalMilliseconds);
-}
-
-void drawGpuPassPerformanceSection(nr::app::UiSystem &ui)
-{
-    auto const &statistics = ui.gpuPassStatistics();
-    if (!hasPerformanceSample(statistics))
-    {
-        return;
-    }
-
-    if (statistics.averages.empty())
-    {
-        ui.text("No addPass samples");
-        return;
-    }
-
-    std::ranges::for_each(statistics.averages, [&](const nr::renderer::RendererGpuPassAverage &timing) {
-        drawGpuPassTimingLine(ui, timing, statistics.averagedFrameCount);
-    });
-}
-
-template <std::size_t N> using UiSectionArray = std::array<nr::app::UiSection, N>;
-
-template <std::size_t N>
-[[nodiscard]] std::span<const nr::app::UiSection> sectionSpan(const UiSectionArray<N> &sections) noexcept
-{
-    return std::span<const nr::app::UiSection>{sections.data(), sections.size()};
-}
-
-[[nodiscard]] UiSectionArray<2> makeTrailingPerformanceUiSections()
-{
-    return {
-        nr::app::UiSection{
-            .id = "cpu.performance",
-            .title = "CPU Performance",
-            .draw = drawCpuPerformanceSection,
-        },
-        nr::app::UiSection{
-            .id = "gpu.performance",
-            .title = "GPU Performance",
-            .draw = drawGpuPassPerformanceSection,
-        },
-    };
 }
 
 [[nodiscard]] std::map<std::uint32_t, nr::renderer::BindlessImageDescriptor> makeUiTextureDescriptors(
@@ -815,45 +829,271 @@ template <std::size_t N>
 }
 
 void prepareBindlessTextureTableForFrame(UiRuntimeCache &runtime, nr::renderer::BindlessImageTableCache &cache,
+                                         nr::renderer::PipelineRuntime<
+                                             nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding,
                                          std::uint32_t frameIndex)
 {
     nr::nrAssert(static_cast<bool>(runtime.pipeline),
                  "UiNode bindless texture table requires an initialized pipeline runtime.");
 
-    cache.ensureTableForFrame(*runtime.pipeline, frameIndex, makeBindlessTextureTableRequest(runtime));
+    cache.ensureTableForFrame(*runtime.pipeline, passBinding, frameIndex, makeBindlessTextureTableRequest(runtime));
 }
 
 [[nodiscard]] nr::rhi::ShaderBindingSnapshot makeBindlessTextureBindingSnapshotForFrame(
-    UiRuntimeCache &runtime, nr::renderer::BindlessImageTableCache &cache, std::uint32_t frameIndex)
+    UiRuntimeCache &runtime, nr::renderer::BindlessImageTableCache &cache,
+    nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding,
+    std::uint32_t frameIndex)
 {
-    return cache.makeSnapshotForFrame(*runtime.pipeline, frameIndex, makeBindlessTextureTableRequest(runtime));
+    return cache.makeSnapshotForFrame(*runtime.pipeline, passBinding, frameIndex,
+                                      makeBindlessTextureTableRequest(runtime));
 }
 
-[[nodiscard]] UiFrameDrawData copyUiDrawData(const ImDrawData &drawData, vk::Extent2D fallbackExtent)
+struct UiDrawCommandRecorder
 {
+    std::shared_ptr<UiRuntimeCache> runtime{};
+    std::reference_wrapper<const nr::renderer::RasterPassRecordContext> rasterContext;
+    UiPushConstants pushConstants{};
+    std::optional<std::uint32_t> lastTextureIndex{};
+
+    void operator()(const UiDrawCommand &command)
+    {
+        if (command.elementCount == 0u || command.scissor.extent.width == 0u ||
+            command.scissor.extent.height == 0u)
+        {
+            return;
+        }
+
+        nr::nrAssert(command.textureSlot < runtime->texturesBySlot.size() &&
+                         runtime->texturesBySlot[command.textureSlot].image.valid(),
+                     std::format("UiNode record stage could not resolve texture slot {}.", command.textureSlot));
+
+        auto const &context = rasterContext.get();
+        if (!lastTextureIndex.has_value() || *lastTextureIndex != command.textureSlot)
+        {
+            pushConstants.textureIndex = command.textureSlot;
+            context.pushConstants("gUiPush", pushConstants);
+            lastTextureIndex = command.textureSlot;
+        }
+
+        context.commandBuffer.setScissor(0u, {command.scissor});
+        context.commandBuffer.drawIndexed(command.elementCount, 1u, command.firstIndex, command.vertexOffset, 0u);
+    }
+};
+
+struct UiOverlayCallbacks
+{
+    nr::renderer::RasterPassPrepareCallback prepare{};
+    nr::renderer::PipelinePassBindingSnapshotCallback<nr::rhi::GraphicsPipeline> dynamicBindingSnapshot{};
+    nr::renderer::RasterPassRecordCallback record{};
+};
+
+[[nodiscard]] UiOverlayCallbacks makeUiOverlayCallbacks(
+    std::shared_ptr<UiRuntimeCache> runtime, UiDrawFramePayload drawFrame,
+    std::reference_wrapper<nr::renderer::BindlessImageTableCache> cache)
+{
+    nr::nrAssert(static_cast<bool>(runtime), "UiNode overlay callbacks require initialized runtime state.");
+    nr::nrAssert(static_cast<bool>(drawFrame), "UiNode overlay callbacks require immutable draw-frame data.");
+
+    return UiOverlayCallbacks{
+        .prepare =
+            [runtime, drawFrame, cache](
+                const nr::renderer::PassPrepareContext &prepareContext,
+                nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding) {
+                nr::nrAssert(prepareContext.device.has_value(), "UiNode prepare stage requires device access.");
+                prepareBindlessTextureTableForFrame(*runtime, cache.get(), passBinding, prepareContext.frameIndex);
+
+                auto &device = prepareContext.device->get();
+                auto const frameSlot =
+                    static_cast<std::size_t>(prepareContext.frameIndex % runtime->vertexBuffers.size());
+                uploadUiDrawFrameBuffers(device, *runtime, frameSlot, *drawFrame);
+            },
+        .dynamicBindingSnapshot =
+            [runtime, cache](
+                const nr::renderer::PassPrepareContext &prepareContext,
+                nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding) {
+                return makeBindlessTextureBindingSnapshotForFrame(*runtime, cache.get(), passBinding,
+                                                                  prepareContext.frameIndex);
+            },
+        .record =
+            [runtime, drawFrame](const nr::renderer::RasterPassRecordContext &rasterContext) {
+                if (drawFrame->commands.empty())
+                {
+                    return;
+                }
+
+                auto const frameSlot =
+                    static_cast<std::size_t>(rasterContext.pass.frameIndex % runtime->vertexBuffers.size());
+                auto const &vertexBuffer = runtime->vertexBuffers[frameSlot];
+                auto const &indexBuffer = runtime->indexBuffers[frameSlot];
+                nr::nrAssert(vertexBuffer.valid(), "UiNode requires a valid per-frame vertex buffer.");
+                nr::nrAssert(indexBuffer.valid(), "UiNode requires a valid per-frame index buffer.");
+
+                auto &commandBuffer = rasterContext.commandBuffer;
+                auto const vertexBuffers = std::array{vertexBuffer.handle()};
+                auto const vertexOffsets = std::array<vk::DeviceSize, 1>{0u};
+                commandBuffer.bindVertexBuffers(0u, vertexBuffers, vertexOffsets);
+                commandBuffer.bindIndexBuffer(indexBuffer.handle(), 0u, kUiIndexType);
+
+                std::ranges::for_each(drawFrame->commands,
+                                      UiDrawCommandRecorder{
+                                          .runtime = runtime,
+                                          .rasterContext = std::cref(rasterContext),
+                                          .pushConstants = drawFrame->pushConstants,
+                                      });
+            },
+    };
+}
+
+struct UiValidatedDrawCounts
+{
+    std::size_t commandListCount = 0u;
+    std::size_t vertexCount = 0u;
+    std::size_t indexCount = 0u;
+};
+
+[[nodiscard]] std::size_t checkedUiDrawSizeAdd(std::size_t accumulated, std::size_t additional,
+                                               std::string_view quantityName)
+{
+    nr::nrAssert(additional <= std::numeric_limits<std::size_t>::max() - accumulated,
+                 std::format("UiNode {} exceeds the host size range.", quantityName));
+    return accumulated + additional;
+}
+
+[[nodiscard]] UiValidatedDrawCounts validateUiDrawData(const ImDrawData &drawData)
+{
+    nr::nrAssert(drawData.Valid, "UiNode requires finalized valid ImDrawData.");
+    nr::nrAssert(drawData.CmdListsCount >= 0, "UiNode ImDrawData command-list count cannot be negative.");
+    nr::nrAssert(drawData.TotalVtxCount >= 0, "UiNode ImDrawData total vertex count cannot be negative.");
+    nr::nrAssert(drawData.TotalIdxCount >= 0, "UiNode ImDrawData total index count cannot be negative.");
+    nr::nrAssert(drawData.CmdLists.Size >= 0, "UiNode ImDrawData command-list storage size cannot be negative.");
+    nr::nrAssert(drawData.CmdLists.Size == drawData.CmdListsCount,
+                 std::format("UiNode ImDrawData reports {} command lists but stores {}.", drawData.CmdListsCount,
+                             drawData.CmdLists.Size));
+    nr::nrAssert(drawData.CmdLists.Size == 0 || drawData.CmdLists.Data != nullptr,
+                 "UiNode ImDrawData requires storage for non-empty command lists.");
+    nr::nrAssert(std::in_range<std::size_t>(drawData.CmdListsCount),
+                 "UiNode ImDrawData command-list count exceeds the host size range.");
+    nr::nrAssert(std::in_range<std::size_t>(drawData.TotalVtxCount),
+                 "UiNode ImDrawData total vertex count exceeds the host size range.");
+    nr::nrAssert(std::in_range<std::size_t>(drawData.TotalIdxCount),
+                 "UiNode ImDrawData total index count exceeds the host size range.");
+
+    auto counts = UiValidatedDrawCounts{
+        .commandListCount = static_cast<std::size_t>(drawData.CmdListsCount),
+    };
+    auto commandListIndices = std::views::iota(std::size_t{0u}, counts.commandListCount);
+    std::ranges::for_each(commandListIndices, [&](std::size_t commandListIndex) {
+        auto const *commandList = drawData.CmdLists.Data[commandListIndex];
+        nr::nrAssert(commandList != nullptr,
+                     std::format("UiNode ImDrawData command list {} cannot be null.", commandListIndex));
+        nr::nrAssert(commandList->VtxBuffer.Size >= 0,
+                     std::format("UiNode command list {} vertex count cannot be negative.", commandListIndex));
+        nr::nrAssert(commandList->IdxBuffer.Size >= 0,
+                     std::format("UiNode command list {} index count cannot be negative.", commandListIndex));
+        nr::nrAssert(commandList->CmdBuffer.Size >= 0,
+                     std::format("UiNode command list {} command count cannot be negative.", commandListIndex));
+        nr::nrAssert(commandList->VtxBuffer.Size == 0 || commandList->VtxBuffer.Data != nullptr,
+                     std::format("UiNode command list {} requires storage for non-empty vertices.", commandListIndex));
+        nr::nrAssert(commandList->IdxBuffer.Size == 0 || commandList->IdxBuffer.Data != nullptr,
+                     std::format("UiNode command list {} requires storage for non-empty indices.", commandListIndex));
+        nr::nrAssert(commandList->CmdBuffer.Size == 0 || commandList->CmdBuffer.Data != nullptr,
+                     std::format("UiNode command list {} requires storage for non-empty commands.", commandListIndex));
+        nr::nrAssert(std::in_range<std::size_t>(commandList->VtxBuffer.Size),
+                     std::format("UiNode command list {} vertex count exceeds the host size range.", commandListIndex));
+        nr::nrAssert(std::in_range<std::size_t>(commandList->IdxBuffer.Size),
+                     std::format("UiNode command list {} index count exceeds the host size range.", commandListIndex));
+        nr::nrAssert(std::in_range<std::size_t>(commandList->CmdBuffer.Size),
+                     std::format("UiNode command list {} command count exceeds the host size range.", commandListIndex));
+
+        auto const listVertexCount = static_cast<std::size_t>(commandList->VtxBuffer.Size);
+        auto const listIndexCount = static_cast<std::size_t>(commandList->IdxBuffer.Size);
+        auto const listCommandCount = static_cast<std::size_t>(commandList->CmdBuffer.Size);
+        counts.vertexCount = checkedUiDrawSizeAdd(counts.vertexCount, listVertexCount, "draw vertex count");
+        counts.indexCount = checkedUiDrawSizeAdd(counts.indexCount, listIndexCount, "draw index count");
+
+        auto commandIndices = std::views::iota(std::size_t{0u}, listCommandCount);
+        std::ranges::for_each(commandIndices, [&](std::size_t commandIndex) {
+            auto const &command = commandList->CmdBuffer.Data[commandIndex];
+            nr::nrAssert(command.UserCallback == nullptr,
+                         std::format("UiNode does not support ImDrawCmd callbacks (list {}, command {}).",
+                                     commandListIndex, commandIndex));
+            nr::nrAssert(std::in_range<std::size_t>(command.IdxOffset),
+                         "UiNode draw-command index offset exceeds the host size range.");
+            nr::nrAssert(std::in_range<std::size_t>(command.ElemCount),
+                         "UiNode draw-command element count exceeds the host size range.");
+            nr::nrAssert(std::in_range<std::size_t>(command.VtxOffset),
+                         "UiNode draw-command vertex offset exceeds the host size range.");
+
+            auto const indexOffset = static_cast<std::size_t>(command.IdxOffset);
+            auto const elementCount = static_cast<std::size_t>(command.ElemCount);
+            auto const vertexOffset = static_cast<std::size_t>(command.VtxOffset);
+            nr::nrAssert(indexOffset <= listIndexCount,
+                         "UiNode draw-command index offset exceeds its command-list index buffer.");
+            nr::nrAssert(elementCount <= listIndexCount - indexOffset,
+                         "UiNode draw-command index span exceeds its command-list index buffer.");
+            nr::nrAssert(vertexOffset <= listVertexCount,
+                         "UiNode draw-command vertex offset exceeds its command-list vertex buffer.");
+
+            auto elementOffsets = std::views::iota(std::size_t{0u}, elementCount);
+            std::ranges::for_each(elementOffsets, [&](std::size_t elementOffset) {
+                auto const indexPosition =
+                    checkedUiDrawSizeAdd(indexOffset, elementOffset, "draw-command index position");
+                auto const localIndex = commandList->IdxBuffer.Data[indexPosition];
+                nr::nrAssert(std::in_range<std::size_t>(localIndex),
+                             "UiNode draw-command index value exceeds the host size range.");
+                auto const referencedVertex = checkedUiDrawSizeAdd(
+                    vertexOffset, static_cast<std::size_t>(localIndex), "draw-command vertex reference");
+                nr::nrAssert(referencedVertex < listVertexCount,
+                             "UiNode draw-command index references outside its command-list vertex buffer.");
+            });
+        });
+    });
+
+    nr::nrAssert(counts.vertexCount == static_cast<std::size_t>(drawData.TotalVtxCount),
+                 std::format("UiNode ImDrawData reports {} total vertices but command lists contain {}.",
+                             drawData.TotalVtxCount, counts.vertexCount));
+    nr::nrAssert(counts.indexCount == static_cast<std::size_t>(drawData.TotalIdxCount),
+                 std::format("UiNode ImDrawData reports {} total indices but command lists contain {}.",
+                             drawData.TotalIdxCount, counts.indexCount));
+    return counts;
+}
+
+[[nodiscard]] UiFrameDrawData copyUiDrawData(const ImDrawData &drawData, vk::Extent2D swapchainExtent)
+{
+    auto const validatedCounts = validateUiDrawData(drawData);
     auto output = UiFrameDrawData{};
     output.framebufferExtent = vk::Extent2D{
-        std::max(1u, fallbackExtent.width),
-        std::max(1u, fallbackExtent.height),
+        std::max(1u, swapchainExtent.width),
+        std::max(1u, swapchainExtent.height),
     };
 
-    if (drawData.TotalVtxCount <= 0 || drawData.TotalIdxCount <= 0)
+    auto const framebufferWidth =
+        static_cast<double>(drawData.DisplaySize.x) * static_cast<double>(drawData.FramebufferScale.x);
+    auto const framebufferHeight =
+        static_cast<double>(drawData.DisplaySize.y) * static_cast<double>(drawData.FramebufferScale.y);
+    constexpr auto maximumFramebufferDimension =
+        static_cast<double>(std::numeric_limits<std::uint32_t>::max());
+    if (!std::isfinite(framebufferWidth) || !std::isfinite(framebufferHeight) || framebufferWidth <= 0.0 ||
+        framebufferHeight <= 0.0 || framebufferWidth > maximumFramebufferDimension ||
+        framebufferHeight > maximumFramebufferDimension)
     {
         return output;
     }
 
-    auto const framebufferWidth = static_cast<int>(drawData.DisplaySize.x * drawData.FramebufferScale.x);
-    auto const framebufferHeight = static_cast<int>(drawData.DisplaySize.y * drawData.FramebufferScale.y);
-    if (framebufferWidth <= 0 || framebufferHeight <= 0)
+    auto const finalizedFramebufferExtent = vk::Extent2D{
+        static_cast<std::uint32_t>(framebufferWidth),
+        static_cast<std::uint32_t>(framebufferHeight),
+    };
+    if (finalizedFramebufferExtent != output.framebufferExtent)
     {
         return output;
     }
 
-    auto const effectiveWidth =
-        std::max(1u, std::min(fallbackExtent.width, static_cast<std::uint32_t>(framebufferWidth)));
-    auto const effectiveHeight =
-        std::max(1u, std::min(fallbackExtent.height, static_cast<std::uint32_t>(framebufferHeight)));
-    output.framebufferExtent = vk::Extent2D{effectiveWidth, effectiveHeight};
+    if (validatedCounts.vertexCount == 0u || validatedCounts.indexCount == 0u)
+    {
+        return output;
+    }
+
     output.pushConstants = UiPushConstants{
         .scale =
             glm::vec2{
@@ -867,40 +1107,53 @@ void prepareBindlessTextureTableForFrame(UiRuntimeCache &runtime, nr::renderer::
             },
     };
 
-    output.vertices.reserve(static_cast<std::size_t>(drawData.TotalVtxCount));
-    output.indices.reserve(static_cast<std::size_t>(drawData.TotalIdxCount));
+    output.vertices.reserve(validatedCounts.vertexCount);
+    output.indices.reserve(validatedCounts.indexCount);
 
-    auto globalVertexOffset = std::uint32_t{0u};
-    auto globalIndexOffset = std::uint32_t{0u};
+    auto globalVertexOffset = std::size_t{0u};
+    auto globalIndexOffset = std::size_t{0u};
 
-    auto commandListIndices = std::views::iota(0, drawData.CmdListsCount);
-    std::ranges::for_each(commandListIndices, [&](int commandListIndex) {
-        auto *commandList = drawData.CmdLists[commandListIndex];
-        if (commandList == nullptr)
+    auto commandListIndices = std::views::iota(std::size_t{0u}, validatedCounts.commandListCount);
+    std::ranges::for_each(commandListIndices, [&](std::size_t commandListIndex) {
+        auto const *commandList = drawData.CmdLists.Data[commandListIndex];
+        auto const listVertexCount = static_cast<std::size_t>(commandList->VtxBuffer.Size);
+        auto const listIndexCount = static_cast<std::size_t>(commandList->IdxBuffer.Size);
+        auto const listCommandCount = static_cast<std::size_t>(commandList->CmdBuffer.Size);
+        if (listVertexCount > 0u)
         {
-            return;
+            output.vertices.insert(output.vertices.end(), commandList->VtxBuffer.Data,
+                                   commandList->VtxBuffer.Data + listVertexCount);
+        }
+        if (listIndexCount > 0u)
+        {
+            output.indices.insert(output.indices.end(), commandList->IdxBuffer.Data,
+                                  commandList->IdxBuffer.Data + listIndexCount);
         }
 
-        output.vertices.insert(output.vertices.end(), commandList->VtxBuffer.Data,
-                               commandList->VtxBuffer.Data + commandList->VtxBuffer.Size);
-        output.indices.insert(output.indices.end(), commandList->IdxBuffer.Data,
-                              commandList->IdxBuffer.Data + commandList->IdxBuffer.Size);
-
-        auto commandIndices = std::views::iota(0, commandList->CmdBuffer.Size);
-        std::ranges::for_each(commandIndices, [&](int commandIndex) {
-            auto const &command = commandList->CmdBuffer[commandIndex];
-            if (command.UserCallback != nullptr)
-            {
-                return;
-            }
+        auto commandIndices = std::views::iota(std::size_t{0u}, listCommandCount);
+        std::ranges::for_each(commandIndices, [&](std::size_t commandIndex) {
+            auto const &command = commandList->CmdBuffer.Data[commandIndex];
+            auto const firstIndex = checkedUiDrawSizeAdd(
+                globalIndexOffset, static_cast<std::size_t>(command.IdxOffset), "global draw-command first index");
+            auto const vertexOffset = checkedUiDrawSizeAdd(
+                globalVertexOffset, static_cast<std::size_t>(command.VtxOffset), "global draw-command vertex offset");
+            nr::nrAssert(std::in_range<std::uint32_t>(command.ElemCount),
+                         "UiNode draw-command element count exceeds the Vulkan draw range.");
+            nr::nrAssert(std::in_range<std::uint32_t>(firstIndex),
+                         "UiNode draw-command first index exceeds the Vulkan draw range.");
+            nr::nrAssert(std::in_range<std::int32_t>(vertexOffset),
+                         "UiNode draw-command vertex offset exceeds the Vulkan draw range.");
+            auto const elementCountValue = static_cast<std::uint32_t>(command.ElemCount);
+            auto const firstIndexValue = static_cast<std::uint32_t>(firstIndex);
+            auto const vertexOffsetValue = static_cast<std::int32_t>(vertexOffset);
 
             auto const clipMinX =
                 std::max(0.0f, (command.ClipRect.x - drawData.DisplayPos.x) * drawData.FramebufferScale.x);
             auto const clipMinY =
                 std::max(0.0f, (command.ClipRect.y - drawData.DisplayPos.y) * drawData.FramebufferScale.y);
-            auto const clipMaxX = std::min(static_cast<float>(effectiveWidth),
+            auto const clipMaxX = std::min(static_cast<float>(output.framebufferExtent.width),
                                            (command.ClipRect.z - drawData.DisplayPos.x) * drawData.FramebufferScale.x);
-            auto const clipMaxY = std::min(static_cast<float>(effectiveHeight),
+            auto const clipMaxY = std::min(static_cast<float>(output.framebufferExtent.height),
                                            (command.ClipRect.w - drawData.DisplayPos.y) * drawData.FramebufferScale.y);
 
             if (clipMaxX <= clipMinX || clipMaxY <= clipMinY)
@@ -912,35 +1165,40 @@ void prepareBindlessTextureTableForFrame(UiRuntimeCache &runtime, nr::renderer::
             auto const offsetY = static_cast<std::int32_t>(clipMinY);
             auto const extentWidth = static_cast<std::uint32_t>(clipMaxX - clipMinX);
             auto const extentHeight = static_cast<std::uint32_t>(clipMaxY - clipMinY);
-            auto const firstIndex = globalIndexOffset + static_cast<std::uint32_t>(command.IdxOffset);
-            auto const vertexOffset = globalVertexOffset + static_cast<std::uint32_t>(command.VtxOffset);
-
-            nr::nrAssert(vertexOffset <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()),
-                         "UiNode vertex offset exceeds std::int32_t range.");
-
             auto scissor = vk::Rect2D{};
             scissor.offset = vk::Offset2D{offsetX, offsetY};
             scissor.extent = vk::Extent2D{extentWidth, extentHeight};
 
             output.commands.push_back(UiDrawCommand{
                 .scissor = scissor,
-                .elementCount = static_cast<std::uint32_t>(command.ElemCount),
-                .firstIndex = firstIndex,
-                .vertexOffset = static_cast<std::int32_t>(vertexOffset),
+                .elementCount = elementCountValue,
+                .firstIndex = firstIndexValue,
+                .vertexOffset = vertexOffsetValue,
                 .textureSlot = textureSlotFromId(command.GetTexID()),
             });
         });
 
-        globalVertexOffset += static_cast<std::uint32_t>(commandList->VtxBuffer.Size);
-        globalIndexOffset += static_cast<std::uint32_t>(commandList->IdxBuffer.Size);
+        globalVertexOffset =
+            checkedUiDrawSizeAdd(globalVertexOffset, listVertexCount, "global draw vertex offset");
+        globalIndexOffset = checkedUiDrawSizeAdd(globalIndexOffset, listIndexCount, "global draw index offset");
     });
 
     return output;
 }
 
-[[nodiscard]] UiFrameDrawData prepareUiDrawFrame(nr::rhi::Device &device, UiRuntimeCache &runtime,
-                                                 const nr::renderer::NodeFrameParameters &frameParameters)
+[[nodiscard]] UiDrawFramePayload makeUiDrawFramePayload(UiFrameDrawData drawFrame)
 {
+    return std::make_shared<const UiFrameDrawData>(std::move(drawFrame));
+}
+
+[[nodiscard]] UiDrawFramePayload prepareUiDrawFrame(nr::rhi::Device &device, UiRuntimeCache &runtime,
+                                                    const nr::renderer::NodeFrameParameters &frameParameters)
+{
+    nr::nrAssert(frameParameters.frameIndex < nr::maxFrameInFlight,
+                 "UiNode draw preflight requires frameIndex to identify a valid RHI frame slot.");
+    auto const currentFrameSlot = static_cast<std::size_t>(frameParameters.frameIndex);
+    cleanupRetiredTextures(runtime, currentFrameSlot);
+
     auto const bufferExtent = vk::Extent2D{
         std::max(1u, frameParameters.swapchainExtent.width),
         std::max(1u, frameParameters.swapchainExtent.height),
@@ -950,20 +1208,17 @@ void prepareBindlessTextureTableForFrame(UiRuntimeCache &runtime, nr::renderer::
     auto uiSystem = tryGetUiOverlaySystem(frameParameters);
     if (!uiSystem.has_value())
     {
-        return drawFrame;
+        return makeUiDrawFramePayload(std::move(drawFrame));
     }
 
-    auto trailingSections = makeTrailingPerformanceUiSections();
-    uiSystem->get().renderSections(std::span<const nr::app::UiSection>{}, sectionSpan(trailingSections));
-    uiSystem->get().finalizeFrame();
     auto drawData = uiSystem->get().drawData();
     if (!drawData.has_value())
     {
-        return drawFrame;
+        return makeUiDrawFramePayload(std::move(drawFrame));
     }
 
-    synchronizeUiTextures(device, runtime, drawData->get(), static_cast<std::uint64_t>(frameParameters.frameIndex));
-    return copyUiDrawData(drawData->get(), bufferExtent);
+    synchronizeUiTextures(device, runtime, drawData->get(), currentFrameSlot);
+    return makeUiDrawFramePayload(copyUiDrawData(drawData->get(), bufferExtent));
 }
 } // namespace nr::renderPasses::detail
 
@@ -994,16 +1249,16 @@ void UiNode::initialize(NodeInitContext &context)
                  "Ui initialization requires ordered vertex and fragment shaders.");
     device_ = context.device;
 
-    auto bufferFormat = input.bufferFormat == vk::Format::eUndefined ? vk::Format::eR8G8B8A8Unorm : input.bufferFormat;
-
-    runtime_ =
-        ensureUiRuntime(context.device.get(), context.shaderPrograms, bufferFormat, context.runtimeName + ".Pipeline");
+    auto const frozenBufferFormat = detail::resolveUiBufferFormat(input);
+    runtime_ = detail::ensureUiRuntime(context.device.get(), context.shaderPrograms, frozenBufferFormat,
+                                       context.runtimeName + ".Pipeline");
 }
 
 void UiNode::finalizeInitialization()
 {
     nr::nrAssert(runtime_ && runtime_->pipeline && runtime_->pipeline->valid(),
                  "Ui async graphics PSO construction failed.");
+    static_cast<void>(detail::validatedFrozenUiBufferFormat(input, *runtime_));
 }
 
 void UiNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
@@ -1018,13 +1273,12 @@ void UiNode::build(NodeBuildContext &context, const NodeFrameParameters &framePa
     {
         return std::nullopt;
     }
-    runtime_->preparedDrawFrame = detail::prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
-    auto const bufferFormat =
-        input.bufferFormat == vk::Format::eUndefined ? vk::Format::eR8G8B8A8Unorm : input.bufferFormat;
-    auto branch = detail::uiSkeletonBranchKey(*runtime_, bufferFormat);
+    static_cast<void>(detail::validatedFrozenUiBufferFormat(input, *runtime_));
+    auto drawFrame = detail::prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
+    nr::nrAssert(static_cast<bool>(drawFrame), "Ui structural snapshot requires immutable draw-frame data.");
+    runtime_->preparedDrawFrame = std::move(drawFrame);
     return StructuralSnapshot{
-        .configurationRevision = std::max<std::uint64_t>(1u, std::hash<std::string>{}(branch)),
-        .branchKey = std::move(branch),
+        .branchKey = detail::uiSkeletonBranchKey(*runtime_),
     };
 }
 
@@ -1034,13 +1288,21 @@ bool UiNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPat
 {
     nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(),
                  "UiNode Skeleton patch requires initialized state.");
+    auto const bufferFormat = detail::validatedFrozenUiBufferFormat(input, *runtime_);
+    auto const expectedBranch = detail::uiSkeletonBranchKey(*runtime_);
+    if (snapshot.branchKey != expectedBranch)
+    {
+        return false;
+    }
+
+    auto drawFrame = std::exchange(runtime_->preparedDrawFrame, detail::UiDrawFramePayload{});
+    nr::nrAssert(static_cast<bool>(drawFrame),
+                 "UiNode Skeleton hit requires the structural snapshot draw-frame payload.");
     auto const bufferExtent = vk::Extent2D{
         std::max(1u, frameParameters.swapchainExtent.width),
         std::max(1u, frameParameters.swapchainExtent.height),
     };
-    auto const bufferFormat =
-        input.bufferFormat == vk::Format::eUndefined ? vk::Format::eR8G8B8A8Unorm : input.bufferFormat;
-    detail::ensureUiBufferImage(device_->get(), *runtime_, bufferExtent, bufferFormat);
+    detail::ensureUiBufferImage(device_->get(), *runtime_, bufferExtent);
     auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
     context.patchResource(0u, nr::renderer::GraphImportedImageDesc{
                                   .debugName = std::format("Ui.Buffer[{}]", frameSlot),
@@ -1055,16 +1317,6 @@ bool UiNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPat
                                   .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
                                   .importedResource = std::cref(runtime_->uiBuffers[frameSlot]),
                               });
-
-    if (!runtime_->preparedDrawFrame.has_value())
-    {
-        runtime_->preparedDrawFrame = detail::prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
-    }
-    auto const drawFrame = *runtime_->preparedDrawFrame;
-    if (detail::uiSkeletonBranchKey(*runtime_, bufferFormat) != snapshot.branchKey)
-    {
-        return false;
-    }
 
     auto resourceSlot = std::size_t{1u};
     auto const textureSlots = std::views::iota(std::size_t{0u}, runtime_->texturesBySlot.size());
@@ -1094,77 +1346,19 @@ bool UiNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPat
 
     auto runtime = runtime_;
     auto &bindlessCache = context.globalResources().bindlessImageTableCache.get();
+    auto callbacks = detail::makeUiOverlayCallbacks(runtime, drawFrame, std::ref(bindlessCache));
     auto patch = nr::renderer::RasterPassPatchBuilder{context, 0u, "Ui.Overlay", runtime_->pipeline};
-    patch.viewport(drawFrame.framebufferExtent)
+    patch.viewport(drawFrame->framebufferExtent)
         .colorAttachment(context.resource(0u),
                          vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}})
         .rasterState(nr::rhi::MeshRasterState{
             .cullMode = vk::CullModeFlagBits::eNone,
             .depthCompareOp = vk::CompareOp::eAlways,
         })
-        .prepare([runtime, drawFrame,
-                  cache = std::ref(bindlessCache)](const nr::renderer::PassPrepareContext &prepareContext) {
-            detail::prepareBindlessTextureTableForFrame(*runtime, cache.get(), prepareContext.frameIndex);
-            auto &device = prepareContext.device->get();
-            auto const frameSlot = static_cast<std::size_t>(prepareContext.frameIndex % runtime->vertexBuffers.size());
-            auto const vertexBytes = static_cast<vk::DeviceSize>(drawFrame.vertices.size() * sizeof(ImDrawVert));
-            auto const indexBytes = static_cast<vk::DeviceSize>(drawFrame.indices.size() * sizeof(ImDrawIdx));
-            detail::ensureFrameUploadBuffer(device, runtime->vertexBuffers[frameSlot], vertexBytes,
-                                            vk::BufferUsageFlagBits::eVertexBuffer,
-                                            std::format("Ui.VertexBuffer[{}]", frameSlot));
-            detail::ensureFrameUploadBuffer(device, runtime->indexBuffers[frameSlot], indexBytes,
-                                            vk::BufferUsageFlagBits::eIndexBuffer,
-                                            std::format("Ui.IndexBuffer[{}]", frameSlot));
-            if (vertexBytes > 0u)
-            {
-                runtime->vertexBuffers[frameSlot].writeMappedAndFlush(std::span<const ImDrawVert>{drawFrame.vertices});
-            }
-            if (indexBytes > 0u)
-            {
-                runtime->indexBuffers[frameSlot].writeMappedAndFlush(std::span<const ImDrawIdx>{drawFrame.indices});
-            }
-        })
-        .dynamicBindingSnapshot([runtime, cache = std::ref(bindlessCache)](
-                                    const nr::renderer::PassPrepareContext &prepareContext) {
-            return detail::makeBindlessTextureBindingSnapshotForFrame(*runtime, cache.get(), prepareContext.frameIndex);
-        })
-        .record([runtime, drawFrame](const nr::renderer::RasterPassRecordContext &rasterContext) {
-            if (drawFrame.commands.empty())
-            {
-                return;
-            }
-            auto const frameSlot =
-                static_cast<std::size_t>(rasterContext.pass.frameIndex % runtime->vertexBuffers.size());
-            auto &commandBuffer = rasterContext.commandBuffer;
-            auto const vertexBuffers = std::array{runtime->vertexBuffers[frameSlot].handle()};
-            auto const vertexOffsets = std::array<vk::DeviceSize, 1>{0u};
-            commandBuffer.bindVertexBuffers(0u, vertexBuffers, vertexOffsets);
-            commandBuffer.bindIndexBuffer(runtime->indexBuffers[frameSlot].handle(), 0u,
-                                          sizeof(ImDrawIdx) == 2u ? vk::IndexType::eUint16 : vk::IndexType::eUint32);
-            auto constants = drawFrame.pushConstants;
-            auto lastTexture = std::optional<std::uint32_t>{};
-            std::ranges::for_each(drawFrame.commands, [&](const detail::UiDrawCommand &command) {
-                if (command.elementCount == 0u || command.scissor.extent.width == 0u ||
-                    command.scissor.extent.height == 0u)
-                {
-                    return;
-                }
-                nr::nrAssert(
-                    command.textureSlot < runtime->texturesBySlot.size() &&
-                        runtime->texturesBySlot[command.textureSlot].image.valid(),
-                    std::format("UiNode Skeleton record could not resolve texture slot {}.", command.textureSlot));
-                if (!lastTexture.has_value() || *lastTexture != command.textureSlot)
-                {
-                    constants.textureIndex = command.textureSlot;
-                    rasterContext.pushConstants("gUiPush", constants);
-                    lastTexture = command.textureSlot;
-                }
-                commandBuffer.setScissor(0u, {command.scissor});
-                commandBuffer.drawIndexed(command.elementCount, 1u, command.firstIndex, command.vertexOffset, 0u);
-            });
-        });
+        .prepare(std::move(callbacks.prepare))
+        .dynamicBindingSnapshot(std::move(callbacks.dynamicBindingSnapshot))
+        .record(std::move(callbacks.record));
     patch.patch();
-    runtime_->preparedDrawFrame.reset();
     return true;
 }
 
@@ -1172,15 +1366,13 @@ void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameP
 {
     nr::nrAssert(static_cast<bool>(runtime_), "UiNode build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "UiNode build stage requires initialize() device reference.");
+    auto const bufferFormat = validatedFrozenUiBufferFormat(input, *runtime_);
 
     auto const bufferExtent = vk::Extent2D{
         std::max(1u, frameParameters.swapchainExtent.width),
         std::max(1u, frameParameters.swapchainExtent.height),
     };
-    auto const bufferFormat =
-        input.bufferFormat == vk::Format::eUndefined ? vk::Format::eR8G8B8A8Unorm : input.bufferFormat;
-
-    ensureUiBufferImage(device_->get(), *runtime_, bufferExtent, bufferFormat);
+    ensureUiBufferImage(device_->get(), *runtime_, bufferExtent);
 
     auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
     auto uiBuffer = context.importSampledColor(runtime_->uiBuffers[frameSlot], std::format("Ui.Buffer[{}]", frameSlot),
@@ -1188,111 +1380,31 @@ void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameP
 
     context.publishFrameResource(nr::renderer::frameResource::uiColor, uiBuffer);
 
-    if (!runtime_->preparedDrawFrame.has_value())
+    auto drawFrame = std::exchange(runtime_->preparedDrawFrame, detail::UiDrawFramePayload{});
+    if (!drawFrame)
     {
-        runtime_->preparedDrawFrame = prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
+        drawFrame = prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
     }
-    auto drawFrame = std::move(*runtime_->preparedDrawFrame);
-    runtime_->preparedDrawFrame.reset();
+    nr::nrAssert(static_cast<bool>(drawFrame), "UiNode cold materialization requires immutable draw-frame data.");
 
-    auto graphResourceBySlot = registerUiTextureImageResources(context, *runtime_);
+    auto textureResources = registerUiTextureImageResources(context, *runtime_);
 
     auto runtime = runtime_;
     auto &bindlessImageTableCache = context.globalResources.get().bindlessImageTableCache.get();
+    auto callbacks = detail::makeUiOverlayCallbacks(runtime, drawFrame, std::ref(bindlessImageTableCache));
     auto overlayPass = nr::renderer::RasterPassBuilder{context, "Ui.Overlay", runtime_->pipeline};
-    overlayPass.viewport(drawFrame.framebufferExtent)
+    overlayPass.viewport(drawFrame->framebufferExtent)
         .colorAttachment(uiBuffer, vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}})
         .rasterState(nr::rhi::MeshRasterState{
             .cullMode = vk::CullModeFlagBits::eNone,
             .depthCompareOp = vk::CompareOp::eAlways,
         })
-        .prepare([runtime, drawFrame,
-                  cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
-            nr::nrAssert(prepareContext.device.has_value(), "UiNode prepare stage requires device access.");
-            nr::nrAssert(static_cast<bool>(runtime), "UiNode prepare stage requires initialized runtime state.");
+        .prepare(std::move(callbacks.prepare))
+        .dynamicBindingSnapshot(std::move(callbacks.dynamicBindingSnapshot))
+        .record(std::move(callbacks.record));
 
-            prepareBindlessTextureTableForFrame(*runtime, cache.get(), prepareContext.frameIndex);
-
-            auto &device = prepareContext.device->get();
-            auto const frameSlot = static_cast<std::size_t>(prepareContext.frameIndex % runtime->vertexBuffers.size());
-
-            auto const vertexBytes = static_cast<vk::DeviceSize>(drawFrame.vertices.size() * sizeof(ImDrawVert));
-            auto const indexBytes = static_cast<vk::DeviceSize>(drawFrame.indices.size() * sizeof(ImDrawIdx));
-
-            ensureFrameUploadBuffer(device, runtime->vertexBuffers[frameSlot], vertexBytes,
-                                    vk::BufferUsageFlagBits::eVertexBuffer,
-                                    std::format("Ui.VertexBuffer[{}]", frameSlot));
-            ensureFrameUploadBuffer(device, runtime->indexBuffers[frameSlot], indexBytes,
-                                    vk::BufferUsageFlagBits::eIndexBuffer,
-                                    std::format("Ui.IndexBuffer[{}]", frameSlot));
-
-            if (vertexBytes > 0u)
-            {
-                auto &vertexBuffer = runtime->vertexBuffers[frameSlot];
-                vertexBuffer.writeMappedAndFlush(
-                    std::span<const ImDrawVert>{drawFrame.vertices.data(), drawFrame.vertices.size()});
-            }
-
-            if (indexBytes > 0u)
-            {
-                auto &indexBuffer = runtime->indexBuffers[frameSlot];
-                indexBuffer.writeMappedAndFlush(
-                    std::span<const ImDrawIdx>{drawFrame.indices.data(), drawFrame.indices.size()});
-            }
-        })
-        .dynamicBindingSnapshot([runtime, cache = std::ref(bindlessImageTableCache)](
-                                    const nr::renderer::PassPrepareContext &prepareContext) {
-            return makeBindlessTextureBindingSnapshotForFrame(*runtime, cache.get(), prepareContext.frameIndex);
-        })
-        .record([runtime, drawFrame](const nr::renderer::RasterPassRecordContext &rasterContext) {
-            if (drawFrame.commands.empty())
-            {
-                return;
-            }
-
-            auto const frameSlot =
-                static_cast<std::size_t>(rasterContext.pass.frameIndex % runtime->vertexBuffers.size());
-            auto const &vertexBuffer = runtime->vertexBuffers[frameSlot];
-            auto const &indexBuffer = runtime->indexBuffers[frameSlot];
-            nr::nrAssert(vertexBuffer.valid(), "UiNode requires a valid per-frame vertex buffer.");
-            nr::nrAssert(indexBuffer.valid(), "UiNode requires a valid per-frame index buffer.");
-
-            auto &commandBuffer = rasterContext.commandBuffer;
-            auto vertexBuffers = std::array{vertexBuffer.handle()};
-            auto vertexOffsets = std::array<vk::DeviceSize, 1>{0u};
-            commandBuffer.bindVertexBuffers(0u, vertexBuffers, vertexOffsets);
-            commandBuffer.bindIndexBuffer(indexBuffer.handle(), 0u,
-                                          sizeof(ImDrawIdx) == 2u ? vk::IndexType::eUint16 : vk::IndexType::eUint32);
-
-            auto drawPushConstants = drawFrame.pushConstants;
-            std::optional<std::uint32_t> lastTextureIndex{};
-            std::ranges::for_each(drawFrame.commands, [&](const UiDrawCommand &command) {
-                if (command.elementCount == 0u || command.scissor.extent.width == 0u ||
-                    command.scissor.extent.height == 0u)
-                {
-                    return;
-                }
-
-                nr::nrAssert(
-                    command.textureSlot < runtime->texturesBySlot.size() &&
-                        runtime->texturesBySlot[command.textureSlot].image.valid(),
-                    std::format("UiNode record stage could not resolve texture slot {}.", command.textureSlot));
-
-                auto const textureIndex = command.textureSlot;
-                if (!lastTextureIndex.has_value() || *lastTextureIndex != textureIndex)
-                {
-                    drawPushConstants.textureIndex = textureIndex;
-                    rasterContext.pushConstants("gUiPush", drawPushConstants);
-                    lastTextureIndex = textureIndex;
-                }
-
-                commandBuffer.setScissor(0u, {command.scissor});
-                commandBuffer.drawIndexed(command.elementCount, 1u, command.firstIndex, command.vertexOffset, 0u);
-            });
-        });
-
-    std::ranges::for_each(graphResourceBySlot, [&](const auto &pair) {
-        overlayPass.resourceUse(nr::renderer::use::withShaderStages(nr::renderer::use::sampledRead(pair.second),
+    std::ranges::for_each(textureResources, [&](nr::renderer::GraphResourceHandle resource) {
+        overlayPass.resourceUse(nr::renderer::use::withShaderStages(nr::renderer::use::sampledRead(resource),
                                                                     nr::renderer::ShaderStageIntent::Fragment));
     });
 

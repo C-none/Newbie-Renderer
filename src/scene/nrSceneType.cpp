@@ -20,14 +20,19 @@ namespace nr::scene
     return indexBuffer.buffer.has_value();
 }
 
-[[nodiscard]] bool SceneBridgeDrawGeometry::hasVertexBuffer() const noexcept
+[[nodiscard]] bool SceneBridgeGeometryBuffers::valid() const noexcept
 {
-    return vertexBuffer.buffer.has_value();
+    return hasVertexBuffer();
 }
 
-[[nodiscard]] bool SceneBridgeDrawGeometry::hasIndexBuffer() const noexcept
+[[nodiscard]] bool SceneBridgeDrawGeometry::indexed() const noexcept
 {
-    return indexBuffer.buffer.has_value() && indexCount > 0;
+    return indexCount > 0u;
+}
+
+[[nodiscard]] bool SceneBridgeDrawGeometry::valid() const noexcept
+{
+    return indexed() != (vertexCount > 0u);
 }
 
 [[nodiscard]] bool SceneAccelerationStructureMesh::hasVertexBuffer() const noexcept

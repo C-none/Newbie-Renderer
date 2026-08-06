@@ -8,6 +8,26 @@ import nr.test;
 
 namespace
 {
+template <typename RecordT>
+concept HasSceneGpuLifecycle = requires(RecordT &record) {
+    record.gpuVersion;
+    record.gpuState;
+    record.gpu;
+    record.retiredGpu;
+};
+
+template <typename RecordT>
+concept HasCpuVersion = requires(RecordT &record) { record.cpuVersion; };
+
+static_assert(HasSceneGpuLifecycle<nr::scene::MeshAssetRecord>);
+static_assert(HasSceneGpuLifecycle<nr::scene::TextureAssetRecord>);
+static_assert(!HasSceneGpuLifecycle<nr::scene::MaterialAssetRecord>);
+static_assert(!HasSceneGpuLifecycle<nr::scene::CameraAssetRecord>);
+static_assert(!HasSceneGpuLifecycle<nr::scene::LightAssetRecord>);
+static_assert(HasCpuVersion<nr::scene::MaterialAssetRecord>);
+static_assert(!HasCpuVersion<nr::scene::CameraAssetRecord>);
+static_assert(!HasCpuVersion<nr::scene::LightAssetRecord>);
+
 [[nodiscard]] bool almostEqual(float lhs, float rhs, float epsilon = 1e-4f) noexcept
 {
     return std::abs(lhs - rhs) <= epsilon;
@@ -363,10 +383,11 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{
 
         auto textureHandles = std::vector<nr::resource::TextureHandle>{};
         textureHandles.reserve(sceneAsset.textures.size());
+        auto texturePlan = nr::scene::SceneBridge::buildPlan(sceneAsset);
+        nr::test::require(texturePlan.valid(), "runtime texture fixture should retain a valid bridge plan");
         auto textureIndices = std::views::iota(std::size_t{0}, sceneAsset.textures.size());
         std::ranges::for_each(textureIndices, [&](std::size_t textureIndex) {
-            auto textureHandle = scene.findTextureHandleByStableKey(
-                nr::scene::SceneBridge::makeTextureCanonicalKey(sceneAsset.textures[textureIndex]));
+            auto textureHandle = scene.findTextureHandleByStableKey(texturePlan.textures[textureIndex].canonicalKey);
             nr::test::require(textureHandle.has_value(),
                               std::format("texture handle {} should resolve by stable key", textureIndex));
             textureHandles.push_back(*textureHandle);
@@ -497,62 +518,6 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{
     });
 }
 
-struct RuntimeHandles
-{
-    nr::resource::MeshHandle mesh{};
-    nr::resource::MaterialHandle material{};
-    nr::resource::TextureHandle texture{};
-};
-
-[[nodiscard]] RuntimeHandles resolveRuntimeHandles(const nr::scene::Scene &scene,
-                                                   const nr::load::SceneAsset &sceneAsset)
-{
-    auto mesh = scene.findMeshHandleByStableKey(nr::scene::SceneBridge::makeMeshCanonicalKey(sceneAsset, 0));
-    auto material =
-        scene.findMaterialHandleByStableKey(nr::scene::SceneBridge::makeMaterialCanonicalKey(sceneAsset, 0));
-    auto texture =
-        scene.findTextureHandleByStableKey(nr::scene::SceneBridge::makeTextureCanonicalKey(sceneAsset.textures[0]));
-
-    nr::test::require(mesh.has_value(), "mesh handle should resolve by stable key");
-    nr::test::require(material.has_value(), "material handle should resolve by stable key");
-    nr::test::require(texture.has_value(), "texture handle should resolve by stable key");
-
-    return RuntimeHandles{.mesh = *mesh, .material = *material, .texture = *texture};
-}
-
-void setMeshResidentForTest(nr::scene::Scene &scene, nr::resource::MeshHandle handle, bool resident)
-{
-    auto record = scene.tryGetMeshAsset(handle);
-    nr::test::require(record.has_value(), "mesh record should exist");
-    auto &mutableRecord = const_cast<nr::scene::MeshAssetRecord &>(record->get());
-    mutableRecord.uploadQueued = false;
-    mutableRecord.gpuState = resident ? nr::scene::GpuResidencyState::resident : nr::scene::GpuResidencyState::none;
-    mutableRecord.gpuVersion = resident ? mutableRecord.cpuVersion : 0u;
-    scene.commitExternalMutation(nr::scene::SceneRevisionMutation::externalTopology);
-}
-
-void setMaterialResidentForTest(nr::scene::Scene &scene, nr::resource::MaterialHandle handle, bool resident)
-{
-    auto record = scene.tryGetMaterialAsset(handle);
-    nr::test::require(record.has_value(), "material record should exist");
-    auto &mutableRecord = const_cast<nr::scene::MaterialAssetRecord &>(record->get());
-    mutableRecord.uploadQueued = false;
-    mutableRecord.gpuState = resident ? nr::scene::GpuResidencyState::resident : nr::scene::GpuResidencyState::none;
-    mutableRecord.gpuVersion = resident ? mutableRecord.cpuVersion : 0u;
-    scene.commitExternalMutation(nr::scene::SceneRevisionMutation::externalTopology);
-}
-
-void setTextureResidentForTest(nr::scene::Scene &scene, nr::resource::TextureHandle handle, bool resident)
-{
-    auto record = scene.tryGetTextureAsset(handle);
-    nr::test::require(record.has_value(), "texture record should exist");
-    auto &mutableRecord = const_cast<nr::scene::TextureAssetRecord &>(record->get());
-    mutableRecord.uploadQueued = false;
-    mutableRecord.gpuState = resident ? nr::scene::GpuResidencyState::resident : nr::scene::GpuResidencyState::none;
-    mutableRecord.gpuVersion = resident ? mutableRecord.cpuVersion : 0u;
-    scene.commitExternalMutation(nr::scene::SceneRevisionMutation::externalTextureResidency);
-}
-
 const nr::test::CaseRegistrar cameraAspectCase{
     "scene primary camera uses authored aspect and viewport overrides", [] {
         nr::rhi::Device device{};
@@ -564,6 +529,13 @@ const nr::test::CaseRegistrar cameraAspectCase{
         nr::test::require(templateHandle.valid(), "template registration should succeed");
         nr::test::require(instanceHandle.valid(), "instance registration should succeed");
         scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
+
+        auto cameraHandle =
+            scene.findCameraHandleByStableKey(nr::scene::SceneBridge::makeCameraCanonicalKey(sceneAsset, 0u));
+        nr::test::require(cameraHandle.has_value(), "authored camera should be registered as a CPU scene asset");
+        auto cameraRecord = scene.tryGetCameraAsset(*cameraHandle);
+        nr::test::require(cameraRecord.has_value() && cameraRecord->get().cpuReady,
+                          "authored camera CPU data should be ready without a GPU upload context");
 
         auto authoredCamera = scene.tryGetPrimaryCamera();
         auto squareCamera = scene.tryGetPrimaryCamera(glm::uvec2{1024u, 1024u});
@@ -597,6 +569,10 @@ const nr::test::CaseRegistrar activeInstanceCase{
         nr::test::require(inactiveInstance.valid(), "inactive instance should be valid");
         scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
 
+        auto fallbackCamera = scene.tryGetPrimaryCamera();
+        nr::test::require(fallbackCamera.has_value() && fallbackCamera->fallback,
+                          "a scene without an authored camera should expose its CPU-only fallback camera");
+
         auto rasterProfile = registerProfile(scene, nr::scene::ScenePacketDomain::rasterDraw, false);
         auto packets = scene.extractPackets(rasterProfile);
 
@@ -607,6 +583,12 @@ const nr::test::CaseRegistrar activeInstanceCase{
                           "template and instance lifecycle should advance topology revision");
         nr::test::requireEqual(packets.domain, nr::scene::ScenePacketDomain::rasterDraw);
         nr::test::requireEqual(packets.rasterDraws.size(), std::size_t{1});
+        nr::test::require(!packets.rasterGeometryBuffers.valid() && packets.rasterTextureHandlesById.empty(),
+                          "diagnostic raster extraction should not pretend to own resident render bindings");
+        nr::test::require(!nr::scene::rasterDrawPacketResolved(packets.rasterDraws.front(),
+                                                               packets.rasterGeometryBuffers,
+                                                               packets.rasterTextureHandlesById),
+                          "requireReadyForDomain=false raster packets should remain explicitly non-renderable");
 
         scene.destroyInstance(activeInstance);
         auto afterDestroy = scene.extractPackets(rasterProfile);
@@ -650,6 +632,8 @@ const nr::test::CaseRegistrar lightRuntimePacketCase{
         auto spotRecord = scene.tryGetLightAsset(*spotHandle);
         nr::test::require(pointRecord.has_value(), "point light record should exist");
         nr::test::require(spotRecord.has_value(), "spot light record should exist");
+        nr::test::require(pointRecord->get().cpuReady && spotRecord->get().cpuReady,
+                          "imported light CPU data should be ready without a GPU upload context");
         nr::test::require(almostEqual(pointRecord->get().cpu.range, 12.5f),
                           "point glTF source range should be preserved");
         nr::test::require(almostEqual(spotRecord->get().cpu.range, 8.0f), "spot glTF source range should be preserved");
@@ -740,94 +724,4 @@ const nr::test::CaseRegistrar sceneLightAliasGpuAbiCase{
         nr::test::require(almostEqual(secondAlias.probabilities.z, 0.75f), "second alias secondary pdf should be 0.75");
     }};
 
-const nr::test::CaseRegistrar readinessCase{
-    "scene extraction applies domain-specific residency readiness", [] {
-        nr::rhi::Device device{};
-        auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
-        auto sceneAsset = makeRuntimeSceneAsset(false);
-
-        auto templateHandle = scene.registerTemplate(sceneAsset);
-        auto instanceHandle = scene.instantiate(templateHandle);
-        nr::test::require(templateHandle.valid(), "template registration should succeed");
-        nr::test::require(instanceHandle.valid(), "instance registration should succeed");
-        scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
-
-        auto handles = resolveRuntimeHandles(scene, sceneAsset);
-        auto rasterProfile = registerProfile(scene, nr::scene::ScenePacketDomain::rasterDraw, true);
-        auto rtProfile = registerProfile(scene, nr::scene::ScenePacketDomain::rayTracingInstance, true);
-        auto tlasProfile = registerProfile(scene, nr::scene::ScenePacketDomain::tlasBuildInput, true);
-
-        setMeshResidentForTest(scene, handles.mesh, false);
-        setMaterialResidentForTest(scene, handles.material, false);
-        setTextureResidentForTest(scene, handles.texture, false);
-        nr::test::require(scene.extractPackets(rasterProfile).rasterDraws.empty(),
-                          "raster should wait for all dependencies");
-        nr::test::require(scene.extractPackets(rtProfile).rtInstances.empty(), "RT should wait for mesh");
-        nr::test::require(scene.extractPackets(tlasProfile).tlasBuildInputs.empty(), "TLAS should wait for mesh");
-
-        setMeshResidentForTest(scene, handles.mesh, true);
-        nr::test::require(scene.extractPackets(rasterProfile).rasterDraws.empty(),
-                          "raster should still wait for material and texture");
-        nr::test::require(scene.extractPackets(rtProfile).rtInstances.empty(),
-                          "RT should still wait for material and texture");
-        nr::test::require(scene.extractPackets(tlasProfile).tlasBuildInputs.empty(),
-                          "TLAS should still wait for material and texture");
-
-        setMaterialResidentForTest(scene, handles.material, true);
-        nr::test::require(scene.extractPackets(rasterProfile).rasterDraws.empty(),
-                          "raster should still wait for texture");
-        nr::test::require(scene.extractPackets(rtProfile).rtInstances.empty(),
-                          "RT should still wait for material textures");
-        nr::test::require(scene.extractPackets(tlasProfile).tlasBuildInputs.empty(),
-                          "TLAS should still wait for material textures");
-
-        setTextureResidentForTest(scene, handles.texture, true);
-        nr::test::requireEqual(scene.extractPackets(rasterProfile).rasterDraws.size(), std::size_t{1});
-        nr::test::requireEqual(scene.extractPackets(rtProfile).rtInstances.size(), std::size_t{1});
-        nr::test::requireEqual(scene.extractPackets(tlasProfile).tlasBuildInputs.size(), std::size_t{1});
-    }};
-
-const nr::test::CaseRegistrar anisotropyReadinessCase{
-    "scene extraction keeps raster strict while RT accepts unavailable anisotropy", [] {
-        nr::rhi::Device device{};
-        auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
-        auto sceneAsset = makeRuntimeSceneAsset(false);
-        sceneAsset.materials[0].anisotropyFactor = 0.75f;
-        sceneAsset.materials[0].textures[0].semantic = nr::resource::MaterialTextureSlotSemantic::anisotropy;
-        sceneAsset.materials[0].textures[0].sourceSemanticName = "anisotropy";
-
-        auto templateHandle = scene.registerTemplate(sceneAsset);
-        auto instanceHandle = scene.instantiate(templateHandle);
-        nr::test::require(templateHandle.valid(), "template registration should succeed");
-        nr::test::require(instanceHandle.valid(), "instance registration should succeed");
-        scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
-
-        auto handles = resolveRuntimeHandles(scene, sceneAsset);
-        auto rasterProfile = registerProfile(scene, nr::scene::ScenePacketDomain::rasterDraw, true);
-        auto rtProfile = registerProfile(scene, nr::scene::ScenePacketDomain::rayTracingInstance, true);
-        auto tlasProfile = registerProfile(scene, nr::scene::ScenePacketDomain::tlasBuildInput, true);
-
-        setMeshResidentForTest(scene, handles.mesh, true);
-        setMaterialResidentForTest(scene, handles.material, true);
-        setTextureResidentForTest(scene, handles.texture, false);
-        nr::test::require(scene.extractPackets(rasterProfile).rasterDraws.empty(),
-                          "raster must retain strict residency for an authored anisotropy texture");
-        nr::test::requireEqual(scene.extractPackets(rtProfile).rtInstances.size(), std::size_t{1},
-                               "RT must use the anisotropy semantic fallback while its texture is unavailable");
-        nr::test::requireEqual(scene.extractPackets(tlasProfile).tlasBuildInputs.size(), std::size_t{1},
-                               "TLAS must not suppress a packet for unavailable anisotropy alone");
-        nr::test::require(!scene.tryGetSampledTextureBinding(handles.texture).has_value(),
-                          "unavailable anisotropy must not expose a sampled binding");
-
-        auto const unavailableRevisions = scene.revisionsSnapshot();
-        setTextureResidentForTest(scene, handles.texture, true);
-        auto const residentRevisions = scene.revisionsSnapshot();
-        nr::test::requireEqual(scene.extractPackets(rasterProfile).rasterDraws.size(), std::size_t{1},
-                               "raster should become ready when anisotropy becomes resident");
-        nr::test::requireEqual(scene.extractPackets(rtProfile).rtInstances.size(), std::size_t{1});
-        nr::test::requireEqual(scene.extractPackets(tlasProfile).tlasBuildInputs.size(), std::size_t{1});
-        nr::test::require(residentRevisions.rt.get<nr::scene::SceneRtRevisionDomain::textureResidency>() !=
-                              unavailableRevisions.rt.get<nr::scene::SceneRtRevisionDomain::textureResidency>(),
-                          "anisotropy residency promotion must invalidate RT material/texture collection");
-    }};
 } // namespace

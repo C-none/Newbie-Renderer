@@ -1,6 +1,5 @@
 module nr.scene;
 import :scene;
-import dependency.math;
 import dependency.ecs;
 import dependency.vulkan;
 import nr.load;
@@ -12,89 +11,49 @@ import :bridge;
 import :utils;
 import :type;
 
-namespace nr::scene::detail
-{
-[[nodiscard]] detail::MaterialGpuData buildMaterialGpuData(const nr::resource::Material &material)
-{
-    auto data = detail::MaterialGpuData{};
-    data.featureFlags = static_cast<std::uint32_t>(material.featureFlags());
-    data.alphaMode = static_cast<std::uint32_t>(material.core.alphaMode);
-    data.textureSlotCount = static_cast<std::uint32_t>(material.textureSlots.size());
-
-    data.baseColorFactor = material.core.baseColorFactor;
-    data.emissiveAndMetallic = glm::vec4{material.core.emissiveFactor, material.core.metallicFactor};
-    data.roughnessNormalOcclusionAlpha = glm::vec4{
-        material.core.roughnessFactor,
-        material.core.normalScale,
-        material.core.occlusionStrength,
-        material.core.alphaCutoff,
-    };
-
-    if (material.clearcoat.has_value())
-    {
-        data.clearcoatFactorRoughness = glm::vec4{
-            material.clearcoat->factor,
-            material.clearcoat->roughnessFactor,
-            0.0f,
-            0.0f,
-        };
-    }
-
-    if (material.sheen.has_value())
-    {
-        data.sheenColorRoughness = glm::vec4{
-            material.sheen->colorFactor,
-            material.sheen->roughnessFactor,
-        };
-    }
-
-    data.transmissionAnisotropy = glm::vec4{
-        material.transmission.has_value() ? material.transmission->factor : 0.0f,
-        material.anisotropy.has_value() ? material.anisotropy->factor : 0.0f,
-        material.anisotropy.has_value() ? material.anisotropy->rotation : 0.0f,
-        0.0f,
-    };
-
-    auto slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
-    std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
-        auto const &slot = material.textureSlots[slotIndex];
-        data.textureHandles[slotIndex] = slot.texture.packed();
-        data.uvSets[slotIndex] = slot.uvSet;
-        data.uvLinear[slotIndex] = slot.transform.linear;
-        data.uvOffsets[slotIndex] = slot.transform.offset;
-    });
-
-    return data;
-}
-
-[[nodiscard]] detail::CameraGpuData buildCameraGpuData(const nr::resource::CameraAsset &camera)
-{
-    return detail::CameraGpuData{
-        .projection = static_cast<std::uint32_t>(camera.projection),
-        .verticalFovRadians = camera.verticalFovRadians,
-        .orthoHeight = camera.orthoHeight,
-        .nearPlane = camera.nearPlane,
-        .farPlane = camera.farPlane,
-    };
-}
-
-[[nodiscard]] detail::LightGpuData buildLightGpuData(const nr::resource::LightAsset &light)
-{
-    return detail::LightGpuData{
-        .type = static_cast<std::uint32_t>(light.type),
-        .intensity = light.intensity,
-        .color = light.color,
-        .range = light.range,
-        .innerConeRadians = light.innerConeRadians,
-        .outerConeRadians = light.outerConeRadians,
-        .castShadow = light.castShadow ? 1u : 0u,
-    };
-}
-
-} // namespace nr::scene::detail
-
 namespace nr::scene
 {
+namespace
+{
+[[nodiscard]] vk::DeviceSize sceneGeometryAtlasRangeEnd(const detail::SceneGeometryAtlasReusableRange &range) noexcept
+{
+    nrAssert(range.byteSize <= std::numeric_limits<vk::DeviceSize>::max() - range.byteOffset,
+             "Scene geometry atlas reusable range overflowed.");
+    return range.byteOffset + range.byteSize;
+}
+
+[[nodiscard]] vk::DeviceSize alignSceneGeometryAtlasOffset(vk::DeviceSize value, vk::DeviceSize alignment) noexcept
+{
+    nrAssert(alignment > 0u, "Scene geometry atlas allocation requires nonzero alignment.");
+    auto const remainder = value % alignment;
+    if (remainder == 0u)
+    {
+        return value;
+    }
+
+    auto const padding = alignment - remainder;
+    nrAssert(padding <= std::numeric_limits<vk::DeviceSize>::max() - value,
+             "Scene geometry atlas aligned offset overflowed.");
+    return value + padding;
+}
+
+void validateSceneGeometryAtlasReusableRanges(std::span<const detail::SceneGeometryAtlasReusableRange> reusableRanges,
+                                              vk::DeviceSize highWaterBytes) noexcept
+{
+    auto const invalidRange = std::ranges::find_if(reusableRanges, [&](const auto &range) {
+        return range.byteSize == 0u || sceneGeometryAtlasRangeEnd(range) > highWaterBytes;
+    });
+    nrAssert(invalidRange == reusableRanges.end(),
+             "Scene geometry atlas reusable ranges must be non-empty and stay below the high-water mark.");
+
+    auto const uncoalescedPair = std::ranges::adjacent_find(reusableRanges, [](const auto &left, const auto &right) {
+        return sceneGeometryAtlasRangeEnd(left) >= right.byteOffset;
+    });
+    nrAssert(uncoalescedPair == reusableRanges.end(),
+             "Scene geometry atlas reusable ranges must be sorted, disjoint, and coalesced.");
+}
+} // namespace
+
 void Scene::uploadPending()
 {
     if (!uploadContextAvailable())
@@ -106,13 +65,16 @@ void Scene::uploadPending()
     reapSubmittedGeometryAtlasGrowWork();
     reapSubmittedGraphicsSyncWork();
 
-    auto uploadBudgetRemaining = uploadBudgetBytesPerFrame_;
+    if (uploadBudgetState_.frameSerial != currentFrame_.frameSerial)
+    {
+        uploadBudgetState_ = UploadBudgetState{
+            .remaining = uploadBudgetBytesPerFrame_,
+            .frameSerial = currentFrame_.frameSerial,
+        };
+    }
 
-    uploadQueuedCameraAssets(uploadBudgetRemaining);
-    uploadQueuedLightAssets(uploadBudgetRemaining);
-    uploadQueuedMaterialAssets(uploadContext, uploadBudgetRemaining);
-    uploadQueuedMeshAssets(uploadContext, uploadBudgetRemaining);
-    uploadQueuedTextureAssets(uploadContext, uploadBudgetRemaining);
+    uploadQueuedMeshAssets(uploadContext, uploadBudgetState_);
+    uploadQueuedTextureAssets(uploadContext, uploadBudgetState_);
     submitPendingGraphicsSyncBatches(uploadContext);
 }
 
@@ -124,6 +86,23 @@ void Scene::uploadPending()
 [[nodiscard]] bool Scene::geometryAtlasReadyForUse() const noexcept
 {
     return submittedGeometryAtlasGrowWork_.empty();
+}
+
+[[nodiscard]] bool Scene::uploadBudgetAllows(const UploadBudgetState &budget, std::size_t bytesNeeded) noexcept
+{
+    return bytesNeeded > 0u && (bytesNeeded <= budget.remaining || !budget.consumed);
+}
+
+void Scene::recordBudgetedUpload(UploadBudgetState &budget, std::size_t bytesUploaded) noexcept
+{
+    nrAssert(uploadBudgetAllows(budget, bytesUploaded),
+             "Scene budget accounting requires a previously permitted non-empty upload.");
+    nrAssert(bytesUploaded <= std::numeric_limits<std::size_t>::max() - uploadBytesThisFrame_,
+             "Scene per-frame upload byte accounting overflowed.");
+
+    budget.remaining = bytesUploaded <= budget.remaining ? budget.remaining - bytesUploaded : 0u;
+    budget.consumed = true;
+    uploadBytesThisFrame_ += bytesUploaded;
 }
 
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan Scene::makeTransferToGraphicsUploadPlan(
@@ -182,17 +161,6 @@ void Scene::uploadPending()
     return std::cref(*withPixels);
 }
 
-[[nodiscard]] vk::DeviceSize Scene::alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept
-{
-    if (alignment <= 1u)
-    {
-        return value;
-    }
-
-    auto const remainder = value % alignment;
-    return remainder == 0u ? value : value + (alignment - remainder);
-}
-
 [[nodiscard]] std::uint32_t Scene::checkedDeviceSizeToUint32(vk::DeviceSize value, std::string_view label)
 {
     nrAssert(value <= std::numeric_limits<std::uint32_t>::max(),
@@ -243,6 +211,160 @@ void Scene::uploadPending()
     return std::max({requiredCapacity, doubledCapacity, minCapacity});
 }
 
+[[nodiscard]] vk::DeviceSize Scene::geometryAtlasReusableBytes(
+    std::span<const detail::SceneGeometryAtlasReusableRange> reusableRanges, vk::DeviceSize highWaterBytes) noexcept
+{
+    validateSceneGeometryAtlasReusableRanges(reusableRanges, highWaterBytes);
+    return std::ranges::fold_left(reusableRanges, vk::DeviceSize{0}, [](vk::DeviceSize total, const auto &range) {
+        nrAssert(range.byteSize <= std::numeric_limits<vk::DeviceSize>::max() - total,
+                 "Scene geometry atlas reusable byte accounting overflowed.");
+        return total + range.byteSize;
+    });
+}
+
+void Scene::releaseGeometryAtlasRange(std::vector<detail::SceneGeometryAtlasReusableRange> &reusableRanges,
+                                      detail::SceneGeometryAtlasReusableRange releasedRange)
+{
+    nrAssert(releasedRange.byteSize > 0u, "Scene geometry atlas cannot release an empty range.");
+    validateSceneGeometryAtlasReusableRanges(reusableRanges, std::numeric_limits<vk::DeviceSize>::max());
+
+    auto next = std::ranges::lower_bound(reusableRanges, releasedRange.byteOffset, {},
+                                         &detail::SceneGeometryAtlasReusableRange::byteOffset);
+    if (next != reusableRanges.begin())
+    {
+        auto previous = std::prev(next);
+        auto const previousEnd = sceneGeometryAtlasRangeEnd(*previous);
+        nrAssert(previousEnd <= releasedRange.byteOffset,
+                 "Scene geometry atlas range release overlaps an existing reusable range.");
+        if (previousEnd == releasedRange.byteOffset)
+        {
+            releasedRange.byteOffset = previous->byteOffset;
+            nrAssert(releasedRange.byteSize <= std::numeric_limits<vk::DeviceSize>::max() - previous->byteSize,
+                     "Scene geometry atlas reusable range merge overflowed.");
+            releasedRange.byteSize += previous->byteSize;
+            next = reusableRanges.erase(previous);
+        }
+    }
+
+    auto const releasedEnd = sceneGeometryAtlasRangeEnd(releasedRange);
+    if (next != reusableRanges.end())
+    {
+        nrAssert(releasedEnd <= next->byteOffset,
+                 "Scene geometry atlas range release overlaps an existing reusable range.");
+        if (releasedEnd == next->byteOffset)
+        {
+            nrAssert(next->byteSize <= std::numeric_limits<vk::DeviceSize>::max() - releasedRange.byteSize,
+                     "Scene geometry atlas reusable range merge overflowed.");
+            releasedRange.byteSize += next->byteSize;
+            next = reusableRanges.erase(next);
+        }
+    }
+
+    reusableRanges.insert(next, releasedRange);
+    validateSceneGeometryAtlasReusableRanges(reusableRanges, std::numeric_limits<vk::DeviceSize>::max());
+}
+
+[[nodiscard]] Scene::GeometryAtlasRangeAllocationPlan Scene::planGeometryAtlasRangeAllocation(
+    std::span<const detail::SceneGeometryAtlasReusableRange> reusableRanges, vk::DeviceSize highWaterBytes,
+    vk::DeviceSize byteSize, vk::DeviceSize alignment)
+{
+    validateSceneGeometryAtlasReusableRanges(reusableRanges, highWaterBytes);
+    auto plan = GeometryAtlasRangeAllocationPlan{
+        .highWaterBytes = highWaterBytes,
+        .reusableRanges = {reusableRanges.begin(), reusableRanges.end()},
+    };
+    if (byteSize == 0u)
+    {
+        return plan;
+    }
+
+    auto selectedRange = std::ranges::find_if(plan.reusableRanges, [&](const auto &range) {
+        auto const alignedOffset = alignSceneGeometryAtlasOffset(range.byteOffset, alignment);
+        auto const rangeEnd = sceneGeometryAtlasRangeEnd(range);
+        return alignedOffset <= rangeEnd && byteSize <= rangeEnd - alignedOffset;
+    });
+    if (selectedRange != plan.reusableRanges.end())
+    {
+        auto const selected = *selectedRange;
+        plan.byteOffset = alignSceneGeometryAtlasOffset(selected.byteOffset, alignment);
+        nrAssert(byteSize <= std::numeric_limits<vk::DeviceSize>::max() - plan.byteOffset,
+                 "Scene geometry atlas reusable allocation overflowed.");
+        auto const allocationEnd = plan.byteOffset + byteSize;
+        auto const selectedEnd = sceneGeometryAtlasRangeEnd(selected);
+        auto const prefixBytes = plan.byteOffset - selected.byteOffset;
+        auto const suffixBytes = selectedEnd - allocationEnd;
+
+        auto insertion = plan.reusableRanges.erase(selectedRange);
+        if (suffixBytes > 0u)
+        {
+            insertion = plan.reusableRanges.insert(insertion, detail::SceneGeometryAtlasReusableRange{
+                                                                  .byteOffset = allocationEnd,
+                                                                  .byteSize = suffixBytes,
+                                                              });
+        }
+        if (prefixBytes > 0u)
+        {
+            plan.reusableRanges.insert(insertion, detail::SceneGeometryAtlasReusableRange{
+                                                      .byteOffset = selected.byteOffset,
+                                                      .byteSize = prefixBytes,
+                                                  });
+        }
+
+        validateSceneGeometryAtlasReusableRanges(plan.reusableRanges, plan.highWaterBytes);
+        return plan;
+    }
+
+    plan.byteOffset = alignSceneGeometryAtlasOffset(highWaterBytes, alignment);
+    if (plan.byteOffset > highWaterBytes)
+    {
+        releaseGeometryAtlasRange(plan.reusableRanges, detail::SceneGeometryAtlasReusableRange{
+                                                           .byteOffset = highWaterBytes,
+                                                           .byteSize = plan.byteOffset - highWaterBytes,
+                                                       });
+    }
+    nrAssert(byteSize <= std::numeric_limits<vk::DeviceSize>::max() - plan.byteOffset,
+             "Scene geometry atlas high-water allocation overflowed.");
+    plan.highWaterBytes = plan.byteOffset + byteSize;
+    validateSceneGeometryAtlasReusableRanges(plan.reusableRanges, plan.highWaterBytes);
+    return plan;
+}
+
+void Scene::releaseGeometryAtlasAllocation(const detail::MeshGeometryAtlasAllocation &allocation)
+{
+    constexpr auto vertexStride = vk::DeviceSize{sizeof(nr::resource::Vertex)};
+    constexpr auto indexStride = vk::DeviceSize{sizeof(std::uint32_t)};
+
+    nrAssert(allocation.vertexCount > 0u, "Scene geometry atlas cannot release an empty vertex allocation.");
+    auto const vertexBytes = static_cast<vk::DeviceSize>(allocation.vertexCount) * vertexStride;
+    nrAssert(allocation.vertexByteOffset % vertexStride == 0u &&
+                 allocation.vertexByteOffset / vertexStride == allocation.vertexBase,
+             "Scene geometry atlas vertex allocation metadata is inconsistent.");
+    nrAssert(allocation.vertexByteOffset <= geometryAtlas_.vertexHighWaterBytes &&
+                 vertexBytes <= geometryAtlas_.vertexHighWaterBytes - allocation.vertexByteOffset,
+             "Scene geometry atlas vertex release exceeds the high-water mark.");
+    releaseGeometryAtlasRange(geometryAtlas_.vertexReusableRanges, detail::SceneGeometryAtlasReusableRange{
+                                                                       .byteOffset = allocation.vertexByteOffset,
+                                                                       .byteSize = vertexBytes,
+                                                                   });
+
+    if (allocation.indexCount == 0u)
+    {
+        return;
+    }
+
+    auto const indexBytes = static_cast<vk::DeviceSize>(allocation.indexCount) * indexStride;
+    nrAssert(allocation.indexByteOffset % indexStride == 0u &&
+                 allocation.indexByteOffset / indexStride == allocation.indexBase,
+             "Scene geometry atlas index allocation metadata is inconsistent.");
+    nrAssert(allocation.indexByteOffset <= geometryAtlas_.indexHighWaterBytes &&
+                 indexBytes <= geometryAtlas_.indexHighWaterBytes - allocation.indexByteOffset,
+             "Scene geometry atlas index release exceeds the high-water mark.");
+    releaseGeometryAtlasRange(geometryAtlas_.indexReusableRanges, detail::SceneGeometryAtlasReusableRange{
+                                                                      .byteOffset = allocation.indexByteOffset,
+                                                                      .byteSize = indexBytes,
+                                                                  });
+}
+
 [[nodiscard]] detail::MeshGeometryAtlasAllocation Scene::reserveGeometryAtlasAllocation(
     const nr::resource::Mesh &mesh, nr::rhi::ops::UploadReadbackContext &uploadContext)
 {
@@ -253,32 +375,30 @@ void Scene::uploadPending()
     constexpr auto vertexStride = vk::DeviceSize{sizeof(nr::resource::Vertex)};
     constexpr auto indexStride = vk::DeviceSize{sizeof(std::uint32_t)};
 
-    auto const vertexByteOffset = alignUp(geometryAtlas_.vertexUsedBytes, vertexStride);
-    auto const indexByteOffset =
-        indexBytes.empty() ? vk::DeviceSize{0} : alignUp(geometryAtlas_.indexUsedBytes, indexStride);
-    nrAssert(std::numeric_limits<vk::DeviceSize>::max() - vertexByteOffset >= vertexBytes.size_bytes(),
-             "Scene geometry vertex atlas allocation overflowed.");
-    nrAssert(indexBytes.empty() ||
-                 std::numeric_limits<vk::DeviceSize>::max() - indexByteOffset >= indexBytes.size_bytes(),
-             "Scene geometry index atlas allocation overflowed.");
+    auto vertexPlan =
+        planGeometryAtlasRangeAllocation(geometryAtlas_.vertexReusableRanges, geometryAtlas_.vertexHighWaterBytes,
+                                         static_cast<vk::DeviceSize>(vertexBytes.size_bytes()), vertexStride);
+    auto indexPlan =
+        planGeometryAtlasRangeAllocation(geometryAtlas_.indexReusableRanges, geometryAtlas_.indexHighWaterBytes,
+                                         static_cast<vk::DeviceSize>(indexBytes.size_bytes()), indexStride);
+    ensureGeometryAtlasCapacity(vertexPlan.highWaterBytes, indexPlan.highWaterBytes, uploadContext);
 
-    auto const requiredVertexBytes = vertexByteOffset + vertexBytes.size_bytes();
-    auto const requiredIndexBytes =
-        indexBytes.empty() ? geometryAtlas_.indexUsedBytes : indexByteOffset + indexBytes.size_bytes();
-    ensureGeometryAtlasCapacity(requiredVertexBytes, requiredIndexBytes, uploadContext);
-
-    geometryAtlas_.vertexUsedBytes = requiredVertexBytes;
-    geometryAtlas_.indexUsedBytes = requiredIndexBytes;
+    geometryAtlas_.vertexHighWaterBytes = vertexPlan.highWaterBytes;
+    geometryAtlas_.indexHighWaterBytes = indexPlan.highWaterBytes;
+    geometryAtlas_.vertexReusableRanges = std::move(vertexPlan.reusableRanges);
+    geometryAtlas_.indexReusableRanges = std::move(indexPlan.reusableRanges);
 
     auto allocation = detail::MeshGeometryAtlasAllocation{
-        .vertexByteOffset = vertexByteOffset,
-        .indexByteOffset = indexByteOffset,
-        .vertexBase = checkedDeviceSizeToUint32(vertexByteOffset / vertexStride, "Scene geometry atlas vertex base"),
-        .indexBase = checkedDeviceSizeToUint32(indexByteOffset / indexStride, "Scene geometry atlas index base"),
+        .vertexByteOffset = vertexPlan.byteOffset,
+        .indexByteOffset = indexPlan.byteOffset,
+        .vertexBase =
+            checkedDeviceSizeToUint32(vertexPlan.byteOffset / vertexStride, "Scene geometry atlas vertex base"),
+        .indexBase = checkedDeviceSizeToUint32(indexPlan.byteOffset / indexStride, "Scene geometry atlas index base"),
         .vertexCount =
             checkedDeviceSizeToUint32(static_cast<vk::DeviceSize>(mesh.vertices.size()), "Scene mesh vertex count"),
         .indexCount =
             checkedDeviceSizeToUint32(static_cast<vk::DeviceSize>(mesh.indices.size()), "Scene mesh index count"),
+        .backingGenerationAtAllocation = geometryAtlas_.backingGeneration,
     };
     return allocation;
 }
@@ -294,9 +414,9 @@ void Scene::ensureGeometryAtlasCapacity(vk::DeviceSize requiredVertexBytes, vk::
     }
 
     auto const copyExistingVertexPrefix =
-        growVertex && geometryAtlas_.vertexBuffer.valid() && geometryAtlas_.vertexUsedBytes > 0u;
+        growVertex && geometryAtlas_.vertexBuffer.valid() && geometryAtlas_.vertexHighWaterBytes > 0u;
     auto const copyExistingIndexPrefix =
-        growIndex && geometryAtlas_.indexBuffer.valid() && geometryAtlas_.indexUsedBytes > 0u;
+        growIndex && geometryAtlas_.indexBuffer.valid() && geometryAtlas_.indexHighWaterBytes > 0u;
     if ((copyExistingVertexPrefix || copyExistingIndexPrefix) && !pendingGraphicsSyncBatches_.empty())
     {
         // Consume ticket references before moving the atlas Buffer wrappers. The
@@ -306,12 +426,12 @@ void Scene::ensureGeometryAtlasCapacity(vk::DeviceSize requiredVertexBytes, vk::
 
     auto oldVertexBuffer = std::optional<nr::rhi::Buffer>{};
     auto oldIndexBuffer = std::optional<nr::rhi::Buffer>{};
-    auto oldVertexUsedBytes = vk::DeviceSize{0};
-    auto oldIndexUsedBytes = vk::DeviceSize{0};
+    auto oldVertexHighWaterBytes = vk::DeviceSize{0};
+    auto oldIndexHighWaterBytes = vk::DeviceSize{0};
 
     if (growVertex)
     {
-        oldVertexUsedBytes = geometryAtlas_.vertexUsedBytes;
+        oldVertexHighWaterBytes = geometryAtlas_.vertexHighWaterBytes;
         if (geometryAtlas_.vertexBuffer.valid())
         {
             oldVertexBuffer.emplace(std::move(geometryAtlas_.vertexBuffer));
@@ -326,11 +446,14 @@ void Scene::ensureGeometryAtlasCapacity(vk::DeviceSize requiredVertexBytes, vk::
                                               std::span<const std::uint32_t>{atlasQueueFamilies}),
             nr::rhi::MemoryUsage::GpuOnly, "scene_geometry_vertex_atlas");
         nrAssert(geometryAtlas_.vertexBuffer.valid(), "Scene failed to create vertex geometry atlas buffer.");
+        nrAssert(geometryAtlas_.backingGeneration.vertex != std::numeric_limits<std::uint64_t>::max(),
+                 "Scene vertex geometry atlas backing generation overflowed.");
+        ++geometryAtlas_.backingGeneration.vertex;
     }
 
     if (growIndex && requiredIndexBytes > 0u)
     {
-        oldIndexUsedBytes = geometryAtlas_.indexUsedBytes;
+        oldIndexHighWaterBytes = geometryAtlas_.indexHighWaterBytes;
         if (geometryAtlas_.indexBuffer.valid())
         {
             oldIndexBuffer.emplace(std::move(geometryAtlas_.indexBuffer));
@@ -344,15 +467,19 @@ void Scene::ensureGeometryAtlasCapacity(vk::DeviceSize requiredVertexBytes, vk::
                                               std::span<const std::uint32_t>{atlasQueueFamilies}),
             nr::rhi::MemoryUsage::GpuOnly, "scene_geometry_index_atlas");
         nrAssert(geometryAtlas_.indexBuffer.valid(), "Scene failed to create index geometry atlas buffer.");
+        nrAssert(geometryAtlas_.backingGeneration.index != std::numeric_limits<std::uint64_t>::max(),
+                 "Scene index geometry atlas backing generation overflowed.");
+        ++geometryAtlas_.backingGeneration.index;
     }
 
-    submitGeometryAtlasGrowCopy(std::move(oldVertexBuffer), oldVertexUsedBytes, std::move(oldIndexBuffer),
-                                oldIndexUsedBytes);
+    submitGeometryAtlasGrowCopy(std::move(oldVertexBuffer), oldVertexHighWaterBytes, std::move(oldIndexBuffer),
+                                oldIndexHighWaterBytes);
 }
 
 void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertexBuffer,
-                                        vk::DeviceSize oldVertexUsedBytes,
-                                        std::optional<nr::rhi::Buffer> oldIndexBuffer, vk::DeviceSize oldIndexUsedBytes)
+                                        vk::DeviceSize oldVertexHighWaterBytes,
+                                        std::optional<nr::rhi::Buffer> oldIndexBuffer,
+                                        vk::DeviceSize oldIndexHighWaterBytes)
 {
     auto retiredBuffers = detail::RetiredSceneGeometryAtlasBuffers{};
     if (oldVertexBuffer.has_value())
@@ -365,9 +492,9 @@ void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertex
     }
 
     auto const copyVertexPrefix =
-        retiredBuffers.vertexBuffer.valid() && geometryAtlas_.vertexBuffer.valid() && oldVertexUsedBytes > 0u;
+        retiredBuffers.vertexBuffer.valid() && geometryAtlas_.vertexBuffer.valid() && oldVertexHighWaterBytes > 0u;
     auto const copyIndexPrefix =
-        retiredBuffers.indexBuffer.valid() && geometryAtlas_.indexBuffer.valid() && oldIndexUsedBytes > 0u;
+        retiredBuffers.indexBuffer.valid() && geometryAtlas_.indexBuffer.valid() && oldIndexHighWaterBytes > 0u;
 
     if (!copyVertexPrefix && !copyIndexPrefix)
     {
@@ -392,7 +519,7 @@ void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertex
         if (copyVertexPrefix)
         {
             auto copyRegion = vk::BufferCopy{};
-            copyRegion.size = oldVertexUsedBytes;
+            copyRegion.size = oldVertexHighWaterBytes;
             nr::rhi::ops::copyBuffer2(commandBuffer, growWork.retiredBuffers.vertexBuffer.handle(),
                                       geometryAtlas_.vertexBuffer.handle(), nr::rhi::ops::toBufferCopy2(copyRegion));
             postCopyBarriers.addBuffer(geometryAtlas_.vertexBuffer, vk::BufferMemoryBarrier2{
@@ -404,7 +531,7 @@ void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertex
                                                                         nr::rhi::ops::kIgnoredQueueFamilyIndex,
                                                                         vk::Buffer{},
                                                                         0,
-                                                                        oldVertexUsedBytes,
+                                                                        oldVertexHighWaterBytes,
                                                                         nullptr,
                                                                     });
         }
@@ -412,7 +539,7 @@ void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertex
         if (copyIndexPrefix)
         {
             auto copyRegion = vk::BufferCopy{};
-            copyRegion.size = oldIndexUsedBytes;
+            copyRegion.size = oldIndexHighWaterBytes;
             nr::rhi::ops::copyBuffer2(commandBuffer, growWork.retiredBuffers.indexBuffer.handle(),
                                       geometryAtlas_.indexBuffer.handle(), nr::rhi::ops::toBufferCopy2(copyRegion));
             postCopyBarriers.addBuffer(geometryAtlas_.indexBuffer, vk::BufferMemoryBarrier2{
@@ -424,7 +551,7 @@ void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertex
                                                                        nr::rhi::ops::kIgnoredQueueFamilyIndex,
                                                                        vk::Buffer{},
                                                                        0,
-                                                                       oldIndexUsedBytes,
+                                                                       oldIndexHighWaterBytes,
                                                                        nullptr,
                                                                    });
         }
@@ -472,10 +599,7 @@ void Scene::reapSubmittedGeometryAtlasGrowWork()
 void Scene::queueGpuUploadsForFrame()
 {
     queueUploadsFor(std::span{meshHandles_}, meshes_);
-    queueUploadsFor(std::span{materialHandles_}, materials_);
     queueUploadsFor(std::span{textureHandles_}, textures_);
-    queueUploadsFor(std::span{cameraHandles_}, cameras_);
-    queueUploadsFor(std::span{lightHandles_}, lights_);
 }
 
 void Scene::reapRetiredGpuVersions()
@@ -483,17 +607,25 @@ void Scene::reapRetiredGpuVersions()
     auto const serial = currentFrame_.frameSerial;
     auto expired = [serial](const auto &retiredVersion) { return retiredVersion.retireAfterSerial <= serial; };
 
-    reapRetiredFor(std::span{meshHandles_}, meshes_, expired);
-    reapRetiredFor(std::span{materialHandles_}, materials_, expired);
-    reapRetiredFor(std::span{textureHandles_}, textures_, expired);
-    reapRetiredFor(std::span{cameraHandles_}, cameras_, expired);
-    reapRetiredFor(std::span{lightHandles_}, lights_, expired);
+    auto reclaimExpiredMeshPayloads = [&](std::vector<detail::RetiredMeshGpuPayload> &retiredPayloads) {
+        std::erase_if(retiredPayloads, [&](const detail::RetiredMeshGpuPayload &retiredPayload) {
+            if (!expired(retiredPayload))
+            {
+                return false;
+            }
 
-    std::erase_if(retiredMeshPayloadGraveyard_, expired);
-    std::erase_if(retiredMaterialPayloadGraveyard_, expired);
+            releaseGeometryAtlasAllocation(retiredPayload.payload.atlas);
+            return true;
+        });
+    };
+
+    forEachLiveRecord(std::span{meshHandles_}, meshes_, [&](nr::resource::MeshHandle, MeshAssetRecord &record) {
+        reclaimExpiredMeshPayloads(record.retiredGpu);
+    });
+    reapRetiredFor(std::span{textureHandles_}, textures_, expired);
+
+    reclaimExpiredMeshPayloads(retiredMeshPayloadGraveyard_);
     std::erase_if(retiredTexturePayloadGraveyard_, expired);
-    std::erase_if(retiredCameraPayloadGraveyard_, expired);
-    std::erase_if(retiredLightPayloadGraveyard_, expired);
     std::erase_if(retiredGeometryAtlasBuffers_, expired);
 }
 
@@ -529,59 +661,14 @@ void Scene::reapRetiredGpuVersions()
     return std::vector<std::byte>(byteSize, std::byte{0xFF});
 }
 
-[[nodiscard]] bool Scene::uploadMaterialAsset(nr::resource::MaterialHandle handle, MaterialAssetRecord &record,
-                                              nr::rhi::ops::UploadReadbackContext &uploadContext)
+void Scene::uploadMeshAsset(nr::resource::MeshHandle handle, MeshAssetRecord &record,
+                            nr::rhi::ops::UploadReadbackContext &uploadContext)
 {
-    auto materialGpuData = detail::buildMaterialGpuData(record.cpu);
-    auto materialBytes = std::as_bytes(std::span{std::addressof(materialGpuData), std::size_t{1}});
-
-    auto createInfo = vk::BufferCreateInfo{};
-    createInfo.size = materialBytes.size();
-    createInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc |
-                       vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eUniformBuffer;
-    createInfo.sharingMode = vk::SharingMode::eExclusive;
-
-    auto payload = detail::MaterialGpuPayload{};
-    payload.buffer = device_.resourceFactory.createBuffer(createInfo, nr::rhi::MemoryUsage::GpuOnly,
-                                                          std::format("scene_material_{}_gpu", handle.slot));
-    payload.byteSize = materialBytes.size();
-
-    auto uploadPlan =
-        makeTransferToGraphicsUploadPlan(vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eMemoryRead);
-    auto uploadTicket = uploadContext.uploadBuffer(materialBytes, payload.buffer, 0, uploadPlan);
-    if (!uploadTicket.valid())
-    {
-        return false;
-    }
-
-    queueRetiredPayload(record.gpu, record.retiredGpu);
-    record.gpu = std::move(payload);
-    record.uploadQueued = false;
-    record.gpuState = GpuResidencyState::waitingGraphicsSync;
-    record.lastUploadFrameSerial = currentFrame_.frameSerial;
-
-    // uploadTicket stores a Buffer reference; rebind to the record-owned payload after move.
-    uploadTicket.buffer = std::cref(record.gpu->buffer);
-
-    auto pendingBatch = PendingGraphicsSyncBatch{};
-    pendingBatch.asset = makeGpuHandleRef(handle, GpuAssetKind::material);
-    pendingBatch.targetGpuVersion = record.cpuVersion;
-    pendingBatch.bufferTickets.push_back(uploadTicket);
-    pendingGraphicsSyncBatches_.push_back(std::move(pendingBatch));
-    return true;
-}
-
-[[nodiscard]] bool Scene::uploadMeshAsset(nr::resource::MeshHandle handle, MeshAssetRecord &record,
-                                          nr::rhi::ops::UploadReadbackContext &uploadContext)
-{
+    nrAssert(record.gpuState == GpuResidencyState::uploadQueued,
+             "Scene mesh upload requires the queued residency state.");
     auto vertexBytes = std::as_bytes(std::span{record.cpu.vertices});
     auto indexBytes = std::as_bytes(std::span{record.cpu.indices});
-    if (vertexBytes.empty())
-    {
-        record.uploadQueued = false;
-        record.gpuState = GpuResidencyState::none;
-        return false;
-    }
+    nrAssert(!vertexBytes.empty(), "Queued Scene mesh upload requires validated non-empty vertex data.");
 
     auto payload = detail::MeshGpuPayload{};
     payload.atlas = reserveGeometryAtlasAllocation(record.cpu, uploadContext);
@@ -593,10 +680,7 @@ void Scene::reapRetiredGpuVersions()
 
     auto vertexTicket =
         uploadContext.uploadBuffer(vertexBytes, geometryAtlas_.vertexBuffer, payload.atlas.vertexByteOffset);
-    if (!vertexTicket.valid())
-    {
-        return false;
-    }
+    nrAssert(vertexTicket.valid(), "Scene mesh vertex upload requires a valid RHI upload ticket.");
 
     auto indexTicket = std::optional<nr::rhi::ops::BufferUploadTicket>{};
     if (!indexBytes.empty())
@@ -605,37 +689,35 @@ void Scene::reapRetiredGpuVersions()
                  "Scene indexed mesh upload requires a valid index geometry atlas.");
         auto uploadedIndexTicket =
             uploadContext.uploadBuffer(indexBytes, geometryAtlas_.indexBuffer, payload.atlas.indexByteOffset);
-        if (!uploadedIndexTicket.valid())
-        {
-            return false;
-        }
+        nrAssert(uploadedIndexTicket.valid(), "Scene mesh index upload requires a valid RHI upload ticket.");
 
         indexTicket = std::move(uploadedIndexTicket);
     }
 
     queueRetiredPayload(record.gpu, record.retiredGpu);
     record.gpu = std::move(payload);
-    record.uploadQueued = false;
     record.gpuState = GpuResidencyState::waitingGraphicsSync;
-    record.lastUploadFrameSerial = currentFrame_.frameSerial;
 
     // Tickets store Buffer references; keep them bound to the scene-owned atlas buffers.
     vertexTicket.buffer = std::cref(geometryAtlas_.vertexBuffer);
     pendingBatch.bufferTickets.push_back(vertexTicket);
 
-    if (indexTicket.has_value() && geometryAtlas_.indexBuffer.valid())
+    if (indexTicket.has_value())
     {
+        nrAssert(geometryAtlas_.indexBuffer.valid(),
+                 "Scene indexed mesh ticket rebinding requires a valid index geometry atlas.");
         indexTicket->buffer = std::cref(geometryAtlas_.indexBuffer);
         pendingBatch.bufferTickets.push_back(*indexTicket);
     }
 
     pendingGraphicsSyncBatches_.push_back(std::move(pendingBatch));
-    return true;
 }
 
-[[nodiscard]] bool Scene::uploadTextureAsset(nr::resource::TextureHandle handle, TextureAssetRecord &record,
-                                             nr::rhi::ops::UploadReadbackContext &uploadContext)
+void Scene::uploadTextureAsset(nr::resource::TextureHandle handle, TextureAssetRecord &record,
+                               nr::rhi::ops::UploadReadbackContext &uploadContext)
 {
+    nrAssert(record.gpuState == GpuResidencyState::uploadQueued,
+             "Scene texture upload requires the queued residency state.");
     auto fallbackBytes = std::vector<std::byte>{};
     auto sourceLevel = firstTextureLevelWithPixels(record.cpu);
 
@@ -661,6 +743,7 @@ void Scene::reapRetiredGpuVersions()
         fallbackBytes = makeFallbackTextureBytes(record.cpu.format);
         imageData = std::span<const std::byte>{fallbackBytes};
     }
+    nrAssert(!imageData.empty(), "Scene texture upload requires non-empty source image data.");
 
     auto imageCreateInfo = vk::ImageCreateInfo{};
     imageCreateInfo.imageType = record.cpu.dimension;
@@ -679,21 +762,17 @@ void Scene::reapRetiredGpuVersions()
     payload.image = device_.resourceFactory.createImage(imageCreateInfo, nr::rhi::MemoryUsage::GpuOnly,
                                                         std::format("scene_texture_{}_gpu", handle.slot));
     payload.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    nrAssert(payload.image.valid(), "Scene texture upload requires a valid destination image.");
 
     auto uploadPlan =
         makeTransferToGraphicsUploadPlan(vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead);
     auto uploadTicket =
         uploadContext.uploadImage(imageData, payload.image, vk::ImageLayout::eUndefined, payload.layout, uploadPlan);
-    if (!uploadTicket.valid())
-    {
-        return false;
-    }
+    nrAssert(uploadTicket.valid(), "Scene texture upload requires a valid RHI upload ticket.");
 
     queueRetiredPayload(record.gpu, record.retiredGpu);
     record.gpu = std::move(payload);
-    record.uploadQueued = false;
     record.gpuState = GpuResidencyState::waitingGraphicsSync;
-    record.lastUploadFrameSerial = currentFrame_.frameSerial;
 
     // uploadTicket stores an Image reference; rebind to the record-owned payload after move.
     uploadTicket.image = std::cref(record.gpu->image);
@@ -703,150 +782,33 @@ void Scene::reapRetiredGpuVersions()
     pendingBatch.targetGpuVersion = record.cpuVersion;
     pendingBatch.imageTickets.push_back(uploadTicket);
     pendingGraphicsSyncBatches_.push_back(std::move(pendingBatch));
-    return true;
 }
 
-[[nodiscard]] bool Scene::uploadCameraAsset(nr::resource::CameraAssetHandle handle, CameraAssetRecord &record)
-{
-    if (!record.gpu.has_value() || !record.gpu->buffer.valid())
-    {
-        queueRetiredPayload(record.gpu, record.retiredGpu);
-
-        auto createInfo = vk::BufferCreateInfo{};
-        createInfo.size = sizeof(detail::CameraGpuData);
-        createInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer;
-        createInfo.sharingMode = vk::SharingMode::eExclusive;
-
-        auto payload = detail::CameraGpuPayload{};
-        payload.buffer = device_.resourceFactory.createBuffer(createInfo, nr::rhi::MemoryUsage::CpuToGpu,
-                                                              std::format("scene_camera_{}_cpu", handle.slot));
-        record.gpu = std::move(payload);
-    }
-
-    auto cameraGpuData = detail::buildCameraGpuData(record.cpu);
-    record.gpu->buffer.writeMappedAndFlush(cameraGpuData);
-
-    record.uploadQueued = false;
-    record.gpuState = GpuResidencyState::resident;
-    record.gpuVersion = record.cpuVersion;
-    record.lastUploadFrameSerial = currentFrame_.frameSerial;
-    return true;
-}
-
-[[nodiscard]] bool Scene::uploadLightAsset(nr::resource::LightAssetHandle handle, LightAssetRecord &record)
-{
-    if (!record.gpu.has_value() || !record.gpu->buffer.valid())
-    {
-        queueRetiredPayload(record.gpu, record.retiredGpu);
-
-        auto createInfo = vk::BufferCreateInfo{};
-        createInfo.size = sizeof(detail::LightGpuData);
-        createInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer;
-        createInfo.sharingMode = vk::SharingMode::eExclusive;
-
-        auto payload = detail::LightGpuPayload{};
-        payload.buffer = device_.resourceFactory.createBuffer(createInfo, nr::rhi::MemoryUsage::CpuToGpu,
-                                                              std::format("scene_light_{}_cpu", handle.slot));
-        record.gpu = std::move(payload);
-    }
-
-    auto lightGpuData = detail::buildLightGpuData(record.cpu);
-    record.gpu->buffer.writeMappedAndFlush(lightGpuData);
-
-    record.uploadQueued = false;
-    record.gpuState = GpuResidencyState::resident;
-    record.gpuVersion = record.cpuVersion;
-    record.lastUploadFrameSerial = currentFrame_.frameSerial;
-    return true;
-}
-
-void Scene::uploadQueuedCameraAssets(std::size_t &uploadBudgetRemaining)
-{
-    (void)uploadBudgetRemaining;
-    forEachLiveRecord(std::span{cameraHandles_}, cameras_,
-                      [&](nr::resource::CameraAssetHandle handle, CameraAssetRecord &record) {
-                          if (!record.uploadQueued)
-                          {
-                              return;
-                          }
-
-                          if (uploadCameraAsset(handle, record))
-                          {
-                              uploadBytesThisFrame_ += sizeof(detail::CameraGpuData);
-                          }
-                      });
-}
-
-void Scene::uploadQueuedLightAssets(std::size_t &uploadBudgetRemaining)
-{
-    (void)uploadBudgetRemaining;
-    forEachLiveRecord(std::span{lightHandles_}, lights_,
-                      [&](nr::resource::LightAssetHandle handle, LightAssetRecord &record) {
-                          if (!record.uploadQueued)
-                          {
-                              return;
-                          }
-
-                          if (uploadLightAsset(handle, record))
-                          {
-                              uploadBytesThisFrame_ += sizeof(detail::LightGpuData);
-                          }
-                      });
-}
-
-void Scene::uploadQueuedMaterialAssets(nr::rhi::ops::UploadReadbackContext &uploadContext,
-                                       std::size_t &uploadBudgetRemaining)
-{
-    forEachLiveRecord(std::span{materialHandles_}, materials_,
-                      [&](nr::resource::MaterialHandle handle, MaterialAssetRecord &record) {
-                          if (!record.uploadQueued)
-                          {
-                              return;
-                          }
-
-                          auto const bytesNeeded = sizeof(detail::MaterialGpuData);
-                          if (bytesNeeded > uploadBudgetRemaining)
-                          {
-                              return;
-                          }
-
-                          if (uploadMaterialAsset(handle, record, uploadContext))
-                          {
-                              uploadBudgetRemaining -= bytesNeeded;
-                              uploadBytesThisFrame_ += bytesNeeded;
-                          }
-                      });
-}
-
-void Scene::uploadQueuedMeshAssets(nr::rhi::ops::UploadReadbackContext &uploadContext,
-                                   std::size_t &uploadBudgetRemaining)
+void Scene::uploadQueuedMeshAssets(nr::rhi::ops::UploadReadbackContext &uploadContext, UploadBudgetState &budget)
 {
     forEachLiveRecord(std::span{meshHandles_}, meshes_, [&](nr::resource::MeshHandle handle, MeshAssetRecord &record) {
-        if (!record.uploadQueued)
+        if (record.gpuState != GpuResidencyState::uploadQueued)
         {
             return;
         }
 
         auto const bytesNeeded = meshUploadBytes(record.cpu);
-        if (bytesNeeded == 0 || bytesNeeded > uploadBudgetRemaining)
+        nrAssert(bytesNeeded > 0u, "Queued Scene mesh upload requires a validated non-empty payload.");
+        if (!uploadBudgetAllows(budget, bytesNeeded))
         {
             return;
         }
 
-        if (uploadMeshAsset(handle, record, uploadContext))
-        {
-            uploadBudgetRemaining -= bytesNeeded;
-            uploadBytesThisFrame_ += bytesNeeded;
-        }
+        uploadMeshAsset(handle, record, uploadContext);
+        recordBudgetedUpload(budget, bytesNeeded);
     });
 }
 
-void Scene::uploadQueuedTextureAssets(nr::rhi::ops::UploadReadbackContext &uploadContext,
-                                      std::size_t &uploadBudgetRemaining)
+void Scene::uploadQueuedTextureAssets(nr::rhi::ops::UploadReadbackContext &uploadContext, UploadBudgetState &budget)
 {
     forEachLiveRecord(std::span{textureHandles_}, textures_,
                       [&](nr::resource::TextureHandle handle, TextureAssetRecord &record) {
-                          if (!record.uploadQueued)
+                          if (record.gpuState != GpuResidencyState::uploadQueued)
                           {
                               return;
                           }
@@ -857,16 +819,14 @@ void Scene::uploadQueuedTextureAssets(nr::rhi::ops::UploadReadbackContext &uploa
                               bytesNeeded = pixelFormatByteSize(record.cpu.format);
                           }
 
-                          if (bytesNeeded > uploadBudgetRemaining)
+                          nrAssert(bytesNeeded > 0u, "Queued Scene texture upload requires a non-empty payload.");
+                          if (!uploadBudgetAllows(budget, bytesNeeded))
                           {
                               return;
                           }
 
-                          if (uploadTextureAsset(handle, record, uploadContext))
-                          {
-                              uploadBudgetRemaining -= bytesNeeded;
-                              uploadBytesThisFrame_ += bytesNeeded;
-                          }
+                          uploadTextureAsset(handle, record, uploadContext);
+                          recordBudgetedUpload(budget, bytesNeeded);
                       });
 }
 
@@ -878,10 +838,10 @@ void Scene::markGraphicsSyncCompletionResident(const GraphicsSyncCompletion &com
         auto handle = nr::resource::MeshHandle{completion.asset.slot, completion.asset.generation};
         if (auto *record = meshes_.tryGet(handle); record != nullptr)
         {
+            nrAssert(record->gpuState == GpuResidencyState::waitingGraphicsSync,
+                     "Scene mesh completion requires the waiting graphics-sync residency state.");
             record->gpuState = GpuResidencyState::resident;
             record->gpuVersion = completion.targetGpuVersion;
-            record->lastUploadFrameSerial = currentFrame_.frameSerial;
-            record->uploadQueued = false;
             if (record->cpuVersion <= completion.targetGpuVersion)
             {
                 discardUploadSourceIfConfigured(*record);
@@ -891,69 +851,20 @@ void Scene::markGraphicsSyncCompletionResident(const GraphicsSyncCompletion &com
         }
         break;
     }
-    case GpuAssetKind::material: {
-        auto handle = nr::resource::MaterialHandle{completion.asset.slot, completion.asset.generation};
-        if (auto *record = materials_.tryGet(handle); record != nullptr)
-        {
-            record->gpuState = GpuResidencyState::resident;
-            record->gpuVersion = completion.targetGpuVersion;
-            record->lastUploadFrameSerial = currentFrame_.frameSerial;
-            record->uploadQueued = false;
-            if (record->cpuVersion <= completion.targetGpuVersion)
-            {
-                discardUploadSourceIfConfigured(*record);
-            }
-            commitMutation(SceneRevisionMutation::materialResident);
-            collectUnusedMaterialAsset(handle);
-        }
-        break;
-    }
     case GpuAssetKind::texture: {
         auto handle = nr::resource::TextureHandle{completion.asset.slot, completion.asset.generation};
         if (auto *record = textures_.tryGet(handle); record != nullptr)
         {
+            nrAssert(record->gpuState == GpuResidencyState::waitingGraphicsSync,
+                     "Scene texture completion requires the waiting graphics-sync residency state.");
             record->gpuState = GpuResidencyState::resident;
             record->gpuVersion = completion.targetGpuVersion;
-            record->lastUploadFrameSerial = currentFrame_.frameSerial;
-            record->uploadQueued = false;
             if (record->cpuVersion <= completion.targetGpuVersion)
             {
                 discardUploadSourceIfConfigured(*record);
             }
             commitMutation(SceneRevisionMutation::textureResident);
             collectUnusedTextureAsset(handle);
-        }
-        break;
-    }
-    case GpuAssetKind::camera: {
-        auto handle = nr::resource::CameraAssetHandle{completion.asset.slot, completion.asset.generation};
-        if (auto *record = cameras_.tryGet(handle); record != nullptr)
-        {
-            record->gpuState = GpuResidencyState::resident;
-            record->gpuVersion = completion.targetGpuVersion;
-            record->lastUploadFrameSerial = currentFrame_.frameSerial;
-            record->uploadQueued = false;
-            if (record->cpuVersion <= completion.targetGpuVersion)
-            {
-                discardUploadSourceIfConfigured(*record);
-            }
-            collectUnusedCameraAsset(handle);
-        }
-        break;
-    }
-    case GpuAssetKind::light: {
-        auto handle = nr::resource::LightAssetHandle{completion.asset.slot, completion.asset.generation};
-        if (auto *record = lights_.tryGet(handle); record != nullptr)
-        {
-            record->gpuState = GpuResidencyState::resident;
-            record->gpuVersion = completion.targetGpuVersion;
-            record->lastUploadFrameSerial = currentFrame_.frameSerial;
-            record->uploadQueued = false;
-            if (record->cpuVersion <= completion.targetGpuVersion)
-            {
-                discardUploadSourceIfConfigured(*record);
-            }
-            collectUnusedLightAsset(handle);
         }
         break;
     }
@@ -1060,10 +971,7 @@ void Scene::subtractSaturating(std::size_t &value, std::size_t delta) noexcept
 void Scene::compactDeadAssetHandles()
 {
     compactDeadHandles(meshHandles_, meshes_);
-    compactDeadHandles(materialHandles_, materials_);
     compactDeadHandles(textureHandles_, textures_);
-    compactDeadHandles(cameraHandles_, cameras_);
-    compactDeadHandles(lightHandles_, lights_);
 }
 
 void Scene::collectUnusedMeshAsset(nr::resource::MeshHandle handle)
@@ -1073,7 +981,7 @@ void Scene::collectUnusedMeshAsset(nr::resource::MeshHandle handle)
 
 void Scene::collectUnusedMaterialAsset(nr::resource::MaterialHandle handle)
 {
-    collectUnusedAsset(handle, materials_, retiredMaterialPayloadGraveyard_);
+    collectUnusedCpuAsset(handle, materials_);
 }
 
 void Scene::collectUnusedTextureAsset(nr::resource::TextureHandle handle)
@@ -1083,12 +991,12 @@ void Scene::collectUnusedTextureAsset(nr::resource::TextureHandle handle)
 
 void Scene::collectUnusedCameraAsset(nr::resource::CameraAssetHandle handle)
 {
-    collectUnusedAsset(handle, cameras_, retiredCameraPayloadGraveyard_);
+    collectUnusedCpuAsset(handle, cameras_);
 }
 
 void Scene::collectUnusedLightAsset(nr::resource::LightAssetHandle handle)
 {
-    collectUnusedAsset(handle, lights_, retiredLightPayloadGraveyard_);
+    collectUnusedCpuAsset(handle, lights_);
 }
 
 void Scene::collectTemplatePinnedAssets(const TemplateResourcePinSet &pinSet)

@@ -324,8 +324,11 @@ struct AccelerationStructureBuildRuntimeCache
     nrAssert(mesh.hasVertexBuffer(), "AS build mesh requires a vertex atlas buffer.");
     auto const &vertexBuffer = mesh.vertexBuffer.buffer->get();
     auto const vertexAddress = vertexBuffer.deviceAddress() + mesh.vertexByteOffset;
-    auto const indexAddress = mesh.hasIndexBuffer()
-                                  ? mesh.indexBuffer.buffer->get().deviceAddress() + mesh.indexByteOffset
+    auto const indexBuffer = mesh.hasIndexBuffer()
+                                 ? std::optional{std::cref(mesh.indexBuffer.buffer->get())}
+                                 : std::optional<std::reference_wrapper<const nr::rhi::Buffer>>{};
+    auto const indexAddress = indexBuffer.has_value()
+                                  ? indexBuffer->get().deviceAddress() + mesh.indexByteOffset
                                   : vk::DeviceAddress{0};
 
     auto records = std::vector<nr::rhi::BlasGeometryRecord>{};
@@ -347,7 +350,12 @@ struct AccelerationStructureBuildRuntimeCache
             .firstVertex = geometry.firstVertex,
             .primitiveOffset = static_cast<std::uint32_t>(geometry.primitiveOffset),
         };
-        records.push_back(nr::rhi::makeBlasTriangleGeometryRecord(vertexBuffer, layout, input));
+        records.push_back(nr::rhi::makeBlasTriangleGeometryRecord(
+            nr::rhi::BlasTriangleGeometryBuffers{
+                .vertex = std::cref(vertexBuffer),
+                .index = geometry.indexed ? indexBuffer : std::nullopt,
+            },
+            layout, input));
     });
 
     return records;
@@ -692,15 +700,20 @@ void ensureTlas(nr::rhi::Device &device, FrameSlotAsResources &slot, const nr::r
         return;
     }
 
-    slot.tlasStorage = device.resourceFactory.createBuffer(
+    auto newStorage = device.resourceFactory.createBuffer(
         nr::rhi::makeBufferCreateInfo(std::max<vk::DeviceSize>(sizes.accelerationStructureSize, 1u),
                                       vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
                                           vk::BufferUsageFlagBits::eShaderDeviceAddress),
         nr::rhi::MemoryUsage::GpuOnly, "ASBuild.TLAS.Storage");
-    nrAssert(slot.tlasStorage.valid(), "AccelerationStructureBuildNode failed to create TLAS storage.");
-    slot.tlas = nr::rhi::AccelerationStructureResource::create(
-        device.device, slot.tlasStorage, 0, sizes.accelerationStructureSize,
+    nrAssert(newStorage.valid(), "AccelerationStructureBuildNode failed to create TLAS storage.");
+    auto newTlas = nr::rhi::AccelerationStructureResource::create(
+        device.device, newStorage, 0, sizes.accelerationStructureSize,
         vk::AccelerationStructureTypeKHR::eTopLevel, "ASBuild.TLAS");
+
+    // The AS must be released before replacing its backing allocation.
+    slot.tlas = {};
+    slot.tlasStorage = std::move(newStorage);
+    slot.tlas = std::move(newTlas);
     slot.tlasCapacity = instanceCount;
 }
 
@@ -1460,12 +1473,14 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
             uses.push_back(nr::renderer::use::accelerationStructureBuildInputRead(resource));
         });
         blasFrameDataHandle = context.importFrameData("ASBuild.BLAS.FrameData", std::move(frameData));
+        auto const blasFrameDataUses = std::array{blasFrameDataHandle};
         static_cast<void>(context.addPass(
             uses, "ASBuild.BuildBLAS", [blasFrameDataHandle](const nr::renderer::PassRecordContext &recordContext) {
                 auto const &data = recordContext.frameData<BlasBuildFrameData>(blasFrameDataHandle);
                 auto records = makeBatchRecords(data);
                 nr::rhi::recordBuildBlasBatch(recordContext.commandBuffer->get(), records, data.scratchAlignment);
-            }));
+            },
+            nullptr, false, vk::PipelineStageFlags2{}, blasFrameDataUses));
     }
 
     auto tlasUses = std::vector<nr::renderer::PassResourceUseDesc>{
@@ -1492,6 +1507,7 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
                                                               .options = tlasBuildOptions(),
                                                               .scratchAlignment = runtime.limits.minScratchAlignment,
                                                           });
+    auto const tlasFrameDataUses = std::array{tlasFrameData};
     static_cast<void>(context.addPass(tlasUses, "ASBuild.BuildTLAS",
                                       [tlasFrameData](const nr::renderer::PassRecordContext &recordContext) {
                                           auto const &data = recordContext.frameData<TlasBuildFrameData>(tlasFrameData);
@@ -1504,8 +1520,9 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
                                                                        .buildInput = data.buildInput,
                                                                        .options = data.options,
                                                                    },
-                                                                   data.scratchAlignment);
-                                      }));
+                                                                    data.scratchAlignment);
+                                      },
+                                      nullptr, false, vk::PipelineStageFlags2{}, tlasFrameDataUses));
 
     if (context.benchmarkTelemetry.has_value())
     {
@@ -1718,13 +1735,15 @@ bool AccelerationStructureBuildNode::materializeRenderGraphSkeleton(
         blasFrameDataHandle = context.frameData(frameDataSlot);
         context.patchFrameData(frameDataSlot++, "ASBuild.BLAS.FrameData",
                                std::make_any<detail::BlasBuildFrameData>(std::move(frameData)));
+        auto const blasFrameDataUses = std::array{blasFrameDataHandle};
         context.patchPass(
             passSlot++, "ASBuild.BuildBLAS", nullptr,
             [blasFrameDataHandle](const nr::renderer::PassRecordContext &recordContext) {
                 auto const &data = recordContext.frameData<detail::BlasBuildFrameData>(blasFrameDataHandle);
                 auto records = detail::makeBatchRecords(data);
                 nr::rhi::recordBuildBlasBatch(recordContext.commandBuffer->get(), records, data.scratchAlignment);
-            });
+            },
+            std::nullopt, blasFrameDataUses);
     }
 
     auto const tlasFrameDataHandle = context.frameData(frameDataSlot);
@@ -1738,6 +1757,7 @@ bool AccelerationStructureBuildNode::materializeRenderGraphSkeleton(
                                .options = detail::tlasBuildOptions(),
                                .scratchAlignment = runtime.limits.minScratchAlignment,
                            }));
+    auto const tlasFrameDataUses = std::array{tlasFrameDataHandle};
     context.patchPass(passSlot, "ASBuild.BuildTLAS", nullptr,
                       [tlasFrameDataHandle](const nr::renderer::PassRecordContext &recordContext) {
                           auto const &data = recordContext.frameData<detail::TlasBuildFrameData>(tlasFrameDataHandle);
@@ -1750,8 +1770,9 @@ bool AccelerationStructureBuildNode::materializeRenderGraphSkeleton(
                                                        .buildInput = data.buildInput,
                                                        .options = data.options,
                                                    },
-                                                   data.scratchAlignment);
-                      });
+                                                    data.scratchAlignment);
+                       },
+                      std::nullopt, tlasFrameDataUses);
 
     if (frameParameters.benchmarkTelemetry.has_value())
     {

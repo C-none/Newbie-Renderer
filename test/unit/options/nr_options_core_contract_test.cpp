@@ -1,6 +1,7 @@
 import dependency.json;
 import nr.options;
 import nr.test;
+import nr.test.options;
 import std;
 
 namespace
@@ -26,17 +27,6 @@ namespace json = dependency::json;
     return *text;
 }
 
-[[nodiscard]] std::shared_ptr<const OptionCatalog> catalog(std::span<const OptionDefinition> definitions)
-{
-    auto builder = OptionCatalogBuilder{};
-    std::ranges::for_each(definitions, [&](auto const &definition) {
-        nr::test::require(builder.add(definition), "definition should be accepted");
-    });
-    auto result = builder.build();
-    nr::test::require(result.valid(), "catalog should build");
-    return result.catalog;
-}
-
 [[nodiscard]] SessionDefinitionSeed sessionDefinitionSeed()
 {
     return SessionDefinitionSeed{
@@ -52,23 +42,14 @@ namespace json = dependency::json;
 [[nodiscard]] std::shared_ptr<const OptionCatalog> sessionCatalog()
 {
     auto definitions = makeSessionDefinitions(sessionDefinitionSeed());
-    return catalog(definitions);
-}
-
-[[nodiscard]] OptionAvailabilityMap allAvailable(const OptionCatalog &value)
-{
-    auto result = OptionAvailabilityMap{};
-    std::ranges::for_each(value.definitions(), [&](auto const &entry) {
-        result.emplace(entry.first, OptionAvailability{.available = true, .reason = {}});
-    });
-    return result;
+    return nr::test::options::buildCatalog(definitions);
 }
 
 [[nodiscard]] std::unique_ptr<OptionSystem> initializedSystem(AuthorityMode mode = AuthorityMode::human)
 {
     auto system = std::make_unique<OptionSystem>(mode);
     auto session = sessionCatalog();
-    nr::test::require(system->initializeSession(session, allAvailable(*session)).committed,
+    nr::test::require(system->initializeSession(session, nr::test::options::allAvailable(*session)).committed,
                       "session catalog should initialize");
     return system;
 }
@@ -89,11 +70,24 @@ template <WireValueAlternative T>
                                                                      std::optional<FrameEffect> effect = {})
 {
     auto currentCatalog = system.activeCatalog();
-    return system.publishRenderableFrame(allAvailable(*currentCatalog), std::move(effect));
+    return system.publishRenderableFrame(nr::test::options::allAvailable(*currentCatalog), std::move(effect));
 }
 
 const nr::test::CaseRegistrar schemaAndCatalogCase{
     "option catalog validates IDs defaults schemas and snapshot bounds", [] {
+        auto const wireTypeNames = std::to_array<std::pair<OptionValueType, std::string_view>>({
+            {OptionValueType::boolean, "boolean"},
+            {OptionValueType::signedInteger, "integer"},
+            {OptionValueType::unsignedInteger, "integer"},
+            {OptionValueType::number, "number"},
+            {OptionValueType::string, "string"},
+            {OptionValueType::array, "array"},
+            {OptionValueType::object, "object"},
+        });
+        std::ranges::for_each(wireTypeNames, [](auto const &entry) {
+            nr::test::requireEqual(wireName(entry.first), entry.second, "option schema wire type name mismatch");
+        });
+
         nr::test::require(OptionId::parse("render.present.ui_opacity").has_value());
         nr::test::require(!OptionId::parse("Render.present.ui_opacity").has_value());
         nr::test::require(!OptionId::parse("render..opacity").has_value());
@@ -240,7 +234,7 @@ const nr::test::CaseRegistrar fixedCatalogCase{
         nr::test::require(session->find(*legacyQuality) == nullptr,
                           "the removed viewer-scoped DLSS quality must not be registered");
 
-        auto dlss = catalog(makeDlssDefinitions());
+        auto dlss = nr::test::options::buildCatalog(makeDlssDefinitions());
         nr::test::require(dlss->find(optionId(keys::dlssQuality)) != nullptr);
         auto const *reset = dlss->find(optionId(keys::dlssResetHistory));
         nr::test::require(reset != nullptr && reset->lifetime == OptionValueLifetime::frameEffect,
@@ -256,13 +250,22 @@ const nr::test::CaseRegistrar fixedCatalogCase{
                               std::format("removed DLSS preset option '{}' must not be registered", id));
         });
 
-        auto present = catalog(makePresentDefinitions());
+        auto present = nr::test::options::buildCatalog(makePresentDefinitions());
         auto const *capture = present->find(optionId(keys::presentCaptureExr));
         nr::test::require(capture != nullptr && capture->lifetime == OptionValueLifetime::frameEffect,
                           "EXR capture must be a one-frame effect");
 
-        auto pathTracing = catalog(makePathTracingDefinitions());
+        auto pathTracing = nr::test::options::buildCatalog(makePathTracingDefinitions());
+        auto const *maxSurfaceBounces = pathTracing->find(optionId(keys::pathTracingMaxSurfaceBounces));
+        auto const *russianRoulette = pathTracing->find(optionId(keys::pathTracingRussianRouletteEnabled));
         auto const *filterAfterShading = pathTracing->find(optionId(keys::pathTracingFilterAfterShadingEnabled));
+        auto const integratorDefinitions = std::array{maxSurfaceBounces, russianRoulette, filterAfterShading};
+        nr::test::require(
+            std::ranges::all_of(integratorDefinitions, [](const OptionDefinition *definition) {
+                return definition != nullptr && definition->scope == OptionScope::graph &&
+                       definition->resetsTemporalHistory;
+            }),
+            "every PathTracing integrator mutation must reset temporal consumers after a successful commit");
         auto const *defaultFilterAfterShading =
             filterAfterShading != nullptr ? std::get_if<bool>(&filterAfterShading->defaultValue.storage) : nullptr;
         nr::test::require(
@@ -270,6 +273,11 @@ const nr::test::CaseRegistrar fixedCatalogCase{
                 filterAfterShading->schema.type == OptionValueType::boolean && defaultFilterAfterShading != nullptr &&
                 !*defaultFilterAfterShading && filterAfterShading->resetsTemporalHistory,
             "PathTracing FAS must default off and reset temporal consumers after a committed A/B transition");
+
+        auto accumulate = nr::test::options::buildCatalog(makeAccumulateDefinitions());
+        auto const *maximumHistorySamples = accumulate->find(optionId(keys::accumulateMaxHistorySamples));
+        nr::test::require(maximumHistorySamples != nullptr && !maximumHistorySamples->resetsTemporalHistory,
+                          "Accumulate history capacity must not change the sampled radiance identity");
 
         auto completeRtBuilder = OptionCatalogBuilder{};
         auto addDefinitions = [&](std::vector<OptionDefinition> definitions) {
@@ -423,7 +431,8 @@ const nr::test::CaseRegistrar snapshotTokenIdentityCase{
                                "ordinary frame publication must not invalidate a binding proof");
 
         frame = first->beginRenderableFrame();
-        nr::test::require(first->replaceGraphCatalog(catalog(makePathTracingDefinitions())).committed);
+        nr::test::require(
+            first->replaceGraphCatalog(nr::test::options::buildCatalog(makePathTracingDefinitions())).committed);
         auto replacementSnapshot = finishFrame(*first);
         nr::test::require(replacementSnapshot->snapshotToken != firstToken,
                           "graph replacement must invalidate the previous session binding token");
@@ -472,7 +481,7 @@ const nr::test::CaseRegistrar executionRevalidationCase{
         auto frame = system->beginRenderableFrame();
         nr::test::require(frame && frame->mutation);
 
-        auto graph = catalog(makePathTracingDefinitions());
+        auto graph = nr::test::options::buildCatalog(makePathTracingDefinitions());
         nr::test::require(system->replaceGraphCatalog(graph).committed);
         nr::test::requireEqual(system->validateForExecution(*frame->mutation), ScheduleRejectReason::staleBinding,
                                "execution must revalidate the binding under the same state mutex");
@@ -485,7 +494,7 @@ const nr::test::CaseRegistrar executionRevalidationCase{
 
 const nr::test::CaseRegistrar catalogAdmissionRaceCase{
     "catalog replacement and admission race has no lost or misbound mutation", [] {
-        auto const graph = catalog(makePathTracingDefinitions());
+        auto const graph = nr::test::options::buildCatalog(makePathTracingDefinitions());
         std::ranges::for_each(std::views::iota(0u, 32u), [&](auto) {
             auto system = initializedSystem();
             auto mutation = request(*system, keys::viewerWindowFullscreen, true);
@@ -547,7 +556,7 @@ const nr::test::CaseRegistrar crossOptionCase{
     "cross-option validation rejects DLSS bypass combinations without implicit correction", [] {
         auto system = initializedSystem();
         auto dlssDefinitions = makeDlssDefinitions();
-        auto graph = catalog(dlssDefinitions);
+        auto graph = nr::test::options::buildCatalog(dlssDefinitions);
         auto frame = system->beginRenderableFrame();
         nr::test::require(system->replaceGraphCatalog(graph).committed);
         (void)finishFrame(*system);
@@ -603,7 +612,7 @@ const nr::test::CaseRegistrar availabilityCase{
         auto system = initializedSystem();
         auto frame = system->beginRenderableFrame();
         nr::test::require(frame && !frame->mutation);
-        auto availability = allAvailable(*system->activeCatalog());
+        auto availability = nr::test::options::allAvailable(*system->activeCatalog());
         availability.insert_or_assign(optionId(keys::viewerWindowFullscreen), OptionAvailability{
                                                                                   .available = false,
                                                                                   .reason = "window_transition_busy",
@@ -635,7 +644,7 @@ const nr::test::CaseRegistrar graphReplacementCase{
         auto oldSnapshot = system->snapshot();
 
         auto graphDefinitions = makePathTracingDefinitions();
-        auto graph = catalog(graphDefinitions);
+        auto graph = nr::test::options::buildCatalog(graphDefinitions);
         auto frame = system->beginRenderableFrame();
         nr::test::require(frame && !frame->mutation);
         nr::test::require(system->replaceGraphCatalog(graph).committed);
@@ -668,7 +677,7 @@ const nr::test::CaseRegistrar graphMutationReplacementCase{
     "graph-switch mutation commits its session value and catalog under the old binding", [] {
         auto system = initializedSystem();
         auto graphDefinitions = makePathTracingDefinitions();
-        auto graph = catalog(graphDefinitions);
+        auto graph = nr::test::options::buildCatalog(graphDefinitions);
         auto frame = system->beginRenderableFrame();
         nr::test::require(system->replaceGraphCatalog(graph).committed);
         (void)finishFrame(*system);
@@ -678,7 +687,7 @@ const nr::test::CaseRegistrar graphMutationReplacementCase{
             system->trySchedule(request(*system, keys::viewerPipelineSelected, std::string{"rtobject"})).started);
         frame = system->beginRenderableFrame();
         auto replacementDefinitions = makeAccumulateDefinitions();
-        auto replacement = catalog(replacementDefinitions);
+        auto replacement = nr::test::options::buildCatalog(replacementDefinitions);
         nr::test::require(system->commitGraphReplacement(std::move(*frame->mutation), replacement).committed);
         auto after = finishFrame(*system);
 
@@ -693,7 +702,7 @@ const nr::test::CaseRegistrar effectCase{
     "frame effects are one-shot and never become a retained operation result", [] {
         auto system = initializedSystem();
         auto graphDefinitions = makePresentDefinitions();
-        auto graph = catalog(graphDefinitions);
+        auto graph = nr::test::options::buildCatalog(graphDefinitions);
         auto frame = system->beginRenderableFrame();
         nr::test::require(system->replaceGraphCatalog(graph).committed);
         (void)finishFrame(*system);

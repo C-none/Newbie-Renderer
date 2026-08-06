@@ -438,6 +438,12 @@ class RenderGraphExecutor
                                                                 std::size_t firstBatchOrdinal,
                                                                 std::size_t lastBatchOrdinal);
 
+    [[nodiscard]] static bool passDeclaresResource(const CompiledPass &pass,
+                                                   GraphResourceHandle handle) noexcept;
+
+    [[nodiscard]] static bool passDeclaresFrameData(const CompiledPass &pass,
+                                                    GraphFrameDataHandle handle) noexcept;
+
     [[nodiscard]] static nr::rhi::CommandPool &primaryPoolForQueue(nr::rhi::FrameContext &frame, QueueDomain queue);
 
     [[nodiscard]] static nr::rhi::CommandPool &secondaryPoolForQueue(nr::rhi::FrameContext &frame, QueueDomain queue,
@@ -488,6 +494,7 @@ class RenderGraphExecutor
                                                    std::uint32_t dstQueueFamilyIndex);
 
     [[nodiscard]] static PassRecordContext makePassRecordContext(
+        const CompiledPass &pass,
         std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer, std::uint32_t frameIndex,
         nr::rhi::Device &device, const RuntimeBindingMap &runtimeBindings,
         const CompiledFrameDataLookup &frameDataByHandle);

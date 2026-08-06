@@ -60,11 +60,6 @@ VmaBuffer &VmaBuffer::operator=(VmaBuffer &&other) noexcept
     return info.pMappedData;
 }
 
-[[nodiscard]] VkDeviceSize VmaBuffer::size() const noexcept
-{
-    return info.size;
-}
-
 [[nodiscard]] VkBuffer VmaBuffer::handle() const noexcept
 {
     return buffer;
@@ -73,18 +68,6 @@ VmaBuffer &VmaBuffer::operator=(VmaBuffer &&other) noexcept
 [[nodiscard]] VkDeviceAddress VmaBuffer::deviceAddress(const vk::raii::Device &device) const noexcept
 {
     return static_cast<VkDeviceAddress>(device.getBufferAddress(vk::BufferDeviceAddressInfo{vk::Buffer{buffer}}));
-}
-
-[[nodiscard]] VkMemoryPropertyFlags VmaBuffer::memoryProperties() const
-{
-    VkMemoryPropertyFlags flags = 0;
-    vmaGetAllocationMemoryProperties(allocator, allocation, &flags);
-    return flags;
-}
-
-[[nodiscard]] bool VmaBuffer::isHostVisible() const
-{
-    return (memoryProperties() & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
 }
 
 void VmaBuffer::flush(VkDeviceSize offset, VkDeviceSize size) const
@@ -151,18 +134,6 @@ VmaImage &VmaImage::operator=(VmaImage &&other) noexcept
 [[nodiscard]] VkImage VmaImage::handle() const noexcept
 {
     return image;
-}
-
-[[nodiscard]] VkDeviceSize VmaImage::size() const noexcept
-{
-    return info.size;
-}
-
-[[nodiscard]] VkMemoryPropertyFlags VmaImage::memoryProperties() const
-{
-    VkMemoryPropertyFlags flags = 0;
-    vmaGetAllocationMemoryProperties(allocator, allocation, &flags);
-    return flags;
 }
 
 VmaPoolHandle::VmaPoolHandle(VmaAllocator alloc, VmaPool p) : allocator(alloc), pool(p)
@@ -234,16 +205,6 @@ void VmaPoolHandle::reset()
     }
 }
 
-[[nodiscard]] VmaStatistics VmaPoolHandle::statistics() const
-{
-    VmaStatistics stats{};
-    if (pool != nullptr)
-    {
-        vmaGetPoolStatistics(allocator, pool, &stats);
-    }
-    return stats;
-}
-
 VmaAllocatorWrapper::VmaAllocatorWrapper(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
                                          const vk::raii::Device &device)
 {
@@ -285,16 +246,6 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
         other.allocator_ = nullptr;
     }
     return *this;
-}
-
-[[nodiscard]] bool VmaAllocatorWrapper::valid() const noexcept
-{
-    return allocator_ != nullptr;
-}
-
-[[nodiscard]] ::VmaAllocator VmaAllocatorWrapper::handle() const noexcept
-{
-    return allocator_;
 }
 
 [[nodiscard]] VmaBuffer VmaAllocatorWrapper::createBuffer(const vk::BufferCreateInfo &bufferInfo,
@@ -348,39 +299,4 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
     return memTypeIndex;
 }
 
-[[nodiscard]] std::uint32_t VmaAllocatorWrapper::findMemoryTypeIndexForImage(
-    const vk::ImageCreateInfo &imageInfo, const VmaAllocationCreateInfo &allocInfo) const
-{
-    std::uint32_t memTypeIndex = 0;
-    // Convert to C struct for VMA API
-    VkImageCreateInfo cImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
-    VkResult result = vmaFindMemoryTypeIndexForImageInfo(allocator_, &cImageInfo, &allocInfo, &memTypeIndex);
-    nrAssert(result == VK_SUCCESS,
-             std::format("vmaFindMemoryTypeIndexForImageInfo failed: {}", static_cast<int>(result)));
-    return memTypeIndex;
-}
-
-[[nodiscard]] std::vector<VmaBudget> VmaAllocatorWrapper::getBudgets() const
-{
-    constexpr std::size_t maxHeaps = 16; // VMA supports up to 16 memory heaps
-    std::vector<VmaBudget> budgets(maxHeaps);
-    vmaGetHeapBudgets(allocator_, budgets.data());
-    return budgets;
-}
-
-[[nodiscard]] VmaTotalStatistics VmaAllocatorWrapper::calculateStatistics() const
-{
-    VmaTotalStatistics stats{};
-    vmaCalculateStatistics(allocator_, &stats);
-    return stats;
-}
-
-[[nodiscard]] std::string VmaAllocatorWrapper::dumpStatsJson(bool detailedMap) const
-{
-    char *statsString = nullptr;
-    vmaBuildStatsString(allocator_, &statsString, static_cast<VkBool32>(detailedMap ? 1 : 0));
-    std::string result(statsString);
-    vmaFreeStatsString(allocator_, statsString);
-    return result;
-}
 } // namespace nr::rhi

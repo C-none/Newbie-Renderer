@@ -221,6 +221,7 @@ AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore &imageAvaila
 
 PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint32_t imageIndex,
                                  const vk::raii::Semaphore &waitSemaphore,
+                                 const vk::raii::Fence &presentCompletionFence,
                                  std::optional<std::uint64_t> frameBoundaryFrameID) const
 {
     nrAssert(imageIndex < swapChainImages.size(),
@@ -235,6 +236,14 @@ PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint3
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &swapchainHandle;
     presentInfo.pImageIndices = &imageIndex;
+    auto swapchainResult = vk::Result::eSuccess;
+    presentInfo.pResults = std::addressof(swapchainResult);
+
+    auto presentCompletionFenceHandle = *presentCompletionFence;
+    auto presentFenceInfo = vk::SwapchainPresentFenceInfoEXT{};
+    presentFenceInfo.swapchainCount = 1;
+    presentFenceInfo.pFences = std::addressof(presentCompletionFenceHandle);
+    presentInfo.pNext = std::addressof(presentFenceInfo);
 
     std::array<vk::Image, 1> frameBoundaryImages{};
     vk::FrameBoundaryEXT frameBoundary{};
@@ -244,13 +253,13 @@ PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint3
         frameBoundary = vk::FrameBoundaryEXT(vk::FrameBoundaryFlagBitsEXT::eFrameEnd, *frameBoundaryFrameID,
                                              static_cast<std::uint32_t>(frameBoundaryImages.size()),
                                              frameBoundaryImages.data(), 0, nullptr);
-        presentInfo.pNext = std::addressof(frameBoundary);
+        presentFenceInfo.pNext = std::addressof(frameBoundary);
     }
 
     try
     {
         auto result = presentQueue.presentKHR(presentInfo);
-        return PresentResult{.result = result};
+        return resolvePresentResult(result, swapchainResult);
     }
     catch (const vk::SystemError &error)
     {
@@ -264,6 +273,17 @@ PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint3
             std::format("SwapChain::present returned {}: {}", vk::to_string(*recreateResult), error.what()));
         return PresentResult{.result = *recreateResult};
     }
+}
+
+PresentResult SwapChain::resolvePresentResult(vk::Result queueResult, vk::Result swapchainResult) noexcept
+{
+    auto const wasQueued = [](vk::Result item) {
+        return item == vk::Result::eSuccess || item == vk::Result::eSuboptimalKHR;
+    };
+    return PresentResult{
+        .result = wasQueued(queueResult) && swapchainResult != vk::Result::eSuccess ? swapchainResult : queueResult,
+        .queued = wasQueued(queueResult) && wasQueued(swapchainResult),
+    };
 }
 
 SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
@@ -283,6 +303,9 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
     auto selectedFormat = chooseSwapchainSurfaceFormat(surfaceFormats);
 
     auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
+    nrAssert((config.imageUsage & capabilities.supportedUsageFlags) == config.imageUsage,
+             std::format("SwapChain::create image usage is unsupported. requested={} supported={}.",
+                         vk::to_string(config.imageUsage), vk::to_string(capabilities.supportedUsageFlags)));
     auto presentModes = physicalDevice.getSurfacePresentModesKHR(surface);
 
     auto maxImageCount = capabilities.maxImageCount == 0 ? config.preferredImageCount : capabilities.maxImageCount;
@@ -363,7 +386,6 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
     result.swapChain = vk::raii::SwapchainKHR(device, createInfo);
     result.swapChainImages = result.swapChain.getImages();
     result.surfaceFormat = selectedFormat;
-    result.format = selectedFormat.format;
     result.extent = extent;
     detail::applyHdrMetadataIfNeeded(device, *result.swapChain, selectedFormat, config);
 
@@ -453,23 +475,87 @@ const vk::raii::Semaphore &AcquireSemaphorePool::semaphore(std::uint32_t slot) c
     return semaphores_[slot];
 }
 
-bool AcquireSemaphorePool::empty() const noexcept
+PresentationContext::PresentationGeneration::PresentationGeneration(SwapChain &&newSwapChain,
+                                                                     const vk::raii::Device &device)
+    : swapChain(std::move(newSwapChain))
 {
-    return semaphores_.empty();
+    auto const imageCount = static_cast<std::uint32_t>(swapChain.swapChainImages.size());
+    renderFinishedSemaphores.reserve(imageCount);
+    presentCompletionFences.reserve(imageCount);
+    presentPending.resize(imageCount);
+
+    auto imageIndices = std::views::iota(std::uint32_t{0}, imageCount);
+    std::ranges::for_each(imageIndices, [&](std::uint32_t) {
+        renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo{});
+        presentCompletionFences.emplace_back(device, vk::FenceCreateInfo{});
+    });
+}
+
+PresentationContext::PresentationGeneration::~PresentationGeneration()
+{
+    // Keep the old swapchain alive until every object derived from or submitted with this generation is gone.
+    swapChain.imageViews.clear();
+    presentCompletionFences.clear();
+    renderFinishedSemaphores.clear();
+}
+
+PresentationContext::PresentationGeneration &PresentationContext::generation()
+{
+    nrAssert(generation_.has_value(), "PresentationContext requires an initialized presentation generation.");
+    return *generation_;
+}
+
+const PresentationContext::PresentationGeneration &PresentationContext::generation() const
+{
+    nrAssert(generation_.has_value(), "PresentationContext requires an initialized presentation generation.");
+    return *generation_;
+}
+
+void PresentationContext::waitForPendingPresent(std::uint32_t imageIndex)
+{
+    auto &currentGeneration = generation();
+    nrAssert(imageIndex < currentGeneration.presentPending.size(),
+             "PresentationContext::waitForPendingPresent image index out of range.");
+    if (!currentGeneration.presentPending[imageIndex])
+    {
+        return;
+    }
+
+    nrAssert(device_.has_value(),
+             "PresentationContext::waitForPendingPresent requires initializeSwapchain() first.");
+    auto &presentFence = currentGeneration.presentCompletionFences[imageIndex];
+    auto const waitResult =
+        device_->get().waitForFences(*presentFence, vk::True, std::numeric_limits<std::uint64_t>::max());
+    nrAssert(waitResult == vk::Result::eSuccess,
+             std::format("PresentationContext failed waiting for present completion fence for image {}: {}",
+                         imageIndex, vk::to_string(waitResult)));
+    device_->get().resetFences(*presentFence);
+    currentGeneration.presentPending[imageIndex] = false;
+}
+
+void PresentationContext::waitForPendingPresents()
+{
+    if (!generation_.has_value())
+    {
+        return;
+    }
+
+    auto imageIndices = std::views::iota(std::uint32_t{0},
+                                         static_cast<std::uint32_t>(generation_->presentPending.size()));
+    std::ranges::for_each(imageIndices, [&](std::uint32_t imageIndex) { waitForPendingPresent(imageIndex); });
 }
 
 PresentationContext::~PresentationContext()
 {
+    waitForPendingPresents();
     releaseFullScreenExclusiveIfNeeded();
+    generation_.reset();
 }
 
-void PresentationContext::initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physicalDevice,
-                                     const vk::raii::Device &device, std::string_view appName,
-                                     const SwapChainConfig &config, std::uint32_t presentQueueFamily)
+void PresentationContext::createSurface(const vk::raii::Instance &instance, std::string_view appName)
 {
-    device_ = std::cref(device);
-    config_ = config;
-    presentQueueFamily_ = presentQueueFamily;
+    nrAssert(surface_.handle == nullptr && *surface_.surface == nullptr,
+             "PresentationContext::createSurface can only initialize the presentation surface once.");
     surface_ = Surface::create(instance, appName);
     glfwSetWindowUserPointer(surface_.handle.get(), this);
     glfwSetScrollCallback(surface_.handle.get(), [](GLFWwindow *window, double, double yOffset) {
@@ -485,15 +571,31 @@ void PresentationContext::initialize(const vk::raii::Instance &instance, const v
         nrAssert(presentation != nullptr, "PresentationContext text input callback requires a window user pointer.");
         presentation->textInputCodepoints_.push_back(static_cast<std::uint32_t>(codepoint));
     });
-    ensurePresentSupport(physicalDevice);
+}
+
+void PresentationContext::initializeSwapchain(const vk::raii::PhysicalDevice &physicalDevice,
+                                              const vk::raii::Device &device, const SwapChainConfig &config,
+                                              std::uint32_t presentQueueFamily)
+{
+    nrAssert(surface_.handle != nullptr && *surface_.surface != nullptr,
+             "PresentationContext::initializeSwapchain requires createSurface() first.");
+    nrAssert(!generation_.has_value(),
+             "PresentationContext::initializeSwapchain can only initialize the first swapchain generation once.");
+    device_ = std::cref(device);
+    config_ = config;
+    presentQueueFamily_ = presentQueueFamily;
     refreshFullScreenExclusiveMonitor();
     ensureFullScreenExclusiveSupport(physicalDevice);
-    swapChain_ = SwapChain::create(physicalDevice, device, surface_.surface, surface_.extent, config_);
-    surface_.format = swapChain_.format;
+    auto swapChain = SwapChain::create(physicalDevice, device, surface_.surface, surface_.extent, config_);
+    generation_.emplace(std::move(swapChain), device);
     acquireFullScreenExclusiveIfNeeded();
+    rebuildAcquirePool();
+}
 
-    auto poolCapacity = swapChain_.swapChainImages.size() + 1u;
-    acquirePool_.initialize(device, static_cast<std::uint32_t>(poolCapacity));
+const vk::raii::SurfaceKHR &PresentationContext::surfaceHandle() const
+{
+    nrAssert(*surface_.surface != nullptr, "PresentationContext::surfaceHandle requires createSurface() first.");
+    return surface_.surface;
 }
 
 AcquireResult PresentationContext::acquireNextImage(std::uint32_t frameSlot, std::uint64_t timeout)
@@ -514,7 +616,7 @@ AcquireResult PresentationContext::acquireNextImage(std::uint32_t frameSlot, std
                 };
             }
         }
-        return swapChain_.acquireNextImage(acquirePool_.semaphore(slot), timeout);
+        return generation().swapChain.acquireNextImage(acquirePool_.semaphore(slot), timeout);
     }();
     if (needsSwapchainRecreate(acquireResult.result) && acquireResult.result != vk::Result::eSuboptimalKHR)
     {
@@ -527,6 +629,7 @@ AcquireResult PresentationContext::acquireNextImage(std::uint32_t frameSlot, std
     nrAssert(acquireResult.result == vk::Result::eSuccess || acquireResult.result == vk::Result::eSuboptimalKHR,
              std::format("PresentationContext::acquireNextImage unexpected acquire result: {}",
                          vk::to_string(acquireResult.result)));
+    waitForPendingPresent(acquireResult.imageIndex);
     borrowedAcquireSlotByFrame_[frameSlot] = slot;
     return acquireResult;
 }
@@ -572,8 +675,17 @@ const vk::raii::Semaphore &PresentationContext::borrowedAcquireSemaphore(std::ui
     return acquirePool_.semaphore(*borrowedAcquireSlotByFrame_[frameSlot]);
 }
 
-PresentResult PresentationContext::present(const QueueManager &queueManager, const vk::raii::Semaphore &waitSemaphore,
-                                           std::optional<std::uint64_t> frameBoundaryFrameID) const
+const vk::raii::Semaphore &PresentationContext::activePresentSemaphore() const
+{
+    auto const imageIndex = activeSwapchainImageIndex();
+    auto const &currentGeneration = generation();
+    nrAssert(imageIndex < currentGeneration.renderFinishedSemaphores.size(),
+             "PresentationContext::activePresentSemaphore image index out of range.");
+    return currentGeneration.renderFinishedSemaphores[imageIndex];
+}
+
+PresentResult PresentationContext::present(const QueueManager &queueManager,
+                                           std::optional<std::uint64_t> frameBoundaryFrameID)
 {
     nrAssert(activeSwapchainImageIndex_.has_value(),
              "PresentationContext::present requires a valid acquired swapchain image.");
@@ -581,56 +693,63 @@ PresentResult PresentationContext::present(const QueueManager &queueManager, con
         queueManager.compute().queueFamilyIndex() == presentQueueFamily_,
         std::format("PresentationContext::present compute-present policy expected compute queue family {}, but got {}.",
                     presentQueueFamily_, queueManager.compute().queueFamilyIndex()));
-    return swapChain_.present(queueManager.compute().handle(), *activeSwapchainImageIndex_, waitSemaphore,
-                              frameBoundaryFrameID);
+    auto const imageIndex = *activeSwapchainImageIndex_;
+    auto &currentGeneration = generation();
+    nrAssert(!currentGeneration.presentPending[imageIndex],
+             "PresentationContext::present cannot reuse an image whose previous present is still pending.");
+    auto result = currentGeneration.swapChain.present(
+        queueManager.compute().handle(), imageIndex, currentGeneration.renderFinishedSemaphores[imageIndex],
+        currentGeneration.presentCompletionFences[imageIndex], frameBoundaryFrameID);
+    if (result.queued && (result.result == vk::Result::eSuccess || result.result == vk::Result::eSuboptimalKHR))
+    {
+        currentGeneration.presentPending[imageIndex] = true;
+    }
+    return result;
 }
 
 void PresentationContext::rebuildAcquirePool()
 {
     nrAssert(device_.has_value(),
-             "PresentationContext::rebuildAcquirePool requires device reference from initialize().");
+             "PresentationContext::rebuildAcquirePool requires initializeSwapchain() first.");
     std::ranges::for_each(borrowedAcquireSlotByFrame_, [](auto &slot) { slot.reset(); });
-    auto poolCapacity = swapChain_.swapChainImages.size() + 1u;
-    acquirePool_.initialize(device_->get(), static_cast<std::uint32_t>(poolCapacity));
+    auto const poolCapacity = std::max(swapchainImageCount() + 1u, maxFrameInFlight);
+    acquirePool_.initialize(device_->get(), poolCapacity);
 }
 
 vk::Extent2D PresentationContext::swapchainExtent() const noexcept
 {
-    return swapChain_.extent;
+    return generation().swapChain.extent;
 }
 
 vk::Format PresentationContext::swapchainFormat() const noexcept
 {
-    return swapChain_.format;
+    return generation().swapChain.surfaceFormat.format;
 }
 
 vk::ColorSpaceKHR PresentationContext::swapchainColorSpace() const noexcept
 {
-    return swapChain_.surfaceFormat.colorSpace;
-}
-
-vk::SurfaceFormatKHR PresentationContext::swapchainSurfaceFormat() const noexcept
-{
-    return swapChain_.surfaceFormat;
+    return generation().swapChain.surfaceFormat.colorSpace;
 }
 
 std::uint32_t PresentationContext::swapchainImageCount() const noexcept
 {
-    return static_cast<std::uint32_t>(swapChain_.swapChainImages.size());
+    return static_cast<std::uint32_t>(generation().swapChain.swapChainImages.size());
 }
 
 vk::Image PresentationContext::swapchainImage(std::uint32_t imageIndex) const
 {
-    nrAssert(imageIndex < swapChain_.swapChainImages.size(),
+    auto const &swapChain = generation().swapChain;
+    nrAssert(imageIndex < swapChain.swapChainImages.size(),
              std::format("PresentationContext::swapchainImage index out of range: {}", imageIndex));
-    return swapChain_.swapChainImages[imageIndex];
+    return swapChain.swapChainImages[imageIndex];
 }
 
 vk::ImageView PresentationContext::swapchainImageView(std::uint32_t imageIndex) const
 {
-    nrAssert(imageIndex < swapChain_.imageViews.size(),
+    auto const &swapChain = generation().swapChain;
+    nrAssert(imageIndex < swapChain.imageViews.size(),
              std::format("PresentationContext::swapchainImageView index out of range: {}", imageIndex));
-    return *swapChain_.imageViews[imageIndex];
+    return *swapChain.imageViews[imageIndex];
 }
 
 void PresentationContext::pollEvents() const
@@ -753,26 +872,19 @@ void PresentationContext::recreate(const vk::raii::PhysicalDevice &physicalDevic
                                    QueueManager &queueManager)
 {
     queueManager.waitAllIdle();
+    waitForPendingPresents();
     releaseFullScreenExclusiveIfNeeded();
     static_cast<void>(surface_.consumeSwapchainRecreateRequest());
     surface_.refreshExtentFromFramebuffer();
     refreshFullScreenExclusiveMonitor();
-    ensurePresentSupport(physicalDevice);
     ensureFullScreenExclusiveSupport(physicalDevice);
-    auto oldSwapchain = *swapChain_.swapChain;
+    auto oldSwapchain = *generation().swapChain.swapChain;
     auto rebuilt =
         SwapChain::recreate(physicalDevice, device, surface_.surface, surface_.extent, oldSwapchain, config_);
-    surface_.format = rebuilt.format;
-    swapChain_ = std::move(rebuilt);
+    generation_.reset();
+    generation_.emplace(std::move(rebuilt), device);
     rebuildAcquirePool();
     acquireFullScreenExclusiveIfNeeded();
-}
-
-void PresentationContext::ensurePresentSupport(const vk::raii::PhysicalDevice &physicalDevice) const
-{
-    nrAssert(physicalDevice.getSurfaceSupportKHR(presentQueueFamily_, surface_.surface),
-             std::format("Compute-present policy requires compute queue family {} to support present.",
-                         presentQueueFamily_));
 }
 
 void PresentationContext::ensureFullScreenExclusiveSupport(const vk::raii::PhysicalDevice &physicalDevice) const
@@ -821,20 +933,12 @@ void PresentationContext::acquireFullScreenExclusiveIfNeeded()
 
     try
     {
-        swapChain_.swapChain.acquireFullScreenExclusiveModeEXT();
+        generation().swapChain.swapChain.acquireFullScreenExclusiveModeEXT();
         fullScreenExclusiveAcquired_ = true;
         nrInfo("VK_EXT_full_screen_exclusive acquired application-controlled exclusive mode.");
     }
     catch (const vk::SystemError &error)
     {
-        if (detail::isVulkanResult<vk::Result::eErrorInitializationFailed>(error))
-        {
-            nrInfo<LogLevel::warning>(std::format(
-                "Full-screen exclusive acquire was deferred because exclusive access is not currently available: {}",
-                error.what()));
-            return;
-        }
-
         nrInfo<LogLevel::error>(
             std::format("PresentationContext failed to acquire full-screen exclusive mode: {}", error.what()));
         nrAssert(false, "PresentationContext failed to acquire VK_EXT_full_screen_exclusive mode.");
@@ -851,7 +955,7 @@ void PresentationContext::releaseFullScreenExclusiveIfNeeded() noexcept
     fullScreenExclusiveAcquired_ = false;
     try
     {
-        swapChain_.swapChain.releaseFullScreenExclusiveModeEXT();
+        generation().swapChain.swapChain.releaseFullScreenExclusiveModeEXT();
     }
     catch (const vk::SystemError &error)
     {

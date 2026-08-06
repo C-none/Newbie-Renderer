@@ -108,9 +108,7 @@ namespace
 
 [[nodiscard]] PassResourceUseDesc imageTransferDstUse(GraphResourceHandle image, ImageAspectIntent aspect) noexcept
 {
-    return use::make<use::spec::ImageTransferDst>(image, use::ImageUseOptions{
-                                                             .aspect = aspect,
-                                                         });
+    return use::imageTransferDst(image, aspect);
 }
 
 [[nodiscard]] GraphPassHandle addCopyPass(NodeBuildContext &context, std::string_view debugName, CopyPassDesc copy)

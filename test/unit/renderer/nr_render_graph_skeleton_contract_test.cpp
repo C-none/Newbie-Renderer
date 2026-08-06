@@ -24,7 +24,8 @@ namespace
 }
 
 [[nodiscard]] nr::renderer::RenderGraphFrameDescription makeFrame(std::uint32_t dynamicValue,
-                                                                  bool addSecondPass = false)
+                                                                  bool addSecondPass = false,
+                                                                  bool duplicateResourceUse = false)
 {
     auto builder = nr::renderer::RenderGraphBuilder{};
     auto node = builder.addNode("Skeleton.Node", nr::renderer::QueueDomain::Compute);
@@ -33,16 +34,41 @@ namespace
         .size = 64u,
         .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
     });
-    static_cast<void>(builder.addFrameData("Skeleton.Dynamic", dynamicValue));
-    auto uses = std::array{nr::renderer::use::storageBufferWrite(buffer)};
+    auto dynamicFrameData = builder.addFrameData("Skeleton.Dynamic", dynamicValue);
+    auto uses = std::vector{nr::renderer::use::storageBufferWrite(buffer)};
+    if (duplicateResourceUse)
+    {
+        uses.push_back(uses.front());
+    }
+    auto frameDataUses = std::array{dynamicFrameData, dynamicFrameData};
     static_cast<void>(
         builder.addPass(std::format("Skeleton.Pass.{}", dynamicValue), node, uses,
-                        [dynamicValue](const nr::renderer::PassRecordContext &) { static_cast<void>(dynamicValue); }));
+                        [dynamicValue](const nr::renderer::PassRecordContext &) { static_cast<void>(dynamicValue); },
+                        nullptr, false, vk::PipelineStageFlags2{}, frameDataUses));
     if (addSecondPass)
     {
         static_cast<void>(
             builder.addPass("Skeleton.Second", node, uses, [](const nr::renderer::PassRecordContext &) {}));
     }
+    return builder.build();
+}
+
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription makeFrameDataUseFrame(bool useSecond)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode("Skeleton.FrameDataUse", nr::renderer::QueueDomain::Compute);
+    auto buffer = builder.addResource(nr::renderer::GraphTransientBufferDesc{
+        .debugName = "Skeleton.FrameDataUse.Buffer",
+        .size = 64u,
+        .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
+    });
+    auto first = builder.addFrameData("Skeleton.FrameDataUse.First", std::uint32_t{1u});
+    auto second = builder.addFrameData("Skeleton.FrameDataUse.Second", std::uint32_t{2u});
+    auto uses = std::array{nr::renderer::use::storageBufferWrite(buffer)};
+    auto frameDataUses = std::array{useSecond ? second : first};
+    static_cast<void>(builder.addPass("Skeleton.FrameDataUse.Pass", node, uses,
+                                      [](const nr::renderer::PassRecordContext &) {}, nullptr, false,
+                                      vk::PipelineStageFlags2{}, frameDataUses));
     return builder.build();
 }
 
@@ -147,6 +173,36 @@ const nr::test::CaseRegistrar exactKeyAndDynamicPatchCase{
         nr::test::requireEqual(statistics.entryCount, std::size_t{1u});
     }};
 
+const nr::test::CaseRegistrar canonicalUsesReachSkeletonCase{
+    "Skeleton capture and instantiation retain canonical resource and frame-data uses", [] {
+        auto cache = nr::renderer::RenderGraphSkeletonCache{};
+        auto cold = makeFrame(11u);
+        nr::test::requireEqual(cold.passes.front().frameDataUses.size(), std::size_t{1});
+        static_cast<void>(cache.acceptMaterialized(makeKey(), cold));
+
+        auto duplicate = makeFrame(22u, false, true);
+        auto result = cache.acceptMaterialized(makeKey(), duplicate);
+        nr::test::require(result.keyHit);
+        nr::test::require(result.structureMatches,
+                          "an identical duplicate declaration should not change Skeleton structure");
+
+        auto skeleton = cache.lookup(makeKey());
+        nr::test::require(static_cast<bool>(skeleton));
+        nr::test::requireEqual(skeleton->staticFrame.passes.front().resourceUses.size(), std::size_t{1});
+        nr::test::requireEqual(skeleton->staticFrame.passes.front().frameDataUses.size(), std::size_t{1});
+        nr::test::requireEqual(skeleton->staticFrame.passes.front().frameDataUses.front(),
+                               skeleton->staticFrame.frameData.front().handle);
+        auto instantiated = nr::renderer::RenderGraphSkeletonCache::instantiate(*skeleton);
+        nr::test::requireEqual(instantiated.passes.front().resourceUses.size(), std::size_t{1});
+        nr::test::requireEqual(instantiated.passes.front().frameDataUses,
+                               skeleton->staticFrame.passes.front().frameDataUses);
+
+        auto coldCompiled = nr::renderer::RenderGraphCompiler{}.compile(cold);
+        auto instantiatedCompiled = nr::renderer::RenderGraphCompiler{}.compile(instantiated);
+        nr::test::requireEqual(coldCompiled.submitBatches.front().passes.front().frameDataUses,
+                               instantiatedCompiled.submitBatches.front().passes.front().frameDataUses);
+    }};
+
 const nr::test::CaseRegistrar ownedTemplateAndPatchOnlyContextCase{
     "Skeleton owns a stripped static template and patch context substitutes current dynamic slots", [] {
         auto cache = nr::renderer::RenderGraphSkeletonCache{};
@@ -159,6 +215,9 @@ const nr::test::CaseRegistrar ownedTemplateAndPatchOnlyContextCase{
         nr::test::require(!skeleton->staticFrame.passes.front().prepare);
         nr::test::require(!skeleton->staticFrame.passes.front().record);
         nr::test::require(!skeleton->staticFrame.passes.front().parallelRecord.has_value());
+        nr::test::requireEqual(skeleton->staticFrame.passes.front().frameDataUses.size(), std::size_t{1});
+        nr::test::requireEqual(skeleton->staticFrame.passes.front().frameDataUses.front(),
+                               skeleton->staticFrame.frameData.front().handle);
 
         auto current = nr::renderer::RenderGraphSkeletonCache::instantiate(*skeleton);
         auto namedResources = std::map<std::string, nr::renderer::GraphResourceHandle>{
@@ -189,9 +248,13 @@ const nr::test::CaseRegistrar ownedTemplateAndPatchOnlyContextCase{
                                     .usageIntents = {nr::renderer::BufferUsageIntent::StorageWrite},
                                 });
         patch.patchFrameData(0u, "Current.Dynamic", std::make_any<std::uint32_t>(22u));
+        auto frameDataUses = std::array{patch.namedFrameData("dynamic"), patch.namedFrameData("dynamic")};
         patch.patchPass(0u, "Current.Pass", nullptr,
-                        [&recorded](const nr::renderer::PassRecordContext &) { recorded = 22u; });
+                        [&recorded](const nr::renderer::PassRecordContext &) { recorded = 22u; }, std::nullopt,
+                        frameDataUses);
         nr::test::requireEqual(std::any_cast<std::uint32_t>(current.frameData.front().payload), std::uint32_t{22u});
+        nr::test::requireEqual(current.passes.front().frameDataUses.size(), std::size_t{1});
+        nr::test::requireEqual(current.passes.front().frameDataUses.front(), current.frameData.front().handle);
         nr::test::requireEqual(patch.namedResource("output"), current.resources.front().handle);
         nr::test::requireEqual(patch.namedFrameData("dynamic"), current.frameData.front().handle);
         nr::test::requireEqual(patch.resolveFrameData<std::uint32_t>(patch.namedFrameData("dynamic"))->get(),
@@ -382,6 +445,32 @@ const nr::test::CaseRegistrar structureMismatchCase{
         nr::test::requireEqual(afterHit.structureMismatchCount, afterMismatch.structureMismatchCount);
         nr::test::requireEqual(afterHit.entryCount, std::size_t{1u});
         nr::test::requireEqual(afterHit.lastMissReason, nr::renderer::RenderGraphSkeletonMissReason::None);
+    }};
+
+const nr::test::CaseRegistrar frameDataUseStructureMismatchCase{
+    "render graph Skeleton treats pass frame-data uses as structural capabilities", [] {
+        auto cache = nr::renderer::RenderGraphSkeletonCache{};
+        auto key = makeKey(1u, 3u, 5u, "frame-data-uses");
+        auto cold = makeFrameDataUseFrame(false);
+        static_cast<void>(cache.acceptMaterialized(key, cold));
+
+        auto changed = makeFrameDataUseFrame(true);
+        auto mismatch = cache.acceptMaterialized(key, changed);
+        nr::test::require(mismatch.keyHit);
+        nr::test::require(!mismatch.structureMatches);
+        nr::test::requireEqual(mismatch.missReason, nr::renderer::RenderGraphSkeletonMissReason::StructureMismatch);
+
+        auto refreshed = cache.lookup(key);
+        nr::test::require(static_cast<bool>(refreshed));
+        nr::test::requireEqual(refreshed->staticFrame.passes.front().frameDataUses.size(), std::size_t{1});
+        nr::test::requireEqual(refreshed->staticFrame.passes.front().frameDataUses.front(),
+                               refreshed->staticFrame.frameData[1].handle);
+
+        auto sameChangedStructure = makeFrameDataUseFrame(true);
+        auto hit = cache.acceptMaterialized(key, sameChangedStructure);
+        nr::test::require(hit.keyHit);
+        nr::test::require(hit.structureMatches);
+        nr::test::requireEqual(hit.missReason, nr::renderer::RenderGraphSkeletonMissReason::None);
     }};
 
 const nr::test::CaseRegistrar unsupportedNodeCase{"node without Skeleton contract reports unsupported snapshot", [] {

@@ -2,14 +2,51 @@ import std;
 import dependency.math;
 import dependency.vulkan;
 import nr.load;
-import nr.options;
 import nr.renderPasses;
 import nr.renderer;
 import nr.scene;
 import nr.test;
+import nr.test.options;
 
 namespace
 {
+[[nodiscard]] bool nearlyEqual(float left, float right, float epsilon = 1e-4f) noexcept
+{
+    return std::abs(left - right) <= epsilon;
+}
+
+[[nodiscard]] bool mat4Near(const glm::mat4 &left, const glm::mat4 &right, float epsilon = 1e-4f) noexcept
+{
+    auto rows = std::views::iota(0, 4);
+    auto columns = std::views::iota(0, 4);
+    return std::ranges::all_of(columns, [&](int column) {
+        return std::ranges::all_of(
+            rows, [&](int row) { return nearlyEqual(left[column][row], right[column][row], epsilon); });
+    });
+}
+
+class CameraFrameCaptureNode final : public nr::renderer::NodeRuntime
+{
+  public:
+    explicit CameraFrameCaptureNode(
+        std::shared_ptr<std::vector<nr::scene::SceneBridgeFrameConstants>> capturedFrames,
+        std::shared_ptr<std::vector<bool>> capturedHistoryResets)
+        : capturedFrames_(std::move(capturedFrames)), capturedHistoryResets_(std::move(capturedHistoryResets))
+    {
+    }
+
+    void build(nr::renderer::NodeBuildContext &,
+               const nr::renderer::NodeFrameParameters &frameParameters) override
+    {
+        capturedFrames_->push_back(frameParameters.renderCameraConstants);
+        capturedHistoryResets_->push_back(frameParameters.resolutionPlan.resetHistory);
+    }
+
+  private:
+    std::shared_ptr<std::vector<nr::scene::SceneBridgeFrameConstants>> capturedFrames_{};
+    std::shared_ptr<std::vector<bool>> capturedHistoryResets_{};
+};
+
 class ShutdownCountingNode final : public nr::renderer::NodeRuntime
 {
   public:
@@ -97,7 +134,10 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
     return scene;
 }
 
-[[nodiscard]] nr::renderer::RendererGraphSpec makeGraphSpec(vk::Format swapchainFormat)
+[[nodiscard]] nr::renderer::RendererGraphSpec makeGraphSpec(
+    vk::Format swapchainFormat,
+    std::shared_ptr<std::vector<nr::scene::SceneBridgeFrameConstants>> capturedCameraFrames,
+    std::shared_ptr<std::vector<bool>> capturedHistoryResets)
 {
     auto normalBuffer = std::make_shared<nr::renderPasses::NormalBufferNode>();
     normalBuffer->input.colorFormat = swapchainFormat;
@@ -129,6 +169,14 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
                             .queue = nr::renderer::QueueDomain::Compute,
                         },
                 },
+                nr::renderer::NodeCreateInfo{
+                    .runtime = std::make_shared<CameraFrameCaptureNode>(std::move(capturedCameraFrames),
+                                                                        std::move(capturedHistoryResets)),
+                    .config =
+                        nr::renderer::NodeConfig{
+                            .instanceName = "CameraFrameCapture",
+                        },
+                },
             },
         .submitNodes =
             {
@@ -137,27 +185,6 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
                     .afterNodeIndex = 1,
                 },
             },
-    };
-}
-
-[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult &preflight)
-{
-    auto values = nr::options::OptionValueMap{};
-    auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
-        values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
-    });
-    return nr::options::OptionFrameSnapshot{
-        .catalog = preflight.optionCatalog,
-        .values = std::move(values),
-        .availability = std::move(availability),
-        .frameIndex = 1u,
-        .revision = 1u,
-        .graphGeneration = 1u,
-        .bindingEpoch = 1u,
-        .snapshotToken = "camera-override-snapshot",
     };
 }
 
@@ -182,11 +209,19 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         renderer.device().waitIdle();
         scene.uploadPending();
 
-        auto graphSpec = makeGraphSpec(renderer.device().presentationContext.swapchainFormat());
+        auto capturedCameraFrames = std::make_shared<std::vector<nr::scene::SceneBridgeFrameConstants>>();
+        auto capturedHistoryResets = std::make_shared<std::vector<bool>>();
+        auto graphSpec = makeGraphSpec(renderer.device().presentationContext.swapchainFormat(), capturedCameraFrames,
+                                       capturedHistoryResets);
         auto const preflight = renderer.preflightGraph(graphSpec);
         nr::test::require(static_cast<bool>(preflight), "camera override graph should pass preflight");
         nr::test::require(renderer.installGraph(graphSpec), "camera override graph should install");
-        auto const optionSnapshot = makeDefaultSnapshot(preflight);
+        auto const optionSnapshot =
+            nr::test::options::makeDefaultSnapshot(preflight.optionCatalog, "camera-override-snapshot");
+
+        auto extent = renderer.device().presentationContext.swapchainExtent();
+        auto sceneCamera = scene.tryGetPrimaryCamera(glm::uvec2{extent.width, extent.height});
+        nr::test::require(sceneCamera.has_value(), "baseline scene should expose its authored primary camera");
 
         auto baseline = renderer.renderFrame(nr::renderer::RendererFrameInput{
             .optionSnapshot = std::cref(optionSnapshot),
@@ -200,9 +235,20 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         nr::test::require(!baseline.usedCameraOverride, "baseline should not use camera override");
         nr::test::require(baseline.sceneBridgeDrawCount > 0u, "baseline should produce scene bridge draws");
         nr::test::require(baseline.sceneTlasPacketCount > 0u, "baseline should produce TLAS packets");
+        nr::test::requireEqual(capturedCameraFrames->size(), std::size_t{1u},
+                               "baseline graph build should observe one selected camera frame");
+        nr::test::requireEqual(capturedHistoryResets->size(), std::size_t{1u});
+        nr::test::require(capturedHistoryResets->front(),
+                          "the first frame after graph installation must reset temporal history");
+        nr::test::require(mat4Near(capturedCameraFrames->front().view, sceneCamera->view),
+                          "baseline node camera view should come from the scene primary camera");
+        nr::test::require(mat4Near(capturedCameraFrames->front().projection, sceneCamera->projection),
+                          "baseline node camera projection should come from the scene primary camera");
+        nr::test::require(mat4Near(capturedCameraFrames->front().viewProjection,
+                                   sceneCamera->projection * sceneCamera->view),
+                          "baseline node camera view-projection should come from the scene primary camera");
 
         auto viewerCamera = nr::renderer::ViewerPerspectiveCamera{};
-        auto extent = renderer.device().presentationContext.swapchainExtent();
         viewerCamera.setViewportExtent(glm::uvec2{extent.width, extent.height});
         viewerCamera.setPoseFromLookAt(glm::vec3{0.0f, 0.0f, 3.0f}, glm::vec3{0.0f});
 
@@ -228,6 +274,50 @@ const nr::test::CaseRegistrar cameraOverrideCase{
                                "override custom frustum should be able to cull all bridge draws");
         nr::test::requireEqual(overridden.sceneTlasPacketCount, baseline.sceneTlasPacketCount,
                                "RT/TLAS extraction must ignore camera override frustum culling");
+        nr::test::requireEqual(capturedCameraFrames->size(), std::size_t{2u},
+                               "override graph build should observe one additional selected camera frame");
+        nr::test::require(!capturedHistoryResets->back(),
+                          "camera-only movement must preserve history for motion-vector reprojection");
+        nr::test::require(mat4Near(capturedCameraFrames->back().view, overrideCamera.frameConstants.view),
+                          "override node camera view should come from the app camera override");
+        nr::test::require(mat4Near(capturedCameraFrames->back().projection,
+                                   overrideCamera.frameConstants.projection),
+                          "override node camera projection should come from the app camera override");
+        nr::test::require(mat4Near(capturedCameraFrames->back().viewProjection,
+                                   overrideCamera.frameConstants.viewProjection),
+                          "override node camera view-projection should come from the app camera override");
+
+        auto additionalInstance = scene.instantiate(templateHandle);
+        nr::test::require(additionalInstance.valid(), "scene revision mutation instance should register");
+        scene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
+        auto sceneChanged = renderer.renderFrame(nr::renderer::RendererFrameInput{
+            .optionSnapshot = std::cref(optionSnapshot),
+            .scene = std::ref(scene),
+            .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
+            .sceneExtractInput = nr::scene::SceneExtractInput{},
+            .cameraOverride = overrideCamera,
+        });
+        nr::test::require(sceneChanged.rendered, "scene-revision frame should render");
+        nr::test::require(capturedHistoryResets->back(),
+                          "a complete SceneRevisionSnapshot change must reset temporal history");
+
+        auto sceneAbsent = renderer.renderFrame(nr::renderer::RendererFrameInput{
+            .optionSnapshot = std::cref(optionSnapshot),
+            .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
+            .cameraOverride = overrideCamera,
+        });
+        nr::test::require(sceneAbsent.rendered, "scene-absent frame should render");
+        nr::test::require(capturedHistoryResets->back(),
+                          "changing scene presence from present to absent must reset temporal history");
+
+        auto sceneStillAbsent = renderer.renderFrame(nr::renderer::RendererFrameInput{
+            .optionSnapshot = std::cref(optionSnapshot),
+            .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
+            .cameraOverride = overrideCamera,
+        });
+        nr::test::require(sceneStillAbsent.rendered, "stable scene-absent frame should render");
+        nr::test::require(!capturedHistoryResets->back(),
+                          "stable scene absence and camera must preserve temporal history");
     }};
 
 const nr::test::CaseRegistrar rendererDestructorCase{

@@ -106,35 +106,21 @@ class FrameContext
      * @param timeout Timeout in nanoseconds (default: 10 second)
      * @return true if fence signaled, false if timeout
      */
-    [[nodiscard]] bool waitForFence(std::uint64_t timeout = 10'000'000'000)
-    {
-        auto result = device_->get().waitForFences(*fence_, vk::True, timeout);
-        return result == vk::Result::eSuccess;
-    }
+    [[nodiscard]] bool waitForFence(std::uint64_t timeout = 10'000'000'000);
 
     /**
      * @brief Reset fence to unsignaled state
      *
      * Must be called before reusing this frame context
      */
-    void resetFence()
-    {
-        device_->get().resetFences(*fence_);
-    }
+    void resetFence();
 
     /**
      * @brief Reset all command pools in this context
      *
      * Only call after fence is signaled. Invalidates all command buffers.
      */
-    void resetPools()
-    {
-        // Retained primary command buffers are individually reset by their owner
-        // after this frame's fence is signaled. Reset only transient secondary pools.
-        resetPreparedSecondaryPools(graphicsSecondary_, graphicsPreparedSecondaryWorkers_);
-        resetPreparedSecondaryPools(computeSecondary_, computePreparedSecondaryWorkers_);
-        resetPreparedSecondaryPools(transferSecondary_, transferPreparedSecondaryWorkers_);
-    }
+    void resetPools();
 
     /**
      * @brief Prebuild secondary command pools for the next recording window.
@@ -180,28 +166,6 @@ class FrameContext
      * @return Reference to vk::raii::Fence
      */
     [[nodiscard]] const vk::raii::Fence &fence() const noexcept;
-
-    /**
-     * @brief Inject the pre-acquired image-available semaphore for this frame.
-     *
-     * Called by Device::acquireFrameImage() at the graph's swapchain-acquire boundary.
-     * The semaphore is owned by the acquire pool; this frame holds a non-owning
-     * pointer valid until Device::beginFrame() calls
-     * PresentationContext::returnAcquireSemaphore() on the next cycle.
-     */
-    void setBorrowedAcquireSemaphore(const vk::raii::Semaphore *semaphore) noexcept;
-
-    /**
-     * @brief Get the image-available semaphore borrowed from the acquire pool.
-     */
-    [[nodiscard]] const vk::raii::Semaphore &imageAvailable() const noexcept;
-
-    // ========== Status queries ==========
-
-    /**
-     * @brief Check if fence is currently signaled
-     */
-    [[nodiscard]] bool isFenceSignaled() const;
 
     /**
      * @brief Get number of registered secondary pools
@@ -321,10 +285,6 @@ class FrameContext
 
     // Synchronization primitives
     vk::raii::Fence fence_ = {nullptr};
-    // Non-owning pointer to a semaphore slot in PresentationContext::acquirePool_.
-    // Injected at acquireFrameImage(), valid until returnAcquireSemaphore() at next beginFrame().
-    const vk::raii::Semaphore *borrowedAcquireSemaphore_ = nullptr;
-
     // Graphics queue pools
     CommandPool graphicsPrimary_;
     std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> graphicsSecondary_{};
@@ -387,38 +347,19 @@ class FrameManager
     [[nodiscard]] FrameContext &current() noexcept;
 
     /**
-     * @brief Get frame context by index
-     */
-    [[nodiscard]] FrameContext &operator[](std::size_t index) noexcept
-    {
-        return frames_[index];
-    }
-
-    /**
      * @brief Get total number of frame contexts
      */
-    [[nodiscard]] std::size_t frameCount() const noexcept
-    {
-        return frames_.size();
-    }
+    [[nodiscard]] std::size_t frameCount() const noexcept;
 
     /**
      * @brief Get current frame index
      */
-    [[nodiscard]] std::size_t currentIndex() const noexcept
-    {
-        return currentIndex_;
-    }
+    [[nodiscard]] std::size_t currentIndex() const noexcept;
 
     /**
      * @brief Wait for all frames to complete
      */
-    void waitAll()
-    {
-        std::ranges::for_each(frames_ | std::views::all, [](FrameContext &frame) {
-            nrAssert(frame.waitForFence(), std::format("Timeout waiting for frame fence"));
-        });
-    }
+    void waitAll();
 
   private:
     std::vector<FrameContext> frames_;

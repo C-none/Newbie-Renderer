@@ -5,6 +5,11 @@ import nr.test;
 
 namespace
 {
+static_assert(!std::is_aggregate_v<nr::rhi::ops::ReadbackTicket>);
+static_assert(!std::is_copy_constructible_v<nr::rhi::ops::ReadbackTicket>);
+static_assert(std::is_move_constructible_v<nr::rhi::ops::ReadbackTicket>);
+static_assert(!std::is_move_assignable_v<nr::rhi::ops::ReadbackTicket>);
+
 const nr::test::CaseRegistrar ownershipTransferCase{
     "rhi upload ownership plans validate same and cross queue handoff", [] {
         auto transfer =
@@ -180,7 +185,6 @@ const nr::test::CaseRegistrar commandBatchFrameBoundaryCase{
         batch.setFrameBoundary(42u, flags, std::span<const vk::Image>{images.data(), images.size()});
 
         auto frameBoundary = batch.frameBoundarySubmitInfo();
-        nr::test::require(batch.hasFrameBoundary(), "batch should retain frame-boundary metadata");
         nr::test::require(frameBoundary.has_value(), "batch should build a frame-boundary view");
         auto submitInfo = batch.submitInfo2View(std::addressof(*frameBoundary));
         nr::test::require(submitInfo.pNext != nullptr, "submit info should expose frame-boundary pNext");
@@ -193,12 +197,11 @@ const nr::test::CaseRegistrar commandBatchFrameBoundaryCase{
         nr::test::requireEqual(boundary->imageCount, 1u);
         nr::test::require(boundary->pImages != nullptr, "frame-boundary images should point to batch-owned storage");
 
-        batch.clearFrameBoundary();
-        auto clearedFrameBoundary = batch.frameBoundarySubmitInfo();
-        auto clearedSubmitInfo = batch.submitInfo2View();
-        nr::test::require(!batch.hasFrameBoundary(), "clearFrameBoundary should remove metadata");
-        nr::test::require(!clearedFrameBoundary.has_value(), "cleared batch should not build a frame-boundary view");
-        nr::test::require(clearedSubmitInfo.pNext == nullptr, "cleared submit should not expose frame-boundary pNext");
+        auto emptyBatch = nr::rhi::CommandBatch{};
+        nr::test::require(!emptyBatch.frameBoundarySubmitInfo().has_value(),
+                          "an untouched batch should not build a frame-boundary view");
+        nr::test::require(emptyBatch.submitInfo2View().pNext == nullptr,
+                          "an untouched batch should not expose frame-boundary pNext");
     }};
 
 const nr::test::CaseRegistrar readbackSyncPlanCase{

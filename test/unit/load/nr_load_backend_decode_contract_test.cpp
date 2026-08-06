@@ -5,22 +5,6 @@ import nr.test;
 
 namespace
 {
-struct FooImporter : nr::load::SceneImporterBackendBase<FooImporter>
-{
-    [[nodiscard]] static bool supportsExtension(std::string_view extension)
-    {
-        return extension == ".foo";
-    }
-
-    [[nodiscard]] static nr::load::SceneImportResult importScene(const nr::load::SceneLoadRequest &request)
-    {
-        auto scene = nr::load::SceneAsset{};
-        scene.sourcePath = request.sourcePath;
-        scene.stats.nodeCount = 1;
-        return scene;
-    }
-};
-
 [[nodiscard]] nr::load::TextureAsset rawTexture(std::string key, std::uint32_t width, std::uint32_t height)
 {
     auto texture = nr::load::TextureAsset{};
@@ -35,27 +19,31 @@ struct FooImporter : nr::load::SceneImporterBackendBase<FooImporter>
 }
 
 const nr::test::CaseRegistrar backendDispatchCase{
-    "load backend registry validates path and extension", [] {
-        using Registry = std::tuple<FooImporter>;
-
-        auto empty = nr::load::SceneImporterRegistry<Registry>::import(nr::load::SceneLoadRequest{});
+    "load scene validates path and dispatches supported extensions to Assimp", [] {
+        auto empty = nr::load::loadScene(nr::load::SceneLoadRequest{});
         nr::test::require(!empty.has_value(), "empty source path should fail");
         nr::test::require(empty.error().code == nr::load::LoadErrorCode::invalidArgument,
                           "empty source path should be invalidArgument");
         nr::test::requireEqual(empty.error().backend, std::string{"registry"});
 
-        auto unsupported = nr::load::SceneImporterRegistry<Registry>::import(nr::load::SceneLoadRequest{
+        auto unsupported = nr::load::loadScene(nr::load::SceneLoadRequest{
             .sourcePath = std::filesystem::path{"asset.bar"},
         });
         nr::test::require(!unsupported.has_value(), "unsupported extension should fail");
         nr::test::require(unsupported.error().code == nr::load::LoadErrorCode::unsupportedFormat,
                           "unsupported extension should be unsupportedFormat");
+        nr::test::requireEqual(unsupported.error().backend, std::string{"registry"});
+        nr::test::requireEqual(unsupported.error().sourcePath, std::filesystem::path{"asset.bar"});
+        nr::test::require(unsupported.error().message.contains("'.bar'"),
+                          "unsupported-format diagnostics should contain the normalized extension");
 
-        auto imported = nr::load::SceneImporterRegistry<Registry>::import(nr::load::SceneLoadRequest{
-            .sourcePath = std::filesystem::path{"Asset.FOO"},
+        auto supported = nr::load::loadScene(nr::load::SceneLoadRequest{
+            .sourcePath = std::filesystem::path{"__nr_missing_asset__.GLTF"},
         });
-        nr::test::require(imported.has_value(), "case-normalized .foo extension should dispatch");
-        nr::test::requireEqual(imported->sourcePath.generic_string(), std::string{"Asset.FOO"});
+        nr::test::require(!supported.has_value(), "missing supported source should reach the Assimp boundary");
+        nr::test::require(supported.error().code == nr::load::LoadErrorCode::fileNotFound,
+                          "case-normalized .GLTF should dispatch before file validation");
+        nr::test::requireEqual(supported.error().backend, std::string{"assimp"});
     }};
 
 const nr::test::CaseRegistrar assimpTextureSemanticCase{

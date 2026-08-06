@@ -1,7 +1,7 @@
 module nr.utils;
 import :threading;
 import :errorHandle;
-import :staticUtils;
+import :staticUtilsConstants;
 import std;
 
 namespace nr::threading::detail

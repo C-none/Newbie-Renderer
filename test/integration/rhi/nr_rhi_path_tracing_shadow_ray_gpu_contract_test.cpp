@@ -323,7 +323,6 @@ void acquireTextureOnGraphics(nr::rhi::Device &device, const nr::rhi::ops::Image
         device.resourceFactory,
         nr::rhi::ShaderBindingTableBuildDesc{
             .pipeline = pipeline,
-            .capabilities = device.rayTracingCapabilities(),
             .raygen = nr::rhi::ShaderBindingTableSectionDesc{.records = raygenRecords},
             .miss = nr::rhi::ShaderBindingTableSectionDesc{.records = missRecords},
             .hit = nr::rhi::ShaderBindingTableSectionDesc{.records = hitRecords},
@@ -413,7 +412,10 @@ const nr::test::CaseRegistrar shadowRayTypeGpuContractCase{
             std::views::iota(std::uint32_t{0u}, kGeometryCount) |
             std::views::transform([&](std::uint32_t geometryIndex) {
                 return nr::rhi::makeBlasTriangleGeometryRecord(
-                    vertexBuffer,
+                    nr::rhi::BlasTriangleGeometryBuffers{
+                        .vertex = std::cref(vertexBuffer),
+                        .index = std::cref(indexBuffer),
+                    },
                     nr::rhi::BlasGeometryLayout{
                         .vertexStride = sizeof(RtContractVertex),
                         .indexType = vk::IndexType::eUint32,
@@ -576,8 +578,7 @@ const nr::test::CaseRegistrar shadowRayTypeGpuContractCase{
                                    .width = kLaneCount,
                                },
                                .recordingQueueRole = nr::rhi::QueueRole::Graphics,
-                           },
-                           device.rayTracingCapabilities());
+                           });
         nr::rhi::CommandRecorder::end(commandBuffer);
 
         auto batch = nr::rhi::CommandBatch{};

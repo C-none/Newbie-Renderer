@@ -526,7 +526,6 @@ createPathTracingPipelineRuntime(nr::rhi::Device &device, const PathTracingPipel
         device.resourceFactory,
         nr::rhi::ShaderBindingTableBuildDesc{
             .pipeline = pipeline,
-            .capabilities = device.rayTracingCapabilities(),
             .raygen =
                 nr::rhi::ShaderBindingTableSectionDesc{
                     .firstGroup = pipeline.shaderGroupIndex(kPathTracingRaygenGroupName),
@@ -1042,29 +1041,31 @@ bool PathTracingNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSk
         .storageBuffer("gSceneLights", inputs.sceneLights, "PathTracing.SceneLights")
         .storageBuffer("gSceneLightAliasTable", inputs.sceneLightAliasTable, "PathTracing.SceneLightAliasTable")
         .prepare([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
-                  cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
-            detail::prepareSceneTextureTableBindingForFrame(*pipeline, cache.get(), prepareContext.frameIndex,
-                                                            sceneTextureTableBinding,
+                  cache = std::ref(bindlessImageTableCache)](
+                     const nr::renderer::PassPrepareContext &prepareContext,
+                     nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>::PassBindingHandle passBinding) {
+            detail::prepareSceneTextureTableBindingForFrame(*pipeline, passBinding, cache.get(),
+                                                            prepareContext.frameIndex, sceneTextureTableBinding,
                                                             detail::SceneTextureTableBindingRequirement::optional);
         })
         .dynamicBindingSnapshot([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
                                  cache = std::ref(bindlessImageTableCache)](
-                                    const nr::renderer::PassPrepareContext &prepareContext) {
-            return detail::makeSceneTextureTableBindingSnapshot(*pipeline, cache.get(), prepareContext.frameIndex,
-                                                                sceneTextureTableBinding,
+                                    const nr::renderer::PassPrepareContext &prepareContext,
+                                    nr::renderer::PipelineRuntime<
+                                        nr::rhi::RayTracingPipeline>::PassBindingHandle passBinding) {
+            return detail::makeSceneTextureTableBindingSnapshot(*pipeline, passBinding, cache.get(),
+                                                                prepareContext.frameIndex, sceneTextureTableBinding,
                                                                 detail::SceneTextureTableBindingRequirement::optional);
         })
         .record([pipeline = activeRuntime.pipeline, shaderBindingTable = activeRuntime.shaderBindingTable, dimensions,
-                 queueRole,
-                 device = std::cref(device_->get())](const nr::renderer::RayTracingPassRecordContext &rayContext) {
+                 queueRole](const nr::renderer::RayTracingPassRecordContext &rayContext) {
             nr::rhi::traceRays(rayContext.commandBuffer,
                                nr::rhi::TraceRaysDesc{
                                    .pipeline = pipeline->pipeline(),
                                    .shaderBindingTable = shaderBindingTable.get(),
                                    .dimensions = dimensions,
                                    .recordingQueueRole = queueRole,
-                               },
-                               device.get().rayTracingCapabilities());
+                               });
         });
     patch.patch();
     return true;
@@ -1141,29 +1142,31 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
         .storageBuffer("gSceneLights", inputs.sceneLights, "PathTracing.SceneLights")
         .storageBuffer("gSceneLightAliasTable", inputs.sceneLightAliasTable, "PathTracing.SceneLightAliasTable")
         .prepare([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
-                  cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
-            detail::prepareSceneTextureTableBindingForFrame(*pipeline, cache.get(), prepareContext.frameIndex,
-                                                            sceneTextureTableBinding,
+                  cache = std::ref(bindlessImageTableCache)](
+                     const nr::renderer::PassPrepareContext &prepareContext,
+                     nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>::PassBindingHandle passBinding) {
+            detail::prepareSceneTextureTableBindingForFrame(*pipeline, passBinding, cache.get(),
+                                                            prepareContext.frameIndex, sceneTextureTableBinding,
                                                             detail::SceneTextureTableBindingRequirement::optional);
         })
         .dynamicBindingSnapshot([pipeline = activeRuntime.pipeline, sceneTextureTableBinding,
                                  cache = std::ref(bindlessImageTableCache)](
-                                    const nr::renderer::PassPrepareContext &prepareContext) {
-            return detail::makeSceneTextureTableBindingSnapshot(*pipeline, cache.get(), prepareContext.frameIndex,
-                                                                sceneTextureTableBinding,
+                                    const nr::renderer::PassPrepareContext &prepareContext,
+                                    nr::renderer::PipelineRuntime<
+                                        nr::rhi::RayTracingPipeline>::PassBindingHandle passBinding) {
+            return detail::makeSceneTextureTableBindingSnapshot(*pipeline, passBinding, cache.get(),
+                                                                prepareContext.frameIndex, sceneTextureTableBinding,
                                                                 detail::SceneTextureTableBindingRequirement::optional);
         })
         .record([pipeline = activeRuntime.pipeline, shaderBindingTable = activeRuntime.shaderBindingTable, dimensions,
-                 queueRole,
-                 device = std::cref(device_->get())](const nr::renderer::RayTracingPassRecordContext &rayContext) {
+                 queueRole](const nr::renderer::RayTracingPassRecordContext &rayContext) {
             nr::rhi::traceRays(rayContext.commandBuffer,
                                nr::rhi::TraceRaysDesc{
                                    .pipeline = pipeline->pipeline(),
                                    .shaderBindingTable = shaderBindingTable.get(),
                                    .dimensions = dimensions,
                                    .recordingQueueRole = queueRole,
-                               },
-                               device.get().rayTracingCapabilities());
+                               });
         });
 
     [[maybe_unused]] auto tracePassHandle = tracePass.build();

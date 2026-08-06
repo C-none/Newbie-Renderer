@@ -49,40 +49,44 @@ namespace
 
 [[nodiscard]] PassResourceUseDesc imageCopySourceUse(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
-    return use::make<use::spec::CopySource>(resource, use::ImageUseOptions{
-                                                          .aspect = aspect,
-                                                      });
+    return use::copySource(resource, aspect);
 }
 
 [[nodiscard]] PassResourceUseDesc imageCopyDestinationUse(GraphResourceHandle resource,
                                                           ImageAspectIntent aspect) noexcept
 {
-    return use::make<use::spec::CopyDestination>(resource, use::ImageUseOptions{
-                                                               .aspect = aspect,
-                                                           });
+    return use::copyDestination(resource, aspect);
+}
+
+[[nodiscard]] bool copySourceEqualsDestination(const CopyPassDesc &copy) noexcept
+{
+    return std::visit(
+        [](const auto &desc) {
+            using DescT = std::remove_cvref_t<decltype(desc)>;
+            if constexpr (std::same_as<DescT, CopyBufferToBufferPassDesc> ||
+                          std::same_as<DescT, CopyImageToImagePassDesc>)
+            {
+                return desc.source == desc.destination;
+            }
+            else if constexpr (std::same_as<DescT, CopyBufferToImagePassDesc>)
+            {
+                return desc.sourceBuffer == desc.destinationImage;
+            }
+            else
+            {
+                return desc.sourceImage == desc.destinationBuffer;
+            }
+        },
+        copy);
 }
 } // namespace
-
-RenderGraphNodeContext::RenderGraphNodeContext(RenderGraphBuilder &builder, GraphNodeHandle node) noexcept
-    : builder_(builder), node(node)
-{
-}
-
-[[nodiscard]] GraphNodeHandle RenderGraphNodeContext::nodeHandle() const noexcept
-{
-    return node;
-}
-
-[[nodiscard]] RenderGraphBuilder &RenderGraphNodeContext::builder() noexcept
-{
-    return builder_.get();
-}
 
 void RenderGraphBuilder::clear()
 {
     // Release per-pass payload before clearing the top-level pass list.
     std::ranges::for_each(frame_.passes, [](PassExecutionDesc &pass) {
         pass.resourceUses.clear();
+        pass.frameDataUses.clear();
         pass.copy.reset();
         pass.record = nullptr;
         pass.parallelRecord.reset();
@@ -130,28 +134,27 @@ void RenderGraphBuilder::clear()
     return handle;
 }
 
-[[nodiscard]] RenderGraphNodeContext RenderGraphBuilder::makeNodeContext(GraphNodeHandle node)
-{
-    nrAssert(node.valid(), "RenderGraphBuilder::makeNodeContext requires a valid node handle.");
-    nrAssert(containsNode(node), "RenderGraphBuilder::makeNodeContext requires an existing node handle.");
-    return RenderGraphNodeContext{*this, node};
-}
-
 [[nodiscard]] GraphPassHandle RenderGraphBuilder::addPass(std::string_view debugName, GraphNodeHandle node,
                                                           std::span<const PassResourceUseDesc> intentList,
                                                           PassRecordCallback executeLambda,
                                                           PassPrepareCallback prepareCallback, bool isCopyPass,
-                                                          vk::PipelineStageFlags2 shaderStages)
+                                                          vk::PipelineStageFlags2 shaderStages,
+                                                          std::span<const GraphFrameDataHandle> frameDataUses)
 {
     validatePassCallbackContract(executeLambda, std::nullopt, isCopyPass);
-    validatePassResourceUses(intentList, isCopyPass);
+    auto resourceUses = canonicalizePassResourceUses(intentList, false);
+    auto canonicalFrameDataUses = canonicalizeFrameDataUses(frameDataUses);
+    if (isCopyPass)
+    {
+        validateCopyPassResourceUses(resourceUses);
+    }
 
     auto passHandle = addPassCore(debugName, node, isCopyPass, shaderStages);
     auto &pass = frame_.passes.back();
     nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
 
-    pass.resourceUses.reserve(intentList.size());
-    std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
+    pass.resourceUses = std::move(resourceUses);
+    pass.frameDataUses = std::move(canonicalFrameDataUses);
     pass.prepare = std::move(prepareCallback);
     pass.record = std::move(executeLambda);
 
@@ -162,17 +165,19 @@ void RenderGraphBuilder::clear()
                                                           std::span<const PassResourceUseDesc> intentList,
                                                           PassParallelRecordDesc parallelRecord,
                                                           PassPrepareCallback prepareCallback,
-                                                          vk::PipelineStageFlags2 shaderStages)
+                                                          vk::PipelineStageFlags2 shaderStages,
+                                                          std::span<const GraphFrameDataHandle> frameDataUses)
 {
     validatePassCallbackContract(PassRecordCallback{}, parallelRecord, false);
-    validatePassResourceUses(intentList, false);
+    auto resourceUses = canonicalizePassResourceUses(intentList, false);
+    auto canonicalFrameDataUses = canonicalizeFrameDataUses(frameDataUses);
 
     auto passHandle = addPassCore(debugName, node, false, shaderStages);
     auto &pass = frame_.passes.back();
     nrAssert(pass.handle == passHandle, "RenderGraphBuilder::addPass pass insertion invariant failed.");
 
-    pass.resourceUses.reserve(intentList.size());
-    std::ranges::copy(intentList, std::back_inserter(pass.resourceUses));
+    pass.resourceUses = std::move(resourceUses);
+    pass.frameDataUses = std::move(canonicalFrameDataUses);
     pass.prepare = std::move(prepareCallback);
     pass.parallelRecord = std::move(parallelRecord);
 
@@ -182,9 +187,12 @@ void RenderGraphBuilder::clear()
 [[nodiscard]] GraphPassHandle RenderGraphBuilder::addCopyPass(std::string_view debugName, GraphNodeHandle node,
                                                               CopyPassDesc copy)
 {
+    nrAssert(!copySourceEqualsDestination(copy),
+             "RenderGraphBuilder::addCopyPass requires distinct source and destination resources.");
     auto resourceUses = makeCopyPassResourceUses(copy);
     validatePassCallbackContract(PassRecordCallback{}, std::nullopt, true);
-    validatePassResourceUses(std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, true);
+    resourceUses = canonicalizePassResourceUses(resourceUses, true);
+    validateCopyPassResourceUses(resourceUses);
 
     auto passHandle = addPassCore(debugName, node, true, vk::PipelineStageFlagBits2::eTransfer);
     auto &pass = frame_.passes.back();
@@ -392,86 +400,6 @@ void RenderGraphBuilder::clear()
            use.imageAspect.has_value();
 }
 
-[[nodiscard]] bool RenderGraphBuilder::bufferAccessReads(BufferAccessIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case BufferAccessIntent::TransferRead:
-    case BufferAccessIntent::UniformRead:
-    case BufferAccessIntent::ShaderSampleRead:
-    case BufferAccessIntent::ShaderStorageRead:
-    case BufferAccessIntent::ShaderStorageReadWrite:
-    case BufferAccessIntent::VertexRead:
-    case BufferAccessIntent::IndexRead:
-    case BufferAccessIntent::IndirectRead:
-    case BufferAccessIntent::TexelRead:
-    case BufferAccessIntent::TexelReadWrite:
-    case BufferAccessIntent::AccelerationStructureRead:
-    case BufferAccessIntent::AccelerationStructureBuildInputRead:
-    case BufferAccessIntent::AccelerationStructureScratchReadWrite:
-    case BufferAccessIntent::ShaderBindingTableRead:
-    case BufferAccessIntent::HostRead:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::bufferAccessWrites(BufferAccessIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case BufferAccessIntent::TransferWrite:
-    case BufferAccessIntent::ShaderStorageWrite:
-    case BufferAccessIntent::ShaderStorageReadWrite:
-    case BufferAccessIntent::TexelWrite:
-    case BufferAccessIntent::TexelReadWrite:
-    case BufferAccessIntent::AccelerationStructureWrite:
-    case BufferAccessIntent::AccelerationStructureScratchReadWrite:
-    case BufferAccessIntent::HostWrite:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::imageAccessReads(ImageAccessIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case ImageAccessIntent::TransferRead:
-    case ImageAccessIntent::SampledRead:
-    case ImageAccessIntent::StorageRead:
-    case ImageAccessIntent::StorageReadWrite:
-    case ImageAccessIntent::ColorAttachmentRead:
-    case ImageAccessIntent::ColorAttachmentReadWrite:
-    case ImageAccessIntent::DepthStencilRead:
-    case ImageAccessIntent::DepthStencilReadWrite:
-    case ImageAccessIntent::InputAttachmentRead:
-    case ImageAccessIntent::PresentRead:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::imageAccessWrites(ImageAccessIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case ImageAccessIntent::TransferWrite:
-    case ImageAccessIntent::StorageWrite:
-    case ImageAccessIntent::StorageReadWrite:
-    case ImageAccessIntent::ColorAttachmentWrite:
-    case ImageAccessIntent::ColorAttachmentReadWrite:
-    case ImageAccessIntent::DepthStencilWrite:
-    case ImageAccessIntent::DepthStencilReadWrite:
-        return true;
-    default:
-        return false;
-    }
-}
-
 [[nodiscard]] bool RenderGraphBuilder::bufferAccessUsesShaderStages(BufferAccessIntent intent) noexcept
 {
     switch (intent)
@@ -504,135 +432,6 @@ void RenderGraphBuilder::clear()
     }
 }
 
-[[nodiscard]] bool RenderGraphBuilder::accelerationStructureAccessReads(
-    AccelerationStructureAccessIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case AccelerationStructureAccessIntent::BuildRead:
-    case AccelerationStructureAccessIntent::TraceRead:
-    case AccelerationStructureAccessIntent::CopyRead:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::accelerationStructureAccessWrites(
-    AccelerationStructureAccessIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case AccelerationStructureAccessIntent::BuildWrite:
-    case AccelerationStructureAccessIntent::CopyWrite:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::accelerationStructureUsageReads(AccelerationStructureUsageIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case AccelerationStructureUsageIntent::BuildInput:
-    case AccelerationStructureUsageIntent::TraceInput:
-    case AccelerationStructureUsageIntent::CopySource:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::accelerationStructureUsageWrites(
-    AccelerationStructureUsageIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case AccelerationStructureUsageIntent::BuildOutput:
-    case AccelerationStructureUsageIntent::CopyDestination:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::bufferUsageReads(BufferUsageIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case BufferUsageIntent::TransferSrc:
-    case BufferUsageIntent::Uniform:
-    case BufferUsageIntent::StorageRead:
-    case BufferUsageIntent::StorageReadWrite:
-    case BufferUsageIntent::Vertex:
-    case BufferUsageIntent::Index:
-    case BufferUsageIntent::Indirect:
-    case BufferUsageIntent::UniformTexel:
-    case BufferUsageIntent::StorageTexelRead:
-    case BufferUsageIntent::StorageTexelReadWrite:
-    case BufferUsageIntent::AccelerationStructureBuildInput:
-    case BufferUsageIntent::HostUpload:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::bufferUsageWrites(BufferUsageIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case BufferUsageIntent::TransferDst:
-    case BufferUsageIntent::StorageWrite:
-    case BufferUsageIntent::StorageReadWrite:
-    case BufferUsageIntent::StorageTexelWrite:
-    case BufferUsageIntent::StorageTexelReadWrite:
-    case BufferUsageIntent::AccelerationStructureStorage:
-    case BufferUsageIntent::AccelerationStructureScratch:
-    case BufferUsageIntent::Readback:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::imageUsageReads(ImageUsageIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case ImageUsageIntent::TransferSrc:
-    case ImageUsageIntent::Sampled:
-    case ImageUsageIntent::StorageRead:
-    case ImageUsageIntent::StorageReadWrite:
-    case ImageUsageIntent::DepthStencilReadOnly:
-    case ImageUsageIntent::InputAttachment:
-    case ImageUsageIntent::ResolveSrc:
-    case ImageUsageIntent::PresentSource:
-    case ImageUsageIntent::CopySource:
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool RenderGraphBuilder::imageUsageWrites(ImageUsageIntent intent) noexcept
-{
-    switch (intent)
-    {
-    case ImageUsageIntent::TransferDst:
-    case ImageUsageIntent::StorageWrite:
-    case ImageUsageIntent::StorageReadWrite:
-    case ImageUsageIntent::ColorAttachment:
-    case ImageUsageIntent::DepthStencilAttachment:
-    case ImageUsageIntent::ResolveDst:
-    case ImageUsageIntent::CopyDestination:
-        return true;
-    default:
-        return false;
-    }
-}
-
 [[nodiscard]] bool RenderGraphBuilder::isCopySourceUse(const PassResourceUseDesc &use) noexcept
 {
     return use.bufferUsage == BufferUsageIntent::TransferSrc || use.bufferUsage == BufferUsageIntent::HostUpload ||
@@ -653,6 +452,13 @@ void RenderGraphBuilder::clear()
 [[nodiscard]] bool RenderGraphBuilder::isPresentUse(const PassResourceUseDesc &use) noexcept
 {
     return use.imageUsage == ImageUsageIntent::PresentSource;
+}
+
+[[nodiscard]] bool RenderGraphBuilder::isImplicitCopyPresentTransition(const PassResourceUseDesc &previous,
+                                                                       const PassResourceUseDesc &current) noexcept
+{
+    return previous.resource == current.resource && previous.imageUsage == ImageUsageIntent::CopyDestination &&
+           current.imageUsage == ImageUsageIntent::PresentSource;
 }
 
 void RenderGraphBuilder::validatePassCallbackContract(const PassRecordCallback &executeLambda,
@@ -676,60 +482,6 @@ void RenderGraphBuilder::validatePassCallbackContract(const PassRecordCallback &
         nrAssert(static_cast<bool>(parallelRecord->recordRange),
                  "RenderGraphBuilder::addPass parallel record requires a range-record callback.");
     }
-}
-
-void RenderGraphBuilder::validatePassUseReadOnlyContract(const PassResourceUseDesc &use)
-{
-    auto hasExplicitAccess = false;
-    auto reads = false;
-    auto writes = false;
-
-    if (use.bufferAccess.has_value() && *use.bufferAccess != BufferAccessIntent::None)
-    {
-        hasExplicitAccess = true;
-        reads = bufferAccessReads(*use.bufferAccess);
-        writes = bufferAccessWrites(*use.bufferAccess);
-    }
-    else if (use.imageAccess.has_value() && *use.imageAccess != ImageAccessIntent::None)
-    {
-        hasExplicitAccess = true;
-        reads = imageAccessReads(*use.imageAccess);
-        writes = imageAccessWrites(*use.imageAccess);
-    }
-    else if (use.accelerationStructureAccess.has_value() &&
-             *use.accelerationStructureAccess != AccelerationStructureAccessIntent::None)
-    {
-        hasExplicitAccess = true;
-        reads = accelerationStructureAccessReads(*use.accelerationStructureAccess);
-        writes = accelerationStructureAccessWrites(*use.accelerationStructureAccess);
-    }
-
-    if (!hasExplicitAccess)
-    {
-        if (use.bufferUsage.has_value())
-        {
-            reads = bufferUsageReads(*use.bufferUsage);
-            writes = bufferUsageWrites(*use.bufferUsage);
-        }
-        else if (use.imageUsage.has_value())
-        {
-            reads = imageUsageReads(*use.imageUsage);
-            writes = imageUsageWrites(*use.imageUsage);
-        }
-        else if (use.accelerationStructureUsage.has_value())
-        {
-            reads = accelerationStructureUsageReads(*use.accelerationStructureUsage);
-            writes = accelerationStructureUsageWrites(*use.accelerationStructureUsage);
-        }
-    }
-
-    if (!reads && !writes)
-    {
-        return;
-    }
-
-    nrAssert(use.readOnly == (reads && !writes),
-             "RenderGraphBuilder::addPass resource use readOnly flag does not match declared access intent.");
 }
 
 void RenderGraphBuilder::validatePassResourceUse(const PassResourceUseDesc &use) const
@@ -772,32 +524,72 @@ void RenderGraphBuilder::validatePassResourceUse(const PassResourceUseDesc &use)
         nrAssert(shaderStageCompatible,
                  "RenderGraphBuilder::addPass shader stage override requires a buffer/image shader access intent.");
     }
-
-    validatePassUseReadOnlyContract(use);
 }
 
-void RenderGraphBuilder::validatePassResourceUses(std::span<const PassResourceUseDesc> intentList,
-                                                  bool isCopyPass) const
+[[nodiscard]] std::vector<PassResourceUseDesc> RenderGraphBuilder::canonicalizePassResourceUses(
+    std::span<const PassResourceUseDesc> intentList, bool allowImplicitCopyPresentTransition) const
 {
-    std::ranges::for_each(intentList, [this](const PassResourceUseDesc &use) { validatePassResourceUse(use); });
+    auto canonical = std::vector<PassResourceUseDesc>{};
+    canonical.reserve(intentList.size());
 
-    if (!isCopyPass)
-    {
-        return;
-    }
+    std::ranges::for_each(intentList, [&](const PassResourceUseDesc &use) {
+        validatePassResourceUse(use);
 
-    auto hasSource = std::ranges::any_of(intentList, isCopySourceUse);
-    auto hasDestination = std::ranges::any_of(intentList, isCopyDestinationUse);
+        if (std::ranges::find(canonical, use) != canonical.end())
+        {
+            return;
+        }
+
+        auto const sameResource = std::ranges::find_if(
+            canonical, [&](const PassResourceUseDesc &candidate) { return candidate.resource == use.resource; });
+        if (sameResource == canonical.end())
+        {
+            canonical.push_back(use);
+            return;
+        }
+
+        nrAssert(allowImplicitCopyPresentTransition && isImplicitCopyPresentTransition(*sameResource, use) &&
+                     std::ranges::count_if(
+                         canonical,
+                         [&](const PassResourceUseDesc &candidate) { return candidate.resource == use.resource; }) == 1,
+                 "RenderGraphBuilder::addPass resource handle has conflicting use declarations.");
+        canonical.push_back(use);
+    });
+
+    return canonical;
+}
+
+[[nodiscard]] std::vector<GraphFrameDataHandle> RenderGraphBuilder::canonicalizeFrameDataUses(
+    std::span<const GraphFrameDataHandle> frameDataUses) const
+{
+    auto canonical = std::vector<GraphFrameDataHandle>{};
+    canonical.reserve(frameDataUses.size());
+    std::ranges::for_each(frameDataUses, [&](GraphFrameDataHandle handle) {
+        nrAssert(handle.valid(), "RenderGraphBuilder::addPass requires valid frame-data handles.");
+        nrAssert(containsFrameData(handle),
+                 "RenderGraphBuilder::addPass frame-data handle validation failed.");
+        if (!std::ranges::contains(canonical, handle))
+        {
+            canonical.push_back(handle);
+        }
+    });
+    return canonical;
+}
+
+void RenderGraphBuilder::validateCopyPassResourceUses(std::span<const PassResourceUseDesc> resourceUses)
+{
+    auto hasSource = std::ranges::any_of(resourceUses, isCopySourceUse);
+    auto hasDestination = std::ranges::any_of(resourceUses, isCopyDestinationUse);
     nrAssert(hasSource, "RenderGraphBuilder::addPass copy pass requires a source copy intent.");
     nrAssert(hasDestination, "RenderGraphBuilder::addPass copy pass requires a destination copy intent.");
 
-    auto presentTargetsDestination = std::ranges::all_of(intentList, [&](const PassResourceUseDesc &use) {
+    auto presentTargetsDestination = std::ranges::all_of(resourceUses, [&](const PassResourceUseDesc &use) {
         if (!isPresentUse(use))
         {
             return true;
         }
 
-        return std::ranges::any_of(intentList, [&](const PassResourceUseDesc &dstUse) {
+        return std::ranges::any_of(resourceUses, [&](const PassResourceUseDesc &dstUse) {
             return isImageCopyDestinationUse(dstUse) && dstUse.resource == use.resource;
         });
     });
@@ -810,41 +602,15 @@ void RenderGraphBuilder::validatePassResourceUses(std::span<const PassResourceUs
     return std::ranges::find_if(frame_.nodes, [handle](const GraphNodeDesc &desc) { return desc.handle == handle; });
 }
 
-[[nodiscard]] bool RenderGraphBuilder::containsNode(GraphNodeHandle handle) const
-{
-    return findNode(handle) != frame_.nodes.end();
-}
-
 [[nodiscard]] bool RenderGraphBuilder::containsResource(GraphResourceHandle handle) const
 {
     return resourceIndexByHandle_.contains(handle);
 }
 
-GraphPassHandle RenderGraphNodeContext::addPass(std::span<const PassResourceUseDesc> intentList,
-                                                std::string_view debugName, PassRecordCallback executeLambda,
-                                                PassPrepareCallback prepareCallback, bool isCopyPass,
-                                                vk::PipelineStageFlags2 shaderStages)
+[[nodiscard]] bool RenderGraphBuilder::containsFrameData(GraphFrameDataHandle handle) const
 {
-    return builder_.get().addPass(debugName, node, intentList, std::move(executeLambda), std::move(prepareCallback),
-                                  isCopyPass, shaderStages);
+    return std::ranges::any_of(frame_.frameData,
+                               [handle](const GraphFrameDataDesc &desc) { return desc.handle == handle; });
 }
 
-GraphPassHandle RenderGraphNodeContext::addPass(std::span<const PassResourceUseDesc> intentList,
-                                                std::string_view debugName, PassParallelRecordDesc parallelRecord,
-                                                PassPrepareCallback prepareCallback,
-                                                vk::PipelineStageFlags2 shaderStages)
-{
-    return builder_.get().addPass(debugName, node, intentList, std::move(parallelRecord), std::move(prepareCallback),
-                                  shaderStages);
-}
-
-GraphPassHandle RenderGraphNodeContext::addCopyPass(std::string_view debugName, CopyPassDesc copy)
-{
-    return builder_.get().addCopyPass(debugName, node, std::move(copy));
-}
-
-GraphSubmitHandle RenderGraphNodeContext::addSubmitNode(std::string_view debugName, SubmitBoundaryKind kind)
-{
-    return builder_.get().addSubmitNode(debugName, kind);
-}
 } // namespace nr::renderer

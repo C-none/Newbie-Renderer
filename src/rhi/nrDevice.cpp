@@ -37,26 +37,6 @@ namespace
     return rtCapabilities_;
 }
 
-[[nodiscard]] const DescriptorIndexingCapabilitySnapshot &Device::descriptorIndexingCapabilities() const noexcept
-{
-    return descriptorIndexingCapabilities_;
-}
-
-[[nodiscard]] const BufferDeviceAddressCapabilitySnapshot &Device::bufferDeviceAddressCapabilities() const noexcept
-{
-    return bufferDeviceAddressCapabilities_;
-}
-
-[[nodiscard]] const Vulkan14CapabilitySnapshot &Device::vulkan14Capabilities() const noexcept
-{
-    return vulkan14Capabilities_;
-}
-
-[[nodiscard]] const Vulkan14PropertySnapshot &Device::vulkan14Properties() const noexcept
-{
-    return vulkan14Properties_;
-}
-
 [[nodiscard]] const ops::QueueFamilyTransferPolicy &Device::queueFamilyTransferPolicy() const noexcept
 {
     return queueFamilyTransferPolicy_;
@@ -85,7 +65,7 @@ namespace
 
 [[nodiscard]] bool Device::hasEnabledDeviceExtension(std::string_view extension) const
 {
-    return std::ranges::any_of(deviceEnabledExtensions,
+    return std::ranges::any_of(enabledDeviceExtensions_,
                                [extension](const std::string &item) { return item == extension; });
 }
 
@@ -104,7 +84,9 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
             debugUtilsMessenger = vk::raii::DebugUtilsMessengerEXT(instance, makeDebugUtilsMessengerCreateInfoEXT());
         }
     }
-    physicalDevice = selectPhysicalDevice(instance);
+    presentationContext.createSurface(instance, appName);
+    physicalDevice =
+        selectPhysicalDevice(instance, presentationContext.surfaceHandle(), requestedDeviceExtensions_);
     {
         auto gpuProps = physicalDevice.getProperties();
         nrInfo<>(std::format("Selected GPU: {}", gpuProps.deviceName.data()));
@@ -117,30 +99,15 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
                  std::format("DLSS RR Vulkan device-extension discovery failed: {} (native code {}).",
                              deviceExtensionQuery.status.message, deviceExtensionQuery.status.nativeCode));
         auto addDeviceExtensionIfMissing = [&](std::string_view extension) {
-            if (std::ranges::none_of(deviceEnabledExtensions,
+            if (std::ranges::none_of(requestedDeviceExtensions_,
                                      [extension](const std::string &item) { return item == extension; }))
             {
-                deviceEnabledExtensions.emplace_back(extension);
+                requestedDeviceExtensions_.emplace_back(extension);
             }
         };
         std::ranges::for_each(deviceExtensionQuery.names, addDeviceExtensionIfMissing);
     }
-    try
-    {
-        device = makeDevice();
-    }
-    catch (const vk::SystemError &error)
-    {
-        nrLog(LogLevel::error,
-              std::format("Device::initialize failed while creating the Vulkan logical device: {}", error.what()),
-              std::source_location::current(), true);
-    }
-    catch (const std::exception &error)
-    {
-        nrLog(LogLevel::error,
-              std::format("Device::initialize failed while creating the Vulkan logical device: {}", error.what()),
-              std::source_location::current(), true);
-    }
+    device = makeDevice();
 
     memoryAllocator.initialize(instance, physicalDevice, device);
     resourceFactory.initialize(memoryAllocator, device);
@@ -152,10 +119,9 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
 
     swapChainConfig_.hdrMetadataEnabled = hdrMetadataEnabled_;
     swapChainConfig_.fullScreenExclusiveEnabled = true;
-    presentationContext.initialize(instance, physicalDevice, device, appName, swapChainConfig_,
-                                   presentQueueFamilyIndex());
-    refreshPresentSemaphores();
-    pipelineService.bindDevice(device, std::cref(rtCapabilities_), std::move(pipelineCache));
+    presentationContext.initializeSwapchain(physicalDevice, device, swapChainConfig_, presentQueueFamilyIndex());
+    pipelineService.bindDevice(device, physicalDevice.getProperties().limits.maxBoundDescriptorSets,
+                               rtCapabilities_, std::move(pipelineCache));
 }
 
 [[nodiscard]] Device::FrameBeginResult Device::beginFrame()
@@ -191,8 +157,6 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
     nrAssert(!presentationContext.hasActiveSwapchainImage(),
              "Device::beginFrame requires the previous frame's active swapchain image to be cleared.");
     presentationContext.setFrameSubmitted(false);
-    frameSubmitCount_ = 0;
-    frameFinalSubmitRole_.reset();
     presentFrameBoundaryFrameID_.reset();
     frameAcquireRequiresRecreate_ = false;
     nsightGraphics_.beginFrame(frameBoundaryEnabled_);
@@ -221,8 +185,6 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
     nrAssert(acquire.result == vk::Result::eSuccess || acquire.result == vk::Result::eSuboptimalKHR,
              "Device::acquireFrameImage failed to acquire a valid swapchain image after recreation.");
 
-    auto &frame = frameManager.current();
-    frame.setBorrowedAcquireSemaphore(&presentationContext.borrowedAcquireSemaphore(frameIndex));
     presentationContext.setActiveSwapchainImage(acquire.imageIndex);
     frameAcquireRequiresRecreate_ = PresentationContext::needsSwapchainRecreate(acquire.result);
 
@@ -236,15 +198,13 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
 void Device::submitFrameBatch(CommandBatch &&batch, QueueRole submitRole, bool signalForPresent,
                               vk::PipelineStageFlags2 imageAvailableWaitStage)
 {
-    nrAssert(!(frameFinalSubmitRole_.has_value() && !signalForPresent),
+    nrAssert(!presentationContext.hasSubmittedCurrentFrame(),
              "Device::submitFrameBatch cannot submit additional batches after final present-signaling submit.");
 
     if (signalForPresent)
     {
         nrAssert(presentationContext.hasActiveSwapchainImage(),
                  "Device::submitFrameBatch final submission requires acquireFrameImage().");
-        nrAssert(!frameFinalSubmitRole_.has_value(),
-                 "Device::submitFrameBatch final present-signaling submit can only happen once per frame.");
         nrAssert(
             submitRole == presentSubmitRole(),
             "Device::submitFrameBatch compute-present policy requires the compute queue when signalForPresent=true.");
@@ -257,12 +217,13 @@ void Device::submitFrameBatch(CommandBatch &&batch, QueueRole submitRole, bool s
     // from stalling earlier GPU batches that do not touch the swapchain image.
     if (signalForPresent)
     {
-        batch.addWait(frame.imageAvailable(), imageAvailableWaitStage);
+        auto const frameIndex = static_cast<std::uint32_t>(frameManager.currentIndex());
+        batch.addWait(presentationContext.borrowedAcquireSemaphore(frameIndex), imageAvailableWaitStage);
     }
 
     if (signalForPresent)
     {
-        batch.addSignal(activePresentSemaphore());
+        batch.addSignal(presentationContext.activePresentSemaphore());
     }
 
     auto frameBoundaryFrameID = batch.frameBoundaryFrameID();
@@ -286,11 +247,8 @@ void Device::submitFrameBatch(CommandBatch &&batch, QueueRole submitRole, bool s
                      : std::nullopt;
     submitToRole(std::move(batch), submitRole, fence);
 
-    ++frameSubmitCount_;
-
     if (signalForPresent)
     {
-        frameFinalSubmitRole_ = submitRole;
         presentationContext.setFrameSubmitted(true);
         presentFrameBoundaryFrameID_.reset();
         if (frameBoundaryEnabled_)
@@ -306,39 +264,18 @@ void Device::submitFrameBatch(CommandBatch &&batch, QueueRole submitRole, bool s
                      vk::PipelineStageFlags2{vk::PipelineStageFlagBits2::eAllCommands});
 }
 
-void Device::submitFrame(CommandBatch &&batch, QueueRole submitRole)
-{
-    submitFrameBatch(std::move(batch), submitRole, true);
-}
-
-[[nodiscard]] bool Device::canPresentCurrentFrame() const noexcept
-{
-    return frameSubmitCount_ > 0 && frameFinalSubmitRole_.has_value() &&
-           *frameFinalSubmitRole_ == presentSubmitRole() && presentationContext.hasSubmittedCurrentFrame();
-}
-
-[[nodiscard]] QueueRole Device::submitRoleForPresent() const noexcept
-{
-    return frameFinalSubmitRole_.value_or(presentSubmitRole());
-}
-
-[[nodiscard]] std::uint32_t Device::frameSubmitCount() const noexcept
-{
-    return frameSubmitCount_;
-}
-
 [[nodiscard]] PresentResult Device::presentFrame()
 {
     nrAssert(presentationContext.hasActiveSwapchainImage(),
              "Device::presentFrame requires beginFrame() before present.");
-    nrAssert(canPresentCurrentFrame(), "Device::presentFrame compute-present policy requires a compute-queue final "
-                                       "submission that signals the active present semaphore.");
+    nrAssert(presentationContext.hasSubmittedCurrentFrame(),
+             "Device::presentFrame compute-present policy requires a final submission that signals the active present "
+             "semaphore.");
 
     auto const presentImage = activeSwapchainImageRawForExternalTools();
     nsightGraphics_.stopTraceBeforeBoundaryIfNeeded(presentImage);
 
-    auto presentResult =
-        presentationContext.present(queueManager, activePresentSemaphore(), presentFrameBoundaryFrameID_);
+    auto presentResult = presentationContext.present(queueManager, presentFrameBoundaryFrameID_);
     nsightGraphics_.markFrameBoundaryAfterPresent(presentResult.result, presentImage);
 
     auto const recreateRequested = presentationContext.consumeSwapchainRecreateRequest();
@@ -354,18 +291,10 @@ void Device::submitFrame(CommandBatch &&batch, QueueRole submitRole)
     frameManager.advanceFrame();
     presentationContext.clearActiveSwapchainImage();
     presentationContext.setFrameSubmitted(false);
-    frameSubmitCount_ = 0;
-    frameFinalSubmitRole_.reset();
     presentFrameBoundaryFrameID_.reset();
     frameAcquireRequiresRecreate_ = false;
 
     return presentResult;
-}
-
-[[nodiscard]] PresentResult Device::endFrame(CommandBatch &&batch, QueueRole submitRole)
-{
-    submitFrame(std::move(batch), submitRole);
-    return presentFrame();
 }
 
 vk::raii::Instance Device::makeInstance(std::uint32_t apiVersion) const
@@ -405,9 +334,18 @@ vk::raii::Device Device::makeDevice()
     auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
     std::ranges::fill(queueFamilyDict, std::numeric_limits<std::size_t>::max());
 
-    auto queueFamilies = selectRequiredQueueFamilies(queueFamilyProperties);
-    nrAssert(queueFamilies.has_value(), "Selected GPU does not expose required graphics, compute, and dedicated "
-                                        "physical copy/transfer queue families.");
+    auto queueIndices = std::views::iota(std::size_t{0}, queueFamilyProperties.size());
+    auto presentSupport = queueIndices | std::views::transform([&](std::size_t index) {
+                              return physicalDevice.getSurfaceSupportKHR(static_cast<std::uint32_t>(index),
+                                                                         presentationContext.surfaceHandle())
+                                         ? vk::True
+                                         : vk::False;
+                          }) |
+                          std::ranges::to<std::vector>();
+    auto queueFamilies = selectRequiredQueueFamilies(queueFamilyProperties, presentSupport);
+    nrAssert(queueFamilies.has_value(),
+             "Selected GPU does not expose required graphics, present-capable compute, and dedicated physical "
+             "copy/transfer queue families.");
 
     auto toQueueIndex = [](QueueFamilyKind kind) { return static_cast<std::size_t>(kind); };
     queueFamilyDict[toQueueIndex(QueueFamilyKind::graphics)] = queueFamilies->graphics;
@@ -450,8 +388,9 @@ vk::raii::Device Device::makeDevice()
         });
     };
 
+    enabledDeviceExtensions_.clear();
     std::vector<char const *> enabledExtensions;
-    enabledExtensions.reserve(deviceEnabledExtensions.size() + 1);
+    enabledExtensions.reserve(requestedDeviceExtensions_.size() + 2u);
     std::set<std::string_view> enabledExtensionSet;
 
     auto enableExtension = [&](std::string_view extensionName, std::string_view reason) {
@@ -467,18 +406,18 @@ vk::raii::Device Device::makeDevice()
         return true;
     };
 
-    std::ranges::for_each(deviceEnabledExtensions, [&](std::string_view extensionName) {
+    std::ranges::for_each(requestedDeviceExtensions_, [&](std::string_view extensionName) {
         auto reason = std::string_view{"modern pipeline backend"};
-        if (extensionName == vk::EXTExtendedDynamicState3ExtensionName)
-            reason = "extended dynamic pipeline state v3";
-        if (extensionName == vk::EXTOpacityMicromapExtensionName)
-            reason = "ray tracing opacity micromap support";
         if (extensionName == vk::KHRMaintenance8ExtensionName)
             reason = "precise queue-family ownership transfer synchronization scopes";
         if (extensionName == vk::KHRMaintenance9ExtensionName)
             reason = "maintenance9 queue-family ownership transfer rules";
+        if (extensionName == vk::EXTRayTracingInvocationReorderExtensionName)
+            reason = "path-tracing shader invocation reordering";
         if (extensionName == vk::EXTFullScreenExclusiveExtensionName)
             reason = "application-controlled fullscreen exclusive swapchain ownership";
+        if (extensionName == vk::EXTSwapchainMaintenance1ExtensionName)
+            reason = "per-present completion fences and swapchain generation retirement";
         enableExtension(extensionName, reason);
     });
 
@@ -493,132 +432,133 @@ vk::raii::Device Device::makeDevice()
         frameBoundaryFeatureSupported = frameBoundaryFeatures.frameBoundary == vk::True;
     }
 
-    auto features2 = physicalDevice.getFeatures2<
+    auto supportedFeatures = physicalDevice.getFeatures2<
         vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features,
         vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features,
+        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
         vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR,
-        vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT, vk::PhysicalDeviceCooperativeVectorFeaturesNV,
-        vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT, vk::PhysicalDeviceMeshShaderFeaturesEXT,
+        vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT,
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-        vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR, vk::PhysicalDeviceRayQueryFeaturesKHR,
-        vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
+        vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>();
 
-    auto &featureList = features2.get<vk::PhysicalDeviceFeatures2>();
-    auto &vulkan11Features = features2.get<vk::PhysicalDeviceVulkan11Features>();
-    auto &vulkan12Features = features2.get<vk::PhysicalDeviceVulkan12Features>();
-    auto &vulkan13Features = features2.get<vk::PhysicalDeviceVulkan13Features>();
-    auto &vulkan14Features = features2.get<vk::PhysicalDeviceVulkan14Features>();
-    auto &maintenance8Features = features2.get<vk::PhysicalDeviceMaintenance8FeaturesKHR>();
-    auto &maintenance9Features = features2.get<vk::PhysicalDeviceMaintenance9FeaturesKHR>();
-    auto &invocationReorderFeatures = features2.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT>();
-    auto &cooperativeVectorFeatures = features2.get<vk::PhysicalDeviceCooperativeVectorFeaturesNV>();
-    auto &extendedDynamicState3Features = features2.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
-    auto &meshShaderFeatures = features2.get<vk::PhysicalDeviceMeshShaderFeaturesEXT>();
-    auto &accelerationStructureFeatures = features2.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
-    auto &rayTracingPipelineFeatures = features2.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
-    auto &rayTracingMaintenance1Features = features2.get<vk::PhysicalDeviceRayTracingMaintenance1FeaturesKHR>();
-    auto &rayQueryFeatures = features2.get<vk::PhysicalDeviceRayQueryFeaturesKHR>();
-    auto &opacityMicromapFeatures = features2.get<vk::PhysicalDeviceOpacityMicromapFeaturesEXT>();
+    auto requestedFeatures = vk::StructureChain<
+        vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features,
+        vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features,
+        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+        vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR,
+        vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT,
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+        vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>{};
 
-    // Keep core mesh/task shader support enabled, but avoid optional mesh sub-features
-    // that require additional feature chains we do not currently enable.
-    meshShaderFeatures.multiviewMeshShader = vk::False;
-    meshShaderFeatures.primitiveFragmentShadingRateMeshShader = vk::False;
-
-    auto properties2 =
-        physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorIndexingProperties,
-                                      vk::PhysicalDeviceRayTracingPipelinePropertiesKHR,
-                                      vk::PhysicalDeviceRayTracingInvocationReorderPropertiesEXT>();
-    auto &physicalDeviceProperties = properties2.get<vk::PhysicalDeviceProperties2>();
-    auto &descriptorIndexingProperties = properties2.get<vk::PhysicalDeviceDescriptorIndexingProperties>();
-    auto &rayTracingPipelineProperties = properties2.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-    auto &invocationReorderProperties = properties2.get<vk::PhysicalDeviceRayTracingInvocationReorderPropertiesEXT>();
-
-#define REQUIRE_FEATURE(feature_field, feature_name)                                                                   \
-    nrAssert(feature_field == vk::True, std::format("Required feature {} is not enabled.", feature_name))
-
-    REQUIRE_FEATURE(vulkan11Features.shaderDrawParameters, "shaderDrawParameters");
-    REQUIRE_FEATURE(vulkan12Features.bufferDeviceAddress, "bufferDeviceAddress");
-    REQUIRE_FEATURE(vulkan12Features.descriptorIndexing, "descriptorIndexing");
-    REQUIRE_FEATURE(vulkan12Features.runtimeDescriptorArray, "runtimeDescriptorArray");
-    REQUIRE_FEATURE(vulkan12Features.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound");
-    REQUIRE_FEATURE(vulkan12Features.descriptorBindingVariableDescriptorCount,
-                    "descriptorBindingVariableDescriptorCount");
-    REQUIRE_FEATURE(vulkan12Features.descriptorBindingSampledImageUpdateAfterBind,
-                    "descriptorBindingSampledImageUpdateAfterBind");
-    REQUIRE_FEATURE(vulkan12Features.descriptorBindingUpdateUnusedWhilePending,
-                    "descriptorBindingUpdateUnusedWhilePending");
-    REQUIRE_FEATURE(vulkan13Features.inlineUniformBlock, "inlineUniformBlock");
-    REQUIRE_FEATURE(vulkan13Features.dynamicRendering, "dynamicRendering");
-    REQUIRE_FEATURE(vulkan13Features.synchronization2, "synchronization2");
-    REQUIRE_FEATURE(maintenance8Features.maintenance8, "maintenance8");
-    REQUIRE_FEATURE(maintenance9Features.maintenance9, "maintenance9");
-    REQUIRE_FEATURE(extendedDynamicState3Features.extendedDynamicState3PolygonMode, "extendedDynamicState3PolygonMode");
-    REQUIRE_FEATURE(extendedDynamicState3Features.extendedDynamicState3RasterizationSamples,
-                    "extendedDynamicState3RasterizationSamples");
-    REQUIRE_FEATURE(meshShaderFeatures.meshShader, "meshShader");
-    REQUIRE_FEATURE(meshShaderFeatures.taskShader, "taskShader");
-    REQUIRE_FEATURE(accelerationStructureFeatures.accelerationStructure, "accelerationStructure");
-    REQUIRE_FEATURE(rayTracingPipelineFeatures.rayTracingPipeline, "rayTracingPipeline");
-    REQUIRE_FEATURE(rayTracingMaintenance1Features.rayTracingMaintenance1, "rayTracingMaintenance1");
-    REQUIRE_FEATURE(rayQueryFeatures.rayQuery, "rayQuery");
-    REQUIRE_FEATURE(opacityMicromapFeatures.micromap, "opacityMicromap");
-    REQUIRE_FEATURE(invocationReorderFeatures.rayTracingInvocationReorder, "rayTracingInvocationReorder");
-    REQUIRE_FEATURE(cooperativeVectorFeatures.cooperativeVector, "cooperativeVector");
-    nrAssert(invocationReorderProperties.rayTracingInvocationReorderReorderingHint ==
-                 vk::RayTracingInvocationReorderModeEXT::eReorder,
-             "VK_EXT_ray_tracing_invocation_reorder is required to expose actual invocation reordering.");
-
-#undef REQUIRE_FEATURE
-
-    descriptorIndexingCapabilities_ = DescriptorIndexingCapabilitySnapshot{
-        .descriptorIndexing = vulkan12Features.descriptorIndexing == vk::True,
-        .runtimeDescriptorArray = vulkan12Features.runtimeDescriptorArray == vk::True,
-        .descriptorBindingPartiallyBound = vulkan12Features.descriptorBindingPartiallyBound == vk::True,
-        .descriptorBindingVariableDescriptorCount =
-            vulkan12Features.descriptorBindingVariableDescriptorCount == vk::True,
-        .descriptorBindingSampledImageUpdateAfterBind =
-            vulkan12Features.descriptorBindingSampledImageUpdateAfterBind == vk::True,
-        .descriptorBindingUpdateUnusedWhilePending =
-            vulkan12Features.descriptorBindingUpdateUnusedWhilePending == vk::True,
-        .shaderSampledImageArrayNonUniformIndexing =
-            vulkan12Features.shaderSampledImageArrayNonUniformIndexing == vk::True,
-        .maxPerStageDescriptorUpdateAfterBindSampledImages =
-            descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindSampledImages,
-        .maxDescriptorSetUpdateAfterBindSampledImages =
-            descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindSampledImages,
+    auto const requireFeature = [](vk::Bool32 supported, std::string_view featureName) {
+        nrAssert(supported == vk::True,
+                 std::format("Required Vulkan device feature '{}' is not supported.", featureName));
     };
-    bufferDeviceAddressCapabilities_ = BufferDeviceAddressCapabilitySnapshot{
-        .bufferDeviceAddress = vulkan12Features.bufferDeviceAddress == vk::True,
-        .bufferDeviceAddressCaptureReplay = vulkan12Features.bufferDeviceAddressCaptureReplay == vk::True,
-        .bufferDeviceAddressMultiDevice = vulkan12Features.bufferDeviceAddressMultiDevice == vk::True,
-    };
-    vulkan14Capabilities_ = Vulkan14CapabilitySnapshot{
-        .globalPriorityQuery = vulkan14Features.globalPriorityQuery == vk::True,
-        .shaderSubgroupRotate = vulkan14Features.shaderSubgroupRotate == vk::True,
-        .shaderSubgroupRotateClustered = vulkan14Features.shaderSubgroupRotateClustered == vk::True,
-        .shaderFloatControls2 = vulkan14Features.shaderFloatControls2 == vk::True,
-        .shaderExpectAssume = vulkan14Features.shaderExpectAssume == vk::True,
-        .rectangularLines = vulkan14Features.rectangularLines == vk::True,
-        .bresenhamLines = vulkan14Features.bresenhamLines == vk::True,
-        .smoothLines = vulkan14Features.smoothLines == vk::True,
-        .stippledRectangularLines = vulkan14Features.stippledRectangularLines == vk::True,
-        .stippledBresenhamLines = vulkan14Features.stippledBresenhamLines == vk::True,
-        .stippledSmoothLines = vulkan14Features.stippledSmoothLines == vk::True,
-        .vertexAttributeInstanceRateDivisor = vulkan14Features.vertexAttributeInstanceRateDivisor == vk::True,
-        .vertexAttributeInstanceRateZeroDivisor = vulkan14Features.vertexAttributeInstanceRateZeroDivisor == vk::True,
-        .indexTypeUint8 = vulkan14Features.indexTypeUint8 == vk::True,
-        .dynamicRenderingLocalRead = vulkan14Features.dynamicRenderingLocalRead == vk::True,
-        .maintenance5 = vulkan14Features.maintenance5 == vk::True,
-        .maintenance6 = vulkan14Features.maintenance6 == vk::True,
-        .maintenance8 = maintenance8Features.maintenance8 == vk::True,
-        .maintenance9 = maintenance9Features.maintenance9 == vk::True,
-        .pipelineProtectedAccess = vulkan14Features.pipelineProtectedAccess == vk::True,
-        .pipelineRobustness = vulkan14Features.pipelineRobustness == vk::True,
-        .hostImageCopy = vulkan14Features.hostImageCopy == vk::True,
-        .pushDescriptor = vulkan14Features.pushDescriptor == vk::True,
-    };
-    vulkan14Properties_ = queryVulkan14PropertySnapshot();
+
+    auto const &supportedCore = supportedFeatures.get<vk::PhysicalDeviceFeatures2>().features;
+    auto &requestedCore = requestedFeatures.get<vk::PhysicalDeviceFeatures2>().features;
+    requireFeature(supportedCore.shaderStorageImageReadWithoutFormat, "shaderStorageImageReadWithoutFormat");
+    requestedCore.shaderStorageImageReadWithoutFormat = vk::True;
+    requireFeature(supportedCore.shaderStorageImageWriteWithoutFormat, "shaderStorageImageWriteWithoutFormat");
+    requestedCore.shaderStorageImageWriteWithoutFormat = vk::True;
+
+    auto const &supportedVulkan11 = supportedFeatures.get<vk::PhysicalDeviceVulkan11Features>();
+    auto &requestedVulkan11 = requestedFeatures.get<vk::PhysicalDeviceVulkan11Features>();
+    requireFeature(supportedVulkan11.shaderDrawParameters, "shaderDrawParameters");
+    requestedVulkan11.shaderDrawParameters = vk::True;
+
+    auto const &supportedVulkan12 = supportedFeatures.get<vk::PhysicalDeviceVulkan12Features>();
+    auto &requestedVulkan12 = requestedFeatures.get<vk::PhysicalDeviceVulkan12Features>();
+    requireFeature(supportedVulkan12.bufferDeviceAddress, "bufferDeviceAddress");
+    requestedVulkan12.bufferDeviceAddress = vk::True;
+    requireFeature(supportedVulkan12.descriptorIndexing, "descriptorIndexing");
+    requestedVulkan12.descriptorIndexing = vk::True;
+    requireFeature(supportedVulkan12.runtimeDescriptorArray, "runtimeDescriptorArray");
+    requestedVulkan12.runtimeDescriptorArray = vk::True;
+    requireFeature(supportedVulkan12.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound");
+    requestedVulkan12.descriptorBindingPartiallyBound = vk::True;
+    requireFeature(supportedVulkan12.descriptorBindingVariableDescriptorCount,
+                   "descriptorBindingVariableDescriptorCount");
+    requestedVulkan12.descriptorBindingVariableDescriptorCount = vk::True;
+    requireFeature(supportedVulkan12.scalarBlockLayout, "scalarBlockLayout");
+    requestedVulkan12.scalarBlockLayout = vk::True;
+    requireFeature(supportedVulkan12.shaderSampledImageArrayNonUniformIndexing,
+                   "shaderSampledImageArrayNonUniformIndexing");
+    requestedVulkan12.shaderSampledImageArrayNonUniformIndexing = vk::True;
+    requireFeature(supportedVulkan12.timelineSemaphore, "timelineSemaphore");
+    requestedVulkan12.timelineSemaphore = vk::True;
+
+    auto const &supportedVulkan13 = supportedFeatures.get<vk::PhysicalDeviceVulkan13Features>();
+    auto &requestedVulkan13 = requestedFeatures.get<vk::PhysicalDeviceVulkan13Features>();
+    requireFeature(supportedVulkan13.inlineUniformBlock, "inlineUniformBlock");
+    requestedVulkan13.inlineUniformBlock = vk::True;
+    requireFeature(supportedVulkan13.dynamicRendering, "dynamicRendering");
+    requestedVulkan13.dynamicRendering = vk::True;
+    requireFeature(supportedVulkan13.synchronization2, "synchronization2");
+    requestedVulkan13.synchronization2 = vk::True;
+    requireFeature(supportedVulkan13.maintenance4, "maintenance4");
+    requestedVulkan13.maintenance4 = vk::True;
+
+    auto const &supportedExtendedDynamicState =
+        supportedFeatures.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    auto &requestedExtendedDynamicState =
+        requestedFeatures.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    requireFeature(supportedExtendedDynamicState.extendedDynamicState, "extendedDynamicState");
+    requestedExtendedDynamicState.extendedDynamicState = vk::True;
+
+    auto const &supportedVulkan14 = supportedFeatures.get<vk::PhysicalDeviceVulkan14Features>();
+    auto &requestedVulkan14 = requestedFeatures.get<vk::PhysicalDeviceVulkan14Features>();
+    requireFeature(supportedVulkan14.maintenance5, "maintenance5");
+    requestedVulkan14.maintenance5 = vk::True;
+    if (enabledExtensionSet.contains("VK_KHR_push_descriptor"))
+    {
+        requireFeature(supportedVulkan14.pushDescriptor, "pushDescriptor");
+        requestedVulkan14.pushDescriptor = vk::True;
+    }
+
+    auto const &supportedMaintenance8 = supportedFeatures.get<vk::PhysicalDeviceMaintenance8FeaturesKHR>();
+    auto &requestedMaintenance8 = requestedFeatures.get<vk::PhysicalDeviceMaintenance8FeaturesKHR>();
+    requireFeature(supportedMaintenance8.maintenance8, "maintenance8");
+    requestedMaintenance8.maintenance8 = vk::True;
+
+    auto const &supportedMaintenance9 = supportedFeatures.get<vk::PhysicalDeviceMaintenance9FeaturesKHR>();
+    auto &requestedMaintenance9 = requestedFeatures.get<vk::PhysicalDeviceMaintenance9FeaturesKHR>();
+    requireFeature(supportedMaintenance9.maintenance9, "maintenance9");
+    requestedMaintenance9.maintenance9 = vk::True;
+
+    auto const &supportedInvocationReorder =
+        supportedFeatures.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT>();
+    auto &requestedInvocationReorder =
+        requestedFeatures.get<vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT>();
+    requireFeature(supportedInvocationReorder.rayTracingInvocationReorder, "rayTracingInvocationReorder");
+    requestedInvocationReorder.rayTracingInvocationReorder = vk::True;
+
+    auto const &supportedAccelerationStructure =
+        supportedFeatures.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
+    auto &requestedAccelerationStructure =
+        requestedFeatures.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
+    requireFeature(supportedAccelerationStructure.accelerationStructure, "accelerationStructure");
+    requestedAccelerationStructure.accelerationStructure = vk::True;
+
+    auto const &supportedRayTracingPipeline =
+        supportedFeatures.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+    auto &requestedRayTracingPipeline =
+        requestedFeatures.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>();
+    requireFeature(supportedRayTracingPipeline.rayTracingPipeline, "rayTracingPipeline");
+    requestedRayTracingPipeline.rayTracingPipeline = vk::True;
+
+    auto const &supportedSwapchainMaintenance1 =
+        supportedFeatures.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>();
+    auto &requestedSwapchainMaintenance1 =
+        requestedFeatures.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>();
+    requireFeature(supportedSwapchainMaintenance1.swapchainMaintenance1, "swapchainMaintenance1");
+    requestedSwapchainMaintenance1.swapchainMaintenance1 = vk::True;
+
+    auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2,
+                                                     vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+    auto const &physicalDeviceProperties = properties2.get<vk::PhysicalDeviceProperties2>();
+    auto const &rayTracingPipelineProperties =
+        properties2.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
 
     auto queueOwnershipPropertyChains = physicalDevice.getQueueFamilyProperties2<
         vk::StructureChain<vk::QueueFamilyProperties2, vk::QueueFamilyOwnershipTransferPropertiesKHR>>();
@@ -630,7 +570,7 @@ vk::raii::Device Device::makeDevice()
     nrAssert(ownershipTransferMasks.size() == queueFamilyProperties.size(),
              "VK_KHR_maintenance9 queue-family ownership transfer property query returned an unexpected family count.");
     queueFamilyTransferPolicy_ = nr::rhi::ops::QueueFamilyTransferPolicy{
-        .maintenance9 = maintenance9Features.maintenance9 == vk::True,
+        .maintenance9 = true,
         .optimalImageTransferToQueueFamilies = std::move(ownershipTransferMasks),
     };
 
@@ -640,8 +580,9 @@ vk::raii::Device Device::makeDevice()
     {
         enableExtension(vk::EXTFrameBoundaryExtensionName, "graphics debugger frame boundary metadata");
         frameBoundaryCreateFeatures.frameBoundary = vk::True;
-        frameBoundaryCreateFeatures.pNext = featureList.pNext;
-        featureList.pNext = std::addressof(frameBoundaryCreateFeatures);
+        auto &requestedFeatureList = requestedFeatures.get<vk::PhysicalDeviceFeatures2>();
+        frameBoundaryCreateFeatures.pNext = requestedFeatureList.pNext;
+        requestedFeatureList.pNext = std::addressof(frameBoundaryCreateFeatures);
         nrInfo("VK_EXT_frame_boundary enabled for graphics debugger frame capture.");
     }
     else if (frameBoundaryExtensionSupported)
@@ -662,31 +603,12 @@ vk::raii::Device Device::makeDevice()
 
     auto const &limits = physicalDeviceProperties.properties.limits;
     rtCapabilities_ = RayTracingCapabilitySnapshot{
-        .rayTracingMaintenance1 = rayTracingMaintenance1Features.rayTracingMaintenance1 == vk::True,
-        .rayTracingPipelineTraceRaysIndirect =
-            rayTracingPipelineFeatures.rayTracingPipelineTraceRaysIndirect == vk::True,
-        .rayTracingPipelineTraceRaysIndirect2 =
-            rayTracingMaintenance1Features.rayTracingPipelineTraceRaysIndirect2 == vk::True,
-        .rayTracingPipelineShaderGroupHandleCaptureReplay =
-            rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplay == vk::True,
-        .rayTracingPipelineShaderGroupHandleCaptureReplayMixed =
-            rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplayMixed == vk::True,
-        .rayTraversalPrimitiveCulling = rayTracingPipelineFeatures.rayTraversalPrimitiveCulling == vk::True,
-        .rayTracingInvocationReorder = invocationReorderFeatures.rayTracingInvocationReorder == vk::True &&
-                                       invocationReorderProperties.rayTracingInvocationReorderReorderingHint ==
-                                           vk::RayTracingInvocationReorderModeEXT::eReorder,
-        .opacityMicromap = opacityMicromapFeatures.micromap == vk::True,
-        .opacityMicromapCaptureReplay = opacityMicromapFeatures.micromapCaptureReplay == vk::True,
-        .opacityMicromapHostCommands = opacityMicromapFeatures.micromapHostCommands == vk::True,
         .shaderGroupHandleSize = rayTracingPipelineProperties.shaderGroupHandleSize,
         .shaderGroupHandleAlignment = rayTracingPipelineProperties.shaderGroupHandleAlignment,
         .shaderGroupBaseAlignment = rayTracingPipelineProperties.shaderGroupBaseAlignment,
-        .shaderGroupHandleCaptureReplaySize = rayTracingPipelineProperties.shaderGroupHandleCaptureReplaySize,
         .maxShaderGroupStride = rayTracingPipelineProperties.maxShaderGroupStride,
         .maxRayDispatchInvocationCount = rayTracingPipelineProperties.maxRayDispatchInvocationCount,
         .maxRayRecursionDepth = rayTracingPipelineProperties.maxRayRecursionDepth,
-        .maxRayHitAttributeSize = rayTracingPipelineProperties.maxRayHitAttributeSize,
-        .maxShaderBindingTableRecordIndex = invocationReorderProperties.maxShaderBindingTableRecordIndex,
         .maxDispatchDimensions =
             {
                 static_cast<std::uint64_t>(limits.maxComputeWorkGroupCount[0]) *
@@ -698,10 +620,27 @@ vk::raii::Device Device::makeDevice()
             },
     };
 
+    auto &requestedFeatureList = requestedFeatures.get<vk::PhysicalDeviceFeatures2>();
     vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(), queueCreateInfos,
                                           {} /* EnabledLayerNames is deprecated and ignored.*/, enabledExtensions,
-                                          nullptr, &featureList);
-    return vk::raii::Device(physicalDevice, deviceCreateInfo);
+                                          nullptr, &requestedFeatureList);
+    auto enabledExtensionNames = enabledExtensions | std::views::transform([](const char *extensionName) {
+                                     return std::string{extensionName};
+                                 }) |
+                                 std::ranges::to<std::vector>();
+    try
+    {
+        auto logicalDevice = vk::raii::Device(physicalDevice, deviceCreateInfo);
+        enabledDeviceExtensions_ = std::move(enabledExtensionNames);
+        return logicalDevice;
+    }
+    catch (const vk::SystemError &error)
+    {
+        nrLog(LogLevel::error,
+              std::format("Vulkan logical-device creation failed: {}", error.what()),
+              std::source_location::current(), true);
+        return {nullptr};
+    }
 }
 
 void Device::initializeCommandSystem()
@@ -710,9 +649,9 @@ void Device::initializeCommandSystem()
     std::uint32_t computeFamily = requiredQueueFamily(QueueFamilyKind::compute);
     std::uint32_t transferFamily = requiredQueueFamily(QueueFamilyKind::transfer);
 
-    GpuQueue graphicsQueue(device, graphicsFamily, QueueRole::Graphics);
-    GpuQueue computeQueue(device, computeFamily, QueueRole::Compute);
-    GpuQueue transferQueue(device, transferFamily, QueueRole::Transfer);
+    GpuQueue graphicsQueue(device, graphicsFamily);
+    GpuQueue computeQueue(device, computeFamily);
+    GpuQueue transferQueue(device, transferFamily);
 
     queueManager = QueueManager(std::move(graphicsQueue), std::move(computeQueue), std::move(transferQueue));
 
@@ -736,7 +675,6 @@ void Device::waitIdle()
 void Device::recreateSwapchain()
 {
     presentationContext.recreate(physicalDevice, device, queueManager);
-    refreshPresentSemaphores();
     ++swapchainRecreationGeneration_;
 }
 
@@ -837,65 +775,6 @@ Device::~Device()
     return static_cast<VkImage>(presentationContext.swapchainImage(imageIndex));
 }
 
-[[nodiscard]] Vulkan14PropertySnapshot Device::queryVulkan14PropertySnapshot() const
-{
-    auto properties2 =
-        physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan14Properties>();
-    auto vulkan14Properties = properties2.get<vk::PhysicalDeviceVulkan14Properties>();
-
-    std::vector<vk::ImageLayout> hostCopySrcLayouts(vulkan14Properties.copySrcLayoutCount);
-    std::vector<vk::ImageLayout> hostCopyDstLayouts(vulkan14Properties.copyDstLayoutCount);
-    if (!hostCopySrcLayouts.empty() || !hostCopyDstLayouts.empty())
-    {
-        vk::StructureChain<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan14Properties> layoutPropertyChain{};
-        auto &layoutProperties2 = layoutPropertyChain.get<vk::PhysicalDeviceProperties2>();
-        auto &layoutVulkan14Properties = layoutPropertyChain.get<vk::PhysicalDeviceVulkan14Properties>();
-
-        layoutVulkan14Properties.copySrcLayoutCount = static_cast<std::uint32_t>(hostCopySrcLayouts.size());
-        layoutVulkan14Properties.pCopySrcLayouts = hostCopySrcLayouts.data();
-        layoutVulkan14Properties.copyDstLayoutCount = static_cast<std::uint32_t>(hostCopyDstLayouts.size());
-        layoutVulkan14Properties.pCopyDstLayouts = hostCopyDstLayouts.data();
-
-        (*physicalDevice).getProperties2(&layoutProperties2, *physicalDevice.getDispatcher());
-        vulkan14Properties = layoutVulkan14Properties;
-    }
-
-    auto uuid = std::array<std::uint8_t, vk::UuidSize>{};
-    auto uuidIndices = std::views::iota(std::size_t{0}, uuid.size());
-    std::ranges::for_each(uuidIndices, [&](std::size_t i) { uuid[i] = vulkan14Properties.optimalTilingLayoutUUID[i]; });
-
-    return Vulkan14PropertySnapshot{
-        .lineSubPixelPrecisionBits = vulkan14Properties.lineSubPixelPrecisionBits,
-        .maxVertexAttribDivisor = vulkan14Properties.maxVertexAttribDivisor,
-        .supportsNonZeroFirstInstance = vulkan14Properties.supportsNonZeroFirstInstance == vk::True,
-        .maxPushDescriptors = vulkan14Properties.maxPushDescriptors,
-        .dynamicRenderingLocalReadDepthStencilAttachments =
-            vulkan14Properties.dynamicRenderingLocalReadDepthStencilAttachments == vk::True,
-        .dynamicRenderingLocalReadMultisampledAttachments =
-            vulkan14Properties.dynamicRenderingLocalReadMultisampledAttachments == vk::True,
-        .earlyFragmentMultisampleCoverageAfterSampleCounting =
-            vulkan14Properties.earlyFragmentMultisampleCoverageAfterSampleCounting == vk::True,
-        .earlyFragmentSampleMaskTestBeforeSampleCounting =
-            vulkan14Properties.earlyFragmentSampleMaskTestBeforeSampleCounting == vk::True,
-        .depthStencilSwizzleOneSupport = vulkan14Properties.depthStencilSwizzleOneSupport == vk::True,
-        .polygonModePointSize = vulkan14Properties.polygonModePointSize == vk::True,
-        .nonStrictSinglePixelWideLinesUseParallelogram =
-            vulkan14Properties.nonStrictSinglePixelWideLinesUseParallelogram == vk::True,
-        .nonStrictWideLinesUseParallelogram = vulkan14Properties.nonStrictWideLinesUseParallelogram == vk::True,
-        .blockTexelViewCompatibleMultipleLayers = vulkan14Properties.blockTexelViewCompatibleMultipleLayers == vk::True,
-        .maxCombinedImageSamplerDescriptorCount = vulkan14Properties.maxCombinedImageSamplerDescriptorCount,
-        .fragmentShadingRateClampCombinerInputs = vulkan14Properties.fragmentShadingRateClampCombinerInputs == vk::True,
-        .defaultRobustnessStorageBuffers = vulkan14Properties.defaultRobustnessStorageBuffers,
-        .defaultRobustnessUniformBuffers = vulkan14Properties.defaultRobustnessUniformBuffers,
-        .defaultRobustnessVertexInputs = vulkan14Properties.defaultRobustnessVertexInputs,
-        .defaultRobustnessImages = vulkan14Properties.defaultRobustnessImages,
-        .hostImageCopySrcLayouts = std::move(hostCopySrcLayouts),
-        .hostImageCopyDstLayouts = std::move(hostCopyDstLayouts),
-        .optimalTilingLayoutUUID = uuid,
-        .identicalMemoryTypeRequirements = vulkan14Properties.identicalMemoryTypeRequirements == vk::True,
-    };
-}
-
 void Device::setupInitialFlags()
 {
     Surface::ensureGlfwInitialized();
@@ -934,6 +813,10 @@ void Device::setupInitialFlags()
         hasInstanceExtension(vk::KHRGetSurfaceCapabilities2ExtensionName),
         "VK_KHR_get_surface_capabilities2 is required for VK_EXT_full_screen_exclusive surface capability queries.");
     addIfMissing(instanceEnabledExtensions, vk::KHRGetSurfaceCapabilities2ExtensionName);
+
+    nrAssert(hasInstanceExtension(vk::EXTSurfaceMaintenance1ExtensionName),
+             "VK_EXT_surface_maintenance1 is required by VK_EXT_swapchain_maintenance1.");
+    addIfMissing(instanceEnabledExtensions, vk::EXTSurfaceMaintenance1ExtensionName);
 
     if constexpr (isDebugMode || gpuDebugNamesEnabled)
     {
@@ -977,38 +860,4 @@ void Device::setupInitialFlags()
     return requiredQueueFamily(QueueFamilyKind::compute);
 }
 
-void Device::refreshPresentSemaphores()
-{
-    auto swapchainImageCount = presentationContext.swapchainImageCount();
-    auto upToDate = presentSemaphoresByImage_.size() == swapchainImageCount &&
-                    std::ranges::all_of(presentSemaphoresByImage_,
-                                        [](const vk::raii::Semaphore &semaphore) { return *semaphore != nullptr; });
-    if (upToDate)
-    {
-        return;
-    }
-
-    presentSemaphoresByImage_.clear();
-    presentSemaphoresByImage_.reserve(swapchainImageCount);
-
-    auto semaphoreCreateInfo = vk::SemaphoreCreateInfo{};
-    auto imageIndices = std::views::iota(std::uint32_t{0}, swapchainImageCount);
-    std::ranges::for_each(imageIndices,
-                          [&](std::uint32_t) { presentSemaphoresByImage_.emplace_back(device, semaphoreCreateInfo); });
-}
-
-[[nodiscard]] const vk::raii::Semaphore &Device::activePresentSemaphore() const
-{
-    auto imageIndex = presentationContext.activeSwapchainImageIndex();
-    nrAssert(imageIndex < presentSemaphoresByImage_.size(),
-             std::format("Device::activePresentSemaphore image index {} is out of range for {} present semaphores.",
-                         imageIndex, presentSemaphoresByImage_.size()));
-    return presentSemaphoresByImage_[imageIndex];
-}
-
-void rhiTest()
-{
-    Device device;
-    device.initialize("HelloVulkan", "VKEngine");
-}
 } // namespace nr::rhi

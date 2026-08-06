@@ -14,9 +14,12 @@ struct RequiredQueueFamilySelection
 };
 
 [[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(
-    std::span<const vk::QueueFamilyProperties> queueFamilyProperties);
+    std::span<const vk::QueueFamilyProperties> queueFamilyProperties,
+    std::span<const vk::Bool32> presentSupport);
 
-[[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance);
+[[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(
+    const vk::raii::Instance &instance, const vk::raii::SurfaceKHR &surface,
+    std::span<const std::string> requiredDeviceExtensions);
 
 // Helper: Convert strings to const char* pointers with deduplication and validation
 [[nodiscard]] std::vector<char const *> gatherLayers(std::span<const std::string> layers);
@@ -100,14 +103,6 @@ struct DebugValidationLayerSettings
     default:
         return false;
     }
-}
-
-/**
- * @brief Check if a Vulkan format is a depth-stencil combined format
- */
-[[nodiscard]] constexpr bool isDepthStencilFormat(vk::Format format) noexcept
-{
-    return isDepthFormat(format) && isStencilFormat(format);
 }
 
 /**

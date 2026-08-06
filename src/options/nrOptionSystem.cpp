@@ -8,6 +8,13 @@ import std;
 
 namespace nr::options
 {
+struct OptionSystem::PreparedGraphReplacement
+{
+    std::shared_ptr<const OptionCatalog> graphCatalog{};
+    std::shared_ptr<const OptionCatalog> combinedCatalog{};
+    OptionValueMap canonicalValues{};
+};
+
 namespace
 {
 [[nodiscard]] OptionAvailability unavailable(std::string reason)
@@ -88,6 +95,56 @@ CatalogBuildResult OptionSystem::combineCatalogs(const OptionCatalog &session, c
     return builder.build();
 }
 
+CatalogCommitResult OptionSystem::prepareGraphReplacementLocked(
+    std::shared_ptr<const OptionCatalog> graphCatalog, PreparedGraphReplacement &replacement) const
+{
+    if (!graphCatalog)
+    {
+        return CatalogCommitResult::rejected(CatalogCommitRejectReason::invalidCatalog);
+    }
+    if (!catalogHasOnlyScope(*graphCatalog, OptionScope::graph))
+    {
+        return CatalogCommitResult::rejected(CatalogCommitRejectReason::wrongScope);
+    }
+
+    auto combined = combineCatalogs(*sessionCatalog_, *graphCatalog);
+    if (!combined.valid())
+    {
+        auto const duplicate = std::ranges::any_of(
+            combined.issues, [](auto const &issue) { return issue.code == CatalogIssueCode::duplicateId; });
+        return CatalogCommitResult::rejected(duplicate ? CatalogCommitRejectReason::duplicateId
+                                                       : CatalogCommitRejectReason::invalidCatalog,
+                                             "candidate graph catalog cannot be combined with the session catalog");
+    }
+
+    auto nextValues = OptionValueMap{};
+    std::ranges::for_each(sessionCatalog_->definitions(), [&](auto const &entry) {
+        auto const existing = canonicalValues_.find(entry.first);
+        nextValues.emplace(entry.first,
+                           existing != canonicalValues_.end() ? existing->second : entry.second.defaultValue);
+    });
+    std::ranges::for_each(graphCatalog->definitions(),
+                          [&](auto const &entry) { nextValues.emplace(entry.first, entry.second.defaultValue); });
+
+    replacement = PreparedGraphReplacement{
+        .graphCatalog = std::move(graphCatalog),
+        .combinedCatalog = std::move(combined.catalog),
+        .canonicalValues = std::move(nextValues),
+    };
+    return CatalogCommitResult::success();
+}
+
+void OptionSystem::applyGraphReplacementLocked(PreparedGraphReplacement &&replacement)
+{
+    nrAssert(bindingEpoch_ != std::numeric_limits<std::uint64_t>::max(), "Option binding epoch exhausted");
+    nrAssert(graphGeneration_ != std::numeric_limits<std::uint64_t>::max(), "Option graph generation exhausted");
+    ++bindingEpoch_;
+    ++graphGeneration_;
+    graphCatalog_ = std::move(replacement.graphCatalog);
+    combinedCatalog_ = std::move(replacement.combinedCatalog);
+    canonicalValues_ = std::move(replacement.canonicalValues);
+}
+
 CatalogCommitResult OptionSystem::initializeSession(std::shared_ptr<const OptionCatalog> sessionCatalog,
                                                     const OptionAvailabilityMap &initialAvailability)
 {
@@ -158,42 +215,14 @@ CatalogCommitResult OptionSystem::replaceGraphCatalog(std::shared_ptr<const Opti
     {
         return CatalogCommitResult::rejected(CatalogCommitRejectReason::pendingMutation);
     }
-    if (!graphCatalog)
+    auto replacement = PreparedGraphReplacement{};
+    auto prepared = prepareGraphReplacementLocked(std::move(graphCatalog), replacement);
+    if (!prepared.committed)
     {
-        return CatalogCommitResult::rejected(CatalogCommitRejectReason::invalidCatalog);
+        return prepared;
     }
-    if (!catalogHasOnlyScope(*graphCatalog, OptionScope::graph))
-    {
-        return CatalogCommitResult::rejected(CatalogCommitRejectReason::wrongScope);
-    }
-
-    auto combined = combineCatalogs(*sessionCatalog_, *graphCatalog);
-    if (!combined.valid())
-    {
-        auto const duplicate = std::ranges::any_of(
-            combined.issues, [](auto const &issue) { return issue.code == CatalogIssueCode::duplicateId; });
-        return CatalogCommitResult::rejected(duplicate ? CatalogCommitRejectReason::duplicateId
-                                                       : CatalogCommitRejectReason::invalidCatalog,
-                                             "candidate graph catalog cannot be combined with the session catalog");
-    }
-
-    auto nextValues = OptionValueMap{};
-    std::ranges::for_each(sessionCatalog_->definitions(), [&](auto const &entry) {
-        auto const existing = canonicalValues_.find(entry.first);
-        nextValues.emplace(entry.first,
-                           existing != canonicalValues_.end() ? existing->second : entry.second.defaultValue);
-    });
-    std::ranges::for_each(graphCatalog->definitions(),
-                          [&](auto const &entry) { nextValues.emplace(entry.first, entry.second.defaultValue); });
-
-    nrAssert(bindingEpoch_ != std::numeric_limits<std::uint64_t>::max(), "Option binding epoch exhausted");
-    nrAssert(graphGeneration_ != std::numeric_limits<std::uint64_t>::max(), "Option graph generation exhausted");
-    ++bindingEpoch_;
-    ++graphGeneration_;
-    graphCatalog_ = std::move(graphCatalog);
-    combinedCatalog_ = std::move(combined.catalog);
-    canonicalValues_ = std::move(nextValues);
-    return CatalogCommitResult::success();
+    applyGraphReplacementLocked(std::move(replacement));
+    return prepared;
 }
 
 CatalogCommitResult OptionSystem::commitGraphReplacement(ScheduledMutation &&mutation,
@@ -221,44 +250,17 @@ CatalogCommitResult OptionSystem::commitGraphReplacement(ScheduledMutation &&mut
         return consumeAndReject(CatalogCommitRejectReason::invalidMutation,
                                 "graph replacement must be committed by a canonical session option");
     }
-    if (!graphCatalog)
+    auto replacement = PreparedGraphReplacement{};
+    auto prepared = prepareGraphReplacementLocked(std::move(graphCatalog), replacement);
+    if (!prepared.committed)
     {
-        return consumeAndReject(CatalogCommitRejectReason::invalidCatalog);
+        mutation.consumed_ = true;
+        return prepared;
     }
-    if (!catalogHasOnlyScope(*graphCatalog, OptionScope::graph))
-    {
-        return consumeAndReject(CatalogCommitRejectReason::wrongScope);
-    }
-
-    auto combined = combineCatalogs(*sessionCatalog_, *graphCatalog);
-    if (!combined.valid())
-    {
-        auto const duplicate = std::ranges::any_of(
-            combined.issues, [](auto const &issue) { return issue.code == CatalogIssueCode::duplicateId; });
-        return consumeAndReject(duplicate ? CatalogCommitRejectReason::duplicateId
-                                          : CatalogCommitRejectReason::invalidCatalog,
-                                "candidate graph catalog cannot be combined with the session catalog");
-    }
-
-    auto nextValues = OptionValueMap{};
-    std::ranges::for_each(sessionCatalog_->definitions(), [&](auto const &entry) {
-        auto const existing = canonicalValues_.find(entry.first);
-        nextValues.emplace(entry.first,
-                           existing != canonicalValues_.end() ? existing->second : entry.second.defaultValue);
-    });
-    nextValues.insert_or_assign(mutation.request_.id, mutation.request_.value);
-    std::ranges::for_each(graphCatalog->definitions(),
-                          [&](auto const &entry) { nextValues.emplace(entry.first, entry.second.defaultValue); });
-
-    nrAssert(bindingEpoch_ != std::numeric_limits<std::uint64_t>::max(), "Option binding epoch exhausted");
-    nrAssert(graphGeneration_ != std::numeric_limits<std::uint64_t>::max(), "Option graph generation exhausted");
-    ++bindingEpoch_;
-    ++graphGeneration_;
-    graphCatalog_ = std::move(graphCatalog);
-    combinedCatalog_ = std::move(combined.catalog);
-    canonicalValues_ = std::move(nextValues);
+    replacement.canonicalValues.insert_or_assign(mutation.request_.id, mutation.request_.value);
+    applyGraphReplacementLocked(std::move(replacement));
     mutation.consumed_ = true;
-    return CatalogCommitResult::success();
+    return prepared;
 }
 
 CatalogCommitResult OptionSystem::clearGraphCatalog()

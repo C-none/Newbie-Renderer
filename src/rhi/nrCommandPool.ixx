@@ -67,23 +67,12 @@ class CommandPool
     void reset(vk::CommandPoolResetFlags flags = {});
 
     /**
-     * @brief Get the underlying vk::raii::CommandPool
-     */
-    [[nodiscard]] const vk::raii::CommandPool &handle() const noexcept;
-
-    /**
-     * @brief Get the queue family index this pool belongs to
-     */
-    [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept;
-
-    /**
      * @brief Check if pool is valid (initialized)
      */
     [[nodiscard]] bool valid() const noexcept;
 
   private:
     vk::raii::CommandPool pool_ = {nullptr};
-    std::uint32_t queueFamilyIndex_ = 0;
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
 };
 

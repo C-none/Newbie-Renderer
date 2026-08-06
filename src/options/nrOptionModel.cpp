@@ -7,6 +7,28 @@ import std;
 
 namespace nr::options
 {
+std::string_view wireName(OptionValueType type) noexcept
+{
+    using enum OptionValueType;
+    switch (type)
+    {
+    case boolean:
+        return "boolean";
+    case signedInteger:
+    case unsignedInteger:
+        return "integer";
+    case number:
+        return "number";
+    case string:
+        return "string";
+    case array:
+        return "array";
+    case object:
+        return "object";
+    }
+    std::unreachable();
+}
+
 namespace
 {
 namespace json = dependency::json;

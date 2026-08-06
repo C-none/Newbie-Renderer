@@ -44,12 +44,6 @@ public struct MaterialDirectLightingInput
     public float3 lightRadiance = float3(0.0f);
 };
 
-public struct MaterialShadingResult
-{
-    public float3 radiance = float3(0.0f);
-    public float alpha = 1.0f;
-};
-
 public float3 safeNormalize(float3 value, float3 fallback)
 {
     float lengthSquared = dot(value, value);

@@ -21,9 +21,39 @@ struct NormalBufferRuntimeCache
 {
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>> pipeline{};
 
+    vk::Format colorFormat = vk::Format::eUndefined;
+    vk::Format depthFormat = vk::Format::eUndefined;
+
     std::array<nr::rhi::Image, nr::maxFrameInFlight> normalBuffers{};
     std::array<nr::rhi::Image, nr::maxFrameInFlight> depthBuffers{};
 };
+
+inline constexpr float kModelLinearSingularityTolerance = 32.0f * std::numeric_limits<float>::epsilon();
+
+[[nodiscard]] float validatedModelLinearDeterminant(const glm::mat4 &model) noexcept
+{
+    auto const row0 = glm::vec3{model[0][0], model[1][0], model[2][0]};
+    auto const row1 = glm::vec3{model[0][1], model[1][1], model[2][1]};
+    auto const row2 = glm::vec3{model[0][2], model[1][2], model[2][2]};
+    auto const determinant = glm::dot(row0, glm::cross(row1, row2));
+    auto const determinantScale = glm::length(row0) * glm::length(row1) * glm::length(row2);
+    nr::nrAssert(std::isfinite(determinant) && std::isfinite(determinantScale) && determinantScale > 0.0f &&
+                     std::abs(determinant) > kModelLinearSingularityTolerance * determinantScale,
+                 "NormalBuffer draw requires a finite, non-singular model linear transform.");
+    return determinant;
+}
+
+[[nodiscard]] vk::FrontFace frontFaceForModelParity(vk::FrontFace objectSpaceFrontFace,
+                                                     float modelLinearDeterminant) noexcept
+{
+    if (modelLinearDeterminant >= 0.0f)
+    {
+        return objectSpaceFrontFace;
+    }
+
+    return objectSpaceFrontFace == vk::FrontFace::eClockwise ? vk::FrontFace::eCounterClockwise
+                                                              : vk::FrontFace::eClockwise;
+}
 
 struct NormalBufferPushConstants
 {
@@ -102,41 +132,18 @@ inline constexpr std::uint32_t kOffsetTexCoord1 = static_cast<std::uint32_t>(off
     nr::rhi::Device &device, std::span<const nr::rhi::SlangProgram> programs, vk::Format colorFormat,
     vk::Format depthFormat, std::string debugName)
 {
+    auto runtime = std::make_shared<NormalBufferRuntimeCache>();
+    runtime->colorFormat = colorFormat;
+    runtime->depthFormat = depthFormat;
+
     auto pipelineDesc = nr::rhi::GraphicsPipelineDesc{};
-    pipelineDesc.colorAttachmentFormats = {colorFormat};
-    pipelineDesc.depthAttachmentFormat = depthFormat;
+    pipelineDesc.colorAttachmentFormats = {runtime->colorFormat};
+    pipelineDesc.depthAttachmentFormat = runtime->depthFormat;
     pipelineDesc.depthTestEnable = true;
     pipelineDesc.depthWriteEnable = true;
     pipelineDesc.vertexBindings = makeVertexBindings();
     pipelineDesc.vertexAttributes = makeVertexAttributes();
-    auto const &descriptorCaps = device.descriptorIndexingCapabilities();
-    nr::nrAssert(descriptorCaps.maxDescriptorSetUpdateAfterBindSampledImages >=
-                     nr::renderer::kSceneTextureDescriptorCapacity,
-                 std::format("NormalBuffer requires at least {} update-after-bind sampled/combined image descriptors "
-                             "per set; device reports {}.",
-                             nr::renderer::kSceneTextureDescriptorCapacity,
-                             descriptorCaps.maxDescriptorSetUpdateAfterBindSampledImages));
-    nr::nrAssert(descriptorCaps.maxPerStageDescriptorUpdateAfterBindSampledImages >=
-                     nr::renderer::kSceneTextureDescriptorCapacity,
-                 std::format("NormalBuffer requires at least {} update-after-bind sampled/combined image descriptors "
-                             "per stage; device reports {}.",
-                             nr::renderer::kSceneTextureDescriptorCapacity,
-                             descriptorCaps.maxPerStageDescriptorUpdateAfterBindSampledImages));
     pipelineDesc.descriptorBindingPolicy.defaultRuntimeDescriptorCount = nr::renderer::kSceneTextureDescriptorCapacity;
-    pipelineDesc.dynamicStates = {
-        vk::DynamicState::eViewport,
-        vk::DynamicState::eScissor,
-        vk::DynamicState::eCullMode,
-        vk::DynamicState::eFrontFace,
-        vk::DynamicState::eDepthTestEnable,
-        vk::DynamicState::eDepthWriteEnable,
-        vk::DynamicState::eDepthCompareOp,
-        vk::DynamicState::ePolygonModeEXT,
-        vk::DynamicState::eRasterizationSamplesEXT,
-        vk::DynamicState::ePrimitiveTopology,
-    };
-
-    auto runtime = std::make_shared<NormalBufferRuntimeCache>();
     runtime->pipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>>();
     auto sceneTextureImmutableSamplers = std::array{sceneTextureTableImmutableSamplerBinding()};
     runtime->pipeline->initializeDeferred(device.pipeline().createGraphicsPipeline(
@@ -145,8 +152,7 @@ inline constexpr std::uint32_t kOffsetTexCoord1 = static_cast<std::uint32_t>(off
     return runtime;
 }
 
-void ensureNormalBufferImages(nr::rhi::Device &device, NormalBufferRuntimeCache &runtime, vk::Extent2D extent,
-                              vk::Format colorFormat, vk::Format depthFormat)
+void ensureNormalBufferImages(nr::rhi::Device &device, NormalBufferRuntimeCache &runtime, vk::Extent2D extent)
 {
     auto imageNeedsRealloc = [](const nr::rhi::Image &image, vk::Extent2D requestedExtent, vk::Format requestedFormat) {
         if (!image.valid())
@@ -161,10 +167,10 @@ void ensureNormalBufferImages(nr::rhi::Device &device, NormalBufferRuntimeCache 
 
     const auto needsRealloc = std::ranges::any_of(runtime.normalBuffers,
                                                   [&](const nr::rhi::Image &image) {
-                                                      return imageNeedsRealloc(image, extent, colorFormat);
+                                                      return imageNeedsRealloc(image, extent, runtime.colorFormat);
                                                   }) ||
                               std::ranges::any_of(runtime.depthBuffers, [&](const nr::rhi::Image &image) {
-                                  return imageNeedsRealloc(image, extent, depthFormat);
+                                  return imageNeedsRealloc(image, extent, runtime.depthFormat);
                               });
 
     if (!needsRealloc)
@@ -194,7 +200,7 @@ void ensureNormalBufferImages(nr::rhi::Device &device, NormalBufferRuntimeCache 
     std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) {
         auto const frameSlotSuffix = std::format("[{}]", frameSlot);
         {
-            auto imageInfo = nr::rhi::makeImageCreateInfo(colorFormat, newExtent,
+            auto imageInfo = nr::rhi::makeImageCreateInfo(runtime.colorFormat, newExtent,
                                                           vk::ImageUsageFlagBits::eColorAttachment |
                                                               vk::ImageUsageFlagBits::eTransferSrc |
                                                               vk::ImageUsageFlagBits::eSampled);
@@ -206,8 +212,8 @@ void ensureNormalBufferImages(nr::rhi::Device &device, NormalBufferRuntimeCache 
         }
 
         {
-            auto imageInfo =
-                nr::rhi::makeImageCreateInfo(depthFormat, newExtent, vk::ImageUsageFlagBits::eDepthStencilAttachment);
+            auto imageInfo = nr::rhi::makeImageCreateInfo(runtime.depthFormat, newExtent,
+                                                          vk::ImageUsageFlagBits::eDepthStencilAttachment);
 
             runtime.depthBuffers[frameSlot] = device.resourceFactory.createImage(
                 imageInfo, nr::rhi::MemoryUsage::GpuOnly, std::format("NormalBuffer.Depth{}", frameSlotSuffix));
@@ -247,11 +253,15 @@ void NormalBufferNode::initialize(NodeInitContext &context)
     {
         colorFormat = context.device.get().presentationContext.swapchainFormat();
     }
+    nr::nrAssert(colorFormat != vk::Format::eUndefined,
+                 "NormalBuffer initialization requires a resolved color attachment format.");
+    nr::nrAssert(input.depthFormat != vk::Format::eUndefined,
+                 "NormalBuffer initialization requires a resolved depth attachment format.");
     runtime_ = detail::ensureNormalBufferRuntime(context.device.get(), context.shaderPrograms, colorFormat,
                                                  input.depthFormat, context.runtimeName + ".Pipeline");
 
     auto const initialExtent = context.device.get().presentationContext.swapchainExtent();
-    detail::ensureNormalBufferImages(context.device.get(), *runtime_, initialExtent, colorFormat, input.depthFormat);
+    detail::ensureNormalBufferImages(context.device.get(), *runtime_, initialExtent);
 }
 
 void NormalBufferNode::finalizeInitialization()
@@ -267,21 +277,31 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
 
     auto viewportExtent = frameParameters.swapchainExtent;
 
-    auto colorFormat = input.colorFormat;
-    if (colorFormat == vk::Format::eUndefined)
+    auto requestedColorFormat = input.colorFormat;
+    if (requestedColorFormat == vk::Format::eUndefined)
     {
-        colorFormat = frameParameters.swapchainFormat;
+        requestedColorFormat = frameParameters.swapchainFormat;
     }
+    nr::nrAssert(requestedColorFormat == runtime_->colorFormat, [&] {
+        return std::format("NormalBuffer color format changed after pipeline initialization: initialized={}, "
+                           "requested={}. Reinstall the graph to rebuild the pipeline.",
+                           vk::to_string(runtime_->colorFormat), vk::to_string(requestedColorFormat));
+    });
+    nr::nrAssert(input.depthFormat == runtime_->depthFormat, [&] {
+        return std::format("NormalBuffer depth format changed after pipeline initialization: initialized={}, "
+                           "requested={}. Reinstall the graph to rebuild the pipeline.",
+                           vk::to_string(runtime_->depthFormat), vk::to_string(input.depthFormat));
+    });
 
-    detail::ensureNormalBufferImages(device_->get(), *runtime_, viewportExtent, colorFormat, input.depthFormat);
+    detail::ensureNormalBufferImages(device_->get(), *runtime_, viewportExtent);
 
     auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
     auto normalBuffer =
         context.importColor(runtime_->normalBuffers[frameSlot], std::format("NormalBuffer.Color[{}]", frameSlot),
-                            viewportExtent, colorFormat, nr::renderer::ResourceLifetime::FrameLocal);
+                            viewportExtent, runtime_->colorFormat, nr::renderer::ResourceLifetime::FrameLocal);
     auto depthBuffer =
         context.importDepth(runtime_->depthBuffers[frameSlot], std::format("NormalBuffer.Depth[{}]", frameSlot),
-                            viewportExtent, input.depthFormat, nr::renderer::ResourceLifetime::FrameLocal);
+                            viewportExtent, runtime_->depthFormat, nr::renderer::ResourceLifetime::FrameLocal);
 
     auto sceneBridgeFrameHandle = frameParameters.sceneBridgeFrameHandle;
     auto sceneTextureTableBinding = detail::makeSceneTextureTableBindingInput(context.globalResources.get());
@@ -293,6 +313,10 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
     };
 
     auto rasterPass = nr::renderer::RasterPassBuilder{context, "NormalBuffer.Raster", runtime_->pipeline};
+    if (sceneBridgeFrameHandle.has_value())
+    {
+        rasterPass.frameData(*sceneBridgeFrameHandle);
+    }
     rasterPass.viewport(viewportExtent)
         .viewportYMode(nr::renderer::RasterViewportYMode::ClipSpaceYUp)
         .colorAttachment(normalBuffer,
@@ -302,15 +326,19 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
                  nr::renderer::ShaderStageIntent::Vertex)
         .rasterState(normalBufferRasterState)
         .prepare([runtime = runtime_, sceneTextureTableBinding,
-                  cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
-            detail::prepareSceneTextureTableBindingForFrame(*runtime->pipeline, cache.get(), prepareContext.frameIndex,
-                                                            sceneTextureTableBinding);
+                  cache = std::ref(bindlessImageTableCache)](
+                     const nr::renderer::PassPrepareContext &prepareContext,
+                     nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding) {
+            detail::prepareSceneTextureTableBindingForFrame(*runtime->pipeline, passBinding, cache.get(),
+                                                            prepareContext.frameIndex, sceneTextureTableBinding);
         })
         .dynamicBindingSnapshot(
             [runtime = runtime_, sceneTextureTableBinding,
-             cache = std::ref(bindlessImageTableCache)](const nr::renderer::PassPrepareContext &prepareContext) {
+             cache = std::ref(bindlessImageTableCache)](
+                const nr::renderer::PassPrepareContext &prepareContext,
+                nr::renderer::PipelineRuntime<nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding) {
                 return detail::makeSceneTextureTableBindingSnapshot(
-                    *runtime->pipeline, cache.get(), prepareContext.frameIndex, sceneTextureTableBinding);
+                    *runtime->pipeline, passBinding, cache.get(), prepareContext.frameIndex, sceneTextureTableBinding);
             })
         .recordParallel(
             [sceneBridgeFrameHandle](const nr::renderer::PassRecordContext &recordContext) -> std::size_t {
@@ -340,10 +368,8 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
                 auto currentFrontFace = normalBufferRasterState.frontFace;
                 auto drawIndices = std::views::iota(rasterContext.range.begin, rasterContext.range.end);
                 auto const &geometryBuffers = sceneBridgeFrame.geometryBuffers;
-                if (!geometryBuffers.hasVertexBuffer())
-                {
-                    return;
-                }
+                nr::nrAssert(geometryBuffers.valid(),
+                             "NormalBuffer raster draws require a resolved frame vertex atlas binding.");
 
                 auto vertexBuffer = geometryBuffers.vertexBuffer.buffer->get().handle();
                 auto vertexOffset = geometryBuffers.vertexBuffer.offset;
@@ -360,10 +386,8 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
 
                 std::ranges::for_each(drawIndices, [&](std::size_t drawIndex) {
                     auto const &draw = sceneBridgeFrame.rasterDraws[drawIndex];
-                    if (!draw.geometry.hasVertexBuffer())
-                    {
-                        return;
-                    }
+                    nr::nrAssert(draw.geometry.valid(),
+                                 "NormalBuffer received an unresolved scene raster draw geometry range.");
 
                     auto const drawCullMode = draw.materialRaster.cullMode;
                     if (currentCullMode != drawCullMode)
@@ -372,16 +396,20 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
                         currentCullMode = drawCullMode;
                     }
 
+                    auto const modelLinearDeterminant = detail::validatedModelLinearDeterminant(draw.world);
+                    auto const drawFrontFace =
+                        detail::frontFaceForModelParity(draw.geometry.frontFace, modelLinearDeterminant);
+
                     rasterContext.pushConstants(
                         modelPushConstants, detail::packDrawPushConstants(draw.world, draw.materialTextures.normal));
 
-                    if (currentFrontFace != draw.geometry.frontFace)
+                    if (currentFrontFace != drawFrontFace)
                     {
-                        commandBuffer.setFrontFace(draw.geometry.frontFace);
-                        currentFrontFace = draw.geometry.frontFace;
+                        commandBuffer.setFrontFace(drawFrontFace);
+                        currentFrontFace = drawFrontFace;
                     }
 
-                    if (draw.geometry.hasIndexBuffer())
+                    if (draw.geometry.indexed())
                     {
                         nr::nrAssert(geometryBuffers.hasIndexBuffer(),
                                      "NormalBuffer indexed draw requires a frame index atlas binding.");
@@ -408,5 +436,6 @@ void NormalBufferNode::shutdown(NodeShutdownContext &)
         runtime_->pipeline->clearBindingSets();
     }
     runtime_.reset();
+    device_.reset();
 }
 } // namespace nr::renderPasses

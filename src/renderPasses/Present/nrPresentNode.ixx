@@ -10,28 +10,7 @@ import :nodeType;
 
 namespace nr::renderPasses::detail
 {
-struct PresentRuntimeCache;
-
-struct PresentScreenshotPendingSave
-{
-    vk::Extent2D extent{1u, 1u};
-    vk::Format format = vk::Format::eUndefined;
-    vk::DeviceSize byteSize = 0;
-    std::filesystem::path path{};
-    std::uint32_t frameSlot = 0;
-    std::uint64_t frameIndex = 0;
-    nr::options::FrameEffect effect{};
-};
-
-struct PresentScreenshotPrepared
-{
-    vk::Extent2D extent{1u, 1u};
-    vk::Format format = vk::Format::eUndefined;
-    vk::DeviceSize byteSize = 0;
-    std::filesystem::path path{};
-    std::uint64_t frameIndex = 0;
-    nr::options::FrameEffect effect{};
-};
+struct PresentRuntimeState;
 } // namespace nr::renderPasses::detail
 
 export namespace nr::renderPasses
@@ -58,7 +37,7 @@ struct PresentNodeInput
 class PresentNode final : public Node
 {
   public:
-    PresentNode() = default;
+    PresentNode();
     ~PresentNode() override;
 
     PresentNodeInput input{};
@@ -95,10 +74,6 @@ class PresentNode final : public Node
     void processCompletedScreenshot(std::uint32_t frameSlot);
     void savePendingScreenshot();
 
-    std::shared_ptr<detail::PresentRuntimeCache> runtime_{};
-    std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
-    nr::rhi::Buffer screenshotReadbackBuffer_{};
-    std::optional<detail::PresentScreenshotPrepared> screenshotPrepared_{};
-    std::optional<detail::PresentScreenshotPendingSave> screenshotPendingSave_{};
+    std::unique_ptr<detail::PresentRuntimeState> runtime_{};
 };
 } // namespace nr::renderPasses

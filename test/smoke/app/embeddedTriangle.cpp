@@ -1,33 +1,12 @@
 import std;
 import dependency.vulkan;
 import nr.app;
-import nr.options;
 import nr.renderer;
 import nr.renderPasses;
+import nr.test.options;
 
 namespace
 {
-[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult &preflight)
-{
-    auto values = nr::options::OptionValueMap{};
-    auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
-        values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
-    });
-    return nr::options::OptionFrameSnapshot{
-        .catalog = preflight.optionCatalog,
-        .values = std::move(values),
-        .availability = std::move(availability),
-        .frameIndex = 1u,
-        .revision = 1u,
-        .graphGeneration = 1u,
-        .bindingEpoch = 1u,
-        .snapshotToken = "embedded-triangle-snapshot",
-    };
-}
-
 void printUsage()
 {
     std::println("Usage:");
@@ -119,7 +98,8 @@ void printUsage()
                 {
                     return 1;
                 }
-                auto const optionSnapshot = makeDefaultSnapshot(preflight);
+                auto const optionSnapshot =
+                    nr::test::options::makeDefaultSnapshot(preflight.optionCatalog, "embedded-triangle-snapshot");
                 auto frameServices = app.makeFrameServices();
 
                 auto previousTick = std::chrono::steady_clock::now();
@@ -133,6 +113,7 @@ void printUsage()
                     previousTick = now;
                     app.ui().beginFrame(presentation, deltaSeconds);
                     app.ui().setCameraFrame(app.camera().frame());
+                    static_cast<void>(app.ui().finalizeFrame());
                     auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
                     auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{

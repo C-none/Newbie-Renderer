@@ -179,42 +179,6 @@ enum class ShaderStageIntent : std::uint8_t
     Callable,
 };
 
-enum class DescriptorBindingIntent : std::uint8_t
-{
-    UniformBuffer,
-    StorageBuffer,
-    UniformTexelBuffer,
-    StorageTexelBuffer,
-    SampledImage,
-    StorageImage,
-    Sampler,
-    CombinedImageSampler,
-    AccelerationStructure,
-    InlineUniform,
-};
-
-enum class AttachmentLoadIntent : std::uint8_t
-{
-    Load,
-    Clear,
-    DontCare,
-};
-
-enum class AttachmentStoreIntent : std::uint8_t
-{
-    Store,
-    DontCare,
-};
-
-enum class ClearValueKind : std::uint8_t
-{
-    None,
-    ColorFloat,
-    ColorUint,
-    ColorSint,
-    DepthStencil,
-};
-
 enum class DependencyStrength : std::uint8_t
 {
     InOrder,

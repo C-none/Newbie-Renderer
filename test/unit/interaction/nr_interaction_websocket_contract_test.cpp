@@ -4,6 +4,7 @@ import dependency.network.test;
 import nr.interaction;
 import nr.options;
 import nr.test;
+import nr.test.options;
 import std;
 
 namespace
@@ -16,31 +17,18 @@ namespace options = nr::options;
 
 [[nodiscard]] std::shared_ptr<const options::OptionCatalog> sessionCatalog()
 {
-    auto builder = options::OptionCatalogBuilder{};
     auto definitions = options::makeSessionDefinitions(options::SessionDefinitionSeed{
         .environmentName = "test_environment",
         .environmentNames = {"test_environment"},
     });
-    std::ranges::for_each(definitions, [&](auto definition) { nr::test::require(builder.add(std::move(definition))); });
-    auto result = builder.build();
-    nr::test::require(result.valid());
-    return result.catalog;
-}
-
-[[nodiscard]] options::OptionAvailabilityMap allAvailable(const options::OptionCatalog &catalog)
-{
-    auto result = options::OptionAvailabilityMap{};
-    std::ranges::for_each(catalog.definitions(), [&](auto const &entry) {
-        result.emplace(entry.first, options::OptionAvailability{.available = true, .reason = {}});
-    });
-    return result;
+    return nr::test::options::buildCatalog(definitions);
 }
 
 [[nodiscard]] std::unique_ptr<options::OptionSystem> agentSystem()
 {
     auto system = std::make_unique<options::OptionSystem>(options::AuthorityMode::agent);
     auto catalog = sessionCatalog();
-    nr::test::require(system->initializeSession(catalog, allAvailable(*catalog)).committed);
+    nr::test::require(system->initializeSession(catalog, nr::test::options::allAvailable(*catalog)).committed);
     return system;
 }
 
@@ -266,7 +254,8 @@ const nr::test::CaseRegistrar exitAdmissionCase{
         nr::test::require(materialized.effect.has_value());
         nr::test::requireEqual(materialized.effect->id, options::optionId(options::keys::viewerExit));
         nr::test::requireEqual(materialized.effect->origin, options::MutationOrigin::websocket);
-        nr::test::require(system->publishRenderableFrame(allAvailable(*system->activeCatalog())) != nullptr);
+        nr::test::require(system->publishRenderableFrame(nr::test::options::allAvailable(*system->activeCatalog())) !=
+                          nullptr);
     }};
 
 const nr::test::CaseRegistrar fragmentedAndProfileCase{
@@ -284,7 +273,8 @@ const nr::test::CaseRegistrar fragmentedAndProfileCase{
         auto frame = system->beginRenderableFrame();
         nr::test::require(frame && frame->mutation);
         nr::test::require(system->discardMutation(std::move(*frame->mutation)));
-        nr::test::require(system->publishRenderableFrame(allAvailable(*system->activeCatalog())) != nullptr);
+        nr::test::require(system->publishRenderableFrame(nr::test::options::allAvailable(*system->activeCatalog())) !=
+                          nullptr);
 
         auto batch =
             protocol.handleText(R"([{"jsonrpc":"2.0","id":"batch","method":"option.snapshot","params":{}}])", {}, slot);

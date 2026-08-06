@@ -138,6 +138,13 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
     return describeGraphImageResource(*resourceIt);
 }
 
+[[nodiscard]] std::size_t NodeBuildContext::nodeLocalPassOrdinal() const noexcept
+{
+    return static_cast<std::size_t>(std::ranges::count_if(
+        graphBuilder.get().frame().passes,
+        [node = nodeHandle](const PassExecutionDesc &pass) { return pass.node == node; }));
+}
+
 [[nodiscard]] GraphResourceHandle NodeBuildContext::transientColor(std::string_view debugName, vk::Extent2D extent,
                                                                    vk::Format format)
 {
@@ -297,22 +304,24 @@ void NodeBuildContext::publishFrameData(std::string_view key, GraphFrameDataHand
 }
 
 [[nodiscard]] GraphPassHandle NodeBuildContext::addPass(std::span<const PassResourceUseDesc> intentList,
-                                                        std::string_view debugName, PassRecordCallback executeLambda,
-                                                        PassPrepareCallback prepareCallback, bool isCopyPass,
-                                                        vk::PipelineStageFlags2 shaderStages)
+                                                         std::string_view debugName, PassRecordCallback executeLambda,
+                                                         PassPrepareCallback prepareCallback, bool isCopyPass,
+                                                         vk::PipelineStageFlags2 shaderStages,
+                                                         std::span<const GraphFrameDataHandle> frameDataUses)
 {
     return graphBuilder.get().addPass(debugName, nodeHandle, intentList, std::move(executeLambda),
-                                      std::move(prepareCallback), isCopyPass, shaderStages);
+                                      std::move(prepareCallback), isCopyPass, shaderStages, frameDataUses);
 }
 
 [[nodiscard]] GraphPassHandle NodeBuildContext::addPass(std::span<const PassResourceUseDesc> intentList,
                                                         std::string_view debugName,
-                                                        PassParallelRecordDesc parallelRecord,
-                                                        PassPrepareCallback prepareCallback,
-                                                        vk::PipelineStageFlags2 shaderStages)
+                                                         PassParallelRecordDesc parallelRecord,
+                                                         PassPrepareCallback prepareCallback,
+                                                         vk::PipelineStageFlags2 shaderStages,
+                                                         std::span<const GraphFrameDataHandle> frameDataUses)
 {
     return graphBuilder.get().addPass(debugName, nodeHandle, intentList, std::move(parallelRecord),
-                                      std::move(prepareCallback), shaderStages);
+                                      std::move(prepareCallback), shaderStages, frameDataUses);
 }
 
 [[nodiscard]] GraphSubmitHandle NodeBuildContext::addSubmitNode(std::string_view debugName)
@@ -637,12 +646,14 @@ RasterPassBuilder &RasterPassBuilder::recordParallel(RasterPassItemCountCallback
 
 void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &commandBuffer,
                                           const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime,
+                                          PipelineRuntime<nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding,
                                           const nr::rhi::ShaderBindingSnapshot &bindingSnapshot,
                                           std::uint32_t frameIndex, vk::Extent2D targetExtent,
                                           RasterViewportYMode viewportYMode, nr::rhi::MeshRasterState rasterState,
                                           vk::PrimitiveTopology primitiveTopology)
 {
-    Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, runtime, bindingSnapshot, frameIndex);
+    Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, runtime, passBinding, bindingSnapshot,
+                                                        frameIndex);
 
     auto viewport = vk::Viewport{};
     viewport.x = 0.0f;
@@ -678,7 +689,9 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
 
     auto common = takeCommonBuildState();
     auto resourceUses = std::move(common.resourceUses);
+    auto frameDataUses = std::move(common.frameDataUses);
     auto runtime = std::move(common.runtime);
+    auto passBinding = common.passBinding;
     auto debugName = std::move(common.debugName);
     auto bindingSnapshot = std::move(common.bindingSnapshot);
     auto prepareCallback = std::move(common.prepareCallback);
@@ -708,7 +721,7 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
                     return makeDynamicRenderingSecondaryScope(setup, *runtime, debugName);
                 },
             .recordRange =
-                [runtime, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode,
+                [runtime, passBinding, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode,
                  rasterState, primitiveTopology, debugName,
                  rangeRecordCallback =
                      std::move(parallelRangeRecordCallback)](const PassRangeRecordContext &rangeContext) {
@@ -720,7 +733,8 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
                         std::span<const RasterColorAttachment>{colorAttachments.data(), colorAttachments.size()},
                         depthAttachment, viewportExtent, debugName);
                     auto &commandBuffer = rangeContext.commandBuffer.get();
-                    bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, rangeContext.pass.frameIndex,
+                    bindGraphicsSetup(commandBuffer, *runtime, passBinding, bindingSnapshot,
+                                      rangeContext.pass.frameIndex,
                                       setup.targetExtent, viewportYMode, rasterState, primitiveTopology);
 
                     rangeRecordCallback(RasterPassRangeRecordContext{
@@ -738,12 +752,15 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
 
         return context_.get().addPass(std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
                                       debugName, std::move(parallelRecord), std::move(prepareCallback),
-                                      vk::PipelineStageFlagBits2::eAllGraphics);
+                                      vk::PipelineStageFlagBits2::eAllGraphics,
+                                      std::span<const GraphFrameDataHandle>{frameDataUses.data(),
+                                                                            frameDataUses.size()});
     }
 
     return context_.get().addPass(
         std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
-        [runtime, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode, rasterState,
+        [runtime, passBinding, colorAttachments, depthAttachment, bindingSnapshot, viewportExtent, viewportYMode,
+         rasterState,
          primitiveTopology, debugName,
          recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(),
@@ -765,8 +782,8 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
 
             auto &commandBuffer = recordContext.commandBuffer->get();
             auto scopedRendering = nr::rhi::ops::ScopedRendering(commandBuffer, renderingScope);
-            bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex, setup.targetExtent,
-                              viewportYMode, rasterState, primitiveTopology);
+            bindGraphicsSetup(commandBuffer, *runtime, passBinding, bindingSnapshot, recordContext.frameIndex,
+                              setup.targetExtent, viewportYMode, rasterState, primitiveTopology);
 
             recordCallback(RasterPassRecordContext{
                 .pass = recordContext,
@@ -776,7 +793,8 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
                 .extent = setup.targetExtent,
             });
         },
-        std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eAllGraphics);
+        std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eAllGraphics,
+        std::span<const GraphFrameDataHandle>{frameDataUses.data(), frameDataUses.size()});
 }
 
 RasterPassPatchBuilder::RasterPassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot,
@@ -814,15 +832,27 @@ RasterPassPatchBuilder &RasterPassPatchBuilder::rasterState(nr::rhi::MeshRasterS
 
 RasterPassPatchBuilder &RasterPassPatchBuilder::prepare(RasterPassPrepareCallback callback)
 {
+    nrAssert(static_cast<bool>(callback), "RasterPassPatchBuilder::prepare requires a callback.");
     prepareCallbacks_.push_back(std::move(callback));
     return *this;
 }
 
-RasterPassPatchBuilder &RasterPassPatchBuilder::dynamicBindingSnapshot(PassBindingSnapshotCallback callback,
-                                                                       nr::rhi::LogicalDescriptorResolver resolver)
+RasterPassPatchBuilder &RasterPassPatchBuilder::frameData(GraphFrameDataHandle handle)
+{
+    nrAssert(handle.valid(), "RasterPassPatchBuilder::frameData requires a valid frame-data handle.");
+    if (!std::ranges::contains(frameDataUses_, handle))
+    {
+        frameDataUses_.push_back(handle);
+    }
+    return *this;
+}
+
+RasterPassPatchBuilder &RasterPassPatchBuilder::dynamicBindingSnapshot(
+    PipelinePassBindingSnapshotCallback<nr::rhi::GraphicsPipeline> callback,
+    nr::rhi::LogicalDescriptorResolver resolver)
 {
     nrAssert(static_cast<bool>(callback), "RasterPassPatchBuilder requires a dynamic snapshot callback.");
-    dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
+    dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc<nr::rhi::GraphicsPipeline>{
         .snapshot = std::move(callback),
         .resolver = std::move(resolver),
     });
@@ -842,36 +872,38 @@ void RasterPassPatchBuilder::patch()
     auto bindingSnapshot = rootCursor_.snapshot();
     rootCursor_.clearSnapshot();
     auto runtime = std::move(runtime_);
+    auto passBinding = runtime->passBinding(context_.get().runtimeName(), passSlot_);
     auto colorAttachments = std::move(colorAttachments_);
     auto viewportExtent = viewportExtent_;
     auto rasterState = rasterState_;
     auto debugName = debugName_;
     auto prepareCallbacks = std::move(prepareCallbacks_);
     auto dynamicSnapshots = std::move(dynamicBindingSnapshots_);
-    auto prepareCallback = [runtime, bindingSnapshot, prepareCallbacks = std::move(prepareCallbacks),
+    auto frameDataUses = std::move(frameDataUses_);
+    auto prepareCallback = [runtime, passBinding, bindingSnapshot, prepareCallbacks = std::move(prepareCallbacks),
                             dynamicSnapshots = std::move(dynamicSnapshots)](const PassPrepareContext &prepareContext) {
         std::ranges::for_each(prepareCallbacks, [&](const RasterPassPrepareCallback &callback) {
-            if (callback)
-            {
-                callback(prepareContext);
-            }
+            callback(prepareContext, passBinding);
         });
-        auto &cache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
+        auto &cache = runtime->descriptorWriteCacheForFrame(passBinding, prepareContext.frameIndex);
         nr::rhi::updateResourcesForBindingSnapshot(
-            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+            runtime->state().bindingPool, runtime->bindingSetsForFrame(passBinding, prepareContext.frameIndex), cache,
             bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
-        std::ranges::for_each(dynamicSnapshots, [&](const DynamicBindingSnapshotDesc &desc) {
-            auto snapshot = desc.snapshot(prepareContext);
+        std::ranges::for_each(
+            dynamicSnapshots, [&](const DynamicBindingSnapshotDesc<nr::rhi::GraphicsPipeline> &desc) {
+            auto snapshot = desc.snapshot(prepareContext, passBinding);
             auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
             nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool,
-                                                       runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+                                                       runtime->bindingSetsForFrame(passBinding,
+                                                                                    prepareContext.frameIndex),
+                                                       cache,
                                                        snapshot, std::move(resolver));
         });
     };
     context_.get().patchPass(
         passSlot_, debugName_, std::move(prepareCallback),
-        [runtime, bindingSnapshot, colorAttachments = std::move(colorAttachments), viewportExtent, rasterState,
-         debugName = std::move(debugName),
+        [runtime, passBinding, bindingSnapshot, colorAttachments = std::move(colorAttachments), viewportExtent,
+         rasterState, debugName = std::move(debugName),
          recordCallback = std::move(recordCallback_)](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(),
                      "RasterPassPatchBuilder record requires a command buffer.");
@@ -883,9 +915,10 @@ void RasterPassPatchBuilder::patch()
             };
             auto &commandBuffer = recordContext.commandBuffer->get();
             auto scopedRendering = nr::rhi::ops::ScopedRendering(commandBuffer, renderingScope);
-            RasterPassBuilder::bindGraphicsSetup(commandBuffer, *runtime, bindingSnapshot, recordContext.frameIndex,
-                                                 setup.targetExtent, RasterViewportYMode::FramebufferTopLeft,
-                                                 rasterState, vk::PrimitiveTopology::eTriangleList);
+            RasterPassBuilder::bindGraphicsSetup(commandBuffer, *runtime, passBinding, bindingSnapshot,
+                                                 recordContext.frameIndex, setup.targetExtent,
+                                                 RasterViewportYMode::FramebufferTopLeft, rasterState,
+                                                 vk::PrimitiveTopology::eTriangleList);
             recordCallback(RasterPassRecordContext{
                 .pass = recordContext,
                 .commandBuffer = commandBuffer,
@@ -893,7 +926,9 @@ void RasterPassPatchBuilder::patch()
                 .pipelineLayout = runtime->state().layout,
                 .extent = setup.targetExtent,
             });
-        });
+        },
+        std::nullopt,
+        std::span<const GraphFrameDataHandle>{frameDataUses.data(), frameDataUses.size()});
 }
 
 [[nodiscard]] vk::Extent2D RasterPassBuilder::resolveTargetExtent(std::optional<vk::Extent2D> viewportExtent,
@@ -944,7 +979,9 @@ ComputePassBuilder &ComputePassBuilder::record(ComputePassRecordCallback callbac
 
     auto common = takeCommonBuildState();
     auto resourceUses = std::move(common.resourceUses);
+    auto frameDataUses = std::move(common.frameDataUses);
     auto runtime = std::move(common.runtime);
+    auto passBinding = common.passBinding;
     auto debugName = std::move(common.debugName);
     auto bindingSnapshot = std::move(common.bindingSnapshot);
     auto prepareCallback = std::move(common.prepareCallback);
@@ -952,14 +989,15 @@ ComputePassBuilder &ComputePassBuilder::record(ComputePassRecordCallback callbac
 
     return context_.get().addPass(
         std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
-        [runtime, bindingSnapshot, recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
+        [runtime, passBinding, bindingSnapshot,
+         recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(),
                      "ComputePassBuilder record requires RAII command buffer access.");
             nrAssert(static_cast<bool>(runtime), "ComputePassBuilder record requires initialized runtime state.");
 
             auto &commandBuffer = recordContext.commandBuffer->get();
-            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, bindingSnapshot,
-                                                                recordContext.frameIndex);
+            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, passBinding,
+                                                                bindingSnapshot, recordContext.frameIndex);
 
             recordCallback(ComputePassRecordContext{
                 .pass = recordContext,
@@ -968,7 +1006,8 @@ ComputePassBuilder &ComputePassBuilder::record(ComputePassRecordCallback callbac
                 .pipelineLayout = runtime->state().layout,
             });
         },
-        std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eComputeShader);
+        std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eComputeShader,
+        std::span<const GraphFrameDataHandle>{frameDataUses.data(), frameDataUses.size()});
 }
 
 ComputePassPatchBuilder::ComputePassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot,
@@ -1006,6 +1045,35 @@ ComputePassPatchBuilder &ComputePassPatchBuilder::storageImage(std::string_view 
     return *this;
 }
 
+ComputePassPatchBuilder &ComputePassPatchBuilder::frameData(GraphFrameDataHandle handle)
+{
+    nrAssert(handle.valid(), "ComputePassPatchBuilder::frameData requires a valid frame-data handle.");
+    if (!std::ranges::contains(frameDataUses_, handle))
+    {
+        frameDataUses_.push_back(handle);
+    }
+    return *this;
+}
+
+ComputePassPatchBuilder &ComputePassPatchBuilder::prepare(ComputePassPrepareCallback callback)
+{
+    nrAssert(static_cast<bool>(callback), "ComputePassPatchBuilder::prepare requires a callback.");
+    prepareCallbacks_.push_back(std::move(callback));
+    return *this;
+}
+
+ComputePassPatchBuilder &ComputePassPatchBuilder::dynamicBindingSnapshot(
+    PipelinePassBindingSnapshotCallback<nr::rhi::ComputePipeline> callback,
+    nr::rhi::LogicalDescriptorResolver resolver)
+{
+    nrAssert(static_cast<bool>(callback), "ComputePassPatchBuilder requires a dynamic snapshot callback.");
+    dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc<nr::rhi::ComputePipeline>{
+        .snapshot = std::move(callback),
+        .resolver = std::move(resolver),
+    });
+    return *this;
+}
+
 ComputePassPatchBuilder &ComputePassPatchBuilder::record(ComputePassRecordCallback callback)
 {
     recordCallback_ = std::move(callback);
@@ -1018,23 +1086,43 @@ void ComputePassPatchBuilder::patch()
     auto bindingSnapshot = rootCursor_.snapshot();
     rootCursor_.clearSnapshot();
     auto runtime = std::move(runtime_);
+    auto passBinding = runtime->passBinding(context_.get().runtimeName(), passSlot_);
     auto recordCallback = std::move(recordCallback_);
-    auto prepareCallback = [runtime, bindingSnapshot](const PassPrepareContext &prepareContext) {
-        auto &descriptorWriteCache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
+    auto frameDataUses = std::move(frameDataUses_);
+    auto prepareCallbacks = std::move(prepareCallbacks_);
+    auto dynamicSnapshots = std::move(dynamicBindingSnapshots_);
+    auto prepareCallback = [runtime, passBinding, bindingSnapshot,
+                            prepareCallbacks = std::move(prepareCallbacks),
+                            dynamicSnapshots = std::move(dynamicSnapshots)](const PassPrepareContext &prepareContext) {
+        std::ranges::for_each(prepareCallbacks, [&](const ComputePassPrepareCallback &callback) {
+            callback(prepareContext, passBinding);
+        });
+        auto &descriptorWriteCache = runtime->descriptorWriteCacheForFrame(passBinding, prepareContext.frameIndex);
         nr::rhi::updateResourcesForBindingSnapshot(
-            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), descriptorWriteCache,
-            bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
+            runtime->state().bindingPool, runtime->bindingSetsForFrame(passBinding, prepareContext.frameIndex),
+            descriptorWriteCache, bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
+        std::ranges::for_each(
+            dynamicSnapshots, [&](const DynamicBindingSnapshotDesc<nr::rhi::ComputePipeline> &desc) {
+                auto snapshot = desc.snapshot(prepareContext, passBinding);
+                auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
+                nr::rhi::updateResourcesForBindingSnapshot(
+                    runtime->state().bindingPool,
+                    runtime->bindingSetsForFrame(passBinding, prepareContext.frameIndex), descriptorWriteCache,
+                    snapshot, std::move(resolver));
+            });
     };
     context_.get().patchPass(
         passSlot_, debugName_, std::move(prepareCallback),
-        [runtime, bindingSnapshot, recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
+        [runtime, passBinding, bindingSnapshot,
+         recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(),
                      "ComputePassPatchBuilder record requires RAII command buffer access.");
             auto &commandBuffer = recordContext.commandBuffer->get();
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, runtime->pipeline().raw());
             nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, vk::PipelineBindPoint::eCompute,
                                                           runtime->state().layout,
-                                                          runtime->bindingSetsForFrame(recordContext.frameIndex));
+                                                          runtime->bindingSetsForFrame(passBinding,
+                                                                                       recordContext.frameIndex));
             nr::rhi::pushConstantsToCommandBuffer(commandBuffer, runtime->state().layout, bindingSnapshot);
             recordCallback(ComputePassRecordContext{
                 .pass = recordContext,
@@ -1042,7 +1130,9 @@ void ComputePassPatchBuilder::patch()
                 .descriptorLayout = runtime->state().descriptorLayout,
                 .pipelineLayout = runtime->state().layout,
             });
-        });
+        },
+        std::nullopt,
+        std::span<const GraphFrameDataHandle>{frameDataUses.data(), frameDataUses.size()});
 }
 
 RayTracingPassBuilder::RayTracingPassBuilder(NodeBuildContext &context, std::string_view debugName,
@@ -1063,7 +1153,9 @@ RayTracingPassBuilder &RayTracingPassBuilder::record(RayTracingPassRecordCallbac
 
     auto common = takeCommonBuildState();
     auto resourceUses = std::move(common.resourceUses);
+    auto frameDataUses = std::move(common.frameDataUses);
     auto runtime = std::move(common.runtime);
+    auto passBinding = common.passBinding;
     auto debugName = std::move(common.debugName);
     auto bindingSnapshot = std::move(common.bindingSnapshot);
     auto prepareCallback = std::move(common.prepareCallback);
@@ -1071,14 +1163,15 @@ RayTracingPassBuilder &RayTracingPassBuilder::record(RayTracingPassRecordCallbac
 
     return context_.get().addPass(
         std::span<const PassResourceUseDesc>{resourceUses.data(), resourceUses.size()}, debugName,
-        [runtime, bindingSnapshot, recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
+        [runtime, passBinding, bindingSnapshot,
+         recordCallback = std::move(recordCallback)](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(),
                      "RayTracingPassBuilder record requires RAII command buffer access.");
             nrAssert(static_cast<bool>(runtime), "RayTracingPassBuilder record requires initialized runtime state.");
 
             auto &commandBuffer = recordContext.commandBuffer->get();
-            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, bindingSnapshot,
-                                                                recordContext.frameIndex);
+            Base::bindPipelinePreparedResourcesAndPushConstants(commandBuffer, *runtime, passBinding,
+                                                                bindingSnapshot, recordContext.frameIndex);
 
             recordCallback(RayTracingPassRecordContext{
                 .pass = recordContext,
@@ -1087,7 +1180,8 @@ RayTracingPassBuilder &RayTracingPassBuilder::record(RayTracingPassRecordCallbac
                 .pipelineLayout = runtime->state().layout,
             });
         },
-        std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
+        std::move(prepareCallback), false, vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        std::span<const GraphFrameDataHandle>{frameDataUses.data(), frameDataUses.size()});
 }
 
 RayTracingPassPatchBuilder::RayTracingPassPatchBuilder(
@@ -1153,6 +1247,16 @@ RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::uniform(std::string_view
     return descriptor(shaderPath, resource, debugName);
 }
 
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::frameData(GraphFrameDataHandle handle)
+{
+    nrAssert(handle.valid(), "RayTracingPassPatchBuilder::frameData requires a valid frame-data handle.");
+    if (!std::ranges::contains(frameDataUses_, handle))
+    {
+        frameDataUses_.push_back(handle);
+    }
+    return *this;
+}
+
 RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::uniform(std::string_view shaderPath,
                                                                 FrameUniformBinding binding, std::string_view debugName)
 {
@@ -1161,17 +1265,19 @@ RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::uniform(std::string_view
                       binding.range);
 }
 
-RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::prepare(ShaderVisiblePassPrepareCallback callback)
+RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::prepare(RayTracingPassPrepareCallback callback)
 {
+    nrAssert(static_cast<bool>(callback), "RayTracingPassPatchBuilder::prepare requires a callback.");
     prepareCallbacks_.push_back(std::move(callback));
     return *this;
 }
 
 RayTracingPassPatchBuilder &RayTracingPassPatchBuilder::dynamicBindingSnapshot(
-    PassBindingSnapshotCallback callback, nr::rhi::LogicalDescriptorResolver resolver)
+    PipelinePassBindingSnapshotCallback<nr::rhi::RayTracingPipeline> callback,
+    nr::rhi::LogicalDescriptorResolver resolver)
 {
     nrAssert(static_cast<bool>(callback), "RayTracingPassPatchBuilder requires a dynamic snapshot callback.");
-    dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
+    dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc<nr::rhi::RayTracingPipeline>{
         .snapshot = std::move(callback),
         .resolver = std::move(resolver),
     });
@@ -1190,31 +1296,33 @@ void RayTracingPassPatchBuilder::patch()
     auto bindingSnapshot = rootCursor_.snapshot();
     rootCursor_.clearSnapshot();
     auto runtime = std::move(runtime_);
+    auto passBinding = runtime->passBinding(context_.get().runtimeName(), passSlot_);
     auto prepareCallbacks = std::move(prepareCallbacks_);
     auto dynamicSnapshots = std::move(dynamicBindingSnapshots_);
-    auto prepareCallback = [runtime, bindingSnapshot, prepareCallbacks = std::move(prepareCallbacks),
+    auto frameDataUses = std::move(frameDataUses_);
+    auto prepareCallback = [runtime, passBinding, bindingSnapshot, prepareCallbacks = std::move(prepareCallbacks),
                             dynamicSnapshots = std::move(dynamicSnapshots)](const PassPrepareContext &prepareContext) {
-        std::ranges::for_each(prepareCallbacks, [&](const ShaderVisiblePassPrepareCallback &callback) {
-            if (callback)
-            {
-                callback(prepareContext);
-            }
+        std::ranges::for_each(prepareCallbacks, [&](const RayTracingPassPrepareCallback &callback) {
+            callback(prepareContext, passBinding);
         });
-        auto &cache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
+        auto &cache = runtime->descriptorWriteCacheForFrame(passBinding, prepareContext.frameIndex);
         nr::rhi::updateResourcesForBindingSnapshot(
-            runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+            runtime->state().bindingPool, runtime->bindingSetsForFrame(passBinding, prepareContext.frameIndex), cache,
             bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
-        std::ranges::for_each(dynamicSnapshots, [&](const DynamicBindingSnapshotDesc &desc) {
-            auto snapshot = desc.snapshot(prepareContext);
+        std::ranges::for_each(
+            dynamicSnapshots, [&](const DynamicBindingSnapshotDesc<nr::rhi::RayTracingPipeline> &desc) {
+            auto snapshot = desc.snapshot(prepareContext, passBinding);
             auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
             nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool,
-                                                       runtime->bindingSetsForFrame(prepareContext.frameIndex), cache,
+                                                       runtime->bindingSetsForFrame(passBinding,
+                                                                                    prepareContext.frameIndex),
+                                                       cache,
                                                        snapshot, std::move(resolver));
         });
     };
     context_.get().patchPass(
         passSlot_, debugName_, std::move(prepareCallback),
-        [runtime, bindingSnapshot,
+        [runtime, passBinding, bindingSnapshot,
          recordCallback = std::move(recordCallback_)](const PassRecordContext &recordContext) {
             nrAssert(recordContext.commandBuffer.has_value(),
                      "RayTracingPassPatchBuilder record requires a command buffer.");
@@ -1222,7 +1330,8 @@ void RayTracingPassPatchBuilder::patch()
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, runtime->pipeline().raw());
             nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, vk::PipelineBindPoint::eRayTracingKHR,
                                                           runtime->state().layout,
-                                                          runtime->bindingSetsForFrame(recordContext.frameIndex));
+                                                          runtime->bindingSetsForFrame(passBinding,
+                                                                                       recordContext.frameIndex));
             nr::rhi::pushConstantsToCommandBuffer(commandBuffer, runtime->state().layout, bindingSnapshot);
             recordCallback(RayTracingPassRecordContext{
                 .pass = recordContext,
@@ -1230,6 +1339,8 @@ void RayTracingPassPatchBuilder::patch()
                 .descriptorLayout = runtime->state().descriptorLayout,
                 .pipelineLayout = runtime->state().layout,
             });
-        });
+        },
+        std::nullopt,
+        std::span<const GraphFrameDataHandle>{frameDataUses.data(), frameDataUses.size()});
 }
 } // namespace nr::renderer

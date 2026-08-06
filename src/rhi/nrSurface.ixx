@@ -33,8 +33,7 @@ struct Surface
     std::unique_ptr<GLFWwindow, decltype(&glfwDestroyWindow)> handle{nullptr, &glfwDestroyWindow};
     vk::Extent2D extent{1920, 1080};
     vk::raii::SurfaceKHR surface = {nullptr};
-    vk::Format format = vk::Format::eUndefined;
-    Surface();
+    Surface() = default;
     Surface(const Surface &) = delete;
     Surface &operator=(const Surface &) = delete;
     Surface(Surface &&) = default;

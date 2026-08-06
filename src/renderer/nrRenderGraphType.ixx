@@ -35,14 +35,6 @@ struct GraphFrameDataDesc
     std::any payload{};
 };
 
-struct GraphImportedResourceDesc
-{
-    std::string debugName{};
-    ResourceLifetime lifetime = ResourceLifetime::ScenePersistent;
-    ResourceResidency residency = ResourceResidency::Imported;
-    ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined;
-};
-
 struct GraphImportedBufferDesc
 {
     std::string debugName{};
@@ -208,8 +200,9 @@ struct PassResourceUseDesc
 
     vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
     ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
-    bool readOnly = false;
     bool requiresPreviousUseBarrier = false;
+
+    [[nodiscard]] bool operator==(const PassResourceUseDesc &) const = default;
 };
 
 enum class CopyBufferDestinationIntent : std::uint8_t
@@ -277,551 +270,6 @@ namespace use
 
 [[nodiscard]] PassResourceUseDesc withShaderStages(PassResourceUseDesc use,
                                                    std::initializer_list<ShaderStageIntent> stages) noexcept;
-
-struct ImageUseSpecDesc
-{
-    ImageUsageIntent usage;
-    ImageAccessIntent access;
-    ImageLayoutIntent layout;
-    ImageAspectIntent aspect = ImageAspectIntent::Color;
-    ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
-    bool readOnly = false;
-};
-
-struct BufferUseSpecDesc
-{
-    BufferUsageIntent usage;
-    BufferAccessIntent access;
-    ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
-    bool readOnly = false;
-};
-
-struct AccelerationStructureUseSpecDesc
-{
-    AccelerationStructureUsageIntent usage;
-    AccelerationStructureAccessIntent access;
-    ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
-    bool readOnly = false;
-};
-
-struct ImageUseOptions
-{
-    std::optional<ImageAspectIntent> aspect{};
-    std::optional<ResourceOwnershipDomain> ownershipDomain{};
-};
-
-struct BufferUseOptions
-{
-    std::optional<ResourceOwnershipDomain> ownershipDomain{};
-};
-
-template <typename TSpec>
-concept ImageUseSpec =
-    requires { TSpec::imageUse; } && std::same_as<std::remove_cvref_t<decltype(TSpec::imageUse)>, ImageUseSpecDesc>;
-
-template <typename TSpec>
-concept BufferUseSpec =
-    requires { TSpec::bufferUse; } && std::same_as<std::remove_cvref_t<decltype(TSpec::bufferUse)>, BufferUseSpecDesc>;
-
-template <typename TSpec>
-concept AccelerationStructureUseSpec = requires {
-    TSpec::accelerationStructureUse;
-} && std::same_as<std::remove_cvref_t<decltype(TSpec::accelerationStructureUse)>, AccelerationStructureUseSpecDesc>;
-
-namespace spec
-{
-struct ColorRead
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::ColorAttachment,
-        .access = ImageAccessIntent::ColorAttachmentRead,
-        .layout = ImageLayoutIntent::ColorAttachment,
-        .readOnly = true,
-    };
-};
-
-struct ColorWrite
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::ColorAttachment,
-        .access = ImageAccessIntent::ColorAttachmentWrite,
-        .layout = ImageLayoutIntent::ColorAttachment,
-    };
-};
-
-struct ColorReadWrite
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::ColorAttachment,
-        .access = ImageAccessIntent::ColorAttachmentReadWrite,
-        .layout = ImageLayoutIntent::ColorAttachment,
-    };
-};
-
-struct DepthRead
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::DepthStencilReadOnly,
-        .access = ImageAccessIntent::DepthStencilRead,
-        .layout = ImageLayoutIntent::DepthStencilReadOnly,
-        .aspect = ImageAspectIntent::Depth,
-        .readOnly = true,
-    };
-};
-
-struct DepthWrite
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::DepthStencilAttachment,
-        .access = ImageAccessIntent::DepthStencilWrite,
-        .layout = ImageLayoutIntent::DepthStencilAttachment,
-        .aspect = ImageAspectIntent::Depth,
-    };
-};
-
-struct DepthReadWrite
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::DepthStencilAttachment,
-        .access = ImageAccessIntent::DepthStencilReadWrite,
-        .layout = ImageLayoutIntent::DepthStencilAttachment,
-        .aspect = ImageAspectIntent::Depth,
-    };
-};
-
-struct SampledRead
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::Sampled,
-        .access = ImageAccessIntent::SampledRead,
-        .layout = ImageLayoutIntent::ShaderReadOnly,
-        .readOnly = true,
-    };
-};
-
-struct StorageRead
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::StorageRead,
-        .access = ImageAccessIntent::StorageRead,
-        .layout = ImageLayoutIntent::General,
-        .readOnly = true,
-    };
-};
-
-struct StorageWrite
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::StorageWrite,
-        .access = ImageAccessIntent::StorageWrite,
-        .layout = ImageLayoutIntent::General,
-    };
-};
-
-struct StorageReadWrite
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::StorageReadWrite,
-        .access = ImageAccessIntent::StorageReadWrite,
-        .layout = ImageLayoutIntent::General,
-    };
-};
-
-struct InputAttachmentRead
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::InputAttachment,
-        .access = ImageAccessIntent::InputAttachmentRead,
-        .layout = ImageLayoutIntent::ShaderReadOnly,
-        .readOnly = true,
-    };
-};
-
-struct ImageTransferSrc
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::TransferSrc,
-        .access = ImageAccessIntent::TransferRead,
-        .layout = ImageLayoutIntent::TransferSrc,
-        .readOnly = true,
-    };
-};
-
-struct ImageTransferDst
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::TransferDst,
-        .access = ImageAccessIntent::TransferWrite,
-        .layout = ImageLayoutIntent::TransferDst,
-    };
-};
-
-struct CopySource
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::CopySource,
-        .access = ImageAccessIntent::TransferRead,
-        .layout = ImageLayoutIntent::TransferSrc,
-        .readOnly = true,
-    };
-};
-
-struct CopyDestination
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::CopyDestination,
-        .access = ImageAccessIntent::TransferWrite,
-        .layout = ImageLayoutIntent::TransferDst,
-    };
-};
-
-struct ResolveSrc
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::ResolveSrc,
-        .access = ImageAccessIntent::TransferRead,
-        .layout = ImageLayoutIntent::TransferSrc,
-        .readOnly = true,
-    };
-};
-
-struct ResolveDst
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::ResolveDst,
-        .access = ImageAccessIntent::TransferWrite,
-        .layout = ImageLayoutIntent::TransferDst,
-    };
-};
-
-struct PresentRead
-{
-    static constexpr ImageUseSpecDesc imageUse{
-        .usage = ImageUsageIntent::PresentSource,
-        .access = ImageAccessIntent::PresentRead,
-        .layout = ImageLayoutIntent::PresentSrc,
-        .readOnly = true,
-    };
-};
-
-struct UniformRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::Uniform,
-        .access = BufferAccessIntent::UniformRead,
-        .readOnly = true,
-    };
-};
-
-struct BufferTransferSrc
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::TransferSrc,
-        .access = BufferAccessIntent::TransferRead,
-        .readOnly = true,
-    };
-};
-
-struct BufferTransferDst
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::TransferDst,
-        .access = BufferAccessIntent::TransferWrite,
-    };
-};
-
-struct StorageBufferRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::StorageRead,
-        .access = BufferAccessIntent::ShaderStorageRead,
-        .readOnly = true,
-    };
-};
-
-struct StorageBufferWrite
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::StorageWrite,
-        .access = BufferAccessIntent::ShaderStorageWrite,
-    };
-};
-
-struct StorageBufferReadWrite
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::StorageReadWrite,
-        .access = BufferAccessIntent::ShaderStorageReadWrite,
-    };
-};
-
-struct VertexRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::Vertex,
-        .access = BufferAccessIntent::VertexRead,
-        .readOnly = true,
-    };
-};
-
-struct IndexRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::Index,
-        .access = BufferAccessIntent::IndexRead,
-        .readOnly = true,
-    };
-};
-
-struct IndirectRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::Indirect,
-        .access = BufferAccessIntent::IndirectRead,
-        .readOnly = true,
-    };
-};
-
-struct UniformTexelRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::UniformTexel,
-        .access = BufferAccessIntent::TexelRead,
-        .readOnly = true,
-    };
-};
-
-struct StorageTexelRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::StorageTexelRead,
-        .access = BufferAccessIntent::TexelRead,
-        .readOnly = true,
-    };
-};
-
-struct StorageTexelWrite
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::StorageTexelWrite,
-        .access = BufferAccessIntent::TexelWrite,
-    };
-};
-
-struct StorageTexelReadWrite
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::StorageTexelReadWrite,
-        .access = BufferAccessIntent::TexelReadWrite,
-    };
-};
-
-struct AccelerationStructureBuildInputRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::AccelerationStructureBuildInput,
-        .access = BufferAccessIntent::AccelerationStructureBuildInputRead,
-        .readOnly = true,
-    };
-};
-
-struct AccelerationStructureStorageRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::AccelerationStructureStorage,
-        .access = BufferAccessIntent::AccelerationStructureRead,
-        .readOnly = true,
-    };
-};
-
-struct AccelerationStructureStorageWrite
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::AccelerationStructureStorage,
-        .access = BufferAccessIntent::AccelerationStructureWrite,
-    };
-};
-
-struct AccelerationStructureScratchWrite
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::AccelerationStructureScratch,
-        .access = BufferAccessIntent::AccelerationStructureScratchReadWrite,
-    };
-};
-
-struct AccelerationStructureBuildRead
-{
-    static constexpr AccelerationStructureUseSpecDesc accelerationStructureUse{
-        .usage = AccelerationStructureUsageIntent::BuildInput,
-        .access = AccelerationStructureAccessIntent::BuildRead,
-        .readOnly = true,
-    };
-};
-
-struct AccelerationStructureBuildWrite
-{
-    static constexpr AccelerationStructureUseSpecDesc accelerationStructureUse{
-        .usage = AccelerationStructureUsageIntent::BuildOutput,
-        .access = AccelerationStructureAccessIntent::BuildWrite,
-    };
-};
-
-struct AccelerationStructureTraceRead
-{
-    static constexpr AccelerationStructureUseSpecDesc accelerationStructureUse{
-        .usage = AccelerationStructureUsageIntent::TraceInput,
-        .access = AccelerationStructureAccessIntent::TraceRead,
-        .readOnly = true,
-    };
-};
-
-struct AccelerationStructureCopyRead
-{
-    static constexpr AccelerationStructureUseSpecDesc accelerationStructureUse{
-        .usage = AccelerationStructureUsageIntent::CopySource,
-        .access = AccelerationStructureAccessIntent::CopyRead,
-        .readOnly = true,
-    };
-};
-
-struct AccelerationStructureCopyWrite
-{
-    static constexpr AccelerationStructureUseSpecDesc accelerationStructureUse{
-        .usage = AccelerationStructureUsageIntent::CopyDestination,
-        .access = AccelerationStructureAccessIntent::CopyWrite,
-    };
-};
-
-struct ShaderBindingTableRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::ShaderBindingTable,
-        .access = BufferAccessIntent::ShaderBindingTableRead,
-        .readOnly = true,
-    };
-};
-
-struct HostUploadRead
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::HostUpload,
-        .access = BufferAccessIntent::TransferRead,
-        .readOnly = true,
-    };
-};
-
-struct ReadbackWrite
-{
-    static constexpr BufferUseSpecDesc bufferUse{
-        .usage = BufferUsageIntent::Readback,
-        .access = BufferAccessIntent::TransferWrite,
-    };
-};
-} // namespace spec
-
-template <ImageUseSpec TSpec> [[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource) noexcept
-{
-    auto result = PassResourceUseDesc{
-        .resource = resource,
-        .imageUsage = TSpec::imageUse.usage,
-        .imageAccess = TSpec::imageUse.access,
-        .imageLayout = TSpec::imageUse.layout,
-        .imageAspect = TSpec::imageUse.aspect,
-    };
-
-    if constexpr (TSpec::imageUse.ownershipDomain != ResourceOwnershipDomain::Undefined)
-    {
-        result.ownershipDomain = TSpec::imageUse.ownershipDomain;
-    }
-
-    if constexpr (TSpec::imageUse.readOnly)
-    {
-        result.readOnly = true;
-    }
-
-    return result;
-}
-
-template <ImageUseSpec TSpec>
-[[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource, ImageUseOptions options) noexcept
-{
-    auto result = make<TSpec>(resource);
-    if (options.aspect.has_value())
-    {
-        result.imageAspect = *options.aspect;
-    }
-    if (options.ownershipDomain.has_value())
-    {
-        result.ownershipDomain = *options.ownershipDomain;
-    }
-    return result;
-}
-
-template <BufferUseSpec TSpec> [[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource) noexcept
-{
-    auto result = PassResourceUseDesc{
-        .resource = resource,
-        .bufferUsage = TSpec::bufferUse.usage,
-        .bufferAccess = TSpec::bufferUse.access,
-    };
-
-    if constexpr (TSpec::bufferUse.ownershipDomain != ResourceOwnershipDomain::Undefined)
-    {
-        result.ownershipDomain = TSpec::bufferUse.ownershipDomain;
-    }
-
-    if constexpr (TSpec::bufferUse.readOnly)
-    {
-        result.readOnly = true;
-    }
-
-    return result;
-}
-
-template <BufferUseSpec TSpec>
-[[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource, BufferUseOptions options) noexcept
-{
-    auto result = make<TSpec>(resource);
-    if (options.ownershipDomain.has_value())
-    {
-        result.ownershipDomain = *options.ownershipDomain;
-    }
-    return result;
-}
-
-template <AccelerationStructureUseSpec TSpec>
-[[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource) noexcept
-{
-    auto result = PassResourceUseDesc{
-        .resource = resource,
-        .accelerationStructureUsage = TSpec::accelerationStructureUse.usage,
-        .accelerationStructureAccess = TSpec::accelerationStructureUse.access,
-    };
-
-    if constexpr (TSpec::accelerationStructureUse.ownershipDomain != ResourceOwnershipDomain::Undefined)
-    {
-        result.ownershipDomain = TSpec::accelerationStructureUse.ownershipDomain;
-    }
-
-    if constexpr (TSpec::accelerationStructureUse.readOnly)
-    {
-        result.readOnly = true;
-    }
-
-    return result;
-}
-
-template <AccelerationStructureUseSpec TSpec>
-[[nodiscard]] inline PassResourceUseDesc make(GraphResourceHandle resource, BufferUseOptions options) noexcept
-{
-    auto result = make<TSpec>(resource);
-    if (options.ownershipDomain.has_value())
-    {
-        result.ownershipDomain = *options.ownershipDomain;
-    }
-    return result;
-}
 
 [[nodiscard]] PassResourceUseDesc colorRead(GraphResourceHandle resource) noexcept;
 
@@ -901,11 +349,14 @@ template <AccelerationStructureUseSpec TSpec>
 
 [[nodiscard]] PassResourceUseDesc imageTransferSrc(GraphResourceHandle resource) noexcept;
 
-[[nodiscard]] PassResourceUseDesc imageTransferDst(GraphResourceHandle resource) noexcept;
+[[nodiscard]] PassResourceUseDesc imageTransferDst(GraphResourceHandle resource,
+                                                   ImageAspectIntent aspect = ImageAspectIntent::Color) noexcept;
 
-[[nodiscard]] PassResourceUseDesc copySource(GraphResourceHandle resource) noexcept;
+[[nodiscard]] PassResourceUseDesc copySource(GraphResourceHandle resource,
+                                             ImageAspectIntent aspect = ImageAspectIntent::Color) noexcept;
 
-[[nodiscard]] PassResourceUseDesc copyDestination(GraphResourceHandle resource) noexcept;
+[[nodiscard]] PassResourceUseDesc copyDestination(GraphResourceHandle resource,
+                                                  ImageAspectIntent aspect = ImageAspectIntent::Color) noexcept;
 
 [[nodiscard]] PassResourceUseDesc resolveSrc(GraphResourceHandle resource) noexcept;
 
@@ -1161,6 +612,7 @@ struct PassExecutionDesc
     vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
     std::optional<CopyPassDesc> copy{};
     std::vector<PassResourceUseDesc> resourceUses{};
+    std::vector<GraphFrameDataHandle> frameDataUses{};
     PassPrepareCallback prepare{};
     PassRecordCallback record{};
     std::optional<PassParallelRecordDesc> parallelRecord{};
@@ -1236,6 +688,7 @@ struct CompiledResourceDesc
     ImageLayoutIntent finalLayout = ImageLayoutIntent::Undefined;
     AccessScope initialAccessScope{};
     AccessScope finalAccessScope{};
+    bool initialStateInitialized = false;
 
     ResourceOwnershipDomain initialOwnership = ResourceOwnershipDomain::Undefined;
     ResourceOwnershipDomain finalOwnership = ResourceOwnershipDomain::Undefined;
@@ -1275,6 +728,7 @@ struct CompiledPass
 
     std::optional<CopyPassDesc> copy{};
     std::vector<PassResourceUseDesc> resourceUses{};
+    std::vector<GraphFrameDataHandle> frameDataUses{};
     std::vector<std::size_t> resolvedResourceIndices{};
     std::vector<ResourceStateTransition> preBarriers{};
     PassPrepareCallback prepare{};

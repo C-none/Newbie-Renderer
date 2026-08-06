@@ -128,8 +128,6 @@ class DlssRayReconstructionNode final : public Node
     void collectOptionAvailability(const nr::options::OptionFrameSnapshot &snapshot,
                                    nr::options::OptionAvailabilityMap &availability) const override;
     void setResolutionController(const std::shared_ptr<DlssRayReconstructionResolutionController> &controller) noexcept;
-    [[nodiscard]] DlssRayReconstructionResolutionRequest effectiveResolutionRequest(
-        const nr::options::OptionFrameSnapshot &snapshot) const;
 
     [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const override;
     void initialize(NodeInitContext &context) override;
@@ -152,7 +150,6 @@ class DlssRayReconstructionNode final : public Node
 
     std::shared_ptr<detail::DlssRayReconstructionRuntime> runtime_{};
     std::weak_ptr<DlssRayReconstructionResolutionController> resolutionController_{};
-    std::optional<std::reference_wrapper<nr::rhi::Device>> device_{};
     std::chrono::steady_clock::time_point previousBuildTime_{};
 };
 } // namespace nr::renderPasses

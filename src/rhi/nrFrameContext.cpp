@@ -43,6 +43,25 @@ FrameContext &FrameContext::operator=(FrameContext &&other) noexcept
     return *this;
 }
 
+[[nodiscard]] bool FrameContext::waitForFence(std::uint64_t timeout)
+{
+    return device_->get().waitForFences(*fence_, vk::True, timeout) == vk::Result::eSuccess;
+}
+
+void FrameContext::resetFence()
+{
+    device_->get().resetFences(*fence_);
+}
+
+void FrameContext::resetPools()
+{
+    // Retained primary command buffers are individually reset by their owner
+    // after this frame's fence is signaled. Reset only transient secondary pools.
+    resetPreparedSecondaryPools(graphicsSecondary_, graphicsPreparedSecondaryWorkers_);
+    resetPreparedSecondaryPools(computeSecondary_, computePreparedSecondaryWorkers_);
+    resetPreparedSecondaryPools(transferSecondary_, transferPreparedSecondaryWorkers_);
+}
+
 void FrameContext::prepareSecondaryPools(std::uint32_t graphicsWorkerCount, std::uint32_t computeWorkerCount,
                                          std::uint32_t transferWorkerCount)
 {
@@ -64,24 +83,6 @@ void FrameContext::prepareSecondaryPools(std::uint32_t graphicsWorkerCount, std:
     return fence_;
 }
 
-void FrameContext::setBorrowedAcquireSemaphore(const vk::raii::Semaphore *semaphore) noexcept
-{
-    borrowedAcquireSemaphore_ = semaphore;
-}
-
-[[nodiscard]] const vk::raii::Semaphore &FrameContext::imageAvailable() const noexcept
-{
-    nrAssert(
-        borrowedAcquireSemaphore_ != nullptr,
-        "FrameContext::imageAvailable requires a borrowed acquire semaphore (call setBorrowedAcquireSemaphore first).");
-    return *borrowedAcquireSemaphore_;
-}
-
-[[nodiscard]] bool FrameContext::isFenceSignaled() const
-{
-    return fence_.getStatus() == vk::Result::eSuccess;
-}
-
 void FrameContext::moveFrom(FrameContext &&other) noexcept
 {
     device_ = std::move(other.device_);
@@ -90,9 +91,6 @@ void FrameContext::moveFrom(FrameContext &&other) noexcept
     transferQueueFamily_ = other.transferQueueFamily_;
 
     fence_ = std::move(other.fence_);
-    borrowedAcquireSemaphore_ = other.borrowedAcquireSemaphore_;
-    other.borrowedAcquireSemaphore_ = nullptr;
-
     graphicsPrimary_ = std::move(other.graphicsPrimary_);
     graphicsSecondary_ = std::move(other.graphicsSecondary_);
 
@@ -148,5 +146,22 @@ void FrameManager::advanceFrame() noexcept
 [[nodiscard]] FrameContext &FrameManager::current() noexcept
 {
     return frames_[currentIndex_];
+}
+
+[[nodiscard]] std::size_t FrameManager::frameCount() const noexcept
+{
+    return frames_.size();
+}
+
+[[nodiscard]] std::size_t FrameManager::currentIndex() const noexcept
+{
+    return currentIndex_;
+}
+
+void FrameManager::waitAll()
+{
+    std::ranges::for_each(frames_, [](FrameContext &frame) {
+        nrAssert(frame.waitForFence(), "Timeout waiting for frame fence");
+    });
 }
 } // namespace nr::rhi

@@ -239,6 +239,11 @@ const nr::test::CaseRegistrar globalFrameUniformCase{
         nr::test::requireEqual(sceneTextureBinding->set, 1u);
         nr::test::requireEqual(sceneTextureBinding->binding, 2u);
         nr::test::require(sceneTextureBinding->descriptorType == vk::DescriptorType::eCombinedImageSampler);
+        nr::test::require(sceneTextureBinding->supportsVariableDescriptorCount());
+        nr::test::require(sceneTextureBinding->isPartiallyBound());
+        nr::test::require((sceneTextureBinding->bindingFlags & vk::DescriptorBindingFlagBits::eUpdateAfterBind) ==
+                              vk::DescriptorBindingFlags{},
+                          "prepare-before-record runtime bindings should not request update-after-bind");
 
         auto sceneTextureElement = sceneTexturesCursor[0u];
         nr::test::require(sceneTextureElement.setObject(nr::rhi::LogicalResourceDescriptorWrite{
@@ -397,6 +402,19 @@ const nr::test::CaseRegistrar appUiCursorCase{
         nr::test::require(texturesCursor.descriptorSemantic() ==
                           nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler);
         nr::test::requireEqual(*texturesCursor.bindingDescriptorCount(), 16u);
+        auto textureBinding = texturesCursor.descriptorBinding();
+        nr::test::require(textureBinding.has_value(), "gUiTextures should expose descriptor binding reflection");
+        nr::test::requireEqual(textureBinding->set, 1u);
+        nr::test::requireEqual(textureBinding->binding, 0u);
+        nr::test::requireEqual(textureBinding->descriptorCount, 16u,
+                               "The test's runtime descriptor policy should resolve gUiTextures to 16 descriptors");
+        nr::test::require(textureBinding->isRuntimeSized, "gUiTextures should remain a runtime descriptor array");
+        nr::test::require(textureBinding->descriptorType == vk::DescriptorType::eCombinedImageSampler);
+        nr::test::require(textureBinding->supportsVariableDescriptorCount());
+        nr::test::require(textureBinding->isPartiallyBound());
+        nr::test::require(textureBinding->stageFlags ==
+                              vk::ShaderStageFlags{vk::ShaderStageFlagBits::eAll},
+                          "gUiTextures should retain the canonical all-stage reflection policy");
 
         auto textureElement = texturesCursor[5u];
         nr::test::require(textureElement.valid(), "runtime descriptor array element should resolve");
@@ -409,6 +427,25 @@ const nr::test::CaseRegistrar appUiCursorCase{
         auto pushCursor = root["gUiPush"];
         nr::test::require(pushCursor.valid(), "push constant cursor should resolve");
         nr::test::require(pushCursor.bindingKind() == nr::rhi::ShaderBindingKind::PushConstant);
+        auto pushRange = pushCursor.pushConstantRange();
+        nr::test::require(pushRange.has_value(), "gUiPush should expose push constant range reflection");
+        nr::test::requireEqual(pushRange->offset, 0u);
+        nr::test::requireEqual(pushRange->size, 32u);
+        nr::test::require(pushRange->stageFlags == vk::ShaderStageFlags{vk::ShaderStageFlagBits::eAll},
+                          "gUiPush should retain the canonical all-stage reflection policy");
+        auto const expectedPushFieldOffsets = std::array{
+            std::pair{"scale", std::size_t{0u}},
+            std::pair{"translate", std::size_t{8u}},
+            std::pair{"textureIndex", std::size_t{16u}},
+            std::pair{"padding", std::size_t{20u}},
+        };
+        std::ranges::for_each(expectedPushFieldOffsets, [&](auto const &expected) {
+            auto fieldCursor = pushCursor[expected.first];
+            nr::test::require(fieldCursor.valid(),
+                              std::format("appUi push field '{}' should resolve", expected.first));
+            nr::test::requireEqual(fieldCursor.address().uniformOffset, expected.second,
+                                   std::format("appUi push field '{}' offset should match C++", expected.first));
+        });
         nr::test::require(pushCursor.setData(UiPushConstants{
             .scale = glm::vec2{2.0f, 2.0f},
             .translate = glm::vec2{-1.0f, -1.0f},

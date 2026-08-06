@@ -3,6 +3,7 @@ nr_add_executable(embeddedTriangle embeddedTriangle.cpp)
 set_target_properties(embeddedTriangle PROPERTIES FOLDER "Test/smoke/app")
 
 nr_link_module_dependencies(embeddedTriangle embeddedTriangle.cpp PRIVATE
+    nr_test_options
     nrapp
     nrrenderpasses
     nrrenderer
@@ -14,6 +15,7 @@ nr_add_executable(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp)
 set_target_properties(nr_normal_buffer_ui_smoke_test PROPERTIES FOLDER "Test/smoke/app")
 
 nr_link_module_dependencies(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.cpp PRIVATE
+    nr_test_options
     nrapp
     nrrenderpasses
     nrrenderer
@@ -24,12 +26,13 @@ nr_link_module_dependencies(nr_normal_buffer_ui_smoke_test normalBufferUiSmoke.c
 )
 
 add_test(NAME nr_normal_buffer_ui_smoke_test COMMAND nr_normal_buffer_ui_smoke_test)
-set_tests_properties(nr_normal_buffer_ui_smoke_test PROPERTIES LABELS "gpu;window;smoke;app")
+nr_set_registered_test_contract(nr_normal_buffer_ui_smoke_test "gpu;window;smoke;app")
 
 nr_add_executable(nr_rt_object_material_smoke_test rtObjectMaterialSmoke.cpp)
 set_target_properties(nr_rt_object_material_smoke_test PROPERTIES FOLDER "Test/smoke/app")
 
 nr_link_module_dependencies(nr_rt_object_material_smoke_test rtObjectMaterialSmoke.cpp PRIVATE
+    nr_test_options
     nrapp
     nrrenderpasses
     nrrenderer
@@ -41,15 +44,16 @@ nr_link_module_dependencies(nr_rt_object_material_smoke_test rtObjectMaterialSmo
 )
 
 add_test(NAME nr_rt_object_material_smoke_test COMMAND nr_rt_object_material_smoke_test)
-set_tests_properties(nr_rt_object_material_smoke_test PROPERTIES
-    LABELS "gpu;window;smoke;app;rt;assets;requires-unsandboxed"
-    TIMEOUT 300
+nr_set_registered_test_contract(
+    nr_rt_object_material_smoke_test
+    "gpu;window;smoke;app;rt;assets;requires-unsandboxed"
 )
 
 nr_add_executable(nr_swapchain_out_of_date_smoke_test swapchainOutOfDateSmoke.cpp)
 set_target_properties(nr_swapchain_out_of_date_smoke_test PROPERTIES FOLDER "Test/smoke/app")
 
 nr_link_module_dependencies(nr_swapchain_out_of_date_smoke_test swapchainOutOfDateSmoke.cpp PRIVATE
+    nr_test_options
     nrapp
     nrrenderpasses
     nrrenderer
@@ -58,7 +62,7 @@ nr_link_module_dependencies(nr_swapchain_out_of_date_smoke_test swapchainOutOfDa
 )
 
 add_test(NAME nr_swapchain_out_of_date_smoke_test COMMAND nr_swapchain_out_of_date_smoke_test)
-set_tests_properties(nr_swapchain_out_of_date_smoke_test PROPERTIES
-    LABELS "gpu;window;smoke;app;swapchain;validation"
-    FAIL_REGULAR_EXPRESSION "\\[NR VULKAN:ERROR\\]"
+nr_set_registered_test_contract(
+    nr_swapchain_out_of_date_smoke_test
+    "gpu;window;smoke;app;swapchain;validation"
 )

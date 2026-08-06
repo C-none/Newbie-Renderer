@@ -58,6 +58,136 @@ void registerSceneComponents(flecs::world &world)
 
 namespace nr::scene
 {
+Scene::TemplateRegistrationTransaction::TemplateRegistrationTransaction(Scene &scene) noexcept : scene_(scene)
+{
+}
+
+Scene::TemplateRegistrationTransaction::~TemplateRegistrationTransaction() noexcept
+{
+    if (committed_)
+    {
+        return;
+    }
+
+    if (stagedTemplate_.valid())
+    {
+        auto *templateRecord = scene_.templates_.tryGet(stagedTemplate_);
+        nrAssert(templateRecord != nullptr, "Staged scene template must exist during registration rollback.");
+        if (templateRecord != nullptr)
+        {
+            scene_.destroyTemplatePrefabEntities(*templateRecord);
+            auto const erased = scene_.templates_.erase(stagedTemplate_);
+            nrAssert(erased, "Staged scene template erase must succeed during registration rollback.");
+        }
+    }
+
+    auto rollbackGpuCreated = [&]<typename HandleT, typename StorageT>(std::vector<HandleT> &createdHandles,
+                                                                       StorageT &storage,
+                                                                       std::vector<HandleT> &liveHandles) {
+        std::ranges::for_each(createdHandles | std::views::reverse, [&](HandleT handle) {
+            auto *record = storage.tryGet(handle);
+            nrAssert(record != nullptr, "Created GPU-backed scene asset must exist during registration rollback.");
+            if (record == nullptr)
+            {
+                return;
+            }
+
+            nrAssert(record->liveTemplatePins == 0u, "Registration rollback assets must not have live pins.");
+            nrAssert((record->gpuState == GpuResidencyState::none ||
+                      record->gpuState == GpuResidencyState::uploadQueued) &&
+                         record->gpuVersion == 0u && !record->gpu.has_value() && record->retiredGpu.empty(),
+                     "Registration rollback assets must not own submitted or resident GPU state.");
+
+            auto const erased = storage.erase(handle);
+            nrAssert(erased, "Created scene asset erase must succeed during registration rollback.");
+        });
+
+        compactDeadHandles(liveHandles, storage);
+    };
+
+    auto rollbackCpuCreated = []<typename HandleT, typename StorageT>(std::vector<HandleT> &createdHandles,
+                                                                      StorageT &storage) {
+        std::ranges::for_each(createdHandles | std::views::reverse, [&](HandleT handle) {
+            auto *record = storage.tryGet(handle);
+            nrAssert(record != nullptr, "Created CPU-only scene asset must exist during registration rollback.");
+            if (record == nullptr)
+            {
+                return;
+            }
+
+            nrAssert(record->liveTemplatePins == 0u, "Registration rollback assets must not have live pins.");
+            auto const erased = storage.erase(handle);
+            nrAssert(erased, "Created CPU-only scene asset erase must succeed during registration rollback.");
+        });
+    };
+
+    rollbackCpuCreated(createdLights_, scene_.lights_);
+    rollbackCpuCreated(createdCameras_, scene_.cameras_);
+    rollbackCpuCreated(createdMaterials_, scene_.materials_);
+    rollbackGpuCreated(createdMeshes_, scene_.meshes_, scene_.meshHandles_);
+    rollbackGpuCreated(createdTextures_, scene_.textures_, scene_.textureHandles_);
+}
+
+void Scene::TemplateRegistrationTransaction::recordCreated(nr::resource::TextureHandle handle)
+{
+    appendUnique(createdTextures_, handle);
+}
+
+void Scene::TemplateRegistrationTransaction::recordCreated(nr::resource::MaterialHandle handle)
+{
+    appendUnique(createdMaterials_, handle);
+}
+
+void Scene::TemplateRegistrationTransaction::recordCreated(nr::resource::MeshHandle handle)
+{
+    appendUnique(createdMeshes_, handle);
+}
+
+void Scene::TemplateRegistrationTransaction::recordCreated(nr::resource::CameraAssetHandle handle)
+{
+    appendUnique(createdCameras_, handle);
+}
+
+void Scene::TemplateRegistrationTransaction::recordCreated(nr::resource::LightAssetHandle handle)
+{
+    appendUnique(createdLights_, handle);
+}
+
+void Scene::TemplateRegistrationTransaction::stageTemplate(SceneTemplateHandle handle) noexcept
+{
+    nrAssert(handle.valid(), "A staged scene template handle must be valid.");
+    nrAssert(!stagedTemplate_.valid(), "A template registration transaction may stage only one template.");
+    stagedTemplate_ = handle;
+}
+
+[[nodiscard]] bool Scene::TemplateRegistrationTransaction::commit()
+{
+    nrAssert(!committed_, "A template registration transaction may commit only once.");
+    nrAssert(stagedTemplate_.valid(), "A template registration transaction requires a staged template to commit.");
+
+    auto *templateRecord = scene_.templates_.tryGet(stagedTemplate_);
+    nrAssert(templateRecord != nullptr, "The staged scene template must exist when committing registration.");
+    if (templateRecord == nullptr)
+    {
+        return false;
+    }
+
+    auto [mapping, inserted] = scene_.templatesByStableKey_.emplace(templateRecord->stableKey, stagedTemplate_);
+    (void)mapping;
+    if (!inserted)
+    {
+        return false;
+    }
+
+    scene_.retainTemplatePins(templateRecord->pins);
+    scene_.templateNodeCount_ += templateRecord->templateNodeCount;
+    scene_.templateMeshBindingCount_ += templateRecord->templateMeshBindingCount;
+    scene_.templateCameraBindingCount_ += templateRecord->templateCameraBindingCount;
+    scene_.templateLightBindingCount_ += templateRecord->templateLightBindingCount;
+    committed_ = true;
+    return true;
+}
+
 Scene::Scene(const SceneCreateInfo &createInfo)
     : device_(createInfo.device), identity_(detail::nextSceneIdentity()),
       uploadBudgetBytesPerFrame_(createInfo.uploadBudgetBytesPerFrame), cpuRetention_(createInfo.cpuRetention)
@@ -104,24 +234,9 @@ Scene::~Scene() noexcept
     submittedGeometryAtlasGrowWork_.clear();
 }
 
-[[nodiscard]] nr::rhi::Device &Scene::device() noexcept
+[[nodiscard]] bool Scene::usesDevice(const nr::rhi::Device &device) const noexcept
 {
-    return device_;
-}
-
-[[nodiscard]] const nr::rhi::Device &Scene::device() const noexcept
-{
-    return device_;
-}
-
-[[nodiscard]] flecs::world &Scene::ecs() noexcept
-{
-    return world_;
-}
-
-[[nodiscard]] const flecs::world &Scene::ecs() const noexcept
-{
-    return world_;
+    return std::addressof(device_) == std::addressof(device);
 }
 
 void Scene::commitMutation(SceneRevisionMutation mutation) noexcept
@@ -130,11 +245,6 @@ void Scene::commitMutation(SceneRevisionMutation mutation) noexcept
         revisions.get<SceneRtRevisionDomain>()};
     batch.apply(mutation);
     batch.commit();
-}
-
-void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
-{
-    commitMutation(mutation);
 }
 
 [[nodiscard]] SceneRevisionSnapshot Scene::revisionsSnapshot() const noexcept
@@ -161,10 +271,21 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
             "Template stable key is empty. Provide SceneTemplateCreateInfo.stableKey or SceneAsset.sourcePath.");
     }
 
+    if (bridgePlan.maximumReachableTemplateDepth > dependency::ecs::hierarchyDagDepthMax)
+    {
+        reportImport<nr::LogLevel::error>(
+            ImportStage::templateRegistration,
+            std::format("Template hierarchy depth {} exceeds the Flecs hierarchy DAG limit of {}.",
+                        bridgePlan.maximumReachableTemplateDepth, dependency::ecs::hierarchyDagDepthMax),
+            templateStableKey, sceneAsset.rootNodeIndex);
+    }
+
     if (hasImportErrors_)
     {
         return {};
     }
+
+    auto const useParentStorage = useParentHierarchyStorage(sceneAsset, createInfo.hierarchyPolicy);
 
     if (auto existing = templatesByStableKey_.find(templateStableKey); existing != templatesByStableKey_.end())
     {
@@ -174,17 +295,19 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
         }
     }
 
+    auto transaction = TemplateRegistrationTransaction{*this};
+
     auto textureHandlesBySource = std::vector<nr::resource::TextureHandle>(sceneAsset.textures.size());
     auto materialHandlesBySource = std::vector<nr::resource::MaterialHandle>(sceneAsset.materials.size());
     auto meshHandlesBySource = std::vector<nr::resource::MeshHandle>(sceneAsset.meshes.size());
     auto cameraHandlesBySource = std::vector<nr::resource::CameraAssetHandle>(sceneAsset.cameras.size());
     auto lightHandlesBySource = std::vector<nr::resource::LightAssetHandle>(sceneAsset.lights.size());
 
-    bridgeTextures(sceneAsset, bridgePlan, textureHandlesBySource);
-    bridgeMaterials(sceneAsset, bridgePlan, textureHandlesBySource, materialHandlesBySource);
-    bridgeMeshes(sceneAsset, bridgePlan, materialHandlesBySource, meshHandlesBySource);
-    bridgeCameras(sceneAsset, bridgePlan, cameraHandlesBySource);
-    bridgeLights(sceneAsset, bridgePlan, lightHandlesBySource);
+    bridgeTextures(sceneAsset, bridgePlan, transaction, textureHandlesBySource);
+    bridgeMaterials(sceneAsset, bridgePlan, transaction, textureHandlesBySource, materialHandlesBySource);
+    bridgeMeshes(sceneAsset, bridgePlan, transaction, materialHandlesBySource, meshHandlesBySource);
+    bridgeCameras(sceneAsset, bridgePlan, transaction, cameraHandlesBySource);
+    bridgeLights(sceneAsset, bridgePlan, transaction, lightHandlesBySource);
 
     if (hasImportErrors_)
     {
@@ -208,6 +331,7 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
             .hierarchyPolicy = createInfo.hierarchyPolicy,
         };
     });
+    transaction.stageTemplate(handle);
 
     auto *templateRecord = templates_.tryGet(handle);
     if (templateRecord == nullptr)
@@ -218,23 +342,24 @@ void Scene::commitExternalMutation(SceneRevisionMutation mutation) noexcept
         return {};
     }
 
-    auto hierarchyBuilt = buildTemplateHierarchy(handle, *templateRecord, sceneAsset, meshHandlesBySource,
-                                                 materialHandlesBySource, cameraHandlesBySource, lightHandlesBySource);
+    auto hierarchyBuilt =
+        buildTemplateHierarchy(handle, *templateRecord, sceneAsset, meshHandlesBySource, materialHandlesBySource,
+                               cameraHandlesBySource, lightHandlesBySource, useParentStorage);
 
     if (!hierarchyBuilt || hasImportErrors_)
     {
-        destroyTemplatePrefabEntities(*templateRecord);
-        templates_.erase(handle);
         return {};
     }
 
-    retainTemplatePins(templateRecord->pins);
-
-    templatesByStableKey_.emplace(templateStableKey, handle);
-    templateNodeCount_ += templateRecord->templateNodeCount;
-    templateMeshBindingCount_ += templateRecord->templateMeshBindingCount;
-    templateCameraBindingCount_ += templateRecord->templateCameraBindingCount;
-    templateLightBindingCount_ += templateRecord->templateLightBindingCount;
+    if (!transaction.commit())
+    {
+        reportImport<nr::LogLevel::error>(
+            ImportStage::templateRegistration,
+            std::format("Failed to publish template '{}' because its stable key mapping already exists.",
+                        templateStableKey),
+            templateStableKey);
+        return {};
+    }
 
     reportImport<nr::LogLevel::info>(
         ImportStage::templateRegistration,
@@ -565,136 +690,200 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
 
     applyActiveTag(instanceRecord.root);
 
-    auto initializeChildren = [&](auto &&self, flecs::entity parent) -> void {
+    auto appendChildrenInReverse = [&](flecs::entity parent, std::vector<flecs::entity_t> &pendingChildren) {
+        auto children = std::vector<flecs::entity_t>{};
         auto childIterator = ecs_children(world_.c_ptr(), parent.id());
         while (ecs_children_next(&childIterator))
         {
             auto const indices = std::views::iota(0, childIterator.count);
-            std::ranges::for_each(indices, [&](int index) {
-                auto child = flecs::entity{world_.c_ptr(), childIterator.entities[index]};
-
-                if (child.has<SceneInstanceRef>())
-                {
-                    // Nested instance root: it owns its own runtime state and
-                    // active-instance tagging via its own initialization pass.
-                    return;
-                }
-
-                applyActiveTag(child);
-
-                if (auto templateTransform = child.try_get<SceneTemplateNodeTransform>(); templateTransform != nullptr)
-                {
-                    child.set(LocalTransform{.value = detail::toGlmMat4(templateTransform->localTransform)});
-                }
-                else if (child.try_get<LocalTransform>() == nullptr)
-                {
-                    child.set(LocalTransform{});
-                }
-
-                child.set(WorldTransform{});
-
-                auto const renderMesh = meshHandleForEntity(child);
-                if (renderMesh.valid())
-                {
-                    auto bounds = meshLocalBounds(renderMesh);
-                    child.set(LocalBounds{.value = bounds});
-                    if (bounds.valid())
-                    {
-                        child.add<StaticObject>();
-                    }
-                    else
-                    {
-                        child.remove<StaticObject>();
-                    }
-                }
-                else if (child.try_get<LocalBounds>() == nullptr)
-                {
-                    child.set(LocalBounds{});
-                }
-
-                child.set(WorldBounds{});
-                self(self, child);
-            });
+            std::ranges::for_each(indices, [&](int index) { children.push_back(childIterator.entities[index]); });
         }
+
+        std::ranges::copy(children | std::views::reverse, std::back_inserter(pendingChildren));
     };
 
-    initializeChildren(initializeChildren, instanceRecord.root);
+    auto pendingChildren = std::vector<flecs::entity_t>{};
+    appendChildrenInReverse(instanceRecord.root, pendingChildren);
+    while (!pendingChildren.empty())
+    {
+        auto const childId = pendingChildren.back();
+        pendingChildren.pop_back();
+        auto child = flecs::entity{world_.c_ptr(), childId};
+
+        if (child.has<SceneInstanceRef>())
+        {
+            // Nested instance root: it owns its own runtime state and
+            // active-instance tagging via its own initialization pass.
+            continue;
+        }
+
+        applyActiveTag(child);
+
+        if (auto templateTransform = child.try_get<SceneTemplateNodeTransform>(); templateTransform != nullptr)
+        {
+            child.set(LocalTransform{.value = detail::toGlmMat4(templateTransform->localTransform)});
+        }
+        else if (child.try_get<LocalTransform>() == nullptr)
+        {
+            child.set(LocalTransform{});
+        }
+
+        child.set(WorldTransform{});
+
+        auto const renderMesh = meshHandleForEntity(child);
+        if (renderMesh.valid())
+        {
+            auto bounds = meshLocalBounds(renderMesh);
+            child.set(LocalBounds{.value = bounds});
+            if (bounds.valid())
+            {
+                child.add<StaticObject>();
+            }
+            else
+            {
+                child.remove<StaticObject>();
+            }
+        }
+        else if (child.try_get<LocalBounds>() == nullptr)
+        {
+            child.set(LocalBounds{});
+        }
+
+        child.set(WorldBounds{});
+        appendChildrenInReverse(child, pendingChildren);
+    }
 }
 
 [[nodiscard]] nr::resource::Aabb Scene::updateHierarchyNode(flecs::entity entity, const glm::mat4 &parentWorld)
 {
-    auto localMatrix = glm::mat4{1.0f};
-
-    if (auto local = entity.try_get<LocalTransform>(); local != nullptr)
+    struct HierarchyUpdateWork
     {
-        if (detail::finiteMat4(local->value))
-        {
-            localMatrix = local->value;
-        }
-        else
-        {
-            entity.set(LocalTransform{});
-        }
-    }
-    else if (auto templateTransform = entity.try_get<SceneTemplateNodeTransform>(); templateTransform != nullptr)
-    {
-        auto converted = detail::toGlmMat4(templateTransform->localTransform);
-        if (detail::finiteMat4(converted))
-        {
-            localMatrix = converted;
-            entity.set(LocalTransform{.value = converted});
-        }
-        else
-        {
-            entity.set(LocalTransform{});
-        }
-    }
-    else
-    {
-        entity.set(LocalTransform{});
-    }
+        flecs::entity_t entityId = 0;
+        flecs::entity_t parentEntityId = 0;
+        glm::mat4 parentWorld{1.0f};
+        bool exiting = false;
+    };
 
-    auto const worldMatrix = parentWorld * localMatrix;
-    entity.set(WorldTransform{.value = worldMatrix});
+    auto aggregateBoundsByEntity = std::map<flecs::entity_t, nr::resource::Aabb>{};
+    auto pending = std::vector<HierarchyUpdateWork>{
+        HierarchyUpdateWork{
+            .entityId = entity.id(),
+            .parentWorld = parentWorld,
+        },
+    };
+    auto rootBounds = nr::resource::Aabb{};
 
-    auto aggregateWorldBounds = nr::resource::Aabb{};
-
-    auto localBounds = nr::resource::Aabb{};
-    if (auto local = entity.try_get<LocalBounds>(); local != nullptr)
+    while (!pending.empty())
     {
-        localBounds = local->value;
-    }
+        auto work = std::move(pending.back());
+        pending.pop_back();
+        auto current = flecs::entity{world_.c_ptr(), work.entityId};
 
-    if (!localBounds.valid())
-    {
-        auto const renderMesh = meshHandleForEntity(entity);
-        if (renderMesh.valid())
+        if (work.exiting)
         {
-            localBounds = meshLocalBounds(renderMesh);
-            if (localBounds.valid())
+            auto aggregate = aggregateBoundsByEntity.find(work.entityId);
+            nrAssert(aggregate != aggregateBoundsByEntity.end(),
+                     "Scene hierarchy exit requires an initialized bounds aggregate.");
+            current.set(WorldBounds{.value = aggregate->second});
+
+            auto completedBounds = aggregate->second;
+            aggregateBoundsByEntity.erase(aggregate);
+            if (work.parentEntityId == 0u)
             {
-                entity.set(LocalBounds{.value = localBounds});
+                rootBounds = completedBounds;
+                continue;
+            }
+
+            auto parentAggregate = aggregateBoundsByEntity.find(work.parentEntityId);
+            nrAssert(parentAggregate != aggregateBoundsByEntity.end(),
+                     "Scene hierarchy child exit requires a live parent bounds aggregate.");
+            parentAggregate->second.merge(completedBounds);
+            continue;
+        }
+
+        auto localMatrix = glm::mat4{1.0f};
+        if (auto local = current.try_get<LocalTransform>(); local != nullptr)
+        {
+            if (detail::finiteMat4(local->value))
+            {
+                localMatrix = local->value;
+            }
+            else
+            {
+                current.set(LocalTransform{});
             }
         }
-    }
+        else if (auto templateTransform = current.try_get<SceneTemplateNodeTransform>(); templateTransform != nullptr)
+        {
+            auto converted = detail::toGlmMat4(templateTransform->localTransform);
+            if (detail::finiteMat4(converted))
+            {
+                localMatrix = converted;
+                current.set(LocalTransform{.value = converted});
+            }
+            else
+            {
+                current.set(LocalTransform{});
+            }
+        }
+        else
+        {
+            current.set(LocalTransform{});
+        }
 
-    if (localBounds.valid())
-    {
-        aggregateWorldBounds.merge(detail::transformAabb(localBounds, worldMatrix));
-    }
+        auto const worldMatrix = work.parentWorld * localMatrix;
+        current.set(WorldTransform{.value = worldMatrix});
 
-    auto childIterator = ecs_children(world_.c_ptr(), entity.id());
-    while (ecs_children_next(&childIterator))
-    {
-        auto const indices = std::views::iota(0, childIterator.count);
-        std::ranges::for_each(indices, [&](int index) {
-            auto child = flecs::entity{world_.c_ptr(), childIterator.entities[index]};
-            aggregateWorldBounds.merge(updateHierarchyNode(child, worldMatrix));
+        auto localBounds = nr::resource::Aabb{};
+        if (auto local = current.try_get<LocalBounds>(); local != nullptr)
+        {
+            localBounds = local->value;
+        }
+
+        if (!localBounds.valid())
+        {
+            auto const renderMesh = meshHandleForEntity(current);
+            if (renderMesh.valid())
+            {
+                localBounds = meshLocalBounds(renderMesh);
+                if (localBounds.valid())
+                {
+                    current.set(LocalBounds{.value = localBounds});
+                }
+            }
+        }
+
+        auto aggregateWorldBounds = nr::resource::Aabb{};
+        if (localBounds.valid())
+        {
+            aggregateWorldBounds.merge(detail::transformAabb(localBounds, worldMatrix));
+        }
+        aggregateBoundsByEntity.insert_or_assign(work.entityId, aggregateWorldBounds);
+
+        pending.push_back(HierarchyUpdateWork{
+            .entityId = work.entityId,
+            .parentEntityId = work.parentEntityId,
+            .exiting = true,
+        });
+
+        auto children = std::vector<flecs::entity_t>{};
+        auto childIterator = ecs_children(world_.c_ptr(), current.id());
+        while (ecs_children_next(&childIterator))
+        {
+            auto const indices = std::views::iota(0, childIterator.count);
+            std::ranges::for_each(indices, [&](int index) { children.push_back(childIterator.entities[index]); });
+        }
+
+        std::ranges::for_each(children | std::views::reverse, [&](flecs::entity_t childId) {
+            pending.push_back(HierarchyUpdateWork{
+                .entityId = childId,
+                .parentEntityId = work.entityId,
+                .parentWorld = worldMatrix,
+            });
         });
     }
 
-    entity.set(WorldBounds{.value = aggregateWorldBounds});
-    return aggregateWorldBounds;
+    return rootBounds;
 }
 
 void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
@@ -725,7 +914,8 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                                                  std::span<const nr::resource::MeshHandle> meshHandlesBySource,
                                                  std::span<const nr::resource::MaterialHandle> materialHandlesBySource,
                                                  std::span<const nr::resource::CameraAssetHandle> cameraHandlesBySource,
-                                                 std::span<const nr::resource::LightAssetHandle> lightHandlesBySource)
+                                                 std::span<const nr::resource::LightAssetHandle> lightHandlesBySource,
+                                                 bool useParentStorage)
 {
     (void)materialHandlesBySource;
 
@@ -758,8 +948,6 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
     auto cameraBindingCount = std::size_t{0};
     auto lightBindingCount = std::size_t{0};
     auto hierarchyHasError = false;
-    auto const useParentStorage = useParentHierarchyStorage(sceneAsset, templateRecord.hierarchyPolicy);
-
     if (templateRecord.hierarchyPolicy == TemplateHierarchyPolicy::autoSelect)
     {
         reportImport<nr::LogLevel::info>(ImportStage::templateRegistration,
@@ -826,7 +1014,7 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
         lightIndicesByNode[lightAsset.nodeIndex].push_back(lightIndex);
     });
 
-    auto buildNode = [&](auto &&self, std::uint32_t nodeIndex, flecs::entity parentEntity) -> void {
+    auto buildNode = [&](std::uint32_t nodeIndex, flecs::entity parentEntity) -> std::optional<flecs::entity> {
         if (nodeIndex >= sceneAsset.nodes.size())
         {
             hierarchyHasError = true;
@@ -834,7 +1022,16 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
                 ImportStage::templateRegistration,
                 std::format("Template hierarchy references out-of-range node index {}.", nodeIndex),
                 templateRecord.stableKey, nodeIndex);
-            return;
+            return std::nullopt;
+        }
+
+        if (visited[nodeIndex])
+        {
+            hierarchyHasError = true;
+            reportImport<nr::LogLevel::error>(ImportStage::templateRegistration,
+                                              std::format("Template hierarchy revisited node index {}.", nodeIndex),
+                                              templateRecord.stableKey, nodeIndex);
+            return std::nullopt;
         }
 
         visited[nodeIndex] = true;
@@ -998,22 +1195,50 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
             });
         }
 
-        std::ranges::for_each(nodeAsset.childIndices, [&](std::uint32_t childIndex) {
+        return nodeEntity;
+    };
+
+    struct PendingTemplateNode
+    {
+        std::uint32_t nodeIndex = nr::load::invalidIndex;
+        flecs::entity parent{};
+    };
+
+    auto pendingNodes = std::vector<PendingTemplateNode>{
+        PendingTemplateNode{
+            .nodeIndex = sceneAsset.rootNodeIndex,
+            .parent = templateRecord.prefabRoot,
+        },
+    };
+    pendingNodes.reserve(sceneAsset.nodes.size());
+    while (!pendingNodes.empty())
+    {
+        auto pending = std::move(pendingNodes.back());
+        pendingNodes.pop_back();
+        auto nodeEntity = buildNode(pending.nodeIndex, pending.parent);
+        if (!nodeEntity.has_value())
+        {
+            continue;
+        }
+
+        auto const reverseChildren = sceneAsset.nodes[pending.nodeIndex].childIndices | std::views::reverse;
+        std::ranges::for_each(reverseChildren, [&](std::uint32_t childIndex) {
             if (childIndex >= sceneAsset.nodes.size())
             {
                 hierarchyHasError = true;
-                reportImport<nr::LogLevel::error>(
-                    ImportStage::templateRegistration,
-                    std::format("Node '{}' references out-of-range child index {}.", nodeAsset.name, childIndex),
-                    templateRecord.stableKey, nodeIndex);
+                reportImport<nr::LogLevel::error>(ImportStage::templateRegistration,
+                                                  std::format("Node '{}' references out-of-range child index {}.",
+                                                              sceneAsset.nodes[pending.nodeIndex].name, childIndex),
+                                                  templateRecord.stableKey, pending.nodeIndex);
                 return;
             }
 
-            self(self, childIndex, nodeEntity);
+            pendingNodes.push_back(PendingTemplateNode{
+                .nodeIndex = childIndex,
+                .parent = *nodeEntity,
+            });
         });
-    };
-
-    buildNode(buildNode, sceneAsset.rootNodeIndex, templateRecord.prefabRoot);
+    }
 
     auto const reachableNodeCount = static_cast<std::size_t>(std::ranges::count(visited, true));
     if (reachableNodeCount != sceneAsset.nodes.size())
@@ -1134,28 +1359,21 @@ void Scene::syncFallbackCameraInfrastructure()
 
 void Scene::initializeFallbackCameraInfrastructure()
 {
-    auto [cameraHandle, created] = cameras_.getOrCreate(
-        std::string{kFallbackCameraStableKey}, [](nr::resource::CameraAssetHandle newHandle, const std::string &key) {
-            return CameraAssetRecord{
-                .handle = newHandle,
-                .stableKey = key,
-            };
-        });
-
-    if (created)
-    {
-        cameraHandles_.push_back(cameraHandle);
-    }
+    auto cameraHandle =
+        cameras_
+            .getOrCreate(std::string{kFallbackCameraStableKey},
+                         [](nr::resource::CameraAssetHandle newHandle, const std::string &key) {
+                             return CameraAssetRecord{
+                                 .handle = newHandle,
+                                 .stableKey = key,
+                             };
+                         })
+            .first;
 
     if (auto *cameraRecord = cameras_.tryGet(cameraHandle); cameraRecord != nullptr)
     {
         cameraRecord->cpu = makeFallbackCameraAsset();
         cameraRecord->cpuReady = true;
-        cameraRecord->uploadQueued = false;
-        if (cameraRecord->cpuVersion == 0u)
-        {
-            cameraRecord->cpuVersion = 1u;
-        }
     }
 
     fallbackCameraHandle_ = cameraHandle;

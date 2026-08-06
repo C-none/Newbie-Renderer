@@ -192,19 +192,6 @@ template <OwnershipBarrierPhase TOwnershipPhase, QueueOwnershipResource TResourc
 [[nodiscard]] vk::ImageMemoryBarrier2 makeImageBarrier(const Image &image, vk::ImageMemoryBarrier2 barrier);
 
 /**
- * @brief Common factory: transfer-write buffer -> shader-read buffer.
- */
-[[nodiscard]] vk::BufferMemoryBarrier2 makeBufferTransferWriteToShaderReadBarrier(
-    const Buffer &buffer, vk::PipelineStageFlags2 dstStages = vk::PipelineStageFlagBits2::eFragmentShader,
-    vk::DeviceSize offset = 0, vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max());
-
-/**
- * @brief Common factory: host-write buffer -> transfer-read buffer.
- */
-[[nodiscard]] vk::BufferMemoryBarrier2 makeBufferHostWriteToTransferReadBarrier(
-    const Buffer &buffer, vk::DeviceSize offset = 0, vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max());
-
-/**
  * @brief Generic image layout transition helper.
  */
 [[nodiscard]] vk::ImageMemoryBarrier2 makeImageLayoutTransitionBarrier(
@@ -350,25 +337,7 @@ template <ImageTransitionBranch TBranch>
 }
 
 /**
- * @brief Queue-family ownership request used on either the release side or the acquire side.
- *
- * The same type is intentionally reused for both phases. When the request is
- * named `release`, `stages/access` describe the last access on the source queue.
- * When it is named `acquire`, `stages/access` describe the first access on the
- * destination queue.
- */
-struct QueueOwnershipRequest
-{
-    std::uint32_t srcQueueFamilyIndex = kIgnoredQueueFamilyIndex;
-    std::uint32_t dstQueueFamilyIndex = kIgnoredQueueFamilyIndex;
-    vk::PipelineStageFlags2 stages = vk::PipelineStageFlagBits2::eAllCommands;
-    vk::AccessFlags2 access = vk::AccessFlagBits2::eMemoryWrite;
-
-    [[nodiscard]] bool valid() const noexcept;
-};
-
-/**
- * @brief Stage/access scope used to construct ownership requests.
+ * @brief Stage/access scope used by ownership and synchronization operations.
  */
 struct QueueAccessScope
 {
@@ -378,68 +347,9 @@ struct QueueAccessScope
     [[nodiscard]] bool valid() const noexcept;
 };
 
-[[nodiscard]] constexpr QueueAccessScope accelerationStructureBuildReadScope() noexcept
-{
-    return QueueAccessScope{
-        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-        .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
-    };
-}
-
-[[nodiscard]] constexpr QueueAccessScope accelerationStructureBuildWriteScope() noexcept
-{
-    return QueueAccessScope{
-        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-        .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-    };
-}
-
-[[nodiscard]] constexpr QueueAccessScope accelerationStructureCopyReadScope() noexcept
-{
-    return QueueAccessScope{
-        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureCopyKHR,
-        .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
-    };
-}
-
-[[nodiscard]] constexpr QueueAccessScope accelerationStructureCopyWriteScope() noexcept
-{
-    return QueueAccessScope{
-        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureCopyKHR,
-        .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-    };
-}
-
-[[nodiscard]] constexpr QueueAccessScope rayTracingShaderAccelerationStructureReadScope() noexcept
-{
-    return QueueAccessScope{
-        .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-        .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
-    };
-}
-
-[[nodiscard]] constexpr QueueAccessScope shaderBindingTableReadScope() noexcept
-{
-    return QueueAccessScope{
-        .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-        .access = vk::AccessFlagBits2::eShaderBindingTableReadKHR,
-    };
-}
-
-[[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBarrier(const QueueAccessScope &srcScope,
-                                                                  const QueueAccessScope &dstScope);
-
-[[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBuildToBuildReadBarrier();
-
 [[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBuildToTraceReadBarrier();
 
-[[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBuildToCopyReadBarrier();
-
 [[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureCopyToTraceReadBarrier();
-
-[[nodiscard]] vk::BufferMemoryBarrier2 makeShaderBindingTableReadBarrier(
-    const Buffer &buffer, vk::PipelineStageFlags2 srcStages, vk::AccessFlags2 srcAccess, vk::DeviceSize offset = 0,
-    vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max());
 
 /**
  * @brief Optional semaphore wait payload used by ownership helpers.
@@ -451,10 +361,6 @@ struct QueueOwnershipWait
 
     [[nodiscard]] bool valid() const noexcept;
 };
-
-[[nodiscard]] QueueOwnershipRequest makeQueueOwnershipRequest(std::uint32_t srcQueueFamilyIndex,
-                                                              std::uint32_t dstQueueFamilyIndex,
-                                                              const QueueAccessScope &scope);
 
 /**
  * @brief Full queue-family hand-off plan: a single queue-family pair plus the
@@ -506,72 +412,18 @@ struct BufferUploadOwnershipPlan
     [[nodiscard]] bool valid(std::uint32_t transferQueueFamilyIndex) const noexcept;
 };
 
-/**
- * @brief Generic buffer queue-ownership barrier (sync2).
- *
- * `TOwnershipPhase = OwnershipBarrierPhase::Release` emits the phase stage on
- * both sides and populates only the source access scope. `Acquire` emits its
- * phase stage on both sides and populates only the destination access scope.
- */
-template <OwnershipBarrierPhase TOwnershipPhase>
-[[nodiscard]] inline vk::BufferMemoryBarrier2 makeBufferOwnershipBarrier(
-    const Buffer &buffer, const QueueOwnershipRequest &request, vk::DeviceSize offset = 0,
-    vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max())
-{
-    nrAssert(request.valid(), "makeBufferOwnershipBarrier requires valid queue-family indices.");
-    return detail::makeQueueOwnershipBarrier<TOwnershipPhase>(buffer,
-                                                              detail::QueueOwnershipBarrierConfig{
-                                                                  .srcQueueFamilyIndex = request.srcQueueFamilyIndex,
-                                                                  .dstQueueFamilyIndex = request.dstQueueFamilyIndex,
-                                                                  .stages = request.stages,
-                                                                  .access = request.access,
-                                                                  .offset = offset,
-                                                                  .size = size,
-                                                              });
-}
-
-/**
- * @brief Generic image queue-ownership barrier (sync2).
- */
-template <OwnershipBarrierPhase TOwnershipPhase>
-[[nodiscard]] inline vk::ImageMemoryBarrier2 makeImageOwnershipBarrier(const Image &image, vk::ImageLayout oldLayout,
-                                                                       vk::ImageLayout newLayout,
-                                                                       const QueueOwnershipRequest &request)
-{
-    nrAssert(request.valid(), "makeImageOwnershipBarrier requires valid queue-family indices.");
-    return detail::makeQueueOwnershipBarrier<TOwnershipPhase>(image,
-                                                              detail::QueueOwnershipBarrierConfig{
-                                                                  .srcQueueFamilyIndex = request.srcQueueFamilyIndex,
-                                                                  .dstQueueFamilyIndex = request.dstQueueFamilyIndex,
-                                                                  .stages = request.stages,
-                                                                  .access = request.access,
-                                                                  .oldLayout = oldLayout,
-                                                                  .newLayout = newLayout,
-                                                              });
-}
-
 namespace detail
 {
 template <OwnershipBarrierPhase TOwnershipPhase>
-[[nodiscard]] inline QueueOwnershipRequest selectOwnershipRequest(const QueueOwnershipTransfer &transfer)
+[[nodiscard]] inline const QueueAccessScope &selectOwnershipScope(const QueueOwnershipTransfer &transfer)
 {
     if constexpr (TOwnershipPhase == OwnershipBarrierPhase::Release)
     {
-        return QueueOwnershipRequest{
-            .srcQueueFamilyIndex = transfer.srcQueueFamilyIndex,
-            .dstQueueFamilyIndex = transfer.dstQueueFamilyIndex,
-            .stages = transfer.release.stages,
-            .access = transfer.release.access,
-        };
+        return transfer.release;
     }
     else
     {
-        return QueueOwnershipRequest{
-            .srcQueueFamilyIndex = transfer.srcQueueFamilyIndex,
-            .dstQueueFamilyIndex = transfer.dstQueueFamilyIndex,
-            .stages = transfer.acquire.stages,
-            .access = transfer.acquire.access,
-        };
+        return transfer.acquire;
     }
 }
 } // namespace detail
@@ -585,8 +437,16 @@ template <OwnershipBarrierPhase TOwnershipPhase>
     vk::DeviceSize size = std::numeric_limits<vk::DeviceSize>::max())
 {
     nrAssert(transfer.valid(), "makeBufferOwnershipTransferBarrier requires a valid QueueOwnershipTransfer.");
-    return makeBufferOwnershipBarrier<TOwnershipPhase>(
-        buffer, detail::selectOwnershipRequest<TOwnershipPhase>(transfer), offset, size);
+    const auto &scope = detail::selectOwnershipScope<TOwnershipPhase>(transfer);
+    return detail::makeQueueOwnershipBarrier<TOwnershipPhase>(buffer,
+                                                              detail::QueueOwnershipBarrierConfig{
+                                                                  .srcQueueFamilyIndex = transfer.srcQueueFamilyIndex,
+                                                                  .dstQueueFamilyIndex = transfer.dstQueueFamilyIndex,
+                                                                  .stages = scope.stages,
+                                                                  .access = scope.access,
+                                                                  .offset = offset,
+                                                                  .size = size,
+                                                              });
 }
 
 /**
@@ -599,8 +459,16 @@ template <OwnershipBarrierPhase TOwnershipPhase>
                                                                                const QueueOwnershipTransfer &transfer)
 {
     nrAssert(transfer.valid(), "makeImageOwnershipTransferBarrier requires a valid QueueOwnershipTransfer.");
-    return makeImageOwnershipBarrier<TOwnershipPhase>(image, oldLayout, newLayout,
-                                                      detail::selectOwnershipRequest<TOwnershipPhase>(transfer));
+    const auto &scope = detail::selectOwnershipScope<TOwnershipPhase>(transfer);
+    return detail::makeQueueOwnershipBarrier<TOwnershipPhase>(image,
+                                                              detail::QueueOwnershipBarrierConfig{
+                                                                  .srcQueueFamilyIndex = transfer.srcQueueFamilyIndex,
+                                                                  .dstQueueFamilyIndex = transfer.dstQueueFamilyIndex,
+                                                                  .stages = scope.stages,
+                                                                  .access = scope.access,
+                                                                  .oldLayout = oldLayout,
+                                                                  .newLayout = newLayout,
+                                                              });
 }
 
 /**
@@ -683,11 +551,6 @@ class BarrierBatch
 void pipelineBarrier(const vk::raii::CommandBuffer &commandBuffer, const BarrierBatch &barriers);
 
 /**
- * @brief Transition one image using a single sync2 image barrier.
- */
-void transitionImage(const vk::raii::CommandBuffer &commandBuffer, const Image &image, vk::ImageMemoryBarrier2 barrier);
-
-/**
  * @brief Convert an original buffer copy region to the pNext-capable copy-2 form.
  */
 [[nodiscard]] vk::BufferCopy2 toBufferCopy2(vk::BufferCopy region);
@@ -725,16 +588,6 @@ void copyImageToBuffer2(const vk::raii::CommandBuffer &commandBuffer, vk::Image 
 void copyImage2(const vk::raii::CommandBuffer &commandBuffer, vk::Image src, vk::ImageLayout srcLayout, vk::Image dst,
                 vk::ImageLayout dstLayout, vk::ImageCopy2 region);
 
-/**
- * @brief Copy one buffer into another with an optional explicit size.
- */
-void copyBuffer(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src, const Buffer &dst,
-                vk::DeviceSize size = 0);
-
-[[nodiscard]] vk::BufferImageCopy normalizeBufferImageCopyRegion(const Image &image, vk::BufferImageCopy region);
-
-[[nodiscard]] vk::DeviceSize linearBufferImageCopySize(const vk::BufferImageCopy &region, vk::DeviceSize elementSize);
-
 struct LinearImageUploadChunk
 {
     vk::DeviceSize sourceOffset = 0;
@@ -753,38 +606,6 @@ struct LinearImageUploadChunk
 [[nodiscard]] std::vector<LinearImageUploadChunk> planLinearImageUploadChunks(const vk::BufferImageCopy &region,
                                                                               vk::DeviceSize elementSize,
                                                                               vk::DeviceSize ringCapacity);
-
-/**
- * @brief Copy buffer data into an image.
- */
-void copyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src, const Image &dst,
-                       vk::ImageLayout dstLayout = vk::ImageLayout::eTransferDstOptimal,
-                       const vk::BufferImageCopy &region = {});
-
-/**
- * @brief Copy image data into a buffer.
- */
-void copyImageToBuffer(const vk::raii::CommandBuffer &commandBuffer, const Image &src, const Buffer &dst,
-                       vk::ImageLayout srcLayout = vk::ImageLayout::eTransferSrcOptimal,
-                       const vk::BufferImageCopy &region = {});
-
-[[nodiscard]] vk::ImageCopy normalizeImageCopyRegion(vk::Extent3D srcExtent, vk::ImageAspectFlags srcAspect,
-                                                     vk::Extent3D dstExtent, vk::ImageAspectFlags dstAspect,
-                                                     vk::ImageCopy region);
-
-[[nodiscard]] vk::ImageCopy normalizeImageCopyRegion(const Image &src, const Image &dst, vk::ImageCopy region);
-
-[[nodiscard]] vk::ImageCopy normalizeImageCopyRegion(vk::Extent3D srcExtent, vk::ImageAspectFlags srcAspect,
-                                                     vk::Extent3D dstExtent, vk::ImageAspectFlags dstAspect,
-                                                     vk::ImageCopy region);
-
-/**
- * @brief Copy image data from one image to another.
- */
-void copyImageToImage(const vk::raii::CommandBuffer &commandBuffer, const Image &src, const Image &dst,
-                      vk::ImageLayout srcLayout = vk::ImageLayout::eTransferSrcOptimal,
-                      vk::ImageLayout dstLayout = vk::ImageLayout::eTransferDstOptimal,
-                      const vk::ImageCopy &region = {});
 
 void copyImageToImage(const vk::raii::CommandBuffer &commandBuffer, vk::Image src, vk::Extent3D srcExtent,
                       vk::ImageAspectFlags srcAspect, vk::Image dst, vk::Extent3D dstExtent,
@@ -918,11 +739,43 @@ struct ImageUploadTicket
     [[nodiscard]] bool valid() const noexcept;
 };
 
-struct ReadbackTicket
+class UploadReadbackContext;
+
+/**
+ * @brief Move-only handle for one context-owned readback result.
+ *
+ * `UploadReadbackContext::readbackBytes` consumes the ticket exactly once.
+ * Results not consumed before ring reuse are preserved in host memory until
+ * the ticket is consumed or the issuing context is destroyed. A ticket must
+ * not outlive its issuing context.
+ */
+class ReadbackTicket
 {
-    vk::DeviceSize offset = 0;
-    vk::DeviceSize size = 0;
-    std::uint64_t signalValue = 0;
+  public:
+    ReadbackTicket(const ReadbackTicket &) = delete;
+    ReadbackTicket &operator=(const ReadbackTicket &) = delete;
+    ReadbackTicket(ReadbackTicket &&other) noexcept
+        : context_(std::exchange(other.context_, {})), offset_(std::exchange(other.offset_, 0)),
+          size_(std::exchange(other.size_, 0)), signalValue_(std::exchange(other.signalValue_, 0))
+    {
+    }
+
+    ReadbackTicket &operator=(ReadbackTicket &&) = delete;
+    ~ReadbackTicket() = default;
+
+  private:
+    friend class UploadReadbackContext;
+
+    ReadbackTicket(const UploadReadbackContext &context, vk::DeviceSize offset, vk::DeviceSize size,
+                   std::uint64_t signalValue)
+        : context_(std::cref(context)), offset_(offset), size_(size), signalValue_(signalValue)
+    {
+    }
+
+    std::optional<std::reference_wrapper<const UploadReadbackContext>> context_{};
+    vk::DeviceSize offset_ = 0;
+    vk::DeviceSize size_ = 0;
+    std::uint64_t signalValue_ = 0;
 };
 
 /**
@@ -966,6 +819,9 @@ struct ReadbackSyncPlan
  *   1. pre-copy barrier for producer-write -> transfer-read visibility,
  *   2. timeline wait for submission completion,
  *   3. host invalidate before CPU reads mapped bytes.
+ * Destruction waits for submissions owned by this context. Callers must still
+ * finish external queue submissions that wait on the exposed upload timeline
+ * before destroying a standalone context.
  */
 class UploadReadbackContext
 {
@@ -975,21 +831,15 @@ class UploadReadbackContext
                           vk::DeviceSize uploadRingSize = kDefaultUploadReadbackRingSize,
                           vk::DeviceSize readbackRingSize = kDefaultUploadReadbackRingSize);
 
+    UploadReadbackContext(const UploadReadbackContext &) = delete;
+    UploadReadbackContext &operator=(const UploadReadbackContext &) = delete;
+    UploadReadbackContext(UploadReadbackContext &&) = delete;
+    UploadReadbackContext &operator=(UploadReadbackContext &&) = delete;
+    ~UploadReadbackContext();
+
     [[nodiscard]] bool valid() const noexcept;
 
     [[nodiscard]] const vk::raii::Semaphore &uploadTimelineSemaphore() const noexcept;
-
-    [[nodiscard]] const vk::raii::Semaphore &readbackTimelineSemaphore() const noexcept;
-
-    /**
-     * @brief Query the completed upload timeline value without blocking.
-     */
-    [[nodiscard]] std::uint64_t completedUploadValue() const;
-
-    /**
-     * @brief Check whether a specific upload signal has completed without blocking.
-     */
-    [[nodiscard]] bool uploadComplete(std::uint64_t signalValue) const;
 
     /**
      * @brief Reclaim upload ring allocations whose timeline signal has completed.
@@ -1004,26 +854,9 @@ class UploadReadbackContext
     void waitUploadComplete(std::uint64_t signalValue = 0);
 
     /**
-     * @brief Block until readback timeline reaches @p signalValue.
-     *
-     * Passing `0` waits for the latest readback issued by this context.
-     */
-    void waitReadbackComplete(std::uint64_t signalValue = 0);
-
-    /**
-     * @brief Build acquire barrier from upload ticket.
-     */
-    [[nodiscard]] vk::BufferMemoryBarrier2 makeAcquireBarrier(const BufferUploadTicket &ticket) const;
-
-    /**
      * @brief Record acquire barrier from upload ticket when the ticket carries ownership.
      */
     void recordAcquireBarrier(const vk::raii::CommandBuffer &commandBuffer, const BufferUploadTicket &ticket) const;
-
-    /**
-     * @brief Build acquire barrier from image upload ticket.
-     */
-    [[nodiscard]] vk::ImageMemoryBarrier2 makeImageAcquireBarrier(const ImageUploadTicket &ticket) const;
 
     /**
      * @brief Record acquire barrier from image upload ticket when the ticket carries ownership.
@@ -1038,9 +871,10 @@ class UploadReadbackContext
      * If `ownership.acquireToTransfer` is present, the first transfer submit waits
      * on `acquireToTransfer.waitSemaphore` and records the matching acquire barrier
      * at the beginning of the transfer pipeline. If it is omitted, this upload path
-     * assumes the written destination range does not need its previous contents
-     * preserved before the transfer queue starts overwriting it.
+     * requires a destination on first use or one already owned by the transfer queue.
      * If payload size exceeds ring capacity, data is chunked and submitted in-order.
+     * The destination buffer must outlive transfer completion and any recorded
+     * acquire operation that consumes the returned ticket.
      */
     [[nodiscard]] BufferUploadTicket uploadBuffer(std::span<const std::byte> data, const Buffer &dst,
                                                   vk::DeviceSize dstOffset, const BufferUploadOwnershipPlan &ownership);
@@ -1052,6 +886,7 @@ class UploadReadbackContext
      * deliberately does not emit queue-family ownership barriers. Use this only
      * for buffers created with concurrent sharing across the transfer queue and
      * all consumer queue families.
+     * The destination buffer must outlive transfer completion.
      */
     [[nodiscard]] BufferUploadTicket uploadBuffer(std::span<const std::byte> data, const Buffer &dst,
                                                   vk::DeviceSize dstOffset);
@@ -1064,10 +899,16 @@ class UploadReadbackContext
      *   2) transition to eTransferDstOptimal,
      *   3) copyBufferToImage2 from upload ring,
      *   4) transition to destination layout and, when required, release to the destination queue.
+     * Omitting `ownership.acquireToTransfer` likewise requires first use or existing
+     * transfer-queue ownership.
      *
      * Payloads larger than the upload ring are split by array layer, depth
      * slice, and row range. The first submit performs the transfer-layout
      * acquire/transition and the final submit performs the destination release.
+     * Layout and ownership transitions cover the whole image even when the copy
+     * region selects only a subresource.
+     * The destination image must outlive transfer completion and any recorded
+     * acquire operation that consumes the returned ticket.
      */
     [[nodiscard]] ImageUploadTicket uploadImage(std::span<const std::byte> data, const Image &dst,
                                                 vk::ImageLayout sourceLayout, vk::ImageLayout destinationLayout,
@@ -1081,6 +922,7 @@ class UploadReadbackContext
      * The caller provides explicit pre/post stage+access scopes:
      *   1) `syncPlan.preCopy` for producer visibility before copy,
      *   2) `syncPlan.postCopy` for source-resource restore visibility after copy.
+     * The source buffer must outlive the readback timeline completion.
      */
     [[nodiscard]] ReadbackTicket readbackBuffer(const Buffer &src, vk::DeviceSize srcOffset, vk::DeviceSize size,
                                                 QueueRole queueRole, const ReadbackSyncPlan &syncPlan);
@@ -1092,15 +934,18 @@ class UploadReadbackContext
      * The caller provides explicit pre/post stage+access scopes:
      *   1) `syncPlan.preCopy` + layout transition to transfer-src,
      *   2) transfer-read -> `syncPlan.postCopy`, then layout restore.
+     * `region` is payload-relative and tightly packed: buffer offset, row length,
+     * and image height must all be zero.
+     * The source image must outlive the readback timeline completion.
      */
     [[nodiscard]] ReadbackTicket readbackImage(const Image &src, vk::ImageLayout sourceLayout, QueueRole queueRole,
                                                const ReadbackSyncPlan &syncPlan,
                                                const vk::BufferImageCopy &region = {});
 
     /**
-     * @brief Block until ticket is ready, invalidate cache, and copy bytes out.
+     * @brief Block until ticket is ready, invalidate cache, copy bytes out, and consume the ticket.
      */
-    [[nodiscard]] std::vector<std::byte> readbackBytes(const ReadbackTicket &ticket);
+    [[nodiscard]] std::vector<std::byte> readbackBytes(ReadbackTicket &ticket);
 
   private:
     struct ReadbackRoute
@@ -1118,11 +963,24 @@ class UploadReadbackContext
 
     struct InFlightBatch
     {
-        std::uint64_t begin = 0;
         std::uint64_t end = 0;
         std::uint64_t signalValue = 0;
-        std::optional<vk::raii::CommandBuffers> commandBuffers{};
+        vk::DeviceSize offset = 0;
+        vk::DeviceSize size = 0;
+        bool ringReclaimable = true;
+        vk::raii::CommandBuffers commandBuffers;
     };
+
+    struct BufferUploadControl
+    {
+        std::optional<std::reference_wrapper<const BufferUploadOwnershipPlan>> ownership{};
+        bool omitReleaseOwnership = false;
+        bool omitAcquireToTransferOwnership = false;
+        bool ticketCarriesOwnership = false;
+    };
+
+    [[nodiscard]] BufferUploadTicket uploadBufferCore(std::span<const std::byte> data, const Buffer &dst,
+                                                      vk::DeviceSize dstOffset, const BufferUploadControl &control);
 
     [[nodiscard]] std::uint64_t consumeNextUploadSignalValue();
 
@@ -1149,9 +1007,6 @@ class UploadReadbackContext
     void recordReadbackRingHostVisibilityBarrier(const vk::raii::CommandBuffer &commandBuffer, vk::DeviceSize offset,
                                                  vk::DeviceSize size) const;
 
-    [[nodiscard]] static vk::ImageSubresourceRange readbackImageSubresourceRange(const Image &image,
-                                                                                 const vk::BufferImageCopy &copyRegion);
-
     [[nodiscard]] static std::uint64_t alignUp(std::uint64_t value, std::uint64_t alignment);
 
     [[nodiscard]] static vk::DeviceSize bytesPerPixel(vk::Format format);
@@ -1163,16 +1018,20 @@ class UploadReadbackContext
     static void reclaimQueue(std::deque<InFlightBatch> &queue, std::uint64_t &reclaimCursor,
                              std::uint64_t completedValue);
 
-    [[nodiscard]] RingAllocation reserveUpload(vk::DeviceSize size, const vk::raii::Semaphore &timelineSemaphore);
+    void spillReadback(InFlightBatch &batch);
+
+    [[nodiscard]] RingAllocation reserveUpload(vk::DeviceSize size);
 
     [[nodiscard]] RingAllocation reserveReadback(vk::DeviceSize size);
 
     [[nodiscard]] RingAllocation reserveRing(vk::DeviceSize size, vk::DeviceSize capacity, std::uint64_t &writeCursor,
                                              std::uint64_t &reclaimCursor, std::deque<InFlightBatch> &queue,
-                                             const vk::raii::Semaphore &timelineSemaphore);
+                                             const vk::raii::Semaphore &timelineSemaphore,
+                                             bool requiresCpuConsumption);
 
     static void addInFlight(std::deque<InFlightBatch> &queue, const RingAllocation &allocation,
-                            std::uint64_t signalValue, vk::raii::CommandBuffers commandBuffers);
+                            std::uint64_t signalValue, bool ringReclaimable,
+                            vk::raii::CommandBuffers commandBuffers);
 
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     std::optional<std::reference_wrapper<QueueManager>> queueManager_{};
@@ -1199,6 +1058,7 @@ class UploadReadbackContext
 
     std::deque<InFlightBatch> uploadInFlight_;
     std::deque<InFlightBatch> readbackInFlight_;
+    std::map<std::uint64_t, std::vector<std::byte>> spilledReadbacks_;
 };
 
 } // namespace nr::rhi::ops

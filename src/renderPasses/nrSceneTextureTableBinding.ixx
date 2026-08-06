@@ -105,20 +105,25 @@ struct SceneTextureTableBindingInput
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 void prepareSceneTextureTableBindingForFrame(
-    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount> &pipeline, nr::renderer::BindlessImageTableCache &cache,
+    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount> &pipeline,
+    typename nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount>::PassBindingHandle passBinding,
+    nr::renderer::BindlessImageTableCache &cache,
     std::uint32_t frameIndex, const SceneTextureTableBindingInput &bindingInput,
     SceneTextureTableBindingRequirement requirement = SceneTextureTableBindingRequirement::required)
 {
-    cache.ensureTableForFrame(pipeline, frameIndex, makeSceneTextureTableBindingRequest(bindingInput, requirement));
+    cache.ensureTableForFrame(pipeline, passBinding, frameIndex,
+                              makeSceneTextureTableBindingRequest(bindingInput, requirement));
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] nr::rhi::ShaderBindingSnapshot makeSceneTextureTableBindingSnapshot(
-    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount> &pipeline, nr::renderer::BindlessImageTableCache &cache,
+    nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount> &pipeline,
+    typename nr::renderer::PipelineRuntime<TPipeline, FrameSlotCount>::PassBindingHandle passBinding,
+    nr::renderer::BindlessImageTableCache &cache,
     std::uint32_t frameIndex, const SceneTextureTableBindingInput &bindingInput,
     SceneTextureTableBindingRequirement requirement = SceneTextureTableBindingRequirement::required)
 {
-    return cache.makeSnapshotForFrame(pipeline, frameIndex,
+    return cache.makeSnapshotForFrame(pipeline, passBinding, frameIndex,
                                       makeSceneTextureTableBindingRequest(bindingInput, requirement));
 }
 } // namespace nr::renderPasses::detail

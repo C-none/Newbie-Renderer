@@ -10,25 +10,37 @@ import std;
 
 namespace nr::rhi
 {
+namespace
+{
+[[nodiscard]] constexpr bool isStageInSet(SlangStage stage, std::initializer_list<SlangStage> stages)
+{
+    return std::ranges::any_of(stages, [stage](SlangStage candidate) { return candidate == stage; });
+}
+
+[[nodiscard]] bool isGraphicsStage(SlangStage stage)
+{
+    return isStageInSet(stage, {SLANG_STAGE_VERTEX, SLANG_STAGE_FRAGMENT, SLANG_STAGE_GEOMETRY, SLANG_STAGE_HULL,
+                                SLANG_STAGE_DOMAIN});
+}
+
+[[nodiscard]] bool isRayTracingStage(SlangStage stage)
+{
+    return isStageInSet(stage, {SLANG_STAGE_RAY_GENERATION, SLANG_STAGE_MISS, SLANG_STAGE_CLOSEST_HIT,
+                                SLANG_STAGE_ANY_HIT, SLANG_STAGE_INTERSECTION, SLANG_STAGE_CALLABLE});
+}
+
+std::atomic<std::uint64_t> nextRayTracingPipelineIdentity{1u};
+
+[[nodiscard]] RayTracingPipelineIdentity allocateRayTracingPipelineIdentity()
+{
+    auto const value = nextRayTracingPipelineIdentity.fetch_add(1u, std::memory_order_relaxed);
+    nrAssert(value != 0u, "Ray tracing pipeline identity space exhausted.");
+    return RayTracingPipelineIdentity{.value = value};
+}
+} // namespace
+
 [[nodiscard]] std::optional<std::string> validateRayTracingPipelineDesc(const RayTracingPipelineDesc &desc)
 {
-    const auto createAsLibrary =
-        desc.createAsLibrary ||
-        ((desc.flags & vk::PipelineCreateFlags{VK_PIPELINE_CREATE_LIBRARY_BIT_KHR}) != vk::PipelineCreateFlags{});
-    const auto usesLinkedLibraries = !desc.linkedLibraries.empty();
-    const auto hasLibraryInterface = desc.libraryInterface.has_value();
-
-    if ((createAsLibrary || usesLinkedLibraries) && !hasLibraryInterface)
-    {
-        return std::string{
-            "RayTracingPipelineDesc library flow requires libraryInterface when creating/linking libraries."};
-    }
-
-    if (std::ranges::any_of(desc.linkedLibraries,
-                            [](vk::Pipeline pipelineHandle) { return pipelineHandle == vk::Pipeline{}; }))
-    {
-        return std::string{"RayTracingPipelineDesc::linkedLibraries contains VK_NULL_HANDLE."};
-    }
     if ((desc.flags & vk::PipelineCreateFlagBits::eEarlyReturnOnFailure) != vk::PipelineCreateFlags{})
     {
         return std::string{"RayTracingPipelineDesc cannot use eEarlyReturnOnFailure with deferred host creation."};
@@ -76,7 +88,7 @@ namespace nr::rhi
                 stage.logicalEntryPointName);
             return;
         }
-        if (!detail::isRayTracingStage(entryPointData->stage))
+        if (!isRayTracingStage(entryPointData->stage))
         {
             stageValidation =
                 std::format("RayTracingProgramAssemblyDesc logical entry point '{}' is not a ray-tracing stage.",
@@ -283,13 +295,27 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
 
 [[nodiscard]] CursorPipelineLayout CursorPipelineLayout::create(
     const vk::raii::Device &device, const ShaderDescriptorLayout &descriptorLayout,
+    std::uint32_t maxBoundDescriptorSets,
     std::span<const SlangImmutableSamplerBinding> immutableSamplers)
 {
+    nrAssert(*device != nullptr, "CursorPipelineLayout::create requires a valid Vulkan device.");
+    nrAssert(descriptorLayout.valid(), "CursorPipelineLayout::create requires a valid descriptor layout.");
+    nrAssert(maxBoundDescriptorSets > 0u,
+             "CursorPipelineLayout::create requires a non-zero maxBoundDescriptorSets limit.");
     CursorPipelineLayout layout;
-    layout.device_ = std::cref(device);
+
+    struct ImmutableSamplerBindingBuildState
+    {
+        std::uint32_t set = 0;
+        std::uint32_t binding = 0;
+        std::vector<vk::Sampler> rawSamplers;
+        bool isApplied = false;
+    };
+    auto immutableSamplerBindings = std::vector<ImmutableSamplerBindingBuildState>{};
 
     auto setLayouts = descriptorLayout.descriptorSets();
-    layout.immutableSamplerBindings_.reserve(immutableSamplers.size());
+    layout.immutableSamplers_.reserve(immutableSamplers.size());
+    immutableSamplerBindings.reserve(immutableSamplers.size());
 
     auto findDescriptorBinding = [setLayouts](std::uint32_t setIndex,
                                               std::uint32_t bindingIndex) -> const DescriptorBindingInfo * {
@@ -313,8 +339,8 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
     };
 
     std::ranges::for_each(immutableSamplers, [&](const SlangImmutableSamplerBinding &immutableSamplerBinding) {
-        nrAssert(std::ranges::none_of(layout.immutableSamplerBindings_,
-                                      [&](const ImmutableSamplerBindingState &state) {
+        nrAssert(std::ranges::none_of(immutableSamplerBindings,
+                                      [&](const ImmutableSamplerBindingBuildState &state) {
                                           return state.set == immutableSamplerBinding.set &&
                                                  state.binding == immutableSamplerBinding.binding;
                                       }),
@@ -344,27 +370,32 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
                              immutableSamplerBinding.set, immutableSamplerBinding.binding, bindingInfo->descriptorCount,
                              immutableSamplerBinding.descriptorCount));
 
-        ImmutableSamplerBindingState state{};
+        ImmutableSamplerBindingBuildState state{};
         state.set = immutableSamplerBinding.set;
         state.binding = immutableSamplerBinding.binding;
-        state.samplers.reserve(1u);
 
         auto samplerDebugName = std::format("immutable_sampler_s{}_b{}", state.set, state.binding);
-        state.samplers.push_back(SlangSampler::create(device, immutableSamplerBinding.samplerDesc, samplerDebugName));
+        layout.immutableSamplers_.push_back(
+            SlangSampler::create(device, immutableSamplerBinding.samplerDesc, samplerDebugName));
         nrAssert(
-            state.samplers.back().valid(),
+            layout.immutableSamplers_.back().valid(),
             std::format("CursorPipelineLayout::create failed to create immutable sampler '{}'.", samplerDebugName));
-        state.rawSamplers.resize(immutableSamplerBinding.descriptorCount, state.samplers.back().raw());
+        state.rawSamplers.resize(immutableSamplerBinding.descriptorCount, layout.immutableSamplers_.back().raw());
 
-        layout.immutableSamplerBindings_.push_back(std::move(state));
+        immutableSamplerBindings.push_back(std::move(state));
     });
 
     auto setInfoByIndex = std::map<std::uint32_t, std::reference_wrapper<const DescriptorSetLayoutInfo>>{};
     std::ranges::for_each(setLayouts, [&](const DescriptorSetLayoutInfo &setInfo) {
-        setInfoByIndex.emplace(setInfo.set, std::cref(setInfo));
+        auto const [_, inserted] = setInfoByIndex.emplace(setInfo.set, std::cref(setInfo));
+        nrAssert(inserted,
+                 std::format("CursorPipelineLayout::create found duplicate descriptor set {}.", setInfo.set));
     });
 
     auto maxSetIndex = setInfoByIndex.empty() ? std::uint32_t{0} : setInfoByIndex.rbegin()->first;
+    nrAssert(setInfoByIndex.empty() || maxSetIndex < maxBoundDescriptorSets,
+             std::format("CursorPipelineLayout::create descriptor set {} exceeds maxBoundDescriptorSets {}.",
+                         maxSetIndex, maxBoundDescriptorSets));
     auto pipelineSetLayoutCount = setInfoByIndex.empty() ? std::size_t{0} : static_cast<std::size_t>(maxSetIndex) + 1u;
     layout.setLayouts_.reserve(pipelineSetLayoutCount);
 
@@ -378,10 +409,10 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
                                     : std::vector<vk::DescriptorBindingFlags>{};
         std::ranges::for_each(bindings, [&](vk::DescriptorSetLayoutBinding &binding) {
             auto immutableSamplerIt =
-                std::ranges::find_if(layout.immutableSamplerBindings_, [&](ImmutableSamplerBindingState &state) {
+                std::ranges::find_if(immutableSamplerBindings, [&](ImmutableSamplerBindingBuildState &state) {
                     return state.set == setIndex && state.binding == binding.binding;
                 });
-            if (immutableSamplerIt == std::ranges::end(layout.immutableSamplerBindings_))
+            if (immutableSamplerIt == std::ranges::end(immutableSamplerBindings))
             {
                 return;
             }
@@ -398,6 +429,8 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
 
         vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
         vk::DescriptorSetLayoutCreateInfo setLayoutInfo{};
+        nrAssert(std::in_range<std::uint32_t>(bindings.size()),
+                 std::format("Descriptor set {} has too many bindings for the Vulkan uint32 ABI.", setIndex));
         setLayoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
         setLayoutInfo.pBindings = bindings.data();
         if (!bindingFlags.empty())
@@ -412,6 +445,26 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
             {
                 setLayoutInfo.flags |= vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
             }
+        }
+
+        auto support = device.getDescriptorSetLayoutSupport<vk::DescriptorSetLayoutSupport,
+                                                            vk::DescriptorSetVariableDescriptorCountLayoutSupport>(
+            setLayoutInfo);
+        nrAssert(support.get<vk::DescriptorSetLayoutSupport>().supported == vk::True,
+                 std::format("Vulkan does not support reflected descriptor set layout {}.", setIndex));
+        auto variableBinding = std::ranges::find_if(bindingFlags, [](vk::DescriptorBindingFlags flags) {
+            return (flags & vk::DescriptorBindingFlagBits::eVariableDescriptorCount) != vk::DescriptorBindingFlags{};
+        });
+        if (variableBinding != bindingFlags.end())
+        {
+            auto bindingIndex = static_cast<std::size_t>(std::distance(bindingFlags.begin(), variableBinding));
+            auto maxVariableDescriptorCount =
+                support.get<vk::DescriptorSetVariableDescriptorCountLayoutSupport>().maxVariableDescriptorCount;
+            nrAssert(bindings[bindingIndex].descriptorCount <= maxVariableDescriptorCount,
+                     std::format("Descriptor set {} variable binding {} requests {} descriptors, but Vulkan supports "
+                                 "at most {} for this layout.",
+                                 setIndex, bindings[bindingIndex].binding, bindings[bindingIndex].descriptorCount,
+                                 maxVariableDescriptorCount));
         }
 
         layout.setLayouts_.push_back(DescriptorSetLayoutHandle{
@@ -430,7 +483,7 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
         });
     }
 
-    std::ranges::for_each(layout.immutableSamplerBindings_, [](const ImmutableSamplerBindingState &state) {
+    std::ranges::for_each(immutableSamplerBindings, [](const ImmutableSamplerBindingBuildState &state) {
         nrAssert(state.isApplied, std::format("CursorPipelineLayout::create immutable sampler binding was not used by "
                                               "descriptor layout at set={}, binding={}",
                                               state.set, state.binding));
@@ -501,49 +554,6 @@ void CursorPipelineLayout::pushConstants(const vk::raii::CommandBuffer &commandB
         vk::ArrayProxy<const std::uint8_t>(static_cast<std::uint32_t>(bytes.size()), bytes.data()));
 }
 
-void CursorPipelineLayout::pushConstants(const vk::raii::CommandBuffer &commandBuffer, const ShaderCursor &cursor,
-                                         std::span<const std::uint8_t> bytes) const
-{
-    nrAssert(valid(), "CursorPipelineLayout::pushConstants requires a valid pipeline layout.");
-    nrAssert(cursor.valid(), "CursorPipelineLayout::pushConstants requires a valid shader cursor.");
-    nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::pushConstants requires a valid command buffer.");
-
-    auto pushConstantRange = cursor.pushConstantRange();
-    nrAssert(pushConstantRange.has_value(),
-             "CursorPipelineLayout::pushConstants requires cursor to reference push-constant storage.");
-
-    auto cursorOffset = cursor.address().uniformOffset;
-    nrAssert(cursorOffset <= std::numeric_limits<std::uint32_t>::max(),
-             std::format("CursorPipelineLayout::pushConstants cursor offset overflow: {}", cursorOffset));
-
-    auto offset = static_cast<std::uint32_t>(cursorOffset);
-    auto rangeBegin = static_cast<std::uint64_t>(pushConstantRange->offset);
-    auto rangeEnd = rangeBegin + static_cast<std::uint64_t>(pushConstantRange->size);
-    auto writeBegin = static_cast<std::uint64_t>(offset);
-    auto writeEnd = writeBegin + static_cast<std::uint64_t>(bytes.size());
-
-    nrAssert(writeBegin >= rangeBegin && writeEnd <= rangeEnd,
-             std::format("CursorPipelineLayout::pushConstants write outside push-constant range. offset={}, size={}, "
-                         "rangeBegin={}, rangeEnd={}",
-                         offset, bytes.size(), pushConstantRange->offset,
-                         pushConstantRange->offset + pushConstantRange->size));
-
-    pushConstants(commandBuffer, pushConstantRange->stageFlags, offset, bytes);
-}
-
-void CursorPipelineLayout::bindDescriptorSet(const vk::raii::CommandBuffer &commandBuffer,
-                                             vk::PipelineBindPoint bindPoint, const ShaderBindingSet &set,
-                                             std::span<const std::uint32_t> dynamicOffsets) const
-{
-    nrAssert(valid(), "CursorPipelineLayout::bindDescriptorSet requires a valid pipeline layout.");
-    nrAssert(set.valid(),
-             std::format("CursorPipelineLayout::bindDescriptorSet received invalid set {}.", set.setIndex()));
-    nrAssert(*commandBuffer != nullptr, "CursorPipelineLayout::bindDescriptorSet requires a valid command buffer.");
-
-    auto handle = set.raw();
-    commandBuffer.bindDescriptorSets(bindPoint, raw(), set.setIndex(), {handle}, dynamicOffsets);
-}
-
 void CursorPipelineLayout::bindDescriptorSets(const vk::raii::CommandBuffer &commandBuffer,
                                               vk::PipelineBindPoint bindPoint, std::span<const ShaderBindingSet> sets,
                                               std::span<const std::uint32_t> dynamicOffsets) const
@@ -602,6 +612,10 @@ std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
     nrAssert(layout.valid(), "allocateBindingSetsForLayout requires a valid cursor pipeline layout.");
 
     auto setIndices = layout.setIndices();
+    nrAssert(std::ranges::all_of(variableDescriptorCountsBySet, [&](const auto &entry) {
+                 return std::ranges::find(setIndices, entry.first) != setIndices.end();
+             }),
+             "allocateBindingSetsForLayout received a variable descriptor count for an unknown set.");
     auto sets = std::vector<ShaderBindingSet>{};
     sets.reserve(setIndices.size());
 
@@ -617,7 +631,7 @@ std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
                                      : std::nullopt);
         nrAssert(set.valid(),
                  std::format("allocateBindingSetsForLayout failed to allocate descriptor set for set {}.", setIndex));
-        sets.push_back(set);
+        sets.push_back(std::move(set));
     });
 
     return sets;
@@ -633,7 +647,7 @@ void updateResourcesForBindingSnapshot(ShaderBindingPool &pool, std::span<const 
                                        const ShaderBindingSnapshot &snapshot, LogicalDescriptorResolver logicalResolver)
 {
     auto writeRequests = resolveDescriptorWriteRequests(snapshot, std::move(logicalResolver));
-    auto changedWriteRequests = filterChangedDescriptorWrites(descriptorWriteCache, writeRequests);
+    auto changedWriteRequests = descriptorWriteCache.filterChanged(writeRequests);
     if (!changedWriteRequests.empty())
     {
         auto requestsBySet = std::map<std::uint32_t, std::vector<DescriptorWriteRequest>>{};
@@ -659,7 +673,7 @@ void updateResourcesForBindingSnapshot(ShaderBindingPool &pool, std::span<const 
 
         nrAssert(requestsBySet.empty(),
                  "updateResourcesForBindingSnapshot could not find descriptor sets for one or more snapshot writes.");
-        commitDescriptorWrites(descriptorWriteCache, changedWriteRequests);
+        descriptorWriteCache.commit(changedWriteRequests);
     }
 }
 
@@ -831,7 +845,7 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     auto graphicsStageIndices =
         std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size())) |
         std::views::filter(
-            [&](std::uint32_t index) { return detail::isGraphicsStage(shaderProgram.stages()[index]); }) |
+            [&](std::uint32_t index) { return isGraphicsStage(shaderProgram.stages()[index]); }) |
         std::ranges::to<std::vector>();
     nrAssert(!graphicsStageIndices.empty(), "GraphicsPipeline::create requires at least one graphics shader stage.");
 
@@ -840,24 +854,10 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
         std::views::transform([&](std::uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
         std::ranges::to<std::vector>();
 
-    auto hasStage = [&](SlangStage stage) {
-        return std::ranges::any_of(graphicsStageIndices, [&](std::uint32_t stageIndex) {
-            return shaderProgram.stages()[stageIndex] == stage;
-        });
-    };
-    auto const hasVertexStage = hasStage(SLANG_STAGE_VERTEX);
-    auto const hasMeshStage = hasStage(SLANG_STAGE_MESH);
-
-    if (desc.mode == GraphicsPipelineMode::Mesh)
-    {
-        nrAssert(hasMeshStage, "GraphicsPipeline::create Mesh mode requires a mesh shader stage.");
-        nrAssert(!hasVertexStage, "GraphicsPipeline::create Mesh mode cannot include a vertex shader stage.");
-    }
-    else
-    {
-        nrAssert(hasVertexStage, "GraphicsPipeline::create StandardGraphics mode requires a vertex shader stage.");
-        nrAssert(!hasMeshStage, "GraphicsPipeline::create StandardGraphics mode cannot include mesh shader stages.");
-    }
+    nrAssert(std::ranges::any_of(graphicsStageIndices, [&](std::uint32_t stageIndex) {
+                 return shaderProgram.stages()[stageIndex] == SLANG_STAGE_VERTEX;
+             }),
+             "GraphicsPipeline::create requires a vertex shader stage.");
 
     auto colorBlendAttachments = desc.colorBlendAttachments;
     if (colorBlendAttachments.empty())
@@ -881,11 +881,16 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
              std::format("GraphicsPipeline::create color blend attachment count mismatch. formats={}, blends={}",
                          desc.colorAttachmentFormats.size(), colorBlendAttachments.size()));
 
-    auto dynamicStates = desc.dynamicStates;
-    if (dynamicStates.empty())
-    {
-        dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
-    }
+    auto dynamicStates = std::vector{
+        vk::DynamicState::eViewport,
+        vk::DynamicState::eScissor,
+        vk::DynamicState::eCullModeEXT,
+        vk::DynamicState::eFrontFaceEXT,
+        vk::DynamicState::eDepthTestEnableEXT,
+        vk::DynamicState::eDepthWriteEnableEXT,
+        vk::DynamicState::eDepthCompareOpEXT,
+        vk::DynamicState::ePrimitiveTopologyEXT,
+    };
 
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.vertexBindingDescriptionCount = static_cast<std::uint32_t>(desc.vertexBindings.size());
@@ -938,12 +943,10 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     renderingInfo.stencilAttachmentFormat = desc.stencilAttachmentFormat.value_or(vk::Format::eUndefined);
 
     vk::GraphicsPipelineCreateInfo createInfo{};
-    createInfo.flags = desc.flags;
     createInfo.stageCount = static_cast<std::uint32_t>(stageCreateInfos.size());
     createInfo.pStages = stageCreateInfos.data();
-    auto const usesMeshPipeline = desc.mode == GraphicsPipelineMode::Mesh;
-    createInfo.pVertexInputState = usesMeshPipeline ? nullptr : &vertexInputInfo;
-    createInfo.pInputAssemblyState = usesMeshPipeline ? nullptr : &inputAssemblyInfo;
+    createInfo.pVertexInputState = &vertexInputInfo;
+    createInfo.pInputAssemblyState = &inputAssemblyInfo;
     createInfo.pViewportState = &viewportStateInfo;
     createInfo.pRasterizationState = &rasterizationInfo;
     createInfo.pMultisampleState = &multisampleInfo;
@@ -981,7 +984,6 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
 [[nodiscard]] ComputePipeline ComputePipeline::create(const vk::raii::Device &device,
                                                       const CursorPipelineLayout &layout,
                                                       const VkShaderProgram &shaderProgram,
-                                                      const ComputePipelineDesc &desc,
                                                       const vk::raii::PipelineCache *pipelineCache)
 {
     nrAssert(layout.valid(), "ComputePipeline::create requires a valid pipeline layout.");
@@ -994,7 +996,6 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     auto stageIndex = *it;
 
     vk::ComputePipelineCreateInfo createInfo{};
-    createInfo.flags = desc.flags;
     createInfo.stage = shaderProgram.stageCreateInfo(stageIndex);
     createInfo.layout = layout.raw();
 
@@ -1059,7 +1060,8 @@ struct DeferredHostJoinResult
 
 [[nodiscard]] RayTracingPipeline RayTracingPipeline::create(
     const vk::raii::Device &device, const CursorPipelineLayout &layout, const VkShaderProgram &shaderProgram,
-    threading::StaticThreadPool &deferredHostPool, const RayTracingPipelineDesc &desc,
+    threading::StaticThreadPool &deferredHostPool, const RayTracingCapabilitySnapshot &capabilities,
+    const RayTracingPipelineDesc &desc,
     std::span<const RayTracingShaderGroupDesc> groupDescs, const vk::raii::PipelineCache *pipelineCache)
 {
     nrAssert(layout.valid(), "RayTracingPipeline::create requires a valid pipeline layout.");
@@ -1072,23 +1074,10 @@ struct DeferredHostJoinResult
     nrAssert(!descValidation.has_value(),
              std::format("RayTracingPipeline::create invalid desc: {}", descValidation.value_or(std::string{})));
 
-    auto createFlags = desc.flags;
-    if (desc.createAsLibrary)
-    {
-        createFlags |= vk::PipelineCreateFlags{VK_PIPELINE_CREATE_LIBRARY_BIT_KHR};
-    }
-
-    auto hasCaptureReplayHandles = std::ranges::any_of(
-        groupDescs, [](const RayTracingShaderGroupDesc &groupDesc) { return !groupDesc.captureReplayHandle.empty(); });
-    if (hasCaptureReplayHandles)
-    {
-        createFlags |= vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR;
-    }
-
     auto rtStageIndices =
         std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size())) |
         std::views::filter(
-            [&](std::uint32_t index) { return detail::isRayTracingStage(shaderProgram.stages()[index]); }) |
+            [&](std::uint32_t index) { return isRayTracingStage(shaderProgram.stages()[index]); }) |
         std::ranges::to<std::vector>();
     nrAssert(!rtStageIndices.empty(), "RayTracingPipeline::create requires at least one ray tracing shader stage.");
 
@@ -1130,46 +1119,17 @@ struct DeferredHostJoinResult
         group.closestHitShader = findLocalStageIndex(groupDesc.closestHitEntryPoint, {SLANG_STAGE_CLOSEST_HIT});
         group.anyHitShader = findLocalStageIndex(groupDesc.anyHitEntryPoint, {SLANG_STAGE_ANY_HIT});
         group.intersectionShader = findLocalStageIndex(groupDesc.intersectionEntryPoint, {SLANG_STAGE_INTERSECTION});
-        if (!groupDesc.captureReplayHandle.empty())
-        {
-            group.pShaderGroupCaptureReplayHandle = groupDesc.captureReplayHandle.data();
-        }
         groups.push_back(group);
     });
 
-    auto dynamicStates = std::array{vk::DynamicState::eRayTracingPipelineStackSizeKHR};
-    vk::PipelineDynamicStateCreateInfo dynamicStateInfo{};
-    if (desc.dynamicPipelineStackSize)
-    {
-        dynamicStateInfo.dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size());
-        dynamicStateInfo.pDynamicStates = dynamicStates.data();
-    }
-
     vk::RayTracingPipelineCreateInfoKHR createInfo{};
-    createInfo.flags = createFlags;
+    createInfo.flags = desc.flags;
     createInfo.stageCount = static_cast<std::uint32_t>(stageCreateInfos.size());
     createInfo.pStages = stageCreateInfos.data();
     createInfo.groupCount = static_cast<std::uint32_t>(groups.size());
     createInfo.pGroups = groups.data();
     createInfo.maxPipelineRayRecursionDepth = desc.maxRayRecursionDepth;
     createInfo.layout = layout.raw();
-    createInfo.pDynamicState = desc.dynamicPipelineStackSize ? &dynamicStateInfo : nullptr;
-
-    vk::PipelineLibraryCreateInfoKHR libraryInfo{};
-    if (!desc.linkedLibraries.empty())
-    {
-        libraryInfo.libraryCount = static_cast<std::uint32_t>(desc.linkedLibraries.size());
-        libraryInfo.pLibraries = desc.linkedLibraries.data();
-        createInfo.pLibraryInfo = &libraryInfo;
-    }
-
-    vk::RayTracingPipelineInterfaceCreateInfoKHR libraryInterface{};
-    if (desc.libraryInterface.has_value())
-    {
-        libraryInterface.maxPipelineRayPayloadSize = desc.libraryInterface->maxPipelineRayPayloadSize;
-        libraryInterface.maxPipelineRayHitAttributeSize = desc.libraryInterface->maxPipelineRayHitAttributeSize;
-        createInfo.pLibraryInterface = &libraryInterface;
-    }
 
     auto const createStart = std::chrono::steady_clock::now();
     auto deferredOperation = vk::raii::DeferredOperationKHR{nullptr};
@@ -1260,7 +1220,8 @@ struct DeferredHostJoinResult
     RayTracingPipeline pipeline;
     pipeline.pipeline_ = vk::raii::Pipeline{device, static_cast<VkPipeline>(rawPipeline)};
     nrAssert(pipeline.valid(), "RayTracingPipeline creation completed without a valid pipeline handle.");
-    pipeline.device_ = std::cref(device);
+    pipeline.identity_ = allocateRayTracingPipelineIdentity();
+    pipeline.capabilities_ = capabilities;
     pipeline.shaderGroupCount_ = static_cast<std::uint32_t>(groups.size());
     auto groupIndices = std::views::iota(std::size_t{0u}, groupDescs.size());
     std::ranges::for_each(groupIndices, [&](std::size_t groupIndex) {
@@ -1270,7 +1231,6 @@ struct DeferredHostJoinResult
             pipeline.shaderGroupIndices_.emplace(groupDescs[groupIndex].name, static_cast<std::uint32_t>(groupIndex));
         nrAssert(inserted, "RayTracingPipeline::create requires unique shader group names.");
     });
-    pipeline.dynamicPipelineStackSize_ = desc.dynamicPipelineStackSize;
     return pipeline;
 }
 
@@ -1282,6 +1242,16 @@ struct DeferredHostJoinResult
 [[nodiscard]] vk::Pipeline RayTracingPipeline::raw() const noexcept
 {
     return valid() ? *pipeline_ : vk::Pipeline{};
+}
+
+[[nodiscard]] RayTracingPipelineIdentity RayTracingPipeline::identity() const noexcept
+{
+    return identity_;
+}
+
+[[nodiscard]] const RayTracingCapabilitySnapshot &RayTracingPipeline::capabilities() const noexcept
+{
+    return capabilities_;
 }
 
 [[nodiscard]] std::uint32_t RayTracingPipeline::shaderGroupCount() const noexcept
@@ -1297,51 +1267,21 @@ struct DeferredHostJoinResult
     return found->second;
 }
 
-[[nodiscard]] bool RayTracingPipeline::dynamicPipelineStackSize() const noexcept
-{
-    return dynamicPipelineStackSize_;
-}
-
 [[nodiscard]] std::vector<std::uint8_t> RayTracingPipeline::shaderGroupHandles(std::uint32_t firstGroup,
-                                                                               std::uint32_t groupCount,
-                                                                               std::uint32_t handleSize) const
+                                                                               std::uint32_t groupCount) const
 {
     nrAssert(valid(), "RayTracingPipeline::shaderGroupHandles requires a valid pipeline.");
-    nrAssert(device_.has_value(), "RayTracingPipeline::shaderGroupHandles requires a valid device reference.");
     nrAssert(groupCount > 0u, "RayTracingPipeline::shaderGroupHandles requires groupCount > 0.");
-    nrAssert(handleSize > 0u, "RayTracingPipeline::shaderGroupHandles requires handleSize > 0.");
+    nrAssert(capabilities_.shaderGroupHandleSize > 0u,
+             "RayTracingPipeline::shaderGroupHandles requires a physical shader group handle size.");
     nrAssert(firstGroup < shaderGroupCount_, "RayTracingPipeline::shaderGroupHandles firstGroup is out of range.");
     auto requestedEnd = static_cast<std::uint64_t>(firstGroup) + static_cast<std::uint64_t>(groupCount);
     nrAssert(requestedEnd <= static_cast<std::uint64_t>(shaderGroupCount_),
              "RayTracingPipeline::shaderGroupHandles range exceeds group count.");
 
-    auto dataSize = static_cast<std::size_t>(handleSize) * static_cast<std::size_t>(groupCount);
+    auto dataSize = static_cast<std::size_t>(capabilities_.shaderGroupHandleSize) *
+                    static_cast<std::size_t>(groupCount);
     return pipeline_.getRayTracingShaderGroupHandlesKHR<std::uint8_t>(firstGroup, groupCount, dataSize);
-}
-
-[[nodiscard]] std::vector<std::uint8_t> RayTracingPipeline::captureReplayShaderGroupHandles(
-    std::uint32_t firstGroup, std::uint32_t groupCount, std::uint32_t captureReplayHandleSize) const
-{
-    nrAssert(valid(), "RayTracingPipeline::captureReplayShaderGroupHandles requires a valid pipeline.");
-    nrAssert(groupCount > 0u, "RayTracingPipeline::captureReplayShaderGroupHandles requires groupCount > 0.");
-    nrAssert(captureReplayHandleSize > 0u,
-             "RayTracingPipeline::captureReplayShaderGroupHandles requires captureReplayHandleSize > 0.");
-    nrAssert(firstGroup < shaderGroupCount_,
-             "RayTracingPipeline::captureReplayShaderGroupHandles firstGroup is out of range.");
-    auto requestedEnd = static_cast<std::uint64_t>(firstGroup) + static_cast<std::uint64_t>(groupCount);
-    nrAssert(requestedEnd <= static_cast<std::uint64_t>(shaderGroupCount_),
-             "RayTracingPipeline::captureReplayShaderGroupHandles range exceeds group count.");
-
-    auto dataSize = static_cast<std::size_t>(captureReplayHandleSize) * static_cast<std::size_t>(groupCount);
-    return pipeline_.getRayTracingCaptureReplayShaderGroupHandlesKHR<std::uint8_t>(firstGroup, groupCount, dataSize);
-}
-
-[[nodiscard]] vk::DeviceSize RayTracingPipeline::shaderGroupStackSize(std::uint32_t group,
-                                                                      vk::ShaderGroupShaderKHR groupShader) const
-{
-    nrAssert(valid(), "RayTracingPipeline::shaderGroupStackSize requires a valid pipeline.");
-    nrAssert(group < shaderGroupCount_, "RayTracingPipeline::shaderGroupStackSize group is out of range.");
-    return pipeline_.getRayTracingShaderGroupStackSizeKHR(group, groupShader);
 }
 
 void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline, std::string_view name)
@@ -1479,22 +1419,18 @@ namespace
 
 void PipelineService::bindDevice(
     const vk::raii::Device &device,
-    std::optional<std::reference_wrapper<const RayTracingCapabilitySnapshot>> rtCapabilities,
+    std::uint32_t maxBoundDescriptorSets,
+    const RayTracingCapabilitySnapshot &rtCapabilities,
     PipelineCacheConfig cacheConfig)
 {
     auto const buildWorkerCount = threading::resolveWorkerCount(0u, nr::maxThreads);
     pipelineBuildPool_.ensureWorkerCount(buildWorkerCount);
     nrInfo<>(std::format("PipelineService PSO build pool ready: workers={}, policy=host-default.", buildWorkerCount));
     device_ = std::cref(device);
+    nrAssert(maxBoundDescriptorSets > 0u, "PipelineService::bindDevice requires maxBoundDescriptorSets > 0.");
+    maxBoundDescriptorSets_ = maxBoundDescriptorSets;
     cacheConfig_ = std::move(cacheConfig);
-    if (rtCapabilities.has_value())
-    {
-        rtCapabilities_ = rtCapabilities->get();
-    }
-    else
-    {
-        rtCapabilities_.reset();
-    }
+    rtCapabilities_ = rtCapabilities;
     auto cacheBlob = readPipelineCacheBlob(cacheConfig_);
     vk::PipelineCacheCreateInfo cacheCreateInfo{};
     if (cacheConfig_.enabled && !cacheBlob.empty())
@@ -1534,36 +1470,6 @@ void PipelineService::waitForBuilds() const
     return writePipelineCacheBlob(cacheConfig_, data);
 }
 
-[[nodiscard]] ShaderBindingPool PipelineService::createBindingPool(const ShaderDescriptorLayout &descriptorLayout,
-                                                                   ShaderBindingPoolConfig config) const
-{
-    nrAssert(device_.has_value(), "PipelineService::createBindingPool requires a bound logical device.");
-    return ShaderBindingPool::create(device_->get(), descriptorLayout, config);
-}
-
-[[nodiscard]] ShaderBindingSet PipelineService::allocateBindingSet(
-    const CursorPipelineLayout &layout, ShaderBindingPool &bindingPool, std::uint32_t setIndex,
-    std::optional<std::uint32_t> variableDescriptorCount) const
-{
-    nrAssert(device_.has_value(), "PipelineService::allocateBindingSet requires a bound logical device.");
-    auto descriptorSetLayout = layout.descriptorSetLayout(setIndex);
-    if (!descriptorSetLayout.has_value())
-    {
-        return {};
-    }
-    return bindingPool.allocate(*descriptorSetLayout, setIndex, variableDescriptorCount);
-}
-
-[[nodiscard]] std::vector<ShaderBindingSet> PipelineService::allocateBindingSets(const CursorPipelineLayout &layout,
-                                                                                 ShaderBindingPool &bindingPool) const
-{
-    nrAssert(device_.has_value(), "PipelineService::allocateBindingSets requires a bound logical device.");
-    return layout.setIndices() | std::views::transform([&](std::uint32_t setIndex) {
-               return allocateBindingSet(layout, bindingPool, setIndex);
-           }) |
-           std::ranges::to<std::vector>();
-}
-
 [[nodiscard]] SlangSampler PipelineService::createSampler(SlangSamplerDesc desc, std::string_view debugName) const
 {
     nrAssert(device_.has_value(), "PipelineService::createSampler requires a bound logical device.");
@@ -1575,8 +1481,10 @@ void PipelineService::waitForBuilds() const
     std::span<const SlangImmutableSamplerBinding> immutableSamplers) const
 {
     const auto &device = device_->get();
-    auto descriptorLayout = ShaderDescriptorLayout::create(slangProgram, descriptorBindingPolicy);
-    auto layout = CursorPipelineLayout::create(device, descriptorLayout, immutableSamplers);
+    auto descriptorLayout =
+        ShaderDescriptorLayout::create(slangProgram, descriptorBindingPolicy, immutableSamplers);
+    auto layout =
+        CursorPipelineLayout::create(device, descriptorLayout, maxBoundDescriptorSets_, immutableSamplers);
     return PipelineLayoutBundle{
         .descriptorLayout = std::move(descriptorLayout),
         .layout = std::move(layout),
@@ -1597,7 +1505,7 @@ void PipelineService::waitForBuilds() const
     nrAssert(std::ranges::all_of(programs,
                                  [](const SlangProgram &program) {
                                      auto const *entryPoint = program.entryPoint();
-                                     return entryPoint && detail::isGraphicsStage(entryPoint->stage);
+                                     return entryPoint && isGraphicsStage(entryPoint->stage);
                                  }),
              "PipelineService::createGraphicsPipeline requires valid graphics-stage programs.");
     auto uniqueStages = std::set<SlangStage>{};
@@ -1617,29 +1525,9 @@ void PipelineService::waitForBuilds() const
                                        effectiveDesc.descriptorBindingPolicy);
     });
 
-    auto appendDynamicState = [&effectiveDesc](vk::DynamicState state) {
-        if (std::ranges::none_of(effectiveDesc.dynamicStates,
-                                 [state](vk::DynamicState current) { return current == state; }))
-        {
-            effectiveDesc.dynamicStates.push_back(state);
-        }
-    };
-    appendDynamicState(vk::DynamicState::eCullModeEXT);
-    appendDynamicState(vk::DynamicState::eFrontFaceEXT);
-    if (effectiveDesc.mode != GraphicsPipelineMode::Mesh)
-    {
-        appendDynamicState(vk::DynamicState::ePrimitiveTopologyEXT);
-    }
-    appendDynamicState(vk::DynamicState::eDepthTestEnableEXT);
-    appendDynamicState(vk::DynamicState::eDepthWriteEnableEXT);
-    appendDynamicState(vk::DynamicState::eDepthCompareOpEXT);
-    appendDynamicState(vk::DynamicState::ePolygonModeEXT);
-    appendDynamicState(vk::DynamicState::eRasterizationSamplesEXT);
-
     auto shaderProgram = VkShaderProgram::create(device, programs);
-    auto reflectionProgramCopy = reflectionProgram;
-    return pipelineBuildPool_.submit([this, reflectionProgram = std::move(reflectionProgramCopy),
-                                      layoutBundle = std::move(layoutBundle), shaderProgram = std::move(shaderProgram),
+    return pipelineBuildPool_.submit([this, layoutBundle = std::move(layoutBundle),
+                                      shaderProgram = std::move(shaderProgram),
                                       effectiveDesc = std::move(effectiveDesc), descriptorMaxSets,
                                       debugName = std::move(debugName)]() mutable {
         auto const createStart = std::chrono::steady_clock::now();
@@ -1648,8 +1536,7 @@ void PipelineService::waitForBuilds() const
                                                  pipelineCacheOrNull());
         nrAssert(pipeline.valid(), "PipelineService failed to build a valid graphics PSO.");
         setPipelineDebugName(buildDevice, pipeline.raw(), debugName);
-        auto state =
-            makePipelineState(reflectionProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
+        auto state = makePipelineState(std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
         state.graphicsDesc = std::move(effectiveDesc);
         auto const elapsed = std::chrono::duration<double, std::milli>{std::chrono::steady_clock::now() - createStart};
         nrInfo<>(std::format(
@@ -1674,20 +1561,16 @@ void PipelineService::waitForBuilds() const
 
     auto programs = std::array{slangProgram};
     auto shaderProgram = VkShaderProgram::create(device, programs);
-    auto reflectionProgram = slangProgram;
-    auto descCopy = desc;
-    return pipelineBuildPool_.submit([this, reflectionProgram = std::move(reflectionProgram),
-                                      layoutBundle = std::move(layoutBundle), shaderProgram = std::move(shaderProgram),
-                                      desc = std::move(descCopy), descriptorMaxSets,
+    return pipelineBuildPool_.submit([this, layoutBundle = std::move(layoutBundle),
+                                      shaderProgram = std::move(shaderProgram), descriptorMaxSets,
                                       debugName = std::move(debugName)]() mutable {
         auto const createStart = std::chrono::steady_clock::now();
         auto const &buildDevice = device_->get();
         auto pipeline =
-            ComputePipeline::create(buildDevice, layoutBundle.layout, shaderProgram, desc, pipelineCacheOrNull());
+            ComputePipeline::create(buildDevice, layoutBundle.layout, shaderProgram, pipelineCacheOrNull());
         nrAssert(pipeline.valid(), "PipelineService failed to build a valid compute PSO.");
         setPipelineDebugName(buildDevice, pipeline.raw(), debugName);
-        auto state =
-            makePipelineState(reflectionProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
+        auto state = makePipelineState(std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
         auto const elapsed = std::chrono::duration<double, std::milli>{std::chrono::steady_clock::now() - createStart};
         nrInfo<>(std::format(
             "PipelineService PSO build completed: type=compute, name='{}', poolWorkers={}, elapsedMs={:.3f}.",
@@ -1717,87 +1600,27 @@ void PipelineService::waitForBuilds() const
                                        desc.descriptorBindingPolicy);
     });
 
-    auto hasCaptureReplayHandles = std::ranges::any_of(assembly.groups, [](const RayTracingShaderGroupDesc &groupDesc) {
-        return !groupDesc.captureReplayHandle.empty();
-    });
-    if (rtCapabilities_.has_value())
-    {
-        nrAssert(desc.maxRayRecursionDepth <= rtCapabilities_->maxRayRecursionDepth,
-                 std::format("PipelineService::createRayTracingPipeline recursion depth {} exceeds device max {}.",
-                             desc.maxRayRecursionDepth, rtCapabilities_->maxRayRecursionDepth));
-
-        auto wantsCaptureReplay =
-            hasCaptureReplayHandles ||
-            ((desc.flags & vk::PipelineCreateFlagBits::eRayTracingShaderGroupHandleCaptureReplayKHR) !=
-             vk::PipelineCreateFlags{});
-        if (wantsCaptureReplay)
-        {
-            nrAssert(rtCapabilities_->rayTracingPipelineShaderGroupHandleCaptureReplay,
-                     "PipelineService::createRayTracingPipeline requires "
-                     "rayTracingPipelineShaderGroupHandleCaptureReplay for capture/replay handles.");
-        }
-
-        if (hasCaptureReplayHandles)
-        {
-            nrAssert(
-                rtCapabilities_->shaderGroupHandleCaptureReplaySize > 0,
-                "PipelineService::createRayTracingPipeline requires a non-zero shaderGroupHandleCaptureReplaySize.");
-
-            auto invalidHandleIt =
-                std::ranges::find_if(assembly.groups, [&](const RayTracingShaderGroupDesc &groupDesc) {
-                    return !groupDesc.captureReplayHandle.empty() &&
-                           groupDesc.captureReplayHandle.size() !=
-                               static_cast<std::size_t>(rtCapabilities_->shaderGroupHandleCaptureReplaySize);
-                });
-            nrAssert(invalidHandleIt == std::ranges::end(assembly.groups),
-                     std::format("PipelineService::createRayTracingPipeline capture replay handles must be {} bytes.",
-                                 rtCapabilities_->shaderGroupHandleCaptureReplaySize));
-        }
-    }
-
-    std::ranges::for_each(assembly.stages, [](const RayTracingPipelineStageSelection &selection) {
-        auto const *entryPointData = selection.program.get().entryPoint();
-        nrAssert(entryPointData != nullptr,
-                 "PipelineService::createRayTracingPipeline received an invalid single-entry program.");
-        nrAssert(detail::isRayTracingStage(entryPointData->stage),
-                 std::format("PipelineService::createRayTracingPipeline entrypoint '{}' is not a ray-tracing stage.",
-                             entryPointData->entryPointName));
-    });
+    nrAssert(desc.maxRayRecursionDepth <= rtCapabilities_.maxRayRecursionDepth,
+             std::format("PipelineService::createRayTracingPipeline recursion depth {} exceeds device max {}.",
+                         desc.maxRayRecursionDepth, rtCapabilities_.maxRayRecursionDepth));
 
     auto shaderProgram = VkShaderProgram::create(device, assembly.stages);
-    auto reflectionProgramCopy = reflectionProgram;
     auto descCopy = desc;
     auto groups = assembly.groups;
-    return pipelineBuildPool_.submit([this, reflectionProgram = std::move(reflectionProgramCopy),
-                                      layoutBundle = std::move(layoutBundle), shaderProgram = std::move(shaderProgram),
-                                      desc = std::move(descCopy), groups = std::move(groups), descriptorMaxSets,
+    return pipelineBuildPool_.submit([this, layoutBundle = std::move(layoutBundle),
+                                      shaderProgram = std::move(shaderProgram),
+                                      capabilities = rtCapabilities_, desc = std::move(descCopy),
+                                      groups = std::move(groups), descriptorMaxSets,
                                       debugName = std::move(debugName)]() mutable {
         auto const &buildDevice = device_->get();
         auto pipeline = RayTracingPipeline::create(buildDevice, layoutBundle.layout, shaderProgram,
-                                                   rayTracingDeferredHostPool_, desc, groups, pipelineCacheOrNull());
+                                                   rayTracingDeferredHostPool_, capabilities, desc, groups,
+                                                   pipelineCacheOrNull());
         nrAssert(pipeline.valid(), "PipelineService failed to build a valid ray-tracing PSO.");
         setPipelineDebugName(buildDevice, pipeline.raw(), debugName);
-        return makePipelineState(reflectionProgram, std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
+        return makePipelineState(std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
     });
 }
-} // namespace nr::rhi
-
-namespace nr::rhi
-{
-namespace detail
-{
-[[nodiscard]] bool isGraphicsStage(SlangStage stage)
-{
-    return isStageInSet(stage, {SLANG_STAGE_VERTEX, SLANG_STAGE_FRAGMENT, SLANG_STAGE_GEOMETRY, SLANG_STAGE_HULL,
-                                SLANG_STAGE_DOMAIN, SLANG_STAGE_AMPLIFICATION, SLANG_STAGE_MESH});
-}
-
-[[nodiscard]] bool isRayTracingStage(SlangStage stage)
-{
-    return isStageInSet(stage, {SLANG_STAGE_RAY_GENERATION, SLANG_STAGE_MISS, SLANG_STAGE_CLOSEST_HIT,
-                                SLANG_STAGE_ANY_HIT, SLANG_STAGE_INTERSECTION, SLANG_STAGE_CALLABLE});
-}
-} // namespace detail
 } // namespace nr::rhi
 
 namespace nr::rhi
@@ -1812,17 +1635,7 @@ void applyRasterState(const vk::raii::CommandBuffer &commandBuffer, const MeshRa
     commandBuffer.setDepthTestEnable(state.depthTestEnable);
     commandBuffer.setDepthWriteEnable(state.depthWriteEnable);
     commandBuffer.setDepthCompareOp(state.depthCompareOp);
-    commandBuffer.setPolygonModeEXT(state.polygonMode);
-    commandBuffer.setRasterizationSamplesEXT(state.rasterizationSamples);
 }
 
-void drawTasks(const vk::raii::CommandBuffer &commandBuffer, std::uint32_t groupCountX, std::uint32_t groupCountY,
-               std::uint32_t groupCountZ)
-{
-    nrAssert(*commandBuffer != nullptr, "mesh::drawTasks requires a valid command buffer.");
-    nrAssert(groupCountX > 0 && groupCountY > 0 && groupCountZ > 0,
-             "mesh::drawTasks requires non-zero dispatch group counts.");
-    commandBuffer.drawMeshTasksEXT(groupCountX, groupCountY, groupCountZ);
-}
 } // namespace mesh
 } // namespace nr::rhi

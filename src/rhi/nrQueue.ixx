@@ -2,7 +2,6 @@ export module nr.rhi:queue;
 import dependency.vulkan;
 import std;
 import :commandBatch;
-import :type;
 
 export namespace nr::rhi
 {
@@ -33,9 +32,8 @@ class GpuQueue
      * @brief Construct queue wrapper from device and queue family
      * @param device Vulkan device
      * @param queueFamilyIndex Queue family index
-     * @param type Logical queue role classification
      */
-    GpuQueue(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, QueueRole type);
+    GpuQueue(const vk::raii::Device &device, std::uint32_t queueFamilyIndex);
 
     // Move-only semantics
     GpuQueue(const GpuQueue &) = delete;
@@ -87,11 +85,6 @@ class GpuQueue
     void waitIdle();
 
     /**
-     * @brief Get the queue type classification
-     */
-    [[nodiscard]] QueueRole type() const noexcept;
-
-    /**
      * @brief Get the queue family index
      */
     [[nodiscard]] std::uint32_t queueFamilyIndex() const noexcept;
@@ -107,10 +100,8 @@ class GpuQueue
     [[nodiscard]] bool valid() const noexcept;
 
   private:
-    std::uint32_t queueIndex_ = 0;
     vk::raii::Queue queue_ = {nullptr};
     std::uint32_t queueFamilyIndex_ = 0;
-    QueueRole type_ = QueueRole::Graphics;
 };
 
 /**
@@ -153,34 +144,6 @@ class QueueManager
 
     [[nodiscard]] GpuQueue &transfer();
     [[nodiscard]] const GpuQueue &transfer() const;
-
-    /**
-     * @brief Get queue by type
-     */
-    template <QueueRole T> [[nodiscard]] GpuQueue &get() noexcept
-    {
-        if constexpr (T == QueueRole::Graphics)
-            return graphics_;
-        else if constexpr (T == QueueRole::Compute)
-            return compute_;
-        else if constexpr (T == QueueRole::Transfer)
-            return transfer_;
-        std::unreachable();
-    }
-
-    /**
-     * @brief Check if a specific queue type is available
-     */
-    template <QueueRole T> [[nodiscard]] bool hasQueue() const noexcept
-    {
-        if constexpr (T == QueueRole::Graphics)
-            return graphics_.valid();
-        else if constexpr (T == QueueRole::Compute)
-            return compute_.valid();
-        else if constexpr (T == QueueRole::Transfer)
-            return transfer_.valid();
-        return false;
-    }
 
     /**
      * @brief Wait for all queues to become idle

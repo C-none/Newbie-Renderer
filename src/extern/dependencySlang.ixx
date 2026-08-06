@@ -11,6 +11,7 @@ using ::Slang::ComPtr;
 
 export namespace slang
 {
+inline constexpr auto unboundedSize = SLANG_UNBOUNDED_SIZE;
 using ::slang::BindingType;
 using ::slang::CompilerOptionEntry;
 using ::slang::CompilerOptionName;

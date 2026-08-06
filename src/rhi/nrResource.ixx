@@ -1,9 +1,7 @@
 export module nr.rhi:resource;
 import dependency.vma;
 import dependency.vulkan;
-import nr.utils;
 import :type;
-import :vk;
 import :vmaAllocator;
 import :memoryAllocator;
 import std;
@@ -16,11 +14,11 @@ import std;
  *
  *   nrResource.ixx       <- this file (Buffer/Image with views & metadata)
  *   nrMemoryAllocator.ixx  (strategy-based allocation)
- *   nrVmaAllocator.ixx     (VMA wrapper + statistics)
+ *   nrVmaAllocator.ixx     (VMA ownership wrapper)
  *   Vulkan Device Layer
  *
  * Buffer: Owns VmaBuffer + named BufferView map + cached BDA
- * Image:  Owns VmaImage  + default ImageView + auxiliary view map
+ * Image:  Owns VmaImage + its default ImageView
  *
  * Both accept vulkan-hpp create infos directly (vk::BufferCreateInfo,
  * vk::ImageCreateInfo) plus MemoryUsage / AllocationStrategy as
@@ -29,104 +27,6 @@ import std;
  * All types are move-only and follow the project's RAII conventions.
  * Creation goes through static factory methods.
  */
-
-export namespace nr::rhi
-{
-
-class Buffer;
-class Image;
-
-// Concepts for resource type identification
-template <typename T>
-concept BufferLike = std::same_as<std::remove_cvref_t<T>, Buffer>;
-
-template <typename T>
-concept ImageLike = std::same_as<std::remove_cvref_t<T>, Image>;
-
-/**
- * @brief Set VK_EXT_debug_utils name on a resource (Buffer or Image)
- *
- * For Image, also names the default view with "_defaultView" suffix.
- */
-template <typename Resource>
-    requires BufferLike<Resource> || ImageLike<Resource>
-void setResourceDebugName(Resource &resource)
-{
-    if constexpr (gpuDebugNamesEnabled)
-    {
-        nrAssert(resource.valid(), "Cannot set debug name on invalid resource");
-
-        vk::ObjectType objectType;
-        std::uint64_t objectHandle;
-
-        if constexpr (BufferLike<Resource>)
-        {
-            objectType = vk::ObjectType::eBuffer;
-            objectHandle = reinterpret_cast<std::uint64_t>(static_cast<VkBuffer>(resource.handle()));
-        }
-        else if constexpr (ImageLike<Resource>)
-        {
-            objectType = vk::ObjectType::eImage;
-            objectHandle = reinterpret_cast<std::uint64_t>(static_cast<VkImage>(resource.handle()));
-        }
-
-        vk::DebugUtilsObjectNameInfoEXT nameInfo{objectType, objectHandle, resource.name_.c_str()};
-        try
-        {
-            resource.device_->get().setDebugUtilsObjectNameEXT(nameInfo);
-
-            // For Image, also name the default view
-            if constexpr (ImageLike<Resource>)
-            {
-                std::string viewName = std::format("{}_defaultView", resource.name_);
-                vk::DebugUtilsObjectNameInfoEXT viewNameInfo{
-                    vk::ObjectType::eImageView,
-                    reinterpret_cast<std::uint64_t>(static_cast<VkImageView>(*resource.defaultView_)),
-                    viewName.c_str()};
-                resource.device_->get().setDebugUtilsObjectNameEXT(viewNameInfo);
-            }
-        }
-        catch (const vk::SystemError &error)
-        {
-            nrInfo<LogLevel::error>(
-                std::format("setResourceDebugName failed for '{}': {}", resource.name_, error.what()));
-            nrAssert(false, "setResourceDebugName failed to set a Vulkan debug object name.");
-        }
-    }
-}
-
-/**
- * @brief Set VK_EXT_debug_utils name on a resource view (BufferView or ImageView)
- */
-template <typename Resource, typename ViewHandle>
-    requires BufferLike<Resource> || ImageLike<Resource>
-void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::string &debugName)
-{
-    if constexpr (!gpuDebugNamesEnabled)
-        return;
-
-    vk::ObjectType viewType;
-    if constexpr (BufferLike<Resource>)
-    {
-        viewType = vk::ObjectType::eBufferView;
-    }
-    else if constexpr (ImageLike<Resource>)
-    {
-        viewType = vk::ObjectType::eImageView;
-    }
-
-    vk::DebugUtilsObjectNameInfoEXT nameInfo{viewType, reinterpret_cast<std::uint64_t>(view), debugName.c_str()};
-    try
-    {
-        resource.device_->get().setDebugUtilsObjectNameEXT(nameInfo);
-    }
-    catch (const vk::SystemError &error)
-    {
-        nrInfo<LogLevel::error>(std::format("setResourceViewDebugName failed for '{}': {}", debugName, error.what()));
-        nrAssert(false, "setResourceViewDebugName failed to set a Vulkan debug object name.");
-    }
-}
-} // namespace nr::rhi
 
 export namespace nr::rhi
 {
@@ -150,15 +50,6 @@ export namespace nr::rhi
  */
 class Buffer
 {
-    // Friend declarations for debug naming helpers
-    template <typename Resource>
-        requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceDebugName(Resource &resource);
-
-    template <typename Resource, typename ViewHandle>
-        requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::string &debugName);
-
   public:
     Buffer() = default;
 
@@ -166,19 +57,18 @@ class Buffer
     Buffer(const Buffer &) = delete;
     Buffer &operator=(const Buffer &) = delete;
     Buffer(Buffer &&) noexcept = default;
-    Buffer &operator=(Buffer &&) noexcept = default;
+    Buffer &operator=(Buffer &&other) noexcept;
 
     /**
      * @brief Create a buffer from a vulkan-hpp create info
      *
      * @param allocator   Initialized MemoryAllocator
      * @param device      RAII device (must outlive this buffer for view creation / BDA)
-     * @param name        Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
      * @param createInfo  Vulkan buffer create info (size, usage, sharingMode, etc.)
+     * @param name        Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
      * @param memoryUsage Memory placement intent (GpuOnly, CpuToGpu, etc.)
      * @param strategy    Allocation lifetime strategy
      * @param frameIndex  Frame index for PerFrame strategy (ignored otherwise)
-     * @param name        Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
      * @return Fully initialized Buffer
      */
     [[nodiscard]] static Buffer create(const MemoryAllocator &allocator, const vk::raii::Device &device,
@@ -201,25 +91,8 @@ class Buffer
     /// Get the sharing mode
     [[nodiscard]] vk::SharingMode sharingMode() const noexcept;
 
-    /// Get the memory usage intent
-    [[nodiscard]] MemoryUsage memoryUsage() const noexcept;
-
-    /// Get the buffer create flags
-    [[nodiscard]] vk::BufferCreateFlags flags() const noexcept;
-
-    /// Get the allocation strategy
-    [[nodiscard]] AllocationStrategy strategy() const noexcept;
-
     /// Check if this buffer holds a valid allocation
     [[nodiscard]] bool valid() const noexcept;
-
-    /// Check if the underlying memory is host-visible
-    [[nodiscard]] bool isHostVisible() const;
-
-    /**
-     * @brief Flush host writes for this buffer range.
-     */
-    void flush(vk::DeviceSize offset = 0, vk::DeviceSize size = vk::WholeSize) const;
 
     /**
      * @brief Invalidate host cache for this buffer range after GPU writes.
@@ -237,17 +110,11 @@ class Buffer
      */
     [[nodiscard]] VkDeviceAddress deviceAddress() const;
 
-    /// Access the underlying VmaBuffer (escape hatch for low-level interop)
-    [[nodiscard]] const VmaBuffer &raw() const noexcept;
-
-    /// Get the debug name
-    [[nodiscard]] const std::string &name() const noexcept;
-
     /**
      * @brief Add a named buffer view for texel buffer usage
      *
      * Creates a VkBufferView and stores it in the named view map.
-     * If a view with the same key already exists, it is replaced.
+     * If a view with the same key already exists, it is reused.
      * When GPU debug names are enabled, sets a Vulkan debug name on the view.
      *
      * @param format   Texel format interpretation
@@ -261,65 +128,24 @@ class Buffer
                                                                vk::DeviceSize range = vk::WholeSize,
                                                                std::string_view viewName = "");
 
-    /**
-     * @brief Get a named buffer view
-     *
-     * @param viewName View key (auto-generated or custom name)
-     * @return Reference to the RAII vk::raii::BufferView
-     */
-    [[nodiscard]] std::optional<std::reference_wrapper<const vk::raii::BufferView>> view(
-        const std::string &viewName) const;
-
-    /// Check if a named buffer view exists
-    [[nodiscard]] bool hasView(const std::string &viewName) const;
-
-    /**
-     * @brief Remove all buffer views
-     */
-    void clearViews();
-
-    /// Write a single typed value to a mapped buffer
-    template <typename T>
-        requires(!std::is_pointer_v<T>)
-    void write(const T &data, std::size_t offset = 0)
-    {
-        write(&data, sizeof(T), offset);
-    }
-
-    /// Write a span of data to a mapped buffer
-    template <typename T> void write(std::span<const T> data, std::size_t offset = 0)
-    {
-        write(data.data(), data.size_bytes(), offset);
-    }
-
-    /**
-     * @brief Write raw data to a mapped buffer and flush the written range.
-     */
-    void writeMappedAndFlush(const void *data, std::size_t dataSize, vk::DeviceSize offset = 0);
-
     /// Write a single typed value to a mapped buffer and flush it.
     template <typename T>
-        requires(!std::is_pointer_v<T>)
+        requires(!std::is_pointer_v<T> && std::is_trivially_copyable_v<T>)
     void writeMappedAndFlush(const T &data, vk::DeviceSize offset = 0)
     {
         writeMappedAndFlush(std::addressof(data), sizeof(T), offset);
     }
 
     /// Write a span of data to a mapped buffer and flush it.
-    template <typename T> void writeMappedAndFlush(std::span<const T> data, vk::DeviceSize offset = 0)
+    template <typename T>
+        requires std::is_trivially_copyable_v<T>
+    void writeMappedAndFlush(std::span<const T> data, vk::DeviceSize offset = 0)
     {
         writeMappedAndFlush(data.data(), data.size_bytes(), offset);
     }
 
   private:
-    /**
-     * @brief Write raw data to a mapped buffer
-     *
-     * @param data     Source data pointer
-     * @param dataSize Bytes to copy
-     * @param offset   Byte offset into the mapped region
-     */
-    void write(const void *data, std::size_t dataSize, std::size_t offset = 0);
+    void writeMappedAndFlush(const void *data, std::size_t dataSize, vk::DeviceSize offset);
 
     VmaBuffer vmaBuffer_;
 
@@ -327,10 +153,6 @@ class Buffer
     vk::DeviceSize size_ = 0;
     vk::BufferUsageFlags usage_ = {};
     vk::SharingMode sharingMode_ = vk::SharingMode::eExclusive;
-    vk::BufferCreateFlags flags_ = {};
-    MemoryUsage memoryUsage_ = MemoryUsage::GpuOnly;
-    AllocationStrategy strategy_ = AllocationStrategy::CrossFrame;
-
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     mutable std::optional<VkDeviceAddress> cachedAddress_{};
     std::map<std::string, vk::raii::BufferView> bufferViews_; ///< Named view map (destroyed before VmaBuffer)
@@ -338,7 +160,7 @@ class Buffer
 };
 
 // =========================================================================
-// Image — RAII GPU image with default view and auxiliary view map
+// Image — RAII GPU image with a default view
 // =========================================================================
 
 /**
@@ -346,26 +168,16 @@ class Buffer
  *
  * Wraps a VmaImage (owns VkImage + VMA allocation) and adds:
  * - Default vk::raii::ImageView (full mip range, full layer range)
- * - Named auxiliary views (per-mip, per-layer, depth-only, etc.)
  * - vk::Image handle accessor for vulkan-hpp interop
  * - Stored metadata from vk::ImageCreateInfo for cache keying
  *
  * Construction is through the static `create()` factory which accepts
  * a standard vk::ImageCreateInfo plus MemoryUsage.
- * Names are immutable after creation (set once in create()).
- * Destruction cascades: auxiliary views -> default view -> VmaImage -> VMA deallocation.
+ * Optional Vulkan debug names are applied during creation.
+ * Destruction cascades: default view -> VmaImage -> VMA deallocation.
  */
 class Image
 {
-    // Friend declarations for debug naming helpers
-    template <typename Resource>
-        requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceDebugName(Resource &resource);
-
-    template <typename Resource, typename ViewHandle>
-        requires BufferLike<Resource> || ImageLike<Resource>
-    friend void setResourceViewDebugName(Resource &resource, ViewHandle view, const std::string &debugName);
-
   public:
     Image() = default;
 
@@ -373,7 +185,7 @@ class Image
     Image(const Image &) = delete;
     Image &operator=(const Image &) = delete;
     Image(Image &&) noexcept = default;
-    Image &operator=(Image &&) noexcept = default;
+    Image &operator=(Image &&other) noexcept;
 
     /**
      * @brief Create an image from a vulkan-hpp create info
@@ -384,9 +196,9 @@ class Image
      *
      * @param allocator    Initialized MemoryAllocator
      * @param device       RAII device (must outlive this image)
-     * @param createInfo   Vulkan image create info (standard vulkan-hpp type)
-     * @param memoryUsage  Memory placement intent (default: GpuOnly)
+     * @param createInfo   Vulkan image create info; usage must support the owned default view
      * @param name         Optional debug name for profiling tools (RenderDoc, PIX, Nsight)
+     * @param memoryUsage  Memory placement intent (default: GpuOnly)
      * @return Fully initialized Image with default view
      */
     [[nodiscard]] static Image create(const MemoryAllocator &allocator, const vk::raii::Device &device,
@@ -398,20 +210,6 @@ class Image
 
     /// Get the default RAII image view (full mip range, full layer range)
     [[nodiscard]] const vk::raii::ImageView &view() const noexcept;
-
-    /**
-     * @brief Get a named auxiliary view
-     *
-     * @param name View name (e.g., "mip_0", "layer_2", "depthOnly")
-     * @return Reference to the RAII vk::raii::ImageView
-     */
-    [[nodiscard]] std::optional<std::reference_wrapper<const vk::raii::ImageView>> view(const std::string &name) const;
-
-    /// Check if a named auxiliary view exists
-    [[nodiscard]] bool hasView(const std::string &name) const;
-
-    /// Get the image type
-    [[nodiscard]] vk::ImageType imageType() const noexcept;
 
     /// Get the image format
     [[nodiscard]] vk::Format format() const noexcept;
@@ -425,9 +223,6 @@ class Image
     /// Get the number of array layers
     [[nodiscard]] std::uint32_t arrayLayers() const noexcept;
 
-    /// Get the sample count
-    [[nodiscard]] vk::SampleCountFlagBits samples() const noexcept;
-
     /// Get the image tiling
     [[nodiscard]] vk::ImageTiling tiling() const noexcept;
 
@@ -437,139 +232,26 @@ class Image
     /// Get the sharing mode
     [[nodiscard]] vk::SharingMode sharingMode() const noexcept;
 
-    /// Get the image create flags
-    [[nodiscard]] vk::ImageCreateFlags flags() const noexcept;
-
-    /// Get the memory usage intent
-    [[nodiscard]] MemoryUsage memoryUsage() const noexcept;
-
     /// Check if this image holds a valid allocation
     [[nodiscard]] bool valid() const noexcept;
-
-    /// Get the debug name
-    [[nodiscard]] const std::string &name() const noexcept;
-
-    /// Access the underlying VmaImage (escape hatch for low-level interop)
-    [[nodiscard]] const VmaImage &raw() const noexcept;
-
-    /**
-     * @brief Add a named auxiliary image view
-     *
-     * The image handle is automatically injected into the create info.
-     * If a view with the same key already exists, it is replaced.
-     * When GPU debug names are enabled, sets a Vulkan debug name on the view.
-     *
-     * @param viewKey  Unique view key for map lookup (also used as the Vulkan debug name)
-     * @param viewInfo View creation parameters (image field is overwritten)
-     * @return Non-owning vk::ImageView handle
-     */
-    std::reference_wrapper<const vk::raii::ImageView> addView(const std::string &viewKey,
-                                                              vk::ImageViewCreateInfo viewInfo);
-
-    /**
-     * @brief Create a view for a specific mip level range
-     *
-     * Auto-generates key: "{imageName}_mip_{baseMip}" (or "{imageName}_mip_{baseMip}_{mipCount}").
-     * Covers all array layers.
-     *
-     * @param baseMip   First mip level
-     * @param mipCount  Number of mip levels (default: 1)
-     * @param viewName  Optional custom key; if empty, auto-generates from parameters
-     */
-    std::reference_wrapper<const vk::raii::ImageView> addMipView(std::uint32_t baseMip, std::uint32_t mipCount = 1,
-                                                                 std::string_view viewName = "");
-
-    /**
-     * @brief Create a view for a specific array layer range
-     *
-     * Auto-generates key: "{imageName}_layer_{baseLayer}" (or "{imageName}_layer_{baseLayer}_{layerCount}").
-     * Covers all mip levels.
-     *
-     * @param baseLayer   First array layer
-     * @param layerCount  Number of array layers (default: 1)
-     * @param viewName    Optional custom key; if empty, auto-generates from parameters
-     */
-    std::reference_wrapper<const vk::raii::ImageView> addLayerView(std::uint32_t baseLayer,
-                                                                   std::uint32_t layerCount = 1,
-                                                                   std::string_view viewName = "");
-
-    /**
-     * @brief Create an aspect-specific view for depth-stencil formats
-     *
-     * Covers all mip levels and array layers.
-     * Auto-generates key: "{imageName}_depthOnly" or "{imageName}_stencilOnly".
-     *
-     * @tparam Aspect vk::ImageAspectFlagBits::eDepth or eStencil
-     * @param viewName Optional custom key; if empty, uses auto-generated name
-     */
-    template <vk::ImageAspectFlagBits Aspect = vk::ImageAspectFlagBits::eDepth>
-    vk::ImageView addAspectView(std::string_view viewName = "")
-    {
-        vk::ImageViewCreateInfo viewInfo{};
-        viewInfo.viewType = inferViewType(imageType_, arrayLayers_);
-        viewInfo.format = format_;
-        if constexpr (Aspect == vk::ImageAspectFlagBits::eDepth)
-        {
-            nrAssert(isDepthFormat(format_), std::format("Image::addAspectView<Depth>: format {} is not a depth format",
-                                                         static_cast<unsigned>(format_)));
-            viewInfo.subresourceRange =
-                vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eDepth, 0, mipLevels_, 0, arrayLayers_};
-            std::string key;
-            if (viewName.empty())
-                key = name_.empty() ? std::string{"depthOnly"} : std::format("{}_depthOnly", name_);
-            else
-                key = viewName;
-            return vk::ImageView{*addView(key, viewInfo).get()};
-        }
-        else if constexpr (Aspect == vk::ImageAspectFlagBits::eStencil)
-        {
-            nrAssert(isStencilFormat(format_),
-                     std::format("Image::addAspectView<Stencil>: format {} is not a stencil format",
-                                 static_cast<unsigned>(format_)));
-            viewInfo.subresourceRange =
-                vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eStencil, 0, mipLevels_, 0, arrayLayers_};
-            std::string key;
-            if (viewName.empty())
-                key = name_.empty() ? std::string{"stencilOnly"} : std::format("{}_stencilOnly", name_);
-            else
-                key = viewName;
-            return vk::ImageView{*addView(key, viewInfo).get()};
-        }
-        std::unreachable();
-    }
-
-    /**
-     * @brief Remove all auxiliary views
-     *
-     * The default view is preserved.
-     */
-    void clearViews();
 
   private:
     /**
      * @brief Create the default image view covering all mips and layers
      */
-    void createDefaultView();
+    void createDefaultView(const vk::raii::Device &device, vk::ImageType imageType);
 
     VmaImage vmaImage_;
 
     // Stored metadata (extracted from vk::ImageCreateInfo at creation)
-    vk::ImageType imageType_ = vk::ImageType::e2D;
     vk::Format format_ = vk::Format::eUndefined;
     vk::Extent3D extent_ = {0, 0, 0};
     std::uint32_t mipLevels_ = 1;
     std::uint32_t arrayLayers_ = 1;
-    vk::SampleCountFlagBits samples_ = vk::SampleCountFlagBits::e1;
     vk::ImageTiling tiling_ = vk::ImageTiling::eOptimal;
     vk::ImageUsageFlags usage_ = {};
     vk::SharingMode sharingMode_ = vk::SharingMode::eExclusive;
-    vk::ImageCreateFlags flags_ = {};
-    MemoryUsage memoryUsage_ = MemoryUsage::GpuOnly;
-
     vk::raii::ImageView defaultView_ = {nullptr};
-    std::map<std::string, vk::raii::ImageView> imageViews_; ///< Named auxiliary view map (destroyed before VmaImage)
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
-    std::string name_; ///< Immutable after creation
 };
 
 } // namespace nr::rhi

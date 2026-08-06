@@ -7,25 +7,6 @@ namespace nr::renderer
 {
 namespace
 {
-[[nodiscard]] RenderGraphCompileCache::ResourceUseSignature makeResourceUseSignature(const PassResourceUseDesc &use)
-{
-    return RenderGraphCompileCache::ResourceUseSignature{
-        .resource = use.resource,
-        .bufferUsage = use.bufferUsage,
-        .bufferAccess = use.bufferAccess,
-        .accelerationStructureUsage = use.accelerationStructureUsage,
-        .accelerationStructureAccess = use.accelerationStructureAccess,
-        .imageUsage = use.imageUsage,
-        .imageAccess = use.imageAccess,
-        .imageLayout = use.imageLayout,
-        .imageAspect = use.imageAspect,
-        .shaderStages = use.shaderStages,
-        .ownershipDomain = use.ownershipDomain,
-        .readOnly = use.readOnly,
-        .requiresPreviousUseBarrier = use.requiresPreviousUseBarrier,
-    };
-}
-
 [[nodiscard]] RenderGraphCompileCache::ResourceSignature makeResourceSignature(const GraphResourceDesc &resource)
 {
     auto signature = RenderGraphCompileCache::ResourceSignature{
@@ -183,8 +164,6 @@ namespace
 
     signature.passes.reserve(frame.passes.size());
     std::ranges::for_each(frame.passes, [&](const PassExecutionDesc &pass) {
-        auto resourceUses =
-            pass.resourceUses | std::views::transform(makeResourceUseSignature) | std::ranges::to<std::vector>();
         auto passSignature = PassSignature{
             .handle = pass.handle,
             .node = pass.node,
@@ -192,7 +171,8 @@ namespace
             .queue = pass.queue,
             .shaderStages = pass.shaderStages,
             .copy = pass.copy,
-            .resourceUses = std::move(resourceUses),
+            .resourceUses = pass.resourceUses,
+            .frameDataUses = pass.frameDataUses,
             .hasPrepare = static_cast<bool>(pass.prepare),
             .hasRecord = static_cast<bool>(pass.record),
             .hasParallelRecord = pass.parallelRecord.has_value(),
@@ -332,6 +312,7 @@ void RenderGraphCompileCache::patchCompiledPasses(std::vector<CompiledSubmitBatc
             compiledPass.shaderStages = framePass.shaderStages;
             compiledPass.copy = std::move(framePass.copy);
             compiledPass.resourceUses = std::move(framePass.resourceUses);
+            compiledPass.frameDataUses = std::move(framePass.frameDataUses);
             compiledPass.prepare = std::move(framePass.prepare);
             compiledPass.record = std::move(framePass.record);
             compiledPass.parallelRecord = std::move(framePass.parallelRecord);
@@ -420,9 +401,9 @@ RenderGraphSkeletonPatchContext::RenderGraphSkeletonPatchContext(
     RenderGraphFrameDescription &frame, RenderGraphSkeletonNodePatchLayout layout,
     const std::map<std::string, GraphResourceHandle> &namedFrameResources,
     const std::map<std::string, GraphFrameDataHandle> &namedFrameData,
-    const FrameGlobalResources *globalResources) noexcept
+    const FrameGlobalResources *globalResources, std::string_view runtimeName) noexcept
     : frame_(frame), layout_(layout), namedFrameResources_(namedFrameResources), namedFrameData_(namedFrameData),
-      globalResources_(globalResources)
+      globalResources_(globalResources), runtimeName_(runtimeName)
 {
 }
 
@@ -447,14 +428,28 @@ void RenderGraphSkeletonPatchContext::patchFrameData(std::size_t localSlot, std:
 
 void RenderGraphSkeletonPatchContext::patchPass(std::size_t localSlot, std::string_view debugName,
                                                 PassPrepareCallback prepare, PassRecordCallback record,
-                                                std::optional<PassParallelRecordDesc> parallelRecord)
+                                                std::optional<PassParallelRecordDesc> parallelRecord,
+                                                std::span<const GraphFrameDataHandle> frameDataUses)
 {
     nrAssert(localSlot < layout_.passCount, "Skeleton pass patch slot is outside the node layout.");
     auto const index = layout_.passBegin + localSlot;
     nrAssert(index < frame_.get().passes.size(), "Skeleton pass patch index is outside the frame.");
     auto &pass = frame_.get().passes[index];
     nrAssert(!pass.isCopyPass, "Skeleton callback patch cannot target a copy pass.");
+    auto canonicalFrameDataUses = std::vector<GraphFrameDataHandle>{};
+    canonicalFrameDataUses.reserve(frameDataUses.size());
+    std::ranges::for_each(frameDataUses, [&](GraphFrameDataHandle handle) {
+        nrAssert(handle.valid(), "Skeleton pass patch requires valid frame-data handles.");
+        nrAssert(std::ranges::any_of(frame_.get().frameData,
+                                    [handle](const GraphFrameDataDesc &desc) { return desc.handle == handle; }),
+                 "Skeleton pass patch frame-data handle is outside the frame.");
+        if (!std::ranges::contains(canonicalFrameDataUses, handle))
+        {
+            canonicalFrameDataUses.push_back(handle);
+        }
+    });
     pass.debugName = debugName;
+    pass.frameDataUses = std::move(canonicalFrameDataUses);
     pass.prepare = std::move(prepare);
     pass.record = std::move(record);
     pass.parallelRecord = std::move(parallelRecord);
@@ -512,6 +507,11 @@ void RenderGraphSkeletonPatchContext::patchCopy(std::size_t localSlot, std::stri
 [[nodiscard]] QueueDomain RenderGraphSkeletonPatchContext::queue() const noexcept
 {
     return layout_.queue;
+}
+
+[[nodiscard]] std::string_view RenderGraphSkeletonPatchContext::runtimeName() const noexcept
+{
+    return runtimeName_;
 }
 
 [[nodiscard]] GraphFrameDataHandle RenderGraphSkeletonPatchContext::frameData(std::size_t localSlot) const
@@ -778,37 +778,29 @@ void BindlessImageTableCache::clear() noexcept
     tables_.clear();
 }
 
-void BindlessImageTableCache::invalidateTableForFrame(std::uintptr_t ownerKey, std::string_view tableKey,
-                                                      std::uint32_t frameIndex) noexcept
+void BindlessImageTableCache::invalidateTablesForFrame(PipelinePassBindingCacheKey ownerKey) noexcept
 {
-    auto tableIt = tables_.find(TableKey{
-        .ownerKey = ownerKey,
-        .tableKey = std::string(tableKey),
+    std::ranges::for_each(tables_, [&](auto &entry) {
+        if (entry.first.ownerKey != ownerKey)
+        {
+            return;
+        }
+        entry.second = {};
     });
-    if (tableIt == tables_.end())
-    {
-        return;
-    }
-
-    auto const frameSlot = static_cast<std::size_t>(frameIndex % nr::maxFrameInFlight);
-    tableIt->second.initialized[frameSlot] = false;
-    tableIt->second.versions[frameSlot] = 0;
-    tableIt->second.descriptorIdsByFrame[frameSlot].clear();
 }
 
 [[nodiscard]] nr::rhi::ShaderBindingSnapshot BindlessImageTableCache::makeSnapshotForFrameCore(
-    std::uintptr_t ownerKey, const nr::rhi::ShaderCursor &tableCursor, const nr::rhi::ShaderCursor &root,
-    std::uint32_t frameIndex, const BindlessImageTableRequest &request)
+    PipelinePassBindingCacheKey ownerKey, const nr::rhi::ShaderCursor &tableCursor,
+    const nr::rhi::ShaderCursor &root, const BindlessImageTableRequest &request)
 {
     auto &tableState = tables_[TableKey{
         .ownerKey = ownerKey,
         .tableKey = request.tableKey,
     }];
 
-    auto const frameSlot = static_cast<std::size_t>(frameIndex % nr::maxFrameInFlight);
-    auto &initialized = tableState.initialized[frameSlot];
-    auto &cachedVersion = tableState.versions[frameSlot];
-    auto &previousDescriptorIds = tableState.descriptorIdsByFrame[frameSlot];
+    auto &initialized = tableState.initialized;
+    auto &cachedVersion = tableState.version;
+    auto &previousDescriptorIds = tableState.descriptorIds;
 
     auto const cacheHit = initialized && cachedVersion == request.tableVersion;
     if (cacheHit && !request.refreshActiveDescriptorsOnCacheHit)

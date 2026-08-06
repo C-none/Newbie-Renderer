@@ -2,7 +2,6 @@ export module nr.rhi:resourcePool;
 import dependency.vulkan;
 import nr.utils;
 import :type;
-import :vk;
 import :resource;
 import :memoryAllocator;
 import std;
@@ -16,7 +15,7 @@ import std;
  *   nrResourcePool.ixx   <- this file (frame-local arena + persistent factory)
  *   nrResource.ixx         (Buffer/Image RAII wrappers)
  *   nrMemoryAllocator.ixx  (strategy-based allocation)
- *   nrVmaAllocator.ixx     (VMA wrapper + statistics)
+ *   nrVmaAllocator.ixx     (VMA ownership wrapper)
  *   Vulkan Device Layer
  *
  * Resource management mode:

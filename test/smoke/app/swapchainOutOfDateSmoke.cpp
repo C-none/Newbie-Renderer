@@ -5,6 +5,7 @@ import nr.options;
 import nr.renderer;
 import nr.renderPasses;
 import nr.rhi;
+import nr.test.options;
 
 namespace
 {
@@ -50,31 +51,10 @@ struct AcquireObservations
 struct ResolverObservations
 {
     std::uint32_t calls = 0;
-    std::uint32_t acquireAttemptsAtCall = 0;
-    vk::Extent2D displayExtent{};
-    bool matchedPresentationExtent = false;
+    std::vector<std::uint32_t> acquireAttemptsAtCalls;
+    std::vector<vk::Extent2D> displayExtents;
+    bool matchedPresentationExtents = true;
 };
-
-[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult &preflight)
-{
-    auto values = nr::options::OptionValueMap{};
-    auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
-        values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
-    });
-    return nr::options::OptionFrameSnapshot{
-        .catalog = preflight.optionCatalog,
-        .values = std::move(values),
-        .availability = std::move(availability),
-        .frameIndex = 1u,
-        .revision = 1u,
-        .graphGeneration = 1u,
-        .bindingEpoch = 1u,
-        .snapshotToken = "smoke-snapshot",
-    };
-}
 
 [[nodiscard]] nr::renderer::RendererGraphSpec buildGraphSpec(
     const std::shared_ptr<nr::renderPasses::EmbeddedTriangleNode> &embeddedTriangle, AcquireObservations &acquire,
@@ -108,9 +88,10 @@ struct ResolverObservations
     graphSpec.frameResolutionResolver = [&acquire, &resolver](nr::rhi::Device &device, vk::Extent2D displayExtent,
                                                               const nr::options::OptionFrameSnapshot &) {
         ++resolver.calls;
-        resolver.acquireAttemptsAtCall = acquire.attempts;
-        resolver.displayExtent = displayExtent;
-        resolver.matchedPresentationExtent = displayExtent == device.presentationContext.swapchainExtent();
+        resolver.acquireAttemptsAtCalls.push_back(acquire.attempts);
+        resolver.displayExtents.push_back(displayExtent);
+        resolver.matchedPresentationExtents =
+            resolver.matchedPresentationExtents && displayExtent == device.presentationContext.swapchainExtent();
         return nr::renderer::FrameResolutionPlan{
             .displayExtent = displayExtent,
             .renderExtent = displayExtent,
@@ -120,8 +101,10 @@ struct ResolverObservations
 }
 
 [[nodiscard]] bool validateObservations(const AcquireObservations &acquire, const ResolverObservations &resolver,
-                                        const nr::renderer::RendererFrameResult &frameResult,
-                                        std::uint64_t recreationGenerationBefore,
+                                         const nr::renderer::RendererFrameResult &normalFrameResult,
+                                         const nr::renderer::RendererFrameResult &recreatedFrameResult,
+                                         std::uint64_t recreationGenerationInitial,
+                                         std::uint64_t recreationGenerationBefore,
                                         std::uint64_t recreationGenerationAfter)
 {
     auto valid = true;
@@ -136,22 +119,35 @@ struct ResolverObservations
     require(acquire.attempts == 2u, "expected exactly two acquire hook attempts");
     require(acquire.forced == 1u, "expected exactly one forced out-of-date acquire");
     require(acquire.nativePassThrough == 1u, "expected exactly one native acquire pass-through");
-    require(resolver.calls == 1u, "expected the frame resolution resolver to run exactly once");
-    require(resolver.acquireAttemptsAtCall == 2u, "expected the resolver to run after the recreated swapchain acquire");
-    require(resolver.displayExtent.width > 0u && resolver.displayExtent.height > 0u,
-            "expected a non-zero resolver display extent");
-    require(resolver.matchedPresentationExtent,
-            "expected resolver display extent to match the current presentation extent");
-    require(frameResult.rendered, "expected the frame to render");
-    require(frameResult.presentResult == vk::Result::eSuccess, "expected presentation to succeed");
-    require(frameResult.compiledSubmitBatchCount >= 2u, "expected at least two compiled submit batches");
-    require(frameResult.submittedBatchCount == frameResult.compiledSubmitBatchCount,
-            "expected every compiled submit batch to be submitted");
-    require(frameResult.invokedPassPrepareCount >= 2u, "expected at least two pass prepare callbacks to be invoked");
-    require(frameResult.invokedPassRecordCount >= 3u,
-            "expected at least three explicit pass record callbacks to be invoked");
-    require(frameResult.replayedSecondaryCommandBufferCount == 4u,
-            "expected all four fixed graph pass secondary command buffers to be replayed");
+    require(resolver.calls == 2u, "expected the frame resolution resolver to run for both presentation generations");
+    require(resolver.acquireAttemptsAtCalls == std::vector<std::uint32_t>{0u, 2u},
+            "expected one normal resolver call before the hook and one after the recreated swapchain acquire");
+    require(std::ranges::all_of(resolver.displayExtents, [](vk::Extent2D extent) {
+                return extent.width > 0u && extent.height > 0u;
+            }),
+            "expected non-zero resolver display extents for both presentation generations");
+    require(resolver.matchedPresentationExtents,
+            "expected every resolver display extent to match its current presentation extent");
+
+    auto validateFrame = [&](const nr::renderer::RendererFrameResult &frameResult, std::string_view phase) {
+        require(frameResult.rendered, std::format("expected the {} frame to render", phase));
+        require(frameResult.presentResult == vk::Result::eSuccess,
+                std::format("expected the {} presentation to succeed", phase));
+        require(frameResult.compiledSubmitBatchCount >= 2u,
+                std::format("expected the {} frame to compile at least two submit batches", phase));
+        require(frameResult.submittedBatchCount == frameResult.compiledSubmitBatchCount,
+                std::format("expected every {} frame submit batch to be submitted", phase));
+        require(frameResult.invokedPassPrepareCount >= 2u,
+                std::format("expected at least two {} frame pass prepare callbacks", phase));
+        require(frameResult.invokedPassRecordCount >= 2u,
+                std::format("expected at least two {} frame pass record callbacks", phase));
+        require(frameResult.replayedSecondaryCommandBufferCount == 3u,
+                std::format("expected all three fixed graph pass command buffers to replay in the {} frame", phase));
+    };
+    validateFrame(normalFrameResult, "old-generation");
+    validateFrame(recreatedFrameResult, "new-generation");
+    require(recreationGenerationBefore == recreationGenerationInitial,
+            "expected the initial normal present to keep the original swapchain generation");
     require(recreationGenerationAfter == recreationGenerationBefore + 1u,
             "expected the forced acquire out-of-date path to increment swapchain recreation generation exactly once");
     return valid;
@@ -170,6 +166,21 @@ struct ResolverObservations
     auto acquire = AcquireObservations{};
     auto resolver = ResolverObservations{};
 
+    auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
+    auto graphSpec = buildGraphSpec(embeddedTriangle, acquire, resolver);
+    auto const preflight = renderer.preflightGraph(graphSpec);
+    if (!preflight || !renderer.installGraph(graphSpec))
+    {
+        app.shutdown();
+        return false;
+    }
+    auto const optionSnapshot = nr::test::options::makeDefaultSnapshot(preflight.optionCatalog, "smoke-snapshot");
+    auto const recreationGenerationInitial = renderer.device().swapchainRecreationGeneration();
+    auto normalFrameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
+        .optionSnapshot = std::cref(optionSnapshot),
+        .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
+    });
+
     presentation.setAcquireOutOfDateTestHook([&acquire]() {
         ++acquire.attempts;
         if (acquire.attempts == 1u)
@@ -182,16 +193,8 @@ struct ResolverObservations
     });
     auto hookCleanup = AcquireOutOfDateHookCleanupGuard{presentation};
 
-    auto embeddedTriangle = std::make_shared<nr::renderPasses::EmbeddedTriangleNode>();
-    auto graphSpec = buildGraphSpec(embeddedTriangle, acquire, resolver);
-    auto const preflight = renderer.preflightGraph(graphSpec);
-    if (!preflight || !renderer.installGraph(graphSpec))
-    {
-        return 1;
-    }
-    auto const optionSnapshot = makeDefaultSnapshot(preflight);
     auto const recreationGenerationBefore = renderer.device().swapchainRecreationGeneration();
-    auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
+    auto recreatedFrameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
         .optionSnapshot = std::cref(optionSnapshot),
         .acquireTimeout = std::numeric_limits<std::uint64_t>::max(),
     });
@@ -199,8 +202,9 @@ struct ResolverObservations
 
     presentation.clearAcquireOutOfDateTestHook();
     hookCleanup.release();
-    auto const valid =
-        validateObservations(acquire, resolver, frameResult, recreationGenerationBefore, recreationGenerationAfter);
+    auto const valid = validateObservations(acquire, resolver, normalFrameResult, recreatedFrameResult,
+                                            recreationGenerationInitial, recreationGenerationBefore,
+                                            recreationGenerationAfter);
     auto const attemptsAfterRender = acquire.attempts;
     if (attemptsAfterRender != 2u)
     {

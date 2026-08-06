@@ -13,8 +13,6 @@ template <typename Tag> struct Handle
     constexpr Handle(std::uint32_t inSlot, std::uint32_t inGeneration) noexcept : slot(inSlot), generation(inGeneration)
     {
     }
-    ~Handle() = default;
-
     [[nodiscard]] constexpr bool valid() const noexcept
     {
         return slot != invalidResourceSlot;

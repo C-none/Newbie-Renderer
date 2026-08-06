@@ -30,9 +30,11 @@ namespace nr::renderer
 }
 
 [[nodiscard]] PassRecordContext RenderGraphExecutor::makePassRecordContext(
-    std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer, std::uint32_t frameIndex,
-    nr::rhi::Device &device, const RuntimeBindingMap &runtimeBindings, const CompiledFrameDataLookup &frameDataByHandle)
+    const CompiledPass &pass, std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer,
+    std::uint32_t frameIndex, nr::rhi::Device &device, const RuntimeBindingMap &runtimeBindings,
+    const CompiledFrameDataLookup &frameDataByHandle)
 {
+    auto const *passPtr = std::addressof(pass);
     auto const *runtimeBindingsPtr = std::addressof(runtimeBindings);
     auto const *frameDataByHandlePtr = std::addressof(frameDataByHandle);
 
@@ -40,7 +42,12 @@ namespace nr::renderer
         .commandBuffer = commandBuffer,
         .frameIndex = frameIndex,
         .device = std::ref(device),
-        .resolveBuffer = [runtimeBindingsPtr](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
+        .resolveBuffer = [passPtr, runtimeBindingsPtr](GraphResourceHandle handle)
+            -> std::optional<PassBufferResource> {
+        nrAssert(passDeclaresResource(*passPtr, handle),
+                 std::format("RenderGraph pass '{}' record resolver rejected undeclared resource handle {} "
+                             "(pass handle {}).",
+                             passPtr->debugName, handle.value, passPtr->handle.value));
             auto bindingIt = runtimeBindingsPtr->find(handle);
             if (bindingIt == runtimeBindingsPtr->end() || !bindingIt->second.isBuffer)
             {
@@ -53,7 +60,12 @@ namespace nr::renderer
                 .resource = bindingIt->second.bufferResource,
             };
         },
-        .resolveImage = [runtimeBindingsPtr](GraphResourceHandle handle) -> std::optional<PassImageResource> {
+        .resolveImage = [passPtr, runtimeBindingsPtr](GraphResourceHandle handle)
+            -> std::optional<PassImageResource> {
+        nrAssert(passDeclaresResource(*passPtr, handle),
+                 std::format("RenderGraph pass '{}' record resolver rejected undeclared resource handle {} "
+                             "(pass handle {}).",
+                             passPtr->debugName, handle.value, passPtr->handle.value));
             auto bindingIt = runtimeBindingsPtr->find(handle);
             if (bindingIt == runtimeBindingsPtr->end() || !bindingIt->second.isImage)
             {
@@ -69,7 +81,12 @@ namespace nr::renderer
             };
         },
         .resolveAccelerationStructure =
-            [runtimeBindingsPtr](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
+            [passPtr, runtimeBindingsPtr](GraphResourceHandle handle)
+            -> std::optional<PassAccelerationStructureResource> {
+        nrAssert(passDeclaresResource(*passPtr, handle),
+                 std::format("RenderGraph pass '{}' record resolver rejected undeclared resource handle {} "
+                             "(pass handle {}).",
+                             passPtr->debugName, handle.value, passPtr->handle.value));
             auto bindingIt = runtimeBindingsPtr->find(handle);
             if (bindingIt == runtimeBindingsPtr->end() || !bindingIt->second.isAccelerationStructure)
             {
@@ -85,8 +102,12 @@ namespace nr::renderer
                 .resource = bindingIt->second.accelerationStructureResource,
             };
         },
-        .resolveFrameDataPayload = [frameDataByHandlePtr](GraphFrameDataHandle handle)
+        .resolveFrameDataPayload = [passPtr, frameDataByHandlePtr](GraphFrameDataHandle handle)
             -> std::optional<std::reference_wrapper<const std::any>> {
+        nrAssert(passDeclaresFrameData(*passPtr, handle),
+                 std::format("RenderGraph pass '{}' record resolver rejected undeclared frame-data handle {} "
+                             "(pass handle {}).",
+                             passPtr->debugName, handle.value, passPtr->handle.value));
             auto frameDataIt = frameDataByHandlePtr->find(handle);
             if (frameDataIt == frameDataByHandlePtr->end())
             {
@@ -164,8 +185,8 @@ namespace nr::renderer
 
         if (pass.record)
         {
-            auto recordContext = makePassRecordContext(std::cref(commandBuffer), desc.frameIndex, desc.device.get(),
-                                                       runtimeBindings, frameDataByHandle);
+            auto recordContext = makePassRecordContext(pass, std::cref(commandBuffer), desc.frameIndex,
+                                                       desc.device.get(), runtimeBindings, frameDataByHandle);
             pass.record(recordContext);
             ++result.invokedPassRecordCount;
         }
@@ -227,7 +248,7 @@ namespace nr::renderer
             std::format("{}[{}]", pass.debugName, desc.chunkIndex),
         };
 
-        auto recordContext = makePassRecordContext(std::cref(commandBuffer), desc.frameIndex, desc.device.get(),
+        auto recordContext = makePassRecordContext(pass, std::cref(commandBuffer), desc.frameIndex, desc.device.get(),
                                                    runtimeBindings, frameDataByHandle);
         pass.parallelRecord->recordRange(PassRangeRecordContext{
             .pass = std::move(recordContext),
@@ -426,7 +447,7 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
             auto const &pass = compiledBatch.passes[passOrdinal];
             if (pass.parallelRecord.has_value())
             {
-                auto planningContext = makePassRecordContext(std::nullopt, context.frameIndex, context.device,
+                auto planningContext = makePassRecordContext(pass, std::nullopt, context.frameIndex, context.device,
                                                              runtimeBindings, frameDataByHandle);
                 auto const itemCount = pass.parallelRecord->itemCount(planningContext);
                 auto const parallelAvailableThreadCount =

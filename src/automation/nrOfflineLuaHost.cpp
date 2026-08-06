@@ -28,28 +28,6 @@ using HostCallResult = dependency::lua::HostCallResult;
     return LuaValue{static_cast<double>(value)};
 }
 
-[[nodiscard]] std::string_view schemaTypeName(nr::options::OptionValueType type) noexcept
-{
-    using enum nr::options::OptionValueType;
-    switch (type)
-    {
-    case boolean:
-        return "boolean";
-    case signedInteger:
-    case unsignedInteger:
-        return "integer";
-    case number:
-        return "number";
-    case string:
-        return "string";
-    case array:
-        return "array";
-    case object:
-        return "object";
-    }
-    std::unreachable();
-}
-
 [[nodiscard]] std::string_view scopeName(nr::options::OptionScope scope) noexcept
 {
     return scope == nr::options::OptionScope::session ? "session" : "graph";
@@ -103,7 +81,7 @@ using HostCallResult = dependency::lua::HostCallResult;
 [[nodiscard]] LuaValue schemaToLua(const nr::options::OptionSchema &schema)
 {
     auto result = LuaObject{
-        {"type", LuaValue{schemaTypeName(schema.type)}},
+        {"type", LuaValue{nr::options::wireName(schema.type)}},
     };
     if (schema.signedMinimum)
     {

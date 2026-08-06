@@ -10,13 +10,6 @@ void CommandBatch::addCommandBuffer(const vk::raii::CommandBuffer &commandBuffer
     commandBufferInfos_.push_back(vk::CommandBufferSubmitInfo{*commandBuffer, 0});
 }
 
-void CommandBatch::addCommandBuffers(std::span<const vk::raii::CommandBuffer> commandBuffers)
-{
-    commandBufferInfos_.reserve(commandBufferInfos_.size() + commandBuffers.size());
-    std::ranges::for_each(commandBuffers,
-                          [&](const auto &cb) { commandBufferInfos_.push_back(vk::CommandBufferSubmitInfo{*cb, 0}); });
-}
-
 void CommandBatch::addWait(const vk::raii::Semaphore &semaphore, vk::PipelineStageFlags2 stage, std::uint64_t value,
                            std::uint32_t deviceIndex)
 {
@@ -52,16 +45,6 @@ void CommandBatch::setFrameBoundary(std::uint64_t frameID, vk::FrameBoundaryFlag
     frameBoundary_->buffers.assign(buffers.begin(), buffers.end());
 }
 
-void CommandBatch::clearFrameBoundary() noexcept
-{
-    frameBoundary_.reset();
-}
-
-[[nodiscard]] bool CommandBatch::hasFrameBoundary() const noexcept
-{
-    return frameBoundary_.has_value();
-}
-
 [[nodiscard]] std::optional<std::uint64_t> CommandBatch::frameBoundaryFrameID() const noexcept
 {
     if (!frameBoundary_.has_value())
@@ -70,24 +53,6 @@ void CommandBatch::clearFrameBoundary() noexcept
     }
 
     return frameBoundary_->frameID;
-}
-
-void CommandBatch::clear() noexcept
-{
-    commandBufferInfos_.clear();
-    waitInfos_.clear();
-    signalInfos_.clear();
-    frameBoundary_.reset();
-}
-
-[[nodiscard]] bool CommandBatch::empty() const noexcept
-{
-    return commandBufferInfos_.empty();
-}
-
-[[nodiscard]] std::size_t CommandBatch::commandBufferCount() const noexcept
-{
-    return commandBufferInfos_.size();
 }
 
 [[nodiscard]] std::optional<vk::FrameBoundaryEXT> CommandBatch::frameBoundarySubmitInfo() const
@@ -119,36 +84,4 @@ void CommandBatch::clear() noexcept
     return submitInfo;
 }
 
-CommandBatch &CommandBatch::withCommandBuffer(const vk::raii::CommandBuffer &cb)
-{
-    addCommandBuffer(cb);
-    return *this;
-}
-
-CommandBatch &CommandBatch::withWait(const vk::raii::Semaphore &sem, vk::PipelineStageFlags2 stage, std::uint64_t value,
-                                     std::uint32_t deviceIndex)
-{
-    addWait(sem, stage, value, deviceIndex);
-    return *this;
-}
-
-CommandBatch &CommandBatch::withSignal(const vk::raii::Semaphore &sem, std::uint64_t value, std::uint32_t deviceIndex,
-                                       vk::PipelineStageFlags2 stage)
-{
-    addSignal(sem, value, deviceIndex, stage);
-    return *this;
-}
-} // namespace nr::rhi
-
-namespace nr::rhi
-{
-namespace batch
-{
-[[nodiscard]] CommandBatch single(const vk::raii::CommandBuffer &commandBuffer)
-{
-    CommandBatch batch{};
-    batch.addCommandBuffer(commandBuffer);
-    return batch;
-}
-} // namespace batch
 } // namespace nr::rhi

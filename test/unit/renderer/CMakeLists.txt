@@ -54,3 +54,32 @@ nr_add_contract_test(nr_render_graph_skeleton_contract_test nr_render_graph_skel
     utils
     dependency_graphics
 )
+
+nr_add_contract_test(nr_render_graph_executor_contract_test nr_render_graph_executor_contract_test.cpp "fast;cpu;unit;renderer;rdg"
+    nrrenderer
+    nrrhi
+    utils
+    dependency_graphics
+)
+
+nr_add_executable(nr_render_graph_failure_probe
+    nr_render_graph_failure_probe.cpp
+)
+set_target_properties(nr_render_graph_failure_probe PROPERTIES FOLDER "Test")
+nr_link_module_dependencies(
+    nr_render_graph_failure_probe
+    nr_render_graph_failure_probe.cpp
+    PRIVATE
+        nrrenderer
+        nrrhi
+        utils
+        dependency_graphics
+)
+
+add_test(
+    NAME nr_render_graph_failure_contract_test
+    COMMAND ${CMAKE_COMMAND}
+        "-DNR_RENDER_GRAPH_FAILURE_PROBE=$<TARGET_FILE:nr_render_graph_failure_probe>"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_nr_render_graph_failure.cmake
+)
+nr_set_registered_test_contract(nr_render_graph_failure_contract_test "fast;cpu;unit;renderer;rdg")

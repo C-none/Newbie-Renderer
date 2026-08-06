@@ -203,13 +203,6 @@ template <RevisionDomain Domain>
     return result;
 }
 
-template <typename... Parts> struct RevisionKey
-{
-    std::tuple<Parts...> parts{};
-
-    [[nodiscard]] friend constexpr bool operator==(const RevisionKey &, const RevisionKey &) noexcept = default;
-};
-
 template <typename Policy, typename Mutation, typename Domain>
 concept RevisionMutationPolicyFor = RevisionDomain<Domain> && requires(Mutation mutation) {
     { Policy::mask(mutation) } noexcept -> std::same_as<RevisionMask<Domain>>;

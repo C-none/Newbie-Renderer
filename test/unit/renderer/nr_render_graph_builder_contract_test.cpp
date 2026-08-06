@@ -41,7 +41,8 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(hasImageFields(color), "color write should fill image fields");
         nr::test::require(color.imageUsage == nr::renderer::ImageUsageIntent::ColorAttachment);
         nr::test::require(color.imageAccess == nr::renderer::ImageAccessIntent::ColorAttachmentWrite);
-        nr::test::require(!color.readOnly, "color write should not be read-only");
+        nr::test::require(color.imageLayout == nr::renderer::ImageLayoutIntent::ColorAttachment);
+        nr::test::require(color.imageAspect == nr::renderer::ImageAspectIntent::Color);
 
         auto orderedColor = nr::renderer::use::orderedAfterPrevious(color);
         nr::test::require(orderedColor.requiresPreviousUseBarrier, "ordered use should request a previous-use barrier");
@@ -51,7 +52,8 @@ const nr::test::CaseRegistrar useFactoryCase{
         auto colorReadWrite = nr::renderer::use::colorReadWrite(handle);
         nr::test::require(colorReadWrite.imageUsage == nr::renderer::ImageUsageIntent::ColorAttachment);
         nr::test::require(colorReadWrite.imageAccess == nr::renderer::ImageAccessIntent::ColorAttachmentReadWrite);
-        nr::test::require(!colorReadWrite.readOnly, "color read-write should not be read-only");
+        nr::test::require(colorReadWrite.imageLayout == nr::renderer::ImageLayoutIntent::ColorAttachment);
+        nr::test::require(colorReadWrite.imageAspect == nr::renderer::ImageAspectIntent::Color);
 
         auto depthReadWrite = nr::renderer::use::depthReadWrite(handle);
         nr::test::require(depthReadWrite.imageUsage == nr::renderer::ImageUsageIntent::DepthStencilAttachment);
@@ -62,7 +64,7 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(sampled.imageUsage == nr::renderer::ImageUsageIntent::Sampled);
         nr::test::require(sampled.imageAccess == nr::renderer::ImageAccessIntent::SampledRead);
         nr::test::require(sampled.imageLayout == nr::renderer::ImageLayoutIntent::ShaderReadOnly);
-        nr::test::require(sampled.readOnly, "sampled read should be read-only");
+        nr::test::require(sampled.imageAspect == nr::renderer::ImageAspectIntent::Color);
 
         auto fragmentSampled = nr::renderer::use::withShaderStages(sampled, nr::renderer::ShaderStageIntent::Fragment);
         nr::test::require(fragmentSampled.shaderStages == vk::PipelineStageFlagBits2::eFragmentShader);
@@ -76,22 +78,24 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(graphicsShaderStages ==
                           (vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader));
 
-        auto sampledDepth = nr::renderer::use::make<nr::renderer::use::spec::SampledRead>(
-            handle, nr::renderer::use::ImageUseOptions{
-                        .aspect = nr::renderer::ImageAspectIntent::Depth,
-                    });
+        auto sampledDepth = nr::renderer::use::sampledRead(handle, nr::renderer::ImageAspectIntent::Depth);
+        nr::test::require(sampledDepth.imageUsage == nr::renderer::ImageUsageIntent::Sampled);
+        nr::test::require(sampledDepth.imageAccess == nr::renderer::ImageAccessIntent::SampledRead);
+        nr::test::require(sampledDepth.imageLayout == nr::renderer::ImageLayoutIntent::ShaderReadOnly);
         nr::test::require(sampledDepth.imageAspect == nr::renderer::ImageAspectIntent::Depth);
-        nr::test::require(sampledDepth.readOnly, "customized sampled read should preserve read-only intent");
 
         auto storageReadWrite = nr::renderer::use::storageReadWrite(handle);
         nr::test::require(storageReadWrite.imageUsage == nr::renderer::ImageUsageIntent::StorageReadWrite);
         nr::test::require(storageReadWrite.imageAccess == nr::renderer::ImageAccessIntent::StorageReadWrite);
-        nr::test::require(!storageReadWrite.readOnly, "storage read-write should not be read-only");
+        nr::test::require(storageReadWrite.imageLayout == nr::renderer::ImageLayoutIntent::General);
+        nr::test::require(storageReadWrite.imageAspect == nr::renderer::ImageAspectIntent::Color);
 
         auto present = nr::renderer::use::presentRead(handle);
         nr::test::require(present.imageUsage == nr::renderer::ImageUsageIntent::PresentSource);
+        nr::test::require(present.imageAccess == nr::renderer::ImageAccessIntent::PresentRead);
+        nr::test::require(present.imageLayout == nr::renderer::ImageLayoutIntent::PresentSrc);
+        nr::test::require(present.imageAspect == nr::renderer::ImageAspectIntent::Color);
         nr::test::require(present.ownershipDomain == nr::renderer::ResourceOwnershipDomain::Undefined);
-        nr::test::require(present.readOnly, "present read should be read-only");
 
         auto computePresent = nr::renderer::use::presentRead(handle, nr::renderer::ResourceOwnershipDomain::Compute);
         nr::test::require(computePresent.ownershipDomain == nr::renderer::ResourceOwnershipDomain::Compute);
@@ -100,17 +104,15 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(hasBufferFields(uniform), "uniform read should fill buffer fields");
         nr::test::require(uniform.bufferUsage == nr::renderer::BufferUsageIntent::Uniform);
         nr::test::require(uniform.bufferAccess == nr::renderer::BufferAccessIntent::UniformRead);
-        nr::test::require(uniform.readOnly, "uniform read should be read-only");
+        nr::test::require(uniform.ownershipDomain == nr::renderer::ResourceOwnershipDomain::Undefined);
 
         auto bufferUpload = nr::renderer::use::bufferTransferSrc(handle);
         nr::test::require(bufferUpload.bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
         nr::test::require(bufferUpload.bufferAccess == nr::renderer::BufferAccessIntent::TransferRead);
-        nr::test::require(bufferUpload.readOnly, "buffer transfer source should be read-only");
 
         auto shaderBindingTable = nr::renderer::use::shaderBindingTableRead(handle);
         nr::test::require(shaderBindingTable.bufferUsage == nr::renderer::BufferUsageIntent::ShaderBindingTable);
         nr::test::require(shaderBindingTable.bufferAccess == nr::renderer::BufferAccessIntent::ShaderBindingTableRead);
-        nr::test::require(shaderBindingTable.readOnly, "shader binding table read should be read-only");
 
         auto accelerationStructureTrace = nr::renderer::use::accelerationStructureTraceRead(handle);
         nr::test::require(hasAccelerationStructureFields(accelerationStructureTrace),
@@ -119,7 +121,8 @@ const nr::test::CaseRegistrar useFactoryCase{
                           nr::renderer::AccelerationStructureUsageIntent::TraceInput);
         nr::test::require(accelerationStructureTrace.accelerationStructureAccess ==
                           nr::renderer::AccelerationStructureAccessIntent::TraceRead);
-        nr::test::require(accelerationStructureTrace.readOnly, "AS trace read should be read-only");
+        nr::test::require(accelerationStructureTrace.ownershipDomain ==
+                          nr::renderer::ResourceOwnershipDomain::Undefined);
 
         auto accelerationStructureStorage = nr::renderer::use::accelerationStructureStorageWrite(handle);
         nr::test::require(hasBufferFields(accelerationStructureStorage), "AS storage write should remain a buffer use");
@@ -127,6 +130,27 @@ const nr::test::CaseRegistrar useFactoryCase{
                           nr::renderer::BufferUsageIntent::AccelerationStructureStorage);
         nr::test::require(accelerationStructureStorage.bufferAccess ==
                           nr::renderer::BufferAccessIntent::AccelerationStructureWrite);
+
+        auto copyDepthSource = nr::renderer::use::copySource(handle, nr::renderer::ImageAspectIntent::Depth);
+        nr::test::require(copyDepthSource.imageUsage == nr::renderer::ImageUsageIntent::CopySource);
+        nr::test::require(copyDepthSource.imageAccess == nr::renderer::ImageAccessIntent::TransferRead);
+        nr::test::require(copyDepthSource.imageLayout == nr::renderer::ImageLayoutIntent::TransferSrc);
+        nr::test::require(copyDepthSource.imageAspect == nr::renderer::ImageAspectIntent::Depth);
+
+        auto copyStencilDestination =
+            nr::renderer::use::copyDestination(handle, nr::renderer::ImageAspectIntent::Stencil);
+        nr::test::require(copyStencilDestination.imageUsage == nr::renderer::ImageUsageIntent::CopyDestination);
+        nr::test::require(copyStencilDestination.imageAccess == nr::renderer::ImageAccessIntent::TransferWrite);
+        nr::test::require(copyStencilDestination.imageLayout == nr::renderer::ImageLayoutIntent::TransferDst);
+        nr::test::require(copyStencilDestination.imageAspect == nr::renderer::ImageAspectIntent::Stencil);
+
+        auto transferDepthStencilDestination =
+            nr::renderer::use::imageTransferDst(handle, nr::renderer::ImageAspectIntent::DepthStencil);
+        nr::test::require(transferDepthStencilDestination.imageUsage == nr::renderer::ImageUsageIntent::TransferDst);
+        nr::test::require(transferDepthStencilDestination.imageAccess == nr::renderer::ImageAccessIntent::TransferWrite);
+        nr::test::require(transferDepthStencilDestination.imageLayout == nr::renderer::ImageLayoutIntent::TransferDst);
+        nr::test::require(transferDepthStencilDestination.imageAspect ==
+                          nr::renderer::ImageAspectIntent::DepthStencil);
     }};
 
 const nr::test::CaseRegistrar parallelPlannerCase{
@@ -330,6 +354,32 @@ const nr::test::CaseRegistrar transferOpsClearCase{
                           nr::renderer::ImageAspectIntent::DepthStencil);
     }};
 
+const nr::test::CaseRegistrar passResourceUseCanonicalizationCase{
+    "render graph builder collapses identical uses while preserving first declaration order", [] {
+        auto builder = nr::renderer::RenderGraphBuilder{};
+        auto node = builder.addNode("CanonicalUses", nr::renderer::QueueDomain::Compute);
+        auto first = builder.addResource(nr::renderer::GraphTransientBufferDesc{
+            .debugName = "CanonicalUses.First",
+            .size = 256,
+            .usageIntents = {nr::renderer::BufferUsageIntent::StorageRead},
+        });
+        auto second = builder.addResource(nr::renderer::GraphTransientBufferDesc{
+            .debugName = "CanonicalUses.Second",
+            .size = 256,
+            .usageIntents = {nr::renderer::BufferUsageIntent::StorageRead},
+        });
+        auto firstUse = nr::renderer::use::storageBufferRead(first);
+        auto secondUse = nr::renderer::use::storageBufferRead(second);
+        auto uses = std::array{firstUse, secondUse, firstUse, secondUse};
+        static_cast<void>(
+            builder.addPass("CanonicalUses.Pass", node, uses, [](const nr::renderer::PassRecordContext &) {}));
+
+        auto frame = builder.build();
+        nr::test::requireEqual(frame.passes.front().resourceUses.size(), std::size_t{2});
+        nr::test::require(frame.passes.front().resourceUses[0] == firstUse);
+        nr::test::require(frame.passes.front().resourceUses[1] == secondUse);
+    }};
+
 const nr::test::CaseRegistrar transferOpsCopyCase{
     "renderer transfer copy helpers encode buffer image combinations", [] {
         auto builder = nr::renderer::RenderGraphBuilder{};
@@ -398,9 +448,10 @@ const nr::test::CaseRegistrar transferOpsCopyCase{
         nr::test::requireEqual(frame.passes.size(), std::size_t{4});
         nr::test::require(std::ranges::all_of(frame.passes,
                                               [](const nr::renderer::PassExecutionDesc &pass) {
-                                                  return pass.isCopyPass && pass.copy.has_value() && !pass.record;
+                                                  return pass.isCopyPass && pass.copy.has_value() && !pass.record &&
+                                                         pass.frameDataUses.empty();
                                               }),
-                          "copy helpers should emit implicit copy passes");
+                          "copy helpers should emit implicit copy passes without frame-data capabilities");
         nr::test::require(frame.passes[0].resourceUses[0].bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
         nr::test::require(frame.passes[0].resourceUses[1].bufferUsage == nr::renderer::BufferUsageIntent::TransferDst);
         nr::test::require(frame.passes[1].resourceUses[0].bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
@@ -411,6 +462,9 @@ const nr::test::CaseRegistrar transferOpsCopyCase{
         nr::test::require(frame.passes[2].resourceUses[0].imageAspect == nr::renderer::ImageAspectIntent::Depth);
         nr::test::require(frame.passes[2].resourceUses[1].bufferUsage == nr::renderer::BufferUsageIntent::Readback);
         nr::test::require(frame.passes[3].resourceUses.size() == 3u, "present image copy should add present use");
+        nr::test::require(frame.passes[3].resourceUses[1].imageUsage ==
+                          nr::renderer::ImageUsageIntent::CopyDestination);
+        nr::test::require(frame.passes[3].resourceUses[2].resource == frame.passes[3].resourceUses[1].resource);
         nr::test::require(frame.passes[3].resourceUses[2].imageUsage == nr::renderer::ImageUsageIntent::PresentSource);
         nr::test::require(std::holds_alternative<nr::renderer::CopyImageToImagePassDesc>(*frame.passes[3].copy));
     }};

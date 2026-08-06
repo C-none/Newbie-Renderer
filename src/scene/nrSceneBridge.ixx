@@ -13,7 +13,20 @@ template <typename TagT> struct BridgeInput
     std::string canonicalKey{};
 };
 
-using TextureBridgeInput = BridgeInput<struct TextureBridgeInputTag>;
+enum class TextureSamplingColorIntent : std::uint8_t
+{
+    srgb,
+    linear,
+};
+
+struct TextureBridgeInput
+{
+    std::uint32_t sourceIndex = nr::load::invalidIndex;
+    std::string canonicalKey{};
+    TextureSamplingColorIntent samplingColorIntent = TextureSamplingColorIntent::linear;
+    bool mixedColorAndLinearReferences = false;
+};
+
 using MaterialBridgeInput = BridgeInput<struct MaterialBridgeInputTag>;
 using MeshBridgeInput = BridgeInput<struct MeshBridgeInputTag>;
 using CameraBridgeInput = BridgeInput<struct CameraBridgeInputTag>;
@@ -27,6 +40,9 @@ struct SceneBridgePlan
     std::vector<MeshBridgeInput> meshes{};
     std::vector<CameraBridgeInput> cameras{};
     std::vector<LightBridgeInput> lights{};
+    std::size_t reachableNodeCount = 0;
+    std::size_t unreachableNodeCount = 0;
+    std::size_t maximumReachableTemplateDepth = 0;
     bool hasErrors = false;
 
     [[nodiscard]] bool valid() const noexcept;
@@ -77,7 +93,9 @@ class SceneBridge
                            sourceIndex);
     }
 
-    [[nodiscard]] static std::string makeTextureCanonicalKey(const nr::load::TextureAsset &textureAsset);
+    [[nodiscard]] static std::string makeTextureCanonicalKey(const nr::load::SceneAsset &sceneAsset,
+                                                             std::uint32_t textureIndex,
+                                                             TextureSamplingColorIntent samplingColorIntent);
 
     [[nodiscard]] static std::string makeMaterialCanonicalKey(const nr::load::SceneAsset &sceneAsset,
                                                               std::uint32_t materialIndex);
@@ -99,15 +117,11 @@ struct SceneRenderBridgeBuildInput
     std::reference_wrapper<const ScenePacketSet> packetSet;
     std::optional<std::reference_wrapper<const SceneResolvedCamera>> primaryCamera{};
     std::optional<SceneBridgeFrameConstants> frameConstantsOverride{};
-    std::function<std::optional<std::uint32_t>(nr::resource::MeshHandle)> resolveMeshBindless{};
-    std::function<std::optional<std::uint32_t>(nr::resource::MaterialHandle)> resolveMaterialBindless{};
-    std::function<std::optional<SceneMaterialTextureBindings>(nr::resource::MaterialHandle)> resolveMaterialTextures{};
-    std::function<std::optional<SceneBridgeMaterialRasterState>(nr::resource::MaterialHandle)>
-        resolveMaterialRasterState{};
-    std::function<std::optional<SceneBridgeGeometryBuffers>()> resolveGeometryBuffers{};
-    std::function<std::optional<SceneBridgeDrawGeometry>(nr::resource::MeshHandle, std::uint32_t)>
-        resolveRasterDrawGeometry{};
 };
+
+[[nodiscard]] bool rasterDrawPacketResolved(const RasterDrawPacket &packet,
+                                            const SceneBridgeGeometryBuffers &geometryBuffers,
+                                            const SceneTextureHandleTable &textureHandlesById) noexcept;
 
 class SceneRenderBridge
 {

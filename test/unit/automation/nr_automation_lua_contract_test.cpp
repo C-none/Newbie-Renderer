@@ -2,6 +2,7 @@ import dependency.lua;
 import nr.automation;
 import nr.options;
 import nr.test;
+import nr.test.options;
 import std;
 
 namespace
@@ -79,21 +80,17 @@ struct HostTrace
 
 [[nodiscard]] std::shared_ptr<const options::OptionCatalog> sessionCatalog()
 {
-    auto builder = options::OptionCatalogBuilder{};
     auto definitions = options::makeSessionDefinitions(options::SessionDefinitionSeed{
         .environmentName = "test_environment",
         .environmentNames = {"test_environment"},
     });
-    std::ranges::for_each(definitions, [&](auto definition) { nr::test::require(builder.add(std::move(definition))); });
-    auto result = builder.build();
-    nr::test::require(result.valid());
-    return result.catalog;
+    return nr::test::options::buildCatalog(definitions);
 }
 
 [[nodiscard]] options::OptionAvailabilityMap allAvailable(const options::OptionCatalog &catalog)
 {
     auto result = options::OptionAvailabilityMap{};
-    std::ranges::for_each(catalog.definitions(), [&](auto const &entry) {
+    std::ranges::for_each(catalog.definitions(), [&](const auto &entry) {
         result.emplace(entry.first, options::OptionAvailability{.available = true});
     });
     return result;

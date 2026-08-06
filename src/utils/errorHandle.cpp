@@ -1,7 +1,7 @@
 module nr.utils;
 
 import :errorHandle;
-import :staticUtils;
+import :staticUtilsConstants;
 import dependency.json;
 import dependency.processLease;
 import std;

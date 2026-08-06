@@ -3,7 +3,6 @@ import :resourcePool;
 import dependency.vulkan;
 import nr.utils;
 import :type;
-import :vk;
 import :resource;
 import :memoryAllocator;
 import std;
@@ -18,7 +17,7 @@ void ResourceFactory::initialize(const MemoryAllocator &allocator, const vk::rai
 
 [[nodiscard]] bool ResourceFactory::valid() const noexcept
 {
-    return device_.has_value();
+    return allocator_.has_value() && device_.has_value();
 }
 
 [[nodiscard]] Buffer ResourceFactory::createBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage,
@@ -43,7 +42,7 @@ void ResourcePool::initialize(const MemoryAllocator &allocator, const vk::raii::
 
 [[nodiscard]] bool ResourcePool::valid() const noexcept
 {
-    return device_.has_value();
+    return allocator_.has_value() && device_.has_value();
 }
 
 Buffer &ResourcePool::allocateTransientBuffer(const vk::BufferCreateInfo &createInfo, MemoryUsage memoryUsage,

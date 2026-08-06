@@ -1043,13 +1043,17 @@ frame N body
   9. consume the latest per-poll vertical wheel delta and begin the Dear ImGui frame
  10. render semantic UI from Snapshot N; agent and offline-Lua modes use a disabled
      read-only mirror
- 11. in human mode, give a committed UI mutation first chance to reserve N+1
- 12. if no UI mutation reserved the slot and UI does not capture input,
+ 11. append the app-owned performance tail, finalize Dear ImGui once, and retain the
+     returned current-frame input-capture state for camera arbitration
+ 12. in human mode, give every UI mutation attempt—including a rejected attempt—priority
+     over camera input so the cursor baseline still advances without a deferred jump
+ 13. if no UI mutation was attempted and the finalized UI does not capture input,
      sample and submit one combined camera-pose mutation
- 13. renderer, resolution resolver, camera derivation, and all nodes consume Snapshot N
- 14. Renderer calls Device::beginFrame(), then advances frame-slot-bound continuations
- 15. Present/render submission for frame N proceeds
- 16. a renderer frame-scope finalizer closes every frame-coupled operation outcome,
+ 14. renderer, resolution resolver, camera derivation, and all nodes consume Snapshot N;
+     UiNode consumes the already-finalized draw data without reopening the UI transaction
+ 15. Renderer calls Device::beginFrame(), then advances frame-slot-bound continuations
+ 16. Present/render submission for frame N proceeds
+ 17. a renderer frame-scope finalizer closes every frame-coupled operation outcome,
       including all early-return/failure paths
 ```
 
@@ -2025,13 +2029,20 @@ snapshot value.
 
 ### 22.4 Required frame-loop change
 
-The semantic widgets must be built after `UiSystem::beginFrame()` but before physical
-camera submission. The current pattern where node callbacks execute later inside the UI
-render node cannot provide deterministic UI-before-camera arbitration and must be
-restructured.
+The semantic widgets are built after `UiSystem::beginFrame()` and the app finalizes that
+same Dear ImGui frame exactly once before physical camera submission. Finalization appends
+the CPU/GPU performance tail, returns the current frame's capture state, and makes draw data
+available to the renderer. Both the mutation-attempt priority branch and camera admission
+consume that one returned state; there is no separately cached capture-state read.
 
-ImGui draw-data finalization may still happen in the UI render path; semantic option
-registration and mutation submission may not.
+`UiSystem` owns queued section IDs/titles and the ImGui context. Its explicit
+idle/active/finalized state rejects a second `beginFrame()` while a frame remains active;
+orderly shutdown is the only path that closes such an active frame without finalizing draw
+data, immediately before context release.
+
+`UiNode` is downstream of this transaction. It may read finalized draw data, synchronize UI
+textures, and copy draw lists and commands, but it may not render app sections or call
+`UiSystem::finalizeFrame()`.
 
 ## 23. Embedded Lua
 

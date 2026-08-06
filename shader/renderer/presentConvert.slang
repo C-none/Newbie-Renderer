@@ -45,6 +45,11 @@ static const float kScRgbReferenceWhiteNits = 80.0f;
 static const float kScRgbMaxOutputNits = 1000.0f;
 static const float kSdrReferenceWhiteNits = 100.0f;
 static const float kSdrMaxOutputNits = 100.0f;
+static const float kPqM1 = 2610.0f / 16384.0f;
+static const float kPqM2 = 2523.0f / 32.0f;
+static const float kPqC1 = 3424.0f / 4096.0f;
+static const float kPqC2 = 2413.0f / 128.0f;
+static const float kPqC3 = 2392.0f / 128.0f;
 
 float3 linearToSrgb(float3 linearColor)
 {
@@ -65,29 +70,17 @@ float3 linearSrgbToBt2020(float3 linearColor)
 // ST 2084 / PQ OETF on a signal normalized so 1.0 == 10000 nits.
 float pqSignalFromNormalized(float y)
 {
-    static const float m1 = 2610.0f / 16384.0f;
-    static const float m2 = 2523.0f / 32.0f;
-    static const float c1 = 3424.0f / 4096.0f;
-    static const float c2 = 2413.0f / 128.0f;
-    static const float c3 = 2392.0f / 128.0f;
-
-    float yc = pow(saturate(y), m1);
-    return pow((c1 + c2 * yc) / (1.0f + c3 * yc), m2);
+    float yc = pow(saturate(y), kPqM1);
+    return pow((kPqC1 + kPqC2 * yc) / (1.0f + kPqC3 * yc), kPqM2);
 }
 
 // Inverse ST 2084 / PQ; returns a normalized signal where 1.0 == 10000 nits.
 float normalizedFromPqSignal(float e)
 {
-    static const float m1 = 2610.0f / 16384.0f;
-    static const float m2 = 2523.0f / 32.0f;
-    static const float c1 = 3424.0f / 4096.0f;
-    static const float c2 = 2413.0f / 128.0f;
-    static const float c3 = 2392.0f / 128.0f;
-
-    float ep = pow(saturate(e), 1.0f / m2);
-    float num = max(ep - c1, 0.0f);
-    float den = max(c2 - c3 * ep, 1.0e-6f);
-    return pow(num / den, 1.0f / m1);
+    float ep = pow(saturate(e), 1.0f / kPqM2);
+    float num = max(ep - kPqC1, 0.0f);
+    float den = max(kPqC2 - kPqC3 * ep, 1.0e-6f);
+    return pow(num / den, 1.0f / kPqM1);
 }
 
 float3 nitsToSt2084Pq(float3 nits)

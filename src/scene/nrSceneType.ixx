@@ -48,21 +48,7 @@ enum class SceneRevisionMutation : std::uint8_t
     instanceRemoved,
     simulationUpdated,
     meshResident,
-    materialResident,
     textureResident,
-    externalTopology,
-    externalTransform,
-    externalVisibility,
-    externalTraceMask,
-    externalMeshBinding,
-    externalMeshContent,
-    externalMeshLayout,
-    externalMaterialBinding,
-    externalMaterialPayload,
-    externalTextureBinding,
-    externalTextureContent,
-    externalTextureResidency,
-    externalEcsMutation,
 };
 
 struct SceneRevisionMutationPolicy
@@ -82,38 +68,11 @@ struct SceneRevisionMutationPolicy
         case SceneRevisionMutation::instanceRemoved:
             return Mask::of<topology, transform, visibility, traceMask, meshBinding>();
         case SceneRevisionMutation::simulationUpdated:
-        case SceneRevisionMutation::externalTransform:
             return Mask::of<transform>();
         case SceneRevisionMutation::meshResident:
             return Mask::of<topology, meshContent>();
-        case SceneRevisionMutation::materialResident:
-            return Mask::of<topology, materialPayload>();
         case SceneRevisionMutation::textureResident:
-        case SceneRevisionMutation::externalTextureResidency:
             return Mask::of<topology, textureResidency>();
-        case SceneRevisionMutation::externalTopology:
-            return Mask::of<topology>();
-        case SceneRevisionMutation::externalVisibility:
-            return Mask::of<topology, visibility>();
-        case SceneRevisionMutation::externalTraceMask:
-            return Mask::of<traceMask>();
-        case SceneRevisionMutation::externalMeshBinding:
-            return Mask::of<topology, meshBinding>();
-        case SceneRevisionMutation::externalMeshContent:
-            return Mask::of<meshContent>();
-        case SceneRevisionMutation::externalMeshLayout:
-            return Mask::of<topology, meshLayout>();
-        case SceneRevisionMutation::externalMaterialBinding:
-            return Mask::of<topology, materialBinding>();
-        case SceneRevisionMutation::externalMaterialPayload:
-            return Mask::of<materialPayload>();
-        case SceneRevisionMutation::externalTextureBinding:
-            return Mask::of<topology, textureBinding>();
-        case SceneRevisionMutation::externalTextureContent:
-            return Mask::of<textureContent>();
-        case SceneRevisionMutation::externalEcsMutation:
-            return Mask::of<topology, transform, visibility, traceMask, meshBinding, meshContent, meshLayout,
-                            materialBinding, materialPayload, textureBinding, textureContent, textureResidency>();
         default:
             return {};
         }
@@ -166,7 +125,6 @@ enum class GpuResidencyState : std::uint8_t
     uploadQueued,
     waitingGraphicsSync,
     resident,
-    evictQueued,
 };
 
 struct SceneCreateInfo
@@ -241,86 +199,6 @@ struct SceneExtractInput
     std::optional<std::uint32_t> partitionOverride{};
 };
 
-struct RasterDrawPacket
-{
-    flecs::entity renderable{};
-    nr::resource::MeshHandle mesh{};
-    nr::resource::MaterialHandle material{};
-    std::uint32_t geometryIndex = 0;
-    glm::mat4 world{1.0f};
-    nr::resource::Aabb worldBounds{};
-    std::uint64_t sortKey = 0;
-};
-
-struct RayTracingInstancePacket
-{
-    flecs::entity renderable{};
-    nr::resource::MeshHandle mesh{};
-    glm::mat4 world{1.0f};
-    std::uint32_t instanceMask = 0xFF;
-    std::uint16_t tlasBucket = 0;
-};
-
-struct TlasBuildInputPacket
-{
-    flecs::entity renderable{};
-    nr::resource::MeshHandle mesh{};
-    glm::mat4 world{1.0f};
-    std::uint32_t instanceMask = 0xFF;
-    std::uint16_t tlasBucket = 0;
-};
-
-struct SceneCameraBinding
-{
-    nr::resource::CameraAssetHandle camera{};
-    bool synthetic = false;
-};
-
-struct SceneLightBinding
-{
-    nr::resource::LightAssetHandle light{};
-};
-
-struct SceneResolvedCamera
-{
-    flecs::entity entity{};
-    nr::resource::CameraAssetHandle camera{};
-    glm::mat4 world{1.0f};
-    glm::mat4 view{1.0f};
-    glm::mat4 projection{1.0f};
-    SceneFrustum frustum{};
-    bool fallback = false;
-};
-
-struct SceneLightPacket
-{
-    flecs::entity entity{};
-    nr::resource::LightAssetHandle light{};
-    glm::mat4 world{1.0f};
-    glm::vec3 position{0.0f};
-    glm::vec3 direction{0.0f, 0.0f, -1.0f};
-    std::uint32_t stableInstanceId = 0;
-};
-
-struct ScenePacketSet
-{
-    SceneRevisionSnapshot revisions{};
-    ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
-    std::vector<RasterDrawPacket> rasterDraws{};
-    std::vector<RayTracingInstancePacket> rtInstances{};
-    std::vector<TlasBuildInputPacket> tlasBuildInputs{};
-    std::vector<SceneLightPacket> lights{};
-};
-
-struct SceneBridgeFrameConstants
-{
-    glm::mat4 view{1.0f};
-    glm::mat4 projection{1.0f};
-    glm::mat4 viewProjection{1.0f};
-    glm::vec3 cameraWorld{0.0f};
-    float drawCount = 0.0f;
-};
-
 struct SceneBridgeBufferBinding
 {
     std::optional<std::reference_wrapper<const nr::rhi::Buffer>> buffer{};
@@ -336,29 +214,27 @@ struct SceneBridgeGeometryBuffers
     [[nodiscard]] bool hasVertexBuffer() const noexcept;
 
     [[nodiscard]] bool hasIndexBuffer() const noexcept;
+
+    [[nodiscard]] bool valid() const noexcept;
 };
 
 struct SceneBridgeDrawGeometry
 {
-    SceneBridgeBufferBinding vertexBuffer{};
-    SceneBridgeBufferBinding indexBuffer{};
     std::uint32_t firstVertex = 0;
     std::uint32_t vertexCount = 0;
     std::uint32_t firstIndex = 0;
     std::uint32_t indexCount = 0;
     std::int32_t vertexOffset = 0;
-    vk::IndexType indexType = vk::IndexType::eUint32;
     vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
 
-    [[nodiscard]] bool hasVertexBuffer() const noexcept;
+    [[nodiscard]] bool indexed() const noexcept;
 
-    [[nodiscard]] bool hasIndexBuffer() const noexcept;
+    [[nodiscard]] bool valid() const noexcept;
 };
 
 struct SceneBridgeMaterialRasterState
 {
     vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
-    bool doubleSided = false;
 };
 
 using SceneMaterialTextureSlot = nr::shader::share::MaterialTextureSlot;
@@ -416,7 +292,9 @@ struct SceneMaterialTextureBindings
     SceneMaterialNormalTextureBinding normal{};
 };
 
-struct SceneBridgeDrawPacket
+using SceneTextureHandleTable = std::map<std::uint32_t, nr::resource::TextureHandle>;
+
+struct RasterDrawPacket
 {
     flecs::entity renderable{};
     nr::resource::MeshHandle mesh{};
@@ -425,27 +303,88 @@ struct SceneBridgeDrawPacket
     glm::mat4 world{1.0f};
     nr::resource::Aabb worldBounds{};
     std::uint64_t sortKey = 0;
-    std::uint32_t meshBindless = std::numeric_limits<std::uint32_t>::max();
-    std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
     SceneMaterialTextureBindings materialTextures{};
     SceneBridgeMaterialRasterState materialRaster{};
     SceneBridgeDrawGeometry geometry{};
 };
 
-struct SceneBridgeDrawGroup
+struct RayTracingInstancePacket
 {
-    nr::resource::MaterialHandle material{};
-    std::uint32_t materialBindless = std::numeric_limits<std::uint32_t>::max();
-    SceneBridgeMaterialRasterState materialRaster{};
-    std::vector<std::uint32_t> drawIndices{};
+    flecs::entity renderable{};
+    nr::resource::MeshHandle mesh{};
+    glm::mat4 world{1.0f};
+    std::uint32_t instanceMask = 0xFF;
+    std::uint16_t tlasBucket = 0;
+};
+
+struct TlasBuildInputPacket
+{
+    flecs::entity renderable{};
+    nr::resource::MeshHandle mesh{};
+    glm::mat4 world{1.0f};
+    std::uint32_t instanceMask = 0xFF;
+    std::uint16_t tlasBucket = 0;
+};
+
+struct SceneCameraBinding
+{
+    nr::resource::CameraAssetHandle camera{};
+    bool synthetic = false;
+};
+
+struct SceneLightBinding
+{
+    nr::resource::LightAssetHandle light{};
+};
+
+struct SceneResolvedCamera
+{
+    flecs::entity entity{};
+    nr::resource::CameraAssetHandle camera{};
+    glm::mat4 world{1.0f};
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    SceneFrustum frustum{};
+    bool fallback = false;
+};
+
+struct SceneLightPacket
+{
+    flecs::entity entity{};
+    nr::resource::LightAssetHandle light{};
+    glm::mat4 world{1.0f};
+    glm::vec3 position{0.0f};
+    glm::vec3 direction{0.0f, 0.0f, -1.0f};
+    std::uint32_t stableInstanceId = 0;
+};
+
+struct ScenePacketSet
+{
+    SceneRevisionSnapshot revisions{};
+    ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
+    SceneBridgeGeometryBuffers rasterGeometryBuffers{};
+    SceneTextureHandleTable rasterTextureHandlesById{};
+    std::vector<RasterDrawPacket> rasterDraws{};
+    std::vector<RayTracingInstancePacket> rtInstances{};
+    std::vector<TlasBuildInputPacket> tlasBuildInputs{};
+    std::vector<SceneLightPacket> lights{};
+};
+
+struct SceneBridgeFrameConstants
+{
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    glm::mat4 viewProjection{1.0f};
+    glm::vec3 cameraWorld{0.0f};
+    float drawCount = 0.0f;
 };
 
 struct SceneBridgeFrame
 {
     ScenePacketDomain domain = ScenePacketDomain::rasterDraw;
     SceneBridgeGeometryBuffers geometryBuffers{};
-    std::vector<SceneBridgeDrawPacket> rasterDraws{};
-    std::vector<SceneBridgeDrawGroup> materialGroups{};
+    SceneTextureHandleTable rasterTextureHandlesById{};
+    std::vector<RasterDrawPacket> rasterDraws{};
     SceneBridgeFrameConstants frameConstants{};
     bool hasPrimaryCamera = false;
 };
@@ -468,9 +407,35 @@ struct SceneAccelerationStructureGeometrySemanticKey
     [[nodiscard]] bool operator==(const SceneAccelerationStructureGeometrySemanticKey &) const = default;
 };
 
+struct SceneGeometryAtlasBackingGeneration
+{
+    std::uint64_t vertex = 0;
+    std::uint64_t index = 0;
+
+    [[nodiscard]] bool operator==(const SceneGeometryAtlasBackingGeneration &) const = default;
+};
+
+struct SceneGeometryAtlasDomainStats
+{
+    vk::DeviceSize capacityBytes = 0;
+    vk::DeviceSize highWaterBytes = 0;
+    vk::DeviceSize reusableBytes = 0;
+
+    [[nodiscard]] bool operator==(const SceneGeometryAtlasDomainStats &) const = default;
+};
+
+struct SceneGeometryAtlasStats
+{
+    SceneGeometryAtlasDomainStats vertex{};
+    SceneGeometryAtlasDomainStats index{};
+
+    [[nodiscard]] bool operator==(const SceneGeometryAtlasStats &) const = default;
+};
+
 struct SceneAccelerationStructureMeshSemanticKey
 {
     std::uint64_t meshGpuVersion = 0;
+    SceneGeometryAtlasBackingGeneration atlasBackingGeneration{};
     vk::GeometryInstanceFlagsKHR instanceFlags{};
     std::vector<SceneAccelerationStructureGeometrySemanticKey> geometries{};
 
@@ -632,52 +597,6 @@ struct TemplateResourcePinSet
 
 namespace detail
 {
-struct MaterialGpuData
-{
-    std::uint32_t abiVersion = 3;
-    std::uint32_t featureFlags = 0;
-    std::uint32_t alphaMode = 0;
-    std::uint32_t textureSlotCount = static_cast<std::uint32_t>(nr::resource::materialTextureSlotCount);
-
-    glm::vec4 baseColorFactor{1.0f};
-
-    glm::vec4 emissiveAndMetallic{0.0f, 0.0f, 0.0f, 1.0f};
-
-    glm::vec4 roughnessNormalOcclusionAlpha{1.0f, 1.0f, 1.0f, 0.5f};
-
-    glm::vec4 clearcoatFactorRoughness{0.0f, 0.0f, 0.0f, 0.0f};
-
-    glm::vec4 sheenColorRoughness{0.0f, 0.0f, 0.0f, 0.0f};
-
-    glm::vec4 transmissionAnisotropy{0.0f, 0.0f, 0.0f, 0.0f};
-
-    std::array<std::uint64_t, nr::resource::materialTextureSlotCount> textureHandles{};
-
-    std::array<std::uint32_t, nr::resource::materialTextureSlotCount> uvSets{};
-    std::array<glm::vec4, nr::resource::materialTextureSlotCount> uvLinear{};
-    std::array<glm::vec2, nr::resource::materialTextureSlotCount> uvOffsets{};
-};
-
-struct CameraGpuData
-{
-    std::uint32_t projection = 0;
-    float verticalFovRadians = 0.0f;
-    float orthoHeight = 0.0f;
-    float nearPlane = 0.1f;
-    float farPlane = 1000.0f;
-};
-
-struct LightGpuData
-{
-    std::uint32_t type = 0;
-    float intensity = 1.0f;
-    glm::vec3 color{1.0f};
-    float range = 0.0f;
-    float innerConeRadians = 0.0f;
-    float outerConeRadians = 0.0f;
-    std::uint32_t castShadow = 0;
-};
-
 struct MeshGeometryAtlasAllocation
 {
     vk::DeviceSize vertexByteOffset = 0;
@@ -686,17 +605,12 @@ struct MeshGeometryAtlasAllocation
     std::uint32_t indexBase = 0;
     std::uint32_t vertexCount = 0;
     std::uint32_t indexCount = 0;
+    SceneGeometryAtlasBackingGeneration backingGenerationAtAllocation{};
 };
 
 struct MeshGpuPayload
 {
     MeshGeometryAtlasAllocation atlas{};
-};
-
-struct MaterialGpuPayload
-{
-    nr::rhi::Buffer buffer{};
-    std::size_t byteSize = 0;
 };
 
 struct TextureGpuPayload
@@ -705,25 +619,9 @@ struct TextureGpuPayload
     vk::ImageLayout layout = vk::ImageLayout::eUndefined;
 };
 
-struct CameraGpuPayload
-{
-    nr::rhi::Buffer buffer{};
-};
-
-struct LightGpuPayload
-{
-    nr::rhi::Buffer buffer{};
-};
-
 struct RetiredMeshGpuPayload
 {
     MeshGpuPayload payload{};
-    std::uint64_t retireAfterSerial = 0;
-};
-
-struct RetiredMaterialGpuPayload
-{
-    MaterialGpuPayload payload{};
     std::uint64_t retireAfterSerial = 0;
 };
 
@@ -733,16 +631,10 @@ struct RetiredTextureGpuPayload
     std::uint64_t retireAfterSerial = 0;
 };
 
-struct RetiredCameraGpuPayload
+struct SceneGeometryAtlasReusableRange
 {
-    CameraGpuPayload payload{};
-    std::uint64_t retireAfterSerial = 0;
-};
-
-struct RetiredLightGpuPayload
-{
-    LightGpuPayload payload{};
-    std::uint64_t retireAfterSerial = 0;
+    vk::DeviceSize byteOffset = 0;
+    vk::DeviceSize byteSize = 0;
 };
 
 struct SceneGeometryAtlas
@@ -751,8 +643,11 @@ struct SceneGeometryAtlas
     nr::rhi::Buffer indexBuffer{};
     vk::DeviceSize vertexCapacityBytes = 0;
     vk::DeviceSize indexCapacityBytes = 0;
-    vk::DeviceSize vertexUsedBytes = 0;
-    vk::DeviceSize indexUsedBytes = 0;
+    vk::DeviceSize vertexHighWaterBytes = 0;
+    vk::DeviceSize indexHighWaterBytes = 0;
+    std::vector<SceneGeometryAtlasReusableRange> vertexReusableRanges{};
+    std::vector<SceneGeometryAtlasReusableRange> indexReusableRanges{};
+    SceneGeometryAtlasBackingGeneration backingGeneration{};
 };
 
 struct RetiredSceneGeometryAtlasBuffers
@@ -770,14 +665,11 @@ struct MeshAssetRecord
     nr::resource::Mesh cpu{};
     std::uint64_t cpuVersion = 1;
     std::uint32_t liveTemplatePins = 0;
-    std::uint32_t liveExplicitPins = 0;
     std::uint64_t gpuVersion = 0;
-    std::uint64_t lastUploadFrameSerial = 0;
     GpuResidencyState gpuState = GpuResidencyState::none;
     std::optional<detail::MeshGpuPayload> gpu{};
     std::vector<detail::RetiredMeshGpuPayload> retiredGpu{};
     bool cpuReady = false;
-    bool uploadQueued = false;
 };
 
 struct MaterialAssetRecord
@@ -787,14 +679,7 @@ struct MaterialAssetRecord
     nr::resource::Material cpu{};
     std::uint64_t cpuVersion = 1;
     std::uint32_t liveTemplatePins = 0;
-    std::uint32_t liveExplicitPins = 0;
-    std::uint64_t gpuVersion = 0;
-    std::uint64_t lastUploadFrameSerial = 0;
-    GpuResidencyState gpuState = GpuResidencyState::none;
-    std::optional<detail::MaterialGpuPayload> gpu{};
-    std::vector<detail::RetiredMaterialGpuPayload> retiredGpu{};
     bool cpuReady = false;
-    bool uploadQueued = false;
 };
 
 struct TextureAssetRecord
@@ -804,14 +689,11 @@ struct TextureAssetRecord
     nr::resource::Texture cpu{};
     std::uint64_t cpuVersion = 1;
     std::uint32_t liveTemplatePins = 0;
-    std::uint32_t liveExplicitPins = 0;
     std::uint64_t gpuVersion = 0;
-    std::uint64_t lastUploadFrameSerial = 0;
     GpuResidencyState gpuState = GpuResidencyState::none;
     std::optional<detail::TextureGpuPayload> gpu{};
     std::vector<detail::RetiredTextureGpuPayload> retiredGpu{};
     bool cpuReady = false;
-    bool uploadQueued = false;
 };
 
 struct SceneSampledTextureBinding
@@ -830,16 +712,8 @@ struct CameraAssetRecord
     nr::resource::CameraAssetHandle handle{};
     std::string stableKey{};
     nr::resource::CameraAsset cpu{};
-    std::uint64_t cpuVersion = 1;
     std::uint32_t liveTemplatePins = 0;
-    std::uint32_t liveExplicitPins = 0;
-    std::uint64_t gpuVersion = 0;
-    std::uint64_t lastUploadFrameSerial = 0;
-    GpuResidencyState gpuState = GpuResidencyState::none;
-    std::optional<detail::CameraGpuPayload> gpu{};
-    std::vector<detail::RetiredCameraGpuPayload> retiredGpu{};
     bool cpuReady = false;
-    bool uploadQueued = false;
 };
 
 struct LightAssetRecord
@@ -847,16 +721,8 @@ struct LightAssetRecord
     nr::resource::LightAssetHandle handle{};
     std::string stableKey{};
     nr::resource::LightAsset cpu{};
-    std::uint64_t cpuVersion = 1;
     std::uint32_t liveTemplatePins = 0;
-    std::uint32_t liveExplicitPins = 0;
-    std::uint64_t gpuVersion = 0;
-    std::uint64_t lastUploadFrameSerial = 0;
-    GpuResidencyState gpuState = GpuResidencyState::none;
-    std::optional<detail::LightGpuPayload> gpu{};
-    std::vector<detail::RetiredLightGpuPayload> retiredGpu{};
     bool cpuReady = false;
-    bool uploadQueued = false;
 };
 
 struct SceneTemplateRecord
@@ -919,7 +785,7 @@ struct TextureColorSpaceHint
 {
     bool hasColor = false;
     bool hasLinear = false;
-    bool preferSrgb = true;
+    bool preferSrgb = false;
 };
 
 struct PreparedImageLevel

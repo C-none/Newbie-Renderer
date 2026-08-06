@@ -8,31 +8,11 @@ import nr.renderer;
 import nr.renderPasses;
 import nr.rhi;
 import nr.scene;
+import nr.test.options;
 import nr.utils;
 
 namespace
 {
-[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult &preflight)
-{
-    auto values = nr::options::OptionValueMap{};
-    auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
-        values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
-    });
-    return nr::options::OptionFrameSnapshot{
-        .catalog = preflight.optionCatalog,
-        .values = std::move(values),
-        .availability = std::move(availability),
-        .frameIndex = 1u,
-        .revision = 1u,
-        .graphGeneration = 1u,
-        .bindingEpoch = 1u,
-        .snapshotToken = "rtobject-material-snapshot",
-    };
-}
-
 constexpr auto kFrameAcquireTimeout = std::chrono::seconds{5};
 constexpr auto kMaxResizeRetries = std::uint32_t{3u};
 
@@ -355,7 +335,8 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         {
             return false;
         }
-        auto const optionSnapshot = makeDefaultSnapshot(preflight);
+        auto const optionSnapshot =
+            nr::test::options::makeDefaultSnapshot(preflight.optionCatalog, "rtobject-material-snapshot");
 
         auto const skeletonStatisticsBefore = app.renderer().renderGraphSkeletonStatistics();
         if (!renderUntilRtSceneReady(app, scene->get(), optionSnapshot) ||

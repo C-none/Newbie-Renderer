@@ -163,6 +163,8 @@ class OptionSystem
     [[nodiscard]] std::optional<AbandonedMutation> shutdown();
 
   private:
+    struct PreparedGraphReplacement;
+
     enum class GateState : std::uint8_t
     {
         closed,
@@ -172,6 +174,9 @@ class OptionSystem
 
     [[nodiscard]] static std::shared_ptr<const OptionCatalog> emptyCatalog();
     [[nodiscard]] CatalogBuildResult combineCatalogs(const OptionCatalog &session, const OptionCatalog &graph) const;
+    [[nodiscard]] CatalogCommitResult prepareGraphReplacementLocked(
+        std::shared_ptr<const OptionCatalog> graphCatalog, PreparedGraphReplacement &replacement) const;
+    void applyGraphReplacementLocked(PreparedGraphReplacement &&replacement);
     [[nodiscard]] ScheduleRejectReason validateForExecutionLocked(const ScheduledMutation &mutation) const;
     [[nodiscard]] OptionAvailabilityMap normalizedAvailability(const OptionCatalog &catalog,
                                                                const OptionAvailabilityMap &availability,

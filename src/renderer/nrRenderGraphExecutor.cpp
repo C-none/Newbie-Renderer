@@ -919,7 +919,7 @@ void RenderGraphExecutor::attachFrameBoundaryMetadata(nr::rhi::CommandBatch &sub
     if (resource.isAccelerationStructure)
     {
         if (resource.importedAccelerationStructureResource.has_value() &&
-            resource.importedAccelerationStructureResource->get().storageBuffer().sharingMode() ==
+            resource.importedAccelerationStructureResource->get().storageSharingMode() ==
                 vk::SharingMode::eConcurrent)
         {
             return true;

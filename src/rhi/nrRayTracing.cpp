@@ -9,27 +9,35 @@ import std;
 
 namespace nr::rhi
 {
-[[nodiscard]] vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment)
+namespace
 {
-    nrAssert(alignment > 0, "alignUp requires alignment > 0.");
-    const auto remainder = value % alignment;
-    if (remainder == 0)
-    {
-        return value;
-    }
-    return value + (alignment - remainder);
+template <std::unsigned_integral T>
+[[nodiscard]] T checkedAdd(T lhs, T rhs, std::string_view context)
+{
+    nrAssert(lhs <= std::numeric_limits<T>::max() - rhs,
+             std::format("{} addition exceeds the destination integer range.", context));
+    return lhs + rhs;
 }
 
-[[nodiscard]] std::uint32_t alignUp(std::uint32_t value, std::uint32_t alignment)
+template <std::unsigned_integral T>
+[[nodiscard]] T checkedMultiply(T lhs, T rhs, std::string_view context)
 {
-    nrAssert(alignment > 0, "alignUp requires alignment > 0.");
+    nrAssert(rhs == 0 || lhs <= std::numeric_limits<T>::max() / rhs,
+             std::format("{} multiplication exceeds the destination integer range.", context));
+    return lhs * rhs;
+}
+
+template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T alignment, std::string_view context)
+{
+    nrAssert(alignment > 0, std::format("{} requires alignment > 0.", context));
     const auto remainder = value % alignment;
     if (remainder == 0)
     {
         return value;
     }
-    return value + (alignment - remainder);
+    return checkedAdd(value, alignment - remainder, context);
 }
+} // namespace
 
 [[nodiscard]] ShaderBindingTableBuildPlan makeShaderBindingTableBuildPlan(const ShaderBindingTableLayoutDesc &desc)
 {
@@ -47,10 +55,12 @@ namespace nr::rhi
 
     auto totalSize = vk::DeviceSize{0};
     std::ranges::for_each(sectionPlan, [&](const ShaderBindingTableBuildPlanSection &section) {
-        totalSize = std::max(totalSize, section.offset + section.size);
+        totalSize = std::max(totalSize, checkedAdd(section.offset, section.size, "SBT section end"));
     });
 
-    totalSize = alignUp(totalSize, static_cast<vk::DeviceSize>(normalizedDesc.capabilities.shaderGroupBaseAlignment));
+    totalSize = checkedAlignUp(totalSize,
+                               static_cast<vk::DeviceSize>(normalizedDesc.capabilities.shaderGroupBaseAlignment),
+                               "SBT total size alignment");
 
     return ShaderBindingTableBuildPlan{
         .totalSize = totalSize,
@@ -71,7 +81,7 @@ namespace nr::rhi
              rt_detail::formatMessage("makeShaderBindingTableBuildPlan invalid desc: {}", validation.message));
 
     return makeShaderBindingTableBuildPlan(ShaderBindingTableLayoutDesc{
-        .capabilities = desc.capabilities,
+        .capabilities = desc.pipeline.capabilities(),
         .pipelineGroupCount = desc.pipeline.shaderGroupCount(),
         .raygen = desc.raygen,
         .miss = desc.miss,
@@ -90,9 +100,11 @@ namespace nr::rhi
     auto plan = makeShaderBindingTableBuildPlan(desc);
     nrAssert(plan.totalSize > 0, "ShaderBindingTable::create requires totalSize > 0.");
 
-    auto packSection = [&](std::span<std::uint8_t> tableBytes,
+    auto packSection = [&](std::span<std::uint8_t> tableBytes, const ShaderBindingTableSectionDesc &section,
                            const ShaderBindingTableBuildPlanSection &plannedSection) {
-        auto sectionRecordCount = rt_detail::recordCount(plannedSection.section);
+        auto sectionRecordCount = rt_detail::recordCount(section);
+        nrAssert(sectionRecordCount == plannedSection.recordCount,
+                 "ShaderBindingTable::create source section no longer matches its value build plan.");
         if (sectionRecordCount == 0)
         {
             return;
@@ -100,15 +112,17 @@ namespace nr::rhi
 
         auto copyRecord = [&](std::uint32_t recordIndex, std::uint32_t shaderGroupIndex,
                               std::span<const std::uint8_t> recordData) {
-            auto dstOffset =
-                plannedSection.offset + (static_cast<vk::DeviceSize>(recordIndex) * plannedSection.section.stride);
+            auto const recordOffset = checkedMultiply(static_cast<vk::DeviceSize>(recordIndex),
+                                                      static_cast<vk::DeviceSize>(plannedSection.stride),
+                                                      "SBT record offset");
+            auto dstOffset = checkedAdd(plannedSection.offset, recordOffset, "SBT record destination");
             auto dstStart = static_cast<std::size_t>(dstOffset);
             nrAssert(dstStart + static_cast<std::size_t>(plan.handleSize) <= tableBytes.size(),
                      "ShaderBindingTable::create destination handle copy range overflow.");
             nrAssert(dstStart + static_cast<std::size_t>(plan.handleSize) + recordData.size() <= tableBytes.size(),
                      "ShaderBindingTable::create destination record data copy range overflow.");
 
-            auto handle = desc.pipeline.shaderGroupHandles(shaderGroupIndex, 1, plan.handleSize);
+            auto handle = desc.pipeline.shaderGroupHandles(shaderGroupIndex, 1);
             nrAssert(handle.size() == static_cast<std::size_t>(plan.handleSize),
                      "ShaderBindingTable::create expected one shader group handle.");
 
@@ -123,22 +137,23 @@ namespace nr::rhi
             }
         };
 
-        if (!plannedSection.section.records.empty())
+        if (!section.records.empty())
         {
             auto recordIndices = std::views::iota(std::uint32_t{0}, sectionRecordCount);
             std::ranges::for_each(recordIndices, [&](std::uint32_t recordIndex) {
-                const auto &record = plannedSection.section.records[recordIndex];
+                const auto &record = section.records[recordIndex];
                 copyRecord(recordIndex, record.groupIndex, record.data);
             });
             return;
         }
 
-        auto handles =
-            desc.pipeline.shaderGroupHandles(plannedSection.section.firstGroup, sectionRecordCount, plan.handleSize);
+        auto handles = desc.pipeline.shaderGroupHandles(plannedSection.firstGroup, sectionRecordCount);
         auto groupIndices = std::views::iota(std::uint32_t{0}, sectionRecordCount);
         std::ranges::for_each(groupIndices, [&](std::uint32_t groupIndex) {
-            auto dstOffset =
-                plannedSection.offset + (static_cast<vk::DeviceSize>(groupIndex) * plannedSection.section.stride);
+            auto const recordOffset = checkedMultiply(static_cast<vk::DeviceSize>(groupIndex),
+                                                      static_cast<vk::DeviceSize>(plannedSection.stride),
+                                                      "SBT group record offset");
+            auto dstOffset = checkedAdd(plannedSection.offset, recordOffset, "SBT group record destination");
             auto srcOffset = static_cast<std::size_t>(groupIndex) * static_cast<std::size_t>(plan.handleSize);
 
             auto dstStart = static_cast<std::size_t>(dstOffset);
@@ -153,11 +168,13 @@ namespace nr::rhi
         });
     };
 
+    nrAssert(plan.totalSize <= static_cast<vk::DeviceSize>(std::numeric_limits<std::size_t>::max()),
+             "ShaderBindingTable::create total size exceeds host address space.");
     auto tableBytes = std::vector<std::uint8_t>(static_cast<std::size_t>(plan.totalSize), std::uint8_t{0});
-    packSection(tableBytes, plan.raygen);
-    packSection(tableBytes, plan.miss);
-    packSection(tableBytes, plan.hit);
-    packSection(tableBytes, plan.callable);
+    packSection(tableBytes, desc.raygen, plan.raygen);
+    packSection(tableBytes, desc.miss, plan.miss);
+    packSection(tableBytes, desc.hit, plan.hit);
+    packSection(tableBytes, desc.callable, plan.callable);
 
     vk::BufferCreateInfo bufferInfo{};
     bufferInfo.size = plan.totalSize;
@@ -172,6 +189,7 @@ namespace nr::rhi
 
     ShaderBindingTable sbt;
     auto baseAddress = buffer.deviceAddress();
+    sbt.pipelineIdentity_ = desc.pipeline.identity();
     sbt.buffer_ = std::move(buffer);
 
     sbt.raygenRegion_ = rt_detail::buildRegion(baseAddress, plan.raygen);
@@ -179,7 +197,7 @@ namespace nr::rhi
     sbt.hitRegion_ = rt_detail::buildRegion(baseAddress, plan.hit);
     sbt.callableRegion_ = rt_detail::buildRegion(baseAddress, plan.callable);
 
-    auto baseAlignment = static_cast<vk::DeviceSize>(desc.capabilities.shaderGroupBaseAlignment);
+    auto baseAlignment = static_cast<vk::DeviceSize>(desc.pipeline.capabilities().shaderGroupBaseAlignment);
     auto checkRegionAlignment = [&](std::string_view label, const vk::StridedDeviceAddressRegionKHR &region) {
         if (region.deviceAddress == 0)
         {
@@ -200,7 +218,12 @@ namespace nr::rhi
 
 [[nodiscard]] bool ShaderBindingTable::valid() const noexcept
 {
-    return buffer_.valid();
+    return static_cast<bool>(pipelineIdentity_) && buffer_.valid();
+}
+
+[[nodiscard]] RayTracingPipelineIdentity ShaderBindingTable::pipelineIdentity() const noexcept
+{
+    return pipelineIdentity_;
 }
 
 [[nodiscard]] const Buffer &ShaderBindingTable::buffer() const noexcept
@@ -238,114 +261,25 @@ namespace nr::rhi
     };
 }
 
-[[nodiscard]] vk::TraceRaysIndirectCommand2KHR ShaderBindingTable::traceRaysIndirectCommand2(
-    TraceRaysDimensions dimensions) const noexcept
-{
-    auto regions = this->regions();
-    vk::TraceRaysIndirectCommand2KHR command{};
-    command.raygenShaderRecordAddress = regions.raygen.deviceAddress;
-    command.raygenShaderRecordSize = regions.raygen.size;
-    command.missShaderBindingTableAddress = regions.miss.deviceAddress;
-    command.missShaderBindingTableSize = regions.miss.size;
-    command.missShaderBindingTableStride = regions.miss.stride;
-    command.hitShaderBindingTableAddress = regions.hit.deviceAddress;
-    command.hitShaderBindingTableSize = regions.hit.size;
-    command.hitShaderBindingTableStride = regions.hit.stride;
-    command.callableShaderBindingTableAddress = regions.callable.deviceAddress;
-    command.callableShaderBindingTableSize = regions.callable.size;
-    command.callableShaderBindingTableStride = regions.callable.stride;
-    command.width = dimensions.width;
-    command.height = dimensions.height;
-    command.depth = dimensions.depth;
-    return command;
-}
-
-[[nodiscard]] vk::TraceRaysIndirectCommand2KHR makeTraceRaysIndirectCommand2(
-    const ShaderBindingTable &shaderBindingTable, TraceRaysDimensions dimensions)
-{
-    nrAssert(shaderBindingTable.valid(), "makeTraceRaysIndirectCommand2 requires a valid shader binding table.");
-    return shaderBindingTable.traceRaysIndirectCommand2(dimensions);
-}
-
-void setRayTracingPipelineStackSize(const vk::raii::CommandBuffer &commandBuffer, std::uint32_t pipelineStackSize)
-{
-    nrAssert(*commandBuffer != nullptr, "setRayTracingPipelineStackSize requires a valid command buffer.");
-    nrAssert(pipelineStackSize > 0, "setRayTracingPipelineStackSize requires pipelineStackSize > 0.");
-    commandBuffer.setRayTracingPipelineStackSizeKHR(pipelineStackSize);
-}
-
-void applyRayTracingPipelineStackSize(const vk::raii::CommandBuffer &commandBuffer, const RayTracingPipeline &pipeline,
-                                      std::optional<std::uint32_t> pipelineStackSize)
-{
-    auto diagnostics = rt_detail::validatePipelineStackSize(pipeline, pipelineStackSize);
-    nrAssert(diagnostics.isValid,
-             rt_detail::formatMessage("applyRayTracingPipelineStackSize invalid state: {}", diagnostics.message));
-
-    if (pipelineStackSize.has_value())
-    {
-        setRayTracingPipelineStackSize(commandBuffer, *pipelineStackSize);
-    }
-}
-
-void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc &desc,
-               const RayTracingCapabilitySnapshot &capabilities)
+void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc &desc)
 {
     nrAssert(*commandBuffer != nullptr, "traceRays requires a valid command buffer.");
     nrAssert(desc.pipeline.valid(), "traceRays requires a valid ray tracing pipeline.");
     nrAssert(desc.shaderBindingTable.valid(), "traceRays requires a valid shader binding table.");
+    nrAssert(desc.shaderBindingTable.pipelineIdentity() == desc.pipeline.identity(),
+             "traceRays requires an SBT created from the bound ray tracing pipeline.");
     nrAssert(desc.recordingQueueRole != QueueRole::Transfer,
              "traceRays requires a queue family that supports compute operations.");
 
-    auto diagnostics = rt_detail::validateTraceRaysDispatch(desc.dimensions, capabilities);
+    auto diagnostics = rt_detail::validateTraceRaysDispatch(desc.dimensions, desc.pipeline.capabilities());
     nrAssert(diagnostics.isValid, rt_detail::formatMessage("traceRays invalid dispatch: {}", diagnostics.message));
 
     auto regions = desc.shaderBindingTable.regions();
     nrAssert(regions.raygen.size == regions.raygen.stride, "traceRays requires raygen SBT region size == stride.");
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
-    applyRayTracingPipelineStackSize(commandBuffer, desc.pipeline, desc.pipelineStackSize);
     commandBuffer.traceRaysKHR(regions.raygen, regions.miss, regions.hit, regions.callable, desc.dimensions.width,
                                desc.dimensions.height, desc.dimensions.depth);
-}
-
-void traceRaysIndirect(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysIndirectDesc &desc,
-                       const RayTracingCapabilitySnapshot &capabilities)
-{
-    nrAssert(*commandBuffer != nullptr, "traceRaysIndirect requires a valid command buffer.");
-    nrAssert(desc.pipeline.valid(), "traceRaysIndirect requires a valid ray tracing pipeline.");
-    nrAssert(desc.shaderBindingTable.valid(), "traceRaysIndirect requires a valid shader binding table.");
-    nrAssert(desc.recordingQueueRole != QueueRole::Transfer,
-             "traceRaysIndirect requires a queue family that supports compute operations.");
-
-    auto diagnostics = rt_detail::validateTraceRaysIndirect(desc.indirectDeviceAddress, capabilities);
-    nrAssert(diagnostics.isValid,
-             rt_detail::formatMessage("traceRaysIndirect invalid arguments: {}", diagnostics.message));
-
-    auto regions = desc.shaderBindingTable.regions();
-    nrAssert(regions.raygen.size == regions.raygen.stride,
-             "traceRaysIndirect requires raygen SBT region size == stride.");
-
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
-    applyRayTracingPipelineStackSize(commandBuffer, desc.pipeline, desc.pipelineStackSize);
-    commandBuffer.traceRaysIndirectKHR(regions.raygen, regions.miss, regions.hit, regions.callable,
-                                       desc.indirectDeviceAddress);
-}
-
-void traceRaysIndirect2(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysIndirect2Desc &desc,
-                        const RayTracingCapabilitySnapshot &capabilities)
-{
-    nrAssert(*commandBuffer != nullptr, "traceRaysIndirect2 requires a valid command buffer.");
-    nrAssert(desc.pipeline.valid(), "traceRaysIndirect2 requires a valid ray tracing pipeline.");
-    nrAssert(desc.recordingQueueRole != QueueRole::Transfer,
-             "traceRaysIndirect2 requires a queue family that supports compute operations.");
-
-    auto diagnostics = rt_detail::validateTraceRaysIndirect2(desc.indirectDeviceAddress, capabilities);
-    nrAssert(diagnostics.isValid,
-             rt_detail::formatMessage("traceRaysIndirect2 invalid arguments: {}", diagnostics.message));
-
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, desc.pipeline.raw());
-    applyRayTracingPipelineStackSize(commandBuffer, desc.pipeline, desc.pipelineStackSize);
-    commandBuffer.traceRaysIndirect2KHR(desc.indirectDeviceAddress);
 }
 } // namespace nr::rhi
 
@@ -402,12 +336,14 @@ namespace nr::rhi::rt_detail
         return section.stride;
     }
 
-    auto minimumStride = static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleSize) +
-                         static_cast<vk::DeviceSize>(maxRecordDataSize(section));
+    auto minimumStride = checkedAdd(static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleSize),
+                                    static_cast<vk::DeviceSize>(maxRecordDataSize(section)),
+                                    "SBT minimum record stride");
     nrAssert(minimumStride <= static_cast<vk::DeviceSize>(std::numeric_limits<std::uint32_t>::max()),
              "SBT record stride exceeds uint32_t range.");
     return static_cast<std::uint32_t>(
-        alignUp(minimumStride, static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleAlignment)));
+        checkedAlignUp(minimumStride, static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleAlignment),
+                       "SBT record stride alignment"));
 }
 
 [[nodiscard]] ValidationResult validateSection(std::string_view label, const ShaderBindingTableSectionDesc &section,
@@ -480,33 +416,41 @@ namespace nr::rhi::rt_detail
 
 [[nodiscard]] vk::DeviceSize sectionSize(const ShaderBindingTableSectionDesc &section)
 {
-    return static_cast<vk::DeviceSize>(recordCount(section)) * static_cast<vk::DeviceSize>(section.stride);
+    return checkedMultiply(static_cast<vk::DeviceSize>(recordCount(section)),
+                           static_cast<vk::DeviceSize>(section.stride), "SBT section size");
 }
 
 [[nodiscard]] std::array<ShaderBindingTableBuildPlanSection, 4> buildSectionPlan(
     const ShaderBindingTableLayoutDesc &desc)
 {
-    auto sections = std::array<ShaderBindingTableBuildPlanSection, 4>{
-        ShaderBindingTableBuildPlanSection{.section = desc.raygen},
-        ShaderBindingTableBuildPlanSection{.section = desc.miss},
-        ShaderBindingTableBuildPlanSection{.section = desc.hit},
-        ShaderBindingTableBuildPlanSection{.section = desc.callable},
+    auto sourceSections = std::array{
+        std::cref(desc.raygen),
+        std::cref(desc.miss),
+        std::cref(desc.hit),
+        std::cref(desc.callable),
     };
+    auto sections = std::array<ShaderBindingTableBuildPlanSection, 4>{};
 
     auto runningOffset = vk::DeviceSize{0};
-    std::ranges::for_each(sections, [&](ShaderBindingTableBuildPlanSection &plannedSection) {
-        if (recordCount(plannedSection.section) == 0)
+    auto indices = std::views::iota(std::size_t{0}, sections.size());
+    std::ranges::for_each(indices, [&](std::size_t index) {
+        auto const &source = sourceSections[index].get();
+        auto &plannedSection = sections[index];
+        plannedSection.firstGroup = source.firstGroup;
+        plannedSection.recordCount = recordCount(source);
+        plannedSection.stride = source.stride;
+        if (plannedSection.recordCount == 0)
         {
-            plannedSection.offset = 0;
-            plannedSection.size = 0;
-            plannedSection.section.stride = 0;
+            plannedSection.stride = 0;
             return;
         }
 
-        runningOffset = alignUp(runningOffset, static_cast<vk::DeviceSize>(desc.capabilities.shaderGroupBaseAlignment));
+        runningOffset = checkedAlignUp(runningOffset,
+                                       static_cast<vk::DeviceSize>(desc.capabilities.shaderGroupBaseAlignment),
+                                       "SBT section base alignment");
         plannedSection.offset = runningOffset;
-        plannedSection.size = sectionSize(plannedSection.section);
-        runningOffset += plannedSection.size;
+        plannedSection.size = sectionSize(source);
+        runningOffset = checkedAdd(runningOffset, plannedSection.size, "SBT accumulated size");
     });
 
     return sections;
@@ -515,14 +459,14 @@ namespace nr::rhi::rt_detail
 [[nodiscard]] vk::StridedDeviceAddressRegionKHR buildRegion(vk::DeviceAddress baseAddress,
                                                             const ShaderBindingTableBuildPlanSection &section)
 {
-    if (recordCount(section.section) == 0)
+    if (section.recordCount == 0)
     {
         return vk::StridedDeviceAddressRegionKHR{};
     }
 
     vk::StridedDeviceAddressRegionKHR region{};
-    region.deviceAddress = baseAddress + section.offset;
-    region.stride = section.section.stride;
+    region.deviceAddress = checkedAdd(baseAddress, section.offset, "SBT region device address");
+    region.stride = section.stride;
     region.size = section.size;
     return region;
 }
@@ -535,7 +479,7 @@ namespace nr::rhi::rt_detail
     }
 
     auto layoutDesc = ShaderBindingTableLayoutDesc{
-        .capabilities = desc.capabilities,
+        .capabilities = desc.pipeline.capabilities(),
         .pipelineGroupCount = desc.pipeline.shaderGroupCount(),
         .raygen = desc.raygen,
         .miss = desc.miss,
@@ -665,76 +609,4 @@ namespace nr::rhi::rt_detail
     return validationSuccess();
 }
 
-[[nodiscard]] ValidationResult validateTraceRaysIndirect(vk::DeviceAddress indirectDeviceAddress,
-                                                         const RayTracingCapabilitySnapshot &capabilities)
-{
-    if (!capabilities.rayTracingPipelineTraceRaysIndirect)
-    {
-        return validationFailure("traceRaysIndirect requires rayTracingPipelineTraceRaysIndirect feature.");
-    }
-
-    if (indirectDeviceAddress == 0)
-    {
-        return validationFailure("traceRaysIndirect requires a non-zero indirect device address.");
-    }
-
-    if ((indirectDeviceAddress % 4u) != 0)
-    {
-        return validationFailure("traceRaysIndirect indirect device address must be 4-byte aligned.");
-    }
-
-    return validationSuccess();
-}
-
-[[nodiscard]] ValidationResult validateTraceRaysIndirect2(vk::DeviceAddress indirectDeviceAddress,
-                                                          const RayTracingCapabilitySnapshot &capabilities)
-{
-    if (!capabilities.rayTracingMaintenance1)
-    {
-        return validationFailure("traceRaysIndirect2 requires rayTracingMaintenance1 feature.");
-    }
-
-    if (!capabilities.rayTracingPipelineTraceRaysIndirect2)
-    {
-        return validationFailure("traceRaysIndirect2 requires rayTracingPipelineTraceRaysIndirect2 feature.");
-    }
-
-    if (indirectDeviceAddress == 0)
-    {
-        return validationFailure("traceRaysIndirect2 requires a non-zero indirect device address.");
-    }
-
-    if ((indirectDeviceAddress % 4u) != 0)
-    {
-        return validationFailure("traceRaysIndirect2 indirect device address must be 4-byte aligned.");
-    }
-
-    return validationSuccess();
-}
-
-[[nodiscard]] ValidationResult validatePipelineStackSize(const RayTracingPipeline &pipeline,
-                                                         std::optional<std::uint32_t> pipelineStackSize)
-{
-    if (pipeline.dynamicPipelineStackSize())
-    {
-        if (!pipelineStackSize.has_value())
-        {
-            return validationFailure(
-                "Ray tracing pipeline uses dynamic stack size; pipelineStackSize must be provided before trace.");
-        }
-        if (*pipelineStackSize == 0)
-        {
-            return validationFailure("Ray tracing pipeline stack size must be > 0.");
-        }
-        return validationSuccess();
-    }
-
-    if (pipelineStackSize.has_value())
-    {
-        return validationFailure(
-            "pipelineStackSize can only be provided for pipelines created with dynamicPipelineStackSize=true.");
-    }
-
-    return validationSuccess();
-}
 } // namespace nr::rhi::rt_detail

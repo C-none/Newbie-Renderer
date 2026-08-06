@@ -19,8 +19,3 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
              0xFF, uint(RtRayType.shadow), uint(RtRayType.count), uint(RtRayType.shadow), ray, payload);
     return payload.occluded == 0u;
 }
-
-public bool tracePathVisibilityRayToLight(float3 origin, SceneLightContribution contribution)
-{
-    return tracePathVisibilityRay(origin, contribution.direction, kRayTMax);
-}

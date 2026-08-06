@@ -13,9 +13,6 @@ struct FluidParticleSet
     std::vector<glm::vec4> velocityLifetime{};
     std::vector<glm::vec4> colorDensity{};
 
-    FluidParticleSet() = default;
-    ~FluidParticleSet() = default;
-
     [[nodiscard]] std::size_t count() const noexcept
     {
         return std::ranges::min({positionRadius.size(), velocityLifetime.size(), colorDensity.size()});

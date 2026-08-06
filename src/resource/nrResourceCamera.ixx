@@ -16,9 +16,6 @@ struct CameraAsset
     float nearPlane = 0.1f;
     float farPlane = 1000.0f;
 
-    CameraAsset() = default;
-    ~CameraAsset() = default;
-
     [[nodiscard]] bool perspective() const noexcept
     {
         return projection == CameraProjection::perspective;

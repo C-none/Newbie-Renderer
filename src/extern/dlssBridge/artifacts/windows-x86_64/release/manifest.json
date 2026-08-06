@@ -1,10 +1,10 @@
 {
-  "apiHeaderSha256" : "20ee666a2c41b88faea7652a3c58c804f3f633e29d11a709f68b5d34750a4334",
+  "apiHeaderSha256" : "3e0e47ba24c01d4d873cf906fa0acc23db0def11aa2a294a74809a68173dd9e1",
   "architecture" : "x86_64",
   "bridgeAbi" : 1,
-  "bridgeInputsSha256" : "b42ad9ea338da496f9115129ccccbda2299aa1a8315d3163c010346c8ea60479",
+  "bridgeInputsSha256" : "b802e3dad45f4be71b83e3c297bdba9b64ddca82c8396feba69941f8d288c1e1",
   "configuration" : "Release",
-  "dllSha256" : "4cde2a0c8a6cdeb3b05548973fc6dad4ea16b9a6863fbd89019925400a4d25e1",
+  "dllSha256" : "e77c2ae6794c97de9381125aedd5c74b02f47e4fd9326a4ce00cdf1788c99d15",
   "export" : "nrDlssBridgeGetApi",
   "ngxLoaderSha256" : "36eab29264c2a06456ba8415f20086aea36f0cbb314d020085cb288cc06bb9ae",
   "platform" : "windows",

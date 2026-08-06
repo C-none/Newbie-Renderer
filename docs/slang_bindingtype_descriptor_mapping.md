@@ -101,7 +101,7 @@ RWByteAddressBuffer rwRawBuffer;            // MutableRawBuffer -> eStorageBuffe
 
 - Reflection reports resource categories as `BindingType` per binding range, not by variable spelling alone.
 - Arrays keep the same `BindingType`; the descriptor count (and array element addressing) changes.
-- Unbounded arrays such as `Texture2D<float4> textures[];` still reflect as the same resource semantic, but the engine can now map them to runtime-sized Vulkan descriptor-array bindings when `DescriptorBindingPolicy` enables variable descriptor count.
+- Unbounded arrays such as `Texture2D<float4> textures[];` still reflect as the same resource semantic; the engine maps them to runtime-sized Vulkan descriptor-array bindings and enforces the fixed semantic-set ABI.
 - `PushConstant` is intentionally outside descriptor-set mapping.
 - `ParameterBlock<T>` is a grouping abstraction in Slang. In this backend, default mapping policy is `eUniformBuffer` for descriptor-backed ordinary data path.
 
@@ -143,7 +143,6 @@ Newbie-Renderer enforces a project hard limit of 128 bytes for push constants (`
 - Can now mark unbounded descriptor bindings as runtime-sized and attach:
   - `eVariableDescriptorCount`
   - `ePartiallyBound`
-  - `eUpdateAfterBind`
 - Exposes `ShaderCursor` for path-based lookup
 
 ### Runtime descriptor arrays and cursor indexing
@@ -154,7 +153,7 @@ Newbie-Renderer enforces a project hard limit of 128 bytes for push constants (`
   - descriptor-array reflection shapes that expose binding counts without a regular `elementTypeLayout`
 - `ShaderCursor::referencesRuntimeDescriptorArray()` and `ShaderCursor::bindingDescriptorCount()` are the current runtime query helpers for this path.
 - `ShaderBindingSet` now records the allocated descriptor capacity for variable-count bindings so write validation uses the real runtime set capacity rather than only the layout default.
-- `DescriptorBindingPolicy` defaults to the semantic multi-set ABI for runtime-sized descriptor arrays. The RHI validates the set reported by Slang reflection and never remaps shader-declared `[[vk::binding(binding, set)]]` values on the host side.
+- Runtime-sized descriptor arrays use the fixed semantic multi-set ABI. The RHI validates the set reported by Slang reflection and never remaps shader-declared `[[vk::binding(binding, set)]]` values on the host side. Descriptor writes finish during prepare before command recording binds the set, so these bindings do not request update-after-bind behavior.
 
 Project descriptor-set convention:
 
@@ -166,15 +165,14 @@ Project descriptor-set convention:
 | buffer and texel-buffer descriptors | 3 |
 | `AccelerationStructure` | 4 |
 
-Project shaders apply the same semantic sets to fixed-size descriptors as well as runtime arrays. The RHI currently enforces the semantic set only for unbounded/runtime-sized arrays; fixed descriptors remain shader-declared ABI and are covered by reflection contract tests. Set 3 reserves binding 0 for the shared `gFrame` uniform and bindings 1 through 7 for the shared RT instance, geometry, material, texture-reference, vertex, and index buffers. Scene lights are the explicit grouped-ABI exception and use set 5: `gSceneLightHeader` at binding 0, `gSceneLights` at binding 1, and `gSceneLightAliasTable` at binding 2. Set 6 is currently unused. Runtime-sized input-attachment and inline-uniform-block arrays do not have reserved semantic sets in the current ABI; add an explicit convention only when a real pass requires that model.
+Project shaders apply the same semantic sets to fixed-size descriptors as well as runtime arrays. The RHI currently enforces the semantic set only for unbounded/runtime-sized arrays; fixed descriptors remain shader-declared ABI and are covered by reflection contract tests. Set 3 reserves binding 0 for the shared `gFrame` uniform and bindings 1 through 7 for the shared RT instance, geometry, material, texture-reference, vertex, and index buffers. Scene lights are the explicit grouped-ABI exception and use set 5: `gSceneLightHeader` at binding 0, `gSceneLights` at binding 1, and `gSceneLightAliasTable` at binding 2. Set 6 is currently unused. Runtime-sized input-attachment and inline-uniform-block arrays do not have reserved semantic sets in the current ABI; extend the fixed ABI only when a real pass requires that model.
 
 Scene material textures use this convention through a single global combined image sampler table: `gSceneTextures[]` is declared at Vulkan set 1, binding 2. Bindings 0 and 1 remain available for pass-local fixed sampled images, and the runtime array stays the numerically largest binding as required by variable descriptor count layouts. The independent AppUi pipeline has only its own `gUiTextures[]` array and therefore uses set 1, binding 0. Shader-visible material texture IDs default to 0, where the renderer binds a 1x1 neutral white fallback texture (linear RGBA(1,1,1,1)); resident scene textures use `TextureHandle.slot + 1` as their descriptor index. `MaterialTextureSlot` defines draw/RT metadata ordering and does not create additional set 1 bindings. IDs remain 16-bit and `kSceneTextureDescriptorCapacity` must fit that ABI, but passes push only the sampling records they consume: NormalBuffer carries the normal texture ID, UV set, affine transform, and scale, while RT uses one dense transformed reference per material slot. `shader/include/materialTextureIds.slang` retains the packed-ID unpack helper for shaders that explicitly choose packed storage. C++ render passes bind the table through the shared `nr.renderPasses:sceneTextureTableBinding` adapter, which forwards table application to the renderer-owned bindless image table cache for frame-slot allocation invalidation, fallback prefill, version checks, resident-slot updates, and removed-slot fallback rewrites.
 
 ### Reflection lifetime requirement
 
-- `ShaderDescriptorLayout` stores reflection-derived raw pointers into the linked Slang program layout.
-- Because of that, `PipelineState` in `src/rhi/nrPipeline.ixx` now retains a `SlangProgram` copy for the full lifetime of the descriptor layout and cursor usage.
-- Removing that ownership without replacing it with another lifetime guarantee will reintroduce dangling reflection pointers.
+- `ShaderDescriptorLayout` stores reflection-derived raw pointers into the linked Slang program layout and retains the source `SlangProgram` that owns them.
+- A `ShaderCursor` still references its creating descriptor-layout object and must not outlive that layout.
 
 ### Cursor-owned binding snapshot
 
@@ -214,9 +212,8 @@ Scene material textures use this convention through a single global combined ima
 
 Pipeline-layout-aware helpers provide:
 
-- `CursorPipelineLayout::bindDescriptorSet(...)`
 - `CursorPipelineLayout::bindDescriptorSets(...)`
-- `CursorPipelineLayout::pushConstants(...)`
+- `CursorPipelineLayout::pushConstants(...)` for an explicit reflected byte range
 
 `src/rhi/nrCommand.ixx` currently only provides command-buffer begin/end recording helpers and does not expose descriptor/pipeline bind wrappers.
 

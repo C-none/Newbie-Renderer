@@ -44,7 +44,6 @@ inline constexpr int kKeyRightSuper = 347;
 inline constexpr float kUiWindowMargin = 16.0f;
 inline constexpr float kUiWindowDefaultWidth = 720.0f;
 inline constexpr float kUiWindowDefaultHeight = 960.0f;
-inline constexpr float kUiWindowVerticalStride = 20.0f;
 inline constexpr float kUiFontGlobalScale = 1.8f;
 inline constexpr std::string_view kUnifiedUiWindowTitle = "Renderer Controls";
 
@@ -134,61 +133,46 @@ void submitKeyboardInput(auto &io, const nr::rhi::PresentationContext &presentat
     auto codepoints = presentation.consumeTextInputCodepoints();
     std::ranges::for_each(codepoints, [&](std::uint32_t codepoint) { io.AddInputCharacter(codepoint); });
 }
+
+void drawCpuTimingLine(nr::app::UiSystem &ui, std::string_view label, double milliseconds)
+{
+    ui.textFmt("{}: {:.3f} ms", label, milliseconds);
+}
+
+[[nodiscard]] std::string_view queueDomainLabel(nr::renderer::QueueDomain queue) noexcept
+{
+    if (queue == nr::renderer::QueueDomain::Graphics)
+    {
+        return "Graphics";
+    }
+    if (queue == nr::renderer::QueueDomain::Compute)
+    {
+        return "Compute";
+    }
+    return "Transfer";
+}
+
+void drawGpuPassTimingLine(nr::app::UiSystem &ui, const nr::renderer::RendererGpuPassAverage &timing,
+                           std::uint32_t averagedFrameCount)
+{
+    auto const passName = timing.debugName.empty() ? std::format("Pass {}", timing.pass.value) : timing.debugName;
+    auto const passKind = timing.isCopyPass ? std::string_view{"Copy"} : queueDomainLabel(timing.queue);
+    if (timing.sampleCount == averagedFrameCount)
+    {
+        ui.textFmt("{} [{}]: {:.3f} ms", passName, passKind, timing.milliseconds);
+        return;
+    }
+
+    ui.textFmt("{} [{}]: {:.3f} ms ({} samples)", passName, passKind, timing.milliseconds, timing.sampleCount);
+}
+
 } // namespace nr::app::detail
 
 namespace nr::app
 {
-UiSystem::WindowScope::WindowScope(UiSystem &owner, bool visible, bool closesWindow) noexcept
-    : owner_(std::ref(owner)), visible_(visible), closesWindow_(closesWindow)
+void UiSystem::ImGuiContextDeleter::operator()(ImGuiContext *context) const noexcept
 {
-}
-
-UiSystem::WindowScope::WindowScope(WindowScope &&other) noexcept
-    : owner_(other.owner_), visible_(other.visible_), closesWindow_(other.closesWindow_)
-{
-    other.owner_.reset();
-    other.visible_ = false;
-    other.closesWindow_ = false;
-}
-
-UiSystem::WindowScope &UiSystem::WindowScope::operator=(WindowScope &&other) noexcept
-{
-    if (this == &other)
-    {
-        return *this;
-    }
-
-    close();
-    owner_ = other.owner_;
-    visible_ = other.visible_;
-    closesWindow_ = other.closesWindow_;
-    other.owner_.reset();
-    other.visible_ = false;
-    other.closesWindow_ = false;
-    return *this;
-}
-
-UiSystem::WindowScope::~WindowScope()
-{
-    close();
-}
-
-UiSystem::WindowScope::operator bool() const noexcept
-{
-    return visible_;
-}
-
-void UiSystem::WindowScope::close() noexcept
-{
-    if (!owner_.has_value())
-    {
-        return;
-    }
-
-    owner_->get().endWindow(closesWindow_);
-    owner_.reset();
-    visible_ = false;
-    closesWindow_ = false;
+    ImGui::DestroyContext(context);
 }
 
 UiSystem::~UiSystem()
@@ -203,7 +187,7 @@ void UiSystem::initialize()
         return;
     }
 
-    context_ = ImGui::CreateContext();
+    context_.reset(ImGui::CreateContext());
     nrAssert(context_ != nullptr, "UiSystem::initialize failed to create ImGui context.");
 
     setCurrentContext();
@@ -228,16 +212,13 @@ void UiSystem::shutdown()
     }
 
     setCurrentContext();
-    if (frameActive_ && !frameFinalized_)
+    if (frameState_ == FrameState::active)
     {
         ImGui::EndFrame();
     }
 
-    ImGui::DestroyContext(context_);
-    context_ = nullptr;
-    frameActive_ = false;
-    frameFinalized_ = false;
-    captureState_ = {};
+    context_.reset();
+    frameState_ = FrameState::idle;
     frameStats_ = {};
     cameraFrame_ = {};
     cpuStatistics_ = {};
@@ -258,12 +239,10 @@ bool UiSystem::initialized() const noexcept
 void UiSystem::beginFrame(const nr::rhi::PresentationContext &presentation, float deltaSeconds)
 {
     nrAssert(initialized(), "UiSystem::beginFrame requires initialize() first.");
+    nrAssert(frameState_ != FrameState::active,
+             "UiSystem::beginFrame requires the previous active frame to be finalized.");
 
     setCurrentContext();
-    if (frameActive_ && !frameFinalized_)
-    {
-        ImGui::EndFrame();
-    }
 
     auto const sanitizedDelta = detail::sanitizeUiDeltaSeconds(deltaSeconds);
     frameStats_.deltaSeconds = sanitizedDelta;
@@ -303,21 +282,30 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext &presentation, floa
     detail::submitKeyboardInput(io, presentation);
 
     ImGui::NewFrame();
-    frameActive_ = true;
-    frameFinalized_ = false;
-    windowsOpenedThisFrame_ = 0u;
+    frameState_ = FrameState::active;
     unifiedWindowOpen_ = false;
     unifiedWindowVisible_ = false;
     unifiedWindowSectionCount_ = 0u;
     queuedSections_.clear();
 }
 
-void UiSystem::finalizeFrame()
+UiCaptureState UiSystem::finalizeFrame()
 {
-    if (!frameActive_ || frameFinalized_)
-    {
-        return;
-    }
+    nrAssert(frameState_ == FrameState::active, "UiSystem::finalizeFrame requires one active UI frame.");
+
+    auto const performanceSections = std::array{
+        UiSection{
+            .id = "cpu.performance",
+            .title = "CPU Performance",
+            .draw = [](UiSystem &ui) { ui.drawCpuPerformanceSection(); },
+        },
+        UiSection{
+            .id = "gpu.performance",
+            .title = "GPU Performance",
+            .draw = [](UiSystem &ui) { ui.drawGpuPerformanceSection(); },
+        },
+    };
+    renderSections(std::span<const UiSection>{}, std::span<const UiSection>{performanceSections});
 
     setCurrentContext();
     if (unifiedWindowOpen_)
@@ -331,47 +319,25 @@ void UiSystem::finalizeFrame()
     ImGui::Render();
 
     auto &io = ImGui::GetIO();
-    captureState_ = UiCaptureState{
+    auto const captureState = UiCaptureState{
         .wantsMouse = io.WantCaptureMouse,
         .wantsKeyboard = io.WantCaptureKeyboard,
     };
 
-    frameActive_ = false;
-    frameFinalized_ = true;
-}
-
-UiSystem::WindowScope UiSystem::window(std::string_view title, ImGuiWindowFlags flags)
-{
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::window requires an active UI frame.");
-    setCurrentContext();
-
-    if (!unifiedWindowOpen_)
-    {
-        prepareWindowDefaults();
-        auto const visible = ImGui::Begin(detail::kUnifiedUiWindowTitle.data(), nullptr, flags);
-        unifiedWindowVisible_ = visible;
-        unifiedWindowOpen_ = true;
-    }
-
-    auto const sectionVisible = beginSection(title, title);
-    return WindowScope{*this, sectionVisible, false};
+    frameState_ = FrameState::finalized;
+    return captureState;
 }
 
 void UiSystem::queueSection(UiSection section)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::queueSection requires an active UI frame.");
+    requireActiveFrame("queueSection");
     queuedSections_.push_back(std::move(section));
-}
-
-void UiSystem::renderSections(std::span<const UiSection> sections, ImGuiWindowFlags flags)
-{
-    renderSections(sections, std::span<const UiSection>{}, flags);
 }
 
 void UiSystem::renderSections(std::span<const UiSection> leadingSections, std::span<const UiSection> trailingSections,
                               ImGuiWindowFlags flags)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::renderSections requires an active UI frame.");
+    requireActiveFrame("renderSections");
     setCurrentContext();
 
     if (leadingSections.empty() && queuedSections_.empty() && trailingSections.empty())
@@ -416,21 +382,21 @@ void UiSystem::renderSections(std::span<const UiSection> leadingSections, std::s
 
 void UiSystem::separator()
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::separator requires an active UI frame.");
+    requireActiveFrame("separator");
     setCurrentContext();
     ImGui::Separator();
 }
 
 void UiSystem::text(std::string_view content)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::text requires an active UI frame.");
+    requireActiveFrame("text");
     setCurrentContext();
     ImGui::TextUnformatted(content.data(), content.data() + content.size());
 }
 
 bool UiSystem::checkbox(std::string_view label, bool &value)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::checkbox requires an active UI frame.");
+    requireActiveFrame("checkbox");
     setCurrentContext();
 
     auto const ownedLabel = std::string{label};
@@ -439,7 +405,7 @@ bool UiSystem::checkbox(std::string_view label, bool &value)
 
 bool UiSystem::button(std::string_view label)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::button requires an active UI frame.");
+    requireActiveFrame("button");
     setCurrentContext();
 
     auto const ownedLabel = std::string{label};
@@ -448,7 +414,7 @@ bool UiSystem::button(std::string_view label)
 
 bool UiSystem::inputText(std::string_view label, std::string &value)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputText requires an active UI frame.");
+    requireActiveFrame("inputText");
     setCurrentContext();
 
     auto const ownedLabel = std::string{label};
@@ -458,7 +424,7 @@ bool UiSystem::inputText(std::string_view label, std::string &value)
 
 bool UiSystem::beginCombo(std::string_view label, std::string_view preview)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::beginCombo requires an active UI frame.");
+    requireActiveFrame("beginCombo");
     setCurrentContext();
 
     auto const ownedLabel = std::string{label};
@@ -468,14 +434,14 @@ bool UiSystem::beginCombo(std::string_view label, std::string_view preview)
 
 void UiSystem::endCombo()
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::endCombo requires an active UI frame.");
+    requireActiveFrame("endCombo");
     setCurrentContext();
     ImGui::EndCombo();
 }
 
 bool UiSystem::selectable(std::string_view label, bool selected)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::selectable requires an active UI frame.");
+    requireActiveFrame("selectable");
     setCurrentContext();
 
     auto const ownedLabel = std::string{label};
@@ -484,7 +450,7 @@ bool UiSystem::selectable(std::string_view label, bool selected)
 
 bool UiSystem::sliderFloat(std::string_view label, float &value, float minValue, float maxValue)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::sliderFloat requires an active UI frame.");
+    requireActiveFrame("sliderFloat");
     nrAssert(minValue <= maxValue, "UiSystem::sliderFloat requires minValue <= maxValue.");
     setCurrentContext();
 
@@ -494,7 +460,7 @@ bool UiSystem::sliderFloat(std::string_view label, float &value, float minValue,
 
 bool UiSystem::inputFloat(std::string_view label, float &value, float minValue, float maxValue)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputFloat requires an active UI frame.");
+    requireActiveFrame("inputFloat");
     nrAssert(minValue <= maxValue, "UiSystem::inputFloat requires minValue <= maxValue.");
     setCurrentContext();
 
@@ -511,7 +477,7 @@ bool UiSystem::inputFloat(std::string_view label, float &value, float minValue, 
 
 bool UiSystem::inputInt32(std::string_view label, std::int32_t &value, std::int32_t minValue, std::int32_t maxValue)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputInt32 requires an active UI frame.");
+    requireActiveFrame("inputInt32");
     nrAssert(minValue <= maxValue, "UiSystem::inputInt32 requires minValue <= maxValue.");
     setCurrentContext();
 
@@ -529,7 +495,7 @@ bool UiSystem::inputInt32(std::string_view label, std::int32_t &value, std::int3
 
 bool UiSystem::inputUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue, std::uint32_t maxValue)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::inputUInt requires an active UI frame.");
+    requireActiveFrame("inputUInt");
     nrAssert(minValue <= maxValue, "UiSystem::inputUInt requires minValue <= maxValue.");
     setCurrentContext();
 
@@ -547,7 +513,7 @@ bool UiSystem::inputUInt(std::string_view label, std::uint32_t &value, std::uint
 
 bool UiSystem::sliderUInt(std::string_view label, std::uint32_t &value, std::uint32_t minValue, std::uint32_t maxValue)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::sliderUInt requires an active UI frame.");
+    requireActiveFrame("sliderUInt");
     nrAssert(minValue <= maxValue, "UiSystem::sliderUInt requires minValue <= maxValue.");
     nrAssert(maxValue <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()),
              "UiSystem::sliderUInt range exceeds ImGui SliderInt capacity.");
@@ -564,21 +530,21 @@ bool UiSystem::sliderUInt(std::string_view label, std::uint32_t &value, std::uin
 
 void UiSystem::beginDisabled(bool disabled)
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::beginDisabled requires an active UI frame.");
+    requireActiveFrame("beginDisabled");
     setCurrentContext();
     ImGui::BeginDisabled(disabled);
 }
 
 void UiSystem::endDisabled()
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::endDisabled requires an active UI frame.");
+    requireActiveFrame("endDisabled");
     setCurrentContext();
     ImGui::EndDisabled();
 }
 
 bool UiSystem::itemEditCommitted() const
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::itemEditCommitted requires an active UI frame.");
+    requireActiveFrame("itemEditCommitted");
     setCurrentContext();
     auto const enterPressed = ImGui::IsItemActive() && (ImGui::IsKeyPressed(imgui::keyEnter, false) ||
                                                         ImGui::IsKeyPressed(imgui::keyKeypadEnter, false));
@@ -587,7 +553,7 @@ bool UiSystem::itemEditCommitted() const
 
 void UiSystem::setItemDefaultFocus()
 {
-    nrAssert(frameActive_ && !frameFinalized_, "UiSystem::setItemDefaultFocus requires an active UI frame.");
+    requireActiveFrame("setItemDefaultFocus");
     setCurrentContext();
     ImGui::SetItemDefaultFocus();
 }
@@ -612,9 +578,24 @@ void UiSystem::setCpuStatistics(const nr::renderer::RendererCpuStatistics &stati
     cpuStatistics_ = statistics;
 }
 
-const nr::renderer::RendererCpuStatistics &UiSystem::cpuStatistics() const noexcept
+void UiSystem::drawCpuPerformanceSection()
 {
-    return cpuStatistics_;
+    if (!cpuStatistics_.valid)
+    {
+        return;
+    }
+
+    auto const &average = cpuStatistics_.average;
+    detail::drawCpuTimingLine(*this, "CPU Wait GPU", average.cpuWaitGpuMilliseconds);
+    detail::drawCpuTimingLine(*this, "Frame Setup", average.frameSetupMilliseconds);
+    detail::drawCpuTimingLine(*this, "Scene", average.sceneMilliseconds);
+    detail::drawCpuTimingLine(*this, "Post Scene", average.postSceneMilliseconds);
+    detail::drawCpuTimingLine(*this, "Build", average.buildMilliseconds);
+    detail::drawCpuTimingLine(*this, "Compile", average.compileMilliseconds);
+    detail::drawCpuTimingLine(*this, "Prepare", average.prepareMilliseconds);
+    detail::drawCpuTimingLine(*this, "Execute", average.executeMilliseconds);
+    detail::drawCpuTimingLine(*this, "Present", average.presentMilliseconds);
+    detail::drawCpuTimingLine(*this, "Total", average.totalMilliseconds);
 }
 
 void UiSystem::setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistics &statistics) noexcept
@@ -622,19 +603,27 @@ void UiSystem::setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistic
     gpuPassStatistics_ = statistics;
 }
 
-const nr::renderer::RendererGpuPassStatistics &UiSystem::gpuPassStatistics() const noexcept
+void UiSystem::drawGpuPerformanceSection()
 {
-    return gpuPassStatistics_;
-}
+    if (!gpuPassStatistics_.valid)
+    {
+        return;
+    }
 
-UiCaptureState UiSystem::captureState() const noexcept
-{
-    return captureState_;
+    if (gpuPassStatistics_.averages.empty())
+    {
+        text("No addPass samples");
+        return;
+    }
+
+    std::ranges::for_each(gpuPassStatistics_.averages, [&](const nr::renderer::RendererGpuPassAverage &timing) {
+        detail::drawGpuPassTimingLine(*this, timing, gpuPassStatistics_.averagedFrameCount);
+    });
 }
 
 std::optional<std::reference_wrapper<const ImDrawData>> UiSystem::drawData() const noexcept
 {
-    if (!frameFinalized_)
+    if (frameState_ != FrameState::finalized)
     {
         return std::nullopt;
     }
@@ -651,18 +640,17 @@ std::optional<std::reference_wrapper<const ImDrawData>> UiSystem::drawData() con
 
 void UiSystem::setCurrentContext() const noexcept
 {
-    ImGui::SetCurrentContext(context_);
+    ImGui::SetCurrentContext(context_.get());
 }
 
-void UiSystem::endWindow(bool closesWindow)
+void UiSystem::requireActiveFrame(std::string_view operation) const
 {
-    if (!closesWindow)
+    if (frameState_ == FrameState::active)
     {
         return;
     }
 
-    setCurrentContext();
-    ImGui::End();
+    nrAssert(false, std::format("UiSystem::{} requires an active UI frame.", operation));
 }
 
 bool UiSystem::beginSection(std::string_view id, std::string_view title, bool defaultOpen)
@@ -691,25 +679,8 @@ bool UiSystem::beginSection(std::string_view id, std::string_view title, bool de
 
 void UiSystem::prepareWindowDefaults()
 {
-    auto &io = ImGui::GetIO();
-    auto const displayWidth =
-        std::max(io.DisplaySize.x, detail::kUiWindowDefaultWidth + detail::kUiWindowMargin * 2.0f);
-    auto const displayHeight =
-        std::max(io.DisplaySize.y, detail::kUiWindowDefaultHeight + detail::kUiWindowMargin * 2.0f);
-
-    auto const columnIndex = windowsOpenedThisFrame_ / 4u;
-    auto const rowIndex = windowsOpenedThisFrame_ % 4u;
-    auto const positionX =
-        std::min(displayWidth - detail::kUiWindowDefaultWidth - detail::kUiWindowMargin,
-                 detail::kUiWindowMargin +
-                     static_cast<float>(columnIndex) * (detail::kUiWindowDefaultWidth + detail::kUiWindowMargin));
-    auto const positionY =
-        std::min(displayHeight - detail::kUiWindowDefaultHeight - detail::kUiWindowMargin,
-                 detail::kUiWindowMargin + static_cast<float>(rowIndex) * detail::kUiWindowVerticalStride);
-
-    ImGui::SetNextWindowPos(ImVec2{positionX, positionY}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2{detail::kUiWindowMargin, detail::kUiWindowMargin}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2{detail::kUiWindowDefaultWidth, detail::kUiWindowDefaultHeight},
                              ImGuiCond_FirstUseEver);
-    ++windowsOpenedThisFrame_;
 }
 } // namespace nr::app

@@ -13,8 +13,14 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
 } // namespace
 
 [[nodiscard]] std::optional<RequiredQueueFamilySelection> selectRequiredQueueFamilies(
-    std::span<const vk::QueueFamilyProperties> queueFamilyProperties)
+    std::span<const vk::QueueFamilyProperties> queueFamilyProperties,
+    std::span<const vk::Bool32> presentSupport)
 {
+    if (queueFamilyProperties.size() != presentSupport.size())
+    {
+        return std::nullopt;
+    }
+
     const auto queueIndices = std::views::iota(std::size_t{0}, queueFamilyProperties.size());
     auto findFirst = [&](auto predicate) -> std::optional<std::size_t> {
         auto it = std::ranges::find_if(queueIndices, predicate);
@@ -29,6 +35,7 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
         const auto &family = queueFamilyProperties[index];
         return family.queueCount > 0 && (family.queueFlags & flags) == flags;
     };
+    auto const supportsPresent = [&](std::size_t index) { return presentSupport[index] == vk::True; };
 
     auto graphicsFamily = findFirst([&](std::size_t index) { return hasFlags(index, vk::QueueFlagBits::eGraphics); });
     if (!graphicsFamily.has_value())
@@ -39,12 +46,14 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
     auto dedicatedComputeFamily = findFirst([&](std::size_t index) {
         const auto &family = queueFamilyProperties[index];
         return family.queueCount > 0 && (family.queueFlags & vk::QueueFlagBits::eCompute) &&
-               !(family.queueFlags & vk::QueueFlagBits::eGraphics);
+               !(family.queueFlags & vk::QueueFlagBits::eGraphics) && supportsPresent(index);
     });
     auto computeFamily = dedicatedComputeFamily;
     if (!computeFamily.has_value())
     {
-        computeFamily = findFirst([&](std::size_t index) { return hasFlags(index, vk::QueueFlagBits::eCompute); });
+        computeFamily = findFirst([&](std::size_t index) {
+            return hasFlags(index, vk::QueueFlagBits::eCompute) && supportsPresent(index);
+        });
     }
     if (!computeFamily.has_value())
     {
@@ -69,27 +78,68 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
     };
 }
 
-[[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(vk::raii::Instance const &instance)
+[[nodiscard]] vk::raii::PhysicalDevice selectPhysicalDevice(
+    const vk::raii::Instance &instance, const vk::raii::SurfaceKHR &surface,
+    std::span<const std::string> requiredDeviceExtensions)
 {
+    nrAssert(*surface != nullptr, "Physical-device selection requires an initialized presentation surface.");
     vk::raii::PhysicalDevices physicalDevices(instance);
     nrAssert(!physicalDevices.empty(), "No Vulkan physical devices are available.");
 
-    auto supportsRequiredQueues = [](const vk::raii::PhysicalDevice &device) {
-        auto queueFamilies = device.getQueueFamilyProperties();
-        return selectRequiredQueueFamilies(queueFamilies).has_value();
-    };
+    constexpr auto nvidiaVendorID = std::uint32_t{0x10DE};
     auto deviceRank = [](const vk::raii::PhysicalDevice &device) {
         auto props = device.getProperties();
-        return std::tuple{
-            props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu,
-            props.limits.maxImageDimension2D,
-        };
+        return props.limits.maxImageDimension2D;
     };
 
     std::optional<std::reference_wrapper<const vk::raii::PhysicalDevice>> bestDevice{};
     std::ranges::for_each(physicalDevices, [&](const vk::raii::PhysicalDevice &device) {
-        if (!supportsRequiredQueues(device))
+        auto const properties = device.getProperties();
+        auto const deviceName = std::string_view{properties.deviceName.data()};
+        auto reject = [&](std::string_view reason) {
+            nrInfo<LogLevel::warning>(std::format("Rejected Vulkan physical device '{}': {}", deviceName, reason));
+        };
+
+        if (properties.vendorID != nvidiaVendorID)
         {
+            reject("the Windows Vulkan RHI requires an NVIDIA GPU.");
+            return;
+        }
+        if (properties.deviceType != vk::PhysicalDeviceType::eDiscreteGpu)
+        {
+            reject("the target profile requires a discrete GPU.");
+            return;
+        }
+        if (properties.apiVersion < vk::ApiVersion14)
+        {
+            reject(std::format("Vulkan 1.4 is required, but the device reports API version {}.",
+                               properties.apiVersion));
+            return;
+        }
+
+        auto const availableExtensions = device.enumerateDeviceExtensionProperties();
+        auto missingExtension = std::ranges::find_if(requiredDeviceExtensions, [&](const std::string &required) {
+            return std::ranges::none_of(availableExtensions, [&](const vk::ExtensionProperties &available) {
+                return std::string_view{available.extensionName} == required;
+            });
+        });
+        if (missingExtension != requiredDeviceExtensions.end())
+        {
+            reject(std::format("required device extension '{}' is unavailable.", *missingExtension));
+            return;
+        }
+
+        auto const queueFamilies = device.getQueueFamilyProperties();
+        auto queueIndices = std::views::iota(std::size_t{0}, queueFamilies.size());
+        auto presentSupport = queueIndices | std::views::transform([&](std::size_t index) {
+                                  return device.getSurfaceSupportKHR(static_cast<std::uint32_t>(index), surface)
+                                             ? vk::True
+                                             : vk::False;
+                              }) |
+                              std::ranges::to<std::vector>();
+        if (!selectRequiredQueueFamilies(queueFamilies, presentSupport).has_value())
+        {
+            reject("required graphics, present-capable compute, and dedicated physical transfer queues are missing.");
             return;
         }
         if (!bestDevice.has_value() || deviceRank(bestDevice->get()) < deviceRank(device))
@@ -98,7 +148,8 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
         }
     });
     nrAssert(bestDevice.has_value(),
-             "No GPU exposes the required graphics, compute, and dedicated physical copy/transfer queue families.");
+             "No NVIDIA discrete Vulkan 1.4 GPU satisfies the required device extensions and graphics, "
+             "present-capable compute, and dedicated physical transfer queue contract.");
     return bestDevice->get();
 }
 
@@ -165,9 +216,6 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
     {
         switch (static_cast<std::uint32_t>(pCallbackData->messageIdNumber))
         {
-        case 0:
-            // Validation Warning: Override layer has override paths set to C:/VulkanSDK/<version>/Bin
-            return vk::False;
         case 0x822806fa:
             // Validation Warning: vkCreateInstance(): to enable extension VK_EXT_debug_utils, but this extension is intended to support use by applications when
             // debugging and it is strongly recommended that it be otherwise avoided.

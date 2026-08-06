@@ -25,7 +25,6 @@ struct ShaderBindingTableSectionDesc
 struct ShaderBindingTableBuildDesc
 {
     const RayTracingPipeline &pipeline;
-    RayTracingCapabilitySnapshot capabilities{};
     ShaderBindingTableSectionDesc raygen{.firstGroup = 0, .groupCount = 1, .stride = 0};
     ShaderBindingTableSectionDesc miss{};
     ShaderBindingTableSectionDesc hit{};
@@ -45,7 +44,9 @@ struct ShaderBindingTableLayoutDesc
 
 struct ShaderBindingTableBuildPlanSection
 {
-    ShaderBindingTableSectionDesc section{};
+    std::uint32_t firstGroup = 0;
+    std::uint32_t recordCount = 0;
+    std::uint32_t stride = 0;
     vk::DeviceSize offset = 0;
     vk::DeviceSize size = 0;
 };
@@ -77,29 +78,7 @@ struct TraceRaysDesc
     const ShaderBindingTable &shaderBindingTable;
     TraceRaysDimensions dimensions{};
     QueueRole recordingQueueRole = QueueRole::Compute;
-    std::optional<std::uint32_t> pipelineStackSize{};
 };
-
-struct TraceRaysIndirectDesc
-{
-    const RayTracingPipeline &pipeline;
-    const ShaderBindingTable &shaderBindingTable;
-    vk::DeviceAddress indirectDeviceAddress = 0;
-    QueueRole recordingQueueRole = QueueRole::Compute;
-    std::optional<std::uint32_t> pipelineStackSize{};
-};
-
-struct TraceRaysIndirect2Desc
-{
-    const RayTracingPipeline &pipeline;
-    vk::DeviceAddress indirectDeviceAddress = 0;
-    QueueRole recordingQueueRole = QueueRole::Compute;
-    std::optional<std::uint32_t> pipelineStackSize{};
-};
-
-[[nodiscard]] vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment);
-
-[[nodiscard]] std::uint32_t alignUp(std::uint32_t value, std::uint32_t alignment);
 
 } // namespace nr::rhi
 
@@ -143,19 +122,8 @@ template <typename... Args> [[nodiscard]] inline std::string formatMessage(std::
 
 [[nodiscard]] ValidationResult validateShaderBindingTableBuildDesc(const ShaderBindingTableBuildDesc &desc);
 
-[[nodiscard]] ValidationResult validateShaderBindingTableLayoutDesc(const ShaderBindingTableLayoutDesc &desc);
-
 [[nodiscard]] ValidationResult validateTraceRaysDispatch(const TraceRaysDimensions &dimensions,
                                                          const RayTracingCapabilitySnapshot &capabilities);
-
-[[nodiscard]] ValidationResult validateTraceRaysIndirect(vk::DeviceAddress indirectDeviceAddress,
-                                                         const RayTracingCapabilitySnapshot &capabilities);
-
-[[nodiscard]] ValidationResult validateTraceRaysIndirect2(vk::DeviceAddress indirectDeviceAddress,
-                                                          const RayTracingCapabilitySnapshot &capabilities);
-
-[[nodiscard]] ValidationResult validatePipelineStackSize(const RayTracingPipeline &pipeline,
-                                                         std::optional<std::uint32_t> pipelineStackSize);
 
 } // namespace nr::rhi::rt_detail
 
@@ -188,6 +156,8 @@ class ShaderBindingTable
 
     [[nodiscard]] bool valid() const noexcept;
 
+    [[nodiscard]] RayTracingPipelineIdentity pipelineIdentity() const noexcept;
+
     [[nodiscard]] const Buffer &buffer() const noexcept;
 
     [[nodiscard]] const vk::StridedDeviceAddressRegionKHR &raygenRegion() const noexcept;
@@ -200,10 +170,8 @@ class ShaderBindingTable
 
     [[nodiscard]] Regions regions() const noexcept;
 
-    [[nodiscard]] vk::TraceRaysIndirectCommand2KHR traceRaysIndirectCommand2(
-        TraceRaysDimensions dimensions) const noexcept;
-
   private:
+    RayTracingPipelineIdentity pipelineIdentity_{};
     Buffer buffer_{};
     vk::StridedDeviceAddressRegionKHR raygenRegion_{};
     vk::StridedDeviceAddressRegionKHR missRegion_{};
@@ -211,21 +179,6 @@ class ShaderBindingTable
     vk::StridedDeviceAddressRegionKHR callableRegion_{};
 };
 
-[[nodiscard]] vk::TraceRaysIndirectCommand2KHR makeTraceRaysIndirectCommand2(
-    const ShaderBindingTable &shaderBindingTable, TraceRaysDimensions dimensions);
-
-void setRayTracingPipelineStackSize(const vk::raii::CommandBuffer &commandBuffer, std::uint32_t pipelineStackSize);
-
-void applyRayTracingPipelineStackSize(const vk::raii::CommandBuffer &commandBuffer, const RayTracingPipeline &pipeline,
-                                      std::optional<std::uint32_t> pipelineStackSize);
-
-void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc &desc,
-               const RayTracingCapabilitySnapshot &capabilities);
-
-void traceRaysIndirect(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysIndirectDesc &desc,
-                       const RayTracingCapabilitySnapshot &capabilities);
-
-void traceRaysIndirect2(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysIndirect2Desc &desc,
-                        const RayTracingCapabilitySnapshot &capabilities);
+void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc &desc);
 
 } // namespace nr::rhi

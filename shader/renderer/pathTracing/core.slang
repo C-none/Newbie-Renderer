@@ -161,6 +161,8 @@ public void accumulateDirectLightSample(inout PathState path, ResolvedMaterialPa
     }
 }
 
+static const uint kDirectLightSampleCount = 4u;
+
 public void sampleDirectLighting(inout PathState path, ResolvedMaterialPayload material, float3 viewDirection)
 {
     if (sceneLightAliasCount() == 0u)
@@ -340,15 +342,6 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     }
 
     ResolvedMaterialScatterKind scatterKind = scatter.kind;
-    if (scatterKind == ResolvedMaterialScatterKind.specular || scatterKind == ResolvedMaterialScatterKind.clearcoat ||
-        scatterKind == ResolvedMaterialScatterKind.transmission)
-    {
-        path.specularBounces += 1u;
-    }
-    else
-    {
-        path.diffuseBounces += 1u;
-    }
 
     if (path.vertexIndex == 1u)
     {
@@ -382,10 +375,6 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 
 public void handleMiss(inout PathState path, float3 missRadiance)
 {
-    if (path.vertexIndex == 2u)
-    {
-        resolvePathTracingSpecularMiss(path.guides);
-    }
     if (path.vertexIndex == 1u)
     {
         // Primary camera misses consume the same environment sample written by msMaterial.

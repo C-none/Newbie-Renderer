@@ -159,6 +159,7 @@ class RenderGraphCompiler
                         if (desc.retainedState.has_value())
                         {
                             const auto &retained = desc.retainedState->get().common;
+                            compiledResource.initialStateInitialized = retained.initialized;
                             if (retained.initialized)
                             {
                                 compiledResource.initialOwnership = retained.ownership;
@@ -191,12 +192,14 @@ class RenderGraphCompiler
                         compiledResource.resolvedAspect = desc.aspect;
                         compiledResource.initialLayout = desc.initialLayout;
                         compiledResource.initialAccessScope = desc.initialAccessScope;
+                        compiledResource.initialStateInitialized = desc.initialAccessScope.resolved();
                         compiledResource.initialOwnership = desc.initialOwnership;
                         compiledResource.retainedImageState = desc.retainedState;
                         compiledResource.retainedState = desc.retainedState;
                         if (desc.retainedState.has_value())
                         {
                             const auto &retainedState = desc.retainedState->get();
+                            compiledResource.initialStateInitialized = retainedState.common.initialized;
                             if (retainedState.common.initialized)
                             {
                                 compiledResource.initialLayout = retainedState.layout;
@@ -231,6 +234,7 @@ class RenderGraphCompiler
                         if (desc.retainedState.has_value())
                         {
                             const auto &retained = desc.retainedState->get().common;
+                            compiledResource.initialStateInitialized = retained.initialized;
                             if (retained.initialized)
                             {
                                 compiledResource.initialOwnership = retained.ownership;
@@ -422,6 +426,7 @@ class RenderGraphCompiler
                 .shaderStages = pass.shaderStages,
                 .copy = transferPayload<MovePassPayloads>(pass.copy),
                 .resourceUses = transferPayload<MovePassPayloads>(pass.resourceUses),
+                .frameDataUses = transferPayload<MovePassPayloads>(pass.frameDataUses),
                 .resolvedResourceIndices = std::move(resolvedResourceIndices),
                 .prepare = transferPayload<MovePassPayloads>(pass.prepare),
                 .record = transferPayload<MovePassPayloads>(pass.record),

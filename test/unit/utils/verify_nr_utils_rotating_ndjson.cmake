@@ -2,14 +2,104 @@ if(NOT DEFINED NR_ROTATING_NDJSON_PROBE)
     message(FATAL_ERROR "NR_ROTATING_NDJSON_PROBE is required.")
 endif()
 
-if(NOT DEFINED NR_ROTATING_NDJSON_OUTPUT_DIR)
-    message(FATAL_ERROR "NR_ROTATING_NDJSON_OUTPUT_DIR is required.")
+if(NR_ROTATING_NDJSON_PROBE STREQUAL "")
+    message(FATAL_ERROR "NR_ROTATING_NDJSON_PROBE must not be empty.")
 endif()
 
-file(REMOVE_RECURSE "${NR_ROTATING_NDJSON_OUTPUT_DIR}")
+get_filename_component(probe_path "${NR_ROTATING_NDJSON_PROBE}" ABSOLUTE)
+if(NOT EXISTS "${probe_path}")
+    message(FATAL_ERROR "Rotating NDJSON probe does not exist: '${probe_path}'.")
+endif()
+if(IS_DIRECTORY "${probe_path}")
+    message(FATAL_ERROR "Rotating NDJSON probe must be a file: '${probe_path}'.")
+endif()
+
+file(REAL_PATH "${probe_path}" canonical_probe_path)
+get_filename_component(probe_parent "${canonical_probe_path}" DIRECTORY)
+file(REAL_PATH "${probe_parent}" canonical_probe_parent)
+if(NOT IS_DIRECTORY "${canonical_probe_parent}")
+    message(FATAL_ERROR "Rotating NDJSON probe parent is not a directory: '${canonical_probe_parent}'.")
+endif()
+
+set(output_root_leaf "nr_utils_rotating_ndjson_test_owned_v2")
+set(ownership_marker_leaf ".nr-utils-rotating-ndjson-owner")
+set(ownership_token "nr-utils-rotating-ndjson-test-root-v1")
+
+function(validate_rotating_ndjson_cleanup_root candidate_root canonical_parent expected_leaf result_variable
+         reason_variable)
+    set(${result_variable} FALSE PARENT_SCOPE)
+    set(${reason_variable} "unknown ownership validation failure" PARENT_SCOPE)
+
+    get_filename_component(candidate_parent "${candidate_root}" DIRECTORY)
+    get_filename_component(candidate_leaf "${candidate_root}" NAME)
+    if(NOT candidate_parent STREQUAL canonical_parent)
+        set(${reason_variable} "candidate is not a direct child of the canonical probe parent" PARENT_SCOPE)
+        return()
+    endif()
+    if(NOT candidate_leaf STREQUAL expected_leaf)
+        set(${reason_variable} "candidate leaf does not match the fixed domain leaf" PARENT_SCOPE)
+        return()
+    endif()
+    if(NOT EXISTS "${candidate_root}")
+        set(${reason_variable} "candidate does not exist" PARENT_SCOPE)
+        return()
+    endif()
+    if(NOT IS_DIRECTORY "${candidate_root}")
+        set(${reason_variable} "candidate is not a directory" PARENT_SCOPE)
+        return()
+    endif()
+
+    file(REAL_PATH "${candidate_root}" canonical_candidate_root)
+    get_filename_component(canonical_candidate_parent "${canonical_candidate_root}" DIRECTORY)
+    if(NOT canonical_candidate_root STREQUAL candidate_root OR
+       NOT canonical_candidate_parent STREQUAL canonical_parent)
+        set(${reason_variable} "candidate resolves outside its exact canonical direct-child path" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(ownership_marker "${candidate_root}/${ownership_marker_leaf}")
+    if(NOT EXISTS "${ownership_marker}" OR IS_DIRECTORY "${ownership_marker}" OR IS_SYMLINK "${ownership_marker}")
+        set(${reason_variable} "ownership marker is missing or is not a regular file" PARENT_SCOPE)
+        return()
+    endif()
+    file(READ "${ownership_marker}" marker_contents)
+    if(NOT marker_contents STREQUAL ownership_token)
+        set(${reason_variable} "ownership marker token does not match" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(${result_variable} TRUE PARENT_SCOPE)
+    set(${reason_variable} "" PARENT_SCOPE)
+endfunction()
+
+set(output_root "${canonical_probe_parent}/${output_root_leaf}")
+get_filename_component(output_root_parent "${output_root}" DIRECTORY)
+get_filename_component(output_root_name "${output_root}" NAME)
+if(NOT output_root_parent STREQUAL canonical_probe_parent OR NOT output_root_name STREQUAL output_root_leaf)
+    message(FATAL_ERROR "Derived rotating NDJSON output root is not the fixed direct child: '${output_root}'.")
+endif()
+
+if(EXISTS "${output_root}" OR IS_SYMLINK "${output_root}")
+    validate_rotating_ndjson_cleanup_root(
+        "${output_root}"
+        "${canonical_probe_parent}"
+        "${output_root_leaf}"
+        output_root_owned
+        output_root_reason
+    )
+    if(NOT output_root_owned)
+        message(FATAL_ERROR "Refusing to clean rotating NDJSON output root: ${output_root_reason}: '${output_root}'.")
+    endif()
+endif()
+
+file(REMOVE_RECURSE "${output_root}")
+file(MAKE_DIRECTORY "${output_root}")
+file(WRITE "${output_root}/${ownership_marker_leaf}" "${ownership_token}")
+
+set(main_output_dir "${output_root}/main")
 
 execute_process(
-    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${NR_ROTATING_NDJSON_OUTPUT_DIR}"
+    COMMAND "${canonical_probe_path}" "${main_output_dir}"
     RESULT_VARIABLE probe_result
     OUTPUT_VARIABLE probe_stdout
     ERROR_VARIABLE probe_stderr
@@ -55,8 +145,8 @@ set(total_engine_records 0)
 set(total_option_records 0)
 
 foreach(stream IN ITEMS engine options)
-    set(active_path "${NR_ROTATING_NDJSON_OUTPUT_DIR}/${stream}.ndjson")
-    set(first_backup_path "${NR_ROTATING_NDJSON_OUTPUT_DIR}/${stream}.1.ndjson")
+    set(active_path "${main_output_dir}/${stream}.ndjson")
+    set(first_backup_path "${main_output_dir}/${stream}.1.ndjson")
     if(NOT EXISTS "${active_path}")
         message(FATAL_ERROR "Active ${stream} NDJSON file was not created: '${active_path}'.")
     endif()
@@ -67,8 +157,8 @@ foreach(stream IN ITEMS engine options)
     file(
         GLOB stream_paths
         LIST_DIRECTORIES false
-        "${NR_ROTATING_NDJSON_OUTPUT_DIR}/${stream}.ndjson"
-        "${NR_ROTATING_NDJSON_OUTPUT_DIR}/${stream}.*.ndjson"
+        "${main_output_dir}/${stream}.ndjson"
+        "${main_output_dir}/${stream}.*.ndjson"
     )
     list(SORT stream_paths)
 
@@ -158,10 +248,9 @@ if(NOT total_option_records EQUAL 12)
     message(FATAL_ERROR "Expected 12 persisted option records, found ${total_option_records}.")
 endif()
 
-set(fatal_output_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-fatal")
-file(REMOVE_RECURSE "${fatal_output_dir}")
+set(fatal_output_dir "${output_root}/fatal")
 execute_process(
-    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${fatal_output_dir}" --fatal
+    COMMAND "${canonical_probe_path}" "${fatal_output_dir}" --fatal
     RESULT_VARIABLE fatal_probe_result
     OUTPUT_VARIABLE fatal_probe_stdout
     ERROR_VARIABLE fatal_probe_stderr
@@ -216,7 +305,7 @@ if(EXISTS "${fatal_output_dir}/.active-viewer")
 endif()
 
 execute_process(
-    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${NR_ROTATING_NDJSON_OUTPUT_DIR}" --prune
+    COMMAND "${canonical_probe_path}" "${main_output_dir}" --prune
     RESULT_VARIABLE prune_probe_result
     OUTPUT_VARIABLE prune_probe_stdout
     ERROR_VARIABLE prune_probe_stderr
@@ -231,11 +320,11 @@ if(NOT prune_probe_result EQUAL 0)
 endif()
 
 foreach(stream IN ITEMS engine options)
-    if(NOT EXISTS "${NR_ROTATING_NDJSON_OUTPUT_DIR}/${stream}.1.ndjson")
+    if(NOT EXISTS "${main_output_dir}/${stream}.1.ndjson")
         message(FATAL_ERROR "Retention prune probe did not preserve '${stream}.1.ndjson'.")
     endif()
     foreach(excess_index RANGE 5 16)
-        if(EXISTS "${NR_ROTATING_NDJSON_OUTPUT_DIR}/${stream}.${excess_index}.ndjson")
+        if(EXISTS "${main_output_dir}/${stream}.${excess_index}.ndjson")
             message(
                 FATAL_ERROR
                 "Retention prune probe left excess '${stream}.${excess_index}.ndjson'."
@@ -244,15 +333,14 @@ foreach(stream IN ITEMS engine options)
     endforeach()
 endforeach()
 
-if(EXISTS "${NR_ROTATING_NDJSON_OUTPUT_DIR}/.active-viewer")
+if(EXISTS "${main_output_dir}/.active-viewer")
     message(FATAL_ERROR "Orderly shutdown left the NDJSON viewer lease behind.")
 endif()
 
-set(stale_lease_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-stale-lease")
-file(REMOVE_RECURSE "${stale_lease_dir}")
+set(stale_lease_dir "${output_root}/stale-lease")
 file(MAKE_DIRECTORY "${stale_lease_dir}/.active-viewer")
 execute_process(
-    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${stale_lease_dir}"
+    COMMAND "${canonical_probe_path}" "${stale_lease_dir}"
     RESULT_VARIABLE stale_lease_result
     OUTPUT_VARIABLE stale_lease_stdout
     ERROR_VARIABLE stale_lease_stderr
@@ -273,10 +361,9 @@ if(EXISTS "${stale_lease_dir}/.active-viewer")
     message(FATAL_ERROR "Stale-lease recovery left the NDJSON viewer marker behind.")
 endif()
 
-set(live_lease_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-live-lease")
-file(REMOVE_RECURSE "${live_lease_dir}")
+set(live_lease_dir "${output_root}/live-lease")
 execute_process(
-    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${live_lease_dir}" --conflict-parent
+    COMMAND "${canonical_probe_path}" "${live_lease_dir}" --conflict-parent
     RESULT_VARIABLE live_lease_result
     OUTPUT_VARIABLE live_lease_stdout
     ERROR_VARIABLE live_lease_stderr
@@ -297,12 +384,11 @@ if(EXISTS "${live_lease_dir}/.active-viewer")
     message(FATAL_ERROR "Live two-process lease probe left the NDJSON viewer marker behind.")
 endif()
 
-set(unexpected_marker_dir "${NR_ROTATING_NDJSON_OUTPUT_DIR}-unexpected-marker")
-file(REMOVE_RECURSE "${unexpected_marker_dir}")
+set(unexpected_marker_dir "${output_root}/unexpected-marker")
 file(MAKE_DIRECTORY "${unexpected_marker_dir}/.active-viewer")
 file(WRITE "${unexpected_marker_dir}/.active-viewer/unexpected" "not a stale empty marker")
 execute_process(
-    COMMAND "${NR_ROTATING_NDJSON_PROBE}" "${unexpected_marker_dir}"
+    COMMAND "${canonical_probe_path}" "${unexpected_marker_dir}"
     RESULT_VARIABLE unexpected_marker_result
     OUTPUT_VARIABLE unexpected_marker_stdout
     ERROR_VARIABLE unexpected_marker_stderr
@@ -319,4 +405,3 @@ if(EXISTS "${unexpected_marker_dir}/engine.ndjson" OR
    EXISTS "${unexpected_marker_dir}/options.ndjson")
     message(FATAL_ERROR "Unexpected-marker probe touched active NDJSON files.")
 endif()
-file(REMOVE_RECURSE "${stale_lease_dir}" "${live_lease_dir}" "${unexpected_marker_dir}")

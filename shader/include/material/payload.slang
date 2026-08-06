@@ -1603,27 +1603,6 @@ public ResolvedMaterialDirectComponents evaluateResolvedMaterialDirectComponents
     return result;
 }
 
-public MaterialShadingResult evaluateResolvedMaterialDirectVariant<let LayerFlags : RtMaterialLayerFlag>(
-    ResolvedMaterialPayload payload, MaterialDirectLightingInput lighting)
-{
-    ResolvedMaterialDirectComponents components =
-        evaluateResolvedMaterialDirectComponentsVariant<LayerFlags>(payload, lighting);
-
-    MaterialShadingResult result;
-    result.radiance = components.diffuseRadiance + components.specularRadiance;
-    result.alpha = payload.alpha;
-    return result;
-}
-
-public float3 evaluateResolvedMaterialBsdfVariant<let LayerFlags : RtMaterialLayerFlag>(ResolvedMaterialPayload payload,
-                                                                                        float3 viewDirection,
-                                                                                        float3 lightDirection)
-{
-    ResolvedMaterialBsdfComponents components =
-        evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags>(payload, viewDirection, lightDirection);
-    return components.diffuse + components.specular;
-}
-
 public float resolvedMaterialCombinedPdfVariant<let LayerFlags : RtMaterialLayerFlag>(ResolvedMaterialPayload payload,
                                                                                       float3 viewDirection,
                                                                                       float3 lightDirection)
@@ -1783,11 +1762,6 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFla
     scatter.pdf = pdf;
     scatter.pmf = 0.0f;
     return scatter;
-}
-
-public float3 evaluateResolvedMaterialBsdf(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
-{
-    return evaluateResolvedMaterialBsdfVariant<kResolvedMaterialVariantMask>(payload, viewDirection, lightDirection);
 }
 
 public ResolvedMaterialScatter sampleResolvedMaterialScatter(ResolvedMaterialPayload payload, float3 viewDirection,

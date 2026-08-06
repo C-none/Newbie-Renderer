@@ -91,10 +91,3 @@ class ViewerPerspectiveCamera
     ViewerCameraControlConfig controlConfig_{};
 };
 } // namespace nr::renderer
-
-namespace nr::renderer::detail
-{
-void viewerCameraModuleAnchor() noexcept
-{
-}
-} // namespace nr::renderer::detail

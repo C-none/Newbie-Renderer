@@ -34,7 +34,7 @@ public float2 pathTracingGuideClipToPixel(float4 clip, uint2 dimensions)
 
 public float2 pathTracingGuideSurfaceMotionVector(float3 position, uint2 dimensions)
 {
-    float4 currentClip = mul(gFrame.viewProjection, float4(position, 1.0f));
+    float4 currentClip = mul(gFrame.unjitteredViewProjection, float4(position, 1.0f));
     float4 previousClip = mul(gFrame.previousViewProjection, float4(position, 1.0f));
     float2 motion =
         pathTracingGuideClipToPixel(previousClip, dimensions) - pathTracingGuideClipToPixel(currentClip, dimensions);
@@ -44,7 +44,7 @@ public float2 pathTracingGuideSurfaceMotionVector(float3 position, uint2 dimensi
 public float2 pathTracingGuideSkyMotionVector(float3 worldDirection, uint2 dimensions)
 {
     float4 direction = float4(worldDirection, 0.0f);
-    float4 currentClip = mul(gFrame.viewProjection, direction);
+    float4 currentClip = mul(gFrame.unjitteredViewProjection, direction);
     float4 previousClip = mul(gFrame.previousViewProjection, direction);
     float2 motion =
         pathTracingGuideClipToPixel(previousClip, dimensions) - pathTracingGuideClipToPixel(currentClip, dimensions);
@@ -140,11 +140,6 @@ public void resolvePathTracingSpecularHit(inout PathTracingGuideState guides, fl
     }
 
     guides.specularHitDistance = min(length(hitPosition - guides.primaryPosition), kPathTracingGuideHalfMax);
-    guides.awaitingSpecularHit = 0u;
-}
-
-public void resolvePathTracingSpecularMiss(inout PathTracingGuideState guides)
-{
     guides.awaitingSpecularHit = 0u;
 }
 

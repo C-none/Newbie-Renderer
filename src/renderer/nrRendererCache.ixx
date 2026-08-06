@@ -117,14 +117,16 @@ class RenderGraphSkeletonPatchContext
     RenderGraphSkeletonPatchContext(RenderGraphFrameDescription &frame, RenderGraphSkeletonNodePatchLayout layout,
                                     const std::map<std::string, GraphResourceHandle> &namedFrameResources,
                                     const std::map<std::string, GraphFrameDataHandle> &namedFrameData,
-                                    const FrameGlobalResources *globalResources = nullptr) noexcept;
+                                    const FrameGlobalResources *globalResources = nullptr,
+                                    std::string_view runtimeName = {}) noexcept;
 
     void patchResource(std::size_t localSlot, GraphResourceDescVariant desc);
 
     void patchFrameData(std::size_t localSlot, std::string_view debugName, std::any payload);
 
     void patchPass(std::size_t localSlot, std::string_view debugName, PassPrepareCallback prepare,
-                   PassRecordCallback record, std::optional<PassParallelRecordDesc> parallelRecord = std::nullopt);
+                   PassRecordCallback record, std::optional<PassParallelRecordDesc> parallelRecord = std::nullopt,
+                   std::span<const GraphFrameDataHandle> frameDataUses = {});
 
     void patchCopy(std::size_t localSlot, std::string_view debugName, CopyPassDesc copy);
 
@@ -161,6 +163,8 @@ class RenderGraphSkeletonPatchContext
 
     [[nodiscard]] QueueDomain queue() const noexcept;
 
+    [[nodiscard]] std::string_view runtimeName() const noexcept;
+
     [[nodiscard]] GraphFrameDataHandle frameData(std::size_t localSlot) const;
 
     [[nodiscard]] GraphPassHandle passHandle(std::size_t localSlot) const;
@@ -180,6 +184,7 @@ class RenderGraphSkeletonPatchContext
     std::reference_wrapper<const std::map<std::string, GraphResourceHandle>> namedFrameResources_;
     std::reference_wrapper<const std::map<std::string, GraphFrameDataHandle>> namedFrameData_;
     const FrameGlobalResources *globalResources_ = nullptr;
+    std::string_view runtimeName_{};
 };
 
 class RenderGraphCompileCache
@@ -195,24 +200,7 @@ class RenderGraphCompileCache
 
     [[nodiscard]] static FrameSignature structuralSignature(const RenderGraphFrameDescription &frame);
 
-    struct ResourceUseSignature
-    {
-        GraphResourceHandle resource{};
-        std::optional<BufferUsageIntent> bufferUsage{};
-        std::optional<BufferAccessIntent> bufferAccess{};
-        std::optional<AccelerationStructureUsageIntent> accelerationStructureUsage{};
-        std::optional<AccelerationStructureAccessIntent> accelerationStructureAccess{};
-        std::optional<ImageUsageIntent> imageUsage{};
-        std::optional<ImageAccessIntent> imageAccess{};
-        std::optional<ImageLayoutIntent> imageLayout{};
-        std::optional<ImageAspectIntent> imageAspect{};
-        vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
-        ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined;
-        bool readOnly = false;
-        bool requiresPreviousUseBarrier = false;
-
-        [[nodiscard]] bool operator==(const ResourceUseSignature &) const = default;
-    };
+    using ResourceUseSignature = PassResourceUseDesc;
 
     struct ImportedBufferResourceSignature
     {
@@ -325,6 +313,7 @@ class RenderGraphCompileCache
         vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{};
         std::optional<CopyPassDesc> copy{};
         std::vector<ResourceUseSignature> resourceUses{};
+        std::vector<GraphFrameDataHandle> frameDataUses{};
         bool hasPrepare = false;
         bool hasRecord = false;
         bool hasParallelRecord = false;
@@ -442,6 +431,16 @@ enum class BindlessImageTableRequirement
     optional,
 };
 
+struct PipelinePassBindingCacheKey
+{
+    std::uint64_t runtimeIdentity = 0;
+    std::uint64_t generation = 0;
+    std::size_t stateIndex = std::numeric_limits<std::size_t>::max();
+    std::size_t frameSlot = 0;
+
+    [[nodiscard]] auto operator<=>(const PipelinePassBindingCacheKey &) const = default;
+};
+
 struct BindlessImageDescriptor
 {
     std::optional<std::reference_wrapper<const nr::rhi::Image>> image{};
@@ -483,27 +482,26 @@ class BindlessImageTableCache
   public:
     void clear() noexcept;
 
-    void invalidateTableForFrame(std::uintptr_t ownerKey, std::string_view tableKey, std::uint32_t frameIndex) noexcept;
-
     template <typename PipelineRuntimeT>
-    void ensureTableForFrame(PipelineRuntimeT &pipeline, std::uint32_t frameIndex,
+    void ensureTableForFrame(PipelineRuntimeT &pipeline, typename PipelineRuntimeT::PassBindingHandle passBinding,
+                             std::uint32_t frameIndex,
                              const BindlessImageTableRequest &request)
     {
         nrAssert(!request.tableKey.empty(), "BindlessImageTableCache requires a non-empty table key.");
         nrAssert(!request.shaderSymbol.empty(), "BindlessImageTableCache requires a shader symbol.");
         nrAssert(request.descriptorCapacity > 0u, "BindlessImageTableCache requires descriptorCapacity > 0.");
 
-        auto ownerKey = reinterpret_cast<std::uintptr_t>(std::addressof(pipeline));
+        auto const ownerKey = pipeline.passBindingCacheKey(passBinding, frameIndex);
         auto root = pipeline.rootCursor();
         if (!root.hasField(request.shaderSymbol))
         {
             nrAssert(request.requirement == BindlessImageTableRequirement::optional,
                      std::format("Bindless image table '{}' requires shader symbol '{}'.", request.tableKey,
                                  request.shaderSymbol));
-            auto const reallocated = pipeline.ensureBindingSetsForFrame(frameIndex, {});
+            auto const reallocated = pipeline.ensureBindingSetsForFrame(passBinding, frameIndex, {});
             if (reallocated)
             {
-                invalidateTableForFrame(ownerKey, request.tableKey, frameIndex);
+                invalidateTablesForFrame(ownerKey);
             }
             return;
         }
@@ -514,10 +512,10 @@ class BindlessImageTableCache
             nrAssert(request.requirement == BindlessImageTableRequirement::optional,
                      std::format("Bindless image table '{}' requires shader symbol '{}'.", request.tableKey,
                                  request.shaderSymbol));
-            auto const reallocated = pipeline.ensureBindingSetsForFrame(frameIndex, {});
+            auto const reallocated = pipeline.ensureBindingSetsForFrame(passBinding, frameIndex, {});
             if (reallocated)
             {
-                invalidateTableForFrame(ownerKey, request.tableKey, frameIndex);
+                invalidateTablesForFrame(ownerKey);
             }
             return;
         }
@@ -533,15 +531,17 @@ class BindlessImageTableCache
                  "BindlessImageTableCache requires a valid sampler for dynamic sampler image descriptors.");
 
         auto const reallocated =
-            pipeline.ensureBindingSetsForFrame(frameIndex, {{tableBinding->set, request.descriptorCapacity}});
+            pipeline.ensureBindingSetsForFrame(passBinding, frameIndex,
+                                               {{tableBinding->set, request.descriptorCapacity}});
         if (reallocated)
         {
-            invalidateTableForFrame(ownerKey, request.tableKey, frameIndex);
+            invalidateTablesForFrame(ownerKey);
         }
     }
 
     template <typename PipelineRuntimeT>
     [[nodiscard]] nr::rhi::ShaderBindingSnapshot makeSnapshotForFrame(PipelineRuntimeT &pipeline,
+                                                                      typename PipelineRuntimeT::PassBindingHandle passBinding,
                                                                       std::uint32_t frameIndex,
                                                                       const BindlessImageTableRequest &request)
     {
@@ -549,17 +549,17 @@ class BindlessImageTableCache
         nrAssert(!request.shaderSymbol.empty(), "BindlessImageTableCache requires a shader symbol.");
         nrAssert(request.descriptorCapacity > 0u, "BindlessImageTableCache requires descriptorCapacity > 0.");
 
-        auto ownerKey = reinterpret_cast<std::uintptr_t>(std::addressof(pipeline));
+        auto const ownerKey = pipeline.passBindingCacheKey(passBinding, frameIndex);
         auto root = pipeline.rootCursor();
         if (!root.hasField(request.shaderSymbol))
         {
             nrAssert(request.requirement == BindlessImageTableRequirement::optional,
                      std::format("Bindless image table '{}' requires shader symbol '{}'.", request.tableKey,
                                  request.shaderSymbol));
-            auto const reallocated = pipeline.ensureBindingSetsForFrame(frameIndex, {});
+            auto const reallocated = pipeline.ensureBindingSetsForFrame(passBinding, frameIndex, {});
             if (reallocated)
             {
-                invalidateTableForFrame(ownerKey, request.tableKey, frameIndex);
+                invalidateTablesForFrame(ownerKey);
             }
             return {};
         }
@@ -570,10 +570,10 @@ class BindlessImageTableCache
             nrAssert(request.requirement == BindlessImageTableRequirement::optional,
                      std::format("Bindless image table '{}' requires shader symbol '{}'.", request.tableKey,
                                  request.shaderSymbol));
-            auto const reallocated = pipeline.ensureBindingSetsForFrame(frameIndex, {});
+            auto const reallocated = pipeline.ensureBindingSetsForFrame(passBinding, frameIndex, {});
             if (reallocated)
             {
-                invalidateTableForFrame(ownerKey, request.tableKey, frameIndex);
+                invalidateTablesForFrame(ownerKey);
             }
             return {};
         }
@@ -589,19 +589,20 @@ class BindlessImageTableCache
                  "BindlessImageTableCache requires a valid sampler for dynamic sampler image descriptors.");
 
         auto const reallocated =
-            pipeline.ensureBindingSetsForFrame(frameIndex, {{tableBinding->set, request.descriptorCapacity}});
+            pipeline.ensureBindingSetsForFrame(passBinding, frameIndex,
+                                               {{tableBinding->set, request.descriptorCapacity}});
         if (reallocated)
         {
-            invalidateTableForFrame(ownerKey, request.tableKey, frameIndex);
+            invalidateTablesForFrame(ownerKey);
         }
 
-        return makeSnapshotForFrameCore(ownerKey, tableCursor, root, frameIndex, request);
+        return makeSnapshotForFrameCore(ownerKey, tableCursor, root, request);
     }
 
   private:
     struct TableKey
     {
-        std::uintptr_t ownerKey = 0;
+        PipelinePassBindingCacheKey ownerKey{};
         std::string tableKey{};
 
         [[nodiscard]] auto operator<=>(const TableKey &) const = default;
@@ -609,15 +610,16 @@ class BindlessImageTableCache
 
     struct TableState
     {
-        std::array<bool, nr::maxFrameInFlight> initialized{};
-        std::array<std::uint64_t, nr::maxFrameInFlight> versions{};
-        std::array<std::set<std::uint32_t>, nr::maxFrameInFlight> descriptorIdsByFrame{};
+        bool initialized = false;
+        std::uint64_t version = 0;
+        std::set<std::uint32_t> descriptorIds{};
     };
 
-    [[nodiscard]] nr::rhi::ShaderBindingSnapshot makeSnapshotForFrameCore(std::uintptr_t ownerKey,
+    void invalidateTablesForFrame(PipelinePassBindingCacheKey ownerKey) noexcept;
+
+    [[nodiscard]] nr::rhi::ShaderBindingSnapshot makeSnapshotForFrameCore(PipelinePassBindingCacheKey ownerKey,
                                                                           const nr::rhi::ShaderCursor &tableCursor,
                                                                           const nr::rhi::ShaderCursor &root,
-                                                                          std::uint32_t frameIndex,
                                                                           const BindlessImageTableRequest &request);
 
     std::map<TableKey, TableState> tables_{};

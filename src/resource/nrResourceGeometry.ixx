@@ -15,8 +15,6 @@ struct Aabb
     constexpr Aabb(glm::vec3 inMin, glm::vec3 inMax) noexcept : min(inMin), max(inMax)
     {
     }
-    ~Aabb() = default;
-
     [[nodiscard]] bool valid() const noexcept;
 
     [[nodiscard]] glm::vec3 center() const noexcept;
@@ -37,8 +35,6 @@ struct BoundingSphere
     constexpr BoundingSphere(glm::vec3 inCenter, float inRadius) noexcept : center(inCenter), radius(inRadius)
     {
     }
-    ~BoundingSphere() = default;
-
     [[nodiscard]] bool valid(float eps = 1e-6f) const noexcept;
 };
 
@@ -52,8 +48,6 @@ struct Triangle
     constexpr Triangle(glm::vec3 inP0, glm::vec3 inP1, glm::vec3 inP2) noexcept : p0(inP0), p1(inP1), p2(inP2)
     {
     }
-    ~Triangle() = default;
-
     [[nodiscard]] glm::vec3 edge01() const noexcept;
 
     [[nodiscard]] glm::vec3 edge02() const noexcept;

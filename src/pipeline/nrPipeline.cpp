@@ -864,23 +864,26 @@ void printViewerUsage(std::string_view executableName)
         app.camera().syncFromSnapshot(*optionSnapshot, presentation);
         app.ui().setCameraFrame(app.camera().frame());
         queueFrameStatusSection(app.ui(), presentation);
+        auto uiResult = nr::app::OptionUiPresentResult{};
+        auto const uiInteractionPolicy = config.interactionMode == ViewerInteractionMode::human
+                                             ? nr::app::OptionUiInteractionPolicy::interactive
+                                             : nr::app::OptionUiInteractionPolicy::readOnly;
         if (!config.benchmark)
         {
-            auto const uiInteractionPolicy = config.interactionMode == ViewerInteractionMode::human
-                                                 ? nr::app::OptionUiInteractionPolicy::interactive
-                                                 : nr::app::OptionUiInteractionPolicy::readOnly;
-            auto uiResult = optionUiPresenter.present(app.ui(), app.options(), optionSnapshot, uiInteractionPolicy);
-            if (uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)
+            uiResult = optionUiPresenter.present(app.ui(), app.options(), optionSnapshot, uiInteractionPolicy);
+        }
+
+        auto const uiCaptureState = app.ui().finalizeFrame();
+        if (!config.benchmark && uiInteractionPolicy == nr::app::OptionUiInteractionPolicy::interactive)
+        {
+            if (uiResult.mutationAttempted)
             {
-                if (uiResult.mutationAttempted)
-                {
-                    app.camera().discardPresentationInput(presentation, deltaSeconds, app.ui().captureState());
-                }
-                else
-                {
-                    static_cast<void>(app.camera().tryScheduleFromPresentation(
-                        app.options(), *optionSnapshot, presentation, deltaSeconds, app.ui().captureState()));
-                }
+                app.camera().discardPresentationInput(presentation, deltaSeconds, uiCaptureState);
+            }
+            else
+            {
+                static_cast<void>(app.camera().tryScheduleFromPresentation(
+                    app.options(), *optionSnapshot, presentation, deltaSeconds, uiCaptureState));
             }
         }
         auto const cameraOverride = app.camera().buildRendererCameraOverride();

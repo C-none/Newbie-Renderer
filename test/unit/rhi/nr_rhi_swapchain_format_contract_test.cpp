@@ -10,6 +10,14 @@ namespace
     return nr::rhi::chooseSwapchainSurfaceFormat(formats);
 }
 
+[[nodiscard]] vk::QueueFamilyProperties queueFamily(vk::QueueFlags flags)
+{
+    auto properties = vk::QueueFamilyProperties{};
+    properties.queueFlags = flags;
+    properties.queueCount = 1;
+    return properties;
+}
+
 const nr::test::CaseRegistrar scRgbPriorityCase{
     "rhi swapchain format selection prefers R16 scRGB", [] {
         auto formats = std::array{
@@ -73,5 +81,61 @@ const nr::test::CaseRegistrar sdrFallbackCase{
         nr::test::requireEqual(selected.format, vk::Format::eB8G8R8A8Srgb);
         nr::test::requireEqual(selected.colorSpace, vk::ColorSpaceKHR::eSrgbNonlinear);
         nr::test::require(!nr::rhi::isHdrSwapchainColorSpace(selected.colorSpace));
+    }};
+
+const nr::test::CaseRegistrar dedicatedPresentComputeCase{
+    "rhi queue selection prefers a present-capable dedicated compute family", [] {
+        auto queueFamilies = std::array{
+            queueFamily(vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute |
+                        vk::QueueFlagBits::eTransfer),
+            queueFamily(vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer),
+            queueFamily(vk::QueueFlagBits::eTransfer),
+        };
+        auto presentSupport = std::array{vk::True, vk::True, vk::False};
+
+        auto selected = nr::rhi::selectRequiredQueueFamilies(queueFamilies, presentSupport);
+        nr::test::require(selected.has_value(), "expected the required queue family contract to be satisfiable");
+        nr::test::requireEqual(selected->graphics, 0u);
+        nr::test::requireEqual(selected->compute, 1u);
+        nr::test::requireEqual(selected->transfer, 2u);
+    }};
+
+const nr::test::CaseRegistrar universalPresentComputeFallbackCase{
+    "rhi queue selection falls back when dedicated compute cannot present", [] {
+        auto queueFamilies = std::array{
+            queueFamily(vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute |
+                        vk::QueueFlagBits::eTransfer),
+            queueFamily(vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer),
+            queueFamily(vk::QueueFlagBits::eTransfer),
+        };
+        auto presentSupport = std::array{vk::True, vk::False, vk::False};
+
+        auto selected = nr::rhi::selectRequiredQueueFamilies(queueFamilies, presentSupport);
+        nr::test::require(selected.has_value(), "expected the present-capable universal compute fallback");
+        nr::test::requireEqual(selected->compute, 0u);
+    }};
+
+const nr::test::CaseRegistrar missingPresentComputeCase{
+    "rhi queue selection rejects devices without a present-capable compute family", [] {
+        auto queueFamilies = std::array{
+            queueFamily(vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute |
+                        vk::QueueFlagBits::eTransfer),
+            queueFamily(vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer),
+            queueFamily(vk::QueueFlagBits::eTransfer),
+        };
+        auto presentSupport = std::array{vk::False, vk::False, vk::False};
+
+        nr::test::require(!nr::rhi::selectRequiredQueueFamilies(queueFamilies, presentSupport).has_value());
+    }};
+
+const nr::test::CaseRegistrar mismatchedPresentSupportCase{
+    "rhi queue selection rejects mismatched present-support input", [] {
+        auto queueFamilies = std::array{
+            queueFamily(vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute),
+            queueFamily(vk::QueueFlagBits::eTransfer),
+        };
+        auto presentSupport = std::array{vk::True};
+
+        nr::test::require(!nr::rhi::selectRequiredQueueFamilies(queueFamilies, presentSupport).has_value());
     }};
 } // namespace

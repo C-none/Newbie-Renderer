@@ -16,6 +16,13 @@ namespace
     return glm::vec3{clip.x, clip.y, clip.z} / clip.w;
 }
 
+[[nodiscard]] glm::vec2 topLeftPixelFromClip(const glm::vec4 &clip, vk::Extent2D extent)
+{
+    auto const ndc = glm::vec2{clip.x, clip.y} / clip.w;
+    auto const uv = glm::vec2{ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f};
+    return uv * glm::vec2{extent.width, extent.height};
+}
+
 const nr::test::CaseRegistrar haltonCase{
     "renderer camera jitter uses wrapped Halton 2,3 samples", [] {
         auto sample = nr::renderer::makeHalton23CameraJitterSample(0u, vk::Extent2D{1280u, 720u});
@@ -43,6 +50,28 @@ const nr::test::CaseRegistrar projectionJitterCase{
 
         nr::test::require(nearlyEqual(jitteredNdc.x - baseNdc.x, ndcOffset.x));
         nr::test::require(nearlyEqual(jitteredNdc.y - baseNdc.y, ndcOffset.y));
+    }};
+
+const nr::test::CaseRegistrar unjitteredMotionCase{
+    "renderer temporal motion excludes current camera jitter in top-left pixel units", [] {
+        auto const extent = vk::Extent2D{1280u, 720u};
+        auto const projection = glm::perspectiveRH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        auto const view = glm::lookAtRH(glm::vec3{0.0f, 0.0f, 3.0f}, glm::vec3{0.0f}, glm::vec3{0.0f, 1.0f, 0.0f});
+        auto const sample = nr::renderer::makeHalton23CameraJitterSample(0u, extent);
+        auto const jitteredProjection = nr::renderer::applyCameraProjectionJitter(projection, sample.ndcOffset);
+        auto const worldPosition = glm::vec4{0.25f, -0.5f, 0.0f, 1.0f};
+
+        auto const previousPixel = topLeftPixelFromClip(projection * view * worldPosition, extent);
+        auto const unjitteredCurrentPixel = topLeftPixelFromClip(projection * view * worldPosition, extent);
+        auto const jitteredCurrentPixel = topLeftPixelFromClip(jitteredProjection * view * worldPosition, extent);
+        auto const temporalMotion = previousPixel - unjitteredCurrentPixel;
+        auto const jitterContaminatedMotion = previousPixel - jitteredCurrentPixel;
+
+        nr::test::require(nearlyEqual(temporalMotion.x, 0.0f) && nearlyEqual(temporalMotion.y, 0.0f),
+                          "a stable camera must have zero motion despite projection jitter");
+        nr::test::require(nearlyEqual(jitterContaminatedMotion.x, -sample.pixelOffset.x, 1.0e-3f) &&
+                              nearlyEqual(jitterContaminatedMotion.y, -sample.pixelOffset.y, 1.0e-3f),
+                          "previousPixel-currentPixel should expose exactly the removed jitter in top-left pixels");
     }};
 
 const nr::test::CaseRegistrar frameStateCase{

@@ -7,7 +7,7 @@ namespace nr::rhi
 {
 CommandPool::CommandPool(const vk::raii::Device &device, std::uint32_t queueFamilyIndex,
                          vk::CommandPoolCreateFlags flags)
-    : queueFamilyIndex_(queueFamilyIndex), device_(std::ref(device))
+    : device_(std::ref(device))
 {
     vk::CommandPoolCreateInfo createInfo{flags, queueFamilyIndex};
     pool_ = vk::raii::CommandPool(device, createInfo);
@@ -28,16 +28,6 @@ CommandPool::CommandPool(const vk::raii::Device &device, std::uint32_t queueFami
 void CommandPool::reset(vk::CommandPoolResetFlags flags)
 {
     pool_.reset(flags);
-}
-
-[[nodiscard]] const vk::raii::CommandPool &CommandPool::handle() const noexcept
-{
-    return pool_;
-}
-
-[[nodiscard]] std::uint32_t CommandPool::queueFamilyIndex() const noexcept
-{
-    return queueFamilyIndex_;
 }
 
 [[nodiscard]] bool CommandPool::valid() const noexcept

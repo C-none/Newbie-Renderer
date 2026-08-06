@@ -72,7 +72,8 @@ namespace nr::scene::detail
         });
     });
 
-    std::ranges::for_each(hints, [](TextureColorSpaceHint &hint) { hint.preferSrgb = !hint.hasLinear; });
+    std::ranges::for_each(hints,
+                          [](TextureColorSpaceHint &hint) { hint.preferSrgb = hint.hasColor && !hint.hasLinear; });
 
     return hints;
 }

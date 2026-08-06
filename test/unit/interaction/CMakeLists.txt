@@ -1,4 +1,5 @@
 nr_add_contract_test(nr_interaction_websocket_contract_test nr_interaction_websocket_contract_test.cpp "fast;cpu;unit;interaction"
+    nr_test_options
     nrinteraction
     nroptions
     dependency_services

@@ -13,7 +13,7 @@ import std;
  * - VmaBuffer:            RAII wrapper for VkBuffer + VmaAllocation pair
  * - VmaImage:             RAII wrapper for VkImage  + VmaAllocation pair
  * - VmaPoolHandle:        RAII wrapper for VmaPool
- * - VmaAllocatorWrapper:  RAII wrapper for VmaAllocator + statistics APIs
+ * - VmaAllocatorWrapper:  RAII wrapper for VmaAllocator + resource creation
  *
  * All types are move-only, following the project's RAII conventions.
  * VMA is internally thread-safe by default (no EXTERNALLY_SYNCHRONIZED).
@@ -62,9 +62,6 @@ struct VmaBuffer
     /// Get the persistently mapped pointer (nullptr if not mapped)
     [[nodiscard]] void *mapped() const noexcept;
 
-    /// Get the allocation size in bytes
-    [[nodiscard]] VkDeviceSize size() const noexcept;
-
     /// Get the raw VkBuffer handle
     [[nodiscard]] VkBuffer handle() const noexcept;
 
@@ -77,15 +74,6 @@ struct VmaBuffer
      * VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT.
      */
     [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device &device) const noexcept;
-
-    /**
-     * @brief Query the actual memory property flags for this allocation
-     * @return Vulkan memory property flags (HOST_VISIBLE, DEVICE_LOCAL, etc.)
-     */
-    [[nodiscard]] VkMemoryPropertyFlags memoryProperties() const;
-
-    /// Check if the underlying memory is host-visible
-    [[nodiscard]] bool isHostVisible() const;
 
     /**
      * @brief Flush host writes to make them visible to the device.
@@ -139,11 +127,6 @@ struct VmaImage
     /// Get the raw VkImage handle
     [[nodiscard]] VkImage handle() const noexcept;
 
-    /// Get the allocation size in bytes
-    [[nodiscard]] VkDeviceSize size() const noexcept;
-
-    /// Query memory property flags
-    [[nodiscard]] VkMemoryPropertyFlags memoryProperties() const;
 };
 
 // =========================================================================
@@ -190,12 +173,10 @@ struct VmaPoolHandle
      */
     void reset();
 
-    /// Get pool statistics (fast, safe to call per-frame)
-    [[nodiscard]] VmaStatistics statistics() const;
 };
 
 // =========================================================================
-// VmaAllocatorWrapper — RAII VmaAllocator + creation/statistics
+// VmaAllocatorWrapper — RAII VmaAllocator + resource creation
 // =========================================================================
 
 /**
@@ -204,7 +185,6 @@ struct VmaPoolHandle
  * Responsibilities:
  * - Create and destroy VmaAllocator with correct Vulkan 1.4 flags
  * - Provide thin passthrough methods for buffer/image/pool creation
- * - Expose budget and statistics queries
  *
  * Thread Safety:
  * - All allocation/deallocation calls are internally synchronized by VMA
@@ -243,9 +223,6 @@ class VmaAllocatorWrapper
 
     VmaAllocatorWrapper &operator=(VmaAllocatorWrapper &&other) noexcept;
 
-    [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] VmaAllocator handle() const noexcept;
-
     // =====================================================================
     // Resource Creation
     // =====================================================================
@@ -283,44 +260,6 @@ class VmaAllocatorWrapper
      */
     [[nodiscard]] std::uint32_t findMemoryTypeIndexForBuffer(const vk::BufferCreateInfo &bufferInfo,
                                                              const VmaAllocationCreateInfo &allocInfo) const;
-
-    /**
-     * @brief Find the memory type index suitable for an image configuration
-    * @param imageInfo   Sample image create info (Vulkan-hpp type)
-     * @param allocInfo   Desired allocation properties
-     * @return Memory type index for VmaPoolCreateInfo
-     */
-    [[nodiscard]] std::uint32_t findMemoryTypeIndexForImage(const vk::ImageCreateInfo &imageInfo,
-                                                            const VmaAllocationCreateInfo &allocInfo) const;
-
-    // =====================================================================
-    // Statistics & Budget
-    // =====================================================================
-
-    /**
-     * @brief Get per-heap memory budgets (fast, safe to call every frame)
-     *
-     * Returns budget info for each memory heap including:
-     * - Allocated block bytes and allocation bytes
-     * - OS-reported usage and budget (with VK_EXT_memory_budget)
-     */
-    [[nodiscard]] std::vector<VmaBudget> getBudgets() const;
-
-    /**
-     * @brief Calculate comprehensive statistics (slow, debug only)
-     *
-     * Traverses all internal data structures. Use sparingly.
-     */
-    [[nodiscard]] VmaTotalStatistics calculateStatistics() const;
-
-    /**
-     * @brief Dump VMA statistics as JSON string
-     *
-     * Produces a detailed JSON report for visualization and debugging tools.
-     * @param detailedMap Include per-allocation details
-     * @return JSON string (heap-allocated, returned by value)
-     */
-    [[nodiscard]] std::string dumpStatsJson(bool detailedMap = true) const;
 
   private:
     VmaAllocator allocator_ = nullptr;

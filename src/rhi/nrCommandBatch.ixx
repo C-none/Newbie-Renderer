@@ -31,9 +31,9 @@ class CommandBatch
      */
     CommandBatch() noexcept = default;
 
-    // Copyable and movable (contains only handles and vectors)
-    CommandBatch(const CommandBatch &) = default;
-    CommandBatch &operator=(const CommandBatch &) = default;
+    // A batch describes one submission and must be consumed explicitly.
+    CommandBatch(const CommandBatch &) = delete;
+    CommandBatch &operator=(const CommandBatch &) = delete;
     CommandBatch(CommandBatch &&) noexcept = default;
     CommandBatch &operator=(CommandBatch &&) noexcept = default;
 
@@ -42,12 +42,6 @@ class CommandBatch
      * @param commandBuffer RAII command buffer (handle extracted automatically)
      */
     void addCommandBuffer(const vk::raii::CommandBuffer &commandBuffer);
-
-    /**
-     * @brief Add multiple command buffers to the batch
-     * @param commandBuffers Span of RAII command buffers
-     */
-    void addCommandBuffers(std::span<const vk::raii::CommandBuffer> commandBuffers);
 
     /**
      * @brief Add a wait semaphore with pipeline stage
@@ -104,51 +98,11 @@ class CommandBatch
     void setFrameBoundary(std::uint64_t frameID, vk::FrameBoundaryFlagsEXT flags = {},
                           std::span<const vk::Image> images = {}, std::span<const vk::Buffer> buffers = {});
 
-    void clearFrameBoundary() noexcept;
-
-    [[nodiscard]] bool hasFrameBoundary() const noexcept;
-
     [[nodiscard]] std::optional<std::uint64_t> frameBoundaryFrameID() const noexcept;
-
-    /**
-     * @brief Clear all command buffers and synchronization
-     * 
-     * Resets batch to empty state
-     */
-    void clear() noexcept;
-
-    /**
-     * @brief Check if batch is empty (no command buffers)
-     */
-    [[nodiscard]] bool empty() const noexcept;
-
-    /**
-     * @brief Get number of command buffers in batch
-     */
-    [[nodiscard]] std::size_t commandBufferCount() const noexcept;
 
     [[nodiscard]] std::optional<vk::FrameBoundaryEXT> frameBoundarySubmitInfo() const;
 
     [[nodiscard]] vk::SubmitInfo2 submitInfo2View(const vk::FrameBoundaryEXT *frameBoundary = nullptr) const noexcept;
-
-    // ========== Builder-style interface ==========
-
-    /**
-     * @brief Builder-style: add command buffer
-     */
-    CommandBatch &withCommandBuffer(const vk::raii::CommandBuffer &cb);
-
-    /**
-     * @brief Builder-style: add wait semaphore
-     */
-    CommandBatch &withWait(const vk::raii::Semaphore &sem, vk::PipelineStageFlags2 stage, std::uint64_t value = 0,
-                           std::uint32_t deviceIndex = 0);
-
-    /**
-     * @brief Builder-style: add signal semaphore
-     */
-    CommandBatch &withSignal(const vk::raii::Semaphore &sem, std::uint64_t value = 0, std::uint32_t deviceIndex = 0,
-                             vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands);
 
   private:
     struct FrameBoundaryMetadata
@@ -164,19 +118,5 @@ class CommandBatch
     std::vector<vk::SemaphoreSubmitInfo> signalInfos_;
     std::optional<FrameBoundaryMetadata> frameBoundary_;
 };
-
-/**
- * @brief Helper functions for common batch operations
- */
-namespace batch
-{
-
-/**
- * @brief Create a simple single-command batch
- * @param commandBuffer RAII command buffer
- */
-[[nodiscard]] CommandBatch single(const vk::raii::CommandBuffer &commandBuffer);
-
-} // namespace batch
 
 } // namespace nr::rhi

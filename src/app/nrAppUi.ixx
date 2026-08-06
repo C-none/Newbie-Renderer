@@ -28,8 +28,8 @@ using UiSectionDrawCallback = std::function<void(UiSystem &)>;
 
 struct UiSection
 {
-    std::string_view id{};
-    std::string_view title{};
+    std::string id{};
+    std::string title{};
     UiSectionDrawCallback draw{};
     bool defaultOpen = true;
 };
@@ -37,29 +37,6 @@ struct UiSection
 class UiSystem
 {
   public:
-    class WindowScope
-    {
-      public:
-        WindowScope() = default;
-        WindowScope(UiSystem &owner, bool visible, bool closesWindow) noexcept;
-
-        WindowScope(const WindowScope &) = delete;
-        WindowScope &operator=(const WindowScope &) = delete;
-
-        WindowScope(WindowScope &&other) noexcept;
-        WindowScope &operator=(WindowScope &&other) noexcept;
-        ~WindowScope();
-
-        [[nodiscard]] explicit operator bool() const noexcept;
-
-      private:
-        void close() noexcept;
-
-        std::optional<std::reference_wrapper<UiSystem>> owner_{};
-        bool visible_ = false;
-        bool closesWindow_ = false;
-    };
-
     UiSystem() = default;
     UiSystem(const UiSystem &) = delete;
     UiSystem &operator=(const UiSystem &) = delete;
@@ -73,11 +50,9 @@ class UiSystem
 
     [[nodiscard]] bool initialized() const noexcept;
     void beginFrame(const nr::rhi::PresentationContext &presentation, float deltaSeconds);
-    void finalizeFrame();
+    [[nodiscard]] UiCaptureState finalizeFrame();
 
-    [[nodiscard]] WindowScope window(std::string_view title, ImGuiWindowFlags flags = 0);
     void queueSection(UiSection section);
-    void renderSections(std::span<const UiSection> sections, ImGuiWindowFlags flags = 0);
     void renderSections(std::span<const UiSection> leadingSections, std::span<const UiSection> trailingSections,
                         ImGuiWindowFlags flags = 0);
     void separator();
@@ -110,28 +85,36 @@ class UiSystem
     void setCameraFrame(const nr::renderer::ViewerPerspectiveCameraFrame &cameraFrame) noexcept;
     [[nodiscard]] const nr::renderer::ViewerPerspectiveCameraFrame &cameraFrame() const noexcept;
     void setCpuStatistics(const nr::renderer::RendererCpuStatistics &statistics) noexcept;
-    [[nodiscard]] const nr::renderer::RendererCpuStatistics &cpuStatistics() const noexcept;
     void setGpuPassStatistics(const nr::renderer::RendererGpuPassStatistics &statistics) noexcept;
-    [[nodiscard]] const nr::renderer::RendererGpuPassStatistics &gpuPassStatistics() const noexcept;
-    [[nodiscard]] UiCaptureState captureState() const noexcept;
     [[nodiscard]] std::optional<std::reference_wrapper<const ImDrawData>> drawData() const noexcept;
 
   private:
+    enum class FrameState : std::uint8_t
+    {
+        idle,
+        active,
+        finalized,
+    };
+
+    struct ImGuiContextDeleter
+    {
+        void operator()(ImGuiContext *context) const noexcept;
+    };
+
     void setCurrentContext() const noexcept;
-    void endWindow(bool closesWindow);
+    void requireActiveFrame(std::string_view operation) const;
     [[nodiscard]] bool beginSection(std::string_view id, std::string_view title, bool defaultOpen = true);
+    void drawCpuPerformanceSection();
+    void drawGpuPerformanceSection();
     void prepareWindowDefaults();
 
-    ImGuiContext *context_ = nullptr;
-    bool frameActive_ = false;
-    bool frameFinalized_ = false;
-    UiCaptureState captureState_{};
+    std::unique_ptr<ImGuiContext, ImGuiContextDeleter> context_{};
+    FrameState frameState_ = FrameState::idle;
     UiFrameStats frameStats_{};
     nr::renderer::ViewerPerspectiveCameraFrame cameraFrame_{};
     nr::renderer::RendererCpuStatistics cpuStatistics_{};
     nr::renderer::RendererGpuPassStatistics gpuPassStatistics_{};
     std::vector<UiSection> queuedSections_{};
-    std::uint32_t windowsOpenedThisFrame_ = 0u;
     float fpsSampleAccumulatedDeltaSeconds_ = 0.0f;
     std::uint32_t fpsSampleFrameCount_ = 0u;
     bool unifiedWindowOpen_ = false;

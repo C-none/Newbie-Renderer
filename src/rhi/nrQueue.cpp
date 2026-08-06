@@ -3,12 +3,11 @@ import :queue;
 import dependency.vulkan;
 import std;
 import :commandBatch;
-import :type;
 
 namespace nr::rhi
 {
-GpuQueue::GpuQueue(const vk::raii::Device &device, std::uint32_t queueFamilyIndex, QueueRole type)
-    : queue_(device.getQueue(queueFamilyIndex, queueIndex_)), queueFamilyIndex_(queueFamilyIndex), type_(type)
+GpuQueue::GpuQueue(const vk::raii::Device &device, std::uint32_t queueFamilyIndex)
+    : queue_(device.getQueue(queueFamilyIndex, 0)), queueFamilyIndex_(queueFamilyIndex)
 {
 }
 
@@ -37,11 +36,6 @@ void GpuQueue::submit(CommandBatch &&batch, std::optional<std::reference_wrapper
 void GpuQueue::waitIdle()
 {
     queue_.waitIdle();
-}
-
-[[nodiscard]] QueueRole GpuQueue::type() const noexcept
-{
-    return type_;
 }
 
 [[nodiscard]] std::uint32_t GpuQueue::queueFamilyIndex() const noexcept

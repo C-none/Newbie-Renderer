@@ -17,10 +17,8 @@ EmbeddedTriangleVertexOutput vertexMain(uint vertexId: SV_VertexID)
         float3(0.2f, 0.4f, 1.0f),
     };
 
-    uint index = vertexId % 3u;
-
     EmbeddedTriangleVertexOutput output;
-    output.position = mul(gFrame.viewProjection, float4(positions[index], 1.0f));
-    output.color = colors[index];
+    output.position = mul(gFrame.viewProjection, float4(positions[vertexId], 1.0f));
+    output.color = colors[vertexId];
     return output;
 }

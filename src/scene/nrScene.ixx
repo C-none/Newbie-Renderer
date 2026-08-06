@@ -145,7 +145,7 @@ template <typename HandleT, typename RecordT> class KeyedSlotMapStorage
 
     [[nodiscard]] std::optional<HandleT> findHandleByStableKey(std::string_view stableKey) const noexcept
     {
-        if (auto it = handlesByStableKey_.find(std::string{stableKey}); it != handlesByStableKey_.end())
+        if (auto it = handlesByStableKey_.find(stableKey); it != handlesByStableKey_.end())
         {
             if (storage_.tryGet(it->second) != nullptr)
             {
@@ -175,7 +175,7 @@ template <typename HandleT, typename RecordT> class KeyedSlotMapStorage
 
   private:
     SlotMapStorage<HandleT, RecordT> storage_{};
-    std::map<std::string, HandleT> handlesByStableKey_{};
+    std::map<std::string, HandleT, std::less<>> handlesByStableKey_{};
 };
 
 void registerSceneComponents(flecs::world &world);
@@ -183,12 +183,6 @@ void registerSceneComponents(flecs::world &world);
 [[nodiscard]] flecs::world makeSceneWorld();
 
 inline constexpr std::uint64_t kDefaultRetireLatencySerial = 3;
-
-[[nodiscard]] detail::MaterialGpuData buildMaterialGpuData(const nr::resource::Material &material);
-
-[[nodiscard]] detail::CameraGpuData buildCameraGpuData(const nr::resource::CameraAsset &camera);
-
-[[nodiscard]] detail::LightGpuData buildLightGpuData(const nr::resource::LightAsset &light);
 } // namespace nr::scene::detail
 
 export namespace nr::scene
@@ -207,15 +201,7 @@ class Scene : public nr::revision::RevisionSyntax
     Scene &operator=(Scene &&) = delete;
     ~Scene() noexcept;
 
-    [[nodiscard]] nr::rhi::Device &device() noexcept;
-
-    [[nodiscard]] const nr::rhi::Device &device() const noexcept;
-
-    [[nodiscard]] flecs::world &ecs() noexcept;
-
-    [[nodiscard]] const flecs::world &ecs() const noexcept;
-
-    void commitExternalMutation(SceneRevisionMutation mutation) noexcept;
+    [[nodiscard]] bool usesDevice(const nr::rhi::Device &device) const noexcept;
 
     [[nodiscard]] SceneRevisionSnapshot revisionsSnapshot() const noexcept;
 
@@ -275,6 +261,10 @@ class Scene : public nr::revision::RevisionSyntax
 
     [[nodiscard]] std::optional<SceneBridgeGeometryBuffers> tryGetRasterGeometryBuffers() const noexcept;
 
+    [[nodiscard]] SceneGeometryAtlasBackingGeneration geometryAtlasBackingGeneration() const noexcept;
+
+    [[nodiscard]] SceneGeometryAtlasStats geometryAtlasStats() const noexcept;
+
     [[nodiscard]] std::optional<SceneAccelerationStructureMeshSemanticKey> tryGetAccelerationStructureMeshSemanticKey(
         nr::resource::MeshHandle handle) const noexcept;
 
@@ -297,6 +287,13 @@ class Scene : public nr::revision::RevisionSyntax
         std::string_view stableKey) const noexcept;
 
   private:
+    struct RasterMaterialResolution
+    {
+        SceneMaterialTextureBindings textures{};
+        SceneBridgeMaterialRasterState raster{};
+        SceneTextureHandleTable textureHandlesById{};
+    };
+
     enum class ImportStage : std::uint8_t
     {
         scene,
@@ -312,10 +309,7 @@ class Scene : public nr::revision::RevisionSyntax
     enum class GpuAssetKind : std::uint8_t
     {
         mesh,
-        material,
         texture,
-        camera,
-        light,
     };
 
     struct GpuAssetHandleRef
@@ -353,6 +347,58 @@ class Scene : public nr::revision::RevisionSyntax
         std::optional<vk::raii::CommandBuffers> commandBuffers{};
         vk::raii::Fence fence{nullptr};
         detail::RetiredSceneGeometryAtlasBuffers retiredBuffers{};
+    };
+
+    struct UploadBudgetState
+    {
+        std::size_t remaining = 0;
+        std::uint64_t frameSerial = std::numeric_limits<std::uint64_t>::max();
+        bool consumed = false;
+    };
+
+    struct GeometryAtlasRangeAllocationPlan
+    {
+        vk::DeviceSize byteOffset = 0;
+        vk::DeviceSize highWaterBytes = 0;
+        std::vector<detail::SceneGeometryAtlasReusableRange> reusableRanges{};
+    };
+
+    class TemplateRegistrationTransaction
+    {
+      public:
+        explicit TemplateRegistrationTransaction(Scene &scene) noexcept;
+        TemplateRegistrationTransaction(const TemplateRegistrationTransaction &) = delete;
+        TemplateRegistrationTransaction &operator=(const TemplateRegistrationTransaction &) = delete;
+        TemplateRegistrationTransaction(TemplateRegistrationTransaction &&) = delete;
+        TemplateRegistrationTransaction &operator=(TemplateRegistrationTransaction &&) = delete;
+        ~TemplateRegistrationTransaction() noexcept;
+
+        void recordCreated(nr::resource::TextureHandle handle);
+        void recordCreated(nr::resource::MaterialHandle handle);
+        void recordCreated(nr::resource::MeshHandle handle);
+        void recordCreated(nr::resource::CameraAssetHandle handle);
+        void recordCreated(nr::resource::LightAssetHandle handle);
+        void stageTemplate(SceneTemplateHandle handle) noexcept;
+
+        [[nodiscard]] bool commit();
+
+      private:
+        template <typename HandleT> static void appendUnique(std::vector<HandleT> &handles, HandleT handle)
+        {
+            if (std::ranges::find(handles, handle) == handles.end())
+            {
+                handles.push_back(handle);
+            }
+        }
+
+        Scene &scene_;
+        std::vector<nr::resource::TextureHandle> createdTextures_{};
+        std::vector<nr::resource::MaterialHandle> createdMaterials_{};
+        std::vector<nr::resource::MeshHandle> createdMeshes_{};
+        std::vector<nr::resource::CameraAssetHandle> createdCameras_{};
+        std::vector<nr::resource::LightAssetHandle> createdLights_{};
+        SceneTemplateHandle stagedTemplate_{};
+        bool committed_ = false;
     };
 
     template <typename HandleT>
@@ -425,8 +471,6 @@ class Scene : public nr::revision::RevisionSyntax
 
     [[nodiscard]] bool meshIsResident(nr::resource::MeshHandle meshHandle) const noexcept;
 
-    [[nodiscard]] bool materialIsResident(nr::resource::MaterialHandle materialHandle) const noexcept;
-
     [[nodiscard]] bool textureIsResident(nr::resource::TextureHandle textureHandle) const noexcept;
 
     [[nodiscard]] bool materialTexturesReady(const nr::resource::Material &material,
@@ -434,6 +478,13 @@ class Scene : public nr::revision::RevisionSyntax
 
     [[nodiscard]] std::optional<nr::resource::MaterialHandle> meshGeometryMaterial(
         nr::resource::MeshHandle meshHandle, std::uint32_t geometryIndex) const noexcept;
+
+    [[nodiscard]] std::optional<SceneBridgeDrawGeometry> tryResolveRasterDrawRange(
+        nr::resource::MeshHandle meshHandle, std::uint32_t geometryIndex,
+        const SceneBridgeGeometryBuffers &geometryBuffers) const noexcept;
+
+    [[nodiscard]] std::optional<RasterMaterialResolution> resolveRasterMaterial(
+        nr::resource::MaterialHandle materialHandle) const noexcept;
 
     [[nodiscard]] bool renderableReadyForRaster(const RenderableBinding &binding) const noexcept;
 
@@ -454,8 +505,9 @@ class Scene : public nr::revision::RevisionSyntax
 
     template <ScenePacketDomain Domain>
     void appendPacketsForCandidate(ScenePacketSet &packetSet, flecs::entity entity, const RenderableBinding &binding,
-                                   std::uint64_t selectionBits, const TlasBucketId &tlasBucketId,
-                                   const WorldTransform &worldTransform, const WorldBounds &worldBounds) const
+                                   std::uint64_t selectionBits, bool resolveRasterResources,
+                                   const TlasBucketId &tlasBucketId, const WorldTransform &worldTransform,
+                                   const WorldBounds &worldBounds) const
     {
         if constexpr (Domain == ScenePacketDomain::rasterDraw)
         {
@@ -464,7 +516,7 @@ class Scene : public nr::revision::RevisionSyntax
             std::ranges::for_each(geometryIndices, [&](std::uint32_t geometryIndex) {
                 auto const materialHandle =
                     meshGeometryMaterial(binding.mesh, geometryIndex).value_or(binding.material);
-                packetSet.rasterDraws.push_back(RasterDrawPacket{
+                auto packet = RasterDrawPacket{
                     .renderable = entity,
                     .mesh = binding.mesh,
                     .material = materialHandle,
@@ -472,7 +524,36 @@ class Scene : public nr::revision::RevisionSyntax
                     .world = worldTransform.value,
                     .worldBounds = worldBounds.value,
                     .sortKey = rasterSortKey(binding.mesh, materialHandle, selectionBits, geometryIndex, entity),
-                });
+                };
+
+                if (resolveRasterResources)
+                {
+                    auto geometry =
+                        tryResolveRasterDrawRange(binding.mesh, geometryIndex, packetSet.rasterGeometryBuffers);
+                    auto material = resolveRasterMaterial(materialHandle);
+                    nrAssert(geometry.has_value() && material.has_value(), [&] {
+                        return std::format(
+                            "Raster readiness passed but packet resolution failed for mesh ({}, {}) geometry {} "
+                            "and material ({}, {}).",
+                            binding.mesh.slot, binding.mesh.generation, geometryIndex, materialHandle.slot,
+                            materialHandle.generation);
+                    });
+                    if (!geometry.has_value() || !material.has_value())
+                    {
+                        return;
+                    }
+
+                    packet.geometry = *geometry;
+                    packet.materialTextures = material->textures;
+                    packet.materialRaster = material->raster;
+                    std::ranges::for_each(material->textureHandlesById, [&](const auto &entry) {
+                        auto [it, inserted] = packetSet.rasterTextureHandlesById.try_emplace(entry.first, entry.second);
+                        nrAssert(inserted || it->second == entry.second,
+                                 "Scene texture id resolved to conflicting texture handles during raster extraction.");
+                    });
+                }
+
+                packetSet.rasterDraws.push_back(std::move(packet));
             });
         }
         else if constexpr (Domain == ScenePacketDomain::rayTracingInstance)
@@ -511,8 +592,6 @@ class Scene : public nr::revision::RevisionSyntax
     [[nodiscard]] static std::optional<std::reference_wrapper<const nr::resource::ImageLevel>>
     firstTextureLevelWithPixels(const nr::resource::Texture &texture);
 
-    [[nodiscard]] static vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept;
-
     [[nodiscard]] static std::uint32_t checkedDeviceSizeToUint32(vk::DeviceSize value, std::string_view label);
 
     [[nodiscard]] std::vector<std::uint32_t> makeGeometryAtlasQueueFamilyIndices() const;
@@ -524,14 +603,29 @@ class Scene : public nr::revision::RevisionSyntax
     [[nodiscard]] static vk::DeviceSize grownGeometryAtlasCapacity(vk::DeviceSize currentCapacity,
                                                                    vk::DeviceSize requiredCapacity) noexcept;
 
+    [[nodiscard]] static GeometryAtlasRangeAllocationPlan planGeometryAtlasRangeAllocation(
+        std::span<const detail::SceneGeometryAtlasReusableRange> reusableRanges, vk::DeviceSize highWaterBytes,
+        vk::DeviceSize byteSize, vk::DeviceSize alignment);
+
+    static void releaseGeometryAtlasRange(std::vector<detail::SceneGeometryAtlasReusableRange> &reusableRanges,
+                                          detail::SceneGeometryAtlasReusableRange releasedRange);
+
+    [[nodiscard]] static vk::DeviceSize geometryAtlasReusableBytes(
+        std::span<const detail::SceneGeometryAtlasReusableRange> reusableRanges,
+        vk::DeviceSize highWaterBytes) noexcept;
+
+    void releaseGeometryAtlasAllocation(const detail::MeshGeometryAtlasAllocation &allocation);
+
     [[nodiscard]] detail::MeshGeometryAtlasAllocation reserveGeometryAtlasAllocation(
         const nr::resource::Mesh &mesh, nr::rhi::ops::UploadReadbackContext &uploadContext);
 
     void ensureGeometryAtlasCapacity(vk::DeviceSize requiredVertexBytes, vk::DeviceSize requiredIndexBytes,
                                      nr::rhi::ops::UploadReadbackContext &uploadContext);
 
-    void submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertexBuffer, vk::DeviceSize oldVertexUsedBytes,
-                                     std::optional<nr::rhi::Buffer> oldIndexBuffer, vk::DeviceSize oldIndexUsedBytes);
+    void submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertexBuffer,
+                                     vk::DeviceSize oldVertexHighWaterBytes,
+                                     std::optional<nr::rhi::Buffer> oldIndexBuffer,
+                                     vk::DeviceSize oldIndexHighWaterBytes);
 
     void retireGeometryAtlasBuffers(detail::RetiredSceneGeometryAtlasBuffers retiredBuffers);
 
@@ -539,30 +633,20 @@ class Scene : public nr::revision::RevisionSyntax
 
     template <typename RecordT> void markRecordUploadQueued(RecordT &record)
     {
-        record.uploadQueued = true;
+        nrAssert(record.gpuState == GpuResidencyState::none || record.gpuState == GpuResidencyState::resident,
+                 "Scene upload queue transition requires a new or resident GPU asset.");
         record.gpuState = GpuResidencyState::uploadQueued;
     }
 
     template <typename RecordT> [[nodiscard]] static bool canConsiderUploadQueue(const RecordT &record) noexcept
     {
-        return record.cpuReady && !record.uploadQueued && record.gpuState != GpuResidencyState::waitingGraphicsSync;
+        return record.cpuReady && (record.gpuState == GpuResidencyState::none ||
+                                   record.gpuState == GpuResidencyState::resident);
     }
 
     template <typename RecordT> [[nodiscard]] bool needsUploadQueue(const RecordT &record) const noexcept
     {
-        if (!canConsiderUploadQueue(record))
-        {
-            return false;
-        }
-
-        if constexpr (std::same_as<RecordT, CameraAssetRecord> || std::same_as<RecordT, LightAssetRecord>)
-        {
-            return record.cpuVersion > record.gpuVersion || record.lastUploadFrameSerial != currentFrame_.frameSerial;
-        }
-        else
-        {
-            return record.cpuVersion > record.gpuVersion;
-        }
+        return canConsiderUploadQueue(record) && record.cpuVersion > record.gpuVersion;
     }
 
     template <typename HandleT, typename StorageT> void queueUploadsFor(std::span<HandleT> handles, StorageT &storage)
@@ -607,30 +691,19 @@ class Scene : public nr::revision::RevisionSyntax
 
     [[nodiscard]] static std::vector<std::byte> makeFallbackTextureBytes(nr::resource::PixelFormat format);
 
-    [[nodiscard]] bool uploadMaterialAsset(nr::resource::MaterialHandle handle, MaterialAssetRecord &record,
-                                           nr::rhi::ops::UploadReadbackContext &uploadContext);
+    [[nodiscard]] static bool uploadBudgetAllows(const UploadBudgetState &budget, std::size_t bytesNeeded) noexcept;
 
-    [[nodiscard]] bool uploadMeshAsset(nr::resource::MeshHandle handle, MeshAssetRecord &record,
-                                       nr::rhi::ops::UploadReadbackContext &uploadContext);
+    void recordBudgetedUpload(UploadBudgetState &budget, std::size_t bytesUploaded) noexcept;
 
-    [[nodiscard]] bool uploadTextureAsset(nr::resource::TextureHandle handle, TextureAssetRecord &record,
-                                          nr::rhi::ops::UploadReadbackContext &uploadContext);
+    void uploadMeshAsset(nr::resource::MeshHandle handle, MeshAssetRecord &record,
+                         nr::rhi::ops::UploadReadbackContext &uploadContext);
 
-    [[nodiscard]] bool uploadCameraAsset(nr::resource::CameraAssetHandle handle, CameraAssetRecord &record);
+    void uploadTextureAsset(nr::resource::TextureHandle handle, TextureAssetRecord &record,
+                            nr::rhi::ops::UploadReadbackContext &uploadContext);
 
-    [[nodiscard]] bool uploadLightAsset(nr::resource::LightAssetHandle handle, LightAssetRecord &record);
+    void uploadQueuedMeshAssets(nr::rhi::ops::UploadReadbackContext &uploadContext, UploadBudgetState &budget);
 
-    void uploadQueuedCameraAssets(std::size_t &uploadBudgetRemaining);
-
-    void uploadQueuedLightAssets(std::size_t &uploadBudgetRemaining);
-
-    void uploadQueuedMaterialAssets(nr::rhi::ops::UploadReadbackContext &uploadContext,
-                                    std::size_t &uploadBudgetRemaining);
-
-    void uploadQueuedMeshAssets(nr::rhi::ops::UploadReadbackContext &uploadContext, std::size_t &uploadBudgetRemaining);
-
-    void uploadQueuedTextureAssets(nr::rhi::ops::UploadReadbackContext &uploadContext,
-                                   std::size_t &uploadBudgetRemaining);
+    void uploadQueuedTextureAssets(nr::rhi::ops::UploadReadbackContext &uploadContext, UploadBudgetState &budget);
 
     void markGraphicsSyncCompletionResident(const GraphicsSyncCompletion &completion);
 
@@ -707,13 +780,6 @@ class Scene : public nr::revision::RevisionSyntax
         return std::nullopt;
     }
 
-    template <typename StorageT>
-    [[nodiscard]] static auto findHandleByStableKey(const StorageT &storage, std::string_view stableKey) noexcept
-        -> decltype(storage.findHandleByStableKey(stableKey))
-    {
-        return storage.findHandleByStableKey(stableKey);
-    }
-
     template <typename HandleT>
     static void appendValidUniqueHandles(std::span<const HandleT> handles, std::vector<HandleT> &output)
     {
@@ -754,7 +820,7 @@ class Scene : public nr::revision::RevisionSyntax
 
     template <typename RecordT> [[nodiscard]] static bool canCollect(const RecordT &record) noexcept
     {
-        return record.liveTemplatePins == 0u && record.liveExplicitPins == 0u;
+        return record.liveTemplatePins == 0u;
     }
 
     template <typename HandleT, typename StorageT>
@@ -788,17 +854,19 @@ class Scene : public nr::revision::RevisionSyntax
             return;
         }
 
-        if (record->uploadQueued && !record->gpu.has_value())
-        {
-            record->uploadQueued = false;
-            record->gpuState = GpuResidencyState::none;
-        }
-
         queueRetiredPayload(record->gpu, record->retiredGpu);
         moveRetiredPayloads(record->retiredGpu, graveyard);
+        storage.erase(handle);
+    }
 
-        record->uploadQueued = false;
-        record->cpuReady = false;
+    template <typename HandleT, typename StorageT> static void collectUnusedCpuAsset(HandleT handle, StorageT &storage)
+    {
+        auto *record = storage.tryGet(handle);
+        if (record == nullptr || !canCollect(*record))
+        {
+            return;
+        }
+
         storage.erase(handle);
     }
 
@@ -815,20 +883,25 @@ class Scene : public nr::revision::RevisionSyntax
     void collectTemplatePinnedAssets(const TemplateResourcePinSet &pinSet);
 
     void bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                        TemplateRegistrationTransaction &transaction,
                         std::vector<nr::resource::TextureHandle> &textureHandlesBySource);
 
     void bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                         TemplateRegistrationTransaction &transaction,
                          const std::vector<nr::resource::TextureHandle> &textureHandlesBySource,
                          std::vector<nr::resource::MaterialHandle> &materialHandlesBySource);
 
     void bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                      TemplateRegistrationTransaction &transaction,
                       const std::vector<nr::resource::MaterialHandle> &materialHandlesBySource,
                       std::vector<nr::resource::MeshHandle> &meshHandlesBySource);
 
     void bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                       TemplateRegistrationTransaction &transaction,
                        std::vector<nr::resource::CameraAssetHandle> &cameraHandlesBySource);
 
     void bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                      TemplateRegistrationTransaction &transaction,
                       std::vector<nr::resource::LightAssetHandle> &lightHandlesBySource);
 
     [[nodiscard]] TemplateResourcePinSet buildTemplatePinSet(
@@ -878,7 +951,8 @@ class Scene : public nr::revision::RevisionSyntax
                                               std::span<const nr::resource::MeshHandle> meshHandlesBySource,
                                               std::span<const nr::resource::MaterialHandle> materialHandlesBySource,
                                               std::span<const nr::resource::CameraAssetHandle> cameraHandlesBySource,
-                                              std::span<const nr::resource::LightAssetHandle> lightHandlesBySource);
+                                              std::span<const nr::resource::LightAssetHandle> lightHandlesBySource,
+                                              bool useParentStorage);
 
     void destroyTemplatePrefabEntities(SceneTemplateRecord &templateRecord);
 
@@ -919,6 +993,7 @@ class Scene : public nr::revision::RevisionSyntax
     nr::revision::RevisionBundle<SceneRtRevisionDomain> revisions{};
     std::size_t uploadBudgetBytesPerFrame_ = 0;
     std::size_t uploadBytesThisFrame_ = 0;
+    UploadBudgetState uploadBudgetState_{};
     CpuRetentionPolicy cpuRetention_ = CpuRetentionPolicy::keepAll;
     bool hasImportErrors_ = false;
     flecs::world world_ = detail::makeSceneWorld();
@@ -938,16 +1013,9 @@ class Scene : public nr::revision::RevisionSyntax
     std::vector<SubmittedGeometryAtlasGrowWork> submittedGeometryAtlasGrowWork_{};
 
     std::vector<nr::resource::MeshHandle> meshHandles_{};
-    std::vector<nr::resource::MaterialHandle> materialHandles_{};
     std::vector<nr::resource::TextureHandle> textureHandles_{};
-    std::vector<nr::resource::CameraAssetHandle> cameraHandles_{};
-    std::vector<nr::resource::LightAssetHandle> lightHandles_{};
-
     std::vector<detail::RetiredMeshGpuPayload> retiredMeshPayloadGraveyard_{};
-    std::vector<detail::RetiredMaterialGpuPayload> retiredMaterialPayloadGraveyard_{};
     std::vector<detail::RetiredTextureGpuPayload> retiredTexturePayloadGraveyard_{};
-    std::vector<detail::RetiredCameraGpuPayload> retiredCameraPayloadGraveyard_{};
-    std::vector<detail::RetiredLightGpuPayload> retiredLightPayloadGraveyard_{};
     std::vector<detail::RetiredSceneGeometryAtlasBuffers> retiredGeometryAtlasBuffers_{};
 
     detail::KeyedSlotMapStorage<nr::resource::MeshHandle, MeshAssetRecord> meshes_{};

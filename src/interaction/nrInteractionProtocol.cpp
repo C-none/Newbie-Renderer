@@ -118,27 +118,6 @@ inline constexpr std::size_t maximumWireDepth = 16u;
     return snapshot && snapshot->catalog && !snapshot->catalog->definitions().empty();
 }
 
-[[nodiscard]] std::string_view schemaTypeName(options::OptionValueType type) noexcept
-{
-    switch (type)
-    {
-    case options::OptionValueType::boolean:
-        return "boolean";
-    case options::OptionValueType::signedInteger:
-    case options::OptionValueType::unsignedInteger:
-        return "integer";
-    case options::OptionValueType::number:
-        return "number";
-    case options::OptionValueType::string:
-        return "string";
-    case options::OptionValueType::array:
-        return "array";
-    case options::OptionValueType::object:
-        return "object";
-    }
-    std::unreachable();
-}
-
 [[nodiscard]] std::string_view controlName(options::OptionUiControl control) noexcept
 {
     switch (control)
@@ -163,7 +142,7 @@ inline constexpr std::size_t maximumWireDepth = 16u;
 
 [[nodiscard]] Json schemaToJson(const options::OptionSchema &schema)
 {
-    auto result = JsonObject{{"type", Json{schemaTypeName(schema.type)}}};
+    auto result = JsonObject{{"type", Json{options::wireName(schema.type)}}};
     if (schema.signedMinimum)
     {
         result.emplace("minimum", Json{*schema.signedMinimum});

@@ -122,7 +122,7 @@ inline int runAll(std::ostream &output = std::cout)
     if (testCases.empty())
     {
         output << "[nr_test] no tests registered\n";
-        return 0;
+        return 1;
     }
 
     std::vector<detail::TestResult> results;

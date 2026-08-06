@@ -77,12 +77,6 @@ template <StringViewLike TString> constexpr void hashAppendString(std::uint64_t 
     return toHexString(toHexChars(value));
 }
 
-template <typename T> [[nodiscard]] consteval std::uint64_t hashValue(const T &value) noexcept
-{
-    std::uint64_t state = fnv1a64OffsetBasis;
-    hashAppend(state, value);
-    return state;
-}
 } // namespace hash
 
 } // namespace nr

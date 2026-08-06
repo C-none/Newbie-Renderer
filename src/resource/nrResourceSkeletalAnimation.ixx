@@ -13,9 +13,6 @@ struct Bone
     std::string name{};
     std::int32_t parentIndex = -1;
 
-    Bone() = default;
-    ~Bone() = default;
-
     [[nodiscard]] bool isRoot() const noexcept;
 };
 
@@ -23,9 +20,6 @@ struct Skeleton
 {
     std::string name{};
     std::vector<Bone> bones{};
-
-    Skeleton() = default;
-    ~Skeleton() = default;
 
     [[nodiscard]] std::size_t boneCount() const noexcept;
 
@@ -53,8 +47,6 @@ struct BoneAnimationTrack
     std::vector<KeyframeQuat> rotations{};
     std::vector<KeyframeVec3> scales{};
 
-    BoneAnimationTrack() = default;
-    ~BoneAnimationTrack() = default;
 };
 
 struct AnimationClip
@@ -64,9 +56,6 @@ struct AnimationClip
     float ticksPerSecond = 0.0f;
     bool looping = true;
     std::vector<BoneAnimationTrack> tracks{};
-
-    AnimationClip() = default;
-    ~AnimationClip() = default;
 
     [[nodiscard]] bool valid() const noexcept;
 };

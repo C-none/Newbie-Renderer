@@ -121,7 +121,6 @@ struct NodeFrameParameters
     nr::scene::SceneRevisionSnapshot sceneRevisions{};
     std::optional<std::reference_wrapper<const nr::scene::ScenePacketSet>> scenePackets{};
     std::optional<std::reference_wrapper<const std::vector<nr::scene::TlasBuildInputPacket>>> sceneTlasBuildInputs{};
-    std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};
     nr::scene::SceneBridgeFrameConstants renderCameraConstants{};
     std::optional<std::reference_wrapper<FrameServices>> frameServices{};
     std::optional<std::reference_wrapper<FrameEffectSink>> frameEffectSink{};
@@ -486,6 +485,8 @@ struct NodeBuildContext
 
     [[nodiscard]] std::optional<NodeImageResourceDesc> describeImageResource(GraphResourceHandle resource) const;
 
+    [[nodiscard]] std::size_t nodeLocalPassOrdinal() const noexcept;
+
     // Node-scoped graph authoring helpers: Generic resource addition interface.
     template <typename TDesc> [[nodiscard]] GraphResourceHandle addResource(const TDesc &desc)
     {
@@ -581,12 +582,14 @@ struct NodeBuildContext
     [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName,
                                           PassRecordCallback executeLambda,
                                           PassPrepareCallback prepareCallback = nullptr, bool isCopyPass = false,
-                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
+                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{},
+                                          std::span<const GraphFrameDataHandle> frameDataUses = {});
 
     [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName,
                                           PassParallelRecordDesc parallelRecord,
                                           PassPrepareCallback prepareCallback = nullptr,
-                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
+                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{},
+                                          std::span<const GraphFrameDataHandle> frameDataUses = {});
 
     [[nodiscard]] GraphSubmitHandle addSubmitNode(std::string_view debugName);
 
@@ -647,9 +650,48 @@ class FrameUniformArena
     vk::DeviceSize maxUniformBufferRange_ = std::numeric_limits<vk::DeviceSize>::max();
 };
 
+namespace detail
+{
+[[nodiscard]] inline std::uint64_t allocatePipelineRuntimeIdentity() noexcept
+{
+    static auto nextIdentity = std::atomic_uint64_t{1};
+    auto const identity = nextIdentity.fetch_add(1, std::memory_order_relaxed);
+    nrAssert(identity != 0, "PipelineRuntime exhausted pass-binding runtime identities.");
+    return identity;
+}
+} // namespace detail
+
 template <typename TPipeline, std::size_t FrameSlotCount = nr::maxFrameInFlight> class PipelineRuntime
 {
+    static_assert(FrameSlotCount > 0, "PipelineRuntime requires at least one frame slot.");
+
   public:
+    class PassBindingHandle
+    {
+      public:
+        PassBindingHandle() = default;
+
+        [[nodiscard]] bool valid() const noexcept
+        {
+            return runtimeIdentity_ != 0 && generation_ != 0 &&
+                   stateIndex_ != std::numeric_limits<std::size_t>::max();
+        }
+
+        [[nodiscard]] auto operator<=>(const PassBindingHandle &) const = default;
+
+      private:
+        friend class PipelineRuntime;
+
+        PassBindingHandle(std::uint64_t runtimeIdentity, std::uint64_t generation, std::size_t stateIndex) noexcept
+            : runtimeIdentity_(runtimeIdentity), generation_(generation), stateIndex_(stateIndex)
+        {
+        }
+
+        std::uint64_t runtimeIdentity_ = 0;
+        std::uint64_t generation_ = 0;
+        std::size_t stateIndex_ = std::numeric_limits<std::size_t>::max();
+    };
+
     PipelineRuntime() = default;
 
     PipelineRuntime(const PipelineRuntime &) = delete;
@@ -675,30 +717,61 @@ template <typename TPipeline, std::size_t FrameSlotCount = nr::maxFrameInFlight>
 
     [[nodiscard]] const TPipeline &pipeline() const;
 
-    [[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> bindingSetsForFrame(std::uint32_t frameIndex) const;
+    [[nodiscard]] PassBindingHandle passBinding(std::string_view runtimeName, std::size_t nodeLocalPassOrdinal);
 
-    [[nodiscard]] nr::rhi::DescriptorWriteCache &descriptorWriteCacheForFrame(std::uint32_t frameIndex) noexcept;
+    [[nodiscard]] PipelinePassBindingCacheKey passBindingCacheKey(PassBindingHandle handle,
+                                                                  std::uint32_t frameIndex) const;
+
+    [[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> bindingSetsForFrame(
+        PassBindingHandle handle, std::uint32_t frameIndex) const;
+
+    [[nodiscard]] nr::rhi::DescriptorWriteCache &descriptorWriteCacheForFrame(PassBindingHandle handle,
+                                                                               std::uint32_t frameIndex);
 
     [[nodiscard]] bool ensureBindingSetsForFrame(
-        std::uint32_t frameIndex, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
+        PassBindingHandle handle, std::uint32_t frameIndex,
+        const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
 
     [[nodiscard]] nr::rhi::ShaderCursor rootCursor() const;
 
   private:
+    struct PassBindingStableKey
+    {
+        std::string runtimeName{};
+        std::size_t nodeLocalPassOrdinal = 0;
+
+        [[nodiscard]] auto operator<=>(const PassBindingStableKey &) const = default;
+    };
+
+    struct PassBindingState
+    {
+        std::array<std::vector<nr::rhi::ShaderBindingSet>, FrameSlotCount> bindingSetsByFrame{};
+        std::array<nr::rhi::DescriptorWriteCache, FrameSlotCount> descriptorWriteCachesByFrame{};
+        std::array<std::map<std::uint32_t, std::uint32_t>, FrameSlotCount> variableDescriptorCountsByFrame{};
+        std::array<bool, FrameSlotCount> bindingSetsInitializedByFrame{};
+    };
+
     template <bool AllocateDefaultBindingSets> void initializeBuild(nr::rhi::PipelineBuild<TPipeline> pipelineBuild);
 
     void resolvePipeline() const;
 
-    void allocateBindingSetsForFrame(std::size_t frameSlot,
+    void clearPassBindingStatesLocked() noexcept;
+
+    [[nodiscard]] PassBindingState &validatedPassBindingStateLocked(PassBindingHandle handle);
+
+    [[nodiscard]] const PassBindingState &validatedPassBindingStateLocked(PassBindingHandle handle) const;
+
+    void allocateBindingSetsForFrame(PassBindingState &bindingState, std::size_t frameSlot,
                                      const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet) const;
 
-    mutable nr::rhi::PipelineState<TPipeline> pipeline_{};
+    mutable std::optional<nr::rhi::PipelineState<TPipeline>> pipeline_{};
     mutable nr::rhi::PipelineBuild<TPipeline> pendingPipeline_{};
     mutable std::mutex resolutionMutex_{};
-    mutable bool allocateDefaultBindingSetsOnResolve_ = false;
-    mutable std::array<std::vector<nr::rhi::ShaderBindingSet>, FrameSlotCount> bindingSetsByFrame_{};
-    mutable std::array<nr::rhi::DescriptorWriteCache, FrameSlotCount> descriptorWriteCachesByFrame_{};
-    mutable std::array<std::map<std::uint32_t, std::uint32_t>, FrameSlotCount> variableDescriptorCountsByFrame_{};
+    mutable bool allocateDefaultBindingSetsForOwners_ = false;
+    std::uint64_t runtimeIdentity_ = detail::allocatePipelineRuntimeIdentity();
+    std::uint64_t passBindingGeneration_ = 1;
+    std::map<PassBindingStableKey, std::size_t> passBindingStateIndices_{};
+    std::vector<PassBindingState> passBindingStates_{};
 };
 
 template <typename TPipeline, std::size_t FrameSlotCount> PipelineRuntime<TPipeline, FrameSlotCount>::~PipelineRuntime()
@@ -723,21 +796,18 @@ template <bool AllocateDefaultBindingSets>
 void PipelineRuntime<TPipeline, FrameSlotCount>::initializeBuild(nr::rhi::PipelineBuild<TPipeline> pipelineBuild)
 {
     std::scoped_lock lock(resolutionMutex_);
-    clearBindingSets();
-    pipeline_ = {};
+    clearPassBindingStatesLocked();
+    pipeline_.reset();
     nrAssert(pipelineBuild.valid(), "PipelineRuntime initialization requires a valid pipeline build.");
     pendingPipeline_ = std::move(pipelineBuild);
-    allocateDefaultBindingSetsOnResolve_ = AllocateDefaultBindingSets;
+    allocateDefaultBindingSetsForOwners_ = AllocateDefaultBindingSets;
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 void PipelineRuntime<TPipeline, FrameSlotCount>::clearBindingSets()
 {
-    std::ranges::for_each(bindingSetsByFrame_, [](auto &bindingSets) { bindingSets.clear(); });
-    std::ranges::for_each(variableDescriptorCountsByFrame_,
-                          [](auto &variableDescriptorCounts) { variableDescriptorCounts.clear(); });
-    std::ranges::for_each(descriptorWriteCachesByFrame_,
-                          [](auto &descriptorWriteCache) { descriptorWriteCache.clear(); });
+    std::scoped_lock lock(resolutionMutex_);
+    clearPassBindingStatesLocked();
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
@@ -749,83 +819,190 @@ void PipelineRuntime<TPipeline, FrameSlotCount>::resolvePipeline() const
         return;
     }
 
-    pipeline_ = pendingPipeline_.get();
-    nrAssert(pipeline_.layout.valid() && pipeline_.pipeline.valid(),
+    pipeline_.emplace(pendingPipeline_.get());
+    nrAssert(pipeline_->layout.valid() && pipeline_->pipeline.valid(),
              "PipelineRuntime async construction returned an invalid pipeline state.");
-    if (allocateDefaultBindingSetsOnResolve_)
-    {
-        auto frameSlots = std::views::iota(std::size_t{0}, bindingSetsByFrame_.size());
-        std::ranges::for_each(frameSlots, [&](std::size_t frameSlot) { allocateBindingSetsForFrame(frameSlot, {}); });
-        allocateDefaultBindingSetsOnResolve_ = false;
-    }
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::valid() const
 {
     resolvePipeline();
-    return pipeline_.pipeline.valid();
+    return pipeline_.has_value() && pipeline_->pipeline.valid();
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] nr::rhi::PipelineState<TPipeline> &PipelineRuntime<TPipeline, FrameSlotCount>::state()
 {
     resolvePipeline();
-    return pipeline_;
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::state requires an initialized pipeline.");
+    return *pipeline_;
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] const nr::rhi::PipelineState<TPipeline> &PipelineRuntime<TPipeline, FrameSlotCount>::state() const
 {
     resolvePipeline();
-    return pipeline_;
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::state requires an initialized pipeline.");
+    return *pipeline_;
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] TPipeline &PipelineRuntime<TPipeline, FrameSlotCount>::pipeline()
 {
     resolvePipeline();
-    return pipeline_.pipeline;
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::pipeline requires an initialized pipeline.");
+    return pipeline_->pipeline;
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] const TPipeline &PipelineRuntime<TPipeline, FrameSlotCount>::pipeline() const
 {
     resolvePipeline();
-    return pipeline_.pipeline;
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::pipeline requires an initialized pipeline.");
+    return pipeline_->pipeline;
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
-[[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> PipelineRuntime<
-    TPipeline, FrameSlotCount>::bindingSetsForFrame(std::uint32_t frameIndex) const
+void PipelineRuntime<TPipeline, FrameSlotCount>::clearPassBindingStatesLocked() noexcept
+{
+    passBindingStateIndices_.clear();
+    passBindingStates_.clear();
+    ++passBindingGeneration_;
+    if (passBindingGeneration_ == 0)
+    {
+        passBindingGeneration_ = 1;
+    }
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] typename PipelineRuntime<TPipeline, FrameSlotCount>::PassBindingState &
+PipelineRuntime<TPipeline, FrameSlotCount>::validatedPassBindingStateLocked(PassBindingHandle handle)
+{
+    nrAssert(handle.valid(), "PipelineRuntime descriptor access requires a valid pass-binding handle.");
+    nrAssert(handle.runtimeIdentity_ == runtimeIdentity_,
+             "PipelineRuntime descriptor access rejected a pass-binding handle owned by another runtime.");
+    nrAssert(handle.generation_ == passBindingGeneration_,
+             "PipelineRuntime descriptor access rejected a stale pass-binding handle.");
+    nrAssert(handle.stateIndex_ < passBindingStates_.size(),
+             "PipelineRuntime descriptor access rejected an unknown pass-binding handle.");
+    return passBindingStates_[handle.stateIndex_];
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] const typename PipelineRuntime<TPipeline, FrameSlotCount>::PassBindingState &
+PipelineRuntime<TPipeline, FrameSlotCount>::validatedPassBindingStateLocked(PassBindingHandle handle) const
+{
+    nrAssert(handle.valid(), "PipelineRuntime descriptor access requires a valid pass-binding handle.");
+    nrAssert(handle.runtimeIdentity_ == runtimeIdentity_,
+             "PipelineRuntime descriptor access rejected a pass-binding handle owned by another runtime.");
+    nrAssert(handle.generation_ == passBindingGeneration_,
+             "PipelineRuntime descriptor access rejected a stale pass-binding handle.");
+    nrAssert(handle.stateIndex_ < passBindingStates_.size(),
+             "PipelineRuntime descriptor access rejected an unknown pass-binding handle.");
+    return passBindingStates_[handle.stateIndex_];
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] typename PipelineRuntime<TPipeline, FrameSlotCount>::PassBindingHandle
+PipelineRuntime<TPipeline, FrameSlotCount>::passBinding(std::string_view runtimeName,
+                                                        std::size_t nodeLocalPassOrdinal)
+{
+    nrAssert(!runtimeName.empty(), "PipelineRuntime::passBinding requires a non-empty runtime name.");
+    resolvePipeline();
+    std::scoped_lock lock(resolutionMutex_);
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::passBinding requires an initialized pipeline.");
+
+    auto key = PassBindingStableKey{
+        .runtimeName = std::string(runtimeName),
+        .nodeLocalPassOrdinal = nodeLocalPassOrdinal,
+    };
+    auto const existing = passBindingStateIndices_.find(key);
+    if (existing != passBindingStateIndices_.end())
+    {
+        return PassBindingHandle{runtimeIdentity_, passBindingGeneration_, existing->second};
+    }
+
+    auto const stateIndex = passBindingStates_.size();
+    passBindingStates_.emplace_back();
+    passBindingStateIndices_.emplace(std::move(key), stateIndex);
+    auto &bindingState = passBindingStates_.back();
+    if (allocateDefaultBindingSetsForOwners_)
+    {
+        auto frameSlots = std::views::iota(std::size_t{0}, FrameSlotCount);
+        std::ranges::for_each(
+            frameSlots, [&](std::size_t frameSlot) { allocateBindingSetsForFrame(bindingState, frameSlot, {}); });
+    }
+
+    return PassBindingHandle{runtimeIdentity_, passBindingGeneration_, stateIndex};
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] PipelinePassBindingCacheKey PipelineRuntime<TPipeline, FrameSlotCount>::passBindingCacheKey(
+    PassBindingHandle handle, std::uint32_t frameIndex) const
 {
     resolvePipeline();
-    auto const frameSlot = static_cast<std::size_t>(frameIndex % bindingSetsByFrame_.size());
-    auto const &bindingSets = bindingSetsByFrame_[frameSlot];
+    std::scoped_lock lock(resolutionMutex_);
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::passBindingCacheKey requires an initialized pipeline.");
+    static_cast<void>(validatedPassBindingStateLocked(handle));
+    return PipelinePassBindingCacheKey{
+        .runtimeIdentity = runtimeIdentity_,
+        .generation = passBindingGeneration_,
+        .stateIndex = handle.stateIndex_,
+        .frameSlot = static_cast<std::size_t>(frameIndex % FrameSlotCount),
+    };
+}
+
+template <typename TPipeline, std::size_t FrameSlotCount>
+[[nodiscard]] std::span<const nr::rhi::ShaderBindingSet> PipelineRuntime<TPipeline, FrameSlotCount>::bindingSetsForFrame(
+    PassBindingHandle handle, std::uint32_t frameIndex) const
+{
+    resolvePipeline();
+    std::scoped_lock lock(resolutionMutex_);
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::bindingSetsForFrame requires an initialized pipeline.");
+    auto const &bindingState = validatedPassBindingStateLocked(handle);
+    auto const frameSlot = static_cast<std::size_t>(frameIndex % FrameSlotCount);
+    nrAssert(bindingState.bindingSetsInitializedByFrame[frameSlot],
+             "PipelineRuntime::bindingSetsForFrame requires allocated binding sets for the pass and frame slot.");
+    auto const &bindingSets = bindingState.bindingSetsByFrame[frameSlot];
     return std::span<const nr::rhi::ShaderBindingSet>{bindingSets.data(), bindingSets.size()};
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] nr::rhi::DescriptorWriteCache &PipelineRuntime<TPipeline, FrameSlotCount>::descriptorWriteCacheForFrame(
-    std::uint32_t frameIndex) noexcept
+    PassBindingHandle handle, std::uint32_t frameIndex)
 {
-    auto const frameSlot = static_cast<std::size_t>(frameIndex % descriptorWriteCachesByFrame_.size());
-    return descriptorWriteCachesByFrame_[frameSlot];
+    resolvePipeline();
+    std::scoped_lock lock(resolutionMutex_);
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::descriptorWriteCacheForFrame requires an initialized pipeline.");
+    auto &bindingState = validatedPassBindingStateLocked(handle);
+    auto const frameSlot = static_cast<std::size_t>(frameIndex % FrameSlotCount);
+    nrAssert(bindingState.bindingSetsInitializedByFrame[frameSlot],
+             "PipelineRuntime::descriptorWriteCacheForFrame requires allocated binding sets for the pass and frame slot.");
+    return bindingState.descriptorWriteCachesByFrame[frameSlot];
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] bool PipelineRuntime<TPipeline, FrameSlotCount>::ensureBindingSetsForFrame(
-    std::uint32_t frameIndex, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet)
+    PassBindingHandle handle, std::uint32_t frameIndex,
+    const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet)
 {
     resolvePipeline();
-    auto const frameSlot = static_cast<std::size_t>(frameIndex % bindingSetsByFrame_.size());
-    if (!bindingSetsByFrame_[frameSlot].empty() &&
-        variableDescriptorCountsByFrame_[frameSlot] == variableDescriptorCountsBySet)
+    std::scoped_lock lock(resolutionMutex_);
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::ensureBindingSetsForFrame requires an initialized pipeline.");
+    auto &bindingState = validatedPassBindingStateLocked(handle);
+    auto const frameSlot = static_cast<std::size_t>(frameIndex % FrameSlotCount);
+    auto mergedVariableDescriptorCounts = bindingState.variableDescriptorCountsByFrame[frameSlot];
+    std::ranges::for_each(variableDescriptorCountsBySet, [&](const auto &entry) {
+        mergedVariableDescriptorCounts.insert_or_assign(entry.first, entry.second);
+    });
+    if (bindingState.bindingSetsInitializedByFrame[frameSlot] &&
+        bindingState.variableDescriptorCountsByFrame[frameSlot] == mergedVariableDescriptorCounts)
     {
         return false;
     }
 
-    allocateBindingSetsForFrame(frameSlot, variableDescriptorCountsBySet);
+    allocateBindingSetsForFrame(bindingState, frameSlot, mergedVariableDescriptorCounts);
     return true;
 }
 
@@ -833,18 +1010,23 @@ template <typename TPipeline, std::size_t FrameSlotCount>
 [[nodiscard]] nr::rhi::ShaderCursor PipelineRuntime<TPipeline, FrameSlotCount>::rootCursor() const
 {
     resolvePipeline();
-    return pipeline_.descriptorLayout.rootCursor();
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::rootCursor requires an initialized pipeline.");
+    return pipeline_->descriptorLayout.rootCursor();
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
 void PipelineRuntime<TPipeline, FrameSlotCount>::allocateBindingSetsForFrame(
-    std::size_t frameSlot, const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet) const
+    PassBindingState &bindingState, std::size_t frameSlot,
+    const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet) const
 {
-    nrAssert(frameSlot < bindingSetsByFrame_.size(), "PipelineRuntime frame slot is out of range.");
-    bindingSetsByFrame_[frameSlot] =
-        nr::rhi::allocateBindingSetsForLayout(pipeline_.layout, pipeline_.bindingPool, variableDescriptorCountsBySet);
-    variableDescriptorCountsByFrame_[frameSlot] = variableDescriptorCountsBySet;
-    descriptorWriteCachesByFrame_[frameSlot].clear();
+    nrAssert(pipeline_.has_value(), "PipelineRuntime binding-set allocation requires an initialized pipeline.");
+    nrAssert(frameSlot < FrameSlotCount, "PipelineRuntime frame slot is out of range.");
+    bindingState.bindingSetsByFrame[frameSlot] =
+        nr::rhi::allocateBindingSetsForLayout(pipeline_->layout, pipeline_->bindingPool,
+                                              variableDescriptorCountsBySet);
+    bindingState.variableDescriptorCountsByFrame[frameSlot] = variableDescriptorCountsBySet;
+    bindingState.descriptorWriteCachesByFrame[frameSlot].clear();
+    bindingState.bindingSetsInitializedByFrame[frameSlot] = true;
 }
 
 struct RasterPassRecordContext
@@ -984,14 +1166,20 @@ enum class RasterViewportYMode : std::uint8_t
     ClipSpaceYUp,
 };
 
-using ShaderVisiblePassPrepareCallback = std::function<void(const PassPrepareContext &)>;
-using RasterPassPrepareCallback = ShaderVisiblePassPrepareCallback;
-using ComputePassPrepareCallback = ShaderVisiblePassPrepareCallback;
-using PassBindingSnapshotCallback = std::function<nr::rhi::ShaderBindingSnapshot(const PassPrepareContext &)>;
+template <typename TPipeline>
+using PipelinePassPrepareCallback = std::function<void(
+    const PassPrepareContext &, typename PipelineRuntime<TPipeline>::PassBindingHandle)>;
+using RasterPassPrepareCallback = PipelinePassPrepareCallback<nr::rhi::GraphicsPipeline>;
+using ComputePassPrepareCallback = PipelinePassPrepareCallback<nr::rhi::ComputePipeline>;
+using RayTracingPassPrepareCallback = PipelinePassPrepareCallback<nr::rhi::RayTracingPipeline>;
 
-struct DynamicBindingSnapshotDesc
+template <typename TPipeline>
+using PipelinePassBindingSnapshotCallback = std::function<nr::rhi::ShaderBindingSnapshot(
+    const PassPrepareContext &, typename PipelineRuntime<TPipeline>::PassBindingHandle)>;
+
+template <typename TPipeline> struct DynamicBindingSnapshotDesc
 {
-    PassBindingSnapshotCallback snapshot{};
+    PipelinePassBindingSnapshotCallback<TPipeline> snapshot{};
     nr::rhi::LogicalDescriptorResolver resolver{};
 };
 
@@ -1002,11 +1190,17 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
   protected:
     using Runtime = PipelineRuntime<TPipeline>;
     using RuntimePtr = std::shared_ptr<Runtime>;
+    using PassBindingHandle = typename Runtime::PassBindingHandle;
+    using PrepareCallback = PipelinePassPrepareCallback<TPipeline>;
+    using BindingSnapshotCallback = PipelinePassBindingSnapshotCallback<TPipeline>;
+    using DynamicSnapshotDesc = DynamicBindingSnapshotDesc<TPipeline>;
 
     struct CommonBuildState
     {
         std::vector<PassResourceUseDesc> resourceUses{};
+        std::vector<GraphFrameDataHandle> frameDataUses{};
         RuntimePtr runtime{};
+        PassBindingHandle passBinding{};
         std::string debugName{};
         nr::rhi::ShaderBindingSnapshot bindingSnapshot{};
         PassPrepareCallback prepareCallback{};
@@ -1101,7 +1295,6 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
             .imageUsage = ImageUsageIntent::Sampled,
             .imageAccess = ImageAccessIntent::SampledRead,
             .imageLayout = ImageLayoutIntent::General,
-            .readOnly = true,
         };
         resourceUses_.push_back(withOptionalShaderStages(std::move(resourceUse), shaderStages));
         return derived();
@@ -1180,18 +1373,29 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         return derived();
     }
 
-    TDerived &prepare(ShaderVisiblePassPrepareCallback callback)
+    TDerived &frameData(GraphFrameDataHandle handle)
     {
+        nrAssert(handle.valid(), std::format("{}::frameData requires a valid frame-data handle.", builderLabel_));
+        if (!std::ranges::contains(frameDataUses_, handle))
+        {
+            frameDataUses_.push_back(handle);
+        }
+        return derived();
+    }
+
+    TDerived &prepare(PrepareCallback callback)
+    {
+        nrAssert(static_cast<bool>(callback), std::format("{}::prepare requires a callback.", builderLabel_));
         prepareCallbacks_.push_back(std::move(callback));
         return derived();
     }
 
-    TDerived &dynamicBindingSnapshot(PassBindingSnapshotCallback snapshotCallback,
+    TDerived &dynamicBindingSnapshot(BindingSnapshotCallback snapshotCallback,
                                      nr::rhi::LogicalDescriptorResolver resolver = {})
     {
         nrAssert(static_cast<bool>(snapshotCallback),
                  std::format("{}::dynamicBindingSnapshot requires a snapshot callback.", builderLabel_));
-        dynamicBindingSnapshots_.push_back(DynamicBindingSnapshotDesc{
+        dynamicBindingSnapshots_.push_back(DynamicSnapshotDesc{
             .snapshot = std::move(snapshotCallback),
             .resolver = std::move(resolver),
         });
@@ -1204,12 +1408,15 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
         rootCursor_.clearSnapshot();
 
         auto runtime = runtime_;
-        auto prepareCallback = makePrepareCallback(runtime, bindingSnapshot, std::move(prepareCallbacks_),
+        auto passBinding = runtime->passBinding(context_.get().runtimeName, context_.get().nodeLocalPassOrdinal());
+        auto prepareCallback = makePrepareCallback(runtime, passBinding, bindingSnapshot, std::move(prepareCallbacks_),
                                                    std::move(dynamicBindingSnapshots_), builderLabel_);
 
         return CommonBuildState{
             .resourceUses = std::move(resourceUses_),
+            .frameDataUses = std::move(frameDataUses_),
             .runtime = std::move(runtime),
+            .passBinding = passBinding,
             .debugName = std::move(debugName_),
             .bindingSnapshot = std::move(bindingSnapshot),
             .prepareCallback = std::move(prepareCallback),
@@ -1217,33 +1424,31 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     }
 
     [[nodiscard]] static PassPrepareCallback makePrepareCallback(
-        RuntimePtr runtime, nr::rhi::ShaderBindingSnapshot bindingSnapshot,
-        std::vector<ShaderVisiblePassPrepareCallback> prepareCallbacks,
-        std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots, std::string builderLabel)
+        RuntimePtr runtime, PassBindingHandle passBinding, nr::rhi::ShaderBindingSnapshot bindingSnapshot,
+        std::vector<PrepareCallback> prepareCallbacks,
+        std::vector<DynamicSnapshotDesc> dynamicBindingSnapshots, std::string builderLabel)
     {
-        return [runtime = std::move(runtime), bindingSnapshot = std::move(bindingSnapshot),
+        return [runtime = std::move(runtime), passBinding, bindingSnapshot = std::move(bindingSnapshot),
                 prepareCallbacks = std::move(prepareCallbacks),
                 dynamicBindingSnapshots = std::move(dynamicBindingSnapshots),
                 builderLabel = std::move(builderLabel)](const PassPrepareContext &prepareContext) {
             nrAssert(static_cast<bool>(runtime),
                      std::format("{} prepare requires initialized runtime state.", builderLabel));
-            std::ranges::for_each(prepareCallbacks, [&](const ShaderVisiblePassPrepareCallback &callback) {
-                if (callback)
-                {
-                    callback(prepareContext);
-                }
+            std::ranges::for_each(prepareCallbacks, [&](const PrepareCallback &callback) {
+                callback(prepareContext, passBinding);
             });
 
-            auto &descriptorWriteCache = runtime->descriptorWriteCacheForFrame(prepareContext.frameIndex);
+            auto &descriptorWriteCache = runtime->descriptorWriteCacheForFrame(passBinding, prepareContext.frameIndex);
             nr::rhi::updateResourcesForBindingSnapshot(
-                runtime->state().bindingPool, runtime->bindingSetsForFrame(prepareContext.frameIndex),
+                runtime->state().bindingPool, runtime->bindingSetsForFrame(passBinding, prepareContext.frameIndex),
                 descriptorWriteCache, bindingSnapshot, makeDefaultLogicalDescriptorResolver(prepareContext));
 
-            std::ranges::for_each(dynamicBindingSnapshots, [&](const DynamicBindingSnapshotDesc &desc) {
-                auto dynamicSnapshot = desc.snapshot(prepareContext);
+            std::ranges::for_each(dynamicBindingSnapshots, [&](const DynamicSnapshotDesc &desc) {
+                auto dynamicSnapshot = desc.snapshot(prepareContext, passBinding);
                 auto resolver = desc.resolver ? desc.resolver : makeDefaultLogicalDescriptorResolver(prepareContext);
                 nr::rhi::updateResourcesForBindingSnapshot(runtime->state().bindingPool,
-                                                           runtime->bindingSetsForFrame(prepareContext.frameIndex),
+                                                           runtime->bindingSetsForFrame(passBinding,
+                                                                                        prepareContext.frameIndex),
                                                            descriptorWriteCache, dynamicSnapshot, std::move(resolver));
             });
         };
@@ -1251,13 +1456,14 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
 
     static void bindPipelinePreparedResourcesAndPushConstants(const vk::raii::CommandBuffer &commandBuffer,
                                                               const Runtime &runtime,
+                                                              PassBindingHandle passBinding,
                                                               const nr::rhi::ShaderBindingSnapshot &bindingSnapshot,
                                                               std::uint32_t frameIndex)
     {
         commandBuffer.bindPipeline(BindPoint, runtime.pipeline().raw());
 
         nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, BindPoint, runtime.state().layout,
-                                                      runtime.bindingSetsForFrame(frameIndex));
+                                                      runtime.bindingSetsForFrame(passBinding, frameIndex));
 
         nr::rhi::pushConstantsToCommandBuffer(commandBuffer, runtime.state().layout, bindingSnapshot);
     }
@@ -1284,8 +1490,9 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     RuntimePtr runtime_{};
     nr::rhi::ShaderCursor rootCursor_{};
     std::vector<PassResourceUseDesc> resourceUses_{};
-    std::vector<ShaderVisiblePassPrepareCallback> prepareCallbacks_{};
-    std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots_{};
+    std::vector<GraphFrameDataHandle> frameDataUses_{};
+    std::vector<PrepareCallback> prepareCallbacks_{};
+    std::vector<DynamicSnapshotDesc> dynamicBindingSnapshots_{};
     std::string builderLabel_{};
 };
 } // namespace detail
@@ -1298,6 +1505,7 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
 
   public:
     using Base::dynamicBindingSnapshot;
+    using Base::frameData;
     using Base::prepare;
     using Base::pushConstants;
     using Base::resourceUse;
@@ -1357,6 +1565,7 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
 
     static void bindGraphicsSetup(const vk::raii::CommandBuffer &commandBuffer,
                                   const PipelineRuntime<nr::rhi::GraphicsPipeline> &runtime,
+                                  PipelineRuntime<nr::rhi::GraphicsPipeline>::PassBindingHandle passBinding,
                                   const nr::rhi::ShaderBindingSnapshot &bindingSnapshot, std::uint32_t frameIndex,
                                   vk::Extent2D targetExtent, RasterViewportYMode viewportYMode,
                                   nr::rhi::MeshRasterState rasterState, vk::PrimitiveTopology primitiveTopology);
@@ -1381,7 +1590,9 @@ class RasterPassPatchBuilder
     RasterPassPatchBuilder &colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue);
     RasterPassPatchBuilder &rasterState(nr::rhi::MeshRasterState state);
     RasterPassPatchBuilder &prepare(RasterPassPrepareCallback callback);
-    RasterPassPatchBuilder &dynamicBindingSnapshot(PassBindingSnapshotCallback callback,
+    RasterPassPatchBuilder &frameData(GraphFrameDataHandle handle);
+    RasterPassPatchBuilder &dynamicBindingSnapshot(
+        PipelinePassBindingSnapshotCallback<nr::rhi::GraphicsPipeline> callback,
                                                    nr::rhi::LogicalDescriptorResolver resolver = {});
     RasterPassPatchBuilder &record(RasterPassRecordCallback callback);
     void patch();
@@ -1396,7 +1607,8 @@ class RasterPassPatchBuilder
     std::vector<RasterColorAttachment> colorAttachments_{};
     nr::rhi::MeshRasterState rasterState_{};
     std::vector<RasterPassPrepareCallback> prepareCallbacks_{};
-    std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots_{};
+    std::vector<GraphFrameDataHandle> frameDataUses_{};
+    std::vector<DynamicBindingSnapshotDesc<nr::rhi::GraphicsPipeline>> dynamicBindingSnapshots_{};
     RasterPassRecordCallback recordCallback_{};
 };
 
@@ -1429,6 +1641,7 @@ class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<ComputePa
 
   public:
     using Base::dynamicBindingSnapshot;
+    using Base::frameData;
     using Base::prepare;
     using Base::pushConstants;
     using Base::resourceUse;
@@ -1461,6 +1674,14 @@ class ComputePassPatchBuilder
     ComputePassPatchBuilder &storageImage(std::string_view shaderPath, GraphResourceHandle resource,
                                           std::string_view debugName);
 
+    ComputePassPatchBuilder &frameData(GraphFrameDataHandle handle);
+
+    ComputePassPatchBuilder &prepare(ComputePassPrepareCallback callback);
+
+    ComputePassPatchBuilder &dynamicBindingSnapshot(
+        PipelinePassBindingSnapshotCallback<nr::rhi::ComputePipeline> callback,
+        nr::rhi::LogicalDescriptorResolver resolver = {});
+
     template <typename TPayload>
     ComputePassPatchBuilder &pushConstants(std::string_view shaderPath, const TPayload &value)
     {
@@ -1479,6 +1700,9 @@ class ComputePassPatchBuilder
     std::string debugName_{};
     std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime_{};
     nr::rhi::ShaderCursor rootCursor_{};
+    std::vector<GraphFrameDataHandle> frameDataUses_{};
+    std::vector<ComputePassPrepareCallback> prepareCallbacks_{};
+    std::vector<DynamicBindingSnapshotDesc<nr::rhi::ComputePipeline>> dynamicBindingSnapshots_{};
     ComputePassRecordCallback recordCallback_{};
 };
 
@@ -1502,6 +1726,7 @@ class RayTracingPassBuilder
   public:
     using Base::accelerationStructure;
     using Base::dynamicBindingSnapshot;
+    using Base::frameData;
     using Base::prepare;
     using Base::pushConstants;
     using Base::resourceUse;
@@ -1540,6 +1765,7 @@ class RayTracingPassPatchBuilder
                                         std::string_view debugName);
     RayTracingPassPatchBuilder &uniform(std::string_view shaderPath, FrameUniformBinding binding,
                                         std::string_view debugName);
+    RayTracingPassPatchBuilder &frameData(GraphFrameDataHandle handle);
 
     template <typename TPayload>
     RayTracingPassPatchBuilder &pushConstants(std::string_view shaderPath, const TPayload &value)
@@ -1549,8 +1775,9 @@ class RayTracingPassPatchBuilder
         return *this;
     }
 
-    RayTracingPassPatchBuilder &prepare(ShaderVisiblePassPrepareCallback callback);
-    RayTracingPassPatchBuilder &dynamicBindingSnapshot(PassBindingSnapshotCallback callback,
+    RayTracingPassPatchBuilder &prepare(RayTracingPassPrepareCallback callback);
+    RayTracingPassPatchBuilder &dynamicBindingSnapshot(
+        PipelinePassBindingSnapshotCallback<nr::rhi::RayTracingPipeline> callback,
                                                        nr::rhi::LogicalDescriptorResolver resolver = {});
     RayTracingPassPatchBuilder &record(RayTracingPassRecordCallback callback);
     void patch();
@@ -1567,8 +1794,9 @@ class RayTracingPassPatchBuilder
     std::string debugName_{};
     std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime_{};
     nr::rhi::ShaderCursor rootCursor_{};
-    std::vector<ShaderVisiblePassPrepareCallback> prepareCallbacks_{};
-    std::vector<DynamicBindingSnapshotDesc> dynamicBindingSnapshots_{};
+    std::vector<GraphFrameDataHandle> frameDataUses_{};
+    std::vector<RayTracingPassPrepareCallback> prepareCallbacks_{};
+    std::vector<DynamicBindingSnapshotDesc<nr::rhi::RayTracingPipeline>> dynamicBindingSnapshots_{};
     RayTracingPassRecordCallback recordCallback_{};
 };
 
@@ -1772,8 +2000,16 @@ class Renderer
         NodeConfig config{};
     };
 
+    struct AcceptedTemporalFrameState
+    {
+        nr::scene::SceneBridgeFrameConstants unjitteredCameraConstants{};
+        std::optional<nr::scene::SceneRevisionSnapshot> sceneRevisions{};
+    };
+
     [[nodiscard]] RendererGraphBuildTimings buildInstalledGraph(
-        const NodeFrameParameters &frameParameters, const nr::scene::SceneBridgeFrameConstants &frameConstants,
+        const NodeFrameParameters &frameParameters,
+        const nr::scene::SceneBridgeFrameConstants &renderingFrameConstants,
+        const nr::scene::SceneBridgeFrameConstants &unjitteredFrameConstants,
         const RendererCameraFrameState &cameraFrameState, std::uint64_t sampleFrameOrdinal,
         std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>> sceneBridgeFrame,
         const std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById);
@@ -1833,7 +2069,7 @@ class Renderer
     std::map<std::uint32_t, nr::resource::TextureHandle> tlasTextureHandlesById_{};
     std::optional<nr::scene::SceneExtractProfileHandle> sceneExtractProfile_{};
     std::optional<nr::scene::SceneExtractProfileHandle> sceneTlasExtractProfile_{};
-    std::optional<nr::scene::SceneBridgeFrameConstants> previousGlobalFrameConstants_{};
+    std::optional<AcceptedTemporalFrameState> acceptedTemporalFrameState_{};
     RendererCpuFrameTimings cpuTimingAccumulator_{};
     RendererCpuStatistics cpuStatistics_{};
     std::map<std::pair<std::uint32_t, std::string>, RendererGpuPassAverage> gpuPassTimingAccumulator_{};

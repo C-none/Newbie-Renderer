@@ -40,6 +40,11 @@ void requireWhitespaceInsensitivePresent(std::string_view contents, std::string_
     nr::test::require(removeWhitespace(contents).contains(removeWhitespace(token)), std::string{message});
 }
 
+void requireWhitespaceInsensitiveAbsent(std::string_view contents, std::string_view token, std::string_view message)
+{
+    nr::test::require(!removeWhitespace(contents).contains(removeWhitespace(token)), std::string{message});
+}
+
 [[nodiscard]] std::size_t countOccurrences(std::string_view contents, std::string_view token)
 {
     nr::test::require(!token.empty(), "countOccurrences requires a non-empty token");
@@ -58,6 +63,16 @@ void requireOrdered(std::string_view contents, std::string_view first, std::stri
     nr::test::require(firstPosition != std::string_view::npos && secondPosition != std::string_view::npos &&
                           firstPosition < secondPosition,
                       std::string{message});
+}
+
+[[nodiscard]] std::string_view sourceSection(std::string_view contents, std::string_view beginToken,
+                                             std::string_view endToken)
+{
+    auto const begin = contents.find(beginToken);
+    nr::test::require(begin != std::string_view::npos, "source section begin token is missing");
+    auto const end = contents.find(endToken, begin + beginToken.size());
+    nr::test::require(end != std::string_view::npos, "source section end token is missing");
+    return contents.substr(begin, end - begin);
 }
 
 [[nodiscard]] nr::rhi::DlssOptimalSettings makeOptimalSettings(nr::rhi::DlssDimensions targetSize,
@@ -102,6 +117,10 @@ const nr::test::CaseRegistrar dlssRrPublicContractCase{
         nr::test::requireEqual(nr::rhi::kDlssRayReconstructionResourceSlotCount, std::size_t{64u});
         nr::test::requireEqual(nr::rhi::kDlssRayReconstructionSubrectSlotCount, std::size_t{39u});
         nr::test::require(input.create.flags.hdr, "RR default creation must request HDR");
+        nr::test::require(!input.create.flags.motionVectorsJittered,
+                          "RR defaults must continue to consume unjittered motion vectors");
+        nr::test::requireEqual(input.evaluate.motionVectorScale, std::array{1.0f, 1.0f},
+                               "RR defaults must keep pixel-space motion-vector scale");
         nr::test::require(!input.evaluate.visualizeMotionVectors,
                           "RR motion-vector visualization must default to disabled");
         nr::test::requireEqual(input.create.quality, nr::rhi::DlssQuality::Quality);
@@ -254,6 +273,27 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
         auto const rhiInterface = readProjectFile("src/rhi/nrDlss.ixx");
         auto const rhiImplementation = readProjectFile("src/rhi/nrDlss.cpp");
         auto const deviceImplementation = readProjectFile("src/rhi/nrDevice.cpp");
+        auto const skeletonMaterialization = sourceSection(
+            node, "bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(",
+            "void DlssRayReconstructionNode::materializeCurrentFrame(");
+        auto const coldMaterialization = sourceSection(
+            node, "void DlssRayReconstructionNode::materializeCurrentFrame(",
+            "void DlssRayReconstructionNode::shutdown(");
+        auto const sharedValidation = sourceSection(node, "bool dlssInputResourceActive(",
+                                                    "struct SubrectResourceMapping");
+        auto const prepareCallback = sourceSection(
+            node, "[[nodiscard]] nr::renderer::PassPrepareCallback makeDlssPrepareCallback(",
+            "[[nodiscard]] nr::renderer::PassRecordCallback makeDlssRecordCallback(");
+        auto const recordCallback = sourceSection(
+            node, "[[nodiscard]] nr::renderer::PassRecordCallback makeDlssRecordCallback(",
+            "} // namespace nr::renderPasses::detail");
+        auto const runtimeState = sourceSection(node, "struct DlssRayReconstructionRuntime",
+                                                "struct DlssRayReconstructionResolutionControllerImpl");
+        auto const structuralSnapshot = sourceSection(
+            node, "structuralSnapshot(const NodeFrameParameters &frameParameters) const",
+            "bool DlssRayReconstructionNode::materializeRenderGraphSkeleton(");
+        auto const publication = sourceSection(node, "auto publishedColor = outputColor;",
+                                               "void DlssRayReconstructionNode::shutdown(");
 
         requirePresent(renderPassExport, "export import :dlssRayReconstruction;",
                        "nr.renderPasses must export the RR node");
@@ -279,6 +319,19 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
         requireAbsent(node, "uiDraft_", "RR must not retain a second writable UI draft");
         requireAbsent(node, "pendingInput_", "RR must not retain a node-local pending mutation");
         requireAbsent(node, "pendingOneShotReset_", "RR must not retain a node-local one-shot flag");
+        requireAbsent(nodeInterface, "effectiveResolutionRequest(",
+                      "RR must not export the unused node forwarding API");
+        requirePresent(nodeInterface, "dlssResolutionRequestFromSnapshot(",
+                       "RR must retain the resolution-request function used by graph assembly");
+        requireAbsent(nodeInterface, "device_", "RR runtime must be the node's only initialization marker");
+        requireAbsent(node, "device_", "RR implementation must not assign, assert, or reset a device marker");
+        requireAbsent(runtimeState, "DlssOptimalSettings optimalSettings",
+                      "RR runtime must not retain prepare-local optimal settings");
+        requireAbsent(runtimeState, "optimalSettingsQueried",
+                      "RR runtime must not retain a write-only query marker");
+        requireAbsent(runtimeState, "std::string status", "RR runtime must not retain a write-only status string");
+        requireAbsent(node, "runtime->optimalSettings", "RR callbacks must not store optimal settings in runtime");
+        requireAbsent(node, "runtime->status", "RR callbacks must not write a dead runtime status");
         requirePresent(node, "activeCreateDesc != createDesc",
                        "only create-config changes should recreate the feature");
         requirePresent(node, "evalDesc.reset =",
@@ -321,6 +374,18 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
                        "RR runtime must enforce DLAA-only bypass");
         requirePresent(node, "!input.overrideRenderSize && !input.overrideTargetSize",
                        "coordinated RR must forbid node-local size overrides");
+        requirePresent(sharedValidation, "void validateCoordinatedResolutionOverrides(",
+                       "coordinated override validation should be an ordinary shared local helper");
+        requireAbsent(sharedValidation, "template <", "shared DLSS validation must not template graph contexts");
+        requirePresent(skeletonMaterialization, "detail::validateCoordinatedResolutionOverrides(",
+                       "Skeleton materialization must apply coordinated override validation");
+        requirePresent(coldMaterialization, "detail::validateCoordinatedResolutionOverrides(",
+                       "cold materialization must apply coordinated override validation");
+        requireOrdered(skeletonMaterialization, "detail::validateCoordinatedResolutionOverrides(",
+                       "if (!input.enabled)",
+                       "Skeleton must reject coordinated overrides even while RR is disabled");
+        requireOrdered(coldMaterialization, "detail::validateCoordinatedResolutionOverrides(",
+                       "if (!input.enabled)", "cold build must reject coordinated overrides at the same boundary");
         requirePresent(node, "frameParameters.resolutionPlan.renderExtent",
                        "coordinated RR must consume the renderer render extent");
         requirePresent(node, "frameParameters.resolutionPlan.displayExtent",
@@ -374,8 +439,39 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
         requirePresent(node, "runtime_->resetNextEvaluation = true", "disabled RR must request a reset on resume");
         requirePresent(node, "previousBuildTime_ = {};", "disabled RR must reset automatic frame-delta history");
         requireAbsent(node, "!input.enabled || input.bypass", "RR output bypass must not skip evaluation");
-        requirePresent(node, "input.bypass ? handles[colorIndex] : outputColor",
-                       "RR output bypass must present the PathTracing input color after evaluation");
+        requirePresent(structuralSnapshot, "{};bypass={};alpha={};hdr={};debug={};quality={}",
+                       "RR branch identity must include every option that changes publication topology");
+        requirePresent(structuralSnapshot, "input.bypass ? 1u : 0u",
+                       "RR branch identity must distinguish bypass publication");
+        requirePresent(structuralSnapshot, "input.create.flags.alphaUpscaling ? 1u : 0u",
+                       "RR branch identity must distinguish alpha publication");
+        requirePresent(structuralSnapshot, "input.evaluate.visualizeMotionVectors ? 1u : 0u",
+                       "RR branch identity must distinguish debug-color publication");
+        requirePresent(publication, "auto publishedColor = outputColor;",
+                       "non-bypass RR must publish its reconstructed color");
+        requirePresent(publication, "if (input.bypass && !input.evaluate.visualizeMotionVectors)",
+                       "ordinary bypass must select the input color only when debug visualization is disabled");
+        requirePresent(publication, "publishedColor = handles[colorIndex];",
+                       "ordinary bypass must publish the PathTracing input color");
+        requirePresent(publication, "context.publishFrameResource(input.outputColorKey, publishedColor)",
+                       "RR must publish the explicitly selected observable color");
+        requirePresent(publication, "auto publishedAlpha = outputAlpha;",
+                       "non-bypass RR must retain reconstructed alpha publication");
+        requirePresent(publication, "if (input.bypass)",
+                       "bypass alpha selection must remain independent of debug-color selection");
+        requirePresent(publication, "DlssRayReconstructionResourceSlot::Alpha",
+                       "bypass alpha must select the matching input alpha slot");
+        requireOrdered(publication, "nrAssert(handles[alphaIndex].valid()",
+                       "publishedAlpha = handles[alphaIndex]",
+                       "bypass must prove its input alpha is active before publication");
+        requirePresent(publication, "context.publishFrameResource(input.outputAlphaKey, publishedAlpha)",
+                       "alpha upscaling must publish the explicitly selected paired alpha");
+        requireAbsent(publication, "?", "RR observable output selection must not use nested conditional expressions");
+        requireOrdered(coldMaterialization, "auto pass = context.addPass(", "auto publishedColor = outputColor;",
+                       "bypass publication must remain after the always-scheduled NGX evaluation pass");
+        requireOrdered(coldMaterialization, "DLSS.RayReconstruction.VisualizeMotionVectors",
+                       "auto publishedColor = outputColor;",
+                       "motion-vector debug output must be written before it is selected for publication");
         requirePresent(node, "runtime->resetNextEvaluation = true", "new or rebuilt RR features must request a reset");
         requirePresent(node, "std::exchange(runtime->resetNextEvaluation, false)",
                        "feature lifecycle reset must be consumed once");
@@ -390,6 +486,24 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
                        "the SDK translucency subrect must map to its transparency-mask resource");
         requirePresent(node, "if (!description.has_value())",
                        "subrect validation must skip resources that are not active");
+        requirePresent(sharedValidation, "input.includeResources[slotIndex(slot)]",
+                       "active resource selection must include programmatically enabled optional slots");
+        requirePresent(skeletonMaterialization, "detail::dlssInputResourceActive(input, slot)",
+                       "Skeleton must resolve every required or included active slot");
+        requirePresent(coldMaterialization, "detail::dlssInputResourceActive(input, slot)",
+                       "cold materialization must use the same active-slot definition");
+        requirePresent(skeletonMaterialization, "input.resourceKeys[index].empty() ||",
+                       "missing or empty active optional keys must reject Skeleton patching");
+        requirePresent(skeletonMaterialization, "!context.hasNamedResource(input.resourceKeys[index])",
+                       "missing active named resources must reject Skeleton patching");
+        requirePresent(skeletonMaterialization, "if (!activeResourcesAvailable)",
+                       "Skeleton must fall back to cold when any active resource is unavailable");
+        requirePresent(skeletonMaterialization, "return false;",
+                       "Skeleton active-resource failure must request cold materialization");
+        requireAbsent(skeletonMaterialization, "context.requireFrameResource(",
+                      "Skeleton must leave active-resource diagnostics to the cold boundary");
+        requirePresent(coldMaterialization, "context.requireFrameResource(",
+                       "cold materialization must remain the fail-fast missing-resource boundary");
         requirePresent(node, "resource == Resource::Output || resource == Resource::OutputAlpha",
                        "output subrects must use target dimensions");
         requirePresent(node, "createDesc.flags.motionVectorsLowResolution",
@@ -398,6 +512,13 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
                        "subrect width validation must use subtraction after checking the base");
         requirePresent(node, "required.height <= extent.height - base.y",
                        "subrect height validation must use subtraction after checking the base");
+        requireAbsent(coldMaterialization,
+                      "descriptions[colorIndex]->extent.width == createDesc.renderSize.width",
+                      "coordinated color backings may exceed the active render subrect");
+        requirePresent(skeletonMaterialization, "detail::validateActiveSubrectBounds(",
+                       "Skeleton must validate Color and every other active rectangle by bounds");
+        requirePresent(coldMaterialization, "detail::validateActiveSubrectBounds(",
+                       "cold materialization must use the same active-rectangle bounds validation");
         requirePresent(node, "subrect base ({}, {}) with required size {}x{} exceeds image extent {}x{}",
                        "subrect failure diagnostics must identify the base, required size, and actual extent");
         requireOrdered(node, "descriptions[outputAlphaIndex] =", "detail::validateActiveSubrectBounds(",
@@ -406,22 +527,22 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
                        "subrect validation must run before evaluation parameters are captured");
         requirePresent(node, "image.extent.width, image.extent.height",
                        "NGX image extents must come from record-time resolution");
-        requirePresent(node, "runtime->optimalSettingsQueried = true",
-                       "RR runtime must record successful optimal-settings acquisition");
+        requirePresent(recordCallback, "evalDesc.resources[index] = makeDlssImage(",
+                       "record callback must resolve graph images into the evaluation descriptor");
         requirePresent(node, "input.outputColorFormat != vk::Format::eUndefined",
                        "RR color output format must fail fast when undefined");
         requirePresent(node, "input.outputAlphaFormat != vk::Format::eUndefined",
                        "RR alpha output format must fail fast when undefined");
         requirePresent(node, "input.outputAlphaKey != input.outputColorKey", "RR output keys must remain distinct");
-        requirePresent(node, "if (coordinatedOptimalSettings.has_value())",
+        requirePresent(prepareCallback, "coordinatedOptimalSettings.has_value()",
                        "coordinated RR must reuse the early controller optimal-settings snapshot");
-        requirePresent(node, "dlssContext->optimalSettings(createDesc.targetSize, createDesc.quality)",
+        requirePresent(prepareCallback, "device.dlssContext()->optimalSettings(",
                        "standalone RR must retain its late optimal-settings query");
         requirePresent(node, "detail::validateDlssOptimalSettings(\n            settings",
                        "coordinated resolution must use the shared optimal-settings validation");
-        requirePresent(
-            node, "validateDlssOptimalSettings(runtime->optimalSettings, createDesc.targetSize, createDesc.quality)",
-            "standalone and coordinated prepare must validate optimal settings");
+        requirePresent(prepareCallback,
+                       "validateDlssOptimalSettings(optimalSettings, createDesc.targetSize, createDesc.quality)",
+                       "standalone and coordinated prepare must validate local optimal settings");
         requirePresent(node, "settings.status.success()", "optimal-settings validation must reject failed queries");
         requirePresent(node,
                        "settings.optimalRenderSize.valid() && settings.minimumRenderSize.valid() && "
@@ -433,18 +554,90 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
                        "optimal-settings validation must reject ranges outside the target height");
         requirePresent(node, "settings.optimalRenderSize == targetSize",
                        "optimal-settings validation must enforce DLAA target equality");
-        nr::test::requireEqual(countOccurrences(node, "dlssContext->optimalSettings("), std::size_t{1u},
+        requirePresent(sharedValidation, "void validateDlssResolvedConfiguration(",
+                       "resolved size, quality, and DoF rules should share one local helper");
+        requirePresent(sharedValidation, "depthOfFieldGuideActive",
+                       "shared resolved configuration must observe the active DoF guide");
+        requirePresent(sharedValidation, "nr::rhi::DlssRayReconstructionPreset::E",
+                       "the shared DoF contract must require Preset E");
+        requirePresent(skeletonMaterialization, "detail::validateDlssResolvedConfiguration(",
+                       "Skeleton must enforce the shared DoF/Preset contract");
+        requirePresent(coldMaterialization, "detail::validateDlssResolvedConfiguration(",
+                       "cold materialization must enforce the shared DoF/Preset contract");
+        requirePresent(sharedValidation, "hasWorldToView == hasViewToClip",
+                       "manual matrix configuration must be paired");
+        requirePresent(sharedValidation, "if (!evaluate.automaticMatrices)",
+                       "manual matrix validation must apply when those matrices are used");
+        requirePresent(sharedValidation, "validateFiniteValues(*evaluate.worldToViewRowMajor",
+                       "used manual world-to-view matrices must be finite");
+        requirePresent(sharedValidation, "validateFiniteValues(*evaluate.viewToClipRowMajor",
+                       "used manual view-to-clip matrices must be finite");
+        requirePresent(sharedValidation, "validateFiniteValues(evaluate.manualJitter",
+                       "used manual jitter must be finite");
+        requirePresent(sharedValidation, "std::isfinite(evaluate.manualFrameTimeDeltaMilliseconds)",
+                       "used manual frame delta must be finite");
+        requirePresent(sharedValidation, "validateFiniteValues(evaluate.motionVectorScale",
+                       "motion-vector scale must be finite");
+        requirePresent(sharedValidation, "std::isfinite(evaluate.preExposure)",
+                       "pre-exposure must be finite");
+        requirePresent(sharedValidation, "std::isfinite(evaluate.exposureScale)",
+                       "exposure scale must be finite");
+        nr::test::requireEqual(countOccurrences(node, "detail::validateDlssEvaluationConfiguration("),
+                               std::size_t{2u},
+                               "cold and Skeleton must both use the shared evaluation validation");
+        nr::test::requireEqual(countOccurrences(node, "device.dlssContext()->optimalSettings("), std::size_t{1u},
                                "RR build must not duplicate the standalone NGX optimal-settings query");
-        requireOrdered(node, "if (!runtime->feature || runtime->activeCreateDesc != createDesc)",
+        requirePresent(prepareCallback, "const nr::renderer::PassPrepareContext &prepareContext",
+                       "feature preparation must remain a prepare-stage callback");
+        requirePresent(recordCallback, "const nr::renderer::PassRecordContext &recordContext",
+                       "image resolution and evaluation must remain a record-stage callback");
+        requireAbsent(prepareCallback, "feature->evaluate(", "prepare must not evaluate the feature");
+        requireAbsent(recordCallback, "createDlssRayReconstructionFeature(",
+                      "record must not create or replace the feature");
+        requireAbsent(skeletonMaterialization, "createDlssRayReconstructionFeature(",
+                      "Skeleton graph patching must delegate feature creation to prepare");
+        requireAbsent(coldMaterialization, "createDlssRayReconstructionFeature(",
+                      "cold graph declaration must delegate feature creation to prepare");
+        requireAbsent(skeletonMaterialization, "feature->evaluate(",
+                      "Skeleton graph patching must delegate evaluation to record");
+        requireAbsent(coldMaterialization, "feature->evaluate(",
+                      "cold graph declaration must delegate evaluation to record");
+        requirePresent(skeletonMaterialization, "detail::makeDlssPrepareCallback(",
+                       "Skeleton must use the shared DLSS prepare callback");
+        requirePresent(coldMaterialization, "detail::makeDlssPrepareCallback(",
+                       "cold materialization must use the shared DLSS prepare callback");
+        requirePresent(skeletonMaterialization, "detail::makeDlssRecordCallback(",
+                       "Skeleton must use the shared DLSS record callback");
+        requirePresent(coldMaterialization, "detail::makeDlssRecordCallback(",
+                       "cold materialization must use the shared DLSS record callback");
+        nr::test::requireEqual(countOccurrences(node, "detail::makeDlssPrepareCallback("), std::size_t{2u},
+                               "cold and Skeleton must be the only shared prepare-helper callers");
+        nr::test::requireEqual(countOccurrences(node, "detail::makeDlssRecordCallback("), std::size_t{2u},
+                               "cold and Skeleton must be the only shared record-helper callers");
+        requireAbsent(prepareCallback, "NodeBuildContext", "prepare helper must not template or own graph context");
+        requireAbsent(prepareCallback, "RenderGraphSkeletonPatchContext",
+                      "prepare helper must not merge the Skeleton graph context");
+        requireAbsent(recordCallback, "NodeBuildContext", "record helper must not template or own graph context");
+        requireAbsent(recordCallback, "RenderGraphSkeletonPatchContext",
+                      "record helper must not merge the Skeleton graph context");
+        requirePresent(skeletonMaterialization, "context.patchPass(",
+                       "Skeleton must remain responsible for patching its graph pass");
+        requirePresent(coldMaterialization, "context.addPass(",
+                       "cold materialization must remain responsible for declaring its graph pass");
+        requireOrdered(prepareCallback, "if (!runtime->feature || runtime->activeCreateDesc != createDesc)",
                        "auto replacement = device.createDlssRayReconstructionFeature",
                        "RR feature creation must remain inside the create/recreate branch");
-        requireOrdered(node, "if (coordinatedOptimalSettings.has_value())",
+        requireOrdered(prepareCallback, "auto optimalSettings = coordinatedOptimalSettings.has_value()",
                        "auto replacement = device.createDlssRayReconstructionFeature",
                        "RR optimal settings must be selected before feature creation");
         requireOrdered(
-            node, "validateDlssOptimalSettings(runtime->optimalSettings, createDesc.targetSize, createDesc.quality)",
+            prepareCallback, "validateDlssOptimalSettings(optimalSettings, createDesc.targetSize, createDesc.quality)",
             "auto replacement = device.createDlssRayReconstructionFeature",
             "RR optimal settings must be validated before feature creation");
+        requirePresent(prepareCallback, "runtime->resetNextEvaluation = true",
+                       "feature creation must arm the one-shot lifecycle reset");
+        requirePresent(recordCallback, "std::exchange(runtime->resetNextEvaluation, false)",
+                       "record must consume the lifecycle reset exactly once");
         requirePresent(node, "ImageUsageIntent::StorageWrite", "RR output must declare storage-write intent");
         requirePresent(node, "ImageUsageIntent::Sampled", "RR inputs/output must retain sampled intent");
         requirePresent(node, "DLSS.RayReconstruction.VisualizeMotionVectors",
@@ -465,6 +658,12 @@ const nr::test::CaseRegistrar dlssRrSourceBoundaryCase{
                        "node frame parameters must expose the actual unjittered render camera");
         requirePresent(rendererImplementation, "frameParameters.renderCameraConstants = globalFrameConstants",
                        "renderer must publish the selected scene or override camera before applying projection jitter");
+        requireWhitespaceInsensitiveAbsent(
+            rendererInterface,
+            "std::optional<std::reference_wrapper<const nr::scene::SceneResolvedCamera>> primaryCamera{};",
+            "node frame parameters must not retain a second scene-only primary-camera view");
+        requireAbsent(rendererImplementation, "frameParameters.primaryCamera",
+                      "renderer must not forward its bridge-only primary-camera temporary to graph nodes");
         requirePresent(node, "frameParameters.renderCameraConstants.view",
                        "automatic RR matrices must use the actual render camera view");
         requirePresent(node, "frameParameters.renderCameraConstants.projection",

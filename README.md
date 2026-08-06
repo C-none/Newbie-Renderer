@@ -99,10 +99,10 @@ Optional MSVC toolchains:
 
 ### Code Format
 
-The repository uses clang-format 22 with the root `.clang-format` for all Git-tracked
-project C/C++, C++ module, and Slang files. Slang uses the matching C# parser profile
-because it preserves Slang declaration modifiers while applying the same layout rules.
-Apply the format from PowerShell with:
+The repository uses clang-format 22 with the root `.clang-format` for all tracked and
+non-ignored untracked project C/C++, C++ module, and Slang files. Slang uses the matching
+C# parser profile because it preserves Slang declaration modifiers while applying the same
+layout rules. Apply the format from PowerShell with:
 
 ```powershell
 .\tools\format.ps1

@@ -59,6 +59,63 @@ namespace nr::renderer
 {
 namespace use
 {
+namespace
+{
+[[nodiscard]] PassResourceUseDesc imageUse(GraphResourceHandle resource, ImageUsageIntent usage,
+                                            ImageAccessIntent access, ImageLayoutIntent layout,
+                                            ImageAspectIntent aspect = ImageAspectIntent::Color,
+                                            ResourceOwnershipDomain ownershipDomain =
+                                                ResourceOwnershipDomain::Undefined) noexcept
+{
+    auto result = PassResourceUseDesc{
+        .resource = resource,
+        .imageUsage = usage,
+        .imageAccess = access,
+        .imageLayout = layout,
+        .imageAspect = aspect,
+    };
+    if (ownershipDomain != ResourceOwnershipDomain::Undefined)
+    {
+        result.ownershipDomain = ownershipDomain;
+    }
+    return result;
+}
+
+[[nodiscard]] PassResourceUseDesc bufferUse(GraphResourceHandle resource, BufferUsageIntent usage,
+                                             BufferAccessIntent access,
+                                             ResourceOwnershipDomain ownershipDomain =
+                                                 ResourceOwnershipDomain::Undefined) noexcept
+{
+    auto result = PassResourceUseDesc{
+        .resource = resource,
+        .bufferUsage = usage,
+        .bufferAccess = access,
+    };
+    if (ownershipDomain != ResourceOwnershipDomain::Undefined)
+    {
+        result.ownershipDomain = ownershipDomain;
+    }
+    return result;
+}
+
+[[nodiscard]] PassResourceUseDesc accelerationStructureUse(
+    GraphResourceHandle resource, AccelerationStructureUsageIntent usage,
+    AccelerationStructureAccessIntent access,
+    ResourceOwnershipDomain ownershipDomain = ResourceOwnershipDomain::Undefined) noexcept
+{
+    auto result = PassResourceUseDesc{
+        .resource = resource,
+        .accelerationStructureUsage = usage,
+        .accelerationStructureAccess = access,
+    };
+    if (ownershipDomain != ResourceOwnershipDomain::Undefined)
+    {
+        result.ownershipDomain = ownershipDomain;
+    }
+    return result;
+}
+} // namespace
+
 [[nodiscard]] vk::PipelineStageFlags2 shaderStageScope(ShaderStageIntent intent) noexcept
 {
     switch (intent)
@@ -116,235 +173,251 @@ namespace use
 
 [[nodiscard]] PassResourceUseDesc colorRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ColorRead>(resource);
+    return imageUse(resource, ImageUsageIntent::ColorAttachment, ImageAccessIntent::ColorAttachmentRead,
+                    ImageLayoutIntent::ColorAttachment);
 }
 
 [[nodiscard]] PassResourceUseDesc colorWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ColorWrite>(resource);
+    return imageUse(resource, ImageUsageIntent::ColorAttachment, ImageAccessIntent::ColorAttachmentWrite,
+                    ImageLayoutIntent::ColorAttachment);
 }
 
 [[nodiscard]] PassResourceUseDesc colorReadWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ColorReadWrite>(resource);
+    return imageUse(resource, ImageUsageIntent::ColorAttachment, ImageAccessIntent::ColorAttachmentReadWrite,
+                    ImageLayoutIntent::ColorAttachment);
 }
 
 [[nodiscard]] PassResourceUseDesc depthRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::DepthRead>(resource);
+    return imageUse(resource, ImageUsageIntent::DepthStencilReadOnly, ImageAccessIntent::DepthStencilRead,
+                    ImageLayoutIntent::DepthStencilReadOnly, ImageAspectIntent::Depth);
 }
 
 [[nodiscard]] PassResourceUseDesc depthWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::DepthWrite>(resource);
+    return imageUse(resource, ImageUsageIntent::DepthStencilAttachment, ImageAccessIntent::DepthStencilWrite,
+                    ImageLayoutIntent::DepthStencilAttachment, ImageAspectIntent::Depth);
 }
 
 [[nodiscard]] PassResourceUseDesc depthReadWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::DepthReadWrite>(resource);
+    return imageUse(resource, ImageUsageIntent::DepthStencilAttachment, ImageAccessIntent::DepthStencilReadWrite,
+                    ImageLayoutIntent::DepthStencilAttachment, ImageAspectIntent::Depth);
 }
 
 [[nodiscard]] PassResourceUseDesc sampledRead(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
-    auto result = make<spec::SampledRead>(resource);
-    if (aspect != ImageAspectIntent::Color)
-    {
-        result.imageAspect = aspect;
-    }
-    return result;
+    return imageUse(resource, ImageUsageIntent::Sampled, ImageAccessIntent::SampledRead,
+                    ImageLayoutIntent::ShaderReadOnly, aspect);
 }
 
 [[nodiscard]] PassResourceUseDesc storageRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageRead>(resource);
+    return imageUse(resource, ImageUsageIntent::StorageRead, ImageAccessIntent::StorageRead,
+                    ImageLayoutIntent::General);
 }
 
 [[nodiscard]] PassResourceUseDesc storageWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageWrite>(resource);
+    return imageUse(resource, ImageUsageIntent::StorageWrite, ImageAccessIntent::StorageWrite,
+                    ImageLayoutIntent::General);
 }
 
 [[nodiscard]] PassResourceUseDesc storageReadWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageReadWrite>(resource);
+    return imageUse(resource, ImageUsageIntent::StorageReadWrite, ImageAccessIntent::StorageReadWrite,
+                    ImageLayoutIntent::General);
 }
 
 [[nodiscard]] PassResourceUseDesc inputAttachmentRead(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
-    auto result = make<spec::InputAttachmentRead>(resource);
-    if (aspect != ImageAspectIntent::Color)
-    {
-        result.imageAspect = aspect;
-    }
-    return result;
+    return imageUse(resource, ImageUsageIntent::InputAttachment, ImageAccessIntent::InputAttachmentRead,
+                    ImageLayoutIntent::ShaderReadOnly, aspect);
 }
 
 [[nodiscard]] PassResourceUseDesc uniformRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::UniformRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::Uniform, BufferAccessIntent::UniformRead);
 }
 
 [[nodiscard]] PassResourceUseDesc bufferTransferSrc(GraphResourceHandle resource) noexcept
 {
-    return make<spec::BufferTransferSrc>(resource);
+    return bufferUse(resource, BufferUsageIntent::TransferSrc, BufferAccessIntent::TransferRead);
 }
 
 [[nodiscard]] PassResourceUseDesc bufferTransferDst(GraphResourceHandle resource) noexcept
 {
-    return make<spec::BufferTransferDst>(resource);
+    return bufferUse(resource, BufferUsageIntent::TransferDst, BufferAccessIntent::TransferWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc storageBufferRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageBufferRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::StorageRead, BufferAccessIntent::ShaderStorageRead);
 }
 
 [[nodiscard]] PassResourceUseDesc storageBufferWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageBufferWrite>(resource);
+    return bufferUse(resource, BufferUsageIntent::StorageWrite, BufferAccessIntent::ShaderStorageWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc storageBufferReadWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageBufferReadWrite>(resource);
+    return bufferUse(resource, BufferUsageIntent::StorageReadWrite, BufferAccessIntent::ShaderStorageReadWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc vertexRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::VertexRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::Vertex, BufferAccessIntent::VertexRead);
 }
 
 [[nodiscard]] PassResourceUseDesc indexRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::IndexRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::Index, BufferAccessIntent::IndexRead);
 }
 
 [[nodiscard]] PassResourceUseDesc indirectRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::IndirectRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::Indirect, BufferAccessIntent::IndirectRead);
 }
 
 [[nodiscard]] PassResourceUseDesc uniformTexelRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::UniformTexelRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::UniformTexel, BufferAccessIntent::TexelRead);
 }
 
 [[nodiscard]] PassResourceUseDesc storageTexelRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageTexelRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::StorageTexelRead, BufferAccessIntent::TexelRead);
 }
 
 [[nodiscard]] PassResourceUseDesc storageTexelWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageTexelWrite>(resource);
+    return bufferUse(resource, BufferUsageIntent::StorageTexelWrite, BufferAccessIntent::TexelWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc storageTexelReadWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::StorageTexelReadWrite>(resource);
+    return bufferUse(resource, BufferUsageIntent::StorageTexelReadWrite, BufferAccessIntent::TexelReadWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureBuildInputRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureBuildInputRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::AccelerationStructureBuildInput,
+                     BufferAccessIntent::AccelerationStructureBuildInputRead);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureStorageRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureStorageRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::AccelerationStructureStorage,
+                     BufferAccessIntent::AccelerationStructureRead);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureStorageWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureStorageWrite>(resource);
+    return bufferUse(resource, BufferUsageIntent::AccelerationStructureStorage,
+                     BufferAccessIntent::AccelerationStructureWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureScratchWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureScratchWrite>(resource);
+    return bufferUse(resource, BufferUsageIntent::AccelerationStructureScratch,
+                     BufferAccessIntent::AccelerationStructureScratchReadWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureBuildRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureBuildRead>(resource);
+    return accelerationStructureUse(resource, AccelerationStructureUsageIntent::BuildInput,
+                                    AccelerationStructureAccessIntent::BuildRead);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureBuildWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureBuildWrite>(resource);
+    return accelerationStructureUse(resource, AccelerationStructureUsageIntent::BuildOutput,
+                                    AccelerationStructureAccessIntent::BuildWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureTraceRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureTraceRead>(resource);
+    return accelerationStructureUse(resource, AccelerationStructureUsageIntent::TraceInput,
+                                    AccelerationStructureAccessIntent::TraceRead);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureCopyRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureCopyRead>(resource);
+    return accelerationStructureUse(resource, AccelerationStructureUsageIntent::CopySource,
+                                    AccelerationStructureAccessIntent::CopyRead);
 }
 
 [[nodiscard]] PassResourceUseDesc accelerationStructureCopyWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::AccelerationStructureCopyWrite>(resource);
+    return accelerationStructureUse(resource, AccelerationStructureUsageIntent::CopyDestination,
+                                    AccelerationStructureAccessIntent::CopyWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc shaderBindingTableRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ShaderBindingTableRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::ShaderBindingTable, BufferAccessIntent::ShaderBindingTableRead);
 }
 
 [[nodiscard]] PassResourceUseDesc hostUploadRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::HostUploadRead>(resource);
+    return bufferUse(resource, BufferUsageIntent::HostUpload, BufferAccessIntent::TransferRead);
 }
 
 [[nodiscard]] PassResourceUseDesc readbackWrite(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ReadbackWrite>(resource);
+    return bufferUse(resource, BufferUsageIntent::Readback, BufferAccessIntent::TransferWrite);
 }
 
 [[nodiscard]] PassResourceUseDesc imageTransferSrc(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ImageTransferSrc>(resource);
+    return imageUse(resource, ImageUsageIntent::TransferSrc, ImageAccessIntent::TransferRead,
+                    ImageLayoutIntent::TransferSrc);
 }
 
-[[nodiscard]] PassResourceUseDesc imageTransferDst(GraphResourceHandle resource) noexcept
+[[nodiscard]] PassResourceUseDesc imageTransferDst(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
-    return make<spec::ImageTransferDst>(resource);
+    return imageUse(resource, ImageUsageIntent::TransferDst, ImageAccessIntent::TransferWrite,
+                    ImageLayoutIntent::TransferDst, aspect);
 }
 
-[[nodiscard]] PassResourceUseDesc copySource(GraphResourceHandle resource) noexcept
+[[nodiscard]] PassResourceUseDesc copySource(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
-    return make<spec::CopySource>(resource);
+    return imageUse(resource, ImageUsageIntent::CopySource, ImageAccessIntent::TransferRead,
+                    ImageLayoutIntent::TransferSrc, aspect);
 }
 
-[[nodiscard]] PassResourceUseDesc copyDestination(GraphResourceHandle resource) noexcept
+[[nodiscard]] PassResourceUseDesc copyDestination(GraphResourceHandle resource, ImageAspectIntent aspect) noexcept
 {
-    return make<spec::CopyDestination>(resource);
+    return imageUse(resource, ImageUsageIntent::CopyDestination, ImageAccessIntent::TransferWrite,
+                    ImageLayoutIntent::TransferDst, aspect);
 }
 
 [[nodiscard]] PassResourceUseDesc resolveSrc(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ResolveSrc>(resource);
+    return imageUse(resource, ImageUsageIntent::ResolveSrc, ImageAccessIntent::TransferRead,
+                    ImageLayoutIntent::TransferSrc);
 }
 
 [[nodiscard]] PassResourceUseDesc resolveDst(GraphResourceHandle resource) noexcept
 {
-    return make<spec::ResolveDst>(resource);
+    return imageUse(resource, ImageUsageIntent::ResolveDst, ImageAccessIntent::TransferWrite,
+                    ImageLayoutIntent::TransferDst);
 }
 
 [[nodiscard]] PassResourceUseDesc presentRead(GraphResourceHandle resource) noexcept
 {
-    return make<spec::PresentRead>(resource);
+    return imageUse(resource, ImageUsageIntent::PresentSource, ImageAccessIntent::PresentRead,
+                    ImageLayoutIntent::PresentSrc);
 }
 
 [[nodiscard]] PassResourceUseDesc presentRead(GraphResourceHandle resource,
                                               ResourceOwnershipDomain ownershipDomain) noexcept
 {
-    return make<spec::PresentRead>(resource, ImageUseOptions{
-                                                 .ownershipDomain = ownershipDomain,
-                                             });
+    return imageUse(resource, ImageUsageIntent::PresentSource, ImageAccessIntent::PresentRead,
+                    ImageLayoutIntent::PresentSrc, ImageAspectIntent::Color, ownershipDomain);
 }
 } // namespace use
 } // namespace nr::renderer

@@ -7,31 +7,11 @@ import nr.renderPasses;
 import nr.rhi;
 import nr.scene;
 import nr.load;
+import nr.test.options;
 import nr.utils;
 
 namespace
 {
-[[nodiscard]] nr::options::OptionFrameSnapshot makeDefaultSnapshot(
-    const nr::renderer::RendererGraphPreflightResult &preflight)
-{
-    auto values = nr::options::OptionValueMap{};
-    auto availability = nr::options::OptionAvailabilityMap{};
-    std::ranges::for_each(preflight.optionCatalog->definitions(), [&](auto const &entry) {
-        values.emplace(entry.first, entry.second.defaultValue);
-        availability.emplace(entry.first, nr::options::OptionAvailability{.available = true, .reason = {}});
-    });
-    return nr::options::OptionFrameSnapshot{
-        .catalog = preflight.optionCatalog,
-        .values = std::move(values),
-        .availability = std::move(availability),
-        .frameIndex = 1u,
-        .revision = 1u,
-        .graphGeneration = 1u,
-        .bindingEpoch = 1u,
-        .snapshotToken = "normal-buffer-snapshot",
-    };
-}
-
 [[nodiscard]] nr::renderer::RendererGraphSpec buildNormalBufferGraphSpec(
     const std::shared_ptr<nr::renderPasses::NormalBufferNode> &normalBuffer)
 {
@@ -138,6 +118,7 @@ namespace
     presentation.pollEvents();
     app.ui().beginFrame(presentation, deltaSeconds);
     app.ui().setCameraFrame(app.camera().frame());
+    static_cast<void>(app.ui().finalizeFrame());
 
     auto const cameraOverride = app.camera().buildRendererCameraOverride();
 
@@ -263,7 +244,8 @@ namespace
         {
             return false;
         }
-        auto const optionSnapshot = makeDefaultSnapshot(preflight);
+        auto const optionSnapshot =
+            nr::test::options::makeDefaultSnapshot(preflight.optionCatalog, "normal-buffer-snapshot");
 
         auto frameServices = app.makeFrameServices();
         constexpr auto deltaSeconds = 1.0f / 60.0f;
@@ -282,7 +264,8 @@ namespace
         {
             return false;
         }
-        auto const switchedSnapshot = makeDefaultSnapshot(switchedPreflight);
+        auto const switchedSnapshot =
+            nr::test::options::makeDefaultSnapshot(switchedPreflight.optionCatalog, "normal-buffer-snapshot");
 
         if (!renderUntilSceneDraw(app, firstScene->get(), frameServices, switchedSnapshot, deltaSeconds,
                                   "pipeline switch"))

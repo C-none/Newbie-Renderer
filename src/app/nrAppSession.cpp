@@ -82,7 +82,7 @@ void AppSession::commitScene(std::unique_ptr<nr::scene::Scene> candidate)
 {
     nrAssert(renderer_.initialized(), "AppSession::commitScene requires initialize() first.");
     nrAssert(candidate != nullptr, "AppSession::commitScene requires a valid candidate.");
-    nrAssert(&candidate->device() == &renderer_.device(),
+    nrAssert(candidate->usesDevice(renderer_.device()),
              "AppSession::commitScene candidate belongs to a different renderer device.");
 
     renderer_.device().waitIdle();

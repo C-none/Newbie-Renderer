@@ -8,54 +8,6 @@ import :rendererType;
 
 export namespace nr::renderer
 {
-class RenderGraphBuilder;
-}
-
-namespace nr::renderer
-{
-
-// Internal implementation class - not part of the public API
-class RenderGraphNodeContext
-{
-  public:
-    RenderGraphNodeContext(RenderGraphBuilder &builder, GraphNodeHandle node) noexcept;
-
-    [[nodiscard]] GraphNodeHandle nodeHandle() const noexcept;
-
-    [[nodiscard]] RenderGraphBuilder &builder() noexcept;
-
-    // Generic resource addition interface - single method for all descriptor types.
-    template <typename TDesc> [[nodiscard]] GraphResourceHandle addResource(const TDesc &desc);
-
-    template <typename TPayload>
-    [[nodiscard]] GraphFrameDataHandle addFrameData(std::string_view debugName, TPayload &&payload);
-
-    // Canonical node pass authoring path:
-    // addPass(intentList, name, executeLambda[, prepareCallback][, isCopyPass]).
-    [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName,
-                                          PassRecordCallback executeLambda,
-                                          PassPrepareCallback prepareCallback = nullptr, bool isCopyPass = false,
-                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
-
-    [[nodiscard]] GraphPassHandle addPass(std::span<const PassResourceUseDesc> intentList, std::string_view debugName,
-                                          PassParallelRecordDesc parallelRecord,
-                                          PassPrepareCallback prepareCallback = nullptr,
-                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
-
-    [[nodiscard]] GraphPassHandle addCopyPass(std::string_view debugName, CopyPassDesc copy);
-
-    [[nodiscard]] GraphSubmitHandle addSubmitNode(std::string_view debugName,
-                                                  SubmitBoundaryKind kind = SubmitBoundaryKind::QueueSubmission);
-
-  private:
-    std::reference_wrapper<RenderGraphBuilder> builder_;
-    GraphNodeHandle node{};
-};
-
-} // namespace nr::renderer
-
-export namespace nr::renderer
-{
 struct RenderGraphDeclarationCounts
 {
     std::size_t nodes = 0;
@@ -80,8 +32,6 @@ class RenderGraphBuilder
     [[nodiscard]] GraphNodeHandle addNode(std::string_view debugName, QueueDomain queue);
 
     [[nodiscard]] GraphNodeHandle addPresentNode(std::string_view debugName);
-
-    [[nodiscard]] RenderGraphNodeContext makeNodeContext(GraphNodeHandle node);
 
     // Generic resource addition interface - single method for all descriptor types.
     template <typename TDesc> [[nodiscard]] inline GraphResourceHandle addResource(const TDesc &desc)
@@ -119,13 +69,15 @@ class RenderGraphBuilder
                                           std::span<const PassResourceUseDesc> intentList,
                                           PassRecordCallback executeLambda,
                                           PassPrepareCallback prepareCallback = nullptr, bool isCopyPass = false,
-                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
+                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{},
+                                          std::span<const GraphFrameDataHandle> frameDataUses = {});
 
     [[nodiscard]] GraphPassHandle addPass(std::string_view debugName, GraphNodeHandle node,
                                           std::span<const PassResourceUseDesc> intentList,
                                           PassParallelRecordDesc parallelRecord,
                                           PassPrepareCallback prepareCallback = nullptr,
-                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{});
+                                          vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{},
+                                          std::span<const GraphFrameDataHandle> frameDataUses = {});
 
     [[nodiscard]] GraphPassHandle addCopyPass(std::string_view debugName, GraphNodeHandle node, CopyPassDesc copy);
 
@@ -166,33 +118,9 @@ class RenderGraphBuilder
 
     [[nodiscard]] static bool hasImageIntentFields(const PassResourceUseDesc &use) noexcept;
 
-    [[nodiscard]] static bool bufferAccessReads(BufferAccessIntent intent) noexcept;
-
-    [[nodiscard]] static bool bufferAccessWrites(BufferAccessIntent intent) noexcept;
-
-    [[nodiscard]] static bool imageAccessReads(ImageAccessIntent intent) noexcept;
-
-    [[nodiscard]] static bool imageAccessWrites(ImageAccessIntent intent) noexcept;
-
     [[nodiscard]] static bool bufferAccessUsesShaderStages(BufferAccessIntent intent) noexcept;
 
     [[nodiscard]] static bool imageAccessUsesShaderStages(ImageAccessIntent intent) noexcept;
-
-    [[nodiscard]] static bool accelerationStructureAccessReads(AccelerationStructureAccessIntent intent) noexcept;
-
-    [[nodiscard]] static bool accelerationStructureAccessWrites(AccelerationStructureAccessIntent intent) noexcept;
-
-    [[nodiscard]] static bool accelerationStructureUsageReads(AccelerationStructureUsageIntent intent) noexcept;
-
-    [[nodiscard]] static bool accelerationStructureUsageWrites(AccelerationStructureUsageIntent intent) noexcept;
-
-    [[nodiscard]] static bool bufferUsageReads(BufferUsageIntent intent) noexcept;
-
-    [[nodiscard]] static bool bufferUsageWrites(BufferUsageIntent intent) noexcept;
-
-    [[nodiscard]] static bool imageUsageReads(ImageUsageIntent intent) noexcept;
-
-    [[nodiscard]] static bool imageUsageWrites(ImageUsageIntent intent) noexcept;
 
     [[nodiscard]] static bool isCopySourceUse(const PassResourceUseDesc &use) noexcept;
 
@@ -202,21 +130,28 @@ class RenderGraphBuilder
 
     [[nodiscard]] static bool isImageCopyDestinationUse(const PassResourceUseDesc &use) noexcept;
 
+    [[nodiscard]] static bool isImplicitCopyPresentTransition(const PassResourceUseDesc &previous,
+                                                              const PassResourceUseDesc &current) noexcept;
+
     static void validatePassCallbackContract(const PassRecordCallback &executeLambda,
                                              const std::optional<PassParallelRecordDesc> &parallelRecord,
                                              bool isCopyPass);
 
-    static void validatePassUseReadOnlyContract(const PassResourceUseDesc &use);
-
     void validatePassResourceUse(const PassResourceUseDesc &use) const;
 
-    void validatePassResourceUses(std::span<const PassResourceUseDesc> intentList, bool isCopyPass) const;
+    [[nodiscard]] std::vector<PassResourceUseDesc> canonicalizePassResourceUses(
+        std::span<const PassResourceUseDesc> intentList, bool allowImplicitCopyPresentTransition) const;
+
+    [[nodiscard]] std::vector<GraphFrameDataHandle>
+    canonicalizeFrameDataUses(std::span<const GraphFrameDataHandle> frameDataUses) const;
+
+    static void validateCopyPassResourceUses(std::span<const PassResourceUseDesc> resourceUses);
 
     [[nodiscard]] std::vector<GraphNodeDesc>::const_iterator findNode(GraphNodeHandle handle) const;
 
-    [[nodiscard]] bool containsNode(GraphNodeHandle handle) const;
-
     [[nodiscard]] bool containsResource(GraphResourceHandle handle) const;
+
+    [[nodiscard]] bool containsFrameData(GraphFrameDataHandle handle) const;
 
     RenderGraphFrameDescription frame_{};
     std::map<GraphResourceHandle, std::size_t> resourceIndexByHandle_{};
@@ -227,16 +162,5 @@ class RenderGraphBuilder
     std::uint32_t nextSubmit_ = 0;
     RenderGraphDeclarationCounts declarationCounts_{};
 };
-
-template <typename TDesc> inline GraphResourceHandle RenderGraphNodeContext::addResource(const TDesc &desc)
-{
-    return builder_.get().addResource(desc);
-}
-
-template <typename TPayload>
-inline GraphFrameDataHandle RenderGraphNodeContext::addFrameData(std::string_view debugName, TPayload &&payload)
-{
-    return builder_.get().addFrameData(debugName, std::forward<TPayload>(payload));
-}
 
 } // namespace nr::renderer

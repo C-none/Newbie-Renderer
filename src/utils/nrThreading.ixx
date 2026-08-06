@@ -1,6 +1,6 @@
 export module nr.utils:threading;
 import :errorHandle;
-import :staticUtils;
+import :staticUtilsConstants;
 import std;
 
 export namespace nr::threading

@@ -450,6 +450,17 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
             .sourcePath = std::filesystem::path{"renderer/presentConvert"},
         });
         nr::test::require(presentProgram.valid(), "rtobject present conversion shader should compile");
+        nr::test::require(presentProgram.entryPoint()->stage == SLANG_STAGE_COMPUTE,
+                          "present conversion entry point should remain compute");
+
+        auto *presentEntryPointLayout = presentProgram.programLayout()->getEntryPointByIndex(0u);
+        nr::test::require(presentEntryPointLayout != nullptr,
+                          "present conversion entry-point reflection should resolve");
+        auto reflectedThreadGroupSize = std::array<SlangUInt, 3>{};
+        presentEntryPointLayout->getComputeThreadGroupSize(reflectedThreadGroupSize.size(),
+                                                           reflectedThreadGroupSize.data());
+        nr::test::require(reflectedThreadGroupSize == std::array<SlangUInt, 3>{16u, 16u, 1u},
+                          "present conversion thread-group ABI should remain 16x16x1");
 
         auto presentLayout = nr::rhi::ShaderDescriptorLayout::create(presentProgram);
         nr::test::require(presentLayout.valid(), "rtobject present conversion layout should be valid");
@@ -467,7 +478,31 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(sourceColor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::SampledImage);
         nr::test::require(uiColor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::SampledImage);
         nr::test::require(convertedColor.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
-        nr::test::require(presentPushConstants.pushConstantRange().has_value());
+        auto presentPushConstantRange = presentPushConstants.pushConstantRange();
+        nr::test::require(presentPushConstantRange.has_value(),
+                          "present conversion push-constant range should reflect");
+        nr::test::requireEqual(presentPushConstantRange->offset, 0u,
+                               "present conversion push constants should start at byte zero");
+        nr::test::requireEqual(presentPushConstantRange->size, 24u,
+                               "present conversion push constants should occupy exactly 24 bytes");
+        nr::test::require(presentPushConstantRange->stageFlags == vk::ShaderStageFlagBits::eAll,
+                          "the canonical RHI layout should preserve its established all-stage visibility");
+
+        auto presentWidth = presentPushConstants["width"];
+        auto presentHeight = presentPushConstants["height"];
+        auto presentSwizzleBgr = presentPushConstants["swizzleBgr"];
+        auto presentOutputEncoding = presentPushConstants["outputEncoding"];
+        auto presentToneMapping = presentPushConstants["toneMapping"];
+        auto presentUiOpacity = presentPushConstants["uiOpacity"];
+        nr::test::require(presentWidth.valid() && presentHeight.valid() && presentSwizzleBgr.valid() &&
+                              presentOutputEncoding.valid() && presentToneMapping.valid() && presentUiOpacity.valid(),
+                          "present conversion should reflect every CPU-authored push-constant field");
+        nr::test::requireEqual(presentWidth.address().uniformOffset, std::size_t{0u});
+        nr::test::requireEqual(presentHeight.address().uniformOffset, std::size_t{4u});
+        nr::test::requireEqual(presentSwizzleBgr.address().uniformOffset, std::size_t{8u});
+        nr::test::requireEqual(presentOutputEncoding.address().uniformOffset, std::size_t{12u});
+        nr::test::requireEqual(presentToneMapping.address().uniformOffset, std::size_t{16u});
+        nr::test::requireEqual(presentUiOpacity.address().uniformOffset, std::size_t{20u});
 
         auto requireDescriptorBinding = [](const nr::rhi::ShaderCursor &cursor, std::string_view symbol,
                                            std::uint32_t expectedSet, std::uint32_t expectedBinding) {
@@ -515,6 +550,14 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         auto sceneLightAliasTable = rtRoot["gSceneLightAliasTable"];
         auto environmentMap = rtRoot["gEnvironmentMap"];
         auto environmentParameters = rtRoot["gEnvironment"];
+        auto frameView = frameUniform["view"];
+        auto frameProjection = frameUniform["projection"];
+        auto frameViewProjection = frameUniform["viewProjection"];
+        auto frameInverseViewProjection = frameUniform["inverseViewProjection"];
+        auto frameUnjitteredViewProjection = frameUniform["unjitteredViewProjection"];
+        auto framePreviousViewProjection = frameUniform["previousViewProjection"];
+        auto frameCameraWorld = frameUniform["cameraWorld"];
+        auto frameState = frameUniform["frameState"];
 
         nr::test::require(scene.valid(), "path tracing TLAS cursor should resolve");
         nr::test::require(outputImage.valid(), "path tracing output cursor should resolve");
@@ -539,6 +582,25 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(sceneLightAliasTable.valid(), "path tracing scene light alias table cursor should resolve");
         nr::test::require(environmentMap.valid(), "path tracing environment map cursor should resolve");
         nr::test::require(environmentParameters.valid(), "path tracing environment parameters should resolve");
+        nr::test::require(frameView.valid() && frameProjection.valid() && frameViewProjection.valid() &&
+                              frameInverseViewProjection.valid() && frameUnjitteredViewProjection.valid() &&
+                              framePreviousViewProjection.valid() && frameCameraWorld.valid() && frameState.valid(),
+                          "path tracing should reflect the complete global frame uniform ABI");
+        nr::test::require(!frameUniform.hasField("previousView"),
+                          "the shader-dead previousView field must stay removed from the frame ABI");
+        nr::test::requireEqual(frameView.address().uniformOffset, std::size_t{0u});
+        nr::test::requireEqual(frameProjection.address().uniformOffset, std::size_t{64u});
+        nr::test::requireEqual(frameViewProjection.address().uniformOffset, std::size_t{128u});
+        nr::test::requireEqual(frameInverseViewProjection.address().uniformOffset, std::size_t{192u});
+        nr::test::requireEqual(frameUnjitteredViewProjection.address().uniformOffset, std::size_t{256u});
+        nr::test::requireEqual(framePreviousViewProjection.address().uniformOffset, std::size_t{320u});
+        nr::test::requireEqual(frameCameraWorld.address().uniformOffset, std::size_t{384u});
+        nr::test::requireEqual(frameState.address().uniformOffset, std::size_t{400u});
+        auto *frameUniformElementLayout = frameUniform.typeLayout()->getElementTypeLayout();
+        nr::test::require(frameUniformElementLayout != nullptr,
+                          "global frame constant buffer should expose its element layout");
+        nr::test::requireEqual(static_cast<std::size_t>(frameUniformElementLayout->getSize()), std::size_t{416u},
+                               "GlobalFrameUniforms must preserve its 416-byte reflected ABI");
         nr::test::require(scene.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::AccelerationStructure);
         nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
         nr::test::require(depthImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);

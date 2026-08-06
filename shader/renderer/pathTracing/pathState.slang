@@ -283,8 +283,6 @@ public struct PathState
     public uint2 dimensions = uint2(0u);
     public PathFlag flags = PathFlag.none;
     public uint vertexIndex = 0u;
-    public uint diffuseBounces = 0u;
-    public uint specularBounces = 0u;
     public RandomSequence rng = {};
     public float3 origin = float3(0.0f);
     public float3 direction = float3(0.0f, 0.0f, -1.0f);

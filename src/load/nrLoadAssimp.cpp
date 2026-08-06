@@ -13,6 +13,13 @@ import std;
 namespace nr::load::detail
 {
 constexpr unsigned int assimpSceneFlagIncomplete = 0x1u;
+inline constexpr std::string_view assimpBackendName = "assimp";
+inline constexpr std::array<std::string_view, 4> assimpSupportedExtensions = {
+    ".gltf",
+    ".glb",
+    ".fbx",
+    ".obj",
+};
 
 struct MaterialPropertyKey
 {
@@ -1602,41 +1609,18 @@ struct VertexTangentVariant
     return static_cast<aiPostProcessSteps>(flags);
 }
 
-} // namespace nr::load::detail
-
-namespace nr::load
+bool assimpSupportsExtension(std::string_view extension) noexcept
 {
-[[nodiscard]] nr::resource::MaterialTextureSlotSemantic assimpTextureSlotSemantic(std::uint32_t textureTypeRaw,
-                                                                                  std::uint32_t textureSlot) noexcept
-{
-    return detail::textureSlotSemantic(static_cast<aiTextureType>(textureTypeRaw), textureSlot);
+    return std::ranges::find(assimpSupportedExtensions, extension) != assimpSupportedExtensions.end();
 }
 
-bool AssimpSceneImporter::supportsExtension(std::string_view extension)
+SceneImportResult importAssimpScene(const SceneLoadRequest &request)
 {
-    return std::ranges::find(kSupportedExtensions, extension) != kSupportedExtensions.end();
-}
-
-SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest &request)
-{
-    if (request.sourcePath.empty())
-    {
-        return SceneImportResult{std::unexpected(
-            makeError(LoadErrorCode::invalidArgument, request.sourcePath, "Scene source path is empty."))};
-    }
-
-    auto extension = normalizedExtension(request.sourcePath);
-    if (!supportsExtension(extension))
-    {
-        return SceneImportResult{
-            std::unexpected(makeError(LoadErrorCode::unsupportedFormat, request.sourcePath,
-                                      std::format("Unsupported file extension '{}' for assimp backend.", extension)))};
-    }
-
     if (!std::filesystem::exists(request.sourcePath))
     {
-        return SceneImportResult{std::unexpected(
-            makeError(LoadErrorCode::fileNotFound, request.sourcePath, "Source asset file does not exist."))};
+        return SceneImportResult{std::unexpected(makeLoadError(LoadErrorCode::fileNotFound, assimpBackendName,
+                                                               request.sourcePath,
+                                                               "Source asset file does not exist."))};
     }
 
     Assimp::Importer importer{};
@@ -1646,14 +1630,15 @@ SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest &reque
     if (assimpScene == nullptr)
     {
         return SceneImportResult{
-            std::unexpected(makeError(LoadErrorCode::importFailed, request.sourcePath,
-                                      std::format("Assimp import failed: {}", importer.GetErrorString())))};
+            std::unexpected(makeLoadError(LoadErrorCode::importFailed, assimpBackendName, request.sourcePath,
+                                          std::format("Assimp import failed: {}", importer.GetErrorString())))};
     }
 
     if ((assimpScene->mFlags & detail::assimpSceneFlagIncomplete) != 0 || assimpScene->mRootNode == nullptr)
     {
-        return SceneImportResult{std::unexpected(
-            makeError(LoadErrorCode::invalidScene, request.sourcePath, "Assimp returned an incomplete scene graph."))};
+        return SceneImportResult{std::unexpected(makeLoadError(LoadErrorCode::invalidScene, assimpBackendName,
+                                                               request.sourcePath,
+                                                               "Assimp returned an incomplete scene graph."))};
     }
 
     SceneAsset scene{};
@@ -1710,5 +1695,14 @@ SceneImportResult AssimpSceneImporter::importScene(const SceneLoadRequest &reque
     scene.stats.indexCount = detail::totalIndexCount(scene);
 
     return scene;
+}
+} // namespace nr::load::detail
+
+namespace nr::load
+{
+[[nodiscard]] nr::resource::MaterialTextureSlotSemantic assimpTextureSlotSemantic(std::uint32_t textureTypeRaw,
+                                                                                  std::uint32_t textureSlot) noexcept
+{
+    return detail::textureSlotSemantic(static_cast<aiTextureType>(textureTypeRaw), textureSlot);
 }
 } // namespace nr::load

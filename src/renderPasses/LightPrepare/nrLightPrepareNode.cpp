@@ -283,6 +283,7 @@ bool LightPrepareNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphS
     context.patchFrameData(0u, "LightPrepare.UploadData",
                            std::make_any<detail::LightPrepareFrameData>(std::move(frameData)));
     auto const frameDataHandle = context.frameData(0u);
+    auto const frameDataUses = std::array{frameDataHandle};
     context.patchPass(
         0u, "LightPrepare.Upload",
         [runtime = runtime_, frameDataHandle](const nr::renderer::PassPrepareContext &prepareContext) {
@@ -294,7 +295,7 @@ bool LightPrepareNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphS
             frameSlotState.aliasBuffer.writeMappedAndFlush(std::span<const nr::scene::SceneLightAliasGpuRecord>{
                 data.aliasRecords.data(), data.aliasRecords.size()});
         },
-        [](const nr::renderer::PassRecordContext &) {});
+        [](const nr::renderer::PassRecordContext &) {}, std::nullopt, frameDataUses);
     return true;
 }
 
@@ -357,6 +358,7 @@ void LightPrepareNode::materializeCurrentFrame(NodeBuildContext &context, const 
             .bufferAccess = nr::renderer::BufferAccessIntent::HostWrite,
         },
     };
+    auto const frameDataUses = std::array{frameDataHandle};
 
     [[maybe_unused]] auto uploadPass = context.addPass(
         std::span<const nr::renderer::PassResourceUseDesc>{resourceUses.data(), resourceUses.size()},
@@ -370,7 +372,8 @@ void LightPrepareNode::materializeCurrentFrame(NodeBuildContext &context, const 
                 std::span<const nr::scene::SceneLightGpuRecord>{data.records.data(), data.records.size()});
             frameSlotState.aliasBuffer.writeMappedAndFlush(std::span<const nr::scene::SceneLightAliasGpuRecord>{
                 data.aliasRecords.data(), data.aliasRecords.size()});
-        });
+        },
+        false, vk::PipelineStageFlags2{}, frameDataUses);
 }
 
 void LightPrepareNode::shutdown(NodeShutdownContext &context)

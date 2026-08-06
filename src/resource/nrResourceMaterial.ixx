@@ -15,9 +15,6 @@ struct ImageLevel
     std::uint32_t depth = 1;
     std::vector<std::byte> bytes{};
 
-    ImageLevel() = default;
-    ~ImageLevel() = default;
-
     [[nodiscard]] std::size_t byteSize() const noexcept;
 };
 
@@ -34,9 +31,6 @@ struct Texture
     bool srgb = true;
     bool compressed = false;
     std::vector<ImageLevel> levels{};
-
-    Texture() = default;
-    ~Texture() = default;
 
     [[nodiscard]] bool valid() const noexcept;
 
@@ -60,8 +54,6 @@ struct SamplerDesc
     float maxLod = std::numeric_limits<float>::max();
     float maxAnisotropy = 1.0f;
 
-    SamplerDesc() = default;
-    ~SamplerDesc() = default;
 };
 
 struct MaterialTextureTransform
@@ -79,8 +71,6 @@ struct MaterialTextureSlot
     float scale = 1.0f;
     float strength = 1.0f;
 
-    MaterialTextureSlot() = default;
-    ~MaterialTextureSlot() = default;
 };
 
 enum class MaterialTextureSlotSemantic : std::uint8_t
@@ -160,8 +150,6 @@ struct MaterialCorePbr
     AlphaMode alphaMode = AlphaMode::opaque;
     bool doubleSided = false;
 
-    MaterialCorePbr() = default;
-    ~MaterialCorePbr() = default;
 };
 
 struct MaterialClearcoatExtension
@@ -169,8 +157,6 @@ struct MaterialClearcoatExtension
     float factor = 0.0f;
     float roughnessFactor = 0.0f;
 
-    MaterialClearcoatExtension() = default;
-    ~MaterialClearcoatExtension() = default;
 };
 
 struct MaterialSheenExtension
@@ -178,32 +164,24 @@ struct MaterialSheenExtension
     glm::vec3 colorFactor{0.0f};
     float roughnessFactor = 0.0f;
 
-    MaterialSheenExtension() = default;
-    ~MaterialSheenExtension() = default;
 };
 
 struct MaterialTransmissionExtension
 {
     float factor = 0.0f;
 
-    MaterialTransmissionExtension() = default;
-    ~MaterialTransmissionExtension() = default;
 };
 
 struct MaterialIorExtension
 {
     float ior = 1.5f;
 
-    MaterialIorExtension() = default;
-    ~MaterialIorExtension() = default;
 };
 
 struct MaterialVolumeBoundaryExtension
 {
     float thicknessFactor = 0.0f;
 
-    MaterialVolumeBoundaryExtension() = default;
-    ~MaterialVolumeBoundaryExtension() = default;
 };
 
 struct MaterialAnisotropyExtension
@@ -211,8 +189,6 @@ struct MaterialAnisotropyExtension
     float factor = 0.0f;
     float rotation = 0.0f;
 
-    MaterialAnisotropyExtension() = default;
-    ~MaterialAnisotropyExtension() = default;
 };
 
 struct Material
@@ -227,9 +203,6 @@ struct Material
     std::optional<MaterialAnisotropyExtension> anisotropy{};
     bool unlit = false;
     std::array<MaterialTextureSlot, materialTextureSlotCount> textureSlots{};
-
-    Material() = default;
-    ~Material() = default;
 
     [[nodiscard]] MaterialTextureSlot &slot(MaterialTextureSlotSemantic semantic) noexcept;
 

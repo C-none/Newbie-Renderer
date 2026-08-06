@@ -13,6 +13,59 @@ import :vk;
 
 namespace nr::rhi::ops
 {
+namespace
+{
+constexpr vk::DeviceSize kRingAllocationAlignment = 16u;
+
+[[nodiscard]] std::uint64_t checkedAdd(std::uint64_t lhs, std::uint64_t rhs, std::string_view operation)
+{
+    nrAssert(rhs <= std::numeric_limits<std::uint64_t>::max() - lhs,
+             std::format("{} overflows a 64-bit size.", operation));
+    return lhs + rhs;
+}
+
+[[nodiscard]] std::uint64_t checkedMultiply(std::uint64_t lhs, std::uint64_t rhs, std::string_view operation)
+{
+    nrAssert(lhs == 0u || rhs <= std::numeric_limits<std::uint64_t>::max() / lhs,
+             std::format("{} overflows a 64-bit size.", operation));
+    return lhs * rhs;
+}
+
+[[nodiscard]] constexpr QueueAccessScope accelerationStructureBuildWriteScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+    };
+}
+
+[[nodiscard]] constexpr QueueAccessScope accelerationStructureCopyWriteScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureCopyKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+    };
+}
+
+[[nodiscard]] constexpr QueueAccessScope rayTracingShaderAccelerationStructureReadScope() noexcept
+{
+    return QueueAccessScope{
+        .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+        .access = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
+    };
+}
+
+[[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBarrier(const QueueAccessScope &srcScope,
+                                                                  const QueueAccessScope &dstScope)
+{
+    nrAssert(srcScope.valid() && dstScope.valid(),
+             "makeAccelerationStructureBarrier requires valid source/destination scopes.");
+    return vk::MemoryBarrier2{
+        srcScope.stages, srcScope.access, dstScope.stages, dstScope.access, nullptr,
+    };
+}
+} // namespace
+
 [[nodiscard]] vk::ImageSubresourceRange fullSubresourceRange(const Image &image)
 {
     return vk::ImageSubresourceRange{
@@ -36,43 +89,6 @@ namespace nr::rhi::ops
     return barrier;
 }
 
-[[nodiscard]] vk::BufferMemoryBarrier2 makeBufferTransferWriteToShaderReadBarrier(const Buffer &buffer,
-                                                                                  vk::PipelineStageFlags2 dstStages,
-                                                                                  vk::DeviceSize offset,
-                                                                                  vk::DeviceSize size)
-{
-    return makeBufferBarrier(buffer, vk::BufferMemoryBarrier2{
-                                         vk::PipelineStageFlagBits2::eTransfer,
-                                         vk::AccessFlagBits2::eTransferWrite,
-                                         dstStages,
-                                         vk::AccessFlagBits2::eShaderRead,
-                                         kIgnoredQueueFamilyIndex,
-                                         kIgnoredQueueFamilyIndex,
-                                         vk::Buffer{},
-                                         offset,
-                                         size,
-                                         nullptr,
-                                     });
-}
-
-[[nodiscard]] vk::BufferMemoryBarrier2 makeBufferHostWriteToTransferReadBarrier(const Buffer &buffer,
-                                                                                vk::DeviceSize offset,
-                                                                                vk::DeviceSize size)
-{
-    return makeBufferBarrier(buffer, vk::BufferMemoryBarrier2{
-                                         vk::PipelineStageFlagBits2::eHost,
-                                         vk::AccessFlagBits2::eHostWrite,
-                                         vk::PipelineStageFlagBits2::eTransfer,
-                                         vk::AccessFlagBits2::eTransferRead,
-                                         kIgnoredQueueFamilyIndex,
-                                         kIgnoredQueueFamilyIndex,
-                                         vk::Buffer{},
-                                         offset,
-                                         size,
-                                         nullptr,
-                                     });
-}
-
 [[nodiscard]] vk::ImageMemoryBarrier2 makeImageLayoutTransitionBarrier(
     const Image &image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, vk::PipelineStageFlags2 srcStages,
     vk::AccessFlags2 srcAccess, vk::PipelineStageFlags2 dstStages, vk::AccessFlags2 dstAccess)
@@ -92,31 +108,9 @@ namespace nr::rhi::ops
                                    });
 }
 
-[[nodiscard]] bool QueueOwnershipRequest::valid() const noexcept
-{
-    return srcQueueFamilyIndex != kIgnoredQueueFamilyIndex && dstQueueFamilyIndex != kIgnoredQueueFamilyIndex &&
-           srcQueueFamilyIndex != dstQueueFamilyIndex;
-}
-
 [[nodiscard]] bool QueueAccessScope::valid() const noexcept
 {
     return stages != vk::PipelineStageFlags2{};
-}
-
-[[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBarrier(const QueueAccessScope &srcScope,
-                                                                  const QueueAccessScope &dstScope)
-{
-    nrAssert(srcScope.valid() && dstScope.valid(),
-             "makeAccelerationStructureBarrier requires valid source/destination scopes.");
-    return vk::MemoryBarrier2{
-        srcScope.stages, srcScope.access, dstScope.stages, dstScope.access, nullptr,
-    };
-}
-
-[[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBuildToBuildReadBarrier()
-{
-    return makeAccelerationStructureBarrier(accelerationStructureBuildWriteScope(),
-                                            accelerationStructureBuildReadScope());
 }
 
 [[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBuildToTraceReadBarrier()
@@ -125,54 +119,15 @@ namespace nr::rhi::ops
                                             rayTracingShaderAccelerationStructureReadScope());
 }
 
-[[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureBuildToCopyReadBarrier()
-{
-    return makeAccelerationStructureBarrier(accelerationStructureBuildWriteScope(),
-                                            accelerationStructureCopyReadScope());
-}
-
 [[nodiscard]] vk::MemoryBarrier2 makeAccelerationStructureCopyToTraceReadBarrier()
 {
     return makeAccelerationStructureBarrier(accelerationStructureCopyWriteScope(),
                                             rayTracingShaderAccelerationStructureReadScope());
 }
 
-[[nodiscard]] vk::BufferMemoryBarrier2 makeShaderBindingTableReadBarrier(const Buffer &buffer,
-                                                                         vk::PipelineStageFlags2 srcStages,
-                                                                         vk::AccessFlags2 srcAccess,
-                                                                         vk::DeviceSize offset, vk::DeviceSize size)
-{
-    nrAssert(buffer.valid(), "makeShaderBindingTableReadBarrier requires a valid buffer.");
-    return makeBufferBarrier(buffer, vk::BufferMemoryBarrier2{
-                                         srcStages,
-                                         srcAccess,
-                                         vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                                         vk::AccessFlagBits2::eShaderBindingTableReadKHR,
-                                         kIgnoredQueueFamilyIndex,
-                                         kIgnoredQueueFamilyIndex,
-                                         vk::Buffer{},
-                                         offset,
-                                         size,
-                                         nullptr,
-                                     });
-}
-
 [[nodiscard]] bool QueueOwnershipWait::valid() const noexcept
 {
     return semaphore != vk::Semaphore{};
-}
-
-[[nodiscard]] QueueOwnershipRequest makeQueueOwnershipRequest(std::uint32_t srcQueueFamilyIndex,
-                                                              std::uint32_t dstQueueFamilyIndex,
-                                                              const QueueAccessScope &scope)
-{
-    nrAssert(scope.valid(), "makeQueueOwnershipRequest requires non-empty stage mask.");
-    return QueueOwnershipRequest{
-        .srcQueueFamilyIndex = srcQueueFamilyIndex,
-        .dstQueueFamilyIndex = dstQueueFamilyIndex,
-        .stages = scope.stages,
-        .access = scope.access,
-    };
 }
 
 [[nodiscard]] bool QueueOwnershipTransfer::valid() const noexcept
@@ -295,13 +250,6 @@ void pipelineBarrier(const vk::raii::CommandBuffer &commandBuffer, const Barrier
     commandBuffer.pipelineBarrier2(packet.dependencyInfo());
 }
 
-void transitionImage(const vk::raii::CommandBuffer &commandBuffer, const Image &image, vk::ImageMemoryBarrier2 barrier)
-{
-    BarrierBatch barriers{};
-    barriers.addImage(image, std::move(barrier));
-    pipelineBarrier(commandBuffer, barriers);
-}
-
 [[nodiscard]] vk::BufferCopy2 toBufferCopy2(vk::BufferCopy region)
 {
     return vk::BufferCopy2{region.srcOffset, region.dstOffset, region.size};
@@ -349,23 +297,66 @@ void copyImage2(const vk::raii::CommandBuffer &commandBuffer, vk::Image src, vk:
     commandBuffer.copyImage2(copyInfo);
 }
 
-void copyBuffer(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src, const Buffer &dst, vk::DeviceSize size)
-{
-    vk::DeviceSize copySize = size == 0 ? std::min(src.size(), dst.size()) : size;
-    vk::BufferCopy region{0, 0, copySize};
-    copyBuffer2(commandBuffer, src.handle(), dst.handle(), toBufferCopy2(region));
-}
-
 [[nodiscard]] vk::BufferImageCopy normalizeBufferImageCopyRegion(const Image &image, vk::BufferImageCopy region)
 {
+    nrAssert(image.valid(), "Buffer-image copies require a valid image.");
     if (region.imageSubresource.aspectMask == vk::ImageAspectFlags{})
     {
-        region.imageSubresource = vk::ImageSubresourceLayers{inferAspectFlags(image.format()), 0, 0, 1};
+        region.imageSubresource.aspectMask = inferAspectFlags(image.format());
     }
+    if (region.imageSubresource.layerCount == 0u)
+    {
+        region.imageSubresource.layerCount = 1u;
+    }
+
+    nrAssert(region.bufferOffset == 0u,
+             "Upload/readback ring buffer-image copies require a payload-relative bufferOffset of zero.");
+    auto const supportedAspects = inferAspectFlags(image.format());
+    nrAssert((region.imageSubresource.aspectMask & supportedAspects) == region.imageSubresource.aspectMask,
+             "Buffer-image copy aspect mask is incompatible with the image format.");
+    nrAssert(region.imageSubresource.mipLevel < image.mipLevels(),
+             "Buffer-image copy mip level exceeds the image mip count.");
+    nrAssert(region.imageSubresource.baseArrayLayer <= image.arrayLayers() &&
+                 region.imageSubresource.layerCount <=
+                     image.arrayLayers() - region.imageSubresource.baseArrayLayer,
+             "Buffer-image copy array-layer range exceeds the image layer count.");
+
+    auto const mipLevel = region.imageSubresource.mipLevel;
+    auto mipDimension = [mipLevel](std::uint32_t dimension) {
+        return mipLevel < std::numeric_limits<std::uint32_t>::digits ? std::max(1u, dimension >> mipLevel) : 1u;
+    };
+    auto const mipExtent = vk::Extent3D{
+        mipDimension(image.extent().width),
+        mipDimension(image.extent().height),
+        mipDimension(image.extent().depth),
+    };
+    nrAssert(region.imageOffset.x >= 0 && region.imageOffset.y >= 0 && region.imageOffset.z >= 0,
+             "Buffer-image copy offsets must be non-negative for upload/readback ring operations.");
+    auto const offset = vk::Extent3D{
+        static_cast<std::uint32_t>(region.imageOffset.x),
+        static_cast<std::uint32_t>(region.imageOffset.y),
+        static_cast<std::uint32_t>(region.imageOffset.z),
+    };
+    nrAssert(offset.width <= mipExtent.width && offset.height <= mipExtent.height && offset.depth <= mipExtent.depth,
+             "Buffer-image copy offset exceeds the selected mip extent.");
     if (region.imageExtent == vk::Extent3D{})
     {
-        region.imageExtent = image.extent();
+        region.imageExtent = vk::Extent3D{
+            mipExtent.width - offset.width,
+            mipExtent.height - offset.height,
+            mipExtent.depth - offset.depth,
+        };
     }
+    nrAssert(region.imageExtent.width > 0u && region.imageExtent.height > 0u && region.imageExtent.depth > 0u,
+             "Buffer-image copy extent must be non-zero.");
+    nrAssert(region.imageExtent.width <= mipExtent.width - offset.width &&
+                 region.imageExtent.height <= mipExtent.height - offset.height &&
+                 region.imageExtent.depth <= mipExtent.depth - offset.depth,
+             "Buffer-image copy extent exceeds the selected mip bounds.");
+    nrAssert(region.bufferRowLength == 0u || region.bufferRowLength >= region.imageExtent.width,
+             "Buffer-image copy row length must cover the copied width.");
+    nrAssert(region.bufferImageHeight == 0u || region.bufferImageHeight >= region.imageExtent.height,
+             "Buffer-image copy image height must cover the copied height.");
     return region;
 }
 
@@ -375,10 +366,11 @@ void copyBuffer(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src,
     const auto imageHeight = region.bufferImageHeight > 0 ? region.bufferImageHeight : region.imageExtent.height;
     const auto layerCount = std::max(1u, region.imageSubresource.layerCount);
 
-    return std::max<vk::DeviceSize>(1, static_cast<vk::DeviceSize>(rowLength) *
-                                           static_cast<vk::DeviceSize>(imageHeight) *
-                                           static_cast<vk::DeviceSize>(region.imageExtent.depth) *
-                                           static_cast<vk::DeviceSize>(layerCount) * elementSize);
+    auto byteSize = checkedMultiply(rowLength, imageHeight, "linear image row count");
+    byteSize = checkedMultiply(byteSize, region.imageExtent.depth, "linear image depth size");
+    byteSize = checkedMultiply(byteSize, layerCount, "linear image layer size");
+    byteSize = checkedMultiply(byteSize, elementSize, "linear image byte size");
+    return std::max<vk::DeviceSize>(1u, byteSize);
 }
 
 [[nodiscard]] std::vector<LinearImageUploadChunk> planLinearImageUploadChunks(const vk::BufferImageCopy &region,
@@ -398,21 +390,22 @@ void copyBuffer(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src,
              "planLinearImageUploadChunks bufferRowLength must cover the copied image width.");
     nrAssert(imageHeight >= region.imageExtent.height,
              "planLinearImageUploadChunks bufferImageHeight must cover the copied image height.");
-    nrAssert(static_cast<vk::DeviceSize>(rowLength) <= std::numeric_limits<vk::DeviceSize>::max() / elementSize,
-             "planLinearImageUploadChunks row byte size overflows vk::DeviceSize.");
-
-    auto const rowStride = static_cast<vk::DeviceSize>(rowLength) * elementSize;
+    auto const rowStride = checkedMultiply(rowLength, elementSize, "linear image row stride");
     nrAssert(rowStride <= ringCapacity,
              std::format("planLinearImageUploadChunks row size ({} bytes) exceeds upload ring capacity ({} bytes).",
                          rowStride, ringCapacity));
 
     auto const rowsPerChunk = static_cast<std::uint32_t>(
         std::min<vk::DeviceSize>(region.imageExtent.height, std::max<vk::DeviceSize>(1u, ringCapacity / rowStride)));
-    auto const chunksPerSlice = (region.imageExtent.height + rowsPerChunk - 1u) / rowsPerChunk;
-    auto const sliceCount = static_cast<std::size_t>(region.imageSubresource.layerCount) *
-                            static_cast<std::size_t>(region.imageExtent.depth);
+    auto const chunksPerSlice = 1u + (region.imageExtent.height - 1u) / rowsPerChunk;
+    auto const sliceCount = checkedMultiply(region.imageSubresource.layerCount, region.imageExtent.depth,
+                                            "linear image upload slice count");
+    auto const chunkCount = checkedMultiply(sliceCount, chunksPerSlice, "linear image upload chunk count");
+    nrAssert(std::in_range<std::size_t>(chunkCount),
+             "linear image upload chunk count exceeds the host container size range.");
     auto chunks = std::vector<LinearImageUploadChunk>{};
-    chunks.reserve(sliceCount * static_cast<std::size_t>(chunksPerSlice));
+    nrAssert(chunkCount <= chunks.max_size(), "linear image upload chunk count exceeds vector::max_size().");
+    chunks.reserve(static_cast<std::size_t>(chunkCount));
 
     auto const layers = std::views::iota(std::uint32_t{0u}, region.imageSubresource.layerCount);
     std::ranges::for_each(layers, [&](std::uint32_t layerIndex) {
@@ -423,18 +416,30 @@ void copyBuffer(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src,
                 auto const firstRow = chunkIndex * rowsPerChunk;
                 auto const rowCount = std::min(rowsPerChunk, region.imageExtent.height - firstRow);
                 auto const linearSliceIndex =
-                    static_cast<vk::DeviceSize>(layerIndex) * region.imageExtent.depth + depthIndex;
-                auto const sourceRowIndex = linearSliceIndex * imageHeight + firstRow;
-                auto const sourceOffset = sourceRowIndex * rowStride;
-                auto const byteSize = static_cast<vk::DeviceSize>(rowCount) * rowStride;
+                    checkedAdd(checkedMultiply(layerIndex, region.imageExtent.depth,
+                                               "linear image upload layer offset"),
+                               depthIndex, "linear image upload depth offset");
+                auto const sourceRowIndex =
+                    checkedAdd(checkedMultiply(linearSliceIndex, imageHeight, "linear image upload slice stride"),
+                               firstRow, "linear image upload row offset");
+                auto const sourceOffset =
+                    checkedMultiply(sourceRowIndex, rowStride, "linear image upload source offset");
+                auto const byteSize = checkedMultiply(rowCount, rowStride, "linear image upload chunk size");
 
                 auto copyRegion = region;
                 copyRegion.bufferOffset = 0u;
                 copyRegion.bufferImageHeight = 0u;
+                nrAssert(layerIndex <= std::numeric_limits<std::uint32_t>::max() -
+                                          copyRegion.imageSubresource.baseArrayLayer,
+                         "linear image upload array-layer offset overflows uint32_t.");
                 copyRegion.imageSubresource.baseArrayLayer += layerIndex;
                 copyRegion.imageSubresource.layerCount = 1u;
-                copyRegion.imageOffset.y += static_cast<std::int32_t>(firstRow);
-                copyRegion.imageOffset.z += static_cast<std::int32_t>(depthIndex);
+                auto const imageOffsetY = static_cast<std::int64_t>(copyRegion.imageOffset.y) + firstRow;
+                auto const imageOffsetZ = static_cast<std::int64_t>(copyRegion.imageOffset.z) + depthIndex;
+                nrAssert(std::in_range<std::int32_t>(imageOffsetY) && std::in_range<std::int32_t>(imageOffsetZ),
+                         "linear image upload chunk offset exceeds the Vulkan int32_t range.");
+                copyRegion.imageOffset.y = static_cast<std::int32_t>(imageOffsetY);
+                copyRegion.imageOffset.z = static_cast<std::int32_t>(imageOffsetZ);
                 copyRegion.imageExtent.height = rowCount;
                 copyRegion.imageExtent.depth = 1u;
 
@@ -447,26 +452,6 @@ void copyBuffer(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src,
         });
     });
     return chunks;
-}
-
-void copyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, const Buffer &src, const Image &dst,
-                       vk::ImageLayout dstLayout, const vk::BufferImageCopy &region)
-{
-    auto effectiveRegion = normalizeBufferImageCopyRegion(dst, region);
-    copyBufferToImage2(commandBuffer, src.handle(), dst.handle(), dstLayout, toBufferImageCopy2(effectiveRegion));
-}
-
-void copyImageToBuffer(const vk::raii::CommandBuffer &commandBuffer, const Image &src, const Buffer &dst,
-                       vk::ImageLayout srcLayout, const vk::BufferImageCopy &region)
-{
-    auto effectiveRegion = normalizeBufferImageCopyRegion(src, region);
-    copyImageToBuffer2(commandBuffer, src.handle(), srcLayout, dst.handle(), toBufferImageCopy2(effectiveRegion));
-}
-
-[[nodiscard]] vk::ImageCopy normalizeImageCopyRegion(const Image &src, const Image &dst, vk::ImageCopy region)
-{
-    return normalizeImageCopyRegion(src.extent(), inferAspectFlags(src.format()), dst.extent(),
-                                    inferAspectFlags(dst.format()), region);
 }
 
 [[nodiscard]] vk::ImageCopy normalizeImageCopyRegion(vk::Extent3D srcExtent, vk::ImageAspectFlags srcAspect,
@@ -494,13 +479,6 @@ void copyImageToBuffer(const vk::raii::CommandBuffer &commandBuffer, const Image
     }
 
     return region;
-}
-
-void copyImageToImage(const vk::raii::CommandBuffer &commandBuffer, const Image &src, const Image &dst,
-                      vk::ImageLayout srcLayout, vk::ImageLayout dstLayout, const vk::ImageCopy &region)
-{
-    auto effectiveRegion = normalizeImageCopyRegion(src, dst, region);
-    copyImage2(commandBuffer, src.handle(), srcLayout, dst.handle(), dstLayout, toImageCopy2(effectiveRegion));
 }
 
 void copyImageToImage(const vk::raii::CommandBuffer &commandBuffer, vk::Image src, vk::Extent3D srcExtent,
@@ -544,6 +522,13 @@ UploadReadbackContext::UploadReadbackContext(const vk::raii::Device &device, Res
                             vk::CommandPoolCreateFlagBits::eTransient),
       computeReadbackPool_(device, queueManager.compute().queueFamilyIndex(), vk::CommandPoolCreateFlagBits::eTransient)
 {
+    nrAssert(uploadRingSize >= kRingAllocationAlignment && readbackRingSize >= kRingAllocationAlignment &&
+                 uploadRingSize % kRingAllocationAlignment == 0u &&
+                 readbackRingSize % kRingAllocationAlignment == 0u,
+             std::format("UploadReadbackContext ring capacities must be multiples of {} bytes and at least that "
+                         "large (upload={}, readback={}).",
+                         kRingAllocationAlignment, uploadRingSize, readbackRingSize));
+
     vk::BufferCreateInfo uploadInfo{};
     uploadInfo.size = uploadRingSize;
     uploadInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
@@ -576,6 +561,18 @@ UploadReadbackContext::UploadReadbackContext(const vk::raii::Device &device, Res
     readbackTimeline_ = sync::createTimelineSemaphore(device, 0u);
 }
 
+UploadReadbackContext::~UploadReadbackContext()
+{
+    if (*uploadTimeline_ != nullptr && nextUploadSignalValue_ > 1u)
+    {
+        waitTimelineValue(uploadTimeline_, nextUploadSignalValue_ - 1u);
+    }
+    if (*readbackTimeline_ != nullptr && nextReadbackSignalValue_ > 1u)
+    {
+        waitTimelineValue(readbackTimeline_, nextReadbackSignalValue_ - 1u);
+    }
+}
+
 [[nodiscard]] bool UploadReadbackContext::valid() const noexcept
 {
     return uploadRing_.valid() && readbackRing_.valid() && transferPool_.valid() && graphicsReadbackPool_.valid() &&
@@ -587,24 +584,9 @@ UploadReadbackContext::UploadReadbackContext(const vk::raii::Device &device, Res
     return uploadTimeline_;
 }
 
-[[nodiscard]] const vk::raii::Semaphore &UploadReadbackContext::readbackTimelineSemaphore() const noexcept
-{
-    return readbackTimeline_;
-}
-
-[[nodiscard]] std::uint64_t UploadReadbackContext::completedUploadValue() const
-{
-    return queryTimelineValue(uploadTimeline_);
-}
-
-[[nodiscard]] bool UploadReadbackContext::uploadComplete(std::uint64_t signalValue) const
-{
-    return signalValue == 0u || completedUploadValue() >= signalValue;
-}
-
 void UploadReadbackContext::reclaimCompletedUploads()
 {
-    reclaimQueue(uploadInFlight_, uploadReclaimCursor_, completedUploadValue());
+    reclaimQueue(uploadInFlight_, uploadReclaimCursor_, queryTimelineValue(uploadTimeline_));
 }
 
 void UploadReadbackContext::waitUploadComplete(std::uint64_t signalValue)
@@ -623,31 +605,6 @@ void UploadReadbackContext::waitUploadComplete(std::uint64_t signalValue)
     reclaimQueue(uploadInFlight_, uploadReclaimCursor_, queryTimelineValue(uploadTimeline_));
 }
 
-void UploadReadbackContext::waitReadbackComplete(std::uint64_t signalValue)
-{
-    if (signalValue == 0)
-    {
-        signalValue = nextReadbackSignalValue_ > 1 ? (nextReadbackSignalValue_ - 1) : 0;
-    }
-
-    if (signalValue == 0)
-    {
-        return;
-    }
-
-    waitTimelineValue(readbackTimeline_, signalValue);
-    reclaimQueue(readbackInFlight_, readbackReclaimCursor_, queryTimelineValue(readbackTimeline_));
-}
-
-[[nodiscard]] vk::BufferMemoryBarrier2 UploadReadbackContext::makeAcquireBarrier(const BufferUploadTicket &ticket) const
-{
-    nrAssert(ticket.valid(), "UploadReadbackContext::makeAcquireBarrier requires a valid ticket.");
-    nrAssert(ticket.ownership.has_value(),
-             "UploadReadbackContext::makeAcquireBarrier requires an ownership-bearing ticket.");
-    return makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(ticket.buffer->get(), *ticket.ownership,
-                                                                              ticket.dstOffset, ticket.size);
-}
-
 void UploadReadbackContext::recordAcquireBarrier(const vk::raii::CommandBuffer &commandBuffer,
                                                  const BufferUploadTicket &ticket) const
 {
@@ -658,18 +615,9 @@ void UploadReadbackContext::recordAcquireBarrier(const vk::raii::CommandBuffer &
     }
 
     BarrierBatch acquireBarriers{};
-    acquireBarriers.add(makeAcquireBarrier(ticket));
+    acquireBarriers.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
+        ticket.buffer->get(), *ticket.ownership, ticket.dstOffset, ticket.size));
     pipelineBarrier(commandBuffer, acquireBarriers);
-}
-
-[[nodiscard]] vk::ImageMemoryBarrier2 UploadReadbackContext::makeImageAcquireBarrier(
-    const ImageUploadTicket &ticket) const
-{
-    nrAssert(ticket.valid(), "UploadReadbackContext::makeImageAcquireBarrier requires a valid ticket.");
-    nrAssert(ticket.ownership.has_value(),
-             "UploadReadbackContext::makeImageAcquireBarrier requires an ownership-bearing ticket.");
-    return makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
-        ticket.image->get(), vk::ImageLayout::eTransferDstOptimal, ticket.layout, *ticket.ownership);
 }
 
 void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuffer &commandBuffer,
@@ -682,7 +630,8 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     }
 
     BarrierBatch acquireBarriers{};
-    acquireBarriers.add(makeImageAcquireBarrier(ticket));
+    acquireBarriers.add(makeImageOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
+        ticket.image->get(), vk::ImageLayout::eTransferDstOptimal, ticket.layout, *ticket.ownership));
     pipelineBarrier(commandBuffer, acquireBarriers);
 }
 
@@ -696,16 +645,33 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     const auto transferQueueFamilyIndex = queueManager_->get().transfer().queueFamilyIndex();
     nrAssert(ownership.valid(transferQueueFamilyIndex),
              "UploadReadbackContext::uploadBuffer requires a valid ownership plan for the transfer queue.");
+    nrAssert(dst.sharingMode() == vk::SharingMode::eExclusive,
+             "UploadReadbackContext::uploadBuffer with ownership requires an exclusive-sharing buffer.");
     const auto omitReleaseOwnership = queueFamilyTransferPolicy_.canOmitBufferQueueFamilyTransfer(
         ownership.releaseToDestination.srcQueueFamilyIndex, ownership.releaseToDestination.dstQueueFamilyIndex);
-    const auto omitAcquireToTransferOwnership =
-        ownership.acquireToTransfer.has_value() &&
-        queueFamilyTransferPolicy_.canOmitBufferQueueFamilyTransfer(ownership.acquireToTransfer->srcQueueFamilyIndex,
-                                                                    ownership.acquireToTransfer->dstQueueFamilyIndex);
-    const auto ticketCarriesOwnership = !ownership.isSameQueueFamily() && !omitReleaseOwnership;
+    return uploadBufferCore(data, dst, dstOffset,
+                            BufferUploadControl{
+                                .ownership = std::cref(ownership),
+                                .omitReleaseOwnership = omitReleaseOwnership,
+                                .omitAcquireToTransferOwnership =
+                                    ownership.acquireToTransfer.has_value() &&
+                                    queueFamilyTransferPolicy_.canOmitBufferQueueFamilyTransfer(
+                                        ownership.acquireToTransfer->srcQueueFamilyIndex,
+                                        ownership.acquireToTransfer->dstQueueFamilyIndex),
+                                .ticketCarriesOwnership = !ownership.isSameQueueFamily() && !omitReleaseOwnership,
+                            });
+}
 
+[[nodiscard]] BufferUploadTicket UploadReadbackContext::uploadBufferCore(std::span<const std::byte> data,
+                                                                         const Buffer &dst,
+                                                                         vk::DeviceSize dstOffset,
+                                                                         const BufferUploadControl &control)
+{
+    nrAssert(dst.valid(), "UploadReadbackContext::uploadBuffer requires a valid destination buffer.");
+    nrAssert(std::in_range<vk::DeviceSize>(data.size_bytes()),
+             "UploadReadbackContext::uploadBuffer payload exceeds the Vulkan device-size range.");
     const auto totalSize = static_cast<vk::DeviceSize>(data.size_bytes());
-    nrAssert(dstOffset + totalSize <= dst.size(),
+    nrAssert(dstOffset <= dst.size() && totalSize <= dst.size() - dstOffset,
              "UploadReadbackContext::uploadBuffer destination range exceeds buffer size.");
     nrAssert((dst.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
              "UploadReadbackContext::uploadBuffer destination buffer must include eTransferDst usage.");
@@ -719,7 +685,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     while (remainingSize > 0)
     {
         const auto chunkSize = std::min(remainingSize, uploadCapacity_);
-        auto allocation = reserveUpload(chunkSize, uploadTimeline_);
+        auto allocation = reserveUpload(chunkSize);
 
         uploadRing_.writeMappedAndFlush(
             std::span<const std::byte>{
@@ -733,11 +699,12 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
 
         CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
         {
-            if (uploadedSize == 0 && ownership.acquireToTransfer.has_value() && !omitAcquireToTransferOwnership)
+            if (uploadedSize == 0 && control.ownership.has_value() &&
+                control.ownership->get().acquireToTransfer.has_value() && !control.omitAcquireToTransferOwnership)
             {
                 BarrierBatch transferAcquireBarrier{};
                 transferAcquireBarrier.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Acquire>(
-                    dst, *ownership.acquireToTransfer, dstOffset, totalSize));
+                    dst, *control.ownership->get().acquireToTransfer, dstOffset, totalSize));
                 pipelineBarrier(commandBuffer, transferAcquireBarrier);
             }
 
@@ -752,13 +719,14 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             if (remainingSize == chunkSize)
             {
                 BarrierBatch releaseBarrier{};
-                if (ownership.isSameQueueFamily())
+                if (control.ownership.has_value() && control.ownership->get().isSameQueueFamily())
                 {
+                    const auto &releaseToDestination = control.ownership->get().releaseToDestination;
                     releaseBarrier.add(makeBufferBarrier(dst, vk::BufferMemoryBarrier2{
-                                                                  ownership.releaseToDestination.release.stages,
-                                                                  ownership.releaseToDestination.release.access,
-                                                                  ownership.releaseToDestination.acquire.stages,
-                                                                  ownership.releaseToDestination.acquire.access,
+                                                                  releaseToDestination.release.stages,
+                                                                  releaseToDestination.release.access,
+                                                                  releaseToDestination.acquire.stages,
+                                                                  releaseToDestination.acquire.access,
                                                                   kIgnoredQueueFamilyIndex,
                                                                   kIgnoredQueueFamilyIndex,
                                                                   vk::Buffer{},
@@ -767,10 +735,10 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
                                                                   nullptr,
                                                               }));
                 }
-                else if (!omitReleaseOwnership)
+                else if (control.ownership.has_value() && !control.omitReleaseOwnership)
                 {
                     releaseBarrier.add(makeBufferOwnershipTransferBarrier<OwnershipBarrierPhase::Release>(
-                        dst, ownership.releaseToDestination, dstOffset, totalSize));
+                        dst, control.ownership->get().releaseToDestination, dstOffset, totalSize));
                 }
                 if (!releaseBarrier.empty())
                 {
@@ -781,9 +749,10 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         CommandRecorder::end(commandBuffer);
 
         auto acquireToTransferWait = std::optional<std::reference_wrapper<const QueueOwnershipTransfer>>{};
-        if (uploadedSize == 0 && ownership.acquireToTransfer.has_value())
+        if (uploadedSize == 0 && control.ownership.has_value() &&
+            control.ownership->get().acquireToTransfer.has_value())
         {
-            acquireToTransferWait = std::cref(*ownership.acquireToTransfer);
+            acquireToTransferWait = std::cref(*control.ownership->get().acquireToTransfer);
         }
 
         const auto signalValue =
@@ -799,8 +768,9 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         .dstOffset = dstOffset,
         .size = totalSize,
         .signalValue = lastSignalValue,
-        .ownership = ticketCarriesOwnership ? std::optional<QueueOwnershipTransfer>{ownership.releaseToDestination}
-                                            : std::optional<QueueOwnershipTransfer>{},
+        .ownership = control.ticketCarriesOwnership
+                         ? std::optional<QueueOwnershipTransfer>{control.ownership->get().releaseToDestination}
+                         : std::optional<QueueOwnershipTransfer>{},
     };
 }
 
@@ -811,57 +781,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     nrAssert(!data.empty(), "UploadReadbackContext::uploadBuffer requires non-empty data.");
     nrAssert(dst.sharingMode() == vk::SharingMode::eConcurrent,
              "UploadReadbackContext::uploadBuffer without ownership is only valid for concurrent-sharing buffers.");
-
-    const auto totalSize = static_cast<vk::DeviceSize>(data.size_bytes());
-    nrAssert(dstOffset + totalSize <= dst.size(),
-             "UploadReadbackContext::uploadBuffer destination range exceeds buffer size.");
-    nrAssert((dst.usage() & vk::BufferUsageFlagBits::eTransferDst) != vk::BufferUsageFlags{},
-             "UploadReadbackContext::uploadBuffer destination buffer must include eTransferDst usage.");
-    nrAssert(uploadRing_.mapped() != nullptr,
-             "UploadReadbackContext::uploadBuffer requires a persistently mapped upload ring.");
-
-    auto remainingSize = totalSize;
-    auto uploadedSize = vk::DeviceSize{0};
-    auto lastSignalValue = std::uint64_t{0};
-
-    while (remainingSize > 0)
-    {
-        const auto chunkSize = std::min(remainingSize, uploadCapacity_);
-        auto allocation = reserveUpload(chunkSize, uploadTimeline_);
-
-        uploadRing_.writeMappedAndFlush(
-            std::span<const std::byte>{
-                data.data() + static_cast<std::size_t>(uploadedSize),
-                static_cast<std::size_t>(chunkSize),
-            },
-            allocation.offset);
-
-        auto commandBuffers = transferPool_.allocatePrimary(1);
-        auto &commandBuffer = commandBuffers.front();
-
-        CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-        {
-            vk::BufferCopy copyRegion{};
-            copyRegion.srcOffset = allocation.offset;
-            copyRegion.dstOffset = dstOffset + uploadedSize;
-            copyRegion.size = chunkSize;
-            copyBuffer2(commandBuffer, uploadRing_.handle(), dst.handle(), toBufferCopy2(copyRegion));
-        }
-        CommandRecorder::end(commandBuffer);
-
-        const auto signalValue = submitUploadCommandBuffers(std::move(commandBuffers), allocation, std::nullopt);
-
-        lastSignalValue = signalValue;
-        uploadedSize += chunkSize;
-        remainingSize -= chunkSize;
-    }
-
-    return BufferUploadTicket{
-        .buffer = std::cref(dst),
-        .dstOffset = dstOffset,
-        .size = totalSize,
-        .signalValue = lastSignalValue,
-    };
+    return uploadBufferCore(data, dst, dstOffset, BufferUploadControl{});
 }
 
 [[nodiscard]] ImageUploadTicket UploadReadbackContext::uploadImage(std::span<const std::byte> data, const Image &dst,
@@ -878,6 +798,8 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     const auto transferQueueFamilyIndex = queueManager_->get().transfer().queueFamilyIndex();
     nrAssert(ownership.valid(transferQueueFamilyIndex),
              "UploadReadbackContext::uploadImage requires a valid ownership plan for the transfer queue.");
+    nrAssert(dst.sharingMode() == vk::SharingMode::eExclusive,
+             "UploadReadbackContext::uploadImage with ownership requires an exclusive-sharing image.");
     const auto omitAcquireToTransferOwnership =
         ownership.acquireToTransfer.has_value() &&
         queueFamilyTransferPolicy_.canOmitImageQueueFamilyTransfer(
@@ -893,6 +815,8 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     auto effectiveRegion = normalizeBufferImageCopyRegion(dst, region);
     const auto payloadSize = linearBufferImageCopySize(effectiveRegion, bytesPerPixel(dst.format()));
 
+    nrAssert(std::in_range<vk::DeviceSize>(data.size_bytes()),
+             "UploadReadbackContext::uploadImage payload exceeds the Vulkan device-size range.");
     nrAssert(static_cast<vk::DeviceSize>(data.size_bytes()) == payloadSize,
              std::format("UploadReadbackContext::uploadImage payload size mismatch: data={} bytes, expected={} bytes.",
                          static_cast<vk::DeviceSize>(data.size_bytes()), payloadSize));
@@ -906,7 +830,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         nrAssert(chunk.sourceOffset <= payloadSize && chunk.byteSize <= payloadSize - chunk.sourceOffset,
                  "UploadReadbackContext::uploadImage chunk exceeds the source payload.");
 
-        auto allocation = reserveUpload(chunk.byteSize, uploadTimeline_);
+        auto allocation = reserveUpload(chunk.byteSize);
         uploadRing_.writeMappedAndFlush(
             data.subspan(static_cast<std::size_t>(chunk.sourceOffset), static_cast<std::size_t>(chunk.byteSize)),
             allocation.offset);
@@ -1021,7 +945,9 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
              "UploadReadbackContext::readbackBuffer supports only graphics/compute queue roles.");
     nrAssert(size > 0, "UploadReadbackContext::readbackBuffer requires size > 0.");
     nrAssert(syncPlan.valid(), "UploadReadbackContext::readbackBuffer requires non-empty pre/post stage masks.");
-    nrAssert(srcOffset + size <= src.size(), "UploadReadbackContext::readbackBuffer source range exceeds buffer size.");
+    nrAssert(src.valid(), "UploadReadbackContext::readbackBuffer requires a valid source buffer.");
+    nrAssert(srcOffset <= src.size() && size <= src.size() - srcOffset,
+             "UploadReadbackContext::readbackBuffer source range exceeds buffer size.");
     nrAssert((src.usage() & vk::BufferUsageFlagBits::eTransferSrc) != vk::BufferUsageFlags{},
              "UploadReadbackContext::readbackBuffer source buffer must include eTransferSrc usage.");
     nrAssert(readbackRing_.mapped() != nullptr,
@@ -1080,7 +1006,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     CommandRecorder::end(commandBuffer);
 
     const auto signalValue = submitReadbackCommandBuffers(readbackQueue, std::move(commandBuffers), allocation);
-    return ReadbackTicket{allocation.offset, size, signalValue};
+    return ReadbackTicket{*this, allocation.offset, size, signalValue};
 }
 
 [[nodiscard]] ReadbackTicket UploadReadbackContext::readbackImage(const Image &src, vk::ImageLayout sourceLayout,
@@ -1090,6 +1016,8 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     nrAssert(valid(), "UploadReadbackContext::readbackImage requires a valid context.");
     nrAssert(isReadbackQueueRoleSupported(queueRole),
              "UploadReadbackContext::readbackImage supports only graphics/compute queue roles.");
+    nrAssert(sourceLayout != vk::ImageLayout::eUndefined,
+             "UploadReadbackContext::readbackImage requires a defined source layout.");
     nrAssert(syncPlan.valid(), "UploadReadbackContext::readbackImage requires non-empty pre/post stage masks.");
     nrAssert((src.usage() & vk::ImageUsageFlagBits::eTransferSrc) != vk::ImageUsageFlags{},
              "UploadReadbackContext::readbackImage source image must include eTransferSrc usage.");
@@ -1101,10 +1029,15 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     auto &readbackPool = route.pool.get();
 
     auto effectiveRegion = normalizeBufferImageCopyRegion(src, region);
+    nrAssert(effectiveRegion.bufferRowLength == 0u && effectiveRegion.bufferImageHeight == 0u,
+             "UploadReadbackContext::readbackImage supports only tightly packed readback regions.");
     const auto readbackSize = linearBufferImageCopySize(effectiveRegion, bytesPerPixel(src.format()));
     auto allocation = reserveReadback(readbackSize);
 
-    auto subresourceRange = readbackImageSubresourceRange(src, effectiveRegion);
+    const auto &layers = effectiveRegion.imageSubresource;
+    auto subresourceRange = vk::ImageSubresourceRange{
+        layers.aspectMask, layers.mipLevel, 1u, layers.baseArrayLayer, layers.layerCount,
+    };
 
     auto commandBuffers = readbackPool.allocatePrimary(1);
     auto &commandBuffer = commandBuffers.front();
@@ -1128,7 +1061,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
 
         recordReadbackRingToTransferWriteBarrier(commandBuffer, allocation.offset, readbackSize);
 
-        effectiveRegion.bufferOffset += allocation.offset;
+        effectiveRegion.bufferOffset = allocation.offset;
         copyImageToBuffer2(commandBuffer, src.handle(), vk::ImageLayout::eTransferSrcOptimal, readbackRing_.handle(),
                            toBufferImageCopy2(effectiveRegion));
 
@@ -1153,36 +1086,66 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     CommandRecorder::end(commandBuffer);
 
     const auto signalValue = submitReadbackCommandBuffers(readbackQueue, std::move(commandBuffers), allocation);
-    return ReadbackTicket{allocation.offset, readbackSize, signalValue};
+    return ReadbackTicket{*this, allocation.offset, readbackSize, signalValue};
 }
 
-[[nodiscard]] std::vector<std::byte> UploadReadbackContext::readbackBytes(const ReadbackTicket &ticket)
+[[nodiscard]] std::vector<std::byte> UploadReadbackContext::readbackBytes(ReadbackTicket &ticket)
 {
-    nrAssert(ticket.signalValue > 0, "UploadReadbackContext::readbackBytes requires ticket.signalValue > 0.");
-    nrAssert(ticket.size > 0, "UploadReadbackContext::readbackBytes requires ticket.size > 0.");
+    nrAssert(ticket.context_.has_value() && std::addressof(ticket.context_->get()) == this,
+             "UploadReadbackContext::readbackBytes requires a ticket issued by this context.");
+    nrAssert(ticket.signalValue_ > 0, "UploadReadbackContext::readbackBytes requires a live ticket.");
+    nrAssert(ticket.offset_ <= readbackCapacity_ && ticket.size_ <= readbackCapacity_ - ticket.offset_,
+             "UploadReadbackContext::readbackBytes ticket range exceeds the readback ring.");
+    nrAssert(std::in_range<std::size_t>(ticket.offset_) && std::in_range<std::size_t>(ticket.size_),
+             "UploadReadbackContext::readbackBytes ticket range exceeds the host address range.");
 
-    waitReadbackComplete(ticket.signalValue);
-    readbackRing_.invalidate(ticket.offset, ticket.size);
+    auto spilled = spilledReadbacks_.find(ticket.signalValue_);
+    if (spilled != spilledReadbacks_.end())
+    {
+        nrAssert(spilled->second.size() == static_cast<std::size_t>(ticket.size_),
+                 "UploadReadbackContext::readbackBytes spilled ticket size mismatch.");
+        auto data = std::move(spilled->second);
+        spilledReadbacks_.erase(spilled);
+        ticket.context_.reset();
+        ticket.signalValue_ = 0;
+        return data;
+    }
 
-    std::vector<std::byte> data(static_cast<std::size_t>(ticket.size));
-    auto *src = static_cast<const std::byte *>(readbackRing_.mapped()) + ticket.offset;
+    auto batch = std::ranges::find(readbackInFlight_, ticket.signalValue_, &InFlightBatch::signalValue);
+    nrAssert(batch != readbackInFlight_.end(),
+             "UploadReadbackContext::readbackBytes ticket is stale or has already been consumed.");
+    nrAssert(!batch->ringReclaimable && batch->offset == ticket.offset_ && batch->size == ticket.size_,
+             "UploadReadbackContext::readbackBytes ticket does not match its issued ring allocation.");
+
+    waitTimelineValue(readbackTimeline_, ticket.signalValue_);
+    readbackRing_.invalidate(ticket.offset_, ticket.size_);
+
+    std::vector<std::byte> data(static_cast<std::size_t>(ticket.size_));
+    auto *src = static_cast<const std::byte *>(readbackRing_.mapped()) + static_cast<std::size_t>(ticket.offset_);
     std::memcpy(data.data(), src, data.size());
+
+    batch->ringReclaimable = true;
+    ticket.context_.reset();
+    ticket.signalValue_ = 0;
+    reclaimQueue(readbackInFlight_, readbackReclaimCursor_, queryTimelineValue(readbackTimeline_));
     return data;
 }
 
 [[nodiscard]] std::uint64_t UploadReadbackContext::consumeNextUploadSignalValue()
 {
     auto value = nextUploadSignalValue_;
+    nrAssert(value != std::numeric_limits<std::uint64_t>::max(),
+             "UploadReadbackContext timeline signal value overflow.");
     ++nextUploadSignalValue_;
-    nrAssert(nextUploadSignalValue_ > value, "UploadReadbackContext timeline signal value overflow.");
     return value;
 }
 
 [[nodiscard]] std::uint64_t UploadReadbackContext::consumeNextReadbackSignalValue()
 {
     auto value = nextReadbackSignalValue_;
+    nrAssert(value != std::numeric_limits<std::uint64_t>::max(),
+             "UploadReadbackContext readback timeline signal value overflow.");
     ++nextReadbackSignalValue_;
-    nrAssert(nextReadbackSignalValue_ > value, "UploadReadbackContext readback timeline signal value overflow.");
     return value;
 }
 
@@ -1216,7 +1179,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     batch.addSignal(uploadTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eAllCommands);
     queueManager_->get().transfer().submit(std::move(batch));
 
-    addInFlight(uploadInFlight_, allocation, signalValue, std::move(commandBuffers));
+    addInFlight(uploadInFlight_, allocation, signalValue, true, std::move(commandBuffers));
     return signalValue;
 }
 
@@ -1236,7 +1199,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     batch.addSignal(readbackTimeline_, signalValue, 0, vk::PipelineStageFlagBits2::eAllCommands);
     readbackQueue.submit(std::move(batch));
 
-    addInFlight(readbackInFlight_, allocation, signalValue, std::move(commandBuffers));
+    addInFlight(readbackInFlight_, allocation, signalValue, false, std::move(commandBuffers));
     return signalValue;
 }
 
@@ -1291,34 +1254,13 @@ void UploadReadbackContext::recordReadbackRingHostVisibilityBarrier(const vk::ra
     pipelineBarrier(commandBuffer, ringBarrier);
 }
 
-[[nodiscard]] vk::ImageSubresourceRange UploadReadbackContext::readbackImageSubresourceRange(
-    const Image &image, const vk::BufferImageCopy &copyRegion)
-{
-    auto layers = copyRegion.imageSubresource;
-    if (layers.aspectMask == vk::ImageAspectFlags{})
-    {
-        layers.aspectMask = inferAspectFlags(image.format());
-    }
-
-    const auto layerCount = std::max(1u, layers.layerCount);
-    nrAssert(
-        layers.baseArrayLayer + layerCount <= image.arrayLayers(),
-        std::format(
-            "UploadReadbackContext::readbackImageSubresourceRange layer range [{}..{}) exceeds image layer count {}.",
-            layers.baseArrayLayer, layers.baseArrayLayer + layerCount, image.arrayLayers()));
-
-    return vk::ImageSubresourceRange{
-        layers.aspectMask, layers.mipLevel, 1, layers.baseArrayLayer, layerCount,
-    };
-}
-
 [[nodiscard]] std::uint64_t UploadReadbackContext::alignUp(std::uint64_t value, std::uint64_t alignment)
 {
     if (alignment <= 1)
         return value;
     nrAssert((alignment & (alignment - 1)) == 0,
              std::format("UploadReadbackContext::alignUp requires power-of-2 alignment, got {}", alignment));
-    return (value + alignment - 1) & ~(alignment - 1);
+    return checkedAdd(value, alignment - 1u, "UploadReadbackContext ring alignment") & ~(alignment - 1u);
 }
 
 [[nodiscard]] vk::DeviceSize UploadReadbackContext::bytesPerPixel(vk::Format format)
@@ -1384,32 +1326,49 @@ void UploadReadbackContext::waitTimelineValue(const vk::raii::Semaphore &timelin
 void UploadReadbackContext::reclaimQueue(std::deque<InFlightBatch> &queue, std::uint64_t &reclaimCursor,
                                          std::uint64_t completedValue)
 {
-    while (!queue.empty() && queue.front().signalValue <= completedValue)
+    while (!queue.empty() && queue.front().ringReclaimable && queue.front().signalValue <= completedValue)
     {
         reclaimCursor = queue.front().end;
         queue.pop_front();
     }
 }
 
-[[nodiscard]] UploadReadbackContext::RingAllocation UploadReadbackContext::reserveUpload(
-    vk::DeviceSize size, const vk::raii::Semaphore &timelineSemaphore)
+[[nodiscard]] UploadReadbackContext::RingAllocation UploadReadbackContext::reserveUpload(vk::DeviceSize size)
 {
     return reserveRing(size, uploadCapacity_, uploadWriteCursor_, uploadReclaimCursor_, uploadInFlight_,
-                       timelineSemaphore);
+                       uploadTimeline_, false);
+}
+
+void UploadReadbackContext::spillReadback(InFlightBatch &batch)
+{
+    nrAssert(!batch.ringReclaimable, "UploadReadbackContext cannot spill an already reclaimable readback.");
+    nrAssert(batch.offset <= readbackCapacity_ && batch.size <= readbackCapacity_ - batch.offset,
+             "UploadReadbackContext spill range exceeds the readback ring.");
+    nrAssert(std::in_range<std::size_t>(batch.offset) && std::in_range<std::size_t>(batch.size),
+             "UploadReadbackContext spill range exceeds the host address range.");
+
+    readbackRing_.invalidate(batch.offset, batch.size);
+    auto bytes = std::vector<std::byte>(static_cast<std::size_t>(batch.size));
+    auto *source = static_cast<const std::byte *>(readbackRing_.mapped()) + static_cast<std::size_t>(batch.offset);
+    std::memcpy(bytes.data(), source, bytes.size());
+    auto [_, inserted] = spilledReadbacks_.emplace(batch.signalValue, std::move(bytes));
+    nrAssert(inserted, "UploadReadbackContext readback signal was spilled more than once.");
+    batch.ringReclaimable = true;
 }
 
 [[nodiscard]] UploadReadbackContext::RingAllocation UploadReadbackContext::reserveReadback(vk::DeviceSize size)
 {
     return reserveRing(size, readbackCapacity_, readbackWriteCursor_, readbackReclaimCursor_, readbackInFlight_,
-                       readbackTimeline_);
+                       readbackTimeline_, true);
 }
 
 [[nodiscard]] UploadReadbackContext::RingAllocation UploadReadbackContext::reserveRing(
     vk::DeviceSize size, vk::DeviceSize capacity, std::uint64_t &writeCursor, std::uint64_t &reclaimCursor,
-    std::deque<InFlightBatch> &queue, const vk::raii::Semaphore &timelineSemaphore)
+    std::deque<InFlightBatch> &queue, const vk::raii::Semaphore &timelineSemaphore,
+    bool requiresCpuConsumption)
 {
-    // Validate that the requested size can fit in the ring buffer
-    nrAssert(size <= capacity,
+    nrAssert(capacity > 0u, "UploadReadbackContext ring capacity must be non-zero.");
+    nrAssert(size > 0u && size <= capacity,
              std::format("UploadReadbackContext ring allocation size ({} bytes) exceeds ring capacity ({} bytes). "
                          "Consider increasing the ring buffer size or using chunked uploads.",
                          size, capacity));
@@ -1417,18 +1376,20 @@ void UploadReadbackContext::reclaimQueue(std::deque<InFlightBatch> &queue, std::
     reclaimQueue(queue, reclaimCursor, queryTimelineValue(timelineSemaphore));
 
     auto tryReserve = [&]() -> std::optional<RingAllocation> {
-        constexpr std::uint64_t alignment = 16;
-        std::uint64_t candidate = alignUp(writeCursor, alignment);
+        std::uint64_t candidate = alignUp(writeCursor, kRingAllocationAlignment);
         std::uint64_t cap = static_cast<std::uint64_t>(capacity);
 
         auto ringOffset = static_cast<vk::DeviceSize>(candidate % cap);
-        if (ringOffset + size > capacity)
+        if (size > capacity - ringOffset)
         {
-            candidate = alignUp(candidate + (cap - ringOffset), alignment);
+            candidate = alignUp(checkedAdd(candidate, cap - ringOffset, "UploadReadbackContext ring wrap"),
+                                kRingAllocationAlignment);
             ringOffset = 0;
         }
 
-        std::uint64_t end = candidate + static_cast<std::uint64_t>(size);
+        std::uint64_t end = checkedAdd(candidate, static_cast<std::uint64_t>(size),
+                                       "UploadReadbackContext ring allocation end");
+        nrAssert(end >= reclaimCursor, "UploadReadbackContext ring cursor ordering is invalid.");
         if (end - reclaimCursor > cap)
         {
             return std::nullopt;
@@ -1446,6 +1407,10 @@ void UploadReadbackContext::reclaimQueue(std::deque<InFlightBatch> &queue, std::
     while (!queue.empty())
     {
         waitTimelineValue(timelineSemaphore, queue.front().signalValue);
+        if (requiresCpuConsumption && !queue.front().ringReclaimable)
+        {
+            spillReadback(queue.front());
+        }
         reclaimQueue(queue, reclaimCursor, queryTimelineValue(timelineSemaphore));
         if (auto allocation = tryReserve())
         {
@@ -1474,17 +1439,20 @@ void UploadReadbackContext::reclaimQueue(std::deque<InFlightBatch> &queue, std::
 }
 
 void UploadReadbackContext::addInFlight(std::deque<InFlightBatch> &queue, const RingAllocation &allocation,
-                                        std::uint64_t signalValue, vk::raii::CommandBuffers commandBuffers)
+                                        std::uint64_t signalValue, bool ringReclaimable,
+                                        vk::raii::CommandBuffers commandBuffers)
 {
     if (!queue.empty())
     {
         nrAssert(signalValue > queue.back().signalValue, "Timeline signal values must be strictly increasing.");
     }
     queue.push_back(InFlightBatch{
-        allocation.begin,
         allocation.end,
         signalValue,
-        std::optional<vk::raii::CommandBuffers>{std::move(commandBuffers)},
+        allocation.offset,
+        static_cast<vk::DeviceSize>(allocation.end - allocation.begin),
+        ringReclaimable,
+        std::move(commandBuffers),
     });
 }
 } // namespace nr::rhi::ops

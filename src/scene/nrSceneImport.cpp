@@ -104,10 +104,9 @@ struct MetallicRoughnessFactorSet
 namespace nr::scene
 {
 void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                           TemplateRegistrationTransaction &transaction,
                            std::vector<nr::resource::TextureHandle> &textureHandlesBySource)
 {
-    auto const colorHints = detail::buildTextureColorSpaceHints(sceneAsset);
-
     std::ranges::for_each(plan.textures, [&](const TextureBridgeInput &entry) {
         if (entry.sourceIndex >= sceneAsset.textures.size())
         {
@@ -130,6 +129,7 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
         if (created)
         {
             textureHandles_.push_back(handle);
+            transaction.recordCreated(handle);
         }
 
         textureHandlesBySource[entry.sourceIndex] = handle;
@@ -149,9 +149,7 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
         }
 
         auto const &sourceTexture = sceneAsset.textures[entry.sourceIndex];
-        auto const hint =
-            entry.sourceIndex < colorHints.size() ? colorHints[entry.sourceIndex] : detail::TextureColorSpaceHint{};
-        if (hint.hasColor && hint.hasLinear)
+        if (entry.mixedColorAndLinearReferences)
         {
             reportImport<nr::LogLevel::warning>(
                 ImportStage::texture,
@@ -163,7 +161,7 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
         auto texture = nr::resource::Texture{};
         texture.name = sourceTexture.key;
         texture.sourcePath = sourceTexture.resolvedPath;
-        texture.srgb = hint.preferSrgb;
+        texture.srgb = entry.samplingColorIntent == TextureSamplingColorIntent::srgb;
 
         if (sourceTexture.decodedImage.has_value())
         {
@@ -217,15 +215,11 @@ void Scene::bridgeTextures(const nr::load::SceneAsset &sceneAsset, const SceneBr
 
         record->cpu = std::move(texture);
         record->cpuReady = true;
-        record->uploadQueued = false;
-        if (record->cpuVersion == 0u)
-        {
-            record->cpuVersion = 1u;
-        }
     });
 }
 
 void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                            TemplateRegistrationTransaction &transaction,
                             const std::vector<nr::resource::TextureHandle> &textureHandlesBySource,
                             std::vector<nr::resource::MaterialHandle> &materialHandlesBySource)
 {
@@ -286,7 +280,7 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
 
         if (created)
         {
-            materialHandles_.push_back(handle);
+            transaction.recordCreated(handle);
         }
 
         materialHandlesBySource[entry.sourceIndex] = handle;
@@ -536,15 +530,11 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
 
         record->cpu = std::move(material);
         record->cpuReady = true;
-        record->uploadQueued = false;
-        if (record->cpuVersion == 0u)
-        {
-            record->cpuVersion = 1u;
-        }
     });
 }
 
 void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                         TemplateRegistrationTransaction &transaction,
                          const std::vector<nr::resource::MaterialHandle> &materialHandlesBySource,
                          std::vector<nr::resource::MeshHandle> &meshHandlesBySource)
 {
@@ -568,7 +558,7 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
 
         if (created)
         {
-            materialHandles_.push_back(handle);
+            transaction.recordCreated(handle);
         }
 
         auto *record = materials_.tryGet(handle);
@@ -578,11 +568,6 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
             material.name = "default_material";
             record->cpu = std::move(material);
             record->cpuReady = true;
-            record->uploadQueued = false;
-            if (record->cpuVersion == 0u)
-            {
-                record->cpuVersion = 1u;
-            }
         }
 
         defaultMaterialHandle = handle;
@@ -611,6 +596,7 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         if (created)
         {
             meshHandles_.push_back(handle);
+            transaction.recordCreated(handle);
         }
 
         meshHandlesBySource[entry.sourceIndex] = handle;
@@ -787,15 +773,11 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
 
         record->cpu = std::move(mesh);
         record->cpuReady = true;
-        record->uploadQueued = false;
-        if (record->cpuVersion == 0u)
-        {
-            record->cpuVersion = 1u;
-        }
     });
 }
 
 void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                          TemplateRegistrationTransaction &transaction,
                           std::vector<nr::resource::CameraAssetHandle> &cameraHandlesBySource)
 {
     constexpr auto kEpsilon = 1e-4f;
@@ -822,7 +804,7 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
 
         if (created)
         {
-            cameraHandles_.push_back(handle);
+            transaction.recordCreated(handle);
         }
 
         cameraHandlesBySource[entry.sourceIndex] = handle;
@@ -944,15 +926,11 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
 
         record->cpu = std::move(camera);
         record->cpuReady = true;
-        record->uploadQueued = false;
-        if (record->cpuVersion == 0u)
-        {
-            record->cpuVersion = 1u;
-        }
     });
 }
 
 void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBridgePlan &plan,
+                         TemplateRegistrationTransaction &transaction,
                          std::vector<nr::resource::LightAssetHandle> &lightHandlesBySource)
 {
     constexpr auto kEpsilon = 1e-4f;
@@ -990,7 +968,7 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
 
         if (created)
         {
-            lightHandles_.push_back(handle);
+            transaction.recordCreated(handle);
         }
 
         lightHandlesBySource[entry.sourceIndex] = handle;
@@ -1078,11 +1056,6 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
 
         record->cpu = std::move(light);
         record->cpuReady = true;
-        record->uploadQueued = false;
-        if (record->cpuVersion == 0u)
-        {
-            record->cpuVersion = 1u;
-        }
     });
 }
 

@@ -12,28 +12,9 @@ constexpr vk::DeviceSize kWholeBufferRange = std::numeric_limits<vk::DeviceSize>
 
 [[nodiscard]] std::optional<vk::DescriptorType> toVkDescriptorType(slang::BindingType bindingType);
 
-[[nodiscard]] vk::ShaderStageFlags toVkShaderStageFlags(std::optional<SlangStage> stage);
-
 [[nodiscard]] bool isUnboundedDescriptorCount(SlangInt descriptorCount);
 
 [[nodiscard]] bool isInlineUniformByteCountValid(std::uint32_t byteCount);
-
-template <typename T, T DefaultValue>
-[[nodiscard]] std::uint32_t sanitizeCountOrSize(T value, bool invalidIfZero = true)
-{
-    if constexpr (std::is_signed_v<T>)
-    {
-        if (value <= (invalidIfZero ? 0 : -1) || value > static_cast<T>(std::numeric_limits<std::uint32_t>::max()))
-            return DefaultValue;
-    }
-    else
-    {
-        if ((invalidIfZero && value == 0) || value == std::numeric_limits<T>::max() ||
-            value > std::numeric_limits<std::uint32_t>::max())
-            return DefaultValue;
-    }
-    return static_cast<std::uint32_t>(value);
-}
 
 [[nodiscard]] std::uint32_t sanitizePushConstantSize(std::size_t byteSize);
 
@@ -62,13 +43,6 @@ struct CursorAddress
     std::uint32_t bindingArrayIndex = 0;
 };
 
-enum class ShaderBindingPhase : unsigned
-{
-    Layout,
-    DescriptorWrite,
-    CommandRecord,
-};
-
 enum class ShaderBindingKind : unsigned
 {
     None,
@@ -94,31 +68,13 @@ enum class ShaderDescriptorSemantic : unsigned
     Unsupported,
 };
 
-enum class RuntimeDescriptorArraySetPolicy : unsigned
-{
-    PreserveShaderSets,
-    RequireSemanticMultiSet,
-};
-
-struct RuntimeDescriptorArraySetConvention
-{
-    std::uint32_t samplerSet = 0;
-    std::uint32_t sampledImageSet = 1;
-    std::uint32_t storageImageSet = 2;
-    std::uint32_t bufferSet = 3;
-    std::uint32_t accelerationStructureSet = 4;
-};
-
 [[nodiscard]] std::string_view shaderDescriptorSemanticName(ShaderDescriptorSemantic semantic) noexcept;
 
 [[nodiscard]] ShaderDescriptorSemantic descriptorSemantic(vk::DescriptorType descriptorType) noexcept;
 
 [[nodiscard]] bool supportsImmutableSampler(vk::DescriptorType descriptorType) noexcept;
 
-[[nodiscard]] bool usesDynamicDescriptorOffset(vk::DescriptorType descriptorType) noexcept;
-
-[[nodiscard]] std::optional<std::uint32_t> runtimeDescriptorArraySetFor(
-    ShaderDescriptorSemantic semantic, const RuntimeDescriptorArraySetConvention &convention) noexcept;
+[[nodiscard]] std::optional<std::uint32_t> runtimeDescriptorArraySetFor(ShaderDescriptorSemantic semantic) noexcept;
 
 struct DescriptorBindingInfo
 {
@@ -126,28 +82,21 @@ struct DescriptorBindingInfo
     std::uint32_t binding = 0;
     std::uint32_t descriptorCount = 1;
     bool isRuntimeSized = false;
+    bool usesImmutableSampler = false;
     vk::DescriptorType descriptorType = vk::DescriptorType::eStorageBuffer;
     vk::ShaderStageFlags stageFlags = vk::ShaderStageFlagBits::eAll;
     vk::DescriptorBindingFlags bindingFlags{};
     std::uint32_t bindingRangeIndex = 0;
-    std::optional<std::uint32_t> expectedRuntimeSet{};
     std::string debugPath;
 
     [[nodiscard]] bool supportsVariableDescriptorCount() const noexcept;
 
     [[nodiscard]] bool isPartiallyBound() const noexcept;
 
-    [[nodiscard]] bool isUpdateAfterBind() const noexcept;
-
     [[nodiscard]] ShaderDescriptorSemantic semantic() const noexcept;
 
     [[nodiscard]] bool supportsImmutableSampler() const noexcept;
 
-    [[nodiscard]] bool usesDynamicDescriptorOffset() const noexcept;
-
-    [[nodiscard]] bool followsExpectedRuntimeSet() const noexcept;
-
-    [[nodiscard]] bool hasPhase(ShaderBindingPhase phase) const noexcept;
 };
 
 struct DescriptorSetLayoutInfo
@@ -164,7 +113,6 @@ struct PushConstantRangeInfo
     std::uint32_t bindingRangeIndex = 0;
     std::string debugPath;
 
-    [[nodiscard]] bool hasPhase(ShaderBindingPhase phase) const noexcept;
 };
 
 struct ShaderDescriptorAbiBinding
@@ -200,31 +148,22 @@ struct ShaderLayoutAbiSignature
                                          const ShaderLayoutAbiSignature &) noexcept = default;
 };
 
-struct ShaderBindingReflection
-{
-    ShaderBindingKind kind = ShaderBindingKind::None;
-    std::optional<DescriptorBindingInfo> descriptorBinding{};
-    std::optional<PushConstantRangeInfo> pushConstantRange{};
-
-    [[nodiscard]] bool hasPhase(ShaderBindingPhase phase) const noexcept;
-
-    [[nodiscard]] std::optional<ShaderDescriptorSemantic> descriptorSemantic() const noexcept;
-
-    [[nodiscard]] bool supportsImmutableSampler() const noexcept;
-
-    [[nodiscard]] bool usesDynamicDescriptorOffset() const noexcept;
-};
-
 struct BufferDescriptorWrite
 {
     vk::Buffer buffer{};
     vk::DeviceSize offset = 0;
     vk::DeviceSize range = detail::kWholeBufferRange;
+
+    [[nodiscard]] friend bool operator==(const BufferDescriptorWrite &, const BufferDescriptorWrite &) noexcept =
+        default;
 };
 
 struct TexelBufferDescriptorWrite
 {
     vk::BufferView view{};
+
+    [[nodiscard]] friend bool operator==(const TexelBufferDescriptorWrite &,
+                                         const TexelBufferDescriptorWrite &) noexcept = default;
 };
 
 struct ImageDescriptorWrite
@@ -232,16 +171,25 @@ struct ImageDescriptorWrite
     vk::ImageView imageView{};
     vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
     vk::Sampler sampler{};
+
+    [[nodiscard]] friend bool operator==(const ImageDescriptorWrite &, const ImageDescriptorWrite &) noexcept =
+        default;
 };
 
 struct AccelerationStructureDescriptorWrite
 {
     vk::AccelerationStructureKHR accelerationStructure{};
+
+    [[nodiscard]] friend bool operator==(const AccelerationStructureDescriptorWrite &,
+                                         const AccelerationStructureDescriptorWrite &) noexcept = default;
 };
 
 struct InlineUniformDescriptorWrite
 {
     std::vector<std::uint8_t> data;
+
+    [[nodiscard]] friend bool operator==(const InlineUniformDescriptorWrite &,
+                                         const InlineUniformDescriptorWrite &) noexcept = default;
 };
 
 using DescriptorWritePayload = std::variant<BufferDescriptorWrite, TexelBufferDescriptorWrite, ImageDescriptorWrite,
@@ -255,71 +203,10 @@ struct DescriptorWriteRequest
     bool forceWrite = false;
 };
 
-struct DescriptorWriteSlotKey
-{
-    std::uint32_t set = 0;
-    std::uint32_t binding = 0;
-    std::uint32_t arrayElement = 0;
-    vk::DescriptorType descriptorType = vk::DescriptorType::eStorageBuffer;
-
-    [[nodiscard]] friend auto operator<=>(const DescriptorWriteSlotKey &,
-                                          const DescriptorWriteSlotKey &) noexcept = default;
-};
-
-struct BufferDescriptorPayloadKey
-{
-    vk::Buffer buffer{};
-    vk::DeviceSize offset = 0;
-    vk::DeviceSize range = detail::kWholeBufferRange;
-
-    [[nodiscard]] friend bool operator==(const BufferDescriptorPayloadKey &,
-                                         const BufferDescriptorPayloadKey &) noexcept = default;
-};
-
-struct TexelBufferDescriptorPayloadKey
-{
-    vk::BufferView view{};
-
-    [[nodiscard]] friend bool operator==(const TexelBufferDescriptorPayloadKey &,
-                                         const TexelBufferDescriptorPayloadKey &) noexcept = default;
-};
-
-struct ImageDescriptorPayloadKey
-{
-    vk::ImageView imageView{};
-    vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    vk::Sampler sampler{};
-
-    [[nodiscard]] friend bool operator==(const ImageDescriptorPayloadKey &,
-                                         const ImageDescriptorPayloadKey &) noexcept = default;
-};
-
-struct AccelerationStructureDescriptorPayloadKey
-{
-    vk::AccelerationStructureKHR accelerationStructure{};
-
-    [[nodiscard]] friend bool operator==(const AccelerationStructureDescriptorPayloadKey &,
-                                         const AccelerationStructureDescriptorPayloadKey &) noexcept = default;
-};
-
-struct InlineUniformDescriptorPayloadKey
-{
-    std::vector<std::uint8_t> data;
-
-    [[nodiscard]] friend bool operator==(const InlineUniformDescriptorPayloadKey &,
-                                         const InlineUniformDescriptorPayloadKey &) noexcept = default;
-};
-
-using DescriptorWritePayloadKey =
-    std::variant<BufferDescriptorPayloadKey, TexelBufferDescriptorPayloadKey, ImageDescriptorPayloadKey,
-                 AccelerationStructureDescriptorPayloadKey, InlineUniformDescriptorPayloadKey>;
-
 class DescriptorWriteCache
 {
   public:
     void clear() noexcept;
-
-    [[nodiscard]] std::uint64_t version() const noexcept;
 
     [[nodiscard]] std::vector<DescriptorWriteRequest> filterChanged(
         std::span<const DescriptorWriteRequest> writeRequests) const;
@@ -327,18 +214,24 @@ class DescriptorWriteCache
     void commit(std::span<const DescriptorWriteRequest> writeRequests);
 
   private:
-    std::map<DescriptorWriteSlotKey, DescriptorWritePayloadKey> payloadsBySlot_{};
-    std::uint64_t version_ = 0;
+    std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t, vk::DescriptorType>, DescriptorWritePayload>
+        payloadsBySlot_{};
 };
 
-[[nodiscard]] std::vector<DescriptorWriteRequest> filterChangedDescriptorWrites(
-    DescriptorWriteCache &cache, std::span<const DescriptorWriteRequest> writeRequests);
-
-void commitDescriptorWrites(DescriptorWriteCache &cache, std::span<const DescriptorWriteRequest> writeRequests);
-
+/**
+ * @brief Move-only descriptor-set ownership allocated from a ShaderBindingPool.
+ *
+ * The issuing pool must outlive the set. Destruction returns the set to that pool.
+ */
 class ShaderBindingSet
 {
   public:
+    ShaderBindingSet() = default;
+    ShaderBindingSet(const ShaderBindingSet &) = delete;
+    ShaderBindingSet &operator=(const ShaderBindingSet &) = delete;
+    ShaderBindingSet(ShaderBindingSet &&) noexcept = default;
+    ShaderBindingSet &operator=(ShaderBindingSet &&) noexcept = default;
+
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] vk::DescriptorSet raw() const noexcept;
     [[nodiscard]] std::uint32_t setIndex() const noexcept;
@@ -346,56 +239,38 @@ class ShaderBindingSet
 
   private:
     friend class ShaderBindingPool;
-    vk::DescriptorSet set_{};
+    vk::raii::DescriptorSet set_ = {nullptr};
+    vk::DescriptorPool descriptorPool_{};
     std::uint32_t setIndex_ = 0;
     std::map<std::uint32_t, std::uint32_t> allocatedDescriptorCountByBinding_{};
 };
 
 class ShaderDescriptorLayout;
 class ShaderCursor;
-class CursorPipelineLayout;
-
-enum class ShaderBindingPoolPolicy : unsigned
-{
-    FrameReset,
-    PersistentFreeable,
-};
-
-struct ShaderBindingPoolConfig
-{
-    std::uint32_t maxSets = 64;
-    std::uint32_t defaultVariableDescriptorCount = 1024;
-    ShaderBindingPoolPolicy policy = ShaderBindingPoolPolicy::FrameReset;
-    vk::DescriptorPoolCreateFlags extraFlags{};
-};
 
 struct DescriptorBindingPolicy
 {
-    bool enableUpdateAfterBind = true;
-    bool enablePartiallyBound = true;
-    bool enableVariableDescriptorCount = true;
     std::uint32_t defaultRuntimeDescriptorCount = 1024;
-    RuntimeDescriptorArraySetPolicy runtimeArraySetPolicy = RuntimeDescriptorArraySetPolicy::RequireSemanticMultiSet;
-    RuntimeDescriptorArraySetConvention runtimeArraySetConvention{};
 };
 
 class ShaderBindingPool
 {
   public:
+    // Allocation and descriptor updates are host-mutable and externally synchronized.
+    // The renderer performs them during serial prepare before parallel command recording.
     [[nodiscard]] static ShaderBindingPool create(const vk::raii::Device &device,
                                                   const ShaderDescriptorLayout &descriptorLayout,
-                                                  ShaderBindingPoolConfig config = {});
+                                                  std::uint32_t maxSets);
 
     [[nodiscard]] ShaderBindingSet allocate(vk::DescriptorSetLayout descriptorSetLayout, std::uint32_t setIndex,
-                                            std::optional<std::uint32_t> variableDescriptorCount = std::nullopt) const;
+                                            std::optional<std::uint32_t> variableDescriptorCount = std::nullopt);
 
-    void update(const ShaderBindingSet &set, std::span<const DescriptorWriteRequest> writeRequests) const;
-
-    void update(const ShaderBindingSet &set, const DescriptorWriteRequest &writeRequest) const;
+    void update(const ShaderBindingSet &set, std::span<const DescriptorWriteRequest> writeRequests);
 
   private:
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     vk::raii::DescriptorPool pool_ = {nullptr};
+    std::map<std::tuple<std::uint32_t, std::uint32_t>, DescriptorBindingInfo> bindings_{};
     std::map<std::uint32_t, std::map<std::uint32_t, std::uint32_t>> variableDescriptorCapBySetAndBinding_{};
 };
 
@@ -458,15 +333,15 @@ using LogicalDescriptorResolver = std::function<std::optional<DescriptorWritePay
 [[nodiscard]] std::vector<DescriptorWriteRequest> resolveDescriptorWriteRequests(
     const ShaderBindingSnapshot &snapshot, LogicalDescriptorResolver logicalResolver = {});
 
-class ShaderDescriptorLayout;
-
 class ShaderCursor
 {
   public:
     // Cursor guide:
     // - The cursor carries reflection type info, a logical write address, and shared mutable binding state.
     // - Copied sub-cursors write into one coherent binding snapshot.
-    // - bindingReflection() classifies Vulkan shader-interface semantics without touching GPU objects.
+    // - Cursors and their snapshots are collected by one prepare thread; shared write state is not synchronized.
+    // - A cursor must not outlive the ShaderDescriptorLayout that created it.
+    // - Binding queries classify Vulkan shader-interface semantics without touching GPU objects.
     // - setObject(...) records descriptor-backed resources (or logical graph references).
     // - setData(...) records push constants or inline uniform bytes.
     // - snapshot() captures a stable per-pass binding view for execute-time replay.
@@ -491,17 +366,9 @@ class ShaderCursor
 
     [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange() const;
 
-    [[nodiscard]] ShaderBindingReflection bindingReflection() const;
-
     [[nodiscard]] ShaderBindingKind bindingKind() const;
 
-    [[nodiscard]] bool hasBindingPhase(ShaderBindingPhase phase) const;
-
     [[nodiscard]] std::optional<ShaderDescriptorSemantic> descriptorSemantic() const;
-
-    [[nodiscard]] bool supportsImmutableSampler() const;
-
-    [[nodiscard]] bool usesDynamicDescriptorOffset() const;
 
     [[nodiscard]] std::optional<SlangImmutableSamplerBinding> makeImmutableSamplerBinding(
         SlangSamplerDesc samplerDesc) const;
@@ -545,34 +412,6 @@ class ShaderCursor
 
     void clearSnapshot() const;
 
-    // Cursor layout/type reflection helpers for runtime binding.
-    [[nodiscard]] slang::TypeReflection::Kind kind() const noexcept;
-
-    [[nodiscard]] std::string typeName() const;
-
-    [[nodiscard]] std::uint32_t fieldCount() const noexcept;
-
-    [[nodiscard]] std::optional<std::uint32_t> elementCount() const;
-
-    [[nodiscard]] std::optional<std::size_t> size(
-        slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
-
-    [[nodiscard]] std::optional<std::size_t> stride(
-        slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
-
-    [[nodiscard]] std::optional<std::int32_t> alignment(
-        slang::ParameterCategory category = slang::ParameterCategory::Uniform) const;
-
-    [[nodiscard]] std::vector<slang::ParameterCategory> categories() const;
-
-    [[nodiscard]] std::optional<SlangResourceShape> resourceShape() const;
-
-    [[nodiscard]] std::optional<SlangResourceAccess> resourceAccess() const;
-
-    [[nodiscard]] slang::TypeReflection *resourceResultType() const noexcept;
-
-    [[nodiscard]] std::optional<std::uint32_t> resourceResultElementCount() const;
-
     // Slang-style convenience accessors:
     // - cursor["field"] -> field lookup
     // - cursor[index]   -> array/vector/matrix/struct element lookup
@@ -581,15 +420,15 @@ class ShaderCursor
         return field(fieldName);
     }
 
-    [[nodiscard]] ShaderCursor operator[](const char *fieldName) const
-    {
-        return field(fieldName ? std::string_view(fieldName) : std::string_view{});
-    }
-
     template <typename TIndex>
         requires(std::integral<std::remove_cvref_t<TIndex>> && !std::same_as<std::remove_cvref_t<TIndex>, bool>)
     [[nodiscard]] ShaderCursor operator[](TIndex index) const
     {
+        if constexpr (std::signed_integral<std::remove_cvref_t<TIndex>>)
+        {
+            nrAssert(index >= 0, "ShaderCursor array index must not be negative.");
+        }
+        nrAssert(std::in_range<std::uint32_t>(index), "ShaderCursor array index exceeds uint32.");
         return element(static_cast<std::uint32_t>(index));
     }
 
@@ -670,8 +509,7 @@ class ShaderDescriptorLayout
     // - Output:
     //   1) descriptor set layout metadata (set/binding/type/count/stageFlags)
     //   2) push constant ranges (for command recording time via vkCmdPushConstants)
-    //   3) Vulkan shader-binding phase metadata for cursor queries
-    //   4) root field map for cursor traversal.
+    //   3) root field map for cursor traversal.
     //
     // Pseudocode:
     //   layout = ShaderDescriptorLayout::create(program)
@@ -680,9 +518,11 @@ class ShaderDescriptorLayout
     //   binding = cursor.descriptorBinding() // -> set/binding/type
     //
     // PushConstant timing note:
+    // The layout retains the source SlangProgram so its reflection pointers remain valid.
 
     [[nodiscard]] static ShaderDescriptorLayout create(const SlangProgram &program,
-                                                       DescriptorBindingPolicy policy = {});
+                                                       DescriptorBindingPolicy policy = {},
+                                                       std::span<const SlangImmutableSamplerBinding> immutableSamplers = {});
 
     [[nodiscard]] bool valid() const noexcept;
 
@@ -691,10 +531,6 @@ class ShaderDescriptorLayout
     [[nodiscard]] std::vector<vk::DescriptorSetLayoutBinding> makeVkSetLayoutBindings(std::uint32_t setIndex) const;
 
     [[nodiscard]] std::vector<vk::DescriptorBindingFlags> makeVkSetLayoutBindingFlags(std::uint32_t setIndex) const;
-
-    [[nodiscard]] bool requiresUpdateAfterBindPool() const;
-
-    [[nodiscard]] std::span<const PushConstantRangeInfo> pushConstantRanges() const noexcept;
 
     [[nodiscard]] std::optional<PushConstantRangeInfo> pushConstantRange(const ShaderCursor &cursor) const;
 
@@ -712,6 +548,7 @@ class ShaderDescriptorLayout
     [[nodiscard]] std::optional<DescriptorBindingInfo> findBindingByRangeIndex(std::uint32_t bindingRangeIndex) const;
 
     bool isValid_ = false;
+    SlangProgram reflectionProgram_{};
     std::map<std::string, ShaderCursor::RootField> rootFields_;
     std::map<std::uint32_t, DescriptorBindingInfo> bindingByRangeIndex_;
     std::map<std::uint32_t, PushConstantRangeInfo> pushConstantByRangeIndex_;
@@ -730,16 +567,6 @@ class ShaderDescriptorLayout
 void assertShaderLayoutAbiStable(const SlangProgram &baselineProgram, const SlangProgram &variantProgram,
                                  DescriptorBindingPolicy policy = {}, std::string_view debugName = {});
 
-[[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(const CursorPipelineLayout &layout,
-                                                                         ShaderBindingPool &pool);
-
-[[nodiscard]] std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
-    const CursorPipelineLayout &layout, ShaderBindingPool &pool,
-    const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
-
-void pushConstantsToCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, const CursorPipelineLayout &layout,
-                                  const ShaderBindingSnapshot &snapshot);
-
 template <typename FieldLayout>
 [[nodiscard]] ShaderCursor ShaderCursor::fieldCursorFromLayout(FieldLayout &fieldLayout, std::uint32_t fieldIndex,
                                                                std::string debugPath) const
@@ -751,15 +578,21 @@ template <typename FieldLayout>
 
     ShaderCursor next = *this;
     next.typeLayout_ = fieldTypeLayout;
-    next.address_.uniformOffset += fieldLayout.getOffset();
-    next.address_.bindingRangeIndex +=
+    auto fieldOffset = fieldLayout.getOffset();
+    nrAssert(fieldOffset <= std::numeric_limits<std::size_t>::max() - next.address_.uniformOffset,
+             std::format("ShaderCursor field uniform offset overflows size_t. fieldIndex={}, fieldOffset={}, cursor={}",
+                         fieldIndex, fieldOffset, debugSummary()));
+    next.address_.uniformOffset += fieldOffset;
+
+    auto bindingRangeOffset =
         detail::sanitizeRangeOffset(typeLayout_->getFieldBindingRangeOffset(static_cast<SlangInt>(fieldIndex)));
+    nrAssert(bindingRangeOffset <= std::numeric_limits<std::uint32_t>::max() - next.address_.bindingRangeIndex,
+             std::format("ShaderCursor field binding range overflows uint32. fieldIndex={}, rangeOffset={}, cursor={}",
+                         fieldIndex, bindingRangeOffset, debugSummary()));
+    next.address_.bindingRangeIndex += bindingRangeOffset;
     next.isRoot_ = false;
     next.debugPath_ = std::move(debugPath);
     return next;
 }
-
-[[nodiscard]] std::vector<DescriptorWriteRequest> resolveDescriptorWriteRequests(
-    const ShaderBindingSnapshot &snapshot, LogicalDescriptorResolver logicalResolver);
 
 } // namespace nr::rhi
