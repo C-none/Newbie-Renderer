@@ -97,7 +97,7 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
         auto const properties = device.getProperties();
         auto const deviceName = std::string_view{properties.deviceName.data()};
         auto reject = [&](std::string_view reason) {
-            nrInfo<LogLevel::warning>(std::format("Rejected Vulkan physical device '{}': {}", deviceName, reason));
+            nrLog<LogLevel::warning>("Rejected Vulkan physical device '{}': {}", deviceName, reason);
         };
 
         if (properties.vendorID != nvidiaVendorID)
@@ -166,7 +166,7 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
         bool found = std::ranges::any_of(layerProperties, [layer](const vk::LayerProperties &lp) {
             return layer == std::string_view(lp.layerName);
         });
-        nrAssert(found, std::format("Requested layer '{}' is not available.", layer));
+        nrAssert(found, "Requested layer '{}' is not available.", layer);
         enabledLayers.emplace_back(layer.data());
     }
     return enabledLayers;
@@ -193,7 +193,7 @@ constexpr char validationLayerName[] = "VK_LAYER_KHRONOS_validation";
         bool found = std::ranges::any_of(extensionProperties, [extension](const vk::ExtensionProperties &ep) {
             return extension == std::string_view(ep.extensionName);
         });
-        nrAssert(found, std::format("Requested extension '{}' is not available.", extension));
+        nrAssert(found, "Requested extension '{}' is not available.", extension);
         enabledExtensions.emplace_back(extension.data());
     }
     return enabledExtensions;
@@ -275,7 +275,20 @@ vk::Bool32 debugUtilsMessengerCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT 
     {
         level = LogLevel::warning;
     }
-    nrVulkan(level, logMessage);
+    switch (level)
+    {
+    case LogLevel::info:
+        nrVulkan<LogLevel::info>("{}", logMessage);
+        break;
+    case LogLevel::warning:
+        nrVulkan<LogLevel::warning>("{}", logMessage);
+        break;
+    case LogLevel::error:
+        nrVulkan<LogLevel::error>("{}", logMessage);
+        break;
+    default:
+        break;
+    }
 
     return vk::False;
 }
@@ -349,8 +362,6 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
             "gpuav_descriptor_checks",
             "gpuav_post_process_descriptor_indexing",
             "gpuav_buffer_address_oob",
-            "gpuav_mesh_shading",
-            "gpuav_validate_ray_query",
             "gpuav_validate_trace_ray",
             "gpuav_vertex_attribute_fetch_oob",
             "gpuav_shader_sanitizer",
@@ -377,9 +388,9 @@ DebugValidationLayerSettings::DebugValidationLayerSettings()
             "gpu_dump_copy_memory_indirect",
             "gpu_dump_device_generated_commands",
             "gpu_dump_to_stdout",
-            "gpu_dump_device_copy",
             "enable_message_limit",
             "message_format_json",
+            "gpuav_mesh_shading",
         },
         false);
 

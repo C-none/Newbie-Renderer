@@ -55,17 +55,15 @@ void ModelHistory::save() const
     std::filesystem::create_directories(storagePath_.parent_path(), ec);
     if (ec)
     {
-        nr::nrLog(nr::LogLevel::warning, "PIPELINE",
-                  std::format("Failed to create model history directory '{}': {}", storagePath_.parent_path().string(),
-                              ec.message()));
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">(
+            "Failed to create model history directory '{}': {}", storagePath_.parent_path().string(), ec.message());
         return;
     }
 
     auto output = std::ofstream{storagePath_, std::ios::trunc};
     if (!output)
     {
-        nr::nrLog(nr::LogLevel::warning, "PIPELINE",
-                  std::format("Failed to write model history '{}'.", storagePath_.string()));
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("Failed to write model history '{}'.", storagePath_.string());
         return;
     }
 
@@ -109,46 +107,53 @@ void ModelHistory::trimToLimit()
     }
 }
 
-[[nodiscard]] ModelLoadReport SceneModelController::loadModel(
-    nr::app::AppSession &app, const std::filesystem::path &modelPath,
-    std::optional<std::reference_wrapper<ModelHistory>> history)
+[[nodiscard]] SceneModelController::ModelCpuLoadResult SceneModelController::loadModelCpu(
+    const std::filesystem::path &modelPath)
 {
     auto normalizedPath = normalizeModelPathForStorage(modelPath);
     if (normalizedPath.empty())
     {
-        return ModelLoadReport{
+        return std::unexpected(ModelLoadReport{
             .message = std::format("Model path is invalid or outside the assets root: {}", modelPath.generic_string()),
-        };
+        });
     }
 
     auto resolvedPath = resolveModelAssetPath(normalizedPath);
     if (!resolvedPath)
     {
-        return ModelLoadReport{
+        return std::unexpected(ModelLoadReport{
             .modelPath = normalizedPath,
             .message = std::move(resolvedPath.error()),
-        };
+        });
     }
 
-    nr::nrLog(nr::LogLevel::info, "PIPELINE", std::format("Loading model: {}", resolvedPath->string()));
-    auto loadResult = nr::load::loadScene(nr::load::SceneLoadRequest{
+    nr::nrLog<nr::LogLevel::info, "PIPELINE">("Loading model: {}", resolvedPath->string());
+    auto sceneLoad = nr::load::loadScene(nr::load::SceneLoadRequest{
         .sourcePath = *resolvedPath,
     });
-    if (!loadResult.has_value())
+    if (!sceneLoad.has_value())
     {
-        return ModelLoadReport{
+        return std::unexpected(ModelLoadReport{
             .modelPath = normalizedPath,
-            .message = std::format("Failed to load model: {}", loadResult.error().message),
-        };
+            .message = std::format("Failed to load model: {}", sceneLoad.error().message),
+        });
     }
 
-    auto &sceneAsset = loadResult.value();
+    return ModelCpuLoad{std::move(normalizedPath), std::move(*sceneLoad)};
+}
+
+[[nodiscard]] ModelLoadReport SceneModelController::commitModel(
+    nr::app::AppSession &app, SceneModelController::ModelCpuLoad &&loadedModel,
+    std::optional<std::reference_wrapper<ModelHistory>> history)
+{
+    auto normalizedModelPath = std::move(loadedModel.normalizedModelPath_);
+    auto sceneAsset = std::move(loadedModel.sceneAsset_);
     auto candidate = app.makeSceneCandidate();
     auto templateHandle = candidate->registerTemplate(sceneAsset);
     if (!templateHandle.valid())
     {
         return ModelLoadReport{
-            .modelPath = normalizedPath,
+            .modelPath = normalizedModelPath,
             .message = "Failed to register scene template.",
         };
     }
@@ -157,29 +162,42 @@ void ModelHistory::trimToLimit()
     if (!instanceHandle.valid())
     {
         return ModelLoadReport{
-            .modelPath = normalizedPath,
+            .modelPath = normalizedModelPath,
             .message = "Failed to instantiate scene.",
         };
     }
 
     app.commitScene(std::move(candidate));
     app.resetCameraFromSceneOrDefault();
-    currentModelPath_ = normalizedPath;
+    currentModelPath_ = normalizedModelPath;
 
     if (history.has_value())
     {
-        history->get().noteLoaded(normalizedPath);
+        history->get().noteLoaded(normalizedModelPath);
         history->get().save();
     }
 
     auto message = std::format("Loaded: {} meshes, {} vertices, {} indices, {} lights", sceneAsset.stats.meshCount,
                                sceneAsset.stats.vertexCount, sceneAsset.stats.indexCount, sceneAsset.stats.lightCount);
-    nr::nrLog(nr::LogLevel::info, "PIPELINE", message);
+    nr::nrLog<nr::LogLevel::info, "PIPELINE">("{}", message);
     return ModelLoadReport{
         .loaded = true,
-        .modelPath = normalizedPath,
+        .modelPath = std::move(normalizedModelPath),
         .message = std::move(message),
     };
+}
+
+[[nodiscard]] ModelLoadReport SceneModelController::loadModel(
+    nr::app::AppSession &app, const std::filesystem::path &modelPath,
+    std::optional<std::reference_wrapper<ModelHistory>> history)
+{
+    auto loadedModel = loadModelCpu(modelPath);
+    if (!loadedModel)
+    {
+        return std::move(loadedModel.error());
+    }
+
+    return commitModel(app, std::move(*loadedModel), history);
 }
 
 [[nodiscard]] const std::optional<std::filesystem::path> &SceneModelController::currentModelPath() const noexcept

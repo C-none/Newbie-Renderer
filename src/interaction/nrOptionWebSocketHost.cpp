@@ -100,20 +100,19 @@ class OptionWebSocketHost::Impl
             [](const network::TransportEvent &event) {
                 if (event.kind == network::TransportEventKind::responseWriteFailed)
                 {
-                    nrLog(LogLevel::warning, "OPTION_WS",
-                          event.startedResponseLost
-                              ? "WebSocket response transport failed after a mutation may have started."
-                              : "WebSocket response transport failed.");
+                    nrLog<LogLevel::warning, "OPTION_WS">(
+                        "{}", event.startedResponseLost
+                                  ? "WebSocket response transport failed after a mutation may have started."
+                                  : "WebSocket response transport failed.");
                 }
                 else if (event.kind == network::TransportEventKind::listenerError)
                 {
-                    nrLog(LogLevel::error, "OPTION_WS", "The loopback WebSocket listener failed.");
+                    nrLog<LogLevel::warning, "OPTION_WS">("The loopback WebSocket listener failed.");
                 }
                 else if (event.kind == network::TransportEventKind::connectionClosed && event.startedResponseLost)
                 {
-                    nrLog(LogLevel::warning, "OPTION_WS",
-                          "WebSocket connection closed after a mutation started response was prepared but not "
-                          "delivered.");
+                    nrLog<LogLevel::warning, "OPTION_WS">(
+                        "WebSocket connection closed after a mutation started response was prepared but not delivered.");
                 }
             });
         if (!result.started)

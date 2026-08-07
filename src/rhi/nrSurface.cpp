@@ -146,7 +146,7 @@ Surface::GlfwContext::~GlfwContext()
 
 void Surface::GlfwContext::errorCallback(int error, const char *msg)
 {
-    nrInfo<LogLevel::error>(std::format("glfw: (error number:{}) {}", error, msg));
+    nrLog<LogLevel::error>("glfw: (error number:{}) {}", error, msg);
 }
 
 [[nodiscard]] Surface::GlfwContext &Surface::glfwContext()
@@ -178,8 +178,7 @@ void Surface::ensureGlfwInitialized()
     if (createResult != vk::Result::eSuccess)
     {
         auto const resultName = vk::to_string(createResult);
-        nrInfo<LogLevel::error>(std::format("Surface::create GLFW Vulkan surface creation failed with {}.",
-                                            resultName));
+        nrLog<LogLevel::warning>("Surface::create GLFW Vulkan surface creation failed with {}.", resultName);
         nrAssert(false, "Surface::create failed to create the Vulkan window surface.");
         return {};
     }

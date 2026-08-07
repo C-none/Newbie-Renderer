@@ -20,14 +20,14 @@ constexpr vk::DeviceSize kRingAllocationAlignment = 16u;
 [[nodiscard]] std::uint64_t checkedAdd(std::uint64_t lhs, std::uint64_t rhs, std::string_view operation)
 {
     nrAssert(rhs <= std::numeric_limits<std::uint64_t>::max() - lhs,
-             std::format("{} overflows a 64-bit size.", operation));
+             "{} overflows a 64-bit size.", operation);
     return lhs + rhs;
 }
 
 [[nodiscard]] std::uint64_t checkedMultiply(std::uint64_t lhs, std::uint64_t rhs, std::string_view operation)
 {
     nrAssert(lhs == 0u || rhs <= std::numeric_limits<std::uint64_t>::max() / lhs,
-             std::format("{} overflows a 64-bit size.", operation));
+             "{} overflows a 64-bit size.", operation);
     return lhs * rhs;
 }
 
@@ -392,8 +392,8 @@ void copyImage2(const vk::raii::CommandBuffer &commandBuffer, vk::Image src, vk:
              "planLinearImageUploadChunks bufferImageHeight must cover the copied image height.");
     auto const rowStride = checkedMultiply(rowLength, elementSize, "linear image row stride");
     nrAssert(rowStride <= ringCapacity,
-             std::format("planLinearImageUploadChunks row size ({} bytes) exceeds upload ring capacity ({} bytes).",
-                         rowStride, ringCapacity));
+             "planLinearImageUploadChunks row size ({} bytes) exceeds upload ring capacity ({} bytes).", rowStride,
+             ringCapacity);
 
     auto const rowsPerChunk = static_cast<std::uint32_t>(
         std::min<vk::DeviceSize>(region.imageExtent.height, std::max<vk::DeviceSize>(1u, ringCapacity / rowStride)));
@@ -525,9 +525,9 @@ UploadReadbackContext::UploadReadbackContext(const vk::raii::Device &device, Res
     nrAssert(uploadRingSize >= kRingAllocationAlignment && readbackRingSize >= kRingAllocationAlignment &&
                  uploadRingSize % kRingAllocationAlignment == 0u &&
                  readbackRingSize % kRingAllocationAlignment == 0u,
-             std::format("UploadReadbackContext ring capacities must be multiples of {} bytes and at least that "
-                         "large (upload={}, readback={}).",
-                         kRingAllocationAlignment, uploadRingSize, readbackRingSize));
+             "UploadReadbackContext ring capacities must be multiples of {} bytes and at least that "
+             "large (upload={}, readback={}).",
+             kRingAllocationAlignment, uploadRingSize, readbackRingSize);
 
     vk::BufferCreateInfo uploadInfo{};
     uploadInfo.size = uploadRingSize;
@@ -818,8 +818,8 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
     nrAssert(std::in_range<vk::DeviceSize>(data.size_bytes()),
              "UploadReadbackContext::uploadImage payload exceeds the Vulkan device-size range.");
     nrAssert(static_cast<vk::DeviceSize>(data.size_bytes()) == payloadSize,
-             std::format("UploadReadbackContext::uploadImage payload size mismatch: data={} bytes, expected={} bytes.",
-                         static_cast<vk::DeviceSize>(data.size_bytes()), payloadSize));
+             "UploadReadbackContext::uploadImage payload size mismatch: data={} bytes, expected={} bytes.",
+             static_cast<vk::DeviceSize>(data.size_bytes()), payloadSize);
     auto const chunks = planLinearImageUploadChunks(effectiveRegion, bytesPerPixel(dst.format()), uploadCapacity_);
     nrAssert(!chunks.empty(), "UploadReadbackContext::uploadImage requires at least one upload chunk.");
 
@@ -1259,7 +1259,7 @@ void UploadReadbackContext::recordReadbackRingHostVisibilityBarrier(const vk::ra
     if (alignment <= 1)
         return value;
     nrAssert((alignment & (alignment - 1)) == 0,
-             std::format("UploadReadbackContext::alignUp requires power-of-2 alignment, got {}", alignment));
+             "UploadReadbackContext::alignUp requires power-of-2 alignment, got {}", alignment);
     return checkedAdd(value, alignment - 1u, "UploadReadbackContext ring alignment") & ~(alignment - 1u);
 }
 
@@ -1304,8 +1304,8 @@ void UploadReadbackContext::recordReadbackRingHostVisibilityBarrier(const vk::ra
         return 16;
     default:
         nrAssert(false,
-                 std::format("UploadReadbackContext::readbackImage unsupported format for readback size estimation: {}",
-                             vk::to_string(format)));
+                 "UploadReadbackContext::readbackImage unsupported format for readback size estimation: {}",
+                 vk::to_string(format));
         return 0;
     }
 }
@@ -1369,9 +1369,9 @@ void UploadReadbackContext::spillReadback(InFlightBatch &batch)
 {
     nrAssert(capacity > 0u, "UploadReadbackContext ring capacity must be non-zero.");
     nrAssert(size > 0u && size <= capacity,
-             std::format("UploadReadbackContext ring allocation size ({} bytes) exceeds ring capacity ({} bytes). "
-                         "Consider increasing the ring buffer size or using chunked uploads.",
-                         size, capacity));
+             "UploadReadbackContext ring allocation size ({} bytes) exceeds ring capacity ({} bytes). "
+             "Consider increasing the ring buffer size or using chunked uploads.",
+             size, capacity);
 
     reclaimQueue(queue, reclaimCursor, queryTimelineValue(timelineSemaphore));
 
@@ -1433,8 +1433,8 @@ void UploadReadbackContext::spillReadback(InFlightBatch &batch)
     }
 
     nrAssert(false,
-             std::format("UploadReadbackContext failed to reserve ring allocation of {} bytes with capacity {} bytes.",
-                         size, capacity));
+             "UploadReadbackContext failed to reserve ring allocation of {} bytes with capacity {} bytes.", size,
+             capacity);
     return RingAllocation{};
 }
 

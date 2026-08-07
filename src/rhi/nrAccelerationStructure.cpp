@@ -63,9 +63,8 @@ namespace nr::rhi
             catch (const vk::SystemError &error)
             {
                 auto errorText = std::string_view{error.what()};
-                nrInfo<LogLevel::error>(
-                    std::vformat("AccelerationStructureResource::create failed to set debug name '{}': {}",
-                                 std::make_format_args(result.name_, errorText)));
+                nrLog<LogLevel::warning>("AccelerationStructureResource::create failed to set debug name '{}': {}",
+                                       result.name_, errorText);
                 nrAssert(false, "AccelerationStructureResource::create failed to set a Vulkan debug object name.");
             }
         }
@@ -200,8 +199,8 @@ namespace nr::rhi
              "queryAccelerationStructureBuildSizes requires one max primitive count per geometry.");
 
     auto flagDiagnostics = detail::validateBuildFlagCombination(options);
-    nrAssert(flagDiagnostics.isValid, detail::formatMessage("queryAccelerationStructureBuildSizes invalid options: {}",
-                                                            flagDiagnostics.message));
+    nrAssert(flagDiagnostics.isValid, "queryAccelerationStructureBuildSizes invalid options: {}",
+             flagDiagnostics.message);
 
     vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
     buildInfo.type = type;
@@ -254,8 +253,7 @@ namespace nr::rhi
                                                vk::AccelerationStructureBuildTypeKHR buildType)
 {
     auto geometryDiagnostics = detail::validateBlasGeometryRecords(geometries);
-    nrAssert(geometryDiagnostics.isValid,
-             detail::formatMessage("queryBlasBuildSizes invalid geometry: {}", geometryDiagnostics.message));
+    nrAssert(geometryDiagnostics.isValid, "queryBlasBuildSizes invalid geometry: {}", geometryDiagnostics.message);
 
     auto vkGeometries = geometries |
                         std::views::transform([](const BlasGeometryRecord &record) { return record.geometry; }) |
@@ -277,8 +275,7 @@ namespace nr::rhi
     nrAssert(input.instanceCount > 0, "queryTlasBuildSizes requires instanceCount > 0.");
 
     auto flagDiagnostics = detail::validateBuildFlagCombination(options);
-    nrAssert(flagDiagnostics.isValid,
-             detail::formatMessage("queryTlasBuildSizes invalid options: {}", flagDiagnostics.message));
+    nrAssert(flagDiagnostics.isValid, "queryTlasBuildSizes invalid options: {}", flagDiagnostics.message);
 
     vk::AccelerationStructureGeometryInstancesDataKHR instances{};
     instances.arrayOfPointers = input.arrayOfPointers ? vk::True : vk::False;
@@ -464,8 +461,7 @@ void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, con
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildBlasGeometries requires a valid command buffer.");
     auto diagnostics = detail::validateAsBuildInputs(info, scratchAlignment);
-    nrAssert(diagnostics.isValid,
-             detail::formatMessage("recordBuildBlasGeometries invalid input: {}", diagnostics.message));
+    nrAssert(diagnostics.isValid, "recordBuildBlasGeometries invalid input: {}", diagnostics.message);
 
     auto geometries = info.geometries |
                       std::views::transform([](const BlasGeometryRecord &record) { return record.geometry; }) |
@@ -493,7 +489,7 @@ void recordBuildBlasBatch(const vk::raii::CommandBuffer &commandBuffer,
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildBlasBatch requires a valid command buffer.");
     auto diagnostics = validateBuildRangeAliasFree(records, scratchAlignment);
-    nrAssert(diagnostics.isValid, detail::formatMessage("recordBuildBlasBatch invalid input: {}", diagnostics.message));
+    nrAssert(diagnostics.isValid, "recordBuildBlasBatch invalid input: {}", diagnostics.message);
 
     auto geometryGroups = std::vector<std::vector<vk::AccelerationStructureGeometryKHR>>{};
     auto rangeInfoGroups = std::vector<std::vector<vk::AccelerationStructureBuildRangeInfoKHR>>{};
@@ -536,7 +532,7 @@ void recordBuildTlas(const vk::raii::CommandBuffer &commandBuffer, const TlasBui
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildTlas requires a valid command buffer.");
     auto diagnostics = detail::validateAsBuildInputs(info, scratchAlignment);
-    nrAssert(diagnostics.isValid, detail::formatMessage("recordBuildTlas invalid input: {}", diagnostics.message));
+    nrAssert(diagnostics.isValid, "recordBuildTlas invalid input: {}", diagnostics.message);
 
     vk::AccelerationStructureGeometryInstancesDataKHR instances{};
     instances.arrayOfPointers = info.buildInput.arrayOfPointers ? vk::True : vk::False;

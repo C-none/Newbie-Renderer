@@ -69,7 +69,13 @@ namespace
                                [extension](const std::string &item) { return item == extension; });
 }
 
-void Device::initialize(std::string const &_appName, std::string const &_engineName, PipelineCacheConfig pipelineCache)
+void Device::initialize(std::string const &_appName, std::string const &_engineName)
+{
+    initialize(_appName, _engineName, std::filesystem::path{std::string{nr::psoCacheRoot}});
+}
+
+void Device::initialize(std::string const &_appName, std::string const &_engineName,
+                        std::filesystem::path pipelineBinaryRoot)
 {
     appName = _appName;
     engineName = _engineName;
@@ -89,15 +95,15 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
         selectPhysicalDevice(instance, presentationContext.surfaceHandle(), requestedDeviceExtensions_);
     {
         auto gpuProps = physicalDevice.getProperties();
-        nrInfo<>(std::format("Selected GPU: {}", gpuProps.deviceName.data()));
+        nrLog<LogLevel::info>("Selected GPU: {}", gpuProps.deviceName.data());
     }
     if (nr::dependency::dlss::sdkCompiled())
     {
         auto const deviceExtensionQuery =
             nr::dependency::dlss::rayReconstructionDeviceExtensions(*instance, *physicalDevice);
         nrAssert(deviceExtensionQuery.status.success(),
-                 std::format("DLSS RR Vulkan device-extension discovery failed: {} (native code {}).",
-                             deviceExtensionQuery.status.message, deviceExtensionQuery.status.nativeCode));
+                 "DLSS RR Vulkan device-extension discovery failed: {} (native code {}).",
+                 deviceExtensionQuery.status.message, deviceExtensionQuery.status.nativeCode);
         auto addDeviceExtensionIfMissing = [&](std::string_view extension) {
             if (std::ranges::none_of(requestedDeviceExtensions_,
                                      [extension](const std::string &item) { return item == extension; }))
@@ -120,8 +126,8 @@ void Device::initialize(std::string const &_appName, std::string const &_engineN
     swapChainConfig_.hdrMetadataEnabled = hdrMetadataEnabled_;
     swapChainConfig_.fullScreenExclusiveEnabled = true;
     presentationContext.initializeSwapchain(physicalDevice, device, swapChainConfig_, presentQueueFamilyIndex());
-    pipelineService.bindDevice(device, physicalDevice.getProperties().limits.maxBoundDescriptorSets,
-                               rtCapabilities_, std::move(pipelineCache));
+    pipelineService.bindDevice(device, physicalDevice.getProperties().limits.maxBoundDescriptorSets, rtCapabilities_,
+                               std::move(pipelineBinaryRoot));
 }
 
 [[nodiscard]] Device::FrameBeginResult Device::beginFrame()
@@ -316,14 +322,14 @@ vk::raii::Instance Device::makeInstance(std::uint32_t apiVersion) const
         DebugValidationLayerSettings validationLayerSettings;
         auto validationLayerSettingsCreateInfo = validationLayerSettings.createInfo(debugPNext);
         instanceCreateInfo.pNext = &validationLayerSettingsCreateInfo;
-        nrInfo(std::format("Debug Vulkan validation layer settings enabled programmatically: "
-                           "Core, Sync Validation, GPU-AV={}, DebugPrintf={}, "
-                           "report_flags=verbose/error/perf/info/warn, "
-                           "debug_action=none (routed through nrVulkan callback), "
-                           "duplicate message limit disabled. "
-                           "GPU-assisted validation and debug printf are enabled by default.",
-                           validationLayerSettings.gpuAssistedValidationEnabled() ? "on" : "off",
-                           validationLayerSettings.debugPrintfEnabled() ? "on" : "off"));
+        nrLog<LogLevel::info>("Debug Vulkan validation layer settings enabled programmatically: "
+                              "Core, Sync Validation, GPU-AV={}, DebugPrintf={}, "
+                              "report_flags=verbose/error/perf/info/warn, "
+                              "debug_action=none (routed through nrVulkan callback), "
+                              "duplicate message limit disabled. "
+                              "GPU-assisted validation and debug printf are enabled by default.",
+                              validationLayerSettings.gpuAssistedValidationEnabled() ? "on" : "off",
+                              validationLayerSettings.debugPrintfEnabled() ? "on" : "off");
         return vk::raii::Instance(context, instanceCreateInfo);
     }
     return vk::raii::Instance(context, instanceCreateInfo);
@@ -361,7 +367,7 @@ vk::raii::Device Device::makeDevice()
         std::format("Vulkan queue family selection: graphics{{{}}} compute{{{}}} transfer{{{}}}",
                     queueFamilySummary(queueFamilies->graphics), queueFamilySummary(queueFamilies->compute),
                     queueFamilySummary(queueFamilies->transfer));
-    nrInfo(queueFamilySelectionMessage);
+    nrLog<LogLevel::info>("{}", queueFamilySelectionMessage);
 
     constexpr float queuePriority = 1.0f;
     auto uniqueFamilies =
@@ -396,7 +402,7 @@ vk::raii::Device Device::makeDevice()
     auto enableExtension = [&](std::string_view extensionName, std::string_view reason) {
         if (!isExtensionSupported(extensionName))
         {
-            nrAssert(false, std::format("Required device extension '{}' is not supported ({})", extensionName, reason));
+            nrAssert(false, "Required device extension '{}' is not supported ({})", extensionName, reason);
             return false;
         }
         if (enabledExtensionSet.insert(extensionName).second)
@@ -436,6 +442,7 @@ vk::raii::Device Device::makeDevice()
         vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features,
         vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features,
         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+        vk::PhysicalDevicePipelineBinaryFeaturesKHR,
         vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR,
         vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT,
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
@@ -445,14 +452,14 @@ vk::raii::Device Device::makeDevice()
         vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features,
         vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceVulkan14Features,
         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+        vk::PhysicalDevicePipelineBinaryFeaturesKHR,
         vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR,
         vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT,
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
         vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>{};
 
     auto const requireFeature = [](vk::Bool32 supported, std::string_view featureName) {
-        nrAssert(supported == vk::True,
-                 std::format("Required Vulkan device feature '{}' is not supported.", featureName));
+        nrAssert(supported == vk::True, "Required Vulkan device feature '{}' is not supported.", featureName);
     };
 
     auto const &supportedCore = supportedFeatures.get<vk::PhysicalDeviceFeatures2>().features;
@@ -505,6 +512,11 @@ vk::raii::Device Device::makeDevice()
         requestedFeatures.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
     requireFeature(supportedExtendedDynamicState.extendedDynamicState, "extendedDynamicState");
     requestedExtendedDynamicState.extendedDynamicState = vk::True;
+
+    auto const &supportedPipelineBinary = supportedFeatures.get<vk::PhysicalDevicePipelineBinaryFeaturesKHR>();
+    auto &requestedPipelineBinary = requestedFeatures.get<vk::PhysicalDevicePipelineBinaryFeaturesKHR>();
+    requireFeature(supportedPipelineBinary.pipelineBinaries, "pipelineBinaries");
+    requestedPipelineBinary.pipelineBinaries = vk::True;
 
     auto const &supportedVulkan14 = supportedFeatures.get<vk::PhysicalDeviceVulkan14Features>();
     auto &requestedVulkan14 = requestedFeatures.get<vk::PhysicalDeviceVulkan14Features>();
@@ -583,11 +595,11 @@ vk::raii::Device Device::makeDevice()
         auto &requestedFeatureList = requestedFeatures.get<vk::PhysicalDeviceFeatures2>();
         frameBoundaryCreateFeatures.pNext = requestedFeatureList.pNext;
         requestedFeatureList.pNext = std::addressof(frameBoundaryCreateFeatures);
-        nrInfo("VK_EXT_frame_boundary enabled for graphics debugger frame capture.");
+        nrLog<LogLevel::info>("VK_EXT_frame_boundary enabled for graphics debugger frame capture.");
     }
     else if (frameBoundaryExtensionSupported)
     {
-        nrInfo<LogLevel::warning>(
+        nrLog<LogLevel::warning>(
             "VK_EXT_frame_boundary was exposed without its frameBoundary feature; frame-boundary tagging is disabled.");
     }
 
@@ -598,7 +610,8 @@ vk::raii::Device Device::makeDevice()
     }
     else
     {
-        nrInfo("VK_EXT_hdr_metadata is unavailable; HDR swapchain output can still run without presentation metadata.");
+        nrLog<LogLevel::info>(
+            "VK_EXT_hdr_metadata is unavailable; HDR swapchain output can still run without presentation metadata.");
     }
 
     auto const &limits = physicalDeviceProperties.properties.limits;
@@ -636,9 +649,7 @@ vk::raii::Device Device::makeDevice()
     }
     catch (const vk::SystemError &error)
     {
-        nrLog(LogLevel::error,
-              std::format("Vulkan logical-device creation failed: {}", error.what()),
-              std::source_location::current(), true);
+        nrLog<LogLevel::error, "LOG">("Vulkan logical-device creation failed: {}", error.what());
         return {nullptr};
     }
 }
@@ -666,10 +677,6 @@ void Device::waitIdle()
 {
     queueManager.waitAllIdle();
     frameManager.waitAll();
-    if (pipelineService.savePipelineCache())
-    {
-        nrInfo<>("Saved Vulkan pipeline cache.");
-    }
 }
 
 void Device::recreateSwapchain()
@@ -718,13 +725,12 @@ void Device::recreateSwapchain()
     {
         auto pathError = std::error_code{};
         auto applicationDataPath = std::filesystem::current_path(pathError);
-        nrAssert(!pathError, std::format("DLSS NGX application-data path resolution failed: {}", pathError.message()));
+        nrAssert(!pathError, "DLSS NGX application-data path resolution failed: {}", pathError.message());
         applicationDataPath /= "ngx";
         dlssContext_ = std::make_shared<DlssContext>(static_cast<vk::Instance>(*instance),
                                                      static_cast<vk::PhysicalDevice>(*physicalDevice),
                                                      static_cast<vk::Device>(*device), std::move(applicationDataPath));
-        nrAssert(dlssContext_->valid(),
-                 std::format("DLSS NGX context initialization failed: {}", dlssContext_->status().message));
+        nrAssert(dlssContext_->valid(), "DLSS NGX context initialization failed: {}", dlssContext_->status().message);
     }
     return dlssContext_;
 }
@@ -748,7 +754,7 @@ void Device::recreateSwapchain()
         auto recording = ScopedCommandBuffer{commandBuffers.front(), vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
         feature = std::make_unique<DlssRayReconstructionFeature>(std::move(sharedContext), recording.get(), desc);
     }
-    nrAssert(feature->valid(), std::format("DLSS RR feature creation failed: {}", feature->status().message));
+    nrAssert(feature->valid(), "DLSS RR feature creation failed: {}", feature->status().message);
     queueManager.compute().submit(commandBuffers.front());
     queueManager.compute().waitIdle();
     return feature;
@@ -793,8 +799,8 @@ void Device::setupInitialFlags()
     {
         auto const instanceExtensionQuery = nr::dependency::dlss::rayReconstructionInstanceExtensions();
         nrAssert(instanceExtensionQuery.status.success(),
-                 std::format("DLSS RR Vulkan instance-extension discovery failed: {} (native code {}).",
-                             instanceExtensionQuery.status.message, instanceExtensionQuery.status.nativeCode));
+                 "DLSS RR Vulkan instance-extension discovery failed: {} (native code {}).",
+                 instanceExtensionQuery.status.message, instanceExtensionQuery.status.nativeCode);
         std::ranges::for_each(instanceExtensionQuery.names,
                               [&](std::string_view extension) { addIfMissing(instanceEnabledExtensions, extension); });
     }
@@ -805,7 +811,7 @@ void Device::setupInitialFlags()
     }
     else
     {
-        nrInfo(
+        nrLog<LogLevel::info>(
             "VK_EXT_swapchain_colorspace is unavailable; swapchain format selection is limited to core color spaces.");
     }
 
@@ -825,11 +831,10 @@ void Device::setupInitialFlags()
             constexpr std::string_view validationLayer = "VK_LAYER_KHRONOS_validation";
             nrAssert(
                 hasInstanceLayer(validationLayer),
-                std::format(
-                    "Debug builds require '{}'. The Vulkan loader did not enumerate this layer on the current machine. "
-                    "Validation layers are provided by the Vulkan SDK / validation-layer installation, not by the GPU "
-                    "or display driver.",
-                    validationLayer));
+                "Debug builds require '{}'. The Vulkan loader did not enumerate this layer on the current machine. "
+                "Validation layers are provided by the Vulkan SDK / validation-layer installation, not by the GPU "
+                "or display driver.",
+                validationLayer);
             addIfMissing(instanceEnabledLayers, validationLayer);
         }
 
@@ -839,7 +844,7 @@ void Device::setupInitialFlags()
         }
         else
         {
-            nrInfo<LogLevel::error>("VK_EXT_debug_utils is unavailable; validation callbacks, debug labels, and object "
+            nrLog<LogLevel::warning>("VK_EXT_debug_utils is unavailable; validation callbacks, debug labels, and object "
                                     "names require this extension.");
             nrAssert(false, "VK_EXT_debug_utils is required when validation or GPU debug names are enabled.");
         }

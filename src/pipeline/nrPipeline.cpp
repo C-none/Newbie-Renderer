@@ -381,8 +381,8 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
 
     if (presentResult != vk::Result::eSuccess)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                  std::format("Unexpected present result: {}", vk::to_string(presentResult)));
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">(
+            "Unexpected present result: {}", vk::to_string(presentResult));
         return false;
     }
 
@@ -530,31 +530,6 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
             consumed[valueIndex] = true;
             return;
         }
-        if (token == "--render-graph-skeleton")
-        {
-            auto const valueIndex = index + 1u;
-            if (valueIndex >= tokens.size())
-            {
-                options.errorMessage = "--render-graph-skeleton requires 'legacy' or 'enabled'.";
-                return;
-            }
-            if (tokens[valueIndex] == "legacy")
-            {
-                options.benchmarkRenderGraphSkeletonMode = nr::renderer::RenderGraphSkeletonMode::Legacy;
-            }
-            else if (tokens[valueIndex] == "enabled")
-            {
-                options.benchmarkRenderGraphSkeletonMode = nr::renderer::RenderGraphSkeletonMode::Enabled;
-            }
-            else
-            {
-                options.errorMessage = "--render-graph-skeleton accepts only 'legacy' or 'enabled'.";
-                return;
-            }
-            consumed[valueIndex] = true;
-            return;
-        }
-
         if (token.starts_with("-"))
         {
             options.errorMessage = std::format("Unknown argument: {}", token);
@@ -589,10 +564,6 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     {
         options.errorMessage = "--script is valid only with --interaction offline-lua.";
     }
-    if (!options.benchmark && options.benchmarkRenderGraphSkeletonMode.has_value())
-    {
-        options.errorMessage = "--render-graph-skeleton is available only with --benchmark.";
-    }
     return options;
 }
 
@@ -603,8 +574,7 @@ void printViewerUsage(std::string_view executableName)
     std::println("  {} [model_path] --interaction agent", executableName);
     std::println("  {} [model_path] --interaction offline-lua --script <path.lua>", executableName);
     std::println("  {} --benchmark --warmup-frames N --measure-frames N --output <directory> "
-                 "[--dlss-quality ultra-performance] "
-                 "[--render-graph-skeleton legacy|enabled]",
+                 "[--dlss-quality ultra-performance]",
                  executableName);
     std::println("  {} --help", executableName);
     std::println("Controls:");
@@ -618,31 +588,23 @@ void printViewerUsage(std::string_view executableName)
 {
     if (config.benchmark && !benchmarkExecutionSupported)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                  "--benchmark requires an optimized Release executable with validation disabled.");
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">(
+            "--benchmark requires an optimized Release executable with validation disabled.");
         return 2;
     }
 
     auto registry = makeDefaultPipelineRegistry();
     if (!registry.contains(config.initialPipelineId))
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                  std::format("Unknown initial pipeline: {}", config.initialPipelineId));
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("Unknown initial pipeline: {}", config.initialPipelineId);
         return 2;
     }
     if (config.benchmark && config.initialPipelineId != rtObjectPipelineId)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", "--benchmark is currently supported only by the rtobject pipeline.");
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">(
+            "--benchmark is currently supported only by the rtobject pipeline.");
         return 2;
     }
-    if (config.benchmark &&
-        config.benchmarkRenderGraphSkeletonMode == nr::renderer::RenderGraphSkeletonMode::Differential)
-    {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                  "--benchmark does not support Differential RenderGraph Skeleton timing.");
-        return 2;
-    }
-
     if (config.initialModelPath.empty())
     {
         config.initialModelPath = defaultModelPath();
@@ -655,19 +617,18 @@ void printViewerUsage(std::string_view executableName)
     auto environmentNames = discoverEnvironmentMapNames();
     if (!environmentNames)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentNames.error());
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("{}", environmentNames.error());
         return 1;
     }
     if (environmentNames->empty())
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", "No OpenEXR environment maps were found under assets/envMap.");
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("No OpenEXR environment maps were found under assets/envMap.");
         return 1;
     }
     if (!std::ranges::contains(*environmentNames, config.initialEnvironmentMapName))
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                  std::format("Initial environment map '{}' was not found under assets/envMap.",
-                              config.initialEnvironmentMapName));
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">(
+            "Initial environment map '{}' was not found under assets/envMap.", config.initialEnvironmentMapName);
         return 1;
     }
 
@@ -691,22 +652,42 @@ void printViewerUsage(std::string_view executableName)
     nrAssert(app.options().setAuthorityMode(authorityMode),
              "Option authority mode must be selected before session initialization.");
 
-    auto environmentLoad = detail::loadEnvironmentMap(app.renderer(), config.initialEnvironmentMapName);
-    if (!environmentLoad)
-    {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", environmentLoad.error());
-        app.shutdown();
-        return 1;
-    }
-
     auto history = ModelHistory{};
-    history.load();
-
     auto modelController = SceneModelController{};
-    auto initialLoad = modelController.loadModel(app, config.initialModelPath, std::ref(history));
+    auto initialLoad = ModelLoadReport{};
+    {
+        auto startupLoadPool = nr::threading::StaticThreadPool{};
+        startupLoadPool.ensureWorkerCount(2u);
+        auto environmentLoadFuture = startupLoadPool.submit([environmentMapName = config.initialEnvironmentMapName] {
+            return detail::loadEnvironmentMapCpu(environmentMapName);
+        });
+        auto modelLoadFuture = startupLoadPool.submit([modelPath = config.initialModelPath] {
+            return SceneModelController::loadModelCpu(modelPath);
+        });
+
+        history.load();
+
+        auto environmentLoad = environmentLoadFuture.get();
+        auto initialModelLoad = modelLoadFuture.get();
+        if (!environmentLoad)
+        {
+            nr::nrLog<nr::LogLevel::warning, "PIPELINE">("{}", environmentLoad.error());
+            app.shutdown();
+            return 1;
+        }
+        detail::commitEnvironmentMap(app.renderer(), std::move(*environmentLoad));
+
+        if (!initialModelLoad)
+        {
+            nr::nrLog<nr::LogLevel::warning, "PIPELINE">("{}", initialModelLoad.error().message);
+            app.shutdown();
+            return 1;
+        }
+        initialLoad = modelController.commitModel(app, std::move(*initialModelLoad), std::ref(history));
+    }
     if (!initialLoad.loaded)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", initialLoad.message);
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("{}", initialLoad.message);
         app.shutdown();
         return 1;
     }
@@ -717,7 +698,7 @@ void printViewerUsage(std::string_view executableName)
                              RtPostProcessingMode::dlssRayReconstruction, config.dlssQuality, captureSessionId);
     if (!initialGraph)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", initialGraph.error());
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("{}", initialGraph.error());
         app.shutdown();
         return 2;
     }
@@ -728,7 +709,7 @@ void printViewerUsage(std::string_view executableName)
     auto combinedCatalog = validateSessionAndGraphCatalog(*sessionCatalog, *initialGraph->optionCatalog);
     if (!combinedCatalog)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", combinedCatalog.error());
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("{}", combinedCatalog.error());
         app.shutdown();
         return 2;
     }
@@ -739,8 +720,7 @@ void printViewerUsage(std::string_view executableName)
         app.options().initializeSession(std::move(sessionCatalog), initialGraph->optionCatalog, initialAvailability);
     if (!initializedOptions.committed)
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                  std::format("Failed to initialize OptionSystem: {}", initializedOptions.detail));
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("Failed to initialize OptionSystem: {}", initializedOptions.detail);
         app.shutdown();
         return 2;
     }
@@ -751,8 +731,7 @@ void printViewerUsage(std::string_view executableName)
         auto started = webSocketHost.start();
         if (!started.started)
         {
-            nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                      std::format("Failed to start the option WebSocket host: {}", started.detail));
+            nr::nrLog<nr::LogLevel::warning, "PIPELINE">("Failed to start the option WebSocket host: {}", started.detail);
             app.shutdown();
             return 2;
         }
@@ -764,8 +743,7 @@ void printViewerUsage(std::string_view executableName)
         auto started = luaHost.start(app.options(), config.automationScript);
         if (!started.started)
         {
-            nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                      std::format("Failed to start offline Lua automation: {}", started.detail));
+            nr::nrLog<nr::LogLevel::warning, "PIPELINE">("Failed to start offline Lua automation: {}", started.detail);
             webSocketHost.stop();
             app.shutdown();
             return 2;
@@ -774,7 +752,6 @@ void printViewerUsage(std::string_view executableName)
 
     if (config.benchmark)
     {
-        app.renderer().configureRenderGraphSkeletonMode(config.benchmarkRenderGraphSkeletonMode);
         app.renderer().configureBenchmark(nr::renderer::RendererBenchmarkConfig{
             .enabled = true,
             .warmupFrames = config.warmupFrames,
@@ -783,7 +760,6 @@ void printViewerUsage(std::string_view executableName)
             .dlssQuality = "ultra-performance",
             .modelPath = initialLoad.modelPath.string(),
             .pipelineId = config.initialPipelineId,
-            .renderGraphSkeletonMode = config.benchmarkRenderGraphSkeletonMode,
             .commandLine = config.commandLine,
         });
     }
@@ -818,8 +794,8 @@ void printViewerUsage(std::string_view executableName)
 
         if (!app.renderer().initialized() || !app.renderer().graphInstalled())
         {
-            nr::nrLog(nr::LogLevel::error, "PIPELINE",
-                      "Renderable viewer iteration requires an initialized renderer and installed graph.");
+            nr::nrLog<nr::LogLevel::warning, "PIPELINE">(
+                "Renderable viewer iteration requires an initialized renderer and installed graph.");
             exitCode = 1;
             break;
         }
@@ -853,8 +829,8 @@ void printViewerUsage(std::string_view executableName)
             else if (luaFrame.status == nr::automation::OfflineLuaFrameStatus::failed ||
                      luaFrame.status == nr::automation::OfflineLuaFrameStatus::notStarted)
             {
-                nr::nrLog(nr::LogLevel::error, "LUA",
-                          luaFrame.detail.empty() ? "Offline Lua automation stopped unexpectedly." : luaFrame.detail);
+                nr::nrLog<nr::LogLevel::warning, "LUA">(
+                    "{}", luaFrame.detail.empty() ? "Offline Lua automation stopped unexpectedly." : luaFrame.detail);
                 exitCode = 1;
                 stopAfterCurrentFrame = true;
             }
@@ -909,7 +885,7 @@ void printViewerUsage(std::string_view executableName)
 
         if (!frameResult.rendered)
         {
-            nr::nrLog(nr::LogLevel::error, "PIPELINE", "Renderer returned rendered=false during main loop.");
+            nr::nrLog<nr::LogLevel::warning, "PIPELINE">("Renderer returned rendered=false during main loop.");
             exitCode = 1;
             break;
         }
@@ -950,7 +926,7 @@ void printViewerUsage(std::string_view executableName)
 
     if (!options.errorMessage.empty())
     {
-        nr::nrLog(nr::LogLevel::error, "PIPELINE", options.errorMessage);
+        nr::nrLog<nr::LogLevel::warning, "PIPELINE">("{}", options.errorMessage);
         printViewerUsage("main");
         return 2;
     }
@@ -958,8 +934,7 @@ void printViewerUsage(std::string_view executableName)
     auto logSession = nr::RotatingNdjsonLogSession::start({});
     if (!logSession)
     {
-        nr::nrLog(nr::LogLevel::error, "LOG",
-                  std::format("Failed to start rotating NDJSON logs: {}", logSession.error()));
+        nr::nrLog<nr::LogLevel::warning, "LOG">("Failed to start rotating NDJSON logs: {}", logSession.error());
         return 2;
     }
 
@@ -983,8 +958,6 @@ void printViewerUsage(std::string_view executableName)
         .dlssQuality = options.dlssQuality,
         .interactionMode = options.interactionMode,
         .automationScript = options.automationScript,
-        .benchmarkRenderGraphSkeletonMode =
-            options.benchmarkRenderGraphSkeletonMode.value_or(nr::renderer::RenderGraphSkeletonMode::Enabled),
         .commandLine = std::move(commandLine),
     });
 }

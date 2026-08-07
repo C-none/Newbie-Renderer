@@ -240,36 +240,22 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
     return true;
 }
 
-[[nodiscard]] bool renderFrameExpectingSkeletonHit(nr::app::AppSession &app, nr::scene::Scene &scene,
-                                                   const nr::options::OptionFrameSnapshot &optionSnapshot,
-                                                   std::optional<nr::renderer::RendererCameraOverride> cameraOverride,
-                                                   std::string_view frameLabel)
+[[nodiscard]] bool renderFrameExpectingSuccess(nr::app::AppSession &app, nr::scene::Scene &scene,
+                                               const nr::options::OptionFrameSnapshot &optionSnapshot,
+                                               std::optional<nr::renderer::RendererCameraOverride> cameraOverride,
+                                               std::string_view frameLabel)
 {
-    auto const before = app.renderer().renderGraphSkeletonStatistics();
     if (!renderOneFrame(app, scene, optionSnapshot, std::move(cameraOverride)).has_value())
     {
         std::println("[error] rtobject material smoke failed while rendering the {} frame.", frameLabel);
         return false;
     }
-
-    auto const after = app.renderer().renderGraphSkeletonStatistics();
-    if (after.hitCount != before.hitCount + 1u || after.missCount != before.missCount)
-    {
-        std::println("[error] rtobject material smoke {} frame expected exactly one Skeleton hit and no miss: hits {} "
-                     "-> {}, misses {} -> {}, last miss reason '{}'.",
-                     frameLabel, before.hitCount, after.hitCount, before.missCount, after.missCount,
-                     nr::renderer::renderGraphSkeletonMissReasonName(after.lastMissReason));
-        return false;
-    }
     return true;
 }
 
-[[nodiscard]] bool renderSkeletonReuseFrames(nr::app::AppSession &app, nr::scene::Scene &scene,
-                                             const nr::options::OptionFrameSnapshot &optionSnapshot)
+[[nodiscard]] bool renderSuccessiveFrames(nr::app::AppSession &app, nr::scene::Scene &scene,
+                                          const nr::options::OptionFrameSnapshot &optionSnapshot)
 {
-    // The first ready frame can carry the one-shot dirty-BLAS branch, and each
-    // in-flight slot can expose a distinct retained scratch-buffer capacity.
-    // Materialize every steady-state slot variant before requiring exact reuse.
     auto stabilizationFailed = false;
     std::ranges::for_each(std::views::iota(std::uint32_t{0u}, nr::maxFrameInFlight), [&](std::uint32_t) {
         stabilizationFailed = stabilizationFailed || !renderOneFrame(app, scene, optionSnapshot).has_value();
@@ -277,11 +263,11 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
     if (stabilizationFailed)
     {
         std::println(
-            "[error] rtobject material smoke failed while stabilizing the post-upload AS frame-slot variants.");
+            "[error] rtobject material smoke failed while stabilizing post-upload AS frame slots.");
         return false;
     }
 
-    if (!renderFrameExpectingSkeletonHit(app, scene, optionSnapshot, {}, "stable warm"))
+    if (!renderFrameExpectingSuccess(app, scene, optionSnapshot, {}, "stable"))
     {
         return false;
     }
@@ -299,14 +285,14 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         return false;
     }
 
-    if (!renderFrameExpectingSkeletonHit(app, scene, optionSnapshot, movedCamera.buildRendererCameraOverride(),
-                                         "camera motion"))
+    if (!renderFrameExpectingSuccess(app, scene, optionSnapshot, movedCamera.buildRendererCameraOverride(),
+                                     "camera motion"))
     {
         return false;
     }
 
-    if (!renderFrameExpectingSkeletonHit(app, scene, optionSnapshot, movedCamera.buildRendererCameraOverride(),
-                                         "post-motion stationary"))
+    if (!renderFrameExpectingSuccess(app, scene, optionSnapshot, movedCamera.buildRendererCameraOverride(),
+                                     "post-motion stationary"))
     {
         return false;
     }
@@ -338,14 +324,12 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         auto const optionSnapshot =
             nr::test::options::makeDefaultSnapshot(preflight.optionCatalog, "rtobject-material-snapshot");
 
-        auto const skeletonStatisticsBefore = app.renderer().renderGraphSkeletonStatistics();
         if (!renderUntilRtSceneReady(app, scene->get(), optionSnapshot) ||
-            !renderSkeletonReuseFrames(app, scene->get(), optionSnapshot))
+            !renderSuccessiveFrames(app, scene->get(), optionSnapshot))
         {
             return false;
         }
-        auto const skeletonStatisticsAfter = app.renderer().renderGraphSkeletonStatistics();
-        return skeletonStatisticsAfter.hitCount > skeletonStatisticsBefore.hitCount;
+        return true;
     }();
 
     app.shutdown();

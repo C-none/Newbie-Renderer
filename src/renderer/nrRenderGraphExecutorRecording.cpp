@@ -45,9 +45,8 @@ namespace nr::renderer
         .resolveBuffer = [passPtr, runtimeBindingsPtr](GraphResourceHandle handle)
             -> std::optional<PassBufferResource> {
         nrAssert(passDeclaresResource(*passPtr, handle),
-                 std::format("RenderGraph pass '{}' record resolver rejected undeclared resource handle {} "
-                             "(pass handle {}).",
-                             passPtr->debugName, handle.value, passPtr->handle.value));
+                 "RenderGraph pass '{}' record resolver rejected undeclared resource handle {} (pass handle {}).",
+                 passPtr->debugName, handle.value, passPtr->handle.value);
             auto bindingIt = runtimeBindingsPtr->find(handle);
             if (bindingIt == runtimeBindingsPtr->end() || !bindingIt->second.isBuffer)
             {
@@ -63,9 +62,8 @@ namespace nr::renderer
         .resolveImage = [passPtr, runtimeBindingsPtr](GraphResourceHandle handle)
             -> std::optional<PassImageResource> {
         nrAssert(passDeclaresResource(*passPtr, handle),
-                 std::format("RenderGraph pass '{}' record resolver rejected undeclared resource handle {} "
-                             "(pass handle {}).",
-                             passPtr->debugName, handle.value, passPtr->handle.value));
+                 "RenderGraph pass '{}' record resolver rejected undeclared resource handle {} (pass handle {}).",
+                 passPtr->debugName, handle.value, passPtr->handle.value);
             auto bindingIt = runtimeBindingsPtr->find(handle);
             if (bindingIt == runtimeBindingsPtr->end() || !bindingIt->second.isImage)
             {
@@ -84,9 +82,8 @@ namespace nr::renderer
             [passPtr, runtimeBindingsPtr](GraphResourceHandle handle)
             -> std::optional<PassAccelerationStructureResource> {
         nrAssert(passDeclaresResource(*passPtr, handle),
-                 std::format("RenderGraph pass '{}' record resolver rejected undeclared resource handle {} "
-                             "(pass handle {}).",
-                             passPtr->debugName, handle.value, passPtr->handle.value));
+                 "RenderGraph pass '{}' record resolver rejected undeclared resource handle {} (pass handle {}).",
+                 passPtr->debugName, handle.value, passPtr->handle.value);
             auto bindingIt = runtimeBindingsPtr->find(handle);
             if (bindingIt == runtimeBindingsPtr->end() || !bindingIt->second.isAccelerationStructure)
             {
@@ -105,9 +102,8 @@ namespace nr::renderer
         .resolveFrameDataPayload = [passPtr, frameDataByHandlePtr](GraphFrameDataHandle handle)
             -> std::optional<std::reference_wrapper<const std::any>> {
         nrAssert(passDeclaresFrameData(*passPtr, handle),
-                 std::format("RenderGraph pass '{}' record resolver rejected undeclared frame-data handle {} "
-                             "(pass handle {}).",
-                             passPtr->debugName, handle.value, passPtr->handle.value));
+                 "RenderGraph pass '{}' record resolver rejected undeclared frame-data handle {} (pass handle {}).",
+                 passPtr->debugName, handle.value, passPtr->handle.value);
             auto frameDataIt = frameDataByHandlePtr->find(handle);
             if (frameDataIt == frameDataByHandlePtr->end())
             {
@@ -273,10 +269,9 @@ namespace nr::renderer
              "RenderGraphExecutor timestamp query queue family index is out of range.");
 
     auto const validBits = queueFamilyProperties[queueFamilyIndex].timestampValidBits;
-    nrAssert(
-        validBits > 0u,
-        std::format("RenderGraphExecutor timestamp queries require non-zero timestampValidBits for {} queue family {}.",
-                    detail::queueDomainLabel(queue), queueFamilyIndex));
+    nrAssert(validBits > 0u,
+             "RenderGraphExecutor timestamp queries require non-zero timestampValidBits for {} queue family {}.",
+             detail::queueDomainLabel(queue), queueFamilyIndex);
     return validBits;
 }
 
@@ -367,7 +362,7 @@ void RenderGraphExecutor::ensureTimingQueryPool(const nr::rhi::Device &device, F
 
     if (result != vk::Result::eSuccess && result != vk::Result::eNotReady)
     {
-        nrAssert(false, std::format("RenderGraphExecutor timestamp query read failed: {}", vk::to_string(result)));
+        nrAssert(false, "RenderGraphExecutor timestamp query read failed: {}", vk::to_string(result));
     }
 
     auto const validBitsByQueue = timestampValidBitsForQueues(

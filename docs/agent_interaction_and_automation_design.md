@@ -881,7 +881,7 @@ RendererFrameInput
 It is forwarded as the same required, non-optional reference in `NodeFrameParameters`.
 Every `renderFrame(...)` call site supplies it explicitly, and
 `FrameResolutionResolver` receives the same snapshot used by camera derivation,
-structural snapshotting, skeleton patching, materialization, and node build.
+node build.
 
 The snapshot should not be hidden in the existing mutable
 [`FrameServices`](../src/renderer/nrFrameServices.ixx) type-index service map. Explicit
@@ -1423,8 +1423,7 @@ implicitly repair values: with bypass true, changing quality to a non-DLAA mode 
   and removes `variantUiDraft_`/`pendingVariant_`.
 - Accumulate reads `render.accumulate.max_history_samples` and removes its draft/pending
   fields; history images and validity remain runtime state.
-- DLSS resolution planning, structural snapshot, skeleton patch, materialization, and
-  build all read the same snapshot. `uiDraft_` and `pendingInput_` are removed; NGX runtime
+- DLSS resolution planning and build both read the same snapshot. `uiDraft_` and `pendingInput_` are removed; NGX runtime
   and the minimum effect-consumption state remain.
 - Present reads tone mapping and opacity from the same snapshot and removes their
   draft/pending fields.
@@ -2618,8 +2617,7 @@ for separate implementation approval.
 - old snapshots remain readable but cannot authorize mutation;
 - model decode, registration, and instantiation failures each preserve the old Scene and
   camera, while success commits source plus the derived camera reset;
-- resolver, node structural snapshot, skeleton patch, materialization, and build read the
-  same snapshot;
+- resolver and node build read the same snapshot;
 - DLSS bypass/DLAA constraints, quality, absence of preset option IDs, reset
   target-pass semantics, and resolution consistency;
 - DLSS reset is consumed once;

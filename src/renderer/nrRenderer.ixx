@@ -26,7 +26,6 @@ struct RendererCreateInfo
     std::string appName = "NewbieRenderer";
     std::string engineName = "NewbieRenderer";
     vk::DeviceSize frameUniformBytesPerFrame = 1024u * 1024u;
-    nr::rhi::PipelineCacheConfig pipelineCache{};
 };
 
 struct NodeConfig
@@ -36,15 +35,6 @@ struct NodeConfig
     std::uint64_t configurationRevision = 1;
 };
 
-enum class RenderGraphSkeletonMode : std::uint8_t
-{
-    Legacy,
-    Enabled,
-    Differential,
-};
-
-[[nodiscard]] std::string_view renderGraphSkeletonModeName(RenderGraphSkeletonMode mode) noexcept;
-[[nodiscard]] std::string_view renderGraphSkeletonMissReasonName(RenderGraphSkeletonMissReason reason) noexcept;
 namespace frameResource
 {
 inline constexpr std::string_view presentSourceColor = "present.sourceColor";
@@ -193,7 +183,6 @@ struct RendererBenchmarkConfig
     std::string dlssQuality{"dlaa"};
     std::string modelPath{};
     std::string pipelineId{};
-    RenderGraphSkeletonMode renderGraphSkeletonMode = RenderGraphSkeletonMode::Enabled;
     std::string commandLine{};
 };
 
@@ -213,10 +202,6 @@ struct RendererBenchmarkFrame
     double graphPreludeMilliseconds = 0.0;
     double uiCollectMilliseconds = 0.0;
     double nodeLoopMilliseconds = 0.0;
-    double skeletonPatchMilliseconds = 0.0;
-    double skeletonRebuildMilliseconds = 0.0;
-    bool skeletonHit = false;
-    RenderGraphSkeletonMissReason skeletonMissReason = RenderGraphSkeletonMissReason::None;
     ExecutorBenchmarkTelemetry execute{};
     double executeAccountedMainThreadMilliseconds = 0.0;
     double executeUnclassifiedMilliseconds = 0.0;
@@ -301,10 +286,6 @@ struct RendererGraphBuildTimings
     double preludeMilliseconds = 0.0;
     double uiCollectMilliseconds = 0.0;
     double nodeLoopMilliseconds = 0.0;
-    double skeletonPatchMilliseconds = 0.0;
-    double skeletonRebuildMilliseconds = 0.0;
-    bool skeletonHit = false;
-    RenderGraphSkeletonMissReason skeletonMissReason = RenderGraphSkeletonMissReason::None;
 };
 
 [[nodiscard]] double benchmarkType7Quantile(std::vector<double> values, double probability);
@@ -317,15 +298,11 @@ struct RendererGraphBuildTimings
 [[nodiscard]] double rendererBenchmarkExecuteAccountedMainThreadMilliseconds(
     const ExecutorBenchmarkTelemetry &telemetry) noexcept;
 [[nodiscard]] bool validateRendererBenchmarkExecuteTelemetry(const RendererBenchmarkFrame &frame) noexcept;
-[[nodiscard]] bool validateRendererBenchmarkSkeletonTelemetry(const RendererBenchmarkFrame &frame,
-                                                              RenderGraphSkeletonMode mode) noexcept;
-[[nodiscard]] bool validateBenchmarkFrames(std::span<const RendererBenchmarkFrame> frames,
-                                           RenderGraphSkeletonMode mode);
+[[nodiscard]] bool validateBenchmarkFrames(std::span<const RendererBenchmarkFrame> frames);
 [[nodiscard]] RendererBenchmarkQualityAudit auditRendererBenchmark(
     std::span<const RendererBenchmarkFrame> frames, std::span<const RendererBenchmarkGpuPass> passes,
     std::span<const RendererBenchmarkGpuFrameStatus> statuses, std::size_t expectedNodeCount,
-    std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry,
-    RenderGraphSkeletonMode skeletonMode);
+    std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry);
 [[nodiscard]] RendererBenchmarkDistribution makeRendererBenchmarkDistribution(std::vector<double> values);
 
 struct NodeInitContext
@@ -466,11 +443,9 @@ struct NodeBuildContext
         }
 
         auto const typedPayload = std::any_cast<Payload>(&payload->get());
-        nrAssert(
-            typedPayload != nullptr,
-            std::format(
-                "NodeBuildContext::resolveBuildFrameData resolved unexpected payload type for frame data handle {}.",
-                handle.value));
+        nrAssert(typedPayload != nullptr,
+                 "NodeBuildContext::resolveBuildFrameData resolved unexpected payload type for frame data handle {}.",
+                 handle.value);
         return std::cref(*typedPayload);
     }
 
@@ -478,8 +453,8 @@ struct NodeBuildContext
     [[nodiscard]] const std::remove_cvref_t<TPayload> &buildFrameData(GraphFrameDataHandle handle) const
     {
         auto resolved = resolveBuildFrameData<TPayload>(handle);
-        nrAssert(resolved.has_value(),
-                 std::format("NodeBuildContext::buildFrameData failed to resolve frame data handle {}.", handle.value));
+        nrAssert(resolved.has_value(), "NodeBuildContext::buildFrameData failed to resolve frame data handle {}.",
+                 handle.value);
         return resolved->get();
     }
 
@@ -539,7 +514,7 @@ struct NodeBuildContext
     {
         auto const frameSlot = frameSlotIndex(FrameSlotCount);
         auto const &image = images[frameSlot];
-        nrAssert(image.valid(), std::format("{} frame image slot {} is invalid.", debugName, frameSlot));
+        nrAssert(image.valid(), "{} frame image slot {} is invalid.", debugName, frameSlot);
 
         return importColor(image, indexedFrameDebugName(debugName, frameSlot), extent, format,
                            ResourceLifetime::FrameLocal);
@@ -552,7 +527,7 @@ struct NodeBuildContext
     {
         auto const frameSlot = frameSlotIndex(FrameSlotCount);
         auto const &image = images[frameSlot];
-        nrAssert(image.valid(), std::format("{} frame storage image slot {} is invalid.", debugName, frameSlot));
+        nrAssert(image.valid(), "{} frame storage image slot {} is invalid.", debugName, frameSlot);
 
         return importStorageColor(image, indexedFrameDebugName(debugName, frameSlot), extent, format,
                                   ResourceLifetime::FrameLocal);
@@ -565,7 +540,7 @@ struct NodeBuildContext
     {
         auto const frameSlot = frameSlotIndex(FrameSlotCount);
         auto const &image = images[frameSlot];
-        nrAssert(image.valid(), std::format("{} frame depth image slot {} is invalid.", debugName, frameSlot));
+        nrAssert(image.valid(), "{} frame depth image slot {} is invalid.", debugName, frameSlot);
 
         return importDepth(image, indexedFrameDebugName(debugName, frameSlot), extent, format,
                            ResourceLifetime::FrameLocal);
@@ -624,10 +599,6 @@ class FrameUniformArena
 
     [[nodiscard]] FrameUniformBinding uploadBytes(RenderGraphBuilder &graphBuilder, std::string_view debugName,
                                                   std::span<const std::byte> bytes);
-
-    [[nodiscard]] FrameUniformBinding patchUploadBytes(RenderGraphSkeletonPatchContext &patchContext,
-                                                       std::size_t resourceSlot, std::string_view debugName,
-                                                       std::span<const std::byte> bytes);
 
     template <typename TPayload>
         requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
@@ -1068,21 +1039,20 @@ struct PushConstantLocation
 {
     auto cursor = descriptorLayout.rootCursor().getPath(shaderPath);
     auto pushConstantRange = cursor.pushConstantRange();
-    nrAssert(pushConstantRange.has_value(),
-             std::format("Push constant path '{}' must reference push-constant storage.", shaderPath));
+    nrAssert(pushConstantRange.has_value(), "Push constant path '{}' must reference push-constant storage.", shaderPath);
 
     auto const cursorOffset = cursor.address().uniformOffset;
     auto const rangeBegin = static_cast<std::uint64_t>(pushConstantRange->offset);
     auto const rangeEnd = rangeBegin + static_cast<std::uint64_t>(pushConstantRange->size);
     nrAssert(cursorOffset <= std::numeric_limits<std::uint32_t>::max(),
-             std::format("Push constant cursor offset overflow for '{}': {}", shaderPath, cursorOffset));
+             "Push constant cursor offset overflow for '{}': {}", shaderPath, cursorOffset);
     nrAssert(cursorOffset >= rangeBegin && cursorOffset < rangeEnd,
-             std::format("Push constant path '{}' resolved outside its range. offset={}, rangeBegin={}, rangeEnd={}",
-                         shaderPath, cursorOffset, rangeBegin, rangeEnd));
+             "Push constant path '{}' resolved outside its range. offset={}, rangeBegin={}, rangeEnd={}", shaderPath,
+             cursorOffset, rangeBegin, rangeEnd);
 
     auto const remainingBytes = rangeEnd - cursorOffset;
     nrAssert(remainingBytes <= std::numeric_limits<std::uint32_t>::max(),
-             std::format("Push constant path '{}' remaining byte count overflow: {}", shaderPath, remainingBytes));
+             "Push constant path '{}' remaining byte count overflow: {}", shaderPath, remainingBytes);
 
     return PushConstantLocation{
         .stageFlags = pushConstantRange->stageFlags,
@@ -1100,8 +1070,8 @@ void pushConstantsToLocation(const vk::raii::CommandBuffer &commandBuffer,
     nrAssert(location.valid(), "pushConstantsToLocation requires a valid push-constant location.");
     auto bytes = std::as_bytes(std::span{std::addressof(value), std::size_t{1}});
     nrAssert(bytes.size() <= location.maxBytes,
-             std::format("Push constant payload exceeds reflected range. size={}, maxBytes={}, offset={}", bytes.size(),
-                         location.maxBytes, location.offset));
+             "Push constant payload exceeds reflected range. size={}, maxBytes={}, offset={}", bytes.size(),
+             location.maxBytes, location.offset);
 
     auto const *rawBytes = reinterpret_cast<const std::uint8_t *>(bytes.data());
     pipelineLayout.pushConstants(commandBuffer, location.stageFlags, location.offset,
@@ -1210,16 +1180,15 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
                                  std::string_view builderLabel)
         : context_(context), debugName_(debugName), runtime_(std::move(runtime)), builderLabel_(builderLabel)
     {
-        nrAssert(static_cast<bool>(runtime_),
-                 std::format("{} requires a valid PipelineRuntime shared pointer.", builderLabel_));
-        nrAssert(runtime_->valid(), std::format("{} requires initialized PipelineRuntime state.", builderLabel_));
+        nrAssert(static_cast<bool>(runtime_), "{} requires a valid PipelineRuntime shared pointer.", builderLabel_);
+        nrAssert(runtime_->valid(), "{} requires initialized PipelineRuntime state.", builderLabel_);
         rootCursor_ = runtime_->rootCursor();
     }
 
     TDerived &uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
                       vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(resource.valid(), std::format("{}::uniform requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(), "{}::uniform requires a valid graph resource.", builderLabel_);
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -1238,10 +1207,8 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &uniform(std::string_view shaderPath, FrameUniformBinding binding, std::string_view debugName,
                       vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(binding.resource.valid(),
-                 std::format("{}::uniform requires a valid frame uniform resource.", builderLabel_));
-        nrAssert(binding.range > 0u,
-                 std::format("{}::uniform requires a non-zero frame uniform range.", builderLabel_));
+        nrAssert(binding.resource.valid(), "{}::uniform requires a valid frame uniform resource.", builderLabel_);
+        nrAssert(binding.range > 0u, "{}::uniform requires a non-zero frame uniform range.", builderLabel_);
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = binding.resource.value,
@@ -1262,7 +1229,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &sampledImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
                            vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(resource.valid(), std::format("{}::sampledImage requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(), "{}::sampledImage requires a valid graph resource.", builderLabel_);
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -1282,8 +1249,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &sampledImageGeneral(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
                                   vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(resource.valid(),
-                 std::format("{}::sampledImageGeneral requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(), "{}::sampledImageGeneral requires a valid graph resource.", builderLabel_);
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -1309,7 +1275,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &storageImage(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
                            vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(resource.valid(), std::format("{}::storageImage requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(), "{}::storageImage requires a valid graph resource.", builderLabel_);
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -1328,7 +1294,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
                             vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(resource.valid(), std::format("{}::storageBuffer requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(), "{}::storageBuffer requires a valid graph resource.", builderLabel_);
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -1347,8 +1313,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource,
                                     std::string_view debugName)
     {
-        nrAssert(resource.valid(),
-                 std::format("{}::accelerationStructure requires a valid graph resource.", builderLabel_));
+        nrAssert(resource.valid(), "{}::accelerationStructure requires a valid graph resource.", builderLabel_);
         auto cursor = rootCursor_.getPath(shaderPath);
         static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = resource.value,
@@ -1367,15 +1332,14 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
 
     TDerived &resourceUse(PassResourceUseDesc resourceUse)
     {
-        nrAssert(resourceUse.resource.valid(),
-                 std::format("{}::resourceUse requires a valid graph resource.", builderLabel_));
+        nrAssert(resourceUse.resource.valid(), "{}::resourceUse requires a valid graph resource.", builderLabel_);
         resourceUses_.push_back(resourceUse);
         return derived();
     }
 
     TDerived &frameData(GraphFrameDataHandle handle)
     {
-        nrAssert(handle.valid(), std::format("{}::frameData requires a valid frame-data handle.", builderLabel_));
+        nrAssert(handle.valid(), "{}::frameData requires a valid frame-data handle.", builderLabel_);
         if (!std::ranges::contains(frameDataUses_, handle))
         {
             frameDataUses_.push_back(handle);
@@ -1385,7 +1349,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
 
     TDerived &prepare(PrepareCallback callback)
     {
-        nrAssert(static_cast<bool>(callback), std::format("{}::prepare requires a callback.", builderLabel_));
+        nrAssert(static_cast<bool>(callback), "{}::prepare requires a callback.", builderLabel_);
         prepareCallbacks_.push_back(std::move(callback));
         return derived();
     }
@@ -1393,8 +1357,8 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &dynamicBindingSnapshot(BindingSnapshotCallback snapshotCallback,
                                      nr::rhi::LogicalDescriptorResolver resolver = {})
     {
-        nrAssert(static_cast<bool>(snapshotCallback),
-                 std::format("{}::dynamicBindingSnapshot requires a snapshot callback.", builderLabel_));
+        nrAssert(static_cast<bool>(snapshotCallback), "{}::dynamicBindingSnapshot requires a snapshot callback.",
+                 builderLabel_);
         dynamicBindingSnapshots_.push_back(DynamicSnapshotDesc{
             .snapshot = std::move(snapshotCallback),
             .resolver = std::move(resolver),
@@ -1432,8 +1396,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
                 prepareCallbacks = std::move(prepareCallbacks),
                 dynamicBindingSnapshots = std::move(dynamicBindingSnapshots),
                 builderLabel = std::move(builderLabel)](const PassPrepareContext &prepareContext) {
-            nrAssert(static_cast<bool>(runtime),
-                     std::format("{} prepare requires initialized runtime state.", builderLabel));
+            nrAssert(static_cast<bool>(runtime), "{} prepare requires initialized runtime state.", builderLabel);
             std::ranges::for_each(prepareCallbacks, [&](const PrepareCallback &callback) {
                 callback(prepareContext, passBinding);
             });
@@ -1538,8 +1501,6 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
     [[nodiscard]] GraphPassHandle build();
 
   private:
-    friend class RasterPassPatchBuilder;
-
     struct RasterPassRenderingSetup
     {
         std::vector<PassImageResource> resolvedColors{};
@@ -1579,37 +1540,6 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
     RasterPassRecordCallback recordCallback_{};
     RasterPassItemCountCallback parallelItemCountCallback_{};
     RasterPassRangeRecordCallback parallelRangeRecordCallback_{};
-};
-
-class RasterPassPatchBuilder
-{
-  public:
-    RasterPassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
-                           std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime);
-    RasterPassPatchBuilder &viewport(vk::Extent2D extent);
-    RasterPassPatchBuilder &colorAttachment(GraphResourceHandle resource, vk::ClearValue clearValue);
-    RasterPassPatchBuilder &rasterState(nr::rhi::MeshRasterState state);
-    RasterPassPatchBuilder &prepare(RasterPassPrepareCallback callback);
-    RasterPassPatchBuilder &frameData(GraphFrameDataHandle handle);
-    RasterPassPatchBuilder &dynamicBindingSnapshot(
-        PipelinePassBindingSnapshotCallback<nr::rhi::GraphicsPipeline> callback,
-                                                   nr::rhi::LogicalDescriptorResolver resolver = {});
-    RasterPassPatchBuilder &record(RasterPassRecordCallback callback);
-    void patch();
-
-  private:
-    std::reference_wrapper<RenderGraphSkeletonPatchContext> context_;
-    std::size_t passSlot_ = 0;
-    std::string debugName_{};
-    std::shared_ptr<PipelineRuntime<nr::rhi::GraphicsPipeline>> runtime_{};
-    nr::rhi::ShaderCursor rootCursor_{};
-    std::optional<vk::Extent2D> viewportExtent_{};
-    std::vector<RasterColorAttachment> colorAttachments_{};
-    nr::rhi::MeshRasterState rasterState_{};
-    std::vector<RasterPassPrepareCallback> prepareCallbacks_{};
-    std::vector<GraphFrameDataHandle> frameDataUses_{};
-    std::vector<DynamicBindingSnapshotDesc<nr::rhi::GraphicsPipeline>> dynamicBindingSnapshots_{};
-    RasterPassRecordCallback recordCallback_{};
 };
 
 struct ComputePassRecordContext
@@ -1662,50 +1592,6 @@ class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<ComputePa
     ComputePassRecordCallback recordCallback_{};
 };
 
-class ComputePassPatchBuilder
-{
-  public:
-    ComputePassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot, std::string_view debugName,
-                            std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime);
-
-    ComputePassPatchBuilder &sampledImage(std::string_view shaderPath, GraphResourceHandle resource,
-                                          std::string_view debugName);
-
-    ComputePassPatchBuilder &storageImage(std::string_view shaderPath, GraphResourceHandle resource,
-                                          std::string_view debugName);
-
-    ComputePassPatchBuilder &frameData(GraphFrameDataHandle handle);
-
-    ComputePassPatchBuilder &prepare(ComputePassPrepareCallback callback);
-
-    ComputePassPatchBuilder &dynamicBindingSnapshot(
-        PipelinePassBindingSnapshotCallback<nr::rhi::ComputePipeline> callback,
-        nr::rhi::LogicalDescriptorResolver resolver = {});
-
-    template <typename TPayload>
-    ComputePassPatchBuilder &pushConstants(std::string_view shaderPath, const TPayload &value)
-    {
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setData(value));
-        return *this;
-    }
-
-    ComputePassPatchBuilder &record(ComputePassRecordCallback callback);
-
-    void patch();
-
-  private:
-    std::reference_wrapper<RenderGraphSkeletonPatchContext> context_;
-    std::size_t passSlot_ = 0;
-    std::string debugName_{};
-    std::shared_ptr<PipelineRuntime<nr::rhi::ComputePipeline>> runtime_{};
-    nr::rhi::ShaderCursor rootCursor_{};
-    std::vector<GraphFrameDataHandle> frameDataUses_{};
-    std::vector<ComputePassPrepareCallback> prepareCallbacks_{};
-    std::vector<DynamicBindingSnapshotDesc<nr::rhi::ComputePipeline>> dynamicBindingSnapshots_{};
-    ComputePassRecordCallback recordCallback_{};
-};
-
 struct RayTracingPassRecordContext
 {
     const PassRecordContext &pass;
@@ -1747,59 +1633,6 @@ class RayTracingPassBuilder
     RayTracingPassRecordCallback recordCallback_{};
 };
 
-class RayTracingPassPatchBuilder
-{
-  public:
-    RayTracingPassPatchBuilder(RenderGraphSkeletonPatchContext &context, std::size_t passSlot,
-                               std::string_view debugName,
-                               std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime);
-    RayTracingPassPatchBuilder &accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource,
-                                                      std::string_view debugName);
-    RayTracingPassPatchBuilder &sampledImage(std::string_view shaderPath, GraphResourceHandle resource,
-                                             std::string_view debugName);
-    RayTracingPassPatchBuilder &storageImage(std::string_view shaderPath, GraphResourceHandle resource,
-                                             std::string_view debugName);
-    RayTracingPassPatchBuilder &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource,
-                                              std::string_view debugName);
-    RayTracingPassPatchBuilder &uniform(std::string_view shaderPath, GraphResourceHandle resource,
-                                        std::string_view debugName);
-    RayTracingPassPatchBuilder &uniform(std::string_view shaderPath, FrameUniformBinding binding,
-                                        std::string_view debugName);
-    RayTracingPassPatchBuilder &frameData(GraphFrameDataHandle handle);
-
-    template <typename TPayload>
-    RayTracingPassPatchBuilder &pushConstants(std::string_view shaderPath, const TPayload &value)
-    {
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setData(value));
-        return *this;
-    }
-
-    RayTracingPassPatchBuilder &prepare(RayTracingPassPrepareCallback callback);
-    RayTracingPassPatchBuilder &dynamicBindingSnapshot(
-        PipelinePassBindingSnapshotCallback<nr::rhi::RayTracingPipeline> callback,
-                                                       nr::rhi::LogicalDescriptorResolver resolver = {});
-    RayTracingPassPatchBuilder &record(RayTracingPassRecordCallback callback);
-    void patch();
-
-  private:
-    RayTracingPassPatchBuilder &descriptor(std::string_view shaderPath, GraphResourceHandle resource,
-                                           std::string_view debugName,
-                                           vk::ImageLayout imageLayout = vk::ImageLayout::eGeneral,
-                                           vk::DeviceSize offset = 0u,
-                                           vk::DeviceSize range = std::numeric_limits<vk::DeviceSize>::max());
-
-    std::reference_wrapper<RenderGraphSkeletonPatchContext> context_;
-    std::size_t passSlot_ = 0;
-    std::string debugName_{};
-    std::shared_ptr<PipelineRuntime<nr::rhi::RayTracingPipeline>> runtime_{};
-    nr::rhi::ShaderCursor rootCursor_{};
-    std::vector<GraphFrameDataHandle> frameDataUses_{};
-    std::vector<RayTracingPassPrepareCallback> prepareCallbacks_{};
-    std::vector<DynamicBindingSnapshotDesc<nr::rhi::RayTracingPipeline>> dynamicBindingSnapshots_{};
-    RayTracingPassRecordCallback recordCallback_{};
-};
-
 class NodeRuntime
 {
   public:
@@ -1831,24 +1664,6 @@ class NodeRuntime
     // Canonical path: context.addPass(intentList, name, executeLambda[, isCopyPass]).
     // Build should capture stable per-pass snapshots used later by execute lambdas.
     virtual void build(NodeBuildContext &context, const NodeFrameParameters &frameParameters) = 0;
-
-    struct StructuralSnapshot
-    {
-        std::uint64_t configurationRevision = 1;
-        std::string branchKey{};
-    };
-
-    /// Opt-in for the generic Skeleton contract. Unsupported nodes force legacy graph build.
-    [[nodiscard]] virtual bool supportsRenderGraphSkeleton() const noexcept;
-
-    /// Captures the exact node-owned topology branch before materialization.
-    [[nodiscard]] virtual std::optional<StructuralSnapshot> structuralSnapshot(
-        const NodeFrameParameters &frameParameters) const;
-
-    /// Materializes current frame references and callbacks for a cached structural variant.
-    virtual bool materializeRenderGraphSkeleton(RenderGraphSkeletonPatchContext &context,
-                                                const NodeFrameParameters &frameParameters,
-                                                const StructuralSnapshot &snapshot);
 
     // Stage 3 (shutdown): release persistent node state.
     virtual void advanceContinuations(std::uint32_t frameSlot);
@@ -1983,12 +1798,6 @@ class Renderer
 
     void configureBenchmark(RendererBenchmarkConfig config);
 
-    void configureRenderGraphSkeletonMode(RenderGraphSkeletonMode mode) noexcept;
-
-    [[nodiscard]] RenderGraphSkeletonMode renderGraphSkeletonMode() const noexcept;
-
-    [[nodiscard]] RenderGraphSkeletonCacheStatistics renderGraphSkeletonStatistics() const noexcept;
-
     [[nodiscard]] bool benchmarkComplete() const noexcept;
 
     [[nodiscard]] bool finalizeBenchmark();
@@ -2005,6 +1814,31 @@ class Renderer
         nr::scene::SceneBridgeFrameConstants unjitteredCameraConstants{};
         std::optional<nr::scene::SceneRevisionSnapshot> sceneRevisions{};
     };
+
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling state. Remove with the whole block.
+    struct TempBuildProfileEntry
+    {
+        std::string name{};
+        std::uint64_t count = 0u;
+        double totalMilliseconds = 0.0;
+        double maxMilliseconds = 0.0;
+
+        void accumulate(double milliseconds) noexcept
+        {
+            ++count;
+            totalMilliseconds += milliseconds;
+            maxMilliseconds = std::max(maxMilliseconds, milliseconds);
+        }
+    };
+
+    void tempReportBuildProfile();
+
+    std::vector<TempBuildProfileEntry> tempBuildProfileNodes_{};
+    TempBuildProfileEntry tempBuildProfilePrelude_{};
+    TempBuildProfileEntry tempBuildProfileTotal_{};
+    std::uint64_t tempBuildProfileFrames_ = 0u;
+    bool tempBuildProfileActive_ = false;
+    // [TEMP-BUILD-PROFILING] END
 
     [[nodiscard]] RendererGraphBuildTimings buildInstalledGraph(
         const NodeFrameParameters &frameParameters,
@@ -2061,7 +1895,6 @@ class Renderer
     std::uint64_t sampleFrameOrdinal_ = 0u;
     std::uint64_t installedGraphGeneration_ = 0u;
     std::uint64_t observedSwapchainRecreationGeneration_ = 0u;
-    RenderGraphSkeletonMode renderGraphSkeletonMode_ = RenderGraphSkeletonMode::Enabled;
     bool temporalHistoryResetPending_ = false;
 
     std::optional<std::uint64_t> activeSceneIdentity_{};
@@ -2087,7 +1920,6 @@ class Renderer
     std::vector<double> benchmarkNodeBuildMilliseconds_{};
     RendererBenchmarkAsTelemetry benchmarkCurrentAsTelemetry_{};
     std::vector<RendererBenchmarkAsTelemetry> benchmarkAsTelemetry_{};
-    RenderGraphSkeletonCacheStatistics benchmarkSkeletonStatisticsBefore_{};
     std::chrono::system_clock::time_point benchmarkStartedAt_{};
     bool benchmarkFinalized_ = false;
     bool benchmarkSucceeded_ = false;

@@ -39,7 +39,7 @@ void NsightGraphicsFrameHelper::configureFromEnvironment()
         state.config.outputDir = *outputDir;
         if (state.config.activity == nr::platform::NsightGraphicsActivity::Trace)
         {
-            nrInfo<LogLevel::warning>("NR_NSIGHT_GRAPHICS_OUTPUT_DIR is not exposed by Nsight Graphics SDK 0.9.0 GPU "
+            nrLog<LogLevel::warning>("NR_NSIGHT_GRAPHICS_OUTPUT_DIR is not exposed by Nsight Graphics SDK 0.9.0 GPU "
                                       "Trace injection settings; Nsight controls trace output location.");
         }
     }
@@ -54,7 +54,7 @@ void NsightGraphicsFrameHelper::configureFromEnvironment()
         }
         else
         {
-            nrInfo<LogLevel::warning>("Ignoring invalid NR_NSIGHT_GRAPHICS_FRAMES value; using 1.");
+            nrLog<LogLevel::warning>("Ignoring invalid NR_NSIGHT_GRAPHICS_FRAMES value; using 1.");
         }
     }
 
@@ -67,15 +67,15 @@ void NsightGraphicsFrameHelper::configureFromEnvironment()
         }
         else
         {
-            nrInfo<LogLevel::warning>("Ignoring invalid NR_NSIGHT_GRAPHICS_FRAME value; Nsight activity will "
+            nrLog<LogLevel::warning>("Ignoring invalid NR_NSIGHT_GRAPHICS_FRAME value; Nsight activity will "
                                       "initialize but not auto-trigger.");
         }
     }
     else
     {
-        nrInfo(std::format("NR_NSIGHT_GRAPHICS_ACTIVITY='{}' requested without NR_NSIGHT_GRAPHICS_FRAME; SDK will "
-                           "initialize but not auto-trigger.",
-                           activityName(state.config.activity)));
+        nrLog<LogLevel::info>("NR_NSIGHT_GRAPHICS_ACTIVITY='{}' requested without NR_NSIGHT_GRAPHICS_FRAME; SDK will "
+                              "initialize but not auto-trigger.",
+                              activityName(state.config.activity));
     }
 
     state_ = std::move(state);
@@ -90,7 +90,7 @@ void NsightGraphicsFrameHelper::injectIfRequested()
 
     if (!nr::platform::nsightGraphicsSdkCompiled())
     {
-        nrInfo<LogLevel::warning>(
+        nrLog<LogLevel::warning>(
             "Nsight Graphics SDK integration was requested, but dependency was built without SDK support.");
         disableActivity();
         return;
@@ -105,7 +105,7 @@ void NsightGraphicsFrameHelper::injectIfRequested()
     }
 
     state_.injected = true;
-    nrInfo(std::format("Nsight Graphics SDK {} activity injected.", activityName(state_.config.activity)));
+    nrLog<LogLevel::info>("Nsight Graphics SDK {} activity injected.", activityName(state_.config.activity));
 }
 
 void NsightGraphicsFrameHelper::initializeIfRequested(VkQueue presentQueue)
@@ -139,7 +139,7 @@ void NsightGraphicsFrameHelper::initializeIfRequested(VkQueue presentQueue)
         state_.traceActivated = true;
     }
 
-    nrInfo(std::format("Nsight Graphics SDK {} activity initialized.", activityName(state_.config.activity)));
+    nrLog<LogLevel::info>("Nsight Graphics SDK {} activity initialized.", activityName(state_.config.activity));
 }
 
 void NsightGraphicsFrameHelper::beginFrame(bool vkFrameBoundaryEnabled)
@@ -192,8 +192,8 @@ void NsightGraphicsFrameHelper::stopTraceBeforeBoundaryIfNeeded(VkImage outputIm
 
     state_.traceRunning = false;
     state_.traceStopRequested = true;
-    nrInfo(
-        std::format("Nsight Graphics GPU Trace stop requested before frame boundary {}.", state_.currentFrameOrdinal));
+    nrLog<LogLevel::info>("Nsight Graphics GPU Trace stop requested before frame boundary {}.",
+                          state_.currentFrameOrdinal);
 }
 
 void NsightGraphicsFrameHelper::markFrameBoundaryAfterPresent(vk::Result presentResult, VkImage outputImage)
@@ -272,8 +272,8 @@ void NsightGraphicsFrameHelper::markFrameBoundaryAfterPresent(vk::Result present
         return nr::platform::NsightGraphicsActivity::Trace;
     }
 
-    nrInfo<LogLevel::warning>(
-        std::format("Ignoring unsupported NR_NSIGHT_GRAPHICS_ACTIVITY='{}'; expected off, capture, or trace.", text));
+    nrLog<LogLevel::warning>("Ignoring unsupported NR_NSIGHT_GRAPHICS_ACTIVITY='{}'; expected off, capture, or trace.",
+                             text);
     return nr::platform::NsightGraphicsActivity::Off;
 }
 
@@ -337,8 +337,7 @@ void NsightGraphicsFrameHelper::reportFailure(std::string_view operation,
     {
         return;
     }
-    nrInfo<LogLevel::warning>(
-        std::format("Nsight Graphics SDK {} failed with result '{}'.", operation, resultName(result)));
+    nrLog<LogLevel::warning>("Nsight Graphics SDK {} failed with result '{}'.", operation, resultName(result));
 }
 
 void NsightGraphicsFrameHelper::requestCapture(bool vkFrameBoundaryEnabled)
@@ -356,8 +355,8 @@ void NsightGraphicsFrameHelper::requestCapture(bool vkFrameBoundaryEnabled)
     }
 
     state_.captureRequested = true;
-    nrInfo(std::format("Nsight Graphics capture requested at frame {} for {} frame(s).", state_.currentFrameOrdinal,
-                       state_.config.frameCount));
+    nrLog<LogLevel::info>("Nsight Graphics capture requested at frame {} for {} frame(s).",
+                          state_.currentFrameOrdinal, state_.config.frameCount);
 }
 
 void NsightGraphicsFrameHelper::startTrace()
@@ -373,7 +372,7 @@ void NsightGraphicsFrameHelper::startTrace()
     state_.traceRunning = true;
     state_.traceStopRequested = false;
     state_.traceStopFrameOrdinal = state_.currentFrameOrdinal + std::max(1u, state_.config.frameCount) - 1u;
-    nrInfo(std::format("Nsight Graphics GPU Trace started at frame {} and will stop at frame boundary {}.",
-                       state_.currentFrameOrdinal, state_.traceStopFrameOrdinal));
+    nrLog<LogLevel::info>("Nsight Graphics GPU Trace started at frame {} and will stop at frame boundary {}.",
+                          state_.currentFrameOrdinal, state_.traceStopFrameOrdinal);
 }
 } // namespace nr::rhi

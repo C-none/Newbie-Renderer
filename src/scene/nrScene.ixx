@@ -531,13 +531,11 @@ class Scene : public nr::revision::RevisionSyntax
                     auto geometry =
                         tryResolveRasterDrawRange(binding.mesh, geometryIndex, packetSet.rasterGeometryBuffers);
                     auto material = resolveRasterMaterial(materialHandle);
-                    nrAssert(geometry.has_value() && material.has_value(), [&] {
-                        return std::format(
-                            "Raster readiness passed but packet resolution failed for mesh ({}, {}) geometry {} "
-                            "and material ({}, {}).",
-                            binding.mesh.slot, binding.mesh.generation, geometryIndex, materialHandle.slot,
-                            materialHandle.generation);
-                    });
+                    nrAssert(geometry.has_value() && material.has_value(),
+                             "Raster readiness passed but packet resolution failed for mesh ({}, {}) geometry {} "
+                             "and material ({}, {}).",
+                             binding.mesh.slot, binding.mesh.generation, geometryIndex, materialHandle.slot,
+                             materialHandle.generation);
                     if (!geometry.has_value() || !material.has_value())
                     {
                         return;
@@ -759,9 +757,11 @@ class Scene : public nr::revision::RevisionSyntax
             sourceIndexPart = std::format(" sourceIndex={}", sourceIndex);
         }
 
-        nr::nrLog(Level, "SCENE",
-                  std::format("[{}]{}{} {}", importStageName(stage), stableKeyPart, sourceIndexPart, message),
-                  std::source_location::current(), false);
+        // Import severity is a scene-level concept. An import error stays recoverable at process level
+        // because it is accumulated into hasImportErrors_ and resolved by the caller, so it is clamped to
+        // warning here and never reaches the fatal nrLog<LogLevel::error> path.
+        constexpr auto logLevel = Level == nr::LogLevel::error ? nr::LogLevel::warning : Level;
+        nr::nrLog<logLevel, "SCENE">("[{}]{}{} {}", importStageName(stage), stableKeyPart, sourceIndexPart, message);
     }
 
     template <typename StorageT, typename HandleT>

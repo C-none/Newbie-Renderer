@@ -115,15 +115,13 @@ void collectTlasMaterialTextureHandles(const nr::scene::Scene &scene, nr::resour
                                        std::map<std::uint32_t, nr::resource::TextureHandle> &sceneTextureHandlesById)
 {
     auto materialRecordRef = scene.tryGetMaterialAsset(materialHandle);
-    nrAssert(
-        materialRecordRef.has_value(),
-        std::format("Renderer scene texture collection expected material handle (slot={}, generation={}) to resolve.",
-                    materialHandle.slot, materialHandle.generation));
+    nrAssert(materialRecordRef.has_value(),
+             "Renderer scene texture collection expected material handle (slot={}, generation={}) to resolve.",
+             materialHandle.slot, materialHandle.generation);
 
     auto const &materialRecord = materialRecordRef->get();
-    nrAssert(materialRecord.cpuReady,
-             std::format("Renderer scene texture collection expected material '{}' to be CPU ready.",
-                         materialRecord.cpu.name));
+    nrAssert(materialRecord.cpuReady, "Renderer scene texture collection expected material '{}' to be CPU ready.",
+             materialRecord.cpu.name);
 
     auto slotIndices = std::views::iota(std::size_t{0}, materialRecord.cpu.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
@@ -142,15 +140,14 @@ void collectTlasMaterialTextureHandles(const nr::scene::Scene &scene, nr::resour
         }
 
         nrAssert(binding.has_value(),
-                 std::format(
-                     "Renderer scene texture collection expected resident sampled texture for material '{}' slot {}.",
-                     materialRecord.cpu.name, slotIndex));
+                 "Renderer scene texture collection expected resident sampled texture for material '{}' slot {}.",
+                 materialRecord.cpu.name, slotIndex);
         nrAssert(binding->descriptorIndex < kSceneTextureDescriptorCapacity,
-                 std::format("Scene texture descriptor id {} exceeds capacity {}.", binding->descriptorIndex,
-                             kSceneTextureDescriptorCapacity));
+                 "Scene texture descriptor id {} exceeds capacity {}.", binding->descriptorIndex,
+                 kSceneTextureDescriptorCapacity);
         nrAssert(binding->descriptorIndex <= nr::scene::kMaxSceneTextureId,
-                 std::format("Scene texture descriptor id {} exceeds packed uint16 id capacity {}.",
-                             binding->descriptorIndex, nr::scene::kMaxSceneTextureId));
+                 "Scene texture descriptor id {} exceeds packed uint16 id capacity {}.", binding->descriptorIndex,
+                 nr::scene::kMaxSceneTextureId);
 
         sceneTextureHandlesById.insert_or_assign(binding->descriptorIndex, textureHandle);
     });
@@ -162,15 +159,13 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene,
 {
     std::ranges::for_each(tlasPackets, [&](const nr::scene::TlasBuildInputPacket &packet) {
         auto meshRecordRef = scene.tryGetMeshAsset(packet.mesh);
-        nrAssert(
-            meshRecordRef.has_value(),
-            std::format("Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to resolve.",
-                        packet.mesh.slot, packet.mesh.generation));
+        nrAssert(meshRecordRef.has_value(),
+                 "Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to resolve.",
+                 packet.mesh.slot, packet.mesh.generation);
         auto const &meshRecord = meshRecordRef->get();
         nrAssert(meshRecord.cpuReady,
-                 std::format(
-                     "Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to be CPU ready.",
-                     packet.mesh.slot, packet.mesh.generation));
+                 "Renderer TLAS texture collection expected mesh handle (slot={}, generation={}) to be CPU ready.",
+                 packet.mesh.slot, packet.mesh.generation);
 
         std::ranges::for_each(meshRecord.cpu.geometries, [&](const nr::resource::MeshGeometry &geometry) {
             if (geometry.material.valid())
@@ -337,40 +332,6 @@ void NodeRuntime::collectOptionAvailability(const nr::options::OptionFrameSnapsh
     return {};
 }
 
-[[nodiscard]] bool NodeRuntime::supportsRenderGraphSkeleton() const noexcept
-{
-    return false;
-}
-
-[[nodiscard]] std::optional<NodeRuntime::StructuralSnapshot> NodeRuntime::structuralSnapshot(
-    const NodeFrameParameters &frameParameters) const
-{
-    if (!supportsRenderGraphSkeleton())
-    {
-        return std::nullopt;
-    }
-
-    return StructuralSnapshot{
-        .branchKey = std::format(
-            "display={}x{};render={}x{};swapchain={}x{};format={};colorSpace={};reset={};scenePackets={};tlasPackets={"
-            "}",
-            frameParameters.resolutionPlan.displayExtent.width, frameParameters.resolutionPlan.displayExtent.height,
-            frameParameters.resolutionPlan.renderExtent.width, frameParameters.resolutionPlan.renderExtent.height,
-            frameParameters.swapchainExtent.width, frameParameters.swapchainExtent.height,
-            static_cast<std::uint32_t>(frameParameters.swapchainFormat),
-            static_cast<std::uint32_t>(frameParameters.swapchainColorSpace),
-            frameParameters.resolutionPlan.resetHistory ? 1 : 0,
-            frameParameters.scenePackets.has_value() ? frameParameters.scenePackets->get().rtInstances.size() : 0u,
-            frameParameters.sceneTlasBuildInputs.has_value() ? frameParameters.sceneTlasBuildInputs->get().size() : 0u),
-    };
-}
-
-bool NodeRuntime::materializeRenderGraphSkeleton(RenderGraphSkeletonPatchContext &, const NodeFrameParameters &,
-                                                 const StructuralSnapshot &)
-{
-    return false;
-}
-
 void NodeRuntime::advanceContinuations(std::uint32_t)
 {
 }
@@ -469,7 +430,7 @@ void Renderer::synchronizeSampledImageUpload(const nr::rhi::ops::ImageUploadTick
                                              std::string_view debugName)
 {
     nrAssert(static_cast<bool>(device_), "Renderer::synchronizeSampledImageUpload requires initialized device.");
-    nrAssert(uploadTicket.valid(), std::format("{} upload ticket is invalid.", debugName));
+    nrAssert(uploadTicket.valid(), "{} upload ticket is invalid.", debugName);
 
     auto &uploadContext = device_->uploadReadback();
     auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
@@ -501,8 +462,7 @@ void Renderer::synchronizeSampledImageUpload(const nr::rhi::ops::ImageUploadTick
     auto fence = vk::raii::Fence(device_->device, vk::FenceCreateInfo{});
     device_->queueManager.graphics().submit(std::move(syncBatch), std::cref(fence));
     auto const waitResult = device_->device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
-    nrAssert(waitResult == vk::Result::eSuccess,
-             std::format("Renderer failed waiting for {} upload synchronization.", debugName));
+    nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for {} upload synchronization.", debugName);
     uploadContext.reclaimCompletedUploads();
 }
 
@@ -560,7 +520,7 @@ void Renderer::initialize(const RendererCreateInfo &info)
     shaderService.configure();
 
     device_ = std::make_unique<nr::rhi::Device>();
-    device_->initialize(info.appName, info.engineName, info.pipelineCache);
+    device_->initialize(info.appName, info.engineName);
     frameUniformArena_.initialize(*device_, info.frameUniformBytesPerFrame, "Renderer.FrameUniformArena");
     submissionTimelines_.initialize(device_->device, 0);
     ensureSceneTextureFallback();
@@ -572,24 +532,36 @@ void Renderer::setEnvironmentMap(nr::resource::EnvironmentMap environment)
     nrAssert(static_cast<bool>(device_), "Renderer::setEnvironmentMap requires initialize() first.");
     nrAssert(environment.valid(), "Renderer::setEnvironmentMap requires a valid RGBA16F environment resource.");
 
+    auto const totalStart = std::chrono::steady_clock::now();
+    auto const waitIdleStart = std::chrono::steady_clock::now();
     device_->waitIdle();
+    auto const waitIdleFinished = std::chrono::steady_clock::now();
+    auto const resetStart = std::chrono::steady_clock::now();
     builder_.clear();
     executor_.clearRetainedState();
     cacheSuite_.clear();
+    auto const resetFinished = std::chrono::steady_clock::now();
     auto const &texture = environment.radiance;
+    auto const imageCreateStart = std::chrono::steady_clock::now();
     auto imageInfo =
         nr::rhi::makeImageCreateInfo(texture.format, vk::Extent2D{texture.width, texture.height},
                                      vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
     auto image = device_->resourceFactory.createImage(imageInfo, nr::rhi::MemoryUsage::GpuOnly,
                                                       std::format("Renderer.EnvironmentMap.{}", texture.name));
     nrAssert(image.valid(), "Renderer::setEnvironmentMap failed to create the GPU image.");
+    auto const imageCreateFinished = std::chrono::steady_clock::now();
 
     auto &uploadContext = device_->uploadReadback();
+    auto const uploadSubmitStart = std::chrono::steady_clock::now();
     auto uploadTicket =
         uploadContext.uploadImage(texture.levels.front().bytes, image, vk::ImageLayout::eUndefined,
                                   vk::ImageLayout::eShaderReadOnlyOptimal, makeSampledImageUploadPlan());
+    auto const uploadSubmitFinished = std::chrono::steady_clock::now();
+    auto const synchronizeStart = std::chrono::steady_clock::now();
     synchronizeSampledImageUpload(uploadTicket, "environment map");
+    auto const synchronizeFinished = std::chrono::steady_clock::now();
 
+    auto const stateAssignStart = std::chrono::steady_clock::now();
     environmentMapImage_ = std::move(image);
     environmentMapParameters_ = EnvironmentMapParameters{
         .radianceDecodeScale = environment.radianceDecodeScale,
@@ -610,6 +582,17 @@ void Renderer::setEnvironmentMap(nr::resource::EnvironmentMap environment)
         .layout = ImageLayoutIntent::ShaderReadOnly,
     };
     temporalHistoryResetPending_ = true;
+    auto const stateAssignFinished = std::chrono::steady_clock::now();
+    nrLog<LogLevel::info>(
+        "[Renderer::setEnvironmentMap] name='{}', extent={}x{}, payloadMiB={:.3f}, phaseMs={{waitIdle={:.3f}, "
+        "resetState={:.3f}, imageCreate={:.3f}, uploadSubmit={:.3f}, synchronize={:.3f}, "
+        "stateAssign={:.3f}, total={:.3f}}}",
+        texture.name, texture.width, texture.height,
+        static_cast<double>(texture.levels.front().bytes.size()) / (1024.0 * 1024.0),
+        elapsedMilliseconds(waitIdleStart, waitIdleFinished), elapsedMilliseconds(resetStart, resetFinished),
+        elapsedMilliseconds(imageCreateStart, imageCreateFinished), elapsedMilliseconds(uploadSubmitStart, uploadSubmitFinished),
+        elapsedMilliseconds(synchronizeStart, synchronizeFinished), elapsedMilliseconds(stateAssignStart, stateAssignFinished),
+        elapsedMilliseconds(totalStart, stateAssignFinished));
 }
 
 void Renderer::requestTemporalHistoryReset() noexcept
@@ -681,6 +664,12 @@ void Renderer::requestTemporalHistoryReset() noexcept
     auto optionBuilder = nr::options::OptionCatalogBuilder{};
     std::ranges::for_each(spec.nodes,
                           [&](const NodeCreateInfo &createInfo) { createInfo.runtime->declareOptions(optionBuilder); });
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling options. Remove with the whole block.
+    std::ranges::for_each(nr::options::makeBuildProfilingDefinitions(),
+                          [&](nr::options::OptionDefinition definition) {
+                              static_cast<void>(optionBuilder.add(std::move(definition)));
+                          });
+    // [TEMP-BUILD-PROFILING] END
     auto optionCatalog = optionBuilder.build();
     if (!optionCatalog.valid())
     {
@@ -732,7 +721,7 @@ void Renderer::requestTemporalHistoryReset() noexcept
     auto const preflight = preflightGraph(spec);
     if (!preflight)
     {
-        nr::nrLog(nr::LogLevel::error, "RENDERER", preflight.message);
+        nr::nrLog<nr::LogLevel::warning, "RENDERER">("{}", preflight.message);
         return false;
     }
 
@@ -759,9 +748,8 @@ void Renderer::requestTemporalHistoryReset() noexcept
                               : nr::rhi::ShaderService::instance().compileProgramsByFile(shaderRequests);
     if (shaderPrograms.size() != shaderRequests.size())
     {
-        nr::nrLog(nr::LogLevel::error, "RENDERER",
-                  std::format("Static shader batch returned {} programs for {} requests.", shaderPrograms.size(),
-                              shaderRequests.size()));
+        nr::nrLog<nr::LogLevel::warning, "RENDERER">(
+            "Static shader batch returned {} programs for {} requests.", shaderPrograms.size(), shaderRequests.size());
         return false;
     }
 
@@ -777,9 +765,9 @@ void Renderer::requestTemporalHistoryReset() noexcept
         });
         auto const ownerName =
             ownerIt != nodeIndices.end() ? spec.nodes[*ownerIt].config.instanceName : std::string{"<unknown>"};
-        nr::nrLog(nr::LogLevel::error, "RENDERER",
-                  std::format("Static shader '{}' failed while installing node '{}'.",
-                              shaderRequests[invalidIndex].sourcePath.generic_string(), ownerName));
+        nr::nrLog<nr::LogLevel::warning, "RENDERER">(
+            "Static shader '{}' failed while installing node '{}'.", shaderRequests[invalidIndex].sourcePath.generic_string(),
+            ownerName);
         return false;
     }
 
@@ -890,7 +878,6 @@ void Renderer::resize()
     }
     device_->recreateSwapchain();
     observedSwapchainRecreationGeneration_ = device_->swapchainRecreationGeneration();
-    cacheSuite_.skeletonCache.clear(RenderGraphSkeletonMissReason::Invalidated);
     cacheSuite_.compileCache.clear();
     acceptedTemporalFrameState_.reset();
 }
@@ -911,6 +898,15 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     std::ranges::for_each(installedNodes_, [&](const InstalledNode &installedNode) {
         installedNode.runtime->collectOptionAvailability(snapshot, availability);
     });
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling options. Remove with the whole block.
+    auto const profilingIds = std::array{
+        nr::options::optionId(nr::options::keys::buildProfilingEnabled),
+        nr::options::optionId(nr::options::keys::buildProfilingReportInterval),
+    };
+    std::ranges::for_each(profilingIds, [&](const nr::options::OptionId &id) {
+        availability.insert_or_assign(id, nr::options::OptionAvailability{.available = true, .reason = {}});
+    });
+    // [TEMP-BUILD-PROFILING] END
 }
 
 [[nodiscard]] RendererFrameResult Renderer::renderFrame(const RendererFrameInput &input)
@@ -1000,7 +996,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
         {
             return;
         }
-        cacheSuite_.skeletonCache.clear(RenderGraphSkeletonMissReason::Invalidated);
         cacheSuite_.compileCache.clear();
         observedSwapchainRecreationGeneration_ = generation;
     };
@@ -1115,12 +1110,11 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
             sceneBridgeMilliseconds = elapsedMilliseconds(sceneBridgeStart, std::chrono::steady_clock::now());
         }
         std::ranges::for_each(sceneBridgeFrame->rasterTextureHandlesById, [&](const auto &entry) {
-            nrAssert(entry.first < kSceneTextureDescriptorCapacity,
-                     std::format("Scene texture descriptor id {} exceeds capacity {}.", entry.first,
-                                 kSceneTextureDescriptorCapacity));
+            nrAssert(entry.first < kSceneTextureDescriptorCapacity, "Scene texture descriptor id {} exceeds capacity {}.",
+                     entry.first, kSceneTextureDescriptorCapacity);
             auto [it, inserted] = sceneTextureHandlesById.try_emplace(entry.first, entry.second);
             nrAssert(inserted || it->second == entry.second,
-                     std::format("Scene texture descriptor id {} resolved to conflicting handles.", entry.first));
+                     "Scene texture descriptor id {} resolved to conflicting handles.", entry.first);
         });
     }
     cpuTimings.sceneMilliseconds = elapsedMilliseconds(sceneStart, std::chrono::steady_clock::now());
@@ -1172,7 +1166,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
         std::ranges::for_each(tlasTextureHandlesById_, [&](const auto &entry) {
             auto [it, inserted] = sceneTextureHandlesById.try_emplace(entry.first, entry.second);
             nrAssert(inserted || it->second == entry.second,
-                     std::format("Scene texture descriptor id {} resolved to conflicting handles.", entry.first));
+                     "Scene texture descriptor id {} resolved to conflicting handles.", entry.first);
         });
         tlasTextureCollectionMilliseconds =
             elapsedMilliseconds(tlasTextureCollectionStart, std::chrono::steady_clock::now());
@@ -1304,10 +1298,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
             .graphPreludeMilliseconds = graphBuildTimings.preludeMilliseconds,
             .uiCollectMilliseconds = graphBuildTimings.uiCollectMilliseconds,
             .nodeLoopMilliseconds = graphBuildTimings.nodeLoopMilliseconds,
-            .skeletonPatchMilliseconds = graphBuildTimings.skeletonPatchMilliseconds,
-            .skeletonRebuildMilliseconds = graphBuildTimings.skeletonRebuildMilliseconds,
-            .skeletonHit = graphBuildTimings.skeletonHit,
-            .skeletonMissReason = graphBuildTimings.skeletonMissReason,
             .execute = executorBenchmarkTelemetry,
             .executeAccountedMainThreadMilliseconds = executeAccountedMainThreadMilliseconds,
             .executeUnclassifiedMilliseconds = executeResidualMilliseconds >= -0.001
@@ -1413,6 +1403,25 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
 {
     nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
+    auto const *tempProfilingOption =
+        frameParameters.optionSnapshot.get().find(nr::options::keys::buildProfilingEnabled);
+    auto const tempProfilingEnabled = tempProfilingOption != nullptr && *tempProfilingOption;
+    if (tempProfilingEnabled != tempBuildProfileActive_)
+    {
+        tempBuildProfileActive_ = tempProfilingEnabled;
+        tempBuildProfileNodes_.clear();
+        tempBuildProfilePrelude_ = {};
+        tempBuildProfileTotal_ = {};
+        tempBuildProfileFrames_ = 0u;
+    }
+    if (tempProfilingEnabled && tempBuildProfileNodes_.size() != installedNodes_.size())
+    {
+        tempBuildProfileNodes_.resize(installedNodes_.size());
+    }
+    auto const tempProfileStart = std::chrono::steady_clock::now();
+    // [TEMP-BUILD-PROFILING] END
+
     auto telemetry = std::optional<RendererBenchmarkBuildTelemetry>{};
     if (benchmarkPhase_ == RendererBenchmarkPhase::measure)
     {
@@ -1443,278 +1452,149 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     auto const nodeBuildStart =
         telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
-    auto structuralSnapshots = std::vector<NodeRuntime::StructuralSnapshot>{};
-    structuralSnapshots.reserve(installedNodes_.size());
-    auto skeletonEligible = renderGraphSkeletonMode_ != RenderGraphSkeletonMode::Legacy;
-    std::ranges::for_each(installedNodes_, [&](const InstalledNode &installedNode) {
-        if (!skeletonEligible)
-        {
-            return;
-        }
-        auto snapshot = installedNode.runtime->structuralSnapshot(nodeFrameParameters);
-        if (!snapshot.has_value())
-        {
-            skeletonEligible = false;
-            structuralSnapshots.clear();
-            return;
-        }
-        structuralSnapshots.push_back(std::move(*snapshot));
-    });
-
-    auto skeletonKey = RenderGraphSkeletonKey{};
-    auto skeletonKeyHit = false;
-    if (skeletonEligible)
-    {
-        skeletonKey.installedGraphGeneration = installedGraphGeneration_;
-        skeletonKey.displayExtent = frameParameters.resolutionPlan.displayExtent;
-        skeletonKey.renderExtent = frameParameters.resolutionPlan.renderExtent;
-        skeletonKey.swapchainExtent = frameParameters.swapchainExtent;
-        skeletonKey.swapchainFormat = frameParameters.swapchainFormat;
-        skeletonKey.swapchainColorSpace = frameParameters.swapchainColorSpace;
-        skeletonKey.shaderSessionGeneration = device_->shaderCompiler().sessionGeneration();
-        skeletonKey.swapchainRecreationGeneration = device_->swapchainRecreationGeneration();
-        skeletonKey.submitAcquirePolicyRevision = installedGraphGeneration_;
-        skeletonKey.hasSceneBridgeFrame = sceneBridgeFrame.has_value();
-        auto nodeOrdinalsForKey = std::views::iota(std::size_t{0}, installedNodes_.size());
-        std::ranges::for_each(nodeOrdinalsForKey, [&](std::size_t nodeIndex) {
-            skeletonKey.nodes.push_back(RenderGraphSkeletonNodeKey{
-                .configurationRevision = installedNodes_[nodeIndex].config.configurationRevision,
-                .runtimeConfigurationRevision = structuralSnapshots[nodeIndex].configurationRevision,
-                .structuralBranchKey = structuralSnapshots[nodeIndex].branchKey,
-            });
-        });
-        skeletonKeyHit = cacheSuite_.skeletonCache.contains(skeletonKey);
-    }
-    else
-    {
-        cacheSuite_.skeletonCache.recordMiss(renderGraphSkeletonMode_ == RenderGraphSkeletonMode::Legacy
-                                                 ? RenderGraphSkeletonMissReason::Disabled
-                                                 : RenderGraphSkeletonMissReason::UnsupportedNode);
-    }
-
     auto timings = RendererGraphBuildTimings{};
-    auto skeletonProbe = RenderGraphSkeletonCache::ProbeResult{};
-    auto patched = false;
-    auto patchFailed = false;
-    if (skeletonEligible && skeletonKeyHit && renderGraphSkeletonMode_ == RenderGraphSkeletonMode::Enabled)
+    auto const buildStart = std::chrono::steady_clock::now();
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
+    if (tempProfilingEnabled)
     {
-        auto const patchStart = std::chrono::steady_clock::now();
-        auto skeleton = cacheSuite_.skeletonCache.lookup(skeletonKey);
-        nrAssert(static_cast<bool>(skeleton), "Renderer Skeleton key hit must resolve an owned template.");
-        if (skeleton->nodePatchLayouts.size() == installedNodes_.size())
+        tempBuildProfilePrelude_.accumulate(elapsedMilliseconds(tempProfileStart, buildStart));
+    }
+    // [TEMP-BUILD-PROFILING] END
+    builder_.clear();
+    auto frameResources = std::map<std::string, GraphResourceHandle>{};
+    auto frameDataResources = std::map<std::string, GraphFrameDataHandle>{};
+    auto const environmentMap = builder_.addResource(GraphImportedImageDesc{
+        .debugName = "Renderer.EnvironmentMap",
+        .lifetime = ResourceLifetime::RendererPersistent,
+        .initialOwnership = environmentMapState_.common.ownership,
+        .extent = environmentMapImage_.extent(),
+        .format = environmentMapImage_.format(),
+        .usageIntents = {ImageUsageIntent::Sampled},
+        .initialLayout = environmentMapState_.layout,
+        .initialAccessScope = environmentMapState_.common.access,
+        .importedResource = std::cref(environmentMapImage_),
+        .retainedState = std::ref(environmentMapState_),
+    });
+    auto globalResources = FrameGlobalResources{
+        .frameUniform = frameUniformArena_.upload(builder_, "Renderer.GlobalFrameUniforms", globalFrameUniforms),
+        .environmentMap = environmentMap,
+        .environmentMapParameters = environmentMapParameters_,
+        .sceneTextureDescriptorsById = std::move(sceneTextureDescriptorTable.descriptorsById),
+        .sceneTextureDescriptorVersion = sceneTextureDescriptorTable.version,
+        .bindlessImageTableCache = std::ref(cacheSuite_.bindlessImageTableCache),
+        .cameraFrameState = cameraFrameState,
+    };
+    frameResources.emplace("Renderer.EnvironmentMap", environmentMap);
+    frameResources.emplace("Renderer.GlobalFrameUniforms", globalResources.frameUniform.resource);
+    if (sceneBridgeFrame.has_value())
+    {
+        nodeFrameParameters.sceneBridgeFrameHandle = builder_.addFrameData("SceneBridgeFrame", sceneBridgeFrame->get());
+        frameDataResources.emplace("SceneBridgeFrame", *nodeFrameParameters.sceneBridgeFrameHandle);
+    }
+    auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
+    std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
+        auto &installedNode = installedNodes_[nodeIndex];
+        // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
+        auto const tempNodeStart =
+            tempProfilingEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        // [TEMP-BUILD-PROFILING] END
+        auto const nodeStart =
+            telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        auto nodeHandle = builder_.addNode(installedNode.config.instanceName, installedNode.config.queue);
+        if (telemetry.has_value())
         {
-            auto currentFrame = RenderGraphSkeletonCache::instantiate(*skeleton);
-            auto namedFrameResources = skeleton->namedFrameResources;
-            auto namedFrameData = skeleton->namedFrameData;
-            auto globalPatch = RenderGraphSkeletonPatchContext{
-                currentFrame,
-                skeleton->globalPatchLayout,
-                namedFrameResources,
-                namedFrameData,
-            };
-            globalPatch.patchResource(0u, GraphImportedImageDesc{
-                                              .debugName = "Renderer.EnvironmentMap",
-                                              .lifetime = ResourceLifetime::RendererPersistent,
-                                              .initialOwnership = environmentMapState_.common.ownership,
-                                              .extent = environmentMapImage_.extent(),
-                                              .format = environmentMapImage_.format(),
-                                              .usageIntents = {ImageUsageIntent::Sampled},
-                                              .initialLayout = environmentMapState_.layout,
-                                              .initialAccessScope = environmentMapState_.common.access,
-                                              .importedResource = std::cref(environmentMapImage_),
-                                              .retainedState = std::ref(environmentMapState_),
-                                          });
-            auto const frameUniform = frameUniformArena_.patchUploadBytes(
-                globalPatch, 1u, "Renderer.GlobalFrameUniforms",
-                std::as_bytes(std::span{std::addressof(globalFrameUniforms), std::size_t{1u}}));
-            auto const globalResources = FrameGlobalResources{
-                .frameUniform = frameUniform,
-                .environmentMap = globalPatch.namedResource("Renderer.EnvironmentMap"),
-                .environmentMapParameters = environmentMapParameters_,
-                .sceneTextureDescriptorsById = sceneTextureDescriptorTable.descriptorsById,
-                .sceneTextureDescriptorVersion = sceneTextureDescriptorTable.version,
-                .bindlessImageTableCache = std::ref(cacheSuite_.bindlessImageTableCache),
-                .cameraFrameState = cameraFrameState,
-            };
-            if (sceneBridgeFrame.has_value())
-            {
-                globalPatch.patchFrameData(0u, "SceneBridgeFrame",
-                                           std::make_any<nr::scene::SceneBridgeFrame>(sceneBridgeFrame->get()));
-                nodeFrameParameters.sceneBridgeFrameHandle = globalPatch.namedFrameData("SceneBridgeFrame");
-            }
-            patched = true;
-            auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
-            std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
-                if (!patched)
-                {
-                    return;
-                }
-                auto nodePatch = RenderGraphSkeletonPatchContext{
-                    currentFrame,   skeleton->nodePatchLayouts[nodeIndex], namedFrameResources,
-                    namedFrameData, std::addressof(globalResources), installedNodes_[nodeIndex].config.instanceName,
-                };
-                auto const nodeStart =
-                    telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-                patched = installedNodes_[nodeIndex].runtime->materializeRenderGraphSkeleton(
-                    nodePatch, nodeFrameParameters, structuralSnapshots[nodeIndex]);
-                if (telemetry.has_value())
-                {
-                    telemetry->nodeBuildMilliseconds[nodeIndex] =
-                        elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
-                }
-            });
-            if (patched)
-            {
-                builder_.clear();
-                builder_.mutableFrame() = std::move(currentFrame);
-                cacheSuite_.skeletonCache.recordHit();
-                skeletonProbe = RenderGraphSkeletonCache::ProbeResult{
-                    .keyHit = true,
-                    .structureMatches = true,
-                };
-                timings.skeletonPatchMilliseconds = elapsedMilliseconds(patchStart, std::chrono::steady_clock::now());
-            }
+            telemetry->nodeOrdinal = nodeIndex;
         }
-        patchFailed = !patched;
-        if (patchFailed)
+        auto buildContext = NodeBuildContext{
+            .graphBuilder = std::ref(builder_),
+            .nodeHandle = nodeHandle,
+            .queue = installedNode.config.queue,
+            .frameIndex = frameParameters.frameIndex,
+            .runtimeName = installedNode.config.instanceName,
+            .globalResources = std::cref(globalResources),
+            .frameResources = std::ref(frameResources),
+            .frameDataResources = std::ref(frameDataResources),
+            .benchmarkTelemetry = telemetry.has_value()
+                                      ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{
+                                            std::ref(*telemetry)}
+                                      : std::nullopt,
+        };
+        installedNode.runtime->build(buildContext, nodeFrameParameters);
+        // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
+        if (tempProfilingEnabled)
         {
-            cacheSuite_.skeletonCache.recordMiss(RenderGraphSkeletonMissReason::PatchFailed);
+            auto &profileEntry = tempBuildProfileNodes_[nodeIndex];
+            profileEntry.name = installedNode.config.instanceName;
+            profileEntry.accumulate(elapsedMilliseconds(tempNodeStart, std::chrono::steady_clock::now()));
+        }
+        // [TEMP-BUILD-PROFILING] END
+        if (telemetry.has_value())
+        {
+            telemetry->nodeBuildMilliseconds[nodeIndex] = elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
+        }
+        auto boundaries = submitNodesByAfterIndex_.equal_range(nodeIndex);
+        std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto &entry) {
+            auto debugName = entry.second.debugName.empty() ? std::format("Submit.After.{}", installedNode.config.instanceName)
+                                                            : entry.second.debugName;
+            nrAssert(builder_.addSubmitNode(debugName).valid(),
+                     "Renderer::buildInstalledGraph failed to add a valid submit node.");
+        });
+    });
+    timings.nodeLoopMilliseconds = elapsedMilliseconds(buildStart, std::chrono::steady_clock::now());
+
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
+    if (tempProfilingEnabled)
+    {
+        tempBuildProfileTotal_.accumulate(elapsedMilliseconds(tempProfileStart, std::chrono::steady_clock::now()));
+        ++tempBuildProfileFrames_;
+        auto const *reportInterval =
+            frameParameters.optionSnapshot.get().find(nr::options::keys::buildProfilingReportInterval);
+        auto const interval = reportInterval != nullptr ? std::max<std::uint64_t>(1u, *reportInterval) : 120u;
+        if (tempBuildProfileFrames_ % interval == 0u)
+        {
+            tempReportBuildProfile();
         }
     }
-
-    if (!patched)
-    {
-        auto const coldBuildStart = std::chrono::steady_clock::now();
-        builder_.clear();
-        auto capture = RenderGraphSkeletonCapture{};
-        auto frameResources = std::map<std::string, GraphResourceHandle>{};
-        auto frameDataResources = std::map<std::string, GraphFrameDataHandle>{};
-        auto const globalResourceBegin = builder_.frame().resources.size();
-        auto const globalFrameDataBegin = builder_.frame().frameData.size();
-        auto const environmentMap = builder_.addResource(GraphImportedImageDesc{
-            .debugName = "Renderer.EnvironmentMap",
-            .lifetime = ResourceLifetime::RendererPersistent,
-            .initialOwnership = environmentMapState_.common.ownership,
-            .extent = environmentMapImage_.extent(),
-            .format = environmentMapImage_.format(),
-            .usageIntents = {ImageUsageIntent::Sampled},
-            .initialLayout = environmentMapState_.layout,
-            .initialAccessScope = environmentMapState_.common.access,
-            .importedResource = std::cref(environmentMapImage_),
-            .retainedState = std::ref(environmentMapState_),
-        });
-        auto globalResources = FrameGlobalResources{
-            .frameUniform = frameUniformArena_.upload(builder_, "Renderer.GlobalFrameUniforms", globalFrameUniforms),
-            .environmentMap = environmentMap,
-            .environmentMapParameters = environmentMapParameters_,
-            .sceneTextureDescriptorsById = std::move(sceneTextureDescriptorTable.descriptorsById),
-            .sceneTextureDescriptorVersion = sceneTextureDescriptorTable.version,
-            .bindlessImageTableCache = std::ref(cacheSuite_.bindlessImageTableCache),
-            .cameraFrameState = cameraFrameState,
-        };
-        frameResources.emplace("Renderer.EnvironmentMap", environmentMap);
-        frameResources.emplace("Renderer.GlobalFrameUniforms", globalResources.frameUniform.resource);
-        if (sceneBridgeFrame.has_value())
-        {
-            nodeFrameParameters.sceneBridgeFrameHandle =
-                builder_.addFrameData("SceneBridgeFrame", sceneBridgeFrame->get());
-            frameDataResources.emplace("SceneBridgeFrame", *nodeFrameParameters.sceneBridgeFrameHandle);
-        }
-        capture.globalPatchLayout = RenderGraphSkeletonNodePatchLayout{
-            .resourceBegin = globalResourceBegin,
-            .resourceCount = builder_.frame().resources.size() - globalResourceBegin,
-            .frameDataBegin = globalFrameDataBegin,
-            .frameDataCount = builder_.frame().frameData.size() - globalFrameDataBegin,
-        };
-
-        auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
-        std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
-            auto &installedNode = installedNodes_[nodeIndex];
-            auto const nodeStart =
-                telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-            auto const resourceBegin = builder_.frame().resources.size();
-            auto const frameDataBegin = builder_.frame().frameData.size();
-            auto const passBegin = builder_.frame().passes.size();
-            auto nodeHandle = builder_.addNode(installedNode.config.instanceName, installedNode.config.queue);
-            if (telemetry.has_value())
-            {
-                telemetry->nodeOrdinal = nodeIndex;
-            }
-            auto buildContext = NodeBuildContext{
-                .graphBuilder = std::ref(builder_),
-                .nodeHandle = nodeHandle,
-                .queue = installedNode.config.queue,
-                .frameIndex = frameParameters.frameIndex,
-                .runtimeName = installedNode.config.instanceName,
-                .globalResources = std::cref(globalResources),
-                .frameResources = std::ref(frameResources),
-                .frameDataResources = std::ref(frameDataResources),
-                .benchmarkTelemetry =
-                    telemetry.has_value()
-                        ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{std::ref(*telemetry)}
-                        : std::nullopt,
-            };
-            installedNode.runtime->build(buildContext, nodeFrameParameters);
-            capture.nodePatchLayouts.push_back(RenderGraphSkeletonNodePatchLayout{
-                .queue = installedNode.config.queue,
-                .resourceBegin = resourceBegin,
-                .resourceCount = builder_.frame().resources.size() - resourceBegin,
-                .frameDataBegin = frameDataBegin,
-                .frameDataCount = builder_.frame().frameData.size() - frameDataBegin,
-                .passBegin = passBegin,
-                .passCount = builder_.frame().passes.size() - passBegin,
-            });
-            if (telemetry.has_value())
-            {
-                telemetry->nodeBuildMilliseconds[nodeIndex] =
-                    elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
-            }
-            auto boundaries = submitNodesByAfterIndex_.equal_range(nodeIndex);
-            std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto &entry) {
-                auto debugName = entry.second.debugName.empty()
-                                     ? std::format("Submit.After.{}", installedNode.config.instanceName)
-                                     : entry.second.debugName;
-                nrAssert(builder_.addSubmitNode(debugName).valid(),
-                         "Renderer::buildInstalledGraph failed to add a valid submit node.");
-            });
-        });
-        capture.namedFrameResources = std::move(frameResources);
-        capture.namedFrameData = std::move(frameDataResources);
-        if (skeletonEligible)
-        {
-            if (patchFailed)
-            {
-                cacheSuite_.skeletonCache.refreshMaterialized(skeletonKey, builder_.frame(), std::move(capture));
-                skeletonProbe = RenderGraphSkeletonCache::ProbeResult{
-                    .keyHit = true,
-                    .missReason = RenderGraphSkeletonMissReason::PatchFailed,
-                };
-            }
-            else
-            {
-                skeletonProbe =
-                    cacheSuite_.skeletonCache.acceptMaterialized(skeletonKey, builder_.frame(), std::move(capture));
-            }
-        }
-        timings.nodeLoopMilliseconds = elapsedMilliseconds(coldBuildStart, std::chrono::steady_clock::now());
-        timings.skeletonRebuildMilliseconds = skeletonEligible ? timings.nodeLoopMilliseconds : 0.0;
-    }
+    // [TEMP-BUILD-PROFILING] END
 
     if (telemetry.has_value())
     {
         timings.preludeMilliseconds = elapsedMilliseconds(graphPreludeStart, nodeBuildStart);
     }
-    timings.skeletonHit = skeletonProbe.structureMatches;
-    timings.skeletonMissReason = skeletonEligible ? skeletonProbe.missReason
-                                 : renderGraphSkeletonMode_ == RenderGraphSkeletonMode::Legacy
-                                     ? RenderGraphSkeletonMissReason::Disabled
-                                     : RenderGraphSkeletonMissReason::UnsupportedNode;
-    if (patchFailed)
-    {
-        timings.skeletonMissReason = RenderGraphSkeletonMissReason::PatchFailed;
-    }
     return timings;
 }
+
+// [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage report. Remove with the whole block.
+void Renderer::tempReportBuildProfile()
+{
+    auto const frames = static_cast<double>(std::max<std::uint64_t>(1u, tempBuildProfileFrames_));
+    auto const totalAverage = tempBuildProfileTotal_.totalMilliseconds / frames;
+    auto ranked = tempBuildProfileNodes_ | std::views::filter([](const TempBuildProfileEntry &entry) {
+                      return entry.count != 0u;
+                  }) |
+                  std::ranges::to<std::vector>();
+    std::ranges::sort(ranked, std::ranges::greater{}, &TempBuildProfileEntry::totalMilliseconds);
+
+    auto report = std::format("[TEMP-BUILD-PROFILING] frames={}, buildTotalAvgMs={:.4f}, buildTotalMaxMs={:.4f}, "
+                              "preludeAvgMs={:.4f} ({:.1f}%), preludeMaxMs={:.4f}",
+                              tempBuildProfileFrames_, totalAverage, tempBuildProfileTotal_.maxMilliseconds,
+                              tempBuildProfilePrelude_.totalMilliseconds / frames,
+                              tempBuildProfileTotal_.totalMilliseconds > 0.0
+                                  ? 100.0 * tempBuildProfilePrelude_.totalMilliseconds /
+                                        tempBuildProfileTotal_.totalMilliseconds
+                                  : 0.0,
+                              tempBuildProfilePrelude_.maxMilliseconds);
+    std::ranges::for_each(ranked, [&](const TempBuildProfileEntry &entry) {
+        report += std::format("\n  {:<40} avgMs={:.4f} maxMs={:.4f} share={:.1f}% samples={}", entry.name,
+                              entry.totalMilliseconds / frames, entry.maxMilliseconds,
+                              tempBuildProfileTotal_.totalMilliseconds > 0.0
+                                  ? 100.0 * entry.totalMilliseconds / tempBuildProfileTotal_.totalMilliseconds
+                                  : 0.0,
+                              entry.count);
+    });
+    nrLog<LogLevel::info>("{}", report);
+}
+// [TEMP-BUILD-PROFILING] END
 
 void Renderer::teardownInstalledGraph()
 {

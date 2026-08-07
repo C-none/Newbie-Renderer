@@ -156,8 +156,8 @@ namespace
          slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::anisotropy) ||
          anyNonZero(material.core.emissiveFactor)))
     {
-        nr::nrInfo<nr::LogLevel::warning>(std::format(
-            "RT material '{}' is unlit; ignoring authored PBR extension and emissive data.", material.name));
+        nr::nrLog<nr::LogLevel::warning>(
+            "RT material '{}' is unlit; ignoring authored PBR extension and emissive data.", material.name);
     }
 
     return layerFlags;
@@ -328,10 +328,8 @@ namespace
     auto slotIndices = std::views::iota(std::size_t{0}, material.textureSlots.size());
     std::ranges::for_each(slotIndices, [&](std::size_t slotIndex) {
         auto const &textureSlot = material.textureSlots[slotIndex];
-        nr::nrAssert(textureSlot.uvSet <= 1u, [&] {
-            return std::format("RT material '{}' texture slot {} uses unsupported UV set {}.", material.name, slotIndex,
-                               textureSlot.uvSet);
-        });
+        nr::nrAssert(textureSlot.uvSet <= 1u, "RT material '{}' texture slot {} uses unsupported UV set {}.",
+                     material.name, slotIndex, textureSlot.uvSet);
         compiled.textureRefs.push_back(RtMaterialTextureRef{
             .uvLinear = textureSlot.transform.linear,
             .uvOffset = textureSlot.transform.offset,

@@ -2,7 +2,9 @@ export module nr.pipeline;
 import dependency.vulkan;
 
 import nr.app;
+import nr.load;
 import nr.renderer;
+import nr.resource;
 import nr.scene;
 import std;
 
@@ -111,6 +113,8 @@ struct ModelLoadReport
     std::string message{};
 };
 
+struct ViewerRunConfig;
+
 class SceneModelController
 {
   public:
@@ -120,6 +124,35 @@ class SceneModelController
     [[nodiscard]] const std::optional<std::filesystem::path> &currentModelPath() const noexcept;
 
   private:
+    class ModelCpuLoad
+    {
+      public:
+        ModelCpuLoad(const ModelCpuLoad &) = delete;
+        ModelCpuLoad &operator=(const ModelCpuLoad &) = delete;
+        ModelCpuLoad(ModelCpuLoad &&) = default;
+        ModelCpuLoad &operator=(ModelCpuLoad &&) = default;
+        ~ModelCpuLoad() = default;
+
+      private:
+        friend class SceneModelController;
+
+        ModelCpuLoad(std::filesystem::path normalizedModelPath, nr::load::SceneAsset sceneAsset)
+            : normalizedModelPath_{std::move(normalizedModelPath)}, sceneAsset_{std::move(sceneAsset)}
+        {
+        }
+
+        std::filesystem::path normalizedModelPath_{};
+        nr::load::SceneAsset sceneAsset_{};
+    };
+
+    using ModelCpuLoadResult = std::expected<ModelCpuLoad, ModelLoadReport>;
+
+    [[nodiscard]] static ModelCpuLoadResult loadModelCpu(const std::filesystem::path &modelPath);
+    [[nodiscard]] ModelLoadReport commitModel(nr::app::AppSession &app, ModelCpuLoad &&loadedModel,
+                                              std::optional<std::reference_wrapper<ModelHistory>> history = {});
+
+    friend int runViewer(ViewerRunConfig config);
+
     std::optional<std::filesystem::path> currentModelPath_{};
 };
 
@@ -135,7 +168,6 @@ struct ViewerCommandLineOptions
     RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
     ViewerInteractionMode interactionMode = ViewerInteractionMode::human;
     std::filesystem::path automationScript{};
-    std::optional<nr::renderer::RenderGraphSkeletonMode> benchmarkRenderGraphSkeletonMode{};
     std::string errorMessage{};
 };
 
@@ -153,8 +185,6 @@ struct ViewerRunConfig
     RtDlssQuality dlssQuality = RtDlssQuality::dlaa;
     ViewerInteractionMode interactionMode = ViewerInteractionMode::human;
     std::filesystem::path automationScript{};
-    nr::renderer::RenderGraphSkeletonMode benchmarkRenderGraphSkeletonMode =
-        nr::renderer::RenderGraphSkeletonMode::Enabled;
     std::string commandLine{};
 };
 
@@ -166,10 +196,20 @@ void printViewerUsage(std::string_view executableName = "main");
 
 namespace nr::pipeline::detail
 {
+struct EnvironmentMapCpuLoad
+{
+    std::filesystem::path sourcePath{};
+    std::string name{};
+    nr::resource::EnvironmentMap environmentMap{};
+};
+
 void registerNormalViewPipeline(RenderPipelineRegistry &registry);
 void registerRtObjectPipeline(RenderPipelineRegistry &registry);
 
 [[nodiscard]] std::string normalizedModelPathKey(const std::filesystem::path &path);
+[[nodiscard]] std::expected<EnvironmentMapCpuLoad, std::string> loadEnvironmentMapCpu(
+    std::string_view environmentMapName);
+void commitEnvironmentMap(nr::renderer::Renderer &renderer, EnvironmentMapCpuLoad &&loadedEnvironmentMap);
 [[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(nr::renderer::Renderer &renderer,
                                                                   std::string_view environmentMapName);
 } // namespace nr::pipeline::detail

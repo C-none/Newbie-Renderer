@@ -79,14 +79,14 @@ class TemporaryExr
     }
     catch (const std::exception &error)
     {
-        nr::nrInfo<nr::LogLevel::error>(
-            std::format("Failed to write OpenEXR test fixture '{}': {}", path.generic_string(), error.what()));
+        nr::nrLog<nr::LogLevel::error>("Failed to write OpenEXR test fixture '{}': {}", path.generic_string(),
+                                            error.what());
         return false;
     }
     catch (...)
     {
-        nr::nrInfo<nr::LogLevel::error>(
-            std::format("Failed to write OpenEXR test fixture '{}': unknown OpenEXR error.", path.generic_string()));
+        nr::nrLog<nr::LogLevel::error>("Failed to write OpenEXR test fixture '{}': unknown OpenEXR error.",
+                                            path.generic_string());
         return false;
     }
 }

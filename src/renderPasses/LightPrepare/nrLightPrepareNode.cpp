@@ -238,67 +238,6 @@ void LightPrepareNode::build(NodeBuildContext &context, const NodeFrameParameter
     materializeCurrentFrame(context, frameParameters);
 }
 
-[[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> LightPrepareNode::structuralSnapshot(
-    const NodeFrameParameters &) const
-{
-    return StructuralSnapshot{
-        .configurationRevision = std::max<std::uint64_t>(1u, input.initialLightCapacity),
-        .branchKey = "upload",
-    };
-}
-
-bool LightPrepareNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
-                                                      const NodeFrameParameters &frameParameters,
-                                                      const StructuralSnapshot &)
-{
-    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(),
-                 "LightPrepare Skeleton patch requires initialized state.");
-    auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-    auto frameData = detail::makeFrameData(frameSlot, detail::buildLightRecords(frameParameters));
-    auto &slot = runtime_->frameSlots[frameSlot];
-    detail::ensureHeaderBuffer(device_->get(), slot, frameSlot);
-    detail::ensureLightBuffer(device_->get(), slot, static_cast<std::uint32_t>(frameData.records.size()),
-                              input.initialLightCapacity, frameSlot);
-    detail::ensureAliasBuffer(device_->get(), slot, static_cast<std::uint32_t>(frameData.aliasRecords.size()),
-                              input.initialLightCapacity, frameSlot);
-
-    auto patchBuffer = [&](std::size_t resourceSlot, const nr::rhi::Buffer &buffer, std::string debugName,
-                           nr::renderer::BufferUsageIntent usage) {
-        context.patchResource(resourceSlot,
-                              nr::renderer::GraphImportedBufferDesc{
-                                  .debugName = std::move(debugName),
-                                  .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
-                                  .initialOwnership = nr::renderer::ownershipDomainFromQueue(context.queue()),
-                                  .size = buffer.size(),
-                                  .usageIntents = {usage},
-                                  .importedResource = std::cref(buffer),
-                              });
-    };
-    patchBuffer(0u, slot.headerBuffer, std::format("LightPrepare.Header[{}]", frameSlot),
-                nr::renderer::BufferUsageIntent::Uniform);
-    patchBuffer(1u, slot.lightBuffer, std::format("LightPrepare.Records[{}]", frameSlot),
-                nr::renderer::BufferUsageIntent::StorageRead);
-    patchBuffer(2u, slot.aliasBuffer, std::format("LightPrepare.AliasTable[{}]", frameSlot),
-                nr::renderer::BufferUsageIntent::StorageRead);
-    context.patchFrameData(0u, "LightPrepare.UploadData",
-                           std::make_any<detail::LightPrepareFrameData>(std::move(frameData)));
-    auto const frameDataHandle = context.frameData(0u);
-    auto const frameDataUses = std::array{frameDataHandle};
-    context.patchPass(
-        0u, "LightPrepare.Upload",
-        [runtime = runtime_, frameDataHandle](const nr::renderer::PassPrepareContext &prepareContext) {
-            auto const &data = prepareContext.frameData<detail::LightPrepareFrameData>(frameDataHandle);
-            auto &frameSlotState = runtime->frameSlots[data.frameSlot];
-            frameSlotState.headerBuffer.writeMappedAndFlush(data.header);
-            frameSlotState.lightBuffer.writeMappedAndFlush(
-                std::span<const nr::scene::SceneLightGpuRecord>{data.records.data(), data.records.size()});
-            frameSlotState.aliasBuffer.writeMappedAndFlush(std::span<const nr::scene::SceneLightAliasGpuRecord>{
-                data.aliasRecords.data(), data.aliasRecords.size()});
-        },
-        [](const nr::renderer::PassRecordContext &) {}, std::nullopt, frameDataUses);
-    return true;
-}
-
 void LightPrepareNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     nr::nrAssert(static_cast<bool>(runtime_), "LightPrepare build stage requires initialized runtime state.");

@@ -15,6 +15,7 @@ module;
 #include <OpenEXR/ImfInputFile.h>
 #include <OpenEXR/ImfOutputFile.h>
 #include <OpenEXR/ImfTestFile.h>
+#include <OpenEXR/ImfThreading.h>
 #include <stb_image.h>
 #include <stb_image_write.h>
 #include <turbojpeg.h>
@@ -43,6 +44,11 @@ inline constexpr PixelType uintPixelType = ::OPENEXR_IMF_NAMESPACE::UINT;
 inline bool inspectFile(const char *fileName, bool &tiled, bool &deep, bool &multiPart)
 {
     return ::OPENEXR_IMF_NAMESPACE::isOpenExrFile(fileName, tiled, deep, multiPart);
+}
+
+inline void setGlobalThreadCount(int count)
+{
+    ::OPENEXR_IMF_NAMESPACE::setGlobalThreadCount(count);
 }
 
 inline Slice makeSlice(PixelType type, const void *pixels, int originX, int originY, std::int64_t width,

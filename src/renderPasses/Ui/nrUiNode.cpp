@@ -111,16 +111,14 @@ struct UiRuntimeCache
     std::map<std::uint64_t, std::uint32_t> textureSlotByKey{};
     std::vector<std::uint32_t> freeTextureSlots{};
     std::vector<UiRetiredTexture> retiredTextures{};
-    UiDrawFramePayload preparedDrawFrame{};
 };
 
 [[nodiscard]] vk::Format validatedFrozenUiBufferFormat(const UiNodeInput &input, const UiRuntimeCache &runtime)
 {
     auto const resolvedFormat = resolveUiBufferFormat(input);
     nr::nrAssert(
-        resolvedFormat == runtime.frozenBufferFormat,
-        std::format("UiNode buffer format cannot change after initialization. frozen={} requested={}",
-                    vk::to_string(runtime.frozenBufferFormat), vk::to_string(resolvedFormat)));
+        resolvedFormat == runtime.frozenBufferFormat, "UiNode buffer format cannot change after initialization. frozen={} requested={}",
+                    vk::to_string(runtime.frozenBufferFormat), vk::to_string(resolvedFormat));
     return runtime.frozenBufferFormat;
 }
 
@@ -260,8 +258,7 @@ void ensureUiBufferImage(nr::rhi::Device &device, UiRuntimeCache &runtime, vk::E
     auto const encodedSlot = reinterpret_cast<std::uintptr_t>(textureId);
     nr::nrAssert(encodedSlot > 0u, "UiNode texture id cannot be null.");
     auto const slot = encodedSlot - 1u;
-    nr::nrAssert(slot <= static_cast<std::uintptr_t>(std::numeric_limits<std::uint32_t>::max()),
-                 std::format("UiNode texture id {} exceeds texture slot range.", slot));
+    nr::nrAssert(slot <= static_cast<std::uintptr_t>(std::numeric_limits<std::uint32_t>::max()), "UiNode texture id {} exceeds texture slot range.", slot);
     return static_cast<std::uint32_t>(slot);
 }
 
@@ -305,16 +302,14 @@ void markBindlessTextureTableDirty(UiRuntimeCache &runtime) noexcept
     else
     {
         slot = static_cast<std::uint32_t>(runtime.texturesBySlot.size());
-        nr::nrAssert(slot < kUiTextureDescriptorCapacity,
-                     std::format("UiNode texture slot allocation exceeded fixed descriptor capacity {}.",
-                                 kUiTextureDescriptorCapacity));
+        nr::nrAssert(slot < kUiTextureDescriptorCapacity, "UiNode texture slot allocation exceeded fixed descriptor capacity {}.",
+                                 kUiTextureDescriptorCapacity);
         runtime.texturesBySlot.emplace_back();
     }
 
     nr::nrAssert(slot < runtime.texturesBySlot.size(), "UiNode acquired texture slot outside texture table.");
-    nr::nrAssert(slot < kUiTextureDescriptorCapacity,
-                 std::format("UiNode bindless texture slot {} exceeds fixed descriptor capacity {}.", slot,
-                             kUiTextureDescriptorCapacity));
+    nr::nrAssert(slot < kUiTextureDescriptorCapacity, "UiNode bindless texture slot {} exceeds fixed descriptor capacity {}.", slot,
+                             kUiTextureDescriptorCapacity);
 
     runtime.textureSlotByKey.insert_or_assign(textureKey, slot);
     return slot;
@@ -345,12 +340,10 @@ struct UiTextureUploadPayload
     auto const textureWidth = static_cast<std::size_t>(textureData.Width);
     auto const textureHeight = static_cast<std::size_t>(textureData.Height);
     auto constexpr maxByteCount = std::numeric_limits<std::size_t>::max();
-    nr::nrAssert(textureHeight <= maxByteCount / textureWidth,
-                 std::format("UiNode texture extent {}x{} overflows its pixel count.", textureWidth, textureHeight));
+    nr::nrAssert(textureHeight <= maxByteCount / textureWidth, "UiNode texture extent {}x{} overflows its pixel count.", textureWidth, textureHeight);
     auto const pixelCount = textureWidth * textureHeight;
-    nr::nrAssert(pixelCount <= maxByteCount / kUiRgbaBytesPerPixel,
-                 std::format("UiNode texture extent {}x{} overflows its RGBA upload byte count.", textureWidth,
-                             textureHeight));
+    nr::nrAssert(pixelCount <= maxByteCount / kUiRgbaBytesPerPixel, "UiNode texture extent {}x{} overflows its RGBA upload byte count.", textureWidth,
+                             textureHeight);
     nr::nrAssert(std::in_range<std::uint32_t>(textureWidth),
                  "UiNode texture width exceeds the Vulkan image extent range.");
     nr::nrAssert(std::in_range<std::uint32_t>(textureHeight),
@@ -370,25 +363,21 @@ struct UiTextureUploadPayload
 [[nodiscard]] UiTextureUploadPayload makeTextureUploadPayload(ImTextureData &textureData)
 {
     auto const payloadLayout = checkedUiTexturePayloadLayout(textureData);
-    nr::nrAssert(textureData.Format == ImTextureFormat_RGBA32 || textureData.Format == ImTextureFormat_Alpha8,
-                 std::format("UiNode encountered unsupported ImGui texture format {}.",
-                             static_cast<int>(textureData.Format)));
+    nr::nrAssert(textureData.Format == ImTextureFormat_RGBA32 || textureData.Format == ImTextureFormat_Alpha8, "UiNode encountered unsupported ImGui texture format {}.",
+                             static_cast<int>(textureData.Format));
 
     auto const rgbaSource = textureData.Format == ImTextureFormat_RGBA32;
     auto const expectedBytesPerPixel = rgbaSource ? static_cast<int>(kUiRgbaBytesPerPixel) : 1;
     auto const expectedSourceByteCount = rgbaSource ? payloadLayout.rgbaByteCount : payloadLayout.pixelCount;
-    nr::nrAssert(textureData.BytesPerPixel == expectedBytesPerPixel,
-                 std::format("UiNode ImGui texture format requires {} bytes per pixel, but the payload reports {}.",
-                             expectedBytesPerPixel, textureData.BytesPerPixel));
-    nr::nrAssert(expectedSourceByteCount <= static_cast<std::size_t>(std::numeric_limits<int>::max()),
-                 std::format("UiNode ImGui texture payload requires {} source bytes, exceeding its API byte-count range.",
-                             expectedSourceByteCount));
+    nr::nrAssert(textureData.BytesPerPixel == expectedBytesPerPixel, "UiNode ImGui texture format requires {} bytes per pixel, but the payload reports {}.",
+                             expectedBytesPerPixel, textureData.BytesPerPixel);
+    nr::nrAssert(expectedSourceByteCount <= static_cast<std::size_t>(std::numeric_limits<int>::max()), "UiNode ImGui texture payload requires {} source bytes, exceeding its API byte-count range.",
+                             expectedSourceByteCount);
 
     auto const reportedSourceByteCount = textureData.GetSizeInBytes();
     nr::nrAssert(reportedSourceByteCount >= 0 &&
-                     static_cast<std::size_t>(reportedSourceByteCount) == expectedSourceByteCount,
-                 std::format("UiNode ImGui texture payload reports {} bytes; expected exactly {}.",
-                             reportedSourceByteCount, expectedSourceByteCount));
+                     static_cast<std::size_t>(reportedSourceByteCount) == expectedSourceByteCount, "UiNode ImGui texture payload reports {} bytes; expected exactly {}.",
+                             reportedSourceByteCount, expectedSourceByteCount);
     nr::nrAssert(textureData.Pixels != nullptr, "UiNode requires CPU-visible ImGui texture pixels.");
     auto const *sourcePixels = static_cast<const unsigned char *>(textureData.GetPixels());
     nr::nrAssert(sourcePixels != nullptr, "UiNode requires non-empty ImGui texture pixel storage.");
@@ -531,7 +520,7 @@ void createOrUpdateUiTexture(nr::rhi::Device &device, UiRuntimeCache &runtime, I
                                          vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
         auto textureImage =
             device.resourceFactory.createImage(imageCreateInfo, nr::rhi::MemoryUsage::GpuOnly, debugName);
-        nr::nrAssert(textureImage.valid(), std::format("UiNode failed to create texture image '{}'.", debugName));
+        nr::nrAssert(textureImage.valid(), "UiNode failed to create texture image '{}'.", debugName);
 
         textureEntry = UiTextureEntry{
             .image = std::move(textureImage),
@@ -668,9 +657,8 @@ void synchronizeUiTextures(nr::rhi::Device &device, UiRuntimeCache &runtime, con
             return;
         }
 
-        nr::nrAssert(slot < kUiTextureDescriptorCapacity,
-                     std::format("UiNode graph resource registration found slot {} beyond descriptor capacity {}.",
-                                 slot, kUiTextureDescriptorCapacity));
+        nr::nrAssert(slot < kUiTextureDescriptorCapacity, "UiNode graph resource registration found slot {} beyond descriptor capacity {}.",
+                                 slot, kUiTextureDescriptorCapacity);
 
         auto resource = context.addResource(nr::renderer::GraphImportedImageDesc{
             .debugName = std::format("Ui.TextureResource[{}]", slot),
@@ -696,23 +684,13 @@ void synchronizeUiTextures(nr::rhi::Device &device, UiRuntimeCache &runtime, con
     return graphResources;
 }
 
-[[nodiscard]] std::string uiSkeletonBranchKey(const UiRuntimeCache &runtime)
-{
-    auto const activeTextureCount = static_cast<std::size_t>(std::ranges::count_if(
-        runtime.texturesBySlot, [](const UiTextureEntry &entry) { return entry.image.valid(); }));
-    return std::format("overlay;textures={}", activeTextureCount);
-}
-
 [[nodiscard]] vk::DeviceSize checkedUiUploadByteSize(std::size_t elementCount, std::size_t elementByteSize,
                                                      std::string_view payloadName)
 {
-    nr::nrAssert(elementByteSize > 0u,
-                 std::format("UiNode {} upload requires a non-zero element byte size.", payloadName));
-    nr::nrAssert(elementCount <= std::numeric_limits<std::size_t>::max() / elementByteSize,
-                 std::format("UiNode {} upload byte size exceeds the host size range.", payloadName));
+    nr::nrAssert(elementByteSize > 0u, "UiNode {} upload requires a non-zero element byte size.", payloadName);
+    nr::nrAssert(elementCount <= std::numeric_limits<std::size_t>::max() / elementByteSize, "UiNode {} upload byte size exceeds the host size range.", payloadName);
     auto const byteSize = elementCount * elementByteSize;
-    nr::nrAssert(std::in_range<vk::DeviceSize>(byteSize),
-                 std::format("UiNode {} upload byte size exceeds the Vulkan buffer size range.", payloadName));
+    nr::nrAssert(std::in_range<vk::DeviceSize>(byteSize), "UiNode {} upload byte size exceeds the Vulkan buffer size range.", payloadName);
     return static_cast<vk::DeviceSize>(byteSize);
 }
 
@@ -741,7 +719,7 @@ void ensureFrameUploadBuffer(nr::rhi::Device &device, nr::rhi::Buffer &buffer, v
     auto bufferInfo = nr::rhi::makeBufferCreateInfo(capacity, usage);
 
     buffer = device.resourceFactory.createBuffer(bufferInfo, nr::rhi::MemoryUsage::CpuToGpu, debugName);
-    nr::nrAssert(buffer.valid(), std::format("UiNode failed to create upload buffer '{}'.", debugName));
+    nr::nrAssert(buffer.valid(), "UiNode failed to create upload buffer '{}'.", debugName);
 }
 
 void uploadUiDrawFrameBuffers(nr::rhi::Device &device, UiRuntimeCache &runtime, std::size_t frameSlot,
@@ -790,9 +768,8 @@ void uploadUiDrawFrameBuffers(nr::rhi::Device &device, UiRuntimeCache &runtime, 
             return;
         }
 
-        nr::nrAssert(slot < kUiTextureDescriptorCapacity,
-                     std::format("UiNode bindless descriptor update found slot {} beyond descriptor capacity {}.", slot,
-                                 kUiTextureDescriptorCapacity));
+        nr::nrAssert(slot < kUiTextureDescriptorCapacity, "UiNode bindless descriptor update found slot {} beyond descriptor capacity {}.", slot,
+                                 kUiTextureDescriptorCapacity);
         descriptorsById.insert_or_assign(static_cast<std::uint32_t>(slot),
                                          nr::renderer::BindlessImageDescriptor{
                                              .image = std::cref(textureEntry.image),
@@ -864,8 +841,7 @@ struct UiDrawCommandRecorder
         }
 
         nr::nrAssert(command.textureSlot < runtime->texturesBySlot.size() &&
-                         runtime->texturesBySlot[command.textureSlot].image.valid(),
-                     std::format("UiNode record stage could not resolve texture slot {}.", command.textureSlot));
+                         runtime->texturesBySlot[command.textureSlot].image.valid(), "UiNode record stage could not resolve texture slot {}.", command.textureSlot);
 
         auto const &context = rasterContext.get();
         if (!lastTextureIndex.has_value() || *lastTextureIndex != command.textureSlot)
@@ -954,10 +930,53 @@ struct UiValidatedDrawCounts
 [[nodiscard]] std::size_t checkedUiDrawSizeAdd(std::size_t accumulated, std::size_t additional,
                                                std::string_view quantityName)
 {
-    nr::nrAssert(additional <= std::numeric_limits<std::size_t>::max() - accumulated,
-                 std::format("UiNode {} exceeds the host size range.", quantityName));
+    // [TEMP-BUILD-PROFILING] BEGIN - lazy assertion context experiment. Revert to the eager std::format form to undo.
+    nr::nrAssert(additional <= std::numeric_limits<std::size_t>::max() - accumulated, "UiNode {} exceeds the host size range.", quantityName);
+    // [TEMP-BUILD-PROFILING] END
     return accumulated + additional;
 }
+
+// [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+struct TempUiProfile
+{
+    double validateMilliseconds = 0.0;
+    double copyMilliseconds = 0.0;
+    double textureSyncMilliseconds = 0.0;
+    double declareMilliseconds = 0.0;
+    double totalMilliseconds = 0.0;
+    std::uint64_t frames = 0u;
+    std::uint64_t vertices = 0u;
+    std::uint64_t indices = 0u;
+    std::uint64_t commands = 0u;
+};
+
+inline TempUiProfile tempUiProfile{};
+
+[[nodiscard]] inline double tempElapsedMs(std::chrono::steady_clock::time_point start,
+                                          std::chrono::steady_clock::time_point finish) noexcept
+{
+    return std::chrono::duration<double, std::milli>(finish - start).count();
+}
+
+inline void tempReportUiProfile()
+{
+    ++tempUiProfile.frames;
+    if (tempUiProfile.frames % 100u != 0u)
+    {
+        return;
+    }
+    auto const frames = static_cast<double>(tempUiProfile.frames);
+    nr::nrLog<nr::LogLevel::info>(
+        "[TEMP-BUILD-PROFILING][Ui] frames={}, totalAvgMs={:.4f} (validate={:.4f}, copyOnly={:.4f}, textureSync={:.4f}, "
+        "declare={:.4f}), avgVertices={}, avgIndices={}, avgCommands={}",
+        tempUiProfile.frames, tempUiProfile.totalMilliseconds / frames, tempUiProfile.validateMilliseconds / frames,
+        (tempUiProfile.copyMilliseconds - tempUiProfile.validateMilliseconds) / frames,
+        tempUiProfile.textureSyncMilliseconds / frames, tempUiProfile.declareMilliseconds / frames,
+        static_cast<std::uint64_t>(static_cast<double>(tempUiProfile.vertices) / frames),
+        static_cast<std::uint64_t>(static_cast<double>(tempUiProfile.indices) / frames),
+        static_cast<std::uint64_t>(static_cast<double>(tempUiProfile.commands) / frames));
+}
+// [TEMP-BUILD-PROFILING] END
 
 [[nodiscard]] UiValidatedDrawCounts validateUiDrawData(const ImDrawData &drawData)
 {
@@ -966,9 +985,8 @@ struct UiValidatedDrawCounts
     nr::nrAssert(drawData.TotalVtxCount >= 0, "UiNode ImDrawData total vertex count cannot be negative.");
     nr::nrAssert(drawData.TotalIdxCount >= 0, "UiNode ImDrawData total index count cannot be negative.");
     nr::nrAssert(drawData.CmdLists.Size >= 0, "UiNode ImDrawData command-list storage size cannot be negative.");
-    nr::nrAssert(drawData.CmdLists.Size == drawData.CmdListsCount,
-                 std::format("UiNode ImDrawData reports {} command lists but stores {}.", drawData.CmdListsCount,
-                             drawData.CmdLists.Size));
+    nr::nrAssert(drawData.CmdLists.Size == drawData.CmdListsCount, "UiNode ImDrawData reports {} command lists but stores {}.", drawData.CmdListsCount,
+                             drawData.CmdLists.Size);
     nr::nrAssert(drawData.CmdLists.Size == 0 || drawData.CmdLists.Data != nullptr,
                  "UiNode ImDrawData requires storage for non-empty command lists.");
     nr::nrAssert(std::in_range<std::size_t>(drawData.CmdListsCount),
@@ -984,26 +1002,16 @@ struct UiValidatedDrawCounts
     auto commandListIndices = std::views::iota(std::size_t{0u}, counts.commandListCount);
     std::ranges::for_each(commandListIndices, [&](std::size_t commandListIndex) {
         auto const *commandList = drawData.CmdLists.Data[commandListIndex];
-        nr::nrAssert(commandList != nullptr,
-                     std::format("UiNode ImDrawData command list {} cannot be null.", commandListIndex));
-        nr::nrAssert(commandList->VtxBuffer.Size >= 0,
-                     std::format("UiNode command list {} vertex count cannot be negative.", commandListIndex));
-        nr::nrAssert(commandList->IdxBuffer.Size >= 0,
-                     std::format("UiNode command list {} index count cannot be negative.", commandListIndex));
-        nr::nrAssert(commandList->CmdBuffer.Size >= 0,
-                     std::format("UiNode command list {} command count cannot be negative.", commandListIndex));
-        nr::nrAssert(commandList->VtxBuffer.Size == 0 || commandList->VtxBuffer.Data != nullptr,
-                     std::format("UiNode command list {} requires storage for non-empty vertices.", commandListIndex));
-        nr::nrAssert(commandList->IdxBuffer.Size == 0 || commandList->IdxBuffer.Data != nullptr,
-                     std::format("UiNode command list {} requires storage for non-empty indices.", commandListIndex));
-        nr::nrAssert(commandList->CmdBuffer.Size == 0 || commandList->CmdBuffer.Data != nullptr,
-                     std::format("UiNode command list {} requires storage for non-empty commands.", commandListIndex));
-        nr::nrAssert(std::in_range<std::size_t>(commandList->VtxBuffer.Size),
-                     std::format("UiNode command list {} vertex count exceeds the host size range.", commandListIndex));
-        nr::nrAssert(std::in_range<std::size_t>(commandList->IdxBuffer.Size),
-                     std::format("UiNode command list {} index count exceeds the host size range.", commandListIndex));
-        nr::nrAssert(std::in_range<std::size_t>(commandList->CmdBuffer.Size),
-                     std::format("UiNode command list {} command count exceeds the host size range.", commandListIndex));
+        nr::nrAssert(commandList != nullptr, "UiNode ImDrawData command list {} cannot be null.", commandListIndex);
+        nr::nrAssert(commandList->VtxBuffer.Size >= 0, "UiNode command list {} vertex count cannot be negative.", commandListIndex);
+        nr::nrAssert(commandList->IdxBuffer.Size >= 0, "UiNode command list {} index count cannot be negative.", commandListIndex);
+        nr::nrAssert(commandList->CmdBuffer.Size >= 0, "UiNode command list {} command count cannot be negative.", commandListIndex);
+        nr::nrAssert(commandList->VtxBuffer.Size == 0 || commandList->VtxBuffer.Data != nullptr, "UiNode command list {} requires storage for non-empty vertices.", commandListIndex);
+        nr::nrAssert(commandList->IdxBuffer.Size == 0 || commandList->IdxBuffer.Data != nullptr, "UiNode command list {} requires storage for non-empty indices.", commandListIndex);
+        nr::nrAssert(commandList->CmdBuffer.Size == 0 || commandList->CmdBuffer.Data != nullptr, "UiNode command list {} requires storage for non-empty commands.", commandListIndex);
+        nr::nrAssert(std::in_range<std::size_t>(commandList->VtxBuffer.Size), "UiNode command list {} vertex count exceeds the host size range.", commandListIndex);
+        nr::nrAssert(std::in_range<std::size_t>(commandList->IdxBuffer.Size), "UiNode command list {} index count exceeds the host size range.", commandListIndex);
+        nr::nrAssert(std::in_range<std::size_t>(commandList->CmdBuffer.Size), "UiNode command list {} command count exceeds the host size range.", commandListIndex);
 
         auto const listVertexCount = static_cast<std::size_t>(commandList->VtxBuffer.Size);
         auto const listIndexCount = static_cast<std::size_t>(commandList->IdxBuffer.Size);
@@ -1014,9 +1022,8 @@ struct UiValidatedDrawCounts
         auto commandIndices = std::views::iota(std::size_t{0u}, listCommandCount);
         std::ranges::for_each(commandIndices, [&](std::size_t commandIndex) {
             auto const &command = commandList->CmdBuffer.Data[commandIndex];
-            nr::nrAssert(command.UserCallback == nullptr,
-                         std::format("UiNode does not support ImDrawCmd callbacks (list {}, command {}).",
-                                     commandListIndex, commandIndex));
+            nr::nrAssert(command.UserCallback == nullptr, "UiNode does not support ImDrawCmd callbacks (list {}, command {}).",
+                                     commandListIndex, commandIndex);
             nr::nrAssert(std::in_range<std::size_t>(command.IdxOffset),
                          "UiNode draw-command index offset exceeds the host size range.");
             nr::nrAssert(std::in_range<std::size_t>(command.ElemCount),
@@ -1049,18 +1056,24 @@ struct UiValidatedDrawCounts
         });
     });
 
-    nr::nrAssert(counts.vertexCount == static_cast<std::size_t>(drawData.TotalVtxCount),
-                 std::format("UiNode ImDrawData reports {} total vertices but command lists contain {}.",
-                             drawData.TotalVtxCount, counts.vertexCount));
-    nr::nrAssert(counts.indexCount == static_cast<std::size_t>(drawData.TotalIdxCount),
-                 std::format("UiNode ImDrawData reports {} total indices but command lists contain {}.",
-                             drawData.TotalIdxCount, counts.indexCount));
+    nr::nrAssert(counts.vertexCount == static_cast<std::size_t>(drawData.TotalVtxCount), "UiNode ImDrawData reports {} total vertices but command lists contain {}.",
+                             drawData.TotalVtxCount, counts.vertexCount);
+    nr::nrAssert(counts.indexCount == static_cast<std::size_t>(drawData.TotalIdxCount), "UiNode ImDrawData reports {} total indices but command lists contain {}.",
+                             drawData.TotalIdxCount, counts.indexCount);
     return counts;
 }
 
 [[nodiscard]] UiFrameDrawData copyUiDrawData(const ImDrawData &drawData, vk::Extent2D swapchainExtent)
 {
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+    auto const tempValidateStart = std::chrono::steady_clock::now();
+    // [TEMP-BUILD-PROFILING] END
     auto const validatedCounts = validateUiDrawData(drawData);
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+    tempUiProfile.validateMilliseconds += tempElapsedMs(tempValidateStart, std::chrono::steady_clock::now());
+    tempUiProfile.vertices += validatedCounts.vertexCount;
+    tempUiProfile.indices += validatedCounts.indexCount;
+    // [TEMP-BUILD-PROFILING] END
     auto output = UiFrameDrawData{};
     output.framebufferExtent = vk::Extent2D{
         std::max(1u, swapchainExtent.width),
@@ -1217,8 +1230,18 @@ struct UiValidatedDrawCounts
         return makeUiDrawFramePayload(std::move(drawFrame));
     }
 
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+    auto const tempSyncStart = std::chrono::steady_clock::now();
+    // [TEMP-BUILD-PROFILING] END
     synchronizeUiTextures(device, runtime, drawData->get(), currentFrameSlot);
-    return makeUiDrawFramePayload(copyUiDrawData(drawData->get(), bufferExtent));
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+    auto const tempCopyStart = std::chrono::steady_clock::now();
+    tempUiProfile.textureSyncMilliseconds += tempElapsedMs(tempSyncStart, tempCopyStart);
+    auto tempPayload = makeUiDrawFramePayload(copyUiDrawData(drawData->get(), bufferExtent));
+    tempUiProfile.copyMilliseconds += tempElapsedMs(tempCopyStart, std::chrono::steady_clock::now());
+    tempUiProfile.commands += tempPayload->commands.size();
+    return tempPayload;
+    // [TEMP-BUILD-PROFILING] END
 }
 } // namespace nr::renderPasses::detail
 
@@ -1266,106 +1289,13 @@ void UiNode::build(NodeBuildContext &context, const NodeFrameParameters &framePa
     materializeCurrentFrame(context, frameParameters);
 }
 
-[[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> UiNode::structuralSnapshot(
-    const NodeFrameParameters &frameParameters) const
-{
-    if (!runtime_ || !device_.has_value())
-    {
-        return std::nullopt;
-    }
-    static_cast<void>(detail::validatedFrozenUiBufferFormat(input, *runtime_));
-    auto drawFrame = detail::prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
-    nr::nrAssert(static_cast<bool>(drawFrame), "Ui structural snapshot requires immutable draw-frame data.");
-    runtime_->preparedDrawFrame = std::move(drawFrame);
-    return StructuralSnapshot{
-        .branchKey = detail::uiSkeletonBranchKey(*runtime_),
-    };
-}
-
-bool UiNode::materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
-                                            const NodeFrameParameters &frameParameters,
-                                            const StructuralSnapshot &snapshot)
-{
-    nr::nrAssert(static_cast<bool>(runtime_) && device_.has_value(),
-                 "UiNode Skeleton patch requires initialized state.");
-    auto const bufferFormat = detail::validatedFrozenUiBufferFormat(input, *runtime_);
-    auto const expectedBranch = detail::uiSkeletonBranchKey(*runtime_);
-    if (snapshot.branchKey != expectedBranch)
-    {
-        return false;
-    }
-
-    auto drawFrame = std::exchange(runtime_->preparedDrawFrame, detail::UiDrawFramePayload{});
-    nr::nrAssert(static_cast<bool>(drawFrame),
-                 "UiNode Skeleton hit requires the structural snapshot draw-frame payload.");
-    auto const bufferExtent = vk::Extent2D{
-        std::max(1u, frameParameters.swapchainExtent.width),
-        std::max(1u, frameParameters.swapchainExtent.height),
-    };
-    detail::ensureUiBufferImage(device_->get(), *runtime_, bufferExtent);
-    auto const frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % nr::maxFrameInFlight);
-    context.patchResource(0u, nr::renderer::GraphImportedImageDesc{
-                                  .debugName = std::format("Ui.Buffer[{}]", frameSlot),
-                                  .lifetime = nr::renderer::ResourceLifetime::FrameLocal,
-                                  .extent = vk::Extent3D{bufferExtent.width, bufferExtent.height, 1u},
-                                  .format = bufferFormat,
-                                  .usageIntents =
-                                      {
-                                          nr::renderer::ImageUsageIntent::Sampled,
-                                          nr::renderer::ImageUsageIntent::ColorAttachment,
-                                      },
-                                  .initialLayout = nr::renderer::ImageLayoutIntent::Undefined,
-                                  .importedResource = std::cref(runtime_->uiBuffers[frameSlot]),
-                              });
-
-    auto resourceSlot = std::size_t{1u};
-    auto const textureSlots = std::views::iota(std::size_t{0u}, runtime_->texturesBySlot.size());
-    std::ranges::for_each(textureSlots, [&](std::size_t slot) {
-        auto &entry = runtime_->texturesBySlot[slot];
-        if (!entry.image.valid())
-        {
-            return;
-        }
-        context.patchResource(resourceSlot++,
-                              nr::renderer::GraphImportedImageDesc{
-                                  .debugName = std::format("Ui.TextureResource[{}]", slot),
-                                  .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
-                                  .initialOwnership = nr::renderer::ResourceOwnershipDomain::Graphics,
-                                  .extent = entry.image.extent(),
-                                  .format = vk::Format::eR8G8B8A8Unorm,
-                                  .usageIntents = {nr::renderer::ImageUsageIntent::Sampled},
-                                  .initialLayout = entry.state.common.initialized
-                                                       ? entry.state.layout
-                                                       : nr::renderer::ImageLayoutIntent::Undefined,
-                                  .initialAccessScope = entry.state.common.initialized ? entry.state.common.access
-                                                                                       : nr::renderer::AccessScope{},
-                                  .importedResource = std::cref(entry.image),
-                                  .retainedState = std::ref(entry.state),
-                              });
-    });
-
-    auto runtime = runtime_;
-    auto &bindlessCache = context.globalResources().bindlessImageTableCache.get();
-    auto callbacks = detail::makeUiOverlayCallbacks(runtime, drawFrame, std::ref(bindlessCache));
-    auto patch = nr::renderer::RasterPassPatchBuilder{context, 0u, "Ui.Overlay", runtime_->pipeline};
-    patch.viewport(drawFrame->framebufferExtent)
-        .colorAttachment(context.resource(0u),
-                         vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}})
-        .rasterState(nr::rhi::MeshRasterState{
-            .cullMode = vk::CullModeFlagBits::eNone,
-            .depthCompareOp = vk::CompareOp::eAlways,
-        })
-        .prepare(std::move(callbacks.prepare))
-        .dynamicBindingSnapshot(std::move(callbacks.dynamicBindingSnapshot))
-        .record(std::move(callbacks.record));
-    patch.patch();
-    return true;
-}
-
 void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     nr::nrAssert(static_cast<bool>(runtime_), "UiNode build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "UiNode build stage requires initialize() device reference.");
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+    auto const tempMaterializeStart = std::chrono::steady_clock::now();
+    // [TEMP-BUILD-PROFILING] END
     auto const bufferFormat = validatedFrozenUiBufferFormat(input, *runtime_);
 
     auto const bufferExtent = vk::Extent2D{
@@ -1380,12 +1310,11 @@ void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameP
 
     context.publishFrameResource(nr::renderer::frameResource::uiColor, uiBuffer);
 
-    auto drawFrame = std::exchange(runtime_->preparedDrawFrame, detail::UiDrawFramePayload{});
-    if (!drawFrame)
-    {
-        drawFrame = prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
-    }
-    nr::nrAssert(static_cast<bool>(drawFrame), "UiNode cold materialization requires immutable draw-frame data.");
+    auto drawFrame = prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
+    nr::nrAssert(static_cast<bool>(drawFrame), "UiNode build requires immutable draw-frame data.");
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+    auto const tempDeclareStart = std::chrono::steady_clock::now();
+    // [TEMP-BUILD-PROFILING] END
 
     auto textureResources = registerUiTextureImageResources(context, *runtime_);
 
@@ -1409,6 +1338,12 @@ void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameP
     });
 
     [[maybe_unused]] auto overlayPassHandle = overlayPass.build();
+    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
+    auto const tempMaterializeFinish = std::chrono::steady_clock::now();
+    tempUiProfile.declareMilliseconds += tempElapsedMs(tempDeclareStart, tempMaterializeFinish);
+    tempUiProfile.totalMilliseconds += tempElapsedMs(tempMaterializeStart, tempMaterializeFinish);
+    tempReportUiProfile();
+    // [TEMP-BUILD-PROFILING] END
 }
 
 void UiNode::shutdown(NodeShutdownContext &)

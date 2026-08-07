@@ -14,7 +14,7 @@ inline constexpr auto geometryBufferUsage = vk::BufferUsageFlagBits::eAccelerati
 {
     auto buffer = device.resourceFactory.createBuffer(nr::rhi::makeBufferCreateInfo(byteSize, geometryBufferUsage),
                                                       nr::rhi::MemoryUsage::CpuToGpu, debugName);
-    nr::nrAssert(buffer.valid(), std::format("{} should be a valid geometry buffer.", debugName));
+    nr::nrAssert(buffer.valid(), "{} should be a valid geometry buffer.", debugName);
     return buffer;
 }
 

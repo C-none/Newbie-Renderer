@@ -14,8 +14,7 @@ namespace
 template <std::unsigned_integral T>
 [[nodiscard]] T checkedAdd(T lhs, T rhs, std::string_view context)
 {
-    nrAssert(lhs <= std::numeric_limits<T>::max() - rhs,
-             std::format("{} addition exceeds the destination integer range.", context));
+    nrAssert(lhs <= std::numeric_limits<T>::max() - rhs, "{} addition exceeds the destination integer range.", context);
     return lhs + rhs;
 }
 
@@ -23,13 +22,13 @@ template <std::unsigned_integral T>
 [[nodiscard]] T checkedMultiply(T lhs, T rhs, std::string_view context)
 {
     nrAssert(rhs == 0 || lhs <= std::numeric_limits<T>::max() / rhs,
-             std::format("{} multiplication exceeds the destination integer range.", context));
+             "{} multiplication exceeds the destination integer range.", context);
     return lhs * rhs;
 }
 
 template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T alignment, std::string_view context)
 {
-    nrAssert(alignment > 0, std::format("{} requires alignment > 0.", context));
+    nrAssert(alignment > 0, "{} requires alignment > 0.", context);
     const auto remainder = value % alignment;
     if (remainder == 0)
     {
@@ -42,8 +41,7 @@ template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T al
 [[nodiscard]] ShaderBindingTableBuildPlan makeShaderBindingTableBuildPlan(const ShaderBindingTableLayoutDesc &desc)
 {
     auto validation = rt_detail::validateShaderBindingTableLayoutDesc(desc);
-    nrAssert(validation.isValid,
-             rt_detail::formatMessage("makeShaderBindingTableBuildPlan invalid desc: {}", validation.message));
+    nrAssert(validation.isValid, "makeShaderBindingTableBuildPlan invalid desc: {}", validation.message);
 
     auto normalizedDesc = desc;
     normalizedDesc.raygen.stride = rt_detail::effectiveStride(normalizedDesc.raygen, normalizedDesc.capabilities);
@@ -77,8 +75,7 @@ template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T al
 [[nodiscard]] ShaderBindingTableBuildPlan makeShaderBindingTableBuildPlan(const ShaderBindingTableBuildDesc &desc)
 {
     auto validation = rt_detail::validateShaderBindingTableBuildDesc(desc);
-    nrAssert(validation.isValid,
-             rt_detail::formatMessage("makeShaderBindingTableBuildPlan invalid desc: {}", validation.message));
+    nrAssert(validation.isValid, "makeShaderBindingTableBuildPlan invalid desc: {}", validation.message);
 
     return makeShaderBindingTableBuildPlan(ShaderBindingTableLayoutDesc{
         .capabilities = desc.pipeline.capabilities(),
@@ -94,8 +91,7 @@ template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T al
                                                             const ShaderBindingTableBuildDesc &desc)
 {
     auto validation = rt_detail::validateShaderBindingTableBuildDesc(desc);
-    nrAssert(validation.isValid,
-             rt_detail::formatMessage("ShaderBindingTable::create invalid desc: {}", validation.message));
+    nrAssert(validation.isValid, "ShaderBindingTable::create invalid desc: {}", validation.message);
 
     auto plan = makeShaderBindingTableBuildPlan(desc);
     nrAssert(plan.totalSize > 0, "ShaderBindingTable::create requires totalSize > 0.");
@@ -204,8 +200,7 @@ template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T al
             return;
         }
         nrAssert((region.deviceAddress % baseAlignment) == 0,
-                 rt_detail::formatMessage(
-                     "ShaderBindingTable::create {} deviceAddress is not shaderGroupBaseAlignment aligned.", label));
+                 "ShaderBindingTable::create {} deviceAddress is not shaderGroupBaseAlignment aligned.", label);
     };
 
     checkRegionAlignment("raygen", sbt.raygenRegion_);
@@ -272,7 +267,7 @@ void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc
              "traceRays requires a queue family that supports compute operations.");
 
     auto diagnostics = rt_detail::validateTraceRaysDispatch(desc.dimensions, desc.pipeline.capabilities());
-    nrAssert(diagnostics.isValid, rt_detail::formatMessage("traceRays invalid dispatch: {}", diagnostics.message));
+    nrAssert(diagnostics.isValid, "traceRays invalid dispatch: {}", diagnostics.message);
 
     auto regions = desc.shaderBindingTable.regions();
     nrAssert(regions.raygen.size == regions.raygen.stride, "traceRays requires raygen SBT region size == stride.");

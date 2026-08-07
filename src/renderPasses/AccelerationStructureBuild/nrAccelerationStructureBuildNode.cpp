@@ -87,25 +87,40 @@ struct BlasStorageAtlas
     std::vector<RetiredBlasAtlasResources> retired{};
 };
 
+/**
+ * @brief Device-local RT metadata tables shared by every frame in flight.
+ *
+ * The tables only describe scene structure, so they carry no per-frame data and
+ * are stored once instead of once per frame slot. A structural plan change
+ * allocates a replacement set and retires the previous one after the in-flight
+ * frames that still reference it have completed.
+ */
+struct RtMetadataResidentSet
+{
+    nr::rhi::Buffer instances{};
+    nr::rhi::Buffer geometries{};
+    nr::rhi::Buffer materialHeaders{};
+    nr::rhi::Buffer materialLayers{};
+    nr::rhi::Buffer materialTextureRefs{};
+    std::uint64_t planGeneration = 0u;
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return instances.valid() && geometries.valid() && materialHeaders.valid() && materialLayers.valid() &&
+               materialTextureRefs.valid();
+    }
+};
+
+struct RetiredRtMetadataSet
+{
+    RtMetadataResidentSet metadata{};
+    std::uint64_t retireAfterFrameSerial = 0;
+};
+
 struct FrameSlotAsResources
 {
     nr::rhi::Buffer instanceBuffer{};
     vk::DeviceSize instanceBufferSize = 0;
-
-    nr::rhi::Buffer rtInstanceMetadataBuffer{};
-    vk::DeviceSize rtInstanceMetadataBufferSize = 0;
-
-    nr::rhi::Buffer rtGeometryMetadataBuffer{};
-    vk::DeviceSize rtGeometryMetadataBufferSize = 0;
-
-    nr::rhi::Buffer rtMaterialHeaderBuffer{};
-    vk::DeviceSize rtMaterialHeaderBufferSize = 0;
-
-    nr::rhi::Buffer rtMaterialLayerBuffer{};
-    vk::DeviceSize rtMaterialLayerBufferSize = 0;
-
-    nr::rhi::Buffer rtMaterialTextureRefBuffer{};
-    vk::DeviceSize rtMaterialTextureRefBufferSize = 0;
 
     nr::rhi::Buffer scratchBuffer{};
     vk::DeviceSize scratchBufferSize = 0;
@@ -113,7 +128,6 @@ struct FrameSlotAsResources
     nr::rhi::Buffer tlasStorage{};
     nr::rhi::AccelerationStructureResource tlas{};
     std::uint32_t tlasCapacity = 0;
-    std::uint64_t appliedStructuralPlanGeneration = 0u;
 };
 
 struct BlasBuildWork
@@ -163,7 +177,6 @@ struct PreparedAsFrame
     std::vector<PlannedInstance> instances{};
     nr::resource::MeshHandle rtAtlasMesh{};
     nr::rhi::TlasBuildInput tlasInput{};
-    std::string branchKey{"none"};
     std::size_t frameSlot = 0u;
     double cacheScanMilliseconds = 0.0;
     double metadataPlanMilliseconds = 0.0;
@@ -267,12 +280,13 @@ struct AccelerationStructureBuildRuntimeCache
     std::map<RtMaterialCacheKey, RtMaterialCacheEntry> rtMaterialCache{};
     std::vector<RetiredBlasAccelerationStructure> retiredBlas{};
     std::array<FrameSlotAsResources, nr::maxFrameInFlight> frameSlots{};
+    RtMetadataResidentSet rtMetadata{};
+    std::vector<RetiredRtMetadataSet> retiredRtMetadata{};
     RtStructuralPlanCache structuralPlan{};
     nr::rhi::AsBuildLimits limits{};
     std::uint64_t frameSerial = 0;
     std::uint64_t activeSceneIdentity = 0u;
     std::optional<BlasRevisionProjection> blasRevisions{};
-    std::optional<PreparedAsFrame> preparedFrame{};
 };
 
 [[nodiscard]] vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept
@@ -403,12 +417,15 @@ void retireBlasResources(AccelerationStructureBuildRuntimeCache &runtime, BlasCa
     entry.retainedState.reset();
 }
 
-void reapRetiredBlas(AccelerationStructureBuildRuntimeCache &runtime)
+void reapRetiredResources(AccelerationStructureBuildRuntimeCache &runtime)
 {
     std::erase_if(runtime.retiredBlas, [&](const RetiredBlasAccelerationStructure &retired) {
         return retired.retireAfterFrameSerial <= runtime.frameSerial;
     });
     std::erase_if(runtime.blasAtlas.retired, [&](const RetiredBlasAtlasResources &retired) {
+        return retired.retireAfterFrameSerial <= runtime.frameSerial;
+    });
+    std::erase_if(runtime.retiredRtMetadata, [&](const RetiredRtMetadataSet &retired) {
         return retired.retireAfterFrameSerial <= runtime.frameSerial;
     });
 }
@@ -663,30 +680,121 @@ void ensureInstanceBuffer(nr::rhi::Device &device, FrameSlotAsResources &slot, v
     slot.instanceBufferSize = std::max<vk::DeviceSize>(requiredSize, 1u);
 }
 
-void ensureStorageMetadataBuffer(nr::rhi::Device &device, nr::rhi::Buffer &buffer, vk::DeviceSize &bufferSize,
-                                 vk::DeviceSize requiredSize, std::string_view debugName)
+[[nodiscard]] std::vector<std::uint32_t> rtMetadataQueueFamilyIndices(nr::rhi::Device &device)
 {
-    if (buffer.valid() && bufferSize >= requiredSize)
-    {
-        return;
-    }
-
-    buffer =
-        device.resourceFactory.createBuffer(nr::rhi::makeBufferCreateInfo(std::max<vk::DeviceSize>(requiredSize, 1u),
-                                                                          vk::BufferUsageFlagBits::eStorageBuffer),
-                                            nr::rhi::MemoryUsage::CpuToGpu, debugName);
-    nrAssert(buffer.valid(), std::format("AccelerationStructureBuildNode failed to create {}.", debugName));
-    bufferSize = std::max<vk::DeviceSize>(requiredSize, 1u);
+    auto families = std::vector<std::uint32_t>{
+        device.queueManager.transfer().queueFamilyIndex(),
+        device.queueManager.graphics().queueFamilyIndex(),
+        device.queueManager.compute().queueFamilyIndex(),
+    };
+    std::ranges::sort(families);
+    auto const duplicates = std::ranges::unique(families);
+    families.erase(duplicates.begin(), duplicates.end());
+    return families;
 }
 
-template <typename T> void writeMetadataBuffer(nr::rhi::Buffer &buffer, std::span<const T> values)
+[[nodiscard]] nr::rhi::Buffer createRtMetadataBuffer(nr::rhi::Device &device, vk::DeviceSize byteSize,
+                                                     std::span<const std::uint32_t> queueFamilyIndices,
+                                                     std::string_view debugName)
+{
+    // Device-local so ray-tracing hit shaders read the tables from VRAM instead of
+    // host-visible memory. Uploads therefore go through the RHI staging ring.
+    auto createInfo = vk::BufferCreateInfo{};
+    createInfo.size = std::max<vk::DeviceSize>(byteSize, 1u);
+    createInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
+    if (queueFamilyIndices.size() > 1u)
+    {
+        createInfo.sharingMode = vk::SharingMode::eConcurrent;
+        createInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(queueFamilyIndices.size());
+        createInfo.pQueueFamilyIndices = queueFamilyIndices.data();
+    }
+
+    auto buffer = device.resourceFactory.createBuffer(createInfo, nr::rhi::MemoryUsage::GpuOnly, debugName);
+    nrAssert(buffer.valid(), "AccelerationStructureBuildNode failed to create {}.", debugName);
+    return buffer;
+}
+
+template <typename T>
+[[nodiscard]] std::uint64_t uploadRtMetadataTable(nr::rhi::Device &device, const nr::rhi::Buffer &buffer,
+                                                  std::span<const T> values)
 {
     if (values.empty())
     {
+        return 0u;
+    }
+
+    auto const ticket = device.uploadReadback().uploadBuffer(std::as_bytes(values), buffer, 0);
+    nrAssert(ticket.valid(), "AccelerationStructureBuildNode failed to upload an RT metadata table.");
+    return ticket.signalValue;
+}
+
+void retireRtMetadata(AccelerationStructureBuildRuntimeCache &runtime, std::uint64_t retireDelay)
+{
+    auto retired = std::exchange(runtime.rtMetadata, {});
+    if (!retired.valid())
+    {
         return;
     }
 
-    buffer.writeMappedAndFlush(values);
+    runtime.retiredRtMetadata.push_back(RetiredRtMetadataSet{
+        .metadata = std::move(retired),
+        .retireAfterFrameSerial = runtime.frameSerial + retireDelay,
+    });
+}
+
+void ensureRtMetadataResidentSet(AccelerationStructureBuildRuntimeCache &runtime, nr::rhi::Device &device,
+                                 const RtMetadataBuildState &metadata,
+                                 const nr::scene::RtMaterialTable &materialTable, std::uint64_t planGeneration,
+                                 std::uint64_t retireDelay)
+{
+    if (runtime.rtMetadata.planGeneration == planGeneration && runtime.rtMetadata.valid())
+    {
+        return;
+    }
+
+    retireRtMetadata(runtime, retireDelay);
+    auto const families = rtMetadataQueueFamilyIndices(device);
+    auto resident = RtMetadataResidentSet{
+        .instances = createRtMetadataBuffer(device, metadata.instances.size() * sizeof(nr::scene::RtInstanceMetadata),
+                                            families, "ASBuild.RT.InstanceMetadata"),
+        .geometries = createRtMetadataBuffer(device, metadata.geometries.size() * sizeof(nr::scene::RtGeometryMetadata),
+                                             families, "ASBuild.RT.GeometryMetadata"),
+        .materialHeaders = createRtMetadataBuffer(
+            device, materialTable.headers.size() * sizeof(nr::scene::RtMaterialHeader), families,
+            "ASBuild.RT.MaterialHeaders"),
+        .materialLayers = createRtMetadataBuffer(
+            device, materialTable.layers.size() * sizeof(nr::scene::RtMaterialLayerRecord), families,
+            "ASBuild.RT.MaterialLayers"),
+        .materialTextureRefs = createRtMetadataBuffer(
+            device, materialTable.textureRefs.size() * sizeof(nr::scene::RtMaterialTextureRef), families,
+            "ASBuild.RT.MaterialTextureRefs"),
+        .planGeneration = planGeneration,
+    };
+
+    auto signalValue = std::uint64_t{0};
+    auto const trackSignal = [&signalValue](std::uint64_t value) noexcept {
+        signalValue = std::max(signalValue, value);
+    };
+    trackSignal(uploadRtMetadataTable(device, resident.instances,
+                                      std::span<const nr::scene::RtInstanceMetadata>{metadata.instances}));
+    trackSignal(uploadRtMetadataTable(device, resident.geometries,
+                                      std::span<const nr::scene::RtGeometryMetadata>{metadata.geometries}));
+    trackSignal(uploadRtMetadataTable(device, resident.materialHeaders,
+                                      std::span<const nr::scene::RtMaterialHeader>{materialTable.headers}));
+    trackSignal(uploadRtMetadataTable(device, resident.materialLayers,
+                                      std::span<const nr::scene::RtMaterialLayerRecord>{materialTable.layers}));
+    trackSignal(uploadRtMetadataTable(device, resident.materialTextureRefs,
+                                      std::span<const nr::scene::RtMaterialTextureRef>{materialTable.textureRefs}));
+
+    if (signalValue > 0u)
+    {
+        // Structural plan changes are rare, so the transfer completion is awaited inline
+        // instead of threading upload tickets through the graph submission.
+        device.uploadReadback().waitUploadComplete(signalValue);
+        device.uploadReadback().reclaimCompletedUploads();
+    }
+
+    runtime.rtMetadata = std::move(resident);
 }
 
 void ensureTlas(nr::rhi::Device &device, FrameSlotAsResources &slot, const nr::rhi::AsBuildSizes &sizes,
@@ -748,8 +856,7 @@ void ensureTlas(nr::rhi::Device &device, FrameSlotAsResources &slot, const nr::r
 
 [[nodiscard]] std::uint32_t checkedRtMetadataUint32(vk::DeviceSize value, std::string_view label)
 {
-    nrAssert(value <= std::numeric_limits<std::uint32_t>::max(),
-             std::format("{} exceeds the RT metadata uint32 ABI range.", label));
+    nrAssert(value <= std::numeric_limits<std::uint32_t>::max(), "{} exceeds the RT metadata uint32 ABI range.", label);
     return static_cast<std::uint32_t>(value);
 }
 
@@ -824,9 +931,8 @@ void ensureTlas(nr::rhi::Device &device, FrameSlotAsResources &slot, const nr::r
             return;
         }
 
-        nrAssert(binding->descriptorIndex <= nr::scene::kMaxSceneTextureId,
-                 std::format("RT material texture descriptor id {} exceeds packed uint16 id capacity {}.",
-                             binding->descriptorIndex, nr::scene::kMaxSceneTextureId));
+        nrAssert(binding->descriptorIndex <= nr::scene::kMaxSceneTextureId, "RT material texture descriptor id {} exceeds packed uint16 id capacity {}.",
+                             binding->descriptorIndex, nr::scene::kMaxSceneTextureId);
         key.textureIds[slotIndex] = static_cast<nr::scene::SceneTextureId>(binding->descriptorIndex);
         key.textureGpuVersions[slotIndex] = binding->gpuVersion;
     });
@@ -992,9 +1098,8 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     nrAssert(physicalHitRecordCount > 0u, "AS build requires at least one physical hit SBT record.");
     nrAssert(physicalHitRecordCount <= std::numeric_limits<std::uint32_t>::max(),
              "Physical RT hit SBT record count exceeds uint32 ABI.");
-    nrAssert(physicalHitRecordBase < physicalHitRecordCount,
-             std::format("TLAS physical hit SBT record base {} exceeds physical hit SBT record count {}.",
-                         physicalHitRecordBase, physicalHitRecordCount));
+    nrAssert(physicalHitRecordBase < physicalHitRecordCount, "TLAS physical hit SBT record base {} exceeds physical hit SBT record count {}.",
+                         physicalHitRecordBase, physicalHitRecordCount);
     nrAssert(physicalHitRecordBase <= 0x00FF'FFFFu,
              "TLAS physical hit SBT record base must fit the 24-bit Vulkan "
              "instanceShaderBindingTableRecordOffset field.");
@@ -1035,38 +1140,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     return batch;
 }
 
-[[nodiscard]] std::string makePreparedAsBranchKey(const AccelerationStructureBuildRuntimeCache &runtime,
-                                                  const PreparedAsFrame &prepared,
-                                                  const nr::scene::SceneRevisionSnapshot &revisions)
-{
-    auto const &slot = runtime.frameSlots[prepared.frameSlot];
-    auto branch = std::format(
-        "{};scene={};plan={};atlasGen={};atlasCapacity={};dirty={};instances={};tlasCapacity={};tlasSize={}",
-        prepared.available ? (prepared.dirtyMeshes.empty() ? "tlas-only" : "dirty-blas") : "no-instances",
-        revisions.sceneIdentity, runtime.structuralPlan.generation, runtime.blasAtlas.generation,
-        runtime.blasAtlas.capacityBytes, prepared.dirtyMeshes.size(), prepared.instances.size(), slot.tlasCapacity,
-        slot.tlas.valid() ? slot.tlas.size() : 0u);
-    auto const structuralRevisions = AsStructuralRevisionProjection::capture(revisions.rt);
-    std::ranges::for_each(structuralRevisions.values,
-                          [&](auto revision) { branch += std::format(";revision={}", revision.value); });
-    std::ranges::for_each(prepared.dirtyMeshes, [&](nr::resource::MeshHandle mesh) {
-        auto const &cached = runtime.blasCache.at(mesh).cachedBuild;
-        branch += std::format(";mesh={}:geometries={}:indexed={}", mesh.packed(), cached.geometries.size(),
-                              cached.sceneMesh.hasIndexBuffer() ? 1u : 0u);
-    });
-    if (prepared.available)
-    {
-        auto const &frameSlot = runtime.frameSlots[prepared.frameSlot];
-        auto const &atlasMesh = runtime.blasCache.at(prepared.rtAtlasMesh).cachedBuild.sceneMesh;
-        branch += std::format(";instanceBytes={};scratchBytes={};rtIndex={};metadata={},{},{},{},{}",
-                              frameSlot.instanceBufferSize, frameSlot.scratchBufferSize,
-                              atlasMesh.hasIndexBuffer() ? 1u : 0u, frameSlot.rtInstanceMetadataBufferSize,
-                              frameSlot.rtGeometryMetadataBufferSize, frameSlot.rtMaterialHeaderBufferSize,
-                              frameSlot.rtMaterialLayerBufferSize, frameSlot.rtMaterialTextureRefBufferSize);
-    }
-    return branch;
-}
-
 [[nodiscard]] PreparedAsFrame prepareAsFrame(AccelerationStructureBuildRuntimeCache &runtime, nr::rhi::Device &device,
                                              const AccelerationStructureBuildNodeInput &input,
                                              const nr::renderer::NodeFrameParameters &frameParameters)
@@ -1075,7 +1148,7 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     prepared.frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % runtime.frameSlots.size());
     auto const probeStart = std::chrono::steady_clock::now();
     ++runtime.frameSerial;
-    reapRetiredBlas(runtime);
+    reapRetiredResources(runtime);
 
     if (!frameParameters.scene.has_value() || !frameParameters.sceneTlasBuildInputs.has_value())
     {
@@ -1094,8 +1167,7 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         runtime.rtMaterialCache.clear();
         runtime.structuralPlan = {};
         runtime.blasRevisions.reset();
-        std::ranges::for_each(runtime.frameSlots,
-                              [](FrameSlotAsResources &slot) { slot.appliedStructuralPlanGeneration = 0u; });
+        retireRtMetadata(runtime, retireDelay);
         runtime.activeSceneIdentity = revisions.sceneIdentity;
     }
     auto const blasRevisions = BlasRevisionProjection::capture(revisions.rt);
@@ -1109,7 +1181,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     pruneRtMaterialCache(runtime, scene, input.unusedFrameRetireLatency);
     if (packets.empty())
     {
-        prepared.branchKey = makePreparedAsBranchKey(runtime, prepared, revisions);
         return prepared;
     }
 
@@ -1151,7 +1222,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     });
     if (pendingByMesh.empty())
     {
-        prepared.branchKey = makePreparedAsBranchKey(runtime, prepared, revisions);
         return prepared;
     }
 
@@ -1240,7 +1310,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         });
         if (templates.empty())
         {
-            prepared.branchKey = makePreparedAsBranchKey(runtime, prepared, revisions);
             return prepared;
         }
         finalizeSceneRtHitSbtPlan(hitSbtPlan);
@@ -1281,7 +1350,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     });
     if (instances.empty())
     {
-        prepared.branchKey = makePreparedAsBranchKey(runtime, prepared, revisions);
         return prepared;
     }
     auto const metadataPlanEnd = std::chrono::steady_clock::now();
@@ -1297,35 +1365,7 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
 
     auto const &metadata = structuralPlan.metadata;
     auto const &materialTable = structuralPlan.materialTable;
-    if (slot.appliedStructuralPlanGeneration != structuralPlan.generation)
-    {
-        ensureStorageMetadataBuffer(device, slot.rtInstanceMetadataBuffer, slot.rtInstanceMetadataBufferSize,
-                                    metadata.instances.size() * sizeof(nr::scene::RtInstanceMetadata),
-                                    "ASBuild.RT.InstanceMetadata");
-        ensureStorageMetadataBuffer(device, slot.rtGeometryMetadataBuffer, slot.rtGeometryMetadataBufferSize,
-                                    metadata.geometries.size() * sizeof(nr::scene::RtGeometryMetadata),
-                                    "ASBuild.RT.GeometryMetadata");
-        ensureStorageMetadataBuffer(device, slot.rtMaterialHeaderBuffer, slot.rtMaterialHeaderBufferSize,
-                                    materialTable.headers.size() * sizeof(nr::scene::RtMaterialHeader),
-                                    "ASBuild.RT.MaterialHeaders");
-        ensureStorageMetadataBuffer(device, slot.rtMaterialLayerBuffer, slot.rtMaterialLayerBufferSize,
-                                    materialTable.layers.size() * sizeof(nr::scene::RtMaterialLayerRecord),
-                                    "ASBuild.RT.MaterialLayers");
-        ensureStorageMetadataBuffer(device, slot.rtMaterialTextureRefBuffer, slot.rtMaterialTextureRefBufferSize,
-                                    materialTable.textureRefs.size() * sizeof(nr::scene::RtMaterialTextureRef),
-                                    "ASBuild.RT.MaterialTextureRefs");
-        writeMetadataBuffer(slot.rtInstanceMetadataBuffer,
-                            std::span<const nr::scene::RtInstanceMetadata>{metadata.instances});
-        writeMetadataBuffer(slot.rtGeometryMetadataBuffer,
-                            std::span<const nr::scene::RtGeometryMetadata>{metadata.geometries});
-        writeMetadataBuffer(slot.rtMaterialHeaderBuffer,
-                            std::span<const nr::scene::RtMaterialHeader>{materialTable.headers});
-        writeMetadataBuffer(slot.rtMaterialLayerBuffer,
-                            std::span<const nr::scene::RtMaterialLayerRecord>{materialTable.layers});
-        writeMetadataBuffer(slot.rtMaterialTextureRefBuffer,
-                            std::span<const nr::scene::RtMaterialTextureRef>{materialTable.textureRefs});
-        slot.appliedStructuralPlanGeneration = structuralPlan.generation;
-    }
+    ensureRtMetadataResidentSet(runtime, device, metadata, materialTable, structuralPlan.generation, retireDelay);
     auto const cpuWritesEnd = std::chrono::steady_clock::now();
 
     prepared.tlasInput = nr::rhi::TlasBuildInput{
@@ -1349,7 +1389,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         std::chrono::duration<double, std::milli>(metadataPlanEnd - cacheScanEnd).count();
     prepared.cpuWritesMilliseconds = std::chrono::duration<double, std::milli>(cpuWritesEnd - metadataPlanEnd).count();
     prepared.tlasSizingMilliseconds = std::chrono::duration<double, std::milli>(sizingEnd - cpuWritesEnd).count();
-    prepared.branchKey = makePreparedAsBranchKey(runtime, prepared, revisions);
     return prepared;
 }
 
@@ -1358,6 +1397,10 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
 {
     if (!prepared.available)
     {
+        if (context.benchmarkTelemetry.has_value())
+        {
+            context.benchmarkTelemetry->get().accelerationStructure.get().recorded = true;
+        }
         return;
     }
     auto &slot = runtime.frameSlots[prepared.frameSlot];
@@ -1375,14 +1418,16 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
     context.publishFrameResource(nr::renderer::frameResource::sceneTlas, tlasResource);
 
     auto importStorage = [&](const nr::rhi::Buffer &buffer, std::string_view name) {
-        return context.importBuffer(buffer, name, ResourceLifetime::FrameLocal, {BufferUsageIntent::StorageRead},
+        return context.importBuffer(buffer, name, ResourceLifetime::ScenePersistent, {BufferUsageIntent::StorageRead},
                                     ownership);
     };
-    auto const instanceMetadata = importStorage(slot.rtInstanceMetadataBuffer, "ASBuild.RT.InstanceMetadata");
-    auto const geometryMetadata = importStorage(slot.rtGeometryMetadataBuffer, "ASBuild.RT.GeometryMetadata");
-    auto const materialHeaders = importStorage(slot.rtMaterialHeaderBuffer, "ASBuild.RT.MaterialHeaders");
-    auto const materialLayers = importStorage(slot.rtMaterialLayerBuffer, "ASBuild.RT.MaterialLayers");
-    auto const materialTextureRefs = importStorage(slot.rtMaterialTextureRefBuffer, "ASBuild.RT.MaterialTextureRefs");
+    auto const &rtMetadata = runtime.rtMetadata;
+    nrAssert(rtMetadata.valid(), "AS build requires a resident RT metadata set before graph declaration.");
+    auto const instanceMetadata = importStorage(rtMetadata.instances, "ASBuild.RT.InstanceMetadata");
+    auto const geometryMetadata = importStorage(rtMetadata.geometries, "ASBuild.RT.GeometryMetadata");
+    auto const materialHeaders = importStorage(rtMetadata.materialHeaders, "ASBuild.RT.MaterialHeaders");
+    auto const materialLayers = importStorage(rtMetadata.materialLayers, "ASBuild.RT.MaterialLayers");
+    auto const materialTextureRefs = importStorage(rtMetadata.materialTextureRefs, "ASBuild.RT.MaterialTextureRefs");
 
     auto const &atlasMesh = runtime.blasCache.at(prepared.rtAtlasMesh).cachedBuild.sceneMesh;
     auto const vertexAtlas =
@@ -1541,13 +1586,6 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
 
 namespace nr::renderPasses
 {
-using GraphResourceHandle = nr::renderer::GraphResourceHandle;
-using PassResourceUseDesc = nr::renderer::PassResourceUseDesc;
-using ResourceLifetime = nr::renderer::ResourceLifetime;
-using ResourceOwnershipDomain = nr::renderer::ResourceOwnershipDomain;
-using BufferUsageIntent = nr::renderer::BufferUsageIntent;
-namespace use = nr::renderer::use;
-
 AccelerationStructureBuildNode::~AccelerationStructureBuildNode() = default;
 
 void AccelerationStructureBuildNode::initialize(NodeInitContext &context)
@@ -1568,237 +1606,13 @@ void AccelerationStructureBuildNode::build(NodeBuildContext &context, const Node
     materializeCurrentFrame(context, frameParameters);
 }
 
-[[nodiscard]] std::optional<nr::renderer::NodeRuntime::StructuralSnapshot> AccelerationStructureBuildNode::
-    structuralSnapshot(const NodeFrameParameters &frameParameters) const
-{
-    nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "AS Skeleton preflight requires initialized state.");
-    runtime_->preparedFrame = detail::prepareAsFrame(*runtime_, device_->get(), input, frameParameters);
-    auto branch = runtime_->preparedFrame->branchKey;
-    branch += std::format(";retireLatency={}", input.unusedFrameRetireLatency);
-    return StructuralSnapshot{
-        .configurationRevision = std::max<std::uint64_t>(1u, std::hash<std::string>{}(branch)),
-        .branchKey = std::move(branch),
-    };
-}
-
-bool AccelerationStructureBuildNode::materializeRenderGraphSkeleton(
-    nr::renderer::RenderGraphSkeletonPatchContext &context, const NodeFrameParameters &frameParameters,
-    const StructuralSnapshot &snapshot)
-{
-    nrAssert(static_cast<bool>(runtime_) && device_.has_value(), "AS Skeleton patch requires initialized state.");
-    if (!runtime_->preparedFrame.has_value())
-    {
-        return false;
-    }
-    auto expectedBranch = runtime_->preparedFrame->branchKey;
-    expectedBranch += std::format(";retireLatency={}", input.unusedFrameRetireLatency);
-    if (snapshot.branchKey != expectedBranch)
-    {
-        return false;
-    }
-    auto prepared = std::move(*runtime_->preparedFrame);
-    runtime_->preparedFrame.reset();
-    if (!prepared.available)
-    {
-        if (frameParameters.benchmarkTelemetry.has_value())
-        {
-            auto &telemetry = frameParameters.benchmarkTelemetry->get().accelerationStructure.get();
-            telemetry.recorded = true;
-        }
-        return true;
-    }
-
-    auto &runtime = *runtime_;
-    auto &slot = runtime.frameSlots[prepared.frameSlot];
-    auto const ownership = nr::renderer::ownershipDomainFromQueue(context.queue());
-    auto resourceSlot = std::size_t{0u};
-    auto patchBuffer = [&](const nr::rhi::Buffer &buffer, std::string debugName,
-                           nr::renderer::ResourceLifetime lifetime,
-                           std::vector<nr::renderer::BufferUsageIntent> usages) {
-        auto const handle = context.resource(resourceSlot);
-        context.patchResource(resourceSlot++, nr::renderer::GraphImportedBufferDesc{
-                                                  .debugName = std::move(debugName),
-                                                  .lifetime = lifetime,
-                                                  .initialOwnership = ownership,
-                                                  .size = buffer.size(),
-                                                  .usageIntents = std::move(usages),
-                                                  .importedResource = std::cref(buffer),
-                                              });
-        return handle;
-    };
-    auto patchAs = [&](const nr::rhi::AccelerationStructureResource &accelerationStructure, std::string debugName,
-                       nr::renderer::ResourceLifetime lifetime,
-                       std::optional<std::reference_wrapper<nr::renderer::RetainedAccelerationStructureState>>
-                           retainedState = {}) {
-        auto const handle = context.resource(resourceSlot);
-        auto const initialOwnership = retainedState.has_value() && retainedState->get().common.initialized
-                                          ? retainedState->get().common.ownership
-                                          : ownership;
-        context.patchResource(resourceSlot++, nr::renderer::GraphImportedAccelerationStructureDesc{
-                                                  .debugName = std::move(debugName),
-                                                  .lifetime = lifetime,
-                                                  .initialOwnership = initialOwnership,
-                                                  .type = accelerationStructure.type(),
-                                                  .size = accelerationStructure.size(),
-                                                  .importedResource = std::cref(accelerationStructure),
-                                                  .retainedState = retainedState,
-                                              });
-        return handle;
-    };
-
-    auto const scratchResource =
-        patchBuffer(slot.scratchBuffer, "ASBuild.Scratch", nr::renderer::ResourceLifetime::FrameLocal,
-                    {nr::renderer::BufferUsageIntent::AccelerationStructureScratch,
-                     nr::renderer::BufferUsageIntent::ShaderDeviceAddress});
-    auto const instanceResource =
-        patchBuffer(slot.instanceBuffer, "ASBuild.TLAS.Instances", nr::renderer::ResourceLifetime::FrameLocal,
-                    {nr::renderer::BufferUsageIntent::AccelerationStructureBuildInput,
-                     nr::renderer::BufferUsageIntent::ShaderDeviceAddress});
-    auto const tlasResource = patchAs(slot.tlas, "ASBuild.TLAS", nr::renderer::ResourceLifetime::FrameLocal);
-    static_cast<void>(scratchResource);
-    static_cast<void>(instanceResource);
-    static_cast<void>(tlasResource);
-    patchBuffer(slot.rtInstanceMetadataBuffer, "ASBuild.RT.InstanceMetadata",
-                nr::renderer::ResourceLifetime::FrameLocal, {nr::renderer::BufferUsageIntent::StorageRead});
-    patchBuffer(slot.rtGeometryMetadataBuffer, "ASBuild.RT.GeometryMetadata",
-                nr::renderer::ResourceLifetime::FrameLocal, {nr::renderer::BufferUsageIntent::StorageRead});
-    patchBuffer(slot.rtMaterialHeaderBuffer, "ASBuild.RT.MaterialHeaders", nr::renderer::ResourceLifetime::FrameLocal,
-                {nr::renderer::BufferUsageIntent::StorageRead});
-    patchBuffer(slot.rtMaterialLayerBuffer, "ASBuild.RT.MaterialLayers", nr::renderer::ResourceLifetime::FrameLocal,
-                {nr::renderer::BufferUsageIntent::StorageRead});
-    patchBuffer(slot.rtMaterialTextureRefBuffer, "ASBuild.RT.MaterialTextureRefs",
-                nr::renderer::ResourceLifetime::FrameLocal, {nr::renderer::BufferUsageIntent::StorageRead});
-    auto const &atlasMesh = runtime.blasCache.at(prepared.rtAtlasMesh).cachedBuild.sceneMesh;
-    patchBuffer(atlasMesh.vertexBuffer.buffer->get(), "ASBuild.RT.VertexAtlas",
-                nr::renderer::ResourceLifetime::ScenePersistent, {nr::renderer::BufferUsageIntent::StorageRead});
-    if (atlasMesh.hasIndexBuffer())
-    {
-        patchBuffer(atlasMesh.indexBuffer.buffer->get(), "ASBuild.RT.IndexAtlas",
-                    nr::renderer::ResourceLifetime::ScenePersistent, {nr::renderer::BufferUsageIntent::StorageRead});
-    }
-
-    auto frameDataSlot = std::size_t{0u};
-    context.patchFrameData(frameDataSlot++, "ASBuild.RT.HitSbtPlan",
-                           std::make_any<std::shared_ptr<const SceneRtHitSbtPlan>>(runtime.structuralPlan.hitSbtPlan));
-
-    auto patchedBlas = std::set<nr::resource::MeshHandle>{};
-    std::ranges::for_each(prepared.instances, [&](const detail::PlannedInstance &instance) {
-        if (!patchedBlas.insert(instance.mesh).second)
-        {
-            return;
-        }
-        auto &entry = runtime.blasCache.at(instance.mesh);
-        patchAs(entry.accelerationStructure, std::format("ASBuild.BLAS.mesh{}", instance.mesh.slot),
-                nr::renderer::ResourceLifetime::RendererPersistent, std::ref(entry.retainedState));
-    });
-
-    auto blasFrameDataHandle = nr::renderer::GraphFrameDataHandle{};
-    auto passSlot = std::size_t{0u};
-    if (!prepared.dirtyMeshes.empty())
-    {
-        auto frameData = detail::BlasBuildFrameData{
-            .scratchAlignment = runtime.limits.minScratchAlignment,
-        };
-        auto scratchOffset = vk::DeviceSize{0u};
-        auto importedInputs = std::map<const nr::rhi::Buffer *, GraphResourceHandle>{};
-        std::ranges::for_each(prepared.dirtyMeshes, [&](nr::resource::MeshHandle mesh) {
-            auto const &cached = runtime.blasCache.at(mesh).cachedBuild;
-            auto const geometryOffset = frameData.geometries.size();
-            frameData.geometries.insert(frameData.geometries.end(), cached.geometries.begin(), cached.geometries.end());
-            scratchOffset = detail::alignUp(scratchOffset, runtime.limits.minScratchAlignment);
-            frameData.works.push_back(detail::BlasBuildWork{
-                .dst = std::cref(runtime.blasCache.at(mesh).accelerationStructure),
-                .scratchBuffer = std::cref(slot.scratchBuffer),
-                .geometryOffset = geometryOffset,
-                .geometryCount = cached.geometries.size(),
-                .scratchAddress = slot.scratchBuffer.deviceAddress() + scratchOffset,
-                .scratchSize = cached.sizes.buildScratchSize,
-                .options = detail::staticBlasBuildOptions(),
-            });
-            scratchOffset += cached.sizes.buildScratchSize;
-            auto patchInput = [&](const nr::rhi::Buffer &buffer, std::string_view name) {
-                if (importedInputs.contains(std::addressof(buffer)))
-                {
-                    return;
-                }
-                auto handle = patchBuffer(buffer, std::string{name}, nr::renderer::ResourceLifetime::ScenePersistent,
-                                          {nr::renderer::BufferUsageIntent::AccelerationStructureBuildInput,
-                                           nr::renderer::BufferUsageIntent::ShaderDeviceAddress});
-                importedInputs.emplace(std::addressof(buffer), handle);
-            };
-            patchInput(cached.sceneMesh.vertexBuffer.buffer->get(), "ASBuild.SceneVertexAtlas");
-            if (cached.sceneMesh.hasIndexBuffer())
-            {
-                patchInput(cached.sceneMesh.indexBuffer.buffer->get(), "ASBuild.SceneIndexAtlas");
-            }
-        });
-        blasFrameDataHandle = context.frameData(frameDataSlot);
-        context.patchFrameData(frameDataSlot++, "ASBuild.BLAS.FrameData",
-                               std::make_any<detail::BlasBuildFrameData>(std::move(frameData)));
-        auto const blasFrameDataUses = std::array{blasFrameDataHandle};
-        context.patchPass(
-            passSlot++, "ASBuild.BuildBLAS", nullptr,
-            [blasFrameDataHandle](const nr::renderer::PassRecordContext &recordContext) {
-                auto const &data = recordContext.frameData<detail::BlasBuildFrameData>(blasFrameDataHandle);
-                auto records = detail::makeBatchRecords(data);
-                nr::rhi::recordBuildBlasBatch(recordContext.commandBuffer->get(), records, data.scratchAlignment);
-            },
-            std::nullopt, blasFrameDataUses);
-    }
-
-    auto const tlasFrameDataHandle = context.frameData(frameDataSlot);
-    context.patchFrameData(frameDataSlot, "ASBuild.TLAS.FrameData",
-                           std::make_any<detail::TlasBuildFrameData>(detail::TlasBuildFrameData{
-                               .dst = std::cref(slot.tlas),
-                               .instanceBuffer = std::cref(slot.instanceBuffer),
-                               .scratchBuffer = std::cref(slot.scratchBuffer),
-                               .scratchAddress = slot.scratchBuffer.deviceAddress(),
-                               .buildInput = prepared.tlasInput,
-                               .options = detail::tlasBuildOptions(),
-                               .scratchAlignment = runtime.limits.minScratchAlignment,
-                           }));
-    auto const tlasFrameDataUses = std::array{tlasFrameDataHandle};
-    context.patchPass(passSlot, "ASBuild.BuildTLAS", nullptr,
-                      [tlasFrameDataHandle](const nr::renderer::PassRecordContext &recordContext) {
-                          auto const &data = recordContext.frameData<detail::TlasBuildFrameData>(tlasFrameDataHandle);
-                          nr::rhi::recordBuildTlas(recordContext.commandBuffer->get(),
-                                                   nr::rhi::TlasBuildRecordInfo{
-                                                       .dst = data.dst.get(),
-                                                       .instanceBuffer = data.instanceBuffer.get(),
-                                                       .scratchBuffer = data.scratchBuffer.get(),
-                                                       .scratchAddress = data.scratchAddress,
-                                                       .buildInput = data.buildInput,
-                                                       .options = data.options,
-                                                   },
-                                                    data.scratchAlignment);
-                       },
-                      std::nullopt, tlasFrameDataUses);
-
-    if (frameParameters.benchmarkTelemetry.has_value())
-    {
-        auto &telemetry = frameParameters.benchmarkTelemetry->get().accelerationStructure.get();
-        telemetry.recorded = true;
-        telemetry.available = true;
-        telemetry.cacheScanMilliseconds = prepared.cacheScanMilliseconds;
-        telemetry.metadataPlanMilliseconds = prepared.metadataPlanMilliseconds;
-        telemetry.cpuWritesMilliseconds = prepared.cpuWritesMilliseconds;
-        telemetry.tlasSizingMilliseconds = prepared.tlasSizingMilliseconds;
-        telemetry.graphDeclareMilliseconds = 0.0;
-        telemetry.instanceCount = prepared.instances.size();
-        telemetry.dirtyBlasCount = prepared.dirtyMeshes.size();
-    }
-    return true;
-}
-
-void AccelerationStructureBuildNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameParameters &)
+void AccelerationStructureBuildNode::materializeCurrentFrame(NodeBuildContext &context,
+                                                             const NodeFrameParameters &frameParameters)
 {
     nrAssert(static_cast<bool>(runtime_), "AccelerationStructureBuild build stage requires initialized runtime state.");
     nrAssert(device_.has_value(),
              "AccelerationStructureBuild build stage requires device reference from initialize stage.");
-    nrAssert(runtime_->preparedFrame.has_value(),
-             "AccelerationStructureBuild build stage requires structural preflight preparation.");
-    auto prepared = std::move(*runtime_->preparedFrame);
-    runtime_->preparedFrame.reset();
+    auto prepared = detail::prepareAsFrame(*runtime_, device_->get(), input, frameParameters);
     detail::declarePreparedAsFrame(context, *runtime_, std::move(prepared));
 }
 } // namespace nr::renderPasses

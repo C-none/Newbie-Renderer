@@ -572,23 +572,24 @@ template <typename FieldLayout>
                                                                std::string debugPath) const
 {
     auto *fieldTypeLayout = fieldLayout.getTypeLayout();
-    nrAssert(fieldTypeLayout != nullptr, std::format("ShaderCursor::fieldCursorFromLayout requires a non-null field "
-                                                     "type layout. fieldIndex={}, debugPath='{}', cursor={}",
-                                                     fieldIndex, debugPath, debugSummary()));
+    nrAssert(fieldTypeLayout != nullptr,
+             "ShaderCursor::fieldCursorFromLayout requires a non-null field type layout. fieldIndex={}, "
+             "debugPath='{}', cursor={}",
+             fieldIndex, debugPath, debugSummary());
 
     ShaderCursor next = *this;
     next.typeLayout_ = fieldTypeLayout;
     auto fieldOffset = fieldLayout.getOffset();
     nrAssert(fieldOffset <= std::numeric_limits<std::size_t>::max() - next.address_.uniformOffset,
-             std::format("ShaderCursor field uniform offset overflows size_t. fieldIndex={}, fieldOffset={}, cursor={}",
-                         fieldIndex, fieldOffset, debugSummary()));
+             "ShaderCursor field uniform offset overflows size_t. fieldIndex={}, fieldOffset={}, cursor={}", fieldIndex,
+             fieldOffset, debugSummary());
     next.address_.uniformOffset += fieldOffset;
 
     auto bindingRangeOffset =
         detail::sanitizeRangeOffset(typeLayout_->getFieldBindingRangeOffset(static_cast<SlangInt>(fieldIndex)));
     nrAssert(bindingRangeOffset <= std::numeric_limits<std::uint32_t>::max() - next.address_.bindingRangeIndex,
-             std::format("ShaderCursor field binding range overflows uint32. fieldIndex={}, rangeOffset={}, cursor={}",
-                         fieldIndex, bindingRangeOffset, debugSummary()));
+             "ShaderCursor field binding range overflows uint32. fieldIndex={}, rangeOffset={}, cursor={}", fieldIndex,
+             bindingRangeOffset, debugSummary());
     next.address_.bindingRangeIndex += bindingRangeOffset;
     next.isRoot_ = false;
     next.debugPath_ = std::move(debugPath);

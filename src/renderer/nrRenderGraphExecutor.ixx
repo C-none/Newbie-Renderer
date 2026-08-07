@@ -174,8 +174,8 @@ template <typename TContext>
 
     nrAssert(
         logicalResource.logicalResourceId <= static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()),
-        std::format("resolveLogicalDescriptorWriteDefault logical resource id {} exceeds GraphResourceHandle capacity.",
-                    logicalResource.logicalResourceId));
+        "resolveLogicalDescriptorWriteDefault logical resource id {} exceeds GraphResourceHandle capacity.",
+        logicalResource.logicalResourceId);
 
     auto resourceHandle = GraphResourceHandle{
         static_cast<std::uint32_t>(logicalResource.logicalResourceId),
@@ -183,27 +183,23 @@ template <typename TContext>
 
     auto resolveBufferDescriptor = [&]() -> std::optional<nr::rhi::DescriptorWritePayload> {
         auto resolvedBuffer = bindingContext.resolveBuffer(resourceHandle);
-        nrAssert(resolvedBuffer.has_value(), std::format("resolveLogicalDescriptorWriteDefault failed to resolve "
-                                                         "logical buffer '{}' ({}) for descriptor set={}, binding={}.",
-                                                         logicalResource.debugName, logicalResource.logicalResourceId,
-                                                         binding.set, binding.binding));
-        nrAssert(
-            logicalResource.offset <= resolvedBuffer->size,
-            std::format("resolveLogicalDescriptorWriteDefault buffer offset out of range. name='{}' offset={} size={}",
-                        logicalResource.debugName, logicalResource.offset, resolvedBuffer->size));
+        nrAssert(resolvedBuffer.has_value(),
+                 "resolveLogicalDescriptorWriteDefault failed to resolve logical buffer '{}' ({}) for descriptor "
+                 "set={}, binding={}.",
+                 logicalResource.debugName, logicalResource.logicalResourceId, binding.set, binding.binding);
+        nrAssert(logicalResource.offset <= resolvedBuffer->size,
+                 "resolveLogicalDescriptorWriteDefault buffer offset out of range. name='{}' offset={} size={}",
+                 logicalResource.debugName, logicalResource.offset, resolvedBuffer->size);
 
         auto resolvedRange = logicalResource.range == std::numeric_limits<vk::DeviceSize>::max()
                                  ? resolvedBuffer->size - logicalResource.offset
                                  : logicalResource.range;
         nrAssert(resolvedRange > 0u,
-                 std::format(
-                     "resolveLogicalDescriptorWriteDefault buffer range must be non-zero. name='{}' offset={} range={}",
-                     logicalResource.debugName, logicalResource.offset, resolvedRange));
-        nrAssert(
-            resolvedRange <= resolvedBuffer->size - logicalResource.offset,
-            std::format(
-                "resolveLogicalDescriptorWriteDefault buffer range out of bounds. name='{}' offset={} range={} size={}",
-                logicalResource.debugName, logicalResource.offset, resolvedRange, resolvedBuffer->size));
+                 "resolveLogicalDescriptorWriteDefault buffer range must be non-zero. name='{}' offset={} range={}",
+                 logicalResource.debugName, logicalResource.offset, resolvedRange);
+        nrAssert(resolvedRange <= resolvedBuffer->size - logicalResource.offset,
+                 "resolveLogicalDescriptorWriteDefault buffer range out of bounds. name='{}' offset={} range={} size={}",
+                 logicalResource.debugName, logicalResource.offset, resolvedRange, resolvedBuffer->size);
 
         if (binding.descriptorType == vk::DescriptorType::eStorageBuffer ||
             binding.descriptorType == vk::DescriptorType::eStorageBufferDynamic)
@@ -212,9 +208,9 @@ template <typename TContext>
             {
                 auto const usage = resolvedBuffer->resource->get().usage();
                 nrAssert((usage & vk::BufferUsageFlagBits::eStorageBuffer) != vk::BufferUsageFlags{},
-                         std::format("Storage buffer descriptor '{}' at shader path '{}' resolved to buffer without "
-                                     "eStorageBuffer usage. usage={}",
-                                     logicalResource.debugName, binding.debugPath, vk::to_string(usage)));
+                         "Storage buffer descriptor '{}' at shader path '{}' resolved to buffer without eStorageBuffer "
+                         "usage. usage={}",
+                         logicalResource.debugName, binding.debugPath, vk::to_string(usage));
             }
 
             if (bindingContext.device.has_value())
@@ -223,9 +219,9 @@ template <typename TContext>
                     1u,
                     bindingContext.device->get().physicalDevice.getProperties().limits.minStorageBufferOffsetAlignment);
                 nrAssert((logicalResource.offset % alignment) == 0u,
-                         std::format("Storage buffer descriptor '{}' at shader path '{}' has unaligned offset {} for "
-                                     "minStorageBufferOffsetAlignment {}.",
-                                     logicalResource.debugName, binding.debugPath, logicalResource.offset, alignment));
+                         "Storage buffer descriptor '{}' at shader path '{}' has unaligned offset {} for "
+                         "minStorageBufferOffsetAlignment {}.",
+                         logicalResource.debugName, binding.debugPath, logicalResource.offset, alignment);
             }
         }
 
@@ -239,14 +235,13 @@ template <typename TContext>
     auto resolveAccelerationStructureDescriptor = [&]() -> std::optional<nr::rhi::DescriptorWritePayload> {
         auto resolvedAccelerationStructure = bindingContext.resolveAccelerationStructure(resourceHandle);
         nrAssert(resolvedAccelerationStructure.has_value(),
-                 std::format("resolveLogicalDescriptorWriteDefault failed to resolve logical acceleration structure "
-                             "'{}' ({}) for descriptor set={}, binding={}.",
-                             logicalResource.debugName, logicalResource.logicalResourceId, binding.set,
-                             binding.binding));
+                 "resolveLogicalDescriptorWriteDefault failed to resolve logical acceleration structure '{}' ({}) for "
+                 "descriptor set={}, binding={}.",
+                 logicalResource.debugName, logicalResource.logicalResourceId, binding.set, binding.binding);
         nrAssert(resolvedAccelerationStructure->accelerationStructure != vk::AccelerationStructureKHR{},
-                 std::format("resolveLogicalDescriptorWriteDefault resolved logical acceleration structure '{}' ({}) "
-                             "without a valid handle.",
-                             logicalResource.debugName, logicalResource.logicalResourceId));
+                 "resolveLogicalDescriptorWriteDefault resolved logical acceleration structure '{}' ({}) without a "
+                 "valid handle.",
+                 logicalResource.debugName, logicalResource.logicalResourceId);
 
         return nr::rhi::DescriptorWritePayload{nr::rhi::AccelerationStructureDescriptorWrite{
             .accelerationStructure = resolvedAccelerationStructure->accelerationStructure,
@@ -269,15 +264,13 @@ template <typename TContext>
     case vk::DescriptorType::eStorageImage:
     case vk::DescriptorType::eInputAttachment: {
         auto resolvedImage = bindingContext.resolveImage(resourceHandle);
-        nrAssert(resolvedImage.has_value(), std::format("resolveLogicalDescriptorWriteDefault failed to resolve "
-                                                        "logical image '{}' ({}) for descriptor set={}, binding={}.",
-                                                        logicalResource.debugName, logicalResource.logicalResourceId,
-                                                        binding.set, binding.binding));
-        nrAssert(
-            resolvedImage->view != vk::ImageView{},
-            std::format(
-                "resolveLogicalDescriptorWriteDefault resolved logical image '{}' ({}) without a valid image view.",
-                logicalResource.debugName, logicalResource.logicalResourceId));
+        nrAssert(resolvedImage.has_value(),
+                 "resolveLogicalDescriptorWriteDefault failed to resolve logical image '{}' ({}) for descriptor "
+                 "set={}, binding={}.",
+                 logicalResource.debugName, logicalResource.logicalResourceId, binding.set, binding.binding);
+        nrAssert(resolvedImage->view != vk::ImageView{},
+                 "resolveLogicalDescriptorWriteDefault resolved logical image '{}' ({}) without a valid image view.",
+                 logicalResource.debugName, logicalResource.logicalResourceId);
 
         return nr::rhi::DescriptorWritePayload{nr::rhi::ImageDescriptorWrite{
             .imageView = resolvedImage->view,
@@ -293,14 +286,13 @@ template <typename TContext>
     case vk::DescriptorType::eCombinedImageSampler: {
         auto resolvedImage = bindingContext.resolveImage(resourceHandle);
         nrAssert(resolvedImage.has_value(),
-                 std::format("resolveLogicalDescriptorWriteDefault failed to resolve logical combined-image '{}' ({}) "
-                             "for descriptor set={}, binding={}.",
-                             logicalResource.debugName, logicalResource.logicalResourceId, binding.set,
-                             binding.binding));
+                 "resolveLogicalDescriptorWriteDefault failed to resolve logical combined-image '{}' ({}) for "
+                 "descriptor set={}, binding={}.",
+                 logicalResource.debugName, logicalResource.logicalResourceId, binding.set, binding.binding);
         nrAssert(resolvedImage->view != vk::ImageView{},
-                 std::format("resolveLogicalDescriptorWriteDefault resolved logical combined-image '{}' ({}) without a "
-                             "valid image view.",
-                             logicalResource.debugName, logicalResource.logicalResourceId));
+                 "resolveLogicalDescriptorWriteDefault resolved logical combined-image '{}' ({}) without a valid "
+                 "image view.",
+                 logicalResource.debugName, logicalResource.logicalResourceId);
 
         return nr::rhi::DescriptorWritePayload{nr::rhi::ImageDescriptorWrite{
             .imageView = resolvedImage->view,

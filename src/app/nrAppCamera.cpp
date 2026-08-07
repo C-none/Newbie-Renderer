@@ -189,7 +189,7 @@ inline constexpr int kKeyE = 'E';
                                                                 std::string_view id) noexcept
 {
     auto const *value = snapshot.findValue(id);
-    nrAssert(value != nullptr, std::format("Camera snapshot is missing required option '{}'.", id));
+    nrAssert(value != nullptr, "Camera snapshot is missing required option '{}'.", id);
     return *value;
 }
 

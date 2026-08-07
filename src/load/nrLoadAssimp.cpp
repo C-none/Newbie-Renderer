@@ -333,13 +333,11 @@ struct TangentUvSelection
     if (baseNormal != nullptr && clearcoatNormal != nullptr &&
         !tangentMappingsEquivalent(*baseNormal, *clearcoatNormal))
     {
-        nr::nrLog(
-            nr::LogLevel::warning, "LOAD",
-            std::format(
-                "Mesh '{}' material '{}' uses different effective UV mappings for base and clearcoat normal textures. "
-                "A vertex stores one tangent frame; generated tangents use the base normal mapping, so the clearcoat "
-                "normal tangent orientation cannot also be exact.",
-                meshName, material.name));
+        nr::nrLog<nr::LogLevel::warning, "LOAD">(
+            "Mesh '{}' material '{}' uses different effective UV mappings for base and clearcoat normal textures. "
+            "A vertex stores one tangent frame; generated tangents use the base normal mapping, so the clearcoat "
+            "normal tangent orientation cannot also be exact.",
+            meshName, material.name);
     }
 
     auto const *selected = baseNormal != nullptr ? baseNormal : clearcoatNormal;
@@ -961,10 +959,10 @@ struct VertexTangentVariant
             (attenuationColor.r != 1.0f || attenuationColor.g != 1.0f || attenuationColor.b != 1.0f);
         if (hasUnsupportedAttenuationDistance || hasUnsupportedAttenuationColor)
         {
-            nr::nrLog(nr::LogLevel::warning, "LOAD",
-                      std::format("Material '{}' uses volume attenuation/absorption properties; Beer-Lambert "
-                                  "absorption is unsupported and will be ignored.",
-                                  materialAsset.name));
+            nr::nrLog<nr::LogLevel::warning, "LOAD">(
+                "Material '{}' uses volume attenuation/absorption properties; Beer-Lambert absorption is unsupported "
+                "and will be ignored.",
+                materialAsset.name);
         }
 
         // Read specular factor (for specular-glossiness workflow)
@@ -1266,11 +1264,10 @@ struct VertexTangentVariant
 
         if (invalidTangentFrameCount > 0u)
         {
-            nr::nrLog(nr::LogLevel::warning, "LOAD",
-                      std::format("Mesh '{}' contains {} vertices with undefined tangent handedness; using +1 tangent "
-                                  "sign for those vertices. First invalid frame: {}.",
-                                  meshAsset.name, invalidTangentFrameCount,
-                                  firstInvalidTangentFrame.value_or("unavailable")));
+            nr::nrLog<nr::LogLevel::warning, "LOAD">(
+                "Mesh '{}' contains {} vertices with undefined tangent handedness; using +1 tangent sign for those "
+                "vertices. First invalid frame: {}.",
+                meshAsset.name, invalidTangentFrameCount, firstInvalidTangentFrame.value_or("unavailable"));
         }
 
         meshAsset.indices.reserve(static_cast<std::size_t>(mesh->mNumFaces) * 3u);
@@ -1655,15 +1652,31 @@ SceneImportResult importAssimpScene(const SceneLoadRequest &request)
         return SceneImportResult{std::unexpected(std::move(*error))};
     }
 
-    if (auto decodeResult = decodeSceneTextureImages(scene); !decodeResult.has_value())
+    auto decodeResult = std::expected<void, LoadError>{};
+    auto meshError = std::optional<LoadError>{};
+    {
+        // Texture decoding mutates scene.textures while mesh conversion writes scene.meshes and reads the
+        // already-finalized material metadata. Join both before any later stage observes the complete SceneAsset.
+        auto meshConversionPool = nr::threading::StaticThreadPool{};
+        meshConversionPool.ensureWorkerCount(1u);
+        auto meshConversionFuture = meshConversionPool.submit(
+            [assimpScene, &scene, strict = request.strict,
+             generateMissingGltfTangents = request.generateTangents && gltfSource] {
+                return detail::appendMeshes(*assimpScene, scene, strict, generateMissingGltfTangents);
+            });
+
+        decodeResult = decodeSceneTextureImages(scene);
+        meshError = meshConversionFuture.get();
+    }
+
+    if (!decodeResult.has_value())
     {
         return SceneImportResult{std::unexpected(std::move(decodeResult.error()))};
     }
 
-    if (auto error = detail::appendMeshes(*assimpScene, scene, request.strict, request.generateTangents && gltfSource);
-        error.has_value())
+    if (meshError.has_value())
     {
-        return SceneImportResult{std::unexpected(std::move(*error))};
+        return SceneImportResult{std::unexpected(std::move(*meshError))};
     }
 
     if (auto error = detail::appendNodes(*assimpScene, scene); error.has_value())

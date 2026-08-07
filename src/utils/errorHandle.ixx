@@ -81,66 +81,89 @@ void emitCompactRecord(LogLevel level, std::string_view schema, std::string_view
 void emitAssertion(std::string_view context, std::source_location loc);
 
 void shutdownNdjsonLogs() noexcept;
+
+inline constexpr std::size_t maximumLogChannelBytes = 32u;
+
+// Structural carrier so a log channel can be supplied as a non-type template parameter.
+struct LogChannel
+{
+    std::array<char, maximumLogChannelBytes> storage{};
+    std::size_t length = 0u;
+
+    template <std::size_t Extent>
+    consteval LogChannel(const char (&text)[Extent]) : length(Extent - 1u)
+    {
+        static_assert(Extent <= maximumLogChannelBytes, "Log channel exceeds maximumLogChannelBytes.");
+        std::ranges::copy(std::string_view{text, Extent - 1u}, storage.begin());
+    }
+
+    [[nodiscard]] constexpr std::string_view view() const noexcept
+    {
+        return std::string_view{storage.data(), length};
+    }
+};
+
+// Captures the caller location alongside a compile-time checked format string, so the
+// formatting work stays inside the reporting entry point instead of the call site.
+template <typename... Args> struct FormatWithLocation
+{
+    std::format_string<Args...> format;
+    std::source_location location;
+
+    template <typename Text>
+        requires std::convertible_to<const Text &, std::string_view>
+    consteval FormatWithLocation(const Text &text, std::source_location loc = std::source_location::current())
+        : format(text), location(loc)
+    {
+    }
+};
+
+template <typename... Args> using FormatContext = FormatWithLocation<std::type_identity_t<Args>...>;
 } // namespace detail
 
-constexpr inline void nrAssert(bool condition, std::string_view context = "",
-                               std::source_location loc = std::source_location::current())
+constexpr inline void nrAssert(bool condition, std::source_location loc = std::source_location::current())
 {
     if (!condition)
     {
-        detail::emitAssertion(context, loc);
+        detail::emitAssertion({}, loc);
         std::exit(1);
     }
 }
 
-template <typename ContextFactory>
-    requires std::invocable<ContextFactory &&> &&
-             std::convertible_to<std::invoke_result_t<ContextFactory &&>, std::string_view>
-constexpr inline void nrAssert(bool condition, ContextFactory &&contextFactory,
-                               std::source_location loc = std::source_location::current())
+template <typename... Args>
+constexpr inline void nrAssert(bool condition, detail::FormatContext<Args...> message, Args &&...args)
 {
     if (!condition)
     {
-        nrAssert(false, std::invoke(std::forward<ContextFactory>(contextFactory)), loc);
+        detail::emitAssertion(std::format(message.format, std::forward<Args>(args)...), message.location);
+        std::exit(1);
     }
 }
 
-constexpr inline void nrLog(LogLevel level, std::string_view channel, std::string_view context,
-                            std::source_location loc = std::source_location::current(), bool terminateOnError = false)
+// Error-level logs are always fatal: they emit regardless of globalLogLevel and terminate the process.
+// A recoverable condition must be reported at warning level or lower.
+template <LogLevel Level, detail::LogChannel Channel = detail::LogChannel{"LOG"}, typename... Args>
+constexpr inline void nrLog(detail::FormatContext<Args...> message, Args &&...args)
 {
-    if (globalLogLevel <= level)
+    if constexpr (globalLogLevel <= Level || Level == LogLevel::error)
     {
-        detail::emitLog(level, channel, context, loc);
+        detail::emitLog(Level, Channel.view(), std::format(message.format, std::forward<Args>(args)...),
+                        message.location);
     }
 
-    if (terminateOnError && level == LogLevel::error)
+    if constexpr (Level == LogLevel::error)
     {
         detail::shutdownNdjsonLogs();
         std::exit(1);
     }
 }
 
-constexpr inline void nrLog(LogLevel level, std::string_view context,
-                            std::source_location loc = std::source_location::current(), bool terminateOnError = false)
+template <LogLevel Level, typename... Args>
+constexpr inline void nrVulkan(detail::FormatContext<Args...> message, Args &&...args)
 {
-    nrLog(level, "LOG", context, loc, terminateOnError);
-}
-
-template <LogLevel Level = LogLevel::info, bool TerminateOnError = (Level == LogLevel::error)>
-constexpr inline void nrInfo(std::string_view context = "", std::source_location loc = std::source_location::current())
-{
-    // Compile-time log level filtering (type-safe enum comparison)
     if constexpr (globalLogLevel <= Level)
     {
-        nrLog(Level, "LOG", context, loc, TerminateOnError);
-    }
-}
-constexpr inline void nrVulkan(LogLevel level, std::string_view context,
-                               std::source_location /*loc*/ = std::source_location::current())
-{
-    if (globalLogLevel <= level)
-    {
-        detail::emitCompactLog(level, "VULKAN", context);
+        detail::emitCompactLog(Level, "VULKAN", std::format(message.format, std::forward<Args>(args)...));
     }
 }
 

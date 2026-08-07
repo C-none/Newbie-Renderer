@@ -6,6 +6,7 @@ import :type;
 import nr.utils;
 import :descriptor;
 import :slang;
+import :pipelineBinary;
 import std;
 
 namespace nr::rhi
@@ -36,6 +37,241 @@ std::atomic<std::uint64_t> nextRayTracingPipelineIdentity{1u};
     auto const value = nextRayTracingPipelineIdentity.fetch_add(1u, std::memory_order_relaxed);
     nrAssert(value != 0u, "Ray tracing pipeline identity space exhausted.");
     return RayTracingPipelineIdentity{.value = value};
+}
+
+[[nodiscard]] vk::PipelineCreateFlags2 capturePipelineFlags(vk::PipelineCreateFlags flags) noexcept
+{
+    auto const legacyFlags = static_cast<std::uint64_t>(static_cast<vk::PipelineCreateFlags::MaskType>(flags));
+    return vk::PipelineCreateFlags2{legacyFlags} | vk::PipelineCreateFlagBits2::eCaptureDataKHR;
+}
+
+template <typename TEnum>
+    requires std::is_enum_v<TEnum>
+void appendPsoEnum(std::uint64_t &fingerprint, TEnum value) noexcept
+{
+    nr::hash::hashAppend(fingerprint, static_cast<std::underlying_type_t<TEnum>>(value));
+}
+
+template <typename TFlags> void appendPsoFlags(std::uint64_t &fingerprint, TFlags value) noexcept
+{
+    nr::hash::hashAppend(fingerprint, static_cast<typename TFlags::MaskType>(value));
+}
+
+template <typename TRange> void appendPsoRangeSize(std::uint64_t &fingerprint, const TRange &range) noexcept
+{
+    nr::hash::hashAppend(fingerprint, static_cast<std::uint64_t>(std::ranges::size(range)));
+}
+
+[[nodiscard]] std::uint64_t finalizePsoContentFingerprint(std::uint64_t fingerprint) noexcept
+{
+    return fingerprint == 0u ? nr::hash::fnv1a64OffsetBasis : fingerprint;
+}
+
+void appendProgramFingerprint(std::uint64_t &fingerprint, const SlangProgram &program,
+                              std::string_view logicalEntryPointName = {})
+{
+    auto const *entryPoint = program.entryPoint();
+    nrAssert(entryPoint != nullptr && entryPoint->valid() && entryPoint->spirv,
+             "PSO content fingerprint requires a valid compiled Slang entry point.");
+    appendPsoEnum(fingerprint, entryPoint->stage);
+    nr::hash::hashAppendString(fingerprint, entryPoint->entryPointName);
+    nr::hash::hashAppendString(fingerprint, logicalEntryPointName);
+    nr::hash::hashAppend(fingerprint, static_cast<std::uint64_t>(entryPoint->spirv->size()));
+    auto const words = std::span<const std::uint32_t>{entryPoint->spirv->data(), entryPoint->spirv->size()};
+    nr::hash::hashAppend(fingerprint, nr::hash::fnv1a64(std::as_bytes(words)));
+}
+
+void appendShaderLayoutFingerprint(std::uint64_t &fingerprint, const ShaderLayoutAbiSignature &signature)
+{
+    auto descriptorBindings = signature.descriptorBindings;
+    std::ranges::sort(descriptorBindings);
+    appendPsoRangeSize(fingerprint, descriptorBindings);
+    std::ranges::for_each(descriptorBindings, [&](const ShaderDescriptorAbiBinding &binding) {
+        nr::hash::hashAppend(fingerprint, binding.set);
+        nr::hash::hashAppend(fingerprint, binding.binding);
+        nr::hash::hashAppend(fingerprint, binding.descriptorCount);
+        nr::hash::hashAppend(fingerprint, binding.isRuntimeSized);
+        appendPsoEnum(fingerprint, binding.descriptorType);
+        appendPsoFlags(fingerprint, binding.stageFlags);
+        appendPsoFlags(fingerprint, binding.bindingFlags);
+    });
+
+    auto pushConstantRanges = signature.pushConstantRanges;
+    std::ranges::sort(pushConstantRanges);
+    appendPsoRangeSize(fingerprint, pushConstantRanges);
+    std::ranges::for_each(pushConstantRanges, [&](const ShaderPushConstantAbiRange &range) {
+        nr::hash::hashAppend(fingerprint, range.offset);
+        nr::hash::hashAppend(fingerprint, range.size);
+        appendPsoFlags(fingerprint, range.stageFlags);
+    });
+}
+
+void appendSamplerDescFingerprint(std::uint64_t &fingerprint, const SlangSamplerDesc &desc) noexcept
+{
+    appendPsoEnum(fingerprint, desc.magFilter);
+    appendPsoEnum(fingerprint, desc.minFilter);
+    appendPsoEnum(fingerprint, desc.mipmapMode);
+    appendPsoEnum(fingerprint, desc.addressModeU);
+    appendPsoEnum(fingerprint, desc.addressModeV);
+    appendPsoEnum(fingerprint, desc.addressModeW);
+    nr::hash::hashAppend(fingerprint, desc.mipLodBias);
+    nr::hash::hashAppend(fingerprint, desc.anisotropyEnable);
+    nr::hash::hashAppend(fingerprint, desc.maxAnisotropy);
+    nr::hash::hashAppend(fingerprint, desc.compareEnable);
+    appendPsoEnum(fingerprint, desc.compareOp);
+    nr::hash::hashAppend(fingerprint, desc.minLod);
+    nr::hash::hashAppend(fingerprint, desc.maxLod);
+    appendPsoEnum(fingerprint, desc.borderColor);
+    nr::hash::hashAppend(fingerprint, desc.unnormalizedCoordinates);
+}
+
+void appendImmutableSamplersFingerprint(std::uint64_t &fingerprint,
+                                        std::span<const SlangImmutableSamplerBinding> immutableSamplers)
+{
+    auto indices = std::views::iota(std::size_t{0}, immutableSamplers.size()) | std::ranges::to<std::vector>();
+    std::ranges::sort(indices, {}, [&](std::size_t index) {
+        auto const &binding = immutableSamplers[index];
+        return std::tuple{binding.set, binding.binding};
+    });
+    appendPsoRangeSize(fingerprint, indices);
+    std::ranges::for_each(indices, [&](std::size_t index) {
+        auto const &binding = immutableSamplers[index];
+        nr::hash::hashAppend(fingerprint, binding.set);
+        nr::hash::hashAppend(fingerprint, binding.binding);
+        nr::hash::hashAppend(fingerprint, binding.descriptorCount);
+        appendSamplerDescFingerprint(fingerprint, binding.samplerDesc);
+    });
+}
+
+[[nodiscard]] std::vector<vk::PipelineColorBlendAttachmentState> normalizedColorBlendAttachments(
+    const GraphicsPipelineDesc &desc)
+{
+    if (!desc.colorBlendAttachments.empty())
+    {
+        return desc.colorBlendAttachments;
+    }
+    return desc.colorAttachmentFormats | std::views::transform([](vk::Format) {
+               return vk::PipelineColorBlendAttachmentState{
+                   vk::False,
+                   vk::BlendFactor::eOne,
+                   vk::BlendFactor::eZero,
+                   vk::BlendOp::eAdd,
+                   vk::BlendFactor::eOne,
+                   vk::BlendFactor::eZero,
+                   vk::BlendOp::eAdd,
+                   vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+                       vk::ColorComponentFlagBits::eA,
+               };
+           }) |
+           std::ranges::to<std::vector>();
+}
+
+void appendDescriptorPolicyFingerprint(std::uint64_t &fingerprint, const DescriptorBindingPolicy &policy) noexcept
+{
+    nr::hash::hashAppend(fingerprint, policy.defaultRuntimeDescriptorCount);
+}
+
+[[nodiscard]] std::uint64_t graphicsPsoContentFingerprint(
+    std::span<const SlangProgram> programs, const GraphicsPipelineDesc &desc,
+    const ShaderLayoutAbiSignature &layoutSignature, std::span<const SlangImmutableSamplerBinding> immutableSamplers)
+{
+    auto fingerprint = nr::hash::fnv1a64OffsetBasis;
+    nr::hash::hashAppendString(fingerprint, "nr.pso.graphics.v1");
+    appendPsoRangeSize(fingerprint, programs);
+    std::ranges::for_each(programs,
+                          [&](const SlangProgram &program) { appendProgramFingerprint(fingerprint, program); });
+
+    appendPsoRangeSize(fingerprint, desc.colorAttachmentFormats);
+    std::ranges::for_each(desc.colorAttachmentFormats, [&](vk::Format format) { appendPsoEnum(fingerprint, format); });
+    nr::hash::hashAppend(fingerprint, desc.depthAttachmentFormat.has_value());
+    if (desc.depthAttachmentFormat)
+    {
+        appendPsoEnum(fingerprint, *desc.depthAttachmentFormat);
+    }
+    nr::hash::hashAppend(fingerprint, desc.stencilAttachmentFormat.has_value());
+    if (desc.stencilAttachmentFormat)
+    {
+        appendPsoEnum(fingerprint, *desc.stencilAttachmentFormat);
+    }
+    appendPsoEnum(fingerprint, desc.topology);
+    appendPsoFlags(fingerprint, desc.cullMode);
+    appendPsoEnum(fingerprint, desc.frontFace);
+    appendPsoEnum(fingerprint, desc.polygonMode);
+    appendPsoEnum(fingerprint, desc.sampleCount);
+    nr::hash::hashAppend(fingerprint, desc.depthTestEnable);
+    nr::hash::hashAppend(fingerprint, desc.depthWriteEnable);
+    appendPsoEnum(fingerprint, desc.depthCompareOp);
+
+    auto const colorBlendAttachments = normalizedColorBlendAttachments(desc);
+    appendPsoRangeSize(fingerprint, colorBlendAttachments);
+    std::ranges::for_each(colorBlendAttachments, [&](const vk::PipelineColorBlendAttachmentState &attachment) {
+        nr::hash::hashAppend(fingerprint, attachment.blendEnable);
+        appendPsoEnum(fingerprint, attachment.srcColorBlendFactor);
+        appendPsoEnum(fingerprint, attachment.dstColorBlendFactor);
+        appendPsoEnum(fingerprint, attachment.colorBlendOp);
+        appendPsoEnum(fingerprint, attachment.srcAlphaBlendFactor);
+        appendPsoEnum(fingerprint, attachment.dstAlphaBlendFactor);
+        appendPsoEnum(fingerprint, attachment.alphaBlendOp);
+        appendPsoFlags(fingerprint, attachment.colorWriteMask);
+    });
+
+    appendPsoRangeSize(fingerprint, desc.vertexBindings);
+    std::ranges::for_each(desc.vertexBindings, [&](const vk::VertexInputBindingDescription &binding) {
+        nr::hash::hashAppend(fingerprint, binding.binding);
+        nr::hash::hashAppend(fingerprint, binding.stride);
+        appendPsoEnum(fingerprint, binding.inputRate);
+    });
+    appendPsoRangeSize(fingerprint, desc.vertexAttributes);
+    std::ranges::for_each(desc.vertexAttributes, [&](const vk::VertexInputAttributeDescription &attribute) {
+        nr::hash::hashAppend(fingerprint, attribute.location);
+        nr::hash::hashAppend(fingerprint, attribute.binding);
+        appendPsoEnum(fingerprint, attribute.format);
+        nr::hash::hashAppend(fingerprint, attribute.offset);
+    });
+    appendDescriptorPolicyFingerprint(fingerprint, desc.descriptorBindingPolicy);
+    appendShaderLayoutFingerprint(fingerprint, layoutSignature);
+    appendImmutableSamplersFingerprint(fingerprint, immutableSamplers);
+    return finalizePsoContentFingerprint(fingerprint);
+}
+
+[[nodiscard]] std::uint64_t computePsoContentFingerprint(
+    const SlangProgram &program, const ComputePipelineDesc &desc, const ShaderLayoutAbiSignature &layoutSignature,
+    std::span<const SlangImmutableSamplerBinding> immutableSamplers)
+{
+    auto fingerprint = nr::hash::fnv1a64OffsetBasis;
+    nr::hash::hashAppendString(fingerprint, "nr.pso.compute.v1");
+    appendProgramFingerprint(fingerprint, program);
+    appendDescriptorPolicyFingerprint(fingerprint, desc.descriptorBindingPolicy);
+    appendShaderLayoutFingerprint(fingerprint, layoutSignature);
+    appendImmutableSamplersFingerprint(fingerprint, immutableSamplers);
+    return finalizePsoContentFingerprint(fingerprint);
+}
+
+[[nodiscard]] std::uint64_t rayTracingPsoContentFingerprint(
+    const RayTracingProgramAssemblyDesc &assembly, const RayTracingPipelineDesc &desc,
+    const ShaderLayoutAbiSignature &layoutSignature, std::span<const SlangImmutableSamplerBinding> immutableSamplers)
+{
+    auto fingerprint = nr::hash::fnv1a64OffsetBasis;
+    nr::hash::hashAppendString(fingerprint, "nr.pso.ray_tracing.v1");
+    appendPsoRangeSize(fingerprint, assembly.stages);
+    std::ranges::for_each(assembly.stages, [&](const RayTracingPipelineStageSelection &selection) {
+        appendProgramFingerprint(fingerprint, selection.program.get(), selection.logicalEntryPointName);
+    });
+    appendPsoRangeSize(fingerprint, assembly.groups);
+    std::ranges::for_each(assembly.groups, [&](const RayTracingShaderGroupDesc &group) {
+        nr::hash::hashAppendString(fingerprint, group.name);
+        appendPsoEnum(fingerprint, group.type);
+        nr::hash::hashAppendString(fingerprint, group.generalEntryPoint);
+        nr::hash::hashAppendString(fingerprint, group.closestHitEntryPoint);
+        nr::hash::hashAppendString(fingerprint, group.anyHitEntryPoint);
+        nr::hash::hashAppendString(fingerprint, group.intersectionEntryPoint);
+    });
+    nr::hash::hashAppend(fingerprint, desc.maxRayRecursionDepth);
+    appendDescriptorPolicyFingerprint(fingerprint, desc.descriptorBindingPolicy);
+    appendPsoFlags(fingerprint, desc.flags);
+    appendShaderLayoutFingerprint(fingerprint, layoutSignature);
+    appendImmutableSamplersFingerprint(fingerprint, immutableSamplers);
+    return finalizePsoContentFingerprint(fingerprint);
 }
 } // namespace
 
@@ -289,7 +525,7 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
     auto validation =
         validateReflectionLayoutCoverage(ownerSignature, requiredLayout.abiSignature(), programDebugName(ownerProgram),
                                          programDebugName(requiredProgram));
-    nrAssert(!validation.has_value(), validation.value_or(std::string{}));
+    nrAssert(!validation.has_value(), "{}", validation.value_or(std::string{}));
 }
 } // namespace
 
@@ -344,31 +580,31 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
                                           return state.set == immutableSamplerBinding.set &&
                                                  state.binding == immutableSamplerBinding.binding;
                                       }),
-                 std::format("CursorPipelineLayout::create duplicate immutable sampler binding at set={}, binding={}",
-                             immutableSamplerBinding.set, immutableSamplerBinding.binding));
+                 "CursorPipelineLayout::create duplicate immutable sampler binding at set={}, binding={}",
+                 immutableSamplerBinding.set, immutableSamplerBinding.binding);
 
         nrAssert(immutableSamplerBinding.descriptorCount > 0,
-                 std::format("CursorPipelineLayout::create immutable sampler binding must have descriptorCount > 0 at "
-                             "set={}, binding={}",
-                             immutableSamplerBinding.set, immutableSamplerBinding.binding));
+                 "CursorPipelineLayout::create immutable sampler binding must have descriptorCount > 0 at "
+                 "set={}, binding={}",
+                 immutableSamplerBinding.set, immutableSamplerBinding.binding);
 
         auto const *bindingInfo = findDescriptorBinding(immutableSamplerBinding.set, immutableSamplerBinding.binding);
         nrAssert(bindingInfo != nullptr,
-                 std::format("CursorPipelineLayout::create immutable sampler target not found at set={}, binding={}",
-                             immutableSamplerBinding.set, immutableSamplerBinding.binding));
+                 "CursorPipelineLayout::create immutable sampler target not found at set={}, binding={}",
+                 immutableSamplerBinding.set, immutableSamplerBinding.binding);
 
         nrAssert(bindingInfo->descriptorType == vk::DescriptorType::eSampler ||
                      bindingInfo->descriptorType == vk::DescriptorType::eCombinedImageSampler,
-                 std::format("CursorPipelineLayout::create immutable sampler target must be "
-                             "sampler/combined-image-sampler at set={}, binding={}, descriptorType={}",
-                             immutableSamplerBinding.set, immutableSamplerBinding.binding,
-                             vk::to_string(bindingInfo->descriptorType)));
+                 "CursorPipelineLayout::create immutable sampler target must be "
+                 "sampler/combined-image-sampler at set={}, binding={}, descriptorType={}",
+                 immutableSamplerBinding.set, immutableSamplerBinding.binding,
+                 vk::to_string(bindingInfo->descriptorType));
 
         nrAssert(bindingInfo->descriptorCount == immutableSamplerBinding.descriptorCount,
-                 std::format("CursorPipelineLayout::create immutable sampler descriptorCount mismatch at set={}, "
-                             "binding={}, layoutCount={}, immutableCount={}",
-                             immutableSamplerBinding.set, immutableSamplerBinding.binding, bindingInfo->descriptorCount,
-                             immutableSamplerBinding.descriptorCount));
+                 "CursorPipelineLayout::create immutable sampler descriptorCount mismatch at set={}, "
+                 "binding={}, layoutCount={}, immutableCount={}",
+                 immutableSamplerBinding.set, immutableSamplerBinding.binding, bindingInfo->descriptorCount,
+                 immutableSamplerBinding.descriptorCount);
 
         ImmutableSamplerBindingBuildState state{};
         state.set = immutableSamplerBinding.set;
@@ -377,9 +613,8 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
         auto samplerDebugName = std::format("immutable_sampler_s{}_b{}", state.set, state.binding);
         layout.immutableSamplers_.push_back(
             SlangSampler::create(device, immutableSamplerBinding.samplerDesc, samplerDebugName));
-        nrAssert(
-            layout.immutableSamplers_.back().valid(),
-            std::format("CursorPipelineLayout::create failed to create immutable sampler '{}'.", samplerDebugName));
+        nrAssert(layout.immutableSamplers_.back().valid(),
+                 "CursorPipelineLayout::create failed to create immutable sampler '{}'.", samplerDebugName);
         state.rawSamplers.resize(immutableSamplerBinding.descriptorCount, layout.immutableSamplers_.back().raw());
 
         immutableSamplerBindings.push_back(std::move(state));
@@ -388,14 +623,13 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
     auto setInfoByIndex = std::map<std::uint32_t, std::reference_wrapper<const DescriptorSetLayoutInfo>>{};
     std::ranges::for_each(setLayouts, [&](const DescriptorSetLayoutInfo &setInfo) {
         auto const [_, inserted] = setInfoByIndex.emplace(setInfo.set, std::cref(setInfo));
-        nrAssert(inserted,
-                 std::format("CursorPipelineLayout::create found duplicate descriptor set {}.", setInfo.set));
+        nrAssert(inserted, "CursorPipelineLayout::create found duplicate descriptor set {}.", setInfo.set);
     });
 
     auto maxSetIndex = setInfoByIndex.empty() ? std::uint32_t{0} : setInfoByIndex.rbegin()->first;
     nrAssert(setInfoByIndex.empty() || maxSetIndex < maxBoundDescriptorSets,
-             std::format("CursorPipelineLayout::create descriptor set {} exceeds maxBoundDescriptorSets {}.",
-                         maxSetIndex, maxBoundDescriptorSets));
+             "CursorPipelineLayout::create descriptor set {} exceeds maxBoundDescriptorSets {}.", maxSetIndex,
+             maxBoundDescriptorSets);
     auto pipelineSetLayoutCount = setInfoByIndex.empty() ? std::size_t{0} : static_cast<std::size_t>(maxSetIndex) + 1u;
     layout.setLayouts_.reserve(pipelineSetLayoutCount);
 
@@ -418,10 +652,9 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
             }
 
             nrAssert(binding.descriptorCount == immutableSamplerIt->rawSamplers.size(),
-                     std::format("CursorPipelineLayout::create immutable sampler descriptorCount mismatch at set={}, "
-                                 "binding={}, layoutCount={}, immutableCount={}",
-                                 setIndex, binding.binding, binding.descriptorCount,
-                                 immutableSamplerIt->rawSamplers.size()));
+                     "CursorPipelineLayout::create immutable sampler descriptorCount mismatch at set={}, "
+                     "binding={}, layoutCount={}, immutableCount={}",
+                     setIndex, binding.binding, binding.descriptorCount, immutableSamplerIt->rawSamplers.size());
 
             binding.pImmutableSamplers = immutableSamplerIt->rawSamplers.data();
             immutableSamplerIt->isApplied = true;
@@ -430,7 +663,7 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
         vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
         vk::DescriptorSetLayoutCreateInfo setLayoutInfo{};
         nrAssert(std::in_range<std::uint32_t>(bindings.size()),
-                 std::format("Descriptor set {} has too many bindings for the Vulkan uint32 ABI.", setIndex));
+                 "Descriptor set {} has too many bindings for the Vulkan uint32 ABI.", setIndex);
         setLayoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
         setLayoutInfo.pBindings = bindings.data();
         if (!bindingFlags.empty())
@@ -451,7 +684,7 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
                                                             vk::DescriptorSetVariableDescriptorCountLayoutSupport>(
             setLayoutInfo);
         nrAssert(support.get<vk::DescriptorSetLayoutSupport>().supported == vk::True,
-                 std::format("Vulkan does not support reflected descriptor set layout {}.", setIndex));
+                 "Vulkan does not support reflected descriptor set layout {}.", setIndex);
         auto variableBinding = std::ranges::find_if(bindingFlags, [](vk::DescriptorBindingFlags flags) {
             return (flags & vk::DescriptorBindingFlagBits::eVariableDescriptorCount) != vk::DescriptorBindingFlags{};
         });
@@ -461,10 +694,10 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
             auto maxVariableDescriptorCount =
                 support.get<vk::DescriptorSetVariableDescriptorCountLayoutSupport>().maxVariableDescriptorCount;
             nrAssert(bindings[bindingIndex].descriptorCount <= maxVariableDescriptorCount,
-                     std::format("Descriptor set {} variable binding {} requests {} descriptors, but Vulkan supports "
-                                 "at most {} for this layout.",
-                                 setIndex, bindings[bindingIndex].binding, bindings[bindingIndex].descriptorCount,
-                                 maxVariableDescriptorCount));
+                     "Descriptor set {} variable binding {} requests {} descriptors, but Vulkan supports "
+                     "at most {} for this layout.",
+                     setIndex, bindings[bindingIndex].binding, bindings[bindingIndex].descriptorCount,
+                     maxVariableDescriptorCount);
         }
 
         layout.setLayouts_.push_back(DescriptorSetLayoutHandle{
@@ -484,9 +717,10 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
     }
 
     std::ranges::for_each(immutableSamplerBindings, [](const ImmutableSamplerBindingBuildState &state) {
-        nrAssert(state.isApplied, std::format("CursorPipelineLayout::create immutable sampler binding was not used by "
-                                              "descriptor layout at set={}, binding={}",
-                                              state.set, state.binding));
+        nrAssert(state.isApplied,
+                 "CursorPipelineLayout::create immutable sampler binding was not used by descriptor layout at set={}, "
+                 "binding={}",
+                 state.set, state.binding);
     });
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -495,8 +729,8 @@ void assertReflectionLayoutCoverage(const ShaderLayoutAbiSignature &ownerSignatu
     auto pushConstantRanges = descriptorLayout.makeVkPushConstantRanges();
     std::ranges::for_each(pushConstantRanges, [](const vk::PushConstantRange &range) {
         nrAssert(range.size <= kMaxPushConstantBytes,
-                 std::format("CursorPipelineLayout::create push constant range exceeds hard limit. size={} max={}",
-                             range.size, kMaxPushConstantBytes));
+                 "CursorPipelineLayout::create push constant range exceeds hard limit. size={} max={}", range.size,
+                 kMaxPushConstantBytes);
     });
     pipelineLayoutInfo.pushConstantRangeCount = static_cast<std::uint32_t>(pushConstantRanges.size());
     pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
@@ -545,10 +779,10 @@ void CursorPipelineLayout::pushConstants(const vk::raii::CommandBuffer &commandB
         return;
     }
     nrAssert(bytes.size() <= std::numeric_limits<std::uint32_t>::max(),
-             std::format("CursorPipelineLayout::pushConstants payload too large: {} bytes", bytes.size()));
+             "CursorPipelineLayout::pushConstants payload too large: {} bytes", bytes.size());
     nrAssert(static_cast<std::uint64_t>(offset) + static_cast<std::uint64_t>(bytes.size()) <= kMaxPushConstantBytes,
-             std::format("CursorPipelineLayout::pushConstants write exceeds hard limit. offset={}, size={}, max={}",
-                         offset, bytes.size(), kMaxPushConstantBytes));
+             "CursorPipelineLayout::pushConstants write exceeds hard limit. offset={}, size={}, max={}", offset,
+             bytes.size(), kMaxPushConstantBytes);
     commandBuffer.pushConstants(
         raw(), stageFlags, offset,
         vk::ArrayProxy<const std::uint8_t>(static_cast<std::uint32_t>(bytes.size()), bytes.data()));
@@ -622,15 +856,14 @@ std::vector<ShaderBindingSet> allocateBindingSetsForLayout(
     std::ranges::for_each(setIndices, [&](std::uint32_t setIndex) {
         auto descriptorSetLayout = layout.descriptorSetLayout(setIndex);
         nrAssert(descriptorSetLayout.has_value(),
-                 std::format("allocateBindingSetsForLayout missing descriptor set layout for set {}.", setIndex));
+                 "allocateBindingSetsForLayout missing descriptor set layout for set {}.", setIndex);
 
         auto requestedVariableCount = variableDescriptorCountsBySet.find(setIndex);
         auto set = pool.allocate(*descriptorSetLayout, setIndex,
                                  requestedVariableCount != variableDescriptorCountsBySet.end()
                                      ? std::optional<std::uint32_t>(requestedVariableCount->second)
                                      : std::nullopt);
-        nrAssert(set.valid(),
-                 std::format("allocateBindingSetsForLayout failed to allocate descriptor set for set {}.", setIndex));
+        nrAssert(set.valid(), "allocateBindingSetsForLayout failed to allocate descriptor set for set {}.", setIndex);
         sets.push_back(std::move(set));
     });
 
@@ -731,8 +964,8 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
         catch (const vk::SystemError &error)
         {
             auto errorText = std::string_view{error.what()};
-            nrInfo<LogLevel::error>(std::vformat("setShaderModuleDebugName failed to set debug name '{}': {}",
-                                                 std::make_format_args(debugName, errorText)));
+            nrLog<LogLevel::warning>("setShaderModuleDebugName failed to set debug name '{}': {}", debugName,
+                                   errorText);
             nrAssert(false, "setShaderModuleDebugName failed to set a Vulkan debug object name.");
         }
     }
@@ -751,8 +984,7 @@ void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::Sh
 void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Device &device,
                                   const SlangEntryPointData &entryPoint, std::string logicalEntryPointName)
 {
-    nrAssert(entryPoint.valid(),
-             std::format("Entry point '{}' has no valid SPIR-V artifact.", entryPoint.entryPointName));
+    nrAssert(entryPoint.valid(), "Entry point '{}' has no valid SPIR-V artifact.", entryPoint.entryPointName);
 
     vk::ShaderModuleCreateInfo moduleInfo{};
     moduleInfo.codeSize = entryPoint.spirv->size() * sizeof(std::uint32_t);
@@ -830,11 +1062,9 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     return logicalEntryPointNames_;
 }
 
-[[nodiscard]] GraphicsPipeline GraphicsPipeline::create(const vk::raii::Device &device,
-                                                        const CursorPipelineLayout &layout,
-                                                        const VkShaderProgram &shaderProgram,
-                                                        const GraphicsPipelineDesc &desc,
-                                                        const vk::raii::PipelineCache *pipelineCache)
+[[nodiscard]] GraphicsPipeline GraphicsPipeline::create(
+    const vk::raii::Device &device, const CursorPipelineLayout &layout, const VkShaderProgram &shaderProgram,
+    PipelineBinaryStore &binaryStore, std::uint64_t contentFingerprint, const GraphicsPipelineDesc &desc)
 {
     nrAssert(!desc.colorAttachmentFormats.empty() || desc.depthAttachmentFormat.has_value() ||
                  desc.stencilAttachmentFormat.has_value(),
@@ -844,8 +1074,7 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
 
     auto graphicsStageIndices =
         std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size())) |
-        std::views::filter(
-            [&](std::uint32_t index) { return isGraphicsStage(shaderProgram.stages()[index]); }) |
+        std::views::filter([&](std::uint32_t index) { return isGraphicsStage(shaderProgram.stages()[index]); }) |
         std::ranges::to<std::vector>();
     nrAssert(!graphicsStageIndices.empty(), "GraphicsPipeline::create requires at least one graphics shader stage.");
 
@@ -854,42 +1083,21 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
         std::views::transform([&](std::uint32_t stageIndex) { return shaderProgram.stageCreateInfo(stageIndex); }) |
         std::ranges::to<std::vector>();
 
-    nrAssert(std::ranges::any_of(graphicsStageIndices, [&](std::uint32_t stageIndex) {
-                 return shaderProgram.stages()[stageIndex] == SLANG_STAGE_VERTEX;
-             }),
+    nrAssert(std::ranges::any_of(
+                 graphicsStageIndices,
+                 [&](std::uint32_t stageIndex) { return shaderProgram.stages()[stageIndex] == SLANG_STAGE_VERTEX; }),
              "GraphicsPipeline::create requires a vertex shader stage.");
 
-    auto colorBlendAttachments = desc.colorBlendAttachments;
-    if (colorBlendAttachments.empty())
-    {
-        colorBlendAttachments = desc.colorAttachmentFormats | std::views::transform([](vk::Format) {
-                                    return vk::PipelineColorBlendAttachmentState{
-                                        vk::False,
-                                        vk::BlendFactor::eOne,
-                                        vk::BlendFactor::eZero,
-                                        vk::BlendOp::eAdd,
-                                        vk::BlendFactor::eOne,
-                                        vk::BlendFactor::eZero,
-                                        vk::BlendOp::eAdd,
-                                        vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                                            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
-                                    };
-                                }) |
-                                std::ranges::to<std::vector>();
-    }
+    auto colorBlendAttachments = normalizedColorBlendAttachments(desc);
     nrAssert(colorBlendAttachments.size() == desc.colorAttachmentFormats.size(),
-             std::format("GraphicsPipeline::create color blend attachment count mismatch. formats={}, blends={}",
-                         desc.colorAttachmentFormats.size(), colorBlendAttachments.size()));
+             "GraphicsPipeline::create color blend attachment count mismatch. formats={}, blends={}",
+             desc.colorAttachmentFormats.size(), colorBlendAttachments.size());
 
     auto dynamicStates = std::vector{
-        vk::DynamicState::eViewport,
-        vk::DynamicState::eScissor,
-        vk::DynamicState::eCullModeEXT,
-        vk::DynamicState::eFrontFaceEXT,
-        vk::DynamicState::eDepthTestEnableEXT,
-        vk::DynamicState::eDepthWriteEnableEXT,
-        vk::DynamicState::eDepthCompareOpEXT,
-        vk::DynamicState::ePrimitiveTopologyEXT,
+        vk::DynamicState::eViewport,           vk::DynamicState::eScissor,
+        vk::DynamicState::eCullModeEXT,        vk::DynamicState::eFrontFaceEXT,
+        vk::DynamicState::eDepthTestEnableEXT, vk::DynamicState::eDepthWriteEnableEXT,
+        vk::DynamicState::eDepthCompareOpEXT,  vk::DynamicState::ePrimitiveTopologyEXT,
     };
 
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
@@ -956,18 +1164,44 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     createInfo.layout = layout.raw();
     createInfo.pNext = &renderingInfo;
 
+    auto pipelineCreateInfo = vk::PipelineCreateInfoKHR{};
+    pipelineCreateInfo.pNext = &createInfo;
+    auto const pipelineKey = binaryStore.pipelineKey(pipelineCreateInfo, contentFingerprint);
     GraphicsPipeline pipeline;
-    auto pipelineCacheOptional = pipelineCache != nullptr ? vk::Optional<const vk::raii::PipelineCache>(*pipelineCache)
-                                                          : vk::Optional<const vk::raii::PipelineCache>(nullptr);
+    if (auto binaries = binaryStore.load(pipelineKey))
+    {
+        auto binaryInfo = vk::PipelineBinaryInfoKHR{};
+        binaryInfo.pNext = createInfo.pNext;
+        binaryInfo.binaryCount = static_cast<std::uint32_t>(binaries->handles.size());
+        binaryInfo.pPipelineBinaries = binaries->handles.data();
+        createInfo.pNext = &binaryInfo;
+        try
+        {
+            pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
+            binaryStore.markLoadAccepted();
+            return pipeline;
+        }
+        catch (const vk::SystemError &error)
+        {
+            nrLog<LogLevel::warning>("GraphicsPipeline rejected persisted PSO binaries and will rebuild: {}", error.what());
+            binaryStore.invalidate(pipelineKey);
+        }
+    }
+
+    auto captureInfo = vk::PipelineCreateFlags2CreateInfoKHR{};
+    captureInfo.pNext = &renderingInfo;
+    captureInfo.flags = capturePipelineFlags(createInfo.flags);
+    createInfo.pNext = &captureInfo;
     try
     {
-        pipeline.pipeline_ = vk::raii::Pipeline(device, pipelineCacheOptional, createInfo);
+        pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
     }
     catch (const vk::SystemError &error)
     {
-        nrInfo<LogLevel::error>(std::format("GraphicsPipeline creation failed: {}", error.what()));
+        nrLog<LogLevel::error>("GraphicsPipeline creation failed: {}", error.what());
         return {};
     }
+    binaryStore.capture(pipelineKey, *pipeline.pipeline_);
     return pipeline;
 }
 
@@ -984,7 +1218,8 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
 [[nodiscard]] ComputePipeline ComputePipeline::create(const vk::raii::Device &device,
                                                       const CursorPipelineLayout &layout,
                                                       const VkShaderProgram &shaderProgram,
-                                                      const vk::raii::PipelineCache *pipelineCache)
+                                                      PipelineBinaryStore &binaryStore,
+                                                      std::uint64_t contentFingerprint)
 {
     nrAssert(layout.valid(), "ComputePipeline::create requires a valid pipeline layout.");
     nrAssert(shaderProgram.valid(), "ComputePipeline::create requires a valid shader program.");
@@ -999,18 +1234,42 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     createInfo.stage = shaderProgram.stageCreateInfo(stageIndex);
     createInfo.layout = layout.raw();
 
+    auto pipelineCreateInfo = vk::PipelineCreateInfoKHR{};
+    pipelineCreateInfo.pNext = &createInfo;
+    auto const pipelineKey = binaryStore.pipelineKey(pipelineCreateInfo, contentFingerprint);
     ComputePipeline pipeline;
-    auto pipelineCacheOptional = pipelineCache != nullptr ? vk::Optional<const vk::raii::PipelineCache>(*pipelineCache)
-                                                          : vk::Optional<const vk::raii::PipelineCache>(nullptr);
+    if (auto binaries = binaryStore.load(pipelineKey))
+    {
+        auto binaryInfo = vk::PipelineBinaryInfoKHR{};
+        binaryInfo.binaryCount = static_cast<std::uint32_t>(binaries->handles.size());
+        binaryInfo.pPipelineBinaries = binaries->handles.data();
+        createInfo.pNext = &binaryInfo;
+        try
+        {
+            pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
+            binaryStore.markLoadAccepted();
+            return pipeline;
+        }
+        catch (const vk::SystemError &error)
+        {
+            nrLog<LogLevel::warning>("ComputePipeline rejected persisted PSO binaries and will rebuild: {}", error.what());
+            binaryStore.invalidate(pipelineKey);
+        }
+    }
+
+    auto captureInfo = vk::PipelineCreateFlags2CreateInfoKHR{};
+    captureInfo.flags = capturePipelineFlags(createInfo.flags);
+    createInfo.pNext = &captureInfo;
     try
     {
-        pipeline.pipeline_ = vk::raii::Pipeline(device, pipelineCacheOptional, createInfo);
+        pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
     }
     catch (const vk::SystemError &error)
     {
-        nrInfo<LogLevel::error>(std::format("ComputePipeline creation failed: {}", error.what()));
+        nrLog<LogLevel::error>("ComputePipeline creation failed: {}", error.what());
         return {};
     }
+    binaryStore.capture(pipelineKey, *pipeline.pipeline_);
     return pipeline;
 }
 
@@ -1052,7 +1311,7 @@ struct DeferredHostJoinResult
     catch (const vk::SystemError &error)
     {
         auto message = std::format("RayTracingPipeline deferred host worker failed while joining: {}", error.what());
-        nrInfo<LogLevel::error, false>(message);
+        nrLog<LogLevel::warning, "LOG">("{}", message);
         return {.error = std::move(message)};
     }
 }
@@ -1061,8 +1320,8 @@ struct DeferredHostJoinResult
 [[nodiscard]] RayTracingPipeline RayTracingPipeline::create(
     const vk::raii::Device &device, const CursorPipelineLayout &layout, const VkShaderProgram &shaderProgram,
     threading::StaticThreadPool &deferredHostPool, const RayTracingCapabilitySnapshot &capabilities,
-    const RayTracingPipelineDesc &desc,
-    std::span<const RayTracingShaderGroupDesc> groupDescs, const vk::raii::PipelineCache *pipelineCache)
+    PipelineBinaryStore &binaryStore, std::uint64_t contentFingerprint, const RayTracingPipelineDesc &desc,
+    std::span<const RayTracingShaderGroupDesc> groupDescs)
 {
     nrAssert(layout.valid(), "RayTracingPipeline::create requires a valid pipeline layout.");
     nrAssert(shaderProgram.valid(), "RayTracingPipeline::create requires a valid shader program.");
@@ -1071,13 +1330,12 @@ struct DeferredHostJoinResult
     nrAssert(groupDescs.size() <= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
              "RayTracingPipeline::create shader group count exceeds uint32 ABI.");
     auto descValidation = validateRayTracingPipelineDesc(desc);
-    nrAssert(!descValidation.has_value(),
-             std::format("RayTracingPipeline::create invalid desc: {}", descValidation.value_or(std::string{})));
+    nrAssert(!descValidation.has_value(), "RayTracingPipeline::create invalid desc: {}",
+             descValidation.value_or(std::string{}));
 
     auto rtStageIndices =
         std::views::iota(std::uint32_t{0}, static_cast<std::uint32_t>(shaderProgram.stages().size())) |
-        std::views::filter(
-            [&](std::uint32_t index) { return isRayTracingStage(shaderProgram.stages()[index]); }) |
+        std::views::filter([&](std::uint32_t index) { return isRayTracingStage(shaderProgram.stages()[index]); }) |
         std::ranges::to<std::vector>();
     nrAssert(!rtStageIndices.empty(), "RayTracingPipeline::create requires at least one ray tracing shader stage.");
 
@@ -1095,18 +1353,16 @@ struct DeferredHostJoinResult
             return shaderUnused;
         }
         auto it = std::ranges::find(shaderProgram.logicalEntryPointNames(), entryPointName);
-        nrAssert(
-            it != std::ranges::end(shaderProgram.logicalEntryPointNames()),
-            std::format("RayTracingPipeline::create unknown logical entrypoint '{}' in custom group.", entryPointName));
+        nrAssert(it != std::ranges::end(shaderProgram.logicalEntryPointNames()),
+                 "RayTracingPipeline::create unknown logical entrypoint '{}' in custom group.", entryPointName);
         auto globalIndex =
             static_cast<std::uint32_t>(std::distance(std::ranges::begin(shaderProgram.logicalEntryPointNames()), it));
         auto localIt = std::ranges::find(rtStageIndices, globalIndex);
         nrAssert(localIt != std::ranges::end(rtStageIndices),
-                 std::format("RayTracingPipeline::create entrypoint '{}' is not a RT stage.", entryPointName));
+                 "RayTracingPipeline::create entrypoint '{}' is not a RT stage.", entryPointName);
         auto stage = shaderProgram.stages()[globalIndex];
-        nrAssert(
-            std::ranges::find(expectedStages, stage) != expectedStages.end(),
-            std::format("RayTracingPipeline::create entrypoint '{}' stage mismatch for custom group.", entryPointName));
+        nrAssert(std::ranges::find(expectedStages, stage) != expectedStages.end(),
+                 "RayTracingPipeline::create entrypoint '{}' stage mismatch for custom group.", entryPointName);
         return static_cast<std::uint32_t>(std::distance(std::ranges::begin(rtStageIndices), localIt));
     };
 
@@ -1131,94 +1387,135 @@ struct DeferredHostJoinResult
     createInfo.maxPipelineRayRecursionDepth = desc.maxRayRecursionDepth;
     createInfo.layout = layout.raw();
 
+    auto pipelineCreateInfo = vk::PipelineCreateInfoKHR{};
+    pipelineCreateInfo.pNext = &createInfo;
+    auto const pipelineKey = binaryStore.pipelineKey(pipelineCreateInfo, contentFingerprint);
     auto const createStart = std::chrono::steady_clock::now();
-    auto deferredOperation = vk::raii::DeferredOperationKHR{nullptr};
-    try
-    {
-        deferredOperation = vk::raii::DeferredOperationKHR{device};
-    }
-    catch (const vk::SystemError &error)
-    {
-        nrInfo<LogLevel::error>(
-            std::format("RayTracingPipeline failed to create a deferred host operation: {}", error.what()));
-        return {};
-    }
-
-    // Deferred commands may retain pointer parameters until completion. Keep
-    // the output slot in this frame, then transfer the completed handle to RAII.
-    auto rawPipeline = vk::Pipeline{};
-    auto const rawPipelineCache = pipelineCache != nullptr ? **pipelineCache : vk::PipelineCache{};
-    auto const initialResult = (*device).createRayTracingPipelinesKHR(
-        *deferredOperation, rawPipelineCache, 1u, &createInfo, nullptr, &rawPipeline, *device.getDispatcher());
-
     auto workerCount = std::uint32_t{0u};
     auto driverConcurrency = std::uint32_t{0u};
-    if (initialResult == vk::Result::eOperationDeferredKHR)
+    auto creationMode = std::string_view{"binary"};
+    auto pipelineHandle = vk::raii::Pipeline{nullptr};
+    if (auto binaries = binaryStore.load(pipelineKey))
     {
-        driverConcurrency = deferredOperation.getMaxConcurrency();
-        nrAssert(driverConcurrency > 0u,
-                 "RayTracingPipeline received a deferred operation with zero available concurrency.");
-        workerCount = threading::resolveWorkerCount(0u, driverConcurrency);
-        auto const backgroundWorkerCount = workerCount - 1u;
-        if (backgroundWorkerCount > 0u)
-        {
-            deferredHostPool.ensureWorkerCount(backgroundWorkerCount);
-        }
-
-        auto futures = std::vector<std::future<DeferredHostJoinResult>>{};
-        futures.reserve(backgroundWorkerCount);
-        std::ranges::for_each(std::views::iota(std::uint32_t{0u}, backgroundWorkerCount), [&](std::uint32_t) {
-            futures.push_back(
-                deferredHostPool.submit([&deferredOperation] { return joinDeferredHostOperation(deferredOperation); }));
-        });
-        auto joinResults = std::vector<DeferredHostJoinResult>{};
-        joinResults.reserve(workerCount);
-        joinResults.push_back(joinDeferredHostOperation(deferredOperation));
-        std::ranges::for_each(futures, [&](auto &future) { joinResults.push_back(future.get()); });
-
-        auto failedJoin = std::ranges::find_if(joinResults, [](const auto &result) { return !result.valid(); });
-        if (failedJoin != std::ranges::end(joinResults))
-        {
-            nrAssert(false, std::format("RayTracingPipeline deferred host join failed: {}", failedJoin->error));
-        }
-        nrAssert(std::ranges::all_of(joinResults,
-                                     [](const auto &result) {
-                                         return result.status == vk::Result::eSuccess ||
-                                                result.status == vk::Result::eThreadDoneKHR;
-                                     }),
-                 "RayTracingPipeline deferred host join returned an unexpected status.");
-        nrAssert(
-            std::ranges::any_of(joinResults, [](const auto &result) { return result.status == vk::Result::eSuccess; }),
-            "RayTracingPipeline deferred host workers completed without finalizing the operation.");
-
-        auto finalResult = vk::Result::eErrorUnknown;
+        auto binaryInfo = vk::PipelineBinaryInfoKHR{};
+        binaryInfo.binaryCount = static_cast<std::uint32_t>(binaries->handles.size());
+        binaryInfo.pPipelineBinaries = binaries->handles.data();
+        createInfo.pNext = &binaryInfo;
         try
         {
-            finalResult = deferredOperation.getResult();
+            pipelineHandle = vk::raii::Pipeline{device, nullptr, nullptr, createInfo};
         }
         catch (const vk::SystemError &error)
         {
-            nrInfo<LogLevel::error>(std::format("RayTracingPipeline deferred host creation failed: {}", error.what()));
+            nrLog<LogLevel::warning>("RayTracingPipeline rejected persisted PSO binaries and will rebuild: {}",
+                                     error.what());
+        }
+        if (*pipelineHandle == nullptr)
+        {
+            binaryStore.invalidate(pipelineKey);
+        }
+        else
+        {
+            binaryStore.markLoadAccepted();
+        }
+    }
+
+    if (*pipelineHandle == nullptr)
+    {
+        creationMode = "driver-immediate";
+        auto captureInfo = vk::PipelineCreateFlags2CreateInfoKHR{};
+        captureInfo.flags = capturePipelineFlags(createInfo.flags);
+        createInfo.pNext = &captureInfo;
+
+        auto deferredOperation = vk::raii::DeferredOperationKHR{nullptr};
+        try
+        {
+            deferredOperation = vk::raii::DeferredOperationKHR{device};
+        }
+        catch (const vk::SystemError &error)
+        {
+            nrLog<LogLevel::error>("RayTracingPipeline failed to create a deferred host operation: {}", error.what());
             return {};
         }
-        nrAssert(finalResult == vk::Result::eSuccess,
-                 std::format("RayTracingPipeline deferred host creation returned {}.", vk::to_string(finalResult)));
-    }
-    else
-    {
-        nrAssert(initialResult == vk::Result::eSuccess || initialResult == vk::Result::eOperationNotDeferredKHR,
-                 std::format("RayTracingPipeline creation returned {}.", vk::to_string(initialResult)));
+
+        // Deferred commands may retain pointer parameters until completion. Keep
+        // the output slot in this frame, then transfer the completed handle to RAII.
+        auto rawPipeline = vk::Pipeline{};
+        auto const initialResult = (*device).createRayTracingPipelinesKHR(
+            *deferredOperation, nullptr, 1u, &createInfo, nullptr, &rawPipeline, *device.getDispatcher());
+
+        if (initialResult == vk::Result::eOperationDeferredKHR)
+        {
+            creationMode = "deferred-host";
+            driverConcurrency = deferredOperation.getMaxConcurrency();
+            nrAssert(driverConcurrency > 0u,
+                     "RayTracingPipeline received a deferred operation with zero available concurrency.");
+            workerCount = threading::resolveWorkerCount(0u, driverConcurrency);
+            auto const backgroundWorkerCount = workerCount - 1u;
+            if (backgroundWorkerCount > 0u)
+            {
+                deferredHostPool.ensureWorkerCount(backgroundWorkerCount);
+            }
+
+            auto futures = std::vector<std::future<DeferredHostJoinResult>>{};
+            futures.reserve(backgroundWorkerCount);
+            std::ranges::for_each(std::views::iota(std::uint32_t{0u}, backgroundWorkerCount), [&](std::uint32_t) {
+                futures.push_back(deferredHostPool.submit(
+                    [&deferredOperation] { return joinDeferredHostOperation(deferredOperation); }));
+            });
+            auto joinResults = std::vector<DeferredHostJoinResult>{};
+            joinResults.reserve(workerCount);
+            joinResults.push_back(joinDeferredHostOperation(deferredOperation));
+            std::ranges::for_each(futures, [&](auto &future) { joinResults.push_back(future.get()); });
+
+            auto failedJoin = std::ranges::find_if(joinResults, [](const auto &result) { return !result.valid(); });
+            if (failedJoin != std::ranges::end(joinResults))
+            {
+                nrAssert(false, "RayTracingPipeline deferred host join failed: {}", failedJoin->error);
+            }
+            nrAssert(std::ranges::all_of(joinResults,
+                                         [](const auto &result) {
+                                             return result.status == vk::Result::eSuccess ||
+                                                    result.status == vk::Result::eThreadDoneKHR;
+                                         }),
+                     "RayTracingPipeline deferred host join returned an unexpected status.");
+            nrAssert(std::ranges::any_of(joinResults,
+                                         [](const auto &result) { return result.status == vk::Result::eSuccess; }),
+                     "RayTracingPipeline deferred host workers completed without finalizing the operation.");
+
+            auto finalResult = vk::Result::eErrorUnknown;
+            try
+            {
+                finalResult = deferredOperation.getResult();
+            }
+            catch (const vk::SystemError &error)
+            {
+                nrLog<LogLevel::error>("RayTracingPipeline deferred host creation failed: {}", error.what());
+                return {};
+            }
+            nrAssert(finalResult == vk::Result::eSuccess,
+                     "RayTracingPipeline deferred host creation returned {}.", vk::to_string(finalResult));
+        }
+        else
+        {
+            nrAssert(initialResult == vk::Result::eSuccess || initialResult == vk::Result::eOperationNotDeferredKHR,
+                     "RayTracingPipeline creation returned {}.", vk::to_string(initialResult));
+        }
+
+        pipelineHandle = vk::raii::Pipeline{device, static_cast<VkPipeline>(rawPipeline)};
+        nrAssert(*pipelineHandle != nullptr,
+                 "RayTracingPipeline creation completed without a valid pipeline handle.");
+        binaryStore.capture(pipelineKey, *pipelineHandle);
     }
 
     auto const createElapsed =
         std::chrono::duration<double, std::milli>{std::chrono::steady_clock::now() - createStart};
-    nrInfo<>(std::format(
+    nrLog<LogLevel::info>(
         "RayTracingPipeline PSO creation completed: mode={}, workers={}, driverConcurrency={}, elapsedMs={:.3f}.",
-        initialResult == vk::Result::eOperationDeferredKHR ? "deferred-host" : "driver-immediate", workerCount,
-        driverConcurrency, createElapsed.count()));
+        creationMode, workerCount, driverConcurrency, createElapsed.count());
 
     RayTracingPipeline pipeline;
-    pipeline.pipeline_ = vk::raii::Pipeline{device, static_cast<VkPipeline>(rawPipeline)};
+    pipeline.pipeline_ = std::move(pipelineHandle);
     nrAssert(pipeline.valid(), "RayTracingPipeline creation completed without a valid pipeline handle.");
     pipeline.identity_ = allocateRayTracingPipelineIdentity();
     pipeline.capabilities_ = capabilities;
@@ -1262,8 +1559,7 @@ struct DeferredHostJoinResult
 [[nodiscard]] std::uint32_t RayTracingPipeline::shaderGroupIndex(std::string_view name) const
 {
     auto const found = shaderGroupIndices_.find(std::string{name});
-    nrAssert(found != shaderGroupIndices_.end(),
-             std::format("RayTracingPipeline::shaderGroupIndex unknown group '{}'.", name));
+    nrAssert(found != shaderGroupIndices_.end(), "RayTracingPipeline::shaderGroupIndex unknown group '{}'.", name);
     return found->second;
 }
 
@@ -1308,138 +1604,38 @@ void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline,
         catch (const vk::SystemError &error)
         {
             auto errorText = std::string_view{error.what()};
-            nrInfo<LogLevel::error>(std::vformat("setPipelineDebugName failed to set debug name '{}': {}",
-                                                 std::make_format_args(debugName, errorText)));
+            nrLog<LogLevel::warning>("setPipelineDebugName failed to set debug name '{}': {}", debugName, errorText);
             nrAssert(false, "setPipelineDebugName failed to set a Vulkan debug object name.");
         }
     }
 }
 
-namespace
-{
-[[nodiscard]] std::filesystem::path pipelineCachePath(const PipelineCacheConfig &config)
-{
-    if (!config.persistent())
-    {
-        return {};
-    }
-    return config.directory / config.fileName;
-}
+PipelineService::PipelineService() = default;
 
-[[nodiscard]] std::vector<std::uint8_t> readPipelineCacheBlob(const PipelineCacheConfig &config)
-{
-    auto const path = pipelineCachePath(config);
-    if (path.empty())
-    {
-        return {};
-    }
+PipelineService::~PipelineService() = default;
 
-    auto error = std::error_code{};
-    if (!std::filesystem::exists(path, error))
-    {
-        return {};
-    }
-    if (error)
-    {
-        nrInfo<LogLevel::warning>(std::format("PipelineService failed to query pipeline cache path '{}': {}",
-                                              path.string(), error.message()));
-        return {};
-    }
-
-    if (std::filesystem::is_directory(path, error))
-    {
-        nrInfo<LogLevel::warning>(
-            std::format("PipelineService ignored pipeline cache path '{}' because it is a directory.", path.string()));
-        return {};
-    }
-
-    auto stream = std::ifstream{path, std::ios::binary | std::ios::ate};
-    if (!stream)
-    {
-        nrInfo<LogLevel::warning>(
-            std::format("PipelineService failed to open pipeline cache file '{}'.", path.string()));
-        return {};
-    }
-
-    auto const size = stream.tellg();
-    if (size <= std::streampos{0})
-    {
-        return {};
-    }
-
-    auto data = std::vector<std::uint8_t>(static_cast<std::size_t>(size));
-    stream.seekg(0, std::ios::beg);
-    stream.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size()));
-    if (!stream)
-    {
-        nrInfo<LogLevel::warning>(
-            std::format("PipelineService failed to read pipeline cache file '{}'.", path.string()));
-        return {};
-    }
-
-    return data;
-}
-
-[[nodiscard]] bool writePipelineCacheBlob(const PipelineCacheConfig &config, std::span<const std::uint8_t> data)
-{
-    auto const path = pipelineCachePath(config);
-    if (path.empty() || data.empty())
-    {
-        return false;
-    }
-
-    auto error = std::error_code{};
-    std::filesystem::create_directories(path.parent_path(), error);
-    if (error)
-    {
-        nrInfo<LogLevel::warning>(std::format("PipelineService failed to create pipeline cache directory '{}': {}",
-                                              path.parent_path().string(), error.message()));
-        return false;
-    }
-
-    auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
-    if (!stream)
-    {
-        nrInfo<LogLevel::warning>(
-            std::format("PipelineService failed to open pipeline cache file '{}' for writing.", path.string()));
-        return false;
-    }
-
-    stream.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size()));
-    if (!stream)
-    {
-        nrInfo<LogLevel::warning>(
-            std::format("PipelineService failed to write pipeline cache file '{}'.", path.string()));
-        return false;
-    }
-
-    return true;
-}
-} // namespace
-
-void PipelineService::bindDevice(
-    const vk::raii::Device &device,
-    std::uint32_t maxBoundDescriptorSets,
-    const RayTracingCapabilitySnapshot &rtCapabilities,
-    PipelineCacheConfig cacheConfig)
+void PipelineService::bindDevice(const vk::raii::Device &device, std::uint32_t maxBoundDescriptorSets,
+                                 const RayTracingCapabilitySnapshot &rtCapabilities,
+                                 std::filesystem::path pipelineBinaryRoot)
 {
     auto const buildWorkerCount = threading::resolveWorkerCount(0u, nr::maxThreads);
     pipelineBuildPool_.ensureWorkerCount(buildWorkerCount);
-    nrInfo<>(std::format("PipelineService PSO build pool ready: workers={}, policy=host-default.", buildWorkerCount));
+    nrLog<LogLevel::info>("PipelineService PSO build pool ready: workers={}, policy=host-default.", buildWorkerCount);
     device_ = std::cref(device);
     nrAssert(maxBoundDescriptorSets > 0u, "PipelineService::bindDevice requires maxBoundDescriptorSets > 0.");
     maxBoundDescriptorSets_ = maxBoundDescriptorSets;
-    cacheConfig_ = std::move(cacheConfig);
     rtCapabilities_ = rtCapabilities;
-    auto cacheBlob = readPipelineCacheBlob(cacheConfig_);
-    vk::PipelineCacheCreateInfo cacheCreateInfo{};
-    if (cacheConfig_.enabled && !cacheBlob.empty())
+    nrAssert(!pipelineBinaryRoot.empty(), "PipelineService requires a CMake-configured PSO cache root.");
+    try
     {
-        cacheCreateInfo.initialDataSize = cacheBlob.size();
-        cacheCreateInfo.pInitialData = cacheBlob.data();
+        pipelineBinaryStore_ = std::make_unique<PipelineBinaryStore>(device, std::move(pipelineBinaryRoot));
     }
-    pipelineCache_ =
-        cacheConfig_.enabled ? vk::raii::PipelineCache(device, cacheCreateInfo) : vk::raii::PipelineCache{nullptr};
+    catch (const vk::SystemError &error)
+    {
+        nrLog<LogLevel::warning>("PipelineService failed to initialize VK_KHR_pipeline_binary: {}", error.what());
+        nrAssert(false, "PipelineService requires VK_KHR_pipeline_binary key queries.");
+    }
+    nrLog<LogLevel::info>("PipelineService PSO binary store ready.");
 }
 
 void PipelineService::waitForBuilds() const
@@ -1447,27 +1643,14 @@ void PipelineService::waitForBuilds() const
     pipelineBuildPool_.waitIdle();
 }
 
-[[nodiscard]] bool PipelineService::savePipelineCache() const
+[[nodiscard]] std::uint64_t PipelineService::pipelineBinaryLoadCount() const noexcept
 {
-    waitForBuilds();
-    if (!cacheConfig_.saveOnIdle || !cacheConfig_.persistent() || *pipelineCache_ == nullptr)
-    {
-        return false;
-    }
+    return pipelineBinaryStore_ ? pipelineBinaryStore_->acceptedLoadCount() : 0u;
+}
 
-    auto data = std::vector<std::uint8_t>{};
-    try
-    {
-        data = pipelineCache_.getData();
-    }
-    catch (const vk::SystemError &error)
-    {
-        nrInfo<LogLevel::warning>(
-            std::format("PipelineService failed to export Vulkan pipeline cache data: {}", error.what()));
-        return false;
-    }
-
-    return writePipelineCacheBlob(cacheConfig_, data);
+[[nodiscard]] std::uint64_t PipelineService::pipelineBinaryCaptureCount() const noexcept
+{
+    return pipelineBinaryStore_ ? pipelineBinaryStore_->persistedCaptureCount() : 0u;
 }
 
 [[nodiscard]] SlangSampler PipelineService::createSampler(SlangSamplerDesc desc, std::string_view debugName) const
@@ -1489,11 +1672,6 @@ void PipelineService::waitForBuilds() const
         .descriptorLayout = std::move(descriptorLayout),
         .layout = std::move(layout),
     };
-}
-
-[[nodiscard]] const vk::raii::PipelineCache *PipelineService::pipelineCacheOrNull() const noexcept
-{
-    return *pipelineCache_ != nullptr ? &pipelineCache_ : nullptr;
 }
 
 [[nodiscard]] PipelineBuild<GraphicsPipeline> PipelineService::createGraphicsPipeline(
@@ -1524,24 +1702,27 @@ void PipelineService::waitForBuilds() const
         assertReflectionLayoutCoverage(reflectionSignature, reflectionProgram, program,
                                        effectiveDesc.descriptorBindingPolicy);
     });
+    auto const contentFingerprint =
+        graphicsPsoContentFingerprint(programs, effectiveDesc, reflectionSignature, immutableSamplers);
 
     auto shaderProgram = VkShaderProgram::create(device, programs);
     return pipelineBuildPool_.submit([this, layoutBundle = std::move(layoutBundle),
                                       shaderProgram = std::move(shaderProgram),
-                                      effectiveDesc = std::move(effectiveDesc), descriptorMaxSets,
+                                      effectiveDesc = std::move(effectiveDesc), contentFingerprint, descriptorMaxSets,
                                       debugName = std::move(debugName)]() mutable {
         auto const createStart = std::chrono::steady_clock::now();
         auto const &buildDevice = device_->get();
-        auto pipeline = GraphicsPipeline::create(buildDevice, layoutBundle.layout, shaderProgram, effectiveDesc,
-                                                 pipelineCacheOrNull());
+        nrAssert(pipelineBinaryStore_ != nullptr,
+                 "PipelineService::createGraphicsPipeline requires a bound PSO binary store.");
+        auto pipeline = GraphicsPipeline::create(buildDevice, layoutBundle.layout, shaderProgram, *pipelineBinaryStore_,
+                                                 contentFingerprint, effectiveDesc);
         nrAssert(pipeline.valid(), "PipelineService failed to build a valid graphics PSO.");
         setPipelineDebugName(buildDevice, pipeline.raw(), debugName);
         auto state = makePipelineState(std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
         state.graphicsDesc = std::move(effectiveDesc);
         auto const elapsed = std::chrono::duration<double, std::milli>{std::chrono::steady_clock::now() - createStart};
-        nrInfo<>(std::format(
-            "PipelineService PSO build completed: type=graphics, name='{}', poolWorkers={}, elapsedMs={:.3f}.",
-            debugName, pipelineBuildPool_.workerCount(), elapsed.count()));
+        nrLog<LogLevel::info>("PipelineService PSO build completed: type=graphics, name='{}', poolWorkers={}, elapsedMs={:.3f}.",
+                debugName, pipelineBuildPool_.workerCount(), elapsed.count());
         return state;
     });
 }
@@ -1558,23 +1739,26 @@ void PipelineService::waitForBuilds() const
 
     const auto &device = device_->get();
     auto layoutBundle = createPipelineLayoutBundle(slangProgram, desc.descriptorBindingPolicy, immutableSamplers);
+    auto const contentFingerprint = computePsoContentFingerprint(
+        slangProgram, desc, layoutBundle.descriptorLayout.abiSignature(), immutableSamplers);
 
     auto programs = std::array{slangProgram};
     auto shaderProgram = VkShaderProgram::create(device, programs);
     return pipelineBuildPool_.submit([this, layoutBundle = std::move(layoutBundle),
-                                      shaderProgram = std::move(shaderProgram), descriptorMaxSets,
+                                      shaderProgram = std::move(shaderProgram), contentFingerprint, descriptorMaxSets,
                                       debugName = std::move(debugName)]() mutable {
         auto const createStart = std::chrono::steady_clock::now();
         auto const &buildDevice = device_->get();
-        auto pipeline =
-            ComputePipeline::create(buildDevice, layoutBundle.layout, shaderProgram, pipelineCacheOrNull());
+        nrAssert(pipelineBinaryStore_ != nullptr,
+                 "PipelineService::createComputePipeline requires a bound PSO binary store.");
+        auto pipeline = ComputePipeline::create(buildDevice, layoutBundle.layout, shaderProgram, *pipelineBinaryStore_,
+                                                contentFingerprint);
         nrAssert(pipeline.valid(), "PipelineService failed to build a valid compute PSO.");
         setPipelineDebugName(buildDevice, pipeline.raw(), debugName);
         auto state = makePipelineState(std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));
         auto const elapsed = std::chrono::duration<double, std::milli>{std::chrono::steady_clock::now() - createStart};
-        nrInfo<>(std::format(
-            "PipelineService PSO build completed: type=compute, name='{}', poolWorkers={}, elapsedMs={:.3f}.",
-            debugName, pipelineBuildPool_.workerCount(), elapsed.count()));
+        nrLog<LogLevel::info>("PipelineService PSO build completed: type=compute, name='{}', poolWorkers={}, elapsedMs={:.3f}.",
+                debugName, pipelineBuildPool_.workerCount(), elapsed.count());
         return state;
     });
 }
@@ -1588,9 +1772,8 @@ void PipelineService::waitForBuilds() const
     nrAssert(reflectionProgram.valid(),
              "PipelineService::createRayTracingPipeline requires a valid reflection SlangProgram.");
     auto assemblyValidation = validateRayTracingProgramAssemblyDesc(assembly);
-    nrAssert(!assemblyValidation.has_value(),
-             std::format("PipelineService::createRayTracingPipeline invalid program assembly: {}",
-                         assemblyValidation.value_or(std::string{})));
+    nrAssert(!assemblyValidation.has_value(), "PipelineService::createRayTracingPipeline invalid program assembly: {}",
+             assemblyValidation.value_or(std::string{}));
 
     const auto &device = device_->get();
     auto layoutBundle = createPipelineLayoutBundle(reflectionProgram, desc.descriptorBindingPolicy, immutableSamplers);
@@ -1601,21 +1784,24 @@ void PipelineService::waitForBuilds() const
     });
 
     nrAssert(desc.maxRayRecursionDepth <= rtCapabilities_.maxRayRecursionDepth,
-             std::format("PipelineService::createRayTracingPipeline recursion depth {} exceeds device max {}.",
-                         desc.maxRayRecursionDepth, rtCapabilities_.maxRayRecursionDepth));
+             "PipelineService::createRayTracingPipeline recursion depth {} exceeds device max {}.",
+             desc.maxRayRecursionDepth, rtCapabilities_.maxRayRecursionDepth);
+    auto const contentFingerprint =
+        rayTracingPsoContentFingerprint(assembly, desc, reflectionSignature, immutableSamplers);
 
     auto shaderProgram = VkShaderProgram::create(device, assembly.stages);
     auto descCopy = desc;
     auto groups = assembly.groups;
     return pipelineBuildPool_.submit([this, layoutBundle = std::move(layoutBundle),
-                                      shaderProgram = std::move(shaderProgram),
-                                      capabilities = rtCapabilities_, desc = std::move(descCopy),
-                                      groups = std::move(groups), descriptorMaxSets,
-                                      debugName = std::move(debugName)]() mutable {
+                                      shaderProgram = std::move(shaderProgram), capabilities = rtCapabilities_,
+                                      desc = std::move(descCopy), groups = std::move(groups), contentFingerprint,
+                                      descriptorMaxSets, debugName = std::move(debugName)]() mutable {
         auto const &buildDevice = device_->get();
-        auto pipeline = RayTracingPipeline::create(buildDevice, layoutBundle.layout, shaderProgram,
-                                                   rayTracingDeferredHostPool_, capabilities, desc, groups,
-                                                   pipelineCacheOrNull());
+        nrAssert(pipelineBinaryStore_ != nullptr,
+                 "PipelineService::createRayTracingPipeline requires a bound PSO binary store.");
+        auto pipeline =
+            RayTracingPipeline::create(buildDevice, layoutBundle.layout, shaderProgram, rayTracingDeferredHostPool_,
+                                       capabilities, *pipelineBinaryStore_, contentFingerprint, desc, groups);
         nrAssert(pipeline.valid(), "PipelineService failed to build a valid ray-tracing PSO.");
         setPipelineDebugName(buildDevice, pipeline.raw(), debugName);
         return makePipelineState(std::move(layoutBundle), descriptorMaxSets, std::move(pipeline));

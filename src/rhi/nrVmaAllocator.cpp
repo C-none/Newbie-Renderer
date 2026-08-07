@@ -75,7 +75,7 @@ void VmaBuffer::flush(VkDeviceSize offset, VkDeviceSize size) const
     if (allocation == nullptr)
         return;
     auto result = vmaFlushAllocation(allocator, allocation, offset, size);
-    nrAssert(result == VK_SUCCESS, std::format("vmaFlushAllocation failed: {}", static_cast<int>(result)));
+    nrAssert(result == VK_SUCCESS, "vmaFlushAllocation failed: {}", static_cast<int>(result));
 }
 
 void VmaBuffer::invalidate(VkDeviceSize offset, VkDeviceSize size) const
@@ -83,7 +83,7 @@ void VmaBuffer::invalidate(VkDeviceSize offset, VkDeviceSize size) const
     if (allocation == nullptr)
         return;
     auto result = vmaInvalidateAllocation(allocator, allocation, offset, size);
-    nrAssert(result == VK_SUCCESS, std::format("vmaInvalidateAllocation failed: {}", static_cast<int>(result)));
+    nrAssert(result == VK_SUCCESS, "vmaInvalidateAllocation failed: {}", static_cast<int>(result));
 }
 
 VmaImage::VmaImage(VmaAllocator alloc, VkImage img, VmaAllocation mem, VmaAllocationInfo allocInfo)
@@ -193,14 +193,14 @@ void VmaPoolHandle::reset()
 {
     if (pool != nullptr)
     {
-        nrAssert(createInfo.has_value(), std::format("VmaPoolHandle::reset requires pool creation info."));
+        nrAssert(createInfo.has_value(), "VmaPoolHandle::reset requires pool creation info.");
 
         vmaDestroyPool(allocator, pool);
         pool = nullptr;
 
         VmaPool newPool = nullptr;
         VkResult result = vmaCreatePool(allocator, &(*createInfo), &newPool);
-        nrAssert(result == VK_SUCCESS, std::format("vmaCreatePool failed: {}", static_cast<int>(result)));
+        nrAssert(result == VK_SUCCESS, "vmaCreatePool failed: {}", static_cast<int>(result));
         pool = newPool;
     }
 }
@@ -218,7 +218,7 @@ VmaAllocatorWrapper::VmaAllocatorWrapper(const vk::raii::Instance &instance, con
 
     VkResult result = vmaCreateAllocator(&createInfo, &allocator_);
     nrAssert(result == VkResult::VK_SUCCESS,
-             std::format("Failed to create VMA allocator: {}", static_cast<int>(result)));
+             "Failed to create VMA allocator: {}", static_cast<int>(result));
 }
 
 VmaAllocatorWrapper::~VmaAllocatorWrapper()
@@ -258,7 +258,7 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
     // Convert to C struct for VMA API
     VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
     VkResult result = vmaCreateBuffer(allocator_, &cBufferInfo, &allocInfo, &buffer, &allocation, &resultInfo);
-    nrAssert(result == VK_SUCCESS, std::format("vmaCreateBuffer failed: {}", static_cast<int>(result)));
+    nrAssert(result == VK_SUCCESS, "vmaCreateBuffer failed: {}", static_cast<int>(result));
 
     return VmaBuffer(allocator_, buffer, allocation, resultInfo);
 }
@@ -273,7 +273,7 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
     // Convert to C struct for VMA API
     VkImageCreateInfo cImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
     VkResult result = vmaCreateImage(allocator_, &cImageInfo, &allocInfo, &image, &allocation, &resultInfo);
-    nrAssert(result == VK_SUCCESS, std::format("vmaCreateImage failed: {}", static_cast<int>(result)));
+    nrAssert(result == VK_SUCCESS, "vmaCreateImage failed: {}", static_cast<int>(result));
 
     return VmaImage(allocator_, image, allocation, resultInfo);
 }
@@ -282,7 +282,7 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
 {
     VmaPool pool = nullptr;
     VkResult result = vmaCreatePool(allocator_, &poolInfo, &pool);
-    nrAssert(result == VK_SUCCESS, std::format("vmaCreatePool failed: {}", static_cast<int>(result)));
+    nrAssert(result == VK_SUCCESS, "vmaCreatePool failed: {}", static_cast<int>(result));
 
     return VmaPoolHandle(allocator_, pool, poolInfo);
 }
@@ -295,7 +295,7 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
     VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
     VkResult result = vmaFindMemoryTypeIndexForBufferInfo(allocator_, &cBufferInfo, &allocInfo, &memTypeIndex);
     nrAssert(result == VK_SUCCESS,
-             std::format("vmaFindMemoryTypeIndexForBufferInfo failed: {}", static_cast<int>(result)));
+             "vmaFindMemoryTypeIndexForBufferInfo failed: {}", static_cast<int>(result));
     return memTypeIndex;
 }
 

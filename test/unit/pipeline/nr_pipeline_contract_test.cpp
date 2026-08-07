@@ -187,7 +187,6 @@ const nr::test::CaseRegistrar cliCase{
         nr::test::require(options.errorMessage.empty());
         nr::test::requireEqual(options.modelPath.string(), std::string{"assets/Box.gltf"});
         nr::test::requireEqual(options.pipelineId, std::string{"rtobject"});
-        nr::test::require(!options.benchmarkRenderGraphSkeletonMode.has_value());
 
         auto badValues = std::vector<std::string>{"--unknown"};
         auto badArgv = makeArgSpanStorage(badValues);
@@ -202,9 +201,7 @@ const nr::test::CaseRegistrar cliCase{
                                                         "--output",
                                                         "build/benchmark",
                                                         "--dlss-quality",
-                                                        "ultra-performance",
-                                                        "--render-graph-skeleton",
-                                                        "legacy"};
+                                                        "ultra-performance"};
         auto benchmarkArgv = makeArgSpanStorage(benchmarkValues);
         auto benchmark =
             nr::pipeline::parseViewerCommandLine(std::span<char *>{benchmarkArgv.data(), benchmarkArgv.size()});
@@ -213,8 +210,6 @@ const nr::test::CaseRegistrar cliCase{
         nr::test::requireEqual(benchmark.warmupFrames, 12u);
         nr::test::requireEqual(benchmark.measureFrames, 24u);
         nr::test::requireEqual(benchmark.dlssQuality, nr::pipeline::RtDlssQuality::ultraPerformance);
-        nr::test::requireEqual(benchmark.benchmarkRenderGraphSkeletonMode,
-                               std::optional{nr::renderer::RenderGraphSkeletonMode::Legacy});
 
         auto incompleteValues = std::vector<std::string>{"--benchmark", "--measure-frames", "0"};
         auto incompleteArgv = makeArgSpanStorage(incompleteValues);
@@ -247,20 +242,11 @@ const nr::test::CaseRegistrar cliCase{
         nr::test::requireEqual(lua.interactionMode, nr::pipeline::ViewerInteractionMode::offlineLua);
         nr::test::requireEqual(lua.automationScript.generic_string(), std::string{"smoke.lua"});
 
-        auto invalidSkeletonValues =
-            std::vector<std::string>{"--benchmark",       "--measure-frames",        "1",
-                                     "--output",          "build/benchmark",         "--dlss-quality",
-                                     "ultra-performance", "--render-graph-skeleton", "differential"};
-        auto invalidSkeletonArgv = makeArgSpanStorage(invalidSkeletonValues);
-        auto invalidSkeleton = nr::pipeline::parseViewerCommandLine(
-            std::span<char *>{invalidSkeletonArgv.data(), invalidSkeletonArgv.size()});
-        nr::test::require(!invalidSkeleton.errorMessage.empty());
-
-        auto nonBenchmarkSkeletonValues = std::vector<std::string>{"--render-graph-skeleton", "enabled"};
-        auto nonBenchmarkSkeletonArgv = makeArgSpanStorage(nonBenchmarkSkeletonValues);
-        auto nonBenchmarkSkeleton = nr::pipeline::parseViewerCommandLine(
-            std::span<char *>{nonBenchmarkSkeletonArgv.data(), nonBenchmarkSkeletonArgv.size()});
-        nr::test::require(!nonBenchmarkSkeleton.errorMessage.empty());
+        auto removedSkeletonValues = std::vector<std::string>{"--render-graph-skeleton", "enabled"};
+        auto removedSkeletonArgv = makeArgSpanStorage(removedSkeletonValues);
+        auto removedSkeleton = nr::pipeline::parseViewerCommandLine(
+            std::span<char *>{removedSkeletonArgv.data(), removedSkeletonArgv.size()});
+        nr::test::require(!removedSkeleton.errorMessage.empty());
     }};
 
 const nr::test::CaseRegistrar benchmarkBuildGateCase{
@@ -337,28 +323,75 @@ const nr::test::CaseRegistrar graphCatalogPreflightOrderingCase{
 const nr::test::CaseRegistrar sceneCandidateCommitOrderingCase{
     "model replacement completes detached Scene construction before committing ownership", [] {
         auto const model = readProjectFile("src/pipeline/nrPipelineModel.cpp");
+        auto const pipelineInterface = readProjectFile("src/pipeline/exportModule.ixx");
         auto const appSessionInterface = readProjectFile("src/app/nrAppSession.ixx");
         auto const appSession = readProjectFile("src/app/nrAppSession.cpp");
         auto const pipeline = readProjectFile("src/pipeline/nrPipeline.cpp");
 
+        auto const modelControllerInterface =
+            sourceSection(pipelineInterface, "class SceneModelController", "struct ViewerCommandLineOptions");
+        auto const publicModelApi = sourceSection(modelControllerInterface, "  public:", "  private:");
+        requireAbsent(publicModelApi, "ModelCpuLoad",
+                      "the public model API must not expose the CPU-load staging token");
+        requireAbsent(publicModelApi, "loadModelCpu(",
+                      "the public model API must not expose the CPU-load staging factory");
+        requireAbsent(publicModelApi, "commitModel(",
+                      "the public model API must not expose the main-thread staging consumer");
+
+        auto const modelCpuToken = sourceSection(modelControllerInterface, "class ModelCpuLoad", "using ModelCpuLoadResult");
+        requirePresent(modelCpuToken, "ModelCpuLoad(const ModelCpuLoad &) = delete;",
+                       "the model CPU-load token must not be copyable");
+        requirePresent(modelCpuToken, "friend class SceneModelController;",
+                       "only SceneModelController may construct or consume the private CPU-load token");
+        requirePresent(modelCpuToken, "ModelCpuLoad(std::filesystem::path normalizedModelPath,",
+                       "the model CPU-load token constructor must remain private");
+        requireAbsent(modelCpuToken, "resolvedSourcePath",
+                      "the model CPU-load token must not retain an unused duplicate source path");
+        requirePresent(modelControllerInterface, "friend int runViewer(ViewerRunConfig config);",
+                       "only startup orchestration may access the private CPU-load staging boundary");
+
+        auto const cpuModelLoad = sourceSection(
+            model, "[[nodiscard]] SceneModelController::ModelCpuLoadResult SceneModelController::loadModelCpu",
+            "[[nodiscard]] ModelLoadReport SceneModelController::commitModel");
+        requireOrdered(cpuModelLoad, "nr::nrLog<nr::LogLevel::info, \"PIPELINE\">(\"Loading model:",
+                       "auto sceneLoad = nr::load::loadScene(",
+                       "model CPU loading must log the resolved source before importing it");
+        requireAbsent(cpuModelLoad, "app.", "the CPU model phase must not touch AppSession state");
+
+        auto const commitModel = sourceSection(
+            model, "[[nodiscard]] ModelLoadReport SceneModelController::commitModel",
+            "[[nodiscard]] ModelLoadReport SceneModelController::loadModel");
+        requireAbsent(commitModel, "normalizeModelPathForStorage(",
+                      "main-thread Scene commit must reuse the normalized path produced by CPU loading");
+        requireAbsent(commitModel, "resolveModelAssetPath(",
+                      "main-thread Scene commit must not resolve the model path again");
+        requireAbsent(commitModel, "nr::load::loadScene(",
+                      "main-thread Scene commit must not perform CPU scene loading");
+        requireOrdered(commitModel, "auto normalizedModelPath = std::move(loadedModel.normalizedModelPath_);",
+                       "auto sceneAsset = std::move(loadedModel.sceneAsset_);",
+                       "the main-thread commit must consume both token fields at its entry");
+        requireOrdered(commitModel, "auto sceneAsset = std::move(loadedModel.sceneAsset_);",
+                       "auto candidate = app.makeSceneCandidate();",
+                       "the move-only CPU-load token must be consumed before Scene commit begins");
+        requireOrdered(commitModel, "auto candidate = app.makeSceneCandidate();",
+                       "auto templateHandle = candidate->registerTemplate(sceneAsset);",
+                       "template registration must target the detached candidate");
+        requireOrdered(commitModel, "if (!templateHandle.valid())",
+                       "auto instanceHandle = candidate->instantiate(templateHandle);",
+                       "template failure must return before instantiation");
+        requireOrdered(commitModel, "if (!instanceHandle.valid())", "app.commitScene(std::move(candidate));",
+                       "instance failure must return before the Scene commit boundary");
+        requireOrdered(commitModel, "app.commitScene(std::move(candidate));", "app.resetCameraFromSceneOrDefault();",
+                       "camera derivation must observe the newly committed Scene");
+        requireAbsent(commitModel, "app.destroyScene();",
+                      "model replacement must not destroy the active Scene before candidate success");
+
         auto const loadModel = sourceSection(
             model, "[[nodiscard]] ModelLoadReport SceneModelController::loadModel",
             "[[nodiscard]] const std::optional<std::filesystem::path> &SceneModelController::currentModelPath");
-        requireOrdered(loadModel, "auto loadResult = nr::load::loadScene(",
-                       "auto candidate = app.makeSceneCandidate();",
-                       "model decoding must finish before detached Scene allocation");
-        requireOrdered(loadModel, "auto candidate = app.makeSceneCandidate();",
-                       "auto templateHandle = candidate->registerTemplate(sceneAsset);",
-                       "template registration must target the detached candidate");
-        requireOrdered(loadModel, "if (!templateHandle.valid())",
-                       "auto instanceHandle = candidate->instantiate(templateHandle);",
-                       "template failure must return before instantiation");
-        requireOrdered(loadModel, "if (!instanceHandle.valid())", "app.commitScene(std::move(candidate));",
-                       "instance failure must return before the Scene commit boundary");
-        requireOrdered(loadModel, "app.commitScene(std::move(candidate));", "app.resetCameraFromSceneOrDefault();",
-                       "camera derivation must observe the newly committed Scene");
-        requireAbsent(loadModel, "app.destroyScene();",
-                      "model replacement must not destroy the active Scene before candidate success");
+        requireOrdered(loadModel, "auto loadedModel = loadModelCpu(modelPath);",
+                       "return commitModel(app, std::move(*loadedModel), history);",
+                       "synchronous model reload must reuse the CPU-load and main-thread-commit split");
 
         requirePresent(appSessionInterface, "std::unique_ptr<nr::scene::Scene> scene_{};",
                        "AppSession must exclusively own the active Scene");
@@ -379,6 +412,37 @@ const nr::test::CaseRegistrar sceneCandidateCommitOrderingCase{
                           "if (id == nr::options::optionId(nr::options::keys::viewerEnvironmentSource))");
         requireOrdered(modelMutation, "if (!report.loaded)", "options.commitModelAndCameraReset(",
                        "model and derived camera canonical values may commit only after Scene replacement succeeds");
+    }};
+
+const nr::test::CaseRegistrar startupLoadConcurrencyCase{
+    "viewer startup overlaps CPU asset loading and commits resources on the main thread", [] {
+        auto const pipeline = readProjectFile("src/pipeline/nrPipeline.cpp");
+        auto const environment = readProjectFile("src/pipeline/nrPipelineEnvironment.cpp");
+        auto const startupLoad = sourceSection(pipeline, "auto startupLoadPool = nr::threading::StaticThreadPool{};",
+                                               "auto const captureSessionId =");
+
+        requirePresent(startupLoad, "startupLoadPool.ensureWorkerCount(2u);",
+                       "startup asset loading must use exactly two phase-local workers");
+        requireOrdered(startupLoad, "auto environmentLoadFuture = startupLoadPool.submit(",
+                       "auto modelLoadFuture = startupLoadPool.submit(",
+                       "environment and model CPU loads must be submitted before either result is awaited");
+        requireOrdered(startupLoad, "auto environmentLoad = environmentLoadFuture.get();",
+                       "detail::commitEnvironmentMap(app.renderer(), std::move(*environmentLoad));",
+                       "the main thread may commit the environment only after its CPU future completes");
+        requireOrdered(startupLoad, "auto initialModelLoad = modelLoadFuture.get();",
+                       "modelController.commitModel(app, std::move(*initialModelLoad), std::ref(history));",
+                       "the main thread may commit the Scene only after its CPU future completes");
+
+        auto const cpuEnvironmentLoad = sourceSection(
+            environment, "[[nodiscard]] std::expected<EnvironmentMapCpuLoad, std::string> loadEnvironmentMapCpu(",
+            "void commitEnvironmentMap(");
+        requireAbsent(cpuEnvironmentLoad, "renderer.",
+                      "the background environment phase must not touch Renderer state");
+        auto const environmentCommit = sourceSection(
+            environment, "void commitEnvironmentMap(",
+            "[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(");
+        requirePresent(environmentCommit, "renderer.setEnvironmentMap(",
+                       "the environment upload must remain in the main-thread commit helper");
     }};
 
 const nr::test::CaseRegistrar renderableFrameGateCase{
@@ -622,9 +686,9 @@ const nr::test::CaseRegistrar uiSystemOwnershipAndFrameStateCase{
 
         auto const activeFrameGuard = sourceSection(ui, "void UiSystem::requireActiveFrame(",
                                                     "bool UiSystem::beginSection(");
-        requireOrdered(activeFrameGuard, "frameState_ == FrameState::active", "std::format(",
+        requireOrdered(activeFrameGuard, "frameState_ == FrameState::active", "nrAssert(false, \"UiSystem::{}",
                        "the normal widget path must return before constructing failure diagnostics");
-        requirePresent(activeFrameGuard, "nrAssert(false, std::format(",
+        requirePresent(activeFrameGuard, "nrAssert(false, \"UiSystem::{}",
                        "invalid widget access must retain an operation-specific fail-fast diagnostic");
 
         auto const finalizeFrame = sourceSection(ui, "UiCaptureState UiSystem::finalizeFrame()",

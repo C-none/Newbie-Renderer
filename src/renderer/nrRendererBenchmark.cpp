@@ -17,53 +17,8 @@ import :rendererSubmission;
 
 namespace nr::renderer
 {
-[[nodiscard]] std::string_view renderGraphSkeletonModeName(RenderGraphSkeletonMode mode) noexcept
-{
-    switch (mode)
-    {
-    case RenderGraphSkeletonMode::Legacy:
-        return "legacy";
-    case RenderGraphSkeletonMode::Enabled:
-        return "enabled";
-    case RenderGraphSkeletonMode::Differential:
-        return "differential";
-    }
-    return "unknown";
-}
-
-[[nodiscard]] std::string_view renderGraphSkeletonMissReasonName(RenderGraphSkeletonMissReason reason) noexcept
-{
-    switch (reason)
-    {
-    case RenderGraphSkeletonMissReason::None:
-        return "none";
-    case RenderGraphSkeletonMissReason::Disabled:
-        return "disabled";
-    case RenderGraphSkeletonMissReason::UnsupportedNode:
-        return "unsupported_node";
-    case RenderGraphSkeletonMissReason::KeyNotFound:
-        return "key_not_found";
-    case RenderGraphSkeletonMissReason::StructureMismatch:
-        return "structure_mismatch";
-    case RenderGraphSkeletonMissReason::PatchFailed:
-        return "patch_failed";
-    case RenderGraphSkeletonMissReason::Invalidated:
-        return "invalidated";
-    }
-    return "unknown";
-}
 namespace
 {
-inline constexpr auto renderGraphSkeletonMissReasons = std::array{
-    RenderGraphSkeletonMissReason::None,
-    RenderGraphSkeletonMissReason::Disabled,
-    RenderGraphSkeletonMissReason::UnsupportedNode,
-    RenderGraphSkeletonMissReason::KeyNotFound,
-    RenderGraphSkeletonMissReason::StructureMismatch,
-    RenderGraphSkeletonMissReason::PatchFailed,
-    RenderGraphSkeletonMissReason::Invalidated,
-};
-
 void accumulateCpuTimings(RendererCpuFrameTimings &target, const RendererCpuFrameTimings &sample) noexcept
 {
     target.cpuWaitGpuMilliseconds += sample.cpuWaitGpuMilliseconds;
@@ -235,7 +190,7 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame &timings)
 
 [[nodiscard]] std::string_view rendererBenchmarkSchemaVersion() noexcept
 {
-    return "nr-renderer-benchmark-v3";
+    return "nr-renderer-benchmark-v4";
 }
 
 [[nodiscard]] std::span<const std::string_view> rendererBenchmarkCpuStageColumns() noexcept
@@ -260,7 +215,7 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame &timings)
 
 [[nodiscard]] std::span<const std::string_view> rendererBenchmarkCpuSubstageColumns() noexcept
 {
-    static constexpr auto columns = std::array<std::string_view, 10u>{
+    static constexpr auto columns = std::array<std::string_view, 8u>{
         std::string_view{"scene_begin_upload_ms"},
         "scene_raster_extract_ms",
         "scene_tlas_extract_ms",
@@ -269,8 +224,6 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame &timings)
         "graph_prelude_ms",
         "ui_collect_ms",
         "node_loop_ms",
-        "skeleton_patch_ms",
-        "skeleton_rebuild_ms",
     };
     return columns;
 }
@@ -339,36 +292,7 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame &timings)
            frame.submitBatchCount == telemetry.queueSubmitCount && frame.recordTaskCount == telemetry.recordTaskCount;
 }
 
-[[nodiscard]] bool validateRendererBenchmarkSkeletonTelemetry(const RendererBenchmarkFrame &frame,
-                                                              RenderGraphSkeletonMode mode) noexcept
-{
-    auto const reasonKnown = std::ranges::contains(renderGraphSkeletonMissReasons, frame.skeletonMissReason);
-    if (!reasonKnown)
-    {
-        return false;
-    }
-
-    switch (mode)
-    {
-    case RenderGraphSkeletonMode::Legacy:
-        return !frame.skeletonHit && frame.skeletonMissReason == RenderGraphSkeletonMissReason::Disabled &&
-               frame.skeletonPatchMilliseconds == 0.0 && frame.skeletonRebuildMilliseconds == 0.0;
-    case RenderGraphSkeletonMode::Enabled:
-        if (frame.skeletonHit)
-        {
-            return frame.skeletonMissReason == RenderGraphSkeletonMissReason::None &&
-                   frame.skeletonRebuildMilliseconds == 0.0;
-        }
-        return frame.skeletonMissReason != RenderGraphSkeletonMissReason::None &&
-               frame.skeletonMissReason != RenderGraphSkeletonMissReason::Disabled &&
-               frame.skeletonPatchMilliseconds == 0.0;
-    case RenderGraphSkeletonMode::Differential:
-        return false;
-    }
-    return false;
-}
-
-[[nodiscard]] bool validateBenchmarkFrames(std::span<const RendererBenchmarkFrame> frames, RenderGraphSkeletonMode mode)
+[[nodiscard]] bool validateBenchmarkFrames(std::span<const RendererBenchmarkFrame> frames)
 {
     auto const configurationStable =
         frames.empty() || std::ranges::all_of(frames, [&](const RendererBenchmarkFrame &frame) {
@@ -380,7 +304,7 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame &timings)
            std::ranges::adjacent_find(
                frames, [](const auto &lhs, const auto &rhs) { return lhs.frameOrdinal >= rhs.frameOrdinal; }) ==
                frames.end() &&
-           std::ranges::all_of(frames, [mode](const RendererBenchmarkFrame &frame) {
+           std::ranges::all_of(frames, [](const RendererBenchmarkFrame &frame) {
                auto durations = std::array{frame.cpu.cpuWaitGpuMilliseconds,
                                            frame.cpu.frameSetupMilliseconds,
                                            frame.cpu.sceneMilliseconds,
@@ -398,17 +322,14 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame &timings)
                                            frame.tlasTextureCollectionMilliseconds,
                                            frame.graphPreludeMilliseconds,
                                            frame.uiCollectMilliseconds,
-                                           frame.nodeLoopMilliseconds,
-                                           frame.skeletonPatchMilliseconds,
-                                           frame.skeletonRebuildMilliseconds};
+                                           frame.nodeLoopMilliseconds};
                return std::ranges::all_of(durations,
                                           [](double value) { return std::isfinite(value) && value >= 0.0; }) &&
                       [&] {
                           auto const classified = rendererBenchmarkClassifiedCpuMilliseconds(frame.cpu);
                           return frame.cpu.totalMilliseconds - frame.cpu.cpuWaitGpuMilliseconds >= -0.001 &&
                                  frame.cpu.totalMilliseconds - classified >= -0.001 &&
-                                 validateRendererBenchmarkExecuteTelemetry(frame) &&
-                                 validateRendererBenchmarkSkeletonTelemetry(frame, mode);
+                                 validateRendererBenchmarkExecuteTelemetry(frame);
                       }();
            });
 }
@@ -416,11 +337,10 @@ void Renderer::recordGpuPassTimingSample(const GpuPassTimingFrame &timings)
 [[nodiscard]] RendererBenchmarkQualityAudit auditRendererBenchmark(
     std::span<const RendererBenchmarkFrame> frames, std::span<const RendererBenchmarkGpuPass> passes,
     std::span<const RendererBenchmarkGpuFrameStatus> statuses, std::size_t expectedNodeCount,
-    std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry,
-    RenderGraphSkeletonMode skeletonMode)
+    std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry)
 {
     auto audit = RendererBenchmarkQualityAudit{};
-    audit.framesValid = validateBenchmarkFrames(frames, skeletonMode);
+    audit.framesValid = validateBenchmarkFrames(frames);
     audit.nodeTelemetryValid = nodeBuildMilliseconds.size() == frames.size() * expectedNodeCount;
     audit.accelerationStructureTelemetryValid = asTelemetry.size() == frames.size();
     audit.missingGpuFrames = 0u;
@@ -535,7 +455,6 @@ void Renderer::configureBenchmark(RendererBenchmarkConfig config)
     benchmarkCurrentNodeBuildMilliseconds_.clear();
     benchmarkNodeBuildMilliseconds_.clear();
     benchmarkAsTelemetry_.clear();
-    benchmarkSkeletonStatisticsBefore_ = renderGraphSkeletonStatistics();
     benchmarkWarmupAccepted_ = 0u;
     benchmarkDrainRendered_ = 0u;
     benchmarkStartedAt_ = std::chrono::system_clock::now();
@@ -549,10 +468,6 @@ void Renderer::configureBenchmark(RendererBenchmarkConfig config)
     nrAssert(benchmarkConfig_.measureFrames > 0u, "Renderer benchmark requires measureFrames > 0.");
     nrAssert(!benchmarkConfig_.outputDirectory.empty(), "Renderer benchmark requires an output directory.");
     nrAssert(graphInstalled_, "Renderer benchmark must be configured after graph installation.");
-    nrAssert(benchmarkConfig_.renderGraphSkeletonMode != RenderGraphSkeletonMode::Differential,
-             "Renderer benchmark does not support Differential RenderGraph Skeleton timing.");
-    nrAssert(benchmarkConfig_.renderGraphSkeletonMode == renderGraphSkeletonMode_,
-             "Renderer benchmark Skeleton metadata must match the configured Renderer mode.");
     benchmarkNodeNames_ = installedNodes_ |
                           std::views::transform([](const InstalledNode &node) { return node.config.instanceName; }) |
                           std::ranges::to<std::vector>();
@@ -565,26 +480,6 @@ void Renderer::configureBenchmark(RendererBenchmarkConfig config)
     benchmarkAsTelemetry_.reserve(benchmarkConfig_.measureFrames);
     benchmarkPhase_ =
         benchmarkConfig_.warmupFrames == 0u ? RendererBenchmarkPhase::measure : RendererBenchmarkPhase::warmup;
-}
-
-void Renderer::configureRenderGraphSkeletonMode(RenderGraphSkeletonMode mode) noexcept
-{
-    if (renderGraphSkeletonMode_ == mode)
-    {
-        return;
-    }
-    renderGraphSkeletonMode_ = mode;
-    cacheSuite_.skeletonCache.clear(RenderGraphSkeletonMissReason::Invalidated);
-}
-
-[[nodiscard]] RenderGraphSkeletonMode Renderer::renderGraphSkeletonMode() const noexcept
-{
-    return renderGraphSkeletonMode_;
-}
-
-[[nodiscard]] RenderGraphSkeletonCacheStatistics Renderer::renderGraphSkeletonStatistics() const noexcept
-{
-    return cacheSuite_.skeletonCache.statistics();
 }
 
 [[nodiscard]] bool Renderer::benchmarkComplete() const noexcept
@@ -646,16 +541,16 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
     }
     if (!benchmarkComplete())
     {
-        nr::nrLog(nr::LogLevel::error, "BENCHMARK", "Benchmark finalization requested before drain completed.");
+        nr::nrLog<nr::LogLevel::warning, "BENCHMARK">("Benchmark finalization requested before drain completed.");
         return false;
     }
     auto error = std::error_code{};
     std::filesystem::create_directories(benchmarkConfig_.outputDirectory, error);
     if (error)
     {
-        nr::nrLog(nr::LogLevel::error, "BENCHMARK",
-                  std::format("Failed to create benchmark output directory '{}': {}",
-                              benchmarkConfig_.outputDirectory.string(), error.message()));
+        nr::nrLog<nr::LogLevel::warning, "BENCHMARK">(
+            "Failed to create benchmark output directory '{}': {}", benchmarkConfig_.outputDirectory.string(),
+            error.message());
         return false;
     }
     auto csv = [&](std::string_view value) {
@@ -677,7 +572,7 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
     };
     auto const audit = auditRendererBenchmark(benchmarkFrames_, benchmarkGpuPasses_, benchmarkGpuFrameStatuses_,
                                               benchmarkNodeNames_.size(), benchmarkNodeBuildMilliseconds_,
-                                              benchmarkAsTelemetry_, benchmarkConfig_.renderGraphSkeletonMode);
+                                              benchmarkAsTelemetry_);
     auto const dataValid = audit.valid;
     auto const requested = benchmarkConfig_.measureFrames;
     auto const accepted = benchmarkFrames_.size();
@@ -699,9 +594,9 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
             ::dependency::json::serializeJson(value, output, maximumSerializedBenchmarkArtifactBytes - 1u);
         if (serializationError != ::dependency::json::JsonError::none)
         {
-            nr::nrLog(nr::LogLevel::error, "BENCHMARK",
-                      std::format("Failed to serialize benchmark artifact '{}': JSON error {}.", artifactName,
-                                  static_cast<std::uint32_t>(serializationError)));
+            nr::nrLog<nr::LogLevel::warning, "BENCHMARK">(
+                "Failed to serialize benchmark artifact '{}': JSON error {}.", artifactName,
+                static_cast<std::uint32_t>(serializationError));
             return false;
         }
         output.push_back('\n');
@@ -754,9 +649,8 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
         {"drain_rendered", Json{static_cast<std::uint64_t>(benchmarkDrainRendered_)}},
         {"time_unit", Json{"milliseconds"}},
         {"cpu_nesting", Json{"top-level stages are mutually exclusive wall-clock intervals; Frame Setup excludes Wait "
-                             "GPU; Post Scene is top-level; CPU substages, including Skeleton patch and rebuild, are "
-                             "nested diagnostics and must not be summed with top-level stages"}},
-        {"render_graph_skeleton_mode", Json{renderGraphSkeletonModeName(benchmarkConfig_.renderGraphSkeletonMode)}},
+                             "GPU; Post Scene is top-level; CPU substages are nested diagnostics and must not be "
+                             "summed with top-level stages"}},
         {"gpu_semantics", Json{"per-pass timestamp durations only; cross-queue values are not a frame critical path"}},
         {"quantile", Json{"Hyndman-Fan type 7"}},
     }};
@@ -771,7 +665,7 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
     auto summary = std::ofstream{benchmarkConfig_.outputDirectory / "summary.json", std::ios::binary};
     if (!metadata || !frames || !gpu || !summary)
     {
-        nr::nrLog(nr::LogLevel::error, "BENCHMARK", "Failed to open one or more benchmark artifacts for writing.");
+        nr::nrLog<nr::LogLevel::warning, "BENCHMARK">("Failed to open one or more benchmark artifacts for writing.");
         return false;
     }
     metadata << metadataText;
@@ -781,7 +675,7 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
                           [&](std::string_view column) { frames << std::format(",{}", column); });
     std::ranges::for_each(rendererBenchmarkCpuSubstageColumns(),
                           [&](std::string_view column) { frames << std::format(",{}", column); });
-    frames << ",skeleton_hit,skeleton_miss_reason,raster_packets,rt_packets,tlas_packets,submit_batches,record_tasks";
+    frames << ",raster_packets,rt_packets,tlas_packets,submit_batches,record_tasks";
     std::ranges::for_each(rendererBenchmarkExecuteCsvColumns(),
                           [&](std::string_view column) { frames << std::format(",{}", column); });
     std::ranges::for_each(std::views::iota(std::size_t{0u}, benchmarkNodeNames_.size()),
@@ -793,7 +687,7 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
         auto const classified = rendererBenchmarkClassifiedCpuMilliseconds(frame.cpu);
         frames << std::format(
             "{},{},{},{},{},{},{},{},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:."
-            "9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{},{},{},{},{},{},{}",
+            "9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{},{},{},{},{}",
             frame.frameOrdinal, frame.frameSlot, frame.configRevision, frame.displayExtent.width,
             frame.displayExtent.height, frame.renderExtent.width, frame.renderExtent.height,
             csv(benchmarkConfig_.dlssQuality), frame.cpu.cpuWaitGpuMilliseconds, frame.cpu.frameSetupMilliseconds,
@@ -804,8 +698,7 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
             frame.cpu.totalMilliseconds - classified, frame.sceneBeginUploadMilliseconds,
             frame.sceneRasterExtractMilliseconds, frame.sceneTlasExtractMilliseconds, frame.sceneBridgeMilliseconds,
             frame.tlasTextureCollectionMilliseconds, frame.graphPreludeMilliseconds, frame.uiCollectMilliseconds,
-            frame.nodeLoopMilliseconds, frame.skeletonPatchMilliseconds, frame.skeletonRebuildMilliseconds,
-            frame.skeletonHit, csv(renderGraphSkeletonMissReasonName(frame.skeletonMissReason)),
+            frame.nodeLoopMilliseconds,
             frame.sceneRasterPacketCount, frame.sceneRtPacketCount, frame.sceneTlasPacketCount, frame.submitBatchCount,
             frame.recordTaskCount);
         auto const &execute = frame.execute;
@@ -899,8 +792,6 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
         {"graph_prelude_ms", frameStatistics([](const auto &frame) { return frame.graphPreludeMilliseconds; })},
         {"ui_collect_ms", frameStatistics([](const auto &frame) { return frame.uiCollectMilliseconds; })},
         {"node_loop_ms", frameStatistics([](const auto &frame) { return frame.nodeLoopMilliseconds; })},
-        {"skeleton_patch_ms", frameStatistics([](const auto &frame) { return frame.skeletonPatchMilliseconds; })},
-        {"skeleton_rebuild_ms", frameStatistics([](const auto &frame) { return frame.skeletonRebuildMilliseconds; })},
     };
     auto executeSubstages = JsonObject{
         {"executor_setup_ms",
@@ -970,57 +861,6 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
                       std::ranges::to<std::vector<double>>();
         nodeSummary.emplace(std::format("node_build_{}_ms", nodeIndex), statisticsObject(std::move(values)));
     });
-    auto skeletonMissReasonCounts = std::array<std::size_t, renderGraphSkeletonMissReasons.size()>{};
-    std::ranges::for_each(benchmarkFrames_, [&](const RendererBenchmarkFrame &frame) {
-        auto const reason = std::ranges::find(renderGraphSkeletonMissReasons, frame.skeletonMissReason);
-        if (reason != renderGraphSkeletonMissReasons.end())
-        {
-            ++skeletonMissReasonCounts[static_cast<std::size_t>(
-                std::ranges::distance(renderGraphSkeletonMissReasons.begin(), reason))];
-        }
-    });
-    auto skeletonMissReasonSummary = JsonObject{};
-    std::ranges::for_each(std::views::iota(std::size_t{0u}, renderGraphSkeletonMissReasons.size()),
-                          [&](std::size_t reasonIndex) {
-                              skeletonMissReasonSummary.emplace(
-                                  renderGraphSkeletonMissReasonName(renderGraphSkeletonMissReasons[reasonIndex]),
-                                  Json{static_cast<std::uint64_t>(skeletonMissReasonCounts[reasonIndex])});
-                          });
-    auto const skeletonFrameHits =
-        static_cast<std::size_t>(std::ranges::count(benchmarkFrames_, true, &RendererBenchmarkFrame::skeletonHit));
-    auto const skeletonDisabledFrames = static_cast<std::size_t>(std::ranges::count(
-        benchmarkFrames_, RenderGraphSkeletonMissReason::Disabled, &RendererBenchmarkFrame::skeletonMissReason));
-    auto const skeletonEnabledMisses =
-        static_cast<std::size_t>(std::ranges::count_if(benchmarkFrames_, [](const RendererBenchmarkFrame &frame) {
-            return !frame.skeletonHit && frame.skeletonMissReason != RenderGraphSkeletonMissReason::Disabled;
-        }));
-    auto const skeletonStatisticsAfter = renderGraphSkeletonStatistics();
-    auto const counterDelta = [](std::uint64_t after, std::uint64_t before) {
-        return after >= before ? after - before : std::uint64_t{0u};
-    };
-    auto skeletonSummary = JsonObject{
-        {"mode", Json{renderGraphSkeletonModeName(benchmarkConfig_.renderGraphSkeletonMode)}},
-        {"measurement_frames", Json{static_cast<std::uint64_t>(benchmarkFrames_.size())}},
-        {"frame_hits", Json{static_cast<std::uint64_t>(skeletonFrameHits)}},
-        {"enabled_misses", Json{static_cast<std::uint64_t>(skeletonEnabledMisses)}},
-        {"disabled_frames", Json{static_cast<std::uint64_t>(skeletonDisabledFrames)}},
-        {"patch_failures",
-         Json{static_cast<std::uint64_t>(
-             skeletonMissReasonCounts[static_cast<std::size_t>(RenderGraphSkeletonMissReason::PatchFailed)])}},
-        {"structural_mismatches",
-         Json{static_cast<std::uint64_t>(
-             skeletonMissReasonCounts[static_cast<std::size_t>(RenderGraphSkeletonMissReason::StructureMismatch)])}},
-        {"run_cache_hit_delta",
-         Json{counterDelta(skeletonStatisticsAfter.hitCount, benchmarkSkeletonStatisticsBefore_.hitCount)}},
-        {"run_cache_miss_delta",
-         Json{counterDelta(skeletonStatisticsAfter.missCount, benchmarkSkeletonStatisticsBefore_.missCount)}},
-        {"run_invalidation_delta", Json{counterDelta(skeletonStatisticsAfter.invalidationCount,
-                                                     benchmarkSkeletonStatisticsBefore_.invalidationCount)}},
-        {"run_structure_mismatch_delta", Json{counterDelta(skeletonStatisticsAfter.structureMismatchCount,
-                                                           benchmarkSkeletonStatisticsBefore_.structureMismatchCount)}},
-        {"entries", Json{static_cast<std::uint64_t>(skeletonStatisticsAfter.entryCount)}},
-        {"miss_reasons", Json{std::move(skeletonMissReasonSummary)}},
-    };
     auto gpuPassSummary = JsonObject{};
     if (!benchmarkFrames_.empty())
     {
@@ -1071,7 +911,6 @@ void Renderer::recordBenchmarkGpuPassTimings(const GpuPassTimingFrame &timings)
          }}},
         {"cpu_stages", Json{std::move(cpuStages)}},
         {"cpu_substages", Json{std::move(cpuSubstages)}},
-        {"render_graph_skeleton", Json{std::move(skeletonSummary)}},
         {"execute_substages", Json{std::move(executeSubstages)}},
         {"execute_counts", Json{std::move(executeCounts)}},
         {"as_timings", Json{std::move(asTimings)}},

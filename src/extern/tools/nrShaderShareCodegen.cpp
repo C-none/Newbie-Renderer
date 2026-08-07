@@ -5,11 +5,11 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -504,60 +504,71 @@ struct Model
     return text;
 }
 
-[[nodiscard]] std::optional<std::string> defaultLiteral(slang::VariableReflection *variable, const CppType &type,
-                                                        const std::vector<EnumInfo> &enums)
+template <typename T>
+[[nodiscard]] std::optional<T> defaultValueScalar(slang::VariableReflection *variable)
 {
-    if (!variable || !variable->hasDefaultValue())
+    if (!variable)
     {
         return std::nullopt;
     }
 
+    Slang::ComPtr<ISlangBlob> blob;
+    if (failed(variable->getDefaultValueBlob(blob.writeRef())) || !blob || blob->getBufferSize() != sizeof(T))
+    {
+        return std::nullopt;
+    }
+
+    auto value = T{};
+    std::memcpy(&value, blob->getBufferPointer(), sizeof(T));
+    return value;
+}
+
+[[nodiscard]] std::optional<std::string> defaultLiteral(slang::VariableReflection *variable, const CppType &type,
+                                                        const std::vector<EnumInfo> &enums)
+{
     if (type.kind == CppTypeKind::scalar)
     {
-        if (type.scalarType == slang::TypeReflection::ScalarType::Float32)
+        switch (type.scalarType)
         {
-            auto value = 0.0f;
-            if (failed(variable->getDefaultValueFloat(&value)))
-            {
-                return std::nullopt;
-            }
-            return formatFloat(value);
+        case slang::TypeReflection::ScalarType::Float32:
+        {
+            auto const value = defaultValueScalar<float>(variable);
+            return value ? std::optional{formatFloat(*value)} : std::nullopt;
         }
-
-        auto value = std::int64_t{0};
-        if (failed(variable->getDefaultValueInt(&value)))
+        case slang::TypeReflection::ScalarType::UInt32:
         {
+            auto const value = defaultValueScalar<std::uint32_t>(variable);
+            return value ? std::optional{std::to_string(*value) + "u"} : std::nullopt;
+        }
+        case slang::TypeReflection::ScalarType::UInt64:
+        {
+            auto const value = defaultValueScalar<std::uint64_t>(variable);
+            return value ? std::optional{std::to_string(*value) + "ull"} : std::nullopt;
+        }
+        case slang::TypeReflection::ScalarType::Int32:
+        {
+            auto const value = defaultValueScalar<std::int32_t>(variable);
+            return value ? std::optional{std::to_string(*value)} : std::nullopt;
+        }
+        case slang::TypeReflection::ScalarType::Int64:
+        {
+            auto const value = defaultValueScalar<std::int64_t>(variable);
+            return value ? std::optional{std::to_string(*value)} : std::nullopt;
+        }
+        default:
             return std::nullopt;
         }
-
-        if (type.scalarType == slang::TypeReflection::ScalarType::UInt32)
-        {
-            if (value < 0)
-            {
-                return std::nullopt;
-            }
-            return std::to_string(static_cast<std::uint32_t>(value)) + "u";
-        }
-        if (type.scalarType == slang::TypeReflection::ScalarType::UInt64)
-        {
-            if (value < 0)
-            {
-                return std::nullopt;
-            }
-            return std::to_string(static_cast<std::uint64_t>(value)) + "ull";
-        }
-        return std::to_string(value);
     }
 
     if (type.kind == CppTypeKind::enumType)
     {
-        auto value = std::int64_t{0};
-        if (failed(variable->getDefaultValueInt(&value)) || value < 0)
+        auto const value = defaultValueScalar<std::uint32_t>(variable);
+        if (!value)
         {
             return std::nullopt;
         }
 
-        auto const enumValue = static_cast<std::uint32_t>(value);
+        auto const enumValue = *value;
         auto const enumIt = std::ranges::find_if(enums, [&](const EnumInfo &info) { return info.name == type.name; });
         if (enumIt != enums.end())
         {
@@ -863,22 +874,17 @@ struct Model
             return false;
         }
 
-        auto value = std::int64_t{0};
-        if (failed(field->getDefaultValueInt(&value)) || value < 0)
+        auto const value = defaultValueScalar<std::uint32_t>(field);
+        if (!value)
         {
             std::cerr << locationText(shareDecl.site) << ": enum case '" << field->getName()
-                      << "' needs a non-negative integer value.\n";
-            return false;
-        }
-        if (static_cast<std::uint64_t>(value) > std::numeric_limits<std::uint32_t>::max())
-        {
-            std::cerr << locationText(shareDecl.site) << ": enum case '" << field->getName() << "' exceeds uint32.\n";
+                      << "' needs a uint32 value.\n";
             return false;
         }
 
         result.cases.push_back(EnumCase{
             .name = field->getName(),
-            .value = static_cast<std::uint32_t>(value),
+            .value = *value,
         });
     }
 

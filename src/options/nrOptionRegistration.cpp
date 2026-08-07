@@ -567,4 +567,16 @@ std::vector<OptionDefinition> makePresentDefinitions()
                                   ui("Present", "Capture EXR", OptionUiControl::button, 30)),
     };
 }
+
+// [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling options. Remove with the whole block.
+std::vector<OptionDefinition> makeBuildProfilingDefinitions()
+{
+    return {
+        makeBooleanDefinition(keys::buildProfilingEnabled, false, OptionScope::graph,
+                              ui("Build profiling (TEMP)", "Enabled", OptionUiControl::checkbox, 10)),
+        makeUnsignedDefinition(keys::buildProfilingReportInterval, 120u, 1u, 4096u, OptionScope::graph,
+                               ui("Build profiling (TEMP)", "Report interval (frames)", OptionUiControl::slider, 20)),
+    };
+}
+// [TEMP-BUILD-PROFILING] END
 } // namespace nr::options

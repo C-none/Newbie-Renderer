@@ -130,7 +130,7 @@ endforeach()
 
 foreach(visible_marker
         "NR_NDJSON_WARNING_MUST_REACH_CMD"
-        "NR_NDJSON_ERROR_MUST_REACH_CMD")
+        "NR_NDJSON_ROTATION_MUST_REACH_CMD")
     string(FIND "${probe_output}" "${visible_marker}" match_index)
     if(match_index EQUAL -1)
         message(

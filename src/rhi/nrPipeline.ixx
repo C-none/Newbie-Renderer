@@ -5,6 +5,7 @@ import :type;
 import nr.utils;
 import :descriptor;
 import :slang;
+import :pipelineBinary;
 import std;
 
 export namespace nr::rhi
@@ -65,19 +66,6 @@ struct RayTracingProgramAssemblyDesc
 {
     std::vector<RayTracingPipelineStageSelection> stages;
     std::vector<RayTracingShaderGroupDesc> groups;
-};
-
-struct PipelineCacheConfig
-{
-    bool enabled = true;
-    std::filesystem::path directory{};
-    std::string fileName = "vulkan-pipeline-cache.bin";
-    bool saveOnIdle = true;
-
-    [[nodiscard]] bool persistent() const noexcept
-    {
-        return enabled && !directory.empty() && !fileName.empty();
-    }
 };
 
 [[nodiscard]] std::optional<std::string> validateRayTracingPipelineDesc(const RayTracingPipelineDesc &desc);
@@ -185,29 +173,33 @@ class VkShaderProgram
 class GraphicsPipeline
 {
   public:
-    [[nodiscard]] static GraphicsPipeline create(const vk::raii::Device &device, const CursorPipelineLayout &layout,
-                                                 const VkShaderProgram &shaderProgram,
-                                                 const GraphicsPipelineDesc &desc = {},
-                                                 const vk::raii::PipelineCache *pipelineCache = nullptr);
-
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] vk::Pipeline raw() const noexcept;
 
   private:
+    friend class PipelineService;
+
+    [[nodiscard]] static GraphicsPipeline create(const vk::raii::Device &device, const CursorPipelineLayout &layout,
+                                                 const VkShaderProgram &shaderProgram, PipelineBinaryStore &binaryStore,
+                                                 std::uint64_t contentFingerprint,
+                                                 const GraphicsPipelineDesc &desc = {});
+
     vk::raii::Pipeline pipeline_ = {nullptr};
 };
 
 class ComputePipeline
 {
   public:
-    [[nodiscard]] static ComputePipeline create(const vk::raii::Device &device, const CursorPipelineLayout &layout,
-                                                const VkShaderProgram &shaderProgram,
-                                                const vk::raii::PipelineCache *pipelineCache = nullptr);
-
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] vk::Pipeline raw() const noexcept;
 
   private:
+    friend class PipelineService;
+
+    [[nodiscard]] static ComputePipeline create(const vk::raii::Device &device, const CursorPipelineLayout &layout,
+                                                const VkShaderProgram &shaderProgram, PipelineBinaryStore &binaryStore,
+                                                std::uint64_t contentFingerprint);
+
     vk::raii::Pipeline pipeline_ = {nullptr};
 };
 
@@ -226,14 +218,6 @@ struct RayTracingPipelineIdentity
 class RayTracingPipeline
 {
   public:
-    [[nodiscard]] static RayTracingPipeline create(const vk::raii::Device &device, const CursorPipelineLayout &layout,
-                                                   const VkShaderProgram &shaderProgram,
-                                                   threading::StaticThreadPool &deferredHostPool,
-                                                   const RayTracingCapabilitySnapshot &capabilities,
-                                                   const RayTracingPipelineDesc &desc = {},
-                                                   std::span<const RayTracingShaderGroupDesc> groups = {},
-                                                   const vk::raii::PipelineCache *pipelineCache = nullptr);
-
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] vk::Pipeline raw() const noexcept;
     [[nodiscard]] RayTracingPipelineIdentity identity() const noexcept;
@@ -244,6 +228,16 @@ class RayTracingPipeline
                                                                std::uint32_t groupCount) const;
 
   private:
+    friend class PipelineService;
+
+    [[nodiscard]] static RayTracingPipeline create(const vk::raii::Device &device, const CursorPipelineLayout &layout,
+                                                   const VkShaderProgram &shaderProgram,
+                                                   threading::StaticThreadPool &deferredHostPool,
+                                                   const RayTracingCapabilitySnapshot &capabilities,
+                                                   PipelineBinaryStore &binaryStore, std::uint64_t contentFingerprint,
+                                                   const RayTracingPipelineDesc &desc = {},
+                                                   std::span<const RayTracingShaderGroupDesc> groups = {});
+
     RayTracingPipelineIdentity identity_{};
     RayTracingCapabilitySnapshot capabilities_{};
     std::uint32_t shaderGroupCount_ = 0;
@@ -284,15 +278,19 @@ template <typename TPipeline> using PipelineBuild = std::future<PipelineState<TP
 class PipelineService
 {
   public:
-    void bindDevice(
-        const vk::raii::Device &device,
-        std::uint32_t maxBoundDescriptorSets,
-        const RayTracingCapabilitySnapshot &rtCapabilities,
-        PipelineCacheConfig cacheConfig = {});
+    PipelineService();
+    ~PipelineService();
+    PipelineService(const PipelineService &) = delete;
+    PipelineService &operator=(const PipelineService &) = delete;
 
-    [[nodiscard]] bool savePipelineCache() const;
+    void bindDevice(const vk::raii::Device &device, std::uint32_t maxBoundDescriptorSets,
+                    const RayTracingCapabilitySnapshot &rtCapabilities, std::filesystem::path pipelineBinaryRoot);
 
     void waitForBuilds() const;
+
+    [[nodiscard]] std::uint64_t pipelineBinaryLoadCount() const noexcept;
+
+    [[nodiscard]] std::uint64_t pipelineBinaryCaptureCount() const noexcept;
 
     [[nodiscard]] SlangSampler createSampler(SlangSamplerDesc desc = {}, std::string_view debugName = {}) const;
 
@@ -306,8 +304,6 @@ class PipelineService
     [[nodiscard]] PipelineLayoutBundle createPipelineLayoutBundle(
         const SlangProgram &slangProgram, const DescriptorBindingPolicy &descriptorBindingPolicy,
         std::span<const SlangImmutableSamplerBinding> immutableSamplers) const;
-
-    [[nodiscard]] const vk::raii::PipelineCache *pipelineCacheOrNull() const noexcept;
 
     template <typename TPipeline>
     [[nodiscard]] PipelineState<TPipeline> makePipelineState(PipelineLayoutBundle bundle,
@@ -338,8 +334,7 @@ class PipelineService
     std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
     std::uint32_t maxBoundDescriptorSets_ = 0;
     RayTracingCapabilitySnapshot rtCapabilities_{};
-    PipelineCacheConfig cacheConfig_{};
-    vk::raii::PipelineCache pipelineCache_ = {nullptr};
+    std::unique_ptr<PipelineBinaryStore> pipelineBinaryStore_{};
     mutable threading::StaticThreadPool rayTracingDeferredHostPool_{};
     mutable threading::StaticThreadPool pipelineBuildPool_{};
 };

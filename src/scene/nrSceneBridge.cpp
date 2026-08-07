@@ -58,8 +58,7 @@ namespace nr::scene
 
     auto reportPlanError = [&](std::string message) {
         plan.hasErrors = true;
-        nr::nrLog(nr::LogLevel::error, "SCENE", std::format("SceneBridgePlan error: {}", message),
-                  std::source_location::current(), false);
+        nr::nrLog<nr::LogLevel::warning, "SCENE">("SceneBridgePlan error: {}", message);
     };
 
     auto const nodeCount = sceneAsset.nodes.size();
@@ -385,10 +384,9 @@ namespace nr::scene
 
     std::ranges::for_each(frame.rasterDraws, [&](const RasterDrawPacket &packet) {
         nrAssert(rasterDrawPacketResolved(packet, frame.geometryBuffers, frame.rasterTextureHandlesById),
-                 std::format("Raster packet resolution invariant failed for mesh ({}, {}) geometry {} and material "
-                             "({}, {}).",
-                             packet.mesh.slot, packet.mesh.generation, packet.geometryIndex, packet.material.slot,
-                             packet.material.generation));
+                 "Raster packet resolution invariant failed for mesh ({}, {}) geometry {} and material ({}, {}).",
+                 packet.mesh.slot, packet.mesh.generation, packet.geometryIndex, packet.material.slot,
+                 packet.material.generation);
     });
 
     frame.frameConstants.drawCount = static_cast<float>(frame.rasterDraws.size());

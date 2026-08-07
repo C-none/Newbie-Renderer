@@ -6,9 +6,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/NrFailureProbeContract.cmake")
 
 nr_require_failure_probe(
     PROBE "${NR_ASSERT_FAILURE_PROBE}"
-    CONTEXT "Lazy assertion failure"
+    CONTEXT "Deferred assertion failure"
     REQUIRED_OUTPUT
         "[NR ASSERT]"
-        "lazy assertion failure probe invocation=1"
+        "deferred assertion failure probe invocation=1"
         "nr_utils_error_handle_lazy_failure_probe.cpp"
 )

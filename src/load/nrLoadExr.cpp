@@ -14,7 +14,35 @@ namespace
 {
 inline constexpr std::size_t decodedChannelCount = 3u;
 inline constexpr std::size_t encodedChannelCount = 4u;
-inline constexpr std::uint32_t scanlineBlockRowCount = 32u;
+inline constexpr std::uint32_t scanlineRowsPerWorker = 32u;
+
+using Clock = std::chrono::steady_clock;
+using Duration = std::chrono::duration<double, std::milli>;
+
+struct OpenExrDecodeConfig
+{
+    std::uint32_t workerCount = 1u;
+    std::uint32_t blockRowCount = scanlineRowsPerWorker;
+};
+
+[[nodiscard]] double elapsedMilliseconds(Clock::time_point begin, Clock::time_point end) noexcept
+{
+    return Duration{end - begin}.count();
+}
+
+[[nodiscard]] const OpenExrDecodeConfig &openExrDecodeConfig()
+{
+    static const auto config = [] {
+        auto const hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+        auto const workerCount = std::min(hardwareThreads, nr::maxThreads);
+        nr::dependency::openexr::setGlobalThreadCount(static_cast<int>(workerCount));
+        return OpenExrDecodeConfig{
+            .workerCount = workerCount,
+            .blockRowCount = std::max(scanlineRowsPerWorker, workerCount * scanlineRowsPerWorker),
+        };
+    }();
+    return config;
+}
 
 [[nodiscard]] LoadError makeExrError(LoadErrorCode code, const std::filesystem::path &sourcePath, std::string message)
 {
@@ -30,8 +58,7 @@ inline constexpr std::uint32_t scanlineBlockRowCount = 32u;
                                              std::string message)
 {
     auto error = makeExrError(code, sourcePath, std::move(message));
-    nrInfo<LogLevel::error>(
-        std::format("OpenEXR environment '{}' failed: {}", sourcePath.generic_string(), error.message));
+    nrLog<LogLevel::error>("OpenEXR environment '{}' failed: {}", sourcePath.generic_string(), error.message);
     return error;
 }
 
@@ -172,14 +199,17 @@ inline constexpr std::uint32_t scanlineBlockRowCount = 32u;
 }
 
 template <typename Consumer>
-[[nodiscard]] std::expected<void, LoadError> visitDecodedBlocks(nr::dependency::openexr::InputFile &file,
-                                                                const std::filesystem::path &sourcePath, int originX,
-                                                                int originY, std::uint32_t width, std::uint32_t height,
-                                                                Consumer &&consumer)
+[[nodiscard]] std::expected<void, LoadError> decodeImageBlocks(nr::dependency::openexr::InputFile &file,
+                                                               const std::filesystem::path &sourcePath, int originX,
+                                                               int originY, std::uint32_t width, std::uint32_t height,
+                                                               std::uint32_t blockRowCount,
+                                                               std::span<float> decodedImage, Consumer &&consumer)
 {
-    auto const maximumBlockRows = std::min(scanlineBlockRowCount, height);
-    auto decoded = std::vector<float>(static_cast<std::size_t>(width) * maximumBlockRows * decodedChannelCount);
-    auto const blockCount = (height + scanlineBlockRowCount - 1u) / scanlineBlockRowCount;
+    nrAssert(blockRowCount > 0u, "decodeImageBlocks requires a non-zero block row count.");
+    auto const expectedSampleCount = static_cast<std::size_t>(width) * height * decodedChannelCount;
+    nrAssert(decodedImage.size() == expectedSampleCount,
+             "decodeImageBlocks requires an exactly sized RGB float image destination.");
+    auto const blockCount = (height + blockRowCount - 1u) / blockRowCount;
     auto failure = std::optional<LoadError>{};
 
     auto const blockIndices = std::views::iota(std::uint32_t{0u}, blockCount);
@@ -189,10 +219,11 @@ template <typename Consumer>
             return;
         }
 
-        auto const firstRow = blockIndex * scanlineBlockRowCount;
-        auto const rowCount = std::min(scanlineBlockRowCount, height - firstRow);
+        auto const firstRow = blockIndex * blockRowCount;
+        auto const rowCount = std::min(blockRowCount, height - firstRow);
         auto const sampleCount = static_cast<std::size_t>(width) * rowCount * decodedChannelCount;
-        auto block = std::span<float>{decoded}.first(sampleCount);
+        auto const sampleOffset = static_cast<std::size_t>(firstRow) * width * decodedChannelCount;
+        auto block = decodedImage.subspan(sampleOffset, sampleCount);
         auto readResult =
             readDecodedBlock(file, sourcePath, originX, originY + static_cast<int>(firstRow), width, rowCount, block);
         if (!readResult)
@@ -226,6 +257,7 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
 
 [[nodiscard]] EnvironmentMapLoadResult loadExrEnvironmentMap(const ExrEnvironmentLoadRequest &request)
 {
+    auto const totalStart = Clock::now();
     if (request.sourcePath.empty())
     {
         return std::unexpected(makeExrError(LoadErrorCode::invalidArgument, request.sourcePath,
@@ -239,6 +271,8 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
                          "OpenEXR environment HALF safe maximum must be finite and within (0, 65504]."));
     }
 
+    auto const &decodeConfig = openExrDecodeConfig();
+    auto const validationStart = Clock::now();
     auto fileStatusError = std::error_code{};
     auto const sourceExists = std::filesystem::is_regular_file(request.sourcePath, fileStatusError);
     if (fileStatusError || !sourceExists)
@@ -254,6 +288,7 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
     {
         return std::unexpected(std::move(containerResult.error()));
     }
+    auto const validationFinished = Clock::now();
 
     auto openResult = openExrFile(request.sourcePath, fileName);
     if (!openResult)
@@ -261,6 +296,7 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
         return std::unexpected(std::move(openResult.error()));
     }
     auto file = std::move(*openResult);
+    auto const openFinished = Clock::now();
 
     try
     {
@@ -313,20 +349,32 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
     auto const width = static_cast<std::uint32_t>(width64);
     auto const height = static_cast<std::uint32_t>(height64);
     auto const texelCount = static_cast<std::uint64_t>(width) * height;
-    auto const outputByteCount = texelCount * encodedChannelCount * sizeof(nr::dependency::imath::Half);
-    if (outputByteCount > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+    auto const outputBytesPerTexel = encodedChannelCount * sizeof(nr::dependency::imath::Half);
+    auto const decodedBytesPerTexel = decodedChannelCount * sizeof(float);
+    if (texelCount > std::numeric_limits<std::size_t>::max() / outputBytesPerTexel ||
+        texelCount > std::numeric_limits<std::size_t>::max() / decodedBytesPerTexel)
     {
         return std::unexpected(makeExrError(LoadErrorCode::textureDataUnsupported, request.sourcePath,
                                             "OpenEXR environment exceeds host addressable memory."));
     }
+    auto const outputByteCount = static_cast<std::size_t>(texelCount) * outputBytesPerTexel;
+    auto const decodedByteCount = static_cast<std::size_t>(texelCount) * decodedBytesPerTexel;
+    auto const metadataFinished = Clock::now();
 
+    auto const scratchAllocationStart = Clock::now();
+    auto decodedImage = std::vector<float>(static_cast<std::size_t>(texelCount) * decodedChannelCount);
+    auto const scratchAllocationFinished = Clock::now();
     auto peakRadiance = 0.0f;
     auto minimumRadiance = 0.0f;
     auto negativeSampleCount = std::uint64_t{0u};
     auto nonFiniteSampleCount = std::uint64_t{0u};
-    auto scanResult = visitDecodedBlocks(*file, request.sourcePath, dataWindow.min.x, dataWindow.min.y, width, height,
-                                         [&](std::span<const float> decoded, std::uint32_t, std::uint32_t) {
-                                             std::ranges::for_each(decoded, [&](float sample) {
+    auto scanConsumerMilliseconds = 0.0;
+    auto const decodeStart = Clock::now();
+    auto decodeResult = decodeImageBlocks(*file, request.sourcePath, dataWindow.min.x, dataWindow.min.y, width, height,
+                                          decodeConfig.blockRowCount, decodedImage,
+                                          [&](std::span<const float> decoded, std::uint32_t, std::uint32_t) {
+                                              auto const consumerStart = Clock::now();
+                                              std::ranges::for_each(decoded, [&](float sample) {
                                                  if (!std::isfinite(sample))
                                                  {
                                                      ++nonFiniteSampleCount;
@@ -340,10 +388,13 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
                                                  }
                                                  peakRadiance = std::max(peakRadiance, sample);
                                              });
-                                         });
-    if (!scanResult)
+                                              scanConsumerMilliseconds +=
+                                                  elapsedMilliseconds(consumerStart, Clock::now());
+                                          });
+    auto const decodeFinished = Clock::now();
+    if (!decodeResult)
     {
-        return std::unexpected(std::move(scanResult.error()));
+        return std::unexpected(std::move(decodeResult.error()));
     }
     if (nonFiniteSampleCount > 0u)
     {
@@ -353,32 +404,26 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
     }
     if (negativeSampleCount > 0u && minimumRadiance < -1.0e-6f)
     {
-        nrInfo<LogLevel::warning>(std::format("OpenEXR environment '{}' clamps {} negative RGB samples (minimum {}).",
-                                              request.sourcePath.generic_string(), negativeSampleCount,
-                                              minimumRadiance));
+        nrLog<LogLevel::warning>("OpenEXR environment '{}' clamps {} negative RGB samples (minimum {}).",
+                                 request.sourcePath.generic_string(), negativeSampleCount, minimumRadiance);
     }
 
     auto const radianceDecodeScale = std::max(1.0f, peakRadiance / request.halfSafeMaximum);
-    auto bytes = std::vector<std::byte>(static_cast<std::size_t>(outputByteCount));
-    auto encodeResult = visitDecodedBlocks(
-        *file, request.sourcePath, dataWindow.min.x, dataWindow.min.y, width, height,
-        [&](std::span<const float> decoded, std::uint32_t firstRow, std::uint32_t rowCount) {
-            auto const blockTexelCount = static_cast<std::size_t>(width) * rowCount;
-            auto const pixelIndices = std::views::iota(std::size_t{0u}, blockTexelCount);
-            std::ranges::for_each(pixelIndices, [&](std::size_t blockPixelIndex) {
-                auto const sourceOffset = blockPixelIndex * decodedChannelCount;
-                auto encode = [&](std::size_t channelIndex) {
-                    return std::clamp(decoded[sourceOffset + channelIndex] / radianceDecodeScale, 0.0f,
-                                      request.halfSafeMaximum);
-                };
-                auto const destinationPixelIndex = static_cast<std::size_t>(firstRow) * width + blockPixelIndex;
-                storeHalfPixel(bytes, destinationPixelIndex, std::array{encode(0u), encode(1u), encode(2u), 1.0f});
-            });
-        });
-    if (!encodeResult)
-    {
-        return std::unexpected(std::move(encodeResult.error()));
-    }
+    auto const allocationStart = Clock::now();
+    auto bytes = std::vector<std::byte>(outputByteCount);
+    auto const allocationFinished = Clock::now();
+    auto const encodeStart = Clock::now();
+    auto const pixelIndices = std::views::iota(std::size_t{0u}, static_cast<std::size_t>(texelCount));
+    std::ranges::for_each(pixelIndices, [&](std::size_t pixelIndex) {
+        auto const sourceOffset = pixelIndex * decodedChannelCount;
+        auto encode = [&](std::size_t channelIndex) {
+            return std::clamp(decodedImage[sourceOffset + channelIndex] / radianceDecodeScale, 0.0f,
+                              request.halfSafeMaximum);
+        };
+        storeHalfPixel(bytes, pixelIndex, std::array{encode(0u), encode(1u), encode(2u), 1.0f});
+    });
+    auto const encodeFinished = Clock::now();
+    auto const encodeConsumerMilliseconds = elapsedMilliseconds(encodeStart, encodeFinished);
 
     auto texture = nr::resource::Texture{};
     texture.name = request.sourcePath.filename().string();
@@ -397,6 +442,25 @@ void storeHalfPixel(std::span<std::byte> destination, std::size_t pixelIndex,
     environment.radiance = std::move(texture);
     environment.radianceDecodeScale = radianceDecodeScale;
     nrAssert(environment.valid(), "loadExrEnvironmentMap produced an invalid environment resource.");
+    auto const totalFinished = Clock::now();
+    auto const decodeMilliseconds = elapsedMilliseconds(decodeStart, decodeFinished);
+    auto const encodeMilliseconds = elapsedMilliseconds(encodeStart, encodeFinished);
+    nrLog<LogLevel::info>(
+        "[EnvironmentMap::loadExr] source='{}', extent={}x{}, outputMiB={:.3f}, decodedScratchMiB={:.3f}, "
+        "transientMiB={:.3f}, openExrWorkers={}, decodeBlockRows={}, sourceDecodePasses=1, "
+        "phaseMs={{validate={:.3f}, open={:.3f}, metadata={:.3f}, scratchAllocate={:.3f}, "
+        "decodePass={:.3f}, scanConsumer={:.3f}, openExrDecodeApprox={:.3f}, outputAllocate={:.3f}, "
+        "encodePass={:.3f}, encodeConsumer={:.3f}, total={:.3f}}}",
+        request.sourcePath.generic_string(), width, height,
+        static_cast<double>(outputByteCount) / (1024.0 * 1024.0),
+        static_cast<double>(decodedByteCount) / (1024.0 * 1024.0),
+        static_cast<double>(outputByteCount + decodedByteCount) / (1024.0 * 1024.0), decodeConfig.workerCount,
+        decodeConfig.blockRowCount, elapsedMilliseconds(validationStart, validationFinished),
+        elapsedMilliseconds(validationFinished, openFinished), elapsedMilliseconds(openFinished, metadataFinished),
+        elapsedMilliseconds(scratchAllocationStart, scratchAllocationFinished), decodeMilliseconds,
+        scanConsumerMilliseconds, std::max(0.0, decodeMilliseconds - scanConsumerMilliseconds),
+        elapsedMilliseconds(allocationStart, allocationFinished), encodeMilliseconds, encodeConsumerMilliseconds,
+        elapsedMilliseconds(totalStart, totalFinished));
     return environment;
 }
 } // namespace nr::load

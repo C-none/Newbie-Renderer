@@ -97,38 +97,38 @@ const nr::test::CaseRegistrar pipelineRuntimeDescriptorOwnershipCase{
         nr::test::require(coldOwner.has_value() && *coldOwner == passA,
                           "cold builder should derive its owner from runtime name and node-local pass ordinal");
 
-        auto patchContext = nr::renderer::RenderGraphSkeletonPatchContext{
-            graphBuilder.mutableFrame(),
-            nr::renderer::RenderGraphSkeletonNodePatchLayout{
+        auto buildRepeatedOwner = [&] {
+            auto freshResources = std::map<std::string, nr::renderer::GraphResourceHandle>{};
+            auto freshFrameData = std::map<std::string, nr::renderer::GraphFrameDataHandle>{};
+            auto freshBuilder = nr::renderer::RenderGraphBuilder{};
+            auto const freshNode = freshBuilder.addNode("Ownership.Node", nr::renderer::QueueDomain::Compute);
+            auto freshContext = nr::renderer::NodeBuildContext{
+                .graphBuilder = std::ref(freshBuilder),
+                .nodeHandle = freshNode,
                 .queue = nr::renderer::QueueDomain::Compute,
-                .passCount = 1u,
-            },
-            namedResources,
-            namedFrameData,
-            std::addressof(globals),
-            "Ownership.Node",
+                .runtimeName = "Ownership.Node",
+                .globalResources = std::cref(globals),
+                .frameResources = std::ref(freshResources),
+                .frameDataResources = std::ref(freshFrameData),
+            };
+            auto owner = std::optional<PassBindingHandle>{};
+            auto pass = nr::renderer::ComputePassBuilder{freshContext, "Ownership.Compute.Rebuilt", runtime};
+            static_cast<void>(pass
+                                  .prepare([&](const nr::renderer::PassPrepareContext &, PassBindingHandle binding) {
+                                      owner = binding;
+                                  })
+                                  .record([](const nr::renderer::ComputePassRecordContext &) {})
+                                  .build());
+            freshBuilder.frame().passes.front().prepare(nr::renderer::PassPrepareContext{});
+            return owner;
         };
-        auto patchOwner = std::optional<PassBindingHandle>{};
-        auto patchPass = nr::renderer::ComputePassPatchBuilder{patchContext, 0u, "Ownership.Compute.Patched", runtime};
-        patchPass
-            .prepare([&](const nr::renderer::PassPrepareContext &, PassBindingHandle owner) { patchOwner = owner; })
-            .record([](const nr::renderer::ComputePassRecordContext &) {})
-            .patch();
-        graphBuilder.frame().passes.front().prepare(nr::renderer::PassPrepareContext{});
-        nr::test::require(patchOwner.has_value() && *patchOwner == passA,
-                          "skeleton patch should reuse the cold pass owner without allocating another identity");
 
-        auto repeatedPatchOwner = std::optional<PassBindingHandle>{};
-        auto repeatedPatchPass =
-            nr::renderer::ComputePassPatchBuilder{patchContext, 0u, "Ownership.Compute.RepeatedPatch", runtime};
-        repeatedPatchPass
-            .prepare(
-                [&](const nr::renderer::PassPrepareContext &, PassBindingHandle owner) { repeatedPatchOwner = owner; })
-            .record([](const nr::renderer::ComputePassRecordContext &) {})
-            .patch();
-        graphBuilder.frame().passes.front().prepare(nr::renderer::PassPrepareContext{});
-        nr::test::require(repeatedPatchOwner.has_value() && *repeatedPatchOwner == passA,
-                          "repeated skeleton patching should preserve the existing pass owner");
+        auto rebuiltOwner = buildRepeatedOwner();
+        nr::test::require(rebuiltOwner.has_value() && *rebuiltOwner == passA,
+                          "a repeated ordinary build should reuse the stable pass owner");
+        auto repeatedOwner = buildRepeatedOwner();
+        nr::test::require(repeatedOwner.has_value() && *repeatedOwner == passA,
+                          "each ordinary rebuild should derive the existing pass owner from its ordinal");
 
         device.waitIdle();
     }};

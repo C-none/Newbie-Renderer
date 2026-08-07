@@ -30,7 +30,7 @@ constexpr auto kDefaultViewCompatibleImageUsage =
     }
     catch (const vk::SystemError &error)
     {
-        nrInfo<LogLevel::error>(std::format("Failed to set Vulkan debug name '{}': {}", debugName, error.what()));
+        nrLog<LogLevel::warning>("Failed to set Vulkan debug name '{}': {}", debugName, error.what());
         nrAssert(false, "Failed to set a Vulkan debug object name.");
     }
 }
@@ -193,8 +193,8 @@ void Buffer::writeMappedAndFlush(const void *data, std::size_t dataSize, vk::Dev
 
     auto const endOffset = hostOffset + dataSize;
     nrAssert(static_cast<vk::DeviceSize>(endOffset) <= size_,
-             std::format("Buffer::writeMappedAndFlush out of bounds: offset={}, dataSize={}, bufferSize={}", offset,
-                         dataSize, static_cast<std::uint64_t>(size_)));
+             "Buffer::writeMappedAndFlush out of bounds: offset={}, dataSize={}, bufferSize={}", offset, dataSize,
+             static_cast<std::uint64_t>(size_));
     auto *mappedData = mapped();
     nrAssert(mappedData != nullptr, "Buffer::writeMappedAndFlush requires a mapped buffer.");
     std::memcpy(static_cast<std::byte *>(mappedData) + hostOffset, data, dataSize);

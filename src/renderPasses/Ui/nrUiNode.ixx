@@ -30,16 +30,7 @@ class UiNode final : public Node
     void initialize(NodeInitContext &context) override;
 
     void finalizeInitialization() override;
-    [[nodiscard]] bool supportsRenderGraphSkeleton() const noexcept override
-    {
-        return true;
-    }
-    [[nodiscard]] std::optional<StructuralSnapshot> structuralSnapshot(
-        const NodeFrameParameters &frameParameters) const override;
     void build(NodeBuildContext &context, const NodeFrameParameters &frameParameters) override;
-    bool materializeRenderGraphSkeleton(nr::renderer::RenderGraphSkeletonPatchContext &context,
-                                        const NodeFrameParameters &frameParameters,
-                                        const StructuralSnapshot &snapshot) override;
     void shutdown(NodeShutdownContext &context) override;
 
   private:

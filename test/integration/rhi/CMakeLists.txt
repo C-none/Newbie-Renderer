@@ -4,6 +4,12 @@ nr_add_contract_test(nr_rhi_device_capability_contract_test nr_rhi_device_capabi
     dependency_graphics
 )
 
+nr_add_contract_test(nr_rhi_pipeline_binary_contract_test nr_rhi_pipeline_binary_contract_test.cpp "gpu;window;integration;rhi;rt;shader;slow;requires-unsandboxed"
+    nrrhi
+    utils
+    dependency_graphics
+)
+
 nr_add_contract_test(nr_rhi_upload_readback_buffer_roundtrip_test nr_rhi_upload_readback_buffer_roundtrip_test.cpp "gpu;window;integration;rhi;upload;readback"
     nrrhi
     utils

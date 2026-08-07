@@ -650,7 +650,7 @@ void UiSystem::requireActiveFrame(std::string_view operation) const
         return;
     }
 
-    nrAssert(false, std::format("UiSystem::{} requires an active UI frame.", operation));
+    nrAssert(false, "UiSystem::{} requires an active UI frame.", operation);
 }
 
 bool UiSystem::beginSection(std::string_view id, std::string_view title, bool defaultOpen)

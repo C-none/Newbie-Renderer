@@ -163,8 +163,8 @@ void Scene::recordBudgetedUpload(UploadBudgetState &budget, std::size_t bytesUpl
 
 [[nodiscard]] std::uint32_t Scene::checkedDeviceSizeToUint32(vk::DeviceSize value, std::string_view label)
 {
-    nrAssert(value <= std::numeric_limits<std::uint32_t>::max(),
-             std::format("{} value {} exceeds uint32_t range.", label, value));
+    nrAssert(value <= std::numeric_limits<std::uint32_t>::max(), "{} value {} exceeds uint32_t range.", label,
+             value);
     return static_cast<std::uint32_t>(value);
 }
 
@@ -650,8 +650,8 @@ void Scene::reapRetiredGpuVersions()
         break;
     }
 
-    nrAssert(false, std::format("Unsupported vk::Format '{}' for Scene texture byte-size calculation.",
-                                static_cast<std::uint32_t>(format)));
+    nrAssert(false, "Unsupported vk::Format '{}' for Scene texture byte-size calculation.",
+             static_cast<std::uint32_t>(format));
     return 4;
 }
 

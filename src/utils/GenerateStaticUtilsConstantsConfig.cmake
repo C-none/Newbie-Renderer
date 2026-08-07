@@ -159,6 +159,14 @@ string(REPLACE "$<CONFIG>" "${NR_BUILD_CONFIG}" nr_shader_cache_dir "${nr_shader
 file(TO_CMAKE_PATH "${nr_shader_cache_dir}" nr_shader_cache_dir)
 nr_escape_cpp_string("${nr_shader_cache_dir}" nr_shader_cache_dir)
 
+nr_read_cache_entry("NR_PSO_CACHE_DIR" nr_pso_cache_dir)
+if(nr_pso_cache_dir STREQUAL "")
+    set(nr_pso_cache_dir "${NR_BINARY_DIR}/pso_cache/${NR_BUILD_CONFIG}")
+endif()
+string(REPLACE "$<CONFIG>" "${NR_BUILD_CONFIG}" nr_pso_cache_dir "${nr_pso_cache_dir}")
+file(TO_CMAKE_PATH "${nr_pso_cache_dir}" nr_pso_cache_dir)
+nr_escape_cpp_string("${nr_pso_cache_dir}" nr_pso_cache_dir)
+
 nr_read_cache_entry("NR_SHADER_ROOT_DIR" nr_shader_root_dir)
 if(nr_shader_root_dir STREQUAL "")
     set(nr_shader_root_dir "${NR_SOURCE_DIR}/shader")
@@ -179,6 +187,7 @@ set(content "#pragma once
 #define NR_GLOBAL_LOG_LEVEL ${nr_global_log_level}
 #define NR_PROJECT_ROOT \"${nr_project_root_dir}\"
 #define NR_SHADER_CACHE_ROOT \"${nr_shader_cache_dir}\"
+#define NR_PSO_CACHE_ROOT \"${nr_pso_cache_dir}\"
 #define NR_SHADER_ROOT \"${nr_shader_root_dir}\"
 #define NR_SHADER_OPTIMIZATION_LEVEL ${nr_shader_optimization_level}
 #define NR_SHADER_DEBUG_INFO_LEVEL ${nr_shader_debug_info_level}

@@ -693,7 +693,7 @@ class OfflineLuaHost::Impl
         std::erase(sanitized, '\n');
         ++logCallsThisResume_;
         logBytesThisResume_ += text->size();
-        nr::nrLog(nr::LogLevel::info, "LUA", sanitized);
+        nr::nrLog<nr::LogLevel::info, "LUA">("{}", sanitized);
         return HostCallResult::success();
     }
 

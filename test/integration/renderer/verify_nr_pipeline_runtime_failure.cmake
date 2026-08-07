@@ -19,4 +19,3 @@ require_pipeline_runtime_failure("stale-handle" "rejected a stale pass-binding h
 require_pipeline_runtime_failure("foreign-handle" "owned by another runtime")
 require_pipeline_runtime_failure("missing-runtime" "requires a valid PipelineRuntime shared pointer")
 require_pipeline_runtime_failure("cold-empty-prepare" "ComputePassBuilder::prepare requires a callback")
-require_pipeline_runtime_failure("patch-empty-prepare" "ComputePassPatchBuilder::prepare requires a callback")

@@ -107,7 +107,7 @@ void applyHdrMetadataIfNeeded(const vk::raii::Device &device, vk::SwapchainKHR s
     }
     catch (const vk::SystemError &error)
     {
-        nrInfo<LogLevel::error>(std::format("SwapChain::create failed to set HDR10 metadata: {}", error.what()));
+        nrLog<LogLevel::warning>("SwapChain::create failed to set HDR10 metadata: {}", error.what());
         nrAssert(false, "SwapChain::create failed to set HDR10 metadata.");
     }
 }
@@ -173,9 +173,10 @@ namespace nr::rhi
         return *selectedFormat;
     }
 
-    nrAssert(false, std::format("chooseSwapchainSurfaceFormat found none of the supported scRGB / HDR10 ST2084 / SDR "
-                                "sRGB format-color-space pairs. Available surface formats:\n{}",
-                                detail::formatSurfaceFormatList(formats)));
+    nrAssert(false,
+             "chooseSwapchainSurfaceFormat found none of the supported scRGB / HDR10 ST2084 / SDR "
+             "sRGB format-color-space pairs. Available surface formats:\n{}",
+             detail::formatSurfaceFormatList(formats));
     return formats.front();
 }
 
@@ -208,11 +209,11 @@ AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore &imageAvaila
         auto recreateResult = detail::swapchainRecreateResultFrom(error);
         if (!recreateResult.has_value())
         {
-            nrAssert(false, std::format("SwapChain::acquireNextImage failed: {}", error.what()));
+            nrAssert(false, "SwapChain::acquireNextImage failed: {}", error.what());
             return AcquireResult{.result = vk::Result::eErrorOutOfDateKHR};
         }
-        nrInfo<LogLevel::warning>(
-            std::format("SwapChain::acquireNextImage returned {}: {}", vk::to_string(*recreateResult), error.what()));
+        nrLog<LogLevel::warning>("SwapChain::acquireNextImage returned {}: {}", vk::to_string(*recreateResult),
+                                 error.what());
         return AcquireResult{
             .result = *recreateResult,
         };
@@ -225,8 +226,8 @@ PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint3
                                  std::optional<std::uint64_t> frameBoundaryFrameID) const
 {
     nrAssert(imageIndex < swapChainImages.size(),
-             std::format("SwapChain::present image index {} is out of range for {} swapchain images.", imageIndex,
-                         swapChainImages.size()));
+             "SwapChain::present image index {} is out of range for {} swapchain images.", imageIndex,
+             swapChainImages.size());
 
     vk::PresentInfoKHR presentInfo{};
     presentInfo.waitSemaphoreCount = 1;
@@ -266,11 +267,10 @@ PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint3
         auto recreateResult = detail::swapchainRecreateResultFrom(error);
         if (!recreateResult.has_value())
         {
-            nrAssert(false, std::format("SwapChain::present failed: {}", error.what()));
+            nrAssert(false, "SwapChain::present failed: {}", error.what());
             return PresentResult{.result = vk::Result::eErrorOutOfDateKHR};
         }
-        nrInfo<LogLevel::warning>(
-            std::format("SwapChain::present returned {}: {}", vk::to_string(*recreateResult), error.what()));
+        nrLog<LogLevel::warning>("SwapChain::present returned {}: {}", vk::to_string(*recreateResult), error.what());
         return PresentResult{.result = *recreateResult};
     }
 }
@@ -296,7 +296,7 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
 
     if (!detail::hasHdrSurfaceFormat(surfaceFormats))
     {
-        nrInfo<LogLevel::warning>("SwapChain::create did not receive any HDR10/scRGB surface format/color-space pairs "
+        nrLog<LogLevel::warning>("SwapChain::create did not receive any HDR10/scRGB surface format/color-space pairs "
                                   "from Vulkan WSI; falling back to SDR.");
     }
 
@@ -304,8 +304,8 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
 
     auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
     nrAssert((config.imageUsage & capabilities.supportedUsageFlags) == config.imageUsage,
-             std::format("SwapChain::create image usage is unsupported. requested={} supported={}.",
-                         vk::to_string(config.imageUsage), vk::to_string(capabilities.supportedUsageFlags)));
+             "SwapChain::create image usage is unsupported. requested={} supported={}.",
+             vk::to_string(config.imageUsage), vk::to_string(capabilities.supportedUsageFlags));
     auto presentModes = physicalDevice.getSurfacePresentModesKHR(surface);
 
     auto maxImageCount = capabilities.maxImageCount == 0 ? config.preferredImageCount : capabilities.maxImageCount;
@@ -326,8 +326,8 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
     auto choosePresentMode = [&]() {
         auto requested = std::ranges::find(presentModes, config.presentMode);
         nrAssert(requested != presentModes.end(),
-                 std::format("SwapChain::create requires present mode '{}'; refusing to enable a v-sync fallback.",
-                             vk::to_string(config.presentMode)));
+                 "SwapChain::create requires present mode '{}'; refusing to enable a v-sync fallback.",
+                 vk::to_string(config.presentMode));
         return config.presentMode;
     };
 
@@ -389,12 +389,11 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
     result.extent = extent;
     detail::applyHdrMetadataIfNeeded(device, *result.swapChain, selectedFormat, config);
 
-    nrInfo(std::format("Swapchain created: requestedPresentMode={}, selectedPresentMode={}, format={}, colorSpace={}, "
-                       "hdrOutput={}, fullScreenExclusivePolicy={}, imageCount={}.",
-                       vk::to_string(config.presentMode), vk::to_string(selectedPresentMode),
-                       vk::to_string(selectedFormat.format), vk::to_string(selectedFormat.colorSpace),
-                       isHdrSwapchainColorSpace(selectedFormat.colorSpace) ? "true" : "false",
-                       fullScreenExclusivePolicy, result.swapChainImages.size()));
+    nrLog<LogLevel::info>("Swapchain created: requestedPresentMode={}, selectedPresentMode={}, format={}, colorSpace={}, "
+            "hdrOutput={}, fullScreenExclusivePolicy={}, imageCount={}.",
+            vk::to_string(config.presentMode), vk::to_string(selectedPresentMode), vk::to_string(selectedFormat.format),
+            vk::to_string(selectedFormat.colorSpace), isHdrSwapchainColorSpace(selectedFormat.colorSpace) ? "true" : "false",
+            fullScreenExclusivePolicy, result.swapChainImages.size());
 
     vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, selectedFormat.format, {},
                                                 {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
@@ -431,8 +430,8 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
             }
             catch (const vk::SystemError &error)
             {
-                nrInfo<LogLevel::error>(std::format(
-                    "SwapChain::create failed to set debug names for swapchain image {}: {}", index, error.what()));
+                nrLog<LogLevel::warning>("SwapChain::create failed to set debug names for swapchain image {}: {}", index,
+                                        error.what());
                 nrAssert(false, "SwapChain::create failed to set Vulkan debug object names.");
             }
         });
@@ -527,8 +526,8 @@ void PresentationContext::waitForPendingPresent(std::uint32_t imageIndex)
     auto const waitResult =
         device_->get().waitForFences(*presentFence, vk::True, std::numeric_limits<std::uint64_t>::max());
     nrAssert(waitResult == vk::Result::eSuccess,
-             std::format("PresentationContext failed waiting for present completion fence for image {}: {}",
-                         imageIndex, vk::to_string(waitResult)));
+             "PresentationContext failed waiting for present completion fence for image {}: {}", imageIndex,
+             vk::to_string(waitResult));
     device_->get().resetFences(*presentFence);
     currentGeneration.presentPending[imageIndex] = false;
 }
@@ -621,14 +620,14 @@ AcquireResult PresentationContext::acquireNextImage(std::uint32_t frameSlot, std
     if (needsSwapchainRecreate(acquireResult.result) && acquireResult.result != vk::Result::eSuboptimalKHR)
     {
         acquirePool_.returnSlot(slot);
-        nrInfo<LogLevel::warning>(std::format("PresentationContext::acquireNextImage got {}; caller must recreate.",
-                                              vk::to_string(acquireResult.result)));
+        nrLog<LogLevel::warning>("PresentationContext::acquireNextImage got {}; caller must recreate.",
+                                 vk::to_string(acquireResult.result));
         return acquireResult;
     }
 
     nrAssert(acquireResult.result == vk::Result::eSuccess || acquireResult.result == vk::Result::eSuboptimalKHR,
-             std::format("PresentationContext::acquireNextImage unexpected acquire result: {}",
-                         vk::to_string(acquireResult.result)));
+             "PresentationContext::acquireNextImage unexpected acquire result: {}",
+             vk::to_string(acquireResult.result));
     waitForPendingPresent(acquireResult.imageIndex);
     borrowedAcquireSlotByFrame_[frameSlot] = slot;
     return acquireResult;
@@ -689,10 +688,9 @@ PresentResult PresentationContext::present(const QueueManager &queueManager,
 {
     nrAssert(activeSwapchainImageIndex_.has_value(),
              "PresentationContext::present requires a valid acquired swapchain image.");
-    nrAssert(
-        queueManager.compute().queueFamilyIndex() == presentQueueFamily_,
-        std::format("PresentationContext::present compute-present policy expected compute queue family {}, but got {}.",
-                    presentQueueFamily_, queueManager.compute().queueFamilyIndex()));
+    nrAssert(queueManager.compute().queueFamilyIndex() == presentQueueFamily_,
+             "PresentationContext::present compute-present policy expected compute queue family {}, but got {}.",
+             presentQueueFamily_, queueManager.compute().queueFamilyIndex());
     auto const imageIndex = *activeSwapchainImageIndex_;
     auto &currentGeneration = generation();
     nrAssert(!currentGeneration.presentPending[imageIndex],
@@ -740,7 +738,7 @@ vk::Image PresentationContext::swapchainImage(std::uint32_t imageIndex) const
 {
     auto const &swapChain = generation().swapChain;
     nrAssert(imageIndex < swapChain.swapChainImages.size(),
-             std::format("PresentationContext::swapchainImage index out of range: {}", imageIndex));
+             "PresentationContext::swapchainImage index out of range: {}", imageIndex);
     return swapChain.swapChainImages[imageIndex];
 }
 
@@ -748,7 +746,7 @@ vk::ImageView PresentationContext::swapchainImageView(std::uint32_t imageIndex) 
 {
     auto const &swapChain = generation().swapChain;
     nrAssert(imageIndex < swapChain.imageViews.size(),
-             std::format("PresentationContext::swapchainImageView index out of range: {}", imageIndex));
+             "PresentationContext::swapchainImageView index out of range: {}", imageIndex);
     return *swapChain.imageViews[imageIndex];
 }
 
@@ -935,12 +933,11 @@ void PresentationContext::acquireFullScreenExclusiveIfNeeded()
     {
         generation().swapChain.swapChain.acquireFullScreenExclusiveModeEXT();
         fullScreenExclusiveAcquired_ = true;
-        nrInfo("VK_EXT_full_screen_exclusive acquired application-controlled exclusive mode.");
+        nrLog<LogLevel::info>("VK_EXT_full_screen_exclusive acquired application-controlled exclusive mode.");
     }
     catch (const vk::SystemError &error)
     {
-        nrInfo<LogLevel::error>(
-            std::format("PresentationContext failed to acquire full-screen exclusive mode: {}", error.what()));
+        nrLog<LogLevel::warning>("PresentationContext failed to acquire full-screen exclusive mode: {}", error.what());
         nrAssert(false, "PresentationContext failed to acquire VK_EXT_full_screen_exclusive mode.");
     }
 }
@@ -961,13 +958,11 @@ void PresentationContext::releaseFullScreenExclusiveIfNeeded() noexcept
     {
         if (detail::isVulkanResult<vk::Result::eErrorFullScreenExclusiveModeLostEXT>(error))
         {
-            nrInfo<LogLevel::warning>(
-                std::format("Full-screen exclusive mode was already lost before release: {}", error.what()));
+            nrLog<LogLevel::warning>("Full-screen exclusive mode was already lost before release: {}", error.what());
             return;
         }
 
-        nrInfo<LogLevel::error>(
-            std::format("PresentationContext failed to release full-screen exclusive mode: {}", error.what()));
+        nrLog<LogLevel::warning>("PresentationContext failed to release full-screen exclusive mode: {}", error.what());
         nrAssert(false, "PresentationContext failed to release VK_EXT_full_screen_exclusive mode.");
     }
 }

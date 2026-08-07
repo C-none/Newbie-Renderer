@@ -37,6 +37,8 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
                           "path-tracing shader invocation reorder extension should be enabled");
         nr::test::require(device.hasEnabledDeviceExtension(vk::KHRPipelineLibraryExtensionName),
                           "pipeline library device extension should be enabled for ray tracing");
+        nr::test::require(device.hasEnabledDeviceExtension(vk::KHRPipelineBinaryExtensionName),
+                          "pipeline binary device extension should be enabled");
         nr::test::require(device.hasEnabledDeviceExtension(vk::EXTMemoryBudgetExtensionName),
                           "memory budget device extension should be enabled for VMA");
         nr::test::require(device.hasEnabledDeviceExtension(vk::KHRMaintenance8ExtensionName),

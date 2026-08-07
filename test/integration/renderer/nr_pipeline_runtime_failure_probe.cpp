@@ -100,36 +100,6 @@ void probeColdEmptyPrepare()
     });
 }
 
-void probePatchEmptyPrepare()
-{
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_pipeline_runtime_failure_probe.patch-empty-prepare", "NewbieRenderer");
-    withBuildContext(initializedRuntime(device),
-                     [](nr::renderer::RenderGraphBuilder &graphBuilder, nr::renderer::NodeBuildContext &buildContext,
-                        nr::renderer::FrameGlobalResources &globals, auto &namedResources, auto &namedFrameData,
-                        std::shared_ptr<Runtime> runtime) {
-                         static_cast<void>(buildContext.addPass({}, "FailureProbe.Placeholder",
-                                                                [](const nr::renderer::PassRecordContext &) {}));
-                         auto patchContext = nr::renderer::RenderGraphSkeletonPatchContext{
-                             graphBuilder.mutableFrame(),
-                             nr::renderer::RenderGraphSkeletonNodePatchLayout{
-                                 .queue = nr::renderer::QueueDomain::Compute,
-                                 .passCount = 1u,
-                             },
-                             namedResources,
-                             namedFrameData,
-                             std::addressof(globals),
-                             "FailureProbe.Node",
-                         };
-                         auto patch = nr::renderer::ComputePassPatchBuilder{
-                             patchContext,
-                             0u,
-                             "FailureProbe.PatchEmptyPrepare",
-                             std::move(runtime),
-                         };
-                         patch.prepare({});
-                     });
-}
 } // namespace
 
 int main(int argc, char **argv)
@@ -167,12 +137,6 @@ int main(int argc, char **argv)
         probeColdEmptyPrepare();
         return 0;
     }
-    if (scenario == "patch-empty-prepare")
-    {
-        probePatchEmptyPrepare();
-        return 0;
-    }
-
     nr::nrAssert(false, "nr_pipeline_runtime_failure_probe received an unknown scenario.");
     return 0;
 }

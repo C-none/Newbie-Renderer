@@ -383,6 +383,28 @@ template <typename VkHandle> [[nodiscard]] VkHandle fakeVkHandle(std::uintptr_t 
     return builder.build();
 }
 
+[[nodiscard]] nr::renderer::RenderGraphFrameDescription buildRetainedAccelerationStructureFrame(
+    nr::renderer::RetainedAccelerationStructureState &state, std::string_view debugSuffix)
+{
+    auto builder = nr::renderer::RenderGraphBuilder{};
+    auto node = builder.addNode(std::format("Retained.As.Node.{}", debugSuffix), nr::renderer::QueueDomain::Graphics);
+    auto tlas = builder.addResource(nr::renderer::GraphImportedAccelerationStructureDesc{
+        .debugName = std::format("Retained.As.Tlas.{}", debugSuffix),
+        .lifetime = nr::renderer::ResourceLifetime::RendererPersistent,
+        .initialOwnership =
+            state.common.initialized ? state.common.ownership : nr::renderer::ResourceOwnershipDomain::Undefined,
+        .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+        .size = 4096,
+        .usageIntents = {nr::renderer::AccelerationStructureUsageIntent::TraceInput},
+        .retainedState = std::ref(state),
+    });
+    auto uses = std::array{nr::renderer::use::accelerationStructureTraceRead(tlas)};
+    static_cast<void>(builder.addPass(std::format("Retained.As.Pass.{}", debugSuffix), node, uses,
+                                      [](const nr::renderer::PassRecordContext &) {}, nullptr, false,
+                                      vk::PipelineStageFlagBits2::eRayTracingShaderKHR));
+    return builder.build();
+}
+
 template <typename TBaseFrameBuilder, typename TVariantFrameBuilder>
 void requireCompileCacheMissForStructuralChange(std::string_view label, TBaseFrameBuilder baseFrameBuilder,
                                                 TVariantFrameBuilder variantFrameBuilder)
@@ -1615,6 +1637,9 @@ const nr::test::CaseRegistrar compileCacheCanonicalUseAndTimelineCase{
         nr::test::requireEqual(hitStats.missCount, std::uint64_t{1});
         nr::test::requireEqual(compiled.submitBatches.front().passes.front().resourceUses.size(), std::size_t{1});
         nr::test::require(compiled.resources.front().retainedBufferState.has_value());
+        nr::test::require(std::addressof(compiled.resources.front().retainedBufferState->get()) ==
+                              std::addressof(currentState),
+                          "cache hits must retain the current buffer state reference");
         nr::test::requireEqual(compiled.resources.front().retainedBufferState->get().common.lastSubmissionTimelineValue,
                                std::uint64_t{29},
                                "cache hits should patch the current retained timeline source without keying it");
@@ -1624,6 +1649,41 @@ const nr::test::CaseRegistrar compileCacheCanonicalUseAndTimelineCase{
         auto markerStats = cache.statistics();
         nr::test::requireEqual(markerStats.hitCount, std::uint64_t{1});
         nr::test::requireEqual(markerStats.missCount, std::uint64_t{2});
+    }};
+
+const nr::test::CaseRegistrar compileCachePatchesRetainedAccelerationStructureStateCase{
+    "render graph compile cache patches the current retained acceleration-structure state", [] {
+        auto makeState = [] {
+            return nr::renderer::RetainedAccelerationStructureState{
+                .common = nr::renderer::RetainedExternalResourceState{
+                    .initialized = true,
+                    .ownership = nr::renderer::ResourceOwnershipDomain::Graphics,
+                    .access = nr::renderer::AccessScope{
+                        .stages = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+                        .access = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+                    },
+                },
+            };
+        };
+        auto previousState = makeState();
+        auto currentState = makeState();
+        currentState.common.lastSubmissionTimelineValue = 37u;
+
+        auto cache = nr::renderer::RenderGraphCompileCache{};
+        auto previous = buildRetainedAccelerationStructureFrame(previousState, "previous");
+        static_cast<void>(cache.compileConsumingCached(previous));
+        auto current = buildRetainedAccelerationStructureFrame(currentState, "current");
+        auto compiled = cache.compileConsumingCached(current);
+        auto stats = cache.statistics();
+        nr::test::requireEqual(stats.hitCount, std::uint64_t{1});
+        nr::test::requireEqual(stats.missCount, std::uint64_t{1});
+        nr::test::require(compiled.resources.front().retainedAccelerationStructureState.has_value());
+        nr::test::require(std::addressof(compiled.resources.front().retainedAccelerationStructureState->get()) ==
+                              std::addressof(currentState),
+                          "cache hits must retain the current acceleration-structure state reference");
+        nr::test::requireEqual(
+            compiled.resources.front().retainedAccelerationStructureState->get().common.lastSubmissionTimelineValue,
+            std::uint64_t{37});
     }};
 
 const nr::test::CaseRegistrar compileCacheStructuralMissCase{
@@ -1728,10 +1788,16 @@ const nr::test::CaseRegistrar compileCacheCopyPayloadPatchCase{
         nr::test::requireEqual(hitCopy->region.size, vk::DeviceSize{64});
 
         auto changedRegion = makeCopyFrame("changed", 16);
-        static_cast<void>(cache.compileConsumingCached(changedRegion));
-        auto statsAfterMiss = cache.statistics();
-        nr::test::requireEqual(statsAfterMiss.hitCount, std::uint64_t{1});
-        nr::test::requireEqual(statsAfterMiss.missCount, std::uint64_t{2});
+        auto compiledChangedRegion = cache.compileConsumingCached(changedRegion);
+        auto statsAfterPayloadChange = cache.statistics();
+        nr::test::requireEqual(statsAfterPayloadChange.hitCount, std::uint64_t{2});
+        nr::test::requireEqual(statsAfterPayloadChange.missCount, std::uint64_t{1});
+        auto const &changedPass = compiledChangedRegion.submitBatches.front().passes.front();
+        nr::test::requireEqual(changedPass.debugName, std::string{"Copy.Pass.changed"});
+        nr::test::require(changedPass.copy.has_value(), "cached copy pass should inject the current copy payload");
+        auto const *changedCopy = std::get_if<nr::renderer::CopyBufferToBufferPassDesc>(&*changedPass.copy);
+        nr::test::require(changedCopy != nullptr, "current copy payload should retain buffer-to-buffer type");
+        nr::test::requireEqual(changedCopy->region.srcOffset, vk::DeviceSize{16});
     }};
 
 const nr::test::CaseRegistrar bindlessImageTableCacheCase{

@@ -282,16 +282,12 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
     {
         requestedColorFormat = frameParameters.swapchainFormat;
     }
-    nr::nrAssert(requestedColorFormat == runtime_->colorFormat, [&] {
-        return std::format("NormalBuffer color format changed after pipeline initialization: initialized={}, "
+    nr::nrAssert(requestedColorFormat == runtime_->colorFormat, "NormalBuffer color format changed after pipeline initialization: initialized={}, "
                            "requested={}. Reinstall the graph to rebuild the pipeline.",
                            vk::to_string(runtime_->colorFormat), vk::to_string(requestedColorFormat));
-    });
-    nr::nrAssert(input.depthFormat == runtime_->depthFormat, [&] {
-        return std::format("NormalBuffer depth format changed after pipeline initialization: initialized={}, "
+    nr::nrAssert(input.depthFormat == runtime_->depthFormat, "NormalBuffer depth format changed after pipeline initialization: initialized={}, "
                            "requested={}. Reinstall the graph to rebuild the pipeline.",
                            vk::to_string(runtime_->depthFormat), vk::to_string(input.depthFormat));
-    });
 
     detail::ensureNormalBufferImages(device_->get(), *runtime_, viewportExtent);
 

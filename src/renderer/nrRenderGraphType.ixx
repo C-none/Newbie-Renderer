@@ -425,9 +425,8 @@ struct PassPrepareContext
 
         auto const typedPayload = std::any_cast<Payload>(&payload->get());
         nrAssert(typedPayload != nullptr,
-                 std::format(
-                     "PassPrepareContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
-                     handle.value));
+                 "PassPrepareContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
+                 handle.value);
         return std::cref(*typedPayload);
     }
 
@@ -435,8 +434,8 @@ struct PassPrepareContext
     [[nodiscard]] const std::remove_cvref_t<TPayload> &frameData(GraphFrameDataHandle handle) const
     {
         auto resolved = resolveFrameData<TPayload>(handle);
-        nrAssert(resolved.has_value(),
-                 std::format("PassPrepareContext::frameData failed to resolve frame data handle {}.", handle.value));
+        nrAssert(resolved.has_value(), "PassPrepareContext::frameData failed to resolve frame data handle {}.",
+                 handle.value);
         return resolved->get();
     }
 };
@@ -473,9 +472,8 @@ struct PassRecordContext
 
         auto const typedPayload = std::any_cast<Payload>(&payload->get());
         nrAssert(typedPayload != nullptr,
-                 std::format(
-                     "PassRecordContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
-                     handle.value));
+                 "PassRecordContext::resolveFrameData resolved unexpected payload type for frame data handle {}.",
+                 handle.value);
         return std::cref(*typedPayload);
     }
 
@@ -483,8 +481,8 @@ struct PassRecordContext
     [[nodiscard]] const std::remove_cvref_t<TPayload> &frameData(GraphFrameDataHandle handle) const
     {
         auto resolved = resolveFrameData<TPayload>(handle);
-        nrAssert(resolved.has_value(),
-                 std::format("PassRecordContext::frameData failed to resolve frame data handle {}.", handle.value));
+        nrAssert(resolved.has_value(), "PassRecordContext::frameData failed to resolve frame data handle {}.",
+                 handle.value);
         return resolved->get();
     }
 };

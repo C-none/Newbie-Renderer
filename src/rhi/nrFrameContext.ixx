@@ -153,8 +153,8 @@ class FrameContext
         const auto preparedWorkers = preparedSecondaryWorkers<T>();
         auto &slots = secondarySlots<T>();
         nrAssert(threadId < preparedWorkers,
-                 std::format("FrameContext::secondary {} threadId {} out of prepared range {}", queueRoleName<T>(),
-                             threadId, preparedWorkers));
+                 "FrameContext::secondary {} threadId {} out of prepared range {}", queueRoleName<T>(), threadId,
+                 preparedWorkers);
         nrAssert(slots[threadId].has_value(), secondaryPoolNotPreparedMessage<T>());
         return *slots[threadId];
     }

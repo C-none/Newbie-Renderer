@@ -191,7 +191,7 @@ namespace nr::rhi::detail
     std::error_code ec;
     auto exists = std::filesystem::exists(rootPath, ec);
     auto isDirectory = exists && std::filesystem::is_directory(rootPath, ec);
-    nrAssert(!ec && isDirectory, std::format("Invalid shader root path from CMake: '{}'.", rootPath.generic_string()));
+    nrAssert(!ec && isDirectory, "Invalid shader root path from CMake: '{}'.", rootPath.generic_string());
     return rootPath;
 }
 
@@ -330,17 +330,18 @@ void hashAppendSlangVariantAssignmentValue(std::uint64_t &state, const SlangVari
     {
         if (!isSlangQualifiedIdentifier(name))
         {
-            nrInfo<LogLevel::warning>(std::format(
+            nrLog<LogLevel::warning>(
                 "[ShaderService::compileProgramsByFile] invalid link-time variant name='{}' for module='{}'.", name,
-                moduleName));
+                moduleName);
             return false;
         }
 
         if (!slangVariantAssignmentValueMatchesType(assignment))
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramsByFile] link-time variant value type "
-                                                  "mismatch: module='{}', name='{}', type='{}'.",
-                                                  moduleName, name, assignment.type));
+            nrLog<LogLevel::warning>(
+                "[ShaderService::compileProgramsByFile] link-time variant value type mismatch: module='{}', name='{}', "
+                "type='{}'.",
+                moduleName, name, assignment.type);
             return false;
         }
 
@@ -350,11 +351,11 @@ void hashAppendSlangVariantAssignmentValue(std::uint64_t &state, const SlangVari
             if (!isSlangQualifiedIdentifier(assignment.type) || concreteTypeName == nullptr ||
                 concreteTypeName->empty())
             {
-                nrInfo<LogLevel::warning>(
-                    std::format("[ShaderService::compileProgramsByFile] invalid link-time type alias for module='{}': "
-                                "name='{}', interface='{}', concrete='{}'.",
-                                moduleName, name, assignment.type,
-                                concreteTypeName != nullptr ? *concreteTypeName : std::string{}));
+                nrLog<LogLevel::warning>(
+                    "[ShaderService::compileProgramsByFile] invalid link-time type alias for module='{}': "
+                    "name='{}', interface='{}', concrete='{}'.",
+                    moduleName, name, assignment.type,
+                    concreteTypeName != nullptr ? *concreteTypeName : std::string{});
                 return false;
             }
         }
@@ -699,7 +700,7 @@ SlangProgramVariantDesc &SlangProgramVariantDesc::assign(std::string_view name, 
                                                          SlangVariantAssignmentValue value)
 {
     nrAssert(!name.empty(), "SlangProgramVariantDesc::assign requires a non-empty name.");
-    nrAssert(!type.empty(), std::format("SlangProgramVariantDesc assignment '{}' requires a non-empty type.", name));
+    nrAssert(!type.empty(), "SlangProgramVariantDesc assignment '{}' requires a non-empty type.", name);
 
     auto const nameString = std::string{name};
     auto [assignmentIt, inserted] = assignments.try_emplace(nameString, SlangVariantAssignment{
@@ -707,7 +708,7 @@ SlangProgramVariantDesc &SlangProgramVariantDesc::assign(std::string_view name, 
                                                                             .value = std::move(value),
                                                                         });
     (void)assignmentIt;
-    nrAssert(inserted, std::format("SlangProgramVariantDesc assignment '{}' is already defined.", nameString));
+    nrAssert(inserted, "SlangProgramVariantDesc assignment '{}' is already defined.", nameString);
     return *this;
 }
 
@@ -799,8 +800,8 @@ SlangProgramVariantDesc &SlangProgramVariantDesc::assign(std::string_view name, 
             }
             catch (const vk::SystemError &error)
             {
-                nrInfo<LogLevel::error>(std::format("SlangSampler::create failed to set debug name '{}': {}",
-                                                    sampler.debugName_, error.what()));
+                nrLog<LogLevel::warning>("SlangSampler::create failed to set debug name '{}': {}", sampler.debugName_,
+                                        error.what());
                 nrAssert(false, "SlangSampler::create failed to set a Vulkan debug object name.");
             }
         }
@@ -875,7 +876,7 @@ void ShaderService::reloadSession()
 
     ensureGlobalSessionLocked();
     recreateSessionLocked();
-    nrInfo<>(std::format("[ShaderService::reloadSession] rebuilt Slang session generation={}", m_sessionGeneration));
+    nrLog<LogLevel::info>("[ShaderService::reloadSession] rebuilt Slang session generation={}", m_sessionGeneration);
 }
 
 [[nodiscard]] std::uint64_t ShaderService::sessionGeneration() const
@@ -902,7 +903,50 @@ void ShaderService::reloadSession()
 {
     std::scoped_lock lock(m_mutex);
     auto const startedAt = std::chrono::steady_clock::now();
+    using PhaseDuration = std::chrono::duration<double, std::milli>;
+    struct PhaseTimings
+    {
+        PhaseDuration configure{};
+        PhaseDuration resolveCache{};
+        PhaseDuration moduleLoad{};
+        PhaseDuration entryPointLoad{};
+        PhaseDuration variantModule{};
+        PhaseDuration compose{};
+        PhaseDuration link{};
+        PhaseDuration reflection{};
+        PhaseDuration entryHashPrepare{};
+        PhaseDuration backendWall{};
+        PhaseDuration backendCacheReadWorkSum{};
+        PhaseDuration backendCacheReadWorkMax{};
+        PhaseDuration backendCodegenWorkSum{};
+        PhaseDuration backendCodegenWorkMax{};
+        PhaseDuration backendArtifactWorkSum{};
+        PhaseDuration backendArtifactWorkMax{};
+        PhaseDuration publish{};
+    };
+    struct ScopedPhaseTimer
+    {
+        PhaseDuration &elapsed;
+        std::chrono::steady_clock::time_point startedAt = std::chrono::steady_clock::now();
+        bool active = true;
+
+        void stop() noexcept
+        {
+            if (!active)
+            {
+                return;
+            }
+            elapsed += std::chrono::duration_cast<PhaseDuration>(std::chrono::steady_clock::now() - startedAt);
+            active = false;
+        }
+
+        ~ScopedPhaseTimer() noexcept { stop(); }
+    };
+
+    auto phaseTimings = PhaseTimings{};
+    auto configureTimer = ScopedPhaseTimer{phaseTimings.configure};
     ensureConfiguredLocked();
+    configureTimer.stop();
     auto programs = std::vector<SlangProgram>(requests.size());
     if (requests.empty())
     {
@@ -935,15 +979,18 @@ void ShaderService::reloadSession()
     preparedPrograms.reserve(requests.size());
     auto preparedIndexByMemoryKey = std::map<std::string, std::size_t>{};
     auto memoryHitCount = std::size_t{0};
+    auto variantRequestCount = std::size_t{0};
 
     std::ranges::for_each(std::views::iota(std::size_t{0}, requests.size()), [&](std::size_t requestIndex) {
         auto const &request = requests[requestIndex];
+        auto resolveCacheTimer = ScopedPhaseTimer{phaseTimings.resolveCache};
+        variantRequestCount += request.variant.empty() ? 0u : 1u;
         auto modulePath = detail::normalizeRequestModulePath(request.sourcePath);
         if (!modulePath.has_value())
         {
-            nrInfo<LogLevel::warning>(std::format("[ShaderService::compileProgramsByFile] invalid sourcePath='{}'. "
-                                                  "Expected a shader-root-relative module path.",
-                                                  request.sourcePath.generic_string()));
+            nrLog<LogLevel::warning>("[ShaderService::compileProgramsByFile] invalid sourcePath='{}'. "
+                                      "Expected a shader-root-relative module path.",
+                                      request.sourcePath.generic_string());
             return;
         }
 
@@ -969,12 +1016,16 @@ void ShaderService::reloadSession()
             return;
         }
 
+        resolveCacheTimer.stop();
+        auto moduleLoadTimer = ScopedPhaseTimer{phaseTimings.moduleLoad};
         auto rootModule = loadOrCompileModuleLocked(moduleName);
+        moduleLoadTimer.stop();
         if (!rootModule)
         {
             return;
         }
 
+        auto entryPointLoadTimer = ScopedPhaseTimer{phaseTimings.entryPointLoad};
         auto definedEntryPointCount = SlangInt32{0};
         try
         {
@@ -982,17 +1033,17 @@ void ShaderService::reloadSession()
         }
         catch (...)
         {
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::warning>(
                 "[ShaderService::compileProgramsByFile] Slang threw while enumerating entrypoints for module='{}'.",
-                moduleName));
+                moduleName);
             nrAssert(false, "Slang entrypoint enumeration threw an internal exception.");
             return;
         }
         if (definedEntryPointCount != 1)
         {
-            nrInfo<LogLevel::error>(std::format("[ShaderService::compileProgramsByFile] module='{}' defines {} "
-                                                "entrypoints; every shader file must define exactly one.",
-                                                moduleName, definedEntryPointCount));
+            nrLog<LogLevel::error>("[ShaderService::compileProgramsByFile] module='{}' defines {} "
+                                    "entrypoints; every shader file must define exactly one.",
+                                    moduleName, definedEntryPointCount);
             return;
         }
 
@@ -1004,25 +1055,27 @@ void ShaderService::reloadSession()
         }
         catch (...)
         {
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::warning>(
                 "[ShaderService::compileProgramsByFile] Slang threw while loading the sole entrypoint for module='{}'.",
-                moduleName));
+                moduleName);
             nrAssert(false, "Slang entrypoint loading threw an internal exception.");
             return;
         }
         if (!detail::slangSucceeded(entryPointResult) || !entryPointComponent)
         {
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::error>(
                 "[ShaderService::compileProgramsByFile] unable to load the only entrypoint for module='{}'.",
-                moduleName));
+                moduleName);
             return;
         }
+        entryPointLoadTimer.stop();
 
         auto components = std::vector<slang::IComponentType *>{rootModule.get(), entryPointComponent.get()};
         Slang::ComPtr<slang::IModule> variantModule;
         auto variantLogLabel = detail::describeSlangVariantForLog(request.variant);
         if (!request.variant.empty())
         {
+            auto variantModuleTimer = ScopedPhaseTimer{phaseTimings.variantModule};
             auto variantSource = request.variant.sourceText();
             auto variantLabel = detail::compactSlangVariantDebugLabel(request.variant);
             auto syntheticModuleName = detail::makeSlangVariantSyntheticModuleName(variantLabel, variantHashHex);
@@ -1036,17 +1089,17 @@ void ShaderService::reloadSession()
             catch (...)
             {
                 emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(exception-path)");
-                nrInfo<LogLevel::error>(std::format("[ShaderService::compileProgramsByFile] Slang threw while loading "
-                                                    "variant for module='{}', variant='{}'.",
-                                                    moduleName, variantLogLabel));
+                nrLog<LogLevel::warning>("[ShaderService::compileProgramsByFile] Slang threw while loading "
+                                        "variant for module='{}', variant='{}'.",
+                                        moduleName, variantLogLabel);
                 nrAssert(false, "Slang variant module loading threw an internal exception.");
             }
             emitDiagnosticsLocked(diagnostics.get(), "loadModuleFromSourceString(variant)");
             if (!variantModule)
             {
-                nrInfo<LogLevel::error>(std::format(
+                nrLog<LogLevel::error>(
                     "[ShaderService::compileProgramsByFile] failed to load variant for module='{}', variant='{}'.",
-                    moduleName, variantLogLabel));
+                    moduleName, variantLogLabel);
                 return;
             }
             components.push_back(variantModule.get());
@@ -1054,6 +1107,7 @@ void ShaderService::reloadSession()
 
         Slang::ComPtr<slang::IComponentType> compositeProgram;
         Slang::ComPtr<slang::IBlob> diagnostics;
+        auto composeTimer = ScopedPhaseTimer{phaseTimings.compose};
         try
         {
             auto composeResult =
@@ -1062,22 +1116,24 @@ void ShaderService::reloadSession()
             emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(single-entry)");
             if (!detail::slangSucceeded(composeResult) || !compositeProgram)
             {
-                nrInfo<LogLevel::error>(std::format(
+                nrLog<LogLevel::warning>(
                     "[ShaderService::compileProgramsByFile] composition failed for module='{}', variant='{}'.",
-                    moduleName, variantLogLabel));
+                    moduleName, variantLogLabel);
                 return;
             }
         }
         catch (...)
         {
             emitDiagnosticsLocked(diagnostics.get(), "createCompositeComponentType(exception-path)");
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::error>(
                 "[ShaderService::compileProgramsByFile] Slang threw while composing module='{}', variant='{}'.",
-                moduleName, variantLogLabel));
+                moduleName, variantLogLabel);
             nrAssert(false, "Slang component composition threw an internal exception.");
         }
+        composeTimer.stop();
 
         Slang::ComPtr<slang::IComponentType> linkedProgram;
+        auto linkTimer = ScopedPhaseTimer{phaseTimings.link};
         diagnostics = nullptr;
         try
         {
@@ -1085,23 +1141,25 @@ void ShaderService::reloadSession()
             emitDiagnosticsLocked(diagnostics.get(), "link(single-entry)");
             if (!detail::slangSucceeded(linkResult) || !linkedProgram)
             {
-                nrInfo<LogLevel::error>(
-                    std::format("[ShaderService::compileProgramsByFile] link failed for module='{}', variant='{}'.",
-                                moduleName, variantLogLabel));
+                nrLog<LogLevel::warning>(
+                    "[ShaderService::compileProgramsByFile] link failed for module='{}', variant='{}'.", moduleName,
+                    variantLogLabel);
                 return;
             }
         }
         catch (...)
         {
             emitDiagnosticsLocked(diagnostics.get(), "link(exception-path)");
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::error>(
                 "[ShaderService::compileProgramsByFile] Slang threw while linking module='{}', variant='{}'.",
-                moduleName, variantLogLabel));
+                moduleName, variantLogLabel);
             nrAssert(false, "Slang component linking threw an internal exception.");
         }
+        linkTimer.stop();
 
         diagnostics = nullptr;
         auto *programLayout = static_cast<slang::ProgramLayout *>(nullptr);
+        auto reflectionTimer = ScopedPhaseTimer{phaseTimings.reflection};
         try
         {
             programLayout = linkedProgram->getLayout(0, diagnostics.writeRef());
@@ -1109,18 +1167,18 @@ void ShaderService::reloadSession()
         catch (...)
         {
             emitDiagnosticsLocked(diagnostics.get(), "getLayout(exception-path)");
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::warning>(
                 "[ShaderService::compileProgramsByFile] Slang threw while reflecting module='{}', variant='{}'.",
-                moduleName, variantLogLabel));
+                moduleName, variantLogLabel);
             nrAssert(false, "Slang program reflection threw an internal exception.");
             return;
         }
         emitDiagnosticsLocked(diagnostics.get(), "getLayout(single-entry)");
         if (!programLayout || programLayout->getEntryPointCount() != 1)
         {
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::error>(
                 "[ShaderService::compileProgramsByFile] linked module='{}' does not expose exactly one entrypoint.",
-                moduleName));
+                moduleName);
             return;
         }
 
@@ -1130,8 +1188,8 @@ void ShaderService::reloadSession()
         auto stage = entryPointLayout ? entryPointLayout->getStage() : SLANG_STAGE_NONE;
         if (entryPointName.empty() || stage == SLANG_STAGE_NONE)
         {
-            nrInfo<LogLevel::error>(std::format(
-                "[ShaderService::compileProgramsByFile] invalid entrypoint reflection for module='{}'.", moduleName));
+            nrLog<LogLevel::error>(
+                "[ShaderService::compileProgramsByFile] invalid entrypoint reflection for module='{}'.", moduleName);
             return;
         }
 
@@ -1143,38 +1201,39 @@ void ShaderService::reloadSession()
             auto bindingType = entryScopeTypeLayout->getBindingRangeType(rangeIndex);
             auto isStageIo =
                 bindingType == slang::BindingType::VaryingInput || bindingType == slang::BindingType::VaryingOutput;
-            nrAssert(
-                isStageIo,
-                std::format("Entry-point descriptor binding is forbidden. entry='{}', rangeIndex={}, bindingType={}",
-                            entryPointName, rangeIndex, static_cast<std::int32_t>(bindingType)));
+            nrAssert(isStageIo,
+                     "Entry-point descriptor binding is forbidden. entry='{}', rangeIndex={}, bindingType={}",
+                     entryPointName, rangeIndex, static_cast<std::int32_t>(bindingType));
         });
+        reflectionTimer.stop();
 
         Slang::ComPtr<slang::IBlob> hashBlob;
+        auto entryHashPrepareTimer = ScopedPhaseTimer{phaseTimings.entryHashPrepare};
         try
         {
             linkedProgram->getEntryPointHash(0, 0, hashBlob.writeRef());
         }
         catch (...)
         {
-            nrInfo<LogLevel::error>(
-                std::format("[ShaderService::compileProgramsByFile] Slang threw while hashing module='{}', entry='{}'.",
-                            moduleName, entryPointName));
+            nrLog<LogLevel::warning>(
+                "[ShaderService::compileProgramsByFile] Slang threw while hashing module='{}', entry='{}'.", moduleName,
+                entryPointName);
             nrAssert(false, "Slang entrypoint hashing threw an internal exception.");
             return;
         }
         if (!hashBlob || hashBlob->getBufferSize() == 0)
         {
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::error>(
                 "[ShaderService::compileProgramsByFile] failed to compute backend cache key for module='{}'.",
-                moduleName));
+                moduleName);
             return;
         }
 
         auto cacheKey = std::vector<std::byte>(hashBlob->getBufferSize());
         std::memcpy(cacheKey.data(), hashBlob->getBufferPointer(), cacheKey.size());
         auto cachePath = m_serviceConfig.persistentSpirvCache
-                             ? detail::makeSpirvCachePath(spirvCacheRootLocked(), cacheKey)
-                             : std::filesystem::path{};
+                              ? detail::makeSpirvCachePath(spirvCacheRootLocked(), cacheKey)
+                              : std::filesystem::path{};
         auto const preparedIndex = preparedPrograms.size();
         preparedPrograms.push_back(PreparedProgram{
             .requestIndices = {requestIndex},
@@ -1190,6 +1249,7 @@ void ShaderService::reloadSession()
             .stage = stage,
         });
         preparedIndexByMemoryKey.emplace(preparedPrograms.back().memoryCacheKey, preparedIndex);
+        entryHashPrepareTimer.stop();
     });
     auto const frontendFinishedAt = std::chrono::steady_clock::now();
 
@@ -1198,6 +1258,9 @@ void ShaderService::reloadSession()
         std::shared_ptr<const std::vector<std::uint32_t>> spirv{};
         bool cacheHit = false;
         bool cacheCorrupt = false;
+        PhaseDuration cacheReadWork{};
+        PhaseDuration codegenWork{};
+        PhaseDuration artifactWork{};
     };
 
     auto leaderByHash = std::map<std::string, std::size_t>{};
@@ -1215,36 +1278,38 @@ void ShaderService::reloadSession()
         auto entryPointName = prepared->entryPointName;
         auto persistentCacheEnabled = m_serviceConfig.persistentSpirvCache;
         futures.emplace(hashHex, m_backendPool->submit([linkedProgram, cachePath = std::move(cachePath),
-                                                        cacheKey = std::move(cacheKey),
-                                                        entryPointName = std::move(entryPointName),
-                                                        persistentCacheEnabled]() mutable -> BackendCompileResult {
-            auto cacheCorrupt = false;
+                                                         cacheKey = std::move(cacheKey),
+                                                         entryPointName = std::move(entryPointName),
+                                                         persistentCacheEnabled]() mutable -> BackendCompileResult {
+            auto result = BackendCompileResult{};
             if (persistentCacheEnabled)
             {
+                auto cacheReadTimer = ScopedPhaseTimer{result.cacheReadWork};
                 auto cached = detail::readSpirvCache(cachePath, cacheKey);
                 if (cached.spirv)
                 {
-                    return BackendCompileResult{
-                        .spirv = std::move(cached.spirv),
-                        .cacheHit = true,
-                    };
+                    result.spirv = std::move(cached.spirv);
+                    result.cacheHit = true;
+                    cacheReadTimer.stop();
+                    return result;
                 }
-                cacheCorrupt = cached.corrupt;
-                if (cacheCorrupt)
+                result.cacheCorrupt = cached.corrupt;
+                if (result.cacheCorrupt)
                 {
                     std::error_code removeError;
                     std::filesystem::remove(cachePath, removeError);
                     if (removeError)
                     {
-                        nrInfo<LogLevel::warning>(
-                            std::format("[ShaderService::backend] failed to remove corrupt SPIR-V cache '{}': {}",
-                                        cachePath.generic_string(), removeError.message()));
+                        nrLog<LogLevel::warning>(
+                            "[ShaderService::backend] failed to remove corrupt SPIR-V cache '{}': {}",
+                            cachePath.generic_string(), removeError.message());
                     }
                 }
             }
 
             Slang::ComPtr<slang::IBlob> codeBlob;
             Slang::ComPtr<slang::IBlob> diagnostics;
+            auto codegenTimer = ScopedPhaseTimer{result.codegenWork};
             try
             {
                 auto compileResult =
@@ -1255,52 +1320,65 @@ void ShaderService::reloadSession()
                                                  diagnostics->getBufferSize()};
                     if (!text.empty())
                     {
-                        nrInfo<LogLevel::warning>(
-                            std::format("[ShaderService::backend] entry='{}' diagnostics:\n{}", entryPointName, text));
+                        nrLog<LogLevel::warning>("[ShaderService::backend] entry='{}' diagnostics:\n{}", entryPointName,
+                                                  text);
                     }
                 }
                 if (!detail::slangSucceeded(compileResult) || !codeBlob)
                 {
-                    return BackendCompileResult{.cacheCorrupt = cacheCorrupt};
+                    codegenTimer.stop();
+                    return result;
                 }
             }
             catch (...)
             {
-                nrInfo<LogLevel::error>(std::format(
-                    "[ShaderService::backend] Slang threw during getEntryPointCode for entry='{}'.", entryPointName));
-                return BackendCompileResult{.cacheCorrupt = cacheCorrupt};
+                nrLog<LogLevel::error>(
+                    "[ShaderService::backend] Slang threw during getEntryPointCode for entry='{}'.", entryPointName);
+                codegenTimer.stop();
+                return result;
             }
+            codegenTimer.stop();
 
+            auto artifactTimer = ScopedPhaseTimer{result.artifactWork};
             auto spirv = detail::copySpirvBlob(*codeBlob);
             if (!spirv)
             {
-                nrInfo<LogLevel::error>(
-                    std::format("[ShaderService::backend] entry='{}' produced invalid SPIR-V.", entryPointName));
-                return BackendCompileResult{.cacheCorrupt = cacheCorrupt};
+                nrLog<LogLevel::error>("[ShaderService::backend] entry='{}' produced invalid SPIR-V.",
+                                        entryPointName);
+                artifactTimer.stop();
+                return result;
             }
             if (persistentCacheEnabled && !detail::writeSpirvCache(cachePath, cacheKey, *spirv))
             {
-                nrInfo<LogLevel::warning>(std::format("[ShaderService::backend] failed to persist SPIR-V cache '{}'.",
-                                                      cachePath.generic_string()));
+                nrLog<LogLevel::warning>("[ShaderService::backend] failed to persist SPIR-V cache '{}'.",
+                                          cachePath.generic_string());
             }
-            return BackendCompileResult{
-                .spirv = std::move(spirv),
-                .cacheCorrupt = cacheCorrupt,
-            };
+            result.spirv = std::move(spirv);
+            artifactTimer.stop();
+            return result;
         }));
     });
 
     auto backendResults = std::map<std::string, BackendCompileResult>{};
     std::ranges::for_each(futures, [&](auto &entry) { backendResults.emplace(entry.first, entry.second.get()); });
     auto const backendFinishedAt = std::chrono::steady_clock::now();
+    phaseTimings.backendWall = std::chrono::duration_cast<PhaseDuration>(backendFinishedAt - frontendFinishedAt);
 
     auto diskHitCount = std::size_t{0};
     auto backendCompileCount = std::size_t{0};
     auto corruptCount = std::size_t{0};
+    auto publishTimer = ScopedPhaseTimer{phaseTimings.publish};
     std::ranges::for_each(backendResults, [&](auto const &entry) {
         diskHitCount += entry.second.cacheHit ? 1u : 0u;
         backendCompileCount += !entry.second.cacheHit && entry.second.spirv ? 1u : 0u;
         corruptCount += entry.second.cacheCorrupt ? 1u : 0u;
+        phaseTimings.backendCacheReadWorkSum += entry.second.cacheReadWork;
+        phaseTimings.backendCacheReadWorkMax =
+            std::max(phaseTimings.backendCacheReadWorkMax, entry.second.cacheReadWork);
+        phaseTimings.backendCodegenWorkSum += entry.second.codegenWork;
+        phaseTimings.backendCodegenWorkMax = std::max(phaseTimings.backendCodegenWorkMax, entry.second.codegenWork);
+        phaseTimings.backendArtifactWorkSum += entry.second.artifactWork;
+        phaseTimings.backendArtifactWorkMax = std::max(phaseTimings.backendArtifactWorkMax, entry.second.artifactWork);
     });
 
     std::ranges::for_each(preparedPrograms, [&](PreparedProgram &prepared) {
@@ -1308,9 +1386,9 @@ void ShaderService::reloadSession()
         auto backend = backendResults.find(hashHex);
         if (backend == backendResults.end() || !backend->second.spirv)
         {
-            nrInfo<LogLevel::error>(std::format(
+            nrLog<LogLevel::error>(
                 "[ShaderService::compileProgramsByFile] backend failed for module='{}', entry='{}', variant='{}'.",
-                prepared.moduleName, prepared.entryPointName, prepared.variantLogLabel));
+                prepared.moduleName, prepared.entryPointName, prepared.variantLogLabel);
             return;
         }
 
@@ -1329,6 +1407,9 @@ void ShaderService::reloadSession()
                               [&](std::size_t requestIndex) { programs[requestIndex] = program; });
         m_linkedProgramCache.insert_or_assign(prepared.memoryCacheKey, std::move(program));
     });
+    auto validProgramCount = std::ranges::count_if(programs, &SlangProgram::valid);
+    auto invalidProgramCount = programs.size() - validProgramCount;
+    publishTimer.stop();
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt);
     auto frontendElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(frontendFinishedAt - startedAt);
@@ -1344,11 +1425,24 @@ void ShaderService::reloadSession()
         .backendElapsed = backendElapsed,
         .elapsed = elapsed,
     };
-    nrInfo<>(std::format("[ShaderService::compileProgramsByFile] requests={}, memoryHits={}, diskHits={}, "
-                         "backendCompiles={}, corruptEntries={}, workers={}, frontendMs={}, backendMs={}, elapsedMs={}",
-                         requests.size(), memoryHitCount, diskHitCount, backendCompileCount, corruptCount,
-                         m_serviceConfig.backendWorkerCount, frontendElapsed.count(), backendElapsed.count(),
-                         elapsed.count()));
+    nrLog<LogLevel::info>("[ShaderService::compileProgramsByFile] requests={}, memoryHits={}, diskHits={}, "
+            "backendCompiles={}, corruptEntries={}, workers={}, frontendMs={}, backendMs={}, elapsedMs={}, "
+            "prepared={}, variantRequests={}, valid={}, invalid={}, phaseMs={{configure={:.3f}, "
+            "resolveCache={:.3f}, moduleLoad={:.3f}, entryPointLoad={:.3f}, variantModule={:.3f}, "
+            "compose={:.3f}, link={:.3f}, reflection={:.3f}, entryHashPrepare={:.3f}, "
+            "backendWall={:.3f}, backendCacheReadWorkSum={:.3f}, backendCacheReadWorkMax={:.3f}, "
+            "backendCodegenWorkSum={:.3f}, backendCodegenWorkMax={:.3f}, "
+            "backendArtifactWorkSum={:.3f}, backendArtifactWorkMax={:.3f}, publish={:.3f}}}",
+            requests.size(), memoryHitCount, diskHitCount, backendCompileCount, corruptCount,
+            m_serviceConfig.backendWorkerCount, frontendElapsed.count(), backendElapsed.count(), elapsed.count(),
+            preparedPrograms.size(), variantRequestCount, validProgramCount, invalidProgramCount,
+            phaseTimings.configure.count(), phaseTimings.resolveCache.count(), phaseTimings.moduleLoad.count(),
+            phaseTimings.entryPointLoad.count(), phaseTimings.variantModule.count(), phaseTimings.compose.count(),
+            phaseTimings.link.count(), phaseTimings.reflection.count(), phaseTimings.entryHashPrepare.count(),
+            phaseTimings.backendWall.count(), phaseTimings.backendCacheReadWorkSum.count(),
+            phaseTimings.backendCacheReadWorkMax.count(), phaseTimings.backendCodegenWorkSum.count(),
+            phaseTimings.backendCodegenWorkMax.count(), phaseTimings.backendArtifactWorkSum.count(),
+            phaseTimings.backendArtifactWorkMax.count(), phaseTimings.publish.count());
     return programs;
 }
 
@@ -1359,8 +1453,8 @@ void ShaderService::enqueueModuleCacheWrite(std::vector<std::byte> bytes, std::f
         m_backendPool->submit([bytes = std::move(bytes), moduleBlobPath = std::move(moduleBlobPath)]() {
             if (detail::writeBytesAtomically(moduleBlobPath, bytes) == detail::AtomicWriteResult::failed)
             {
-                nrInfo<LogLevel::warning>(std::format("[ShaderService::moduleCache] failed to persist '{}'.",
-                                                      moduleBlobPath.generic_string()));
+                nrLog<LogLevel::warning>("[ShaderService::moduleCache] failed to persist '{}'.",
+                                          moduleBlobPath.generic_string());
             }
         });
 }
@@ -1376,7 +1470,7 @@ void ShaderService::ensureGlobalSessionLocked()
         }
         catch (...)
         {
-            nrInfo<nr::LogLevel::error>(
+            nrLog<nr::LogLevel::warning>(
                 "[ShaderService::ensureGlobalSessionLocked] Slang threw an internal exception during "
                 "createGlobalSession. "
                 "Attach a debugger and break on Slang::InternalError to inspect the Message field.");
@@ -1426,16 +1520,15 @@ void ShaderService::invalidateStaleModuleCacheLocked(std::string_view modulePath
         auto removed = std::filesystem::remove(moduleBlobPath, removeError);
         if (removeError)
         {
-            nrInfo<nr::LogLevel::warning>(std::format(
+            nrLog<nr::LogLevel::warning>(
                 "[ShaderService::invalidateStaleModuleCacheLocked] stale cache removal failed: path='{}', error='{}'",
-                moduleBlobPath.generic_string(), removeError.message()));
+                moduleBlobPath.generic_string(), removeError.message());
             return;
         }
         if (removed)
         {
-            nrInfo<>(
-                std::format("[ShaderService::invalidateStaleModuleCacheLocked] removed stale cache blob: path='{}'",
-                            moduleBlobPath.generic_string()));
+            nrLog<LogLevel::info>("[ShaderService::invalidateStaleModuleCacheLocked] removed stale cache blob: path='{}'",
+                    moduleBlobPath.generic_string());
         }
     };
 
@@ -1461,9 +1554,9 @@ void ShaderService::invalidateStaleModuleCacheLocked(std::string_view modulePath
     }
     catch (...)
     {
-        nrInfo<LogLevel::error>(
-            std::format("[ShaderService::invalidateStaleModuleCacheLocked] Slang threw while validating '{}'.",
-                        moduleBlobPath.generic_string()));
+        nrLog<LogLevel::warning>(
+            "[ShaderService::invalidateStaleModuleCacheLocked] Slang threw while validating '{}'.",
+            moduleBlobPath.generic_string());
         nrAssert(false, "Slang module-cache validation threw an internal exception.");
     }
     if (isUpToDate)
@@ -1549,7 +1642,7 @@ void ShaderService::recreateSessionLocked()
     }
     catch (...)
     {
-        nrInfo<nr::LogLevel::error>(
+        nrLog<nr::LogLevel::warning>(
             "[ShaderService::recreateSessionLocked] Slang threw an internal exception during createSession. "
             "Attach a debugger and break on Slang::InternalError to inspect the Message field.");
         nrAssert(false, "Slang::IGlobalSession::createSession threw an internal exception.");
@@ -1568,7 +1661,7 @@ void ShaderService::emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string
 
     if (!text.empty())
     {
-        nrInfo<nr::LogLevel::warning>(std::format("[Slang:{}]\n{}", context, text));
+        nrLog<nr::LogLevel::warning>("[Slang:{}]\n{}", context, text);
     }
 }
 
@@ -1577,9 +1670,9 @@ void ShaderService::emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string
     auto derivedModuleName = detail::modulePathToName(modulePath);
     if (derivedModuleName.empty())
     {
-        nrInfo<nr::LogLevel::warning>(
-            std::format("[ShaderService::resolveModuleNameLocked] unable to derive module name from modulePath='{}'.",
-                        std::string(modulePath)));
+        nrLog<nr::LogLevel::warning>(
+            "[ShaderService::resolveModuleNameLocked] unable to derive module name from modulePath='{}'.",
+            std::string(modulePath));
         return {};
     }
 
@@ -1605,10 +1698,10 @@ void ShaderService::emitDiagnosticsLocked(slang::IBlob *diagnostics, std::string
 
         if (!declaredMatches)
         {
-            auto message = std::format("[ShaderService::resolveModuleNameLocked] module declaration mismatch for "
-                                       "modulePath='{}': declared='{}', expected='{}' (leaf='{}').",
-                                       std::string(modulePath), declaredModule, derivedModuleName, expectedLeaf);
-            nrInfo<nr::LogLevel::warning>(message);
+            nrLog<nr::LogLevel::warning>(
+                "[ShaderService::resolveModuleNameLocked] module declaration mismatch for "
+                "modulePath='{}': declared='{}', expected='{}' (leaf='{}').",
+                std::string(modulePath), declaredModule, derivedModuleName, expectedLeaf);
             return {};
         }
     }
@@ -1639,11 +1732,11 @@ Slang::ComPtr<slang::IModule> ShaderService::loadOrCompileModuleLocked(const std
     }
     catch (...)
     {
-        nrInfo<nr::LogLevel::error>(
-            std::format("[ShaderService::loadOrCompileModuleLocked] Slang threw an internal exception during "
-                        "loadModule for module='{}' path='{}'. "
-                        "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
-                        moduleName, normalizedModulePath));
+        nrLog<nr::LogLevel::warning>(
+            "[ShaderService::loadOrCompileModuleLocked] Slang threw an internal exception during "
+            "loadModule for module='{}' path='{}'. "
+            "Attach a debugger and break on Slang::InternalError to inspect the Message field.",
+            moduleName, normalizedModulePath);
         emitDiagnosticsLocked(diagnostics.get(), "loadModule(exception-path)");
         nrAssert(false, "Slang::ISession::loadModule threw an internal exception.");
     }
@@ -1651,10 +1744,10 @@ Slang::ComPtr<slang::IModule> ShaderService::loadOrCompileModuleLocked(const std
 
     if (!loadedModule)
     {
-        auto message = std::format("[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via "
-                                   "loadModule(module-path='{}'). Expected slash form like 'renderer/appUi/vertex'.",
-                                   moduleName, normalizedModulePath);
-        nrInfo<LogLevel::warning>(message);
+        nrLog<LogLevel::warning>(
+            "[ShaderService::loadOrCompileModuleLocked] failed to load module='{}' via "
+            "loadModule(module-path='{}'). Expected slash form like 'renderer/appUi/vertex'.",
+            moduleName, normalizedModulePath);
         return {};
     }
 
@@ -1668,15 +1761,15 @@ Slang::ComPtr<slang::IModule> ShaderService::loadOrCompileModuleLocked(const std
             auto serializeResult = loadedModule->serialize(serializedModule.writeRef());
             if (!detail::slangSucceeded(serializeResult) || !serializedModule)
             {
-                nrInfo<LogLevel::warning>(std::format(
+                nrLog<LogLevel::warning>(
                     "[ShaderService::loadOrCompileModuleLocked] failed to serialize module cache for module='{}'.",
-                    moduleName));
+                    moduleName);
             }
         }
         catch (...)
         {
-            nrInfo<LogLevel::error>(std::format(
-                "[ShaderService::loadOrCompileModuleLocked] Slang threw while serializing module='{}'.", moduleName));
+            nrLog<LogLevel::warning>(
+                "[ShaderService::loadOrCompileModuleLocked] Slang threw while serializing module='{}'.", moduleName);
             nrAssert(false, "Slang module serialization threw an internal exception.");
         }
 

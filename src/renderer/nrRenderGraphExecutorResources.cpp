@@ -157,9 +157,11 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
             {
                 // Use pre-allocated imported buffer from node
                 const auto &buffer = resource.importedBufferResource->get();
-                nrAssert(buffer.valid(), "RenderGraphExecutor::resolveRuntimeResources: importedBufferResource "
-                                         "reference is invalid for resource: " +
-                                             resource.debugName);
+                nrAssert(buffer.valid(),
+                         "{}",
+                         "RenderGraphExecutor::resolveRuntimeResources: importedBufferResource reference is invalid for "
+                         "resource: " +
+                             resource.debugName);
                 binding.buffer = buffer.handle();
                 binding.bufferSize = buffer.size();
                 binding.bufferResource = std::cref(buffer);
@@ -171,6 +173,7 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
             auto resolveImportedAccelerationStructure =
                 [&](const nr::rhi::AccelerationStructureResource &accelerationStructure) {
                     nrAssert(accelerationStructure.valid(),
+                             "{}",
                              "RenderGraphExecutor::resolveRuntimeResources: imported acceleration structure reference "
                              "is invalid for resource: " +
                                  resource.debugName);
@@ -227,9 +230,10 @@ void RenderGraphExecutor::applyQueueFamilyTransferPolicy(CompiledGraphFrame &com
                 {
                     // Use pre-allocated imported image from node
                     const auto &image = resource.importedImageResource->get();
-                    nrAssert(image.valid(), "RenderGraphExecutor::resolveRuntimeResources: importedImageResource "
-                                            "reference is invalid for resource: " +
-                                                resource.debugName);
+                    nrAssert(image.valid(),
+                             "RenderGraphExecutor::resolveRuntimeResources: importedImageResource reference is "
+                             "invalid for resource: {}",
+                             resource.debugName);
                     binding.image = image.handle();
                     binding.imageView = *image.view();
                     binding.imageResource = std::cref(image);
@@ -261,16 +265,15 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
         }
 
         nrAssert(resource.resolvedFormat == currentFormat,
-                 std::format("RenderGraphExecutor swapchain format changed between graph build and acquire boundary: "
-                             "compiled={} acquired={}.",
-                             vk::to_string(resource.resolvedFormat), vk::to_string(currentFormat)));
+                 "RenderGraphExecutor swapchain format changed between graph build and acquire boundary: compiled={} "
+                 "acquired={}.",
+                 vk::to_string(resource.resolvedFormat), vk::to_string(currentFormat));
         nrAssert(resource.resolvedExtent.width == std::max(1u, currentExtent.width) &&
                      resource.resolvedExtent.height == std::max(1u, currentExtent.height) &&
                      resource.resolvedExtent.depth == 1u,
-                 std::format("RenderGraphExecutor swapchain extent changed between graph build and acquire boundary: "
-                             "compiled={}x{} acquired={}x{}.",
-                             resource.resolvedExtent.width, resource.resolvedExtent.height, currentExtent.width,
-                             currentExtent.height));
+                 "RenderGraphExecutor swapchain extent changed between graph build and acquire boundary: compiled={}x{} "
+                 "acquired={}x{}.",
+                 resource.resolvedExtent.width, resource.resolvedExtent.height, currentExtent.width, currentExtent.height);
 
         auto binding = PreparedResourceBinding{};
         binding.isImage = true;
@@ -311,9 +314,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
 
             auto resolveBuffer = [&](GraphResourceHandle handle) -> std::optional<PassBufferResource> {
                 nrAssert(passDeclaresResource(pass, handle),
-                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} "
-                                     "(pass handle {}).",
-                                     pass.debugName, handle.value, pass.handle.value));
+                         "RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} (pass handle {}).",
+                         pass.debugName, handle.value, pass.handle.value);
                 auto bindingIt = runtimeBindings.find(handle);
                 if (bindingIt == runtimeBindings.end() || !bindingIt->second.isBuffer)
                 {
@@ -328,9 +330,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
             };
             auto resolveImage = [&](GraphResourceHandle handle) -> std::optional<PassImageResource> {
                 nrAssert(passDeclaresResource(pass, handle),
-                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} "
-                                     "(pass handle {}).",
-                                     pass.debugName, handle.value, pass.handle.value));
+                         "RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} (pass handle {}).",
+                         pass.debugName, handle.value, pass.handle.value);
                 auto bindingIt = runtimeBindings.find(handle);
                 if (bindingIt == runtimeBindings.end() || !bindingIt->second.isImage)
                 {
@@ -348,9 +349,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
             auto resolveAccelerationStructure =
                 [&](GraphResourceHandle handle) -> std::optional<PassAccelerationStructureResource> {
                 nrAssert(passDeclaresResource(pass, handle),
-                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} "
-                                     "(pass handle {}).",
-                                     pass.debugName, handle.value, pass.handle.value));
+                         "RenderGraph pass '{}' prepare resolver rejected undeclared resource handle {} (pass handle {}).",
+                         pass.debugName, handle.value, pass.handle.value);
                 auto bindingIt = runtimeBindings.find(handle);
                 if (bindingIt == runtimeBindings.end() || !bindingIt->second.isAccelerationStructure)
                 {
@@ -369,9 +369,8 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
             auto resolveFrameDataPayload =
                 [&](GraphFrameDataHandle handle) -> std::optional<std::reference_wrapper<const std::any>> {
                 nrAssert(passDeclaresFrameData(pass, handle),
-                         std::format("RenderGraph pass '{}' prepare resolver rejected undeclared frame-data handle {} "
-                                     "(pass handle {}).",
-                                     pass.debugName, handle.value, pass.handle.value));
+                         "RenderGraph pass '{}' prepare resolver rejected undeclared frame-data handle {} (pass handle {}).",
+                         pass.debugName, handle.value, pass.handle.value);
                 auto frameDataIt = frameDataByHandle.find(handle);
                 if (frameDataIt == frameDataByHandle.end())
                 {
@@ -712,8 +711,7 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
     std::string_view operation)
 {
     auto bindingIt = runtimeBindings.find(resource);
-    nrAssert(bindingIt != runtimeBindings.end(),
-             std::format("{} failed to resolve graph resource {}.", operation, resource.value));
+    nrAssert(bindingIt != runtimeBindings.end(), "{} failed to resolve graph resource {}.", operation, resource.value);
     return bindingIt->second;
 }
 
@@ -722,8 +720,8 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
     std::string_view operation)
 {
     auto const &binding = requireBinding(runtimeBindings, resource, operation);
-    nrAssert(binding.isBuffer && binding.buffer != vk::Buffer{},
-             std::format("{} requires graph resource {} to resolve to a buffer.", operation, resource.value));
+    nrAssert(binding.isBuffer && binding.buffer != vk::Buffer{}, "{} requires graph resource {} to resolve to a buffer.",
+             operation, resource.value);
     return binding;
 }
 
@@ -732,16 +730,16 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
     std::string_view operation)
 {
     auto const &binding = requireBinding(runtimeBindings, resource, operation);
-    nrAssert(binding.isImage && binding.image != vk::Image{},
-             std::format("{} requires graph resource {} to resolve to an image.", operation, resource.value));
+    nrAssert(binding.isImage && binding.image != vk::Image{}, "{} requires graph resource {} to resolve to an image.",
+             operation, resource.value);
     return binding;
 }
 
 [[nodiscard]] vk::DeviceSize remainingBufferBytes(const PreparedResourceBinding &binding, vk::DeviceSize offset,
                                                   std::string_view operation)
 {
-    nrAssert(offset <= binding.bufferSize,
-             std::format("{} buffer offset {} exceeds buffer size {}.", operation, offset, binding.bufferSize));
+    nrAssert(offset <= binding.bufferSize, "{} buffer offset {} exceeds buffer size {}.", operation, offset,
+             binding.bufferSize);
     return binding.bufferSize - offset;
 }
 
@@ -754,8 +752,8 @@ bool RenderGraphExecutor::addTransitionBarrier(nr::rhi::ops::BarrierBatch &barri
     auto const destinationRemaining = remainingBufferBytes(destination, destinationOffset, "RDG copy-buffer");
     auto const maxCopySize = std::min(sourceRemaining, destinationRemaining);
     auto const size = (requestedSize == 0 || requestedSize == vk::WholeSize) ? maxCopySize : requestedSize;
-    nrAssert(size <= maxCopySize,
-             std::format("RDG copy-buffer size {} exceeds available source/destination range {}.", size, maxCopySize));
+    nrAssert(size <= maxCopySize, "RDG copy-buffer size {} exceeds available source/destination range {}.", size,
+             maxCopySize);
     return size;
 }
 

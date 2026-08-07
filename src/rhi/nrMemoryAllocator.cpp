@@ -21,10 +21,9 @@ void MemoryAllocator::initialize(const vk::raii::Instance &instance, const vk::r
 
     if (nsightProfilerActive_)
     {
-        nrLog(LogLevel::error, "RHI-DIAG",
-              "Nsight Graphics profiling mode detected: applying profiler-safe buffer allocation metadata to avoid "
-              "VUID-VkMemoryAllocateInfo-pNext-02806. This diagnostic channel is non-fatal.",
-              std::source_location::current(), false);
+        nrLog<LogLevel::warning, "RHI-DIAG">(
+            "Nsight Graphics profiling mode detected: applying profiler-safe buffer allocation metadata to avoid "
+            "VUID-VkMemoryAllocateInfo-pNext-02806. This diagnostic channel is non-fatal.");
         createProfilerSafePool();
     }
 }

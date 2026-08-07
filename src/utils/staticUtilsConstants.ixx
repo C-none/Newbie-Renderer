@@ -27,6 +27,10 @@ import std;
 #error "NR_SHADER_CACHE_ROOT must be defined by staticUtilsConstantsConfig.inl."
 #endif
 
+#ifndef NR_PSO_CACHE_ROOT
+#error "NR_PSO_CACHE_ROOT must be defined by staticUtilsConstantsConfig.inl."
+#endif
+
 #ifndef NR_SHADER_ROOT
 #error "NR_SHADER_ROOT must be defined by staticUtilsConstantsConfig.inl."
 #endif
@@ -91,5 +95,6 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(LogLevel:
 
 inline constexpr std::string_view projectRoot = NR_PROJECT_ROOT;
 inline constexpr std::string_view shaderCacheRoot = NR_SHADER_CACHE_ROOT;
+inline constexpr std::string_view psoCacheRoot = NR_PSO_CACHE_ROOT;
 inline constexpr std::string_view shaderRoot = NR_SHADER_ROOT;
 } // namespace nr

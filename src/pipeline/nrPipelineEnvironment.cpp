@@ -150,8 +150,8 @@ struct EnvironmentMapAsset
 
 namespace nr::pipeline::detail
 {
-[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(nr::renderer::Renderer &renderer,
-                                                                  std::string_view environmentMapName)
+[[nodiscard]] std::expected<EnvironmentMapCpuLoad, std::string> loadEnvironmentMapCpu(
+    std::string_view environmentMapName)
 {
     auto asset = resolveEnvironmentMapAsset(environmentMapName);
     if (!asset)
@@ -168,13 +168,34 @@ namespace nr::pipeline::detail
                                            asset->sourcePath.generic_string(), result.error().message));
     }
 
-    auto const width = result->radiance.width;
-    auto const height = result->radiance.height;
-    auto const decodeScale = result->radianceDecodeScale;
-    renderer.setEnvironmentMap(std::move(*result));
-    nr::nrLog(nr::LogLevel::info, "PIPELINE",
-              std::format("Loaded environment map '{}': {} ({}x{}, RGBA16F, decode scale {})", asset->name,
-                          asset->sourcePath.generic_string(), width, height, decodeScale));
+    return EnvironmentMapCpuLoad{
+        .sourcePath = std::move(asset->sourcePath),
+        .name = std::move(asset->name),
+        .environmentMap = std::move(*result),
+    };
+}
+
+void commitEnvironmentMap(nr::renderer::Renderer &renderer, EnvironmentMapCpuLoad &&loadedEnvironmentMap)
+{
+    auto const width = loadedEnvironmentMap.environmentMap.radiance.width;
+    auto const height = loadedEnvironmentMap.environmentMap.radiance.height;
+    auto const decodeScale = loadedEnvironmentMap.environmentMap.radianceDecodeScale;
+    renderer.setEnvironmentMap(std::move(loadedEnvironmentMap.environmentMap));
+    nr::nrLog<nr::LogLevel::info, "PIPELINE">(
+        "Loaded environment map '{}': {} ({}x{}, RGBA16F, decode scale {})", loadedEnvironmentMap.name,
+        loadedEnvironmentMap.sourcePath.generic_string(), width, height, decodeScale);
+}
+
+[[nodiscard]] std::expected<void, std::string> loadEnvironmentMap(nr::renderer::Renderer &renderer,
+                                                                  std::string_view environmentMapName)
+{
+    auto loadedEnvironmentMap = loadEnvironmentMapCpu(environmentMapName);
+    if (!loadedEnvironmentMap)
+    {
+        return std::unexpected(std::move(loadedEnvironmentMap.error()));
+    }
+
+    commitEnvironmentMap(renderer, std::move(*loadedEnvironmentMap));
     return {};
 }
 } // namespace nr::pipeline::detail

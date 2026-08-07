@@ -126,8 +126,8 @@ public ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectCo
     }
 }
 
-public void accumulateDirectLightSample(inout PathState path, ResolvedMaterialPayload material, float3 viewDirection,
-                                        float2 randomValues, float sampleWeight)
+public void sampleDirectLighting(inout PathState path, ResolvedMaterialPayload material, float3 viewDirection,
+                                 float2 randomValues)
 {
     SceneLightSample lightSample;
     if (!sampleSceneLightAlias(randomValues, lightSample))
@@ -153,31 +153,12 @@ public void accumulateDirectLightSample(inout PathState path, ResolvedMaterialPa
         dispatchEvaluateResolvedMaterialDirectComponents(material, makeLighting(viewDirection, contribution));
     if (path.vertexIndex == 1u)
     {
-        addPrimaryPathContribution(path, direct.specularRadiance * sampleWeight, direct.diffuseRadiance * sampleWeight);
+        addPrimaryPathContribution(path, direct.specularRadiance, direct.diffuseRadiance);
     }
     else
     {
-        addPathContribution(path, (direct.specularRadiance + direct.diffuseRadiance) * sampleWeight);
+        addPathContribution(path, direct.specularRadiance + direct.diffuseRadiance);
     }
-}
-
-static const uint kDirectLightSampleCount = 4u;
-
-public void sampleDirectLighting(inout PathState path, ResolvedMaterialPayload material, float3 viewDirection)
-{
-    if (sceneLightAliasCount() == 0u)
-    {
-        return;
-    }
-
-    float sampleWeight = 1.0f / float(kDirectLightSampleCount);
-    float4 lightRandomValues = path.rng.rand4();
-    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.xy, sampleWeight);
-    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.zw, sampleWeight);
-
-    lightRandomValues = path.rng.rand4();
-    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.xy, sampleWeight);
-    accumulateDirectLightSample(path, material, viewDirection, lightRandomValues.zw, sampleWeight);
 }
 
 public bool reachedBounceLimit(PathState path)
@@ -321,7 +302,13 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
 
     // NEE is a single-segment shadow connection that does not consume a bounce, so it must run at
     // every surface vertex including the terminal one. The bounce limit only gates BSDF continuation.
-    sampleDirectLighting(path, material, viewDirection);
+    bool hasDirectLightSample = sceneLightAliasCount() != 0u;
+    float4 directLightRandomPacket = {};
+    if (hasDirectLightSample)
+    {
+        directLightRandomPacket = path.rng.rand4();
+        sampleDirectLighting(path, material, viewDirection, directLightRandomPacket.xy);
+    }
 
     if (reachedBounceLimit(path))
     {
@@ -356,7 +343,8 @@ public void handleHit(inout PathState path, ResolvedMaterialPayload material, Re
     if (roulettePolicy.shouldApply(path.vertexIndex))
     {
         float survivalProbability = roulettePolicy.survivalProbability(pathCombinedThroughput(path) * path.etaScale);
-        if (!roulettePolicy.survives(path.rng.rand4().x, survivalProbability))
+        float rouletteRandomValue = hasDirectLightSample ? directLightRandomPacket.z : path.rng.rand4().x;
+        if (!roulettePolicy.survives(rouletteRandomValue, survivalProbability))
         {
             terminatePathState(path);
             return;

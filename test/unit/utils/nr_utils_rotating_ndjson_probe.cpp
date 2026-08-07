@@ -9,7 +9,9 @@ namespace json = dependency::json;
 inline constexpr std::string_view sessionId = "nr-utils-rotating-ndjson-test";
 inline constexpr std::string_view infoMarker = "NR_NDJSON_INFO_MUST_NOT_REACH_CMD";
 inline constexpr std::string_view warningMarker = "NR_NDJSON_WARNING_MUST_REACH_CMD";
-inline constexpr std::string_view errorMarker = "NR_NDJSON_ERROR_MUST_REACH_CMD";
+// Error-level logs always terminate, so console visibility for a surviving process is covered by a second
+// warning record. Error-level routing and flushing are covered by the --fatal mode below.
+inline constexpr std::string_view rotationMarker = "NR_NDJSON_ROTATION_MUST_REACH_CMD";
 inline constexpr std::string_view optionMarker = "NR_NDJSON_OPTION_MUST_NOT_REACH_CMD";
 inline constexpr std::string_view fatalMarker = "NR_NDJSON_FATAL_MUST_FLUSH";
 inline constexpr std::string_view pruneMarker = "NR_NDJSON_RETENTION_PRUNE";
@@ -112,14 +114,14 @@ int main(int argc, char **argv)
             std::println(std::cerr, "Unknown rotating NDJSON probe mode.");
             return 5;
         }
-        nr::nrInfo<nr::LogLevel::error>(fatalMarker);
+        nr::nrLog<nr::LogLevel::error>("{}", fatalMarker);
         return 6;
     }
 
     auto const enginePadding = std::string(384u, 'e');
-    nr::nrInfo<nr::LogLevel::info>(std::format("{} {}", infoMarker, enginePadding));
-    nr::nrInfo<nr::LogLevel::warning>(std::format("{} {}", warningMarker, enginePadding));
-    nr::nrInfo<nr::LogLevel::error, false>(std::format("{} {}", errorMarker, enginePadding));
+    nr::nrLog<nr::LogLevel::info>("{} {}", infoMarker, enginePadding);
+    nr::nrLog<nr::LogLevel::warning>("{} {}", warningMarker, enginePadding);
+    nr::nrLog<nr::LogLevel::warning>("{} {}", rotationMarker, enginePadding);
 
     auto const optionPadding = std::string(256u, 'o');
     auto const recordIndices = std::views::iota(std::uint32_t{0u}, std::uint32_t{12u});

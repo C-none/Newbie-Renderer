@@ -29,7 +29,6 @@ namespace
     auto sample = nr::renderer::RendererBenchmarkFrame{};
     sample.frameOrdinal = ordinal;
     sample.cpu.totalMilliseconds = totalMilliseconds;
-    sample.skeletonHit = true;
     return sample;
 }
 
@@ -52,18 +51,16 @@ struct AuditInput
     };
 }
 
-[[nodiscard]] bool validate(std::span<const nr::renderer::RendererBenchmarkFrame> frames,
-                            nr::renderer::RenderGraphSkeletonMode mode = nr::renderer::RenderGraphSkeletonMode::Enabled)
+[[nodiscard]] bool validate(std::span<const nr::renderer::RendererBenchmarkFrame> frames)
 {
-    return nr::renderer::validateBenchmarkFrames(frames, mode);
+    return nr::renderer::validateBenchmarkFrames(frames);
 }
 
 [[nodiscard]] nr::renderer::RendererBenchmarkQualityAudit audit(
-    const AuditInput &input, std::size_t expectedNodeCount = 0u,
-    nr::renderer::RenderGraphSkeletonMode mode = nr::renderer::RenderGraphSkeletonMode::Enabled)
+    const AuditInput &input, std::size_t expectedNodeCount = 0u)
 {
     return nr::renderer::auditRendererBenchmark(input.frames, input.passes, input.statuses, expectedNodeCount,
-                                                input.nodeBuildMilliseconds, input.accelerationStructures, mode);
+                                                input.nodeBuildMilliseconds, input.accelerationStructures);
 }
 
 void appendValidFrame(AuditInput &input)
@@ -118,79 +115,9 @@ const nr::test::CaseRegistrar validationCase{
         nonFinitePostScene.front().cpu.postSceneMilliseconds = std::numeric_limits<double>::quiet_NaN();
         nr::test::require(!validate(nonFinitePostScene));
 
-        auto negativeSkeletonPatch = std::array{frame(3u, 1.0)};
-        negativeSkeletonPatch.front().skeletonPatchMilliseconds = -0.1;
-        nr::test::require(!validate(negativeSkeletonPatch));
-
-        auto nonFiniteSkeletonRebuild = std::array{frame(3u, 1.0)};
-        nonFiniteSkeletonRebuild.front().skeletonRebuildMilliseconds = std::numeric_limits<double>::quiet_NaN();
-        nr::test::require(!validate(nonFiniteSkeletonRebuild));
-
         auto drift = std::array{frame(3u, 1.0), frame(4u, 2.0)};
         drift[1].configRevision = 2u;
         nr::test::require(!validate(drift));
-    }};
-
-const nr::test::CaseRegistrar skeletonTelemetryValidationCase{
-    "renderer benchmark validates Skeleton telemetry against the selected mode", [] {
-        auto legacy = frame(1u, 1.0);
-        legacy.skeletonHit = false;
-        legacy.skeletonMissReason = nr::renderer::RenderGraphSkeletonMissReason::Disabled;
-        nr::test::require(validate(std::span{&legacy, std::size_t{1u}}, nr::renderer::RenderGraphSkeletonMode::Legacy));
-
-        auto legacyHit = legacy;
-        legacyHit.skeletonHit = true;
-        nr::test::require(
-            !validate(std::span{&legacyHit, std::size_t{1u}}, nr::renderer::RenderGraphSkeletonMode::Legacy));
-
-        auto legacyPatch = legacy;
-        legacyPatch.skeletonPatchMilliseconds = 0.1;
-        nr::test::require(
-            !validate(std::span{&legacyPatch, std::size_t{1u}}, nr::renderer::RenderGraphSkeletonMode::Legacy));
-
-        auto legacyRebuild = legacy;
-        legacyRebuild.skeletonRebuildMilliseconds = 0.1;
-        nr::test::require(
-            !validate(std::span{&legacyRebuild, std::size_t{1u}}, nr::renderer::RenderGraphSkeletonMode::Legacy));
-
-        auto enabledHit = frame(1u, 1.0);
-        enabledHit.skeletonPatchMilliseconds = 0.1;
-        nr::test::require(validate(std::span{&enabledHit, std::size_t{1u}}));
-
-        auto enabledHitRebuild = enabledHit;
-        enabledHitRebuild.skeletonRebuildMilliseconds = 0.1;
-        nr::test::require(!validate(std::span{&enabledHitRebuild, std::size_t{1u}}));
-
-        auto enabledHitReason = enabledHit;
-        enabledHitReason.skeletonMissReason = nr::renderer::RenderGraphSkeletonMissReason::KeyNotFound;
-        nr::test::require(!validate(std::span{&enabledHitReason, std::size_t{1u}}));
-
-        auto enabledMiss = frame(1u, 1.0);
-        enabledMiss.skeletonHit = false;
-        enabledMiss.skeletonMissReason = nr::renderer::RenderGraphSkeletonMissReason::KeyNotFound;
-        enabledMiss.skeletonRebuildMilliseconds = 0.1;
-        nr::test::require(validate(std::span{&enabledMiss, std::size_t{1u}}));
-
-        auto enabledMissPatch = enabledMiss;
-        enabledMissPatch.skeletonPatchMilliseconds = 0.1;
-        nr::test::require(!validate(std::span{&enabledMissPatch, std::size_t{1u}}));
-
-        auto enabledMissNone = enabledMiss;
-        enabledMissNone.skeletonMissReason = nr::renderer::RenderGraphSkeletonMissReason::None;
-        nr::test::require(!validate(std::span{&enabledMissNone, std::size_t{1u}}));
-
-        auto enabledMissDisabled = enabledMiss;
-        enabledMissDisabled.skeletonMissReason = nr::renderer::RenderGraphSkeletonMissReason::Disabled;
-        nr::test::require(!validate(std::span{&enabledMissDisabled, std::size_t{1u}}));
-
-        auto unknownReason = enabledMiss;
-        unknownReason.skeletonMissReason = static_cast<nr::renderer::RenderGraphSkeletonMissReason>(255u);
-        nr::test::require(!validate(std::span{&unknownReason, std::size_t{1u}}));
-
-        nr::test::require(
-            !validate(std::span{&enabledHit, std::size_t{1u}}, nr::renderer::RenderGraphSkeletonMode::Differential));
-        nr::test::require(!validate(std::span{&enabledHit, std::size_t{1u}},
-                                    static_cast<nr::renderer::RenderGraphSkeletonMode>(255u)));
     }};
 
 const nr::test::CaseRegistrar executeTelemetryCase{
@@ -267,37 +194,22 @@ const nr::test::CaseRegistrar frameCsvDelimiterCase{
     }};
 
 const nr::test::CaseRegistrar cpuSchemaCase{
-    "renderer benchmark v3 preserves top-level CPU stages and adds Skeleton diagnostics", [] {
+    "renderer benchmark v4 preserves top-level CPU stages without Skeleton diagnostics", [] {
         auto const stages = nr::renderer::rendererBenchmarkCpuStageColumns();
         auto const substages = nr::renderer::rendererBenchmarkCpuSubstageColumns();
         nr::test::requireEqual(nr::renderer::rendererBenchmarkSchemaVersion(),
-                               std::string_view{"nr-renderer-benchmark-v3"});
+                               std::string_view{"nr-renderer-benchmark-v4"});
         nr::test::requireEqual(std::ranges::count(stages, std::string_view{"post_scene_ms"}), std::ptrdiff_t{1});
         nr::test::requireEqual(std::ranges::count(substages, std::string_view{"post_scene_ms"}), std::ptrdiff_t{0});
         nr::test::requireEqual(std::ranges::count(stages, std::string_view{"skeleton_patch_ms"}), std::ptrdiff_t{0});
         nr::test::requireEqual(std::ranges::count(stages, std::string_view{"skeleton_rebuild_ms"}), std::ptrdiff_t{0});
-        nr::test::requireEqual(std::ranges::count(substages, std::string_view{"skeleton_patch_ms"}), std::ptrdiff_t{1});
+        nr::test::requireEqual(std::ranges::count(substages, std::string_view{"skeleton_patch_ms"}), std::ptrdiff_t{0});
         nr::test::requireEqual(std::ranges::count(substages, std::string_view{"skeleton_rebuild_ms"}),
-                               std::ptrdiff_t{1});
+                               std::ptrdiff_t{0});
         auto const scene = std::ranges::find(stages, std::string_view{"scene_ms"});
         auto const postScene = std::ranges::find(stages, std::string_view{"post_scene_ms"});
         auto const build = std::ranges::find(stages, std::string_view{"build_ms"});
         nr::test::require(scene != stages.end() && postScene == std::next(scene) && build == std::next(postScene));
-    }};
-
-const nr::test::CaseRegistrar skeletonNamesCase{
-    "renderer benchmark uses stable Skeleton mode and miss-reason names", [] {
-        nr::test::requireEqual(nr::renderer::renderGraphSkeletonModeName(nr::renderer::RenderGraphSkeletonMode::Legacy),
-                               std::string_view{"legacy"});
-        nr::test::requireEqual(
-            nr::renderer::renderGraphSkeletonModeName(nr::renderer::RenderGraphSkeletonMode::Enabled),
-            std::string_view{"enabled"});
-        nr::test::requireEqual(
-            nr::renderer::renderGraphSkeletonMissReasonName(nr::renderer::RenderGraphSkeletonMissReason::Disabled),
-            std::string_view{"disabled"});
-        nr::test::requireEqual(
-            nr::renderer::renderGraphSkeletonMissReasonName(nr::renderer::RenderGraphSkeletonMissReason::PatchFailed),
-            std::string_view{"patch_failed"});
     }};
 
 const nr::test::CaseRegistrar disabledFinalizationCase{

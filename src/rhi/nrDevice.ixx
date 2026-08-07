@@ -16,7 +16,6 @@ import :resourcePool;
 import :pipeline;
 import :resourceOps;
 import :dlss;
-import nr.utils;
 import std;
 
 export namespace nr::rhi
@@ -79,8 +78,10 @@ class Device
 
     [[nodiscard]] bool hasEnabledDeviceExtension(std::string_view extension) const;
 
-    void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"},
-                    PipelineCacheConfig pipelineCache = {});
+    void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"});
+
+    void initialize(std::string const &_appName, std::string const &_engineName,
+                    std::filesystem::path pipelineBinaryRoot);
 
     [[nodiscard]] FrameBeginResult beginFrame();
 
@@ -145,6 +146,7 @@ class Device
         vk::KHRRayTracingPipelineExtensionName,
         vk::EXTRayTracingInvocationReorderExtensionName,
         vk::KHRPipelineLibraryExtensionName,
+        vk::KHRPipelineBinaryExtensionName,
         vk::EXTMemoryBudgetExtensionName,
         vk::KHRMaintenance8ExtensionName,
         vk::KHRMaintenance9ExtensionName,

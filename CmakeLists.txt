@@ -73,6 +73,7 @@ set(NR_MAX_FRAME_IN_FLIGHT "3" CACHE STRING "Number of renderer frames in flight
 set(NR_STATISTICS_SAMPLE_FRAME_COUNT "240" CACHE STRING "Frame count used for averaged runtime statistics")
 option(NR_ENABLE_BUNDLED_SLANGD "Build Slang language server (slangd) in bundled Slang package." ON)
 set(NR_SHADER_CACHE_DIR "${CMAKE_BINARY_DIR}/shader_cache/$<CONFIG>" CACHE STRING "Runtime shader cache directory")
+set(NR_PSO_CACHE_DIR "${CMAKE_BINARY_DIR}/pso_cache/$<CONFIG>" CACHE PATH "Runtime PSO binary cache directory")
 set(NR_SHADER_ROOT_DIR "${CMAKE_SOURCE_DIR}/shader" CACHE STRING "Runtime shader source root directory")
 
 set(NR_SHADER_OPTIMIZATION_LEVEL "MAXIMAL" CACHE STRING "Slang shader optimization level: NONE, DEFAULT, HIGH, or MAXIMAL.")
