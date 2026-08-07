@@ -1948,7 +1948,7 @@ One active viewer owns these fixed paths:
 
 | Stream | Active file | Records |
 |---|---|---|
-| Engine | `build/app/logs/engine.ndjson` | `NR_LOG_V1` diagnostics from ordinary `nrLog` / `nrInfo` / `nrVulkan` / assertions |
+| Engine | `build/app/logs/engine.ndjson` | `NR_LOG_V1` diagnostics from ordinary `nrLog` / `nrVulkan` / assertions |
 | Options | `build/app/logs/options.ndjson` | every `nrCompactRecord`, including `NR_OPTION_V1` results and `NR_OPTION_ENDPOINT_V1` discovery |
 
 The viewer atomically creates an empty `.active-viewer` directory before touching either

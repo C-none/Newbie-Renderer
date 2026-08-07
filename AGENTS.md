@@ -78,15 +78,25 @@ This document outlines the development standards, architectural principles, and 
 
 *   **Single Error Facility:** Use `nr.utils:errorHandle` as the only in-project error reporting entrypoint.
 *   **No Module-Local Diagnostic Systems:** Do **not** introduce per-module custom diagnostics buffers/entry structs for production error reporting paths.
-*   **Scene Rule:** Scene import/bridge/runtime errors and warnings must be emitted through `nrLog`/`nrInfo`/`nrVulkan`/`nrAssert` from `errorHandle`.
+*   **Scene Rule:** Scene import/bridge/runtime errors and warnings must be emitted through `nrLog`/`nrVulkan`/`nrAssert` from `errorHandle`.
+*   **Deferred Formatting Only:** Every reporting entrypoint takes a compile-time checked format string followed by its arguments, and performs the `std::format` call internally so the successful path never formats. Do **not** pass a pre-formatted message.
+    *   *Preferred:* `nrAssert(condition, "resource '{}' exceeds {} bytes", name, limit);`
+    *   *Avoid:* `nrAssert(condition, std::format("resource '{}' exceeds {} bytes", name, limit));`
+    *   *Avoid:* `nrAssert(condition, [&] { return std::format(...); });` — the lambda context-factory form no longer exists.
+    *   A runtime string message must be passed as an argument, not as the format string: `nrAssert(condition, "{}", message);`
+*   **Compile-Time Log Variants:** `nrLog<Level, Channel>(...)` takes the level and the channel as non-type template parameters; `Channel` defaults to `"LOG"`. There is no runtime-level or runtime-channel overload, and no separate `nrInfo` entrypoint.
+*   **Error Is Always Fatal:** `nrLog<LogLevel::error>(...)` emits regardless of `NR_LOG_LEVEL` and then terminates the process. It carries no opt-out parameter.
+    *   A condition the caller can recover from must be reported at `LogLevel::warning` or lower. "Log an error and keep going" is not an available behavior.
+    *   Never place code after a `nrLog<LogLevel::error>(...)` call expecting it to run. When a call site needs contextual detail plus termination, emit the detail at `warning` and let a following `nrAssert(false, ...)` terminate.
+    *   `nrVulkan<Level>(...)` is exempt: it forwards external Vulkan validation-layer messages and never terminates.
 *   **Extensibility Rule:** If a module needs additional reporting behavior, extend `errorHandle` first, then reuse it everywhere instead of adding a new ad-hoc reporting API.
 
 ### 2.9 Exception Handling Policy
 
-*   **No try/catch for In-Project Error Paths:** Project code must **not** use `try`/`catch` as a general error-handling mechanism. Errors must be detected, reported in-place via `nrInfo`/`nrAssert`, and handled locally (early return, sentinel value, or `std::exit`).
+*   **No try/catch for In-Project Error Paths:** Project code must **not** use `try`/`catch` as a general error-handling mechanism. Errors must be detected, reported in-place via `nrLog`/`nrAssert`, and handled locally (early return, sentinel value, or `std::exit`).
 *   **External Library Boundary Rule:** A small, focused `try`/`catch` is permitted **only** at the immediate call site of an external library API that is documented or known to throw non-`std::exception` exceptions (e.g., `Slang::InternalError`). The catch block must:
-    1.  Emit the error in-place via `nrInfo<LogLevel::error>` with enough context to identify the call site and the failing operation.
-    2.  Either terminate (`nrAssert(false, ...)`) or return a clearly invalid sentinel value — do **not** silently swallow or re-throw.
+    1.  Emit the failure detail in-place via `nrLog<LogLevel::warning>` with enough context to identify the call site and the failing operation.
+    2.  Either terminate with a following `nrAssert(false, ...)` or return a clearly invalid sentinel value — do **not** silently swallow or re-throw. Do not use `nrLog<LogLevel::error>` for the detail message, because it terminates before the `nrAssert` summary can run.
 *   **No Propagation Wrappers:** Do **not** wrap entire functions in `try`/`catch` just to translate or re-throw. Catching, logging, and immediately re-throwing (`throw;`) is only acceptable if the sole purpose is diagnostic logging and the exception will be caught and terminated at the nearest external boundary.
 *   **`noexcept` on Internal Helpers:** Internal helper functions that call only project code (no external library calls) should be marked `noexcept` where correct. Removing `noexcept` to accommodate unhandled external exceptions is not acceptable — handle the exception at the external call site instead.
 

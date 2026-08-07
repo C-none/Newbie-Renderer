@@ -29,17 +29,6 @@ add_test(
 )
 nr_set_registered_test_contract(nr_utils_error_handle_lazy_failure_test "fast;cpu;unit;utils")
 
-nr_add_executable(nr_utils_error_handle_api_spike
-    nr_utils_error_handle_api_spike.cpp
-)
-set_target_properties(nr_utils_error_handle_api_spike PROPERTIES FOLDER "Test" EXCLUDE_FROM_ALL TRUE)
-nr_link_module_dependencies(
-    nr_utils_error_handle_api_spike
-    nr_utils_error_handle_api_spike.cpp
-    PRIVATE
-        utils
-)
-
 nr_add_executable(nr_utils_rotating_ndjson_probe
     nr_utils_rotating_ndjson_probe.cpp
 )
