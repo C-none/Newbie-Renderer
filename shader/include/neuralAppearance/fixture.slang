@@ -4,13 +4,31 @@ import include.neuralAppearance.layout;
 
 public struct NeuralAppearanceFixture
 {
-    public float3 f0;
-    public float roughness;
-    public float3 geometryNormal;
-    public float anisotropyStrength;
-    public float3 shadingNormal;
-    public float anisotropyAngle;
-    public float3 anisotropyTangent;
+    public float3 f0 = float3(0.04f);
+    public float roughness = 0.5f;
+    public float3 geometryNormal = float3(0.0f, 1.0f, 0.0f);
+    public float anisotropyStrength = 0.0f;
+    public float3 shadingNormal = float3(0.0f, 1.0f, 0.0f);
+    public float anisotropyAngle = 0.0f;
+    public float3 anisotropyTangent = float3(1.0f, 0.0f, 0.0f);
+
+    public __init()
+    {
+    }
+
+    public __init(
+        float3 inputF0, float inputRoughness, float3 inputGeometryNormal,
+        float inputAnisotropyStrength, float3 inputShadingNormal,
+        float inputAnisotropyAngle, float3 inputAnisotropyTangent)
+    {
+        f0 = inputF0;
+        roughness = inputRoughness;
+        geometryNormal = inputGeometryNormal;
+        anisotropyStrength = inputAnisotropyStrength;
+        shadingNormal = inputShadingNormal;
+        anisotropyAngle = inputAnisotropyAngle;
+        anisotropyTangent = inputAnisotropyTangent;
+    }
 };
 
 public NeuralAppearanceFixture neuralAppearanceFixture(float2 uv)
@@ -19,33 +37,33 @@ public NeuralAppearanceFixture neuralAppearanceFixture(float2 uv)
     float3 waves = 0.5f + 0.5f * float3(sin(phase.x), sin(phase.y),
                                         sin(phase.x + phase.y));
 
-    NeuralAppearanceFixture fixture;
-    fixture.f0 = 0.035f + 0.72f * waves;
-    fixture.roughness = 0.18f + 0.52f * (0.5f + 0.5f * cos(phase.x - phase.y));
-    fixture.geometryNormal = float3(0.0f, 1.0f, 0.0f);
-    fixture.anisotropyStrength = 0.55f + 0.35f * (0.5f + 0.5f * sin(phase.x + 0.7f * phase.y));
+    float3 f0 = 0.035f + 0.72f * waves;
+    float roughness = 0.18f + 0.52f * (0.5f + 0.5f * cos(phase.x - phase.y));
+    float3 geometryNormal = float3(0.0f, 1.0f, 0.0f);
+    float anisotropyStrength =
+        0.55f + 0.35f * (0.5f + 0.5f * sin(phase.x + 0.7f * phase.y));
 
     float2 normalSlope = 0.24f * float2(sin(phase.x), cos(phase.y));
-    fixture.shadingNormal = safeNormalize(float3(normalSlope.x, 1.0f, normalSlope.y),
-                                          fixture.geometryNormal);
+    float3 shadingNormal = safeNormalize(float3(normalSlope.x, 1.0f, normalSlope.y),
+                                         geometryNormal);
 
-    fixture.anisotropyAngle = phase.x + 0.65f * sin(phase.y);
-    float3 tangentHint = float3(cos(fixture.anisotropyAngle), 0.0f,
-                                sin(fixture.anisotropyAngle));
-    fixture.anisotropyTangent = safeNormalize(
-        tangentHint - fixture.shadingNormal * dot(fixture.shadingNormal, tangentHint),
-        orthogonalTangent(fixture.shadingNormal));
-    return fixture;
+    float anisotropyAngle = phase.x + 0.65f * sin(phase.y);
+    float3 tangentHint = float3(cos(anisotropyAngle), 0.0f, sin(anisotropyAngle));
+    float3 anisotropyTangent = safeNormalize(
+        tangentHint - shadingNormal * dot(shadingNormal, tangentHint),
+        orthogonalTangent(shadingNormal));
+    return NeuralAppearanceFixture(
+        f0, roughness, geometryNormal, anisotropyStrength,
+        shadingNormal, anisotropyAngle, anisotropyTangent);
 }
 
 public NeuralAppearanceLatent neuralAppearanceFixtureLatent(float2 uv)
 {
     NeuralAppearanceFixture fixture = neuralAppearanceFixture(uv);
-    NeuralAppearanceLatent latent;
-    latent.chunks[0] = float4(fixture.f0, fixture.roughness);
-    latent.chunks[1] = float4(fixture.shadingNormal.x, fixture.shadingNormal.z,
-                              cos(fixture.anisotropyAngle), sin(fixture.anisotropyAngle));
-    return latent;
+    return NeuralAppearanceLatent(
+        float4(fixture.f0, fixture.roughness),
+        float4(fixture.shadingNormal.x, fixture.shadingNormal.z,
+               cos(fixture.anisotropyAngle), sin(fixture.anisotropyAngle)));
 }
 
 public NeuralAppearanceLatent neuralAppearanceFixtureLatentTexel(uint2 texel)

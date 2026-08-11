@@ -19,10 +19,8 @@ public bool payloadPairMatches(float2 actual, float2 expected)
 
 public uint verifyMaterialFilterPacketAdvance()
 {
-    RandomSequence reference;
-    reference.sampleIndex = 0x13579bdfu;
-    reference.sampleSeed = 0x2468ace0u;
-    RandomSequence advanced = reference;
+    RandomSequence reference = RandomSequence(0x13579bdfu, 0x2468ace0u);
+    RandomSequence advanced = RandomSequence(reference.sampleIndex, reference.sampleSeed);
 
     float4 discarded0 = reference.rand4();
     float4 discarded1 = reference.rand4();
@@ -71,40 +69,24 @@ void payloadPackingContractMain(uint3 dispatchThreadId: SV_DispatchThreadID)
              all(unpackPayloadOct32(packPayloadOct32(float3(0.0f, invalidInfinity, 0.0f), float3(0.0f, 0.0f, 1.0f)),
                                     float3(0.0f, 0.0f, 1.0f)) == float3(0.0f, 0.0f, 1.0f)));
 
-    ResolvedMaterialPayload material = {};
-    material.materialIndex = 0x10203040u;
-    material.instanceMetadataIndex = 0x50607080u;
-    material.geometryIndex = 0x90abcdefu;
-    material.position = float3(1.25f, -2.5f, 3.75f);
-    material.geometryNormal = safePayloadDirection(float3(1.0f, 2.0f, 3.0f), fallbackY);
-    material.shadingNormal = safePayloadDirection(float3(-2.0f, 1.0f, 3.0f), fallbackY);
-    material.anisotropyTangent = safePayloadDirection(float3(1.0f, 2.0f, -1.0f), float3(1.0f, 0.0f, 0.0f));
-    material.anisotropyStrength = 0.0f;
-    material.baseColor = float4(0.125f, 0.25f, 0.5f, 0.75f);
-    material.metallic = 1.0f;
-    material.roughness = 0.2f;
-    material.emissive = float3(0.5f, 1.5f, 2.5f);
-    material.layers.clearcoat = 0.8f;
-    material.layers.clearcoatRoughness = 1.0f;
-    material.layers.clearcoatNormal = safePayloadDirection(float3(2.0f, -3.0f, 1.0f), fallbackY);
-    material.layers.sheenColor = float3(0.125f, 0.375f, 0.625f);
-    material.layers.sheenRoughness = 0.0f;
-    material.layers.transmission = 0.875f;
-    material.layers.transmissionMode = RtTransmissionMode.volume;
-    material.layers.transmissionIor = 1.625f;
+    MaterialLayerStack layers = MaterialLayerStack(
+        0.8f, 1.0f, safePayloadDirection(float3(2.0f, -3.0f, 1.0f), fallbackY), float3(0.125f, 0.375f, 0.625f),
+        0.0f, 0.875f, RtTransmissionMode.volume, 1.625f);
+    ResolvedMaterialPayload material = ResolvedMaterialPayload(
+        0x10203040u, RtMaterialLayerFlag.none, AlphaMode.opaque, float3(1.25f, -2.5f, 3.75f),
+        safePayloadDirection(float3(1.0f, 2.0f, 3.0f), fallbackY),
+        safePayloadDirection(float3(-2.0f, 1.0f, 3.0f), fallbackY),
+        safePayloadDirection(float3(1.0f, 2.0f, -1.0f), float3(1.0f, 0.0f, 0.0f)), 0.0f,
+        float4(0.125f, 0.25f, 0.5f, 0.75f), 1.0f, 0.2f, float3(0.5f, 1.5f, 2.5f), layers, 1.0f, 1.0f,
+        0x50607080u, 0x90abcdefu);
 
-    ResolvedMaterialScatter scatter = {};
-    scatter.direction = safePayloadDirection(float3(-3.0f, -1.0f, -2.0f), fallbackY);
-    scatter.diffuseWeight = float3(0.125f, 0.25f, 0.375f);
-    scatter.specularWeight = float3(0.5f, 0.625f, 0.75f);
-    scatter.etaRatio = 0.875f;
+    ResolvedMaterialScatter scatter = ResolvedMaterialScatter(
+        ResolvedMaterialFlag.none, safePayloadDirection(float3(-3.0f, -1.0f, -2.0f), fallbackY), float3(0.0f),
+        float3(0.125f, 0.25f, 0.375f), float3(0.5f, 0.625f, 0.75f), 0.0f, 0.0f, 0.875f);
 
-    RandomSequence filterSequence;
-    filterSequence.sampleIndex = 0x12345678u;
-    filterSequence.sampleSeed = 0x9abcdef0u;
-    MaterialRayPayload rayPayload;
+    RandomSequence filterSequence = RandomSequence(0x12345678u, 0x9abcdef0u);
     float4 scatterRandomValues = float4(0.0625f, 0.1875f, 0.3125f, 0.4375f);
-    initializeMaterialRayPayload(rayPayload, scatterRandomValues, filterSequence, 1.25f, 1.75f);
+    MaterialRayPayload rayPayload = MaterialRayPayload(scatterRandomValues, filterSequence, 1.25f, 1.75f);
     gContractResults[8] = uint(all(rayPayload.scatterRandomValues == scatterRandomValues) &&
                                rayPayload.materialFilterSequence.sampleIndex == filterSequence.sampleIndex &&
                                rayPayload.materialFilterSequence.sampleSeed == filterSequence.sampleSeed &&

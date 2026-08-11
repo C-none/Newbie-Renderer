@@ -12,14 +12,14 @@ export namespace nr::app
 struct AppCameraCursorTrackingState
 {
     bool hasPrevious = false;
-    glm::dvec2 previous{0.0, 0.0};
+    nr::math::Double2 previous{0.0, 0.0};
 };
 
 struct AppCameraDefaultView
 {
     nr::renderer::ViewerPerspectiveLens lens{};
-    glm::vec3 position{0.0f, 0.0f, 3.0f};
-    glm::vec3 target{0.0f, 0.0f, 0.0f};
+    DirectX::XMFLOAT3 position{0.0f, 0.0f, 3.0f};
+    DirectX::XMFLOAT3 target{0.0f, 0.0f, 0.0f};
 };
 
 class AppCamera

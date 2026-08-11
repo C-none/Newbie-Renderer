@@ -1,4 +1,5 @@
 * text eol=crlf
+artifacts/neuralAppearance/full_training.bin binary -eol
 shader/include/neuralAppearance/fixtureModel.slang text eol=lf
 
 *.dll binary

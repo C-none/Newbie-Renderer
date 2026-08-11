@@ -3,7 +3,21 @@ import common;
 
 struct NeuralAppearanceAutodiffProbe : IDifferentiable
 {
-    float values[4];
+    float values[4] = {};
+
+    [Differentiable]
+    __init()
+    {
+    }
+
+    [Differentiable]
+    __init(float value0, float value1, float value2, float value3)
+    {
+        values[0] = value0;
+        values[1] = value1;
+        values[2] = value2;
+        values[3] = value3;
+    }
 };
 
 [Differentiable]
@@ -19,11 +33,8 @@ RWStructuredBuffer<float> gAutodiffResults;
 [numthreads(1, 1, 1)]
 void autodiffContractMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
-    NeuralAppearanceAutodiffProbe probe;
-    probe.values[0] = 2.0f;
-    probe.values[1] = 3.0f;
-    probe.values[2] = 5.0f;
-    probe.values[3] = 7.0f;
+    NeuralAppearanceAutodiffProbe probe =
+        NeuralAppearanceAutodiffProbe(2.0f, 3.0f, 5.0f, 7.0f);
 
     DifferentialPair<NeuralAppearanceAutodiffProbe> pair = diffPair(probe);
     bwd_diff(neuralAppearanceAutodiffProbeLoss)(pair, 1.0f);

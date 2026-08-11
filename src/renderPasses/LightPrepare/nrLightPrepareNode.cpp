@@ -97,13 +97,20 @@ void ensureAliasBuffer(nr::rhi::Device &device, LightPrepareFrameSlot &slot, std
     slot.aliasCapacity = capacity;
 }
 
-[[nodiscard]] glm::vec3 normalizedDirection(glm::vec3 direction) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 normalizedDirection(DirectX::XMFLOAT3 direction) noexcept
 {
-    if (!nr::resource::math::finiteVec(direction) || glm::dot(direction, direction) <= 1.0e-8f)
+    auto const lengthSquared = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
+    if (!nr::resource::math::finiteVec(direction) || lengthSquared <= 1.0e-8f)
     {
-        return glm::vec3{0.0f, 0.0f, -1.0f};
+        return {0.0f, 0.0f, -1.0f};
     }
-    return glm::normalize(direction);
+
+    auto const inverseLength = 1.0f / std::sqrt(lengthSquared);
+    return {
+        direction.x * inverseLength,
+        direction.y * inverseLength,
+        direction.z * inverseLength,
+    };
 }
 
 [[nodiscard]] nr::scene::SceneLightGpuRecord makeDefaultSunLightRecord() noexcept
@@ -112,14 +119,17 @@ void ensureAliasBuffer(nr::rhi::Device &device, LightPrepareFrameSlot &slot, std
     // intensity is illuminance in lux and color is a unitless linear RGB filter.
     return nr::scene::SceneLightGpuRecord{
         .meta =
-            glm::uvec4{
+            DirectX::XMUINT4{
                 nr::scene::sceneLightGpuType(nr::resource::LightType::directional),
                 0u,
                 std::numeric_limits<std::uint32_t>::max(),
                 0u,
             },
-        .colorIntensity = glm::vec4{glm::vec3{1.0f, 0.92f, 0.72f}, 32.0f},
-        .direction = glm::vec4{normalizedDirection(glm::vec3{0.482f, -0.704f, -0.522f}), 0.0f},
+        .colorIntensity = DirectX::XMFLOAT4{1.0f, 0.92f, 0.72f, 32.0f},
+        .direction = [&] {
+            auto const direction = normalizedDirection({0.482f, -0.704f, -0.522f});
+            return DirectX::XMFLOAT4{direction.x, direction.y, direction.z, 0.0f};
+        }(),
     };
 }
 
@@ -139,17 +149,20 @@ void ensureAliasBuffer(nr::rhi::Device &device, LightPrepareFrameSlot &slot, std
 
     return nr::scene::SceneLightGpuRecord{
         .meta =
-            glm::uvec4{
+            DirectX::XMUINT4{
                 nr::scene::sceneLightGpuType(light.type),
                 flags,
                 packet.stableInstanceId,
                 0u,
             },
-        .colorIntensity = glm::vec4{light.color, intensity},
-        .positionRange = glm::vec4{packet.position, range},
-        .direction = glm::vec4{normalizedDirection(packet.direction), 0.0f},
+        .colorIntensity = DirectX::XMFLOAT4{light.color.x, light.color.y, light.color.z, intensity},
+        .positionRange = DirectX::XMFLOAT4{packet.position.x, packet.position.y, packet.position.z, range},
+        .direction = [&] {
+            auto const direction = normalizedDirection(packet.direction);
+            return DirectX::XMFLOAT4{direction.x, direction.y, direction.z, 0.0f};
+        }(),
         .spotCone =
-            glm::vec4{
+            DirectX::XMFLOAT4{
                 innerCone,
                 outerCone,
                 std::cos(innerCone),

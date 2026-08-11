@@ -100,14 +100,11 @@ public MaterialSample sampleCoreMaterialVariant(StructuredBuffer<RtMaterialTextu
         sampleMaterialTextureVariant(textureRefs, material, MaterialTextureSlot.emissive, surface.texCoord0,
                                      surface.texCoord1, float4(1.0f), filterRandomValues.z);
 
-    MaterialSample sample;
-    sample.baseColor = material.baseColorFactor * baseColorTexture * surface.color0;
-    sample.alpha = saturate(sample.baseColor.a);
-    sample.metallic = saturate(material.emissiveAndMetallic.w * metallicRoughnessTexture.b);
-    sample.roughness =
-        clamp(material.roughnessNormalOcclusionAlpha.x * metallicRoughnessTexture.g, kMaterialMinRoughness, 1.0f);
-    sample.emissive = material.emissiveAndMetallic.rgb * emissiveTexture.rgb;
-    return sample;
+    float4 baseColor = material.baseColorFactor * baseColorTexture * surface.color0;
+    return MaterialSample(
+        baseColor, saturate(material.emissiveAndMetallic.w * metallicRoughnessTexture.b),
+        clamp(material.roughnessNormalOcclusionAlpha.x * metallicRoughnessTexture.g, kMaterialMinRoughness, 1.0f),
+        material.emissiveAndMetallic.rgb * emissiveTexture.rgb, saturate(baseColor.a));
 }
 
 // Canonical layer-record parser. Records are compact in bit order (base -> clearcoat -> sheen ->
@@ -119,8 +116,7 @@ public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMateria
     RtMaterialHeader material, RtSurfaceData surface, float3 orientedNormal, float3 clearcoatFilterRandomValues,
     inout RandomSequence filterSequence)
 {
-    MaterialLayerStack sample = {};
-    sample.clearcoatNormal = orientedNormal;
+    MaterialLayerStack sample = MaterialLayerStack(orientedNormal);
 
     uint layerRecordIndex = material.layerOffset + 1u;
 

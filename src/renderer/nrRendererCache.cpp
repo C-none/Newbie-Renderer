@@ -448,6 +448,24 @@ void BindlessImageTableCache::invalidateTablesForFrame(PipelinePassBindingCacheK
     });
 }
 
+[[nodiscard]] bool BindlessImageTableCache::snapshotNeededForFrame(PipelinePassBindingCacheKey ownerKey,
+                                                                    const BindlessImageTableRequest &request) const
+{
+    auto const tableKey = TableKey{
+        .ownerKey = ownerKey,
+        .tableKey = request.tableKey,
+    };
+    auto const tableIt = tables_.find(tableKey);
+    if (tableIt == tables_.end())
+    {
+        return true;
+    }
+
+    auto const &tableState = tableIt->second;
+    return !tableState.initialized || tableState.version != request.tableVersion ||
+           request.refreshActiveDescriptorsOnCacheHit;
+}
+
 [[nodiscard]] nr::rhi::ShaderBindingSnapshot BindlessImageTableCache::makeSnapshotForFrameCore(
     PipelinePassBindingCacheKey ownerKey, const nr::rhi::ShaderCursor &tableCursor,
     const nr::rhi::ShaderCursor &root, const BindlessImageTableRequest &request)
@@ -462,10 +480,6 @@ void BindlessImageTableCache::invalidateTablesForFrame(PipelinePassBindingCacheK
     auto &previousDescriptorIds = tableState.descriptorIds;
 
     auto const cacheHit = initialized && cachedVersion == request.tableVersion;
-    if (cacheHit && !request.refreshActiveDescriptorsOnCacheHit)
-    {
-        return {};
-    }
 
     auto currentDescriptorIds = request.descriptorsById | std::views::keys | std::ranges::to<std::set<std::uint32_t>>();
 
@@ -524,16 +538,12 @@ void BindlessImageTableCache::invalidateTablesForFrame(PipelinePassBindingCacheK
     std::ranges::for_each(request.descriptorsById,
                           [&](const auto &entry) { writeDescriptor(entry.first, entry.second); });
 
-    auto snapshot = root.snapshot();
-    if (cacheHit && request.refreshActiveDescriptorsOnCacheHit)
-    {
-        snapshot.forceDescriptorWrites();
-    }
-    root.clearSnapshot();
+    auto snapshot = root.takeSnapshot();
     initialized = true;
     cachedVersion = request.tableVersion;
     previousDescriptorIds = std::move(currentDescriptorIds);
-    return snapshot;
+    return cacheHit && request.refreshActiveDescriptorsOnCacheHit ? snapshot.withForcedDescriptorWrites()
+                                                                   : snapshot;
 }
 
 [[nodiscard]] RendererSceneTextureDescriptorTable RendererGlobalDescriptorTableCache::buildSceneTextureDescriptorTable(

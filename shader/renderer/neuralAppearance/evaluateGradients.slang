@@ -18,11 +18,27 @@ struct NeuralAppearanceGradientPushConstants
 
 struct NeuralAppearanceLossInputs : IDifferentiable
 {
-    NeuralAppearanceParameters parameters;
-    NeuralAppearanceLatentNeighborhood neighborhood;
-    no_diff float3 viewDirection;
-    no_diff float3 lightDirection;
-    no_diff float3 target;
+    NeuralAppearanceParameters parameters = NeuralAppearanceParameters();
+    NeuralAppearanceLatentNeighborhood neighborhood = NeuralAppearanceLatentNeighborhood();
+    no_diff float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
+    no_diff float3 lightDirection = float3(0.0f, 1.0f, 0.0f);
+    no_diff float3 target = float3(0.0f);
+
+    __init()
+    {
+    }
+
+    __init(
+        NeuralAppearanceParameters inputParameters,
+        NeuralAppearanceLatentNeighborhood inputNeighborhood,
+        float3 inputViewDirection, float3 inputLightDirection, float3 inputTarget)
+    {
+        parameters = inputParameters;
+        neighborhood = inputNeighborhood;
+        viewDirection = inputViewDirection;
+        lightDirection = inputLightDirection;
+        target = inputTarget;
+    }
 };
 
 [[vk::binding(0, 1)]]
@@ -71,17 +87,16 @@ NeuralAppearanceLatentNeighborhood loadNeuralAppearanceLatentNeighborhood(
         neuralAppearanceTexelIndex(baseTexel + int2(0, 1), width, height),
         neuralAppearanceTexelIndex(baseTexel + int2(1, 1), width, height));
 
-    NeuralAppearanceLatentNeighborhood neighborhood;
-    neighborhood.fraction = frac(texelPosition);
+    float4 values[8] = {};
     for (uint tap = 0u; tap < 4u; ++tap)
     {
         for (uint textureIndex = 0u; textureIndex < 2u; ++textureIndex)
         {
-            neighborhood.values[tap * 2u + textureIndex] =
+            values[tap * 2u + textureIndex] =
                 gTrainingLatent[texelIndices[tap] * 2u + textureIndex];
         }
     }
-    return neighborhood;
+    return NeuralAppearanceLatentNeighborhood(values, frac(texelPosition));
 }
 
 [Differentiable]
@@ -115,13 +130,11 @@ void evaluateGradientsMain(uint3 dispatchThreadID: SV_DispatchThreadID)
     float4 targetRecord = gSampleTargets[sampleIndex];
 
     uint4 texelIndices;
-    NeuralAppearanceLossInputs inputs;
-    inputs.parameters = loadNeuralAppearanceParameters(gModelParameters);
-    inputs.neighborhood = loadNeuralAppearanceLatentNeighborhood(
-        sample.uv, gTraining.latentWidth, gTraining.latentHeight, texelIndices);
-    inputs.viewDirection = sample.directions.viewDirection;
-    inputs.lightDirection = sample.directions.lightDirection;
-    inputs.target = targetRecord.xyz;
+    NeuralAppearanceLossInputs inputs = NeuralAppearanceLossInputs(
+        loadNeuralAppearanceParameters(gModelParameters),
+        loadNeuralAppearanceLatentNeighborhood(
+            sample.uv, gTraining.latentWidth, gTraining.latentHeight, texelIndices),
+        sample.directions.viewDirection, sample.directions.lightDirection, targetRecord.xyz);
 
     DifferentialPair<NeuralAppearanceLossInputs> pair = diffPair(inputs);
     bwd_diff(neuralAppearanceTrainingLoss)(pair, 1.0f);

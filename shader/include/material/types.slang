@@ -14,6 +14,23 @@ public struct RtSurfaceData
     public float2 texCoord0 = float2(0.0f);
     public float2 texCoord1 = float2(0.0f);
     public float4 color0 = float4(1.0f);
+
+    // Keeps the semantic fallback frame available to cross-module `{}` initialization.
+    public __init()
+    {
+    }
+
+    public __init(float3 position, float3 normal, float3 tangent, float tangentSign, float2 texCoord0, float2 texCoord1,
+           float4 color0)
+    {
+        this.position = position;
+        this.normal = normal;
+        this.tangent = tangent;
+        this.tangentSign = tangentSign;
+        this.texCoord0 = texCoord0;
+        this.texCoord1 = texCoord1;
+        this.color0 = color0;
+    }
 };
 
 public struct MaterialSample
@@ -23,6 +40,15 @@ public struct MaterialSample
     public float roughness = 1.0f;
     public float3 emissive = float3(0.0f);
     public float alpha = 1.0f;
+
+    public __init(float4 baseColor, float metallic, float roughness, float3 emissive, float alpha)
+    {
+        this.baseColor = baseColor;
+        this.metallic = metallic;
+        this.roughness = roughness;
+        this.emissive = emissive;
+        this.alpha = alpha;
+    }
 };
 
 public struct MaterialLayerStack
@@ -35,6 +61,29 @@ public struct MaterialLayerStack
     public float transmission = 0.0f;
     public RtTransmissionMode transmissionMode = RtTransmissionMode.thin;
     public float transmissionIor = 1.5f;
+
+    // Layer parsing begins from these defaults and conditionally overrides authored layers.
+    public __init()
+    {
+    }
+
+    public __init(float3 clearcoatNormal)
+    {
+        this.clearcoatNormal = clearcoatNormal;
+    }
+
+    public __init(float clearcoat, float clearcoatRoughness, float3 clearcoatNormal, float3 sheenColor,
+           float sheenRoughness, float transmission, RtTransmissionMode transmissionMode, float transmissionIor)
+    {
+        this.clearcoat = clearcoat;
+        this.clearcoatRoughness = clearcoatRoughness;
+        this.clearcoatNormal = clearcoatNormal;
+        this.sheenColor = sheenColor;
+        this.sheenRoughness = sheenRoughness;
+        this.transmission = transmission;
+        this.transmissionMode = transmissionMode;
+        this.transmissionIor = transmissionIor;
+    }
 };
 
 public struct MaterialDirectLightingInput
@@ -42,6 +91,18 @@ public struct MaterialDirectLightingInput
     public float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
     public float3 lightDirection = float3(0.0f, 1.0f, 0.0f);
     public float3 lightRadiance = float3(0.0f);
+
+    // Compatibility default for callers that fill lighting fields conditionally.
+    public __init()
+    {
+    }
+
+    public __init(float3 viewDirection, float3 lightDirection, float3 lightRadiance)
+    {
+        this.viewDirection = viewDirection;
+        this.lightDirection = lightDirection;
+        this.lightRadiance = lightRadiance;
+    }
 };
 
 public float3 safeNormalize(float3 value, float3 fallback)

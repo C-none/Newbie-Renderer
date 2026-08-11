@@ -238,6 +238,7 @@ namespace nr::renderer
     auto prepared = PreparedGraphFrame{};
     prepared.plan = buildPlan(compiled);
     prepared.runtimeBindings = resolveRuntimeResources(compiled, context);
+
     auto acquireBatch = std::ranges::find_if(compiled.submitBatches, [](const CompiledSubmitBatch &batch) {
         return batch.openedBySubmitNodeKind == SubmitBoundaryKind::SwapchainAcquire;
     });
@@ -246,9 +247,11 @@ namespace nr::renderer
         prepared.firstDeferredPrepareBatch =
             static_cast<std::size_t>(std::ranges::distance(compiled.submitBatches.begin(), acquireBatch));
     }
+
     auto const immediatePrepareBatchCount = prepared.firstDeferredPrepareBatch.value_or(compiled.submitBatches.size());
     prepared.invokedPassPrepareCount =
         invokePassPrepareCallbacks(compiled, context, prepared.runtimeBindings, 0u, immediatePrepareBatchCount);
+
     prepared.compiled = std::move(compiled);
     return prepared;
 }
@@ -263,25 +266,6 @@ namespace nr::renderer
 [[nodiscard]] ExecuteReport RenderGraphExecutor::executePrepared(const PreparedGraphFrame &prepared,
                                                                  const ExecuteContext &context)
 {
-    auto telemetry = context.benchmarkTelemetry;
-    if (telemetry.has_value())
-    {
-        telemetry->get() = {};
-    }
-    auto const timingStart = [&] {
-        return telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    };
-    auto const elapsedMilliseconds = [](std::chrono::steady_clock::time_point start) {
-        return std::chrono::duration<double, std::milli>{std::chrono::steady_clock::now() - start}.count();
-    };
-    auto const recordTiming = [&](double ExecutorBenchmarkTelemetry::*field,
-                                  std::chrono::steady_clock::time_point start) {
-        if (telemetry.has_value())
-        {
-            telemetry->get().*field += elapsedMilliseconds(start);
-        }
-    };
-    auto const executorSetupStart = timingStart();
     auto report = ExecuteReport{};
     report.plan = prepared.plan;
     report.invokedPassPrepareCount = prepared.invokedPassPrepareCount;
@@ -312,14 +296,10 @@ namespace nr::renderer
     }
 
     auto frameSlot = static_cast<std::size_t>(context.frameIndex % static_cast<std::uint32_t>(frameCount));
-    recordTiming(&ExecutorBenchmarkTelemetry::executorSetupMilliseconds, executorSetupStart);
 
     auto &frameTimingState = gpuPassTimingStatesByFrame_[frameSlot];
-    auto const completedGpuTimingReadbackStart = timingStart();
     report.completedGpuPassTimingFrame = collectCompletedGpuPassTimings(context.device, frameTimingState);
-    recordTiming(&ExecutorBenchmarkTelemetry::completedGpuTimingReadbackMilliseconds, completedGpuTimingReadbackStart);
 
-    auto const timingSetupStart = timingStart();
     auto currentTimingSamples = buildPassTimingSamples(compiled);
     if (!currentTimingSamples.empty())
     {
@@ -328,9 +308,7 @@ namespace nr::renderer
             std::span<const GpuPassTimingSample>{currentTimingSamples.data(), currentTimingSamples.size()}));
     }
     ensureTimingQueryPool(context.device, frameTimingState, timingQueryCountForPassCount(currentTimingSamples.size()));
-    recordTiming(&ExecutorBenchmarkTelemetry::timingSetupMilliseconds, timingSetupStart);
 
-    auto const perFrameLookupStart = timingStart();
     auto desiredWorkerCount = resolvedRecordWorkerCount(context.device.frameManager.current());
     recordThreadPool_.ensureWorkerCount(desiredWorkerCount);
     report.recordWorkerCount = recordThreadPool_.workerCount();
@@ -380,11 +358,6 @@ namespace nr::renderer
         compiled.resources, [](const CompiledResourceDesc &resource) { return resource.isSwapchain; }));
     auto const acquireBoundaryCount = static_cast<std::size_t>(std::ranges::count_if(
         report.plan.batches, [](const ExecutorBatchPlan &batch) { return batch.acquiresSwapchainBeforeSubmit; }));
-    if (telemetry.has_value())
-    {
-        telemetry->get().compiledSubmitBatchCount = compiled.submitBatches.size();
-        telemetry->get().acquireBatchCount = acquireBoundaryCount;
-    }
     nrAssert(swapchainResourceCount == 0u || acquireBoundaryCount == 1u,
              "RenderGraphExecutor::execute requires exactly one swapchain-acquire boundary when swapchain resources "
              "are present.");
@@ -415,8 +388,6 @@ namespace nr::renderer
                  "RenderGraphExecutor::execute requires the swapchain acquire boundary immediately before the first "
                  "swapchain access.");
     }
-    recordTiming(&ExecutorBenchmarkTelemetry::perFrameLookupMilliseconds, perFrameLookupStart);
-
     auto previousSignalToken = RendererSubmitToken{};
     auto signalTokenByBatch = std::map<std::uint32_t, RendererSubmitToken>{};
     auto timedPassOffset = std::size_t{0};
@@ -450,7 +421,6 @@ namespace nr::renderer
         return appliedBarrierCount;
     };
 
-    auto const initialReleaseRecordSubmitStart = timingStart();
     auto initialReleaseOrdinals = std::views::iota(std::size_t{0}, report.plan.initialReleaseBatches.size());
     std::ranges::for_each(initialReleaseOrdinals, [&](std::size_t initialReleaseOrdinal) {
         const auto &planBatch = report.plan.initialReleaseBatches[initialReleaseOrdinal];
@@ -486,7 +456,6 @@ namespace nr::renderer
         context.device.submitFrameBatch(std::move(submitBatch), toQueueRole(planBatch.queue), false);
         ++report.submittedBatchCount;
     });
-    recordTiming(&ExecutorBenchmarkTelemetry::initialReleaseRecordSubmitMilliseconds, initialReleaseRecordSubmitStart);
 
     auto batchOrdinals = std::views::iota(std::size_t{0}, report.plan.batches.size());
     std::ranges::for_each(batchOrdinals, [&](std::size_t batchOrdinal) {
@@ -500,7 +469,6 @@ namespace nr::renderer
         {
             nrAssert(!report.swapchainImageIndex.has_value(),
                      "RenderGraphExecutor::execute encountered more than one swapchain acquire.");
-            auto const swapchainAcquireStart = timingStart();
             auto acquire = context.preAcquiredFrameImage.has_value()
                                ? *context.preAcquiredFrameImage
                                : context.device.acquireFrameImage(context.acquireTimeout);
@@ -515,25 +483,19 @@ namespace nr::renderer
             report.swapchainImageIndex = acquire.swapchainImageIndex;
             report.swapchainAcquireResult = acquire.swapchainResult;
             resolveSwapchainRuntimeResources(compiled, context, acquire.swapchainImageIndex, runtimeBindings);
-            recordTiming(&ExecutorBenchmarkTelemetry::swapchainAcquireMilliseconds, swapchainAcquireStart);
 
-            auto const deferredPrepareStart = timingStart();
             nrAssert(
                 !prepared.firstDeferredPrepareBatch.has_value() || *prepared.firstDeferredPrepareBatch == batchOrdinal,
                 "RenderGraphExecutor::execute deferred prepare boundary does not match the swapchain acquire batch.");
             report.invokedPassPrepareCount += invokePassPrepareCallbacks(compiled, context, runtimeBindings,
                                                                          batchOrdinal, compiled.submitBatches.size());
             deferredPrepareInvoked = true;
-            recordTiming(&ExecutorBenchmarkTelemetry::deferredPrepareMilliseconds, deferredPrepareStart);
         }
 
-        auto const taskPlanLaunchStart = timingStart();
         auto recordTasks =
             launchRecordTasksForBatch(context, frameSlot, batchOrdinal, compiled, compiledResourceByHandle,
                                       runtimeBindings, frameDataByHandle, report);
-        recordTiming(&ExecutorBenchmarkTelemetry::taskPlanLaunchMilliseconds, taskPlanLaunchStart);
 
-        auto const primaryRecordBeforeCollectStart = timingStart();
         auto &commandBuffer = primaryCommandBufferForQueue(context, frameSlot, planBatch.queue, batchOrdinal);
 
         commandBuffer.reset();
@@ -556,14 +518,9 @@ namespace nr::renderer
                 report.appliedAcquireBarrierCount += recordOwnershipTransitions(
                     commandBuffer, planBatch.headAcquireTransitions, TransitionPlacement::Acquire);
             }
-            recordTiming(&ExecutorBenchmarkTelemetry::primaryRecordBeforeCollectMilliseconds,
-                         primaryRecordBeforeCollectStart);
 
-            auto const recordCompletionWaitStart = timingStart();
             auto recordResults = collectRecordTaskResults(recordTasks, batchOrdinal, report);
-            recordTiming(&ExecutorBenchmarkTelemetry::recordCompletionWaitMilliseconds, recordCompletionWaitStart);
 
-            auto const primaryReplayBarrierTimestampStart = timingStart();
             executeRecordedSecondaries(
                 commandBuffer, compiledBatch,
                 std::span<const RecordPassExecutionPlan>{recordTasks.passPlans.data(), recordTasks.passPlans.size()},
@@ -575,11 +532,8 @@ namespace nr::renderer
                 report.appliedReleaseBarrierCount += recordOwnershipTransitions(
                     commandBuffer, planBatch.tailReleaseTransitions, TransitionPlacement::Release);
             }
-            recordTiming(&ExecutorBenchmarkTelemetry::primaryReplayBarrierTimestampMilliseconds,
-                         primaryReplayBarrierTimestampStart);
         }
 
-        auto const primaryEndAndSubmitBuildStart = timingStart();
         nr::rhi::CommandRecorder::end(commandBuffer);
 
         auto submitBatch = nr::rhi::CommandBatch{};
@@ -626,18 +580,14 @@ namespace nr::renderer
                                            : vk::PipelineStageFlags2{};
         attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, planBatch.signalsPresent,
                                     report.swapchainImageIndex);
-        recordTiming(&ExecutorBenchmarkTelemetry::primaryEndAndSubmitBuildMilliseconds, primaryEndAndSubmitBuildStart);
-        auto const queueSubmitStart = timingStart();
         context.device.submitFrameBatch(std::move(submitBatch), submitRole, planBatch.signalsPresent,
                                         imageAvailableWaitStage);
         ++report.submittedBatchCount;
         report.submittedCompiledBatchIndices.push_back(compiledBatch.batchIndex);
-        recordTiming(&ExecutorBenchmarkTelemetry::queueSubmitMilliseconds, queueSubmitStart);
     });
 
     if (report.plan.requiresSyntheticPresentBatch)
     {
-        auto const syntheticPresentRecordSubmitStart = timingStart();
         auto &commandBuffer =
             primaryCommandBufferForQueue(context, frameSlot, QueueDomain::Compute,
                                          report.plan.batches.size() + report.plan.initialReleaseBatches.size());
@@ -658,11 +608,8 @@ namespace nr::renderer
         attachFrameBoundaryMetadata(submitBatch, context, frameBoundaryFrameID, true, report.swapchainImageIndex);
         context.device.submitFrameBatch(std::move(submitBatch), nr::rhi::QueueRole::Compute, true);
         ++report.submittedBatchCount;
-        recordTiming(&ExecutorBenchmarkTelemetry::syntheticPresentRecordSubmitMilliseconds,
-                     syntheticPresentRecordSubmitStart);
     }
 
-    auto const finalizationStart = timingStart();
     updateRetainedExternalResourceStates(compiled, signalTokenByBatch);
 
     nrAssert(!prepared.firstDeferredPrepareBatch.has_value() || deferredPrepareInvoked,
@@ -670,13 +617,6 @@ namespace nr::renderer
 
     frameTimingState.pendingFrameOrdinal = context.frameOrdinal;
     frameTimingState.pendingPasses = std::move(currentTimingSamples);
-    if (telemetry.has_value())
-    {
-        telemetry->get().recordTaskCount = report.submittedRecordTaskCount;
-        telemetry->get().replayedSecondaryCommandBufferCount = report.replayedSecondaryCommandBufferCount;
-        telemetry->get().queueSubmitCount = report.submittedBatchCount;
-    }
-    recordTiming(&ExecutorBenchmarkTelemetry::finalizationMilliseconds, finalizationStart);
 
     return report;
 }

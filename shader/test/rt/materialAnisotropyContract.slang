@@ -19,8 +19,9 @@ uint instantiateMaterialChs<let LayerFlags : RtMaterialLayerFlag>(ClosestHitInpu
 [numthreads(1, 1, 1)]
 void computeMain(uint3 dispatchThreadId: SV_DispatchThreadID)
 {
-    ClosestHitInput input = {};
-    input.material = gMaterialHeader;
+    ClosestHitInput input = ClosestHitInput(
+        false, gMaterialHeader, RtSurfaceData(), float3(0.0f, 1.0f, 0.0f), float3(0.0f, 1.0f, 0.0f), true,
+        kRtMaterialFallbackIndex, 0xffffffffu, 0xffffffffu, float4(0.0f), RandomSequence(), 1.0f, 1.0f);
     uint selector = dispatchThreadId.x & 15u;
     switch (selector)
     {

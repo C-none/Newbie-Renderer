@@ -6,24 +6,6 @@ import std;
 
 namespace
 {
-[[nodiscard]] std::string readProjectFile(std::filesystem::path relativePath)
-{
-    auto path = std::filesystem::path{std::string{nr::projectRoot}} / relativePath;
-    auto file = std::ifstream{path};
-    nr::test::require(file.good(), std::format("failed to open {}", path.generic_string()));
-
-    auto contents = std::ostringstream{};
-    contents << file.rdbuf();
-    return contents.str();
-}
-
-[[nodiscard]] std::string removeWhitespace(std::string_view value)
-{
-    return value |
-           std::views::filter([](char character) { return std::isspace(static_cast<unsigned char>(character)) == 0; }) |
-           std::ranges::to<std::string>();
-}
-
 [[nodiscard]] nr::renderer::RendererBenchmarkFrame frame(std::uint64_t ordinal, double totalMilliseconds)
 {
     auto sample = nr::renderer::RendererBenchmarkFrame{};
@@ -37,8 +19,6 @@ struct AuditInput
     std::vector<nr::renderer::RendererBenchmarkFrame> frames{};
     std::vector<nr::renderer::RendererBenchmarkGpuPass> passes{};
     std::vector<nr::renderer::RendererBenchmarkGpuFrameStatus> statuses{};
-    std::vector<double> nodeBuildMilliseconds{};
-    std::vector<nr::renderer::RendererBenchmarkAsTelemetry> accelerationStructures{};
 };
 
 [[nodiscard]] AuditInput validAuditInput()
@@ -47,7 +27,6 @@ struct AuditInput
         .frames = {frame(1u, 1.0)},
         .passes = {{.frameOrdinal = 1u, .passIndex = 0u, .debugName = "main", .milliseconds = 1.0}},
         .statuses = {{.frameOrdinal = 1u, .expectedPassCount = 1u, .availablePassCount = 1u, .complete = true}},
-        .accelerationStructures = {{.recorded = true, .available = true}},
     };
 }
 
@@ -56,11 +35,9 @@ struct AuditInput
     return nr::renderer::validateBenchmarkFrames(frames);
 }
 
-[[nodiscard]] nr::renderer::RendererBenchmarkQualityAudit audit(
-    const AuditInput &input, std::size_t expectedNodeCount = 0u)
+[[nodiscard]] nr::renderer::RendererBenchmarkQualityAudit audit(const AuditInput &input)
 {
-    return nr::renderer::auditRendererBenchmark(input.frames, input.passes, input.statuses, expectedNodeCount,
-                                                input.nodeBuildMilliseconds, input.accelerationStructures);
+    return nr::renderer::auditRendererBenchmark(input.frames, input.passes, input.statuses);
 }
 
 void appendValidFrame(AuditInput &input)
@@ -70,8 +47,6 @@ void appendValidFrame(AuditInput &input)
         .frameOrdinal = 2u, .passIndex = 0u, .debugName = "main", .milliseconds = 1.0});
     input.statuses.emplace_back(nr::renderer::RendererBenchmarkGpuFrameStatus{
         .frameOrdinal = 2u, .expectedPassCount = 1u, .availablePassCount = 1u, .complete = true});
-    input.accelerationStructures.emplace_back(
-        nr::renderer::RendererBenchmarkAsTelemetry{.recorded = true, .available = true});
 }
 
 const nr::test::CaseRegistrar quantileCase{
@@ -95,11 +70,11 @@ const nr::test::CaseRegistrar distributionCase{
     }};
 
 const nr::test::CaseRegistrar validationCase{
-    "renderer benchmark rejects duplicate ordinals and invalid durations", [] {
+    "renderer benchmark accepts raw top-level CPU timings and rejects invalid frames", [] {
         auto valid = std::array{frame(3u, 1.0), frame(5u, 2.0)};
         valid.front().cpu.postSceneMilliseconds = 0.25;
+        valid.front().cpu.buildMilliseconds = 0.25;
         nr::test::require(validate(valid));
-        nr::test::requireEqual(nr::renderer::rendererBenchmarkClassifiedCpuMilliseconds(valid.front().cpu), 0.25);
 
         auto duplicate = std::array{frame(3u, 1.0), frame(3u, 2.0)};
         nr::test::require(!validate(duplicate));
@@ -107,109 +82,33 @@ const nr::test::CaseRegistrar validationCase{
         auto negative = std::array{frame(3u, -1.0)};
         nr::test::require(!validate(negative));
 
-        auto negativePostScene = std::array{frame(3u, 1.0)};
-        negativePostScene.front().cpu.postSceneMilliseconds = -0.1;
-        nr::test::require(!validate(negativePostScene));
+        auto negativeBuild = std::array{frame(3u, 1.0)};
+        negativeBuild.front().cpu.buildMilliseconds = -0.1;
+        nr::test::require(!validate(negativeBuild));
 
-        auto nonFinitePostScene = std::array{frame(3u, 1.0)};
-        nonFinitePostScene.front().cpu.postSceneMilliseconds = std::numeric_limits<double>::quiet_NaN();
-        nr::test::require(!validate(nonFinitePostScene));
+        auto nonFinitePrepare = std::array{frame(3u, 1.0)};
+        nonFinitePrepare.front().cpu.prepareMilliseconds = std::numeric_limits<double>::quiet_NaN();
+        nr::test::require(!validate(nonFinitePrepare));
 
         auto drift = std::array{frame(3u, 1.0), frame(4u, 2.0)};
         drift[1].configRevision = 2u;
         nr::test::require(!validate(drift));
     }};
 
-const nr::test::CaseRegistrar executeTelemetryCase{
-    "renderer benchmark validates execute telemetry accounting and counts", [] {
-        auto input = validAuditInput();
-        auto &sample = input.frames.front();
-        sample.cpu.executeMilliseconds = 1.0;
-        sample.execute.executorSetupMilliseconds = 0.2;
-        sample.execute.timingSetupMilliseconds = 0.1;
-        sample.execute.primaryReplayBarrierTimestampMilliseconds = 0.2;
-        sample.execute.queueSubmitMilliseconds = 0.1;
-        sample.execute.compiledSubmitBatchCount = 1u;
-        sample.execute.recordTaskCount = 1u;
-        sample.execute.replayedSecondaryCommandBufferCount = 1u;
-        sample.execute.queueSubmitCount = 1u;
-        sample.submitBatchCount = 1u;
-        sample.recordTaskCount = 1u;
-        sample.executeAccountedMainThreadMilliseconds =
-            nr::renderer::rendererBenchmarkExecuteAccountedMainThreadMilliseconds(sample.execute);
-        sample.executeUnclassifiedMilliseconds =
-            sample.cpu.executeMilliseconds - sample.executeAccountedMainThreadMilliseconds;
-        nr::test::require(nr::renderer::validateRendererBenchmarkExecuteTelemetry(sample));
-        nr::test::require(audit(input).framesValid);
-
-        auto nan = input;
-        nan.frames.front().execute.queueSubmitMilliseconds = std::numeric_limits<double>::quiet_NaN();
-        nr::test::require(!audit(nan).framesValid);
-
-        auto negative = input;
-        negative.frames.front().execute.queueSubmitMilliseconds = -0.1;
-        nr::test::require(!audit(negative).framesValid);
-
-        auto residual = input;
-        residual.frames.front().cpu.executeMilliseconds = 0.1;
-        residual.frames.front().executeUnclassifiedMilliseconds = 0.0;
-        nr::test::require(!audit(residual).framesValid);
-
-        auto inconsistentCounts = input;
-        inconsistentCounts.frames.front().execute.replayedSecondaryCommandBufferCount = 0u;
-        nr::test::require(!audit(inconsistentCounts).framesValid);
-    }};
-
-const nr::test::CaseRegistrar executeSchemaCase{
-    "renderer benchmark execute CSV and summary schemas are complete", [] {
-        auto const columns = nr::renderer::rendererBenchmarkExecuteCsvColumns();
-        auto const sections = nr::renderer::rendererBenchmarkExecuteSummarySections();
-        nr::test::requireEqual(columns.size(), std::size_t{22u});
-        nr::test::require(std::ranges::contains(columns, std::string_view{"execute_executor_setup_ms"}));
-        nr::test::require(std::ranges::contains(columns, std::string_view{"execute_unclassified_ms"}));
-        nr::test::require(std::ranges::contains(columns, std::string_view{"execute_queue_submits"}));
-        nr::test::requireEqual(sections.size(), std::size_t{2u});
-        nr::test::require(std::ranges::contains(sections, std::string_view{"execute_substages"}));
-        nr::test::require(std::ranges::contains(sections, std::string_view{"execute_counts"}));
-    }};
-
-const nr::test::CaseRegistrar frameCsvDelimiterCase{
-    "renderer benchmark CSV joins execute and node columns with one delimiter", [] {
-        auto const source = removeWhitespace(readProjectFile("src/renderer/nrRendererBenchmark.cpp"));
-        constexpr auto writerToken = std::string_view{"autoconst&execute=frame.execute;"};
-        constexpr auto literalToken = std::string_view{"frames<<std::format(\""};
-        constexpr auto argumentsToken = std::string_view{"\",execute.executorSetupMilliseconds"};
-        auto const writerBegin = source.find(writerToken);
-        auto const literalBegin = source.find(literalToken, writerBegin);
-        auto const argumentsBegin = source.find(argumentsToken, literalBegin);
-        nr::test::require(writerBegin != std::string::npos && literalBegin != std::string::npos &&
-                              argumentsBegin != std::string::npos,
-                          "failed to locate the benchmark execute CSV writer");
-        auto const formatLiteral = std::string_view{source}.substr(literalBegin + literalToken.size(),
-                                                                   argumentsBegin - literalBegin - literalToken.size());
-        nr::test::require(!formatLiteral.ends_with(','));
-        nr::test::require(source.find("frames<<std::format(\",{:.9f}\",benchmarkNodeBuildMilliseconds_",
-                                      argumentsBegin) != std::string::npos,
-                          "node build CSV writer must retain its leading delimiter");
-    }};
-
 const nr::test::CaseRegistrar cpuSchemaCase{
-    "renderer benchmark v4 preserves top-level CPU stages without Skeleton diagnostics", [] {
+    "renderer benchmark v8 exports only raw top-level CPU stages", [] {
         auto const stages = nr::renderer::rendererBenchmarkCpuStageColumns();
-        auto const substages = nr::renderer::rendererBenchmarkCpuSubstageColumns();
         nr::test::requireEqual(nr::renderer::rendererBenchmarkSchemaVersion(),
-                               std::string_view{"nr-renderer-benchmark-v4"});
-        nr::test::requireEqual(std::ranges::count(stages, std::string_view{"post_scene_ms"}), std::ptrdiff_t{1});
-        nr::test::requireEqual(std::ranges::count(substages, std::string_view{"post_scene_ms"}), std::ptrdiff_t{0});
-        nr::test::requireEqual(std::ranges::count(stages, std::string_view{"skeleton_patch_ms"}), std::ptrdiff_t{0});
-        nr::test::requireEqual(std::ranges::count(stages, std::string_view{"skeleton_rebuild_ms"}), std::ptrdiff_t{0});
-        nr::test::requireEqual(std::ranges::count(substages, std::string_view{"skeleton_patch_ms"}), std::ptrdiff_t{0});
-        nr::test::requireEqual(std::ranges::count(substages, std::string_view{"skeleton_rebuild_ms"}),
-                               std::ptrdiff_t{0});
-        auto const scene = std::ranges::find(stages, std::string_view{"scene_ms"});
+                               std::string_view{"nr-renderer-benchmark-v8"});
+        nr::test::requireEqual(stages.size(), std::size_t{10u});
+        nr::test::requireEqual(std::ranges::count(stages, std::string_view{"build_ms"}), std::ptrdiff_t{1});
+        nr::test::requireEqual(std::ranges::count(stages, std::string_view{"cpu_work_ms"}), std::ptrdiff_t{0});
+        nr::test::requireEqual(std::ranges::count(stages, std::string_view{"classified_ms"}), std::ptrdiff_t{0});
+        nr::test::requireEqual(std::ranges::count(stages, std::string_view{"unclassified_ms"}), std::ptrdiff_t{0});
         auto const postScene = std::ranges::find(stages, std::string_view{"post_scene_ms"});
         auto const build = std::ranges::find(stages, std::string_view{"build_ms"});
-        nr::test::require(scene != stages.end() && postScene == std::next(scene) && build == std::next(postScene));
+        auto const compile = std::ranges::find(stages, std::string_view{"compile_ms"});
+        nr::test::require(postScene != stages.end() && build == std::next(postScene) && compile == std::next(build));
     }};
 
 const nr::test::CaseRegistrar disabledFinalizationCase{
@@ -228,8 +127,6 @@ const nr::test::CaseRegistrar qualityAuditCase{"renderer benchmark quality audit
                                                    auto const result = audit(validAuditInput());
                                                    nr::test::require(result.valid);
                                                    nr::test::require(result.framesValid);
-                                                   nr::test::require(result.nodeTelemetryValid);
-                                                   nr::test::require(result.accelerationStructureTelemetryValid);
                                                }};
 
 const nr::test::CaseRegistrar gpuStatusAuditCase{
@@ -324,34 +221,9 @@ const nr::test::CaseRegistrar frameAuditCase{"renderer benchmark quality audit r
                                                      std::numeric_limits<double>::quiet_NaN();
                                                  nr::test::require(!audit(nan).framesValid);
 
-                                                 auto materialNegative = validAuditInput();
-                                                 materialNegative.frames.front().cpu.cpuWaitGpuMilliseconds = 2.0;
-                                                 nr::test::require(!audit(materialNegative).framesValid);
+                                                 auto invalidWait = validAuditInput();
+                                                 invalidWait.frames.front().cpu.cpuWaitGpuMilliseconds = 2.0;
+                                                 nr::test::require(!audit(invalidWait).framesValid);
                                              }};
 
-const nr::test::CaseRegistrar nodeAndAsAuditCase{
-    "renderer benchmark quality audit validates node and AS telemetry", [] {
-        auto nodeSize = validAuditInput();
-        nr::test::require(!audit(nodeSize, 1u).nodeTelemetryValid);
-
-        auto nodeNegative = validAuditInput();
-        nodeNegative.nodeBuildMilliseconds = {-1.0};
-        nr::test::require(!audit(nodeNegative, 1u).nodeTelemetryValid);
-
-        auto nodeNan = validAuditInput();
-        nodeNan.nodeBuildMilliseconds = {std::numeric_limits<double>::quiet_NaN()};
-        nr::test::require(!audit(nodeNan, 1u).nodeTelemetryValid);
-
-        auto unavailable = validAuditInput();
-        unavailable.accelerationStructures.front().available = false;
-        nr::test::require(!audit(unavailable).accelerationStructureTelemetryValid);
-
-        auto asNegative = validAuditInput();
-        asNegative.accelerationStructures.front().cacheScanMilliseconds = -1.0;
-        nr::test::require(!audit(asNegative).accelerationStructureTelemetryValid);
-
-        auto asNan = validAuditInput();
-        asNan.accelerationStructures.front().cacheScanMilliseconds = std::numeric_limits<double>::quiet_NaN();
-        nr::test::require(!audit(asNan).accelerationStructureTelemetryValid);
-    }};
 } // namespace

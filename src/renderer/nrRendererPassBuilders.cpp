@@ -707,7 +707,6 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
                         .chunkIndex = rangeContext.chunkIndex,
                         .range = rangeContext.range,
                         .commandBuffer = commandBuffer,
-                        .descriptorLayout = runtime->state().descriptorLayout,
                         .pipelineLayout = runtime->state().layout,
                         .extent = setup.targetExtent,
                     });
@@ -752,7 +751,6 @@ void RasterPassBuilder::bindGraphicsSetup(const vk::raii::CommandBuffer &command
             recordCallback(RasterPassRecordContext{
                 .pass = recordContext,
                 .commandBuffer = commandBuffer,
-                .descriptorLayout = runtime->state().descriptorLayout,
                 .pipelineLayout = runtime->state().layout,
                 .extent = setup.targetExtent,
             });
@@ -832,7 +830,6 @@ ComputePassBuilder &ComputePassBuilder::record(ComputePassRecordCallback callbac
             recordCallback(ComputePassRecordContext{
                 .pass = recordContext,
                 .commandBuffer = commandBuffer,
-                .descriptorLayout = runtime->state().descriptorLayout,
                 .pipelineLayout = runtime->state().layout,
             });
         },
@@ -881,7 +878,6 @@ RayTracingPassBuilder &RayTracingPassBuilder::record(RayTracingPassRecordCallbac
             recordCallback(RayTracingPassRecordContext{
                 .pass = recordContext,
                 .commandBuffer = commandBuffer,
-                .descriptorLayout = runtime->state().descriptorLayout,
                 .pipelineLayout = runtime->state().layout,
             });
         },

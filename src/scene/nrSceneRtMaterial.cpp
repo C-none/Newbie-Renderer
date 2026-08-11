@@ -1,6 +1,7 @@
 module nr.scene;
 import :rtMaterial;
 
+import dependency.math;
 import nr.resource;
 import nr.utils;
 import std;
@@ -21,7 +22,7 @@ namespace
     return material.slot(semantic).texture.valid();
 }
 
-[[nodiscard]] bool anyNonZero(glm::vec3 value) noexcept
+[[nodiscard]] bool anyNonZero(DirectX::XMFLOAT3 value) noexcept
 {
     return value.x != 0.0f || value.y != 0.0f || value.z != 0.0f;
 }
@@ -184,8 +185,10 @@ namespace
         .layer = RtMaterialLayerFlag::baseSurface,
         .p0 = material.core.baseColorFactor,
         .p1 =
-            glm::vec4{
-                material.core.emissiveFactor,
+            DirectX::XMFLOAT4{
+                material.core.emissiveFactor.x,
+                material.core.emissiveFactor.y,
+                material.core.emissiveFactor.z,
                 material.core.metallicFactor,
             },
     };
@@ -210,13 +213,13 @@ namespace
 
     return RtMaterialLayerRecord{
         .layer = RtMaterialLayerFlag::clearcoat,
-        .p0 = glm::vec4{factor, roughness, clearcoatNormalScale, 0.0f},
+        .p0 = DirectX::XMFLOAT4{factor, roughness, clearcoatNormalScale, 0.0f},
     };
 }
 
 [[nodiscard]] RtMaterialLayerRecord makeSheenLayer(const nr::resource::Material &material) noexcept
 {
-    auto color = glm::vec3{0.0f};
+    auto color = DirectX::XMFLOAT3{};
     auto roughness = 0.0f;
     if (material.sheen.has_value())
     {
@@ -226,7 +229,7 @@ namespace
 
     return RtMaterialLayerRecord{
         .layer = RtMaterialLayerFlag::sheen,
-        .p0 = glm::vec4{color, roughness},
+        .p0 = DirectX::XMFLOAT4{color.x, color.y, color.z, roughness},
     };
 }
 
@@ -235,7 +238,7 @@ namespace
     return RtMaterialLayerRecord{
         .layer = RtMaterialLayerFlag::transmission,
         .aux0 = static_cast<std::uint32_t>(transmissionMode(material)),
-        .p0 = glm::vec4{effectiveTransmissionFactor(material), transmissionIor(material), 0.0f, 0.0f},
+        .p0 = DirectX::XMFLOAT4{effectiveTransmissionFactor(material), transmissionIor(material), 0.0f, 0.0f},
     };
 }
 } // namespace
@@ -278,23 +281,24 @@ namespace
         .alphaMode = toRtAlphaMode(material.core.alphaMode),
         .alphaCutoff = material.core.alphaCutoff,
         .baseColorFactor = material.core.baseColorFactor,
-        .emissiveAndMetallic = glm::vec4{material.core.emissiveFactor, material.core.metallicFactor},
+        .emissiveAndMetallic = DirectX::XMFLOAT4{material.core.emissiveFactor.x, material.core.emissiveFactor.y,
+                                                  material.core.emissiveFactor.z, material.core.metallicFactor},
         .roughnessNormalOcclusionAlpha =
-            glm::vec4{
+            DirectX::XMFLOAT4{
                 material.core.roughnessFactor,
                 baseNormalScale,
                 material.core.occlusionStrength,
                 material.core.alphaCutoff,
             },
         .transmissionClearcoatSheen =
-            glm::vec4{
+            DirectX::XMFLOAT4{
                 0.0f,
                 clearcoatFactor,
                 clearcoatRoughness,
                 sheenMax,
             },
         .anisotropy =
-            glm::vec4{
+            DirectX::XMFLOAT4{
                 anisotropyStrength,
                 physicalLayerFlags != RtMaterialLayerFlag::none ? anisotropyRotation(material) : 0.0f,
                 anisotropyTexturePresent ? 1.0f : 0.0f,
@@ -369,7 +373,7 @@ namespace
 {
     auto material = nr::resource::Material{};
     material.name = "rt_fallback";
-    material.core.baseColorFactor = glm::vec4{1.0f, 0.0f, 1.0f, 1.0f};
+    material.core.baseColorFactor = DirectX::XMFLOAT4{1.0f, 0.0f, 1.0f, 1.0f};
     material.core.roughnessFactor = 1.0f;
     material.core.metallicFactor = 0.0f;
     return compileRtMaterial(material);

@@ -324,7 +324,7 @@ class BindlessImageTableCache
         nrAssert(request.descriptorCapacity > 0u, "BindlessImageTableCache requires descriptorCapacity > 0.");
 
         auto const ownerKey = pipeline.passBindingCacheKey(passBinding, frameIndex);
-        auto root = pipeline.rootCursor();
+        auto root = pipeline.state().descriptorLayout.rootCursor();
         if (!root.hasField(request.shaderSymbol))
         {
             nrAssert(request.requirement == BindlessImageTableRequirement::optional,
@@ -380,7 +380,7 @@ class BindlessImageTableCache
         nrAssert(request.descriptorCapacity > 0u, "BindlessImageTableCache requires descriptorCapacity > 0.");
 
         auto const ownerKey = pipeline.passBindingCacheKey(passBinding, frameIndex);
-        auto root = pipeline.rootCursor();
+        auto root = pipeline.state().descriptorLayout.rootCursor();
         if (!root.hasField(request.shaderSymbol))
         {
             nrAssert(request.requirement == BindlessImageTableRequirement::optional,
@@ -424,7 +424,14 @@ class BindlessImageTableCache
             invalidateTablesForFrame(ownerKey);
         }
 
-        return makeSnapshotForFrameCore(ownerKey, tableCursor, root, request);
+        if (!snapshotNeededForFrame(ownerKey, request))
+        {
+            return {};
+        }
+
+        auto recordingRoot = pipeline.recordingCursor(passBinding, frameIndex);
+        auto recordingTableCursor = recordingRoot[request.shaderSymbol];
+        return makeSnapshotForFrameCore(ownerKey, recordingTableCursor, recordingRoot, request);
     }
 
   private:
@@ -444,6 +451,9 @@ class BindlessImageTableCache
     };
 
     void invalidateTablesForFrame(PipelinePassBindingCacheKey ownerKey) noexcept;
+
+    [[nodiscard]] bool snapshotNeededForFrame(PipelinePassBindingCacheKey ownerKey,
+                                              const BindlessImageTableRequest &request) const;
 
     [[nodiscard]] nr::rhi::ShaderBindingSnapshot makeSnapshotForFrameCore(PipelinePassBindingCacheKey ownerKey,
                                                                           const nr::rhi::ShaderCursor &tableCursor,

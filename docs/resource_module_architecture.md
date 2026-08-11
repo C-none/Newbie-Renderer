@@ -79,7 +79,18 @@ Mesh-specific consequence:
 - Each `MeshGeometry` represents one source primitive / future BLAS geometry range and must carry a valid material handle.
 - A mesh is the future BLAS unit; geometry is the material-mapping and draw/build-range unit.
 
-### 3.3 Validation stays close to the data
+### 3.3 Math storage and transform convention are explicit
+
+`nr.resource` obtains DirectXMath only through `dependency.math`. Resource records keep
+standard-layout `DirectX::XMFLOAT*` and `XMUINT*` storage values; `XMVECTOR` and
+`XMMATRIX` are local SIMD computation values and must not be retained in records or
+containers. Quaternions use `XMFLOAT4` in `x, y, z, w` order.
+
+Persistent transforms use row-major `XMFLOAT4X4` and the project convention is a row
+vector multiplied on the left (`v * M`). Importers convert external column-vector matrix
+conventions at their boundary so scene/resource consumers do not mix conventions.
+
+### 3.4 Validation stays close to the data
 
 Normalization and validation helpers such as mesh-bound rebuilding, skin-weight normalization, texture validity checks, and hierarchy validation belong here because they are properties of the data itself.
 
@@ -87,7 +98,7 @@ Important consequence:
 
 - scene bridge code should reuse these helpers instead of re-implementing ad-hoc validation logic
 
-### 3.4 `CameraAsset` is authored lens data, not runtime camera control
+### 3.5 `CameraAsset` is authored lens data, not runtime camera control
 
 The current `CameraAsset` in [../src/resource/nrResourceCamera.ixx](../src/resource/nrResourceCamera.ixx) stores authored projection parameters:
 

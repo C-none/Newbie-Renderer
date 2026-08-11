@@ -8,9 +8,59 @@ namespace
 {
 constexpr auto kReferenceMinLengthSquared = 1.0e-8f;
 
-[[nodiscard]] glm::vec3 safeNormalizeReference(glm::vec3 value, glm::vec3 fallback) noexcept
+[[nodiscard]] constexpr DirectX::XMFLOAT3 operator+(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs) noexcept
 {
-    auto const lengthSquared = glm::dot(value, value);
+    return {lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z};
+}
+
+[[nodiscard]] constexpr DirectX::XMFLOAT3 operator-(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs) noexcept
+{
+    return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
+}
+
+[[nodiscard]] constexpr DirectX::XMFLOAT3 operator-(DirectX::XMFLOAT3 value) noexcept
+{
+    return {-value.x, -value.y, -value.z};
+}
+
+[[nodiscard]] constexpr DirectX::XMFLOAT3 operator*(DirectX::XMFLOAT3 value, float scale) noexcept
+{
+    return {value.x * scale, value.y * scale, value.z * scale};
+}
+
+[[nodiscard]] constexpr DirectX::XMFLOAT3 operator*(float scale, DirectX::XMFLOAT3 value) noexcept
+{
+    return value * scale;
+}
+
+[[nodiscard]] constexpr DirectX::XMFLOAT3 operator*(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs) noexcept
+{
+    return {lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z};
+}
+
+[[nodiscard]] constexpr DirectX::XMFLOAT3 operator/(DirectX::XMFLOAT3 value, float divisor) noexcept
+{
+    return {value.x / divisor, value.y / divisor, value.z / divisor};
+}
+
+[[nodiscard]] constexpr float dot(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs) noexcept
+{
+    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
+}
+
+[[nodiscard]] float length(DirectX::XMFLOAT3 value) noexcept
+{
+    return std::sqrt(dot(value, value));
+}
+
+[[nodiscard]] DirectX::XMFLOAT3 normalize(DirectX::XMFLOAT3 value) noexcept
+{
+    return value / length(value);
+}
+
+[[nodiscard]] DirectX::XMFLOAT3 safeNormalizeReference(DirectX::XMFLOAT3 value, DirectX::XMFLOAT3 fallback) noexcept
+{
+    auto const lengthSquared = dot(value, value);
     if (lengthSquared > kReferenceMinLengthSquared)
     {
         return value / std::sqrt(lengthSquared);
@@ -18,19 +68,19 @@ constexpr auto kReferenceMinLengthSquared = 1.0e-8f;
     return fallback;
 }
 
-[[nodiscard]] glm::vec3 reflectReference(glm::vec3 incidentDirection, glm::vec3 normal) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 reflectReference(DirectX::XMFLOAT3 incidentDirection, DirectX::XMFLOAT3 normal) noexcept
 {
-    return incidentDirection - 2.0f * glm::dot(incidentDirection, normal) * normal;
+    return incidentDirection - 2.0f * dot(incidentDirection, normal) * normal;
 }
 
 struct GgxSpecularEnergyTermsReference
 {
-    glm::vec3 W{1.0f};
-    glm::vec3 E{1.0f};
+    DirectX::XMFLOAT3 W{1.0f, 1.0f, 1.0f};
+    DirectX::XMFLOAT3 E{1.0f, 1.0f, 1.0f};
 };
 
-[[nodiscard]] float correlatedSmithG2Reference(float alphaT, float alphaB, glm::vec3 localView,
-                                               glm::vec3 localLight) noexcept
+[[nodiscard]] float correlatedSmithG2Reference(float alphaT, float alphaB, DirectX::XMFLOAT3 localView,
+                                               DirectX::XMFLOAT3 localLight) noexcept
 {
     auto const noV = std::abs(localView.z);
     auto const noL = std::abs(localLight.z);
@@ -39,12 +89,12 @@ struct GgxSpecularEnergyTermsReference
         return 0.0f;
     }
 
-    auto const lenV = glm::length(glm::vec3{
+    auto const lenV = length(DirectX::XMFLOAT3{
         alphaT * localView.x,
         alphaB * localView.y,
         noV,
     });
-    auto const lenL = glm::length(glm::vec3{
+    auto const lenL = length(DirectX::XMFLOAT3{
         alphaT * localLight.x,
         alphaB * localLight.y,
         noL,
@@ -52,17 +102,17 @@ struct GgxSpecularEnergyTermsReference
     return 2.0f * noV * noL / std::max(noL * lenV + noV * lenL, 1.0e-7f);
 }
 
-[[nodiscard]] float separableSmithG2Reference(float alphaT, float alphaB, glm::vec3 localView,
-                                              glm::vec3 localLight) noexcept
+[[nodiscard]] float separableSmithG2Reference(float alphaT, float alphaB, DirectX::XMFLOAT3 localView,
+                                              DirectX::XMFLOAT3 localLight) noexcept
 {
-    auto smithG1 = [alphaT, alphaB](glm::vec3 direction) {
+    auto smithG1 = [alphaT, alphaB](DirectX::XMFLOAT3 direction) {
         auto const noX = std::abs(direction.z);
         if (noX <= 0.0f)
         {
             return 0.0f;
         }
 
-        auto const lenX = glm::length(glm::vec3{
+        auto const lenX = length(DirectX::XMFLOAT3{
             alphaT * direction.x,
             alphaB * direction.y,
             noX,
@@ -72,7 +122,7 @@ struct GgxSpecularEnergyTermsReference
     return smithG1(localView) * smithG1(localLight);
 }
 
-[[nodiscard]] glm::vec2 ggxDirectionalAlbedoAnalyticReference(float roughness, float noV) noexcept
+[[nodiscard]] DirectX::XMFLOAT2 ggxDirectionalAlbedoAnalyticReference(float roughness, float noV) noexcept
 {
     constexpr auto minRoughness = 0.045f;
     auto const r = std::max(roughness, minRoughness);
@@ -82,57 +132,58 @@ struct GgxSpecularEnergyTermsReference
     auto const oneMinusC = 1.0f - c;
     auto const fresnelDirectionalAlbedo = oneMinusC * oneMinusC * oneMinusC * oneMinusC * oneMinusC *
                                           std::pow(2.36651f * std::pow(c, 4.7703f * r) + 0.0387332f, r);
-    return glm::vec2{directionalAlbedo, fresnelDirectionalAlbedo};
+    return DirectX::XMFLOAT2{directionalAlbedo, fresnelDirectionalAlbedo};
 }
 
-[[nodiscard]] GgxSpecularEnergyTermsReference ggxSpecularEnergyTermsReference(float roughness, float noV, glm::vec3 f0,
-                                                                              glm::vec3 f90) noexcept
+[[nodiscard]] GgxSpecularEnergyTermsReference ggxSpecularEnergyTermsReference(float roughness, float noV, DirectX::XMFLOAT3 f0,
+                                                                              DirectX::XMFLOAT3 f90) noexcept
 {
     auto const splitSum = ggxDirectionalAlbedoAnalyticReference(roughness, noV);
     auto const safeDirectionalAlbedo = std::max(splitSum.x, 1.0e-4f);
 
     GgxSpecularEnergyTermsReference result;
-    result.W = glm::vec3{1.0f} + f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
+    result.W = DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f} +
+               f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
     result.E = result.W * (splitSum.x * f0 + splitSum.y * (f90 - f0));
     return result;
 }
 
-[[nodiscard]] glm::vec3 mirrorReflectionDirectionReference(glm::vec3 facingGeometryNormal, glm::vec3 direction) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 mirrorReflectionDirectionReference(DirectX::XMFLOAT3 facingGeometryNormal, DirectX::XMFLOAT3 direction) noexcept
 {
-    auto const safeGeometryNormal = safeNormalizeReference(facingGeometryNormal, glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeGeometryNormal = safeNormalizeReference(facingGeometryNormal, DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f});
     auto const safeDirection = safeNormalizeReference(direction, safeGeometryNormal);
     return safeNormalizeReference(
-        safeDirection - 2.0f * glm::dot(safeDirection, safeGeometryNormal) * safeGeometryNormal, safeDirection);
+        safeDirection - 2.0f * dot(safeDirection, safeGeometryNormal) * safeGeometryNormal, safeDirection);
 }
 
-[[nodiscard]] glm::vec3 foldReflectionDirectionReference(glm::vec3 facingGeometryNormal, glm::vec3 direction) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 foldReflectionDirectionReference(DirectX::XMFLOAT3 facingGeometryNormal, DirectX::XMFLOAT3 direction) noexcept
 {
-    auto const safeGeometryNormal = safeNormalizeReference(facingGeometryNormal, glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeGeometryNormal = safeNormalizeReference(facingGeometryNormal, DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f});
     auto const safeDirection = safeNormalizeReference(direction, safeGeometryNormal);
-    return glm::dot(safeGeometryNormal, safeDirection) >= 0.0f
+    return dot(safeGeometryNormal, safeDirection) >= 0.0f
                ? safeDirection
                : mirrorReflectionDirectionReference(safeGeometryNormal, safeDirection);
 }
 
-[[nodiscard]] float cosineHemispherePdfReference(glm::vec3 normal, glm::vec3 direction) noexcept
+[[nodiscard]] float cosineHemispherePdfReference(DirectX::XMFLOAT3 normal, DirectX::XMFLOAT3 direction) noexcept
 {
-    auto const safeNormal = safeNormalizeReference(normal, glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeNormal = safeNormalizeReference(normal, DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f});
     auto const safeDirection = safeNormalizeReference(direction, safeNormal);
-    return std::max(glm::dot(safeNormal, safeDirection), 0.0f) / std::numbers::pi_v<float>;
+    return std::max(dot(safeNormal, safeDirection), 0.0f) / std::numbers::pi_v<float>;
 }
 
-[[nodiscard]] float foldedCosineHemispherePdfReference(glm::vec3 shadingNormal, glm::vec3 facingGeometryNormal,
-                                                       glm::vec3 exteriorDirection) noexcept
+[[nodiscard]] float foldedCosineHemispherePdfReference(DirectX::XMFLOAT3 shadingNormal, DirectX::XMFLOAT3 facingGeometryNormal,
+                                                       DirectX::XMFLOAT3 exteriorDirection) noexcept
 {
-    auto const safeGeometryNormal = safeNormalizeReference(facingGeometryNormal, glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const safeGeometryNormal = safeNormalizeReference(facingGeometryNormal, DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f});
     auto const safeDirection = safeNormalizeReference(exteriorDirection, safeGeometryNormal);
-    if (glm::dot(safeGeometryNormal, safeDirection) < 0.0f)
+    if (dot(safeGeometryNormal, safeDirection) < 0.0f)
     {
         return 0.0f;
     }
 
     auto result = cosineHemispherePdfReference(shadingNormal, safeDirection);
-    if (glm::dot(safeGeometryNormal, safeDirection) > 0.0f)
+    if (dot(safeGeometryNormal, safeDirection) > 0.0f)
     {
         result += cosineHemispherePdfReference(shadingNormal,
                                                mirrorReflectionDirectionReference(safeGeometryNormal, safeDirection));
@@ -140,23 +191,23 @@ struct GgxSpecularEnergyTermsReference
     return result;
 }
 
-[[nodiscard]] glm::vec3 facingGeometryNormalReference(glm::vec3 geometryNormal, glm::vec3 shadingNormal,
-                                                      glm::vec3 viewDirection) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 facingGeometryNormalReference(DirectX::XMFLOAT3 geometryNormal, DirectX::XMFLOAT3 shadingNormal,
+                                                      DirectX::XMFLOAT3 viewDirection) noexcept
 {
-    auto const rawNormal = safeNormalizeReference(shadingNormal, glm::vec3{0.0f, 1.0f, 0.0f});
+    auto const rawNormal = safeNormalizeReference(shadingNormal, DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f});
     auto const facingNormal = safeNormalizeReference(geometryNormal, rawNormal);
-    return glm::dot(facingNormal, viewDirection) >= 0.0f ? facingNormal : -facingNormal;
+    return dot(facingNormal, viewDirection) >= 0.0f ? facingNormal : -facingNormal;
 }
 
-[[nodiscard]] glm::vec3 adjustSpecularNormalReference(glm::vec3 shadingNormal, glm::vec3 geometryNormal,
-                                                      glm::vec3 viewDirection) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 adjustSpecularNormalReference(DirectX::XMFLOAT3 shadingNormal, DirectX::XMFLOAT3 geometryNormal,
+                                                      DirectX::XMFLOAT3 viewDirection) noexcept
 {
     auto const facingGeometryNormal = facingGeometryNormalReference(geometryNormal, shadingNormal, viewDirection);
     auto const rawNormal = safeNormalizeReference(shadingNormal, facingGeometryNormal);
     auto const safeViewDirection = safeNormalizeReference(viewDirection, facingGeometryNormal);
     auto const incidentDirection = -safeViewDirection;
     auto const reflectedDirection = reflectReference(incidentDirection, rawNormal);
-    auto const geometryCosine = glm::dot(reflectedDirection, facingGeometryNormal);
+    auto const geometryCosine = dot(reflectedDirection, facingGeometryNormal);
 
     auto specularNormal = rawNormal;
     if (geometryCosine < 0.0f)
@@ -167,17 +218,17 @@ struct GgxSpecularEnergyTermsReference
         specularNormal = safeNormalizeReference(clippedReflection - incidentDirection, facingGeometryNormal);
     }
 
-    return glm::dot(specularNormal, safeViewDirection) >= 0.0f ? specularNormal : -specularNormal;
+    return dot(specularNormal, safeViewDirection) >= 0.0f ? specularNormal : -specularNormal;
 }
 
-[[nodiscard]] bool finite(glm::vec3 value) noexcept
+[[nodiscard]] bool finite(DirectX::XMFLOAT3 value) noexcept
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
-[[nodiscard]] bool nearlyEqual(glm::vec3 lhs, glm::vec3 rhs, float epsilon = 1.0e-5f) noexcept
+[[nodiscard]] bool nearlyEqual(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs, float epsilon = 1.0e-5f) noexcept
 {
-    return glm::length(lhs - rhs) <= epsilon;
+    return length(lhs - rhs) <= epsilon;
 }
 
 const nr::test::CaseRegistrar lobeSpecificNormalShaderMatrixCase{
@@ -203,38 +254,38 @@ const nr::test::CaseRegistrar lobeSpecificNormalShaderMatrixCase{
 
 const nr::test::CaseRegistrar lobeSpecificNormalIdentityAndGrazingCase{
     "lobe-specific normal adjustment preserves identity and clips grazing reflection", [] {
-        auto const geometryNormal = glm::vec3{0.0f, 1.0f, 0.0f};
+        auto const geometryNormal = DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f};
         auto const viewDirection = geometryNormal;
 
         auto const identity = adjustSpecularNormalReference(geometryNormal, geometryNormal, viewDirection);
         nr::test::require(nearlyEqual(identity, geometryNormal),
                           "matching raw and geometry normals should remain unchanged");
 
-        auto const rawGrazingNormal = safeNormalizeReference(glm::vec3{0.8660254f, 0.5f, 0.0f}, geometryNormal);
+        auto const rawGrazingNormal = safeNormalizeReference(DirectX::XMFLOAT3{0.8660254f, 0.5f, 0.0f}, geometryNormal);
         auto const unadjustedReflection = reflectReference(-viewDirection, rawGrazingNormal);
-        nr::test::require(glm::dot(unadjustedReflection, geometryNormal) < 0.0f,
+        nr::test::require(dot(unadjustedReflection, geometryNormal) < 0.0f,
                           "reference grazing normal should reflect below the geometric surface");
 
         auto const adjustedNormal = adjustSpecularNormalReference(rawGrazingNormal, geometryNormal, viewDirection);
         auto const adjustedReflection = reflectReference(-viewDirection, adjustedNormal);
-        nr::test::require(finite(adjustedNormal) && std::abs(glm::length(adjustedNormal) - 1.0f) <= 1.0e-5f,
+        nr::test::require(finite(adjustedNormal) && std::abs(length(adjustedNormal) - 1.0f) <= 1.0e-5f,
                           "adjusted grazing normal should remain finite and normalized");
-        nr::test::require(glm::dot(adjustedReflection, geometryNormal) >= -1.0e-5f,
+        nr::test::require(dot(adjustedReflection, geometryNormal) >= -1.0e-5f,
                           "adjusted ideal reflection should not cross below the geometric surface");
-        nr::test::require(glm::dot(adjustedNormal, viewDirection) >= 0.0f,
+        nr::test::require(dot(adjustedNormal, viewDirection) >= 0.0f,
                           "adjusted microfacet representative should face the view");
     }};
 
 const nr::test::CaseRegistrar lobeSpecificNormalDegenerateAndDoubleSidedCase{
     "lobe-specific normal adjustment handles degenerate projection and double-sided facing", [] {
-        auto const upward = glm::vec3{0.0f, 1.0f, 0.0f};
-        auto const tangentRawNormal = glm::vec3{1.0f, 0.0f, 0.0f};
+        auto const upward = DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f};
+        auto const tangentRawNormal = DirectX::XMFLOAT3{1.0f, 0.0f, 0.0f};
         auto const degenerate = adjustSpecularNormalReference(tangentRawNormal, upward, upward);
         nr::test::require(finite(degenerate) && nearlyEqual(degenerate, upward),
                           "zero tangent-plane reflection projection should use the finite geometry-normal fallback");
 
         auto const storedBackfaceNormal = -upward;
-        auto const rawBackfaceShadingNormal = safeNormalizeReference(glm::vec3{0.8660254f, 0.5f, 0.0f}, upward);
+        auto const rawBackfaceShadingNormal = safeNormalizeReference(DirectX::XMFLOAT3{0.8660254f, 0.5f, 0.0f}, upward);
         auto const facing = facingGeometryNormalReference(storedBackfaceNormal, rawBackfaceShadingNormal, upward);
         nr::test::require(nearlyEqual(facing, upward),
                           "double-sided BSDF geometry normal should face the current view");
@@ -250,10 +301,10 @@ const nr::test::CaseRegistrar lobeSpecificNormalThresholdCase{
     "lobe-specific normal adjustment remains finite and continuous at the clipping threshold", [] {
         constexpr auto threshold = 0.7853981633974483f;
         constexpr auto delta = 1.0e-4f;
-        auto const geometryNormal = glm::vec3{0.0f, 1.0f, 0.0f};
+        auto const geometryNormal = DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f};
         auto const viewDirection = geometryNormal;
         auto rawNormalAt = [](float angle) {
-            return glm::vec3{
+            return DirectX::XMFLOAT3{
                 std::sin(angle),
                 std::cos(angle),
                 0.0f,
@@ -267,11 +318,11 @@ const nr::test::CaseRegistrar lobeSpecificNormalThresholdCase{
         nr::test::require(finite(below) && finite(at) && finite(above),
                           "both sides of the clipping threshold should remain finite");
         nr::test::require(
-            glm::length(below - at) <= 5.0e-4f && glm::length(above - at) <= 5.0e-4f,
+            length(below - at) <= 5.0e-4f && length(above - at) <= 5.0e-4f,
             "specular normal should be continuous as ideal reflection reaches the geometric tangent plane");
 
         auto const reflectedAbove = reflectReference(-viewDirection, above);
-        nr::test::require(glm::dot(reflectedAbove, geometryNormal) >= -1.0e-5f,
+        nr::test::require(dot(reflectedAbove, geometryNormal) >= -1.0e-5f,
                           "the corrected side of the threshold should stay in the geometric hemisphere");
     }};
 
@@ -279,52 +330,55 @@ const nr::test::CaseRegistrar correlatedSmithGeometryCase{
     "GGX uses joint correlated Smith masking and shadowing", [] {
         constexpr auto alphaT = 0.8f;
         constexpr auto alphaB = 0.35f;
-        auto const localView = glm::normalize(glm::vec3{0.72f, 0.12f, 0.68f});
-        auto const localLight = glm::normalize(glm::vec3{-0.43f, 0.71f, 0.56f});
+        auto const localView = normalize(DirectX::XMFLOAT3{0.72f, 0.12f, 0.68f});
+        auto const localLight = normalize(DirectX::XMFLOAT3{-0.43f, 0.71f, 0.56f});
         auto const correlated = correlatedSmithG2Reference(alphaT, alphaB, localView, localLight);
         auto const separable = separableSmithG2Reference(alphaT, alphaB, localView, localLight);
 
         nr::test::require(std::isfinite(correlated) && correlated > separable + 1.0e-4f && correlated <= 1.0f,
                           "height correlation should retain more valid rough-lobe energy than independent G1 products");
-        nr::test::require(std::abs(correlatedSmithG2Reference(alphaT, alphaB, glm::vec3{0.0f, 0.0f, 1.0f},
-                                                              glm::vec3{0.0f, 0.0f, 1.0f}) -
+        nr::test::require(std::abs(correlatedSmithG2Reference(alphaT, alphaB, DirectX::XMFLOAT3{0.0f, 0.0f, 1.0f},
+                                                              DirectX::XMFLOAT3{0.0f, 0.0f, 1.0f}) -
                                    1.0f) <= 1.0e-6f,
                           "joint Smith masking should remain one at normal incidence");
         nr::test::require(std::abs(correlatedSmithG2Reference(alphaT, alphaB, localView,
-                                                              glm::vec3{localLight.x, localLight.y, -localLight.z}) -
+                                                              DirectX::XMFLOAT3{localLight.x, localLight.y, -localLight.z}) -
                                    correlated) <= 1.0e-6f,
                           "the shared correlated G2 helper should use the opposite-side cosine for transmission");
     }};
 
 const nr::test::CaseRegistrar ggxSpecularEnergyCompensationCase{
     "GGX Spec.W restores rough-lobe loss and Spec.E remains bounded", [] {
-        auto const terms = ggxSpecularEnergyTermsReference(0.85f, 0.2f, glm::vec3{0.04f, 0.2f, 0.8f}, glm::vec3{1.0f});
+        auto const terms = ggxSpecularEnergyTermsReference(
+            0.85f, 0.2f, DirectX::XMFLOAT3{0.04f, 0.2f, 0.8f}, DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f});
         nr::test::require(finite(terms.W) && finite(terms.E) && terms.W.x >= 1.0f && terms.W.y >= 1.0f &&
                               terms.W.z >= 1.0f && terms.E.x >= 0.0f && terms.E.y >= 0.0f && terms.E.z >= 0.0f &&
                               terms.E.x <= 1.0f + 1.0e-5f && terms.E.y <= 1.0f + 1.0e-5f && terms.E.z <= 1.0f + 1.0e-5f,
                           "rough GGX energy terms should be finite, compensating, and energy bounded");
 
-        auto const perfectReflector = ggxSpecularEnergyTermsReference(0.85f, 0.2f, glm::vec3{1.0f}, glm::vec3{1.0f});
-        nr::test::require(nearlyEqual(perfectReflector.E, glm::vec3{1.0f}, 1.0e-5f),
+        auto const perfectReflector = ggxSpecularEnergyTermsReference(
+            0.85f, 0.2f, DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f});
+        nr::test::require(nearlyEqual(perfectReflector.E, DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, 1.0e-5f),
                           "Spec.W should restore a Schlick perfect reflector to unit directional albedo");
 
-        auto const smoothTerms = ggxSpecularEnergyTermsReference(0.045f, 1.0f, glm::vec3{0.04f}, glm::vec3{1.0f});
-        nr::test::require(nearlyEqual(smoothTerms.W, glm::vec3{1.0f}, 1.0e-5f),
+        auto const smoothTerms = ggxSpecularEnergyTermsReference(
+            0.045f, 1.0f, DirectX::XMFLOAT3{0.04f, 0.04f, 0.04f}, DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f});
+        nr::test::require(nearlyEqual(smoothTerms.W, DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, 1.0e-5f),
                           "nearly smooth normal-incidence GGX should not receive material compensation");
     }};
 
 const nr::test::CaseRegistrar reflectionDirectionFoldGeometryCase{
     "reflection direction fold is an exterior-preserving mirror involution", [] {
-        auto const geometryNormal = glm::vec3{0.0f, 1.0f, 0.0f};
-        auto const interiorDirection = safeNormalizeReference(glm::vec3{0.6f, -0.7f, 0.25f}, geometryNormal);
-        auto const exteriorDirection = safeNormalizeReference(glm::vec3{-0.35f, 0.8f, 0.48f}, geometryNormal);
+        auto const geometryNormal = DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f};
+        auto const interiorDirection = safeNormalizeReference(DirectX::XMFLOAT3{0.6f, -0.7f, 0.25f}, geometryNormal);
+        auto const exteriorDirection = safeNormalizeReference(DirectX::XMFLOAT3{-0.35f, 0.8f, 0.48f}, geometryNormal);
 
         auto const mirrored = mirrorReflectionDirectionReference(geometryNormal, interiorDirection);
         auto const roundTrip = mirrorReflectionDirectionReference(geometryNormal, mirrored);
         nr::test::require(nearlyEqual(roundTrip, interiorDirection),
                           "reflection-plane mirroring should be an involution");
-        nr::test::require(glm::dot(geometryNormal, mirrored) > 0.0f &&
-                              glm::dot(geometryNormal, interiorDirection) < 0.0f,
+        nr::test::require(dot(geometryNormal, mirrored) > 0.0f &&
+                              dot(geometryNormal, interiorDirection) < 0.0f,
                           "mirroring should move an interior reflection direction to the exterior hemisphere");
 
         auto const foldedInterior = foldReflectionDirectionReference(geometryNormal, interiorDirection);
@@ -332,9 +386,9 @@ const nr::test::CaseRegistrar reflectionDirectionFoldGeometryCase{
         nr::test::require(nearlyEqual(foldedInterior, mirrored) && nearlyEqual(foldedExterior, exteriorDirection),
                           "folding should mirror only directions below the facing geometry plane");
 
-        auto const interiorTangent = interiorDirection - glm::dot(interiorDirection, geometryNormal) * geometryNormal;
-        auto const mirroredTangent = mirrored - glm::dot(mirrored, geometryNormal) * geometryNormal;
-        nr::test::require(std::abs(glm::length(mirrored) - glm::length(interiorDirection)) <= 1.0e-5f &&
+        auto const interiorTangent = interiorDirection - dot(interiorDirection, geometryNormal) * geometryNormal;
+        auto const mirroredTangent = mirrored - dot(mirrored, geometryNormal) * geometryNormal;
+        nr::test::require(std::abs(length(mirrored) - length(interiorDirection)) <= 1.0e-5f &&
                               nearlyEqual(mirroredTangent, interiorTangent),
                           "reflection-plane mirroring should preserve direction length and tangent components");
     }};
@@ -343,8 +397,8 @@ const nr::test::CaseRegistrar reflectionDirectionFoldPdfCase{
     "reflection direction fold preserves normalized push-forward probability", [] {
         constexpr auto cosineStepCount = 256u;
         constexpr auto azimuthStepCount = 512u;
-        auto const geometryNormal = glm::vec3{0.0f, 1.0f, 0.0f};
-        auto const shadingNormal = safeNormalizeReference(glm::vec3{0.8660254f, 0.5f, 0.0f}, geometryNormal);
+        auto const geometryNormal = DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f};
+        auto const shadingNormal = safeNormalizeReference(DirectX::XMFLOAT3{0.8660254f, 0.5f, 0.0f}, geometryNormal);
         auto const solidAngleStep =
             (2.0 * std::numbers::pi_v<double>) / static_cast<double>(cosineStepCount * azimuthStepCount);
         auto integratedProbability = 0.0;
@@ -355,7 +409,7 @@ const nr::test::CaseRegistrar reflectionDirectionFoldPdfCase{
             std::ranges::for_each(std::views::iota(0u, azimuthStepCount), [&](std::uint32_t azimuthIndex) {
                 auto const azimuth = 2.0f * std::numbers::pi_v<float> * (static_cast<float>(azimuthIndex) + 0.5f) /
                                      static_cast<float>(azimuthStepCount);
-                auto const exteriorDirection = glm::vec3{
+                auto const exteriorDirection = DirectX::XMFLOAT3{
                     sine * std::cos(azimuth),
                     geometryCosine,
                     sine * std::sin(azimuth),

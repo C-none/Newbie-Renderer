@@ -20,24 +20,24 @@ struct SceneLightGpuHeader
 struct SceneLightGpuRecord
 {
     // meta.x: LightType, meta.y: flags, meta.z: stable/debug instance id, meta.w: reserved.
-    glm::uvec4 meta{};
+    DirectX::XMUINT4 meta{};
     // colorIntensity.rgb: glTF unitless linear RGB color multiplier.
     // colorIntensity.w: glTF intensity, in lux for directional lights and
     // candela for point/spot lights.
-    glm::vec4 colorIntensity{};
+    DirectX::XMFLOAT4 colorIntensity{};
     // positionRange.xyz: world position for point/spot lights.
     // positionRange.w: glTF point/spot range in meters; <=0 means infinite.
-    glm::vec4 positionRange{};
-    glm::vec4 direction{};
-    glm::vec4 spotCone{};
+    DirectX::XMFLOAT4 positionRange{};
+    DirectX::XMFLOAT4 direction{};
+    DirectX::XMFLOAT4 spotCone{};
 };
 
 struct SceneLightAliasGpuRecord
 {
     // meta.x: primary light index, meta.y: alias light index, meta.zw: reserved.
-    glm::uvec4 meta{};
+    DirectX::XMUINT4 meta{};
     // probabilities.x: alias accept threshold, probabilities.y: primary pdf, probabilities.z: alias pdf.
-    glm::vec4 probabilities{};
+    DirectX::XMFLOAT4 probabilities{};
 };
 
 struct SceneLightAliasTableBuildResult
@@ -54,7 +54,7 @@ inline constexpr std::uint32_t kSceneLightGpuFlagCastShadow = 1u << 0u;
     return static_cast<std::uint32_t>(type);
 }
 
-[[nodiscard]] float sceneLightAliasEnergy(glm::vec3 color, float intensity) noexcept;
+[[nodiscard]] float sceneLightAliasEnergy(DirectX::XMFLOAT3 color, float intensity) noexcept;
 
 [[nodiscard]] float sceneLightAliasEnergy(const SceneLightGpuRecord &record) noexcept;
 

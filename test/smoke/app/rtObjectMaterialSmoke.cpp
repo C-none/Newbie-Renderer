@@ -279,7 +279,13 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
         .moveRight = true,
     });
     auto const movedPosition = movedCamera.frame().position;
-    if (glm::length(movedPosition - previousPosition) <= std::numeric_limits<float>::epsilon())
+    auto const cameraDisplacement = DirectX::XMFLOAT3{movedPosition.x - previousPosition.x,
+                                                       movedPosition.y - previousPosition.y,
+                                                       movedPosition.z - previousPosition.z};
+    auto const cameraDisplacementSquared = cameraDisplacement.x * cameraDisplacement.x +
+                                           cameraDisplacement.y * cameraDisplacement.y +
+                                           cameraDisplacement.z * cameraDisplacement.z;
+    if (cameraDisplacementSquared <= std::numeric_limits<float>::epsilon() * std::numeric_limits<float>::epsilon())
     {
         std::println("[error] rtobject material smoke failed to move the test camera.");
         return false;

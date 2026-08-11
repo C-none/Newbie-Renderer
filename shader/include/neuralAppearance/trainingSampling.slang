@@ -10,16 +10,40 @@ public static const uint kNeuralAppearanceMollificationSampleCountMax = 256u;
 
 public struct NeuralAppearanceDirectionPair
 {
-    public float3 viewDirection;
-    public float3 lightDirection;
+    public float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
+    public float3 lightDirection = float3(0.0f, 1.0f, 0.0f);
+
+    public __init()
+    {
+    }
+
+    public __init(float3 inputViewDirection, float3 inputLightDirection)
+    {
+        viewDirection = inputViewDirection;
+        lightDirection = inputLightDirection;
+    }
 };
 
 public struct NeuralAppearanceTrainingSample
 {
-    public uint sampleSeed;
-    public float2 uv;
-    public NeuralAppearanceDirectionPair directions;
-    public float mollificationAngle;
+    public uint sampleSeed = 0u;
+    public float2 uv = float2(0.5f);
+    public NeuralAppearanceDirectionPair directions = NeuralAppearanceDirectionPair();
+    public float mollificationAngle = 0.0f;
+
+    public __init()
+    {
+    }
+
+    public __init(
+        uint inputSampleSeed, float2 inputUv,
+        NeuralAppearanceDirectionPair inputDirections, float inputMollificationAngle)
+    {
+        sampleSeed = inputSampleSeed;
+        uv = inputUv;
+        directions = inputDirections;
+        mollificationAngle = inputMollificationAngle;
+    }
 };
 
 public uint neuralAppearanceTrainingHash(uint value)
@@ -77,10 +101,9 @@ NeuralAppearanceDirectionPair neuralAppearanceRusinkiewiczDirectionPair(
     float radialSin = sinThetaD * sin(phiD);
     float3 radial = halfTangent * radialCos + halfBitangent * radialSin;
 
-    NeuralAppearanceDirectionPair pair;
-    pair.viewDirection = halfDirection * cosThetaD + radial;
-    pair.lightDirection = halfDirection * cosThetaD - radial;
-    return pair;
+    return NeuralAppearanceDirectionPair(
+        halfDirection * cosThetaD + radial,
+        halfDirection * cosThetaD - radial);
 }
 
 public NeuralAppearanceDirectionPair neuralAppearanceTrainingDirectionPair(
@@ -106,10 +129,9 @@ public NeuralAppearanceDirectionPair neuralAppearanceTrainingDirectionPair(
     }
 
     // This path is deterministic and valid even if every rejection sample is grazing.
-    NeuralAppearanceDirectionPair fallback;
-    fallback.viewDirection = float3(0.0f, 1.0f, 0.0f);
-    fallback.lightDirection = float3(0.0f, 1.0f, 0.0f);
-    return fallback;
+    return NeuralAppearanceDirectionPair(
+        float3(0.0f, 1.0f, 0.0f),
+        float3(0.0f, 1.0f, 0.0f));
 }
 
 public float3 neuralAppearanceTrainingUniformConeDirection(
@@ -165,15 +187,14 @@ public NeuralAppearanceTrainingSample neuralAppearanceTrainingSample(
     uint trainingStep, uint sampleIndex,
     uint mollificationStepCount, float initialAngleRadians)
 {
-    NeuralAppearanceTrainingSample sample;
-    sample.sampleSeed = neuralAppearanceTrainingHash(
+    uint sampleSeed = neuralAppearanceTrainingHash(
         trainingStep * kNeuralAppearanceBatchSize + sampleIndex + 1u);
-    sample.uv = float2(
-        neuralAppearanceTrainingRandom(sample.sampleSeed, 0u),
-        neuralAppearanceTrainingRandom(sample.sampleSeed, 1u));
-    sample.directions = neuralAppearanceTrainingDirectionPair(
-        neuralAppearanceTrainingHash(sample.sampleSeed ^ 0x243f6a88u), 0u);
-    sample.mollificationAngle = neuralAppearanceTrainingMollificationAngle(
+    float2 uv = float2(
+        neuralAppearanceTrainingRandom(sampleSeed, 0u),
+        neuralAppearanceTrainingRandom(sampleSeed, 1u));
+    NeuralAppearanceDirectionPair directions = neuralAppearanceTrainingDirectionPair(
+        neuralAppearanceTrainingHash(sampleSeed ^ 0x243f6a88u), 0u);
+    float mollificationAngle = neuralAppearanceTrainingMollificationAngle(
         trainingStep, mollificationStepCount, initialAngleRadians);
-    return sample;
+    return NeuralAppearanceTrainingSample(sampleSeed, uv, directions, mollificationAngle);
 }

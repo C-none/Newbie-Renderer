@@ -1,8 +1,8 @@
+import std;
 import dependency.math;
 import dependency.vulkan;
 import nr.renderer;
 import nr.test;
-import std;
 
 namespace
 {
@@ -11,16 +11,55 @@ namespace
     return std::abs(left - right) <= epsilon;
 }
 
-[[nodiscard]] glm::vec3 ndcFromClip(const glm::vec4 &clip)
+[[nodiscard]] DirectX::XMFLOAT4 transformRowVector(const DirectX::XMFLOAT4 &vector,
+                                                    const DirectX::XMFLOAT4X4 &matrix) noexcept
 {
-    return glm::vec3{clip.x, clip.y, clip.z} / clip.w;
+    return DirectX::XMFLOAT4{
+        vector.x * matrix._11 + vector.y * matrix._21 + vector.z * matrix._31 + vector.w * matrix._41,
+        vector.x * matrix._12 + vector.y * matrix._22 + vector.z * matrix._32 + vector.w * matrix._42,
+        vector.x * matrix._13 + vector.y * matrix._23 + vector.z * matrix._33 + vector.w * matrix._43,
+        vector.x * matrix._14 + vector.y * matrix._24 + vector.z * matrix._34 + vector.w * matrix._44,
+    };
 }
 
-[[nodiscard]] glm::vec2 topLeftPixelFromClip(const glm::vec4 &clip, vk::Extent2D extent)
+[[nodiscard]] DirectX::XMFLOAT4X4 matrixProduct(const DirectX::XMFLOAT4X4 &left,
+                                                 const DirectX::XMFLOAT4X4 &right) noexcept
 {
-    auto const ndc = glm::vec2{clip.x, clip.y} / clip.w;
-    auto const uv = glm::vec2{ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f};
-    return uv * glm::vec2{extent.width, extent.height};
+    auto result = DirectX::XMFLOAT4X4{};
+    DirectX::XMStoreFloat4x4(&result,
+                              DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&left), DirectX::XMLoadFloat4x4(&right)));
+    return result;
+}
+
+[[nodiscard]] DirectX::XMFLOAT3 ndcFromClip(const DirectX::XMFLOAT4 &clip)
+{
+    return DirectX::XMFLOAT3{clip.x / clip.w, clip.y / clip.w, clip.z / clip.w};
+}
+
+[[nodiscard]] DirectX::XMFLOAT2 topLeftPixelFromClip(const DirectX::XMFLOAT4 &clip, vk::Extent2D extent)
+{
+    return DirectX::XMFLOAT2{
+        (clip.x / clip.w * 0.5f + 0.5f) * static_cast<float>(extent.width),
+        (0.5f - clip.y / clip.w * 0.5f) * static_cast<float>(extent.height),
+    };
+}
+
+[[nodiscard]] DirectX::XMFLOAT4X4 perspective(float verticalFovRadians, float aspect, float nearPlane,
+                                               float farPlane) noexcept
+{
+    auto result = DirectX::XMFLOAT4X4{};
+    DirectX::XMStoreFloat4x4(&result, DirectX::XMMatrixPerspectiveFovRH(verticalFovRadians, aspect, nearPlane, farPlane));
+    return result;
+}
+
+[[nodiscard]] DirectX::XMFLOAT4X4 lookAt(const DirectX::XMFLOAT3 &eye, const DirectX::XMFLOAT3 &target,
+                                          const DirectX::XMFLOAT3 &up) noexcept
+{
+    auto result = DirectX::XMFLOAT4X4{};
+    DirectX::XMStoreFloat4x4(&result, DirectX::XMMatrixLookAtRH(DirectX::XMLoadFloat3(&eye),
+                                                                 DirectX::XMLoadFloat3(&target),
+                                                                 DirectX::XMLoadFloat3(&up)));
+    return result;
 }
 
 const nr::test::CaseRegistrar haltonCase{
@@ -40,13 +79,13 @@ const nr::test::CaseRegistrar haltonCase{
 
 const nr::test::CaseRegistrar projectionJitterCase{
     "renderer projection jitter shifts projected NDC by requested offset", [] {
-        auto const projection = glm::perspectiveRH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
-        auto const ndcOffset = glm::vec2{0.01f, -0.02f};
+        auto const projection = perspective(nr::math::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        auto const ndcOffset = DirectX::XMFLOAT2{0.01f, -0.02f};
         auto const jitteredProjection = nr::renderer::applyCameraProjectionJitter(projection, ndcOffset);
 
-        auto const viewSpacePoint = glm::vec4{0.25f, -0.5f, -3.0f, 1.0f};
-        auto const baseNdc = ndcFromClip(projection * viewSpacePoint);
-        auto const jitteredNdc = ndcFromClip(jitteredProjection * viewSpacePoint);
+        auto const viewSpacePoint = DirectX::XMFLOAT4{0.25f, -0.5f, -3.0f, 1.0f};
+        auto const baseNdc = ndcFromClip(transformRowVector(viewSpacePoint, projection));
+        auto const jitteredNdc = ndcFromClip(transformRowVector(viewSpacePoint, jitteredProjection));
 
         nr::test::require(nearlyEqual(jitteredNdc.x - baseNdc.x, ndcOffset.x));
         nr::test::require(nearlyEqual(jitteredNdc.y - baseNdc.y, ndcOffset.y));
@@ -55,17 +94,22 @@ const nr::test::CaseRegistrar projectionJitterCase{
 const nr::test::CaseRegistrar unjitteredMotionCase{
     "renderer temporal motion excludes current camera jitter in top-left pixel units", [] {
         auto const extent = vk::Extent2D{1280u, 720u};
-        auto const projection = glm::perspectiveRH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
-        auto const view = glm::lookAtRH(glm::vec3{0.0f, 0.0f, 3.0f}, glm::vec3{0.0f}, glm::vec3{0.0f, 1.0f, 0.0f});
+        auto const projection = perspective(nr::math::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        auto const view = lookAt(DirectX::XMFLOAT3{0.0f, 0.0f, 3.0f}, DirectX::XMFLOAT3{0.0f, 0.0f, 0.0f},
+                                 DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f});
         auto const sample = nr::renderer::makeHalton23CameraJitterSample(0u, extent);
         auto const jitteredProjection = nr::renderer::applyCameraProjectionJitter(projection, sample.ndcOffset);
-        auto const worldPosition = glm::vec4{0.25f, -0.5f, 0.0f, 1.0f};
+        auto const worldPosition = DirectX::XMFLOAT4{0.25f, -0.5f, 0.0f, 1.0f};
 
-        auto const previousPixel = topLeftPixelFromClip(projection * view * worldPosition, extent);
-        auto const unjitteredCurrentPixel = topLeftPixelFromClip(projection * view * worldPosition, extent);
-        auto const jitteredCurrentPixel = topLeftPixelFromClip(jitteredProjection * view * worldPosition, extent);
-        auto const temporalMotion = previousPixel - unjitteredCurrentPixel;
-        auto const jitterContaminatedMotion = previousPixel - jitteredCurrentPixel;
+        auto const previousPixel = topLeftPixelFromClip(transformRowVector(worldPosition, matrixProduct(view, projection)), extent);
+        auto const unjitteredCurrentPixel =
+            topLeftPixelFromClip(transformRowVector(worldPosition, matrixProduct(view, projection)), extent);
+        auto const jitteredCurrentPixel =
+            topLeftPixelFromClip(transformRowVector(worldPosition, matrixProduct(view, jitteredProjection)), extent);
+        auto const temporalMotion = DirectX::XMFLOAT2{previousPixel.x - unjitteredCurrentPixel.x,
+                                                       previousPixel.y - unjitteredCurrentPixel.y};
+        auto const jitterContaminatedMotion = DirectX::XMFLOAT2{previousPixel.x - jitteredCurrentPixel.x,
+                                                                 previousPixel.y - jitteredCurrentPixel.y};
 
         nr::test::require(nearlyEqual(temporalMotion.x, 0.0f) && nearlyEqual(temporalMotion.y, 0.0f),
                           "a stable camera must have zero motion despite projection jitter");

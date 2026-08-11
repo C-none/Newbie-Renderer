@@ -8,8 +8,8 @@ export namespace nr::resource
 {
 struct Bone
 {
-    alignas(16) glm::mat4 inverseBindPose{1.0f};
-    alignas(16) glm::mat4 localBindPose{1.0f};
+    alignas(16) DirectX::XMFLOAT4X4 inverseBindPose{math::identity4x4()};
+    alignas(16) DirectX::XMFLOAT4X4 localBindPose{math::identity4x4()};
     std::string name{};
     std::int32_t parentIndex = -1;
 
@@ -31,13 +31,14 @@ struct Skeleton
 struct KeyframeVec3
 {
     float timeSeconds = 0.0f;
-    glm::vec3 value{};
+    DirectX::XMFLOAT3 value{};
 };
 
 struct KeyframeQuat
 {
     float timeSeconds = 0.0f;
-    glm::quat value{1.0f, 0.0f, 0.0f, 0.0f};
+    // DirectXMath quaternions use x, y, z, w component order.
+    DirectX::XMFLOAT4 value{0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 struct BoneAnimationTrack

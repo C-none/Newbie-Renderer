@@ -31,51 +31,51 @@ inline constexpr int kKeyE = 'E';
     return std::clamp(deltaSeconds, 1.0f / 240.0f, 0.1f);
 }
 
-[[nodiscard]] bool finiteVec3(const glm::vec3 &value) noexcept
+[[nodiscard]] bool finiteVec3(const DirectX::XMFLOAT3 &value) noexcept
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
-[[nodiscard]] bool finiteVec4(const glm::vec4 &value) noexcept
+[[nodiscard]] bool finiteMat4(const DirectX::XMFLOAT4X4 &value) noexcept
 {
-    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) && std::isfinite(value.w);
+    return std::isfinite(value._11) && std::isfinite(value._12) && std::isfinite(value._13) &&
+           std::isfinite(value._14) && std::isfinite(value._21) && std::isfinite(value._22) &&
+           std::isfinite(value._23) && std::isfinite(value._24) && std::isfinite(value._31) &&
+           std::isfinite(value._32) && std::isfinite(value._33) && std::isfinite(value._34) &&
+           std::isfinite(value._41) && std::isfinite(value._42) && std::isfinite(value._43) &&
+           std::isfinite(value._44);
 }
 
-[[nodiscard]] bool finiteMat4(const glm::mat4 &value) noexcept
-{
-    return finiteVec4(value[0]) && finiteVec4(value[1]) && finiteVec4(value[2]) && finiteVec4(value[3]);
-}
-
-[[nodiscard]] glm::uvec2 viewportExtentFrom(const nr::rhi::PresentationContext &presentation) noexcept
+[[nodiscard]] DirectX::XMUINT2 viewportExtentFrom(const nr::rhi::PresentationContext &presentation) noexcept
 {
     auto const extent = presentation.swapchainExtent();
     if (extent.width == 0u || extent.height == 0u)
     {
-        return glm::uvec2{1u, 1u};
+        return DirectX::XMUINT2{1u, 1u};
     }
 
-    return glm::uvec2{extent.width, extent.height};
+    return DirectX::XMUINT2{extent.width, extent.height};
 }
 
-[[nodiscard]] glm::vec3 cameraForwardFromWorld(const glm::mat4 &world) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 cameraForwardFromWorld(const DirectX::XMFLOAT4X4 &world) noexcept
 {
-    auto const forward = glm::vec3{-world[2].x, -world[2].y, -world[2].z};
-    auto const length = glm::length(forward);
+    auto const forward = DirectX::XMFLOAT3{-world._31, -world._32, -world._33};
+    auto const length = std::sqrt(forward.x * forward.x + forward.y * forward.y + forward.z * forward.z);
     if (!std::isfinite(length) || length <= 1e-6f)
     {
-        return glm::vec3{0.0f, 0.0f, -1.0f};
+        return DirectX::XMFLOAT3{0.0f, 0.0f, -1.0f};
     }
 
-    return forward / length;
+    return DirectX::XMFLOAT3{forward.x / length, forward.y / length, forward.z / length};
 }
 
 [[nodiscard]] nr::renderer::ViewerPerspectiveLens sanitizeLens(const nr::renderer::ViewerPerspectiveLens &lens) noexcept
 {
     auto result = lens;
     if (!std::isfinite(result.verticalFovRadians) || result.verticalFovRadians <= 1e-3f ||
-        result.verticalFovRadians >= (glm::pi<float>() - 1e-3f))
+        result.verticalFovRadians >= (nr::math::pi - 1e-3f))
     {
-        result.verticalFovRadians = glm::radians(60.0f);
+        result.verticalFovRadians = nr::math::radians(60.0f);
     }
 
     if (!std::isfinite(result.nearPlane) || result.nearPlane <= 1e-3f)
@@ -118,12 +118,12 @@ inline constexpr int kKeyE = 'E';
     auto const rotateActive = !captureState.wantsMouse && (presentation.mouseButtonDown(kMouseButtonLeft) ||
                                                            presentation.mouseButtonDown(kMouseButtonRight));
 
-    auto cursorDelta = glm::vec2{0.0f, 0.0f};
+    auto cursorDelta = DirectX::XMFLOAT2{0.0f, 0.0f};
     if (rotateActive)
     {
         if (cursorTracking.hasPrevious)
         {
-            cursorDelta = glm::vec2{
+            cursorDelta = DirectX::XMFLOAT2{
                 static_cast<float>(cursor.x - cursorTracking.previous.x),
                 static_cast<float>(cursor.y - cursorTracking.previous.y),
             };
@@ -153,13 +153,13 @@ inline constexpr int kKeyE = 'E';
 
 [[nodiscard]] float normalizedYawRadians(float yawRadians) noexcept
 {
-    auto const turn = glm::two_pi<float>();
-    auto normalized = std::fmod(yawRadians + glm::pi<float>(), turn);
+    auto const turn = nr::math::twoPi;
+    auto normalized = std::fmod(yawRadians + nr::math::pi, turn);
     if (normalized < 0.0f)
     {
         normalized += turn;
     }
-    return normalized - glm::pi<float>();
+    return normalized - nr::math::pi;
 }
 
 [[nodiscard]] nr::options::OptionWireValue::Object poseValue(const nr::renderer::ViewerCameraPose &pose)
@@ -171,9 +171,10 @@ inline constexpr int kKeyE = 'E';
              static_cast<double>(pose.position.y),
              static_cast<double>(pose.position.z),
          }},
-        {"yaw_degrees", static_cast<double>(glm::degrees(normalizedYawRadians(pose.yawRadians)))},
+        {"yaw_degrees", static_cast<double>(nr::math::degrees(normalizedYawRadians(pose.yawRadians)))},
         {"pitch_degrees",
-         static_cast<double>(glm::degrees(std::clamp(pose.pitchRadians, -glm::radians(89.0f), glm::radians(89.0f))))},
+         static_cast<double>(nr::math::degrees(std::clamp(pose.pitchRadians, -nr::math::radians(89.0f),
+                                                          nr::math::radians(89.0f))))},
     };
 }
 
@@ -208,13 +209,13 @@ inline constexpr int kKeyE = 'E';
     };
     return nr::renderer::ViewerCameraPose{
         .position =
-            glm::vec3{
+            DirectX::XMFLOAT3{
                 numberAt((*position)[0]),
                 numberAt((*position)[1]),
                 numberAt((*position)[2]),
             },
-        .yawRadians = glm::radians(numberAt(object->at("yaw_degrees"))),
-        .pitchRadians = glm::radians(numberAt(object->at("pitch_degrees"))),
+        .yawRadians = nr::math::radians(numberAt(object->at("yaw_degrees"))),
+        .pitchRadians = nr::math::radians(numberAt(object->at("pitch_degrees"))),
     };
 }
 
@@ -230,7 +231,7 @@ inline constexpr int kKeyE = 'E';
     auto const *farPlane = std::get_if<double>(&clip->at("far").storage);
     nrAssert(nearPlane != nullptr && farPlane != nullptr, "viewer.camera.clip_planes fields must be numbers.");
     return nr::renderer::ViewerPerspectiveLens{
-        .verticalFovRadians = glm::radians(static_cast<float>(*fov)),
+        .verticalFovRadians = nr::math::radians(static_cast<float>(*fov)),
         .nearPlane = static_cast<float>(*nearPlane),
         .farPlane = static_cast<float>(*farPlane),
     };
@@ -261,11 +262,12 @@ namespace nr::app
 void AppCamera::initializeDefault(const nr::rhi::PresentationContext &presentation,
                                   const AppCameraDefaultView &defaults) noexcept
 {
-    auto position = detail::finiteVec3(defaults.position) ? defaults.position : glm::vec3{0.0f, 0.0f, 3.0f};
-    auto target = detail::finiteVec3(defaults.target) ? defaults.target : glm::vec3{0.0f, 0.0f, 0.0f};
-    if (glm::length(target - position) <= 1e-6f)
+    auto position = detail::finiteVec3(defaults.position) ? defaults.position : DirectX::XMFLOAT3{0.0f, 0.0f, 3.0f};
+    auto target = detail::finiteVec3(defaults.target) ? defaults.target : DirectX::XMFLOAT3{0.0f, 0.0f, 0.0f};
+    auto const targetDelta = DirectX::XMFLOAT3{target.x - position.x, target.y - position.y, target.z - position.z};
+    if (std::sqrt(targetDelta.x * targetDelta.x + targetDelta.y * targetDelta.y + targetDelta.z * targetDelta.z) <= 1e-6f)
     {
-        target = position + glm::vec3{0.0f, 0.0f, -1.0f};
+        target = DirectX::XMFLOAT3{position.x, position.y, position.z - 1.0f};
     }
 
     viewer_.setViewportExtent(detail::viewportExtentFrom(presentation));
@@ -279,18 +281,19 @@ void AppCamera::initializeFromSceneOrDefault(const nr::scene::Scene &scene,
                                              const AppCameraDefaultView &defaults) noexcept
 {
     auto const viewportExtent = detail::viewportExtentFrom(presentation);
-    if (auto primaryCamera = scene.tryGetPrimaryCamera(std::optional<glm::uvec2>{viewportExtent});
+    if (auto primaryCamera = scene.tryGetPrimaryCamera(std::optional<DirectX::XMUINT2>{viewportExtent});
         primaryCamera.has_value() && !primaryCamera->fallback && detail::finiteMat4(primaryCamera->world))
     {
-        auto const translation = primaryCamera->world[3];
-        auto const position = glm::vec3{translation.x, translation.y, translation.z};
+        auto const position = DirectX::XMFLOAT3{primaryCamera->world._41, primaryCamera->world._42,
+                                                primaryCamera->world._43};
         auto const forward = detail::cameraForwardFromWorld(primaryCamera->world);
 
         if (detail::finiteVec3(position))
         {
             viewer_.setViewportExtent(viewportExtent);
             viewer_.setLens(detail::lensFromSceneCamera(scene, *primaryCamera, defaults.lens));
-            viewer_.setPoseFromLookAt(position, position + forward);
+            viewer_.setPoseFromLookAt(position, DirectX::XMFLOAT3{position.x + forward.x, position.y + forward.y,
+                                                                   position.z + forward.z});
             cursorTracking_ = {};
             return;
         }
@@ -353,7 +356,7 @@ nr::options::CameraResetValues AppCamera::optionResetValues() const
     return nr::options::CameraResetValues{
         .pose = detail::poseValue(viewer_.pose()),
         .verticalFovDegrees = static_cast<std::uint64_t>(
-            std::clamp(std::lround(glm::degrees(viewer_.lens().verticalFovRadians)), 1l, 179l)),
+            std::clamp(std::lround(nr::math::degrees(viewer_.lens().verticalFovRadians)), 1l, 179l)),
         .clipPlanes = detail::clipValue(viewer_.lens()),
     };
 }

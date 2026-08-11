@@ -4,37 +4,93 @@ import include.neuralAppearance.layout;
 
 public struct NeuralAppearanceFrame : IDifferentiable
 {
-    public float3 normal;
-    public float normalPadding;
-    public float3 tangent;
-    public float tangentPadding;
-    public float3 bitangent;
-    public float bitangentPadding;
+    public float3 normal = float3(0.0f, 1.0f, 0.0f);
+    public float normalPadding = 0.0f;
+    public float3 tangent = float3(1.0f, 0.0f, 0.0f);
+    public float tangentPadding = 0.0f;
+    public float3 bitangent = float3(0.0f, 0.0f, -1.0f);
+    public float bitangentPadding = 0.0f;
+
+    [Differentiable]
+    public __init()
+    {
+    }
+
+    [Differentiable]
+    public __init(float3 inputNormal, float3 inputTangent, float3 inputBitangent)
+    {
+        normal = inputNormal;
+        tangent = inputTangent;
+        bitangent = inputBitangent;
+    }
 };
 
 public struct NeuralMaterialContext : IDifferentiable
 {
-    public float spatialPrefix[32];
-    public NeuralAppearanceFrame frames[2];
+    public float spatialPrefix[32] = {};
+    public NeuralAppearanceFrame frames[2] = {
+        NeuralAppearanceFrame(),
+        NeuralAppearanceFrame(),
+    };
+
+    [Differentiable]
+    public __init()
+    {
+    }
+
+    [Differentiable]
+    public __init(
+        NeuralAppearanceFrame frame0, NeuralAppearanceFrame frame1)
+    {
+        frames[0] = frame0;
+        frames[1] = frame1;
+    }
 };
 
 struct NeuralAppearanceHiddenLayer : IDifferentiable
 {
-    float values[32];
+    float values[32] = {};
+
+    [Differentiable]
+    __init()
+    {
+    }
+
 };
 
 struct NeuralAppearanceDirectionFeatures : IDifferentiable
 {
-    float values[12];
+    float values[12] = {};
+
+    [Differentiable]
+    __init()
+    {
+    }
+
+    [Differentiable]
+    __init(float3 light0, float3 view0, float3 light1, float3 view1)
+    {
+        values[0] = light0.x;
+        values[1] = light0.y;
+        values[2] = light0.z;
+        values[3] = view0.x;
+        values[4] = view0.y;
+        values[5] = view0.z;
+        values[6] = light1.x;
+        values[7] = light1.y;
+        values[8] = light1.z;
+        values[9] = view1.x;
+        values[10] = view1.y;
+        values[11] = view1.z;
+    }
 };
 
 public NeuralAppearanceLatent sampleNeuralAppearanceLatent(
     Sampler2D<float4> latentTexture0, Sampler2D<float4> latentTexture1, float2 uv)
 {
-    NeuralAppearanceLatent latent;
-    latent.chunks[0] = latentTexture0.SampleLevel(uv, 0.0f);
-    latent.chunks[1] = latentTexture1.SampleLevel(uv, 0.0f);
-    return latent;
+    return NeuralAppearanceLatent(
+        latentTexture0.SampleLevel(uv, 0.0f),
+        latentTexture1.SampleLevel(uv, 0.0f));
 }
 
 [Differentiable]
@@ -58,26 +114,65 @@ float3 neuralAppearanceDifferentiableOrthogonal(float3 normal)
 [Differentiable]
 NeuralAppearanceFrame neuralAppearanceBuildFrame(float rawValues[6])
 {
-    NeuralAppearanceFrame frame;
-    frame.normal = neuralAppearanceDifferentiableNormalize(
+    float3 normal = neuralAppearanceDifferentiableNormalize(
         float3(rawValues[0], rawValues[1], rawValues[2]), float3(0.0f, 1.0f, 0.0f));
-    frame.normalPadding = 0.0f;
     // The learned tangent is normalized but intentionally not projected against N.
-    frame.tangent = neuralAppearanceDifferentiableNormalize(
+    float3 tangent = neuralAppearanceDifferentiableNormalize(
         float3(rawValues[3], rawValues[4], rawValues[5]), float3(1.0f, 0.0f, 0.0f));
-    frame.tangentPadding = 0.0f;
-    float3 bitangentFallback = neuralAppearanceDifferentiableOrthogonal(frame.normal);
-    frame.bitangent = neuralAppearanceDifferentiableNormalize(
-        cross(frame.normal, frame.tangent), bitangentFallback);
-    frame.bitangentPadding = 0.0f;
-    return frame;
+    float3 bitangentFallback = neuralAppearanceDifferentiableOrthogonal(normal);
+    float3 bitangent = neuralAppearanceDifferentiableNormalize(
+        cross(normal, tangent), bitangentFallback);
+    return NeuralAppearanceFrame(normal, tangent, bitangent);
+}
+
+[Differentiable]
+NeuralAppearanceFrame neuralAppearanceBuildFrame(
+    NeuralAppearanceParameters parameters, NeuralAppearanceLatent latent, uint frameIndex)
+{
+    float rawValues[6] = {};
+    for (uint output = 0u; output < 6u; ++output)
+    {
+        uint row = frameIndex * 6u + output;
+        float value = neuralAppearanceParameterScalar(
+            parameters, kNeuralAppearanceFrameBiasOffset + row);
+        for (uint input = 0u; input < 8u; ++input)
+        {
+            value += neuralAppearanceParameterScalar(
+                parameters, kNeuralAppearanceFrameWeightOffset + row * 8u + input) *
+                latent.chunks[input >> 2u][input & 3u];
+        }
+        rawValues[output] = value;
+    }
+    return neuralAppearanceBuildFrame(rawValues);
+}
+
+NeuralAppearanceFrame neuralAppearanceBuildFrameRuntime(
+    StructuredBuffer<float4> parameterBuffer, NeuralAppearanceLatent latent, uint frameIndex)
+{
+    float rawValues[6] = {};
+    for (uint output = 0u; output < 6u; ++output)
+    {
+        uint row = frameIndex * 6u + output;
+        float value = neuralAppearanceParameterScalarRuntime(
+            parameterBuffer, kNeuralAppearanceFrameBiasOffset + row);
+        for (uint input = 0u; input < 8u; ++input)
+        {
+            value += neuralAppearanceParameterScalarRuntime(
+                parameterBuffer, kNeuralAppearanceFrameWeightOffset + row * 8u + input) *
+                latent.chunks[input >> 2u][input & 3u];
+        }
+        rawValues[output] = value;
+    }
+    return neuralAppearanceBuildFrame(rawValues);
 }
 
 [Differentiable]
 public NeuralMaterialContext buildNeuralMaterialContext(
     NeuralAppearanceParameters parameters, NeuralAppearanceLatent latent)
 {
-    NeuralMaterialContext context;
+    NeuralMaterialContext context = NeuralMaterialContext(
+        neuralAppearanceBuildFrame(parameters, latent, 0u),
+        neuralAppearanceBuildFrame(parameters, latent, 1u));
     for (uint output = 0u; output < 32u; ++output)
     {
         float activation = neuralAppearanceParameterScalar(
@@ -90,32 +185,15 @@ public NeuralMaterialContext buildNeuralMaterialContext(
         }
         context.spatialPrefix[output] = activation;
     }
-
-    for (uint frameIndex = 0u; frameIndex < 2u; ++frameIndex)
-    {
-        float rawValues[6];
-        for (uint output = 0u; output < 6u; ++output)
-        {
-            uint row = frameIndex * 6u + output;
-            float value = neuralAppearanceParameterScalar(
-                parameters, kNeuralAppearanceFrameBiasOffset + row);
-            for (uint input = 0u; input < 8u; ++input)
-            {
-                value += neuralAppearanceParameterScalar(
-                    parameters, kNeuralAppearanceFrameWeightOffset + row * 8u + input) *
-                    latent.chunks[input >> 2u][input & 3u];
-            }
-            rawValues[output] = value;
-        }
-        context.frames[frameIndex] = neuralAppearanceBuildFrame(rawValues);
-    }
     return context;
 }
 
 public NeuralMaterialContext buildNeuralMaterialContextRuntime(
     StructuredBuffer<float4> parameterBuffer, NeuralAppearanceLatent latent)
 {
-    NeuralMaterialContext context;
+    NeuralMaterialContext context = NeuralMaterialContext(
+        neuralAppearanceBuildFrameRuntime(parameterBuffer, latent, 0u),
+        neuralAppearanceBuildFrameRuntime(parameterBuffer, latent, 1u));
     for (uint output = 0u; output < 32u; ++output)
     {
         float activation = neuralAppearanceParameterScalarRuntime(
@@ -127,25 +205,6 @@ public NeuralMaterialContext buildNeuralMaterialContextRuntime(
                 latent.chunks[input >> 2u][input & 3u];
         }
         context.spatialPrefix[output] = activation;
-    }
-
-    for (uint frameIndex = 0u; frameIndex < 2u; ++frameIndex)
-    {
-        float rawValues[6];
-        for (uint output = 0u; output < 6u; ++output)
-        {
-            uint row = frameIndex * 6u + output;
-            float value = neuralAppearanceParameterScalarRuntime(
-                parameterBuffer, kNeuralAppearanceFrameBiasOffset + row);
-            for (uint input = 0u; input < 8u; ++input)
-            {
-                value += neuralAppearanceParameterScalarRuntime(
-                    parameterBuffer, kNeuralAppearanceFrameWeightOffset + row * 8u + input) *
-                    latent.chunks[input >> 2u][input & 3u];
-            }
-            rawValues[output] = value;
-        }
-        context.frames[frameIndex] = neuralAppearanceBuildFrame(rawValues);
     }
     return context;
 }
@@ -164,20 +223,11 @@ float3 neuralAppearanceDirectionInFrame(NeuralAppearanceFrame frame, float3 dire
 NeuralAppearanceDirectionFeatures neuralAppearanceDirectionFeatures(
     NeuralMaterialContext context, float3 viewDirection, float3 lightDirection)
 {
-    NeuralAppearanceDirectionFeatures features;
-    for (uint frameIndex = 0u; frameIndex < 2u; ++frameIndex)
-    {
-        float3 localLight = neuralAppearanceDirectionInFrame(context.frames[frameIndex], lightDirection);
-        float3 localView = neuralAppearanceDirectionInFrame(context.frames[frameIndex], viewDirection);
-        uint offset = frameIndex * 6u;
-        features.values[offset + 0u] = localLight.x;
-        features.values[offset + 1u] = localLight.y;
-        features.values[offset + 2u] = localLight.z;
-        features.values[offset + 3u] = localView.x;
-        features.values[offset + 4u] = localView.y;
-        features.values[offset + 5u] = localView.z;
-    }
-    return features;
+    float3 light0 = neuralAppearanceDirectionInFrame(context.frames[0], lightDirection);
+    float3 view0 = neuralAppearanceDirectionInFrame(context.frames[0], viewDirection);
+    float3 light1 = neuralAppearanceDirectionInFrame(context.frames[1], lightDirection);
+    float3 view1 = neuralAppearanceDirectionInFrame(context.frames[1], viewDirection);
+    return NeuralAppearanceDirectionFeatures(light0, view0, light1, view1);
 }
 
 [Differentiable]
@@ -192,7 +242,7 @@ float3 neuralAppearanceDecodeOutput(float3 logits)
 float3 neuralAppearanceFinishDecode(
     NeuralAppearanceParameters parameters, NeuralAppearanceHiddenLayer firstHidden)
 {
-    NeuralAppearanceHiddenLayer secondHidden;
+    NeuralAppearanceHiddenLayer secondHidden = NeuralAppearanceHiddenLayer();
     for (uint output = 0u; output < 32u; ++output)
     {
         float activation = neuralAppearanceParameterScalar(
@@ -226,7 +276,7 @@ float3 neuralAppearanceFinishDecode(
 float3 neuralAppearanceFinishDecodeRuntime(
     StructuredBuffer<float4> parameterBuffer, NeuralAppearanceHiddenLayer firstHidden)
 {
-    NeuralAppearanceHiddenLayer secondHidden;
+    NeuralAppearanceHiddenLayer secondHidden = NeuralAppearanceHiddenLayer();
     for (uint output = 0u; output < 32u; ++output)
     {
         float activation = neuralAppearanceParameterScalarRuntime(
@@ -264,7 +314,7 @@ public float3 evaluateNeuralAppearance(
 {
     NeuralAppearanceDirectionFeatures directionFeatures =
         neuralAppearanceDirectionFeatures(context, viewDirection, lightDirection);
-    NeuralAppearanceHiddenLayer firstHidden;
+    NeuralAppearanceHiddenLayer firstHidden = NeuralAppearanceHiddenLayer();
     for (uint output = 0u; output < 32u; ++output)
     {
         float activation = context.spatialPrefix[output];
@@ -285,7 +335,7 @@ public float3 evaluateNeuralAppearanceRuntime(
 {
     NeuralAppearanceDirectionFeatures directionFeatures =
         neuralAppearanceDirectionFeatures(context, viewDirection, lightDirection);
-    NeuralAppearanceHiddenLayer firstHidden;
+    NeuralAppearanceHiddenLayer firstHidden = NeuralAppearanceHiddenLayer();
     for (uint output = 0u; output < 32u; ++output)
     {
         float activation = context.spatialPrefix[output];

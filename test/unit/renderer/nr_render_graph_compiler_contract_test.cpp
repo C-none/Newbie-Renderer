@@ -441,6 +441,7 @@ struct FakeBindlessPipeline
     nr::rhi::ShaderDescriptorLayout descriptorLayout{};
     std::map<std::size_t, std::map<std::size_t, std::map<std::uint32_t, std::uint32_t>>> variableCountsByOwner{};
     std::map<std::size_t, std::map<std::size_t, bool>> bindingSetsInitializedByOwner{};
+    std::map<std::size_t, std::map<std::size_t, nr::rhi::ShaderCursor>> recordingCursorsByOwner{};
     std::size_t frameSlotCount = nr::maxFrameInFlight;
     bool forceReallocation = false;
     std::size_t reallocationCount = 0;
@@ -463,9 +464,23 @@ struct FakeBindlessPipeline
         };
     }
 
-    [[nodiscard]] nr::rhi::ShaderCursor rootCursor() const
+    [[nodiscard]] const FakeBindlessPipeline &state() const noexcept
     {
-        return descriptorLayout.rootCursor();
+        return *this;
+    }
+
+    [[nodiscard]] nr::rhi::ShaderCursor recordingCursor(PassBindingHandle handle, std::uint32_t frameIndex)
+    {
+        nr::test::require(handle.valid(), "fake bindless pipeline requires a valid pass-binding handle");
+        nr::test::require(frameSlotCount > 0u, "fake bindless pipeline requires at least one frame slot");
+        auto const frameSlot = static_cast<std::size_t>(frameIndex % frameSlotCount);
+        auto &cursor = recordingCursorsByOwner[handle.stateIndex][frameSlot];
+        if (!cursor.valid())
+        {
+            cursor = descriptorLayout.rootCursor();
+        }
+        cursor.beginRecording();
+        return cursor;
     }
 
     [[nodiscard]] bool ensureBindingSetsForFrame(
@@ -1897,16 +1912,23 @@ const nr::test::CaseRegistrar bindlessImageTableFrameSlotIsolationCase{
                                                 {
                                                     {1u, logicalTextureDescriptor(101u, "texture-1")},
                                                 });
+        auto extendedRequest = makeBindlessCacheRequest(8u, 4u,
+                                                        {
+                                                            {1u, logicalTextureDescriptor(201u,
+                                                                                          "texture-1-slot-extended")},
+                                                        });
 
         auto frameZero = cache.makeSnapshotForFrame(pipeline, passBinding, 0u, request);
         auto extendedFrameSlot = cache.makeSnapshotForFrame(
-            pipeline, passBinding, static_cast<std::uint32_t>(nr::maxFrameInFlight), request);
+            pipeline, passBinding, static_cast<std::uint32_t>(nr::maxFrameInFlight), extendedRequest);
         auto extendedFrameSlotHit = cache.makeSnapshotForFrame(
-            pipeline, passBinding, static_cast<std::uint32_t>(nr::maxFrameInFlight), request);
+            pipeline, passBinding, static_cast<std::uint32_t>(nr::maxFrameInFlight), extendedRequest);
         auto frameZeroHit = cache.makeSnapshotForFrame(pipeline, passBinding, 0u, request);
 
         nr::test::requireEqual(frameZero.descriptorWriteCount(), std::size_t{4});
         nr::test::requireEqual(extendedFrameSlot.descriptorWriteCount(), std::size_t{4});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(frameZero, 1u), std::uint64_t{101});
+        nr::test::requireEqual(logicalResourceIdForArrayElement(extendedFrameSlot, 1u), std::uint64_t{201});
         nr::test::require(extendedFrameSlotHit.empty(), "one extended frame slot should suppress its own version");
         nr::test::require(frameZeroHit.empty(), "another frame slot should retain its independent applied version");
     }};

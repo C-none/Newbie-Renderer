@@ -8,23 +8,23 @@ namespace nr::resource
 {
 [[nodiscard]] bool Aabb::valid() const noexcept
 {
-    return math::finiteVec(min) && math::finiteVec(max) && glm::all(glm::lessThanEqual(min, max));
+    return math::finiteVec(min) && math::finiteVec(max) && min.x <= max.x && min.y <= max.y && min.z <= max.z;
 }
 
-[[nodiscard]] glm::vec3 Aabb::center() const noexcept
+[[nodiscard]] DirectX::XMFLOAT3 Aabb::center() const noexcept
 {
-    return (min + max) * 0.5f;
+    return math::scale(math::add(min, max), 0.5f);
 }
 
-[[nodiscard]] glm::vec3 Aabb::extent() const noexcept
+[[nodiscard]] DirectX::XMFLOAT3 Aabb::extent() const noexcept
 {
-    return max - min;
+    return math::subtract(max, min);
 }
 
-void Aabb::expand(glm::vec3 p) noexcept
+void Aabb::expand(DirectX::XMFLOAT3 p) noexcept
 {
-    min = glm::min(min, p);
-    max = glm::max(max, p);
+    min = math::min(min, p);
+    max = math::max(max, p);
 }
 
 void Aabb::merge(const Aabb &rhs) noexcept
@@ -40,8 +40,8 @@ void Aabb::merge(const Aabb &rhs) noexcept
         return;
     }
 
-    min = glm::min(min, rhs.min);
-    max = glm::max(max, rhs.max);
+    min = math::min(min, rhs.min);
+    max = math::max(max, rhs.max);
 }
 
 [[nodiscard]] bool BoundingSphere::valid(float eps) const noexcept
@@ -49,36 +49,36 @@ void Aabb::merge(const Aabb &rhs) noexcept
     return math::finiteVec(center) && math::finiteFloat(radius) && radius >= eps;
 }
 
-[[nodiscard]] glm::vec3 Triangle::edge01() const noexcept
+[[nodiscard]] DirectX::XMFLOAT3 Triangle::edge01() const noexcept
 {
-    return p1 - p0;
+    return math::subtract(p1, p0);
 }
 
-[[nodiscard]] glm::vec3 Triangle::edge02() const noexcept
+[[nodiscard]] DirectX::XMFLOAT3 Triangle::edge02() const noexcept
 {
-    return p2 - p0;
+    return math::subtract(p2, p0);
 }
 
-[[nodiscard]] glm::vec3 Triangle::computeFaceNormal() const noexcept
+[[nodiscard]] DirectX::XMFLOAT3 Triangle::computeFaceNormal() const noexcept
 {
-    auto normal = glm::cross(edge01(), edge02());
-    auto length = glm::length(normal);
+    auto normal = math::cross(edge01(), edge02());
+    auto length = math::length(normal);
     if (length <= 1e-6f)
     {
-        return glm::vec3{0.0f};
+        return math::float3();
     }
 
-    return normal / length;
+    return math::scale(normal, 1.0f / length);
 }
 
 [[nodiscard]] float Triangle::computeArea() const noexcept
 {
-    return 0.5f * glm::length(glm::cross(edge01(), edge02()));
+    return 0.5f * math::length(math::cross(edge01(), edge02()));
 }
 
-[[nodiscard]] glm::vec3 Triangle::centroid() const noexcept
+[[nodiscard]] DirectX::XMFLOAT3 Triangle::centroid() const noexcept
 {
-    return (p0 + p1 + p2) / 3.0f;
+    return math::scale(math::add(math::add(p0, p1), p2), 1.0f / 3.0f);
 }
 
 [[nodiscard]] bool Triangle::isDegenerate(float eps) const noexcept

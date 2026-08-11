@@ -101,7 +101,7 @@ namespace nr::resource
         return std::ranges::all_of(keys, [&](const KeyframeQuat &key) {
             return math::finiteFloat(key.timeSeconds) && key.timeSeconds >= 0.0f &&
                    key.timeSeconds <= durationSeconds + eps && math::finiteQuat(key.value) &&
-                   glm::length(key.value) > eps;
+                   math::length(key.value) > eps;
         });
     };
 

@@ -47,6 +47,18 @@ float3 neuralAppearanceViewerLightDirection(uint frameIndex)
     return safeNormalize(float3(cos(phase), 0.65f, sin(phase)), float3(0.0f, 1.0f, 0.0f));
 }
 
+[noinline]
+float3 evaluateNeuralAppearanceViewer(
+    float2 materialUv, float3 viewDirection, float3 lightDirection)
+{
+    NeuralAppearanceLatent latent = sampleNeuralAppearanceLatent(
+        gLatentTexture0, gLatentTexture1, materialUv);
+    NeuralMaterialContext context = buildNeuralMaterialContextRuntime(
+        gModelParameters, latent);
+    return evaluateNeuralAppearanceRuntime(
+        gModelParameters, context, viewDirection, lightDirection);
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void viewerMain(uint3 dispatchThreadID: SV_DispatchThreadID)
@@ -99,11 +111,8 @@ void viewerMain(uint3 dispatchThreadID: SV_DispatchThreadID)
     }
     else
     {
-        NeuralAppearanceLatent latent = sampleNeuralAppearanceLatent(
-            gLatentTexture0, gLatentTexture1, materialUv);
-        NeuralMaterialContext context = buildNeuralMaterialContextRuntime(gModelParameters, latent);
-        float3 neuralValue = evaluateNeuralAppearanceRuntime(
-            gModelParameters, context, viewDirection, lightDirection);
+        float3 neuralValue = evaluateNeuralAppearanceViewer(
+            materialUv, viewDirection, lightDirection);
         if (panel == 1u)
         {
             outputValue = neuralValue;

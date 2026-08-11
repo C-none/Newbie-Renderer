@@ -22,30 +22,32 @@ struct AccumulatePushConstants
     std::uint32_t maxHistorySampleCount = kAccumulateDefaultMaxHistorySampleCount;
 };
 
+static_assert(std::is_standard_layout_v<AccumulatePushConstants>);
+static_assert(sizeof(AccumulatePushConstants) == 20u);
+static_assert(nr::memberOffset<&AccumulatePushConstants::width>() == 0u);
+static_assert(nr::memberOffset<&AccumulatePushConstants::height>() == 4u);
+static_assert(nr::memberOffset<&AccumulatePushConstants::resetHistory>() == 8u);
+static_assert(nr::memberOffset<&AccumulatePushConstants::historySampleCount>() == 12u);
+static_assert(nr::memberOffset<&AccumulatePushConstants::maxHistorySampleCount>() == 16u);
 static_assert(sizeof(AccumulatePushConstants) <= nr::rhi::kMaxPushConstantBytes);
 
 struct AccumulateTemporalIdentity
 {
-    glm::mat4 view{1.0f};
-    glm::mat4 projection{1.0f};
-    glm::vec3 cameraWorld{0.0f};
+    DirectX::XMFLOAT4X4 view = nr::scene::kIdentityMatrix;
+    DirectX::XMFLOAT4X4 projection = nr::scene::kIdentityMatrix;
+    DirectX::XMFLOAT3 cameraWorld{};
     nr::scene::SceneRevisionSnapshot sceneRevisions{};
 };
 
-[[nodiscard]] bool accumulateMatricesEquivalent(const glm::mat4 &left, const glm::mat4 &right) noexcept
+[[nodiscard]] bool accumulateMatricesEquivalent(const DirectX::XMFLOAT4X4 &left,
+                                                 const DirectX::XMFLOAT4X4 &right) noexcept
 {
-    auto elements = std::views::iota(std::size_t{0}, std::size_t{16});
-    return std::ranges::all_of(elements, [&](std::size_t element) {
-        auto const column = element / 4u;
-        auto const row = element % 4u;
-        return left[column][row] == right[column][row];
-    });
+    return std::bit_cast<std::array<float, 16u>>(left) == std::bit_cast<std::array<float, 16u>>(right);
 }
 
-[[nodiscard]] bool accumulateVectorsEquivalent(const glm::vec3 &left, const glm::vec3 &right) noexcept
+[[nodiscard]] bool accumulateVectorsEquivalent(const DirectX::XMFLOAT3 &left, const DirectX::XMFLOAT3 &right) noexcept
 {
-    auto components = std::views::iota(std::size_t{0}, std::size_t{3});
-    return std::ranges::all_of(components, [&](std::size_t component) { return left[component] == right[component]; });
+    return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
 [[nodiscard]] bool accumulateTemporalIdentitiesEquivalent(const AccumulateTemporalIdentity &left,

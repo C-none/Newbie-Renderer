@@ -363,8 +363,12 @@ namespace nr::scene
         frame.hasPrimaryCamera = true;
         frame.frameConstants.view = camera.view;
         frame.frameConstants.projection = camera.projection;
-        frame.frameConstants.viewProjection = camera.projection * camera.view;
-        frame.frameConstants.cameraWorld = glm::vec3{camera.world[3]};
+        DirectX::XMStoreFloat4x4(
+            &frame.frameConstants.viewProjection,
+            DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&camera.view),
+                                      DirectX::XMLoadFloat4x4(&camera.projection)));
+        frame.frameConstants.cameraWorld =
+            DirectX::XMFLOAT3{camera.world._41, camera.world._42, camera.world._43};
     }
 
     if (packetSet.domain != ScenePacketDomain::rasterDraw)

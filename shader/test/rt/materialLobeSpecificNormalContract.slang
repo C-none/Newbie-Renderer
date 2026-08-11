@@ -39,10 +39,8 @@ uint instantiateFullLobeEvaluationContract<let LayerFlags : RtMaterialLayerFlag>
     float3 lightDirection = safeNormalize(float3(0.75f, 0.5f, 0.25f), float3(0.0f, 1.0f, 0.0f));
     ResolvedMaterialBsdfComponents components =
         evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags>(hit.material, viewDirection, lightDirection);
-    MaterialDirectLightingInput lighting = {};
-    lighting.viewDirection = viewDirection;
-    lighting.lightDirection = lightDirection;
-    lighting.lightRadiance = float3(1.0f);
+    MaterialDirectLightingInput lighting =
+        MaterialDirectLightingInput(viewDirection, lightDirection, float3(1.0f));
     ResolvedMaterialDirectComponents direct =
         evaluateResolvedMaterialDirectComponentsVariant<LayerFlags>(hit.material, lighting);
     float combinedPdf = resolvedMaterialCombinedPdfVariant<LayerFlags>(hit.material, viewDirection, lightDirection);
@@ -83,12 +81,12 @@ uint instantiateFullLobeEvaluationContract<let LayerFlags : RtMaterialLayerFlag>
 [numthreads(1, 1, 1)]
 void computeMain(uint3 dispatchThreadId: SV_DispatchThreadID)
 {
-    ClosestHitInput input = {};
-    input.geometryValid = gMaterialHeader.textureRefCount != 0xffffffffu;
-    input.material = gMaterialHeader;
-    input.surface.normal = float3(0.8660254f, 0.5f, 0.0f);
-    input.viewDirection = float3(0.0f, 1.0f, 0.0f);
-    input.geometryNormal = float3(0.0f, 1.0f, 0.0f);
+    ClosestHitInput input = ClosestHitInput(
+        gMaterialHeader.textureRefCount != 0xffffffffu, gMaterialHeader,
+        RtSurfaceData(float3(0.0f), float3(0.8660254f, 0.5f, 0.0f), float3(1.0f, 0.0f, 0.0f), 1.0f,
+                      float2(0.0f), float2(0.0f), float4(1.0f)),
+        float3(0.0f, 1.0f, 0.0f), float3(0.0f, 1.0f, 0.0f), true, kRtMaterialFallbackIndex, 0xffffffffu,
+        0xffffffffu, float4(0.0f), RandomSequence(), 1.0f, 1.0f);
 
     uint selector = dispatchThreadId.x & 15u;
     switch (selector)

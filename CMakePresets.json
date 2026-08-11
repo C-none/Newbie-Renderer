@@ -26,7 +26,8 @@
     },
     {
       "name": "llvm",
-      "displayName": "LLVM Clang++",
+      "displayName": "LLVM Clang++ (Supported)",
+      "description": "The only supported full-project build and verification toolchain.",
       "inherits": "base",
       "generator": "Ninja Multi-Config",
       "binaryDir": "${sourceDir}/build/llvm",
@@ -44,7 +45,8 @@
     },
     {
       "name": "msvc-vs",
-      "displayName": "MSVC (Visual Studio Generator)",
+      "displayName": "MSVC (Not Recommended; Best Effort)",
+      "description": "Retained for optional developer experiments; renderer feature completeness and verification are not guaranteed.",
       "inherits": "base",
       "generator": "Visual Studio 18 2026",
       "binaryDir": "${sourceDir}/build/msvc-vs",
@@ -59,7 +61,8 @@
     },
     {
       "name": "msvc-dlss-bridge",
-      "displayName": "MSVC DLSS Bridge Publisher",
+      "displayName": "MSVC DLSS Bridge Publisher (Boundary Tool)",
+      "description": "Supported only for publishing the project-owned DLSS bridge artifact, not for full renderer builds.",
       "generator": "Visual Studio 18 2026",
       "binaryDir": "${sourceDir}/build/msvc-dlss-bridge",
       "architecture": {
@@ -92,18 +95,21 @@
     },
     {
       "name": "debug-msvc",
+      "displayName": "MSVC Debug (Not Recommended; Best Effort)",
       "inherits": "build-base",
       "configurePreset": "msvc-vs",
       "configuration": "Debug"
     },
     {
       "name": "release-msvc",
+      "displayName": "MSVC Release (Not Recommended; Best Effort)",
       "inherits": "build-base",
       "configurePreset": "msvc-vs",
       "configuration": "Release"
     },
     {
       "name": "publish-dlss-bridge-msvc",
+      "displayName": "Publish DLSS Bridge with MSVC (Boundary Tool)",
       "inherits": "build-base",
       "configurePreset": "msvc-dlss-bridge",
       "configuration": "Release",

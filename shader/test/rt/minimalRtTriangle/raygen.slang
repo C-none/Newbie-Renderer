@@ -20,8 +20,7 @@ void rgMain()
     ray.TMin = 0.001;
     ray.TMax = 10000.0;
 
-    RayPayload payload;
-    payload.color = float3(0.02, 0.02, 0.05);
+    RayPayload payload = RayPayload(float3(0.02f, 0.02f, 0.05f));
 
     HitObject hitObject = HitObject::TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
     ReorderThread(hitObject);

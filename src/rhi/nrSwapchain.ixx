@@ -130,7 +130,7 @@ class PresentationContext
     void pollEvents() const;
     [[nodiscard]] bool keyDown(int glfwKeyCode) const;
     [[nodiscard]] bool mouseButtonDown(int glfwMouseButton) const;
-    [[nodiscard]] glm::dvec2 cursorPosition() const;
+    [[nodiscard]] nr::math::Double2 cursorPosition() const;
     [[nodiscard]] double consumeVerticalScrollOffset() const noexcept;
     [[nodiscard]] std::vector<std::uint32_t> consumeTextInputCodepoints() const;
     [[nodiscard]] bool windowShouldClose() const;

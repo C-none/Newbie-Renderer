@@ -1,5 +1,3 @@
-#include <cstddef>
-
 import std;
 import dependency.math;
 import dependency.slang;
@@ -7,15 +5,16 @@ import dependency.vulkan;
 import nr.resource;
 import nr.rhi;
 import nr.test;
+import nr.utils;
 
 namespace
 {
 struct CameraData
 {
-    glm::vec4 origin{};
-    glm::vec4 right{};
-    glm::vec4 up{};
-    glm::vec4 forward{};
+    DirectX::XMFLOAT4 origin{};
+    DirectX::XMFLOAT4 right{};
+    DirectX::XMFLOAT4 up{};
+    DirectX::XMFLOAT4 forward{};
 };
 
 [[nodiscard]] nr::rhi::SlangProgramVariantDesc makePathTracingRaygenVariant(std::uint32_t maxSurfaceBounces = 16u,
@@ -209,20 +208,22 @@ const nr::test::CaseRegistrar variantAssignmentSourceTextCase{
             .assign("kFloatValue", "float", 1.5f)
             .assign("kIntValue", "int", std::int32_t{-3});
 
-        auto constantLines = effectiveShaderLines(constants.sourceText());
-        nr::test::requireEqual(constantLines.size(), std::size_t{4u});
-        nr::test::requireEqual(constantLines[0], std::string{"export static const bool kBoolValue = true;"});
-        nr::test::requireEqual(constantLines[1], std::string{"export static const float kFloatValue = 1.5f;"});
-        nr::test::requireEqual(constantLines[2], std::string{"export static const int kIntValue = -3;"});
-        nr::test::requireEqual(constantLines[3], std::string{"export static const uint kUIntValue = 7u;"});
+        auto constantLines = effectiveShaderLines(constants.sourceText("variantConstants"));
+        nr::test::requireEqual(constantLines.size(), std::size_t{5u});
+        nr::test::requireEqual(constantLines[0], std::string{"module variantConstants;"});
+        nr::test::requireEqual(constantLines[1], std::string{"export static const bool kBoolValue = true;"});
+        nr::test::requireEqual(constantLines[2], std::string{"export static const float kFloatValue = 1.5f;"});
+        nr::test::requireEqual(constantLines[3], std::string{"export static const int kIntValue = -3;"});
+        nr::test::requireEqual(constantLines[4], std::string{"export static const uint kUIntValue = 7u;"});
 
         auto alias = nr::rhi::SlangProgramVariantDesc{};
         alias.assign("Policy", "IPolicy", std::string{"ConcretePolicy<1u, SomeEnum.value>"});
 
-        auto aliasLines = effectiveShaderLines(alias.sourceText());
-        nr::test::requireEqual(aliasLines.size(), std::size_t{2u});
-        nr::test::requireEqual(aliasLines[0], std::string{"import common;"});
-        nr::test::requireEqual(aliasLines[1],
+        auto aliasLines = effectiveShaderLines(alias.sourceText("variantPolicy"));
+        nr::test::requireEqual(aliasLines.size(), std::size_t{3u});
+        nr::test::requireEqual(aliasLines[0], std::string{"module variantPolicy;"});
+        nr::test::requireEqual(aliasLines[1], std::string{"import common;"});
+        nr::test::requireEqual(aliasLines[2],
                                std::string{"export struct Policy : IPolicy = ConcretePolicy<1u, SomeEnum.value>;"});
 
         auto constantsReordered = nr::rhi::SlangProgramVariantDesc{};
@@ -232,7 +233,8 @@ const nr::test::CaseRegistrar variantAssignmentSourceTextCase{
             .assign("kFloatValue", "float", 1.5f);
 
         nr::test::requireEqual(constantsReordered.hashValue(), constants.hashValue());
-        nr::test::requireEqual(constantsReordered.sourceText(), constants.sourceText());
+        nr::test::requireEqual(constantsReordered.sourceText("variantConstants"),
+                               constants.sourceText("variantConstants"));
     }};
 
 const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
@@ -241,13 +243,14 @@ const nr::test::CaseRegistrar pathTracingChsLinkTimeTypeCase{
         shaderService.configure();
 
         auto chsVariant = makePathTracingClosestHitVariant();
-        auto chsSource = chsVariant.sourceText();
+        auto chsSource = chsVariant.sourceText("variantChs");
         auto effectiveLines = effectiveShaderLines(chsSource);
-        nr::test::requireEqual(effectiveLines.size(), std::size_t{3u});
-        nr::test::requireEqual(effectiveLines[0], std::string{"import common;"});
-        nr::test::requireEqual(effectiveLines[1],
-                               std::string{"export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u)>;"});
+        nr::test::requireEqual(effectiveLines.size(), std::size_t{4u});
+        nr::test::requireEqual(effectiveLines[0], std::string{"module variantChs;"});
+        nr::test::requireEqual(effectiveLines[1], std::string{"import common;"});
         nr::test::requireEqual(effectiveLines[2],
+                               std::string{"export struct CHS : ICHS = MaterialCHS<RtMaterialLayerFlag(0u)>;"});
+        nr::test::requireEqual(effectiveLines[3],
                                std::string{"export static const bool kEnableFilterAfterShading = false;"});
 
         auto program = shaderService.compileProgramByFile(nr::rhi::SlangProgramCompileFileRequest{
@@ -417,6 +420,7 @@ const nr::test::CaseRegistrar rtShaderReflectionCase{
         nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
         nr::test::require(camera.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::UniformBuffer);
 
+        root.beginRecording();
         nr::test::require(scene.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = 100,
             .debugName = "logical-tlas",
@@ -430,7 +434,7 @@ const nr::test::CaseRegistrar rtShaderReflectionCase{
             .debugName = "logical-camera",
         }));
 
-        auto snapshot = root.snapshot();
+        auto snapshot = root.takeSnapshot();
         nr::test::requireEqual(snapshot.descriptorWriteCount(), std::size_t{3});
         auto semantics = snapshot.descriptorWrites() |
                          std::views::transform(
@@ -550,8 +554,6 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         auto sceneLightAliasTable = rtRoot["gSceneLightAliasTable"];
         auto environmentMap = rtRoot["gEnvironmentMap"];
         auto environmentParameters = rtRoot["gEnvironment"];
-        auto frameView = frameUniform["view"];
-        auto frameProjection = frameUniform["projection"];
         auto frameViewProjection = frameUniform["viewProjection"];
         auto frameInverseViewProjection = frameUniform["inverseViewProjection"];
         auto frameUnjitteredViewProjection = frameUniform["unjitteredViewProjection"];
@@ -582,25 +584,39 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(sceneLightAliasTable.valid(), "path tracing scene light alias table cursor should resolve");
         nr::test::require(environmentMap.valid(), "path tracing environment map cursor should resolve");
         nr::test::require(environmentParameters.valid(), "path tracing environment parameters should resolve");
-        nr::test::require(frameView.valid() && frameProjection.valid() && frameViewProjection.valid() &&
-                              frameInverseViewProjection.valid() && frameUnjitteredViewProjection.valid() &&
+        nr::test::require(frameViewProjection.valid() && frameInverseViewProjection.valid() &&
+                              frameUnjitteredViewProjection.valid() &&
                               framePreviousViewProjection.valid() && frameCameraWorld.valid() && frameState.valid(),
                           "path tracing should reflect the complete global frame uniform ABI");
+        nr::test::require(!frameUniform.hasField("view") && !frameUniform.hasField("projection"),
+                          "the shader-dead view and projection fields must stay removed from the frame ABI");
         nr::test::require(!frameUniform.hasField("previousView"),
                           "the shader-dead previousView field must stay removed from the frame ABI");
-        nr::test::requireEqual(frameView.address().uniformOffset, std::size_t{0u});
-        nr::test::requireEqual(frameProjection.address().uniformOffset, std::size_t{64u});
-        nr::test::requireEqual(frameViewProjection.address().uniformOffset, std::size_t{128u});
-        nr::test::requireEqual(frameInverseViewProjection.address().uniformOffset, std::size_t{192u});
-        nr::test::requireEqual(frameUnjitteredViewProjection.address().uniformOffset, std::size_t{256u});
-        nr::test::requireEqual(framePreviousViewProjection.address().uniformOffset, std::size_t{320u});
-        nr::test::requireEqual(frameCameraWorld.address().uniformOffset, std::size_t{384u});
-        nr::test::requireEqual(frameState.address().uniformOffset, std::size_t{400u});
+        nr::test::requireEqual(frameViewProjection.address().uniformOffset, std::size_t{0u});
+        nr::test::requireEqual(frameInverseViewProjection.address().uniformOffset, std::size_t{64u});
+        nr::test::requireEqual(frameUnjitteredViewProjection.address().uniformOffset, std::size_t{128u});
+        nr::test::requireEqual(framePreviousViewProjection.address().uniformOffset, std::size_t{192u});
+        nr::test::requireEqual(frameCameraWorld.address().uniformOffset, std::size_t{256u});
+        nr::test::requireEqual(frameState.address().uniformOffset, std::size_t{272u});
+        auto const frameMatrices = std::array{
+            frameViewProjection,
+            frameInverseViewProjection,
+            frameUnjitteredViewProjection,
+            framePreviousViewProjection,
+        };
+        std::ranges::for_each(frameMatrices, [](const nr::rhi::ShaderCursor &matrixCursor) {
+            auto *matrixLayout = matrixCursor.typeLayout();
+            nr::test::require(matrixLayout != nullptr, "global frame matrix should expose type reflection");
+            nr::test::require(matrixLayout->getMatrixLayoutMode() == SLANG_MATRIX_LAYOUT_ROW_MAJOR,
+                              "global frame matrices must be row-major");
+            nr::test::requireEqual(static_cast<std::size_t>(matrixLayout->getSize(slang::ParameterCategory::Uniform)),
+                                   std::size_t{64u}, "global frame matrix must occupy 16 floats");
+        });
         auto *frameUniformElementLayout = frameUniform.typeLayout()->getElementTypeLayout();
         nr::test::require(frameUniformElementLayout != nullptr,
                           "global frame constant buffer should expose its element layout");
-        nr::test::requireEqual(static_cast<std::size_t>(frameUniformElementLayout->getSize()), std::size_t{416u},
-                               "GlobalFrameUniforms must preserve its 416-byte reflected ABI");
+        nr::test::requireEqual(static_cast<std::size_t>(frameUniformElementLayout->getSize()), std::size_t{288u},
+                               "GlobalFrameUniforms must preserve its 288-byte reflected ABI");
         nr::test::require(scene.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::AccelerationStructure);
         nr::test::require(outputImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
         nr::test::require(depthImage.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageImage);
@@ -910,16 +926,16 @@ const nr::test::CaseRegistrar pathTracingLinkTimeVariantCase{
 
 const nr::test::CaseRegistrar rtVertexAtlasLayoutCase{
     "path tracing shader vertex atlas offsets match resource vertex layout", [] {
-        nr::test::requireEqual(offsetof(nr::resource::Vertex, position), std::size_t{0u});
-        nr::test::requireEqual(offsetof(nr::resource::Vertex, normal), std::size_t{12u});
-        nr::test::requireEqual(offsetof(nr::resource::Vertex, tangent), std::size_t{24u});
-        nr::test::requireEqual(offsetof(nr::resource::Vertex, texCoord0), std::size_t{40u});
-        nr::test::requireEqual(offsetof(nr::resource::Vertex, texCoord1), std::size_t{48u});
-        nr::test::requireEqual(offsetof(nr::resource::Vertex, color0), std::size_t{56u});
+        nr::test::requireEqual(nr::memberOffset<&nr::resource::Vertex::position>(), std::size_t{0u});
+        nr::test::requireEqual(nr::memberOffset<&nr::resource::Vertex::normal>(), std::size_t{12u});
+        nr::test::requireEqual(nr::memberOffset<&nr::resource::Vertex::tangent>(), std::size_t{24u});
+        nr::test::requireEqual(nr::memberOffset<&nr::resource::Vertex::texCoord0>(), std::size_t{40u});
+        nr::test::requireEqual(nr::memberOffset<&nr::resource::Vertex::texCoord1>(), std::size_t{48u});
+        nr::test::requireEqual(nr::memberOffset<&nr::resource::Vertex::color0>(), std::size_t{56u});
     }};
 
 const nr::test::CaseRegistrar rtMaterialTextureIdsReflectionCase{
-    "rt shader common material texture id helper exposes scene texture table", [] {
+    "rt shader test-local packed material texture id helper exposes scene texture table", [] {
         auto &shaderService = nr::rhi::ShaderService::instance();
         shaderService.configure();
 
@@ -957,6 +973,7 @@ const nr::test::CaseRegistrar rtMaterialTextureIdsReflectionCase{
         nr::test::requireEqual(sceneTextureImmutableSampler->binding, 2u);
         nr::test::requireEqual(sceneTextureImmutableSampler->descriptorCount, 1024u);
 
+        root.beginRecording();
         auto sceneTextureElement = sceneTextures[7u];
         nr::test::require(sceneTextureElement.setObject(nr::rhi::LogicalResourceDescriptorWrite{
             .logicalResourceId = 77,
@@ -972,7 +989,7 @@ const nr::test::CaseRegistrar rtMaterialTextureIdsReflectionCase{
         nr::test::require(materialTextureIds.valid(), "RT material helper push constants should resolve");
         nr::test::require(materialTextureIds.pushConstantRange().has_value());
 
-        auto snapshot = root.snapshot();
+        auto snapshot = root.takeSnapshot();
         nr::test::requireEqual(snapshot.descriptorWriteCount(), std::size_t{1});
         auto const &write = snapshot.descriptorWrites().front();
         nr::test::requireEqual(write.binding.set, 1u);

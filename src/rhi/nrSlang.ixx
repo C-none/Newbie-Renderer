@@ -142,12 +142,17 @@ static_assert(shaderDebugInfoLevel >= SLANG_DEBUG_INFO_LEVEL_NONE &&
                   shaderDebugInfoLevel <= SLANG_DEBUG_INFO_LEVEL_MAXIMAL,
               "shaderDebugInfoLevel must map to a valid Slang debug information level.");
 
-[[nodiscard]] consteval std::array<SlangCompilerOption, 6> makeBaseCompilerOptions() noexcept
+[[nodiscard]] consteval std::array<SlangCompilerOption, 8> makeBaseCompilerOptions() noexcept
 {
-    return std::array<SlangCompilerOption, 6>{
+    return std::array<SlangCompilerOption, 8>{
         SlangCompilerOption{.name = slang::CompilerOptionName::EmitSpirvDirectly, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::VulkanUseEntryPointName, .intValue0 = 1},
         SlangCompilerOption{.name = slang::CompilerOptionName::UseUpToDateBinaryModule, .intValue0 = 1},
+        SlangCompilerOption{.name = slang::CompilerOptionName::MatrixLayoutRow, .intValue0 = 1},
+        SlangCompilerOption{
+            .name = slang::CompilerOptionName::LanguageVersion,
+            .intValue0 = static_cast<std::int32_t>(slang::languageVersion2026),
+        },
         SlangCompilerOption{.name = slang::CompilerOptionName::Optimization, .intValue0 = shaderOptimizationLevel},
         SlangCompilerOption{.name = slang::CompilerOptionName::DebugInformation, .intValue0 = shaderDebugInfoLevel},
         SlangCompilerOption{
@@ -158,7 +163,7 @@ static_assert(shaderDebugInfoLevel >= SLANG_DEBUG_INFO_LEVEL_NONE &&
 }
 
 inline constexpr std::size_t kDefaultSlangCompilerOptionCount =
-    std::size_t{6} + (shaderDumpReproOnError ? std::size_t{1} : std::size_t{0}) +
+    std::size_t{8} + (shaderDumpReproOnError ? std::size_t{1} : std::size_t{0}) +
     (!shaderWarningsAsErrors.empty() ? std::size_t{1} : std::size_t{0});
 
 [[nodiscard]] consteval auto defaultCompilerOptions() noexcept
@@ -339,7 +344,8 @@ struct SlangProgramVariantDesc
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::uint64_t hashValue() const noexcept;
-    [[nodiscard]] std::string sourceText() const;
+    /** Generate a standalone specialization module with the supplied valid Slang module name. */
+    [[nodiscard]] std::string sourceText(std::string_view moduleName) const;
 };
 
 struct SlangProgramCompileFileRequest

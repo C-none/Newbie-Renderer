@@ -20,5 +20,10 @@ public ConstantBuffer<CameraData> camera;
 
 public struct RayPayload
 {
-    public float3 color;
+    public float3 color = float3(0.0f);
+
+    public __init(float3 initialColor)
+    {
+        color = initialColor;
+    }
 };

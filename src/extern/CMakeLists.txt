@@ -2,7 +2,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 find_package(Vulkan REQUIRED)
 find_package(imgui CONFIG REQUIRED)
-find_package(glm REQUIRED)
+find_package(directxmath CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
@@ -206,7 +206,7 @@ target_sources(dependency_graphics
 set_target_properties(dependency_graphics PROPERTIES FOLDER "extern/providers")
 
 nr_add_library(dependency_math STATIC)
-target_link_libraries(dependency_math PUBLIC glm::glm)
+target_link_libraries(dependency_math PUBLIC Microsoft::DirectXMath)
 target_sources(dependency_math
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES

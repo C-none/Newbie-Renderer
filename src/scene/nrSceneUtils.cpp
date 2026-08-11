@@ -186,40 +186,43 @@ namespace nr::scene::detail
                        lightSlot);
 }
 
-[[nodiscard]] glm::vec3 toVec3(std::array<float, 3> const &value)
+[[nodiscard]] DirectX::XMFLOAT3 toFloat3(std::array<float, 3> const &value)
 {
-    return glm::vec3{value[0], value[1], value[2]};
+    return DirectX::XMFLOAT3{value[0], value[1], value[2]};
 }
 
-[[nodiscard]] glm::mat4 toGlmMat4(const std::array<float, 16> &value)
+[[nodiscard]] DirectX::XMFLOAT4X4 toRowMajorFloat4x4(const std::array<float, 16> &value)
 {
-    auto matrix = glm::mat4{1.0f};
-    auto const rowIndices = std::views::iota(0, 4);
-    auto const columnIndices = std::views::iota(0, 4);
-
-    std::ranges::for_each(rowIndices, [&](int row) {
-        std::ranges::for_each(columnIndices, [&](int column) {
-            auto const linearIndex = static_cast<std::size_t>(row * 4 + column);
-            matrix[column][row] = value[linearIndex];
-        });
-    });
-
-    return matrix;
+    // Imported transforms use column vectors and row-linear storage. Transpose once
+    // at this boundary so every scene matrix thereafter uses DirectX row-vector math.
+    return DirectX::XMFLOAT4X4{
+        value[0], value[4], value[8], value[12],
+        value[1], value[5], value[9], value[13],
+        value[2], value[6], value[10], value[14],
+        value[3], value[7], value[11], value[15],
+    };
 }
 
-[[nodiscard]] bool finiteMat4(const glm::mat4 &value) noexcept
+[[nodiscard]] bool finiteMat4(const DirectX::XMFLOAT4X4 &value) noexcept
 {
-    auto const columnIndices = std::views::iota(0, 4);
-    return std::ranges::all_of(columnIndices, [&](int column) { return nr::resource::math::finiteVec(value[column]); });
+    return std::isfinite(value._11) && std::isfinite(value._12) && std::isfinite(value._13) && std::isfinite(value._14) &&
+           std::isfinite(value._21) && std::isfinite(value._22) && std::isfinite(value._23) && std::isfinite(value._24) &&
+           std::isfinite(value._31) && std::isfinite(value._32) && std::isfinite(value._33) && std::isfinite(value._34) &&
+           std::isfinite(value._41) && std::isfinite(value._42) && std::isfinite(value._43) && std::isfinite(value._44);
 }
 
-[[nodiscard]] glm::vec3 transformPoint(const glm::mat4 &matrix, const glm::vec3 &point)
+[[nodiscard]] DirectX::XMFLOAT3 transformPoint(const DirectX::XMFLOAT4X4 &matrix,
+                                                const DirectX::XMFLOAT3 &point)
 {
-    auto const transformed = matrix * glm::vec4{point, 1.0f};
-    return glm::vec3{transformed.x, transformed.y, transformed.z};
+    auto transformed = DirectX::XMFLOAT3{};
+    DirectX::XMStoreFloat3(
+        &transformed,
+        DirectX::XMVector3TransformCoord(DirectX::XMLoadFloat3(&point), DirectX::XMLoadFloat4x4(&matrix)));
+    return transformed;
 }
 
-[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds, const glm::mat4 &matrix)
+[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds,
+                                                const DirectX::XMFLOAT4X4 &matrix)
 {
     if (!bounds.valid() || !finiteMat4(matrix))
     {
@@ -237,7 +240,7 @@ namespace nr::scene::detail
                 auto const x = xBit > 0.5f ? bounds.max.x : bounds.min.x;
                 auto const y = yBit > 0.5f ? bounds.max.y : bounds.min.y;
                 auto const z = zBit > 0.5f ? bounds.max.z : bounds.min.z;
-                transformed.expand(transformPoint(matrix, glm::vec3{x, y, z}));
+                transformed.expand(transformPoint(matrix, DirectX::XMFLOAT3{x, y, z}));
             });
         });
     });

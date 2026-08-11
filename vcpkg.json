@@ -5,7 +5,7 @@
     "imgui",
     "glfw3",
     "vulkan-memory-allocator",
-    "glm",
+    "directxmath",
     "assimp",
     "mikktspace",
     "stb",

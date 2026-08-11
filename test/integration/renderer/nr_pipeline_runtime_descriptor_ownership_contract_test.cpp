@@ -20,6 +20,16 @@ using PassBindingHandle = Runtime::PassBindingHandle;
     return program;
 }
 
+[[nodiscard]] std::uint64_t currentLogicalResourceId(const nr::rhi::ShaderBindingSnapshot &snapshot)
+{
+    auto writeIt = std::ranges::find_if(snapshot.descriptorWrites(), [](const nr::rhi::ShaderBindingRecord &record) {
+        return std::holds_alternative<nr::rhi::LogicalResourceDescriptorWrite>(record.payload);
+    });
+    nr::test::require(writeIt != snapshot.descriptorWrites().end(),
+                      "recording cursor snapshot should contain one logical descriptor write");
+    return std::get<nr::rhi::LogicalResourceDescriptorWrite>(writeIt->payload).logicalResourceId;
+}
+
 const nr::test::CaseRegistrar pipelineRuntimeDescriptorOwnershipCase{
     "pipeline runtime isolates descriptor state by pass owner and frame slot", [] {
         auto device = nr::rhi::Device{};
@@ -53,6 +63,25 @@ const nr::test::CaseRegistrar pipelineRuntimeDescriptorOwnershipCase{
                           "two pass owners must not share a descriptor write cache in one frame slot");
         nr::test::require(std::addressof(passACacheSlot0) != std::addressof(passACacheSlot1),
                           "descriptor write caches must be isolated between frame slots");
+
+        auto recordCurrentColor = [&](PassBindingHandle owner, std::uint32_t frameIndex, std::uint64_t resourceId) {
+            auto cursor = runtime->recordingCursor(owner, frameIndex);
+            static_cast<void>(cursor.getPath("gCurrentColor").setObject(nr::rhi::LogicalResourceDescriptorWrite{
+                .logicalResourceId = resourceId,
+                .debugName = "PipelineRuntime.Ownership.CurrentColor",
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            }));
+            return cursor.takeSnapshot();
+        };
+
+        auto const passAFirstSnapshot = recordCurrentColor(passA, 0u, 101u);
+        auto const passBSlotZeroSnapshot = recordCurrentColor(passB, 0u, 201u);
+        auto const passASlotOneSnapshot = recordCurrentColor(passA, 1u, 301u);
+        auto const passARebuiltSnapshot = recordCurrentColor(passA, 0u, 401u);
+        nr::test::requireEqual(currentLogicalResourceId(passAFirstSnapshot), std::uint64_t{101u});
+        nr::test::requireEqual(currentLogicalResourceId(passBSlotZeroSnapshot), std::uint64_t{201u});
+        nr::test::requireEqual(currentLogicalResourceId(passASlotOneSnapshot), std::uint64_t{301u});
+        nr::test::requireEqual(currentLogicalResourceId(passARebuiltSnapshot), std::uint64_t{401u});
 
         auto twoTableProgram = compileOwnershipProgram(std::filesystem::path{"test/renderer/bindlessTwoTableContract"});
         auto twoTableRuntime = Runtime{};

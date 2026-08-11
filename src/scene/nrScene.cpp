@@ -721,7 +721,7 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
 
         if (auto templateTransform = child.try_get<SceneTemplateNodeTransform>(); templateTransform != nullptr)
         {
-            child.set(LocalTransform{.value = detail::toGlmMat4(templateTransform->localTransform)});
+            child.set(LocalTransform{.value = detail::toRowMajorFloat4x4(templateTransform->localTransform)});
         }
         else if (child.try_get<LocalTransform>() == nullptr)
         {
@@ -754,13 +754,14 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
     }
 }
 
-[[nodiscard]] nr::resource::Aabb Scene::updateHierarchyNode(flecs::entity entity, const glm::mat4 &parentWorld)
+[[nodiscard]] nr::resource::Aabb Scene::updateHierarchyNode(flecs::entity entity,
+                                                             const DirectX::XMFLOAT4X4 &parentWorld)
 {
     struct HierarchyUpdateWork
     {
         flecs::entity_t entityId = 0;
         flecs::entity_t parentEntityId = 0;
-        glm::mat4 parentWorld{1.0f};
+        DirectX::XMFLOAT4X4 parentWorld = kIdentityMatrix;
         bool exiting = false;
     };
 
@@ -801,7 +802,7 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
             continue;
         }
 
-        auto localMatrix = glm::mat4{1.0f};
+        auto localMatrix = kIdentityMatrix;
         if (auto local = current.try_get<LocalTransform>(); local != nullptr)
         {
             if (detail::finiteMat4(local->value))
@@ -815,7 +816,7 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
         }
         else if (auto templateTransform = current.try_get<SceneTemplateNodeTransform>(); templateTransform != nullptr)
         {
-            auto converted = detail::toGlmMat4(templateTransform->localTransform);
+            auto converted = detail::toRowMajorFloat4x4(templateTransform->localTransform);
             if (detail::finiteMat4(converted))
             {
                 localMatrix = converted;
@@ -831,7 +832,11 @@ void Scene::initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord)
             current.set(LocalTransform{});
         }
 
-        auto const worldMatrix = work.parentWorld * localMatrix;
+        auto worldMatrix = DirectX::XMFLOAT4X4{};
+        DirectX::XMStoreFloat4x4(
+            &worldMatrix,
+            DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&localMatrix),
+                                      DirectX::XMLoadFloat4x4(&work.parentWorld)));
         current.set(WorldTransform{.value = worldMatrix});
 
         auto localBounds = nr::resource::Aabb{};
@@ -893,7 +898,7 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
         return;
     }
 
-    auto parentWorld = glm::mat4{1.0f};
+    auto parentWorld = kIdentityMatrix;
     auto const parentId = ecs_get_parent(world_.c_ptr(), instanceRecord.root.id());
     if (parentId != 0)
     {
@@ -1052,7 +1057,7 @@ void Scene::updateInstanceHierarchy(SceneInstanceRecord &instanceRecord)
             .resolvedName = resolvedName,
         });
         nodeEntity.set(SceneTemplateNodeTransform{.localTransform = nodeAsset.localTransform});
-        nodeEntity.set(LocalTransform{.value = detail::toGlmMat4(nodeAsset.localTransform)});
+        nodeEntity.set(LocalTransform{.value = detail::toRowMajorFloat4x4(nodeAsset.localTransform)});
         nodeEntity.set(WorldTransform{});
         nodeEntity.set(LocalBounds{});
         nodeEntity.set(WorldBounds{});

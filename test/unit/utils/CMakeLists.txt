@@ -2,6 +2,10 @@ nr_add_contract_test(nr_utils_threading_contract_test nr_utils_threading_contrac
     utils
 )
 
+nr_add_contract_test(nr_utils_static_utils_contract_test nr_utils_static_utils_contract_test.cpp "fast;cpu;unit;utils"
+    utils
+)
+
 nr_add_contract_test(nr_utils_revision_contract_test nr_utils_revision_contract_test.cpp "fast;cpu;unit;utils"
     utils
 )

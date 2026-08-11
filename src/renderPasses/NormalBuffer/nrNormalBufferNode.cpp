@@ -1,6 +1,3 @@
-module;
-#include <cstddef>
-
 module nr.renderPasses;
 import dependency.math;
 import dependency.vulkan;
@@ -30,13 +27,29 @@ struct NormalBufferRuntimeCache
 
 inline constexpr float kModelLinearSingularityTolerance = 32.0f * std::numeric_limits<float>::epsilon();
 
-[[nodiscard]] float validatedModelLinearDeterminant(const glm::mat4 &model) noexcept
+void validateAffineModelTransform(const DirectX::XMFLOAT4X4 &model) noexcept
 {
-    auto const row0 = glm::vec3{model[0][0], model[1][0], model[2][0]};
-    auto const row1 = glm::vec3{model[0][1], model[1][1], model[2][1]};
-    auto const row2 = glm::vec3{model[0][2], model[1][2], model[2][2]};
-    auto const determinant = glm::dot(row0, glm::cross(row1, row2));
-    auto const determinantScale = glm::length(row0) * glm::length(row1) * glm::length(row2);
+    nr::nrAssert(std::isfinite(model._11) && std::isfinite(model._12) && std::isfinite(model._13) &&
+                     std::isfinite(model._14) && std::isfinite(model._21) && std::isfinite(model._22) &&
+                     std::isfinite(model._23) && std::isfinite(model._24) && std::isfinite(model._31) &&
+                     std::isfinite(model._32) && std::isfinite(model._33) && std::isfinite(model._34) &&
+                     std::isfinite(model._41) && std::isfinite(model._42) && std::isfinite(model._43) &&
+                     std::isfinite(model._44) && std::abs(model._14) <= kModelLinearSingularityTolerance &&
+                     std::abs(model._24) <= kModelLinearSingularityTolerance &&
+                     std::abs(model._34) <= kModelLinearSingularityTolerance &&
+                     std::abs(model._44 - 1.0f) <= kModelLinearSingularityTolerance,
+                 "NormalBuffer draw requires a finite affine row-vector model transform.");
+}
+
+[[nodiscard]] float validatedModelLinearDeterminant(const DirectX::XMFLOAT4X4 &model) noexcept
+{
+    auto const determinant = model._11 * (model._22 * model._33 - model._23 * model._32) -
+                             model._12 * (model._21 * model._33 - model._23 * model._31) +
+                             model._13 * (model._21 * model._32 - model._22 * model._31);
+    auto const row0Length = std::sqrt(model._11 * model._11 + model._12 * model._12 + model._13 * model._13);
+    auto const row1Length = std::sqrt(model._21 * model._21 + model._22 * model._22 + model._23 * model._23);
+    auto const row2Length = std::sqrt(model._31 * model._31 + model._32 * model._32 + model._33 * model._33);
+    auto const determinantScale = row0Length * row1Length * row2Length;
     nr::nrAssert(std::isfinite(determinant) && std::isfinite(determinantScale) && determinantScale > 0.0f &&
                      std::abs(determinant) > kModelLinearSingularityTolerance * determinantScale,
                  "NormalBuffer draw requires a finite, non-singular model linear transform.");
@@ -57,30 +70,35 @@ inline constexpr float kModelLinearSingularityTolerance = 32.0f * std::numeric_l
 
 struct NormalBufferPushConstants
 {
-    glm::vec4 modelRow0{};
-    glm::vec4 modelRow1{};
-    glm::vec4 modelRow2{};
-    glm::vec4 normalUvLinear{};
-    glm::vec4 normalUvOffsetScale{};
-    glm::uvec4 normalTextureMeta{};
+    DirectX::XMFLOAT4X3 model{};
+    DirectX::XMFLOAT4 normalUvLinear{};
+    DirectX::XMFLOAT4 normalUvOffsetScale{};
+    DirectX::XMUINT4 normalTextureMeta{};
 };
 
+static_assert(std::is_standard_layout_v<NormalBufferPushConstants>);
 static_assert(sizeof(NormalBufferPushConstants) == 96u,
               "NormalBuffer push constants must match the reflected shader layout.");
-static_assert(offsetof(NormalBufferPushConstants, modelRow0) == 0u);
-static_assert(offsetof(NormalBufferPushConstants, modelRow1) == 16u);
-static_assert(offsetof(NormalBufferPushConstants, modelRow2) == 32u);
-static_assert(offsetof(NormalBufferPushConstants, normalUvLinear) == 48u);
-static_assert(offsetof(NormalBufferPushConstants, normalUvOffsetScale) == 64u);
-static_assert(offsetof(NormalBufferPushConstants, normalTextureMeta) == 80u);
+static_assert(sizeof(DirectX::XMFLOAT4X3) == 48u);
+static_assert(std::is_standard_layout_v<DirectX::XMFLOAT4X3>);
+static_assert(std::is_trivially_copyable_v<DirectX::XMFLOAT4X3>);
+static_assert(nr::memberOffset<&NormalBufferPushConstants::model>() == 0u);
+static_assert(nr::memberOffset<&NormalBufferPushConstants::normalUvLinear>() == 48u);
+static_assert(nr::memberOffset<&NormalBufferPushConstants::normalUvOffsetScale>() == 64u);
+static_assert(nr::memberOffset<&NormalBufferPushConstants::normalTextureMeta>() == 80u);
 static_assert(sizeof(NormalBufferPushConstants) <= nr::rhi::kMaxPushConstantBytes, "Push constants exceed 128 bytes.");
 
 inline constexpr std::uint32_t kVertexStride = static_cast<std::uint32_t>(sizeof(nr::resource::Vertex));
-inline constexpr std::uint32_t kOffsetPosition = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, position));
-inline constexpr std::uint32_t kOffsetNormal = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, normal));
-inline constexpr std::uint32_t kOffsetTangent = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, tangent));
-inline constexpr std::uint32_t kOffsetTexCoord0 = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, texCoord0));
-inline constexpr std::uint32_t kOffsetTexCoord1 = static_cast<std::uint32_t>(offsetof(nr::resource::Vertex, texCoord1));
+inline constexpr std::uint32_t kOffsetPosition =
+    static_cast<std::uint32_t>(nr::memberOffset<&nr::resource::Vertex::position>());
+inline constexpr std::uint32_t kOffsetNormal =
+    static_cast<std::uint32_t>(nr::memberOffset<&nr::resource::Vertex::normal>());
+inline constexpr std::uint32_t kOffsetTangent =
+    static_cast<std::uint32_t>(nr::memberOffset<&nr::resource::Vertex::tangent>());
+inline constexpr std::uint32_t kOffsetTexCoord0 =
+    static_cast<std::uint32_t>(nr::memberOffset<&nr::resource::Vertex::texCoord0>());
+inline constexpr std::uint32_t kOffsetTexCoord1 =
+    static_cast<std::uint32_t>(nr::memberOffset<&nr::resource::Vertex::texCoord1>());
 
 [[nodiscard]] std::vector<vk::VertexInputBindingDescription> makeVertexBindings()
 {
@@ -105,21 +123,35 @@ inline constexpr std::uint32_t kOffsetTexCoord1 = static_cast<std::uint32_t>(off
 }
 
 [[nodiscard]] NormalBufferPushConstants packDrawPushConstants(
-    const glm::mat4 &model, const nr::scene::SceneMaterialNormalTextureBinding &normalTexture) noexcept
+    const DirectX::XMFLOAT4X4 &model, const nr::scene::SceneMaterialNormalTextureBinding &normalTexture) noexcept
 {
+    validateAffineModelTransform(model);
     return NormalBufferPushConstants{
-        .modelRow0 = glm::vec4{model[0][0], model[1][0], model[2][0], model[3][0]},
-        .modelRow1 = glm::vec4{model[0][1], model[1][1], model[2][1], model[3][1]},
-        .modelRow2 = glm::vec4{model[0][2], model[1][2], model[2][2], model[3][2]},
+        .model =
+            DirectX::XMFLOAT4X3{
+                model._11,
+                model._12,
+                model._13,
+                model._21,
+                model._22,
+                model._23,
+                model._31,
+                model._32,
+                model._33,
+                model._41,
+                model._42,
+                model._43,
+            },
         .normalUvLinear = normalTexture.uvLinear,
         .normalUvOffsetScale =
-            glm::vec4{
-                normalTexture.uvOffset,
+            DirectX::XMFLOAT4{
+                normalTexture.uvOffset.x,
+                normalTexture.uvOffset.y,
                 normalTexture.normalScale,
                 0.0f,
             },
         .normalTextureMeta =
-            glm::uvec4{
+            DirectX::XMUINT4{
                 normalTexture.textureId,
                 normalTexture.uvSet,
                 0u,
@@ -307,6 +339,8 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
         .depthTestEnable = vk::True,
         .depthWriteEnable = vk::True,
     };
+    auto const modelPushConstants =
+        nr::renderer::resolvePushConstantLocation(runtime_->pipeline->state().descriptorLayout, "gPushConstants");
 
     auto rasterPass = nr::renderer::RasterPassBuilder{context, "NormalBuffer.Raster", runtime_->pipeline};
     if (sceneBridgeFrameHandle.has_value())
@@ -347,8 +381,8 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
                     recordContext.frameData<nr::scene::SceneBridgeFrame>(*sceneBridgeFrameHandle);
                 return sceneBridgeFrame.rasterDraws.size();
             },
-            [sceneBridgeFrameHandle,
-             normalBufferRasterState](const nr::renderer::RasterPassRangeRecordContext &rasterContext) {
+            [sceneBridgeFrameHandle, normalBufferRasterState,
+             modelPushConstants](const nr::renderer::RasterPassRangeRecordContext &rasterContext) {
                 if (!sceneBridgeFrameHandle.has_value())
                 {
                     return;
@@ -358,7 +392,6 @@ void NormalBufferNode::build(NodeBuildContext &context, const NodeFrameParameter
                     rasterContext.pass.frameData<nr::scene::SceneBridgeFrame>(*sceneBridgeFrameHandle);
 
                 auto &commandBuffer = rasterContext.commandBuffer;
-                auto const modelPushConstants = rasterContext.pushConstantLocation("gPushConstants");
 
                 auto currentCullMode = normalBufferRasterState.cullMode;
                 auto currentFrontFace = normalBufferRasterState.frontFace;

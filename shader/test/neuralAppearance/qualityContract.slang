@@ -37,13 +37,13 @@ float3 neuralAppearanceQualityNormalize(float3 value, float3 fallback)
 NeuralAppearanceDirectionPair neuralAppearanceQualityHighlightPair(
     ResolvedMaterialPayload material, uint sampleSeed)
 {
-    NeuralAppearanceDirectionPair pair;
-    pair.viewDirection = neuralAppearanceTrainingUniformConeDirection(
+    float3 viewDirection = neuralAppearanceTrainingUniformConeDirection(
         material.geometryNormal, 0.6108652382f, sampleSeed, 2u);
     float3 reflectionAxis = neuralAppearanceQualityNormalize(
-        reflect(-pair.viewDirection, material.shadingNormal), material.shadingNormal);
-    pair.lightDirection = neuralAppearanceTrainingUniformConeDirection(
-        reflectionAxis, 0.0436332313f, sampleSeed, 4u);
+        reflect(-viewDirection, material.shadingNormal), material.shadingNormal);
+    NeuralAppearanceDirectionPair pair = NeuralAppearanceDirectionPair(
+        viewDirection, neuralAppearanceTrainingUniformConeDirection(
+            reflectionAxis, 0.0436332313f, sampleSeed, 4u));
 
     if (dot(material.geometryNormal, pair.lightDirection) < 1.0e-3f)
     {
@@ -67,17 +67,6 @@ float3 neuralAppearanceQualityGrazingDirection(
         horizonDirection * sqrt(max(1.0f - height * height, 0.0f)) +
             normal * height,
         normal);
-}
-
-NeuralAppearanceDirectionPair neuralAppearanceQualityGrazingPair(
-    ResolvedMaterialPayload material, uint sampleSeed)
-{
-    NeuralAppearanceDirectionPair pair;
-    pair.viewDirection = neuralAppearanceQualityGrazingDirection(
-        material.geometryNormal, sampleSeed, 2u);
-    pair.lightDirection = neuralAppearanceQualityGrazingDirection(
-        material.geometryNormal, sampleSeed, 4u);
-    return pair;
 }
 
 float3 neuralAppearanceQualityMap(float3 value)
@@ -116,21 +105,21 @@ void qualityContractMain(uint3 dispatchThreadID: SV_DispatchThreadID)
     ResolvedMaterialPayload material = neuralAppearanceFixtureMaterial(materialUv);
 
     uint stratum = kNeuralAppearanceQualityUniformStratum;
-    NeuralAppearanceDirectionPair pair;
-    if (sampleIndex < kNeuralAppearanceQualityUniformCount)
-    {
-        pair = neuralAppearanceTrainingDirectionPair(sampleSeed, 2u);
-    }
-    else if (sampleIndex < kNeuralAppearanceQualityUniformCount +
-                               kNeuralAppearanceQualityHighlightCount)
+    NeuralAppearanceDirectionPair pair = neuralAppearanceTrainingDirectionPair(sampleSeed, 2u);
+    if (sampleIndex >= kNeuralAppearanceQualityUniformCount &&
+        sampleIndex < kNeuralAppearanceQualityUniformCount +
+                          kNeuralAppearanceQualityHighlightCount)
     {
         stratum = kNeuralAppearanceQualityHighlightStratum;
         pair = neuralAppearanceQualityHighlightPair(material, sampleSeed);
     }
-    else
+    else if (sampleIndex >= kNeuralAppearanceQualityUniformCount +
+                               kNeuralAppearanceQualityHighlightCount)
     {
         stratum = kNeuralAppearanceQualityGrazingStratum;
-        pair = neuralAppearanceQualityGrazingPair(material, sampleSeed);
+        pair = NeuralAppearanceDirectionPair(
+            neuralAppearanceQualityGrazingDirection(material.geometryNormal, sampleSeed, 2u),
+            neuralAppearanceQualityGrazingDirection(material.geometryNormal, sampleSeed, 4u));
     }
 
     NeuralAppearanceLatent latent = sampleNeuralAppearanceLatent(

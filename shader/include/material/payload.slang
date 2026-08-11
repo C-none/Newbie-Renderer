@@ -84,9 +84,76 @@ public struct ResolvedMaterialPayload
     public float metallic = 0.0f;
     public float roughness = 1.0f;
     public float3 emissive = float3(0.0f);
-    public MaterialLayerStack layers = {};
+    public MaterialLayerStack layers = MaterialLayerStack();
     public float incidentMediumIor = 1.0f;
     public float exteriorMediumIor = 1.0f;
+
+    // The default state is a valid front-facing fallback payload used by ray payload storage.
+    public __init()
+    {
+    }
+
+    public __init(uint materialIndex, RtMaterialLayerFlag layerFlags, AlphaMode alphaMode, float3 position,
+                  float3 geometryNormal, float3 shadingNormal, float3 anisotropyTangent, float anisotropyStrength,
+                  float4 baseColor, float metallic, float roughness, float3 emissive, MaterialLayerStack layers,
+                  float incidentMediumIor, float exteriorMediumIor, uint instanceMetadataIndex = 0xffffffffu,
+                  uint geometryIndex = 0xffffffffu)
+    {
+        this.materialIndex = materialIndex;
+        this.layerFlags = layerFlags;
+        this.alphaMode = alphaMode;
+        this.position = position;
+        this.geometryNormal = geometryNormal;
+        this.shadingNormal = shadingNormal;
+        this.anisotropyTangent = anisotropyTangent;
+        this.anisotropyStrength = anisotropyStrength;
+        this.baseColor = baseColor;
+        this.metallic = metallic;
+        this.roughness = roughness;
+        this.emissive = emissive;
+        this.layers = layers;
+        this.incidentMediumIor = incidentMediumIor;
+        this.exteriorMediumIor = exteriorMediumIor;
+        this.instanceMetadataIndex = instanceMetadataIndex;
+        this.geometryIndex = geometryIndex;
+    }
+
+    public __init(RtMaterialLayerFlag layerFlags, float3 geometryNormal, float3 shadingNormal,
+                  float3 anisotropyTangent, float anisotropyStrength, float4 baseColor, float metallic,
+                  float roughness)
+    {
+        this.layerFlags = layerFlags;
+        this.geometryNormal = geometryNormal;
+        this.shadingNormal = shadingNormal;
+        this.anisotropyTangent = anisotropyTangent;
+        this.anisotropyStrength = anisotropyStrength;
+        this.baseColor = baseColor;
+        this.metallic = metallic;
+        this.roughness = roughness;
+    }
+
+    public __init(ResolvedMaterialFlag flags, uint materialIndex, uint instanceMetadataIndex, uint geometryIndex,
+                  float3 position, float3 geometryNormal, float3 shadingNormal, float3 anisotropyTangent,
+                  float anisotropyStrength, float4 baseColor, float metallic, float roughness, float3 emissive,
+                  MaterialLayerStack layers, float incidentMediumIor, float exteriorMediumIor)
+    {
+        this.flags = flags;
+        this.materialIndex = materialIndex;
+        this.instanceMetadataIndex = instanceMetadataIndex;
+        this.geometryIndex = geometryIndex;
+        this.position = position;
+        this.geometryNormal = geometryNormal;
+        this.shadingNormal = shadingNormal;
+        this.anisotropyTangent = anisotropyTangent;
+        this.anisotropyStrength = anisotropyStrength;
+        this.baseColor = baseColor;
+        this.metallic = metallic;
+        this.roughness = roughness;
+        this.emissive = emissive;
+        this.layers = layers;
+        this.incidentMediumIor = incidentMediumIor;
+        this.exteriorMediumIor = exteriorMediumIor;
+    }
 
     public property RtMaterialLayerFlag layerFlags
     {
@@ -137,6 +204,32 @@ public struct ResolvedMaterialScatter
     public float pmf = 0.0f;
     public float etaRatio = 1.0f;
 
+    // Invalid scatter is the required early-return state for rejected samples.
+    public __init()
+    {
+    }
+
+    public __init(float3 direction, ResolvedMaterialScatterKind kind, float pdf, bool valid)
+    {
+        this.direction = direction;
+        this.kind = kind;
+        this.pdf = pdf;
+        this.valid = valid;
+    }
+
+    public __init(ResolvedMaterialFlag flags, float3 direction, float3 weight, float3 diffuseWeight, float3 specularWeight,
+           float pdf, float pmf, float etaRatio)
+    {
+        this.flags = flags;
+        this.direction = direction;
+        this.weight = weight;
+        this.diffuseWeight = diffuseWeight;
+        this.specularWeight = specularWeight;
+        this.pdf = pdf;
+        this.pmf = pmf;
+        this.etaRatio = etaRatio;
+    }
+
     public property bool valid
     {
         get {
@@ -186,6 +279,19 @@ public struct ResolvedMaterialBsdfComponents
     public float3 specular = float3(0.0f);
     public float3 diffuseProjected = float3(0.0f);
     public float3 specularProjected = float3(0.0f);
+
+    // Component accumulation starts at zero when optional lobes are composed.
+    public __init()
+    {
+    }
+
+    public __init(float3 diffuse, float3 specular, float3 diffuseProjected, float3 specularProjected)
+    {
+        this.diffuse = diffuse;
+        this.specular = specular;
+        this.diffuseProjected = diffuseProjected;
+        this.specularProjected = specularProjected;
+    }
 };
 
 // Reflection folding is a push-forward from the shading-normal hemisphere to the geometric
@@ -195,23 +301,37 @@ public struct MaterialPayloadReflectionEvaluation
 {
     public float3 value = float3(0.0f);
     public float3 projected = float3(0.0f);
+
+    public __init()
+    {
+    }
+
+    public __init(float3 value, float3 projected)
+    {
+        this.value = value;
+        this.projected = projected;
+    }
 };
 
 public struct ResolvedMaterialDirectComponents
 {
     public float3 diffuseRadiance = float3(0.0f);
     public float3 specularRadiance = float3(0.0f);
+
+    public __init()
+    {
+    }
+
+    public __init(float3 diffuseRadiance, float3 specularRadiance)
+    {
+        this.diffuseRadiance = diffuseRadiance;
+        this.specularRadiance = specularRadiance;
+    }
 };
 
 public MaterialSample materialSampleFromResolvedPayload(ResolvedMaterialPayload payload)
 {
-    MaterialSample sample;
-    sample.baseColor = payload.baseColor;
-    sample.metallic = payload.metallic;
-    sample.roughness = payload.roughness;
-    sample.emissive = payload.emissive;
-    sample.alpha = payload.alpha;
-    return sample;
+    return MaterialSample(payload.baseColor, payload.metallic, payload.roughness, payload.emissive, payload.alpha);
 }
 
 // glTF base color coverage: base color factor x base color texture x vertex color. Shared by unlit
@@ -252,18 +372,9 @@ public ResolvedMaterialPayload resolveUnlitMaterialPayload(StructuredBuffer<RtMa
     float4 baseColor = resolveBaseColorAndAlphaVariant(textureRefs, material, surface, filterPacket0.x);
     float3 orientedNormal = safeNormalize(surface.normal, viewDirection);
 
-    ResolvedMaterialPayload payload;
-    payload.materialIndex = materialIndex;
-    payload.layerFlags = RtMaterialLayerFlag.none;
-    payload.alphaMode = material.alphaMode;
-    payload.position = surface.position;
-    payload.geometryNormal = orientedNormal;
-    payload.shadingNormal = orientedNormal;
-    payload.baseColor = baseColor;
-    payload.metallic = 0.0f;
-    payload.roughness = 1.0f;
-    payload.emissive = float3(0.0f);
-    return payload;
+    return ResolvedMaterialPayload(materialIndex, RtMaterialLayerFlag.none, material.alphaMode, surface.position,
+                                   orientedNormal, orientedNormal, float3(1.0f, 0.0f, 0.0f), 0.0f, baseColor, 0.0f,
+                                   1.0f, float3(0.0f), MaterialLayerStack(), 1.0f, 1.0f);
 }
 
 // Lit resolver. baseSurface is always resolved from the header plus base textures; optional layer data
@@ -276,41 +387,29 @@ public ResolvedMaterialPayload resolveLitMaterialPayloadVariant<let LayerFlags :
 {
     RandomSequence localFilterSequence = filterSequence;
     float3 orientedNormal = safeNormalize(surface.normal, viewDirection);
-    MaterialSample core;
-    float3 shadingNormal;
-    {
-        float4 filterPacket0 = localFilterSequence.rand4();
-        core = sampleCoreMaterialVariant(textureRefs, material, surface, filterPacket0.xyz);
-        float normalScale = material.roughnessNormalOcclusionAlpha.y;
-        shadingNormal = applyNormalMapSlotVariant(textureRefs, material, MaterialTextureSlot.normal, normalScale,
-                                                  orientedNormal, surface.tangent, surface.tangentSign,
-                                                  surface.texCoord0, surface.texCoord1, filterPacket0.w);
-    }
+    float4 filterPacket0 = localFilterSequence.rand4();
+    MaterialSample core = sampleCoreMaterialVariant(textureRefs, material, surface, filterPacket0.xyz);
+    float normalScale = material.roughnessNormalOcclusionAlpha.y;
+    float3 shadingNormal = applyNormalMapSlotVariant(textureRefs, material, MaterialTextureSlot.normal, normalScale,
+                                                     orientedNormal, surface.tangent, surface.tangentSign,
+                                                     surface.texCoord0, surface.texCoord1, filterPacket0.w);
 
-    ResolvedMaterialPayload payload;
-    payload.materialIndex = materialIndex;
-    payload.layerFlags = LayerFlags;
-    payload.alphaMode = material.alphaMode;
-    payload.position = surface.position;
-    payload.geometryNormal = orientedNormal;
-    payload.shadingNormal = shadingNormal;
-    payload.anisotropyTangent = orthogonalTangent(shadingNormal);
-    payload.anisotropyStrength = 0.0f;
+    float3 anisotropyTangent = orthogonalTangent(shadingNormal);
+    float anisotropyStrength = 0.0f;
+    MaterialLayerStack layers = MaterialLayerStack(orientedNormal);
     {
         float4 filterPacket1 = localFilterSequence.rand4();
         if (uint(LayerFlags & RtMaterialLayerFlag.anisotropicBaseLobe) != 0u)
         {
             sampleMaterialAnisotropyVariant(textureRefs, material, surface, shadingNormal, filterPacket1.x,
-                                            payload.anisotropyTangent, payload.anisotropyStrength);
+                                            anisotropyTangent, anisotropyStrength);
         }
-        payload.layers = sampleMaterialLayersVariant<LayerFlags>(
+        layers = sampleMaterialLayersVariant<LayerFlags>(
             textureRefs, layerRecords, material, surface, orientedNormal, filterPacket1.yzw, localFilterSequence);
     }
-    payload.baseColor = core.baseColor;
-    payload.metallic = core.metallic;
-    payload.roughness = core.roughness;
-    payload.emissive = core.emissive;
-    return payload;
+    return ResolvedMaterialPayload(materialIndex, LayerFlags, material.alphaMode, surface.position, orientedNormal,
+                                   shadingNormal, anisotropyTangent, anisotropyStrength, core.baseColor, core.metallic,
+                                   core.roughness, core.emissive, layers, 1.0f, 1.0f);
 }
 
 public float materialPayloadLuminance(float3 value)
@@ -448,21 +547,6 @@ public float3 sampleMaterialPayloadGgxVisibleHalfVector(float2 randomValues, flo
         safeNormalize(float3(alpha * stretchedNormal.x, alpha * stretchedNormal.y, max(stretchedNormal.z, 0.0f)),
                       float3(0.0f, 0.0f, 1.0f));
     return materialPayloadToWorld(localHalfVector, normal);
-}
-
-public float materialPayloadGgxVisibleHalfVectorPdf(float roughness, float3 normal, float3 viewDirection,
-                                                    float3 halfVector)
-{
-    float noV = abs(dot(normal, viewDirection));
-    float noH = saturate(dot(normal, halfVector));
-    float voH = abs(dot(viewDirection, halfVector));
-    if (noV <= kMaterialMinCosTheta || noH <= kMaterialMinCosTheta || voH <= kMaterialMinCosTheta)
-    {
-        return 0.0f;
-    }
-
-    float alpha = max(roughness * roughness, kMaterialMinRoughness * kMaterialMinRoughness);
-    return ggxDistribution(alpha, noH) * ggxSmithG1(alpha, noV) * voH / noV;
 }
 
 public struct BaseGgxDistribution<let LayerFlags : RtMaterialLayerFlag>
@@ -827,12 +911,11 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                                                                           float3 specularNormal, float3 viewDirection,
                                                                           float3 lightDirection, float3 energyWeight)
     {
-        MaterialPayloadReflectionEvaluation result = {};
         float specularNoV = saturate(dot(specularNormal, viewDirection));
         float specularNoL = saturate(dot(specularNormal, lightDirection));
         if (specularNoV <= kMaterialMinCosTheta || specularNoL <= kMaterialMinCosTheta)
         {
-            return result;
+            return MaterialPayloadReflectionEvaluation();
         }
 
         float3 halfVector = safeNormalize(viewDirection + lightDirection, specularNormal);
@@ -840,17 +923,15 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         float voH = saturate(dot(viewDirection, halfVector));
         if (noH <= kMaterialMinCosTheta || voH <= kMaterialMinCosTheta)
         {
-            return result;
+            return MaterialPayloadReflectionEvaluation();
         }
 
         BaseGgxDistribution<LayerFlags> baseGgx;
         float3 fresnel = interfaceFresnel(payload, voH);
         float distribution = baseGgx.distribution(payload, specularNormal, halfVector);
         float geometry = baseGgx.smithG2(payload, specularNormal, viewDirection, lightDirection);
-        result.value =
-            energyWeight * fresnel * distribution * geometry / max(4.0f * specularNoV * specularNoL, 1.0e-7f);
-        result.projected = result.value * specularNoL;
-        return result;
+        float3 value = energyWeight * fresnel * distribution * geometry / max(4.0f * specularNoV * specularNoL, 1.0e-7f);
+        return MaterialPayloadReflectionEvaluation(value, value * specularNoL);
     }
 
     public MaterialPayloadReflectionEvaluation evaluateFoldedReflection(ResolvedMaterialPayload payload,
@@ -858,10 +939,9 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                                                                         float3 specularNormal, float3 viewDirection,
                                                                         float3 lightDirection)
     {
-        MaterialPayloadReflectionEvaluation result = {};
         if (!materialPayloadGeometrySupportsReflection(facingGeometryNormal, lightDirection))
         {
-            return result;
+            return MaterialPayloadReflectionEvaluation();
         }
 
         float3 energyWeight = float3(1.0f);
@@ -870,7 +950,8 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             energyWeight = specularEnergyTerms(payload, specularNormal, viewDirection).W;
         }
 
-        result = evaluateUnfoldedReflection(payload, specularNormal, viewDirection, lightDirection, energyWeight);
+        MaterialPayloadReflectionEvaluation result =
+            evaluateUnfoldedReflection(payload, specularNormal, viewDirection, lightDirection, energyWeight);
         if (dot(facingGeometryNormal, lightDirection) > 0.0f)
         {
             float3 mirroredDirection = materialPayloadMirrorReflectionDirection(facingGeometryNormal, lightDirection);
@@ -946,7 +1027,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
     public ResolvedMaterialBsdfComponents evaluate(ResolvedMaterialPayload payload, float3 viewDirection,
                                                    float3 lightDirection)
     {
-        ResolvedMaterialBsdfComponents result = {};
+        ResolvedMaterialBsdfComponents result = ResolvedMaterialBsdfComponents();
         float3 facingGeometryNormal =
             materialPayloadFacingGeometryNormal(payload.geometryNormal, payload.shadingNormal, viewDirection);
         float3 rawNormal = safeNormalize(payload.shadingNormal, facingGeometryNormal);
@@ -1161,7 +1242,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
 
     public ResolvedMaterialScatter sample(ResolvedMaterialPayload payload, float3 viewDirection, float3 randomValues)
     {
-        ResolvedMaterialScatter scatter = {};
+        ResolvedMaterialScatter scatter = ResolvedMaterialScatter();
         float diffuseWeight;
         float interfaceWeight;
         selectionWeights(payload, viewDirection, diffuseWeight, interfaceWeight);
@@ -1180,11 +1261,9 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         float selectedWeight = min(saturate(randomValues.x), 0.99999994f) * baseWeight;
         if (selectedWeight < diffuseWeight)
         {
-            scatter.direction = sampleMaterialPayloadCosineHemisphere(randomValues.yz, rawNormal);
-            scatter.kind = ResolvedMaterialScatterKind.diffuse;
-            scatter.pdf = pdf(payload, viewDirection, scatter.direction);
-            scatter.valid = scatter.pdf > 0.0f;
-            return scatter;
+            float3 direction = sampleMaterialPayloadCosineHemisphere(randomValues.yz, rawNormal);
+            float samplePdf = pdf(payload, viewDirection, direction);
+            return ResolvedMaterialScatter(direction, ResolvedMaterialScatterKind.diffuse, samplePdf, samplePdf > 0.0f);
         }
 
         if (interfaceWeight <= 1.0e-7f)
@@ -1229,14 +1308,13 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             float3 unfoldedDirection = safeNormalize(reflect(-viewDirection, halfVector), specularNormal);
             if (dot(specularNormal, unfoldedDirection) <= kMaterialMinCosTheta)
             {
-                return {};
+                return ResolvedMaterialScatter();
             }
 
-            scatter.direction = materialPayloadFoldReflectionDirection(facingGeometryNormal, unfoldedDirection);
-            scatter.kind = ResolvedMaterialScatterKind.specular;
-            scatter.pdf = pdf(payload, viewDirection, scatter.direction);
-            scatter.valid = scatter.pdf > 0.0f;
-            return scatter;
+            float3 direction = materialPayloadFoldReflectionDirection(facingGeometryNormal, unfoldedDirection);
+            float samplePdf = pdf(payload, viewDirection, direction);
+            return ResolvedMaterialScatter(direction, ResolvedMaterialScatterKind.specular, samplePdf,
+                                           samplePdf > 0.0f);
         }
 
         if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
@@ -1247,30 +1325,29 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 return scatter;
             }
 
-            scatter.kind = ResolvedMaterialScatterKind.transmission;
             if (payload.layers.transmissionMode == RtTransmissionMode.thin)
             {
                 float3 reflectedDirection = safeNormalize(reflect(-viewDirection, halfVector), specularNormal);
-                scatter.direction =
-                    reflectedDirection - 2.0f * dot(specularNormal, reflectedDirection) * specularNormal;
-                if (dot(specularNormal, scatter.direction) >= -kMaterialMinCosTheta ||
-                    !materialPayloadGeometrySupportsTransmission(facingGeometryNormal, scatter.direction))
+                float3 direction = reflectedDirection - 2.0f * dot(specularNormal, reflectedDirection) * specularNormal;
+                if (dot(specularNormal, direction) >= -kMaterialMinCosTheta ||
+                    !materialPayloadGeometrySupportsTransmission(facingGeometryNormal, direction))
                 {
-                    return {};
+                    return ResolvedMaterialScatter();
                 }
 
-                scatter.pdf = pdf(payload, viewDirection, scatter.direction);
-                scatter.valid = scatter.pdf > 0.0f;
-                return scatter;
+                float samplePdf = pdf(payload, viewDirection, direction);
+                return ResolvedMaterialScatter(direction, ResolvedMaterialScatterKind.transmission, samplePdf,
+                                               samplePdf > 0.0f);
             }
 
             float etaI = payload.incidentMediumIor;
             float etaT = payload.frontFace ? payload.layers.transmissionIor : payload.exteriorMediumIor;
             if (etaI <= 0.0f || etaT <= 0.0f)
             {
-                return {};
+                return ResolvedMaterialScatter();
             }
 
+            scatter.kind = ResolvedMaterialScatterKind.transmission;
             scatter.etaRatio = etaT / etaI;
             scatter.mediumTransition =
                 payload.frontFace ? ResolvedMaterialMediumTransition.enter : ResolvedMaterialMediumTransition.exit;
@@ -1279,7 +1356,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 scatter.direction = -viewDirection;
                 if (!materialPayloadGeometrySupportsTransmission(facingGeometryNormal, scatter.direction))
                 {
-                    return {};
+                    return ResolvedMaterialScatter();
                 }
                 scatter.delta = true;
                 scatter.pmf = (interfaceWeight / baseWeight) * transmissionProbability;
@@ -1287,7 +1364,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                     payload.baseColor.rgb * (1.0f - payload.metallic) * payload.layers.transmission;
                 if (scatter.pmf <= 0.0f)
                 {
-                    return {};
+                    return ResolvedMaterialScatter();
                 }
 
                 scatter.valid = true;
@@ -1302,7 +1379,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 // Exact Fresnel makes transmissionProbability zero under TIR. Reaching this branch can
                 // only be a numeric boundary disagreement, so reject the sample instead of changing its
                 // measure after selection.
-                return {};
+                return ResolvedMaterialScatter();
             }
 
             float cosThetaT = sqrt(max(1.0f - sinThetaT2, 0.0f));
@@ -1311,13 +1388,13 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             if (dot(specularNormal, scatter.direction) >= -kMaterialMinCosTheta ||
                 !materialPayloadGeometrySupportsTransmission(facingGeometryNormal, scatter.direction))
             {
-                return {};
+                return ResolvedMaterialScatter();
             }
 
             scatter.pdf = pdf(payload, viewDirection, scatter.direction);
             if (scatter.pdf <= 0.0f)
             {
-                return {};
+                return ResolvedMaterialScatter();
             }
 
             scatter.valid = true;
@@ -1339,32 +1416,30 @@ public struct SheenBsdfLobe
                                                                           float3 specularNormal, float3 viewDirection,
                                                                           float3 lightDirection)
     {
-        MaterialPayloadReflectionEvaluation result = {};
         float noL = saturate(dot(specularNormal, lightDirection));
         if (noL <= kMaterialMinCosTheta)
         {
-            return result;
+            return MaterialPayloadReflectionEvaluation();
         }
 
-        result.value = evaluateSheenBsdf(payload.layers, specularNormal, viewDirection, lightDirection);
-        result.projected = result.value * noL;
-        return result;
+        float3 value = evaluateSheenBsdf(payload.layers, specularNormal, viewDirection, lightDirection);
+        return MaterialPayloadReflectionEvaluation(value, value * noL);
     }
 
     public MaterialPayloadReflectionEvaluation evaluateFoldedReflection(ResolvedMaterialPayload payload,
                                                                         float3 viewDirection, float3 lightDirection)
     {
-        MaterialPayloadReflectionEvaluation result = {};
         float3 facingGeometryNormal =
             materialPayloadFacingGeometryNormal(payload.geometryNormal, payload.shadingNormal, viewDirection);
         if (!materialPayloadGeometrySupportsReflection(facingGeometryNormal, lightDirection))
         {
-            return result;
+            return MaterialPayloadReflectionEvaluation();
         }
 
         float3 specularNormal =
             adjustMaterialPayloadSpecularNormal(payload.shadingNormal, facingGeometryNormal, viewDirection);
-        result = evaluateUnfoldedReflection(payload, specularNormal, viewDirection, lightDirection);
+        MaterialPayloadReflectionEvaluation result =
+            evaluateUnfoldedReflection(payload, specularNormal, viewDirection, lightDirection);
         if (dot(facingGeometryNormal, lightDirection) > 0.0f)
         {
             float3 mirroredDirection = materialPayloadMirrorReflectionDirection(facingGeometryNormal, lightDirection);
@@ -1374,11 +1449,6 @@ public struct SheenBsdfLobe
             result.projected += mirrored.projected;
         }
         return result;
-    }
-
-    public float3 evaluate(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
-    {
-        return evaluateFoldedReflection(payload, viewDirection, lightDirection).value;
     }
 
     public float foldedReflectionPdf(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
@@ -1408,23 +1478,16 @@ public struct SheenBsdfLobe
 
     public ResolvedMaterialScatter sample(ResolvedMaterialPayload payload, float3 viewDirection, float2 randomValues)
     {
-        ResolvedMaterialScatter scatter = {};
         float3 facingGeometryNormal =
             materialPayloadFacingGeometryNormal(payload.geometryNormal, payload.shadingNormal, viewDirection);
         float3 specularNormal =
             adjustMaterialPayloadSpecularNormal(payload.shadingNormal, facingGeometryNormal, viewDirection);
         float3 unfoldedDirection = sampleMaterialPayloadCosineHemisphere(randomValues, specularNormal);
-        scatter.direction = materialPayloadFoldReflectionDirection(facingGeometryNormal, unfoldedDirection);
-        scatter.kind = ResolvedMaterialScatterKind.sheen;
-        scatter.pdf = pdf(payload, viewDirection, scatter.direction);
-        scatter.valid = scatter.pdf > 0.0f;
-        return scatter;
+        float3 direction = materialPayloadFoldReflectionDirection(facingGeometryNormal, unfoldedDirection);
+        float samplePdf = pdf(payload, viewDirection, direction);
+        return ResolvedMaterialScatter(direction, ResolvedMaterialScatterKind.sheen, samplePdf, samplePdf > 0.0f);
     }
 
-    public bool isDelta()
-    {
-        return false;
-    }
 };
 
 public struct ClearcoatBsdfLobe
@@ -1449,36 +1512,33 @@ public struct ClearcoatBsdfLobe
                                                                           float3 viewDirection, float3 lightDirection,
                                                                           float energyWeight)
     {
-        MaterialPayloadReflectionEvaluation result = {};
         float noL = saturate(dot(clearcoatSpecularNormal, lightDirection));
         if (noL <= kMaterialMinCosTheta)
         {
-            return result;
+            return MaterialPayloadReflectionEvaluation();
         }
 
         float coatSpecular = evaluateClearcoatSpecular(payload.layers.clearcoatRoughness, clearcoatSpecularNormal,
                                                        viewDirection, lightDirection, energyWeight) *
                              payload.layers.clearcoat;
-        result.value = float3(coatSpecular);
-        result.projected = result.value * noL;
-        return result;
+        float3 value = float3(coatSpecular);
+        return MaterialPayloadReflectionEvaluation(value, value * noL);
     }
 
     public MaterialPayloadReflectionEvaluation evaluateFoldedReflection(ResolvedMaterialPayload payload,
                                                                         float3 viewDirection, float3 lightDirection)
     {
-        MaterialPayloadReflectionEvaluation result = {};
         float3 facingGeometryNormal =
             materialPayloadFacingGeometryNormal(payload.geometryNormal, payload.layers.clearcoatNormal, viewDirection);
         if (!materialPayloadGeometrySupportsReflection(facingGeometryNormal, lightDirection))
         {
-            return result;
+            return MaterialPayloadReflectionEvaluation();
         }
 
         float3 clearcoatSpecularNormal =
             adjustMaterialPayloadSpecularNormal(payload.layers.clearcoatNormal, facingGeometryNormal, viewDirection);
         float energyWeight = clearcoatGgxEnergyTerms(payload.layers, clearcoatSpecularNormal, viewDirection).W.x;
-        result =
+        MaterialPayloadReflectionEvaluation result =
             evaluateUnfoldedReflection(payload, clearcoatSpecularNormal, viewDirection, lightDirection, energyWeight);
         if (dot(facingGeometryNormal, lightDirection) > 0.0f)
         {
@@ -1489,11 +1549,6 @@ public struct ClearcoatBsdfLobe
             result.projected += mirrored.projected;
         }
         return result;
-    }
-
-    public float3 evaluate(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
-    {
-        return evaluateFoldedReflection(payload, viewDirection, lightDirection).value;
     }
 
     public float foldedReflectionPdf(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
@@ -1524,7 +1579,6 @@ public struct ClearcoatBsdfLobe
 
     public ResolvedMaterialScatter sample(ResolvedMaterialPayload payload, float3 viewDirection, float2 randomValues)
     {
-        ResolvedMaterialScatter scatter = {};
         float3 facingGeometryNormal =
             materialPayloadFacingGeometryNormal(payload.geometryNormal, payload.layers.clearcoatNormal, viewDirection);
         float3 clearcoatSpecularNormal =
@@ -1534,26 +1588,21 @@ public struct ClearcoatBsdfLobe
         float3 unfoldedDirection = safeNormalize(reflect(-viewDirection, halfVector), clearcoatSpecularNormal);
         if (dot(clearcoatSpecularNormal, unfoldedDirection) <= kMaterialMinCosTheta)
         {
-            return scatter;
+            return ResolvedMaterialScatter();
         }
 
-        scatter.direction = materialPayloadFoldReflectionDirection(facingGeometryNormal, unfoldedDirection);
-        scatter.kind = ResolvedMaterialScatterKind.clearcoat;
-        scatter.pdf = pdf(payload, viewDirection, scatter.direction);
-        scatter.valid = scatter.pdf > 0.0f;
-        return scatter;
+        float3 direction = materialPayloadFoldReflectionDirection(facingGeometryNormal, unfoldedDirection);
+        float samplePdf = pdf(payload, viewDirection, direction);
+        return ResolvedMaterialScatter(direction, ResolvedMaterialScatterKind.clearcoat, samplePdf,
+                                       samplePdf > 0.0f);
     }
 
-    public bool isDelta()
-    {
-        return false;
-    }
 };
 
 public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVariant<
     let LayerFlags : RtMaterialLayerFlag>(ResolvedMaterialPayload payload, float3 viewDirection, float3 lightDirection)
 {
-    ResolvedMaterialBsdfComponents result = {};
+    ResolvedMaterialBsdfComponents result = ResolvedMaterialBsdfComponents();
     if (uint(LayerFlags & RtMaterialLayerFlag.baseSurface) != 0u)
     {
         BaseSurfaceBsdfLobe<LayerFlags> baseSurface;
@@ -1597,10 +1646,8 @@ public ResolvedMaterialDirectComponents evaluateResolvedMaterialDirectComponents
 {
     ResolvedMaterialBsdfComponents bsdf = evaluateResolvedMaterialBsdfComponentsVariant<LayerFlags>(
         payload, lighting.viewDirection, lighting.lightDirection);
-    ResolvedMaterialDirectComponents result = {};
-    result.diffuseRadiance = bsdf.diffuseProjected * lighting.lightRadiance;
-    result.specularRadiance = bsdf.specularProjected * lighting.lightRadiance;
-    return result;
+    return ResolvedMaterialDirectComponents(bsdf.diffuseProjected * lighting.lightRadiance,
+                                            bsdf.specularProjected * lighting.lightRadiance);
 }
 
 public float resolvedMaterialCombinedPdfVariant<let LayerFlags : RtMaterialLayerFlag>(ResolvedMaterialPayload payload,
@@ -1642,7 +1689,7 @@ public float resolvedMaterialCombinedPdfVariant<let LayerFlags : RtMaterialLayer
 public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFlags : RtMaterialLayerFlag>(
     ResolvedMaterialPayload payload, float3 viewDirection, float4 randomValues)
 {
-    ResolvedMaterialScatter scatter = {};
+    ResolvedMaterialScatter scatter = ResolvedMaterialScatter();
 
     // Pass 1: accumulate per-lobe selection weights. Each optional lobe's weight computation lives in its
     // own static block, so inactive-layer selection math is removed by link specialization.
@@ -1762,10 +1809,4 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFla
     scatter.pdf = pdf;
     scatter.pmf = 0.0f;
     return scatter;
-}
-
-public ResolvedMaterialScatter sampleResolvedMaterialScatter(ResolvedMaterialPayload payload, float3 viewDirection,
-                                                             float4 randomValues)
-{
-    return sampleResolvedMaterialScatterVariant<kResolvedMaterialVariantMask>(payload, viewDirection, randomValues);
 }

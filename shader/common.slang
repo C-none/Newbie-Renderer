@@ -9,7 +9,6 @@ __include include.share.rtRayType;
 __include include.globalUniform;
 __include include.sceneTextures;
 __include include.sceneLights;
-__include include.materialTextureIds;
 __include include.material.types;
 __include include.pathTracing.random;
 __include include.material.stochasticTextureFiltering;

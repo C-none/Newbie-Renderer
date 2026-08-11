@@ -33,13 +33,23 @@ static_assert(!HasCpuVersion<nr::scene::LightAssetRecord>);
     return std::abs(lhs - rhs) <= epsilon;
 }
 
-[[nodiscard]] float projectionAspectRatio(const glm::mat4 &projection) noexcept
+[[nodiscard]] bool float2Equal(const DirectX::XMFLOAT2 &lhs, const DirectX::XMFLOAT2 &rhs) noexcept
 {
-    if (std::abs(projection[0][0]) <= 1e-6f)
+    return lhs.x == rhs.x && lhs.y == rhs.y;
+}
+
+[[nodiscard]] bool float4Equal(const DirectX::XMFLOAT4 &lhs, const DirectX::XMFLOAT4 &rhs) noexcept
+{
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w;
+}
+
+[[nodiscard]] float projectionAspectRatio(const DirectX::XMFLOAT4X4 &projection) noexcept
+{
+    if (std::abs(projection._11) <= 1e-6f)
     {
         return 0.0f;
     }
-    return projection[1][1] / projection[0][0];
+    return projection._22 / projection._11;
 }
 
 [[nodiscard]] std::array<float, 16> identityTransform() noexcept
@@ -137,7 +147,7 @@ static_assert(!HasCpuVersion<nr::scene::LightAssetRecord>);
             .nodeIndex = 2,
             .lookAt = {0.0f, 0.0f, -1.0f},
             .up = {0.0f, 1.0f, 0.0f},
-            .horizontalFov = glm::radians(90.0f),
+            .horizontalFov = nr::math::radians(90.0f),
             .aspect = 1.0f,
             .nearPlane = 0.1f,
             .farPlane = 500.0f,
@@ -202,8 +212,8 @@ static_assert(!HasCpuVersion<nr::scene::LightAssetRecord>);
             .type = "spot",
             .colorDiffuse = {1.0f, 1.0f, 3.0f},
             .range = 8.0f,
-            .innerCone = glm::radians(10.0f),
-            .outerCone = glm::radians(25.0f),
+            .innerCone = nr::math::radians(10.0f),
+            .outerCone = nr::math::radians(25.0f),
         },
         nr::load::LightAsset{
             .name = "AmbientLight",
@@ -226,10 +236,11 @@ static_assert(!HasCpuVersion<nr::scene::LightAssetRecord>);
     return scene;
 }
 
-[[nodiscard]] nr::scene::SceneLightGpuRecord makeAliasTableTestLight(glm::vec3 color, float intensity) noexcept
+[[nodiscard]] nr::scene::SceneLightGpuRecord makeAliasTableTestLight(DirectX::XMFLOAT3 color,
+                                                                       float intensity) noexcept
 {
     auto record = nr::scene::SceneLightGpuRecord{};
-    record.colorIntensity = glm::vec4{color, intensity};
+    record.colorIntensity = DirectX::XMFLOAT4{color.x, color.y, color.z, intensity};
     return record;
 }
 
@@ -331,19 +342,19 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{
         auto &baseColorBinding = sceneAsset.materials[0].textures.front();
         baseColorBinding.uvChannel = 1u;
         baseColorBinding.transform = nr::resource::MaterialTextureTransform{
-            .linear = glm::vec4{2.0f, -0.5f, 0.25f, 0.75f},
-            .offset = glm::vec2{0.125f, 0.375f},
+            .linear = DirectX::XMFLOAT4{2.0f, -0.5f, 0.25f, 0.75f},
+            .offset = DirectX::XMFLOAT2{0.125f, 0.375f},
         };
         auto &occlusionBinding = sceneAsset.materials[0].textures[3];
         occlusionBinding.transform = nr::resource::MaterialTextureTransform{
-            .linear = glm::vec4{0.5f, 0.0f, 0.0f, 0.25f},
-            .offset = glm::vec2{0.625f, 0.75f},
+            .linear = DirectX::XMFLOAT4{0.5f, 0.0f, 0.0f, 0.25f},
+            .offset = DirectX::XMFLOAT2{0.625f, 0.75f},
         };
         auto &anisotropyBinding = sceneAsset.materials[1].textures[3];
         anisotropyBinding.uvChannel = 1u;
         anisotropyBinding.transform = nr::resource::MaterialTextureTransform{
-            .linear = glm::vec4{0.75f, -0.25f, 0.5f, 1.25f},
-            .offset = glm::vec2{0.2f, -0.1f},
+            .linear = DirectX::XMFLOAT4{0.75f, -0.25f, 0.5f, 1.25f},
+            .offset = DirectX::XMFLOAT2{0.2f, -0.1f},
         };
 
         sceneAsset.materials[0].textures.push_back(nr::load::MaterialTextureBinding{
@@ -409,16 +420,17 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{
                           "gltf_metallic_roughness should bind metallicRoughness slot");
         nr::test::requireEqual(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet,
                                std::uint32_t{1}, "material bridge should preserve UV set 1");
-        nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear ==
-                                  glm::vec4{2.0f, -0.5f, 0.25f, 0.75f} &&
-                              material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.offset ==
-                                  glm::vec2{0.125f, 0.375f},
+        nr::test::require(float4Equal(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear,
+                                      DirectX::XMFLOAT4{2.0f, -0.5f, 0.25f, 0.75f}) &&
+                              float2Equal(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor)
+                                              .transform.offset,
+                                          DirectX::XMFLOAT2{0.125f, 0.375f}),
                           "material bridge should preserve base-color affine texture metadata");
         nr::test::require(
-            material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).transform.linear ==
-                    glm::vec4{0.5f, 0.0f, 0.0f, 0.25f} &&
-                material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).transform.offset ==
-                    glm::vec2{0.625f, 0.75f},
+            float4Equal(material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).transform.linear,
+                        DirectX::XMFLOAT4{0.5f, 0.0f, 0.0f, 0.25f}) &&
+                float2Equal(material.slot(nr::resource::MaterialTextureSlotSemantic::occlusion).transform.offset,
+                            DirectX::XMFLOAT2{0.625f, 0.75f}),
             "material bridge should transport occlusion affine metadata without enabling shader behavior");
         nr::test::requireEqual(material.core.metallicFactor, 1.0f);
         nr::test::require(!material.clearcoat.has_value(), "core material should not create clearcoat extension");
@@ -462,8 +474,9 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{
         auto const &runtimeAnisotropySlot =
             extensionMaterial.slot(nr::resource::MaterialTextureSlotSemantic::anisotropy);
         nr::test::requireEqual(runtimeAnisotropySlot.uvSet, std::uint32_t{1u});
-        nr::test::require(runtimeAnisotropySlot.transform.linear == glm::vec4{0.75f, -0.25f, 0.5f, 1.25f} &&
-                              runtimeAnisotropySlot.transform.offset == glm::vec2{0.2f, -0.1f},
+        nr::test::require(float4Equal(runtimeAnisotropySlot.transform.linear,
+                                      DirectX::XMFLOAT4{0.75f, -0.25f, 0.5f, 1.25f}) &&
+                              float2Equal(runtimeAnisotropySlot.transform.offset, DirectX::XMFLOAT2{0.2f, -0.1f}),
                           "anisotropy should preserve UV reference and full affine transform");
         auto anisotropyTextureRecord = scene.tryGetTextureAsset(textureHandles[8]);
         nr::test::require(anisotropyTextureRecord.has_value() && !anisotropyTextureRecord->get().cpu.srgb,
@@ -498,7 +511,8 @@ const nr::test::CaseRegistrar materialSemanticClassificationCase{
         auto meshRecord = scene.tryGetMeshAsset(*meshHandle);
         nr::test::require(meshRecord.has_value(), "mesh record should exist");
         nr::test::require(!meshRecord->get().cpu.vertices.empty() &&
-                              meshRecord->get().cpu.vertices.front().texCoord1 == glm::vec2{0.125f, 0.875f},
+                              float2Equal(meshRecord->get().cpu.vertices.front().texCoord1,
+                                          DirectX::XMFLOAT2{0.125f, 0.875f}),
                           "mesh bridge should preserve the second UV set");
     }};
 
@@ -538,8 +552,8 @@ const nr::test::CaseRegistrar cameraAspectCase{
                           "authored camera CPU data should be ready without a GPU upload context");
 
         auto authoredCamera = scene.tryGetPrimaryCamera();
-        auto squareCamera = scene.tryGetPrimaryCamera(glm::uvec2{1024u, 1024u});
-        auto wideCamera = scene.tryGetPrimaryCamera(glm::uvec2{1920u, 1080u});
+        auto squareCamera = scene.tryGetPrimaryCamera(DirectX::XMUINT2{1024u, 1024u});
+        auto wideCamera = scene.tryGetPrimaryCamera(DirectX::XMUINT2{1920u, 1080u});
 
         nr::test::require(authoredCamera.has_value(), "authored camera should resolve");
         nr::test::require(squareCamera.has_value(), "square viewport camera should resolve");
@@ -639,9 +653,9 @@ const nr::test::CaseRegistrar lightRuntimePacketCase{
         nr::test::require(almostEqual(spotRecord->get().cpu.range, 8.0f), "spot glTF source range should be preserved");
         nr::test::require(almostEqual(pointRecord->get().cpu.intensity, 4.0f),
                           "point intensity should come from color magnitude");
-        nr::test::require(almostEqual(pointRecord->get().cpu.color.g, 1.0f),
+        nr::test::require(almostEqual(pointRecord->get().cpu.color.y, 1.0f),
                           "point color should be normalized by intensity");
-        nr::test::require(almostEqual(spotRecord->get().cpu.outerConeRadians, glm::radians(25.0f)),
+        nr::test::require(almostEqual(spotRecord->get().cpu.outerConeRadians, nr::math::radians(25.0f)),
                           "spot outer cone should be preserved");
 
         auto rasterProfile = registerProfile(scene, nr::scene::ScenePacketDomain::rasterDraw, false);
@@ -677,11 +691,11 @@ const nr::test::CaseRegistrar sceneLightAliasGpuAbiCase{
         nr::test::requireEqual(sizeof(nr::scene::SceneLightGpuRecord), std::size_t{80u});
         nr::test::requireEqual(sizeof(nr::scene::SceneLightAliasGpuRecord), std::size_t{32u});
 
-        nr::test::require(almostEqual(nr::scene::sceneLightAliasEnergy(glm::vec3{1.0f}, 2.0f), 2.0f),
+        nr::test::require(almostEqual(nr::scene::sceneLightAliasEnergy(DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, 2.0f), 2.0f),
                           "white light alias energy should equal intensity");
-        nr::test::require(almostEqual(nr::scene::sceneLightAliasEnergy(glm::vec3{0.0f, 1.0f, 0.0f}, 2.0f), 1.4304f),
+        nr::test::require(almostEqual(nr::scene::sceneLightAliasEnergy(DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f}, 2.0f), 1.4304f),
                           "green light alias energy should use Rec.709 luminance");
-        nr::test::require(almostEqual(nr::scene::sceneLightAliasEnergy(glm::vec3{1.0f}, -2.0f), 0.0f),
+        nr::test::require(almostEqual(nr::scene::sceneLightAliasEnergy(DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, -2.0f), 0.0f),
                           "negative light intensity should have zero alias energy");
 
         auto emptyTable = nr::scene::buildSceneLightAliasTable(std::span<const nr::scene::SceneLightGpuRecord>{});
@@ -690,8 +704,8 @@ const nr::test::CaseRegistrar sceneLightAliasGpuAbiCase{
         nr::test::requireEqual(emptyTable.records.size(), std::size_t{1u});
 
         auto zeroEnergyRecords = std::array{
-            makeAliasTableTestLight(glm::vec3{1.0f}, 0.0f),
-            makeAliasTableTestLight(glm::vec3{0.0f}, 5.0f),
+            makeAliasTableTestLight(DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, 0.0f),
+            makeAliasTableTestLight(DirectX::XMFLOAT3{}, 5.0f),
         };
         auto zeroEnergyTable = nr::scene::buildSceneLightAliasTable(zeroEnergyRecords);
         nr::test::requireEqual(zeroEnergyTable.aliasCount, std::uint32_t{0u});
@@ -700,8 +714,8 @@ const nr::test::CaseRegistrar sceneLightAliasGpuAbiCase{
         nr::test::requireEqual(zeroEnergyTable.records.size(), std::size_t{1u});
 
         auto weightedRecords = std::array{
-            makeAliasTableTestLight(glm::vec3{1.0f}, 1.0f),
-            makeAliasTableTestLight(glm::vec3{1.0f}, 3.0f),
+            makeAliasTableTestLight(DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, 1.0f),
+            makeAliasTableTestLight(DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f}, 3.0f),
         };
         auto weightedTable = nr::scene::buildSceneLightAliasTable(weightedRecords);
         nr::test::requireEqual(weightedTable.aliasCount, std::uint32_t{2u});

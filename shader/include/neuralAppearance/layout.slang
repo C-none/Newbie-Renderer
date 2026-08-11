@@ -27,18 +27,59 @@ public static const uint kNeuralAppearancePaddingOffset = 1935u;
 
 public struct NeuralAppearanceParameters : IDifferentiable
 {
-    public float4 chunks[kNeuralAppearanceParameterChunkCount];
+    public float4 chunks[kNeuralAppearanceParameterChunkCount] = {};
+
+    [Differentiable]
+    public __init()
+    {
+    }
+
+    [Differentiable]
+    public __init(float4 inputChunks[kNeuralAppearanceParameterChunkCount])
+    {
+        for (uint chunk = 0u; chunk < kNeuralAppearanceParameterChunkCount; ++chunk)
+        {
+            chunks[chunk] = inputChunks[chunk];
+        }
+    }
 };
 
 public struct NeuralAppearanceLatent : IDifferentiable
 {
-    public float4 chunks[kNeuralAppearanceLatentTextureCount];
+    public float4 chunks[kNeuralAppearanceLatentTextureCount] = {};
+
+    [Differentiable]
+    public __init()
+    {
+    }
+
+    [Differentiable]
+    public __init(float4 chunk0, float4 chunk1)
+    {
+        chunks[0] = chunk0;
+        chunks[1] = chunk1;
+    }
 };
 
 public struct NeuralAppearanceLatentNeighborhood : IDifferentiable
 {
-    public float4 values[8];
-    public float2 fraction;
+    public float4 values[8] = {};
+    public float2 fraction = float2(0.0f);
+
+    [Differentiable]
+    public __init()
+    {
+    }
+
+    [Differentiable]
+    public __init(float4 inputValues[8], float2 inputFraction)
+    {
+        for (uint value = 0u; value < 8u; ++value)
+        {
+            values[value] = inputValues[value];
+        }
+        fraction = inputFraction;
+    }
 };
 
 [Differentiable]
@@ -55,12 +96,12 @@ public float neuralAppearanceParameterScalarRuntime(
 
 public NeuralAppearanceParameters loadNeuralAppearanceParameters(StructuredBuffer<float4> parameterBuffer)
 {
-    NeuralAppearanceParameters parameters;
+    float4 chunks[kNeuralAppearanceParameterChunkCount] = {};
     for (uint chunk = 0u; chunk < kNeuralAppearanceParameterChunkCount; ++chunk)
     {
-        parameters.chunks[chunk] = parameterBuffer[chunk];
+        chunks[chunk] = parameterBuffer[chunk];
     }
-    return parameters;
+    return NeuralAppearanceParameters(chunks);
 }
 
 [Differentiable]
@@ -71,14 +112,9 @@ public NeuralAppearanceLatent interpolateNeuralAppearanceLatent(
     float4 weights = float4((1.0f - f.x) * (1.0f - f.y), f.x * (1.0f - f.y),
                             (1.0f - f.x) * f.y, f.x * f.y);
 
-    NeuralAppearanceLatent latent;
-    for (uint textureIndex = 0u; textureIndex < kNeuralAppearanceLatentTextureCount; ++textureIndex)
-    {
-        latent.chunks[textureIndex] =
-            neighborhood.values[textureIndex] * weights.x +
-            neighborhood.values[2u + textureIndex] * weights.y +
-            neighborhood.values[4u + textureIndex] * weights.z +
-            neighborhood.values[6u + textureIndex] * weights.w;
-    }
-    return latent;
+    return NeuralAppearanceLatent(
+        neighborhood.values[0u] * weights.x + neighborhood.values[2u] * weights.y +
+            neighborhood.values[4u] * weights.z + neighborhood.values[6u] * weights.w,
+        neighborhood.values[1u] * weights.x + neighborhood.values[3u] * weights.y +
+            neighborhood.values[5u] * weights.z + neighborhood.values[7u] * weights.w);
 }

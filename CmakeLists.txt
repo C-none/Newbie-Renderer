@@ -63,6 +63,13 @@ if(NR_DLSS_BRIDGE_ONLY)
     return()
 endif()
 
+if(MSVC)
+    message(WARNING
+        "Native MSVC full-project builds are not recommended and remain best-effort only. "
+        "Use the 'llvm' configure preset for the supported renderer build and verification path."
+    )
+endif()
+
 option(NR_BUILD_TESTS "Build unit tests" ON)
 option(NR_ENABLE_RELEASE_IPO "Enable IPO/LTO for Release builds when supported." ON)
 option(NR_ENABLE_CLANGD_SYNC "Synchronize clangd's isolated compile database and standard module BMI during LLVM project builds." ON)

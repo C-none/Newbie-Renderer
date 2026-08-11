@@ -23,7 +23,14 @@ public struct UiVertexInput
 
 public struct UiVertexOutput
 {
-    public float4 position : SV_Position;
-    public float2 uv : TEXCOORD0;
-    public float4 color : COLOR0;
+    public float4 position : SV_Position = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    public float2 uv : TEXCOORD0 = float2(0.0f, 0.0f);
+    public float4 color : COLOR0 = float4(1.0f, 1.0f, 1.0f, 1.0f);
+
+    public __init(float4 positionValue, float2 uvValue, float4 colorValue)
+    {
+        position = positionValue;
+        uv = uvValue;
+        color = colorValue;
+    }
 };

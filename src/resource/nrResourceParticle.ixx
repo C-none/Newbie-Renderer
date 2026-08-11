@@ -3,15 +3,16 @@ import dependency.math;
 
 import std;
 import :geometry;
+import :math;
 
 export namespace nr::resource
 {
 struct FluidParticleSet
 {
     std::string name{};
-    std::vector<glm::vec4> positionRadius{};
-    std::vector<glm::vec4> velocityLifetime{};
-    std::vector<glm::vec4> colorDensity{};
+    std::vector<DirectX::XMFLOAT4> positionRadius{};
+    std::vector<DirectX::XMFLOAT4> velocityLifetime{};
+    std::vector<DirectX::XMFLOAT4> colorDensity{};
 
     [[nodiscard]] std::size_t count() const noexcept
     {
@@ -35,11 +36,12 @@ struct FluidParticleSet
     [[nodiscard]] Aabb computeBounds() const noexcept
     {
         auto bounds = Aabb{};
-        std::ranges::for_each(positionRadius, [&](const glm::vec4 &particle) {
+        std::ranges::for_each(positionRadius, [&](const DirectX::XMFLOAT4 &particle) {
             auto radius = std::max(particle.w, 0.0f);
-            auto center = glm::vec3{particle.x, particle.y, particle.z};
-            bounds.expand(center - glm::vec3{radius});
-            bounds.expand(center + glm::vec3{radius});
+            auto center = math::float3(particle.x, particle.y, particle.z);
+            auto radiusVector = math::float3(radius, radius, radius);
+            bounds.expand(math::subtract(center, radiusVector));
+            bounds.expand(math::add(center, radiusVector));
         });
         return bounds;
     }

@@ -229,7 +229,7 @@ class Scene : public nr::revision::RevisionSyntax
                                                 const SceneExtractInput &input = {}) const;
 
     [[nodiscard]] std::optional<SceneResolvedCamera> tryGetPrimaryCamera(
-        const std::optional<glm::uvec2> &viewportExtent = std::nullopt) const;
+        const std::optional<DirectX::XMUINT2> &viewportExtent = std::nullopt) const;
 
     [[nodiscard]] SceneFrameStamp currentFrameStamp() const noexcept;
 
@@ -441,22 +441,22 @@ class Scene : public nr::revision::RevisionSyntax
 
     [[nodiscard]] static bool intersectsFrustum(const nr::resource::Aabb &bounds, const SceneFrustum &frustum) noexcept;
 
-    [[nodiscard]] static glm::mat4 buildViewMatrixFromWorld(const glm::mat4 &world) noexcept;
+    [[nodiscard]] static DirectX::XMFLOAT4X4 buildViewMatrixFromWorld(const DirectX::XMFLOAT4X4 &world) noexcept;
 
     [[nodiscard]] static std::optional<float> aspectRatioFromViewportExtent(
-        const std::optional<glm::uvec2> &viewportExtent) noexcept;
+        const std::optional<DirectX::XMUINT2> &viewportExtent) noexcept;
 
     [[nodiscard]] static float resolveProjectionAspectRatio(const nr::resource::CameraAsset &camera,
-                                                            const std::optional<glm::uvec2> &viewportExtent) noexcept;
+                                                            const std::optional<DirectX::XMUINT2> &viewportExtent) noexcept;
 
-    [[nodiscard]] static glm::mat4 buildProjectionMatrix(const nr::resource::CameraAsset &camera,
-                                                         float aspectRatio) noexcept;
+    [[nodiscard]] static DirectX::XMFLOAT4X4 buildProjectionMatrix(const nr::resource::CameraAsset &camera,
+                                                                     float aspectRatio) noexcept;
 
-    [[nodiscard]] static SceneFrustum buildFrustumFromViewProjection(const glm::mat4 &viewProjection) noexcept;
+    [[nodiscard]] static SceneFrustum buildFrustumFromViewProjection(const DirectX::XMFLOAT4X4 &viewProjection) noexcept;
 
     [[nodiscard]] std::optional<SceneResolvedCamera> buildResolvedCamera(
         flecs::entity entity, nr::resource::CameraAssetHandle cameraHandle, bool fallback,
-        const std::optional<glm::uvec2> &viewportExtent) const;
+        const std::optional<DirectX::XMUINT2> &viewportExtent) const;
 
     [[nodiscard]] std::optional<SceneFrustum> resolveExtractFrustum(const SceneExtractInput &input) const;
 
@@ -942,7 +942,8 @@ class Scene : public nr::revision::RevisionSyntax
 
     void initializeInstanceRuntimeState(SceneInstanceRecord &instanceRecord);
 
-    [[nodiscard]] nr::resource::Aabb updateHierarchyNode(flecs::entity entity, const glm::mat4 &parentWorld);
+    [[nodiscard]] nr::resource::Aabb updateHierarchyNode(flecs::entity entity,
+                                                          const DirectX::XMFLOAT4X4 &parentWorld);
 
     void updateInstanceHierarchy(SceneInstanceRecord &instanceRecord);
 

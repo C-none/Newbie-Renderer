@@ -12,6 +12,13 @@ import std;
 
 export namespace nr::scene
 {
+inline constexpr DirectX::XMFLOAT4X4 kIdentityMatrix{
+    1.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 1.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 1.0f,
+};
+
 using SceneTemplateHandle = nr::resource::Handle<struct SceneTemplateTag>;
 using SceneInstanceHandle = nr::resource::Handle<struct SceneInstanceTag>;
 using SceneExtractProfileHandle = nr::resource::Handle<struct SceneExtractProfileTag>;
@@ -144,7 +151,7 @@ struct SceneTemplateCreateInfo
 struct SceneInstantiateInfo
 {
     std::optional<std::reference_wrapper<const flecs::entity>> runtimeParent{};
-    glm::mat4 rootTransform{1.0f};
+    DirectX::XMFLOAT4X4 rootTransform = kIdentityMatrix;
     bool activate = true;
 };
 
@@ -176,7 +183,7 @@ struct SceneSelectionMask
 
 struct SceneFrustum
 {
-    std::array<glm::vec4, 6> planes{};
+    std::array<DirectX::XMFLOAT4, 6> planes{};
 };
 
 struct SceneExtractProfileCreateInfo
@@ -195,7 +202,7 @@ struct SceneExtractInput
 {
     SceneVisibilityMode visibility = SceneVisibilityMode::none;
     std::optional<SceneFrustum> customFrustum{};
-    std::optional<glm::uvec2> viewportExtent{};
+    std::optional<DirectX::XMUINT2> viewportExtent{};
     std::optional<std::uint32_t> partitionOverride{};
 };
 
@@ -281,8 +288,8 @@ struct SceneMaterialNormalTextureBinding
 {
     SceneTextureId textureId = kDefaultSceneTextureId;
     std::uint32_t uvSet = 0u;
-    glm::vec4 uvLinear{1.0f, 0.0f, 0.0f, 1.0f};
-    glm::vec2 uvOffset{};
+    DirectX::XMFLOAT4 uvLinear{1.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT2 uvOffset{};
     float normalScale = 1.0f;
 };
 
@@ -300,7 +307,7 @@ struct RasterDrawPacket
     nr::resource::MeshHandle mesh{};
     nr::resource::MaterialHandle material{};
     std::uint32_t geometryIndex = 0;
-    glm::mat4 world{1.0f};
+    DirectX::XMFLOAT4X4 world = kIdentityMatrix;
     nr::resource::Aabb worldBounds{};
     std::uint64_t sortKey = 0;
     SceneMaterialTextureBindings materialTextures{};
@@ -312,7 +319,7 @@ struct RayTracingInstancePacket
 {
     flecs::entity renderable{};
     nr::resource::MeshHandle mesh{};
-    glm::mat4 world{1.0f};
+    DirectX::XMFLOAT4X4 world = kIdentityMatrix;
     std::uint32_t instanceMask = 0xFF;
     std::uint16_t tlasBucket = 0;
 };
@@ -321,7 +328,7 @@ struct TlasBuildInputPacket
 {
     flecs::entity renderable{};
     nr::resource::MeshHandle mesh{};
-    glm::mat4 world{1.0f};
+    DirectX::XMFLOAT4X4 world = kIdentityMatrix;
     std::uint32_t instanceMask = 0xFF;
     std::uint16_t tlasBucket = 0;
 };
@@ -341,9 +348,9 @@ struct SceneResolvedCamera
 {
     flecs::entity entity{};
     nr::resource::CameraAssetHandle camera{};
-    glm::mat4 world{1.0f};
-    glm::mat4 view{1.0f};
-    glm::mat4 projection{1.0f};
+    DirectX::XMFLOAT4X4 world = kIdentityMatrix;
+    DirectX::XMFLOAT4X4 view = kIdentityMatrix;
+    DirectX::XMFLOAT4X4 projection = kIdentityMatrix;
     SceneFrustum frustum{};
     bool fallback = false;
 };
@@ -352,9 +359,9 @@ struct SceneLightPacket
 {
     flecs::entity entity{};
     nr::resource::LightAssetHandle light{};
-    glm::mat4 world{1.0f};
-    glm::vec3 position{0.0f};
-    glm::vec3 direction{0.0f, 0.0f, -1.0f};
+    DirectX::XMFLOAT4X4 world = kIdentityMatrix;
+    DirectX::XMFLOAT3 position{};
+    DirectX::XMFLOAT3 direction{0.0f, 0.0f, -1.0f};
     std::uint32_t stableInstanceId = 0;
 };
 
@@ -372,10 +379,10 @@ struct ScenePacketSet
 
 struct SceneBridgeFrameConstants
 {
-    glm::mat4 view{1.0f};
-    glm::mat4 projection{1.0f};
-    glm::mat4 viewProjection{1.0f};
-    glm::vec3 cameraWorld{0.0f};
+    DirectX::XMFLOAT4X4 view = kIdentityMatrix;
+    DirectX::XMFLOAT4X4 projection = kIdentityMatrix;
+    DirectX::XMFLOAT4X4 viewProjection = kIdentityMatrix;
+    DirectX::XMFLOAT3 cameraWorld{};
     float drawCount = 0.0f;
 };
 
@@ -479,12 +486,12 @@ enum class SceneSelectionBit : std::uint8_t
 
 struct LocalTransform
 {
-    glm::mat4 value{1.0f};
+    DirectX::XMFLOAT4X4 value = kIdentityMatrix;
 };
 
 struct WorldTransform
 {
-    glm::mat4 value{1.0f};
+    DirectX::XMFLOAT4X4 value = kIdentityMatrix;
 };
 
 struct LocalBounds

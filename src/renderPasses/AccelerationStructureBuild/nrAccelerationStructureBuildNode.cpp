@@ -178,10 +178,6 @@ struct PreparedAsFrame
     nr::resource::MeshHandle rtAtlasMesh{};
     nr::rhi::TlasBuildInput tlasInput{};
     std::size_t frameSlot = 0u;
-    double cacheScanMilliseconds = 0.0;
-    double metadataPlanMilliseconds = 0.0;
-    double cpuWritesMilliseconds = 0.0;
-    double tlasSizingMilliseconds = 0.0;
     bool available = false;
 };
 
@@ -300,21 +296,34 @@ struct AccelerationStructureBuildRuntimeCache
     return remainder == 0u ? value : value + (alignment - remainder);
 }
 
-[[nodiscard]] vk::TransformMatrixKHR packTransform(const glm::mat4 &world) noexcept
+[[nodiscard]] vk::TransformMatrixKHR packTransform(const DirectX::XMFLOAT4X4 &world) noexcept
 {
+    constexpr auto affineTolerance = 32.0f * std::numeric_limits<float>::epsilon();
+    nrAssert(std::isfinite(world._11) && std::isfinite(world._12) && std::isfinite(world._13) &&
+                 std::isfinite(world._14) && std::isfinite(world._21) && std::isfinite(world._22) &&
+                 std::isfinite(world._23) && std::isfinite(world._24) && std::isfinite(world._31) &&
+                 std::isfinite(world._32) && std::isfinite(world._33) && std::isfinite(world._34) &&
+                 std::isfinite(world._41) && std::isfinite(world._42) && std::isfinite(world._43) &&
+                 std::isfinite(world._44) && std::abs(world._14) <= affineTolerance &&
+                 std::abs(world._24) <= affineTolerance && std::abs(world._34) <= affineTolerance &&
+                 std::abs(world._44 - 1.0f) <= affineTolerance,
+             "TLAS instance transforms must be finite affine row-vector matrices.");
+
+    // Vulkan ray tracing consumes a column-vector 3x4 transform. Transpose the DirectX row-vector matrix while
+    // packing its affine 4x3 payload so both APIs describe the same object-to-world transform.
     auto transform = vk::TransformMatrixKHR{};
-    transform.matrix[0][0] = world[0][0];
-    transform.matrix[0][1] = world[1][0];
-    transform.matrix[0][2] = world[2][0];
-    transform.matrix[0][3] = world[3][0];
-    transform.matrix[1][0] = world[0][1];
-    transform.matrix[1][1] = world[1][1];
-    transform.matrix[1][2] = world[2][1];
-    transform.matrix[1][3] = world[3][1];
-    transform.matrix[2][0] = world[0][2];
-    transform.matrix[2][1] = world[1][2];
-    transform.matrix[2][2] = world[2][2];
-    transform.matrix[2][3] = world[3][2];
+    transform.matrix[0][0] = world._11;
+    transform.matrix[0][1] = world._21;
+    transform.matrix[0][2] = world._31;
+    transform.matrix[0][3] = world._41;
+    transform.matrix[1][0] = world._12;
+    transform.matrix[1][1] = world._22;
+    transform.matrix[1][2] = world._32;
+    transform.matrix[1][3] = world._42;
+    transform.matrix[2][0] = world._13;
+    transform.matrix[2][1] = world._23;
+    transform.matrix[2][2] = world._33;
+    transform.matrix[2][3] = world._43;
     return transform;
 }
 
@@ -1146,7 +1155,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
 {
     auto prepared = PreparedAsFrame{};
     prepared.frameSlot = static_cast<std::size_t>(frameParameters.frameIndex % runtime.frameSlots.size());
-    auto const probeStart = std::chrono::steady_clock::now();
     ++runtime.frameSerial;
     reapRetiredResources(runtime);
 
@@ -1274,8 +1282,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         entry.lastSeenFrameSerial = runtime.frameSerial;
         prepared.dirtyMeshes.push_back(pending.get().mesh);
     });
-    auto const cacheScanEnd = std::chrono::steady_clock::now();
-
     auto structuralKey = makeAsStructuralPlanKey(revisions, packets, pendingByMesh);
     auto &structuralPlan = runtime.structuralPlan;
     if (!structuralPlan.key.has_value() || *structuralPlan.key != structuralKey)
@@ -1327,7 +1333,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
             .generation = nextGeneration,
         };
     }
-
     auto &instances = prepared.instances;
     nrAssert(structuralPlan.hitSbtPlan && structuralPlan.hitSbtPlan->valid(),
              "AS structural plan requires a valid logical hit SBT plan.");
@@ -1352,8 +1357,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     {
         return prepared;
     }
-    auto const metadataPlanEnd = std::chrono::steady_clock::now();
-
     auto &slot = runtime.frameSlots[frameParameters.frameIndex % runtime.frameSlots.size()];
     auto const instanceBytes =
         static_cast<vk::DeviceSize>(instances.size() * sizeof(vk::AccelerationStructureInstanceKHR));
@@ -1366,7 +1369,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     auto const &metadata = structuralPlan.metadata;
     auto const &materialTable = structuralPlan.materialTable;
     ensureRtMetadataResidentSet(runtime, device, metadata, materialTable, structuralPlan.generation, retireDelay);
-    auto const cpuWritesEnd = std::chrono::steady_clock::now();
 
     prepared.tlasInput = nr::rhi::TlasBuildInput{
         .instancesAddress = slot.instanceBuffer.deviceAddress(),
@@ -1382,13 +1384,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     ensureScratchBuffer(device, slot, std::max(blasScratchBytes, tlasSizes.buildScratchSize));
     prepared.rtAtlasMesh = instances.front().mesh;
     prepared.available = true;
-    auto const sizingEnd = std::chrono::steady_clock::now();
-
-    prepared.cacheScanMilliseconds = std::chrono::duration<double, std::milli>(cacheScanEnd - probeStart).count();
-    prepared.metadataPlanMilliseconds =
-        std::chrono::duration<double, std::milli>(metadataPlanEnd - cacheScanEnd).count();
-    prepared.cpuWritesMilliseconds = std::chrono::duration<double, std::milli>(cpuWritesEnd - metadataPlanEnd).count();
-    prepared.tlasSizingMilliseconds = std::chrono::duration<double, std::milli>(sizingEnd - cpuWritesEnd).count();
     return prepared;
 }
 
@@ -1397,10 +1392,6 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
 {
     if (!prepared.available)
     {
-        if (context.benchmarkTelemetry.has_value())
-        {
-            context.benchmarkTelemetry->get().accelerationStructure.get().recorded = true;
-        }
         return;
     }
     auto &slot = runtime.frameSlots[prepared.frameSlot];
@@ -1473,6 +1464,7 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
     auto dirtyBlasResources = std::map<nr::resource::MeshHandle, GraphResourceHandle>{};
     std::ranges::for_each(prepared.instances,
                           [&](const PlannedInstance &instance) { static_cast<void>(importBlas(instance.mesh)); });
+
     auto blasFrameDataHandle = nr::renderer::GraphFrameDataHandle{};
     if (!prepared.dirtyMeshes.empty())
     {
@@ -1568,19 +1560,6 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
                                                                     data.scratchAlignment);
                                       },
                                       nullptr, false, vk::PipelineStageFlags2{}, tlasFrameDataUses));
-
-    if (context.benchmarkTelemetry.has_value())
-    {
-        auto &telemetry = context.benchmarkTelemetry->get().accelerationStructure.get();
-        telemetry.recorded = true;
-        telemetry.available = true;
-        telemetry.cacheScanMilliseconds = prepared.cacheScanMilliseconds;
-        telemetry.metadataPlanMilliseconds = prepared.metadataPlanMilliseconds;
-        telemetry.cpuWritesMilliseconds = prepared.cpuWritesMilliseconds;
-        telemetry.tlasSizingMilliseconds = prepared.tlasSizingMilliseconds;
-        telemetry.instanceCount = prepared.instances.size();
-        telemetry.dirtyBlasCount = prepared.dirtyMeshes.size();
-    }
 }
 } // namespace nr::renderPasses::detail
 

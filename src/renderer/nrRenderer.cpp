@@ -1,6 +1,3 @@
-module;
-#include <cstddef>
-
 module nr.renderer;
 import :renderer;
 import dependency.assets;
@@ -48,26 +45,26 @@ template <typename Function> ScopeExit(Function) -> ScopeExit<Function>;
 
 struct RendererGlobalFrameUniforms
 {
-    glm::mat4 view{1.0f};
-    glm::mat4 projection{1.0f};
-    glm::mat4 viewProjection{1.0f};
-    glm::mat4 inverseViewProjection{1.0f};
-    glm::mat4 unjitteredViewProjection{1.0f};
-    glm::mat4 previousViewProjection{1.0f};
-    glm::vec4 cameraWorld{0.0f, 0.0f, 0.0f, 1.0f};
-    glm::uvec4 frameState{0u, 0u, 0u, 0u};
+    DirectX::XMFLOAT4X4 viewProjection{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                       0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT4X4 inverseViewProjection{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                              0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT4X4 unjitteredViewProjection{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                                 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT4X4 previousViewProjection{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                                0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT4 cameraWorld{0.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMUINT4 frameState{0u, 0u, 0u, 0u};
 };
 
-static_assert(sizeof(RendererGlobalFrameUniforms) == 416u,
+static_assert(sizeof(RendererGlobalFrameUniforms) == 288u,
               "Renderer.GlobalFrameUniforms must match shader/include/globalUniform.slang.");
-static_assert(offsetof(RendererGlobalFrameUniforms, view) == 0u);
-static_assert(offsetof(RendererGlobalFrameUniforms, projection) == 64u);
-static_assert(offsetof(RendererGlobalFrameUniforms, viewProjection) == 128u);
-static_assert(offsetof(RendererGlobalFrameUniforms, inverseViewProjection) == 192u);
-static_assert(offsetof(RendererGlobalFrameUniforms, unjitteredViewProjection) == 256u);
-static_assert(offsetof(RendererGlobalFrameUniforms, previousViewProjection) == 320u);
-static_assert(offsetof(RendererGlobalFrameUniforms, cameraWorld) == 384u);
-static_assert(offsetof(RendererGlobalFrameUniforms, frameState) == 400u);
+static_assert(nr::memberOffset<&RendererGlobalFrameUniforms::viewProjection>() == 0u);
+static_assert(nr::memberOffset<&RendererGlobalFrameUniforms::inverseViewProjection>() == 64u);
+static_assert(nr::memberOffset<&RendererGlobalFrameUniforms::unjitteredViewProjection>() == 128u);
+static_assert(nr::memberOffset<&RendererGlobalFrameUniforms::previousViewProjection>() == 192u);
+static_assert(nr::memberOffset<&RendererGlobalFrameUniforms::cameraWorld>() == 256u);
+static_assert(nr::memberOffset<&RendererGlobalFrameUniforms::frameState>() == 272u);
 
 [[nodiscard]] vk::Extent2D sanitizeViewportExtent(vk::Extent2D extent) noexcept
 {
@@ -83,25 +80,28 @@ static_assert(offsetof(RendererGlobalFrameUniforms, frameState) == 400u);
     const nr::scene::SceneBridgeFrameConstants &previousUnjitteredFrameConstants, std::uint32_t frameIndex,
     std::uint64_t sampleFrameOrdinal) noexcept
 {
-    auto inverseViewProjection = glm::mat4{1.0f};
-    auto const determinant = glm::determinant(renderingFrameConstants.viewProjection);
-    if (std::isfinite(determinant) && std::abs(determinant) > std::numeric_limits<float>::epsilon())
+    auto inverseViewProjection = DirectX::XMFLOAT4X4{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                                      0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    auto const source = DirectX::XMLoadFloat4x4(&renderingFrameConstants.viewProjection);
+    auto const determinant = DirectX::XMMatrixDeterminant(source);
+    auto determinantValue = DirectX::XMFLOAT4{};
+    DirectX::XMStoreFloat4(&determinantValue, determinant);
+    if (std::isfinite(determinantValue.x) && std::abs(determinantValue.x) > std::numeric_limits<float>::epsilon())
     {
-        inverseViewProjection = glm::inverse(renderingFrameConstants.viewProjection);
+        DirectX::XMStoreFloat4x4(&inverseViewProjection, DirectX::XMMatrixInverse(nullptr, source));
     }
 
     auto const sampleFrameLow = static_cast<std::uint32_t>(sampleFrameOrdinal);
     auto const sampleFrameHigh = static_cast<std::uint32_t>(sampleFrameOrdinal >> 32u);
 
     return RendererGlobalFrameUniforms{
-        .view = renderingFrameConstants.view,
-        .projection = renderingFrameConstants.projection,
         .viewProjection = renderingFrameConstants.viewProjection,
         .inverseViewProjection = inverseViewProjection,
         .unjitteredViewProjection = unjitteredFrameConstants.viewProjection,
         .previousViewProjection = previousUnjitteredFrameConstants.viewProjection,
-        .cameraWorld = glm::vec4{renderingFrameConstants.cameraWorld, 1.0f},
-        .frameState = glm::uvec4{sampleFrameLow, sampleFrameHigh, frameIndex, 0u},
+        .cameraWorld = DirectX::XMFLOAT4{renderingFrameConstants.cameraWorld.x, renderingFrameConstants.cameraWorld.y,
+                                         renderingFrameConstants.cameraWorld.z, 1.0f},
+        .frameState = DirectX::XMUINT4{sampleFrameLow, sampleFrameHigh, frameIndex, 0u},
     };
 }
 
@@ -220,12 +220,12 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene,
     auto const extent = sanitizeViewportExtent(viewportExtent);
     auto const cycle = std::max(1u, cycleLength);
     auto const sampleIndex = static_cast<std::uint32_t>(frameOrdinal % static_cast<std::uint64_t>(cycle)) + 1u;
-    auto const sample = glm::vec2{
+    auto const sample = DirectX::XMFLOAT2{
         haltonSequenceValue(sampleIndex, 2u),
         haltonSequenceValue(sampleIndex, 3u),
     };
-    auto const pixelOffset = sample - glm::vec2{0.5f};
-    auto const ndcOffset = glm::vec2{
+    auto const pixelOffset = DirectX::XMFLOAT2{sample.x - 0.5f, sample.y - 0.5f};
+    auto const ndcOffset = DirectX::XMFLOAT2{
         2.0f * pixelOffset.x / static_cast<float>(extent.width),
         -2.0f * pixelOffset.y / static_cast<float>(extent.height),
     };
@@ -237,11 +237,12 @@ void collectTlasSceneTextureHandles(const nr::scene::Scene &scene,
     };
 }
 
-[[nodiscard]] glm::mat4 applyCameraProjectionJitter(const glm::mat4 &projection, glm::vec2 ndcOffset) noexcept
+[[nodiscard]] DirectX::XMFLOAT4X4 applyCameraProjectionJitter(const DirectX::XMFLOAT4X4 &projection,
+                                                               DirectX::XMFLOAT2 ndcOffset) noexcept
 {
     auto result = projection;
-    result[2][0] -= ndcOffset.x;
-    result[2][1] -= ndcOffset.y;
+    result._31 -= ndcOffset.x;
+    result._32 -= ndcOffset.y;
     return result;
 }
 
@@ -664,12 +665,6 @@ void Renderer::requestTemporalHistoryReset() noexcept
     auto optionBuilder = nr::options::OptionCatalogBuilder{};
     std::ranges::for_each(spec.nodes,
                           [&](const NodeCreateInfo &createInfo) { createInfo.runtime->declareOptions(optionBuilder); });
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling options. Remove with the whole block.
-    std::ranges::for_each(nr::options::makeBuildProfilingDefinitions(),
-                          [&](nr::options::OptionDefinition definition) {
-                              static_cast<void>(optionBuilder.add(std::move(definition)));
-                          });
-    // [TEMP-BUILD-PROFILING] END
     auto optionCatalog = optionBuilder.build();
     if (!optionCatalog.valid())
     {
@@ -898,15 +893,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     std::ranges::for_each(installedNodes_, [&](const InstalledNode &installedNode) {
         installedNode.runtime->collectOptionAvailability(snapshot, availability);
     });
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling options. Remove with the whole block.
-    auto const profilingIds = std::array{
-        nr::options::optionId(nr::options::keys::buildProfilingEnabled),
-        nr::options::optionId(nr::options::keys::buildProfilingReportInterval),
-    };
-    std::ranges::for_each(profilingIds, [&](const nr::options::OptionId &id) {
-        availability.insert_or_assign(id, nr::options::OptionAvailability{.available = true, .reason = {}});
-    });
-    // [TEMP-BUILD-PROFILING] END
 }
 
 [[nodiscard]] RendererFrameResult Renderer::renderFrame(const RendererFrameInput &input)
@@ -1046,19 +1032,13 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     auto sceneTextureHandlesById = std::map<std::uint32_t, nr::resource::TextureHandle>{};
     auto sceneExtractProfileCreated = false;
     auto sceneCameraOverride = input.cameraOverride;
-    auto sceneBeginUploadMilliseconds = 0.0;
-    auto sceneRasterExtractMilliseconds = 0.0;
-    auto sceneTlasExtractMilliseconds = 0.0;
-    auto sceneBridgeMilliseconds = 0.0;
 
     auto const sceneStart = std::chrono::steady_clock::now();
     if (input.scene.has_value())
     {
         auto &scene = input.scene->get();
-        auto const sceneBeginUploadStart = std::chrono::steady_clock::now();
         scene.beginFrame(begin.frameIndex);
         scene.uploadPending();
-        sceneBeginUploadMilliseconds = elapsedMilliseconds(sceneBeginUploadStart, std::chrono::steady_clock::now());
 
         auto [profile, created] = ensureSceneExtractProfile(scene);
         sceneExtractProfileCreated = created;
@@ -1068,7 +1048,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
         auto extractInput = input.sceneExtractInput.value_or(nr::scene::SceneExtractInput{});
         if (!extractInput.viewportExtent.has_value())
         {
-            extractInput.viewportExtent = glm::uvec2{displayExtent.width, displayExtent.height};
+            extractInput.viewportExtent = DirectX::XMUINT2{displayExtent.width, displayExtent.height};
         }
 
         if (sceneCameraOverride.has_value())
@@ -1081,12 +1061,8 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
         tlasExtractInput.visibility = nr::scene::SceneVisibilityMode::none;
         tlasExtractInput.customFrustum.reset();
 
-        auto const rasterExtractStart = std::chrono::steady_clock::now();
         scenePackets = scene.extractPackets(profile, extractInput);
-        sceneRasterExtractMilliseconds = elapsedMilliseconds(rasterExtractStart, std::chrono::steady_clock::now());
-        auto const tlasExtractStart = std::chrono::steady_clock::now();
         sceneTlasPackets = scene.extractPackets(tlasProfile, tlasExtractInput);
-        sceneTlasExtractMilliseconds = elapsedMilliseconds(tlasExtractStart, std::chrono::steady_clock::now());
         {
             auto primaryCamera = sceneCameraOverride.has_value()
                                      ? std::optional<nr::scene::SceneResolvedCamera>{}
@@ -1105,9 +1081,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
                 bridgeBuildInput.primaryCamera = std::cref(*primaryCamera);
             }
 
-            auto const sceneBridgeStart = std::chrono::steady_clock::now();
             sceneBridgeFrame = nr::scene::SceneRenderBridge::buildFrame(bridgeBuildInput);
-            sceneBridgeMilliseconds = elapsedMilliseconds(sceneBridgeStart, std::chrono::steady_clock::now());
         }
         std::ranges::for_each(sceneBridgeFrame->rasterTextureHandlesById, [&](const auto &entry) {
             nrAssert(entry.first < kSceneTextureDescriptorCapacity, "Scene texture descriptor id {} exceeds capacity {}.",
@@ -1119,7 +1093,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     }
     cpuTimings.sceneMilliseconds = elapsedMilliseconds(sceneStart, std::chrono::steady_clock::now());
     auto const postSceneStart = std::chrono::steady_clock::now();
-    auto tlasTextureCollectionMilliseconds = 0.0;
 
     auto frameParameters = NodeFrameParameters{
         .optionSnapshot = input.optionSnapshot,
@@ -1153,7 +1126,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
 
     if (input.scene.has_value() && sceneTlasPackets.has_value())
     {
-        auto const tlasTextureCollectionStart = std::chrono::steady_clock::now();
         auto const packets = std::span<const nr::scene::TlasBuildInputPacket>{sceneTlasPackets->tlasBuildInputs};
         auto key = makeTlasTextureCollectionKey(sceneTlasPackets->revisions, packets);
         if (!tlasTextureCollectionKey_.has_value() || *tlasTextureCollectionKey_ != key)
@@ -1168,8 +1140,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
             nrAssert(inserted || it->second == entry.second,
                      "Scene texture descriptor id {} resolved to conflicting handles.", entry.first);
         });
-        tlasTextureCollectionMilliseconds =
-            elapsedMilliseconds(tlasTextureCollectionStart, std::chrono::steady_clock::now());
     }
 
     auto sceneBridgeFrameRef = std::optional<std::reference_wrapper<const nr::scene::SceneBridgeFrame>>{};
@@ -1206,14 +1176,16 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     {
         renderingFrameConstants.projection =
             applyCameraProjectionJitter(globalFrameConstants.projection, cameraFrameState.jitter.ndcOffset);
-        renderingFrameConstants.viewProjection = renderingFrameConstants.projection * renderingFrameConstants.view;
+        DirectX::XMStoreFloat4x4(
+            &renderingFrameConstants.viewProjection,
+            DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&renderingFrameConstants.view),
+                                      DirectX::XMLoadFloat4x4(&renderingFrameConstants.projection)));
     }
 
+    cpuTimings.postSceneMilliseconds = elapsedMilliseconds(postSceneStart, std::chrono::steady_clock::now());
     auto const buildStart = std::chrono::steady_clock::now();
-    cpuTimings.postSceneMilliseconds = elapsedMilliseconds(postSceneStart, buildStart);
-    auto const graphBuildTimings =
-        buildInstalledGraph(frameParameters, renderingFrameConstants, globalFrameConstants, cameraFrameState,
-                            sampleFrameOrdinal, sceneBridgeFrameRef, sceneTextureHandlesById);
+    buildInstalledGraph(frameParameters, renderingFrameConstants, globalFrameConstants, cameraFrameState,
+                        sampleFrameOrdinal, sceneBridgeFrameRef, sceneTextureHandlesById);
     cpuTimings.buildMilliseconds = elapsedMilliseconds(buildStart, std::chrono::steady_clock::now());
 
     auto const compileStart = std::chrono::steady_clock::now();
@@ -1237,7 +1209,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     cpuTimings.compileMilliseconds = elapsedMilliseconds(compileStart, std::chrono::steady_clock::now());
 
     auto const benchmarkCapturing = benchmarkPhase_ == RendererBenchmarkPhase::measure;
-    auto executorBenchmarkTelemetry = ExecutorBenchmarkTelemetry{};
     auto executeContext = RenderGraphExecutor::ExecuteContext{
         .device = *device_,
         .frameIndex = begin.frameIndex,
@@ -1248,9 +1219,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
             submissionTimelines_.valid()
                 ? std::optional<std::reference_wrapper<RendererSubmissionTimelines>>(std::ref(submissionTimelines_))
                 : std::nullopt,
-        .benchmarkTelemetry = benchmarkCapturing ? std::optional<std::reference_wrapper<ExecutorBenchmarkTelemetry>>(
-                                                       std::ref(executorBenchmarkTelemetry))
-                                                 : std::nullopt,
     };
 
     auto const prepareStart = std::chrono::steady_clock::now();
@@ -1280,39 +1248,13 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     cpuTimings.totalMilliseconds = elapsedMilliseconds(totalStart, std::chrono::steady_clock::now());
     if (benchmarkCapturing)
     {
-        auto const executeAccountedMainThreadMilliseconds =
-            rendererBenchmarkExecuteAccountedMainThreadMilliseconds(executorBenchmarkTelemetry);
-        auto const executeResidualMilliseconds =
-            cpuTimings.executeMilliseconds - executeAccountedMainThreadMilliseconds;
         benchmarkFrames_.push_back(RendererBenchmarkFrame{
             .frameOrdinal = sampleFrameOrdinal,
             .frameSlot = begin.frameIndex % nr::maxFrameInFlight,
             .displayExtent = resolutionPlan.displayExtent,
             .renderExtent = resolutionPlan.renderExtent,
             .cpu = cpuTimings,
-            .sceneBeginUploadMilliseconds = sceneBeginUploadMilliseconds,
-            .sceneRasterExtractMilliseconds = sceneRasterExtractMilliseconds,
-            .sceneTlasExtractMilliseconds = sceneTlasExtractMilliseconds,
-            .sceneBridgeMilliseconds = sceneBridgeMilliseconds,
-            .tlasTextureCollectionMilliseconds = tlasTextureCollectionMilliseconds,
-            .graphPreludeMilliseconds = graphBuildTimings.preludeMilliseconds,
-            .uiCollectMilliseconds = graphBuildTimings.uiCollectMilliseconds,
-            .nodeLoopMilliseconds = graphBuildTimings.nodeLoopMilliseconds,
-            .execute = executorBenchmarkTelemetry,
-            .executeAccountedMainThreadMilliseconds = executeAccountedMainThreadMilliseconds,
-            .executeUnclassifiedMilliseconds = executeResidualMilliseconds >= -0.001
-                                                   ? std::max(0.0, executeResidualMilliseconds)
-                                                   : executeResidualMilliseconds,
-            .sceneRasterPacketCount = scenePackets.has_value() ? scenePackets->rasterDraws.size() : 0u,
-            .sceneRtPacketCount = scenePackets.has_value() ? scenePackets->rtInstances.size() : 0u,
-            .sceneTlasPacketCount = sceneTlasPackets.has_value() ? sceneTlasPackets->tlasBuildInputs.size() : 0u,
-            .submitBatchCount = executeReport.submittedBatchCount,
-            .recordTaskCount = executeReport.submittedRecordTaskCount,
         });
-        benchmarkNodeBuildMilliseconds_.insert(benchmarkNodeBuildMilliseconds_.end(),
-                                               benchmarkCurrentNodeBuildMilliseconds_.begin(),
-                                               benchmarkCurrentNodeBuildMilliseconds_.end());
-        benchmarkAsTelemetry_.push_back(benchmarkCurrentAsTelemetry_);
         if (benchmarkFrames_.size() >= benchmarkConfig_.measureFrames)
         {
             benchmarkPhase_ = RendererBenchmarkPhase::drain;
@@ -1393,7 +1335,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     return gpuPassStatistics_;
 }
 
-[[nodiscard]] RendererGraphBuildTimings Renderer::buildInstalledGraph(
+void Renderer::buildInstalledGraph(
     const NodeFrameParameters &frameParameters,
     const nr::scene::SceneBridgeFrameConstants &renderingFrameConstants,
     const nr::scene::SceneBridgeFrameConstants &unjitteredFrameConstants,
@@ -1403,37 +1345,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
 {
     nrAssert(graphInstalled_, "Renderer::buildInstalledGraph requires installGraph() before rendering.");
 
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
-    auto const *tempProfilingOption =
-        frameParameters.optionSnapshot.get().find(nr::options::keys::buildProfilingEnabled);
-    auto const tempProfilingEnabled = tempProfilingOption != nullptr && *tempProfilingOption;
-    if (tempProfilingEnabled != tempBuildProfileActive_)
-    {
-        tempBuildProfileActive_ = tempProfilingEnabled;
-        tempBuildProfileNodes_.clear();
-        tempBuildProfilePrelude_ = {};
-        tempBuildProfileTotal_ = {};
-        tempBuildProfileFrames_ = 0u;
-    }
-    if (tempProfilingEnabled && tempBuildProfileNodes_.size() != installedNodes_.size())
-    {
-        tempBuildProfileNodes_.resize(installedNodes_.size());
-    }
-    auto const tempProfileStart = std::chrono::steady_clock::now();
-    // [TEMP-BUILD-PROFILING] END
-
-    auto telemetry = std::optional<RendererBenchmarkBuildTelemetry>{};
-    if (benchmarkPhase_ == RendererBenchmarkPhase::measure)
-    {
-        std::ranges::fill(benchmarkCurrentNodeBuildMilliseconds_, 0.0);
-        benchmarkCurrentAsTelemetry_ = {};
-        telemetry = RendererBenchmarkBuildTelemetry{
-            .nodeBuildMilliseconds = benchmarkCurrentNodeBuildMilliseconds_,
-            .accelerationStructure = std::ref(benchmarkCurrentAsTelemetry_),
-        };
-    }
-    auto const graphPreludeStart =
-        telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     auto const &previousUnjitteredFrameConstants = acceptedTemporalFrameState_.has_value()
                                                       ? acceptedTemporalFrameState_->unjitteredCameraConstants
                                                       : unjitteredFrameConstants;
@@ -1444,22 +1355,6 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
              "Renderer::buildInstalledGraph requires a resident environment map.");
     auto sceneTextureDescriptorTable = buildSceneTextureDescriptorTable(frameParameters, sceneTextureHandlesById);
     auto nodeFrameParameters = frameParameters;
-    nodeFrameParameters.benchmarkTelemetry =
-        telemetry.has_value()
-            ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{std::ref(*telemetry)}
-            : std::nullopt;
-
-    auto const nodeBuildStart =
-        telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-
-    auto timings = RendererGraphBuildTimings{};
-    auto const buildStart = std::chrono::steady_clock::now();
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
-    if (tempProfilingEnabled)
-    {
-        tempBuildProfilePrelude_.accumulate(elapsedMilliseconds(tempProfileStart, buildStart));
-    }
-    // [TEMP-BUILD-PROFILING] END
     builder_.clear();
     auto frameResources = std::map<std::string, GraphResourceHandle>{};
     auto frameDataResources = std::map<std::string, GraphFrameDataHandle>{};
@@ -1494,17 +1389,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
     auto nodeOrdinals = std::views::iota(std::size_t{0}, installedNodes_.size());
     std::ranges::for_each(nodeOrdinals, [&](std::size_t nodeIndex) {
         auto &installedNode = installedNodes_[nodeIndex];
-        // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
-        auto const tempNodeStart =
-            tempProfilingEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-        // [TEMP-BUILD-PROFILING] END
-        auto const nodeStart =
-            telemetry.has_value() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         auto nodeHandle = builder_.addNode(installedNode.config.instanceName, installedNode.config.queue);
-        if (telemetry.has_value())
-        {
-            telemetry->nodeOrdinal = nodeIndex;
-        }
         auto buildContext = NodeBuildContext{
             .graphBuilder = std::ref(builder_),
             .nodeHandle = nodeHandle,
@@ -1514,24 +1399,8 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
             .globalResources = std::cref(globalResources),
             .frameResources = std::ref(frameResources),
             .frameDataResources = std::ref(frameDataResources),
-            .benchmarkTelemetry = telemetry.has_value()
-                                      ? std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>>{
-                                            std::ref(*telemetry)}
-                                      : std::nullopt,
         };
         installedNode.runtime->build(buildContext, nodeFrameParameters);
-        // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
-        if (tempProfilingEnabled)
-        {
-            auto &profileEntry = tempBuildProfileNodes_[nodeIndex];
-            profileEntry.name = installedNode.config.instanceName;
-            profileEntry.accumulate(elapsedMilliseconds(tempNodeStart, std::chrono::steady_clock::now()));
-        }
-        // [TEMP-BUILD-PROFILING] END
-        if (telemetry.has_value())
-        {
-            telemetry->nodeBuildMilliseconds[nodeIndex] = elapsedMilliseconds(nodeStart, std::chrono::steady_clock::now());
-        }
         auto boundaries = submitNodesByAfterIndex_.equal_range(nodeIndex);
         std::ranges::for_each(std::ranges::subrange(boundaries.first, boundaries.second), [&](const auto &entry) {
             auto debugName = entry.second.debugName.empty() ? std::format("Submit.After.{}", installedNode.config.instanceName)
@@ -1540,61 +1409,7 @@ void Renderer::collectOptionAvailability(const nr::options::OptionFrameSnapshot 
                      "Renderer::buildInstalledGraph failed to add a valid submit node.");
         });
     });
-    timings.nodeLoopMilliseconds = elapsedMilliseconds(buildStart, std::chrono::steady_clock::now());
-
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage timing. Remove with the whole block.
-    if (tempProfilingEnabled)
-    {
-        tempBuildProfileTotal_.accumulate(elapsedMilliseconds(tempProfileStart, std::chrono::steady_clock::now()));
-        ++tempBuildProfileFrames_;
-        auto const *reportInterval =
-            frameParameters.optionSnapshot.get().find(nr::options::keys::buildProfilingReportInterval);
-        auto const interval = reportInterval != nullptr ? std::max<std::uint64_t>(1u, *reportInterval) : 120u;
-        if (tempBuildProfileFrames_ % interval == 0u)
-        {
-            tempReportBuildProfile();
-        }
-    }
-    // [TEMP-BUILD-PROFILING] END
-
-    if (telemetry.has_value())
-    {
-        timings.preludeMilliseconds = elapsedMilliseconds(graphPreludeStart, nodeBuildStart);
-    }
-    return timings;
 }
-
-// [TEMP-BUILD-PROFILING] BEGIN - temporary per-node RDG build-stage report. Remove with the whole block.
-void Renderer::tempReportBuildProfile()
-{
-    auto const frames = static_cast<double>(std::max<std::uint64_t>(1u, tempBuildProfileFrames_));
-    auto const totalAverage = tempBuildProfileTotal_.totalMilliseconds / frames;
-    auto ranked = tempBuildProfileNodes_ | std::views::filter([](const TempBuildProfileEntry &entry) {
-                      return entry.count != 0u;
-                  }) |
-                  std::ranges::to<std::vector>();
-    std::ranges::sort(ranked, std::ranges::greater{}, &TempBuildProfileEntry::totalMilliseconds);
-
-    auto report = std::format("[TEMP-BUILD-PROFILING] frames={}, buildTotalAvgMs={:.4f}, buildTotalMaxMs={:.4f}, "
-                              "preludeAvgMs={:.4f} ({:.1f}%), preludeMaxMs={:.4f}",
-                              tempBuildProfileFrames_, totalAverage, tempBuildProfileTotal_.maxMilliseconds,
-                              tempBuildProfilePrelude_.totalMilliseconds / frames,
-                              tempBuildProfileTotal_.totalMilliseconds > 0.0
-                                  ? 100.0 * tempBuildProfilePrelude_.totalMilliseconds /
-                                        tempBuildProfileTotal_.totalMilliseconds
-                                  : 0.0,
-                              tempBuildProfilePrelude_.maxMilliseconds);
-    std::ranges::for_each(ranked, [&](const TempBuildProfileEntry &entry) {
-        report += std::format("\n  {:<40} avgMs={:.4f} maxMs={:.4f} share={:.1f}% samples={}", entry.name,
-                              entry.totalMilliseconds / frames, entry.maxMilliseconds,
-                              tempBuildProfileTotal_.totalMilliseconds > 0.0
-                                  ? 100.0 * entry.totalMilliseconds / tempBuildProfileTotal_.totalMilliseconds
-                                  : 0.0,
-                              entry.count);
-    });
-    nrLog<LogLevel::info>("{}", report);
-}
-// [TEMP-BUILD-PROFILING] END
 
 void Renderer::teardownInstalledGraph()
 {

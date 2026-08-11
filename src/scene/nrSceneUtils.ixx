@@ -39,15 +39,17 @@ export namespace nr::scene::detail
 [[nodiscard]] std::string makeTemplateLightEntityName(SceneTemplateHandle handle, std::uint32_t sourceNodeIndex,
                                                       std::uint32_t lightSlot);
 
-[[nodiscard]] glm::vec3 toVec3(std::array<float, 3> const &value);
+[[nodiscard]] DirectX::XMFLOAT3 toFloat3(std::array<float, 3> const &value);
 
-[[nodiscard]] glm::mat4 toGlmMat4(const std::array<float, 16> &value);
+[[nodiscard]] DirectX::XMFLOAT4X4 toRowMajorFloat4x4(const std::array<float, 16> &value);
 
-[[nodiscard]] bool finiteMat4(const glm::mat4 &value) noexcept;
+[[nodiscard]] bool finiteMat4(const DirectX::XMFLOAT4X4 &value) noexcept;
 
-[[nodiscard]] glm::vec3 transformPoint(const glm::mat4 &matrix, const glm::vec3 &point);
+[[nodiscard]] DirectX::XMFLOAT3 transformPoint(const DirectX::XMFLOAT4X4 &matrix,
+                                                const DirectX::XMFLOAT3 &point);
 
-[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds, const glm::mat4 &matrix);
+[[nodiscard]] nr::resource::Aabb transformAabb(const nr::resource::Aabb &bounds,
+                                                const DirectX::XMFLOAT4X4 &matrix);
 
 [[nodiscard]] std::optional<nr::resource::LightType> mapLightType(std::string_view typeName);
 

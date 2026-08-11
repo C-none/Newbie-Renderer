@@ -1,18 +1,27 @@
 module closestHit;
 import common;
 import renderer.pathTracing.pathState;
-import renderer.pathTracing.hitShaders;
+import include.rt.hitSurface;
 
 [shader("closesthit")]
 void chMain(inout MaterialRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
     CHS chs = CHS();
-    ClosestHitInput input = makeClosestHitInput(attributes);
+    float3 viewDirection = normalize(-WorldRayDirection());
+    RtHitSurface hit = currentRtHitSurface(attributes, viewDirection);
+    RtMaterialHeader material = {};
+    if (hit.geometryValid)
+    {
+        material = rtMaterialHeaders[hit.geometry.materialIndex];
+        orientRtSurfaceForMaterial(hit.surface, viewDirection);
+    }
+
     // Copy every shared-lifetime input before the result overwrites the same physical payload slots.
-    input.scatterRandomValues = payload.scatterRandomValues;
-    input.materialFilterSequence = payload.materialFilterSequence;
-    input.incidentMediumIor = payload.incidentMediumIor;
-    input.exteriorMediumIor = payload.exteriorMediumIor;
+    ClosestHitInput input = ClosestHitInput(
+        hit.geometryValid, material, hit.surface, viewDirection, hit.geometryNormal, hit.frontFace,
+        hit.geometry.materialIndex, uint(InstanceID()), uint(GeometryIndex()), payload.scatterRandomValues,
+        payload.materialFilterSequence, payload.incidentMediumIor, payload.exteriorMediumIor);
+
     ClosestHitResult result = chs.handleClosestHit(input);
     if (result.hit != 0u)
     {

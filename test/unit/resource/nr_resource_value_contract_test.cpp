@@ -6,17 +6,45 @@ import nr.test;
 
 namespace
 {
+static_assert(sizeof(DirectX::XMFLOAT3) == 12u);
+static_assert(sizeof(DirectX::XMFLOAT4) == 16u);
+static_assert(sizeof(DirectX::XMFLOAT4X3) == 48u);
+static_assert(sizeof(DirectX::XMFLOAT4X4) == 64u);
+static_assert(std::is_standard_layout_v<DirectX::XMFLOAT3>);
+static_assert(std::is_standard_layout_v<DirectX::XMFLOAT4>);
+static_assert(std::is_standard_layout_v<DirectX::XMFLOAT4X3>);
+static_assert(std::is_standard_layout_v<DirectX::XMFLOAT4X4>);
+static_assert(std::is_trivially_copyable_v<DirectX::XMFLOAT3>);
+static_assert(std::is_trivially_copyable_v<DirectX::XMFLOAT4>);
+static_assert(std::is_trivially_copyable_v<DirectX::XMFLOAT4X3>);
+static_assert(std::is_trivially_copyable_v<DirectX::XMFLOAT4X4>);
+
 [[nodiscard]] bool near(float lhs, float rhs, float eps = 1e-4f) noexcept
 {
     return std::abs(lhs - rhs) <= eps;
 }
 
-[[nodiscard]] bool vec3Near(const glm::vec3 &lhs, const glm::vec3 &rhs, float eps = 1e-4f) noexcept
+[[nodiscard]] bool vec2Near(const DirectX::XMFLOAT2 &lhs, const DirectX::XMFLOAT2 &rhs, float eps = 1e-4f) noexcept
+{
+    return near(lhs.x, rhs.x, eps) && near(lhs.y, rhs.y, eps);
+}
+
+[[nodiscard]] bool vec3Near(const DirectX::XMFLOAT3 &lhs, const DirectX::XMFLOAT3 &rhs, float eps = 1e-4f) noexcept
 {
     return near(lhs.x, rhs.x, eps) && near(lhs.y, rhs.y, eps) && near(lhs.z, rhs.z, eps);
 }
 
-[[nodiscard]] nr::resource::Vertex vertex(glm::vec3 position)
+[[nodiscard]] bool vec4Near(const DirectX::XMFLOAT4 &lhs, const DirectX::XMFLOAT4 &rhs, float eps = 1e-4f) noexcept
+{
+    return near(lhs.x, rhs.x, eps) && near(lhs.y, rhs.y, eps) && near(lhs.z, rhs.z, eps) && near(lhs.w, rhs.w, eps);
+}
+
+[[nodiscard]] bool uint3Equal(const DirectX::XMUINT3 &lhs, const DirectX::XMUINT3 &rhs) noexcept
+{
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+}
+
+[[nodiscard]] nr::resource::Vertex vertex(DirectX::XMFLOAT3 position)
 {
     auto result = nr::resource::Vertex{};
     result.position = position;
@@ -27,9 +55,9 @@ namespace
 {
     auto mesh = nr::resource::Mesh{};
     mesh.vertices = {
-        vertex(glm::vec3{-1.0f, -1.0f, 0.0f}),
-        vertex(glm::vec3{1.0f, -1.0f, 0.0f}),
-        vertex(glm::vec3{0.0f, 1.0f, 0.0f}),
+        vertex(DirectX::XMFLOAT3{-1.0f, -1.0f, 0.0f}),
+        vertex(DirectX::XMFLOAT3{1.0f, -1.0f, 0.0f}),
+        vertex(DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f}),
     };
     mesh.indices = {0u, 1u, 2u};
     mesh.rebuildLocalBounds();
@@ -62,24 +90,24 @@ const nr::test::CaseRegistrar geometryCase{
     "geometry helpers validate bounds and triangles", [] {
         auto bounds = nr::resource::Aabb{};
         nr::test::require(!bounds.valid(), "default AABB should be invalid until expanded");
-        bounds.expand(glm::vec3{-1.0f, 2.0f, 0.0f});
-        bounds.expand(glm::vec3{3.0f, 4.0f, 2.0f});
+        bounds.expand(DirectX::XMFLOAT3{-1.0f, 2.0f, 0.0f});
+        bounds.expand(DirectX::XMFLOAT3{3.0f, 4.0f, 2.0f});
         nr::test::require(bounds.valid(), "expanded AABB should be valid");
-        nr::test::require(vec3Near(bounds.center(), glm::vec3{1.0f, 3.0f, 1.0f}), "AABB center mismatch");
-        nr::test::require(vec3Near(bounds.extent(), glm::vec3{4.0f, 2.0f, 2.0f}), "AABB extent mismatch");
+        nr::test::require(vec3Near(bounds.center(), DirectX::XMFLOAT3{1.0f, 3.0f, 1.0f}), "AABB center mismatch");
+        nr::test::require(vec3Near(bounds.extent(), DirectX::XMFLOAT3{4.0f, 2.0f, 2.0f}), "AABB extent mismatch");
 
-        auto rhs = nr::resource::Aabb{glm::vec3{-2.0f, 0.0f, -1.0f}, glm::vec3{2.0f, 1.0f, 1.0f}};
+        auto rhs = nr::resource::Aabb{DirectX::XMFLOAT3{-2.0f, 0.0f, -1.0f}, DirectX::XMFLOAT3{2.0f, 1.0f, 1.0f}};
         bounds.merge(rhs);
-        nr::test::require(vec3Near(bounds.min, glm::vec3{-2.0f, 0.0f, -1.0f}), "AABB merge min mismatch");
-        nr::test::require(vec3Near(bounds.max, glm::vec3{3.0f, 4.0f, 2.0f}), "AABB merge max mismatch");
+        nr::test::require(vec3Near(bounds.min, DirectX::XMFLOAT3{-2.0f, 0.0f, -1.0f}), "AABB merge min mismatch");
+        nr::test::require(vec3Near(bounds.max, DirectX::XMFLOAT3{3.0f, 4.0f, 2.0f}), "AABB merge max mismatch");
 
         auto tri = nr::resource::Triangle{
-            glm::vec3{0.0f, 0.0f, 0.0f},
-            glm::vec3{1.0f, 0.0f, 0.0f},
-            glm::vec3{0.0f, 1.0f, 0.0f},
+            DirectX::XMFLOAT3{0.0f, 0.0f, 0.0f},
+            DirectX::XMFLOAT3{1.0f, 0.0f, 0.0f},
+            DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f},
         };
         nr::test::require(near(tri.computeArea(), 0.5f), "triangle area mismatch");
-        nr::test::require(vec3Near(tri.computeFaceNormal(), glm::vec3{0.0f, 0.0f, 1.0f}), "triangle normal mismatch");
+        nr::test::require(vec3Near(tri.computeFaceNormal(), DirectX::XMFLOAT3{0.0f, 0.0f, 1.0f}), "triangle normal mismatch");
         nr::test::require(!tri.isDegenerate(), "non-zero triangle should not be degenerate");
     }};
 
@@ -91,13 +119,13 @@ const nr::test::CaseRegistrar meshCase{
         nr::test::requireEqual(mesh.indexCount(), std::size_t{3});
         nr::test::requireEqual(mesh.triangleCount(), std::size_t{1});
         nr::test::require(mesh.validate(), "rebuilt triangle mesh should validate");
-        nr::test::require(vec3Near(mesh.localBounds.min, glm::vec3{-1.0f, -1.0f, 0.0f}), "mesh bounds min mismatch");
-        nr::test::require(vec3Near(mesh.localBounds.max, glm::vec3{1.0f, 1.0f, 0.0f}), "mesh bounds max mismatch");
+        nr::test::require(vec3Near(mesh.localBounds.min, DirectX::XMFLOAT3{-1.0f, -1.0f, 0.0f}), "mesh bounds min mismatch");
+        nr::test::require(vec3Near(mesh.localBounds.max, DirectX::XMFLOAT3{1.0f, 1.0f, 0.0f}), "mesh bounds max mismatch");
         nr::test::require(mesh.localSphere.valid(), "mesh sphere should be valid");
-        nr::test::require(vec3Near(mesh.triangle(0).centroid(), glm::vec3{0.0f, -1.0f / 3.0f, 0.0f}),
+        nr::test::require(vec3Near(mesh.triangle(0).centroid(), DirectX::XMFLOAT3{0.0f, -1.0f / 3.0f, 0.0f}),
                           "mesh triangle centroid mismatch");
 
-        mesh.vertices.front().skin.weights = glm::vec4{-1.0f, 0.0f, 3.0f, 0.0f};
+        mesh.vertices.front().skin.weights = DirectX::XMFLOAT4{-1.0f, 0.0f, 3.0f, 0.0f};
         mesh.normalizeSkinWeights();
         nr::test::require(near(mesh.vertices.front().skin.weights.z, 1.0f), "skin weights should clamp and normalize");
     }};
@@ -118,9 +146,9 @@ const nr::test::CaseRegistrar textureMaterialCase{
         nr::test::require(texture.valid(), "texture metadata should validate");
         nr::test::require(texture.hasCpuPixels(), "texture should report CPU pixels");
         nr::test::requireEqual(texture.byteSize(), std::size_t{128});
-        nr::test::require(texture.mipExtent(0) == glm::uvec3{8u, 4u, 1u}, "mip 0 extent mismatch");
-        nr::test::require(texture.mipExtent(3) == glm::uvec3{1u, 1u, 1u}, "mip 3 extent should clamp to one texel");
-        nr::test::require(texture.mipExtent(4) == glm::uvec3{0u, 0u, 0u}, "out-of-range mip should be zero extent");
+        nr::test::require(uint3Equal(texture.mipExtent(0), DirectX::XMUINT3{8u, 4u, 1u}), "mip 0 extent mismatch");
+        nr::test::require(uint3Equal(texture.mipExtent(3), DirectX::XMUINT3{1u, 1u, 1u}), "mip 3 extent should clamp to one texel");
+        nr::test::require(uint3Equal(texture.mipExtent(4), DirectX::XMUINT3{0u, 0u, 0u}), "out-of-range mip should be zero extent");
 
         auto material = nr::resource::Material{};
         nr::test::require(material.isOpaque(), "default material should be opaque");
@@ -135,8 +163,8 @@ const nr::test::CaseRegistrar textureMaterialCase{
 
         auto const &defaultTextureTransform =
             material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform;
-        nr::test::require(defaultTextureTransform.linear == glm::vec4{1.0f, 0.0f, 0.0f, 1.0f} &&
-                              defaultTextureTransform.offset == glm::vec2{0.0f},
+        nr::test::require(vec4Near(defaultTextureTransform.linear, DirectX::XMFLOAT4{1.0f, 0.0f, 0.0f, 1.0f}) &&
+                              vec2Near(defaultTextureTransform.offset, DirectX::XMFLOAT2{}),
                           "material texture transforms should default to identity");
 
         material.transmission.emplace();
@@ -161,8 +189,8 @@ const nr::test::CaseRegistrar textureMaterialCase{
         material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet = 1u;
         material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform =
             nr::resource::MaterialTextureTransform{
-                .linear = glm::vec4{2.0f, 0.25f, -0.5f, 0.75f},
-                .offset = glm::vec2{0.125f, 0.625f},
+                .linear = DirectX::XMFLOAT4{2.0f, 0.25f, -0.5f, 0.75f},
+                .offset = DirectX::XMFLOAT2{0.125f, 0.625f},
             };
 
         auto const featureFlags = material.featureFlags();
@@ -176,10 +204,10 @@ const nr::test::CaseRegistrar textureMaterialCase{
         nr::test::require(nr::resource::hasAnyFeature(featureFlags, nr::resource::MaterialFeatureFlag::anisotropy),
                           "feature flags should include anisotropy");
         nr::test::requireEqual(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).uvSet, 1u);
-        nr::test::require(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear ==
-                                  glm::vec4{2.0f, 0.25f, -0.5f, 0.75f} &&
-                              material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.offset ==
-                                  glm::vec2{0.125f, 0.625f},
+        nr::test::require(vec4Near(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.linear,
+                                   DirectX::XMFLOAT4{2.0f, 0.25f, -0.5f, 0.75f}) &&
+                              vec2Near(material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).transform.offset,
+                                       DirectX::XMFLOAT2{0.125f, 0.625f}),
                           "material texture slots should retain their affine transform metadata");
     }};
 } // namespace

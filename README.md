@@ -43,17 +43,17 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 
 ## Prerequisites
 
-- MSYS2 CLANG64 tools on `PATH` (`clang`, `clang++`, `clang-scan-deps`, `lld`, `llvm-ar`, `llvm-ranlib`, `llvm-objcopy`, `llvm-strip`, `clangd`, `lldb-dap`, `ninja`)
-- A compiler toolchain with `import std;` support for C++26
+- MSYS2 CLANG64 tools on `PATH` (`clang`, `clang++`, `clang-scan-deps`, `lld`, `llvm-ar`, `llvm-ranlib`, `llvm-objcopy`, `llvm-strip`, `clangd`, `lldb-dap`, `ninja`); this is the only supported full-project compiler toolchain
+- LLVM Clang++ with `import std;` support for C++26
 - Vulkan SDK 1.4.341 or newer
 - CMake 4.4 or newer
 - Vcpkg with `VCPKG_ROOT` configured
 - Git submodules initialized recursively for Slang, DLSS, sample assets, and Ninja tracing
 - Python 3.14 or newer.
 
-Optional MSVC toolchains:
+Optional boundary-tool compiler:
 
-- Visual Studio 18 2026
+- Visual Studio 18 2026, required only when publishing the project-owned DLSS bridge
 
 ## Build
 
@@ -165,18 +165,19 @@ For a quick PowerShell view, run
 `Get-Content .\build\app\logs\options.ndjson -Wait`; restart that reader after a rotation
 so it resumes from the new `NR_LOG_SESSION_V1` marker.
 
-### MSVC / Visual Studio Generator
+### MSVC / Visual Studio Generator (Not Recommended)
 
-Per the CMake 4.4 C++ modules manual, `import std` is currently supported only with Ninja generators. The supported build and verification path in this repository is therefore the LLVM/Ninja preset above.
+The LLVM/Ninja preset above is the only supported full-project build and verification path. Native MSVC feature completeness, compilation, and tests are not guaranteed; new renderer features may rely on LLVM/Clang capabilities and do not need MSVC compatibility fallbacks.
 
-The available MSVC-oriented configure preset is `msvc-vs`, which uses the Visual Studio 18 2026 generator and is kept for IDE-oriented workflows. It is not the supported `import std` verification path under CMake 4.4.
+The `msvc-vs` configure preset uses the Visual Studio 18 2026 generator and is retained only as a not-recommended, best-effort developer aid. Do not use it as a release or acceptance gate.
 
 ```bash
 cmake --preset msvc-vs
 cmake --build --preset debug-msvc --target main
 ```
 
-MSVC also owns the project-local NGX bridge build. Debug builds create a local
+Native MSVC remains required for the project-local NGX bridge publisher. This
+boundary-only ABI tool does not make MSVC a supported renderer compiler. Debug builds create a local
 `nr_dlss_bridge.dll` in the build tree, but Debug artifacts are never publishable.
 Only the dedicated MSVC Release preset may refresh the Git-tracked bridge:
 
@@ -223,7 +224,7 @@ app.shutdown();
 
 | Name | Current State | Purpose |
 | --- | --- | --- |
-| Slang | `v2026.13` | Shader language, compilation, reflection, SPIR-V generation |
+| Slang | `v2026.14.1` | Shader language, compilation, reflection, SPIR-V generation |
 | glTF-Sample-Assets | `2bac6f8c` | Sample assets for import, testing, and regression cases |
 | NVIDIA DLSS SDK | `310.7.0` | NGX headers, static loader input for MSVC bridge publication, and the Release Ray Reconstruction feature DLL |
 | Ninja tracing | `fc292457` | Converts Ninja build logs into Chrome trace JSON through the project trace target |
@@ -243,7 +244,7 @@ git submodule update --init --recursive
 
 | Package | Purpose |
 | --- | --- |
-| `glm` | Math types and transforms |
+| `directxmath` | Row-major math types and SIMD transforms, exposed through `dependency.math` |
 | `imgui` | Debug UI and tooling overlays |
 | `glfw3` | Window creation and Vulkan surface bootstrap |
 | `vulkan-memory-allocator` | Vulkan memory allocation |
@@ -260,6 +261,7 @@ git submodule update --init --recursive
 ### Notes
 
 - Third-party C/C++ headers are surfaced to engine code through narrow `dependency.*` C++ modules under `src/extern`; `src/extern/exportDependency.ixx` remains a compatibility umbrella. Internal project sources should import the narrow module they need instead of adding raw third-party includes.
+- `dependency.math` isolates DirectXMath. Persistent project data uses `XMFLOAT*`/`XMUINT*` storage types; `XMVECTOR` and `XMMATRIX` are function-local SIMD values. Project CPU and shader transforms use row-major storage and row-vector multiplication.
 - The Slang git submodule is kept under `src/extern/slang`, configured as a local build-tree CMake package, and consumed by the engine through `find_package(slang)` / `slang::slang`.
 - The Ninja tracing submodule is pinned to an explicitly reviewed commit; do not float `tools/ninjatracing` with `git submodule update --remote`.
 - Additional transitive dependencies used by Slang, SPIR-V tooling, and related build scripts are resolved through the Slang submodule itself.

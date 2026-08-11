@@ -47,9 +47,10 @@ void executePayloadPackingContract(const nr::rhi::SlangProgram &program)
     nr::test::require(resultBuffer.valid(), "payload packing contract should create a valid GPU result buffer");
 
     auto rootCursor = pipeline.descriptorLayout.rootCursor();
+    rootCursor.beginRecording();
     nr::test::require(rootCursor["gContractResults"].setObject(resultBuffer),
                       "payload packing contract should bind its reflected result buffer");
-    auto bindingSnapshot = rootCursor.snapshot();
+    auto bindingSnapshot = rootCursor.takeSnapshot();
     auto bindingSets = nr::rhi::allocateBindingSetsForLayout(pipeline.layout, pipeline.bindingPool);
     auto descriptorWriteCache = nr::rhi::DescriptorWriteCache{};
     nr::rhi::updateResourcesForBindingSnapshot(pipeline.bindingPool, bindingSets, descriptorWriteCache, bindingSnapshot,

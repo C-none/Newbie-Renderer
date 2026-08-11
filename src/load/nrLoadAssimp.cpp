@@ -161,13 +161,13 @@ struct AssimpTextureTransform
 
         return nr::resource::MaterialTextureTransform{
             .linear =
-                glm::vec4{
+                DirectX::XMFLOAT4{
                     rotationCos * source.scaleU,
                     -rotationSin * source.scaleV,
                     rotationSin * source.scaleU,
                     rotationCos * source.scaleV,
                 },
-            .offset = glm::vec2{offsetU, offsetV},
+            .offset = DirectX::XMFLOAT2{offsetU, offsetV},
         };
     }
 
@@ -178,9 +178,9 @@ struct AssimpTextureTransform
     auto const m10 = source.scaleV * rotationSin;
     auto const m11 = source.scaleV * rotationCos;
     return nr::resource::MaterialTextureTransform{
-        .linear = glm::vec4{m00, m01, m10, m11},
+        .linear = DirectX::XMFLOAT4{m00, m01, m10, m11},
         .offset =
-            glm::vec2{
+            DirectX::XMFLOAT2{
                 0.5f + m00 * (source.translationU - 0.5f) + m01 * (source.translationV - 0.5f),
                 0.5f + m10 * (source.translationU - 0.5f) + m11 * (source.translationV - 0.5f),
             },

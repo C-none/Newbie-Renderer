@@ -76,6 +76,17 @@ NeuralAppearance.InitializeTraining
     -> NeuralAppearance.Viewer
 ```
 
+`Viewer` remains one pass in that fixed topology. Its reflected push-constant record is
+24 bytes, and each invocation records one full-grid `8 x 8`-thread dispatch. Before
+completion, and whenever comparison is disabled, that dispatch writes progress. After
+comparison-enabled completion, the same dispatch writes the native, neural, and
+amplified absolute-error panels.
+
+The Viewer shader keeps latent sampling, runtime material-context construction, and
+runtime neural-network evaluation in a `[noinline]` helper. This isolates the NVIDIA
+driver device-loss-prone code-generation path without changing viewer pixels or the
+reflected shader ABI.
+
 `InitializeTraining` services the one-time reset request and initializes the FP32 model,
 latent, both Adam moment planes, and status records. Each active target pass produces one
 reference record per decoder sample. Its gradient pass reads those records, invokes Slang
@@ -100,10 +111,10 @@ compiled topology before, during, and after training.
 training, `Viewer` reads only the status record and draws a cheap fullscreen progress
 display; it returns before latent sampling, MLP evaluation, or reference evaluation.
 At completion, Pack converts the FP32 master latent into two transient `RGBA16F` mip-zero
-images. A comparison-enabled interactive Viewer then switches to native, neural, and
-amplified absolute-error panels; the no-UI training mode keeps comparison disabled and
-continues showing progress. The interactive three-panel animation uses the display
-ordinal, not the logical training step.
+images. A comparison-enabled interactive Viewer then uses its single full-grid dispatch
+to draw the native, neural, and amplified absolute-error panels; the no-UI training mode
+keeps comparison disabled and continues with its single progress dispatch. The interactive
+three-panel animation uses the display ordinal, not the logical training step.
 
 Persistent state consists of the model, model moments, latent, latent moments, training
 control, and status buffers. The model and latent moment buffers each store all Adam
@@ -276,23 +287,36 @@ The GPU contract compiles a test-only `qualityContract.slang` entry point and ev
 the actual two-image `RGBA16F` inference path over 256 held-out, stratified samples:
 128 uniform Rusinkiewicz pairs, 64 highlight-focused pairs, and 64 grazing pairs. The
 host aggregates mean and P95 mapped and safe-log errors overall and for the highlight and
-grazing strata, checks finite/non-negative output and improvement from the initialized
-model, and checks mean/P95 native-versus-neural mapped RGB closeness in the headless
-viewer.
+grazing strata, checks finite/non-negative output and deterministic target metadata, and
+checks mean/P95 native-versus-neural mapped RGB closeness in the headless viewer. The
+16-round smoke also requires the fixed training-batch loss to fall by at least 2%, each
+held-out stratum mean to remain within 5% of initialization, and the overall mean to stay
+within 5% of the zero-prediction baseline. Full convergence and final-quality acceptance
+belong to a formal 32,768-step training run, not CTest.
 
-The registered contract deliberately scales training work to 512 updates, batch 32,
-eight mollification references, a 32-step latent warmup, and a 512-texel optimized latent
-subset dispatched as eight optimizer groups. It still uses full-sized state buffers,
-initializes and packs all 4,096 texels, and evaluates all 256 held-out quality samples.
+The registered contract deliberately scales training work to 16 updates, batch 32,
+eight mollification references, a one-step mollification schedule and latent warmup, and a
+512-texel optimized latent subset dispatched as eight optimizer groups. It still uses
+full-sized state buffers, initializes and packs all 4,096 texels, and evaluates all 256
+held-out quality samples.
+Each logical update is submitted and completed separately so the reverse-AD workload stays
+inside the Windows GPU watchdog window. The tail is likewise staged into final
+target-and-gradient, latent-pack, held-out-quality, model-contract, comparison-viewer, and
+progress-viewer submissions; shader state, barriers, step count, and quality gates are
+unchanged by that test-only scheduling boundary.
+The headless viewer contract uses a `48 x 16` output: its one `8 x 8` full-grid dispatch
+preserves 256 corresponding pixels for each native/neural/error panel and the exact
+progress-track rows.
 Those settings exercise target-to-gradient barriers, shader ABI, AD, Adam moment packing,
 latent updates, packing, stratification, metric plumbing, and viewer agreement; they are
 not the live settings of 32,768 steps, batch 64, 256 references, a 2,048-step warmup,
 4,096 optimized texels, and 64 optimizer groups. A smoke result must not be cited as
 proof of full-budget trained quality.
 
-In Debug builds, `neuralMaterialViewer` explicitly disables GPU-Assisted Validation and
-DebugPrintf shader instrumentation for both interactive and train-and-save modes. Core,
-Synchronization, and Object validation remain enabled, as do normal debug callbacks.
+In Debug builds, `neuralMaterialViewer` and the Neural Appearance GPU contract explicitly
+disable GPU-Assisted Validation (GPU-AV) and DebugPrintf shader instrumentation.
+Instrumenting the large reverse-AD compute pipeline makes pipeline creation prohibitively
+slow. Core, Synchronization, and Object validation remain enabled, as do normal debug callbacks.
 `RendererCreateInfo` defaults shader instrumentation on, so other programs keep the
 existing GPUAV/DebugPrintf behavior unless they explicitly opt out.
 

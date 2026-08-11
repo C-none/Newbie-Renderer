@@ -16,25 +16,49 @@ namespace nr::scene::detail
 {
 struct MetallicRoughnessFactorSet
 {
-    glm::vec4 baseColorFactor{1.0f};
+    DirectX::XMFLOAT4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
 };
 
 [[nodiscard]] float clamp01(float value) noexcept
 {
-    return glm::clamp(value, 0.0f, 1.0f);
+    return std::clamp(value, 0.0f, 1.0f);
 }
 
-[[nodiscard]] glm::vec3 clamp01(glm::vec3 value) noexcept
+[[nodiscard]] DirectX::XMFLOAT3 clamp01(DirectX::XMFLOAT3 value) noexcept
 {
-    return glm::clamp(value, 0.0f, 1.0f);
+    return DirectX::XMFLOAT3{clamp01(value.x), clamp01(value.y), clamp01(value.z)};
 }
 
-[[nodiscard]] float perceivedBrightness(glm::vec3 color) noexcept
+[[nodiscard]] float dot(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs) noexcept
+{
+    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
+}
+
+[[nodiscard]] DirectX::XMFLOAT3 scale(DirectX::XMFLOAT3 value, float factor) noexcept
+{
+    return DirectX::XMFLOAT3{value.x * factor, value.y * factor, value.z * factor};
+}
+
+[[nodiscard]] DirectX::XMFLOAT3 subtract(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs) noexcept
+{
+    return DirectX::XMFLOAT3{lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
+}
+
+[[nodiscard]] DirectX::XMFLOAT3 lerp(DirectX::XMFLOAT3 lhs, DirectX::XMFLOAT3 rhs, float factor) noexcept
+{
+    return DirectX::XMFLOAT3{
+        lhs.x + (rhs.x - lhs.x) * factor,
+        lhs.y + (rhs.y - lhs.y) * factor,
+        lhs.z + (rhs.z - lhs.z) * factor,
+    };
+}
+
+[[nodiscard]] float perceivedBrightness(DirectX::XMFLOAT3 color) noexcept
 {
     color = clamp01(color);
-    return std::sqrt(0.299f * color.r * color.r + 0.587f * color.g * color.g + 0.114f * color.b * color.b);
+    return std::sqrt(0.299f * color.x * color.x + 0.587f * color.y * color.y + 0.114f * color.z * color.z);
 }
 
 [[nodiscard]] float solveMetallic(float diffuseBrightness, float specularBrightness,
@@ -55,17 +79,17 @@ struct MetallicRoughnessFactorSet
     constexpr auto dielectricSpecular = 0.04f;
     constexpr auto epsilon = 1.0e-6f;
 
-    auto diffuse = clamp01(glm::vec3{
+    auto diffuse = clamp01(DirectX::XMFLOAT3{
         material.baseColorFactor[0],
         material.baseColorFactor[1],
         material.baseColorFactor[2],
     });
     auto alpha = clamp01(material.baseColorFactor[3] * material.opacity);
 
-    auto specular = glm::vec3{1.0f};
+    auto specular = DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f};
     if (material.specularFactor.has_value())
     {
-        specular = clamp01(glm::vec3{
+        specular = clamp01(DirectX::XMFLOAT3{
             (*material.specularFactor)[0],
             (*material.specularFactor)[1],
             (*material.specularFactor)[2],
@@ -73,22 +97,26 @@ struct MetallicRoughnessFactorSet
     }
 
     auto const glossiness = clamp01(material.glossinessFactor.value_or(1.0f));
-    auto const specularStrength = std::max({specular.r, specular.g, specular.b});
+    auto const specularStrength = std::max({specular.x, specular.y, specular.z});
     auto const oneMinusSpecularStrength = 1.0f - specularStrength;
     auto const metallic =
         solveMetallic(perceivedBrightness(diffuse), perceivedBrightness(specular), oneMinusSpecularStrength);
 
     auto const oneMinusMetallic = 1.0f - metallic;
-    auto const baseColorFromDiffuse =
-        diffuse * (oneMinusSpecularStrength / ((1.0f - dielectricSpecular) * std::max(oneMinusMetallic, epsilon)));
+    auto const baseColorFromDiffuse = scale(
+        diffuse, oneMinusSpecularStrength / ((1.0f - dielectricSpecular) * std::max(oneMinusMetallic, epsilon)));
 
+    auto const dielectric = DirectX::XMFLOAT3{
+        dielectricSpecular * oneMinusMetallic * oneMinusMetallic,
+        dielectricSpecular * oneMinusMetallic * oneMinusMetallic,
+        dielectricSpecular * oneMinusMetallic * oneMinusMetallic,
+    };
     auto const baseColorFromSpecular =
-        (specular - glm::vec3{dielectricSpecular * oneMinusMetallic * oneMinusMetallic}) /
-        std::max(1.0f - oneMinusMetallic * oneMinusMetallic, epsilon);
+        scale(subtract(specular, dielectric), 1.0f / std::max(1.0f - oneMinusMetallic * oneMinusMetallic, epsilon));
 
-    auto const baseColor = clamp01(glm::mix(baseColorFromDiffuse, baseColorFromSpecular, metallic * metallic));
+    auto const baseColor = clamp01(lerp(baseColorFromDiffuse, baseColorFromSpecular, metallic * metallic));
     return MetallicRoughnessFactorSet{
-        .baseColorFactor = glm::vec4{baseColor, alpha},
+        .baseColorFactor = DirectX::XMFLOAT4{baseColor.x, baseColor.y, baseColor.z, alpha},
         .metallicFactor = metallic,
         .roughnessFactor = clamp01(1.0f - glossiness),
     };
@@ -305,7 +333,7 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
 
         auto convertedFactors = detail::MetallicRoughnessFactorSet{
             .baseColorFactor =
-                glm::vec4{
+                DirectX::XMFLOAT4{
                     sourceMaterial.baseColorFactor[0],
                     sourceMaterial.baseColorFactor[1],
                     sourceMaterial.baseColorFactor[2],
@@ -327,7 +355,7 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
         }
 
         material.core.baseColorFactor = convertedFactors.baseColorFactor;
-        material.core.emissiveFactor = glm::vec3{
+        material.core.emissiveFactor = DirectX::XMFLOAT3{
             sourceMaterial.emissiveFactor[0],
             sourceMaterial.emissiveFactor[1],
             sourceMaterial.emissiveFactor[2],
@@ -364,7 +392,8 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
             {
                 material.sheen.emplace();
             }
-            material.sheen->colorFactor = glm::vec3{sheenColorFactor[0], sheenColorFactor[1], sheenColorFactor[2]};
+            material.sheen->colorFactor =
+                DirectX::XMFLOAT3{sheenColorFactor[0], sheenColorFactor[1], sheenColorFactor[2]};
         });
         assignIfPresent(sourceMaterial.sheenRoughnessFactor, [&](float sheenRoughnessFactor) {
             if (!material.sheen.has_value())
@@ -623,14 +652,15 @@ void Scene::bridgeMeshes(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         mesh.vertices.reserve(sourceMesh.vertices.size());
         std::ranges::for_each(sourceMesh.vertices, [&](const nr::load::VertexAsset &sourceVertex) {
             auto vertex = nr::resource::Vertex{};
-            vertex.position = glm::vec3{sourceVertex.position[0], sourceVertex.position[1], sourceVertex.position[2]};
-            vertex.normal = glm::vec3{sourceVertex.normal[0], sourceVertex.normal[1], sourceVertex.normal[2]};
-            vertex.tangent = glm::vec4{sourceVertex.tangent[0], sourceVertex.tangent[1], sourceVertex.tangent[2],
-                                       sourceVertex.tangent[3]};
-            vertex.texCoord0 = glm::vec2{sourceVertex.texCoord0[0], sourceVertex.texCoord0[1]};
-            vertex.texCoord1 = glm::vec2{sourceVertex.texCoord1[0], sourceVertex.texCoord1[1]};
-            vertex.color0 = glm::vec4{sourceVertex.color0[0], sourceVertex.color0[1], sourceVertex.color0[2],
-                                      sourceVertex.color0[3]};
+            vertex.position = DirectX::XMFLOAT3{sourceVertex.position[0], sourceVertex.position[1],
+                                                sourceVertex.position[2]};
+            vertex.normal = DirectX::XMFLOAT3{sourceVertex.normal[0], sourceVertex.normal[1], sourceVertex.normal[2]};
+            vertex.tangent = DirectX::XMFLOAT4{sourceVertex.tangent[0], sourceVertex.tangent[1], sourceVertex.tangent[2],
+                                               sourceVertex.tangent[3]};
+            vertex.texCoord0 = DirectX::XMFLOAT2{sourceVertex.texCoord0[0], sourceVertex.texCoord0[1]};
+            vertex.texCoord1 = DirectX::XMFLOAT2{sourceVertex.texCoord1[0], sourceVertex.texCoord1[1]};
+            vertex.color0 = DirectX::XMFLOAT4{sourceVertex.color0[0], sourceVertex.color0[1], sourceVertex.color0[2],
+                                              sourceVertex.color0[3]};
             mesh.vertices.push_back(vertex);
         });
 
@@ -781,7 +811,7 @@ void Scene::bridgeCameras(const nr::load::SceneAsset &sceneAsset, const SceneBri
                           std::vector<nr::resource::CameraAssetHandle> &cameraHandlesBySource)
 {
     constexpr auto kEpsilon = 1e-4f;
-    constexpr auto kFallbackFov = glm::radians(60.0f);
+    constexpr auto kFallbackFov = nr::math::radians(60.0f);
 
     std::ranges::for_each(plan.cameras, [&](const CameraBridgeInput &entry) {
         if (entry.sourceIndex >= sceneAsset.cameras.size())
@@ -991,36 +1021,37 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         light.name = sourceLight.name.empty() ? std::format("light_{}", entry.sourceIndex) : sourceLight.name;
         light.type = *mappedType;
 
-        auto diffuseColor = detail::toVec3(sourceLight.colorDiffuse);
-        auto specularColor = detail::toVec3(sourceLight.colorSpecular);
-        auto ambientColor = detail::toVec3(sourceLight.colorAmbient);
+        auto diffuseColor = detail::toFloat3(sourceLight.colorDiffuse);
+        auto specularColor = detail::toFloat3(sourceLight.colorSpecular);
+        auto ambientColor = detail::toFloat3(sourceLight.colorAmbient);
 
         auto color = diffuseColor;
-        if (glm::dot(color, color) <= kEpsilon)
+        if (detail::dot(color, color) <= kEpsilon)
         {
-            if (glm::dot(specularColor, specularColor) > kEpsilon)
+            if (detail::dot(specularColor, specularColor) > kEpsilon)
             {
                 color = specularColor;
             }
-            else if (glm::dot(ambientColor, ambientColor) > kEpsilon)
+            else if (detail::dot(ambientColor, ambientColor) > kEpsilon)
             {
                 color = ambientColor;
             }
             else
             {
-                color = glm::vec3{1.0f};
+                color = DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f};
             }
         }
 
-        auto intensity = std::max({color.r, color.g, color.b});
-        if (!nr::resource::math::finiteVec(color) || !std::isfinite(intensity) || intensity <= kEpsilon)
+        auto intensity = std::max({color.x, color.y, color.z});
+        if (!(std::isfinite(color.x) && std::isfinite(color.y) && std::isfinite(color.z)) ||
+            !std::isfinite(intensity) || intensity <= kEpsilon)
         {
-            light.color = glm::vec3{1.0f};
+            light.color = DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f};
             light.intensity = 1.0f;
         }
         else
         {
-            light.color = color / intensity;
+            light.color = detail::scale(color, 1.0f / intensity);
             light.intensity = intensity;
         }
 
@@ -1039,7 +1070,7 @@ void Scene::bridgeLights(const nr::load::SceneAsset &sceneAsset, const SceneBrid
         auto outerCone = sourceLight.outerCone;
         if (!(std::isfinite(outerCone) && outerCone > 0.0f))
         {
-            outerCone = glm::radians(45.0f);
+            outerCone = nr::math::radians(45.0f);
         }
 
         if (outerCone < innerCone)

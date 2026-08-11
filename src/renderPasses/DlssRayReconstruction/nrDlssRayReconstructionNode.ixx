@@ -16,7 +16,7 @@ struct DlssRayReconstructionResolutionControllerImpl;
 
 export namespace nr::renderPasses::detail
 {
-[[nodiscard]] std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4 &value) noexcept;
+[[nodiscard]] std::array<float, 16u> toDlssRowVectorMatrix(const DirectX::XMFLOAT4X4 &value) noexcept;
 }
 
 export namespace nr::renderPasses

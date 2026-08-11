@@ -1,6 +1,3 @@
-module;
-#include <cstddef>
-
 module nr.renderPasses;
 import dependency.assets;
 import dependency.vulkan;
@@ -27,12 +24,12 @@ struct PresentConvertPushConstants
 
 static_assert(std::is_standard_layout_v<PresentConvertPushConstants>);
 static_assert(sizeof(PresentConvertPushConstants) == 24u);
-static_assert(offsetof(PresentConvertPushConstants, width) == 0u);
-static_assert(offsetof(PresentConvertPushConstants, height) == 4u);
-static_assert(offsetof(PresentConvertPushConstants, swizzleBgr) == 8u);
-static_assert(offsetof(PresentConvertPushConstants, outputEncoding) == 12u);
-static_assert(offsetof(PresentConvertPushConstants, toneMapping) == 16u);
-static_assert(offsetof(PresentConvertPushConstants, uiOpacity) == 20u);
+static_assert(nr::memberOffset<&PresentConvertPushConstants::width>() == 0u);
+static_assert(nr::memberOffset<&PresentConvertPushConstants::height>() == 4u);
+static_assert(nr::memberOffset<&PresentConvertPushConstants::swizzleBgr>() == 8u);
+static_assert(nr::memberOffset<&PresentConvertPushConstants::outputEncoding>() == 12u);
+static_assert(nr::memberOffset<&PresentConvertPushConstants::toneMapping>() == 16u);
+static_assert(nr::memberOffset<&PresentConvertPushConstants::uiOpacity>() == 20u);
 
 inline constexpr std::uint32_t kOutputEncodingLinear = 0u;
 inline constexpr std::uint32_t kOutputEncodingSrgb = 1u;

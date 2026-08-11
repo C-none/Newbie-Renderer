@@ -10,32 +10,42 @@ namespace nr::rhi
 {
 [[nodiscard]] bool ShaderBindingSnapshot::empty() const noexcept
 {
-    return descriptorWrites_.empty() && pushConstantWrites_.empty();
+    return !storage_ || (storage_->descriptorWrites.empty() && storage_->pushConstantWrites.empty());
 }
 
 [[nodiscard]] std::size_t ShaderBindingSnapshot::descriptorWriteCount() const noexcept
 {
-    return descriptorWrites_.size();
+    return storage_ ? storage_->descriptorWrites.size() : 0u;
 }
 
 [[nodiscard]] std::size_t ShaderBindingSnapshot::pushConstantWriteCount() const noexcept
 {
-    return pushConstantWrites_.size();
+    return storage_ ? storage_->pushConstantWrites.size() : 0u;
 }
 
 [[nodiscard]] std::span<const ShaderBindingRecord> ShaderBindingSnapshot::descriptorWrites() const noexcept
 {
-    return descriptorWrites_;
+    return storage_ ? std::span<const ShaderBindingRecord>{storage_->descriptorWrites} : std::span<const ShaderBindingRecord>{};
 }
 
 [[nodiscard]] std::span<const PushConstantWriteRecord> ShaderBindingSnapshot::pushConstantWrites() const noexcept
 {
-    return pushConstantWrites_;
+    return storage_ ? std::span<const PushConstantWriteRecord>{storage_->pushConstantWrites}
+                    : std::span<const PushConstantWriteRecord>{};
 }
 
-void ShaderBindingSnapshot::forceDescriptorWrites() noexcept
+[[nodiscard]] ShaderBindingSnapshot ShaderBindingSnapshot::withForcedDescriptorWrites() const
 {
-    std::ranges::for_each(descriptorWrites_, [](ShaderBindingRecord &record) { record.forceWrite = true; });
+    if (!storage_ || storage_->descriptorWrites.empty())
+    {
+        return *this;
+    }
+
+    auto storage = std::make_shared<Storage>(*storage_);
+    std::ranges::for_each(storage->descriptorWrites, [](ShaderBindingRecord &record) { record.forceWrite = true; });
+    auto snapshot = ShaderBindingSnapshot{};
+    snapshot.storage_ = std::move(storage);
+    return snapshot;
 }
 
 [[nodiscard]] bool ShaderCursor::valid() const noexcept
@@ -53,8 +63,30 @@ void ShaderBindingSnapshot::forceDescriptorWrites() noexcept
     return typeLayout_;
 }
 
+void ShaderCursor::SharedBindingState::beginRecording()
+{
+    nrAssert(!recording, "ShaderCursor::beginRecording cannot begin while recording is already active.");
+    if (epoch == std::numeric_limits<std::uint64_t>::max())
+    {
+        descriptorWritesByBinding.clear();
+        pushConstantWritesByRangeAndOffset.clear();
+        epoch = 1;
+    }
+    else
+    {
+        ++epoch;
+    }
+    recording = true;
+}
+
+void ShaderCursor::SharedBindingState::assertRecording(std::string_view operation) const
+{
+    nrAssert(recording && epoch != 0u, "{} requires an active ShaderCursor recording.", operation);
+}
+
 void ShaderCursor::SharedBindingState::writeDescriptor(ShaderBindingRecord record)
 {
+    assertRecording("ShaderCursor::setObject");
     auto key = std::tuple{record.binding.set, record.binding.binding, record.arrayElement};
     if (auto *inlineWrite = std::get_if<InlineUniformDescriptorWrite>(&record.payload))
     {
@@ -62,9 +94,9 @@ void ShaderCursor::SharedBindingState::writeDescriptor(ShaderBindingRecord recor
         auto writeEnd = writeBegin + inlineWrite->data.size();
         std::ranges::for_each(descriptorWritesByBinding, [&](const auto &entry) {
             auto const &[set, binding, arrayElement] = entry.first;
-            auto *existingInline = std::get_if<InlineUniformDescriptorWrite>(&entry.second.payload);
-            if (set != record.binding.set || binding != record.binding.binding || !existingInline ||
-                arrayElement == record.arrayElement)
+            auto *existingInline = std::get_if<InlineUniformDescriptorWrite>(&entry.second.record.payload);
+            if (entry.second.epoch != epoch || set != record.binding.set || binding != record.binding.binding ||
+                !existingInline || arrayElement == record.arrayElement)
             {
                 return;
             }
@@ -77,49 +109,64 @@ void ShaderCursor::SharedBindingState::writeDescriptor(ShaderBindingRecord recor
                      set, binding, existingBegin, existingEnd, writeBegin, writeEnd);
         });
     }
-    descriptorWritesByBinding.insert_or_assign(key, std::move(record));
+    descriptorWritesByBinding.insert_or_assign(key, EpochStampedRecord<ShaderBindingRecord>{
+                                                       .epoch = epoch,
+                                                       .record = std::move(record),
+                                                   });
 }
 
 void ShaderCursor::SharedBindingState::writePushConstant(PushConstantWriteRecord record)
 {
+    assertRecording("ShaderCursor::setData");
     auto key = std::tuple{record.range.bindingRangeIndex, record.offset};
     auto writeBegin = static_cast<std::uint64_t>(record.offset);
     auto writeEnd = writeBegin + record.data.size();
     std::ranges::for_each(pushConstantWritesByRangeAndOffset, [&](const auto &entry) {
         auto const &[bindingRangeIndex, offset] = entry.first;
-        if (bindingRangeIndex != record.range.bindingRangeIndex || offset == record.offset)
+        if (entry.second.epoch != epoch || bindingRangeIndex != record.range.bindingRangeIndex ||
+            offset == record.offset)
         {
             return;
         }
 
         auto existingBegin = static_cast<std::uint64_t>(offset);
-        auto existingEnd = existingBegin + entry.second.data.size();
+        auto existingEnd = existingBegin + entry.second.record.data.size();
         nrAssert(writeEnd <= existingBegin || existingEnd <= writeBegin,
                  "Overlapping push-constant writes are ambiguous. range={}, existing=[{}, {}), incoming=[{}, {}).",
                  bindingRangeIndex, existingBegin, existingEnd, writeBegin, writeEnd);
     });
-    pushConstantWritesByRangeAndOffset.insert_or_assign(key, std::move(record));
+    pushConstantWritesByRangeAndOffset.insert_or_assign(key, EpochStampedRecord<PushConstantWriteRecord>{
+                                                             .epoch = epoch,
+                                                             .record = std::move(record),
+                                                         });
 }
 
-[[nodiscard]] ShaderBindingSnapshot ShaderCursor::SharedBindingState::snapshot() const
+[[nodiscard]] std::pair<std::vector<ShaderBindingRecord>, std::vector<PushConstantWriteRecord>>
+ShaderCursor::SharedBindingState::takeRecords()
 {
-    auto snapshot = ShaderBindingSnapshot{};
-    snapshot.descriptorWrites_.reserve(descriptorWritesByBinding.size());
-    snapshot.pushConstantWrites_.reserve(pushConstantWritesByRangeAndOffset.size());
+    assertRecording("ShaderCursor::takeSnapshot");
+    auto descriptorWrites = std::vector<ShaderBindingRecord>{};
+    auto pushConstantWrites = std::vector<PushConstantWriteRecord>{};
+    descriptorWrites.reserve(descriptorWritesByBinding.size());
+    pushConstantWrites.reserve(pushConstantWritesByRangeAndOffset.size());
 
     std::ranges::for_each(descriptorWritesByBinding,
-                          [&](const auto &entry) { snapshot.descriptorWrites_.push_back(entry.second); });
+                          [&](auto &entry) {
+                              if (entry.second.epoch == epoch)
+                              {
+                                  descriptorWrites.push_back(std::move(entry.second.record));
+                              }
+                          });
 
     std::ranges::for_each(pushConstantWritesByRangeAndOffset,
-                          [&](const auto &entry) { snapshot.pushConstantWrites_.push_back(entry.second); });
-
-    return snapshot;
-}
-
-void ShaderCursor::SharedBindingState::clear()
-{
-    descriptorWritesByBinding.clear();
-    pushConstantWritesByRangeAndOffset.clear();
+                          [&](auto &entry) {
+                              if (entry.second.epoch == epoch)
+                              {
+                                  pushConstantWrites.push_back(std::move(entry.second.record));
+                              }
+                          });
+    recording = false;
+    return {std::move(descriptorWrites), std::move(pushConstantWrites)};
 }
 
 ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout, RootField field,
@@ -232,15 +279,23 @@ ShaderCursor::ShaderCursor(const ShaderDescriptorLayout &layout)
 
 void ShaderCursor::assertValidCursor(std::string_view operation) const
 {
-    nrAssert(valid(), "{} requires a valid ShaderCursor. cursor={}", operation, debugSummary());
+    if (!valid()) [[unlikely]]
+    {
+        nrAssert(false, "{} requires a valid ShaderCursor. cursor={}", operation, debugSummary());
+    }
 }
 
 void ShaderCursor::assertWritableCursor(std::string_view operation) const
 {
     assertValidCursor(operation);
-    nrAssert(!isRoot_, "{} requires a non-root ShaderCursor. cursor={}", operation, debugSummary());
-    nrAssert(static_cast<bool>(bindingState_), "{} requires shared binding state. cursor={}", operation,
-             debugSummary());
+    if (isRoot_) [[unlikely]]
+    {
+        nrAssert(false, "{} requires a non-root ShaderCursor. cursor={}", operation, debugSummary());
+    }
+    if (!bindingState_) [[unlikely]]
+    {
+        nrAssert(false, "{} requires shared binding state. cursor={}", operation, debugSummary());
+    }
 }
 
 [[nodiscard]] ShaderCursor ShaderCursor::field(std::string_view fieldName) const
@@ -447,7 +502,20 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
 [[nodiscard]] ShaderCursor ShaderCursor::getPath(std::string_view path) const
 {
     assertValidCursor("ShaderCursor::getPath");
-    nrAssert(!path.empty(), "ShaderCursor::getPath requires a non-empty path. cursor={}", debugSummary());
+    if (path.empty()) [[unlikely]]
+    {
+        nrAssert(false, "ShaderCursor::getPath requires a non-empty path. cursor={}", debugSummary());
+    }
+
+    if (isRoot_)
+    {
+        nrAssert(static_cast<bool>(bindingState_), "ShaderCursor::getPath root cursor requires shared binding state.");
+        if (auto const cached = bindingState_->resolvedRootPaths.find(path);
+            cached != bindingState_->resolvedRootPaths.end())
+        {
+            return ShaderCursor(layoutRef(), cached->second, bindingState_);
+        }
+    }
 
     ShaderCursor cursor = *this;
     std::size_t tokenBegin = 0;
@@ -491,6 +559,15 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
             break;
         }
         tokenBegin = tokenEnd;
+    }
+
+    if (isRoot_)
+    {
+        bindingState_->resolvedRootPaths.try_emplace(std::string{path}, RootField{
+                                                                  .typeLayout = cursor.typeLayout_,
+                                                                  .address = cursor.address_,
+                                                                  .debugPath = cursor.debugPath_,
+                                                              });
     }
 
     return cursor;
@@ -578,19 +655,28 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     assertWritableCursor("ShaderCursor::writeDescriptorRecord");
 
     auto bindingInfo = layoutRef().findBindingByRangeIndex(address_.bindingRangeIndex);
-    nrAssert(bindingInfo.has_value(),
-             "ShaderCursor::writeDescriptorRecord requires a descriptor binding. allowedTypes=[{}], cursor={}",
-             describeDescriptorTypes(allowedTypes), debugSummary());
-    nrAssert(acceptsDescriptorType(bindingInfo->descriptorType, allowedTypes),
-             "ShaderCursor::writeDescriptorRecord descriptor type mismatch. allowedTypes=[{}], actualBinding={}, "
-             "cursor={}",
-             describeDescriptorTypes(allowedTypes), describeDescriptorBinding(*bindingInfo), debugSummary());
+    if (!bindingInfo) [[unlikely]]
+    {
+        nrAssert(false,
+                 "ShaderCursor::writeDescriptorRecord requires a descriptor binding. allowedTypes=[{}], cursor={}",
+                 describeDescriptorTypes(allowedTypes), debugSummary());
+    }
+    if (!acceptsDescriptorType(bindingInfo->descriptorType, allowedTypes)) [[unlikely]]
+    {
+        nrAssert(false,
+                 "ShaderCursor::writeDescriptorRecord descriptor type mismatch. allowedTypes=[{}], "
+                 "actualBinding={}, cursor={}",
+                 describeDescriptorTypes(allowedTypes), describeDescriptorBinding(*bindingInfo), debugSummary());
+    }
 
     auto arrayElement = explicitArrayElement.value_or(address_.bindingArrayIndex);
-    nrAssert(arrayElement < bindingInfo->descriptorCount,
-             "ShaderCursor::writeDescriptorRecord descriptor array element out of range. arrayElement={}, binding={}, "
-             "cursor={}",
-             arrayElement, describeDescriptorBinding(*bindingInfo), debugSummary());
+    if (arrayElement >= bindingInfo->descriptorCount) [[unlikely]]
+    {
+        nrAssert(false,
+                 "ShaderCursor::writeDescriptorRecord descriptor array element out of range. arrayElement={}, "
+                 "binding={}, cursor={}",
+                 arrayElement, describeDescriptorBinding(*bindingInfo), debugSummary());
+    }
     bindingState_->writeDescriptor(ShaderBindingRecord{
         .binding = *bindingInfo,
         .arrayElement = arrayElement,
@@ -602,9 +688,14 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
 [[nodiscard]] bool ShaderCursor::setData(std::span<const std::uint8_t> bytes) const
 {
     assertWritableCursor("ShaderCursor::setData");
-    nrAssert(!bytes.empty(), "ShaderCursor::setData requires a non-empty byte payload. cursor={}", debugSummary());
-    nrAssert(bytes.size() <= std::numeric_limits<std::uint32_t>::max(),
-             "ShaderCursor::setData payload too large. size={}, cursor={}", bytes.size(), debugSummary());
+    if (bytes.empty()) [[unlikely]]
+    {
+        nrAssert(false, "ShaderCursor::setData requires a non-empty byte payload. cursor={}", debugSummary());
+    }
+    if (bytes.size() > std::numeric_limits<std::uint32_t>::max()) [[unlikely]]
+    {
+        nrAssert(false, "ShaderCursor::setData payload too large. size={}, cursor={}", bytes.size(), debugSummary());
+    }
 
     auto byteCount = static_cast<std::uint32_t>(bytes.size());
     auto *dataTypeLayout = typeLayout_;
@@ -617,12 +708,14 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
         }
     }
     auto reflectedByteSize = detail::tryLayoutSize(dataTypeLayout->getSize(slang::ParameterCategory::Uniform));
-    nrAssert(reflectedByteSize.has_value() && *reflectedByteSize == bytes.size(),
-             "ShaderCursor::setData requires an exact reflected field size. payloadSize={}, reflectedSize={}, "
-             "cursor={}",
-             bytes.size(),
-             reflectedByteSize.has_value() ? std::to_string(*reflectedByteSize) : std::string{"<unknown>"},
-             debugSummary());
+    if (!reflectedByteSize || *reflectedByteSize != bytes.size()) [[unlikely]]
+    {
+        nrAssert(false,
+                 "ShaderCursor::setData requires an exact reflected field size. payloadSize={}, reflectedSize={}, "
+                 "cursor={}",
+                 bytes.size(), reflectedByteSize ? std::to_string(*reflectedByteSize) : std::string{"<unknown>"},
+                 debugSummary());
+    }
     auto copiedBytes = std::vector<std::uint8_t>{};
     copiedBytes.assign(bytes.begin(), bytes.end());
 
@@ -653,13 +746,20 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
     }
 
     auto bindingInfo = layout.findBindingByRangeIndex(address_.bindingRangeIndex);
-    nrAssert(bindingInfo.has_value(),
-             "ShaderCursor::setData requires a push-constant range or inline-uniform descriptor binding. cursor={}",
-             debugSummary());
-    nrAssert(bindingInfo->descriptorType == vk::DescriptorType::eInlineUniformBlock,
-             "ShaderCursor::setData can only write push constants or inline uniform blocks. actualBinding={}, "
-             "cursor={}",
-             describeDescriptorBinding(*bindingInfo), debugSummary());
+    if (!bindingInfo) [[unlikely]]
+    {
+        nrAssert(false,
+                 "ShaderCursor::setData requires a push-constant range or inline-uniform descriptor binding. "
+                 "cursor={}",
+                 debugSummary());
+    }
+    if (bindingInfo->descriptorType != vk::DescriptorType::eInlineUniformBlock) [[unlikely]]
+    {
+        nrAssert(false,
+                 "ShaderCursor::setData can only write push constants or inline uniform blocks. actualBinding={}, "
+                 "cursor={}",
+                 describeDescriptorBinding(*bindingInfo), debugSummary());
+    }
 
     nrAssert(detail::isInlineUniformByteCountValid(byteCount),
              "Inline uniform write size must be > 0 and multiple of 4 (size={}).", byteCount);
@@ -750,9 +850,9 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
                                  {vk::DescriptorType::eAccelerationStructureKHR});
 }
 
-[[nodiscard]] bool ShaderCursor::setObject(const LogicalResourceDescriptorWrite &logicalResource) const
+[[nodiscard]] bool ShaderCursor::setObject(LogicalResourceDescriptorWrite logicalResource) const
 {
-    return writeDescriptorRecord(logicalResource, {
+    return writeDescriptorRecord(std::move(logicalResource), {
                                                       vk::DescriptorType::eUniformBuffer,
                                                       vk::DescriptorType::eUniformBufferDynamic,
                                                       vk::DescriptorType::eStorageBuffer,
@@ -768,22 +868,32 @@ void ShaderCursor::assertWritableCursor(std::string_view operation) const
                                                   });
 }
 
-[[nodiscard]] ShaderBindingSnapshot ShaderCursor::snapshot() const
+void ShaderCursor::beginRecording() const
 {
-    if (!bindingState_)
+    assertValidCursor("ShaderCursor::beginRecording");
+    if (!isRoot_) [[unlikely]]
     {
-        return {};
+        nrAssert(false, "ShaderCursor::beginRecording requires a root cursor. cursor={}", debugSummary());
     }
-    return bindingState_->snapshot();
+    nrAssert(static_cast<bool>(bindingState_), "ShaderCursor::beginRecording requires shared binding state.");
+    bindingState_->beginRecording();
 }
 
-void ShaderCursor::clearSnapshot() const
+[[nodiscard]] ShaderBindingSnapshot ShaderCursor::takeSnapshot() const
 {
-    if (!bindingState_)
+    assertValidCursor("ShaderCursor::takeSnapshot");
+    if (!isRoot_) [[unlikely]]
     {
-        return;
+        nrAssert(false, "ShaderCursor::takeSnapshot requires a root cursor. cursor={}", debugSummary());
     }
-    bindingState_->clear();
+    nrAssert(static_cast<bool>(bindingState_), "ShaderCursor::takeSnapshot requires shared binding state.");
+    auto [descriptorWrites, pushConstantWrites] = bindingState_->takeRecords();
+    auto storage = std::make_shared<ShaderBindingSnapshot::Storage>();
+    storage->descriptorWrites = std::move(descriptorWrites);
+    storage->pushConstantWrites = std::move(pushConstantWrites);
+    auto snapshot = ShaderBindingSnapshot{};
+    snapshot.storage_ = std::move(storage);
+    return snapshot;
 }
 
 } // namespace nr::rhi

@@ -12,6 +12,7 @@ using ::Slang::ComPtr;
 export namespace slang
 {
 inline constexpr auto unboundedSize = SLANG_UNBOUNDED_SIZE;
+inline constexpr auto languageVersion2026 = SLANG_LANGUAGE_VERSION_2026;
 using ::slang::BindingType;
 using ::slang::CompilerOptionEntry;
 using ::slang::CompilerOptionName;
@@ -48,6 +49,7 @@ export using ::SLANG_DEBUG_INFO_LEVEL_MAXIMAL;
 export using ::SLANG_DEBUG_INFO_LEVEL_NONE;
 export using ::SLANG_OPTIMIZATION_LEVEL_MAXIMAL;
 export using ::SLANG_OPTIMIZATION_LEVEL_NONE;
+export using ::SLANG_MATRIX_LAYOUT_ROW_MAJOR;
 export using ::SLANG_PARAMETER_CATEGORY_UNIFORM;
 export using ::SLANG_PROFILE_UNKNOWN;
 export using ::SLANG_SPIRV;

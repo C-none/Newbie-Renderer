@@ -318,12 +318,18 @@ class ShaderBindingSnapshot
 
     [[nodiscard]] std::span<const PushConstantWriteRecord> pushConstantWrites() const noexcept;
 
-    void forceDescriptorWrites() noexcept;
+    [[nodiscard]] ShaderBindingSnapshot withForcedDescriptorWrites() const;
 
   private:
     friend class ShaderCursor;
-    std::vector<ShaderBindingRecord> descriptorWrites_{};
-    std::vector<PushConstantWriteRecord> pushConstantWrites_{};
+
+    struct Storage
+    {
+        std::vector<ShaderBindingRecord> descriptorWrites{};
+        std::vector<PushConstantWriteRecord> pushConstantWrites{};
+    };
+
+    std::shared_ptr<const Storage> storage_{};
 };
 
 using LogicalDescriptorResolver = std::function<std::optional<DescriptorWritePayload>(
@@ -344,7 +350,7 @@ class ShaderCursor
     // - Binding queries classify Vulkan shader-interface semantics without touching GPU objects.
     // - setObject(...) records descriptor-backed resources (or logical graph references).
     // - setData(...) records push constants or inline uniform bytes.
-    // - snapshot() captures a stable per-pass binding view for execute-time replay.
+    // - beginRecording()/takeSnapshot() delimit one stable per-pass binding view for execute-time replay.
 
     ShaderCursor() = default;
 
@@ -406,11 +412,11 @@ class ShaderCursor
 
     [[nodiscard]] bool setObject(vk::AccelerationStructureKHR accelerationStructure) const;
 
-    [[nodiscard]] bool setObject(const LogicalResourceDescriptorWrite &logicalResource) const;
+    [[nodiscard]] bool setObject(LogicalResourceDescriptorWrite logicalResource) const;
 
-    [[nodiscard]] ShaderBindingSnapshot snapshot() const;
+    void beginRecording() const;
 
-    void clearSnapshot() const;
+    [[nodiscard]] ShaderBindingSnapshot takeSnapshot() const;
 
     // Slang-style convenience accessors:
     // - cursor["field"] -> field lookup
@@ -435,27 +441,41 @@ class ShaderCursor
   private:
     friend class ShaderDescriptorLayout;
 
-    struct SharedBindingState
-    {
-        std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, ShaderBindingRecord>
-            descriptorWritesByBinding{};
-        std::map<std::tuple<std::uint32_t, std::uint32_t>, PushConstantWriteRecord>
-            pushConstantWritesByRangeAndOffset{};
-
-        void writeDescriptor(ShaderBindingRecord record);
-
-        void writePushConstant(PushConstantWriteRecord record);
-
-        [[nodiscard]] ShaderBindingSnapshot snapshot() const;
-
-        void clear();
-    };
-
     struct RootField
     {
         slang::TypeLayoutReflection *typeLayout = nullptr;
         CursorAddress address{};
         std::string debugPath;
+    };
+
+    template <typename TRecord> struct EpochStampedRecord
+    {
+        std::uint64_t epoch = 0;
+        TRecord record;
+    };
+
+    struct SharedBindingState
+    {
+        using DescriptorWriteKey = std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>;
+        using PushConstantWriteKey = std::tuple<std::uint32_t, std::uint32_t>;
+
+        std::map<DescriptorWriteKey, EpochStampedRecord<ShaderBindingRecord>> descriptorWritesByBinding{};
+        std::map<PushConstantWriteKey, EpochStampedRecord<PushConstantWriteRecord>>
+            pushConstantWritesByRangeAndOffset{};
+        std::map<std::string, RootField, std::less<>> resolvedRootPaths{};
+        std::uint64_t epoch = 0;
+        bool recording = false;
+
+        void beginRecording();
+
+        void assertRecording(std::string_view operation) const;
+
+        void writeDescriptor(ShaderBindingRecord record);
+
+        void writePushConstant(PushConstantWriteRecord record);
+
+        [[nodiscard]] std::pair<std::vector<ShaderBindingRecord>, std::vector<PushConstantWriteRecord>>
+        takeRecords();
     };
 
     ShaderCursor(const ShaderDescriptorLayout &layout, RootField field,

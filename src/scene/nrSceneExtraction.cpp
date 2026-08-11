@@ -53,7 +53,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 }
 
 [[nodiscard]] std::optional<SceneResolvedCamera> Scene::tryGetPrimaryCamera(
-    const std::optional<glm::uvec2> &viewportExtent) const
+    const std::optional<DirectX::XMUINT2> &viewportExtent) const
 {
     struct ImportedCameraCandidate
     {
@@ -637,45 +637,43 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         return true;
     }
 
-    auto isOutsidePlane = [&](const glm::vec4 &plane) {
-        auto normal = glm::vec3{plane.x, plane.y, plane.z};
-        auto positive = glm::vec3{
-            normal.x >= 0.0f ? bounds.max.x : bounds.min.x,
-            normal.y >= 0.0f ? bounds.max.y : bounds.min.y,
-            normal.z >= 0.0f ? bounds.max.z : bounds.min.z,
-        };
-
-        auto distance = glm::dot(normal, positive) + plane.w;
+    auto isOutsidePlane = [&](const DirectX::XMFLOAT4 &plane) {
+        auto const positiveX = plane.x >= 0.0f ? bounds.max.x : bounds.min.x;
+        auto const positiveY = plane.y >= 0.0f ? bounds.max.y : bounds.min.y;
+        auto const positiveZ = plane.z >= 0.0f ? bounds.max.z : bounds.min.z;
+        auto const distance = plane.x * positiveX + plane.y * positiveY + plane.z * positiveZ + plane.w;
         return distance < 0.0f;
     };
 
     return std::ranges::none_of(frustum.planes, isOutsidePlane);
 }
 
-[[nodiscard]] glm::mat4 Scene::buildViewMatrixFromWorld(const glm::mat4 &world) noexcept
+[[nodiscard]] DirectX::XMFLOAT4X4 Scene::buildViewMatrixFromWorld(const DirectX::XMFLOAT4X4 &world) noexcept
 {
     if (!detail::finiteMat4(world))
     {
-        return glm::mat4{1.0f};
+        return kIdentityMatrix;
     }
 
-    auto const determinant = glm::determinant(world);
+    auto const worldMatrix = DirectX::XMLoadFloat4x4(&world);
+    auto const determinant = DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(worldMatrix));
     if (!std::isfinite(determinant) || std::abs(determinant) <= 1e-8f)
     {
-        return glm::mat4{1.0f};
+        return kIdentityMatrix;
     }
 
-    auto const view = glm::inverse(world);
+    auto view = DirectX::XMFLOAT4X4{};
+    DirectX::XMStoreFloat4x4(&view, DirectX::XMMatrixInverse(nullptr, worldMatrix));
     if (!detail::finiteMat4(view))
     {
-        return glm::mat4{1.0f};
+        return kIdentityMatrix;
     }
 
     return view;
 }
 
 [[nodiscard]] std::optional<float> Scene::aspectRatioFromViewportExtent(
-    const std::optional<glm::uvec2> &viewportExtent) noexcept
+    const std::optional<DirectX::XMUINT2> &viewportExtent) noexcept
 {
     if (!viewportExtent.has_value())
     {
@@ -692,7 +690,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 }
 
 [[nodiscard]] float Scene::resolveProjectionAspectRatio(const nr::resource::CameraAsset &camera,
-                                                        const std::optional<glm::uvec2> &viewportExtent) noexcept
+                                                        const std::optional<DirectX::XMUINT2> &viewportExtent) noexcept
 {
     constexpr auto kMinAspect = 1e-4f;
     constexpr auto kFallbackAspectRatio = 16.0f / 9.0f;
@@ -717,8 +715,8 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
     return kFallbackAspectRatio;
 }
 
-[[nodiscard]] glm::mat4 Scene::buildProjectionMatrix(const nr::resource::CameraAsset &camera,
-                                                     float aspectRatio) noexcept
+[[nodiscard]] DirectX::XMFLOAT4X4 Scene::buildProjectionMatrix(const nr::resource::CameraAsset &camera,
+                                                                float aspectRatio) noexcept
 {
     constexpr auto kFallbackAspectRatio = 16.0f / 9.0f;
     constexpr auto kMinAspectRatio = 1e-4f;
@@ -746,12 +744,15 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
     {
         auto verticalFov = camera.verticalFovRadians;
         if (!(std::isfinite(verticalFov) && verticalFov > kMinDepthRange &&
-              verticalFov < (glm::pi<float>() - kMinDepthRange)))
+              verticalFov < (nr::math::pi - kMinDepthRange)))
         {
-            verticalFov = glm::radians(60.0f);
+            verticalFov = nr::math::radians(60.0f);
         }
 
-        return glm::perspectiveRH_ZO(verticalFov, aspectRatio, nearPlane, farPlane);
+        auto projection = DirectX::XMFLOAT4X4{};
+        DirectX::XMStoreFloat4x4(
+            &projection, DirectX::XMMatrixPerspectiveFovRH(verticalFov, aspectRatio, nearPlane, farPlane));
+        return projection;
     }
 
     auto halfHeight = camera.orthoHeight;
@@ -760,28 +761,41 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         halfHeight = 10.0f;
     }
 
-    auto const halfWidth = halfHeight * aspectRatio;
-    return glm::orthoRH_ZO(-halfWidth, halfWidth, -halfHeight, halfHeight, nearPlane, farPlane);
+    auto projection = DirectX::XMFLOAT4X4{};
+    DirectX::XMStoreFloat4x4(&projection,
+                             DirectX::XMMatrixOrthographicRH(2.0f * halfHeight * aspectRatio, 2.0f * halfHeight,
+                                                             nearPlane, farPlane));
+    return projection;
 }
 
-[[nodiscard]] SceneFrustum Scene::buildFrustumFromViewProjection(const glm::mat4 &viewProjection) noexcept
+[[nodiscard]] SceneFrustum Scene::buildFrustumFromViewProjection(const DirectX::XMFLOAT4X4 &viewProjection) noexcept
 {
     auto frustum = SceneFrustum{};
-    auto const transposed = glm::transpose(viewProjection);
-
     auto const rawPlanes = std::array{
-        transposed[3] + transposed[0], transposed[3] - transposed[0], transposed[3] + transposed[1],
-        transposed[3] - transposed[1], transposed[3] + transposed[2], transposed[3] - transposed[2],
+        DirectX::XMFLOAT4{viewProjection._14 + viewProjection._11, viewProjection._24 + viewProjection._21,
+                          viewProjection._34 + viewProjection._31, viewProjection._44 + viewProjection._41},
+        DirectX::XMFLOAT4{viewProjection._14 - viewProjection._11, viewProjection._24 - viewProjection._21,
+                          viewProjection._34 - viewProjection._31, viewProjection._44 - viewProjection._41},
+        DirectX::XMFLOAT4{viewProjection._14 + viewProjection._12, viewProjection._24 + viewProjection._22,
+                          viewProjection._34 + viewProjection._32, viewProjection._44 + viewProjection._42},
+        DirectX::XMFLOAT4{viewProjection._14 - viewProjection._12, viewProjection._24 - viewProjection._22,
+                          viewProjection._34 - viewProjection._32, viewProjection._44 - viewProjection._42},
+        DirectX::XMFLOAT4{viewProjection._14 + viewProjection._13, viewProjection._24 + viewProjection._23,
+                          viewProjection._34 + viewProjection._33, viewProjection._44 + viewProjection._43},
+        DirectX::XMFLOAT4{viewProjection._14 - viewProjection._13, viewProjection._24 - viewProjection._23,
+                          viewProjection._34 - viewProjection._33, viewProjection._44 - viewProjection._43},
     };
 
     auto const planeIndices = std::views::iota(std::size_t{0}, rawPlanes.size());
     std::ranges::for_each(planeIndices, [&](std::size_t planeIndex) {
         auto plane = rawPlanes[planeIndex];
-        auto const normal = glm::vec3{plane.x, plane.y, plane.z};
-        auto const normalLength = glm::length(normal);
+        auto const normalLength = std::sqrt(plane.x * plane.x + plane.y * plane.y + plane.z * plane.z);
         if (std::isfinite(normalLength) && normalLength > 1e-6f)
         {
-            plane /= normalLength;
+            plane.x /= normalLength;
+            plane.y /= normalLength;
+            plane.z /= normalLength;
+            plane.w /= normalLength;
         }
 
         frustum.planes[planeIndex] = plane;
@@ -792,7 +806,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
 
 [[nodiscard]] std::optional<SceneResolvedCamera> Scene::buildResolvedCamera(
     flecs::entity entity, nr::resource::CameraAssetHandle cameraHandle, bool fallback,
-    const std::optional<glm::uvec2> &viewportExtent) const
+    const std::optional<DirectX::XMUINT2> &viewportExtent) const
 {
     if (!entity.is_alive() || !cameraHandle.valid())
     {
@@ -805,7 +819,7 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
         return std::nullopt;
     }
 
-    auto world = glm::mat4{1.0f};
+    auto world = kIdentityMatrix;
     if (auto worldTransform = entity.try_get<WorldTransform>();
         worldTransform != nullptr && detail::finiteMat4(worldTransform->value))
     {
@@ -815,7 +829,11 @@ void Scene::destroyExtractProfile(SceneExtractProfileHandle profile)
     auto const view = buildViewMatrixFromWorld(world);
     auto const aspectRatio = resolveProjectionAspectRatio(cameraRecord->cpu, viewportExtent);
     auto const projection = buildProjectionMatrix(cameraRecord->cpu, aspectRatio);
-    auto const frustum = buildFrustumFromViewProjection(projection * view);
+    auto viewProjection = DirectX::XMFLOAT4X4{};
+    DirectX::XMStoreFloat4x4(&viewProjection,
+                             DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&view),
+                                                        DirectX::XMLoadFloat4x4(&projection)));
+    auto const frustum = buildFrustumFromViewProjection(viewProjection);
 
     return SceneResolvedCamera{
         .entity = entity,
@@ -959,20 +977,28 @@ Scene::candidateQueryFor(ScenePacketDomain domain) const noexcept
                 return;
             }
 
-            auto const position = glm::vec3{worldTransform.value[3]};
-            if (!nr::resource::math::finiteVec(position))
+            auto const position = DirectX::XMFLOAT3{worldTransform.value._41, worldTransform.value._42,
+                                                    worldTransform.value._43};
+            if (!(std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z)))
             {
                 return;
             }
 
-            auto direction = glm::vec3{worldTransform.value * glm::vec4{0.0f, 0.0f, -1.0f, 0.0f}};
-            if (!nr::resource::math::finiteVec(direction) || glm::dot(direction, direction) <= 1.0e-8f)
+            auto direction = DirectX::XMFLOAT3{-worldTransform.value._31, -worldTransform.value._32,
+                                               -worldTransform.value._33};
+            auto const directionLengthSquared = direction.x * direction.x + direction.y * direction.y +
+                                                direction.z * direction.z;
+            if (!(std::isfinite(direction.x) && std::isfinite(direction.y) && std::isfinite(direction.z)) ||
+                directionLengthSquared <= 1.0e-8f)
             {
-                direction = glm::vec3{0.0f, 0.0f, -1.0f};
+                direction = DirectX::XMFLOAT3{0.0f, 0.0f, -1.0f};
             }
             else
             {
-                direction = glm::normalize(direction);
+                auto const inverseLength = 1.0f / std::sqrt(directionLengthSquared);
+                direction.x *= inverseLength;
+                direction.y *= inverseLength;
+                direction.z *= inverseLength;
             }
 
             packetSet.lights.push_back(SceneLightPacket{

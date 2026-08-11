@@ -150,6 +150,49 @@ public struct RandomSequence
     public uint sampleIndex = 0u; // low-discrepancy index (spatial), pre-bit-reversed
     public uint sampleSeed = 0u;  // scrambling seed; shared per frame, evolves per 4D packet
 
+    public __init()
+    {
+    }
+
+    public __init(uint initialSampleIndex, uint initialSampleSeed)
+    {
+        sampleIndex = initialSampleIndex;
+        sampleSeed = initialSampleSeed;
+    }
+
+    // Tiled screen-space low-discrepancy initialisation (UE-aligned, one sample per frame).
+    //   dispatch           : per-thread 2D position (e.g. DispatchRaysIndex().xy)
+    //   sampleFrameOrdinal : monotonic 64-bit frame ordinal as low/high uint lanes
+    //   tileBits           : Hilbert tile size = 2^tileBits per axis (1..15);
+    //                        the default 11-bit axes leave 10 frame bits
+    public __init(uint2 dispatch, uint2 sampleFrameOrdinal, int tileBits = 11)
+    {
+        // Spatial low discrepancy: encode the low dispatch.xy tile coordinates along
+        // a Hilbert curve so one complete tile spans one contiguous Sobol' index
+        // block. With the default tileBits == 11, the 32-bit index dedicates 22 bits
+        // to a 2048x2048 spatial tile and 10 bits to the in-era frame ordinal. The
+        // resulting frame * 4194304 stride is shattered into white cross-frame noise
+        // by fastOwenScrambling. The 1..15 tileBits contract keeps every shift
+        // strictly below 32 bits.
+        uint spatialBitCount = uint(2 * tileBits);
+        uint frameBitCount = 32u - spatialBitCount;
+        uint frameInEraMask = 0xffffffffu >> spatialBitCount;
+        uint frameInEra = sampleFrameOrdinal.x & frameInEraMask;
+        uint tileId = hilbertSFCInverse(dispatch.x, dispatch.y, tileBits);
+        tileId += frameInEra << spatialBitCount;
+        sampleIndex = reversebits(tileId);
+
+        // Fold the ordinal bits that do not fit in the Sobol' index into a frame-era
+        // seed. It is independent of dispatch, preserving the tile-local
+        // low-discrepancy structure. Era zero deliberately retains the zero seed;
+        // with the default tileBits == 11, each era spans 1,024 frames.
+        uint2 frameEra = uint2((sampleFrameOrdinal.x >> frameBitCount) | (sampleFrameOrdinal.y << spatialBitCount),
+                               sampleFrameOrdinal.y >> frameBitCount);
+        // strongIntegerHash(0u) == 0u, so frame era zero naturally keeps the legacy
+        // seed while every nonzero era is mixed without a special-case branch.
+        sampleSeed = strongIntegerHash(frameEra.x ^ strongIntegerHash(frameEra.y));
+    }
+
     // Draw one complete low-discrepancy packet. The core advances the scramble
     // seed through the five keys used to construct it.
     [mutating]
@@ -168,39 +211,4 @@ public struct RandomSequence
     {
         sampleSeed = sampleSeed * 0x98a5741du + 0xacfbeaa7u;
     }
-}
-
-// Tiled screen-space low-discrepancy initialisation (UE-aligned, one sample per frame).
-//   dispatch : per-thread 2D position (e.g. DispatchRaysIndex().xy)
-//   sampleFrameOrdinal : monotonic 64-bit frame ordinal as low/high uint lanes
-//   tileBits           : Hilbert tile size = 2^tileBits per axis (1..15);
-//                        the default 11-bit axes leave 10 frame bits
-public RandomSequence makeErrorDiffusionSequence(uint2 dispatch, uint2 sampleFrameOrdinal, int tileBits = 11)
-{
-    RandomSequence seq;
-    // Spatial low discrepancy: encode the low dispatch.xy tile coordinates along
-    // a Hilbert curve so one complete tile spans one contiguous Sobol' index
-    // block. With the default tileBits == 11, the 32-bit index dedicates 22 bits
-    // to a 2048x2048 spatial tile and 10 bits to the in-era frame ordinal. The
-    // resulting frame * 4194304 stride is shattered into white cross-frame noise
-    // by fastOwenScrambling. The 1..15 tileBits contract keeps every shift
-    // strictly below 32 bits.
-    uint spatialBitCount = uint(2 * tileBits);
-    uint frameBitCount = 32u - spatialBitCount;
-    uint frameInEraMask = 0xffffffffu >> spatialBitCount;
-    uint frameInEra = sampleFrameOrdinal.x & frameInEraMask;
-    uint tileId = hilbertSFCInverse(dispatch.x, dispatch.y, tileBits);
-    tileId += frameInEra << spatialBitCount;
-    seq.sampleIndex = reversebits(tileId);
-
-    // Fold the ordinal bits that do not fit in the Sobol' index into a frame-era
-    // seed. It is independent of dispatch, preserving the tile-local
-    // low-discrepancy structure. Era zero deliberately retains the zero seed;
-    // with the default tileBits == 11, each era spans 1,024 frames.
-    uint2 frameEra = uint2((sampleFrameOrdinal.x >> frameBitCount) | (sampleFrameOrdinal.y << spatialBitCount),
-                           sampleFrameOrdinal.y >> frameBitCount);
-    // strongIntegerHash(0u) == 0u, so frame era zero naturally keeps the legacy
-    // seed while every nonzero era is mixed without a special-case branch.
-    seq.sampleSeed = strongIntegerHash(frameEra.x ^ strongIntegerHash(frameEra.y));
-    return seq;
 }

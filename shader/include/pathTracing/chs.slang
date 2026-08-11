@@ -4,24 +4,65 @@ public struct ClosestHitInput
 {
     public bool geometryValid = false;
     public RtMaterialHeader material = {};
-    public RtSurfaceData surface = {};
+    public RtSurfaceData surface = RtSurfaceData();
     public float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
     public float3 geometryNormal = float3(0.0f, 1.0f, 0.0f);
     public bool frontFace = true;
     public float4 scatterRandomValues = float4(0.0f);
-    public RandomSequence materialFilterSequence = {};
+    public RandomSequence materialFilterSequence = RandomSequence();
     public float incidentMediumIor = 1.0f;
     public float exteriorMediumIor = 1.0f;
     public uint materialIndex = kRtMaterialFallbackIndex;
     public uint instanceMetadataIndex = 0xffffffffu;
     public uint geometryIndex = 0xffffffffu;
+
+    public __init()
+    {
+    }
+
+    public __init(bool geometryIsValid, RtMaterialHeader hitMaterial, RtSurfaceData hitSurface,
+                  float3 rayViewDirection, float3 hitGeometryNormal, bool hitFrontFace, uint hitMaterialIndex,
+                  uint hitInstanceMetadataIndex, uint hitGeometryIndex, float4 hitScatterRandomValues,
+                  RandomSequence hitMaterialFilterSequence, float hitIncidentMediumIor, float hitExteriorMediumIor)
+    {
+        geometryValid = geometryIsValid;
+        material = hitMaterial;
+        surface = hitSurface;
+        viewDirection = rayViewDirection;
+        geometryNormal = hitGeometryNormal;
+        frontFace = hitFrontFace;
+        scatterRandomValues = hitScatterRandomValues;
+        materialFilterSequence = hitMaterialFilterSequence;
+        incidentMediumIor = hitIncidentMediumIor;
+        exteriorMediumIor = hitExteriorMediumIor;
+        materialIndex = hitMaterialIndex;
+        instanceMetadataIndex = hitInstanceMetadataIndex;
+        geometryIndex = hitGeometryIndex;
+    }
 };
 
 public struct ClosestHitResult
 {
     public uint hit = 0u;
-    public ResolvedMaterialPayload material = {};
-    public ResolvedMaterialScatter scatter = {};
+    public ResolvedMaterialPayload material = ResolvedMaterialPayload();
+    public ResolvedMaterialScatter scatter = ResolvedMaterialScatter();
+
+    public __init()
+    {
+    }
+
+    public __init(ResolvedMaterialPayload resolvedMaterial, ClosestHitInput input)
+    {
+        hit = 1u;
+        material = resolvedMaterial;
+        material.geometryNormal = input.geometryNormal;
+        material.frontFace = input.frontFace;
+        material.incidentMediumIor = input.incidentMediumIor;
+        material.exteriorMediumIor = input.exteriorMediumIor;
+        material.instanceMetadataIndex = input.instanceMetadataIndex;
+        material.geometryIndex = input.geometryIndex;
+    }
+
 };
 
 public interface ICHS
@@ -33,40 +74,28 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
 {
     public ClosestHitResult handleClosestHit(ClosestHitInput input)
     {
-        ClosestHitResult result = {};
         if (!input.geometryValid)
         {
-            return result;
+            return ClosestHitResult();
         }
 
-        result.hit = 1u;
         if (LayerFlags == RtMaterialLayerFlag.none)
         {
             // Unlit (KHR_materials_unlit): base color coverage only, no PBR resolve and no scatter.
             // Raygen treats layerFlags == none as terminal surface radiance.
-            result.material =
+            ResolvedMaterialPayload material =
                 resolveUnlitMaterialPayload(rtMaterialTextureRefs, input.material, input.surface, input.viewDirection,
                                             input.materialIndex, input.materialFilterSequence);
-            result.material.geometryNormal = input.geometryNormal;
-            result.material.frontFace = input.frontFace;
-            result.material.incidentMediumIor = input.incidentMediumIor;
-            result.material.exteriorMediumIor = input.exteriorMediumIor;
-            result.material.instanceMetadataIndex = input.instanceMetadataIndex;
-            result.material.geometryIndex = input.geometryIndex;
-            return result;
+            return ClosestHitResult(material, input);
         }
 
-        result.material = resolveLitMaterialPayloadVariant<LayerFlags>(
+        ResolvedMaterialPayload material = resolveLitMaterialPayloadVariant<LayerFlags>(
             rtMaterialTextureRefs, rtMaterialLayers, input.material, input.surface, input.viewDirection,
             input.materialIndex, input.materialFilterSequence);
-        result.material.geometryNormal = input.geometryNormal;
-        result.material.frontFace = input.frontFace;
-        result.material.incidentMediumIor = input.incidentMediumIor;
-        result.material.exteriorMediumIor = input.exteriorMediumIor;
-        result.material.instanceMetadataIndex = input.instanceMetadataIndex;
-        result.material.geometryIndex = input.geometryIndex;
-        result.scatter = sampleResolvedMaterialScatterVariant<LayerFlags>(result.material, input.viewDirection,
-                                                                          input.scatterRandomValues);
+        ClosestHitResult result = ClosestHitResult(material, input);
+        // Scatter sampling consumes the completed hit frame and medium state.
+        result.scatter =
+            sampleResolvedMaterialScatterVariant<LayerFlags>(result.material, input.viewDirection, input.scatterRandomValues);
         return result;
     }
 }

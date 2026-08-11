@@ -15,6 +15,7 @@ public void handleAnyHitPolicy(BuiltInTriangleIntersectionAttributes attributes)
     RtGeometryMetadata geometry = currentRtGeometry(instance, geometryValid);
     if (!geometryValid)
     {
+        // Accept the candidate: ignoring a broken TLAS/sideband association can leak light.
         return;
     }
 

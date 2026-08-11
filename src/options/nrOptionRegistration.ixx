@@ -106,12 +106,6 @@ inline constexpr auto dlssResetHistory = OptionKey<OptionWireValue::Object>{"ren
 inline constexpr auto presentToneMapping = OptionKey<std::string>{"render.present.tone_mapping"};
 inline constexpr auto presentUiOpacity = OptionKey<double>{"render.present.ui_opacity"};
 inline constexpr auto presentCaptureExr = OptionKey<OptionWireValue::Object>{"render.present.capture_exr"};
-
-// [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling options. Remove with the whole block.
-inline constexpr auto buildProfilingEnabled = OptionKey<bool>{"debug.build_profiling.enabled"};
-inline constexpr auto buildProfilingReportInterval =
-    OptionKey<std::uint64_t>{"debug.build_profiling.report_interval_frames"};
-// [TEMP-BUILD-PROFILING] END
 } // namespace keys
 
 struct SessionDefinitionSeed
@@ -146,8 +140,4 @@ struct SessionDefinitionSeed
 [[nodiscard]] std::vector<OptionDefinition> makeAccumulateDefinitions();
 [[nodiscard]] std::vector<OptionDefinition> makeDlssDefinitions(std::string initialQuality = "quality");
 [[nodiscard]] std::vector<OptionDefinition> makePresentDefinitions();
-
-// [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling options. Remove with the whole block.
-[[nodiscard]] std::vector<OptionDefinition> makeBuildProfilingDefinitions();
-// [TEMP-BUILD-PROFILING] END
 } // namespace nr::options

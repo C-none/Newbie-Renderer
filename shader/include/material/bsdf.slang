@@ -57,6 +57,12 @@ public struct GgxSpecularEnergyTerms
     // W compensates the single-scattering GGX lobe; E is its compensated directional albedo.
     public float3 W = float3(1.0f);
     public float3 E = float3(1.0f);
+
+    public __init(float3 W, float3 E)
+    {
+        this.W = W;
+        this.E = E;
+    }
 };
 
 // Analytic form of UE's split-sum GGX directional-albedo lookup. It avoids introducing a shader
@@ -75,10 +81,8 @@ public GgxSpecularEnergyTerms computeGgxSpecularEnergyTerms(float roughness, flo
     float2 splitSum = ggxDirectionalAlbedoAnalytic(roughness, noV);
     float safeDirectionalAlbedo = max(splitSum.x, 1.0e-4f);
 
-    GgxSpecularEnergyTerms result;
-    result.W = float3(1.0f) + f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
-    result.E = result.W * (splitSum.x * f0 + splitSum.y * (f90 - f0));
-    return result;
+    float3 W = float3(1.0f) + f0 * ((1.0f - safeDirectionalAlbedo) / safeDirectionalAlbedo);
+    return GgxSpecularEnergyTerms(W, W * (splitSum.x * f0 + splitSum.y * (f90 - f0)));
 }
 
 public float3 metallicRoughnessF0(MaterialSample material)

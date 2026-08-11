@@ -78,11 +78,11 @@ namespace nr::resource
                                   [](std::size_t sum, const ImageLevel &level) { return sum + level.byteSize(); });
 }
 
-[[nodiscard]] glm::uvec3 Texture::mipExtent(std::uint32_t mip) const noexcept
+[[nodiscard]] DirectX::XMUINT3 Texture::mipExtent(std::uint32_t mip) const noexcept
 {
     if (mip >= mipCount)
     {
-        return glm::uvec3{0u, 0u, 0u};
+        return {0u, 0u, 0u};
     }
 
     auto reduce = [mip](std::uint32_t value) {
@@ -90,7 +90,7 @@ namespace nr::resource
         return std::max(shifted, 1u);
     };
 
-    return glm::uvec3{reduce(width), reduce(height), reduce(depth)};
+    return {reduce(width), reduce(height), reduce(depth)};
 }
 
 [[nodiscard]] MaterialTextureSlot &Material::slot(MaterialTextureSlotSemantic semantic) noexcept

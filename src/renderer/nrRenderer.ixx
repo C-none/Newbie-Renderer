@@ -96,8 +96,6 @@ class FrameEffectSink
     GraphPassHandle targetPass_{};
 };
 
-struct RendererBenchmarkBuildTelemetry;
-
 struct NodeFrameParameters
 {
     std::reference_wrapper<const nr::options::OptionFrameSnapshot> optionSnapshot;
@@ -115,7 +113,6 @@ struct NodeFrameParameters
     nr::scene::SceneBridgeFrameConstants renderCameraConstants{};
     std::optional<std::reference_wrapper<FrameServices>> frameServices{};
     std::optional<std::reference_wrapper<FrameEffectSink>> frameEffectSink{};
-    std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>> benchmarkTelemetry{};
 };
 
 using RendererTlasTextureRevisionProjection = nr::scene::SceneRtStructuralRevisionProjection;
@@ -195,22 +192,6 @@ struct RendererBenchmarkFrame
     vk::Extent2D displayExtent{1u, 1u};
     vk::Extent2D renderExtent{1u, 1u};
     RendererCpuFrameTimings cpu{};
-    double sceneBeginUploadMilliseconds = 0.0;
-    double sceneRasterExtractMilliseconds = 0.0;
-    double sceneTlasExtractMilliseconds = 0.0;
-    double sceneBridgeMilliseconds = 0.0;
-    double tlasTextureCollectionMilliseconds = 0.0;
-    double graphPreludeMilliseconds = 0.0;
-    double uiCollectMilliseconds = 0.0;
-    double nodeLoopMilliseconds = 0.0;
-    ExecutorBenchmarkTelemetry execute{};
-    double executeAccountedMainThreadMilliseconds = 0.0;
-    double executeUnclassifiedMilliseconds = 0.0;
-    std::size_t sceneRasterPacketCount = 0u;
-    std::size_t sceneRtPacketCount = 0u;
-    std::size_t sceneTlasPacketCount = 0u;
-    std::size_t submitBatchCount = 0u;
-    std::size_t recordTaskCount = 0u;
 };
 
 struct RendererBenchmarkGpuPass
@@ -236,8 +217,6 @@ struct RendererBenchmarkQualityAudit
 {
     bool valid = true;
     bool framesValid = true;
-    bool nodeTelemetryValid = true;
-    bool accelerationStructureTelemetryValid = true;
     std::size_t missingGpuFrames = 0u;
     std::size_t partialGpuFrames = 0u;
     std::size_t extraGpuStatuses = 0u;
@@ -261,49 +240,13 @@ struct RendererBenchmarkDistribution
     double populationStddev = 0.0;
 };
 
-struct RendererBenchmarkAsTelemetry
-{
-    bool recorded = false;
-    bool available = false;
-    double cacheScanMilliseconds = 0.0;
-    double metadataPlanMilliseconds = 0.0;
-    double cpuWritesMilliseconds = 0.0;
-    double tlasSizingMilliseconds = 0.0;
-    double graphDeclareMilliseconds = 0.0;
-    std::size_t packetCount = 0u;
-    std::size_t instanceCount = 0u;
-    std::size_t dirtyBlasCount = 0u;
-};
-
-struct RendererBenchmarkBuildTelemetry
-{
-    std::span<double> nodeBuildMilliseconds{};
-    std::size_t nodeOrdinal = 0u;
-    std::reference_wrapper<RendererBenchmarkAsTelemetry> accelerationStructure;
-};
-
-struct RendererGraphBuildTimings
-{
-    double preludeMilliseconds = 0.0;
-    double uiCollectMilliseconds = 0.0;
-    double nodeLoopMilliseconds = 0.0;
-};
-
 [[nodiscard]] double benchmarkType7Quantile(std::vector<double> values, double probability);
 [[nodiscard]] std::string_view rendererBenchmarkSchemaVersion() noexcept;
 [[nodiscard]] std::span<const std::string_view> rendererBenchmarkCpuStageColumns() noexcept;
-[[nodiscard]] std::span<const std::string_view> rendererBenchmarkCpuSubstageColumns() noexcept;
-[[nodiscard]] std::span<const std::string_view> rendererBenchmarkExecuteCsvColumns() noexcept;
-[[nodiscard]] std::span<const std::string_view> rendererBenchmarkExecuteSummarySections() noexcept;
-[[nodiscard]] double rendererBenchmarkClassifiedCpuMilliseconds(const RendererCpuFrameTimings &timings) noexcept;
-[[nodiscard]] double rendererBenchmarkExecuteAccountedMainThreadMilliseconds(
-    const ExecutorBenchmarkTelemetry &telemetry) noexcept;
-[[nodiscard]] bool validateRendererBenchmarkExecuteTelemetry(const RendererBenchmarkFrame &frame) noexcept;
 [[nodiscard]] bool validateBenchmarkFrames(std::span<const RendererBenchmarkFrame> frames);
 [[nodiscard]] RendererBenchmarkQualityAudit auditRendererBenchmark(
     std::span<const RendererBenchmarkFrame> frames, std::span<const RendererBenchmarkGpuPass> passes,
-    std::span<const RendererBenchmarkGpuFrameStatus> statuses, std::size_t expectedNodeCount,
-    std::span<const double> nodeBuildMilliseconds, std::span<const RendererBenchmarkAsTelemetry> asTelemetry);
+    std::span<const RendererBenchmarkGpuFrameStatus> statuses);
 [[nodiscard]] RendererBenchmarkDistribution makeRendererBenchmarkDistribution(std::vector<double> values);
 
 struct NodeInitContext
@@ -349,8 +292,8 @@ struct RendererCameraJitterConfig
 struct RendererCameraJitterSample
 {
     std::uint32_t sampleIndex = 0u;
-    glm::vec2 pixelOffset{0.0f};
-    glm::vec2 ndcOffset{0.0f};
+    DirectX::XMFLOAT2 pixelOffset{0.0f, 0.0f};
+    DirectX::XMFLOAT2 ndcOffset{0.0f, 0.0f};
 };
 
 struct RendererCameraFrameState
@@ -366,7 +309,8 @@ struct RendererCameraFrameState
     std::uint64_t frameOrdinal, vk::Extent2D viewportExtent,
     std::uint32_t cycleLength = kRendererDefaultCameraJitterCycleLength) noexcept;
 
-[[nodiscard]] glm::mat4 applyCameraProjectionJitter(const glm::mat4 &projection, glm::vec2 ndcOffset) noexcept;
+[[nodiscard]] DirectX::XMFLOAT4X4 applyCameraProjectionJitter(const DirectX::XMFLOAT4X4 &projection,
+                                                               DirectX::XMFLOAT2 ndcOffset) noexcept;
 
 [[nodiscard]] RendererCameraFrameState makeRendererCameraFrameState(const RendererCameraJitterConfig &jitterConfig,
                                                                     std::uint64_t frameOrdinal,
@@ -412,8 +356,6 @@ struct NodeBuildContext
     std::reference_wrapper<const FrameGlobalResources> globalResources;
     std::reference_wrapper<std::map<std::string, GraphResourceHandle>> frameResources;
     std::reference_wrapper<std::map<std::string, GraphFrameDataHandle>> frameDataResources;
-    std::optional<std::reference_wrapper<RendererBenchmarkBuildTelemetry>> benchmarkTelemetry{};
-
     void publishFrameResource(std::string_view key, GraphResourceHandle resource) const;
 
     [[nodiscard]] GraphResourceHandle resolveFrameResource(std::string_view key) const;
@@ -704,7 +646,7 @@ template <typename TPipeline, std::size_t FrameSlotCount = nr::maxFrameInFlight>
         PassBindingHandle handle, std::uint32_t frameIndex,
         const std::map<std::uint32_t, std::uint32_t> &variableDescriptorCountsBySet);
 
-    [[nodiscard]] nr::rhi::ShaderCursor rootCursor() const;
+    [[nodiscard]] nr::rhi::ShaderCursor recordingCursor(PassBindingHandle handle, std::uint32_t frameIndex);
 
   private:
     struct PassBindingStableKey
@@ -721,6 +663,7 @@ template <typename TPipeline, std::size_t FrameSlotCount = nr::maxFrameInFlight>
         std::array<nr::rhi::DescriptorWriteCache, FrameSlotCount> descriptorWriteCachesByFrame{};
         std::array<std::map<std::uint32_t, std::uint32_t>, FrameSlotCount> variableDescriptorCountsByFrame{};
         std::array<bool, FrameSlotCount> bindingSetsInitializedByFrame{};
+        std::array<nr::rhi::ShaderCursor, FrameSlotCount> cursorsByFrame{};
     };
 
     template <bool AllocateDefaultBindingSets> void initializeBuild(nr::rhi::PipelineBuild<TPipeline> pipelineBuild);
@@ -899,6 +842,8 @@ PipelineRuntime<TPipeline, FrameSlotCount>::passBinding(std::string_view runtime
     passBindingStates_.emplace_back();
     passBindingStateIndices_.emplace(std::move(key), stateIndex);
     auto &bindingState = passBindingStates_.back();
+    std::ranges::for_each(bindingState.cursorsByFrame,
+                          [&](nr::rhi::ShaderCursor &cursor) { cursor = pipeline_->descriptorLayout.rootCursor(); });
     if (allocateDefaultBindingSetsForOwners_)
     {
         auto frameSlots = std::views::iota(std::size_t{0}, FrameSlotCount);
@@ -979,11 +924,17 @@ template <typename TPipeline, std::size_t FrameSlotCount>
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
-[[nodiscard]] nr::rhi::ShaderCursor PipelineRuntime<TPipeline, FrameSlotCount>::rootCursor() const
+[[nodiscard]] nr::rhi::ShaderCursor PipelineRuntime<TPipeline, FrameSlotCount>::recordingCursor(
+    PassBindingHandle handle, std::uint32_t frameIndex)
 {
     resolvePipeline();
-    nrAssert(pipeline_.has_value(), "PipelineRuntime::rootCursor requires an initialized pipeline.");
-    return pipeline_->descriptorLayout.rootCursor();
+    std::scoped_lock lock(resolutionMutex_);
+    nrAssert(pipeline_.has_value(), "PipelineRuntime::recordingCursor requires an initialized pipeline.");
+    auto &bindingState = validatedPassBindingStateLocked(handle);
+    auto const frameSlot = static_cast<std::size_t>(frameIndex % FrameSlotCount);
+    auto cursor = bindingState.cursorsByFrame[frameSlot];
+    cursor.beginRecording();
+    return cursor;
 }
 
 template <typename TPipeline, std::size_t FrameSlotCount>
@@ -1001,39 +952,43 @@ void PipelineRuntime<TPipeline, FrameSlotCount>::allocateBindingSetsForFrame(
     bindingState.bindingSetsInitializedByFrame[frameSlot] = true;
 }
 
-struct RasterPassRecordContext
-{
-    const PassRecordContext &pass;
-    const vk::raii::CommandBuffer &commandBuffer;
-    const nr::rhi::ShaderDescriptorLayout &descriptorLayout;
-    const nr::rhi::CursorPipelineLayout &pipelineLayout;
-    vk::Extent2D extent{1, 1};
-
-    template <typename TPayload> void pushConstants(std::string_view shaderPath, const TPayload &value) const
-    {
-        auto root = descriptorLayout.rootCursor();
-        auto cursor = root.getPath(shaderPath);
-        static_cast<void>(cursor.setData(value));
-
-        auto bindingSnapshot = root.snapshot();
-        root.clearSnapshot();
-        nr::rhi::pushConstantsToCommandBuffer(commandBuffer, pipelineLayout, bindingSnapshot);
-    }
-};
-
-using RasterPassRecordCallback = std::function<void(const RasterPassRecordContext &)>;
-
 struct PushConstantLocation
 {
     vk::ShaderStageFlags stageFlags{};
-    std::uint32_t offset = 0;
-    std::uint32_t maxBytes = 0;
+    std::uint32_t offset = 0u;
+    std::uint32_t maxBytes = 0u;
 
     [[nodiscard]] bool valid() const noexcept
     {
         return stageFlags != vk::ShaderStageFlags{} && maxBytes > 0u;
     }
 };
+
+[[nodiscard]] PushConstantLocation resolvePushConstantLocation(
+    const nr::rhi::ShaderDescriptorLayout &descriptorLayout, std::string_view shaderPath);
+
+template <typename TPayload>
+    requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
+void pushConstantsToLocation(const vk::raii::CommandBuffer &commandBuffer,
+                             const nr::rhi::CursorPipelineLayout &pipelineLayout, PushConstantLocation location,
+                             const TPayload &value);
+
+struct RasterPassRecordContext
+{
+    const PassRecordContext &pass;
+    const vk::raii::CommandBuffer &commandBuffer;
+    const nr::rhi::CursorPipelineLayout &pipelineLayout;
+    vk::Extent2D extent{1, 1};
+
+    template <typename TPayload>
+        requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
+    void pushConstants(PushConstantLocation location, const TPayload &value) const
+    {
+        pushConstantsToLocation(commandBuffer, pipelineLayout, location, value);
+    }
+};
+
+using RasterPassRecordCallback = std::function<void(const RasterPassRecordContext &)>;
 
 [[nodiscard]] inline PushConstantLocation resolvePushConstantLocation(
     const nr::rhi::ShaderDescriptorLayout &descriptorLayout, std::string_view shaderPath)
@@ -1086,14 +1041,8 @@ struct RasterPassRangeRecordContext
     std::size_t chunkIndex = 0;
     ParallelRecordRange range{};
     const vk::raii::CommandBuffer &commandBuffer;
-    const nr::rhi::ShaderDescriptorLayout &descriptorLayout;
     const nr::rhi::CursorPipelineLayout &pipelineLayout;
     vk::Extent2D extent{1, 1};
-
-    [[nodiscard]] PushConstantLocation pushConstantLocation(std::string_view shaderPath) const
-    {
-        return resolvePushConstantLocation(descriptorLayout, shaderPath);
-    }
 
     template <typename TPayload>
         requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
@@ -1102,12 +1051,6 @@ struct RasterPassRangeRecordContext
         pushConstantsToLocation(commandBuffer, pipelineLayout, location, value);
     }
 
-    template <typename TPayload>
-        requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
-    void pushConstants(std::string_view shaderPath, const TPayload &value) const
-    {
-        pushConstants(pushConstantLocation(shaderPath), value);
-    }
 };
 
 using RasterPassItemCountCallback = std::function<std::size_t(const PassRecordContext &)>;
@@ -1183,7 +1126,8 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     {
         nrAssert(static_cast<bool>(runtime_), "{} requires a valid PipelineRuntime shared pointer.", builderLabel_);
         nrAssert(runtime_->valid(), "{} requires initialized PipelineRuntime state.", builderLabel_);
-        rootCursor_ = runtime_->rootCursor();
+        passBinding_ = runtime_->passBinding(context_.get().runtimeName, context_.get().nodeLocalPassOrdinal());
+        rootCursor_ = runtime_->recordingCursor(passBinding_, context_.get().frameIndex);
     }
 
     TDerived &uniform(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
@@ -1391,11 +1335,10 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
 
     [[nodiscard]] CommonBuildState takeCommonBuildState()
     {
-        auto bindingSnapshot = rootCursor_.snapshot();
-        rootCursor_.clearSnapshot();
+        auto bindingSnapshot = rootCursor_.takeSnapshot();
 
         auto runtime = runtime_;
-        auto passBinding = runtime->passBinding(context_.get().runtimeName, context_.get().nodeLocalPassOrdinal());
+        auto passBinding = passBinding_;
         auto prepareCallback = makePrepareCallback(runtime, passBinding, bindingSnapshot, std::move(prepareCallbacks_),
                                                    std::move(dynamicBindingSnapshots_), builderLabel_);
 
@@ -1489,6 +1432,7 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
 
     std::string debugName_{};
     RuntimePtr runtime_{};
+    PassBindingHandle passBinding_{};
     nr::rhi::ShaderCursor rootCursor_{};
     std::vector<PassResourceUseDesc> resourceUses_{};
     std::vector<GraphFrameDataHandle> frameDataUses_{};
@@ -1586,18 +1530,13 @@ struct ComputePassRecordContext
 {
     const PassRecordContext &pass;
     const vk::raii::CommandBuffer &commandBuffer;
-    const nr::rhi::ShaderDescriptorLayout &descriptorLayout;
     const nr::rhi::CursorPipelineLayout &pipelineLayout;
 
-    template <typename TPayload> void pushConstants(std::string_view shaderPath, const TPayload &value) const
+    template <typename TPayload>
+        requires(std::is_trivially_copyable_v<std::remove_cvref_t<TPayload>>)
+    void pushConstants(PushConstantLocation location, const TPayload &value) const
     {
-        auto root = descriptorLayout.rootCursor();
-        auto cursor = root.getPath(shaderPath);
-        static_cast<void>(cursor.setData(value));
-
-        auto bindingSnapshot = root.snapshot();
-        root.clearSnapshot();
-        nr::rhi::pushConstantsToCommandBuffer(commandBuffer, pipelineLayout, bindingSnapshot);
+        pushConstantsToLocation(commandBuffer, pipelineLayout, location, value);
     }
 };
 
@@ -1638,7 +1577,6 @@ struct RayTracingPassRecordContext
 {
     const PassRecordContext &pass;
     const vk::raii::CommandBuffer &commandBuffer;
-    const nr::rhi::ShaderDescriptorLayout &descriptorLayout;
     const nr::rhi::CursorPipelineLayout &pipelineLayout;
 };
 
@@ -1859,32 +1797,7 @@ class Renderer
         std::optional<nr::scene::SceneRevisionSnapshot> sceneRevisions{};
     };
 
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary RDG build-stage profiling state. Remove with the whole block.
-    struct TempBuildProfileEntry
-    {
-        std::string name{};
-        std::uint64_t count = 0u;
-        double totalMilliseconds = 0.0;
-        double maxMilliseconds = 0.0;
-
-        void accumulate(double milliseconds) noexcept
-        {
-            ++count;
-            totalMilliseconds += milliseconds;
-            maxMilliseconds = std::max(maxMilliseconds, milliseconds);
-        }
-    };
-
-    void tempReportBuildProfile();
-
-    std::vector<TempBuildProfileEntry> tempBuildProfileNodes_{};
-    TempBuildProfileEntry tempBuildProfilePrelude_{};
-    TempBuildProfileEntry tempBuildProfileTotal_{};
-    std::uint64_t tempBuildProfileFrames_ = 0u;
-    bool tempBuildProfileActive_ = false;
-    // [TEMP-BUILD-PROFILING] END
-
-    [[nodiscard]] RendererGraphBuildTimings buildInstalledGraph(
+    void buildInstalledGraph(
         const NodeFrameParameters &frameParameters,
         const nr::scene::SceneBridgeFrameConstants &renderingFrameConstants,
         const nr::scene::SceneBridgeFrameConstants &unjitteredFrameConstants,
@@ -1959,11 +1872,6 @@ class Renderer
     std::vector<RendererBenchmarkGpuPass> benchmarkGpuPasses_{};
     std::vector<RendererBenchmarkGpuFrameStatus> benchmarkGpuFrameStatuses_{};
     std::vector<std::string> benchmarkGpuPassNames_{};
-    std::vector<std::string> benchmarkNodeNames_{};
-    std::vector<double> benchmarkCurrentNodeBuildMilliseconds_{};
-    std::vector<double> benchmarkNodeBuildMilliseconds_{};
-    RendererBenchmarkAsTelemetry benchmarkCurrentAsTelemetry_{};
-    std::vector<RendererBenchmarkAsTelemetry> benchmarkAsTelemetry_{};
     std::chrono::system_clock::time_point benchmarkStartedAt_{};
     bool benchmarkFinalized_ = false;
     bool benchmarkSucceeded_ = false;

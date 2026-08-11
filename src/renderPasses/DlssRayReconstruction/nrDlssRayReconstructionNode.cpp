@@ -20,7 +20,13 @@ struct DlssMotionVectorDebugPushConstants
     std::array<std::uint32_t, 2u> motionVectorSize{};
     std::array<float, 2u> motionVectorScale{1.0f, 1.0f};
 };
+static_assert(std::is_standard_layout_v<DlssMotionVectorDebugPushConstants>);
 static_assert(sizeof(DlssMotionVectorDebugPushConstants) == 40u);
+static_assert(nr::memberOffset<&DlssMotionVectorDebugPushConstants::outputBase>() == 0u);
+static_assert(nr::memberOffset<&DlssMotionVectorDebugPushConstants::outputSize>() == 8u);
+static_assert(nr::memberOffset<&DlssMotionVectorDebugPushConstants::motionVectorBase>() == 16u);
+static_assert(nr::memberOffset<&DlssMotionVectorDebugPushConstants::motionVectorSize>() == 24u);
+static_assert(nr::memberOffset<&DlssMotionVectorDebugPushConstants::motionVectorScale>() == 32u);
 static_assert(sizeof(DlssMotionVectorDebugPushConstants) <= nr::rhi::kMaxPushConstantBytes);
 
 struct DlssRayReconstructionRuntime
@@ -373,17 +379,15 @@ template <typename T>
     return resolved;
 }
 
-std::array<float, 16u> toDlssRowVectorMatrix(const glm::mat4 &value) noexcept
+std::array<float, 16u> toDlssRowVectorMatrix(const DirectX::XMFLOAT4X4 &value) noexcept
 {
-    // Preserve the transform while converting GLM column-vector math to NGX row-vector math.
-    auto result = std::array<float, 16u>{};
-    auto indices = std::views::iota(std::size_t{0u}, result.size());
-    std::ranges::for_each(indices, [&](std::size_t index) {
-        auto const row = index / 4u;
-        auto const column = index % 4u;
-        result[index] = value[static_cast<glm::length_t>(row)][static_cast<glm::length_t>(column)];
-    });
-    return result;
+    // DirectXMath and NGX both use row-vector, row-major matrices. Keep NGX's required full 4x4 payload.
+    return {
+        value._11, value._12, value._13, value._14,
+        value._21, value._22, value._23, value._24,
+        value._31, value._32, value._33, value._34,
+        value._41, value._42, value._43, value._44,
+    };
 }
 
 [[nodiscard]] nr::rhi::DlssImage makeDlssImage(const nr::renderer::PassImageResource &image,

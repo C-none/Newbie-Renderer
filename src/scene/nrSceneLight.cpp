@@ -22,14 +22,14 @@ inline constexpr float kSceneLightAliasLuminanceBlue = 0.0722f;
 {
     return SceneLightAliasGpuRecord{
         .meta =
-            glm::uvec4{
+            DirectX::XMUINT4{
                 primaryIndex,
                 aliasIndex,
                 0u,
                 0u,
             },
         .probabilities =
-            glm::vec4{
+            DirectX::XMFLOAT4{
                 std::clamp(acceptThreshold, 0.0f, 1.0f),
                 finitePositive(primaryPdf),
                 finitePositive(aliasPdf),
@@ -39,24 +39,26 @@ inline constexpr float kSceneLightAliasLuminanceBlue = 0.0722f;
 }
 } // namespace
 
-[[nodiscard]] float sceneLightAliasEnergy(glm::vec3 color, float intensity) noexcept
+[[nodiscard]] float sceneLightAliasEnergy(DirectX::XMFLOAT3 color, float intensity) noexcept
 {
-    auto const positiveColor = glm::vec3{
-        finitePositive(color.r),
-        finitePositive(color.g),
-        finitePositive(color.b),
+    auto const positiveColor = DirectX::XMFLOAT3{
+        finitePositive(color.x),
+        finitePositive(color.y),
+        finitePositive(color.z),
     };
     auto const positiveIntensity = finitePositive(intensity);
-    auto const luminance = positiveColor.r * kSceneLightAliasLuminanceRed +
-                           positiveColor.g * kSceneLightAliasLuminanceGreen +
-                           positiveColor.b * kSceneLightAliasLuminanceBlue;
+    auto const luminance = positiveColor.x * kSceneLightAliasLuminanceRed +
+                           positiveColor.y * kSceneLightAliasLuminanceGreen +
+                           positiveColor.z * kSceneLightAliasLuminanceBlue;
     auto const energy = positiveIntensity * luminance;
     return finitePositive(energy);
 }
 
 [[nodiscard]] float sceneLightAliasEnergy(const SceneLightGpuRecord &record) noexcept
 {
-    return sceneLightAliasEnergy(glm::vec3{record.colorIntensity}, record.colorIntensity.w);
+    return sceneLightAliasEnergy(DirectX::XMFLOAT3{record.colorIntensity.x, record.colorIntensity.y,
+                                                    record.colorIntensity.z},
+                                 record.colorIntensity.w);
 }
 
 [[nodiscard]] SceneLightAliasTableBuildResult buildSceneLightAliasTable(std::span<const SceneLightGpuRecord> records)

@@ -777,17 +777,17 @@ bool PresentationContext::mouseButtonDown(int glfwMouseButton) const
     return glfwGetMouseButton(surface_.handle.get(), glfwMouseButton) != 0;
 }
 
-glm::dvec2 PresentationContext::cursorPosition() const
+nr::math::Double2 PresentationContext::cursorPosition() const
 {
     if (surface_.handle == nullptr)
     {
-        return glm::dvec2{0.0, 0.0};
+        return {};
     }
 
     auto x = 0.0;
     auto y = 0.0;
     glfwGetCursorPos(surface_.handle.get(), &x, &y);
-    return glm::dvec2{x, y};
+    return nr::math::Double2{x, y};
 }
 
 double PresentationContext::consumeVerticalScrollOffset() const noexcept

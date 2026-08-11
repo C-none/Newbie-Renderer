@@ -80,30 +80,6 @@ struct ExecutorPlan
     bool requiresSyntheticPresentBatch = false;
 };
 
-struct ExecutorBenchmarkTelemetry
-{
-    double executorSetupMilliseconds = 0.0;
-    double completedGpuTimingReadbackMilliseconds = 0.0;
-    double timingSetupMilliseconds = 0.0;
-    double perFrameLookupMilliseconds = 0.0;
-    double swapchainAcquireMilliseconds = 0.0;
-    double deferredPrepareMilliseconds = 0.0;
-    double taskPlanLaunchMilliseconds = 0.0;
-    double primaryRecordBeforeCollectMilliseconds = 0.0;
-    double recordCompletionWaitMilliseconds = 0.0;
-    double primaryReplayBarrierTimestampMilliseconds = 0.0;
-    double primaryEndAndSubmitBuildMilliseconds = 0.0;
-    double queueSubmitMilliseconds = 0.0;
-    double initialReleaseRecordSubmitMilliseconds = 0.0;
-    double syntheticPresentRecordSubmitMilliseconds = 0.0;
-    double finalizationMilliseconds = 0.0;
-    std::size_t compiledSubmitBatchCount = 0u;
-    std::size_t acquireBatchCount = 0u;
-    std::size_t recordTaskCount = 0u;
-    std::size_t replayedSecondaryCommandBufferCount = 0u;
-    std::size_t queueSubmitCount = 0u;
-};
-
 struct ExecuteReport
 {
     ExecutorPlan plan{};
@@ -324,7 +300,6 @@ class RenderGraphExecutor
         std::uint64_t acquireTimeout = std::numeric_limits<std::uint64_t>::max();
         std::optional<nr::rhi::Device::FrameAcquireResult> preAcquiredFrameImage{};
         std::optional<std::reference_wrapper<RendererSubmissionTimelines>> submissionTimelines{};
-        std::optional<std::reference_wrapper<ExecutorBenchmarkTelemetry>> benchmarkTelemetry{};
     };
 
     [[nodiscard]] ExecutorPlan buildPlan(const CompiledGraphFrame &compiled) const;

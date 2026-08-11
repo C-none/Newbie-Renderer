@@ -38,7 +38,7 @@ struct Texture
 
     [[nodiscard]] std::size_t byteSize() const noexcept;
 
-    [[nodiscard]] glm::uvec3 mipExtent(std::uint32_t mip) const noexcept;
+    [[nodiscard]] DirectX::XMUINT3 mipExtent(std::uint32_t mip) const noexcept;
 };
 
 struct SamplerDesc
@@ -58,8 +58,8 @@ struct SamplerDesc
 
 struct MaterialTextureTransform
 {
-    glm::vec4 linear{1.0f, 0.0f, 0.0f, 1.0f};
-    glm::vec2 offset{};
+    DirectX::XMFLOAT4 linear{1.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT2 offset{};
 };
 
 struct MaterialTextureSlot
@@ -140,8 +140,8 @@ constexpr MaterialFeatureFlag &operator|=(MaterialFeatureFlag &lhs, MaterialFeat
 
 struct MaterialCorePbr
 {
-    glm::vec4 baseColorFactor{1.0f};
-    glm::vec3 emissiveFactor{0.0f};
+    DirectX::XMFLOAT4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+    DirectX::XMFLOAT3 emissiveFactor{};
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
     float normalScale = 1.0f;
@@ -161,7 +161,7 @@ struct MaterialClearcoatExtension
 
 struct MaterialSheenExtension
 {
-    glm::vec3 colorFactor{0.0f};
+    DirectX::XMFLOAT3 colorFactor{};
     float roughnessFactor = 0.0f;
 
 };

@@ -1,6 +1,3 @@
-module;
-#include <cstddef>
-
 module nr.renderPasses;
 import dependency.math;
 import dependency.ui;
@@ -18,18 +15,18 @@ namespace nr::renderPasses::detail
 {
 struct UiPushConstants
 {
-    glm::vec2 scale{1.0f, 1.0f};
-    glm::vec2 translate{0.0f, 0.0f};
+    DirectX::XMFLOAT2 scale{1.0f, 1.0f};
+    DirectX::XMFLOAT2 translate{};
     std::uint32_t textureIndex = 0u;
     std::array<std::uint32_t, 3> padding{};
 };
 
 static_assert(std::is_standard_layout_v<UiPushConstants>);
 static_assert(sizeof(UiPushConstants) == 32u);
-static_assert(offsetof(UiPushConstants, scale) == 0u);
-static_assert(offsetof(UiPushConstants, translate) == 8u);
-static_assert(offsetof(UiPushConstants, textureIndex) == 16u);
-static_assert(offsetof(UiPushConstants, padding) == 20u);
+static_assert(nr::memberOffset<&UiPushConstants::scale>() == 0u);
+static_assert(nr::memberOffset<&UiPushConstants::translate>() == 8u);
+static_assert(nr::memberOffset<&UiPushConstants::textureIndex>() == 16u);
+static_assert(nr::memberOffset<&UiPushConstants::padding>() == 20u);
 static_assert(sizeof(UiPushConstants) <= nr::rhi::kMaxPushConstantBytes,
               "UiNode push constants exceed the RHI maximum.");
 
@@ -38,9 +35,9 @@ static_assert(sizeof(ImDrawVert) == 20u);
 static_assert(imgui::drawVertPosOffset == 0u);
 static_assert(imgui::drawVertUvOffset == 8u);
 static_assert(imgui::drawVertColorOffset == 16u);
-static_assert(offsetof(ImDrawVert, pos) == 0u);
-static_assert(offsetof(ImDrawVert, uv) == 8u);
-static_assert(offsetof(ImDrawVert, col) == 16u);
+static_assert(nr::memberOffset<&ImDrawVert::pos>() == 0u);
+static_assert(nr::memberOffset<&ImDrawVert::uv>() == 8u);
+static_assert(nr::memberOffset<&ImDrawVert::col>() == 16u);
 
 static_assert(std::is_unsigned_v<ImDrawIdx>);
 static_assert(sizeof(ImDrawIdx) == 2u || sizeof(ImDrawIdx) == 4u);
@@ -829,6 +826,7 @@ struct UiDrawCommandRecorder
 {
     std::shared_ptr<UiRuntimeCache> runtime{};
     std::reference_wrapper<const nr::renderer::RasterPassRecordContext> rasterContext;
+    nr::renderer::PushConstantLocation pushConstantLocation{};
     UiPushConstants pushConstants{};
     std::optional<std::uint32_t> lastTextureIndex{};
 
@@ -847,7 +845,7 @@ struct UiDrawCommandRecorder
         if (!lastTextureIndex.has_value() || *lastTextureIndex != command.textureSlot)
         {
             pushConstants.textureIndex = command.textureSlot;
-            context.pushConstants("gUiPush", pushConstants);
+            context.pushConstants(pushConstantLocation, pushConstants);
             lastTextureIndex = command.textureSlot;
         }
 
@@ -869,6 +867,10 @@ struct UiOverlayCallbacks
 {
     nr::nrAssert(static_cast<bool>(runtime), "UiNode overlay callbacks require initialized runtime state.");
     nr::nrAssert(static_cast<bool>(drawFrame), "UiNode overlay callbacks require immutable draw-frame data.");
+    nr::nrAssert(static_cast<bool>(runtime->pipeline),
+                 "UiNode overlay callbacks require an initialized pipeline runtime.");
+    auto const uiPushConstantLocation =
+        nr::renderer::resolvePushConstantLocation(runtime->pipeline->state().descriptorLayout, "gUiPush");
 
     return UiOverlayCallbacks{
         .prepare =
@@ -891,7 +893,7 @@ struct UiOverlayCallbacks
                                                                   prepareContext.frameIndex);
             },
         .record =
-            [runtime, drawFrame](const nr::renderer::RasterPassRecordContext &rasterContext) {
+            [runtime, drawFrame, uiPushConstantLocation](const nr::renderer::RasterPassRecordContext &rasterContext) {
                 if (drawFrame->commands.empty())
                 {
                     return;
@@ -914,6 +916,7 @@ struct UiOverlayCallbacks
                                       UiDrawCommandRecorder{
                                           .runtime = runtime,
                                           .rasterContext = std::cref(rasterContext),
+                                          .pushConstantLocation = uiPushConstantLocation,
                                           .pushConstants = drawFrame->pushConstants,
                                       });
             },
@@ -930,53 +933,9 @@ struct UiValidatedDrawCounts
 [[nodiscard]] std::size_t checkedUiDrawSizeAdd(std::size_t accumulated, std::size_t additional,
                                                std::string_view quantityName)
 {
-    // [TEMP-BUILD-PROFILING] BEGIN - lazy assertion context experiment. Revert to the eager std::format form to undo.
     nr::nrAssert(additional <= std::numeric_limits<std::size_t>::max() - accumulated, "UiNode {} exceeds the host size range.", quantityName);
-    // [TEMP-BUILD-PROFILING] END
     return accumulated + additional;
 }
-
-// [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-struct TempUiProfile
-{
-    double validateMilliseconds = 0.0;
-    double copyMilliseconds = 0.0;
-    double textureSyncMilliseconds = 0.0;
-    double declareMilliseconds = 0.0;
-    double totalMilliseconds = 0.0;
-    std::uint64_t frames = 0u;
-    std::uint64_t vertices = 0u;
-    std::uint64_t indices = 0u;
-    std::uint64_t commands = 0u;
-};
-
-inline TempUiProfile tempUiProfile{};
-
-[[nodiscard]] inline double tempElapsedMs(std::chrono::steady_clock::time_point start,
-                                          std::chrono::steady_clock::time_point finish) noexcept
-{
-    return std::chrono::duration<double, std::milli>(finish - start).count();
-}
-
-inline void tempReportUiProfile()
-{
-    ++tempUiProfile.frames;
-    if (tempUiProfile.frames % 100u != 0u)
-    {
-        return;
-    }
-    auto const frames = static_cast<double>(tempUiProfile.frames);
-    nr::nrLog<nr::LogLevel::info>(
-        "[TEMP-BUILD-PROFILING][Ui] frames={}, totalAvgMs={:.4f} (validate={:.4f}, copyOnly={:.4f}, textureSync={:.4f}, "
-        "declare={:.4f}), avgVertices={}, avgIndices={}, avgCommands={}",
-        tempUiProfile.frames, tempUiProfile.totalMilliseconds / frames, tempUiProfile.validateMilliseconds / frames,
-        (tempUiProfile.copyMilliseconds - tempUiProfile.validateMilliseconds) / frames,
-        tempUiProfile.textureSyncMilliseconds / frames, tempUiProfile.declareMilliseconds / frames,
-        static_cast<std::uint64_t>(static_cast<double>(tempUiProfile.vertices) / frames),
-        static_cast<std::uint64_t>(static_cast<double>(tempUiProfile.indices) / frames),
-        static_cast<std::uint64_t>(static_cast<double>(tempUiProfile.commands) / frames));
-}
-// [TEMP-BUILD-PROFILING] END
 
 [[nodiscard]] UiValidatedDrawCounts validateUiDrawData(const ImDrawData &drawData)
 {
@@ -1065,15 +1024,7 @@ inline void tempReportUiProfile()
 
 [[nodiscard]] UiFrameDrawData copyUiDrawData(const ImDrawData &drawData, vk::Extent2D swapchainExtent)
 {
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-    auto const tempValidateStart = std::chrono::steady_clock::now();
-    // [TEMP-BUILD-PROFILING] END
     auto const validatedCounts = validateUiDrawData(drawData);
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-    tempUiProfile.validateMilliseconds += tempElapsedMs(tempValidateStart, std::chrono::steady_clock::now());
-    tempUiProfile.vertices += validatedCounts.vertexCount;
-    tempUiProfile.indices += validatedCounts.indexCount;
-    // [TEMP-BUILD-PROFILING] END
     auto output = UiFrameDrawData{};
     output.framebufferExtent = vk::Extent2D{
         std::max(1u, swapchainExtent.width),
@@ -1109,12 +1060,12 @@ inline void tempReportUiProfile()
 
     output.pushConstants = UiPushConstants{
         .scale =
-            glm::vec2{
+            DirectX::XMFLOAT2{
                 2.0f / drawData.DisplaySize.x,
                 2.0f / drawData.DisplaySize.y,
             },
         .translate =
-            glm::vec2{
+            DirectX::XMFLOAT2{
                 -1.0f - drawData.DisplayPos.x * (2.0f / drawData.DisplaySize.x),
                 -1.0f - drawData.DisplayPos.y * (2.0f / drawData.DisplaySize.y),
             },
@@ -1230,18 +1181,8 @@ inline void tempReportUiProfile()
         return makeUiDrawFramePayload(std::move(drawFrame));
     }
 
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-    auto const tempSyncStart = std::chrono::steady_clock::now();
-    // [TEMP-BUILD-PROFILING] END
     synchronizeUiTextures(device, runtime, drawData->get(), currentFrameSlot);
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-    auto const tempCopyStart = std::chrono::steady_clock::now();
-    tempUiProfile.textureSyncMilliseconds += tempElapsedMs(tempSyncStart, tempCopyStart);
-    auto tempPayload = makeUiDrawFramePayload(copyUiDrawData(drawData->get(), bufferExtent));
-    tempUiProfile.copyMilliseconds += tempElapsedMs(tempCopyStart, std::chrono::steady_clock::now());
-    tempUiProfile.commands += tempPayload->commands.size();
-    return tempPayload;
-    // [TEMP-BUILD-PROFILING] END
+    return makeUiDrawFramePayload(copyUiDrawData(drawData->get(), bufferExtent));
 }
 } // namespace nr::renderPasses::detail
 
@@ -1293,9 +1234,6 @@ void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameP
 {
     nr::nrAssert(static_cast<bool>(runtime_), "UiNode build stage requires initialized runtime state.");
     nr::nrAssert(device_.has_value(), "UiNode build stage requires initialize() device reference.");
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-    auto const tempMaterializeStart = std::chrono::steady_clock::now();
-    // [TEMP-BUILD-PROFILING] END
     auto const bufferFormat = validatedFrozenUiBufferFormat(input, *runtime_);
 
     auto const bufferExtent = vk::Extent2D{
@@ -1312,9 +1250,6 @@ void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameP
 
     auto drawFrame = prepareUiDrawFrame(device_->get(), *runtime_, frameParameters);
     nr::nrAssert(static_cast<bool>(drawFrame), "UiNode build requires immutable draw-frame data.");
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-    auto const tempDeclareStart = std::chrono::steady_clock::now();
-    // [TEMP-BUILD-PROFILING] END
 
     auto textureResources = registerUiTextureImageResources(context, *runtime_);
 
@@ -1338,12 +1273,6 @@ void UiNode::materializeCurrentFrame(NodeBuildContext &context, const NodeFrameP
     });
 
     [[maybe_unused]] auto overlayPassHandle = overlayPass.build();
-    // [TEMP-BUILD-PROFILING] BEGIN - temporary UiNode build-stage sub-timers. Remove with the whole block.
-    auto const tempMaterializeFinish = std::chrono::steady_clock::now();
-    tempUiProfile.declareMilliseconds += tempElapsedMs(tempDeclareStart, tempMaterializeFinish);
-    tempUiProfile.totalMilliseconds += tempElapsedMs(tempMaterializeStart, tempMaterializeFinish);
-    tempReportUiProfile();
-    // [TEMP-BUILD-PROFILING] END
 }
 
 void UiNode::shutdown(NodeShutdownContext &)

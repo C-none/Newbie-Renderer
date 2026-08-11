@@ -15,14 +15,26 @@ namespace
     return std::abs(left - right) <= epsilon;
 }
 
-[[nodiscard]] bool mat4Near(const glm::mat4 &left, const glm::mat4 &right, float epsilon = 1e-4f) noexcept
+[[nodiscard]] bool mat4Near(const DirectX::XMFLOAT4X4 &left, const DirectX::XMFLOAT4X4 &right,
+                            float epsilon = 1e-4f) noexcept
 {
-    auto rows = std::views::iota(0, 4);
-    auto columns = std::views::iota(0, 4);
-    return std::ranges::all_of(columns, [&](int column) {
-        return std::ranges::all_of(
-            rows, [&](int row) { return nearlyEqual(left[column][row], right[column][row], epsilon); });
+    auto const leftValues = std::array{left._11, left._12, left._13, left._14, left._21, left._22, left._23, left._24,
+                                       left._31, left._32, left._33, left._34, left._41, left._42, left._43, left._44};
+    auto const rightValues = std::array{right._11, right._12, right._13, right._14, right._21, right._22, right._23,
+                                        right._24, right._31, right._32, right._33, right._34, right._41, right._42,
+                                        right._43, right._44};
+    return std::ranges::equal(leftValues, rightValues, [epsilon](float leftValue, float rightValue) {
+        return nearlyEqual(leftValue, rightValue, epsilon);
     });
+}
+
+[[nodiscard]] DirectX::XMFLOAT4X4 matrixProduct(const DirectX::XMFLOAT4X4 &left,
+                                                 const DirectX::XMFLOAT4X4 &right) noexcept
+{
+    auto result = DirectX::XMFLOAT4X4{};
+    DirectX::XMStoreFloat4x4(&result,
+                              DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&left), DirectX::XMLoadFloat4x4(&right)));
+    return result;
 }
 
 class CameraFrameCaptureNode final : public nr::renderer::NodeRuntime
@@ -119,7 +131,7 @@ class ShutdownCountingNode final : public nr::renderer::NodeRuntime
         .nodeIndex = 2,
         .lookAt = {0.0f, 0.0f, -1.0f},
         .up = {0.0f, 1.0f, 0.0f},
-        .horizontalFov = glm::radians(90.0f),
+        .horizontalFov = nr::math::radians(90.0f),
         .aspect = 1.0f,
         .nearPlane = 0.1f,
         .farPlane = 500.0f,
@@ -220,7 +232,7 @@ const nr::test::CaseRegistrar cameraOverrideCase{
             nr::test::options::makeDefaultSnapshot(preflight.optionCatalog, "camera-override-snapshot");
 
         auto extent = renderer.device().presentationContext.swapchainExtent();
-        auto sceneCamera = scene.tryGetPrimaryCamera(glm::uvec2{extent.width, extent.height});
+        auto sceneCamera = scene.tryGetPrimaryCamera(DirectX::XMUINT2{extent.width, extent.height});
         nr::test::require(sceneCamera.has_value(), "baseline scene should expose its authored primary camera");
 
         auto baseline = renderer.renderFrame(nr::renderer::RendererFrameInput{
@@ -245,18 +257,18 @@ const nr::test::CaseRegistrar cameraOverrideCase{
         nr::test::require(mat4Near(capturedCameraFrames->front().projection, sceneCamera->projection),
                           "baseline node camera projection should come from the scene primary camera");
         nr::test::require(mat4Near(capturedCameraFrames->front().viewProjection,
-                                   sceneCamera->projection * sceneCamera->view),
+                                   matrixProduct(sceneCamera->view, sceneCamera->projection)),
                           "baseline node camera view-projection should come from the scene primary camera");
 
         auto viewerCamera = nr::renderer::ViewerPerspectiveCamera{};
-        viewerCamera.setViewportExtent(glm::uvec2{extent.width, extent.height});
-        viewerCamera.setPoseFromLookAt(glm::vec3{0.0f, 0.0f, 3.0f}, glm::vec3{0.0f});
+        viewerCamera.setViewportExtent(DirectX::XMUINT2{extent.width, extent.height});
+        viewerCamera.setPoseFromLookAt(DirectX::XMFLOAT3{0.0f, 0.0f, 3.0f}, DirectX::XMFLOAT3{0.0f, 0.0f, 0.0f});
 
         auto overrideCamera = viewerCamera.buildRendererCameraOverride();
         overrideCamera.frustum.planes = {
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f}, glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f}, glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
-            glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f}, glm::vec4{0.0f, 0.0f, 1.0f, -10000.0f},
+            DirectX::XMFLOAT4{0.0f, 0.0f, 1.0f, -10000.0f}, DirectX::XMFLOAT4{0.0f, 0.0f, 1.0f, -10000.0f},
+            DirectX::XMFLOAT4{0.0f, 0.0f, 1.0f, -10000.0f}, DirectX::XMFLOAT4{0.0f, 0.0f, 1.0f, -10000.0f},
+            DirectX::XMFLOAT4{0.0f, 0.0f, 1.0f, -10000.0f}, DirectX::XMFLOAT4{0.0f, 0.0f, 1.0f, -10000.0f},
         };
 
         auto overridden = renderer.renderFrame(nr::renderer::RendererFrameInput{

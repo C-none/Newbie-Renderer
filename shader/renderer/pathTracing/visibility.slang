@@ -12,7 +12,7 @@ public bool tracePathVisibilityRay(float3 origin, float3 direction, float maxDis
     ray.TMin = kRayEpsilon;
     ray.TMax = max(kRayEpsilon, maxDistance - kRayEpsilon);
 
-    ShadowRayPayload payload = {};
+    ShadowRayPayload payload = ShadowRayPayload(1u);
     TraceRay(scene,
              RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                  RAY_FLAG_CULL_BACK_FACING_TRIANGLES,

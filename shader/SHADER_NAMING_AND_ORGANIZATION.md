@@ -135,6 +135,43 @@ This split is intentional and required by current Slang behavior in this reposit
 - Do not add project prefixes such as `nr` to shader helper functions.
 - Keep domain context in the helper name when needed, for example `sceneLightAliasCount()` or `currentRtHitSurface()`.
 
+## Shader-Only Value-Struct Initialization and Construction
+
+This policy applies to every value `struct` constructed locally in shader code, except for the `shader/include/share` ABI records listed below. A pipeline-visible layout does not by itself exempt a locally constructed record. Give every field a semantic default member initializer. Slang executes those member initializers before the body of an explicit constructor, so a constructor may override only the dynamic values it receives:
+
+```slang
+struct SurfaceSample
+{
+    float3 normal = float3(0.0, 0.0, 1.0);
+    float weight = 1.0;
+
+    __init(float3 shadingNormal, float sampleWeight)
+    {
+        normal = shadingNormal;
+        weight = sampleWeight;
+    }
+}
+
+SurfaceSample sample = { shadingNormal, sampleWeight };
+```
+
+For a commonly created locally constructed value struct, provide an explicit parameterized `__init(...)` and construct it with its dynamic inputs. Preserve the semantic defaults in the declaration even where that constructor normally overwrites them. This makes the default state visible, keeps constructor bodies limited to dynamic overrides, and gives future constructors a defined baseline.
+
+After construction, write fields only when control flow or a state transition requires it: for example, a branch selects an optional lobe, a ray result updates traversal state, or an accumulating algorithm advances its state. Do not construct an object and then immediately assign its unconditional creation inputs field by field.
+
+A runtime-indexed loop that computes an array-valued member is a necessary post-construction adjustment when supplying the completed array to `__init(...)` would require a duplicate temporary or duplicate computation. Default-initialize the record once, then fill only that computed array in the loop.
+
+Do not add a factory or helper function solely to assemble a value struct. A constructor is the normal creation boundary; retain a helper only when it performs behavior beyond construction, such as a calculation, validation, resource access, coordinate conversion, sampling, or a reusable state transition.
+
+The policy deliberately does not apply to the following cases:
+
+- Declarations under `shader/include/share`: these are stable Slang/C++ ABI records and are absolutely data-only; they must not declare functions or constructors.
+- Host- or pipeline-populated records that shader code never constructs locally may remain data-only. This includes GPU-buffer element records read only from buffers, `ConstantBuffer` and push-constant payloads, and stage-input structs.
+- A stage-output, ray-payload, or other value record that shader code constructs locally is not an exception: use default member initializers plus an explicit parameterized constructor. Constructors and methods do not change the record's field layout.
+- Slang built-in scalar, vector, matrix, resource, and other built-in types: use their ordinary constructors/conversions where needed.
+- Array literals and aggregate data whose natural representation is an initializer list: retain the literal form rather than introducing a wrapper struct or constructor.
+- Existing required `out`/`inout` reset paths: retain explicit reset/assignment when the caller-owned value must be cleared or reinitialized before it is written or passed onward.
+
 ## Shared Common Shader Module
 
 Every project shader imports the root `common` module:
@@ -151,6 +188,10 @@ For every `enum : uint` under `shader/include/share`, the codegen also emits enu
 
 Link-time type variant declarations must also live under `shader/include` and be made visible through `shader/common.slang`. Generated specialization modules are intentionally narrow: they may only `import common;` and then export assignments from the C++ variant description. Scalar assignments generate `export static const <type> <name> = <literal>;` where `<type>` is the direct Slang declaration string (`bool`, `int`, `uint`, or `float`). Type assignments generate aliases such as `export struct T : I = Concrete;`, where the interface type and concrete RHS string are supplied directly by the owning node. Type policy implementations must be pure shader logic and must not declare new global bindable resources. Variant resources must come from the existing ABI or be passed as ordinary values.
 
+The project compiler session pins Slang language version 2026. Every primary source file must begin with its `module` declaration, and every generated specialization source must begin with a `module` declaration whose name exactly matches the name passed to Slang's module-loading API. Included implementation fragments continue to use `implementing common` because they form the `common` primary module rather than independent imported modules.
+
+The project compiler session forces Slang row-major matrix layout and the same setting participates in the shader compile-options cache key. Host-visible matrix fields must also declare `row_major` explicitly. Project shader transform math uses row vectors (`mul(vector, matrix)`), matching the DirectXMath CPU convention; API-defined Vulkan ray-tracing built-ins remain behind their dedicated reconstruction helpers.
+
 Shader-side `extern` values used as link-time scalar assignments must never specify default values. The owning C++ node must populate the matching `SlangProgramVariantDesc` from its private compile key; UI state is staged separately and mapped to that compile key only by the owning node. Default values belong in C++ constants and node UI/input state, not in Slang `extern` declarations or separate variant metadata. An empty variant compile is only valid for shaders that do not declare required variant `extern` values.
 
 `shader/include/globalUniform.slang` is an `implementing common` file that declares the global frame uniform payload type and buffer:
@@ -161,7 +202,7 @@ public struct GlobalFrameUniforms { /* ... */ }
 public ConstantBuffer<GlobalFrameUniforms> gFrame;
 ```
 
-The global frame uniform uses Vulkan descriptor set 3, binding 0, and carries current camera matrices, previous view data for future motion-vector work, camera world position, and frame state. `frameState.xy` carries the monotonic 64-bit sample-frame ordinal used for per-frame shader sampling, while `frameState.z` preserves the resource frame slot. Project shader resources follow one semantic set convention: standalone samplers use set 0, sampled or combined images use set 1, storage images use set 2, uniform/storage/texel buffers use set 3, and acceleration structures use set 4. In the shared set 3 ABI, `gFrame` owns binding 0 and the seven RT scene-sideband buffers own bindings 1 through 7. Set 5 is reserved by the common ABI for scene lights; set 6 is currently unused.
+The global frame uniform uses Vulkan descriptor set 3, binding 0, and is a fixed 288-byte record: four `row_major float4x4` projective camera matrices (`viewProjection`, `inverseViewProjection`, `unjitteredViewProjection`, and `previousViewProjection`), camera world position, and frame state. `frameState.xy` carries the monotonic 64-bit sample-frame ordinal used for per-frame shader sampling, while `frameState.z` preserves the resource frame slot. Standalone view/projection fields are not uploaded. Projective transforms remain full 4x4; a validated affine host-visible transform may instead use `row_major float4x3` for 12 floats/48 bytes, as NormalBuffer does. Project shader resources follow one semantic set convention: standalone samplers use set 0, sampled or combined images use set 1, storage images use set 2, uniform/storage/texel buffers use set 3, and acceleration structures use set 4. In the shared set 3 ABI, `gFrame` owns binding 0 and the seven RT scene-sideband buffers own bindings 1 through 7. Set 5 is reserved by the common ABI for scene lights; set 6 is currently unused.
 
 Only shaders that actually reference `gFrame` require a matching C++ descriptor binding. Pass code should bind it through the reflection-backed `shaderCursor` path, normally via renderer pass builders such as:
 
@@ -178,7 +219,7 @@ public Sampler2D<float4> gSceneTextures[];
 
 Set 1 bindings 0 and 1 are reserved for pass-local fixed sampled images, keeping this variable descriptor array at the numerically largest binding in every pipeline that imports `common`. The independent AppUi ABI uses set 1, binding 0 for `gUiTextures[]` because that array is its only set 1 binding.
 
-All material texture types share this single runtime descriptor array. `shader/include/share/materialTextureIds.slang` defines the common `MaterialTextureSlot` order, while `shader/include/materialTextureIds.slang` retains the packed `uint16` helper for shaders that actually use packed IDs. Texture ID 0 is the renderer-owned neutral white fallback (1x1 linear RGBA(1,1,1,1)); resident scene texture IDs are renderer-assigned descriptor indices. RT materials store one dense texture reference per slot with UV0/UV1 selection and an identity-default row-major 2x2 affine transform plus offset, so unauthored slots hold ID 0 and shaders always sample (a missing texture multiplies through as a neutral 1 factor, and a missing normal map decodes to tangent-space (0,0,1) via a zero effective normal scale) without a texture-presence branch. An authored but unavailable anisotropy texture is the explicit exception: RT keeps ID 0 and decodes the semantic fallback `(1, 0.5, 1)` instead of treating generic white as anisotropy data. The occlusion slot retains the same transport metadata but remains intentionally unsampled by current material shading. PSOs that consume this table install a nearest immutable sampler clamped to LOD0 during pipeline layout creation, so per-frame descriptor updates provide only image views and layouts. Raster shaders retain their authored texture coordinates but now observe the same nearest scene sampler. RT FAS-off reads sample those transformed coordinates directly at LOD0; FAS-on reads use `material/stochasticTextureFiltering.slang` to select one bilinear reconstruction tap with a semantic-specific scalar, move to that texel center, and perform the same nearest LOD0 fetch. The first-stage implementation has no mip, derivative, or ray-cone path. The PathTracing environment uses a separate linear immutable sampler.
+All material texture types share this single runtime descriptor array. `shader/include/share/materialTextureIds.slang` defines the common `MaterialTextureSlot` order. Production RT materials use one dense texture reference per slot; the legacy packed-pair helpers are test-local to `shader/test/rt/materialTextureIdsRt/abi.slang` and are not part of `common`. Texture ID 0 is the renderer-owned neutral white fallback (1x1 linear RGBA(1,1,1,1)); resident scene texture IDs are renderer-assigned descriptor indices. RT materials store one dense texture reference per slot with UV0/UV1 selection and an identity-default row-major 2x2 affine transform plus offset, so unauthored slots hold ID 0 and shaders always sample (a missing texture multiplies through as a neutral 1 factor, and a missing normal map decodes to tangent-space (0,0,1) via a zero effective normal scale) without a texture-presence branch. An authored but unavailable anisotropy texture is the explicit exception: RT keeps ID 0 and decodes the semantic fallback `(1, 0.5, 1)` instead of treating generic white as anisotropy data. The occlusion slot retains the same transport metadata but remains intentionally unsampled by current material shading. PSOs that consume this table install a nearest immutable sampler clamped to LOD0 during pipeline layout creation, so per-frame descriptor updates provide only image views and layouts. Raster shaders retain their authored texture coordinates but now observe the same nearest scene sampler. RT FAS-off reads sample those transformed coordinates directly at LOD0; FAS-on reads use `material/stochasticTextureFiltering.slang` to select one bilinear reconstruction tap with a semantic-specific scalar, move to that texel center, and perform the same nearest LOD0 fetch. The first-stage implementation has no mip, derivative, or ray-cone path. The PathTracing environment uses a separate linear immutable sampler.
 
 `shader/include/sceneLights.slang` declares the global scene light buffers:
 

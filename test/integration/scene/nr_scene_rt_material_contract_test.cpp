@@ -1,5 +1,3 @@
-#include <cstddef>
-
 import std;
 import dependency.json;
 import dependency.math;
@@ -50,13 +48,13 @@ namespace
 {
     auto material = nr::resource::Material{};
     material.name = source.name;
-    material.core.baseColorFactor = glm::vec4{
+    material.core.baseColorFactor = DirectX::XMFLOAT4{
         source.baseColorFactor[0],
         source.baseColorFactor[1],
         source.baseColorFactor[2],
         source.baseColorFactor[3],
     };
-    material.core.emissiveFactor = glm::vec3{
+    material.core.emissiveFactor = DirectX::XMFLOAT3{
         source.emissiveFactor[0],
         source.emissiveFactor[1],
         source.emissiveFactor[2],
@@ -96,7 +94,7 @@ namespace
         if (source.sheenColorFactor.has_value())
         {
             auto const &color = *source.sheenColorFactor;
-            material.sheen->colorFactor = glm::vec3{color[0], color[1], color[2]};
+            material.sheen->colorFactor = DirectX::XMFLOAT3{color[0], color[1], color[2]};
         }
         if (source.sheenRoughnessFactor.has_value())
         {
@@ -424,12 +422,12 @@ struct TangentSignSummary
 const nr::test::CaseRegistrar rtMaterialCompilerCase{
     "scene RT material compiler builds canonical layers and anisotropy ABI", [] {
         auto material = nr::resource::Material{};
-        material.core.baseColorFactor = glm::vec4{0.8f, 0.2f, 0.1f, 1.0f};
+        material.core.baseColorFactor = DirectX::XMFLOAT4{0.8f, 0.2f, 0.1f, 1.0f};
         material.clearcoat.emplace();
         material.clearcoat->factor = 0.7f;
         material.clearcoat->roughnessFactor = 0.2f;
         material.sheen.emplace();
-        material.sheen->colorFactor = glm::vec3{0.1f, 0.2f, 0.9f};
+        material.sheen->colorFactor = DirectX::XMFLOAT3{0.1f, 0.2f, 0.9f};
         material.sheen->roughnessFactor = 0.6f;
         material.transmission.emplace();
         material.transmission->factor = 0.5f;
@@ -462,14 +460,17 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         nr::test::require(nearlyEqual(compiled.header.anisotropy.z, 1.0f));
         nr::test::require(nearlyEqual(compiled.header.anisotropy.w, 0.0f));
         nr::test::requireEqual(sizeof(nr::scene::RtMaterialHeader), std::size_t{112u});
-        nr::test::requireEqual(offsetof(nr::scene::RtMaterialHeader, anisotropy), std::size_t{96u});
+        nr::test::requireEqual(nr::memberOffset<&nr::scene::RtMaterialHeader::anisotropy>(), std::size_t{96u});
         auto compiledRefs = std::array<std::reference_wrapper<const nr::scene::RtCompiledMaterial>, 1>{
             std::cref(compiled),
         };
         auto table = nr::scene::makeRtMaterialTable(compiledRefs);
         nr::test::requireEqual(table.headers.size(), std::size_t{1u});
-        nr::test::requireEqual(table.headers[0].anisotropy, compiled.header.anisotropy,
-                               "RT material table packing must preserve anisotropy ABI lanes");
+        nr::test::require(nearlyEqual(table.headers[0].anisotropy.x, compiled.header.anisotropy.x) &&
+                              nearlyEqual(table.headers[0].anisotropy.y, compiled.header.anisotropy.y) &&
+                              nearlyEqual(table.headers[0].anisotropy.z, compiled.header.anisotropy.z) &&
+                              nearlyEqual(table.headers[0].anisotropy.w, compiled.header.anisotropy.w),
+                          "RT material table packing must preserve anisotropy ABI lanes");
         nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
         nr::test::requireEqual(compiled.layers[0].layer, nr::scene::RtMaterialLayerFlag::baseSurface);
         nr::test::requireEqual(compiled.layers[1].layer, nr::scene::RtMaterialLayerFlag::clearcoat);
@@ -512,7 +513,10 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
             nr::test::require(!hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary),
                               "unlit materials must not retain an ignored PBR volume boundary");
-            nr::test::require(compiled.header.anisotropy == glm::vec4{0.0f},
+            nr::test::require(nearlyEqual(compiled.header.anisotropy.x, 0.0f) &&
+                                  nearlyEqual(compiled.header.anisotropy.y, 0.0f) &&
+                                  nearlyEqual(compiled.header.anisotropy.z, 0.0f) &&
+                                  nearlyEqual(compiled.header.anisotropy.w, 0.0f),
                               "unlit materials must not retain meaningful RT anisotropy data");
         }
 
@@ -584,8 +588,8 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             auto &anisotropySlot = material.slot(MaterialTextureSlotSemantic::anisotropy);
             anisotropySlot.texture = nr::resource::TextureHandle{2u, 1u};
             anisotropySlot.uvSet = 1u;
-            anisotropySlot.transform.linear = glm::vec4{2.0f, -0.25f, 0.5f, 3.0f};
-            anisotropySlot.transform.offset = glm::vec2{0.25f, -0.5f};
+            anisotropySlot.transform.linear = DirectX::XMFLOAT4{2.0f, -0.25f, 0.5f, 3.0f};
+            anisotropySlot.transform.offset = DirectX::XMFLOAT2{0.25f, -0.5f};
 
             auto ids = nr::scene::SceneMaterialTextureIds{};
             ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::anisotropy)] = 7u;
@@ -720,19 +724,19 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             auto &baseColorSlot = material.slot(MaterialTextureSlotSemantic::baseColor);
             baseColorSlot.texture = nr::resource::TextureHandle{2u, 1u};
             baseColorSlot.uvSet = 1u;
-            baseColorSlot.transform.linear = glm::vec4{2.0f, 0.25f, -0.5f, 3.0f};
-            baseColorSlot.transform.offset = glm::vec2{0.125f, -0.25f};
+            baseColorSlot.transform.linear = DirectX::XMFLOAT4{2.0f, 0.25f, -0.5f, 3.0f};
+            baseColorSlot.transform.offset = DirectX::XMFLOAT2{0.125f, -0.25f};
 
             auto &normalSlot = material.slot(MaterialTextureSlotSemantic::normal);
             normalSlot.texture = nr::resource::TextureHandle{3u, 1u};
-            normalSlot.transform.linear = glm::vec4{0.5f, -0.25f, 0.75f, 1.5f};
-            normalSlot.transform.offset = glm::vec2{-0.125f, 0.375f};
+            normalSlot.transform.linear = DirectX::XMFLOAT4{0.5f, -0.25f, 0.75f, 1.5f};
+            normalSlot.transform.offset = DirectX::XMFLOAT2{-0.125f, 0.375f};
 
             auto &occlusionSlot = material.slot(MaterialTextureSlotSemantic::occlusion);
             occlusionSlot.texture = nr::resource::TextureHandle{4u, 1u};
             occlusionSlot.uvSet = 1u;
-            occlusionSlot.transform.linear = glm::vec4{4.0f, 0.0f, 0.0f, 2.0f};
-            occlusionSlot.transform.offset = glm::vec2{0.5f, 0.25f};
+            occlusionSlot.transform.linear = DirectX::XMFLOAT4{4.0f, 0.0f, 0.0f, 2.0f};
+            occlusionSlot.transform.offset = DirectX::XMFLOAT2{0.5f, 0.25f};
 
             auto ids = nr::scene::SceneMaterialTextureIds{};
             ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)] = 7u;
@@ -875,10 +879,13 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 materialPayload.contains("public float visibleHalfVectorPdf("),
             "anisotropic GGX D, correlated Smith G2, Heitz VNDF and visible-normal PDF should share one base helper");
         nr::test::require(materialBsdf.contains("public struct GgxSpecularEnergyTerms") &&
+                              materialBsdf.contains("public __init(float3 W, float3 E)") &&
+                              materialBsdf.contains("this.W = W") && materialBsdf.contains("this.E = E") &&
                               materialBsdf.contains("public float2 ggxDirectionalAlbedoAnalytic(") &&
                               materialBsdf.contains("0.0266916f") && materialBsdf.contains("0.466495f") &&
                               materialBsdf.contains("2.36651f") && materialBsdf.contains("4.7703f") &&
-                              materialBsdf.contains("result.W =") && materialBsdf.contains("result.E =") &&
+                              materialBsdf.contains("float3 W =") &&
+                              materialBsdf.contains("return GgxSpecularEnergyTerms(W, W *") &&
                               materialBsdf.contains("noL * lenV + noV * lenL") &&
                               materialPayload.contains("public GgxSpecularEnergyTerms specularEnergyTerms(") &&
                               materialPayload.contains("public bool hasActiveTransmission(") &&
@@ -1097,7 +1104,10 @@ const nr::test::CaseRegistrar directionalLightImportCase{
         auto const &lightPacket = lightPackets.lights.front();
         nr::test::require(lightPacket.light == *lightHandle,
                           "DirectionalLight packet should reference the runtime light");
-        nr::test::require(glm::dot(lightPacket.direction, lightPacket.direction) > 0.0f,
+        nr::test::require(lightPacket.direction.x * lightPacket.direction.x +
+                              lightPacket.direction.y * lightPacket.direction.y +
+                              lightPacket.direction.z * lightPacket.direction.z >
+                          0.0f,
                           "DirectionalLight packet should carry a non-zero direction");
     }};
 

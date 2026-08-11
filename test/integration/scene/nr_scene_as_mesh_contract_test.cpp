@@ -347,7 +347,7 @@ namespace
         .nodeIndex = 2u,
         .lookAt = {0.0f, 0.0f, -1.0f},
         .up = {0.0f, 1.0f, 0.0f},
-        .horizontalFov = glm::radians(60.0f),
+        .horizontalFov = nr::math::radians(60.0f),
         .aspect = 1.0f,
         .nearPlane = 0.1f,
         .farPlane = 100.0f,
@@ -811,8 +811,14 @@ const nr::test::CaseRegistrar rasterBridgeResolutionCase{
         nr::test::requireEqual(indexedDraw.materialTextures.normal.textureId,
                                static_cast<nr::scene::SceneTextureId>(textureId));
         nr::test::requireEqual(indexedDraw.materialTextures.normal.uvSet, 1u);
-        nr::test::requireEqual(indexedDraw.materialTextures.normal.uvLinear, glm::vec4{2.0f, 0.25f, -0.5f, 3.0f});
-        nr::test::requireEqual(indexedDraw.materialTextures.normal.uvOffset, glm::vec2{0.125f, -0.25f});
+        nr::test::require(indexedDraw.materialTextures.normal.uvLinear.x == 2.0f &&
+                              indexedDraw.materialTextures.normal.uvLinear.y == 0.25f &&
+                              indexedDraw.materialTextures.normal.uvLinear.z == -0.5f &&
+                              indexedDraw.materialTextures.normal.uvLinear.w == 3.0f,
+                          "normal texture UV linear transform should be preserved");
+        nr::test::require(indexedDraw.materialTextures.normal.uvOffset.x == 0.125f &&
+                              indexedDraw.materialTextures.normal.uvOffset.y == -0.25f,
+                          "normal texture UV offset should be preserved");
         nr::test::requireEqual(indexedDraw.materialTextures.normal.normalScale, 0.75f);
         nr::test::requireEqual(nonindexedDraw.materialTextures.normal.normalScale, 0.5f);
 

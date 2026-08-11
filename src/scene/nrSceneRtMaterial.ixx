@@ -1,12 +1,10 @@
-module;
-#include <cstddef>
-
 export module nr.scene:rtMaterial;
 
 import dependency.math;
 import dependency.shaderShare;
 
 import nr.resource;
+import nr.utils;
 import std;
 import :type;
 
@@ -69,13 +67,13 @@ struct RtMaterialTable
 [[nodiscard]] RtCompiledMaterial makeFallbackRtMaterial();
 
 static_assert(sizeof(RtMaterialHeader) == 112u);
-static_assert(offsetof(RtMaterialHeader, anisotropy) == 96u);
+static_assert(nr::memberOffset<&RtMaterialHeader::anisotropy>() == 96u);
 static_assert(sizeof(RtMaterialLayerRecord) == 44u);
 static_assert(sizeof(RtMaterialTextureRef) == 32u);
-static_assert(offsetof(RtMaterialTextureRef, uvLinear) == 0u);
-static_assert(offsetof(RtMaterialTextureRef, uvOffset) == 16u);
-static_assert(offsetof(RtMaterialTextureRef, textureId) == 24u);
-static_assert(offsetof(RtMaterialTextureRef, uvSet) == 28u);
+static_assert(nr::memberOffset<&RtMaterialTextureRef::uvLinear>() == 0u);
+static_assert(nr::memberOffset<&RtMaterialTextureRef::uvOffset>() == 16u);
+static_assert(nr::memberOffset<&RtMaterialTextureRef::textureId>() == 24u);
+static_assert(nr::memberOffset<&RtMaterialTextureRef::uvSet>() == 28u);
 static_assert(sizeof(RtGeometryMetadata) == 32u);
 static_assert(sizeof(RtInstanceMetadata) == 32u);
 static_assert(static_cast<std::uint32_t>(RtMaterialLayerFlag::anisotropicBaseLobe) == 16u);

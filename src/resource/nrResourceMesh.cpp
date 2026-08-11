@@ -23,23 +23,23 @@ void VertexSkinData::normalizeWeights(float eps) noexcept
     auto sum = weights.x + weights.y + weights.z + weights.w;
     if (sum <= eps)
     {
-        weights = glm::vec4{1.0f, 0.0f, 0.0f, 0.0f};
+        weights = math::float4(1.0f, 0.0f, 0.0f, 0.0f);
         return;
     }
 
-    weights /= sum;
+    weights = math::scale(weights, 1.0f / sum);
 }
 
 [[nodiscard]] bool Vertex::hasValidNormal(float eps) const noexcept
 {
-    auto length = glm::length(normal);
+    auto length = math::length(normal);
     return math::finiteFloat(length) && length > eps;
 }
 
 [[nodiscard]] bool Vertex::hasValidTangent(float eps) const noexcept
 {
-    auto tangentVec = glm::vec3{tangent.x, tangent.y, tangent.z};
-    auto length = glm::length(tangentVec);
+    auto tangentVec = math::float3(tangent.x, tangent.y, tangent.z);
+    auto length = math::length(tangentVec);
     return math::finiteFloat(length) && math::finiteFloat(tangent.w) && length > eps;
 }
 
@@ -47,27 +47,27 @@ void Vertex::normalizeFrame(float eps) noexcept
 {
     if (hasValidNormal(eps))
     {
-        normal = glm::normalize(normal);
+        normal = math::normalize(normal);
     }
     else
     {
-        normal = glm::vec3{0.0f, 0.0f, 1.0f};
+        normal = math::float3(0.0f, 0.0f, 1.0f);
     }
 
-    auto tangentVec = glm::vec3{tangent.x, tangent.y, tangent.z};
-    auto tangentLength = glm::length(tangentVec);
+    auto tangentVec = math::float3(tangent.x, tangent.y, tangent.z);
+    auto tangentLength = math::length(tangentVec);
     if (math::finiteFloat(tangentLength) && tangentLength > eps)
     {
-        tangentVec /= tangentLength;
+        tangentVec = math::scale(tangentVec, 1.0f / tangentLength);
     }
     else
     {
-        tangentVec = glm::vec3{1.0f, 0.0f, 0.0f};
+        tangentVec = math::float3(1.0f, 0.0f, 0.0f);
     }
 
     auto handedness =
         math::finiteFloat(tangent.w) && std::abs(tangent.w) > eps ? (tangent.w > 0.0f ? 1.0f : -1.0f) : 1.0f;
-    tangent = glm::vec4{tangentVec, handedness};
+    tangent = math::float4(tangentVec.x, tangentVec.y, tangentVec.z, handedness);
 }
 
 [[nodiscard]] std::uint32_t MeshGeometry::triangleCount() const noexcept
@@ -150,8 +150,8 @@ void Mesh::rebuildLocalSphere() noexcept
 
     auto center = localBounds.center();
     auto maxDistanceSquared = std::ranges::fold_left(vertices, 0.0f, [&](float current, const Vertex &vertex) {
-        auto delta = vertex.position - center;
-        return std::max(current, glm::dot(delta, delta));
+        auto delta = math::subtract(vertex.position, center);
+        return std::max(current, math::dot(delta, delta));
     });
 
     localSphere.center = center;
@@ -180,7 +180,7 @@ void Mesh::rebuildFlatNormals(float eps) noexcept
 
             auto normal =
                 Triangle{vertices[i0].position, vertices[i1].position, vertices[i2].position}.computeFaceNormal();
-            if (glm::length(normal) <= eps)
+            if (math::length(normal) <= eps)
             {
                 return;
             }
@@ -197,7 +197,7 @@ void Mesh::rebuildFlatNormals(float eps) noexcept
         auto base = tri * 3u;
         auto normal = Triangle{vertices[base + 0u].position, vertices[base + 1u].position, vertices[base + 2u].position}
                           .computeFaceNormal();
-        if (glm::length(normal) <= eps)
+        if (math::length(normal) <= eps)
         {
             return;
         }
@@ -210,7 +210,7 @@ void Mesh::rebuildFlatNormals(float eps) noexcept
 
 void Mesh::rebuildVertexNormals(float eps) noexcept
 {
-    std::ranges::for_each(vertices, [](Vertex &vertex) { vertex.normal = glm::vec3{0.0f}; });
+    std::ranges::for_each(vertices, [](Vertex &vertex) { vertex.normal = math::float3(); });
 
     if (indexed())
     {
@@ -225,12 +225,12 @@ void Mesh::rebuildVertexNormals(float eps) noexcept
                 return;
             }
 
-            auto face = glm::cross(vertices[i1].position - vertices[i0].position,
-                                   vertices[i2].position - vertices[i0].position);
+            auto face = math::cross(math::subtract(vertices[i1].position, vertices[i0].position),
+                                    math::subtract(vertices[i2].position, vertices[i0].position));
 
-            vertices[i0].normal += face;
-            vertices[i1].normal += face;
-            vertices[i2].normal += face;
+            vertices[i0].normal = math::add(vertices[i0].normal, face);
+            vertices[i1].normal = math::add(vertices[i1].normal, face);
+            vertices[i2].normal = math::add(vertices[i2].normal, face);
         });
     }
     else
@@ -238,24 +238,24 @@ void Mesh::rebuildVertexNormals(float eps) noexcept
         auto triIndices = std::views::iota(std::size_t{0}, vertices.size() / 3u);
         std::ranges::for_each(triIndices, [&](std::size_t tri) {
             auto base = tri * 3u;
-            auto face = glm::cross(vertices[base + 1u].position - vertices[base + 0u].position,
-                                   vertices[base + 2u].position - vertices[base + 0u].position);
+            auto face = math::cross(math::subtract(vertices[base + 1u].position, vertices[base + 0u].position),
+                                    math::subtract(vertices[base + 2u].position, vertices[base + 0u].position));
 
-            vertices[base + 0u].normal += face;
-            vertices[base + 1u].normal += face;
-            vertices[base + 2u].normal += face;
+            vertices[base + 0u].normal = math::add(vertices[base + 0u].normal, face);
+            vertices[base + 1u].normal = math::add(vertices[base + 1u].normal, face);
+            vertices[base + 2u].normal = math::add(vertices[base + 2u].normal, face);
         });
     }
 
     std::ranges::for_each(vertices, [&](Vertex &vertex) {
-        auto length = glm::length(vertex.normal);
+        auto length = math::length(vertex.normal);
         if (length > eps)
         {
-            vertex.normal /= length;
+            vertex.normal = math::scale(vertex.normal, 1.0f / length);
         }
         else
         {
-            vertex.normal = glm::vec3{0.0f, 0.0f, 1.0f};
+            vertex.normal = math::float3(0.0f, 0.0f, 1.0f);
         }
     });
 }

@@ -8,6 +8,10 @@ import nr.utils;
 
 namespace
 {
+static_assert(sizeof(DirectX::XMFLOAT4X4) == 64u);
+static_assert(std::is_standard_layout_v<DirectX::XMFLOAT4X4>);
+static_assert(std::is_trivially_copyable_v<DirectX::XMFLOAT4X4>);
+
 [[nodiscard]] nr::rhi::DlssOptimalSettings makeOptimalSettings(nr::rhi::DlssDimensions targetSize,
                                                                nr::rhi::DlssQuality quality)
 {
@@ -120,12 +124,13 @@ const nr::test::CaseRegistrar dlssRrResolutionControllerCase{
     }};
 
 const nr::test::CaseRegistrar dlssRrMatrixConventionCase{
-    "renderpasses DLSS RR converts GLM transforms to NGX row-vector matrices", [] {
-        auto transform = glm::mat4{1.0f};
-        transform[0] = glm::vec4{0.0f, 1.0f, 0.0f, 0.0f};
-        transform[1] = glm::vec4{-1.0f, 0.0f, 0.0f, 0.0f};
-        transform[2] = glm::vec4{0.0f, 0.0f, 1.0f, 0.0f};
-        transform[3] = glm::vec4{4.0f, -2.0f, 7.0f, 1.0f};
+    "renderpasses DLSS RR preserves DirectX row-vector matrices as NGX row-major payloads", [] {
+        auto const transform = DirectX::XMFLOAT4X4{
+            0.0f, 1.0f, 0.0f, 0.0f,
+            -1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            4.0f, -2.0f, 7.0f, 1.0f,
+        };
         auto const converted = nr::renderPasses::detail::toDlssRowVectorMatrix(transform);
         auto const expected = std::array{
             0.0f, 1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f,

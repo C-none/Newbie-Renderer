@@ -420,11 +420,11 @@ struct Model
     switch (scalarType)
     {
     case slang::TypeReflection::ScalarType::Float32:
-        return "glm::vec" + suffix;
+        return "DirectX::XMFLOAT" + suffix;
     case slang::TypeReflection::ScalarType::UInt32:
-        return "glm::uvec" + suffix;
+        return "DirectX::XMUINT" + suffix;
     case slang::TypeReflection::ScalarType::Int32:
-        return "glm::ivec" + suffix;
+        return "DirectX::XMINT" + suffix;
     default:
         return {};
     }

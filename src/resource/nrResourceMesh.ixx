@@ -10,8 +10,8 @@ export namespace nr::resource
 {
 struct VertexSkinData
 {
-    glm::uvec4 joints{};
-    glm::vec4 weights{1.0f, 0.0f, 0.0f, 0.0f};
+    DirectX::XMUINT4 joints{};
+    DirectX::XMFLOAT4 weights{1.0f, 0.0f, 0.0f, 0.0f};
 
     [[nodiscard]] bool hasInfluence(float eps = 1e-6f) const noexcept;
 
@@ -20,12 +20,12 @@ struct VertexSkinData
 
 struct Vertex
 {
-    glm::vec3 position{};
-    glm::vec3 normal{0.0f, 0.0f, 1.0f};
-    glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
-    glm::vec2 texCoord0{};
-    glm::vec2 texCoord1{};
-    glm::vec4 color0{1.0f};
+    DirectX::XMFLOAT3 position{};
+    DirectX::XMFLOAT3 normal{0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
+    DirectX::XMFLOAT2 texCoord0{};
+    DirectX::XMFLOAT2 texCoord1{};
+    DirectX::XMFLOAT4 color0{1.0f, 1.0f, 1.0f, 1.0f};
     VertexSkinData skin{};
 
     [[nodiscard]] bool hasValidNormal(float eps = 1e-6f) const noexcept;

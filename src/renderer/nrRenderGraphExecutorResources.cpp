@@ -306,7 +306,9 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
     auto batchOrdinals = std::views::iota(firstBatchOrdinal, lastBatchOrdinal);
     std::ranges::for_each(batchOrdinals, [&](std::size_t batchOrdinal) {
         auto const &batch = compiled.submitBatches[batchOrdinal];
-        std::ranges::for_each(batch.passes, [&](const CompiledPass &pass) {
+        auto passOrdinals = std::views::iota(std::size_t{0u}, batch.passes.size());
+        std::ranges::for_each(passOrdinals, [&](std::size_t passOrdinal) {
+            auto const &pass = batch.passes[passOrdinal];
             if (!pass.prepare)
             {
                 return;
@@ -380,14 +382,15 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
                 return std::cref(frameDataIt->second.get().payload);
             };
 
-            pass.prepare(PassPrepareContext{
+            auto prepareContext = PassPrepareContext{
                 .frameIndex = context.frameIndex,
                 .device = std::ref(context.device),
                 .resolveBuffer = resolveBuffer,
                 .resolveImage = resolveImage,
                 .resolveAccelerationStructure = resolveAccelerationStructure,
                 .resolveFrameDataPayload = resolveFrameDataPayload,
-            });
+            };
+            pass.prepare(prepareContext);
             ++invokedPrepareCount;
         });
     });
