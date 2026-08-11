@@ -69,20 +69,22 @@ namespace
                                [extension](const std::string &item) { return item == extension; });
 }
 
-void Device::initialize(std::string const &_appName, std::string const &_engineName)
+void Device::initialize(std::string const &_appName, std::string const &_engineName,
+                        bool debugShaderInstrumentationEnabled)
 {
-    initialize(_appName, _engineName, std::filesystem::path{std::string{nr::psoCacheRoot}});
+    initialize(_appName, _engineName, std::filesystem::path{std::string{nr::psoCacheRoot}},
+               debugShaderInstrumentationEnabled);
 }
 
 void Device::initialize(std::string const &_appName, std::string const &_engineName,
-                        std::filesystem::path pipelineBinaryRoot)
+                        std::filesystem::path pipelineBinaryRoot, bool debugShaderInstrumentationEnabled)
 {
     appName = _appName;
     engineName = _engineName;
     setupInitialFlags();
     nsightGraphics_.configureFromEnvironment();
     nsightGraphics_.injectIfRequested();
-    instance = makeInstance();
+    instance = makeInstance(vk::ApiVersion14, debugShaderInstrumentationEnabled);
     if constexpr (isDebugMode)
     {
         if (hasEnabledInstanceExtension(vk::EXTDebugUtilsExtensionName))
@@ -303,7 +305,7 @@ void Device::submitFrameBatch(CommandBatch &&batch, QueueRole submitRole, bool s
     return presentResult;
 }
 
-vk::raii::Instance Device::makeInstance(std::uint32_t apiVersion) const
+vk::raii::Instance Device::makeInstance(std::uint32_t apiVersion, bool debugShaderInstrumentationEnabled) const
 {
     const vk::ApplicationInfo applicationInfo(appName.c_str(), 1, engineName.c_str(), 1, apiVersion);
     std::vector<char const *> enabledLayers = gatherLayers(instanceEnabledLayers);
@@ -319,15 +321,14 @@ vk::raii::Instance Device::makeInstance(std::uint32_t apiVersion) const
             debugCreateInfo = makeDebugUtilsMessengerCreateInfoEXT();
             debugPNext = &debugCreateInfo;
         }
-        DebugValidationLayerSettings validationLayerSettings;
+        DebugValidationLayerSettings validationLayerSettings(debugShaderInstrumentationEnabled);
         auto validationLayerSettingsCreateInfo = validationLayerSettings.createInfo(debugPNext);
         instanceCreateInfo.pNext = &validationLayerSettingsCreateInfo;
         nrLog<LogLevel::info>("Debug Vulkan validation layer settings enabled programmatically: "
-                              "Core, Sync Validation, GPU-AV={}, DebugPrintf={}, "
+                              "Core=on, SyncValidation=on, ObjectValidation=on, GPU-AV={}, DebugPrintf={}, "
                               "report_flags=verbose/error/perf/info/warn, "
                               "debug_action=none (routed through nrVulkan callback), "
-                              "duplicate message limit disabled. "
-                              "GPU-assisted validation and debug printf are enabled by default.",
+                              "duplicate message limit disabled.",
                               validationLayerSettings.gpuAssistedValidationEnabled() ? "on" : "off",
                               validationLayerSettings.debugPrintfEnabled() ? "on" : "off");
         return vk::raii::Instance(context, instanceCreateInfo);

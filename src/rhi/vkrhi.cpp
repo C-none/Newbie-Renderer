@@ -304,7 +304,9 @@ vk::DebugUtilsMessengerCreateInfoEXT makeDebugUtilsMessengerCreateInfoEXT()
     return {{}, severityFlags, messageTypeFlags, &debugUtilsMessengerCallback};
 }
 
-DebugValidationLayerSettings::DebugValidationLayerSettings()
+DebugValidationLayerSettings::DebugValidationLayerSettings(bool debugShaderInstrumentationEnabled)
+    : gpuAssistedValidationEnabled_(debugShaderInstrumentationEnabled),
+      debugPrintfEnabled_(debugShaderInstrumentationEnabled)
 {
     settings_.reserve(64);
 

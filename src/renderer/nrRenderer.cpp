@@ -520,7 +520,7 @@ void Renderer::initialize(const RendererCreateInfo &info)
     shaderService.configure();
 
     device_ = std::make_unique<nr::rhi::Device>();
-    device_->initialize(info.appName, info.engineName);
+    device_->initialize(info.appName, info.engineName, info.debugShaderInstrumentationEnabled);
     frameUniformArena_.initialize(*device_, info.frameUniformBytesPerFrame, "Renderer.FrameUniformArena");
     submissionTimelines_.initialize(device_->device, 0);
     ensureSceneTextureFallback();

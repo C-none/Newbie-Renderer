@@ -29,6 +29,19 @@ nr_add_contract_test(nr_rhi_shader_cursor_contract_test nr_rhi_shader_cursor_con
     dependency_graphics
 )
 
+nr_add_contract_test(
+    nr_rhi_neural_appearance_shader_contract_test
+    nr_rhi_neural_appearance_shader_contract_test.cpp
+    "gpu;unit;rhi;shader;neural-appearance;slow"
+    nrrhi
+    utils
+    dependency_graphics
+)
+set_tests_properties(
+    nr_rhi_neural_appearance_shader_contract_test
+    PROPERTIES TIMEOUT 900
+)
+
 nr_add_contract_test(nr_rhi_rt_shader_reflection_contract_test nr_rhi_rt_shader_reflection_contract_test.cpp "fast;cpu;unit;rhi;rt;shader"
     nrresource
     nrrhi

@@ -78,10 +78,11 @@ class Device
 
     [[nodiscard]] bool hasEnabledDeviceExtension(std::string_view extension) const;
 
-    void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"});
+    void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"},
+                    bool debugShaderInstrumentationEnabled = true);
 
     void initialize(std::string const &_appName, std::string const &_engineName,
-                    std::filesystem::path pipelineBinaryRoot);
+                    std::filesystem::path pipelineBinaryRoot, bool debugShaderInstrumentationEnabled = true);
 
     [[nodiscard]] FrameBeginResult beginFrame();
 
@@ -96,7 +97,8 @@ class Device
 
     [[nodiscard]] PresentResult presentFrame();
 
-    vk::raii::Instance makeInstance(std::uint32_t apiVersion = vk::ApiVersion14) const;
+    vk::raii::Instance makeInstance(std::uint32_t apiVersion = vk::ApiVersion14,
+                                    bool debugShaderInstrumentationEnabled = true) const;
 
     vk::raii::Device makeDevice();
 

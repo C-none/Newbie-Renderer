@@ -49,6 +49,7 @@ Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slan
 - CMake 4.4 or newer
 - Vcpkg with `VCPKG_ROOT` configured
 - Git submodules initialized recursively for Slang, DLSS, sample assets, and Ninja tracing
+- Python 3.14 or newer.
 
 Optional MSVC toolchains:
 

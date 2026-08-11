@@ -5,6 +5,36 @@ import std;
 
 namespace
 {
+const nr::test::CaseRegistrar debugValidationInstrumentationProfileCase{
+    "rhi debug validation settings keep core validation while toggling shader instrumentation", [] {
+        auto enabledSettings = nr::rhi::DebugValidationLayerSettings{true};
+        nr::test::require(enabledSettings.gpuAssistedValidationEnabled());
+        nr::test::require(enabledSettings.debugPrintfEnabled());
+
+        auto disabledSettings = nr::rhi::DebugValidationLayerSettings{false};
+        nr::test::require(!disabledSettings.gpuAssistedValidationEnabled());
+        nr::test::require(!disabledSettings.debugPrintfEnabled());
+
+        auto const createInfo = disabledSettings.createInfo();
+        auto const settings =
+            std::span<const vk::LayerSettingEXT>{createInfo.pSettings, createInfo.settingCount};
+        auto boolSetting = [&](std::string_view name) {
+            auto const setting = std::ranges::find_if(settings, [name](const vk::LayerSettingEXT &candidate) {
+                return candidate.pSettingName != nullptr && name == candidate.pSettingName;
+            });
+            nr::test::require(setting != settings.end(), std::format("missing Vulkan layer setting '{}'", name));
+            nr::test::requireEqual(setting->type, vk::LayerSettingTypeEXT::eBool32);
+            nr::test::requireEqual(setting->valueCount, 1u);
+            return *static_cast<const vk::Bool32 *>(setting->pValues);
+        };
+
+        nr::test::requireEqual(boolSetting("validate_core"), vk::True);
+        nr::test::requireEqual(boolSetting("validate_sync"), vk::True);
+        nr::test::requireEqual(boolSetting("object_lifetime"), vk::True);
+        nr::test::requireEqual(boolSetting("gpuav_enable"), vk::False);
+        nr::test::requireEqual(boolSetting("printf_enable"), vk::False);
+    }};
+
 [[nodiscard]] vk::SurfaceFormatKHR select(std::span<const vk::SurfaceFormatKHR> formats)
 {
     return nr::rhi::chooseSwapchainSurfaceFormat(formats);

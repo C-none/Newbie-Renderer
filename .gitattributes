@@ -1,4 +1,5 @@
 * text eol=crlf
+shader/include/neuralAppearance/fixtureModel.slang text eol=lf
 
 *.dll binary
 *.exe binary

@@ -25,6 +25,7 @@ struct RendererCreateInfo
 {
     std::string appName = "NewbieRenderer";
     std::string engineName = "NewbieRenderer";
+    bool debugShaderInstrumentationEnabled = true;
     vk::DeviceSize frameUniformBytesPerFrame = 1024u * 1024u;
 };
 
@@ -1294,20 +1295,42 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     TDerived &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
                             vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
     {
-        nrAssert(resource.valid(), "{}::storageBuffer requires a valid graph resource.", builderLabel_);
-        auto cursor = rootCursor_.getPath(shaderPath);
-        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
-            .logicalResourceId = resource.value,
-            .debugName = std::string(debugName),
-        }));
-        resourceUses_.push_back(withOptionalShaderStages(use::storageBufferRead(resource), shaderStages));
-        return derived();
+        return storageBufferBinding<use::storageBufferRead>("storageBuffer", shaderPath, resource, debugName,
+                                                            shaderStages);
     }
 
     TDerived &storageBuffer(std::string_view shaderPath, GraphResourceHandle resource, std::string_view debugName,
                             ShaderStageIntent shaderStage)
     {
         return storageBuffer(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
+    }
+
+    TDerived &storageBufferWrite(std::string_view shaderPath, GraphResourceHandle resource,
+                                 std::string_view debugName,
+                                 vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    {
+        return storageBufferBinding<use::storageBufferWrite>("storageBufferWrite", shaderPath, resource, debugName,
+                                                             shaderStages);
+    }
+
+    TDerived &storageBufferWrite(std::string_view shaderPath, GraphResourceHandle resource,
+                                 std::string_view debugName, ShaderStageIntent shaderStage)
+    {
+        return storageBufferWrite(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
+    }
+
+    TDerived &storageBufferReadWrite(std::string_view shaderPath, GraphResourceHandle resource,
+                                     std::string_view debugName,
+                                     vk::PipelineStageFlags2 shaderStages = vk::PipelineStageFlags2{})
+    {
+        return storageBufferBinding<use::storageBufferReadWrite>("storageBufferReadWrite", shaderPath, resource,
+                                                                 debugName, shaderStages);
+    }
+
+    TDerived &storageBufferReadWrite(std::string_view shaderPath, GraphResourceHandle resource,
+                                     std::string_view debugName, ShaderStageIntent shaderStage)
+    {
+        return storageBufferReadWrite(shaderPath, resource, debugName, use::shaderStageScope(shaderStage));
     }
 
     TDerived &accelerationStructure(std::string_view shaderPath, GraphResourceHandle resource,
@@ -1434,6 +1457,21 @@ template <typename TDerived, typename TPipeline, vk::PipelineBindPoint BindPoint
     std::reference_wrapper<NodeBuildContext> context_;
 
   private:
+    template <auto ResourceUseFactory>
+    TDerived &storageBufferBinding(std::string_view operation, std::string_view shaderPath,
+                                   GraphResourceHandle resource, std::string_view debugName,
+                                   vk::PipelineStageFlags2 shaderStages)
+    {
+        nrAssert(resource.valid(), "{}::{} requires a valid graph resource.", builderLabel_, operation);
+        auto cursor = rootCursor_.getPath(shaderPath);
+        static_cast<void>(cursor.setObject(nr::rhi::LogicalResourceDescriptorWrite{
+            .logicalResourceId = resource.value,
+            .debugName = std::string(debugName),
+        }));
+        resourceUses_.push_back(withOptionalShaderStages(ResourceUseFactory(resource), shaderStages));
+        return derived();
+    }
+
     [[nodiscard]] static PassResourceUseDesc withOptionalShaderStages(PassResourceUseDesc resourceUse,
                                                                       vk::PipelineStageFlags2 shaderStages) noexcept
     {
@@ -1475,6 +1513,8 @@ class RasterPassBuilder : public detail::ShaderVisiblePassBuilderBase<RasterPass
     using Base::sampledImage;
     using Base::sampledImageGeneral;
     using Base::storageBuffer;
+    using Base::storageBufferReadWrite;
+    using Base::storageBufferWrite;
     using Base::storageImage;
     using Base::uniform;
 
@@ -1578,6 +1618,8 @@ class ComputePassBuilder : public detail::ShaderVisiblePassBuilderBase<ComputePa
     using Base::sampledImage;
     using Base::sampledImageGeneral;
     using Base::storageBuffer;
+    using Base::storageBufferReadWrite;
+    using Base::storageBufferWrite;
     using Base::storageImage;
     using Base::uniform;
 
@@ -1619,6 +1661,8 @@ class RayTracingPassBuilder
     using Base::sampledImage;
     using Base::sampledImageGeneral;
     using Base::storageBuffer;
+    using Base::storageBufferReadWrite;
+    using Base::storageBufferWrite;
     using Base::storageImage;
     using Base::uniform;
 

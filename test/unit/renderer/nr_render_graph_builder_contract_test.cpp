@@ -22,6 +22,21 @@ namespace
     return use.accelerationStructureUsage.has_value() && use.accelerationStructureAccess.has_value();
 }
 
+template <typename TBuilder>
+concept StorageBufferMutationBuilder = requires(TBuilder &builder, nr::renderer::GraphResourceHandle resource,
+                                                vk::PipelineStageFlags2 stages) {
+    { builder.storageBufferWrite("gOutput", resource, "Output", stages) } -> std::same_as<TBuilder &>;
+    { builder.storageBufferWrite("gOutput", resource, "Output", nr::renderer::ShaderStageIntent::Compute) }
+    -> std::same_as<TBuilder &>;
+    { builder.storageBufferReadWrite("gState", resource, "State", stages) } -> std::same_as<TBuilder &>;
+    { builder.storageBufferReadWrite("gState", resource, "State", nr::renderer::ShaderStageIntent::Compute) }
+    -> std::same_as<TBuilder &>;
+};
+
+static_assert(StorageBufferMutationBuilder<nr::renderer::RasterPassBuilder>);
+static_assert(StorageBufferMutationBuilder<nr::renderer::ComputePassBuilder>);
+static_assert(StorageBufferMutationBuilder<nr::renderer::RayTracingPassBuilder>);
+
 void requireContiguousCoverage(const nr::renderer::PassParallelRecordPlan &plan, std::size_t itemCount)
 {
     auto expectedBegin = std::size_t{0};
@@ -105,6 +120,22 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(uniform.bufferUsage == nr::renderer::BufferUsageIntent::Uniform);
         nr::test::require(uniform.bufferAccess == nr::renderer::BufferAccessIntent::UniformRead);
         nr::test::require(uniform.ownershipDomain == nr::renderer::ResourceOwnershipDomain::Undefined);
+
+        auto storageWrite = nr::renderer::use::storageBufferWrite(handle);
+        nr::test::require(hasBufferFields(storageWrite), "storage-buffer write should fill buffer fields");
+        nr::test::require(storageWrite.bufferUsage == nr::renderer::BufferUsageIntent::StorageWrite);
+        nr::test::require(storageWrite.bufferAccess == nr::renderer::BufferAccessIntent::ShaderStorageWrite);
+        nr::test::require(storageWrite.bufferAccess != nr::renderer::BufferAccessIntent::ShaderStorageRead,
+                          "storage-buffer write must not add a conflicting read intent");
+
+        auto storageBufferReadWrite = nr::renderer::use::withShaderStages(
+            nr::renderer::use::storageBufferReadWrite(handle), nr::renderer::ShaderStageIntent::Compute);
+        nr::test::require(hasBufferFields(storageBufferReadWrite),
+                          "storage-buffer read-write should fill buffer fields");
+        nr::test::require(storageBufferReadWrite.bufferUsage == nr::renderer::BufferUsageIntent::StorageReadWrite);
+        nr::test::require(storageBufferReadWrite.bufferAccess ==
+                          nr::renderer::BufferAccessIntent::ShaderStorageReadWrite);
+        nr::test::require(storageBufferReadWrite.shaderStages == vk::PipelineStageFlagBits2::eComputeShader);
 
         auto bufferUpload = nr::renderer::use::bufferTransferSrc(handle);
         nr::test::require(bufferUpload.bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);

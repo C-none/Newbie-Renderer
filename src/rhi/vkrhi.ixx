@@ -40,7 +40,7 @@ vk::DebugUtilsMessengerCreateInfoEXT makeDebugUtilsMessengerCreateInfoEXT();
 
 struct DebugValidationLayerSettings
 {
-    DebugValidationLayerSettings();
+    explicit DebugValidationLayerSettings(bool debugShaderInstrumentationEnabled = true);
     DebugValidationLayerSettings(const DebugValidationLayerSettings &) = delete;
     DebugValidationLayerSettings &operator=(const DebugValidationLayerSettings &) = delete;
     DebugValidationLayerSettings(DebugValidationLayerSettings &&) = delete;

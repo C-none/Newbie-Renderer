@@ -10,6 +10,15 @@ static_assert(!std::move_constructible<nr::renderer::Renderer>);
 static_assert(!std::is_move_assignable_v<nr::renderer::Renderer>);
 static_assert(std::is_nothrow_destructible_v<nr::renderer::Renderer>);
 
+const nr::test::CaseRegistrar defaultCreateInfoValidationProfileCase{
+    "renderer create info enables debug shader instrumentation by default", [] {
+        auto createInfo = nr::renderer::RendererCreateInfo{};
+        nr::test::require(createInfo.debugShaderInstrumentationEnabled);
+
+        createInfo.debugShaderInstrumentationEnabled = false;
+        nr::test::require(!createInfo.debugShaderInstrumentationEnabled);
+    }};
+
 const nr::test::CaseRegistrar defaultShutdownCase{
     "default renderer shutdown is idempotent", [] {
         auto renderer = nr::renderer::Renderer{};

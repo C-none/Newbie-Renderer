@@ -24,3 +24,9 @@ nr_add_contract_test(nr_renderpasses_dlss_rr_contract_test nr_renderpasses_dlss_
     dependency_math
     dependency_graphics
 )
+
+nr_add_contract_test(nr_renderpasses_neural_checkpoint_contract_test nr_renderpasses_neural_checkpoint_contract_test.cpp "fast;cpu;unit;renderpasses;neural;checkpoint"
+    nrrenderpasses
+    nr_test_options
+    utils
+)

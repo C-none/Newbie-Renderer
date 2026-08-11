@@ -17,3 +17,5 @@ file(GENERATE
     CONTENT "set(NR_SHADER_COMPILE_CHECK_EXECUTABLE [==[$<TARGET_FILE:nr_shader_compile_check>]==])\n"
     TARGET nr_shader_compile_check
 )
+
+add_subdirectory(neuralMaterialViewer)

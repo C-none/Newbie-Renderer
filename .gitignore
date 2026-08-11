@@ -6,6 +6,8 @@ build/
 /debug.log
 /imgui.ini
 /tmp/
+__pycache__/
+*.py[cod]
 
 # Keep screenshots folder but ignore its content
 screenshots/*
