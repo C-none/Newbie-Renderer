@@ -7,6 +7,7 @@ export import :embeddedTriangle;
 export import :dlssRayReconstruction;
 export import :lightPrepare;
 export import :neuralAppearance;
+export import :neuralAppearanceQuality;
 export import :normalBuffer;
 export import :presentNode;
 export import :pathTracing;

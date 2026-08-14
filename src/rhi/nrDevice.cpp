@@ -9,6 +9,7 @@ import :surface;
 import :swapchain;
 import :type;
 import :queue;
+import :cooperativeVector;
 import :frameContext;
 import :command;
 import :commandPool;
@@ -30,11 +31,192 @@ namespace
 {
     return std::chrono::duration<double, std::milli>(end - begin).count();
 }
+
+[[nodiscard]] vk::CooperativeVectorMatrixLayoutNV toVulkanCooperativeVectorLayout(
+    CooperativeVectorMatrixLayout layout) noexcept
+{
+    if (layout == CooperativeVectorMatrixLayout::RowMajor)
+    {
+        return vk::CooperativeVectorMatrixLayoutNV::eRowMajor;
+    }
+    return vk::CooperativeVectorMatrixLayoutNV::eTrainingOptimal;
+}
+
+[[nodiscard]] vk::DeviceSize checkedRowMajorMatrixSize(CooperativeVectorMatrixDesc desc)
+{
+    constexpr auto elementSize = vk::DeviceSize{sizeof(std::uint16_t)};
+    nrAssert(desc.rows > 0 && desc.columns > 0,
+             "Cooperative-vector matrix dimensions must both be non-zero (rows={}, columns={}).", desc.rows,
+             desc.columns);
+    // VUID-VkConvertCooperativeVectorMatrixInfoNV-srcLayout-10077 and
+    // -dstLayout-10078 require a row-major stride large enough for one row
+    // and divisible by the component size.
+    nrAssert(desc.rowStrideBytes >= static_cast<vk::DeviceSize>(desc.columns) * elementSize,
+             "Cooperative-vector row-major stride {} is smaller than {} FP16 columns.", desc.rowStrideBytes,
+             desc.columns);
+    nrAssert(desc.rowStrideBytes % elementSize == 0u,
+             "Cooperative-vector row-major stride {} must be a multiple of the {}-byte FP16 element size.",
+             desc.rowStrideBytes, elementSize);
+    auto const tightRowSize = static_cast<vk::DeviceSize>(desc.columns) * elementSize;
+    // VkConvertCooperativeVectorMatrixInfoNV::srcSize/dstSize cover the final
+    // row's elements, not trailing padding after that row. This mirrors the
+    // standard row-major matrix layout used by VK_NV_cooperative_vector.
+    auto const precedingRows = static_cast<vk::DeviceSize>(desc.rows - 1u);
+    nrAssert(precedingRows <= (std::numeric_limits<vk::DeviceSize>::max() - tightRowSize) / desc.rowStrideBytes,
+             "Cooperative-vector row-major matrix size overflows vk::DeviceSize.");
+    return precedingRows * desc.rowStrideBytes + tightRowSize;
+}
+
+void validateCooperativeVectorMatrixDesc(CooperativeVectorMatrixDesc desc)
+{
+    nrAssert(desc.rows > 0 && desc.columns > 0,
+             "Cooperative-vector matrix dimensions must both be non-zero (rows={}, columns={}).", desc.rows,
+             desc.columns);
+    if (desc.layout == CooperativeVectorMatrixLayout::RowMajor)
+    {
+        static_cast<void>(checkedRowMajorMatrixSize(desc));
+        return;
+    }
+    nrAssert(desc.rowStrideBytes == 0,
+             "Cooperative-vector TrainingOptimal matrices are opaque and must use a zero row stride.");
+}
+
+void validateCooperativeVectorMatrixLayoutSize(CooperativeVectorMatrixDesc desc,
+                                               CooperativeVectorMatrixLayoutSize layoutSize,
+                                               std::string_view role)
+{
+    nrAssert(layoutSize.byteSize > 0u, "Cooperative-vector {} matrix layout size must be non-zero.", role);
+    if (desc.layout == CooperativeVectorMatrixLayout::RowMajor)
+    {
+        nrAssert(layoutSize.byteSize == checkedRowMajorMatrixSize(desc),
+                 "Cooperative-vector {} row-major layout size {} does not match its stride-defined size {}.", role,
+                 layoutSize.byteSize, checkedRowMajorMatrixSize(desc));
+    }
+}
+
+void validateCooperativeVectorMatrixMemory(CooperativeVectorMatrixMemory memory,
+                                           CooperativeVectorMatrixLayoutSize layoutSize, std::string_view role)
+{
+    nrAssert(memory.deviceAddress != 0, "Cooperative-vector {} matrix requires a non-zero device address.", role);
+    nrAssert(memory.deviceAddress % kCooperativeVectorMatrixDeviceAddressAlignment == 0,
+             "Cooperative-vector {} matrix device address {} must be {}-byte aligned.", role, memory.deviceAddress,
+             kCooperativeVectorMatrixDeviceAddressAlignment);
+    // VUID-vkCmdConvertCooperativeVectorMatrixNV-pInfo-10086/-10087 require
+    // source/destination sizes to cover the respective matrix. Requiring the
+    // exact queried region also prevents a caller from accidentally passing a
+    // tail-of-buffer size for a packed per-layer allocation.
+    nrAssert(memory.size == layoutSize.byteSize,
+             "Cooperative-vector {} matrix region size {} must exactly equal its layout size {} bytes.", role,
+             memory.size, layoutSize.byteSize);
+}
 } // namespace
 
 [[nodiscard]] const RayTracingCapabilitySnapshot &Device::rayTracingCapabilities() const noexcept
 {
     return rtCapabilities_;
+}
+
+[[nodiscard]] const CooperativeVectorCapabilitySnapshot &Device::cooperativeVectorCapabilities() const noexcept
+{
+    return cooperativeVectorCapabilities_;
+}
+
+[[nodiscard]] CooperativeVectorMatrixLayoutSize Device::cooperativeVectorMatrixLayoutSize(
+    CooperativeVectorMatrixDesc desc) const
+{
+    validateCooperativeVectorMatrixDesc(desc);
+    nrAssert(*device != nullptr, "Cooperative-vector matrix layout query requires a valid logical device.");
+
+    if (desc.layout == CooperativeVectorMatrixLayout::RowMajor)
+    {
+        return CooperativeVectorMatrixLayoutSize{
+            .byteSize = checkedRowMajorMatrixSize(desc),
+        };
+    }
+
+    constexpr auto elementSize = vk::DeviceSize{sizeof(std::uint16_t)};
+    auto const sourceStride = static_cast<vk::DeviceSize>(desc.columns) * elementSize;
+    auto const sourceSize = checkedRowMajorMatrixSize(CooperativeVectorMatrixDesc{
+        .rows = desc.rows,
+        .columns = desc.columns,
+        .layout = CooperativeVectorMatrixLayout::RowMajor,
+        .rowStrideBytes = sourceStride,
+    });
+    nrAssert(sourceSize <= std::numeric_limits<std::size_t>::max(),
+             "Cooperative-vector layout query source size exceeds size_t.");
+    auto source = std::vector<std::byte>(static_cast<std::size_t>(sourceSize));
+    auto destinationSize = std::size_t{0};
+    auto info = vk::ConvertCooperativeVectorMatrixInfoNV{};
+    info.srcSize = static_cast<std::size_t>(sourceSize);
+    info.srcData.hostAddress = source.data();
+    info.pDstSize = std::addressof(destinationSize);
+    info.srcComponentType = vk::ComponentTypeKHR::eFloat16;
+    info.dstComponentType = vk::ComponentTypeKHR::eFloat16;
+    info.numRows = desc.rows;
+    info.numColumns = desc.columns;
+    info.srcLayout = vk::CooperativeVectorMatrixLayoutNV::eRowMajor;
+    info.srcStride = static_cast<std::size_t>(sourceStride);
+    info.dstLayout = toVulkanCooperativeVectorLayout(desc.layout);
+    info.dstStride = 0;
+
+    try
+    {
+        auto const result = device.convertCooperativeVectorMatrixNV(info);
+        nrAssert(result == vk::Result::eSuccess || result == vk::Result::eIncomplete,
+                 "Cooperative-vector matrix layout query returned unexpected Vulkan result {}.", vk::to_string(result));
+    }
+    catch (const vk::SystemError &error)
+    {
+        nrLog<LogLevel::error>("Cooperative-vector matrix layout query failed: {}", error.what());
+        return {};
+    }
+
+    nrAssert(destinationSize > 0, "Cooperative-vector TrainingOptimal layout query returned a zero byte size.");
+    return CooperativeVectorMatrixLayoutSize{
+        .byteSize = static_cast<vk::DeviceSize>(destinationSize),
+    };
+}
+
+void Device::recordCooperativeVectorMatrixConversion(const vk::raii::CommandBuffer &commandBuffer,
+                                                      CooperativeVectorMatrixMemory source,
+                                                      CooperativeVectorMatrixDesc sourceDesc,
+                                                      CooperativeVectorMatrixLayoutSize sourceLayoutSize,
+                                                      CooperativeVectorMatrixMemory destination,
+                                                      CooperativeVectorMatrixDesc destinationDesc,
+                                                      CooperativeVectorMatrixLayoutSize destinationLayoutSize) const
+{
+    validateCooperativeVectorMatrixDesc(sourceDesc);
+    validateCooperativeVectorMatrixDesc(destinationDesc);
+    nrAssert(sourceDesc.rows == destinationDesc.rows && sourceDesc.columns == destinationDesc.columns,
+             "Cooperative-vector matrix conversion requires matching source and destination dimensions.");
+
+    validateCooperativeVectorMatrixLayoutSize(sourceDesc, sourceLayoutSize, "source");
+    validateCooperativeVectorMatrixLayoutSize(destinationDesc, destinationLayoutSize, "destination");
+    validateCooperativeVectorMatrixMemory(source, sourceLayoutSize, "source");
+    validateCooperativeVectorMatrixMemory(destination, destinationLayoutSize, "destination");
+    nrAssert(sourceLayoutSize.byteSize <= std::numeric_limits<std::size_t>::max(),
+             "Cooperative-vector source matrix layout size exceeds size_t.");
+    nrAssert(destinationLayoutSize.byteSize <= std::numeric_limits<std::size_t>::max(),
+             "Cooperative-vector destination matrix layout size exceeds size_t.");
+
+    auto info = vk::ConvertCooperativeVectorMatrixInfoNV{};
+    // pDstSize remains live for the immediate Vulkan-Hpp command call and is
+    // the exact queried destination matrix size, never an allocation tail.
+    auto destinationSize = static_cast<std::size_t>(destinationLayoutSize.byteSize);
+    info.srcSize = static_cast<std::size_t>(sourceLayoutSize.byteSize);
+    info.srcData.deviceAddress = source.deviceAddress;
+    info.pDstSize = std::addressof(destinationSize);
+    info.dstData.deviceAddress = destination.deviceAddress;
+    info.srcComponentType = vk::ComponentTypeKHR::eFloat16;
+    info.dstComponentType = vk::ComponentTypeKHR::eFloat16;
+    info.numRows = sourceDesc.rows;
+    info.numColumns = sourceDesc.columns;
+    info.srcLayout = toVulkanCooperativeVectorLayout(sourceDesc.layout);
+    info.srcStride = static_cast<std::size_t>(sourceDesc.rowStrideBytes);
+    info.dstLayout = toVulkanCooperativeVectorLayout(destinationDesc.layout);
+    info.dstStride = static_cast<std::size_t>(destinationDesc.rowStrideBytes);
+    auto const infos = std::array{info};
+    commandBuffer.convertCooperativeVectorMatrixNV(infos);
 }
 
 [[nodiscard]] const ops::QueueFamilyTransferPolicy &Device::queueFamilyTransferPolicy() const noexcept
@@ -425,6 +607,10 @@ vk::raii::Device Device::makeDevice()
             reason = "application-controlled fullscreen exclusive swapchain ownership";
         if (extensionName == vk::EXTSwapchainMaintenance1ExtensionName)
             reason = "per-present completion fences and swapchain generation retirement";
+        if (extensionName == vk::NVCooperativeVectorExtensionName)
+            reason = "global neural-material cooperative-vector inference and training";
+        if (extensionName == vk::EXTShaderReplicatedCompositesExtensionName)
+            reason = "SPIR-V emitted for cooperative-vector arithmetic";
         enableExtension(extensionName, reason);
     });
 
@@ -447,7 +633,8 @@ vk::raii::Device Device::makeDevice()
         vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR,
         vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT,
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-        vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>();
+        vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT, vk::PhysicalDeviceCooperativeVectorFeaturesNV,
+        vk::PhysicalDeviceShaderReplicatedCompositesFeaturesEXT>();
 
     auto requestedFeatures = vk::StructureChain<
         vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan12Features,
@@ -457,7 +644,8 @@ vk::raii::Device Device::makeDevice()
         vk::PhysicalDeviceMaintenance8FeaturesKHR, vk::PhysicalDeviceMaintenance9FeaturesKHR,
         vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT,
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-        vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>{};
+        vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT, vk::PhysicalDeviceCooperativeVectorFeaturesNV,
+        vk::PhysicalDeviceShaderReplicatedCompositesFeaturesEXT>{};
 
     auto const requireFeature = [](vk::Bool32 supported, std::string_view featureName) {
         nrAssert(supported == vk::True, "Required Vulkan device feature '{}' is not supported.", featureName);
@@ -474,6 +662,10 @@ vk::raii::Device Device::makeDevice()
     auto &requestedVulkan11 = requestedFeatures.get<vk::PhysicalDeviceVulkan11Features>();
     requireFeature(supportedVulkan11.shaderDrawParameters, "shaderDrawParameters");
     requestedVulkan11.shaderDrawParameters = vk::True;
+    requireFeature(supportedVulkan11.storageBuffer16BitAccess, "storageBuffer16BitAccess");
+    requestedVulkan11.storageBuffer16BitAccess = vk::True;
+    requireFeature(supportedVulkan11.uniformAndStorageBuffer16BitAccess, "uniformAndStorageBuffer16BitAccess");
+    requestedVulkan11.uniformAndStorageBuffer16BitAccess = vk::True;
 
     auto const &supportedVulkan12 = supportedFeatures.get<vk::PhysicalDeviceVulkan12Features>();
     auto &requestedVulkan12 = requestedFeatures.get<vk::PhysicalDeviceVulkan12Features>();
@@ -495,6 +687,10 @@ vk::raii::Device Device::makeDevice()
     requestedVulkan12.shaderSampledImageArrayNonUniformIndexing = vk::True;
     requireFeature(supportedVulkan12.timelineSemaphore, "timelineSemaphore");
     requestedVulkan12.timelineSemaphore = vk::True;
+    requireFeature(supportedVulkan12.shaderFloat16, "shaderFloat16");
+    requestedVulkan12.shaderFloat16 = vk::True;
+    requireFeature(supportedVulkan12.vulkanMemoryModel, "vulkanMemoryModel");
+    requestedVulkan12.vulkanMemoryModel = vk::True;
 
     auto const &supportedVulkan13 = supportedFeatures.get<vk::PhysicalDeviceVulkan13Features>();
     auto &requestedVulkan13 = requestedFeatures.get<vk::PhysicalDeviceVulkan13Features>();
@@ -567,11 +763,83 @@ vk::raii::Device Device::makeDevice()
     requireFeature(supportedSwapchainMaintenance1.swapchainMaintenance1, "swapchainMaintenance1");
     requestedSwapchainMaintenance1.swapchainMaintenance1 = vk::True;
 
+    auto const &supportedCooperativeVector =
+        supportedFeatures.get<vk::PhysicalDeviceCooperativeVectorFeaturesNV>();
+    auto &requestedCooperativeVector = requestedFeatures.get<vk::PhysicalDeviceCooperativeVectorFeaturesNV>();
+    requireFeature(supportedCooperativeVector.cooperativeVector, "cooperativeVector");
+    requestedCooperativeVector.cooperativeVector = vk::True;
+    requireFeature(supportedCooperativeVector.cooperativeVectorTraining, "cooperativeVectorTraining");
+    requestedCooperativeVector.cooperativeVectorTraining = vk::True;
+
+    auto const &supportedReplicatedComposites =
+        supportedFeatures.get<vk::PhysicalDeviceShaderReplicatedCompositesFeaturesEXT>();
+    auto &requestedReplicatedComposites =
+        requestedFeatures.get<vk::PhysicalDeviceShaderReplicatedCompositesFeaturesEXT>();
+    requireFeature(supportedReplicatedComposites.shaderReplicatedComposites, "shaderReplicatedComposites");
+    requestedReplicatedComposites.shaderReplicatedComposites = vk::True;
+
     auto properties2 = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2,
-                                                     vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+                                                     vk::PhysicalDeviceRayTracingPipelinePropertiesKHR,
+                                                     vk::PhysicalDeviceCooperativeVectorPropertiesNV>();
     auto const &physicalDeviceProperties = properties2.get<vk::PhysicalDeviceProperties2>();
     auto const &rayTracingPipelineProperties =
         properties2.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+    auto const &cooperativeVectorProperties =
+        properties2.get<vk::PhysicalDeviceCooperativeVectorPropertiesNV>();
+    auto const requiredCooperativeVectorStages =
+        vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR;
+    nrAssert((cooperativeVectorProperties.cooperativeVectorSupportedStages & requiredCooperativeVectorStages) ==
+                 requiredCooperativeVectorStages,
+             "VK_NV_cooperative_vector must support compute, raygen, and closest-hit shader stages.");
+    nrAssert(cooperativeVectorProperties.cooperativeVectorTrainingFloat16Accumulation == vk::True,
+             "VK_NV_cooperative_vector must support FP16 TrainingOptimal accumulation.");
+    nrAssert(cooperativeVectorProperties.maxCooperativeVectorComponents >= 32u,
+             "VK_NV_cooperative_vector requires at least 32 cooperative-vector components, but the device exposes {}.",
+             cooperativeVectorProperties.maxCooperativeVectorComponents);
+
+    auto const cooperativeVectorTypes = physicalDevice.getCooperativeVectorPropertiesNV();
+    auto const supportsFullFloat16Tuple = [&cooperativeVectorTypes](bool requireTranspose) {
+        // A true advertised transpose bit is a capability superset: the same tuple
+        // remains valid for a non-transposed multiply. Vulkan only requires the bit
+        // to be true when the SPIR-V Transpose operand is true.
+        return std::ranges::any_of(cooperativeVectorTypes, [requireTranspose](const vk::CooperativeVectorPropertiesNV &properties) {
+            return properties.inputType == vk::ComponentTypeKHR::eFloat16 &&
+                   properties.inputInterpretation == vk::ComponentTypeKHR::eFloat16 &&
+                   properties.matrixInterpretation == vk::ComponentTypeKHR::eFloat16 &&
+                   properties.biasInterpretation == vk::ComponentTypeKHR::eFloat16 &&
+                   properties.resultType == vk::ComponentTypeKHR::eFloat16 &&
+                   (!requireTranspose || properties.transpose == vk::True);
+        });
+    };
+    auto const supportsFullFloat16TupleWithoutTranspose = supportsFullFloat16Tuple(false);
+    auto const supportsFullFloat16TupleWithTranspose = supportsFullFloat16Tuple(true);
+    nrAssert(supportsFullFloat16TupleWithoutTranspose,
+             "VK_NV_cooperative_vector must expose the required all-FP16 tuple without transpose support.");
+    nrAssert(supportsFullFloat16TupleWithTranspose,
+             "VK_NV_cooperative_vector must expose the required all-FP16 tuple with transpose support.");
+    cooperativeVectorCapabilities_ = CooperativeVectorCapabilitySnapshot{
+        .extensionEnabled = true,
+        .cooperativeVectorFeatureEnabled = requestedCooperativeVector.cooperativeVector == vk::True,
+        .cooperativeVectorTrainingFeatureEnabled = requestedCooperativeVector.cooperativeVectorTraining == vk::True,
+        .shaderFloat16FeatureEnabled = requestedVulkan12.shaderFloat16 == vk::True,
+        .vulkanMemoryModelFeatureEnabled = requestedVulkan12.vulkanMemoryModel == vk::True,
+        .shaderReplicatedCompositesFeatureEnabled =
+            requestedReplicatedComposites.shaderReplicatedComposites == vk::True,
+        .storageBuffer16BitAccessFeatureEnabled = requestedVulkan11.storageBuffer16BitAccess == vk::True,
+        .uniformAndStorageBuffer16BitAccessFeatureEnabled =
+            requestedVulkan11.uniformAndStorageBuffer16BitAccess == vk::True,
+        .computeStage = (cooperativeVectorProperties.cooperativeVectorSupportedStages &
+                         vk::ShaderStageFlagBits::eCompute) != vk::ShaderStageFlags{},
+        .raygenStage = (cooperativeVectorProperties.cooperativeVectorSupportedStages &
+                        vk::ShaderStageFlagBits::eRaygenKHR) != vk::ShaderStageFlags{},
+        .closestHitStage = (cooperativeVectorProperties.cooperativeVectorSupportedStages &
+                            vk::ShaderStageFlagBits::eClosestHitKHR) != vk::ShaderStageFlags{},
+        .trainingFloat16Accumulation =
+            cooperativeVectorProperties.cooperativeVectorTrainingFloat16Accumulation == vk::True,
+        .fullFloat16Tuple = supportsFullFloat16TupleWithoutTranspose,
+        .fullFloat16TupleWithTranspose = supportsFullFloat16TupleWithTranspose,
+        .maxComponents = cooperativeVectorProperties.maxCooperativeVectorComponents,
+    };
 
     auto queueOwnershipPropertyChains = physicalDevice.getQueueFamilyProperties2<
         vk::StructureChain<vk::QueueFamilyProperties2, vk::QueueFamilyOwnershipTransferPropertiesKHR>>();

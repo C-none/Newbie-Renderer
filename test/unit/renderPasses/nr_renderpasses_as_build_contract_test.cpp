@@ -1,5 +1,6 @@
 import std;
 import nr.renderPasses;
+import nr.resource;
 import nr.scene;
 import nr.test;
 
@@ -10,6 +11,65 @@ const nr::test::CaseRegistrar asBuildInputCase{
         auto input = nr::renderPasses::AccelerationStructureBuildNodeInput{};
         nr::test::require(input.unusedFrameRetireLatency > 0u,
                           "AS build cache retirement latency should stay positive");
+    }};
+
+[[nodiscard]] nr::resource::Material makeNeuralP0Material()
+{
+    auto material = nr::resource::Material{};
+    material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor).texture = nr::resource::TextureHandle{0u, 1u};
+    return material;
+}
+
+const nr::test::CaseRegistrar neuralP0HostEligibilityCase{
+    "renderpasses neural P0 host eligibility accepts only the bound base-surface slice", [] {
+        using enum nr::resource::MaterialTextureSlotSemantic;
+
+        auto material = makeNeuralP0Material();
+        nr::test::require(nr::renderPasses::neuralMaterialP0Eligible(material),
+                          "an opaque, single-sided identity-UV0 base surface must be eligible");
+
+        material.ior = nr::resource::MaterialIorExtension{.ior = 1.45f};
+        nr::test::require(nr::renderPasses::neuralMaterialP0Eligible(material),
+                          "P0 replaces the specular lobe, so an IOR extension alone remains eligible");
+
+        auto reject = [&](auto mutate, std::string_view reason) {
+            auto candidate = makeNeuralP0Material();
+            mutate(candidate);
+            nr::test::require(!nr::renderPasses::neuralMaterialP0Eligible(candidate), std::string{reason});
+        };
+        reject([](nr::resource::Material &candidate) { candidate.core.alphaMode = nr::resource::AlphaMode::mask; },
+               "non-opaque material must be rejected");
+        reject([](nr::resource::Material &candidate) { candidate.core.baseColorFactor.w = 0.5f; },
+               "non-unit opaque alpha factor must be rejected");
+        reject([](nr::resource::Material &candidate) { candidate.core.doubleSided = true; },
+               "double-sided material must be rejected");
+        reject([](nr::resource::Material &candidate) { candidate.unlit = true; }, "unlit material must be rejected");
+        reject([](nr::resource::Material &candidate) { candidate.slot(baseColor).texture = {}; },
+               "base-color texture is required");
+        reject([](nr::resource::Material &candidate) { candidate.slot(baseColor).uvSet = 1u; },
+               "non-UV0 base-color texture must be rejected");
+        reject([](nr::resource::Material &candidate) { candidate.slot(baseColor).transform.offset.x = 0.25f; },
+               "transformed base-color UVs must be rejected");
+        reject([](nr::resource::Material &candidate) {
+                   candidate.slot(normal).texture = nr::resource::TextureHandle{1u, 1u};
+               },
+               "normal map must be rejected");
+        reject([](nr::resource::Material &candidate) { candidate.clearcoat = nr::resource::MaterialClearcoatExtension{}; },
+               "clearcoat must be rejected");
+        reject([](nr::resource::Material &candidate) { candidate.sheen = nr::resource::MaterialSheenExtension{}; },
+               "sheen must be rejected");
+        reject([](nr::resource::Material &candidate) {
+                   candidate.transmission = nr::resource::MaterialTransmissionExtension{};
+               },
+               "transmission must be rejected");
+        reject([](nr::resource::Material &candidate) {
+                   candidate.anisotropy = nr::resource::MaterialAnisotropyExtension{};
+               },
+               "anisotropy must be rejected");
+        reject([](nr::resource::Material &candidate) {
+                   candidate.volumeBoundary = nr::resource::MaterialVolumeBoundaryExtension{};
+               },
+               "volume boundary must be rejected");
     }};
 
 const nr::test::CaseRegistrar rtRayTypePhysicalMappingCase{

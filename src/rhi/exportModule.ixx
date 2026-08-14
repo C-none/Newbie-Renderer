@@ -3,6 +3,7 @@ export import :accelerationStructure;
 export import :command;
 export import :commandBatch;
 export import :commandPool;
+export import :cooperativeVector;
 export import :descriptor;
 export import :dlss;
 export import :device;

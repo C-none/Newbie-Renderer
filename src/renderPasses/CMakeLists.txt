@@ -16,6 +16,7 @@ target_link_libraries(nrrenderpasses
         nrrenderer
         nrscene
         nrresource
+        nrneuralappearanceasset
         nrrhi
         utils
         dependency_graphics

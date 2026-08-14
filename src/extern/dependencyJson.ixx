@@ -68,5 +68,6 @@ struct JsonParseResult
 };
 
 [[nodiscard]] JsonParseResult parseJson(std::string_view text, std::size_t maximumDepth = 32u);
+[[nodiscard]] JsonParseResult parseJsonRejectingDuplicateKeys(std::string_view text, std::size_t maximumDepth = 32u);
 [[nodiscard]] JsonError serializeJson(const JsonValue &value, std::string &output, std::size_t maximumBytes);
 } // namespace dependency::json

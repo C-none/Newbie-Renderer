@@ -3,6 +3,7 @@ import dependency.vulkan;
 
 import nr.app;
 import nr.load;
+import nr.neuralAppearanceAsset;
 import nr.renderer;
 import nr.resource;
 import nr.scene;
@@ -136,13 +137,16 @@ class SceneModelController
       private:
         friend class SceneModelController;
 
-        ModelCpuLoad(std::filesystem::path normalizedModelPath, nr::load::SceneAsset sceneAsset)
-            : normalizedModelPath_{std::move(normalizedModelPath)}, sceneAsset_{std::move(sceneAsset)}
+        ModelCpuLoad(std::filesystem::path normalizedModelPath, nr::load::SceneAsset sceneAsset,
+                     std::optional<nr::neuralAppearance::BindingRequest> neuralMaterialBinding)
+            : normalizedModelPath_{std::move(normalizedModelPath)}, sceneAsset_{std::move(sceneAsset)},
+              neuralMaterialBinding_{std::move(neuralMaterialBinding)}
         {
         }
 
         std::filesystem::path normalizedModelPath_{};
         nr::load::SceneAsset sceneAsset_{};
+        std::optional<nr::neuralAppearance::BindingRequest> neuralMaterialBinding_{};
     };
 
     using ModelCpuLoadResult = std::expected<ModelCpuLoad, ModelLoadReport>;

@@ -356,6 +356,12 @@ const nr::test::CaseRegistrar sceneCandidateCommitOrderingCase{
         requireOrdered(cpuModelLoad, "nr::nrLog<nr::LogLevel::info, \"PIPELINE\">(\"Loading model:",
                        "auto sceneLoad = nr::load::loadScene(",
                        "model CPU loading must log the resolved source before importing it");
+        requireOrdered(cpuModelLoad,
+                       "auto neuralMaterialBinding = nr::neuralAppearance::loadBindingRequest(modelAssetRootPath(), normalizedPath);",
+                       "if (!neuralMaterialBinding)",
+                       "a sidecar/artifact failure must be rejected during detached CPU model loading");
+        requireOrdered(cpuModelLoad, "if (!neuralMaterialBinding)", "return ModelCpuLoad{",
+                       "only a successfully validated neural sidecar may cross into candidate Scene construction");
         requireAbsent(cpuModelLoad, "app.", "the CPU model phase must not touch AppSession state");
 
         auto const commitModel = sourceSection(
@@ -374,8 +380,11 @@ const nr::test::CaseRegistrar sceneCandidateCommitOrderingCase{
                        "auto candidate = app.makeSceneCandidate();",
                        "the move-only CPU-load token must be consumed before Scene commit begins");
         requireOrdered(commitModel, "auto candidate = app.makeSceneCandidate();",
-                       "auto templateHandle = candidate->registerTemplate(sceneAsset);",
+                       "auto templateHandle = candidate->registerTemplate(",
                        "template registration must target the detached candidate");
+        requireOrdered(commitModel, "auto neuralMaterialBinding = std::move(loadedModel.neuralMaterialBinding_);",
+                       "auto candidate = app.makeSceneCandidate();",
+                       "main-thread Scene commit must consume the parsed neural material binding before candidate construction");
         requireOrdered(commitModel, "if (!templateHandle.valid())",
                        "auto instanceHandle = candidate->instantiate(templateHandle);",
                        "template failure must return before instantiation");

@@ -631,6 +631,23 @@ const nr::test::CaseRegistrar compilerMappingCase{
         nr::test::require(rayTracingUniform.stages == vk::PipelineStageFlagBits2::eRayTracingShaderKHR);
         nr::test::require(rayTracingUniform.access == vk::AccessFlagBits2::eUniformRead);
 
+        nr::test::require(nr::renderer::RenderGraphCompiler::mapBufferUsageIntent(
+                              nr::renderer::BufferUsageIntent::CooperativeVectorConvertRead) ==
+                          vk::BufferUsageFlagBits::eShaderDeviceAddress,
+                          "cooperative-vector conversion sources require buffer device addresses");
+        nr::test::require(nr::renderer::RenderGraphCompiler::mapBufferUsageIntent(
+                              nr::renderer::BufferUsageIntent::CooperativeVectorConvertWrite) ==
+                          vk::BufferUsageFlagBits::eShaderDeviceAddress,
+                          "cooperative-vector conversion destinations require buffer device addresses");
+        auto cooperativeVectorRead = nr::renderer::RenderGraphCompiler::mapBufferAccessIntent(
+            nr::renderer::BufferAccessIntent::CooperativeVectorConvertRead, nr::renderer::QueueDomain::Compute);
+        nr::test::require(cooperativeVectorRead.stages == vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV);
+        nr::test::require(cooperativeVectorRead.access == vk::AccessFlagBits2::eTransferRead);
+        auto cooperativeVectorWrite = nr::renderer::RenderGraphCompiler::mapBufferAccessIntent(
+            nr::renderer::BufferAccessIntent::CooperativeVectorConvertWrite, nr::renderer::QueueDomain::Compute);
+        nr::test::require(cooperativeVectorWrite.stages == vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV);
+        nr::test::require(cooperativeVectorWrite.access == vk::AccessFlagBits2::eTransferWrite);
+
         auto colorReadWrite = nr::renderer::RenderGraphCompiler::mapImageAccessIntent(
             nr::renderer::ImageAccessIntent::ColorAttachmentReadWrite, nr::renderer::QueueDomain::Graphics);
         nr::test::require(colorReadWrite.stages == vk::PipelineStageFlagBits2::eColorAttachmentOutput);

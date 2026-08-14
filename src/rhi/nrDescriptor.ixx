@@ -258,9 +258,11 @@ class ShaderBindingPool
   public:
     // Allocation and descriptor updates are host-mutable and externally synchronized.
     // The renderer performs them during serial prepare before parallel command recording.
+    // maxBindingGroups counts complete allocations of every reflected descriptor set in the layout;
+    // the Vulkan pool expands that logical budget by the number of non-empty set layouts.
     [[nodiscard]] static ShaderBindingPool create(const vk::raii::Device &device,
                                                   const ShaderDescriptorLayout &descriptorLayout,
-                                                  std::uint32_t maxSets);
+                                                  std::uint32_t maxBindingGroups);
 
     [[nodiscard]] ShaderBindingSet allocate(vk::DescriptorSetLayout descriptorSetLayout, std::uint32_t setIndex,
                                             std::optional<std::uint32_t> variableDescriptorCount = std::nullopt);

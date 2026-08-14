@@ -2,6 +2,7 @@ module raygen;
 import common;
 import renderer.pathTracing.scheduler;
 
+[require(spvCooperativeVectorNV)]
 [shader("raygeneration")]
 void rgMain()
 {

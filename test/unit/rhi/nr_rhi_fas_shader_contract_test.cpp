@@ -26,6 +26,12 @@ constexpr auto payloadPackingResultNames = std::array{
     "decoded UNORM field mappings and roughness floor",
     "full-width payload fields",
     "material filter packet advance",
+    "neural continuation applied before payload compaction",
+    "neural continuation payload discards proposal PDF",
+    "invalid neural continuation keeps analytic fallback",
+    "neural P0 shader eligibility is strict",
+    "neural NEE and continuation use the same projected direction",
+    "invalid neural NEE and continuation retain analytic fallback",
 };
 
 void executePayloadPackingContract(const nr::rhi::SlangProgram &program)

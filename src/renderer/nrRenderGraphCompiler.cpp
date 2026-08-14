@@ -122,6 +122,9 @@ inline constexpr auto kWriteAccessMask =
         return vk::BufferUsageFlagBits::eIndirectBuffer;
     case BufferUsageIntent::ShaderDeviceAddress:
         return vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    case BufferUsageIntent::CooperativeVectorConvertRead:
+    case BufferUsageIntent::CooperativeVectorConvertWrite:
+        return vk::BufferUsageFlagBits::eShaderDeviceAddress;
     case BufferUsageIntent::UniformTexel:
         return vk::BufferUsageFlagBits::eUniformTexelBuffer;
     case BufferUsageIntent::StorageTexelRead:
@@ -288,6 +291,12 @@ inline constexpr auto kWriteAccessMask =
         return AccessScope{vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead};
     case BufferAccessIntent::HostWrite:
         return AccessScope{vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostWrite};
+    case BufferAccessIntent::CooperativeVectorConvertRead:
+        return AccessScope{vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV,
+                           vk::AccessFlagBits2::eTransferRead};
+    case BufferAccessIntent::CooperativeVectorConvertWrite:
+        return AccessScope{vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV,
+                           vk::AccessFlagBits2::eTransferWrite};
     }
     return AccessScope{};
 }

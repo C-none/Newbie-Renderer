@@ -46,6 +46,18 @@ RWStructuredBuffer<float4> gTrainingStatus;
 [[vk::binding(5, 2)]]
 RWStructuredBuffer<uint4> gTrainingControl;
 
+[[vk::binding(7, 2)]]
+ByteAddressBuffer gRowMajorWeightGradients;
+
+[[vk::binding(8, 2)]]
+ByteAddressBuffer gBiasGradients;
+
+[[vk::binding(9, 2)]]
+RWByteAddressBuffer gInferenceParameters;
+
+[[vk::binding(10, 2)]]
+RWByteAddressBuffer gInferenceLatent;
+
 [[vk::push_constant]]
 ConstantBuffer<NeuralAppearanceOptimizePushConstants> gTraining;
 
@@ -59,6 +71,35 @@ static const uint kSharedModelSecondCorrection = 6u;
 static const uint kSharedLatentFirstCorrection = 7u;
 static const uint kSharedLatentSecondCorrection = 8u;
 groupshared float gAdamShared[9];
+
+uint neuralAppearanceInferenceByteOffset(uint scalarIndex)
+{
+    if (scalarIndex < kNeuralAppearanceFrameBiasOffset)
+        return kNeuralAppearanceFrameWeightByteOffset + scalarIndex * 2u;
+    if (scalarIndex < kNeuralAppearanceSpatialWeightOffset)
+        return kNeuralAppearanceFrameBiasByteOffset + (scalarIndex - kNeuralAppearanceFrameBiasOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceDirectionWeightOffset)
+        return kNeuralAppearanceSpatialWeightByteOffset + (scalarIndex - kNeuralAppearanceSpatialWeightOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceFirstBiasOffset)
+        return kNeuralAppearanceDirectionWeightByteOffset + (scalarIndex - kNeuralAppearanceDirectionWeightOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceSecondWeightOffset)
+        return kNeuralAppearanceSpatialBiasByteOffset + (scalarIndex - kNeuralAppearanceFirstBiasOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceSecondBiasOffset)
+        return kNeuralAppearanceHiddenWeightByteOffset + (scalarIndex - kNeuralAppearanceSecondWeightOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceOutputWeightOffset)
+        return kNeuralAppearanceHiddenBiasByteOffset + (scalarIndex - kNeuralAppearanceSecondBiasOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceOutputBiasOffset)
+        return kNeuralAppearanceOutputWeightByteOffset + (scalarIndex - kNeuralAppearanceOutputWeightOffset) * 2u;
+    return kNeuralAppearanceOutputBiasByteOffset + (scalarIndex - kNeuralAppearanceOutputBiasOffset) * 2u;
+}
+
+bool neuralAppearanceParameterIsBias(uint scalarIndex)
+{
+    return (scalarIndex >= kNeuralAppearanceFrameBiasOffset && scalarIndex < kNeuralAppearanceSpatialWeightOffset) ||
+           (scalarIndex >= kNeuralAppearanceFirstBiasOffset && scalarIndex < kNeuralAppearanceSecondWeightOffset) ||
+           (scalarIndex >= kNeuralAppearanceSecondBiasOffset && scalarIndex < kNeuralAppearanceOutputWeightOffset) ||
+           scalarIndex >= kNeuralAppearanceOutputBiasOffset;
+}
 
 float4 neuralAppearanceSanitizeGradient(float4 gradient)
 {
@@ -83,13 +124,21 @@ void neuralAppearanceAdamUpdate(
 
 float4 neuralAppearanceReducedParameterGradient(uint chunkIndex, uint batchSize)
 {
+    uint scalar = chunkIndex * 4u;
     float4 gradient = float4(0.0f);
-    for (uint sample = 0u; sample < batchSize; ++sample)
+    [ForceUnroll]
+    for (uint lane = 0u; lane < 4u; ++lane)
     {
-        gradient += gSampleGradients[
-            sample * kNeuralAppearanceGradientChunkCount + chunkIndex];
+        uint scalarIndex = scalar + lane;
+        if (scalarIndex < kNeuralAppearancePaddingOffset)
+        {
+            uint byteOffset = neuralAppearanceInferenceByteOffset(scalarIndex);
+            gradient[lane] = neuralAppearanceParameterIsBias(scalarIndex)
+                                 ? float(gBiasGradients.Load<half>(byteOffset)) / float(batchSize)
+                                 : float(gRowMajorWeightGradients.Load<half>(byteOffset)) / float(batchSize);
+        }
     }
-    return gradient / float(batchSize);
+    return gradient;
 }
 
 void neuralAppearanceReducedLatentGradient(
@@ -192,6 +241,17 @@ void optimizeTrainingMain(
         gModelParameters[invocation] = value;
         gModelMoments[invocation] = firstMoment;
         gModelMoments[kNeuralAppearanceParameterChunkCount + invocation] = secondMoment;
+
+        uint scalar = invocation * 4u;
+        [ForceUnroll]
+        for (uint lane = 0u; lane < 4u; ++lane)
+        {
+            uint scalarIndex = scalar + lane;
+            if (scalarIndex < kNeuralAppearanceParameterScalarCount)
+            {
+                gInferenceParameters.Store<half>(neuralAppearanceInferenceByteOffset(scalarIndex), half(value[lane]));
+            }
+        }
     }
 
     if (invocation < latentTexelCount && latentActive)
@@ -226,6 +286,14 @@ void optimizeTrainingMain(
         gLatentMoments[chunk1] = firstMoment1;
         gLatentMoments[kNeuralAppearanceLatentChunkCount + chunk0] = secondMoment0;
         gLatentMoments[kNeuralAppearanceLatentChunkCount + chunk1] = secondMoment1;
+        gInferenceLatent.Store<half>(chunk0 * 8u + 0u, half(value0.x));
+        gInferenceLatent.Store<half>(chunk0 * 8u + 2u, half(value0.y));
+        gInferenceLatent.Store<half>(chunk0 * 8u + 4u, half(value0.z));
+        gInferenceLatent.Store<half>(chunk0 * 8u + 6u, half(value0.w));
+        gInferenceLatent.Store<half>(chunk1 * 8u + 0u, half(value1.x));
+        gInferenceLatent.Store<half>(chunk1 * 8u + 2u, half(value1.y));
+        gInferenceLatent.Store<half>(chunk1 * 8u + 4u, half(value1.z));
+        gInferenceLatent.Store<half>(chunk1 * 8u + 6u, half(value1.w));
     }
 
     if (invocation == 0u)

@@ -16,8 +16,8 @@ void printUsage()
 {
     std::println("Usage:");
     std::println("  neuralMaterialViewer");
-    std::println("  neuralMaterialViewer --train-and-save <artifact.bin> [--checkpoint <checkpoint.bin>]");
-    std::println("  neuralMaterialViewer --resume <checkpoint.bin> --train-and-save <artifact.bin>");
+    std::println("  neuralMaterialViewer --train-and-save <artifact.nart> [--checkpoint <checkpoint.bin>]");
+    std::println("  neuralMaterialViewer --resume <checkpoint.bin> --train-and-save <artifact.nart>");
     std::println("  neuralMaterialViewer --help");
     std::println("Modes:");
     std::println("  no arguments                      Run the interactive viewer.");
@@ -80,6 +80,12 @@ struct CommandLineOptions
                                                                                std::filesystem::path checkpointPath,
                                                                                bool checkpointMustExist)
 {
+    if (artifactPath.extension() != ".nart")
+    {
+        nr::nrLog<nr::LogLevel::warning>(
+            "Neural material production artifacts must use the .nart extension (received '{}').", artifactPath.string());
+        return std::nullopt;
+    }
     auto checkpointSlot0Path = checkpointPath;
     checkpointSlot0Path += ".0";
     auto checkpointSlot1Path = checkpointPath;

@@ -58,6 +58,8 @@ enum class BufferUsageIntent : std::uint8_t
     ShaderBindingTable,
     HostUpload,
     Readback,
+    CooperativeVectorConvertRead,
+    CooperativeVectorConvertWrite,
 };
 
 enum class BufferAccessIntent : std::uint8_t
@@ -83,6 +85,8 @@ enum class BufferAccessIntent : std::uint8_t
     ShaderBindingTableRead,
     HostRead,
     HostWrite,
+    CooperativeVectorConvertRead,
+    CooperativeVectorConvertWrite,
 };
 
 enum class AccelerationStructureUsageIntent : std::uint8_t

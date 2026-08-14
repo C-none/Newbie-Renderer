@@ -105,12 +105,14 @@ set(DEPENDENCY_UI_MODULE_UNITS
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyUi.ixx"
 )
 set(DEPENDENCY_SERVICES_MODULE_UNITS
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyCrypto.ixx"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyJson.ixx"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyLua.ixx"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyNetwork.ixx"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyProcessLease.ixx"
 )
 set(DEPENDENCY_SERVICES_IMPLEMENTATION_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/dependencyCrypto.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyJson.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyLua.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencyNetwork.cpp"
@@ -284,7 +286,7 @@ target_link_libraries(dependency_services
         lua::lua
 )
 if(WIN32)
-    target_link_libraries(dependency_services PUBLIC ws2_32 mswsock)
+    target_link_libraries(dependency_services PUBLIC bcrypt ws2_32 mswsock)
 endif()
 target_sources(dependency_services
     PUBLIC

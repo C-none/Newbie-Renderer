@@ -170,6 +170,10 @@ struct PathTracingFrameInputs
     nr::renderer::GraphResourceHandle rtMaterialHeaders{};
     nr::renderer::GraphResourceHandle rtMaterialLayers{};
     nr::renderer::GraphResourceHandle rtMaterialTextureRefs{};
+    nr::renderer::GraphResourceHandle rtNeuralMaterialRefs{};
+    nr::renderer::GraphResourceHandle neuralModelParameters{};
+    nr::renderer::GraphResourceHandle neuralLatentTexture0{};
+    nr::renderer::GraphResourceHandle neuralLatentTexture1{};
     nr::renderer::GraphResourceHandle rtVertexAtlas{};
     nr::renderer::GraphResourceHandle rtIndexAtlas{};
     nr::renderer::GraphResourceHandle sceneLightHeader{};
@@ -394,6 +398,26 @@ inline constexpr std::string_view kPathTracingShadowHitGroupName = "hit_shadow";
                                      }),
                  "Path tracing closest-hit files must each define one closest-hit entrypoint.");
 
+    auto const requireNeuralFallbackSet = [&](const nr::rhi::SlangProgram &program) {
+        auto descriptorLayout = nr::rhi::ShaderDescriptorLayout::create(program, pipelineDesc.descriptorBindingPolicy);
+        nr::nrAssert(descriptorLayout.valid(), "Path tracing neural resource reflection must be valid.");
+        auto root = descriptorLayout.rootCursor();
+        auto const requireBinding = [&](std::string_view name, std::uint32_t binding) {
+            auto cursor = root[name];
+            auto descriptor = cursor.descriptorBinding();
+            nr::nrAssert(cursor.valid() && descriptor.has_value() && descriptor->set == 6u &&
+                              descriptor->binding == binding,
+                         "Path tracing '{}' must retain neural fallback descriptor set 6 binding {}.", name, binding);
+        };
+        requireBinding("gRtNeuralMaterialRefs", 0u);
+        requireBinding("gNeuralModelParameters", 1u);
+        requireBinding("gNeuralLatentTexture0", 2u);
+        requireBinding("gNeuralLatentTexture1", 3u);
+    };
+    requireNeuralFallbackSet(compiledPrograms[raygenIndex]);
+    std::ranges::for_each(std::views::iota(firstClosestHitIndex, compiledPrograms.size()),
+                          [&](std::size_t index) { requireNeuralFallbackSet(compiledPrograms[index]); });
+
     if (raygenIndex != baselineRaygenIndex)
     {
         nr::rhi::assertShaderLayoutAbiStable(compiledPrograms[baselineRaygenIndex], compiledPrograms[raygenIndex],
@@ -462,11 +486,29 @@ createPathTracingPipelineRuntime(nr::rhi::Device &device, const PathTracingPipel
             .maxLod = 0.0f,
         });
     nr::nrAssert(environmentSampler.has_value(), "Path tracing gEnvironmentMap must support an immutable sampler.");
+    auto const neuralLatentSamplerDesc = nr::rhi::SlangSamplerDesc{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .addressModeU = vk::SamplerAddressMode::eRepeat,
+        .addressModeV = vk::SamplerAddressMode::eRepeat,
+        .addressModeW = vk::SamplerAddressMode::eRepeat,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+    };
+    auto neuralLatentTexture0Sampler =
+        descriptorLayout.rootCursor()["gNeuralLatentTexture0"].makeImmutableSamplerBinding(neuralLatentSamplerDesc);
+    auto neuralLatentTexture1Sampler =
+        descriptorLayout.rootCursor()["gNeuralLatentTexture1"].makeImmutableSamplerBinding(neuralLatentSamplerDesc);
+    nr::nrAssert(neuralLatentTexture0Sampler.has_value() && neuralLatentTexture1Sampler.has_value(),
+                 "Path tracing neural latent textures must support immutable samplers.");
 
     auto pipelineRuntime = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::RayTracingPipeline>>();
     auto immutableSamplers = std::array{
         sceneTextureTableImmutableSamplerBinding(),
         *environmentSampler,
+        *neuralLatentTexture0Sampler,
+        *neuralLatentTexture1Sampler,
     };
     pipelineRuntime->initializeDeferred(device.pipeline().createRayTracingPipeline(
         programs.raygen, programAssembly, pipelineDesc, 64u, immutableSamplers,
@@ -723,6 +765,13 @@ void publishPathTracingGuides(
     auto rtMaterialHeaders = context.resolveFrameResource(nr::renderer::frameResource::sceneRtMaterialHeaders);
     auto rtMaterialLayers = context.resolveFrameResource(nr::renderer::frameResource::sceneRtMaterialLayers);
     auto rtMaterialTextureRefs = context.resolveFrameResource(nr::renderer::frameResource::sceneRtMaterialTextureRefs);
+    auto rtNeuralMaterialRefs = context.resolveFrameResource(nr::renderer::frameResource::sceneRtNeuralMaterialRefs);
+    auto neuralModelParameters =
+        context.resolveFrameResource(nr::renderer::frameResource::sceneRtNeuralModelParameters);
+    auto neuralLatentTexture0 =
+        context.resolveFrameResource(nr::renderer::frameResource::sceneRtNeuralLatentTexture0);
+    auto neuralLatentTexture1 =
+        context.resolveFrameResource(nr::renderer::frameResource::sceneRtNeuralLatentTexture1);
     auto rtVertexAtlas = context.resolveFrameResource(nr::renderer::frameResource::sceneRtVertexAtlas);
     auto rtIndexAtlas = context.resolveFrameResource(nr::renderer::frameResource::sceneRtIndexAtlas);
     auto sceneLightHeader = context.resolveFrameResource(nr::renderer::frameResource::sceneLightHeader);
@@ -730,8 +779,10 @@ void publishPathTracingGuides(
     auto sceneLightAliasTable = context.resolveFrameResource(nr::renderer::frameResource::sceneLightAliasTable);
     auto rtHitSbtPlanHandle = context.resolveFrameData(nr::renderer::frameData::sceneRtHitSbtPlan);
     auto sidebandResources = std::array{
-        rtInstanceMetadata, rtGeometryMetadata, rtMaterialHeaders, rtMaterialLayers, rtMaterialTextureRefs,
-        rtVertexAtlas,      rtIndexAtlas,       sceneLightHeader,  sceneLights,      sceneLightAliasTable,
+        rtInstanceMetadata,     rtGeometryMetadata,       rtMaterialHeaders,     rtMaterialLayers,
+        rtMaterialTextureRefs,  rtNeuralMaterialRefs,     neuralModelParameters, neuralLatentTexture0,
+        neuralLatentTexture1,   rtVertexAtlas,             rtIndexAtlas,          sceneLightHeader,
+        sceneLights,            sceneLightAliasTable,
     };
     if (!rtHitSbtPlanHandle.valid() ||
         std::ranges::any_of(sidebandResources,
@@ -757,6 +808,10 @@ void publishPathTracingGuides(
         .rtMaterialHeaders = rtMaterialHeaders,
         .rtMaterialLayers = rtMaterialLayers,
         .rtMaterialTextureRefs = rtMaterialTextureRefs,
+        .rtNeuralMaterialRefs = rtNeuralMaterialRefs,
+        .neuralModelParameters = neuralModelParameters,
+        .neuralLatentTexture0 = neuralLatentTexture0,
+        .neuralLatentTexture1 = neuralLatentTexture1,
         .rtVertexAtlas = rtVertexAtlas,
         .rtIndexAtlas = rtIndexAtlas,
         .sceneLightHeader = sceneLightHeader,
@@ -899,6 +954,10 @@ void PathTracingNode::materializeCurrentFrame(NodeBuildContext &context, const N
         .storageBuffer("rtMaterialHeaders", inputs.rtMaterialHeaders, "PathTracing.MaterialHeaders")
         .storageBuffer("rtMaterialLayers", inputs.rtMaterialLayers, "PathTracing.MaterialLayers")
         .storageBuffer("rtMaterialTextureRefs", inputs.rtMaterialTextureRefs, "PathTracing.MaterialTextureRefs")
+        .storageBuffer("gRtNeuralMaterialRefs", inputs.rtNeuralMaterialRefs, "PathTracing.NeuralMaterialRefs")
+        .storageBuffer("gNeuralModelParameters", inputs.neuralModelParameters, "PathTracing.NeuralModelParameters")
+        .sampledImage("gNeuralLatentTexture0", inputs.neuralLatentTexture0, "PathTracing.NeuralLatentTexture0")
+        .sampledImage("gNeuralLatentTexture1", inputs.neuralLatentTexture1, "PathTracing.NeuralLatentTexture1")
         .storageBuffer("rtVertexData", inputs.rtVertexAtlas, "PathTracing.VertexAtlas")
         .storageBuffer("rtIndexData", inputs.rtIndexAtlas, "PathTracing.IndexAtlas")
         .sampledImage("gEnvironmentMap", environmentMap, "Renderer.EnvironmentMap")

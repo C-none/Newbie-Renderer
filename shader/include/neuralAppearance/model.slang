@@ -58,17 +58,17 @@ struct NeuralAppearanceHiddenLayer : IDifferentiable
 
 };
 
-struct NeuralAppearanceDirectionFeatures : IDifferentiable
+public struct NeuralAppearanceDirectionFeatures : IDifferentiable
 {
-    float values[12] = {};
+    public float values[12] = {};
 
     [Differentiable]
-    __init()
+    public __init()
     {
     }
 
     [Differentiable]
-    __init(float3 light0, float3 view0, float3 light1, float3 view1)
+    public __init(float3 light0, float3 view0, float3 light1, float3 view1)
     {
         values[0] = light0.x;
         values[1] = light0.y;
@@ -112,7 +112,7 @@ float3 neuralAppearanceDifferentiableOrthogonal(float3 normal)
 }
 
 [Differentiable]
-NeuralAppearanceFrame neuralAppearanceBuildFrame(float rawValues[6])
+public NeuralAppearanceFrame neuralAppearanceBuildFrame(float rawValues[6])
 {
     float3 normal = neuralAppearanceDifferentiableNormalize(
         float3(rawValues[0], rawValues[1], rawValues[2]), float3(0.0f, 1.0f, 0.0f));
@@ -220,7 +220,7 @@ float3 neuralAppearanceDirectionInFrame(NeuralAppearanceFrame frame, float3 dire
 }
 
 [Differentiable]
-NeuralAppearanceDirectionFeatures neuralAppearanceDirectionFeatures(
+public NeuralAppearanceDirectionFeatures neuralAppearanceDirectionFeatures(
     NeuralMaterialContext context, float3 viewDirection, float3 lightDirection)
 {
     float3 light0 = neuralAppearanceDirectionInFrame(context.frames[0], lightDirection);
@@ -231,7 +231,7 @@ NeuralAppearanceDirectionFeatures neuralAppearanceDirectionFeatures(
 }
 
 [Differentiable]
-float3 neuralAppearanceDecodeOutput(float3 logits)
+public float3 neuralAppearanceDecodeOutput(float3 logits)
 {
     // Capping the exponent argument at 11 keeps decoded RGB below the finite
     // rgba16f range while retaining exp(logits - 3) throughout that range.
@@ -366,4 +366,142 @@ public float3 evaluateNeuralAppearanceRecomputedRuntime(
     NeuralMaterialContext context = buildNeuralMaterialContextRuntime(parameterBuffer, latent);
     return evaluateNeuralAppearanceRuntime(
         parameterBuffer, context, viewDirection, lightDirection);
+}
+
+// -----------------------------------------------------------------------------
+// V2 FP16 CooperativeVector inference ABI
+// -----------------------------------------------------------------------------
+//
+// This path deliberately has no stage entry point. It is shared by training,
+// the preview viewer, and ray tracing. The portable parameter blob is always
+// F/S/D/H/O in the exact byte layout declared in layout.slang. Do not use a
+// TrainingOptimal matrix here: that layout is device-local gradient scratch.
+
+public CoopVec<half, N> neuralAppearanceCoopVecFromFloatArray<let N : int>(float values[N])
+{
+    CoopVec<half, N> result;
+    [ForceUnroll]
+    for (int index = 0; index < N; ++index)
+    {
+        result[index] = half(values[index]);
+    }
+    return result;
+}
+
+public float[N] neuralAppearanceFloatArrayFromCoopVec<let N : int>(CoopVec<half, N> value)
+{
+    float result[N];
+    [ForceUnroll]
+    for (int index = 0; index < N; ++index)
+    {
+        result[index] = float(value[index]);
+    }
+    return result;
+}
+
+CoopVec<half, Outputs> neuralAppearanceCoopLinear<let Inputs : int, let Outputs : int>(
+    CoopVec<half, Inputs> input, ByteAddressBuffer parameters, uint weightOffsetBytes,
+    uint biasOffsetBytes, uint rowStrideBytes)
+{
+    return coopVecMatMulAdd<half, Outputs>(
+        input,
+        CoopVecComponentType.Float16,
+        parameters,
+        int(weightOffsetBytes),
+        CoopVecComponentType.Float16,
+        parameters,
+        int(biasOffsetBytes),
+        CoopVecComponentType.Float16,
+        CoopVecMatrixLayout.RowMajor,
+        false,
+        int(rowStrideBytes));
+}
+
+CoopVec<half, Outputs> neuralAppearanceCoopLinearNoBias<let Inputs : int, let Outputs : int>(
+    CoopVec<half, Inputs> input, ByteAddressBuffer parameters, uint weightOffsetBytes,
+    uint rowStrideBytes)
+{
+    return coopVecMatMul<half, Outputs>(
+        input,
+        CoopVecComponentType.Float16,
+        parameters,
+        int(weightOffsetBytes),
+        CoopVecComponentType.Float16,
+        CoopVecMatrixLayout.RowMajor,
+        false,
+        int(rowStrideBytes));
+}
+
+NeuralAppearanceFrame neuralAppearanceBuildFrameCoop(CoopVec<half, 12> frameValues, uint frameIndex)
+{
+    float rawValues[6];
+    uint base = frameIndex * 6u;
+    [ForceUnroll]
+    for (uint output = 0u; output < 6u; ++output)
+    {
+        rawValues[output] = float(frameValues[int(base + output)]);
+    }
+    return neuralAppearanceBuildFrame(rawValues);
+}
+
+float3 neuralAppearanceFinishDecodeCoop(ByteAddressBuffer parameters, CoopVec<half, 32> firstHidden)
+{
+    CoopVec<half, 32> hiddenPreActivation = neuralAppearanceCoopLinear<32, 32>(
+        firstHidden, parameters, kNeuralAppearanceHiddenWeightByteOffset,
+        kNeuralAppearanceHiddenBiasByteOffset, kNeuralAppearanceHiddenWeightRowStrideBytes);
+    float hiddenValues[32] = neuralAppearanceFloatArrayFromCoopVec(hiddenPreActivation);
+    [ForceUnroll]
+    for (int index = 0; index < 32; ++index)
+    {
+        hiddenValues[index] = max(hiddenValues[index], 0.0f);
+    }
+    CoopVec<half, 3> output = neuralAppearanceCoopLinear<32, 3>(
+        neuralAppearanceCoopVecFromFloatArray(hiddenValues), parameters, kNeuralAppearanceOutputWeightByteOffset,
+        kNeuralAppearanceOutputBiasByteOffset, kNeuralAppearanceOutputWeightRowStrideBytes);
+    return neuralAppearanceDecodeOutput(float3(float(output[0]), float(output[1]), float(output[2])));
+}
+
+public float3 evaluateNeuralAppearanceRuntime(
+    ByteAddressBuffer parameters, NeuralAppearanceLatent latent,
+    float3 viewDirection, float3 lightDirection)
+{
+    float latentValues[8] = {
+        latent.chunks[0].x, latent.chunks[0].y, latent.chunks[0].z, latent.chunks[0].w,
+        latent.chunks[1].x, latent.chunks[1].y, latent.chunks[1].z, latent.chunks[1].w,
+    };
+    CoopVec<half, 8> latentVector = neuralAppearanceCoopVecFromFloatArray(latentValues);
+    CoopVec<half, 12> frameValues = neuralAppearanceCoopLinear<8, 12>(
+        latentVector, parameters, kNeuralAppearanceFrameWeightByteOffset,
+        kNeuralAppearanceFrameBiasByteOffset, kNeuralAppearanceFrameWeightRowStrideBytes);
+    NeuralMaterialContext context = NeuralMaterialContext(
+        neuralAppearanceBuildFrameCoop(frameValues, 0u),
+        neuralAppearanceBuildFrameCoop(frameValues, 1u));
+
+    CoopVec<half, 32> spatial = neuralAppearanceCoopLinear<8, 32>(
+        latentVector, parameters, kNeuralAppearanceSpatialWeightByteOffset,
+        kNeuralAppearanceSpatialBiasByteOffset, kNeuralAppearanceSpatialWeightRowStrideBytes);
+    NeuralAppearanceDirectionFeatures directionFeatures =
+        neuralAppearanceDirectionFeatures(context, viewDirection, lightDirection);
+    CoopVec<half, 12> directionVector = neuralAppearanceCoopVecFromFloatArray(directionFeatures.values);
+    CoopVec<half, 32> directional = neuralAppearanceCoopLinearNoBias<12, 32>(
+        directionVector, parameters, kNeuralAppearanceDirectionWeightByteOffset,
+        kNeuralAppearanceDirectionWeightRowStrideBytes);
+    float spatialValues[32] = neuralAppearanceFloatArrayFromCoopVec(spatial);
+    float directionalValues[32] = neuralAppearanceFloatArrayFromCoopVec(directional);
+    float firstHiddenValues[32];
+    [ForceUnroll]
+    for (int index = 0; index < 32; ++index)
+    {
+        firstHiddenValues[index] = max(spatialValues[index] + directionalValues[index], 0.0f);
+    }
+    return neuralAppearanceFinishDecodeCoop(
+        parameters, neuralAppearanceCoopVecFromFloatArray(firstHiddenValues));
+}
+
+public float3 evaluateNeuralAppearanceRuntime(
+    ByteAddressBuffer parameters, Sampler2D<float4> latentTexture0, Sampler2D<float4> latentTexture1,
+    float2 uv, float3 viewDirection, float3 lightDirection)
+{
+    return evaluateNeuralAppearanceRuntime(
+        parameters, sampleNeuralAppearanceLatent(latentTexture0, latentTexture1, uv), viewDirection, lightDirection);
 }

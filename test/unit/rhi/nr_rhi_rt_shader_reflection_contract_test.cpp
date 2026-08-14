@@ -546,6 +546,10 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         auto materialHeaders = rtRoot["rtMaterialHeaders"];
         auto materialLayers = rtRoot["rtMaterialLayers"];
         auto materialTextureRefs = rtRoot["rtMaterialTextureRefs"];
+        auto neuralMaterialRefs = rtRoot["gRtNeuralMaterialRefs"];
+        auto neuralModelParameters = rtRoot["gNeuralModelParameters"];
+        auto neuralLatentTexture0 = rtRoot["gNeuralLatentTexture0"];
+        auto neuralLatentTexture1 = rtRoot["gNeuralLatentTexture1"];
         auto vertexData = rtRoot["rtVertexData"];
         auto indexData = rtRoot["rtIndexData"];
         auto sceneTextures = rtRoot["gSceneTextures"];
@@ -576,6 +580,9 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(materialHeaders.valid(), "RT material headers cursor should resolve");
         nr::test::require(materialLayers.valid(), "RT material layers cursor should resolve");
         nr::test::require(materialTextureRefs.valid(), "RT material texture refs cursor should resolve");
+        nr::test::require(neuralMaterialRefs.valid() && neuralModelParameters.valid() && neuralLatentTexture0.valid() &&
+                              neuralLatentTexture1.valid(),
+                          "PathTracing raygen must retain its complete neural-material fallback set");
         nr::test::require(vertexData.valid(), "RT vertex atlas cursor should resolve");
         nr::test::require(indexData.valid(), "RT index atlas cursor should resolve");
         nr::test::require(sceneTextures.valid(), "path tracing scene texture table cursor should resolve");
@@ -632,6 +639,14 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         nr::test::require(materialHeaders.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
         nr::test::require(materialLayers.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
         nr::test::require(materialTextureRefs.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
+        nr::test::require(neuralMaterialRefs.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer &&
+                              neuralModelParameters.descriptorSemantic() ==
+                                  nr::rhi::ShaderDescriptorSemantic::StorageBuffer &&
+                              neuralLatentTexture0.descriptorSemantic() ==
+                                  nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler &&
+                              neuralLatentTexture1.descriptorSemantic() ==
+                                  nr::rhi::ShaderDescriptorSemantic::CombinedImageSampler,
+                          "PathTracing neural fallback descriptors must preserve their resource semantics");
         nr::test::require(vertexData.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
         nr::test::require(indexData.descriptorSemantic() == nr::rhi::ShaderDescriptorSemantic::StorageBuffer);
         nr::test::require(sceneTextures.descriptorSemantic() ==
@@ -665,6 +680,10 @@ const nr::test::CaseRegistrar rtObjectShaderReflectionCase{
         requireDescriptorBinding(materialHeaders, "rtMaterialHeaders", 3u, 3u);
         requireDescriptorBinding(materialLayers, "rtMaterialLayers", 3u, 4u);
         requireDescriptorBinding(materialTextureRefs, "rtMaterialTextureRefs", 3u, 5u);
+        requireDescriptorBinding(neuralMaterialRefs, "gRtNeuralMaterialRefs", 6u, 0u);
+        requireDescriptorBinding(neuralModelParameters, "gNeuralModelParameters", 6u, 1u);
+        requireDescriptorBinding(neuralLatentTexture0, "gNeuralLatentTexture0", 6u, 2u);
+        requireDescriptorBinding(neuralLatentTexture1, "gNeuralLatentTexture1", 6u, 3u);
         requireDescriptorBinding(vertexData, "rtVertexData", 3u, 6u);
         requireDescriptorBinding(indexData, "rtIndexData", 3u, 7u);
         requireDescriptorBinding(scene, "scene", 4u, 0u);

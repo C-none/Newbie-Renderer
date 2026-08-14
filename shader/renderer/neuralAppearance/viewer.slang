@@ -23,7 +23,7 @@ Sampler2D<float4> gLatentTexture0;
 Sampler2D<float4> gLatentTexture1;
 
 [[vk::binding(1, 2)]]
-StructuredBuffer<float4> gModelParameters;
+ByteAddressBuffer gInferenceParameters;
 
 [[vk::binding(2, 2)]]
 StructuredBuffer<float4> gTrainingStatus;
@@ -51,15 +51,13 @@ float3 neuralAppearanceViewerLightDirection(uint frameIndex)
 float3 evaluateNeuralAppearanceViewer(
     float2 materialUv, float3 viewDirection, float3 lightDirection)
 {
-    NeuralAppearanceLatent latent = sampleNeuralAppearanceLatent(
-        gLatentTexture0, gLatentTexture1, materialUv);
-    NeuralMaterialContext context = buildNeuralMaterialContextRuntime(
-        gModelParameters, latent);
     return evaluateNeuralAppearanceRuntime(
-        gModelParameters, context, viewDirection, lightDirection);
+        gInferenceParameters, gLatentTexture0, gLatentTexture1,
+        materialUv, viewDirection, lightDirection);
 }
 
 [shader("compute")]
+[require(spvCooperativeVectorNV)]
 [numthreads(8, 8, 1)]
 void viewerMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 {

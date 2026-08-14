@@ -81,7 +81,7 @@ public float3 neuralAppearanceTrainingOrthogonal(float3 direction)
         cross(referenceAxis, normalizedDirection), float3(0.0f, 0.0f, 1.0f));
 }
 
-NeuralAppearanceDirectionPair neuralAppearanceRusinkiewiczDirectionPair(
+public NeuralAppearanceDirectionPair neuralAppearanceRusinkiewiczDirectionPair(
     float thetaH, float thetaD, float phiH, float phiD)
 {
     float sinThetaH = sin(thetaH);

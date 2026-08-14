@@ -14,6 +14,7 @@ target_link_libraries(nrscene
         utils
         nrload
         nrresource
+        nrneuralappearanceasset
         nrrhi
         dependency_math
         dependency_ecs

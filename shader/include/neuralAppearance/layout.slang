@@ -14,6 +14,33 @@ public static const uint kNeuralAppearanceBatchSize = 64u;
 public static const uint kNeuralAppearanceGradientChunkCount = 492u;
 public static const uint kNeuralAppearanceTrainingSchemaMagic = 0x4e415450u;
 
+// V2 deployment ABI. The optimizer owns FP32 master parameters in the legacy
+// float4 buffer below, while all inference and differentiable affine reads use
+// this tightly specified FP16 row-major mirror. Keep these byte offsets in
+// sync with the portable .nart writer/reader; TrainingOptimal data is never
+// described here because it is device-local and opaque.
+public static const uint kNeuralAppearanceInferenceParameterBytes = 3968u;
+public static const uint kNeuralAppearanceInferenceScalarBytes = 2u;
+public static const uint kNeuralAppearanceFrameWeightByteOffset = 0u;
+public static const uint kNeuralAppearanceFrameWeightRowStrideBytes = 16u;
+public static const uint kNeuralAppearanceFrameBiasByteOffset = 192u;
+public static const uint kNeuralAppearanceSpatialWeightByteOffset = 256u;
+public static const uint kNeuralAppearanceSpatialWeightRowStrideBytes = 16u;
+public static const uint kNeuralAppearanceSpatialBiasByteOffset = 768u;
+public static const uint kNeuralAppearanceDirectionWeightByteOffset = 832u;
+public static const uint kNeuralAppearanceDirectionWeightRowStrideBytes = 24u;
+public static const uint kNeuralAppearanceHiddenWeightByteOffset = 1600u;
+public static const uint kNeuralAppearanceHiddenWeightRowStrideBytes = 64u;
+public static const uint kNeuralAppearanceHiddenBiasByteOffset = 3648u;
+public static const uint kNeuralAppearanceOutputWeightByteOffset = 3712u;
+public static const uint kNeuralAppearanceOutputWeightRowStrideBytes = 64u;
+public static const uint kNeuralAppearanceOutputBiasByteOffset = 3904u;
+
+// Fixed five-affine topology: F(8->12), S(8->32), D(12->32), H(32->32),
+// O(32->3). The legacy scalar offsets intentionally remain below because the
+// FP32 master/Adam state is retained for checkpoint compatibility.
+public static const uint kNeuralAppearanceAffineLayerCount = 5u;
+
 public static const uint kNeuralAppearanceFrameWeightOffset = 0u;
 public static const uint kNeuralAppearanceFrameBiasOffset = 96u;
 public static const uint kNeuralAppearanceSpatialWeightOffset = 108u;

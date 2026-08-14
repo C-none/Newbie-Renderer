@@ -37,10 +37,14 @@ public enum ResolvedMaterialFlag : uint
     mediumTransitionBit0,
     mediumTransitionBit1,
     volumeTransmission,
+    // Ray payload transport-only bits. They are outside layer/alpha/scatter
+    // fields and never influence SBT specialization or analytic material logic.
+    neuralMaterialP0 = 1u << 29u,
+    neuralTangentNegative = 1u << 30u,
 
     layerMask = baseSurface | clearcoat | sheen | transmission | anisotropicBaseLobe,
     alphaModeMask = alphaModeBit0 | alphaModeBit1,
-    materialMask = layerMask | alphaModeMask | frontFace,
+    materialMask = layerMask | alphaModeMask | frontFace | neuralMaterialP0 | neuralTangentNegative,
     scatterKindMask = scatterKindBit0 | scatterKindBit1 | scatterKindBit2,
     mediumTransitionMask = mediumTransitionBit0 | mediumTransitionBit1,
     scatterMask = scatterValid | scatterKindMask | scatterDelta | mediumTransitionMask,

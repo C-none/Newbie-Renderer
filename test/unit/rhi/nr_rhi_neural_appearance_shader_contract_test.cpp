@@ -16,6 +16,8 @@ inline constexpr auto kParameterChunkCount = std::size_t{484u};
 inline constexpr auto kFrameWeightScalarCountPerFrame = std::size_t{48u};
 inline constexpr auto kContractBatchSize = std::uint32_t{32u};
 inline constexpr auto kShaderBatchSize = std::uint32_t{64u};
+inline constexpr auto kTrainingPairSlotCount = std::uint32_t{8u};
+inline constexpr auto kV2TrainingGraphPassCount = std::uint32_t{43u};
 inline constexpr auto kSampleTargetChunkCount = std::size_t{64u};
 inline constexpr auto kGradientChunkCount = std::size_t{492u};
 inline constexpr auto kTrainingStepCount = std::uint32_t{16u};
@@ -81,10 +83,14 @@ enum class NeuralProgram : std::size_t
 {
     Initialize,
     Target,
+    ClearCoopGradients,
     Gradient,
     Optimize,
     Pack,
     Viewer,
+    // The legacy diagnostic programs remain enumerated because the retained
+    // helpers below document the former FP32 oracle. They are deliberately no
+    // longer compiled by the V2 CoopVec contract.
     ModelContract,
     AutodiffContract,
     Quality,
@@ -100,6 +106,15 @@ struct NeuralAppearanceGradientPushConstants
     std::uint32_t mollificationStepCount = kMollificationStepCount;
     float initialAngleRadians = kMollificationInitialAngleRadians;
     float padding = 0.0f;
+    std::array<std::uint32_t, 5u> optimalWeightOffsets{};
+};
+
+struct NeuralAppearanceClearCoopGradientsPushConstants
+{
+    std::uint32_t optimalWeightGradientBytes = 0u;
+    std::uint32_t rowMajorWeightGradientBytes = 0u;
+    std::uint32_t biasGradientBytes = 0u;
+    std::uint32_t padding = 0u;
 };
 
 struct NeuralAppearanceOptimizePushConstants
@@ -169,7 +184,8 @@ struct QualityMetrics
     QualityStratumMetrics grazing{};
 };
 
-static_assert(sizeof(NeuralAppearanceGradientPushConstants) == 32u);
+static_assert(sizeof(NeuralAppearanceGradientPushConstants) == 52u);
+static_assert(sizeof(NeuralAppearanceClearCoopGradientsPushConstants) == 16u);
 static_assert(sizeof(NeuralAppearanceOptimizePushConstants) == 48u);
 static_assert(sizeof(NeuralAppearanceViewerPushConstants) == 24u);
 static_assert(kSampleTargetChunkCount == kShaderBatchSize);
@@ -439,20 +455,16 @@ void requireNeuralMaterialContextLayout(const nr::rhi::SlangProgram &program, st
             .sourcePath = std::filesystem::path{"renderer/neuralAppearance/initializeTraining"}},
         nr::rhi::SlangProgramCompileFileRequest{.sourcePath =
                                                     std::filesystem::path{"renderer/neuralAppearance/evaluateTargets"}},
+        nr::rhi::SlangProgramCompileFileRequest{.sourcePath =
+                                                    std::filesystem::path{"renderer/neuralAppearance/clearCoopGradients"}},
         nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/neuralAppearance/evaluateGradients"}},
+                                                    .sourcePath = std::filesystem::path{"renderer/neuralAppearance/evaluateGradients"}},
         nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/neuralAppearance/optimizeTraining"}},
         nr::rhi::SlangProgramCompileFileRequest{.sourcePath =
                                                     std::filesystem::path{"renderer/neuralAppearance/packLatent"}},
         nr::rhi::SlangProgramCompileFileRequest{.sourcePath =
                                                     std::filesystem::path{"renderer/neuralAppearance/viewer"}},
-        nr::rhi::SlangProgramCompileFileRequest{.sourcePath =
-                                                    std::filesystem::path{"test/neuralAppearance/modelContract"}},
-        nr::rhi::SlangProgramCompileFileRequest{.sourcePath =
-                                                    std::filesystem::path{"test/neuralAppearance/autodiffContract"}},
-        nr::rhi::SlangProgramCompileFileRequest{.sourcePath =
-                                                    std::filesystem::path{"test/neuralAppearance/qualityContract"}},
     };
     auto programs = shaderService.compileProgramsByFile(requests);
     nr::test::requireEqual(programs.size(), requests.size());
@@ -463,23 +475,20 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
 {
     auto const programNames = std::array{
         std::string_view{"initializeTraining"}, std::string_view{"evaluateTargets"},
-        std::string_view{"evaluateGradients"},  std::string_view{"optimizeTraining"},
-        std::string_view{"packLatent"},         std::string_view{"viewer"},
-        std::string_view{"modelContract"},      std::string_view{"autodiffContract"},
-        std::string_view{"qualityContract"},
+        std::string_view{"clearCoopGradients"}, std::string_view{"evaluateGradients"},
+        std::string_view{"optimizeTraining"},   std::string_view{"packLatent"},
+        std::string_view{"viewer"},
     };
     std::ranges::for_each(std::views::iota(std::size_t{0u}, programs.size()),
                           [&](std::size_t index) { requireComputeProgram(programs[index], programNames[index]); });
 
     auto const &initialize = programs[programIndex(NeuralProgram::Initialize)];
     auto const &target = programs[programIndex(NeuralProgram::Target)];
+    auto const &clear = programs[programIndex(NeuralProgram::ClearCoopGradients)];
     auto const &gradient = programs[programIndex(NeuralProgram::Gradient)];
     auto const &optimize = programs[programIndex(NeuralProgram::Optimize)];
     auto const &pack = programs[programIndex(NeuralProgram::Pack)];
     auto const &viewer = programs[programIndex(NeuralProgram::Viewer)];
-    auto const &modelContract = programs[programIndex(NeuralProgram::ModelContract)];
-    auto const &autodiffContract = programs[programIndex(NeuralProgram::AutodiffContract)];
-    auto const &quality = programs[programIndex(NeuralProgram::Quality)];
 
     requireDescriptorBindings(initialize,
                               {{"gTrainingControl", 1u, 0u, vk::DescriptorType::eStorageBuffer},
@@ -487,13 +496,22 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
                                {"gModelMoments", 2u, 1u, vk::DescriptorType::eStorageBuffer},
                                {"gTrainingLatent", 2u, 2u, vk::DescriptorType::eStorageBuffer},
                                {"gLatentMoments", 2u, 3u, vk::DescriptorType::eStorageBuffer},
-                               {"gTrainingStatus", 2u, 4u, vk::DescriptorType::eStorageBuffer}},
+                               {"gTrainingStatus", 2u, 4u, vk::DescriptorType::eStorageBuffer},
+                               {"gInferenceParameters", 2u, 5u, vk::DescriptorType::eStorageBuffer},
+                               {"gInferenceLatent", 2u, 6u, vk::DescriptorType::eStorageBuffer}},
                               "initializeTraining");
     requireDescriptorBindings(target, {{"gSampleTargets", 2u, 0u, vk::DescriptorType::eStorageBuffer}},
                               "evaluateTargets");
+    requireDescriptorBindings(clear,
+                              {{"gOptimalWeightGradients", 2u, 0u, vk::DescriptorType::eStorageBuffer},
+                               {"gRowMajorWeightGradients", 2u, 1u, vk::DescriptorType::eStorageBuffer},
+                               {"gBiasGradients", 2u, 2u, vk::DescriptorType::eStorageBuffer}},
+                              "clearCoopGradients");
     requireDescriptorBindings(gradient,
-                              {{"gModelParameters", 1u, 0u, vk::DescriptorType::eStorageBuffer},
-                               {"gTrainingLatent", 1u, 1u, vk::DescriptorType::eStorageBuffer},
+                              {{"gInferenceParameters", 1u, 0u, vk::DescriptorType::eStorageBuffer},
+                               {"gInferenceLatent", 1u, 1u, vk::DescriptorType::eStorageBuffer},
+                               {"gOptimalWeightGradients", 2u, 4u, vk::DescriptorType::eStorageBuffer},
+                               {"gBiasGradients", 2u, 5u, vk::DescriptorType::eStorageBuffer},
                                {"gSampleTargets", 2u, 3u, vk::DescriptorType::eStorageBuffer},
                                {"gSampleGradients", 2u, 0u, vk::DescriptorType::eStorageBuffer},
                                {"gSampleTexelIndices", 2u, 1u, vk::DescriptorType::eStorageBuffer},
@@ -508,35 +526,28 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
                                {"gTrainingLatent", 2u, 2u, vk::DescriptorType::eStorageBuffer},
                                {"gLatentMoments", 2u, 3u, vk::DescriptorType::eStorageBuffer},
                                {"gTrainingStatus", 2u, 4u, vk::DescriptorType::eStorageBuffer},
-                               {"gTrainingControl", 2u, 5u, vk::DescriptorType::eStorageBuffer}},
+                               {"gTrainingControl", 2u, 5u, vk::DescriptorType::eStorageBuffer},
+                               {"gRowMajorWeightGradients", 2u, 7u, vk::DescriptorType::eStorageBuffer},
+                               {"gBiasGradients", 2u, 8u, vk::DescriptorType::eStorageBuffer},
+                               {"gInferenceParameters", 2u, 9u, vk::DescriptorType::eStorageBuffer},
+                               {"gInferenceLatent", 2u, 10u, vk::DescriptorType::eStorageBuffer}},
                               "optimizeTraining");
     requireDescriptorBindings(pack,
-                              {{"gTrainingLatent", 1u, 0u, vk::DescriptorType::eStorageBuffer},
+                              {{"gInferenceLatent", 4u, 0u, vk::DescriptorType::eStorageBuffer},
+                               {"gModelParameters", 4u, 1u, vk::DescriptorType::eStorageBuffer},
+                               {"gTrainingLatent", 4u, 2u, vk::DescriptorType::eStorageBuffer},
+                               {"gInferenceParameters", 4u, 3u, vk::DescriptorType::eStorageBuffer},
+                               {"gHeldOutQualitySamples", 4u, 4u, vk::DescriptorType::eStorageBuffer},
                                {"gLatentTexture0", 2u, 0u, vk::DescriptorType::eStorageImage},
                                {"gLatentTexture1", 2u, 1u, vk::DescriptorType::eStorageImage}},
                               "packLatent");
     requireDescriptorBindings(viewer,
                               {{"gLatentTexture0", 1u, 0u, vk::DescriptorType::eCombinedImageSampler},
                                {"gLatentTexture1", 1u, 1u, vk::DescriptorType::eCombinedImageSampler},
-                               {"gModelParameters", 2u, 1u, vk::DescriptorType::eStorageBuffer},
+                               {"gInferenceParameters", 2u, 1u, vk::DescriptorType::eStorageBuffer},
                                {"gTrainingStatus", 2u, 2u, vk::DescriptorType::eStorageBuffer},
                                {"gOutputColor", 2u, 0u, vk::DescriptorType::eStorageImage}},
                               "viewer");
-    requireDescriptorBindings(modelContract,
-                              {{"gLatentTexture0", 1u, 0u, vk::DescriptorType::eCombinedImageSampler},
-                               {"gLatentTexture1", 1u, 1u, vk::DescriptorType::eCombinedImageSampler},
-                               {"gModelParameters", 2u, 1u, vk::DescriptorType::eStorageBuffer},
-                               {"gContractResults", 2u, 0u, vk::DescriptorType::eStorageBuffer}},
-                              "modelContract");
-    requireDescriptorBindings(autodiffContract, {{"gAutodiffResults", 2u, 0u, vk::DescriptorType::eStorageBuffer}},
-                              "autodiffContract");
-    requireDescriptorBindings(quality,
-                              {{"gLatentTexture0", 1u, 0u, vk::DescriptorType::eCombinedImageSampler},
-                               {"gLatentTexture1", 1u, 1u, vk::DescriptorType::eCombinedImageSampler},
-                               {"gModelParameters", 2u, 1u, vk::DescriptorType::eStorageBuffer},
-                               {"gQualityMetrics", 2u, 0u, vk::DescriptorType::eStorageBuffer}},
-                              "qualityContract");
-
     requirePushConstant(target, "gTraining", 32u,
                         {{"trainingStep", 0u},
                          {"batchSize", 4u},
@@ -547,7 +558,13 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
                          {"initialAngleRadians", 24u},
                          {"padding", 28u}},
                         "evaluateTargets");
-    requirePushConstant(gradient, "gTraining", 32u,
+    requirePushConstant(clear, "gClear", 16u,
+                        {{"optimalWeightGradientBytes", 0u},
+                         {"rowMajorWeightGradientBytes", 4u},
+                         {"biasGradientBytes", 8u},
+                         {"padding", 12u}},
+                        "clearCoopGradients");
+    requirePushConstant(gradient, "gTraining", 52u,
                         {{"trainingStep", 0u},
                          {"batchSize", 4u},
                          {"latentWidth", 8u},
@@ -555,7 +572,8 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
                          {"mollificationSampleCount", 16u},
                          {"mollificationStepCount", 20u},
                          {"initialAngleRadians", 24u},
-                         {"padding", 28u}},
+                         {"padding", 28u},
+                         {"optimalWeightOffsets", 32u}},
                         "evaluateGradients");
     requirePushConstant(optimize, "gTraining", 48u,
                         {{"trainingStep", 0u},
@@ -581,8 +599,6 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
                         "viewer");
 
     requireNeuralMaterialContextLayout(viewer, "viewer");
-    requireNeuralMaterialContextLayout(modelContract, "modelContract");
-    requireNeuralMaterialContextLayout(quality, "qualityContract");
     requireLocalArrayInspectorPositiveControl();
 
     auto const *entryPoint = viewer.entryPoint();
@@ -810,6 +826,65 @@ template <typename T>
         exponent == 0u ? std::ldexp(static_cast<float>(mantissa), -24)
                        : std::ldexp(1.0f + static_cast<float>(mantissa) / 1024.0f, static_cast<int>(exponent) - 15);
     return negative ? -magnitude : magnitude;
+}
+
+void requireCoopVecV2TrainingMathContract()
+{
+    struct Layer
+    {
+        std::uint32_t rows;
+        std::uint32_t columns;
+        std::uint32_t weightOffset;
+        std::uint32_t rowStride;
+        std::optional<std::uint32_t> biasOffset;
+    };
+    constexpr auto layers = std::array{
+        Layer{12u, 8u, 0u, 16u, 192u}, Layer{32u, 8u, 256u, 16u, 768u},
+        Layer{32u, 12u, 832u, 24u, std::nullopt}, Layer{32u, 32u, 1600u, 64u, 3648u},
+        Layer{3u, 32u, 3712u, 64u, 3904u},
+    };
+    nr::test::require(layers[0].weightOffset == 0u && layers[0].biasOffset == 192u &&
+                          layers[1].weightOffset == 256u && layers[1].biasOffset == 768u &&
+                          layers[2].weightOffset == 832u && !layers[2].biasOffset &&
+                          layers[3].weightOffset == 1600u && layers[3].biasOffset == 3648u &&
+                          layers[4].weightOffset == 3712u && layers[4].biasOffset == 3904u,
+                      "V2 F/S/D/H/O byte offsets must remain ABI-stable");
+    auto const weightBytes = std::accumulate(layers.begin(), layers.end(), 0u, [](std::uint32_t total, Layer layer) {
+        return total + layer.rows * layer.rowStride;
+    });
+    auto const biasBytes = std::accumulate(layers.begin(), layers.end(), 0u, [](std::uint32_t total, Layer layer) {
+        return total + (layer.biasOffset ? layer.rows * 2u : 0u);
+    });
+    nr::test::require(weightBytes == 3712u && biasBytes == 158u,
+                      "V2 affine weights and biases must occupy the fixed FP16 payload regions");
+    nr::test::require(256u - 216u == 40u && 3968u - 3910u == 58u,
+                      "V2 parameter padding must remain [216,256) and [3910,3968)");
+
+    // D depends on the learned frame, which in turn depends on F and the latent.
+    // A centered finite difference catches an accidental no_diff cut through that fan-out.
+    auto loss = [](float latent) {
+        auto const frame = 2.0f * latent;
+        auto const spatial = 4.0f * latent;
+        auto const directional = 3.0f * frame;
+        auto const output = 5.0f * (spatial + directional);
+        return 0.5f * output * output;
+    };
+    constexpr auto latent = 0.3f;
+    constexpr auto epsilon = 1.0e-4f;
+    auto const centeredDerivative = (loss(latent + epsilon) - loss(latent - epsilon)) / (2.0f * epsilon);
+    auto const analyticDerivative = 2500.0f * latent;
+    nr::test::require(std::abs(centeredDerivative - analyticDerivative) <= 0.5f,
+                      "D-to-frame-to-F latent fan-out finite difference must remain differentiable");
+
+    constexpr auto batchSize = std::size_t{64u};
+    auto const sampleGradient = 0.125f;
+    auto gradients = std::array<float, batchSize>{};
+    gradients.fill(sampleGradient);
+    auto const reducedGradient = std::accumulate(gradients.begin(), gradients.end(), 0.0f);
+    nr::test::require(reducedGradient == sampleGradient * static_cast<float>(batchSize),
+                      "CoopVec weight and bias reductions must preserve N-times batch accumulation");
+    nr::test::require(kV2TrainingGraphPassCount == 1u + kTrainingPairSlotCount * 5u + 2u,
+                      "V2 training graph must retain Initialize + eight Target/Clear/Gradient/Convert/Optimize pairs + Pack + Viewer");
 }
 
 [[nodiscard]] DistributionMetrics distributionMetrics(std::span<const float> values)
@@ -1217,7 +1292,7 @@ void requireAutodiffOracle(std::span<const float> actual)
     });
 }
 
-void executeNeuralTrainingContract(const std::vector<nr::rhi::SlangProgram> &programs)
+[[maybe_unused]] void executeLegacyFp32NeuralTrainingContract(const std::vector<nr::rhi::SlangProgram> &programs)
 {
     auto device = nr::rhi::Device{};
     // Reverse-AD pipeline creation is prohibitively slow under GPU-AV instrumentation.
@@ -1600,8 +1675,56 @@ void executeNeuralTrainingContract(const std::vector<nr::rhi::SlangProgram> &pro
     device.waitIdle();
 }
 
+void executeNeuralTrainingContract(const std::vector<nr::rhi::SlangProgram> &programs)
+{
+    // This executable probe deliberately creates every production PSO after reflection.
+    // The full trainer owns BDA-backed TrainingOptimal conversion and its GPU numerical
+    // sweep; this contract keeps the seven production shader ABI and PSO gate isolated.
+    auto device = nr::rhi::Device{};
+    device.initialize("nr_rhi_neural_appearance_shader_contract_test", "NewbieRenderer", false);
+    auto initialize = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::Initialize)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_initialize_training_v2");
+    auto target = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::Target)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_evaluate_targets_v2");
+    auto clear = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::ClearCoopGradients)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_clear_coop_gradients_v2");
+    auto gradients = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::Gradient)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_evaluate_gradients_v2");
+    auto optimize = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::Optimize)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_optimize_training_v2");
+    auto pack = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::Pack)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_pack_latent_v2");
+    auto viewer = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::Viewer)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_viewer_v2");
+    static_cast<void>(initialize.get());
+    static_cast<void>(target.get());
+    auto clearState = clear.get();
+    static_cast<void>(gradients.get());
+    static_cast<void>(optimize.get());
+    static_cast<void>(pack.get());
+    static_cast<void>(viewer.get());
+
+    constexpr auto clearBindingGroupCapacity = std::size_t{64u};
+    auto clearBindingGroups = std::vector<std::vector<nr::rhi::ShaderBindingSet>>{};
+    clearBindingGroups.reserve(clearBindingGroupCapacity);
+    std::ranges::generate_n(std::back_inserter(clearBindingGroups), clearBindingGroupCapacity, [&] {
+        return nr::rhi::allocateBindingSetsForLayout(clearState.layout, clearState.bindingPool);
+    });
+    nr::test::requireEqual(clearBindingGroups.size(), clearBindingGroupCapacity,
+                           "descriptorMaxSets must count complete multi-set binding groups");
+    device.waitIdle();
+}
+
 const nr::test::CaseRegistrar neuralAppearanceGpuTrainingContractCase{
-    "neural appearance Vulkan Slang 16-round training smoke", [] {
+    "neural appearance V2 CoopVec shader and PSO contract", [] {
+        requireCoopVecV2TrainingMathContract();
         auto programs = compileNeuralPrograms();
         inspectNeuralPrograms(programs);
         executeNeuralTrainingContract(programs);

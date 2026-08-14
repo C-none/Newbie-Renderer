@@ -13,6 +13,65 @@ namespace
 namespace boostJson = boost::json;
 using ErrorCode = boost::system::error_code;
 
+struct DuplicateKeyHandler
+{
+    static constexpr std::size_t max_object_size = boostJson::object::max_size();
+    static constexpr std::size_t max_array_size = boostJson::array::max_size();
+    static constexpr std::size_t max_key_size = boostJson::string::max_size();
+    static constexpr std::size_t max_string_size = boostJson::string::max_size();
+
+    [[nodiscard]] bool on_document_begin(ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_document_end(ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_array_begin(ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_array_end(std::size_t, ErrorCode &) noexcept { return true; }
+
+    [[nodiscard]] bool on_object_begin(ErrorCode &) noexcept
+    {
+        objectKeys.emplace_back();
+        return true;
+    }
+
+    [[nodiscard]] bool on_object_end(std::size_t, ErrorCode &) noexcept
+    {
+        objectKeys.pop_back();
+        return true;
+    }
+
+    [[nodiscard]] bool on_key_part(boostJson::string_view text, std::size_t total, ErrorCode &) noexcept
+    {
+        if (total == text.size())
+        {
+            pendingKey.clear();
+        }
+        pendingKey.append(text.data(), text.size());
+        return true;
+    }
+
+    [[nodiscard]] bool on_key(boostJson::string_view text, std::size_t total, ErrorCode &) noexcept
+    {
+        if (total == text.size())
+        {
+            pendingKey.clear();
+        }
+        pendingKey.append(text.data(), text.size());
+        return !objectKeys.empty() && objectKeys.back().insert(pendingKey).second;
+    }
+
+    [[nodiscard]] bool on_string_part(boostJson::string_view, std::size_t, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_string(boostJson::string_view, std::size_t, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_number_part(boostJson::string_view, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_int64(std::int64_t, boostJson::string_view, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_uint64(std::uint64_t, boostJson::string_view, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_double(double, boostJson::string_view, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_bool(bool, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_null(ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_comment_part(boostJson::string_view, ErrorCode &) noexcept { return true; }
+    [[nodiscard]] bool on_comment(boostJson::string_view, ErrorCode &) noexcept { return true; }
+
+    std::vector<std::set<std::string, std::less<>>> objectKeys{};
+    std::string pendingKey{};
+};
+
 [[nodiscard]] boostJson::parse_options strictJsonOptions(std::size_t maximumDepth) noexcept
 {
     auto options = boostJson::parse_options{};
@@ -114,6 +173,20 @@ JsonParseResult parseJson(std::string_view text, std::size_t maximumDepth)
         };
     }
     return JsonParseResult{.value = fromBoostJson(parser.release())};
+}
+
+JsonParseResult parseJsonRejectingDuplicateKeys(std::string_view text, std::size_t maximumDepth)
+{
+    auto error = ErrorCode{};
+    auto duplicateKeyParser = boostJson::basic_parser<DuplicateKeyHandler>{strictJsonOptions(maximumDepth)};
+    auto const consumed = duplicateKeyParser.write_some(false, text.data(), text.size(), error);
+    if (error || consumed != text.size() || !duplicateKeyParser.done())
+    {
+        return JsonParseResult{
+            .error = error == boostJson::error::too_deep ? JsonError::maximumDepth : JsonError::invalidSyntax,
+        };
+    }
+    return parseJson(text, maximumDepth);
 }
 
 JsonError serializeJson(const JsonValue &value, std::string &output, std::size_t maximumBytes)

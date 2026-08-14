@@ -1,0 +1,6 @@
+{
+  "schema": "nr.neural-material-binding/v2",
+  "scene": "glTF-Sample-Assets/Models/BoxTextured/glTF/BoxTextured.gltf",
+  "material": 0,
+  "artifact": "glTF-Sample-Assets/Models/BoxTextured/glTF/BoxTextured.material-0.nart"
+}

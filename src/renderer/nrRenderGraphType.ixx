@@ -303,6 +303,10 @@ namespace use
 
 [[nodiscard]] PassResourceUseDesc bufferTransferDst(GraphResourceHandle resource) noexcept;
 
+[[nodiscard]] PassResourceUseDesc cooperativeVectorConvertRead(GraphResourceHandle resource) noexcept;
+
+[[nodiscard]] PassResourceUseDesc cooperativeVectorConvertWrite(GraphResourceHandle resource) noexcept;
+
 [[nodiscard]] PassResourceUseDesc storageBufferRead(GraphResourceHandle resource) noexcept;
 
 [[nodiscard]] PassResourceUseDesc storageBufferWrite(GraphResourceHandle resource) noexcept;

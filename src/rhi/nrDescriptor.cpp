@@ -964,7 +964,7 @@ void assertShaderLayoutAbiStable(const SlangProgram &baselineProgram, const Slan
 
 [[nodiscard]] ShaderBindingPool ShaderBindingPool::create(const vk::raii::Device &device,
                                                           const ShaderDescriptorLayout &descriptorLayout,
-                                                          std::uint32_t maxSets)
+                                                          std::uint32_t maxBindingGroups)
 {
     nrAssert(*device != nullptr, "ShaderBindingPool::create requires a valid Vulkan device.");
     nrAssert(descriptorLayout.valid(), "ShaderBindingPool::create requires a valid descriptor layout.");
@@ -972,7 +972,17 @@ void assertShaderLayoutAbiStable(const SlangProgram &baselineProgram, const Slan
     ShaderBindingPool pool;
     pool.device_ = std::cref(device);
 
-    nrAssert(maxSets > 0u, "ShaderBindingPool::create requires maxSets > 0.");
+    nrAssert(maxBindingGroups > 0u, "ShaderBindingPool::create requires maxBindingGroups > 0.");
+
+    auto const reflectedSetCount = descriptorLayout.descriptorSets().size();
+    nrAssert(std::in_range<std::uint32_t>(reflectedSetCount),
+             "ShaderBindingPool reflected descriptor-set count exceeds the Vulkan uint32 range.");
+    auto const physicalSetsPerBindingGroup =
+        std::max(std::uint32_t{1u}, static_cast<std::uint32_t>(reflectedSetCount));
+    nrAssert(maxBindingGroups <= std::numeric_limits<std::uint32_t>::max() / physicalSetsPerBindingGroup,
+             "Descriptor pool maxSets overflows uint32. bindingGroups={}, reflectedSetsPerGroup={}",
+             maxBindingGroups, physicalSetsPerBindingGroup);
+    auto const physicalMaxSets = maxBindingGroups * physicalSetsPerBindingGroup;
 
     auto descriptorCounts = std::map<vk::DescriptorType, std::uint32_t>{};
     std::uint32_t inlineUniformBindingCount = 0;
@@ -987,11 +997,14 @@ void assertShaderLayoutAbiStable(const SlangProgram &baselineProgram, const Slan
             nrAssert(effectiveDescriptorCount > 0u,
                      "ShaderBindingPool::create requires a non-zero descriptor count. set={}, binding={}",
                      bindingInfo.set, bindingInfo.binding);
-            auto scaledDescriptorCount = static_cast<std::uint64_t>(effectiveDescriptorCount) * maxSets;
+            auto scaledDescriptorCount =
+                static_cast<std::uint64_t>(effectiveDescriptorCount) * maxBindingGroups;
             auto &descriptorCount = descriptorCounts[bindingInfo.descriptorType];
             nrAssert(scaledDescriptorCount <= std::numeric_limits<std::uint32_t>::max() - descriptorCount,
-                     "Descriptor pool size overflows uint32 for type {}. accumulated={}, perSet={}, maxSets={}",
-                     vk::to_string(bindingInfo.descriptorType), descriptorCount, effectiveDescriptorCount, maxSets);
+                     "Descriptor pool size overflows uint32 for type {}. accumulated={}, perBindingGroup={}, "
+                     "maxBindingGroups={}",
+                     vk::to_string(bindingInfo.descriptorType), descriptorCount, effectiveDescriptorCount,
+                     maxBindingGroups);
             descriptorCount += static_cast<std::uint32_t>(scaledDescriptorCount);
             if (isVariableCount)
             {
@@ -1001,9 +1014,10 @@ void assertShaderLayoutAbiStable(const SlangProgram &baselineProgram, const Slan
             }
             if (bindingInfo.descriptorType == vk::DescriptorType::eInlineUniformBlock)
             {
-                nrAssert(maxSets <= std::numeric_limits<std::uint32_t>::max() - inlineUniformBindingCount,
+                nrAssert(maxBindingGroups <=
+                             std::numeric_limits<std::uint32_t>::max() - inlineUniformBindingCount,
                          "Inline-uniform descriptor pool binding count overflows uint32.");
-                inlineUniformBindingCount += maxSets;
+                inlineUniformBindingCount += maxBindingGroups;
             }
         });
     });
@@ -1015,14 +1029,14 @@ void assertShaderLayoutAbiStable(const SlangProgram &baselineProgram, const Slan
 
     if (poolSizes.empty())
     {
-        poolSizes.push_back(vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, maxSets});
+        poolSizes.push_back(vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, maxBindingGroups});
     }
 
     auto flags = vk::DescriptorPoolCreateFlags{vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet};
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = flags;
-    poolInfo.maxSets = maxSets;
+    poolInfo.maxSets = physicalMaxSets;
     nrAssert(std::in_range<std::uint32_t>(poolSizes.size()),
              "Descriptor pool type count exceeds the Vulkan uint32 range.");
     poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());

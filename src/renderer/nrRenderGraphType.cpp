@@ -252,6 +252,18 @@ namespace
     return bufferUse(resource, BufferUsageIntent::TransferDst, BufferAccessIntent::TransferWrite);
 }
 
+[[nodiscard]] PassResourceUseDesc cooperativeVectorConvertRead(GraphResourceHandle resource) noexcept
+{
+    return bufferUse(resource, BufferUsageIntent::CooperativeVectorConvertRead,
+                     BufferAccessIntent::CooperativeVectorConvertRead);
+}
+
+[[nodiscard]] PassResourceUseDesc cooperativeVectorConvertWrite(GraphResourceHandle resource) noexcept
+{
+    return bufferUse(resource, BufferUsageIntent::CooperativeVectorConvertWrite,
+                     BufferAccessIntent::CooperativeVectorConvertWrite);
+}
+
 [[nodiscard]] PassResourceUseDesc storageBufferRead(GraphResourceHandle resource) noexcept
 {
     return bufferUse(resource, BufferUsageIntent::StorageRead, BufferAccessIntent::ShaderStorageRead);

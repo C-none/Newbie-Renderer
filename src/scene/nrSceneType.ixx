@@ -4,6 +4,7 @@ import dependency.ecs;
 import dependency.shaderShare;
 import dependency.vulkan;
 
+import nr.neuralAppearanceAsset;
 import nr.load;
 import nr.resource;
 import nr.rhi;
@@ -141,11 +142,18 @@ struct SceneCreateInfo
     CpuRetentionPolicy cpuRetention = CpuRetentionPolicy::keepAll;
 };
 
+struct NeuralAppearanceMaterialBinding
+{
+    std::uint32_t sourceMaterialIndex = 0u;
+    std::shared_ptr<const nr::neuralAppearance::Artifact> artifact{};
+};
+
 struct SceneTemplateCreateInfo
 {
     std::string debugName{};
     std::string stableKey{};
     TemplateHierarchyPolicy hierarchyPolicy = TemplateHierarchyPolicy::autoSelect;
+    std::optional<NeuralAppearanceMaterialBinding> neuralMaterialBinding{};
 };
 
 struct SceneInstantiateInfo
@@ -684,6 +692,7 @@ struct MaterialAssetRecord
     nr::resource::MaterialHandle handle{};
     std::string stableKey{};
     nr::resource::Material cpu{};
+    std::optional<NeuralAppearanceMaterialBinding> neuralAppearance{};
     std::uint64_t cpuVersion = 1;
     std::uint32_t liveTemplatePins = 0;
     bool cpuReady = false;

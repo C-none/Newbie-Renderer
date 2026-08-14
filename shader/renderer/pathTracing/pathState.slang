@@ -2,6 +2,7 @@ module pathState;
 import common;
 import renderer.pathTracing.params;
 import renderer.pathTracing.guides;
+import renderer.pathTracing.neuralMaterial;
 
 [Flags]
 public enum PathFlag : uint
@@ -96,6 +97,24 @@ public struct ResolvedMaterialRayPayload
         sheenColorYZUnorm2x16 = packPayloadUnorm2x16(material.layers.sheenColor.yz);
         sheenRoughnessTransmissionUnorm2x16 =
             packPayloadUnorm2x16(float2(material.layers.sheenRoughness, material.layers.transmission));
+    }
+};
+
+public struct RtNeuralMaterialPayloadContext
+{
+    public bool enabled = false;
+    public float2 repeatUv = float2(0.0f);
+    public float tangentSign = 1.0f;
+
+    public __init()
+    {
+    }
+
+    public __init(bool isEnabled, float2 packedRepeatUv, float packedTangentSign)
+    {
+        enabled = isEnabled;
+        repeatUv = packedRepeatUv;
+        tangentSign = packedTangentSign;
     }
 };
 
@@ -232,6 +251,40 @@ public void writeResolvedMaterialRayPayload(inout MaterialRayPayload payload, Re
                                              ResolvedMaterialScatter scatter)
 {
     payload.resolved = ResolvedMaterialRayPayload(material, scatter);
+}
+
+public void writeRtNeuralMaterialRayPayload(inout MaterialRayPayload payload, ResolvedMaterialPayload material,
+                                             ResolvedMaterialScatter scatter, float2 repeatUv,
+                                             uint shadingNormalOct32, uint tangentOct32, float tangentSign)
+{
+    writeResolvedMaterialRayPayload(payload, material, scatter);
+    if (!rtNeuralMaterialEnabled(material.materialIndex) || !rtNeuralP0Eligible(material))
+    {
+        return;
+    }
+
+    payload.resolved.flags |= ResolvedMaterialFlag.neuralMaterialP0;
+    if (tangentSign < 0.0f)
+    {
+        payload.resolved.flags |= ResolvedMaterialFlag.neuralTangentNegative;
+    }
+    // Closest-hit quantizes this frame once. Raygen decodes the same two words
+    // for NEE, so continuation and direct lighting cannot diverge by a second
+    // tangent quantization or re-projection.
+    payload.resolved.shadingNormalOct32 = shadingNormalOct32;
+    payload.resolved.anisotropyTangentOct32 = tangentOct32;
+    // Eligible P0 materials have no clearcoat or sheen, so this lane is not
+    // consumed by analytic reconstruction while the material ray is in flight.
+    payload.resolved.clearcoatRoughnessSheenColorXUnorm2x16 = packRtNeuralRepeatUvUnorm2x16(repeatUv);
+}
+
+public RtNeuralMaterialPayloadContext rtNeuralMaterialPayloadContext(MaterialRayPayload payload)
+{
+    bool enabled = payload.resolved.flags.has(ResolvedMaterialFlag.neuralMaterialP0) &&
+                   rtNeuralMaterialEnabled(payload.resolved.materialIndex);
+    return RtNeuralMaterialPayloadContext(
+        enabled, unpackRtNeuralRepeatUvUnorm2x16(payload.resolved.clearcoatRoughnessSheenColorXUnorm2x16),
+        payload.resolved.flags.has(ResolvedMaterialFlag.neuralTangentNegative) ? -1.0f : 1.0f);
 }
 
 public ResolvedMaterialPayload resolvedMaterialFromRayPayload(MaterialRayPayload payload, float incidentMediumIor,

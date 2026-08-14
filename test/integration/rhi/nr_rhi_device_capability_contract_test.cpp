@@ -6,6 +6,43 @@ import nr.test;
 
 namespace
 {
+[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUploadOwnershipPlan(const nr::rhi::Device &device)
+{
+    return nr::rhi::ops::BufferUploadOwnershipPlan{
+        .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
+            device.queueManager.transfer().queueFamilyIndex(), device.queueManager.graphics().queueFamilyIndex(),
+            nr::rhi::ops::QueueAccessScope{
+                .stages = vk::PipelineStageFlagBits2::eTransfer,
+                .access = vk::AccessFlagBits2::eTransferWrite,
+            },
+            nr::rhi::ops::QueueAccessScope{
+                .stages = vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV,
+                .access = vk::AccessFlagBits2::eTransferRead,
+            }),
+    };
+}
+
+void acquireUploadedBufferOnGraphics(nr::rhi::Device &device, const nr::rhi::ops::BufferUploadTicket &ticket)
+{
+    auto commandPool = nr::rhi::CommandPool{
+        device.device,
+        device.queueManager.graphics().queueFamilyIndex(),
+        vk::CommandPoolCreateFlagBits::eTransient,
+    };
+    auto commandBuffers = commandPool.allocatePrimary(1);
+    auto const &commandBuffer = commandBuffers.front();
+    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    device.uploadReadback().recordAcquireBarrier(commandBuffer, ticket);
+    nr::rhi::CommandRecorder::end(commandBuffer);
+
+    auto batch = nr::rhi::CommandBatch{};
+    batch.addWait(device.uploadReadback().uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
+                  ticket.signalValue);
+    batch.addCommandBuffer(commandBuffer);
+    device.queueManager.graphics().submit(std::move(batch));
+    device.queueManager.graphics().waitIdle();
+}
+
 const nr::test::CaseRegistrar deviceCapabilityCase{
     "rhi device initialization exposes required target capabilities", [] {
         auto device = nr::rhi::Device{};
@@ -47,6 +84,10 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
                           "maintenance9 device extension should be enabled");
         nr::test::require(device.hasEnabledDeviceExtension(vk::EXTFullScreenExclusiveExtensionName),
                           "full-screen exclusive device extension should be enabled");
+        nr::test::require(device.hasEnabledDeviceExtension(vk::NVCooperativeVectorExtensionName),
+                          "cooperative-vector device extension should be enabled globally");
+        nr::test::require(device.hasEnabledDeviceExtension(vk::EXTShaderReplicatedCompositesExtensionName),
+                          "shader replicated-composites extension should be enabled for CoopVec SPIR-V");
         nr::test::require(!device.frameBoundaryEnabled() ||
                               device.hasEnabledDeviceExtension(vk::EXTFrameBoundaryExtensionName),
                           "enabled frame-boundary support should appear in the final device extension set");
@@ -54,12 +95,11 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
                               device.hasEnabledDeviceExtension(vk::EXTHdrMetadataExtensionName),
                           "enabled HDR metadata support should appear in the final device extension set");
 
-        auto const disabledDeviceExtensions = std::array<std::string_view, 6>{
+        auto const disabledDeviceExtensions = std::array<std::string_view, 5>{
             "VK_EXT_mesh_shader",
             "VK_KHR_ray_tracing_maintenance1",
             "VK_KHR_ray_query",
             "VK_EXT_opacity_micromap",
-            "VK_NV_cooperative_vector",
             "VK_EXT_extended_dynamic_state3",
         };
         std::ranges::for_each(disabledDeviceExtensions, [&](std::string_view extension) {
@@ -127,6 +167,65 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
         nr::test::require(std::ranges::all_of(rt.maxDispatchDimensions, [](std::uint64_t limit) { return limit > 0; }),
                           "ray dispatch dimension limits should be populated");
 
+        auto const &cooperativeVector = device.cooperativeVectorCapabilities();
+        nr::test::require(cooperativeVector.extensionEnabled,
+                          "cooperative-vector extension must be enabled in the logical-device contract");
+        nr::test::require(cooperativeVector.cooperativeVectorFeatureEnabled,
+                          "cooperativeVector device feature must be enabled");
+        nr::test::require(cooperativeVector.cooperativeVectorTrainingFeatureEnabled,
+                          "cooperativeVectorTraining device feature must be enabled");
+        nr::test::require(cooperativeVector.shaderFloat16FeatureEnabled,
+                          "shaderFloat16 device feature must be enabled");
+        nr::test::require(cooperativeVector.vulkanMemoryModelFeatureEnabled,
+                          "vulkanMemoryModel device feature must be enabled for CoopVec SPIR-V");
+        nr::test::require(cooperativeVector.shaderReplicatedCompositesFeatureEnabled,
+                          "shaderReplicatedComposites device feature must be enabled for CoopVec SPIR-V");
+        nr::test::require(cooperativeVector.storageBuffer16BitAccessFeatureEnabled,
+                          "storageBuffer16BitAccess device feature must be enabled");
+        nr::test::require(cooperativeVector.uniformAndStorageBuffer16BitAccessFeatureEnabled,
+                          "uniformAndStorageBuffer16BitAccess device feature must be enabled");
+        nr::test::require(cooperativeVector.computeStage,
+                          "cooperative vectors must support compute shader execution");
+        nr::test::require(cooperativeVector.raygenStage,
+                          "cooperative vectors must support raygen shader execution");
+        nr::test::require(cooperativeVector.closestHitStage,
+                          "cooperative vectors must support closest-hit shader execution");
+        nr::test::require(cooperativeVector.trainingFloat16Accumulation,
+                          "cooperative vectors must support FP16 training accumulation");
+        nr::test::require(cooperativeVector.fullFloat16Tuple,
+                          "cooperative vectors must expose the all-FP16 tuple without transpose support");
+        nr::test::require(cooperativeVector.fullFloat16TupleWithTranspose,
+                          "cooperative vectors must expose the all-FP16 tuple with transpose support");
+        nr::test::require(cooperativeVector.maxComponents >= 32u,
+                          "cooperative vectors must expose at least 32 components");
+
+        auto const rowMajorLayout = device.cooperativeVectorMatrixLayoutSize(nr::rhi::CooperativeVectorMatrixDesc{
+            .rows = 32u,
+            .columns = 32u,
+            .layout = nr::rhi::CooperativeVectorMatrixLayout::RowMajor,
+            .rowStrideBytes = 64u,
+        });
+        nr::test::require(rowMajorLayout.byteSize == 2048u,
+                          "row-major FP16 cooperative-vector matrix layout size should be exact");
+        auto const trainingOptimalLayout = device.cooperativeVectorMatrixLayoutSize(nr::rhi::CooperativeVectorMatrixDesc{
+            .rows = 32u,
+            .columns = 32u,
+            .layout = nr::rhi::CooperativeVectorMatrixLayout::TrainingOptimal,
+        });
+        nr::test::require(trainingOptimalLayout.byteSize > 0u,
+                          "TrainingOptimal cooperative-vector matrix layout size should be queryable");
+        nr::test::require(nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment == 64u,
+                          "VK_NV_cooperative_vector fixes conversion device-address alignment at 64 bytes");
+        auto const paddedRowMajorLayout = device.cooperativeVectorMatrixLayoutSize(
+            nr::rhi::CooperativeVectorMatrixDesc{
+                .rows = 3u,
+                .columns = 8u,
+                .layout = nr::rhi::CooperativeVectorMatrixLayout::RowMajor,
+                .rowStrideBytes = 32u,
+            });
+        nr::test::require(paddedRowMajorLayout.byteSize == 80u,
+                          "row-major matrix size must exclude padding after its final row");
+
         auto bufferInfo = vk::BufferCreateInfo{};
         bufferInfo.size = 16;
         bufferInfo.usage = vk::BufferUsageFlagBits::eUniformTexelBuffer;
@@ -154,6 +253,124 @@ const nr::test::CaseRegistrar deviceCapabilityCase{
             imageInfo, nr::rhi::MemoryUsage::GpuOnly, "move_assignment_image_source");
         image = std::move(replacementImage);
         nr::test::require(image.valid(), "move-assigned image should remain valid");
+
+        device.waitIdle();
+    }};
+
+const nr::test::CaseRegistrar cooperativeVectorRoundtripCase{
+    "rhi cooperative-vector conversion roundtrips FP16 row-major bytes through TrainingOptimal", [] {
+        auto device = nr::rhi::Device{};
+        device.initialize("nr_rhi_cooperative_vector_roundtrip_test", "NewbieRenderer");
+
+        constexpr auto values = std::array<std::uint16_t, 32>{
+            0x0000u, 0x3C00u, 0x4000u, 0x4200u, 0x4400u, 0x4500u, 0x4600u, 0x4700u,
+            0x4800u, 0x4880u, 0x4900u, 0x4980u, 0x4A00u, 0x4A80u, 0x4B00u, 0x4B80u,
+            0xBC00u, 0xC000u, 0xC200u, 0xC400u, 0xC500u, 0xC600u, 0xC700u, 0xC800u,
+            0xC880u, 0xC900u, 0xC980u, 0xCA00u, 0xCA80u, 0xCB00u, 0xCB80u, 0x4C00u,
+        };
+        auto const valueBytes = std::as_bytes(std::span<const std::uint16_t>{values.data(), values.size()});
+        auto const rowMajor = nr::rhi::CooperativeVectorMatrixDesc{
+            .rows = 4u,
+            .columns = 8u,
+            .layout = nr::rhi::CooperativeVectorMatrixLayout::RowMajor,
+            .rowStrideBytes = 16u,
+        };
+        auto const trainingOptimal = nr::rhi::CooperativeVectorMatrixDesc{
+            .rows = rowMajor.rows,
+            .columns = rowMajor.columns,
+            .layout = nr::rhi::CooperativeVectorMatrixLayout::TrainingOptimal,
+        };
+        auto const rowMajorSize = device.cooperativeVectorMatrixLayoutSize(rowMajor);
+        auto const trainingOptimalSize = device.cooperativeVectorMatrixLayoutSize(trainingOptimal);
+
+        auto inputInfo = vk::BufferCreateInfo{};
+        inputInfo.size = valueBytes.size_bytes();
+        inputInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eShaderDeviceAddress;
+        auto input = device.resourceFactory.createBuffer(inputInfo, nr::rhi::MemoryUsage::GpuOnly,
+                                                         "cooperative_vector_roundtrip_input");
+
+        auto optimalInfo = vk::BufferCreateInfo{};
+        optimalInfo.size = trainingOptimalSize.byteSize;
+        optimalInfo.usage = vk::BufferUsageFlagBits::eShaderDeviceAddress;
+        auto optimal = device.resourceFactory.createBuffer(optimalInfo, nr::rhi::MemoryUsage::GpuOnly,
+                                                           "cooperative_vector_roundtrip_optimal");
+
+        auto outputInfo = vk::BufferCreateInfo{};
+        outputInfo.size = valueBytes.size_bytes();
+        outputInfo.usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eShaderDeviceAddress;
+        auto output = device.resourceFactory.createBuffer(outputInfo, nr::rhi::MemoryUsage::GpuOnly,
+                                                          "cooperative_vector_roundtrip_output");
+
+        auto upload = device.uploadReadback().uploadBuffer(valueBytes, input, 0u, makeUploadOwnershipPlan(device));
+        nr::test::require(upload.valid(), "cooperative-vector source upload should succeed");
+        acquireUploadedBufferOnGraphics(device, upload);
+
+        auto commandPool = nr::rhi::CommandPool{
+            device.device,
+            device.queueManager.graphics().queueFamilyIndex(),
+            vk::CommandPoolCreateFlagBits::eTransient,
+        };
+        auto commandBuffers = commandPool.allocatePrimary(1);
+        auto const &commandBuffer = commandBuffers.front();
+        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        device.recordCooperativeVectorMatrixConversion(
+            commandBuffer,
+            nr::rhi::CooperativeVectorMatrixMemory{
+                .deviceAddress = input.deviceAddress(),
+                .size = rowMajorSize.byteSize,
+            },
+            rowMajor,
+            rowMajorSize,
+            nr::rhi::CooperativeVectorMatrixMemory{
+                .deviceAddress = optimal.deviceAddress(),
+                .size = trainingOptimalSize.byteSize,
+            },
+            trainingOptimal,
+            trainingOptimalSize);
+
+        auto conversionBarrier = vk::MemoryBarrier2{};
+        conversionBarrier.srcStageMask = vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV;
+        conversionBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
+        conversionBarrier.dstStageMask = vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV;
+        conversionBarrier.dstAccessMask = vk::AccessFlagBits2::eTransferRead;
+        auto dependencyInfo = vk::DependencyInfo{};
+        dependencyInfo.memoryBarrierCount = 1u;
+        dependencyInfo.pMemoryBarriers = std::addressof(conversionBarrier);
+        commandBuffer.pipelineBarrier2(dependencyInfo);
+
+        device.recordCooperativeVectorMatrixConversion(
+            commandBuffer,
+            nr::rhi::CooperativeVectorMatrixMemory{
+                .deviceAddress = optimal.deviceAddress(),
+                .size = trainingOptimalSize.byteSize,
+            },
+            trainingOptimal,
+            trainingOptimalSize,
+            nr::rhi::CooperativeVectorMatrixMemory{
+                .deviceAddress = output.deviceAddress(),
+                .size = rowMajorSize.byteSize,
+            },
+            rowMajor,
+            rowMajorSize);
+        nr::rhi::CommandRecorder::end(commandBuffer);
+        device.queueManager.graphics().submit(commandBuffer);
+        device.queueManager.graphics().waitIdle();
+
+        auto readback = device.uploadReadback().readbackBuffer(
+            output, 0u, valueBytes.size_bytes(), nr::rhi::QueueRole::Graphics,
+            nr::rhi::ops::ReadbackSyncPlan{
+                .preCopy = nr::rhi::ops::ReadbackSyncScope{
+                    .stages = vk::PipelineStageFlagBits2::eConvertCooperativeVectorMatrixNV,
+                    .access = vk::AccessFlagBits2::eTransferWrite,
+                },
+                .postCopy = nr::rhi::ops::ReadbackSyncScope{
+                    .stages = vk::PipelineStageFlagBits2::eTransfer,
+                    .access = vk::AccessFlagBits2::eTransferRead,
+                },
+            });
+        auto const bytes = device.uploadReadback().readbackBytes(readback);
+        nr::test::require(std::ranges::equal(bytes, valueBytes),
+                          "row-major FP16 bytes must survive TrainingOptimal conversion roundtrip");
 
         device.waitIdle();
     }};

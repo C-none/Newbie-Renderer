@@ -73,6 +73,15 @@ module utils;
 
 Every `.slang` file may declare at most one function carrying a `[shader(...)]` attribute. Files that contain shared declarations or implementation helpers declare no entry point. An entry-point file is a directly compilable primary module whose file name and leaf `module` declaration follow the normal module-name mapping rules.
 
+## Cooperative Vector Entry Requirements
+
+`VK_NV_cooperative_vector` is a renderer-wide device requirement, but a stage still declares the
+capabilities it consumes. PathTracing `raygen.slang` and `closestHit.slang` use
+`[require(spvCooperativeVectorNV)]`; the neural-training gradient root additionally requires
+`spvCooperativeVectorTrainingNV` and the group operations it uses. Shared helper modules do not
+declare stage requirements. A new CoopVec stage root must keep its requirements local to its one
+entry point so reflection, shader caching, and pipeline diagnostics identify the actual consumer.
+
 This is a project-level invariant, not an optional authoring convention:
 
 - Different graphics stages and ray-tracing stages live in different files.
@@ -202,7 +211,7 @@ public struct GlobalFrameUniforms { /* ... */ }
 public ConstantBuffer<GlobalFrameUniforms> gFrame;
 ```
 
-The global frame uniform uses Vulkan descriptor set 3, binding 0, and is a fixed 288-byte record: four `row_major float4x4` projective camera matrices (`viewProjection`, `inverseViewProjection`, `unjitteredViewProjection`, and `previousViewProjection`), camera world position, and frame state. `frameState.xy` carries the monotonic 64-bit sample-frame ordinal used for per-frame shader sampling, while `frameState.z` preserves the resource frame slot. Standalone view/projection fields are not uploaded. Projective transforms remain full 4x4; a validated affine host-visible transform may instead use `row_major float4x3` for 12 floats/48 bytes, as NormalBuffer does. Project shader resources follow one semantic set convention: standalone samplers use set 0, sampled or combined images use set 1, storage images use set 2, uniform/storage/texel buffers use set 3, and acceleration structures use set 4. In the shared set 3 ABI, `gFrame` owns binding 0 and the seven RT scene-sideband buffers own bindings 1 through 7. Set 5 is reserved by the common ABI for scene lights; set 6 is currently unused.
+The global frame uniform uses Vulkan descriptor set 3, binding 0, and is a fixed 288-byte record: four `row_major float4x4` projective camera matrices (`viewProjection`, `inverseViewProjection`, `unjitteredViewProjection`, and `previousViewProjection`), camera world position, and frame state. `frameState.xy` carries the monotonic 64-bit sample-frame ordinal used for per-frame shader sampling, while `frameState.z` preserves the resource frame slot. Standalone view/projection fields are not uploaded. Projective transforms remain full 4x4; a validated affine host-visible transform may instead use `row_major float4x3` for 12 floats/48 bytes, as NormalBuffer does. Project shader resources follow one semantic set convention: standalone samplers use set 0, sampled or combined images use set 1, storage images use set 2, uniform/storage/texel buffers use set 3, and acceleration structures use set 4. In the shared set 3 ABI, `gFrame` owns binding 0 and the seven RT scene-sideband buffers own bindings 1 through 7. Set 5 is reserved by the common ABI for scene lights. Set 6 is the fixed PathTracing neural-material ABI declared by `shader/renderer/pathTracing/neuralResources.slang`: binding 0 is `gRtNeuralMaterialRefs`, binding 1 is the FP16 `gNeuralModelParameters` byte-address buffer, and bindings 2/3 are `gNeuralLatentTexture0/1`. That module is intentionally not part of `common`; only PathTracing roots import it. PathTracing binds neutral fallbacks at all four bindings when no artifact is resident, so root reflection does not depend on a Scene binding.
 
 Only shaders that actually reference `gFrame` require a matching C++ descriptor binding. Pass code should bind it through the reflection-backed `shaderCursor` path, normally via renderer pass builders such as:
 

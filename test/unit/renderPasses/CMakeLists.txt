@@ -30,3 +30,7 @@ nr_add_contract_test(nr_renderpasses_neural_checkpoint_contract_test nr_renderpa
     nr_test_options
     utils
 )
+
+nr_add_contract_test(nr_renderpasses_neural_quality_contract_test nr_renderpasses_neural_quality_contract_test.cpp "fast;cpu;unit;renderpasses;neural;quality"
+    nrrenderpasses
+)

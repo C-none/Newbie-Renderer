@@ -141,6 +141,18 @@ const nr::test::CaseRegistrar useFactoryCase{
         nr::test::require(bufferUpload.bufferUsage == nr::renderer::BufferUsageIntent::TransferSrc);
         nr::test::require(bufferUpload.bufferAccess == nr::renderer::BufferAccessIntent::TransferRead);
 
+        auto cooperativeVectorRead = nr::renderer::use::cooperativeVectorConvertRead(handle);
+        nr::test::require(cooperativeVectorRead.bufferUsage ==
+                          nr::renderer::BufferUsageIntent::CooperativeVectorConvertRead);
+        nr::test::require(cooperativeVectorRead.bufferAccess ==
+                          nr::renderer::BufferAccessIntent::CooperativeVectorConvertRead);
+
+        auto cooperativeVectorWrite = nr::renderer::use::cooperativeVectorConvertWrite(handle);
+        nr::test::require(cooperativeVectorWrite.bufferUsage ==
+                          nr::renderer::BufferUsageIntent::CooperativeVectorConvertWrite);
+        nr::test::require(cooperativeVectorWrite.bufferAccess ==
+                          nr::renderer::BufferAccessIntent::CooperativeVectorConvertWrite);
+
         auto shaderBindingTable = nr::renderer::use::shaderBindingTableRead(handle);
         nr::test::require(shaderBindingTable.bufferUsage == nr::renderer::BufferUsageIntent::ShaderBindingTable);
         nr::test::require(shaderBindingTable.bufferAccess == nr::renderer::BufferAccessIntent::ShaderBindingTableRead);

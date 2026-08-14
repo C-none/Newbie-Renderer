@@ -10,6 +10,7 @@ export import dependency.slang;
 export import dependency.ecs;
 export import dependency.nsight;
 export import dependency.dlss;
+export import dependency.crypto;
 export import dependency.json;
 export import dependency.lua;
 export import dependency.network;

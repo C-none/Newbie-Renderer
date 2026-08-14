@@ -9,6 +9,7 @@ import :surface;
 import :swapchain;
 import :type;
 import :queue;
+import :cooperativeVector;
 import :frameContext;
 import :memoryAllocator;
 import :nsightGraphics;
@@ -60,6 +61,21 @@ class Device
     Device &operator=(Device &) = delete;
 
     [[nodiscard]] const RayTracingCapabilitySnapshot &rayTracingCapabilities() const noexcept;
+
+    [[nodiscard]] const CooperativeVectorCapabilitySnapshot &cooperativeVectorCapabilities() const noexcept;
+
+    // Query opaque TrainingOptimal sizes during resource initialization and retain the result for every conversion.
+    [[nodiscard]] CooperativeVectorMatrixLayoutSize cooperativeVectorMatrixLayoutSize(
+        CooperativeVectorMatrixDesc desc) const;
+
+    // The source and destination regions must describe exactly one matrix using the cached layout sizes above.
+    void recordCooperativeVectorMatrixConversion(const vk::raii::CommandBuffer &commandBuffer,
+                                                  CooperativeVectorMatrixMemory source,
+                                                  CooperativeVectorMatrixDesc sourceDesc,
+                                                  CooperativeVectorMatrixLayoutSize sourceLayoutSize,
+                                                  CooperativeVectorMatrixMemory destination,
+                                                  CooperativeVectorMatrixDesc destinationDesc,
+                                                  CooperativeVectorMatrixLayoutSize destinationLayoutSize) const;
 
     [[nodiscard]] const ops::QueueFamilyTransferPolicy &queueFamilyTransferPolicy() const noexcept;
 
@@ -153,9 +169,12 @@ class Device
         vk::KHRMaintenance8ExtensionName,
         vk::KHRMaintenance9ExtensionName,
         vk::EXTFullScreenExclusiveExtensionName,
+        vk::NVCooperativeVectorExtensionName,
+        vk::EXTShaderReplicatedCompositesExtensionName,
     };
     std::vector<std::string> enabledDeviceExtensions_{};
     RayTracingCapabilitySnapshot rtCapabilities_{};
+    CooperativeVectorCapabilitySnapshot cooperativeVectorCapabilities_{};
     ops::QueueFamilyTransferPolicy queueFamilyTransferPolicy_{};
     bool frameBoundaryEnabled_ = false;
     bool hdrMetadataEnabled_ = false;

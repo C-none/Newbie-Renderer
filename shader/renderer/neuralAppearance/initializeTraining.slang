@@ -22,6 +22,33 @@ RWStructuredBuffer<float4> gLatentMoments;
 [[vk::binding(4, 2)]]
 RWStructuredBuffer<float4> gTrainingStatus;
 
+[[vk::binding(5, 2)]]
+RWByteAddressBuffer gInferenceParameters;
+
+[[vk::binding(6, 2)]]
+RWByteAddressBuffer gInferenceLatent;
+
+uint neuralAppearanceInferenceByteOffset(uint scalarIndex)
+{
+    if (scalarIndex < kNeuralAppearanceFrameBiasOffset)
+        return kNeuralAppearanceFrameWeightByteOffset + scalarIndex * 2u;
+    if (scalarIndex < kNeuralAppearanceSpatialWeightOffset)
+        return kNeuralAppearanceFrameBiasByteOffset + (scalarIndex - kNeuralAppearanceFrameBiasOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceDirectionWeightOffset)
+        return kNeuralAppearanceSpatialWeightByteOffset + (scalarIndex - kNeuralAppearanceSpatialWeightOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceFirstBiasOffset)
+        return kNeuralAppearanceDirectionWeightByteOffset + (scalarIndex - kNeuralAppearanceDirectionWeightOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceSecondWeightOffset)
+        return kNeuralAppearanceSpatialBiasByteOffset + (scalarIndex - kNeuralAppearanceFirstBiasOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceSecondBiasOffset)
+        return kNeuralAppearanceHiddenWeightByteOffset + (scalarIndex - kNeuralAppearanceSecondWeightOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceOutputWeightOffset)
+        return kNeuralAppearanceHiddenBiasByteOffset + (scalarIndex - kNeuralAppearanceSecondBiasOffset) * 2u;
+    if (scalarIndex < kNeuralAppearanceOutputBiasOffset)
+        return kNeuralAppearanceOutputWeightByteOffset + (scalarIndex - kNeuralAppearanceOutputWeightOffset) * 2u;
+    return kNeuralAppearanceOutputBiasByteOffset + (scalarIndex - kNeuralAppearanceOutputBiasOffset) * 2u;
+}
+
 float neuralAppearanceInitialRandom(uint scalarIndex, float scale)
 {
     float unitRandom = neuralAppearanceTrainingRandom(0x6a09e667u, scalarIndex);
@@ -85,22 +112,56 @@ float neuralAppearanceInitialParameter(uint scalarIndex)
 void initializeTrainingMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     uint4 control = gTrainingControl[0];
-    if (control.y == 0u || control.z != kNeuralAppearanceTrainingSchemaMagic)
+    if (control.y == 0u || control.y > 2u || control.z != kNeuralAppearanceTrainingSchemaMagic)
     {
         return;
     }
 
     uint chunkIndex = dispatchThreadID.x;
+    // The fixed V2 model blob contains alignment padding. It is part of the
+    // portable ABI and must remain zero for both fresh and restored mirrors.
+    if (chunkIndex < (kNeuralAppearanceInferenceParameterBytes / 4u))
+    {
+        uint byteOffset = chunkIndex * 4u;
+        bool padding0 = (byteOffset >= 216u && byteOffset < 256u) ||
+                        (byteOffset >= 3910u && byteOffset < kNeuralAppearanceInferenceParameterBytes);
+        bool padding1 = (byteOffset + 2u >= 216u && byteOffset + 2u < 256u) ||
+                        (byteOffset + 2u >= 3910u && byteOffset + 2u < kNeuralAppearanceInferenceParameterBytes);
+        if (padding0)
+        {
+            gInferenceParameters.Store<half>(byteOffset, half(0.0h));
+        }
+        if (padding1)
+        {
+            gInferenceParameters.Store<half>(byteOffset + 2u, half(0.0h));
+        }
+    }
     if (chunkIndex < kNeuralAppearanceParameterChunkCount)
     {
         uint scalar = chunkIndex * 4u;
-        gModelParameters[chunkIndex] = float4(
-            neuralAppearanceInitialParameter(scalar + 0u),
-            neuralAppearanceInitialParameter(scalar + 1u),
-            neuralAppearanceInitialParameter(scalar + 2u),
-            neuralAppearanceInitialParameter(scalar + 3u));
-        gModelMoments[chunkIndex] = float4(0.0f);
-        gModelMoments[kNeuralAppearanceParameterChunkCount + chunkIndex] = float4(0.0f);
+        float4 values = control.y == 1u
+                            ? float4(
+                                  neuralAppearanceInitialParameter(scalar + 0u),
+                                  neuralAppearanceInitialParameter(scalar + 1u),
+                                  neuralAppearanceInitialParameter(scalar + 2u),
+                                  neuralAppearanceInitialParameter(scalar + 3u))
+                            : gModelParameters[chunkIndex];
+        gModelParameters[chunkIndex] = values;
+        if (control.y == 1u)
+        {
+            gModelMoments[chunkIndex] = float4(0.0f);
+            gModelMoments[kNeuralAppearanceParameterChunkCount + chunkIndex] = float4(0.0f);
+        }
+
+        [ForceUnroll]
+        for (uint lane = 0u; lane < 4u; ++lane)
+        {
+            uint scalarIndex = scalar + lane;
+            if (scalarIndex < kNeuralAppearanceParameterScalarCount)
+            {
+                gInferenceParameters.Store<half>(neuralAppearanceInferenceByteOffset(scalarIndex), half(values[lane]));
+            }
+        }
     }
 
     if (chunkIndex < kNeuralAppearanceLatentChunkCount)
@@ -110,12 +171,21 @@ void initializeTrainingMain(uint3 dispatchThreadID: SV_DispatchThreadID)
         uint2 texel = uint2(texelIndex % kNeuralAppearanceLatentWidth,
                             texelIndex / kNeuralAppearanceLatentWidth);
         NeuralAppearanceLatent latent = neuralAppearanceFixtureLatentTexel(texel);
-        gTrainingLatent[chunkIndex] = latent.chunks[textureIndex];
-        gLatentMoments[chunkIndex] = float4(0.0f);
-        gLatentMoments[kNeuralAppearanceLatentChunkCount + chunkIndex] = float4(0.0f);
+        float4 values = control.y == 1u ? latent.chunks[textureIndex] : gTrainingLatent[chunkIndex];
+        gTrainingLatent[chunkIndex] = values;
+        if (control.y == 1u)
+        {
+            gLatentMoments[chunkIndex] = float4(0.0f);
+            gLatentMoments[kNeuralAppearanceLatentChunkCount + chunkIndex] = float4(0.0f);
+        }
+        uint byteOffset = chunkIndex * 8u;
+        gInferenceLatent.Store<half>(byteOffset + 0u, half(values.x));
+        gInferenceLatent.Store<half>(byteOffset + 2u, half(values.y));
+        gInferenceLatent.Store<half>(byteOffset + 4u, half(values.z));
+        gInferenceLatent.Store<half>(byteOffset + 6u, half(values.w));
     }
 
-    if (chunkIndex == 0u)
+    if (chunkIndex == 0u && control.y == 1u)
     {
         gTrainingStatus[0] = float4(0.0f, 0.0f, 0.0f, 1.0f);
         gTrainingStatus[1] = float4(0.0f);
