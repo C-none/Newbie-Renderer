@@ -2,8 +2,7 @@
 
 ## Local deployment
 
-Install Git LFS and Node.js 24, then run the following commands from this
-directory:
+Install Git LFS and Node.js 24, then run these commands from `docs/web`:
 
 ```sh
 git lfs install
@@ -15,32 +14,28 @@ pnpm build
 pnpm serve -- --host
 ```
 
-For development with hot reload, run `pnpm dev` instead.
+Open the local URL printed by Vite. For development with hot reload, run
+`pnpm dev` instead.
 
 ## GitHub Pages deployment
 
-This project is deployed at the fixed GitHub Pages project path `/web/`. Its
-public URL has the following form:
+The site uses the fixed repository path `/Newbie-Renderer/` and is published at:
 
 ```text
-https://<GitHub-account>.github.io/web/
+https://c-none.github.io/Newbie-Renderer/
 ```
 
-Configure the repository as follows:
+The Vite base path is fixed in `vite.config.js`; no repository secret or
+environment variable is required.
 
-1. Open `Settings > Secrets and variables > Actions`.
-2. Create a repository secret named `VITE_BASE_PUBLIC_PATH` with this exact
-   value:
+To enable deployment:
 
-   ```text
-   /web/
-   ```
+1. Open the `Newbie-Renderer` repository on GitHub.
+2. Go to `Settings > Pages`.
+3. Under `Build and deployment`, set `Source` to `GitHub Actions`.
+4. Push the `master` branch. The root workflow at
+   `.github/workflows/deploy-web.yml` installs, lints, builds, and deploys
+   `docs/web`.
+5. Open the URL above after the `Deploy web to GitHub Pages` workflow succeeds.
 
-3. Push the project to the `main` branch. The workflow at
-   `.github/workflows/cd.yml` builds the site and publishes it to the
-   `gh-pages` branch.
-4. Open `Settings > Pages`, select `Deploy from a branch`, choose the
-   `gh-pages` branch and the `/ (root)` directory, and save the settings.
-
-After the workflow completes, open the URL shown above and replace
-`<GitHub-account>` with the repository owner's GitHub account name.
+The workflow can also be started manually from the repository's `Actions` tab.

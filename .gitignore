@@ -2,7 +2,10 @@
 !.vscode/settings.json
 !.vscode/extensions.json
 build/
-.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/deploy-web.yml
 /debug.log
 /imgui.ini
 /tmp/
