@@ -11,6 +11,7 @@ shader/include/neuralAppearance/fixtureModel.slang text eol=lf
 *.pdf binary
 *.pdb binary
 *.png binary
+*.woff2 binary
 *.zip binary
 
 assets/envMap/** filter=lfs diff=lfs merge=lfs -text
