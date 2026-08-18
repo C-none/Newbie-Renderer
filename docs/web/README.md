@@ -1,52 +1,46 @@
-<p align='center'>
-  <img src='https://repository-images.githubusercontent.com/442005408/3f8d7fed-9d3f-45c8-bcd5-0fa64e9ac535' alt='Vue.js starter template' width='600'/>
-</p>
+# Web
 
-# Vue.js starter template
+## Local deployment
 
-Features:
-
-- 🛠 [Vue 3](https://v3.vuejs.org/guide/introduction.html)
-- ⚡️ [Vite](https://vitejs.dev/guide/)
-- 🗂 [PNPM](https://pnpm.io)
-- 🛣 [Vue Router](https://github.com/vuejs/vue-router-next)
-- 🔄 [Auto import](https://github.com/unplugin/unplugin-auto-import)
-- 🎨 [Tailwind CSS](https://tailwindcss.com/docs/)
-- 🔍 [Eslint with airbnb / Tailwind CSS / stylelint](https://github.com/airbnb/javascript)
-- 🌗 [Light and dark mode composable](https://github.com/lecoueyl/vue3-template/blob/main/src/composables/theme.js)
-- 🔡 [Inter var font](https://rsms.me/inter/)
-- 📄 [Github pages action](https://pages.github.com)
-
-[Open in Visual Studio Code](https://open.vscode.dev/lecoueyl/vue3-template)
-
-## Getting Started
-
-Scaffold this repository
+Install Git LFS and Node.js 24, then run the following commands from this
+directory:
 
 ```sh
-pnpx degit lecoueyl/vue3-template my-project
-cd my-project
+git lfs install
+git lfs pull
+corepack enable
+corepack prepare pnpm@11.22.0 --activate
+pnpm install --frozen-lockfile
+pnpm build
+pnpm serve -- --host
 ```
 
-Install and start dev server
+For development with hot reload, run `pnpm dev` instead.
 
-```sh
-pnpm install
-pnpm run dev
+## GitHub Pages deployment
+
+This project is deployed at the fixed GitHub Pages project path `/web/`. Its
+public URL has the following form:
+
+```text
+https://<GitHub-account>.github.io/web/
 ```
 
-## Deployment
+Configure the repository as follows:
 
-### Netlify
+1. Open `Settings > Secrets and variables > Actions`.
+2. Create a repository secret named `VITE_BASE_PUBLIC_PATH` with this exact
+   value:
 
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/lecoueyl/vue3-template)
+   ```text
+   /web/
+   ```
 
-### Github pages
+3. Push the project to the `main` branch. The workflow at
+   `.github/workflows/cd.yml` builds the site and publishes it to the
+   `gh-pages` branch.
+4. Open `Settings > Pages`, select `Deploy from a branch`, choose the
+   `gh-pages` branch and the `/ (root)` directory, and save the settings.
 
-The default github action will build to `gh-page` when pushing on `main` branch.
-
-For a project page, the base path of the repository must be specified. Add the following secret in the Github repository `Settings` > `Secrets` > `Actions`
-
-| Name                        | Value                    |
-| --------------------------- | ------------------------ |
-| VITE_BASE_PUBLIC_PATH       | `/repository-name/`      |
+After the workflow completes, open the URL shown above and replace
+`<GitHub-account>` with the repository owner's GitHub account name.

@@ -1,18 +1,18 @@
 import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import eslint from 'vite-plugin-eslint';
 import stylelint from 'vite-plugin-stylelint';
 import svgLoader from 'vite-svg-loader';
-import autoImport from 'unplugin-auto-import/dist/vite.js';
+import autoImport from 'unplugin-auto-import/vite';
 import { resolve } from 'path';
 
 export default ({ mode }) => {
-  process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
+  const env = loadEnv(mode, import.meta.dirname);
 
   return defineConfig({
-    base: process.env.VITE_BASE_PUBLIC_PATH,
+    base: env.VITE_BASE_PUBLIC_PATH,
+    root: import.meta.dirname,
+    publicDir: 'assets/exr',
     plugins: [
-      eslint({ cache: false }),
       stylelint(),
       svgLoader(),
       vue(),
@@ -22,17 +22,17 @@ export default ({ mode }) => {
           'vue-router',
         ],
         eslintrc: {
-          enabled: true,
+          enabled: false,
         },
         dirs: [
-          './src/components',
-          './src/composables',
+          resolve(import.meta.dirname, 'src/components'),
+          resolve(import.meta.dirname, 'src/composables'),
         ],
       }),
     ],
     resolve: {
       alias: {
-        '@': resolve(__dirname, 'src'),
+        '@': resolve(import.meta.dirname, 'src'),
       },
     },
   });

@@ -421,6 +421,16 @@ const nr::test::CaseRegistrar sceneCandidateCommitOrderingCase{
                           "if (id == nr::options::optionId(nr::options::keys::viewerEnvironmentSource))");
         requireOrdered(modelMutation, "if (!report.loaded)", "options.commitModelAndCameraReset(",
                        "model and derived camera canonical values may commit only after Scene replacement succeeds");
+        requirePresent(modelMutation, "emitTerminal<nr::LogLevel::warning>(",
+                       "recoverable model-source loading failures must emit a warning terminal record");
+
+        auto const terminalEmission = sourceSection(
+            pipeline, "template <nr::LogLevel FailureLevel = nr::LogLevel::error>",
+            "[[nodiscard]] MutationFrameResult executeMutation");
+        requirePresent(terminalEmission, "nr::options::emitMachineRecord<FailureLevel>(record);",
+                       "terminal emission must preserve the caller-selected failure level");
+        requirePresent(pipeline, "emitTerminal(sequence, id, frameIndex, origin, requestId, false, std::move(reason));",
+                       "ordinary mutation failures must retain the default error terminal record");
     }};
 
 const nr::test::CaseRegistrar startupLoadConcurrencyCase{

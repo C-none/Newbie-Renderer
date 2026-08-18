@@ -1,7 +1,7 @@
 [build]
-  command = "pnpm build || ( npm install pnpm && pnpm build )"
+  command = "pnpm build"
   publish = "dist"
-  environment = { NODE_VERSION = "16" }
+  environment = { NODE_VERSION = "24", PNPM_VERSION = "11.22.0" }
 
 [[redirects]]
   from = "/*"

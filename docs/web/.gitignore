@@ -2,30 +2,39 @@
 /logs
 *.log
 npm-debug.log*
+pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 report.*.json
 debug.log
 
-# Dependency directories
+# Local dependencies and package-manager state
 node_modules/
 jspm_packages/
+.pnpm-store/
 
-# macOS
+# Tool caches
+.cache/
+.eslintcache
+.stylelintcache
+.vite/
+vite.config.*.timestamp-*
+
+# Build and test output
+dist/
+dist-ssr/
+coverage/
+*.tsbuildinfo
+
+# OS and editor files
 .DS_Store
-
-# Vim swap files
 *.swp
+.idea/
+.vscode/
+*.iml
 
-# Build
-dist
-dist-ssr
-
-# IDE / Editor
-.idea
-
-# dotenv
-.env*
+# Local environment files
+.env
+.env.*
 *.local
 !.env.sample
-.stylelintcache

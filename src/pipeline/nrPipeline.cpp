@@ -193,6 +193,7 @@ void installPreparedPipelineGraph(nr::renderer::Renderer &renderer, const Prepar
     return availability;
 }
 
+template <nr::LogLevel FailureLevel = nr::LogLevel::error>
 void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::uint64_t frameIndex,
                   nr::options::MutationOrigin origin, const std::optional<std::string> &requestId, bool succeeded,
                   std::optional<std::string> reason = {})
@@ -213,7 +214,7 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
     }
     else
     {
-        nr::options::emitMachineRecord<nr::LogLevel::error>(record);
+        nr::options::emitMachineRecord<FailureLevel>(record);
     }
 }
 
@@ -298,7 +299,10 @@ void emitTerminal(std::uint64_t sequence, const nr::options::OptionId &id, std::
         auto report = modelController.loadModel(app, source, std::ref(history));
         if (!report.loaded)
         {
-            return fail(std::move(report.message));
+            static_cast<void>(options.discardMutation(std::move(mutation)));
+            emitTerminal<nr::LogLevel::warning>(sequence, id, frameIndex, origin, requestId, false,
+                                                std::move(report.message));
+            return {};
         }
         auto committed = options.commitModelAndCameraReset(std::move(mutation), app.camera().optionResetValues());
         nrAssert(committed.committed, "Model and derived camera option commit failed after Scene commit.");
