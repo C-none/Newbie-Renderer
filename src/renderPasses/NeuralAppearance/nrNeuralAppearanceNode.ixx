@@ -15,7 +15,7 @@ export namespace nr::renderPasses
 class NeuralAppearanceNode final : public Node
 {
   public:
-    explicit NeuralAppearanceNode(bool comparisonEnabled = true) noexcept;
+    explicit NeuralAppearanceNode(bool comparisonEnabled = true, std::uint32_t trainingSeed = 0u) noexcept;
     ~NeuralAppearanceNode() override;
 
     [[nodiscard]] std::vector<nr::rhi::SlangProgramCompileFileRequest> shaderRequests() const override;
@@ -25,6 +25,7 @@ class NeuralAppearanceNode final : public Node
     void shutdown(NodeShutdownContext &context) override;
 
     [[nodiscard]] bool trainingComplete() const noexcept;
+    [[nodiscard]] static std::uint32_t totalTrainingStepCount() noexcept;
     [[nodiscard]] std::uint32_t lastScheduledTrainingStep() const noexcept;
     [[nodiscard]] static bool trainingCheckpointExists(const std::filesystem::path &path);
     [[nodiscard]] static bool removeTrainingCheckpoint(const std::filesystem::path &path,
@@ -37,5 +38,6 @@ class NeuralAppearanceNode final : public Node
   private:
     std::shared_ptr<detail::NeuralAppearanceRuntimeCache> runtime_{};
     bool comparisonEnabled_ = true;
+    std::uint32_t trainingSeed_ = 0u;
 };
 } // namespace nr::renderPasses

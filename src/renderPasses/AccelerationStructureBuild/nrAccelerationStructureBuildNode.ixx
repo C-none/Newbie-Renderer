@@ -3,7 +3,6 @@ import dependency.vulkan;
 
 import nr.renderer;
 import nr.rhi;
-import nr.resource;
 import std;
 import :nodeType;
 
@@ -18,10 +17,6 @@ struct AccelerationStructureBuildNodeInput
 {
     std::uint64_t unusedFrameRetireLatency = 300;
 };
-
-// This is the host-side half of the neural P0 contract. The shader repeats
-// the runtime material-state check before evaluating the artifact.
-[[nodiscard]] bool neuralMaterialP0Eligible(const nr::resource::Material &material) noexcept;
 
 class AccelerationStructureBuildNode final : public Node
 {

@@ -4,12 +4,6 @@ import include.neuralAppearance.fixture;
 import include.neuralAppearance.layout;
 import include.neuralAppearance.model;
 
-[[vk::binding(0, 1)]]
-Sampler2D<float4> gLatentTexture0;
-
-[[vk::binding(1, 1)]]
-Sampler2D<float4> gLatentTexture1;
-
 [[vk::binding(1, 2)]]
 StructuredBuffer<float4> gModelParameters;
 
@@ -23,10 +17,19 @@ bool neuralAppearanceValuesMatch(float3 cached, float3 recomputed)
            all(abs(cached - recomputed) <= tolerance);
 }
 
-bool neuralAppearanceContractMatches(float3 cached, float3 recomputed)
+bool neuralAppearanceLobesMatch(NeuralAppearanceLobes cached, NeuralAppearanceLobes recomputed)
 {
-    return neuralAppearanceValuesMatch(cached, recomputed) &&
-           all(cached >= float3(0.0f)) && all(recomputed >= float3(0.0f));
+    return neuralAppearanceValuesMatch(cached.diffuse, recomputed.diffuse) &&
+           neuralAppearanceValuesMatch(cached.specular, recomputed.specular) &&
+           all(cached.diffuse >= float3(0.0f)) && all(cached.specular >= float3(0.0f));
+}
+
+bool neuralAppearanceLobesBounded(NeuralAppearanceLobes lobes)
+{
+    // The decode saturates smoothly, so both heads must stay inside their cap
+    // and therefore inside the finite rgba16f range.
+    return all(lobes.diffuse <= float3(exp(kNeuralAppearanceDiffuseLogMaximum))) &&
+           all(lobes.specular <= float3(exp(kNeuralAppearanceSpecularLogMaximum)));
 }
 
 bool neuralAppearanceFrameUnitFinite(NeuralAppearanceFrame frame)
@@ -43,37 +46,10 @@ bool neuralAppearanceFrameCrossMatches(NeuralAppearanceFrame frame)
     float crossLengthSquared = dot(crossValue, crossValue);
     float3 expected = crossLengthSquared >= 1.0e-12f
                           ? crossValue * rsqrt(max(crossLengthSquared, 1.0e-12f))
-                          : orthogonalTangent(frame.normal);
+                          : float3(0.0f, 0.0f, -1.0f);
     return all(abs(expected - frame.bitangent) <= float3(2.0e-4f)) &&
            abs(dot(frame.bitangent, frame.normal)) <= 2.0e-4f &&
            abs(dot(frame.bitangent, frame.tangent)) <= 2.0e-4f;
-}
-
-bool neuralAppearancePrefixPathsMatch(
-    NeuralMaterialContext runtimeContext, NeuralMaterialContext differentiableContext)
-{
-    bool matches = true;
-    for (uint value = 0u; value < 32u; ++value)
-    {
-        float runtimeValue = runtimeContext.spatialPrefix[value];
-        float differentiableValue = differentiableContext.spatialPrefix[value];
-        float tolerance = 3.0e-5f *
-                          (1.0f + max(abs(runtimeValue), abs(differentiableValue)));
-        matches = matches && isfinite(runtimeValue) && isfinite(differentiableValue) &&
-                  abs(runtimeValue - differentiableValue) <= tolerance;
-    }
-    return matches;
-}
-
-bool neuralAppearanceFramePathsMatch(
-    NeuralAppearanceFrame runtimeFrame, NeuralAppearanceFrame differentiableFrame)
-{
-    return neuralAppearanceValuesMatch(runtimeFrame.normal, differentiableFrame.normal) &&
-           neuralAppearanceValuesMatch(runtimeFrame.tangent, differentiableFrame.tangent) &&
-           neuralAppearanceValuesMatch(runtimeFrame.bitangent, differentiableFrame.bitangent) &&
-           runtimeFrame.normalPadding == differentiableFrame.normalPadding &&
-           runtimeFrame.tangentPadding == differentiableFrame.tangentPadding &&
-           runtimeFrame.bitangentPadding == differentiableFrame.bitangentPadding;
 }
 
 [shader("compute")]
@@ -81,36 +57,34 @@ bool neuralAppearanceFramePathsMatch(
 void modelContractMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     static const float2 materialUv = float2(24.5f / 64.0f, 40.5f / 64.0f);
-    NeuralAppearanceLatent latent = sampleNeuralAppearanceLatent(
-        gLatentTexture0, gLatentTexture1, materialUv);
-    NeuralAppearanceParameters parameters = loadNeuralAppearanceParameters(gModelParameters);
-    NeuralMaterialContext context = buildNeuralMaterialContextRuntime(gModelParameters, latent);
-    NeuralMaterialContext differentiableContext = buildNeuralMaterialContext(parameters, latent);
+    NeuralAppearanceFixture fixture = neuralAppearanceFixture(materialUv);
+    NeuralAppearanceMaterialInput material = neuralAppearanceMaterialInput(fixture);
 
+    bool materialFinite = true;
+    for (uint value = 0u; value < kNeuralAppearanceMaterialInputCount; ++value)
+    {
+        materialFinite = materialFinite && isfinite(material.values[value]);
+    }
+    gContractResults[0] = uint(materialFinite);
+
+    float latent[kNeuralAppearanceLatentCount] =
+        encodeNeuralAppearanceLatentRuntime(gModelParameters, material);
     bool latentFinite = true;
-    for (uint chunk = 0u; chunk < 2u; ++chunk)
+    for (uint value = 0u; value < kNeuralAppearanceLatentCount; ++value)
     {
-        latentFinite = latentFinite && all(isfinite(latent.chunks[chunk]));
+        latentFinite = latentFinite && isfinite(latent[value]);
     }
-    gContractResults[0] = uint(latentFinite);
+    gContractResults[1] = uint(latentFinite);
 
-    bool parametersFinite = true;
-    for (uint chunk = 0u; chunk < kNeuralAppearanceParameterChunkCount; ++chunk)
-    {
-        parametersFinite = parametersFinite && all(isfinite(parameters.chunks[chunk]));
-    }
-    gContractResults[1] = uint(parametersFinite);
-
+    NeuralMaterialContext context = buildNeuralMaterialContextRuntime(gModelParameters, latent);
     bool prefixFinite = true;
-    for (uint value = 0u; value < 32u; ++value)
+    for (uint value = 0u; value < kNeuralAppearanceHiddenCount; ++value)
     {
         prefixFinite = prefixFinite && isfinite(context.spatialPrefix[value]);
     }
     gContractResults[2] = uint(prefixFinite);
-    gContractResults[3] = uint(neuralAppearanceFrameUnitFinite(context.frames[0]));
-    gContractResults[4] = uint(neuralAppearanceFrameCrossMatches(context.frames[0]));
-    gContractResults[5] = uint(neuralAppearanceFrameUnitFinite(context.frames[1]));
-    gContractResults[6] = uint(neuralAppearanceFrameCrossMatches(context.frames[1]));
+    gContractResults[3] = uint(neuralAppearanceFrameUnitFinite(context.frame));
+    gContractResults[4] = uint(neuralAppearanceFrameCrossMatches(context.frame));
 
     float3 viewDirections[4] = {
         safeNormalize(float3(0.15f, 0.98f, 0.09f), float3(0.0f, 1.0f, 0.0f)),
@@ -127,36 +101,35 @@ void modelContractMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 
     for (uint pair = 0u; pair < 4u; ++pair)
     {
-        float3 cached = evaluateNeuralAppearanceRuntime(
+        NeuralAppearanceLobes cached = evaluateNeuralAppearanceRuntime(
             gModelParameters, context, viewDirections[pair], lightDirections[pair]);
-        float3 recomputed = evaluateNeuralAppearanceRecomputedRuntime(
-            gModelParameters, latent, viewDirections[pair], lightDirections[pair]);
-        float3 differentiablePath = evaluateNeuralAppearance(
-            parameters, differentiableContext, viewDirections[pair], lightDirections[pair]);
-        float3 differentiableRecomputed = evaluateNeuralAppearanceRecomputed(
-            parameters, latent, viewDirections[pair], lightDirections[pair]);
-        gContractResults[7u + pair] = uint(
-            neuralAppearanceContractMatches(cached, recomputed) &&
-            neuralAppearanceContractMatches(cached, differentiablePath) &&
-            neuralAppearanceContractMatches(cached, differentiableRecomputed));
+        NeuralAppearanceLobes recomputed = evaluateNeuralAppearanceRecomputedRuntime(
+            gModelParameters, material, viewDirections[pair], lightDirections[pair]);
+        gContractResults[5u + pair] = uint(
+            neuralAppearanceLobesMatch(cached, recomputed) && neuralAppearanceLobesBounded(cached));
     }
-    gContractResults[11] = uint(
-        neuralAppearancePrefixPathsMatch(context, differentiableContext));
-    gContractResults[12] = uint(
-        neuralAppearanceFramePathsMatch(context.frames[0], differentiableContext.frames[0]) &&
-        neuralAppearanceFramePathsMatch(context.frames[1], differentiableContext.frames[1]));
 
-    NeuralAppearanceFixture fixture = neuralAppearanceFixture(materialUv);
-    gContractResults[13] = uint(
+    gContractResults[9] = uint(
         all(isfinite(fixture.shadingNormal)) && abs(fixture.shadingNormal.y - 1.0f) > 1.0e-4f);
-    gContractResults[14] = uint(
+    gContractResults[10] = uint(
         fixture.anisotropyStrength > 0.0f && all(isfinite(fixture.anisotropyTangent)) &&
         abs(length(fixture.anisotropyTangent) - 1.0f) <= 2.0e-4f);
 
+    // A seeded fixture must stay inside the base surface parameter domain the
+    // reference evaluator accepts.
+    NeuralAppearanceFixture seeded = neuralAppearanceFixtureSample(0x51ed270bu);
+    gContractResults[11] = uint(
+        all(seeded.baseColor >= float3(0.0f)) && all(seeded.baseColor <= float3(1.0f)) &&
+        seeded.metallic >= 0.0f && seeded.metallic <= 1.0f &&
+        seeded.roughness >= kMaterialMinRoughness && seeded.roughness <= 1.0f &&
+        seeded.anisotropyStrength >= 0.0f && seeded.anisotropyStrength <= 1.0f &&
+        abs(length(seeded.shadingNormal) - 1.0f) <= 2.0e-4f &&
+        abs(length(seeded.anisotropyTangent) - 1.0f) <= 2.0e-4f);
+
     bool allPassed = true;
-    for (uint flag = 0u; flag < 15u; ++flag)
+    for (uint flag = 0u; flag < 12u; ++flag)
     {
         allPassed = allPassed && gContractResults[flag] != 0u;
     }
-    gContractResults[15] = uint(allPassed);
+    gContractResults[12] = uint(allPassed);
 }

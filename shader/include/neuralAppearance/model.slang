@@ -2,6 +2,13 @@ module model;
 import common;
 import include.neuralAppearance.layout;
 
+// Both lobes decode with exp(logit) in the small regime and saturate smoothly at
+// exp(logMaximum). The specular cap matches the finite rgba16f range the V2
+// capped exponential guaranteed, and the diffuse cap stays just above 1/pi.
+public static const float kNeuralAppearanceDiffuseLogMaximum = 1.0f;
+public static const float kNeuralAppearanceSpecularLogMaximum = 11.0f;
+public static const float kNeuralAppearanceLeakySlope = 0.01f;
+
 public struct NeuralAppearanceFrame : IDifferentiable
 {
     public float3 normal = float3(0.0f, 1.0f, 0.0f);
@@ -27,11 +34,8 @@ public struct NeuralAppearanceFrame : IDifferentiable
 
 public struct NeuralMaterialContext : IDifferentiable
 {
-    public float spatialPrefix[32] = {};
-    public NeuralAppearanceFrame frames[2] = {
-        NeuralAppearanceFrame(),
-        NeuralAppearanceFrame(),
-    };
+    public float spatialPrefix[kNeuralAppearanceHiddenCount] = {};
+    public NeuralAppearanceFrame frame = NeuralAppearanceFrame();
 
     [Differentiable]
     public __init()
@@ -39,28 +43,15 @@ public struct NeuralMaterialContext : IDifferentiable
     }
 
     [Differentiable]
-    public __init(
-        NeuralAppearanceFrame frame0, NeuralAppearanceFrame frame1)
+    public __init(NeuralAppearanceFrame inputFrame)
     {
-        frames[0] = frame0;
-        frames[1] = frame1;
+        frame = inputFrame;
     }
-};
-
-struct NeuralAppearanceHiddenLayer : IDifferentiable
-{
-    float values[32] = {};
-
-    [Differentiable]
-    __init()
-    {
-    }
-
 };
 
 public struct NeuralAppearanceDirectionFeatures : IDifferentiable
 {
-    public float values[12] = {};
+    public float values[kNeuralAppearanceDirectionFeatureCount] = {};
 
     [Differentiable]
     public __init()
@@ -68,33 +59,23 @@ public struct NeuralAppearanceDirectionFeatures : IDifferentiable
     }
 
     [Differentiable]
-    public __init(float3 light0, float3 view0, float3 light1, float3 view1)
+    public __init(float3 halfVector, float3 difference, float lightCosine, float viewCosine)
     {
-        values[0] = light0.x;
-        values[1] = light0.y;
-        values[2] = light0.z;
-        values[3] = view0.x;
-        values[4] = view0.y;
-        values[5] = view0.z;
-        values[6] = light1.x;
-        values[7] = light1.y;
-        values[8] = light1.z;
-        values[9] = view1.x;
-        values[10] = view1.y;
-        values[11] = view1.z;
+        values[0] = halfVector.x;
+        values[1] = halfVector.y;
+        values[2] = halfVector.z;
+        values[3] = difference.x;
+        values[4] = difference.y;
+        values[5] = difference.z;
+        // The two geometry-frame cosines are the only inputs that survive the
+        // learned rotation, so the decoder can still see the folding horizon.
+        values[6] = lightCosine;
+        values[7] = viewCosine;
     }
 };
 
-public NeuralAppearanceLatent sampleNeuralAppearanceLatent(
-    Sampler2D<float4> latentTexture0, Sampler2D<float4> latentTexture1, float2 uv)
-{
-    return NeuralAppearanceLatent(
-        latentTexture0.SampleLevel(uv, 0.0f),
-        latentTexture1.SampleLevel(uv, 0.0f));
-}
-
 [Differentiable]
-float3 neuralAppearanceDifferentiableNormalize(float3 value, float3 fallback)
+public float3 neuralAppearanceDifferentiableNormalize(float3 value, float3 fallback)
 {
     float lengthSquared = dot(value, value);
     float valid = lengthSquared >= 1.0e-12f ? 1.0f : 0.0f;
@@ -103,279 +84,177 @@ float3 neuralAppearanceDifferentiableNormalize(float3 value, float3 fallback)
 }
 
 [Differentiable]
-float3 neuralAppearanceDifferentiableOrthogonal(float3 normal)
+public float neuralAppearanceLeakyRelu(float value)
 {
-    float useZ = abs(normal.z) < 0.999f ? 1.0f : 0.0f;
-    float3 axis = float3(0.0f, 1.0f - useZ, useZ);
-    float3 tangent = cross(axis, normal);
-    return tangent * rsqrt(max(dot(tangent, tangent), 1.0e-12f));
+    return value >= 0.0f ? value : kNeuralAppearanceLeakySlope * value;
 }
 
+// The residual formulation keeps a zero-initialized model at the geometry frame,
+// so no hand-tuned identity weights are needed for the frame layer.
 [Differentiable]
-public NeuralAppearanceFrame neuralAppearanceBuildFrame(float rawValues[6])
+public NeuralAppearanceFrame neuralAppearanceBuildFrame(float rawValues[kNeuralAppearanceFrameValueCount])
 {
     float3 normal = neuralAppearanceDifferentiableNormalize(
-        float3(rawValues[0], rawValues[1], rawValues[2]), float3(0.0f, 1.0f, 0.0f));
-    // The learned tangent is normalized but intentionally not projected against N.
+        float3(rawValues[0], 1.0f + rawValues[1], rawValues[2]), float3(0.0f, 1.0f, 0.0f));
     float3 tangent = neuralAppearanceDifferentiableNormalize(
-        float3(rawValues[3], rawValues[4], rawValues[5]), float3(1.0f, 0.0f, 0.0f));
-    float3 bitangentFallback = neuralAppearanceDifferentiableOrthogonal(normal);
+        float3(1.0f + rawValues[3], rawValues[4], rawValues[5]), float3(1.0f, 0.0f, 0.0f));
     float3 bitangent = neuralAppearanceDifferentiableNormalize(
-        cross(normal, tangent), bitangentFallback);
+        cross(normal, tangent), float3(0.0f, 0.0f, -1.0f));
     return NeuralAppearanceFrame(normal, tangent, bitangent);
-}
-
-[Differentiable]
-NeuralAppearanceFrame neuralAppearanceBuildFrame(
-    NeuralAppearanceParameters parameters, NeuralAppearanceLatent latent, uint frameIndex)
-{
-    float rawValues[6] = {};
-    for (uint output = 0u; output < 6u; ++output)
-    {
-        uint row = frameIndex * 6u + output;
-        float value = neuralAppearanceParameterScalar(
-            parameters, kNeuralAppearanceFrameBiasOffset + row);
-        for (uint input = 0u; input < 8u; ++input)
-        {
-            value += neuralAppearanceParameterScalar(
-                parameters, kNeuralAppearanceFrameWeightOffset + row * 8u + input) *
-                latent.chunks[input >> 2u][input & 3u];
-        }
-        rawValues[output] = value;
-    }
-    return neuralAppearanceBuildFrame(rawValues);
-}
-
-NeuralAppearanceFrame neuralAppearanceBuildFrameRuntime(
-    StructuredBuffer<float4> parameterBuffer, NeuralAppearanceLatent latent, uint frameIndex)
-{
-    float rawValues[6] = {};
-    for (uint output = 0u; output < 6u; ++output)
-    {
-        uint row = frameIndex * 6u + output;
-        float value = neuralAppearanceParameterScalarRuntime(
-            parameterBuffer, kNeuralAppearanceFrameBiasOffset + row);
-        for (uint input = 0u; input < 8u; ++input)
-        {
-            value += neuralAppearanceParameterScalarRuntime(
-                parameterBuffer, kNeuralAppearanceFrameWeightOffset + row * 8u + input) *
-                latent.chunks[input >> 2u][input & 3u];
-        }
-        rawValues[output] = value;
-    }
-    return neuralAppearanceBuildFrame(rawValues);
-}
-
-[Differentiable]
-public NeuralMaterialContext buildNeuralMaterialContext(
-    NeuralAppearanceParameters parameters, NeuralAppearanceLatent latent)
-{
-    NeuralMaterialContext context = NeuralMaterialContext(
-        neuralAppearanceBuildFrame(parameters, latent, 0u),
-        neuralAppearanceBuildFrame(parameters, latent, 1u));
-    for (uint output = 0u; output < 32u; ++output)
-    {
-        float activation = neuralAppearanceParameterScalar(
-            parameters, kNeuralAppearanceFirstBiasOffset + output);
-        for (uint input = 0u; input < 8u; ++input)
-        {
-            activation += neuralAppearanceParameterScalar(
-                parameters, kNeuralAppearanceSpatialWeightOffset + output * 8u + input) *
-                latent.chunks[input >> 2u][input & 3u];
-        }
-        context.spatialPrefix[output] = activation;
-    }
-    return context;
-}
-
-public NeuralMaterialContext buildNeuralMaterialContextRuntime(
-    StructuredBuffer<float4> parameterBuffer, NeuralAppearanceLatent latent)
-{
-    NeuralMaterialContext context = NeuralMaterialContext(
-        neuralAppearanceBuildFrameRuntime(parameterBuffer, latent, 0u),
-        neuralAppearanceBuildFrameRuntime(parameterBuffer, latent, 1u));
-    for (uint output = 0u; output < 32u; ++output)
-    {
-        float activation = neuralAppearanceParameterScalarRuntime(
-            parameterBuffer, kNeuralAppearanceFirstBiasOffset + output);
-        for (uint input = 0u; input < 8u; ++input)
-        {
-            activation += neuralAppearanceParameterScalarRuntime(
-                parameterBuffer, kNeuralAppearanceSpatialWeightOffset + output * 8u + input) *
-                latent.chunks[input >> 2u][input & 3u];
-        }
-        context.spatialPrefix[output] = activation;
-    }
-    return context;
 }
 
 [Differentiable]
 float3 neuralAppearanceDirectionInFrame(NeuralAppearanceFrame frame, float3 direction)
 {
-    float3 normalizedDirection = neuralAppearanceDifferentiableNormalize(
-        direction, float3(0.0f, 1.0f, 0.0f));
-    return float3(dot(frame.tangent, normalizedDirection),
-                  dot(frame.bitangent, normalizedDirection),
-                  dot(frame.normal, normalizedDirection));
+    return float3(dot(frame.tangent, direction), dot(frame.bitangent, direction),
+                  dot(frame.normal, direction));
 }
 
+// Rusinkiewicz parameterization in the geometry frame: the half vector pins the
+// specular peak, and the difference vector is the light direction expressed in
+// the half-vector basis. The world tangent is the azimuth reference so the
+// anisotropy tangent fed to the encoder stays in the same frame.
 [Differentiable]
 public NeuralAppearanceDirectionFeatures neuralAppearanceDirectionFeatures(
     NeuralMaterialContext context, float3 viewDirection, float3 lightDirection)
 {
-    float3 light0 = neuralAppearanceDirectionInFrame(context.frames[0], lightDirection);
-    float3 view0 = neuralAppearanceDirectionInFrame(context.frames[0], viewDirection);
-    float3 light1 = neuralAppearanceDirectionInFrame(context.frames[1], lightDirection);
-    float3 view1 = neuralAppearanceDirectionInFrame(context.frames[1], viewDirection);
-    return NeuralAppearanceDirectionFeatures(light0, view0, light1, view1);
+    float3 halfVector = neuralAppearanceDifferentiableNormalize(
+        viewDirection + lightDirection, float3(0.0f, 1.0f, 0.0f));
+    float3 halfTangent = neuralAppearanceDifferentiableNormalize(
+        float3(1.0f, 0.0f, 0.0f) - halfVector * halfVector.x, float3(0.0f, 0.0f, 1.0f));
+    float3 halfBitangent = cross(halfVector, halfTangent);
+    float3 difference = float3(dot(lightDirection, halfTangent),
+                               dot(lightDirection, halfBitangent),
+                               dot(lightDirection, halfVector));
+    return NeuralAppearanceDirectionFeatures(
+        neuralAppearanceDirectionInFrame(context.frame, halfVector),
+        neuralAppearanceDirectionInFrame(context.frame, difference),
+        lightDirection.y, viewDirection.y);
 }
 
 [Differentiable]
-public float3 neuralAppearanceDecodeOutput(float3 logits)
+public float3 neuralAppearanceDecodeLobe(float3 logits, float logMaximum)
 {
-    // Capping the exponent argument at 11 keeps decoded RGB below the finite
-    // rgba16f range while retaining exp(logits - 3) throughout that range.
-    return exp(min(logits - float3(3.0f), float3(11.0f)));
+    float3 excess = min(float3(logMaximum) - logits, float3(80.0f));
+    return exp(logMaximum) / (float3(1.0f) + exp(excess));
 }
 
-[Differentiable]
-float3 neuralAppearanceFinishDecode(
-    NeuralAppearanceParameters parameters, NeuralAppearanceHiddenLayer firstHidden)
+// The aggregate form is runtime only. Training decodes each lobe separately so
+// the reverse-mode chain never carries a struct across a module boundary.
+public NeuralAppearanceLobes neuralAppearanceDecodeLobes(float logits[kNeuralAppearanceOutputCount])
 {
-    NeuralAppearanceHiddenLayer secondHidden = NeuralAppearanceHiddenLayer();
-    for (uint output = 0u; output < 32u; ++output)
-    {
-        float activation = neuralAppearanceParameterScalar(
-            parameters, kNeuralAppearanceSecondBiasOffset + output);
-        for (uint input = 0u; input < 32u; ++input)
-        {
-            activation += neuralAppearanceParameterScalar(
-                parameters, kNeuralAppearanceSecondWeightOffset + output * 32u + input) *
-                firstHidden.values[input];
-        }
-        secondHidden.values[output] = max(activation, 0.0f);
-    }
-
-    float3 logits;
-    for (uint channel = 0u; channel < 3u; ++channel)
-    {
-        float value = neuralAppearanceParameterScalar(
-            parameters, kNeuralAppearanceOutputBiasOffset + channel);
-        for (uint input = 0u; input < 32u; ++input)
-        {
-            value += neuralAppearanceParameterScalar(
-                parameters, kNeuralAppearanceOutputWeightOffset + channel * 32u + input) *
-                secondHidden.values[input];
-        }
-        logits[channel] = value;
-    }
-
-    return neuralAppearanceDecodeOutput(logits);
+    return NeuralAppearanceLobes(
+        neuralAppearanceDecodeLobe(float3(logits[0], logits[1], logits[2]),
+                                   kNeuralAppearanceDiffuseLogMaximum),
+        neuralAppearanceDecodeLobe(float3(logits[3], logits[4], logits[5]),
+                                   kNeuralAppearanceSpecularLogMaximum));
 }
 
-float3 neuralAppearanceFinishDecodeRuntime(
-    StructuredBuffer<float4> parameterBuffer, NeuralAppearanceHiddenLayer firstHidden)
-{
-    NeuralAppearanceHiddenLayer secondHidden = NeuralAppearanceHiddenLayer();
-    for (uint output = 0u; output < 32u; ++output)
-    {
-        float activation = neuralAppearanceParameterScalarRuntime(
-            parameterBuffer, kNeuralAppearanceSecondBiasOffset + output);
-        for (uint input = 0u; input < 32u; ++input)
-        {
-            activation += neuralAppearanceParameterScalarRuntime(
-                parameterBuffer, kNeuralAppearanceSecondWeightOffset + output * 32u + input) *
-                firstHidden.values[input];
-        }
-        secondHidden.values[output] = max(activation, 0.0f);
-    }
+// -----------------------------------------------------------------------------
+// FP32 master evaluation
+// -----------------------------------------------------------------------------
+//
+// This path exists so the published quality gate can compare the FP16 mirror
+// against the optimizer's master parameters. It is not used for deployment.
 
-    float3 logits;
-    for (uint channel = 0u; channel < 3u; ++channel)
+float[Outputs] neuralAppearanceAffineRuntime<let Inputs : int, let Outputs : int>(
+    StructuredBuffer<float4> parameterBuffer, uint layerIndex, float inputs[Inputs])
+{
+    NeuralAppearanceAffineLayer layer = neuralAppearanceAffineLayer(layerIndex);
+    float result[Outputs];
+    for (uint output = 0u; output < uint(Outputs); ++output)
     {
-        float value = neuralAppearanceParameterScalarRuntime(
-            parameterBuffer, kNeuralAppearanceOutputBiasOffset + channel);
-        for (uint input = 0u; input < 32u; ++input)
+        float value = layer.hasBias
+            ? neuralAppearanceParameterScalarRuntime(parameterBuffer, layer.biasScalarOffset + output)
+            : 0.0f;
+        for (uint input = 0u; input < uint(Inputs); ++input)
         {
             value += neuralAppearanceParameterScalarRuntime(
-                parameterBuffer, kNeuralAppearanceOutputWeightOffset + channel * 32u + input) *
-                secondHidden.values[input];
+                         parameterBuffer, layer.weightScalarOffset + output * uint(Inputs) + input) *
+                     inputs[input];
         }
-        logits[channel] = value;
+        result[output] = value;
     }
-
-    return neuralAppearanceDecodeOutput(logits);
+    return result;
 }
 
-[Differentiable]
-public float3 evaluateNeuralAppearance(
-    NeuralAppearanceParameters parameters, NeuralMaterialContext context,
-    float3 viewDirection, float3 lightDirection)
+float[N] neuralAppearanceLeakyReluArray<let N : int>(float values[N])
 {
-    NeuralAppearanceDirectionFeatures directionFeatures =
-        neuralAppearanceDirectionFeatures(context, viewDirection, lightDirection);
-    NeuralAppearanceHiddenLayer firstHidden = NeuralAppearanceHiddenLayer();
-    for (uint output = 0u; output < 32u; ++output)
+    float result[N];
+    for (uint index = 0u; index < uint(N); ++index)
     {
-        float activation = context.spatialPrefix[output];
-        for (uint input = 0u; input < 12u; ++input)
-        {
-            activation += neuralAppearanceParameterScalar(
-                parameters, kNeuralAppearanceDirectionWeightOffset + output * 12u + input) *
-                directionFeatures.values[input];
-        }
-        firstHidden.values[output] = max(activation, 0.0f);
+        result[index] = neuralAppearanceLeakyRelu(values[index]);
     }
-    return neuralAppearanceFinishDecode(parameters, firstHidden);
+    return result;
 }
 
-public float3 evaluateNeuralAppearanceRuntime(
+public float[kNeuralAppearanceLatentCount] encodeNeuralAppearanceLatentRuntime(
+    StructuredBuffer<float4> parameterBuffer, NeuralAppearanceMaterialInput material)
+{
+    float first[kNeuralAppearanceHiddenCount] = neuralAppearanceLeakyReluArray(
+        neuralAppearanceAffineRuntime<int(kNeuralAppearanceMaterialInputCount), int(kNeuralAppearanceHiddenCount)>(
+            parameterBuffer, kNeuralAppearanceEncodeFirstLayer, material.values));
+    float second[kNeuralAppearanceHiddenCount] = neuralAppearanceLeakyReluArray(
+        neuralAppearanceAffineRuntime<int(kNeuralAppearanceHiddenCount), int(kNeuralAppearanceHiddenCount)>(
+            parameterBuffer, kNeuralAppearanceEncodeSecondLayer, first));
+    return neuralAppearanceAffineRuntime<int(kNeuralAppearanceHiddenCount), int(kNeuralAppearanceLatentCount)>(
+        parameterBuffer, kNeuralAppearanceEncodeThirdLayer, second);
+}
+
+public NeuralMaterialContext buildNeuralMaterialContextRuntime(
+    StructuredBuffer<float4> parameterBuffer, float latent[kNeuralAppearanceLatentCount])
+{
+    NeuralMaterialContext context = NeuralMaterialContext(neuralAppearanceBuildFrame(
+        neuralAppearanceAffineRuntime<int(kNeuralAppearanceLatentCount), int(kNeuralAppearanceFrameValueCount)>(
+            parameterBuffer, kNeuralAppearanceFrameLayer, latent)));
+    context.spatialPrefix =
+        neuralAppearanceAffineRuntime<int(kNeuralAppearanceLatentCount), int(kNeuralAppearanceHiddenCount)>(
+            parameterBuffer, kNeuralAppearanceSpatialLayer, latent);
+    return context;
+}
+
+public NeuralAppearanceLobes evaluateNeuralAppearanceRuntime(
     StructuredBuffer<float4> parameterBuffer, NeuralMaterialContext context,
     float3 viewDirection, float3 lightDirection)
 {
     NeuralAppearanceDirectionFeatures directionFeatures =
         neuralAppearanceDirectionFeatures(context, viewDirection, lightDirection);
-    NeuralAppearanceHiddenLayer firstHidden = NeuralAppearanceHiddenLayer();
-    for (uint output = 0u; output < 32u; ++output)
+    float directional[kNeuralAppearanceHiddenCount] =
+        neuralAppearanceAffineRuntime<int(kNeuralAppearanceDirectionFeatureCount), int(kNeuralAppearanceHiddenCount)>(
+            parameterBuffer, kNeuralAppearanceDirectionLayer, directionFeatures.values);
+    float firstHidden[kNeuralAppearanceHiddenCount];
+    for (uint index = 0u; index < kNeuralAppearanceHiddenCount; ++index)
     {
-        float activation = context.spatialPrefix[output];
-        for (uint input = 0u; input < 12u; ++input)
-        {
-            activation += neuralAppearanceParameterScalarRuntime(
-                parameterBuffer, kNeuralAppearanceDirectionWeightOffset + output * 12u + input) *
-                directionFeatures.values[input];
-        }
-        firstHidden.values[output] = max(activation, 0.0f);
+        firstHidden[index] = neuralAppearanceLeakyRelu(context.spatialPrefix[index] + directional[index]);
     }
-    return neuralAppearanceFinishDecodeRuntime(parameterBuffer, firstHidden);
+    float secondHidden[kNeuralAppearanceHiddenCount] = neuralAppearanceLeakyReluArray(
+        neuralAppearanceAffineRuntime<int(kNeuralAppearanceHiddenCount), int(kNeuralAppearanceHiddenCount)>(
+            parameterBuffer, kNeuralAppearanceHiddenLayer, firstHidden));
+    return neuralAppearanceDecodeLobes(
+        neuralAppearanceAffineRuntime<int(kNeuralAppearanceHiddenCount), int(kNeuralAppearanceOutputCount)>(
+            parameterBuffer, kNeuralAppearanceOutputLayer, secondHidden));
 }
 
-[Differentiable]
-public float3 evaluateNeuralAppearanceRecomputed(
-    NeuralAppearanceParameters parameters, NeuralAppearanceLatent latent,
+public NeuralAppearanceLobes evaluateNeuralAppearanceRecomputedRuntime(
+    StructuredBuffer<float4> parameterBuffer, NeuralAppearanceMaterialInput material,
     float3 viewDirection, float3 lightDirection)
 {
-    NeuralMaterialContext context = buildNeuralMaterialContext(parameters, latent);
-    return evaluateNeuralAppearance(parameters, context, viewDirection, lightDirection);
-}
-
-public float3 evaluateNeuralAppearanceRecomputedRuntime(
-    StructuredBuffer<float4> parameterBuffer, NeuralAppearanceLatent latent,
-    float3 viewDirection, float3 lightDirection)
-{
-    NeuralMaterialContext context = buildNeuralMaterialContextRuntime(parameterBuffer, latent);
+    float latent[kNeuralAppearanceLatentCount] =
+        encodeNeuralAppearanceLatentRuntime(parameterBuffer, material);
     return evaluateNeuralAppearanceRuntime(
-        parameterBuffer, context, viewDirection, lightDirection);
+        parameterBuffer, buildNeuralMaterialContextRuntime(parameterBuffer, latent),
+        viewDirection, lightDirection);
 }
 
 // -----------------------------------------------------------------------------
-// V2 FP16 CooperativeVector inference ABI
+// V3 FP16 CooperativeVector inference ABI
 // -----------------------------------------------------------------------------
 //
-// This path deliberately has no stage entry point. It is shared by training,
-// the preview viewer, and ray tracing. The portable parameter blob is always
-// F/S/D/H/O in the exact byte layout declared in layout.slang. Do not use a
-// TrainingOptimal matrix here: that layout is device-local gradient scratch.
+// This path deliberately has no stage entry point. It is shared by training, the
+// preview viewer, and ray tracing. The portable parameter blob is always
+// E1/E2/E3/F/S/D/H/O in the exact byte layout declared in layout.slang. Do not
+// use a TrainingOptimal matrix here: that layout is device-local gradient
+// scratch.
 
 public CoopVec<half, N> neuralAppearanceCoopVecFromFloatArray<let N : int>(float values[N])
 {
@@ -400,108 +279,101 @@ public float[N] neuralAppearanceFloatArrayFromCoopVec<let N : int>(CoopVec<half,
 }
 
 CoopVec<half, Outputs> neuralAppearanceCoopLinear<let Inputs : int, let Outputs : int>(
-    CoopVec<half, Inputs> input, ByteAddressBuffer parameters, uint weightOffsetBytes,
-    uint biasOffsetBytes, uint rowStrideBytes)
+    CoopVec<half, Inputs> input, ByteAddressBuffer parameters, uint layerIndex)
 {
+    NeuralAppearanceAffineLayer layer = neuralAppearanceAffineLayer(layerIndex);
     return coopVecMatMulAdd<half, Outputs>(
         input,
         CoopVecComponentType.Float16,
         parameters,
-        int(weightOffsetBytes),
+        int(layer.weightByteOffset),
         CoopVecComponentType.Float16,
         parameters,
-        int(biasOffsetBytes),
+        int(layer.biasByteOffset),
         CoopVecComponentType.Float16,
         CoopVecMatrixLayout.RowMajor,
         false,
-        int(rowStrideBytes));
+        int(layer.rowStrideBytes));
 }
 
 CoopVec<half, Outputs> neuralAppearanceCoopLinearNoBias<let Inputs : int, let Outputs : int>(
-    CoopVec<half, Inputs> input, ByteAddressBuffer parameters, uint weightOffsetBytes,
-    uint rowStrideBytes)
+    CoopVec<half, Inputs> input, ByteAddressBuffer parameters, uint layerIndex)
 {
+    NeuralAppearanceAffineLayer layer = neuralAppearanceAffineLayer(layerIndex);
     return coopVecMatMul<half, Outputs>(
         input,
         CoopVecComponentType.Float16,
         parameters,
-        int(weightOffsetBytes),
+        int(layer.weightByteOffset),
         CoopVecComponentType.Float16,
         CoopVecMatrixLayout.RowMajor,
         false,
-        int(rowStrideBytes));
+        int(layer.rowStrideBytes));
 }
 
-NeuralAppearanceFrame neuralAppearanceBuildFrameCoop(CoopVec<half, 12> frameValues, uint frameIndex)
+CoopVec<half, N> neuralAppearanceCoopLeakyRelu<let N : int>(CoopVec<half, N> value)
 {
-    float rawValues[6];
-    uint base = frameIndex * 6u;
+    float values[N] = neuralAppearanceFloatArrayFromCoopVec(value);
     [ForceUnroll]
-    for (uint output = 0u; output < 6u; ++output)
+    for (int index = 0; index < N; ++index)
     {
-        rawValues[output] = float(frameValues[int(base + output)]);
+        values[index] = neuralAppearanceLeakyRelu(values[index]);
     }
-    return neuralAppearanceBuildFrame(rawValues);
+    return neuralAppearanceCoopVecFromFloatArray(values);
 }
 
-float3 neuralAppearanceFinishDecodeCoop(ByteAddressBuffer parameters, CoopVec<half, 32> firstHidden)
+public CoopVec<half, 8> encodeNeuralAppearanceLatentCoop(
+    ByteAddressBuffer parameters, NeuralAppearanceMaterialInput material)
 {
-    CoopVec<half, 32> hiddenPreActivation = neuralAppearanceCoopLinear<32, 32>(
-        firstHidden, parameters, kNeuralAppearanceHiddenWeightByteOffset,
-        kNeuralAppearanceHiddenBiasByteOffset, kNeuralAppearanceHiddenWeightRowStrideBytes);
-    float hiddenValues[32] = neuralAppearanceFloatArrayFromCoopVec(hiddenPreActivation);
-    [ForceUnroll]
-    for (int index = 0; index < 32; ++index)
-    {
-        hiddenValues[index] = max(hiddenValues[index], 0.0f);
-    }
-    CoopVec<half, 3> output = neuralAppearanceCoopLinear<32, 3>(
-        neuralAppearanceCoopVecFromFloatArray(hiddenValues), parameters, kNeuralAppearanceOutputWeightByteOffset,
-        kNeuralAppearanceOutputBiasByteOffset, kNeuralAppearanceOutputWeightRowStrideBytes);
-    return neuralAppearanceDecodeOutput(float3(float(output[0]), float(output[1]), float(output[2])));
+    CoopVec<half, 12> materialVector = neuralAppearanceCoopVecFromFloatArray(material.values);
+    CoopVec<half, 32> first = neuralAppearanceCoopLeakyRelu(
+        neuralAppearanceCoopLinear<12, 32>(materialVector, parameters, kNeuralAppearanceEncodeFirstLayer));
+    CoopVec<half, 32> second = neuralAppearanceCoopLeakyRelu(
+        neuralAppearanceCoopLinear<32, 32>(first, parameters, kNeuralAppearanceEncodeSecondLayer));
+    return neuralAppearanceCoopLinear<32, 8>(second, parameters, kNeuralAppearanceEncodeThirdLayer);
 }
 
-public float3 evaluateNeuralAppearanceRuntime(
-    ByteAddressBuffer parameters, NeuralAppearanceLatent latent,
+public NeuralMaterialContext buildNeuralMaterialContextCoop(
+    ByteAddressBuffer parameters, CoopVec<half, 8> latent)
+{
+    NeuralMaterialContext context = NeuralMaterialContext(neuralAppearanceBuildFrame(
+        neuralAppearanceFloatArrayFromCoopVec(
+            neuralAppearanceCoopLinear<8, 6>(latent, parameters, kNeuralAppearanceFrameLayer))));
+    context.spatialPrefix = neuralAppearanceFloatArrayFromCoopVec(
+        neuralAppearanceCoopLinear<8, 32>(latent, parameters, kNeuralAppearanceSpatialLayer));
+    return context;
+}
+
+public NeuralAppearanceLobes evaluateNeuralAppearanceCoop(
+    ByteAddressBuffer parameters, NeuralMaterialContext context,
     float3 viewDirection, float3 lightDirection)
 {
-    float latentValues[8] = {
-        latent.chunks[0].x, latent.chunks[0].y, latent.chunks[0].z, latent.chunks[0].w,
-        latent.chunks[1].x, latent.chunks[1].y, latent.chunks[1].z, latent.chunks[1].w,
-    };
-    CoopVec<half, 8> latentVector = neuralAppearanceCoopVecFromFloatArray(latentValues);
-    CoopVec<half, 12> frameValues = neuralAppearanceCoopLinear<8, 12>(
-        latentVector, parameters, kNeuralAppearanceFrameWeightByteOffset,
-        kNeuralAppearanceFrameBiasByteOffset, kNeuralAppearanceFrameWeightRowStrideBytes);
-    NeuralMaterialContext context = NeuralMaterialContext(
-        neuralAppearanceBuildFrameCoop(frameValues, 0u),
-        neuralAppearanceBuildFrameCoop(frameValues, 1u));
-
-    CoopVec<half, 32> spatial = neuralAppearanceCoopLinear<8, 32>(
-        latentVector, parameters, kNeuralAppearanceSpatialWeightByteOffset,
-        kNeuralAppearanceSpatialBiasByteOffset, kNeuralAppearanceSpatialWeightRowStrideBytes);
     NeuralAppearanceDirectionFeatures directionFeatures =
         neuralAppearanceDirectionFeatures(context, viewDirection, lightDirection);
-    CoopVec<half, 12> directionVector = neuralAppearanceCoopVecFromFloatArray(directionFeatures.values);
-    CoopVec<half, 32> directional = neuralAppearanceCoopLinearNoBias<12, 32>(
-        directionVector, parameters, kNeuralAppearanceDirectionWeightByteOffset,
-        kNeuralAppearanceDirectionWeightRowStrideBytes);
-    float spatialValues[32] = neuralAppearanceFloatArrayFromCoopVec(spatial);
+    CoopVec<half, 32> directional = neuralAppearanceCoopLinearNoBias<8, 32>(
+        neuralAppearanceCoopVecFromFloatArray(directionFeatures.values), parameters,
+        kNeuralAppearanceDirectionLayer);
     float directionalValues[32] = neuralAppearanceFloatArrayFromCoopVec(directional);
     float firstHiddenValues[32];
     [ForceUnroll]
     for (int index = 0; index < 32; ++index)
     {
-        firstHiddenValues[index] = max(spatialValues[index] + directionalValues[index], 0.0f);
+        firstHiddenValues[index] =
+            neuralAppearanceLeakyRelu(context.spatialPrefix[index] + directionalValues[index]);
     }
-    return neuralAppearanceFinishDecodeCoop(
-        parameters, neuralAppearanceCoopVecFromFloatArray(firstHiddenValues));
+    CoopVec<half, 32> secondHidden = neuralAppearanceCoopLeakyRelu(
+        neuralAppearanceCoopLinear<32, 32>(
+            neuralAppearanceCoopVecFromFloatArray(firstHiddenValues), parameters,
+            kNeuralAppearanceHiddenLayer));
+    return neuralAppearanceDecodeLobes(neuralAppearanceFloatArrayFromCoopVec(
+        neuralAppearanceCoopLinear<32, 6>(secondHidden, parameters, kNeuralAppearanceOutputLayer)));
 }
 
-public float3 evaluateNeuralAppearanceRuntime(
-    ByteAddressBuffer parameters, Sampler2D<float4> latentTexture0, Sampler2D<float4> latentTexture1,
-    float2 uv, float3 viewDirection, float3 lightDirection)
+public NeuralAppearanceLobes evaluateNeuralAppearanceRuntime(
+    ByteAddressBuffer parameters, NeuralAppearanceMaterialInput material,
+    float3 viewDirection, float3 lightDirection)
 {
-    return evaluateNeuralAppearanceRuntime(
-        parameters, sampleNeuralAppearanceLatent(latentTexture0, latentTexture1, uv), viewDirection, lightDirection);
+    CoopVec<half, 8> latent = encodeNeuralAppearanceLatentCoop(parameters, material);
+    return evaluateNeuralAppearanceCoop(
+        parameters, buildNeuralMaterialContextCoop(parameters, latent), viewDirection, lightDirection);
 }

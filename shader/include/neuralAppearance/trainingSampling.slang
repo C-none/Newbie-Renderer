@@ -6,7 +6,6 @@ public static const float kNeuralAppearanceTrainingPi = 3.14159265358979323846f;
 public static const float kNeuralAppearanceTrainingTwoPi =
     2.0f * kNeuralAppearanceTrainingPi;
 public static const uint kNeuralAppearanceDirectionSamplingAttempts = 64u;
-public static const uint kNeuralAppearanceMollificationSampleCountMax = 256u;
 
 public struct NeuralAppearanceDirectionPair
 {
@@ -26,23 +25,17 @@ public struct NeuralAppearanceDirectionPair
 
 public struct NeuralAppearanceTrainingSample
 {
-    public uint sampleSeed = 0u;
-    public float2 uv = float2(0.5f);
+    public uint materialSeed = 0u;
     public NeuralAppearanceDirectionPair directions = NeuralAppearanceDirectionPair();
-    public float mollificationAngle = 0.0f;
 
     public __init()
     {
     }
 
-    public __init(
-        uint inputSampleSeed, float2 inputUv,
-        NeuralAppearanceDirectionPair inputDirections, float inputMollificationAngle)
+    public __init(uint inputMaterialSeed, NeuralAppearanceDirectionPair inputDirections)
     {
-        sampleSeed = inputSampleSeed;
-        uv = inputUv;
+        materialSeed = inputMaterialSeed;
         directions = inputDirections;
-        mollificationAngle = inputMollificationAngle;
     }
 };
 
@@ -62,25 +55,9 @@ public float neuralAppearanceTrainingRandom(uint sampleSeed, uint dimension)
     return (float(bits) + 0.5f) / 16777216.0f;
 }
 
-float3 neuralAppearanceTrainingNormalize(float3 value, float3 fallback)
-{
-    float lengthSquared = dot(value, value);
-    return lengthSquared >= 1.0e-12f
-        ? value * rsqrt(lengthSquared)
-        : fallback;
-}
-
-public float3 neuralAppearanceTrainingOrthogonal(float3 direction)
-{
-    float3 normalizedDirection = neuralAppearanceTrainingNormalize(
-        direction, float3(0.0f, 1.0f, 0.0f));
-    float3 referenceAxis = abs(normalizedDirection.y) < 0.999f
-        ? float3(0.0f, 1.0f, 0.0f)
-        : float3(1.0f, 0.0f, 0.0f);
-    return neuralAppearanceTrainingNormalize(
-        cross(referenceAxis, normalizedDirection), float3(0.0f, 0.0f, 1.0f));
-}
-
+// Rusinkiewicz parameterization: the half vector pins the specular peak so a
+// uniform sweep of (thetaH, thetaD, phiH, phiD) keeps highlight coverage dense
+// without importance sampling the analytic lobe.
 public NeuralAppearanceDirectionPair neuralAppearanceRusinkiewiczDirectionPair(
     float thetaH, float thetaD, float phiH, float phiD)
 {
@@ -122,7 +99,9 @@ public NeuralAppearanceDirectionPair neuralAppearanceTrainingDirectionPair(
                      kNeuralAppearanceTrainingTwoPi;
         NeuralAppearanceDirectionPair pair = neuralAppearanceRusinkiewiczDirectionPair(
             thetaH, thetaD, phiH, phiD);
-        if (pair.viewDirection.y >= 1.0e-3f && pair.lightDirection.y >= 0.0f)
+        // Both directions stay in the geometric upper hemisphere, which is the
+        // domain the folded reflection is defined on.
+        if (pair.viewDirection.y >= 1.0e-3f && pair.lightDirection.y >= 1.0e-3f)
         {
             return pair;
         }
@@ -132,30 +111,6 @@ public NeuralAppearanceDirectionPair neuralAppearanceTrainingDirectionPair(
     return NeuralAppearanceDirectionPair(
         float3(0.0f, 1.0f, 0.0f),
         float3(0.0f, 1.0f, 0.0f));
-}
-
-public float3 neuralAppearanceTrainingUniformConeDirection(
-    float3 axis, float angleRadians, uint sampleSeed, uint dimensionOffset)
-{
-    float3 normalizedAxis = neuralAppearanceTrainingNormalize(
-        axis, float3(0.0f, 1.0f, 0.0f));
-    if (angleRadians <= 0.0f)
-    {
-        return normalizedAxis;
-    }
-
-    float clampedAngle = min(angleRadians, 0.5f * kNeuralAppearanceTrainingPi);
-    float minimumCosine = cos(clampedAngle);
-    float cosine = lerp(
-        1.0f, minimumCosine,
-        neuralAppearanceTrainingRandom(sampleSeed, dimensionOffset + 0u));
-    float sine = sqrt(max(1.0f - cosine * cosine, 0.0f));
-    float phase = kNeuralAppearanceTrainingTwoPi *
-                  neuralAppearanceTrainingRandom(sampleSeed, dimensionOffset + 1u);
-    float3 tangent = neuralAppearanceTrainingOrthogonal(normalizedAxis);
-    float3 bitangent = cross(normalizedAxis, tangent);
-    return normalizedAxis * cosine +
-           sine * (tangent * cos(phase) + bitangent * sin(phase));
 }
 
 public float neuralAppearanceTrainingCosineSchedule(
@@ -175,26 +130,17 @@ public float neuralAppearanceTrainingCosineSchedule(
     return finalValue + (initialValue - finalValue) * weight;
 }
 
-public float neuralAppearanceTrainingMollificationAngle(
-    uint trainingStep, uint mollificationStepCount, float initialAngleRadians)
-{
-    return neuralAppearanceTrainingCosineSchedule(
-        max(initialAngleRadians, 0.0f), 0.0f,
-        trainingStep, mollificationStepCount);
-}
-
+// The seed separates otherwise identical runs. Without it the initial weights and
+// the whole sample sequence are fixed constants, so repeated training is bit
+// identical and run-to-run variance cannot be measured at all.
 public NeuralAppearanceTrainingSample neuralAppearanceTrainingSample(
-    uint trainingStep, uint sampleIndex,
-    uint mollificationStepCount, float initialAngleRadians)
+    uint trainingStep, uint sampleIndex, uint trainingSeed)
 {
     uint sampleSeed = neuralAppearanceTrainingHash(
+        neuralAppearanceTrainingHash(trainingSeed + 0x9e3779b9u) +
         trainingStep * kNeuralAppearanceBatchSize + sampleIndex + 1u);
-    float2 uv = float2(
-        neuralAppearanceTrainingRandom(sampleSeed, 0u),
-        neuralAppearanceTrainingRandom(sampleSeed, 1u));
-    NeuralAppearanceDirectionPair directions = neuralAppearanceTrainingDirectionPair(
-        neuralAppearanceTrainingHash(sampleSeed ^ 0x243f6a88u), 0u);
-    float mollificationAngle = neuralAppearanceTrainingMollificationAngle(
-        trainingStep, mollificationStepCount, initialAngleRadians);
-    return NeuralAppearanceTrainingSample(sampleSeed, uv, directions, mollificationAngle);
+    return NeuralAppearanceTrainingSample(
+        neuralAppearanceTrainingHash(sampleSeed ^ 0x5bf03635u),
+        neuralAppearanceTrainingDirectionPair(
+            neuralAppearanceTrainingHash(sampleSeed ^ 0x243f6a88u), 0u));
 }

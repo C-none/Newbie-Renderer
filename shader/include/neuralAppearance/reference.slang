@@ -1,22 +1,27 @@
 module reference;
 import common;
 import include.neuralAppearance.fixture;
+import include.neuralAppearance.layout;
 
-public ResolvedMaterialPayload neuralAppearanceFixtureMaterial(float2 uv)
+// The supervised target is the reflective part of the base surface lobe. The
+// template intentionally omits RtMaterialLayerFlag.transmission so the whole
+// transmission block is removed at compile time and the returned components stay
+// pure reflection.
+public ResolvedMaterialPayload neuralAppearanceFixturePayload(NeuralAppearanceFixture fixture)
 {
-    NeuralAppearanceFixture fixture = neuralAppearanceFixture(uv);
-
     return ResolvedMaterialPayload(
-        RtMaterialLayerFlag.baseSurface | RtMaterialLayerFlag.anisotropicBaseLobe, fixture.geometryNormal,
-        fixture.shadingNormal, fixture.anisotropyTangent, fixture.anisotropyStrength,
-        float4(saturate(fixture.f0), 1.0f), 1.0f, max(kMaterialMinRoughness, saturate(fixture.roughness)));
+        RtMaterialLayerFlag.baseSurface | RtMaterialLayerFlag.anisotropicBaseLobe,
+        fixture.geometryNormal, fixture.shadingNormal, fixture.anisotropyTangent,
+        saturate(fixture.anisotropyStrength), float4(saturate(fixture.baseColor), 1.0f),
+        saturate(fixture.metallic), max(kMaterialMinRoughness, saturate(fixture.roughness)));
 }
 
-public float3 neuralAppearanceReferenceSpecularProjected(
-    float2 uv, float3 viewDirection, float3 lightDirection)
+public NeuralAppearanceLobes neuralAppearanceReferenceLobes(
+    NeuralAppearanceFixture fixture, float3 viewDirection, float3 lightDirection)
 {
-    ResolvedMaterialPayload material = neuralAppearanceFixtureMaterial(uv);
     BaseSurfaceBsdfLobe<
         RtMaterialLayerFlag.baseSurface | RtMaterialLayerFlag.anisotropicBaseLobe> baseSurface;
-    return baseSurface.evaluate(material, viewDirection, lightDirection).specularProjected;
+    ResolvedMaterialBsdfComponents components = baseSurface.evaluate(
+        neuralAppearanceFixturePayload(fixture), viewDirection, lightDirection);
+    return NeuralAppearanceLobes(components.diffuseProjected, components.specularProjected);
 }

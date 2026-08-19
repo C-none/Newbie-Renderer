@@ -139,27 +139,7 @@ void ModelHistory::trimToLimit()
         });
     }
 
-    auto neuralMaterialBinding = nr::neuralAppearance::loadBindingRequest(modelAssetRootPath(), normalizedPath);
-    if (!neuralMaterialBinding)
-    {
-        return std::unexpected(ModelLoadReport{
-            .modelPath = normalizedPath,
-            .message = std::format("Failed to load neural material binding: {}", neuralMaterialBinding.error()),
-        });
-    }
-    if (neuralMaterialBinding->has_value())
-    {
-        auto bindingValidation = nr::neuralAppearance::validateBindingForScene(**neuralMaterialBinding, *sceneLoad);
-        if (!bindingValidation)
-        {
-            return std::unexpected(ModelLoadReport{
-                .modelPath = normalizedPath,
-                .message = std::format("Neural material binding rejected: {}", bindingValidation.error()),
-            });
-        }
-    }
-
-    return ModelCpuLoad{std::move(normalizedPath), std::move(*sceneLoad), std::move(*neuralMaterialBinding)};
+    return ModelCpuLoad{std::move(normalizedPath), std::move(*sceneLoad)};
 }
 
 [[nodiscard]] ModelLoadReport SceneModelController::commitModel(
@@ -168,17 +148,8 @@ void ModelHistory::trimToLimit()
 {
     auto normalizedModelPath = std::move(loadedModel.normalizedModelPath_);
     auto sceneAsset = std::move(loadedModel.sceneAsset_);
-    auto neuralMaterialBinding = std::move(loadedModel.neuralMaterialBinding_);
     auto candidate = app.makeSceneCandidate();
-    auto templateHandle = candidate->registerTemplate(
-        sceneAsset, nr::scene::SceneTemplateCreateInfo{
-                        .neuralMaterialBinding = neuralMaterialBinding.transform([](nr::neuralAppearance::BindingRequest request) {
-                            return nr::scene::NeuralAppearanceMaterialBinding{
-                                .sourceMaterialIndex = request.sourceMaterialIndex,
-                                .artifact = std::move(request.artifact),
-                            };
-                        }),
-                    });
+    auto templateHandle = candidate->registerTemplate(sceneAsset, nr::scene::SceneTemplateCreateInfo{});
     if (!templateHandle.valid())
     {
         return ModelLoadReport{

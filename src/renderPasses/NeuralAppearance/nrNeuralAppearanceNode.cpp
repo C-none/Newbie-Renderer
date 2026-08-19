@@ -12,101 +12,81 @@ import :nodeType;
 
 namespace nr::renderPasses::detail
 {
-inline constexpr auto kLatentExtent = vk::Extent2D{64u, 64u};
 inline constexpr auto kImageThreadGroupSize = 8u;
 inline constexpr auto kGradientThreadGroupSize = 32u;
 inline constexpr auto kTrainingThreadGroupSize = 64u;
 inline constexpr auto kTrainingPairSlotCount = 8u;
-inline constexpr auto kTotalTrainingStepCount = 32768u;
+// Measured convergence: the EMA safe-log loss reaches its floor near step 4,096
+// and then oscillates without trend for the rest of the run. The budget keeps a
+// 4x margin over that floor instead of the former 131,072 steps.
+inline constexpr auto kTotalTrainingStepCount = 16384u;
+// Sample buffers are sized for the shader-side capacity so the active batch stays
+// a host-side experiment knob rather than an ABI change.
+inline constexpr auto kMaxTrainingBatchSize = 512u;
 inline constexpr auto kTrainingBatchSize = 64u;
 inline constexpr auto kHeldOutQualitySamplesPerStratum = 64u;
 inline constexpr auto kHeldOutQualityStratumCount = 3u;
 inline constexpr auto kHeldOutQualitySampleCount =
     kHeldOutQualitySamplesPerStratum * kHeldOutQualityStratumCount;
-inline constexpr auto kParameterChunkCount = 484u;
-inline constexpr auto kLatentChunkCount = kLatentExtent.width * kLatentExtent.height * 2u;
-inline constexpr auto kLatentTexelCount = kLatentExtent.width * kLatentExtent.height;
-inline constexpr auto kGradientChunksPerSample = 492u;
-inline constexpr auto kMollificationSampleCount = 256u;
-inline constexpr auto kMollificationStepCount = 2048u;
-inline constexpr auto kLatentWarmupStepCount = 2048u;
+inline constexpr auto kAffineLayerCount = 8u;
+inline constexpr auto kParameterChunkCount = 897u;
 inline constexpr auto kInitialLearningRate = 0.001f;
-inline constexpr auto kFinalLearningRate = 0.0001f;
-inline constexpr auto kLatentLearningRateScale = 0.1f;
+inline constexpr auto kFinalLearningRate = 0.00001f;
 inline constexpr auto kAdamBeta1 = 0.9f;
 inline constexpr auto kAdamBeta2 = 0.999f;
 inline constexpr auto kAdamEpsilon = 1.0e-7f;
-inline constexpr auto kInitialMollificationAngleRadians = std::numbers::pi_v<float> / 18.0f;
-inline constexpr auto kTrainingSchemaMagic = 0x4E415450u;
+// Per-element clamp on the batch-normalized gradient; zero disables clipping.
+inline constexpr auto kGradientClip = 0.01f;
+inline constexpr auto kTrainingSchemaMagic = 0x4E415433u;
 inline constexpr auto kTrainingCheckpointMagic = 0x4E415443u;
-inline constexpr auto kTrainingCheckpointVersion = 2u;
+inline constexpr auto kTrainingCheckpointVersion = 3u;
 
 inline constexpr auto kParameterBufferBytes =
     static_cast<vk::DeviceSize>(kParameterChunkCount) * sizeof(std::array<float, 4u>);
-inline constexpr auto kInferenceParameterBufferBytes = vk::DeviceSize{3968u};
-inline constexpr auto kLatentBufferBytes =
-    static_cast<vk::DeviceSize>(kLatentChunkCount) * sizeof(std::array<float, 4u>);
-inline constexpr auto kInferenceLatentBufferBytes = vk::DeviceSize{65536u};
+inline constexpr auto kInferenceParameterBufferBytes = vk::DeviceSize{7360u};
 inline constexpr auto kModelMomentBufferBytes = 2u * kParameterBufferBytes;
-inline constexpr auto kLatentMomentBufferBytes = 2u * kLatentBufferBytes;
-inline constexpr auto kSampleGradientBufferBytes =
-    static_cast<vk::DeviceSize>(kTrainingBatchSize) * kGradientChunksPerSample * sizeof(std::array<float, 4u>);
-inline constexpr auto kSampleTexelIndexBufferBytes =
-    static_cast<vk::DeviceSize>(kTrainingBatchSize) * sizeof(std::array<std::uint32_t, 4u>);
 inline constexpr auto kSampleMetricBufferBytes =
-    static_cast<vk::DeviceSize>(kTrainingBatchSize) * sizeof(std::array<float, 4u>);
-inline constexpr auto kSampleTargetBufferBytes =
-    static_cast<vk::DeviceSize>(kTrainingBatchSize) * sizeof(std::array<float, 4u>);
+    static_cast<vk::DeviceSize>(kMaxTrainingBatchSize) * sizeof(std::array<float, 4u>);
+// Two records per sample: the projected diffuse lobe and the projected specular lobe.
+inline constexpr auto kSampleTargetBufferBytes = 2u * kSampleMetricBufferBytes;
 inline constexpr auto kTrainingStatusBufferBytes = 2u * sizeof(std::array<float, 4u>);
 inline constexpr auto kTrainingControlBufferBytes = sizeof(std::array<std::uint32_t, 4u>);
 inline constexpr auto kHeldOutQualitySampleBufferBytes =
     static_cast<vk::DeviceSize>(kHeldOutQualitySampleCount) * sizeof(std::array<float, 4u>);
 
-static_assert(kParameterBufferBytes == 7744u);
-static_assert(kInferenceParameterBufferBytes == 3968u);
-static_assert(kLatentBufferBytes == 131072u);
-static_assert(kInferenceLatentBufferBytes == 65536u);
-static_assert(kModelMomentBufferBytes == 15488u);
-static_assert(kLatentMomentBufferBytes == 262144u);
-static_assert(kSampleGradientBufferBytes == 503808u);
-static_assert(kSampleTexelIndexBufferBytes == 1024u);
-static_assert(kSampleMetricBufferBytes == 1024u);
-static_assert(kSampleTargetBufferBytes == 1024u);
+static_assert(kParameterBufferBytes == 14352u);
+static_assert(kInferenceParameterBufferBytes == 7360u);
+static_assert(kModelMomentBufferBytes == 28704u);
+static_assert(kSampleMetricBufferBytes == 8192u);
+static_assert(kSampleTargetBufferBytes == 16384u);
 static_assert(kTrainingStatusBufferBytes == 32u);
 static_assert(kTrainingControlBufferBytes == 16u);
 static_assert(kHeldOutQualitySampleBufferBytes == 3072u);
+
+struct NeuralAppearanceInitializePushConstants
+{
+    std::uint32_t trainingSeed = 0u;
+};
 
 struct NeuralAppearanceGradientPushConstants
 {
     std::uint32_t trainingStep = 0u;
     std::uint32_t batchSize = 0u;
-    std::uint32_t latentWidth = kLatentExtent.width;
-    std::uint32_t latentHeight = kLatentExtent.height;
-    std::uint32_t mollificationSampleCount = kMollificationSampleCount;
-    std::uint32_t mollificationStepCount = kMollificationStepCount;
-    float initialAngleRadians = kInitialMollificationAngleRadians;
-    float padding = 0.0f;
-    std::array<std::uint32_t, 5u> optimalWeightOffsets{};
+    std::uint32_t trainingSeed = 0u;
+    std::array<std::uint32_t, kAffineLayerCount> optimalWeightOffsets{};
 };
 
 struct NeuralAppearanceTargetPushConstants
 {
     std::uint32_t trainingStep = 0u;
     std::uint32_t batchSize = 0u;
-    std::uint32_t latentWidth = kLatentExtent.width;
-    std::uint32_t latentHeight = kLatentExtent.height;
-    std::uint32_t mollificationSampleCount = kMollificationSampleCount;
-    std::uint32_t mollificationStepCount = kMollificationStepCount;
-    float initialAngleRadians = kInitialMollificationAngleRadians;
-    float padding = 0.0f;
+    std::uint32_t trainingSeed = 0u;
 };
 
 struct NeuralAppearanceClearCoopGradientsPushConstants
 {
     std::uint32_t optimalWeightGradientBytes = 0u;
-    std::uint32_t rowMajorWeightGradientBytes = static_cast<std::uint32_t>(kInferenceParameterBufferBytes);
     std::uint32_t biasGradientBytes = static_cast<std::uint32_t>(kInferenceParameterBufferBytes);
-    std::uint32_t padding = 0u;
 };
 
 struct NeuralAppearanceOptimizePushConstants
@@ -114,12 +94,11 @@ struct NeuralAppearanceOptimizePushConstants
     std::uint32_t trainingStep = 0u;
     std::uint32_t batchSize = 0u;
     std::uint32_t parameterChunkCount = kParameterChunkCount;
-    std::uint32_t latentTexelCount = kLatentTexelCount;
     std::uint32_t totalTrainingSteps = kTotalTrainingStepCount;
-    std::uint32_t latentWarmupSteps = kLatentWarmupStepCount;
+    std::uint32_t rowMajorGradientBaseOffset = 0u;
+    float gradientClip = kGradientClip;
     float initialLearningRate = kInitialLearningRate;
     float finalLearningRate = kFinalLearningRate;
-    float latentLearningRateScale = kLatentLearningRateScale;
     float beta1 = kAdamBeta1;
     float beta2 = kAdamBeta2;
     float epsilon = kAdamEpsilon;
@@ -139,25 +118,24 @@ struct NeuralAppearanceTrainingCheckpointHeader
 {
     std::uint32_t magic = kTrainingCheckpointMagic;
     std::uint32_t version = kTrainingCheckpointVersion;
-    std::uint32_t latentWidth = kLatentExtent.width;
-    std::uint32_t latentHeight = kLatentExtent.height;
-    std::uint32_t latentChannelCount = 8u;
     std::uint32_t parameterChunkCount = kParameterChunkCount;
     std::uint32_t modelMomentChunkCount = 2u * kParameterChunkCount;
-    std::uint32_t latentChunkCount = kLatentChunkCount;
-    std::uint32_t latentMomentChunkCount = 2u * kLatentChunkCount;
     std::uint32_t statusChunkCount = 2u;
     std::uint32_t controlWordCount = 4u;
     std::uint32_t totalTrainingStepCount = kTotalTrainingStepCount;
     std::uint32_t completedTrainingStep = 0u;
+    // Persisted so a resumed run continues the same initialization and sample
+    // stream instead of silently switching distributions.
+    std::uint32_t trainingSeed = 0u;
 };
 
-static_assert(sizeof(NeuralAppearanceGradientPushConstants) == 52u);
-static_assert(sizeof(NeuralAppearanceTargetPushConstants) == 32u);
-static_assert(sizeof(NeuralAppearanceClearCoopGradientsPushConstants) == 16u);
-static_assert(sizeof(NeuralAppearanceOptimizePushConstants) == 48u);
+static_assert(sizeof(NeuralAppearanceInitializePushConstants) == 4u);
+static_assert(sizeof(NeuralAppearanceGradientPushConstants) == 44u);
+static_assert(sizeof(NeuralAppearanceTargetPushConstants) == 12u);
+static_assert(sizeof(NeuralAppearanceClearCoopGradientsPushConstants) == 8u);
+static_assert(sizeof(NeuralAppearanceOptimizePushConstants) == 44u);
 static_assert(sizeof(NeuralAppearancePushConstants) == 24u);
-static_assert(sizeof(NeuralAppearanceTrainingCheckpointHeader) == 52u);
+static_assert(sizeof(NeuralAppearanceTrainingCheckpointHeader) == 36u);
 static_assert(sizeof(NeuralAppearanceGradientPushConstants) <= nr::rhi::kMaxPushConstantBytes);
 static_assert(sizeof(NeuralAppearanceOptimizePushConstants) <= nr::rhi::kMaxPushConstantBytes);
 static_assert(sizeof(NeuralAppearancePushConstants) <= nr::rhi::kMaxPushConstantBytes);
@@ -169,15 +147,12 @@ struct NeuralAppearanceRuntimeCache
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> clearCoopGradientsPipeline{};
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> gradientPipeline{};
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> optimizePipeline{};
-    std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> packPipeline{};
+    std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> qualityPipeline{};
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> viewerPipeline{};
 
     nr::rhi::Buffer modelParameters{};
     nr::rhi::Buffer modelMoments{};
-    nr::rhi::Buffer trainingLatent{};
-    nr::rhi::Buffer latentMoments{};
     nr::rhi::Buffer inferenceParameters{};
-    nr::rhi::Buffer inferenceLatent{};
     nr::rhi::Buffer optimalWeightGradients{};
     nr::rhi::Buffer rowMajorWeightGradients{};
     nr::rhi::Buffer biasGradients{};
@@ -187,10 +162,7 @@ struct NeuralAppearanceRuntimeCache
 
     nr::renderer::RetainedBufferState modelParameterState{};
     nr::renderer::RetainedBufferState modelMomentState{};
-    nr::renderer::RetainedBufferState trainingLatentState{};
-    nr::renderer::RetainedBufferState latentMomentState{};
     nr::renderer::RetainedBufferState inferenceParameterState{};
-    nr::renderer::RetainedBufferState inferenceLatentState{};
     nr::renderer::RetainedBufferState optimalWeightGradientState{};
     nr::renderer::RetainedBufferState rowMajorWeightGradientState{};
     nr::renderer::RetainedBufferState biasGradientState{};
@@ -199,13 +171,16 @@ struct NeuralAppearanceRuntimeCache
     nr::renderer::RetainedBufferState heldOutQualitySampleState{};
 
     std::uint32_t nextTrainingStep = 1u;
+    std::uint32_t trainingSeed = 0u;
     std::uint64_t lastDisplayOrdinal = 0u;
-    std::array<nr::rhi::CooperativeVectorMatrixDesc, 5u> cooperativeGradientDescs{};
-    std::array<nr::rhi::CooperativeVectorMatrixDesc, 5u> rowMajorGradientDescs{};
-    std::array<nr::rhi::CooperativeVectorMatrixLayoutSize, 5u> cooperativeGradientLayoutSizes{};
-    std::array<nr::rhi::CooperativeVectorMatrixLayoutSize, 5u> rowMajorGradientLayoutSizes{};
-    std::array<vk::DeviceSize, 5u> cooperativeGradientOffsets{};
+    std::array<nr::rhi::CooperativeVectorMatrixDesc, kAffineLayerCount> cooperativeGradientDescs{};
+    std::array<nr::rhi::CooperativeVectorMatrixDesc, kAffineLayerCount> rowMajorGradientDescs{};
+    std::array<nr::rhi::CooperativeVectorMatrixLayoutSize, kAffineLayerCount> cooperativeGradientLayoutSizes{};
+    std::array<nr::rhi::CooperativeVectorMatrixLayoutSize, kAffineLayerCount> rowMajorGradientLayoutSizes{};
+    std::array<vk::DeviceSize, kAffineLayerCount> cooperativeGradientOffsets{};
     vk::DeviceSize optimalWeightGradientBytes = 0u;
+    vk::DeviceSize rowMajorWeightGradientBytes = 0u;
+    std::uint32_t rowMajorGradientBasePadding = 0u;
 };
 
 struct NeuralAppearanceTrainingCheckpoint
@@ -213,18 +188,15 @@ struct NeuralAppearanceTrainingCheckpoint
     NeuralAppearanceTrainingCheckpointHeader header{};
     std::vector<std::byte> modelParameters{};
     std::vector<std::byte> modelMoments{};
-    std::vector<std::byte> trainingLatent{};
-    std::vector<std::byte> latentMoments{};
     std::array<float, 8u> trainingStatus{};
     std::array<std::uint32_t, 4u> trainingControl{};
 };
 
 inline constexpr auto kTrainingCheckpointFileBytes =
     static_cast<std::uintmax_t>(sizeof(NeuralAppearanceTrainingCheckpointHeader)) + kParameterBufferBytes +
-    kModelMomentBufferBytes + kLatentBufferBytes + kLatentMomentBufferBytes + kTrainingStatusBufferBytes +
-    kTrainingControlBufferBytes;
+    kModelMomentBufferBytes + kTrainingStatusBufferBytes + kTrainingControlBufferBytes;
 
-static_assert(kTrainingCheckpointFileBytes == 416548u);
+static_assert(kTrainingCheckpointFileBytes == 43140u);
 
 [[nodiscard]] std::array<std::filesystem::path, 2u> trainingCheckpointSlotPaths(const std::filesystem::path &basePath)
 {
@@ -290,13 +262,11 @@ void reportCheckpointWarning(const std::filesystem::path &path, std::string_view
 
 [[nodiscard]] bool trainingCheckpointHeaderValid(const NeuralAppearanceTrainingCheckpointHeader &header) noexcept
 {
-    // Version 2 checkpoints are emitted only after the GPU completes at least one training step. Step zero still
+    // Version 3 checkpoints are emitted only after the GPU completes at least one training step. Step zero still
     // requires the initialization pass and therefore cannot be restored as a post-initialization snapshot.
     return header.magic == kTrainingCheckpointMagic && header.version == kTrainingCheckpointVersion &&
-           header.latentWidth == kLatentExtent.width && header.latentHeight == kLatentExtent.height &&
-           header.latentChannelCount == 8u && header.parameterChunkCount == kParameterChunkCount &&
-           header.modelMomentChunkCount == 2u * kParameterChunkCount && header.latentChunkCount == kLatentChunkCount &&
-           header.latentMomentChunkCount == 2u * kLatentChunkCount && header.statusChunkCount == 2u &&
+           header.parameterChunkCount == kParameterChunkCount &&
+           header.modelMomentChunkCount == 2u * kParameterChunkCount && header.statusChunkCount == 2u &&
            header.controlWordCount == 4u && header.totalTrainingStepCount == kTotalTrainingStepCount &&
            header.completedTrainingStep > 0u && header.completedTrainingStep <= kTotalTrainingStepCount;
 }
@@ -307,11 +277,8 @@ void reportCheckpointWarning(const std::filesystem::path &path, std::string_view
     auto const controlFlagsValid = checkpoint.trainingControl[1] == 0u && checkpoint.trainingControl[3] == 1u;
     return trainingCheckpointHeaderValid(checkpoint.header) &&
            checkpoint.modelParameters.size() == kParameterBufferBytes &&
-           checkpoint.modelMoments.size() == kModelMomentBufferBytes &&
-           checkpoint.trainingLatent.size() == kLatentBufferBytes &&
-           checkpoint.latentMoments.size() == kLatentMomentBufferBytes && finiteFp32Bytes(checkpoint.modelParameters) &&
-           finiteFp32Bytes(checkpoint.modelMoments) && finiteFp32Bytes(checkpoint.trainingLatent) &&
-           finiteFp32Bytes(checkpoint.latentMoments) &&
+           checkpoint.modelMoments.size() == kModelMomentBufferBytes && finiteFp32Bytes(checkpoint.modelParameters) &&
+           finiteFp32Bytes(checkpoint.modelMoments) &&
            std::ranges::all_of(checkpoint.trainingStatus, [](float value) { return std::isfinite(value); }) &&
            checkpoint.trainingStatus[2] == static_cast<float>(completedStep) && checkpoint.trainingStatus[3] > 0.5f &&
            checkpoint.trainingControl[0] == completedStep && checkpoint.trainingControl[2] == kTrainingSchemaMagic &&
@@ -369,10 +336,7 @@ void reportCheckpointWarning(const std::filesystem::path &path, std::string_view
 
     checkpoint.modelParameters.resize(static_cast<std::size_t>(kParameterBufferBytes));
     checkpoint.modelMoments.resize(static_cast<std::size_t>(kModelMomentBufferBytes));
-    checkpoint.trainingLatent.resize(static_cast<std::size_t>(kLatentBufferBytes));
-    checkpoint.latentMoments.resize(static_cast<std::size_t>(kLatentMomentBufferBytes));
     if (!readBytes(input, checkpoint.modelParameters) || !readBytes(input, checkpoint.modelMoments) ||
-        !readBytes(input, checkpoint.trainingLatent) || !readBytes(input, checkpoint.latentMoments) ||
         !readBytes(input, std::as_writable_bytes(std::span{checkpoint.trainingStatus})) ||
         !readBytes(input, std::as_writable_bytes(std::span{checkpoint.trainingControl})))
     {
@@ -418,7 +382,6 @@ void reportCheckpointWarning(const std::filesystem::path &path, std::string_view
     auto const writeSucceeded =
         output.is_open() && writeBytes(output, std::as_bytes(std::span{&checkpoint.header, 1u})) &&
         writeBytes(output, checkpoint.modelParameters) && writeBytes(output, checkpoint.modelMoments) &&
-        writeBytes(output, checkpoint.trainingLatent) && writeBytes(output, checkpoint.latentMoments) &&
         writeBytes(output, std::as_bytes(std::span{checkpoint.trainingStatus})) &&
         writeBytes(output, std::as_bytes(std::span{checkpoint.trainingControl}));
     if (writeSucceeded)
@@ -473,33 +436,43 @@ void reportCheckpointWarning(const std::filesystem::path &path, std::string_view
     return (value + alignment - 1u) / alignment * alignment;
 }
 
-[[nodiscard]] constexpr std::array<nr::rhi::CooperativeVectorMatrixDesc, 5u>
+// Rows are outputs and columns are inputs, matching the eight-affine topology
+// E1(12->32), E2(32->32), E3(32->8), F(8->6), S(8->32), D(8->32), H(32->32),
+// O(32->6) declared in shader/include/neuralAppearance/layout.slang.
+[[nodiscard]] constexpr std::array<nr::rhi::CooperativeVectorMatrixDesc, kAffineLayerCount>
 neuralAppearanceCooperativeGradientDescs() noexcept
 {
     using Layout = nr::rhi::CooperativeVectorMatrixLayout;
     return {
-        nr::rhi::CooperativeVectorMatrixDesc{.rows = 12u, .columns = 8u, .layout = Layout::TrainingOptimal},
-        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 8u, .layout = Layout::TrainingOptimal},
         nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 12u, .layout = Layout::TrainingOptimal},
         nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 32u, .layout = Layout::TrainingOptimal},
-        nr::rhi::CooperativeVectorMatrixDesc{.rows = 3u, .columns = 32u, .layout = Layout::TrainingOptimal},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 8u, .columns = 32u, .layout = Layout::TrainingOptimal},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 6u, .columns = 8u, .layout = Layout::TrainingOptimal},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 8u, .layout = Layout::TrainingOptimal},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 8u, .layout = Layout::TrainingOptimal},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 32u, .layout = Layout::TrainingOptimal},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 6u, .columns = 32u, .layout = Layout::TrainingOptimal},
     };
 }
 
-[[nodiscard]] constexpr std::array<nr::rhi::CooperativeVectorMatrixDesc, 5u>
+[[nodiscard]] constexpr std::array<nr::rhi::CooperativeVectorMatrixDesc, kAffineLayerCount>
 neuralAppearanceCooperativeRowMajorGradientDescs() noexcept
 {
     using Layout = nr::rhi::CooperativeVectorMatrixLayout;
     return {
-        nr::rhi::CooperativeVectorMatrixDesc{.rows = 12u, .columns = 8u, .layout = Layout::RowMajor, .rowStrideBytes = 16u},
-        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 8u, .layout = Layout::RowMajor, .rowStrideBytes = 16u},
         nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 12u, .layout = Layout::RowMajor, .rowStrideBytes = 24u},
         nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 32u, .layout = Layout::RowMajor, .rowStrideBytes = 64u},
-        nr::rhi::CooperativeVectorMatrixDesc{.rows = 3u, .columns = 32u, .layout = Layout::RowMajor, .rowStrideBytes = 64u},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 8u, .columns = 32u, .layout = Layout::RowMajor, .rowStrideBytes = 64u},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 6u, .columns = 8u, .layout = Layout::RowMajor, .rowStrideBytes = 16u},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 8u, .layout = Layout::RowMajor, .rowStrideBytes = 16u},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 8u, .layout = Layout::RowMajor, .rowStrideBytes = 16u},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 32u, .columns = 32u, .layout = Layout::RowMajor, .rowStrideBytes = 64u},
+        nr::rhi::CooperativeVectorMatrixDesc{.rows = 6u, .columns = 32u, .layout = Layout::RowMajor, .rowStrideBytes = 64u},
     };
 }
 
-inline constexpr auto kRowMajorGradientOffsets = std::array<vk::DeviceSize, 5u>{0u, 256u, 832u, 1600u, 3712u};
+inline constexpr auto kRowMajorGradientOffsets =
+    std::array<vk::DeviceSize, kAffineLayerCount>{0u, 832u, 2944u, 3520u, 3712u, 4288u, 4800u, 6912u};
 
 [[nodiscard]] nr::rhi::Buffer createTrainingBuffer(nr::rhi::Device &device, vk::DeviceSize size,
                                                    nr::rhi::MemoryUsage memoryUsage, std::string_view debugName)
@@ -568,29 +541,7 @@ void synchronizeTrainingCheckpointUploads(nr::rhi::Device &device,
 {
     nr::nrAssert(
         programs.size() == 7u,
-        "NeuralAppearance runtime requires initialize, target, clear, gradient, optimize, pack, and viewer programs.");
-
-    auto viewerPipelineDesc = nr::rhi::ComputePipelineDesc{};
-    auto viewerDescriptorLayout =
-        nr::rhi::ShaderDescriptorLayout::create(programs[6], viewerPipelineDesc.descriptorBindingPolicy);
-    nr::nrAssert(viewerDescriptorLayout.valid(), "NeuralAppearance viewer descriptor reflection failed.");
-
-    auto const samplerDesc = nr::rhi::SlangSamplerDesc{
-        .magFilter = vk::Filter::eLinear,
-        .minFilter = vk::Filter::eLinear,
-        .mipmapMode = vk::SamplerMipmapMode::eNearest,
-        .addressModeU = vk::SamplerAddressMode::eRepeat,
-        .addressModeV = vk::SamplerAddressMode::eRepeat,
-        .addressModeW = vk::SamplerAddressMode::eRepeat,
-        .minLod = 0.0f,
-        .maxLod = 0.0f,
-    };
-    auto latentSampler0 =
-        viewerDescriptorLayout.rootCursor()["gLatentTexture0"].makeImmutableSamplerBinding(samplerDesc);
-    auto latentSampler1 =
-        viewerDescriptorLayout.rootCursor()["gLatentTexture1"].makeImmutableSamplerBinding(samplerDesc);
-    nr::nrAssert(latentSampler0.has_value() && latentSampler1.has_value(),
-                 "NeuralAppearance viewer latent textures must support immutable samplers.");
+        "NeuralAppearance runtime requires initialize, target, clear, gradient, optimize, quality, and viewer programs.");
 
     auto runtime = std::make_shared<NeuralAppearanceRuntimeCache>();
     runtime->initializePipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
@@ -598,7 +549,7 @@ void synchronizeTrainingCheckpointUploads(nr::rhi::Device &device,
     runtime->clearCoopGradientsPipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
     runtime->gradientPipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
     runtime->optimizePipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
-    runtime->packPipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
+    runtime->qualityPipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
     runtime->viewerPipeline = std::make_shared<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>>();
 
     runtime->initializePipeline->initialize(device.pipeline().createComputePipeline(
@@ -611,24 +562,17 @@ void synchronizeTrainingCheckpointUploads(nr::rhi::Device &device,
         programs[3], {}, 128u, {}, std::format("{}.EvaluateGradientsPipeline", runtimeName)));
     runtime->optimizePipeline->initialize(device.pipeline().createComputePipeline(
         programs[4], {}, 128u, {}, std::format("{}.OptimizeTrainingPipeline", runtimeName)));
-    runtime->packPipeline->initialize(device.pipeline().createComputePipeline(
-        programs[5], {}, 64u, {}, std::format("{}.PackLatentPipeline", runtimeName)));
-    auto viewerImmutableSamplers = std::array{*latentSampler0, *latentSampler1};
+    runtime->qualityPipeline->initialize(device.pipeline().createComputePipeline(
+        programs[5], {}, 64u, {}, std::format("{}.EvaluateQualityPipeline", runtimeName)));
     runtime->viewerPipeline->initialize(device.pipeline().createComputePipeline(
-        programs[6], viewerPipelineDesc, 64u, viewerImmutableSamplers, std::format("{}.ViewerPipeline", runtimeName)));
+        programs[6], {}, 64u, {}, std::format("{}.ViewerPipeline", runtimeName)));
 
     runtime->modelParameters = createTrainingBuffer(device, kParameterBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
                                                     "NeuralAppearance.ModelParameters");
     runtime->modelMoments = createTrainingBuffer(device, kModelMomentBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
                                                  "NeuralAppearance.ModelMoments");
-    runtime->trainingLatent = createTrainingBuffer(device, kLatentBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
-                                                   "NeuralAppearance.TrainingLatent");
-    runtime->latentMoments = createTrainingBuffer(device, kLatentMomentBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
-                                                  "NeuralAppearance.LatentMoments");
     runtime->inferenceParameters = createTrainingBuffer(
         device, kInferenceParameterBufferBytes, nr::rhi::MemoryUsage::GpuOnly, "NeuralAppearance.InferenceParameters");
-    runtime->inferenceLatent = createTrainingBuffer(
-        device, kInferenceLatentBufferBytes, nr::rhi::MemoryUsage::GpuOnly, "NeuralAppearance.InferenceLatent");
     runtime->cooperativeGradientDescs = neuralAppearanceCooperativeGradientDescs();
     runtime->rowMajorGradientDescs = neuralAppearanceCooperativeRowMajorGradientDescs();
     std::ranges::for_each(std::views::iota(std::size_t{0u}, runtime->cooperativeGradientDescs.size()),
@@ -644,21 +588,46 @@ void synchronizeTrainingCheckpointUploads(nr::rhi::Device &device,
                               runtime->optimalWeightGradientBytes =
                                   runtime->cooperativeGradientOffsets[index] + size.byteSize;
                           });
-    runtime->optimalWeightGradientBytes = alignUp(
-        runtime->optimalWeightGradientBytes, nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment);
+    // The allocator only guarantees its own buffer alignment, so reserve one extra
+    // alignment window and shift every matrix offset by the measured base
+    // misalignment. Every TrainingOptimal device address then satisfies the
+    // extension requirement regardless of how the allocation was suballocated.
+    runtime->optimalWeightGradientBytes =
+        alignUp(runtime->optimalWeightGradientBytes, nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment) +
+        nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment;
     runtime->optimalWeightGradients = createTrainingBuffer(
         device, runtime->optimalWeightGradientBytes, nr::rhi::MemoryUsage::GpuOnly,
         "NeuralAppearance.OptimalWeightGradients");
+    runtime->rowMajorWeightGradientBytes =
+        kInferenceParameterBufferBytes + nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment;
     runtime->rowMajorWeightGradients = createTrainingBuffer(
-        device, kInferenceParameterBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
+        device, runtime->rowMajorWeightGradientBytes, nr::rhi::MemoryUsage::GpuOnly,
         "NeuralAppearance.RowMajorWeightGradients");
     runtime->biasGradients = createTrainingBuffer(
         device, kInferenceParameterBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
         "NeuralAppearance.BiasGradients");
-    nr::nrAssert(runtime->optimalWeightGradients.deviceAddress() %
-                         nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment ==
-                     0u,
-                 "NeuralAppearance TrainingOptimal gradient allocation must have a 64-byte device address alignment.");
+    auto const gradientBaseAddress = runtime->optimalWeightGradients.deviceAddress();
+    auto const gradientBasePadding =
+        (nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment -
+         gradientBaseAddress % nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment) %
+        nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment;
+    std::ranges::for_each(runtime->cooperativeGradientOffsets,
+                          [gradientBasePadding](vk::DeviceSize &offset) { offset += gradientBasePadding; });
+    auto const rowMajorBaseAddress = runtime->rowMajorWeightGradients.deviceAddress();
+    runtime->rowMajorGradientBasePadding = static_cast<std::uint32_t>(
+        (nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment -
+         rowMajorBaseAddress % nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment) %
+        nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment);
+    nr::nrAssert(std::ranges::all_of(runtime->cooperativeGradientOffsets,
+                                     [&](vk::DeviceSize offset) {
+                                         return (gradientBaseAddress + offset) %
+                                                    nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment ==
+                                                0u;
+                                     }) &&
+                     (rowMajorBaseAddress + runtime->rowMajorGradientBasePadding) %
+                             nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment ==
+                         0u,
+                 "NeuralAppearance cooperative-vector gradient matrices must have 64-byte device address alignment.");
     runtime->trainingStatus = createTrainingBuffer(device, kTrainingStatusBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
                                                    "NeuralAppearance.TrainingStatus");
     runtime->trainingControl = createTrainingBuffer(device, kTrainingControlBufferBytes, nr::rhi::MemoryUsage::CpuToGpu,
@@ -862,11 +831,43 @@ enum NeuralAppearanceHeldOutQualityFlag : std::uint32_t
     });
     return result;
 }
+// The published numbers are the only quantitative record of how well a run fits
+// the reflective base surface, so they are reported whether the gate passes or
+// fails. A pass-only failure log would leave a successful run unmeasurable.
+void logHeldOutQualityReport(const NeuralAppearanceQualityReport &report)
+{
+    nr::nrLog<nr::LogLevel::info, "NEURAL-QUALITY">(
+        "held-out quality: emaSafeLogLoss={:.6f} initialSafeLogLoss={:.6f} outputsFinite={} outputsNonnegative={}",
+        report.emaSafeLogLoss, report.initialSafeLogLoss, report.outputsFinite, report.outputsNonnegative);
+    auto const strata = std::array{
+        std::pair{std::string_view{"overall"}, std::cref(report.overall)},
+        std::pair{std::string_view{"uniform"}, std::cref(report.uniform)},
+        std::pair{std::string_view{"highlight"}, std::cref(report.highlight)},
+        std::pair{std::string_view{"grazing"}, std::cref(report.grazing)},
+    };
+    std::ranges::for_each(strata, [](const auto &entry) {
+        auto const &stratum = entry.second.get();
+        nr::nrLog<nr::LogLevel::info, "NEURAL-QUALITY">(
+            "held-out stratum {}: samples={} fp32Mean={:.6f} fp32P95={:.6f} fp16Mean={:.6f} fp16P95={:.6f} "
+            "zeroMean={:.6f} zeroP95={:.6f} fp16OverFp32={:.4f} fp32OverZero={:.4f}",
+            entry.first, stratum.fp32Master.sampleCount, stratum.fp32Master.meanSafeLogLoss,
+            stratum.fp32Master.percentile95SafeLogLoss, stratum.fp16CooperativeVector.meanSafeLogLoss,
+            stratum.fp16CooperativeVector.percentile95SafeLogLoss, stratum.zeroPrediction.meanSafeLogLoss,
+            stratum.zeroPrediction.percentile95SafeLogLoss,
+            stratum.fp32Master.meanSafeLogLoss > 0.0f
+                ? stratum.fp16CooperativeVector.meanSafeLogLoss / stratum.fp32Master.meanSafeLogLoss
+                : 0.0f,
+            stratum.zeroPrediction.meanSafeLogLoss > 0.0f
+                ? stratum.fp32Master.meanSafeLogLoss / stratum.zeroPrediction.meanSafeLogLoss
+                : 0.0f);
+    });
+}
 } // namespace nr::renderPasses::detail
 
 namespace nr::renderPasses
 {
-NeuralAppearanceNode::NeuralAppearanceNode(bool comparisonEnabled) noexcept : comparisonEnabled_(comparisonEnabled)
+NeuralAppearanceNode::NeuralAppearanceNode(bool comparisonEnabled, std::uint32_t trainingSeed) noexcept
+    : comparisonEnabled_(comparisonEnabled), trainingSeed_(trainingSeed)
 {
 }
 
@@ -891,7 +892,7 @@ NeuralAppearanceNode::~NeuralAppearanceNode() = default;
             .sourcePath = std::filesystem::path{"renderer/neuralAppearance/optimizeTraining"},
         },
         nr::rhi::SlangProgramCompileFileRequest{
-            .sourcePath = std::filesystem::path{"renderer/neuralAppearance/packLatent"},
+            .sourcePath = std::filesystem::path{"renderer/neuralAppearance/evaluateQuality"},
         },
         nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/neuralAppearance/viewer"},
@@ -909,6 +910,7 @@ void NeuralAppearanceNode::initialize(NodeInitContext &context)
                                          }),
                  "NeuralAppearance initialization requires seven ordered compute shaders.");
     runtime_ = detail::makeRuntime(context.device.get(), context.shaderPrograms, context.runtimeName);
+    runtime_->trainingSeed = trainingSeed_;
 }
 
 void NeuralAppearanceNode::finalizeInitialization()
@@ -917,7 +919,8 @@ void NeuralAppearanceNode::finalizeInitialization()
                      runtime_->targetPipeline && runtime_->targetPipeline->valid() && runtime_->clearCoopGradientsPipeline &&
                      runtime_->clearCoopGradientsPipeline->valid() && runtime_->gradientPipeline &&
                      runtime_->gradientPipeline->valid() && runtime_->optimizePipeline &&
-                     runtime_->optimizePipeline->valid() && runtime_->packPipeline && runtime_->packPipeline->valid() &&
+                     runtime_->optimizePipeline->valid() && runtime_->qualityPipeline &&
+                     runtime_->qualityPipeline->valid() &&
                      runtime_->viewerPipeline && runtime_->viewerPipeline->valid(),
                  "NeuralAppearance async compute PSO construction failed.");
 }
@@ -925,7 +928,7 @@ void NeuralAppearanceNode::finalizeInitialization()
 void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParameters &frameParameters)
 {
     nr::nrAssert(runtime_ && runtime_->initializePipeline && runtime_->targetPipeline && runtime_->clearCoopGradientsPipeline && runtime_->gradientPipeline &&
-                     runtime_->optimizePipeline && runtime_->packPipeline && runtime_->viewerPipeline,
+                     runtime_->optimizePipeline && runtime_->qualityPipeline && runtime_->viewerPipeline,
                  "NeuralAppearance build stage requires initialized runtime state.");
     nr::nrAssert(context.queue == nr::renderer::QueueDomain::Compute,
                  "NeuralAppearance must run on the compute queue.");
@@ -947,30 +950,9 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
                                                          nr::renderer::BufferUsageIntent::StorageWrite,
                                                          nr::renderer::BufferUsageIntent::StorageReadWrite,
                                                      });
-    auto trainingLatent = detail::importTrainingBuffer(context, runtime_->trainingLatent, runtime_->trainingLatentState,
-                                                       "NeuralAppearance.TrainingLatent",
-                                                       {
-                                                           nr::renderer::BufferUsageIntent::StorageRead,
-                                                           nr::renderer::BufferUsageIntent::StorageWrite,
-                                                           nr::renderer::BufferUsageIntent::StorageReadWrite,
-                                                       });
-    auto latentMoments = detail::importTrainingBuffer(context, runtime_->latentMoments, runtime_->latentMomentState,
-                                                      "NeuralAppearance.LatentMoments",
-                                                      {
-                                                          nr::renderer::BufferUsageIntent::StorageWrite,
-                                                          nr::renderer::BufferUsageIntent::StorageReadWrite,
-                                                      });
     auto inferenceParameters = detail::importTrainingBuffer(
         context, runtime_->inferenceParameters, runtime_->inferenceParameterState,
         "NeuralAppearance.InferenceParameters",
-        {
-            nr::renderer::BufferUsageIntent::StorageRead,
-            nr::renderer::BufferUsageIntent::StorageWrite,
-            nr::renderer::BufferUsageIntent::StorageReadWrite,
-        });
-    auto inferenceLatent = detail::importTrainingBuffer(
-        context, runtime_->inferenceLatent, runtime_->inferenceLatentState,
-        "NeuralAppearance.InferenceLatent",
         {
             nr::renderer::BufferUsageIntent::StorageRead,
             nr::renderer::BufferUsageIntent::StorageWrite,
@@ -1021,24 +1003,10 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
             nr::renderer::BufferUsageIntent::StorageWrite,
         });
 
-    auto sampleGradients =
-        detail::makeTransientBuffer(context, "NeuralAppearance.SampleGradients", detail::kSampleGradientBufferBytes);
-    auto sampleTexelIndices = detail::makeTransientBuffer(context, "NeuralAppearance.SampleTexelIndices",
-                                                          detail::kSampleTexelIndexBufferBytes);
     auto sampleMetrics =
         detail::makeTransientBuffer(context, "NeuralAppearance.SampleMetrics", detail::kSampleMetricBufferBytes);
     auto sampleTargets =
         detail::makeTransientBuffer(context, "NeuralAppearance.SampleTargets", detail::kSampleTargetBufferBytes);
-    auto latentTexture0 = detail::makeTransientImage(context, "NeuralAppearance.LatentTexture0", detail::kLatentExtent,
-                                                     {
-                                                         nr::renderer::ImageUsageIntent::StorageWrite,
-                                                         nr::renderer::ImageUsageIntent::Sampled,
-                                                     });
-    auto latentTexture1 = detail::makeTransientImage(context, "NeuralAppearance.LatentTexture1", detail::kLatentExtent,
-                                                     {
-                                                         nr::renderer::ImageUsageIntent::StorageWrite,
-                                                         nr::renderer::ImageUsageIntent::Sampled,
-                                                     });
     auto outputColor = detail::makeTransientImage(context, "NeuralAppearance.OutputColor", outputExtent,
                                                   {
                                                       nr::renderer::ImageUsageIntent::StorageWrite,
@@ -1051,15 +1019,17 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
     initializePass.storageBuffer("gTrainingControl", trainingControl, "NeuralAppearance.TrainingControl")
         .storageBufferWrite("gModelParameters", modelParameters, "NeuralAppearance.ModelParameters")
         .storageBufferWrite("gModelMoments", modelMoments, "NeuralAppearance.ModelMoments")
-        .storageBufferWrite("gTrainingLatent", trainingLatent, "NeuralAppearance.TrainingLatent")
-        .storageBufferWrite("gLatentMoments", latentMoments, "NeuralAppearance.LatentMoments")
         .storageBufferWrite("gTrainingStatus", trainingStatus, "NeuralAppearance.TrainingStatus")
         .storageBufferWrite("gInferenceParameters", inferenceParameters, "NeuralAppearance.InferenceParameters")
-        .storageBufferWrite("gInferenceLatent", inferenceLatent, "NeuralAppearance.InferenceLatent")
+        .pushConstants("gInitialize", detail::NeuralAppearanceInitializePushConstants{
+                                          .trainingSeed = runtime_->trainingSeed,
+                                      })
         .record([](const nr::renderer::ComputePassRecordContext &computeContext) {
             computeContext.commandBuffer.dispatch(
-                detail::divideRoundUp(std::max(detail::kParameterChunkCount, detail::kLatentChunkCount),
-                                      detail::kTrainingThreadGroupSize),
+                detail::divideRoundUp(
+                    std::max(detail::kParameterChunkCount,
+                             static_cast<std::uint32_t>(detail::kInferenceParameterBufferBytes / 4u)),
+                    detail::kTrainingThreadGroupSize),
                 1u, 1u);
         });
     [[maybe_unused]] auto initializePassHandle = initializePass.build();
@@ -1074,9 +1044,7 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
         auto const remainingTrainingSteps = runtime_->nextTrainingStep <= detail::kTotalTrainingStepCount
                                                 ? detail::kTotalTrainingStepCount - runtime_->nextTrainingStep + 1u
                                                 : 0u;
-        auto const trainingStepBudget =
-            runtime_->nextTrainingStep <= detail::kMollificationStepCount ? 1u : detail::kTrainingPairSlotCount;
-        activeTrainingPairCount = std::min(trainingStepBudget, remainingTrainingSteps);
+        activeTrainingPairCount = std::min(detail::kTrainingPairSlotCount, remainingTrainingSteps);
         runtime_->nextTrainingStep += activeTrainingPairCount;
     }
 
@@ -1085,7 +1053,10 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
         std::array<detail::NeuralAppearanceGradientPushConstants, detail::kTrainingPairSlotCount>{};
     // Fixed pair slots preserve pass-binding owner ordinals; a zero batch makes an inactive slot a shader no-op.
     std::ranges::for_each(trainingDispatches,
-                          [lastTrainingStep](auto &dispatch) { dispatch.trainingStep = lastTrainingStep; });
+                          [lastTrainingStep, seed = runtime_->trainingSeed](auto &dispatch) {
+                              dispatch.trainingStep = lastTrainingStep;
+                              dispatch.trainingSeed = seed;
+                          });
     std::ranges::for_each(trainingDispatches, [offsets = runtime_->cooperativeGradientOffsets](auto &dispatch) {
         std::ranges::transform(offsets, dispatch.optimalWeightOffsets.begin(), [](vk::DeviceSize offset) {
             return static_cast<std::uint32_t>(offset);
@@ -1102,20 +1073,16 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
         auto const targetPushConstants = detail::NeuralAppearanceTargetPushConstants{
             .trainingStep = gradientPushConstants.trainingStep,
             .batchSize = gradientPushConstants.batchSize,
-            .latentWidth = gradientPushConstants.latentWidth,
-            .latentHeight = gradientPushConstants.latentHeight,
-            .mollificationSampleCount = gradientPushConstants.mollificationSampleCount,
-            .mollificationStepCount = gradientPushConstants.mollificationStepCount,
-            .initialAngleRadians = gradientPushConstants.initialAngleRadians,
-            .padding = gradientPushConstants.padding,
+            .trainingSeed = gradientPushConstants.trainingSeed,
         };
         auto targetPass = nr::renderer::ComputePassBuilder{
             context, std::format("NeuralAppearance.EvaluateTargets.Pair{}", pairIndex), runtime_->targetPipeline};
         targetPass.storageBufferWrite("gSampleTargets", sampleTargets, "NeuralAppearance.SampleTargets")
             .pushConstants("gTraining", targetPushConstants)
-            .record([groupCount = gradientPushConstants.batchSize](
+            .record([batchSize = gradientPushConstants.batchSize](
                         const nr::renderer::ComputePassRecordContext &computeContext) {
-                computeContext.commandBuffer.dispatch(groupCount, 1u, 1u);
+                computeContext.commandBuffer.dispatch(
+                    detail::divideRoundUp(batchSize, detail::kTrainingThreadGroupSize), 1u, 1u);
             });
         [[maybe_unused]] auto targetPassHandle = targetPass.build();
 
@@ -1124,8 +1091,6 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
             runtime_->clearCoopGradientsPipeline};
         clearPass.storageBufferWrite("gOptimalWeightGradients", optimalWeightGradients,
                                      "NeuralAppearance.OptimalWeightGradients")
-            .storageBufferWrite("gRowMajorWeightGradients", rowMajorWeightGradients,
-                                "NeuralAppearance.RowMajorWeightGradients")
             .storageBufferWrite("gBiasGradients", biasGradients, "NeuralAppearance.BiasGradients")
             .pushConstants("gClear", detail::NeuralAppearanceClearCoopGradientsPushConstants{
                                          .optimalWeightGradientBytes = static_cast<std::uint32_t>(
@@ -1143,13 +1108,10 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
         auto gradientPass = nr::renderer::ComputePassBuilder{
             context, std::format("NeuralAppearance.EvaluateGradients.Pair{}", pairIndex), runtime_->gradientPipeline};
         gradientPass.storageBuffer("gInferenceParameters", inferenceParameters, "NeuralAppearance.InferenceParameters")
-            .storageBuffer("gInferenceLatent", inferenceLatent, "NeuralAppearance.InferenceLatent")
             .storageBufferWrite("gOptimalWeightGradients", optimalWeightGradients,
                                 "NeuralAppearance.OptimalWeightGradients")
             .storageBufferWrite("gBiasGradients", biasGradients, "NeuralAppearance.BiasGradients")
             .storageBuffer("gSampleTargets", sampleTargets, "NeuralAppearance.SampleTargets")
-            .storageBufferWrite("gSampleGradients", sampleGradients, "NeuralAppearance.SampleGradients")
-            .storageBufferWrite("gSampleTexelIndices", sampleTexelIndices, "NeuralAppearance.SampleTexelIndices")
             .storageBufferWrite("gSampleMetrics", sampleMetrics, "NeuralAppearance.SampleMetrics")
             .pushConstants("gTraining", gradientPushConstants)
             .record([batchSize = gradientPushConstants.batchSize](
@@ -1186,6 +1148,7 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
                             runtime->cooperativeGradientLayoutSizes[index],
                             nr::rhi::CooperativeVectorMatrixMemory{
                                 .deviceAddress = runtime->rowMajorWeightGradients.deviceAddress() +
+                                                 runtime->rowMajorGradientBasePadding +
                                                  detail::kRowMajorGradientOffsets[index],
                                 .size = runtime->rowMajorGradientLayoutSizes[index].byteSize,
                             },
@@ -1196,55 +1159,44 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
         auto const optimizePushConstants = detail::NeuralAppearanceOptimizePushConstants{
             .trainingStep = gradientPushConstants.trainingStep,
             .batchSize = gradientPushConstants.batchSize,
+            .rowMajorGradientBaseOffset = runtime_->rowMajorGradientBasePadding,
         };
         auto optimizePass = nr::renderer::ComputePassBuilder{
             context, std::format("NeuralAppearance.OptimizeTraining.Pair{}", pairIndex), runtime_->optimizePipeline};
-        optimizePass.storageBuffer("gSampleGradients", sampleGradients, "NeuralAppearance.SampleGradients")
-            .storageBuffer("gSampleTexelIndices", sampleTexelIndices, "NeuralAppearance.SampleTexelIndices")
-            .storageBuffer("gSampleMetrics", sampleMetrics, "NeuralAppearance.SampleMetrics")
+        optimizePass.storageBuffer("gSampleMetrics", sampleMetrics, "NeuralAppearance.SampleMetrics")
             .storageBufferReadWrite("gModelParameters", modelParameters, "NeuralAppearance.ModelParameters")
             .storageBufferReadWrite("gModelMoments", modelMoments, "NeuralAppearance.ModelMoments")
-            .storageBufferReadWrite("gTrainingLatent", trainingLatent, "NeuralAppearance.TrainingLatent")
-            .storageBufferReadWrite("gLatentMoments", latentMoments, "NeuralAppearance.LatentMoments")
             .storageBufferReadWrite("gTrainingStatus", trainingStatus, "NeuralAppearance.TrainingStatus")
             .storageBufferReadWrite("gTrainingControl", trainingControl, "NeuralAppearance.TrainingControl")
             .storageBuffer("gRowMajorWeightGradients", rowMajorWeightGradients,
                            "NeuralAppearance.RowMajorWeightGradients")
             .storageBuffer("gBiasGradients", biasGradients, "NeuralAppearance.BiasGradients")
             .storageBufferWrite("gInferenceParameters", inferenceParameters, "NeuralAppearance.InferenceParameters")
-            .storageBufferWrite("gInferenceLatent", inferenceLatent, "NeuralAppearance.InferenceLatent")
             .pushConstants("gTraining", optimizePushConstants)
             .record([active = gradientPushConstants.batchSize >
                               0u](const nr::renderer::ComputePassRecordContext &computeContext) {
                 auto const groupCount =
-                    active ? detail::divideRoundUp(std::max(detail::kParameterChunkCount, detail::kLatentTexelCount),
-                                                   detail::kTrainingThreadGroupSize)
-                           : 0u;
+                    active ? detail::divideRoundUp(detail::kParameterChunkCount, detail::kTrainingThreadGroupSize) : 0u;
                 computeContext.commandBuffer.dispatch(groupCount, 1u, 1u);
             });
         [[maybe_unused]] auto optimizePassHandle = optimizePass.build();
     });
 
-    auto packPass = nr::renderer::ComputePassBuilder{context, "NeuralAppearance.PackLatent", runtime_->packPipeline};
-    packPass.storageBuffer("gInferenceLatent", inferenceLatent, "NeuralAppearance.InferenceLatent")
-        .storageBuffer("gModelParameters", modelParameters, "NeuralAppearance.ModelParameters")
-        .storageBuffer("gTrainingLatent", trainingLatent, "NeuralAppearance.TrainingLatent")
+    auto qualityPass =
+        nr::renderer::ComputePassBuilder{context, "NeuralAppearance.EvaluateQuality", runtime_->qualityPipeline};
+    qualityPass.storageBuffer("gModelParameters", modelParameters, "NeuralAppearance.ModelParameters")
         .storageBuffer("gInferenceParameters", inferenceParameters, "NeuralAppearance.InferenceParameters")
         .storageBufferWrite("gHeldOutQualitySamples", heldOutQualitySamples,
                             "NeuralAppearance.HeldOutQualitySamples")
-        .storageImage("gLatentTexture0", latentTexture0, "NeuralAppearance.LatentTexture0")
-        .storageImage("gLatentTexture1", latentTexture1, "NeuralAppearance.LatentTexture1")
         .record([trainingFinished = lastTrainingStep >= detail::kTotalTrainingStepCount](
                     const nr::renderer::ComputePassRecordContext &computeContext) {
-            auto const groupCountX =
-                trainingFinished ? detail::divideRoundUp(detail::kLatentExtent.width, detail::kImageThreadGroupSize)
-                                 : 0u;
-            auto const groupCountY =
-                trainingFinished ? detail::divideRoundUp(detail::kLatentExtent.height, detail::kImageThreadGroupSize)
-                                 : 0u;
-            computeContext.commandBuffer.dispatch(groupCountX, groupCountY, 1u);
+            computeContext.commandBuffer.dispatch(
+                trainingFinished ? detail::divideRoundUp(detail::kHeldOutQualitySampleCount,
+                                                         detail::kTrainingThreadGroupSize)
+                                 : 0u,
+                1u, 1u);
         });
-    [[maybe_unused]] auto packPassHandle = packPass.build();
+    [[maybe_unused]] auto qualityPassHandle = qualityPass.build();
 
     auto const viewerPushConstants = detail::NeuralAppearancePushConstants{
         .width = outputExtent.width,
@@ -1255,9 +1207,7 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
         .comparisonEnabled = comparisonEnabled_ ? 1u : 0u,
     };
     auto viewerPass = nr::renderer::ComputePassBuilder{context, "NeuralAppearance.Viewer", runtime_->viewerPipeline};
-    viewerPass.sampledImage("gLatentTexture0", latentTexture0, "NeuralAppearance.LatentTexture0")
-        .sampledImage("gLatentTexture1", latentTexture1, "NeuralAppearance.LatentTexture1")
-        .storageBuffer("gInferenceParameters", inferenceParameters, "NeuralAppearance.InferenceParameters")
+    viewerPass.storageBuffer("gInferenceParameters", inferenceParameters, "NeuralAppearance.InferenceParameters")
         .storageBuffer("gTrainingStatus", trainingStatus, "NeuralAppearance.TrainingStatus")
         .storageImage("gOutputColor", outputColor, "NeuralAppearance.OutputColor")
         .pushConstants("gNeuralAppearance", viewerPushConstants)
@@ -1274,6 +1224,11 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
 bool NeuralAppearanceNode::trainingComplete() const noexcept
 {
     return lastScheduledTrainingStep() >= detail::kTotalTrainingStepCount;
+}
+
+std::uint32_t NeuralAppearanceNode::totalTrainingStepCount() noexcept
+{
+    return detail::kTotalTrainingStepCount;
 }
 
 std::uint32_t NeuralAppearanceNode::lastScheduledTrainingStep() const noexcept
@@ -1351,10 +1306,6 @@ std::optional<std::uint32_t> NeuralAppearanceNode::saveTrainingCheckpoint(nr::rh
                                                         nr::rhi::QueueRole::Compute, readbackSyncPlan);
     auto modelMomentTicket = readback.readbackBuffer(runtime_->modelMoments, 0u, detail::kModelMomentBufferBytes,
                                                      nr::rhi::QueueRole::Compute, readbackSyncPlan);
-    auto trainingLatentTicket = readback.readbackBuffer(runtime_->trainingLatent, 0u, detail::kLatentBufferBytes,
-                                                        nr::rhi::QueueRole::Compute, readbackSyncPlan);
-    auto latentMomentTicket = readback.readbackBuffer(runtime_->latentMoments, 0u, detail::kLatentMomentBufferBytes,
-                                                      nr::rhi::QueueRole::Compute, readbackSyncPlan);
     auto statusTicket = readback.readbackBuffer(runtime_->trainingStatus, 0u, detail::kTrainingStatusBufferBytes,
                                                 nr::rhi::QueueRole::Compute, readbackSyncPlan);
     auto controlTicket = readback.readbackBuffer(runtime_->trainingControl, 0u, detail::kTrainingControlBufferBytes,
@@ -1363,8 +1314,6 @@ std::optional<std::uint32_t> NeuralAppearanceNode::saveTrainingCheckpoint(nr::rh
     auto checkpoint = detail::NeuralAppearanceTrainingCheckpoint{};
     checkpoint.modelParameters = readback.readbackBytes(modelParameterTicket);
     checkpoint.modelMoments = readback.readbackBytes(modelMomentTicket);
-    checkpoint.trainingLatent = readback.readbackBytes(trainingLatentTicket);
-    checkpoint.latentMoments = readback.readbackBytes(latentMomentTicket);
     auto statusBytes = readback.readbackBytes(statusTicket);
     auto controlBytes = readback.readbackBytes(controlTicket);
     if (statusBytes.size() != detail::kTrainingStatusBufferBytes ||
@@ -1376,6 +1325,15 @@ std::optional<std::uint32_t> NeuralAppearanceNode::saveTrainingCheckpoint(nr::rh
     std::memcpy(checkpoint.trainingStatus.data(), statusBytes.data(), statusBytes.size());
     std::memcpy(checkpoint.trainingControl.data(), controlBytes.data(), controlBytes.size());
     checkpoint.header.completedTrainingStep = checkpoint.trainingControl[0];
+    checkpoint.header.trainingSeed = runtime_->trainingSeed;
+    // Checkpoints are the only periodic host-visible sample of training state, so
+    // publishing the telemetry here yields a 512-step-granularity loss curve for
+    // free instead of requiring an extra readback.
+    nr::nrLog<nr::LogLevel::info, "NEURAL-TRAINING">(
+        "training telemetry: step={} emaSafeLogLoss={:.6f} initialSafeLogLoss={:.6f} learningRate={:.3e} "
+        "trainingLoss={:.6f} finite={}",
+        checkpoint.header.completedTrainingStep, checkpoint.trainingStatus[0], checkpoint.trainingStatus[1],
+        checkpoint.trainingStatus[4], checkpoint.trainingStatus[5], checkpoint.trainingStatus[3] > 0.5f);
     if (!detail::trainingCheckpointPayloadValid(checkpoint))
     {
         detail::reportCheckpointWarning(path, "GPU snapshot contains invalid values or an inconsistent completed step");
@@ -1439,17 +1397,9 @@ bool NeuralAppearanceNode::loadTrainingCheckpoint(nr::rhi::Device &device, const
     auto restoredModelMoments =
         detail::createTrainingBuffer(device, detail::kModelMomentBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
                                      "NeuralAppearance.RestoredModelMoments");
-    auto restoredTrainingLatent = detail::createTrainingBuffer(
-        device, detail::kLatentBufferBytes, nr::rhi::MemoryUsage::GpuOnly, "NeuralAppearance.RestoredTrainingLatent");
-    auto restoredLatentMoments =
-        detail::createTrainingBuffer(device, detail::kLatentMomentBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
-                                     "NeuralAppearance.RestoredLatentMoments");
     auto restoredInferenceParameters = detail::createTrainingBuffer(
         device, detail::kInferenceParameterBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
         "NeuralAppearance.RestoredInferenceParameters");
-    auto restoredInferenceLatent = detail::createTrainingBuffer(
-        device, detail::kInferenceLatentBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
-        "NeuralAppearance.RestoredInferenceLatent");
     auto restoredTrainingStatus =
         detail::createTrainingBuffer(device, detail::kTrainingStatusBufferBytes, nr::rhi::MemoryUsage::GpuOnly,
                                      "NeuralAppearance.RestoredTrainingStatus");
@@ -1465,8 +1415,6 @@ bool NeuralAppearanceNode::loadTrainingCheckpoint(nr::rhi::Device &device, const
     auto uploadTickets = std::array{
         uploadReadback.uploadBuffer(checkpoint->modelParameters, restoredModelParameters, 0u, uploadPlan),
         uploadReadback.uploadBuffer(checkpoint->modelMoments, restoredModelMoments, 0u, uploadPlan),
-        uploadReadback.uploadBuffer(checkpoint->trainingLatent, restoredTrainingLatent, 0u, uploadPlan),
-        uploadReadback.uploadBuffer(checkpoint->latentMoments, restoredLatentMoments, 0u, uploadPlan),
         uploadReadback.uploadBuffer(std::as_bytes(std::span{checkpoint->trainingStatus}), restoredTrainingStatus, 0u,
                                     uploadPlan),
     };
@@ -1480,19 +1428,13 @@ bool NeuralAppearanceNode::loadTrainingCheckpoint(nr::rhi::Device &device, const
 
     runtime_->modelParameters = std::move(restoredModelParameters);
     runtime_->modelMoments = std::move(restoredModelMoments);
-    runtime_->trainingLatent = std::move(restoredTrainingLatent);
-    runtime_->latentMoments = std::move(restoredLatentMoments);
     runtime_->inferenceParameters = std::move(restoredInferenceParameters);
-    runtime_->inferenceLatent = std::move(restoredInferenceLatent);
     runtime_->trainingStatus = std::move(restoredTrainingStatus);
     runtime_->trainingControl = std::move(restoredTrainingControl);
     runtime_->heldOutQualitySamples = std::move(restoredHeldOutQualitySamples);
     runtime_->modelParameterState = {};
     runtime_->modelMomentState = {};
-    runtime_->trainingLatentState = {};
-    runtime_->latentMomentState = {};
     runtime_->inferenceParameterState = {};
-    runtime_->inferenceLatentState = {};
     runtime_->optimalWeightGradientState = {};
     runtime_->rowMajorWeightGradientState = {};
     runtime_->biasGradientState = {};
@@ -1500,6 +1442,7 @@ bool NeuralAppearanceNode::loadTrainingCheckpoint(nr::rhi::Device &device, const
     runtime_->trainingControlState = {};
     runtime_->heldOutQualitySampleState = {};
     runtime_->nextTrainingStep = checkpoint->header.completedTrainingStep + 1u;
+    runtime_->trainingSeed = checkpoint->header.trainingSeed;
     runtime_->lastDisplayOrdinal = 0u;
     return true;
 }
@@ -1509,7 +1452,7 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
     if (path.extension() != ".nart")
     {
         nr::nrLog<nr::LogLevel::warning, "NEURAL-ARTIFACT">(
-            "NeuralAppearance refuses artifact '{}' because V2 production artifacts must use the .nart extension.",
+            "NeuralAppearance refuses artifact '{}' because V3 production artifacts must use the .nart extension.",
             path.generic_string());
         return false;
     }
@@ -1534,8 +1477,6 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
     auto &readback = device.uploadReadback();
     auto modelTicket = readback.readbackBuffer(runtime_->inferenceParameters, 0u, detail::kInferenceParameterBufferBytes,
                                                nr::rhi::QueueRole::Compute, readbackSyncPlan);
-    auto latentTicket = readback.readbackBuffer(runtime_->inferenceLatent, 0u, detail::kInferenceLatentBufferBytes,
-                                                nr::rhi::QueueRole::Compute, readbackSyncPlan);
     auto statusTicket = readback.readbackBuffer(runtime_->trainingStatus, 0u, detail::kTrainingStatusBufferBytes,
                                                 nr::rhi::QueueRole::Compute, readbackSyncPlan);
     auto controlTicket = readback.readbackBuffer(runtime_->trainingControl, 0u, detail::kTrainingControlBufferBytes,
@@ -1544,11 +1485,10 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
                                                  detail::kHeldOutQualitySampleBufferBytes,
                                                  nr::rhi::QueueRole::Compute, readbackSyncPlan);
     auto modelBytes = readback.readbackBytes(modelTicket);
-    auto latentBytes = readback.readbackBytes(latentTicket);
     auto statusBytes = readback.readbackBytes(statusTicket);
     auto controlBytes = readback.readbackBytes(controlTicket);
     auto qualityBytes = readback.readbackBytes(qualityTicket);
-    if (modelBytes.size() != detail::kInferenceParameterBufferBytes || latentBytes.size() != detail::kInferenceLatentBufferBytes ||
+    if (modelBytes.size() != detail::kInferenceParameterBufferBytes ||
         statusBytes.size() != detail::kTrainingStatusBufferBytes ||
         controlBytes.size() != detail::kTrainingControlBufferBytes ||
         qualityBytes.size() != detail::kHeldOutQualitySampleBufferBytes)
@@ -1581,6 +1521,7 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
             path.generic_string());
         return false;
     }
+    detail::logHeldOutQualityReport(*qualityReport);
     auto const qualityGate = evaluateNeuralAppearanceQuality(*qualityReport);
     if (!qualityGate.passed)
     {
@@ -1590,30 +1531,9 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
         return false;
     }
 
-    auto latentPlanes = std::array{
-        std::vector<std::byte>(nr::neuralAppearance::v2LatentPlaneBytes),
-        std::vector<std::byte>(nr::neuralAppearance::v2LatentPlaneBytes),
-    };
-    for (auto texel = std::size_t{0u}; texel < detail::kLatentTexelCount; ++texel)
-    {
-        auto const sourceBase = texel * 16u;
-        std::memcpy(latentPlanes[0].data() + texel * 8u, latentBytes.data() + sourceBase, 8u);
-        std::memcpy(latentPlanes[1].data() + texel * 8u, latentBytes.data() + sourceBase + 8u, 8u);
-    }
-    auto binding = nr::neuralAppearance::makeArtifactBindingContract(
-        "glTF-Sample-Assets/Models/BoxTextured/glTF/BoxTextured.gltf");
-    if (!binding.has_value())
-    {
-        nr::nrLog<nr::LogLevel::warning, "NEURAL-ARTIFACT">(
-            "NeuralAppearance could not construct the V2 artifact binding for '{}': {}", path.generic_string(),
-            binding.error());
-        return false;
-    }
-    auto write = nr::neuralAppearance::writeArtifactV2(nr::neuralAppearance::ArtifactWriteRequest{
+    auto write = nr::neuralAppearance::writeArtifactV3(nr::neuralAppearance::ArtifactWriteRequest{
         .destination = path,
-        .bindingContract = *binding,
         .model = modelBytes,
-        .latentPlanes = {std::span<const std::byte>{latentPlanes[0]}, std::span<const std::byte>{latentPlanes[1]}},
         .completedSteps = completedTrainingStep,
         .batchSize = detail::kTrainingBatchSize,
         .sampleCount = static_cast<std::uint64_t>(detail::kTrainingBatchSize) * detail::kTotalTrainingStepCount,
@@ -1621,7 +1541,7 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
     if (!write.has_value())
     {
         nr::nrLog<nr::LogLevel::warning, "NEURAL-ARTIFACT">(
-            "NeuralAppearance failed to publish V2 artifact '{}': {}", path.generic_string(), write.error());
+            "NeuralAppearance failed to publish V3 artifact '{}': {}", path.generic_string(), write.error());
         return false;
     }
     return true;
@@ -1635,7 +1555,7 @@ void NeuralAppearanceNode::shutdown(NodeShutdownContext &)
             std::ref(runtime_->initializePipeline), std::ref(runtime_->targetPipeline),
             std::ref(runtime_->clearCoopGradientsPipeline), std::ref(runtime_->gradientPipeline),
             std::ref(runtime_->optimizePipeline),
-            std::ref(runtime_->packPipeline),       std::ref(runtime_->viewerPipeline),
+            std::ref(runtime_->qualityPipeline),    std::ref(runtime_->viewerPipeline),
         };
         std::ranges::for_each(pipelines, [](auto pipeline) {
             if (pipeline.get())

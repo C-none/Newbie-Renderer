@@ -44,7 +44,7 @@ namespace
 }
 
 const nr::test::CaseRegistrar passingQualityCase{
-    "neural appearance quality gate accepts a completed V2 result", [] {
+    "neural appearance quality gate accepts a completed V3 result", [] {
         auto const result = nr::renderPasses::evaluateNeuralAppearanceQuality(passingReport());
         nr::test::require(result.passed, "a result meeting every published P0 quality threshold must pass");
         nr::test::require(result.violations.empty(), "a passing quality result must not carry violations");
@@ -55,8 +55,8 @@ const nr::test::CaseRegistrar trainingTelemetryGateCase{
         auto report = passingReport();
         report.outputsFinite = false;
         report.outputsNonnegative = false;
-        report.emaSafeLogLoss = 0.030f;
-        report.initialSafeLogLoss = 0.050f;
+        report.emaSafeLogLoss = 0.070f;
+        report.initialSafeLogLoss = 0.100f;
 
         auto const result = nr::renderPasses::evaluateNeuralAppearanceQuality(report);
         nr::test::require(!result.passed, "invalid outputs or unsuccessful EMA convergence must reject publication");
@@ -65,7 +65,7 @@ const nr::test::CaseRegistrar trainingTelemetryGateCase{
         nr::test::require(contains(result, nr::renderPasses::NeuralAppearanceQualityViolation::OutputsNegative),
                           "negative output must be reported");
         nr::test::require(contains(result, nr::renderPasses::NeuralAppearanceQualityViolation::EmaLossThreshold),
-                          "EMA above 0.025 must be rejected");
+                          "EMA above the published absolute bound must be rejected");
         nr::test::require(
             contains(result, nr::renderPasses::NeuralAppearanceQualityViolation::EmaImprovementThreshold),
             "EMA above 40 percent of initial loss must be rejected");

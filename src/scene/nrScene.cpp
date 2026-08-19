@@ -285,22 +285,6 @@ void Scene::commitMutation(SceneRevisionMutation mutation) noexcept
         return {};
     }
 
-    if (createInfo.neuralMaterialBinding.has_value())
-    {
-        auto request = nr::neuralAppearance::BindingRequest{
-            .sourceMaterialIndex = createInfo.neuralMaterialBinding->sourceMaterialIndex,
-            .artifact = createInfo.neuralMaterialBinding->artifact,
-        };
-        auto bindingValidation = nr::neuralAppearance::validateBindingForScene(request, sceneAsset);
-        if (!bindingValidation)
-        {
-            reportImport<nr::LogLevel::error>(ImportStage::material,
-                                              std::format("Neural material binding rejected: {}", bindingValidation.error()),
-                                              templateStableKey, request.sourceMaterialIndex);
-            return {};
-        }
-    }
-
     auto const useParentStorage = useParentHierarchyStorage(sceneAsset, createInfo.hierarchyPolicy);
 
     if (auto existing = templatesByStableKey_.find(templateStableKey); existing != templatesByStableKey_.end())
@@ -328,21 +312,6 @@ void Scene::commitMutation(SceneRevisionMutation mutation) noexcept
     if (hasImportErrors_)
     {
         return {};
-    }
-
-    if (createInfo.neuralMaterialBinding.has_value())
-    {
-        auto const sourceIndex = createInfo.neuralMaterialBinding->sourceMaterialIndex;
-        auto *record = sourceIndex < materialHandlesBySource.size() ? materials_.tryGet(materialHandlesBySource[sourceIndex])
-                                                                     : nullptr;
-        if (record == nullptr || !record->cpuReady)
-        {
-            reportImport<nr::LogLevel::error>(ImportStage::material,
-                                              "Neural material binding could not resolve its imported material.",
-                                              templateStableKey, sourceIndex);
-            return {};
-        }
-        record->neuralAppearance = createInfo.neuralMaterialBinding;
     }
 
     auto pinSet = buildTemplatePinSet(meshHandlesBySource, materialHandlesBySource, textureHandlesBySource,

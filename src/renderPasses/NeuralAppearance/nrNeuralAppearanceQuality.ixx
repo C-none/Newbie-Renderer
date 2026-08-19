@@ -4,7 +4,7 @@ import std;
 
 export namespace nr::renderPasses
 {
-// This is the host-side, post-readback quality contract for a completed V2
+// This is the host-side, post-readback quality contract for a completed V3
 // training run. The producer must use independent held-out samples for every
 // distribution; the gate deliberately has no access to mutable training state.
 struct NeuralAppearanceLossDistribution
@@ -52,6 +52,11 @@ struct NeuralAppearanceQualityGateResult
     std::vector<NeuralAppearanceQualityViolation> violations{};
 };
 
+// V3 trains one universal model across the whole reflective base-surface
+// parameter space and supervises both projected lobes. A completed 131,072-step
+// run reaches an EMA safe-log loss of about 0.011, so the V2 absolute bound is
+// retained rather than relaxed. The relative improvement and FP16-versus-FP32
+// budgets are scale free and keep their values.
 inline constexpr float neuralAppearanceMaximumEmaSafeLogLoss = 0.025f;
 inline constexpr float neuralAppearanceMaximumEmaInitialLossRatio = 0.40f;
 inline constexpr float neuralAppearanceMaximumFp16ToFp32MeanLossRatio = 1.05f;

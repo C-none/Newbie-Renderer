@@ -78,18 +78,4 @@ const nr::test::CaseRegistrar statefulNodesBuildInOnePassCase{
                        "UI build must prepare its current draw frame");
         requireAbsent(uiNode, "preparedDrawFrame", "UI must not transfer draw state across build paths");
     }};
-
-const nr::test::CaseRegistrar neuralArtifactStructuralIdentityCase{
-    "AS structural plan keys include the immutable neural artifact identity", [] {
-        auto const asNode = readProjectFile("src/renderPasses/AccelerationStructureBuild/nrAccelerationStructureBuildNode.cpp");
-
-        nr::test::require(asNode.contains("struct NeuralArtifactStructuralIdentity"),
-                          "AS build must declare a dedicated neural artifact structural identity");
-        nr::test::require(asNode.contains("std::vector<NeuralArtifactStructuralIdentity> neuralArtifacts"),
-                          "AS structural plan key must retain neural artifact identities");
-        requireOrdered(asNode, "makeNeuralArtifactStructuralIdentities", "payloadDigest = binding.artifact->payloadDigest()",
-                       "AS structural identity must include the immutable artifact payload SHA-256");
-        requireOrdered(asNode, "makeAsStructuralPlanKey", "makeNeuralArtifactStructuralIdentities(scene, pendingByMesh)",
-                       "AS structural plan construction must capture neural artifact identity before cache comparison");
-    }};
 } // namespace

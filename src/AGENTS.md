@@ -6,10 +6,8 @@ These rules apply to project-owned C++ production code, tests, and tools. Vendor
 
 - Organize internal code as named C++ modules. Use `.ixx` for interfaces and keep exported declarations, templates, `constexpr`/`consteval` logic, default arguments, and necessary tiny inline helpers there.
 - Split a substantial partition into a matching `.ixx` interface and `.cpp` implementation; move non-template, non-`constexpr` runtime implementation to the `.cpp`. Small declaration-only partitions may remain `.ixx`-only.
-- Prefer ranges and views to raw loops when they remain clear and are not performance-critical. Use a loop when a ranges formulation is materially more complex or a measured hot path requires it.
-- When call paths differ only by small compile-time constants, prefer one non-type-template-parameter implementation with `if constexpr` over near-identical wrappers.
 - Default to `std::map` and `std::set`. Use unordered containers when the normal size exceeds 50 or a clear measured workload justifies them.
-- During construction, omit members whose values equal their default member initializers, including empty optional or nullable members; use `{}` when a stored optional-like member needs an explicit empty default. Assign an explicit empty value only to clear an existing object, define an API default, disambiguate an overload, document an external boundary, or intentionally reset state.
+- Loop-versus-ranges choice, `if constexpr` consolidation of near-identical wrappers, and omission of default-valued members during construction follow the root `AGENTS.md` `## Code Simplification` rules.
 
 ## Ownership and Lifetime
 
@@ -22,7 +20,7 @@ These rules apply to project-owned C++ production code, tests, and tools. Vendor
 
 - Encapsulate third-party non-module C++ libraries at `src/extern` and expose them through narrow `dependency.*` modules. The top-level `dependency` module may remain a compatibility umbrella.
 - Outside the dependency boundary, do not include raw third-party headers; import the adapted `dependency.*` module instead.
-- Prefer a mature third-party library or tool over a project-local reimplementation unless a clear measured reason justifies owning the behavior.
+- Library-versus-reimplementation preference follows the root `AGENTS.md` `## Code Simplification` rules.
 
 ## Diagnostics and Exceptions
 

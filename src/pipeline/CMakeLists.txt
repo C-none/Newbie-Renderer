@@ -15,7 +15,6 @@ target_link_libraries(nrpipeline
         nrautomation
         nrinteraction
         nrload
-        nrneuralappearanceasset
         nroptions
         nrrenderer
         nrrenderpasses

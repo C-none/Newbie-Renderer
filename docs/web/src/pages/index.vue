@@ -1,292 +1,239 @@
 <script setup>
-import * as THREE from 'three';
-import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import {
-  nextTick,
+  computed,
+  defineAsyncComponent,
   onBeforeUnmount,
   onMounted,
   ref,
-  watch,
 } from 'vue';
+import {
+  features,
+  highlights,
+  projectLinks,
+  projectSummary,
+  roadmap,
+} from '@/data/project.js';
 
-const exrFile = { name: 'chess.exr', size: '6.6 MB' };
-const toneMappingOptions = [
-  { label: 'None', value: 'none', mode: THREE.NoToneMapping },
-  { label: 'Linear', value: 'linear', mode: THREE.LinearToneMapping },
-  { label: 'Reinhard', value: 'reinhard', mode: THREE.ReinhardToneMapping },
-  { label: 'Cineon', value: 'cineon', mode: THREE.CineonToneMapping },
-  { label: 'ACES Filmic', value: 'aces-filmic', mode: THREE.ACESFilmicToneMapping },
-  { label: 'AgX', value: 'agx', mode: THREE.AgXToneMapping },
-  { label: 'Neutral', value: 'neutral', mode: THREE.NeutralToneMapping },
+const ExrViewer = defineAsyncComponent(() => import('@/components/ExrViewer.vue'));
+
+const doneCount = computed(() => roadmap.filter(({ done }) => done).length);
+const progressPercent = computed(() => Math.round((doneCount.value / roadmap.length) * 100));
+
+const sections = [
+  { id: 'features', label: 'Features' },
+  { id: 'roadmap', label: 'Todo List' },
+  { id: 'demo', label: 'EXR Demo' },
 ];
 
-const canvasHost = ref(null);
-const exposure = ref(1);
-const selectedToneMapping = ref('aces-filmic');
-const loadState = ref('idle');
-const loadProgress = ref(0);
-const errorMessage = ref('');
-const imageSize = ref('');
+const demoSection = ref(null);
+const demoActive = ref(false);
+let demoObserver;
 
-function statusText() {
-  if (loadState.value === 'loading') {
-    return loadProgress.value > 0 ? `Loading ${loadProgress.value}%` : 'Loading EXR…';
-  }
-  if (loadState.value === 'ready') {
-    return imageSize.value;
-  }
-  return '';
-}
-
-let renderer;
-let scene;
-let camera;
-let previewMesh;
-let previewTexture;
-let resizeObserver;
-let loadSequence = 0;
-
-function render() {
-  if (!renderer || !scene || !camera) return;
-  renderer.toneMappingExposure = exposure.value;
-  renderer.render(scene, camera);
-}
-
-function updateToneMapping() {
-  if (!renderer) return;
-
-  const option = toneMappingOptions.find(({ value }) => value === selectedToneMapping.value);
-  renderer.toneMapping = option?.mode ?? THREE.ACESFilmicToneMapping;
-
-  if (previewMesh) {
-    previewMesh.material.needsUpdate = true;
-  }
-
-  render();
-}
-
-function fitPreview() {
-  if (!renderer || !camera || !previewMesh || !canvasHost.value) return;
-
-  const width = Math.max(canvasHost.value.clientWidth, 1);
-  const height = Math.max(canvasHost.value.clientHeight, 1);
-  const viewportAspect = width / height;
-
-  camera.left = -viewportAspect;
-  camera.right = viewportAspect;
-  camera.top = 1;
-  camera.bottom = -1;
-  camera.updateProjectionMatrix();
-  renderer.setSize(width, height, false);
-
-  if (previewTexture) {
-    const imageAspect = previewTexture.image.width / previewTexture.image.height;
-    if (imageAspect > viewportAspect) {
-      previewMesh.scale.set(2 * viewportAspect, (2 * viewportAspect) / imageAspect, 1);
-    } else {
-      previewMesh.scale.set(2 * imageAspect, 2, 1);
-    }
-  }
-
-  render();
-}
-
-function assetUrl(filename) {
-  return `${import.meta.env.BASE_URL}${encodeURIComponent(filename)}`;
-}
-
-function loadSelectedExr() {
-  if (!renderer) return;
-
-  loadSequence += 1;
-  const sequence = loadSequence;
-  loadState.value = 'loading';
-  loadProgress.value = 0;
-  errorMessage.value = '';
-  imageSize.value = '';
-
-  new EXRLoader().load(
-    assetUrl(exrFile.name),
-    (texture) => {
-      if (sequence !== loadSequence) {
-        texture.dispose();
-        return;
-      }
-
-      previewTexture?.dispose();
-      previewTexture = texture;
-      previewMesh.material.map = texture;
-      previewMesh.material.needsUpdate = true;
-      imageSize.value = `${texture.image.width} × ${texture.image.height}`;
-      loadState.value = 'ready';
-      fitPreview();
-    },
-    ({ loaded, total }) => {
-      if (sequence === loadSequence && total > 0) {
-        loadProgress.value = Math.round((loaded / total) * 100);
-      }
-    },
-    (error) => {
-      if (sequence !== loadSequence) return;
-      loadState.value = 'error';
-      errorMessage.value = error?.message || 'Unable to decode this EXR file.';
-    },
-  );
-}
-
-onMounted(async () => {
-  await nextTick();
-
-  try {
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    updateToneMapping();
-
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x090b10);
-    camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    previewMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ toneMapped: true }),
-    );
-    scene.add(previewMesh);
-
-    renderer.domElement.className = 'block size-full';
-    canvasHost.value.appendChild(renderer.domElement);
-    resizeObserver = new ResizeObserver(fitPreview);
-    resizeObserver.observe(canvasHost.value);
-    fitPreview();
-    loadSelectedExr();
-  } catch (error) {
-    loadState.value = 'error';
-    errorMessage.value = error?.message || 'WebGL is unavailable in this browser.';
-  }
+onMounted(() => {
+  demoObserver = new IntersectionObserver((entries) => {
+    if (!entries.some(({ isIntersecting }) => isIntersecting)) return;
+    demoActive.value = true;
+    demoObserver.disconnect();
+  }, { rootMargin: '256px' });
+  demoObserver.observe(demoSection.value);
 });
 
-watch(exposure, render);
-watch(selectedToneMapping, updateToneMapping);
-
-onBeforeUnmount(() => {
-  loadSequence += 1;
-  resizeObserver?.disconnect();
-  previewTexture?.dispose();
-  previewMesh?.geometry.dispose();
-  previewMesh?.material.dispose();
-  renderer?.dispose();
-  renderer?.domElement.remove();
-});
+onBeforeUnmount(() => demoObserver?.disconnect());
 </script>
 
 <template>
-  <main class="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-8">
-    <div class="mx-auto flex w-full max-w-7xl flex-col gap-6">
-      <header class="flex flex-col gap-2">
-        <p class="text-sm font-semibold uppercase tracking-[0.24em] text-cyan-400">
-          Newbie Renderer
-        </p>
-        <h1 class="text-3xl font-semibold tracking-tight sm:text-5xl">
-          EXR environment gallery
-        </h1>
-        <p class="max-w-3xl text-sm leading-6 text-slate-400 sm:text-base">
-          OpenEXR assets are decoded locally and displayed with selectable tone mapping.
-          Only the selected image is loaded to keep memory usage predictable.
-        </p>
-      </header>
-
-      <section class="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-2xl shadow-black/30 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <aside class="flex flex-col gap-5 rounded-xl bg-slate-950/60 p-4">
-          <label class="flex flex-col gap-2 text-sm font-medium text-slate-300">
-            <span>Tone mapping</span>
-            <select
-              v-model="selectedToneMapping"
-              class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
-            >
-              <option
-                v-for="option in toneMappingOptions"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-
-          <label class="flex flex-col gap-2 text-sm font-medium text-slate-300">
-            <span class="flex items-center justify-between">
-              <span>Exposure</span>
-              <output class="font-mono text-cyan-300">{{ exposure.toFixed(2) }}</output>
-            </span>
-            <input
-              v-model.number="exposure"
-              class="accent-cyan-400"
-              type="range"
-              min="0.1"
-              max="4"
-              step="0.05"
-            >
-          </label>
-
-          <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 border-t border-slate-800 pt-4 text-xs">
-            <dt class="text-slate-500">
-              File
-            </dt>
-            <dd class="break-all text-right text-slate-300">
-              {{ exrFile.name }}
-            </dd>
-            <dt class="text-slate-500">
-              Download
-            </dt>
-            <dd class="text-right text-slate-300">
-              {{ exrFile.size }}
-            </dd>
-            <dt class="text-slate-500">
-              Resolution
-            </dt>
-            <dd class="text-right text-slate-300">
-              {{ statusText() || '—' }}
-            </dd>
-          </dl>
-        </aside>
-
-        <div class="relative min-h-[55vh] overflow-hidden rounded-xl border border-slate-800 bg-[#090b10]">
-          <div
-            ref="canvasHost"
-            class="absolute inset-0"
-          />
-
-          <div
-            v-if="loadState === 'loading'"
-            class="absolute inset-0 grid place-items-center bg-slate-950/70 backdrop-blur-sm"
+  <main class="min-h-screen bg-slate-950 px-4 py-10 text-slate-100 sm:px-8">
+    <div class="mx-auto flex w-full max-w-7xl flex-col gap-16">
+      <header class="flex flex-col gap-8">
+        <nav class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-400">
+          <span class="font-semibold uppercase tracking-[0.24em] text-cyan-400">Newbie Renderer</span>
+          <a
+            v-for="section in sections"
+            :key="section.id"
+            :href="`#${section.id}`"
+            class="transition hover:text-slate-100"
           >
-            <div class="flex flex-col items-center gap-3 text-sm text-slate-300">
-              <span class="size-8 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400" />
-              <span>{{ statusText() }}</span>
-            </div>
-          </div>
-
-          <div
-            v-if="loadState === 'error'"
-            class="absolute inset-0 grid place-items-center p-6 text-center"
+            {{ section.label }}
+          </a>
+          <a
+            class="ml-auto rounded-lg border border-slate-700 px-3 py-1.5 font-medium text-slate-200 transition hover:border-cyan-400 hover:text-cyan-300"
+            :href="projectLinks.repository"
+            rel="noreferrer"
+            target="_blank"
           >
-            <div class="max-w-lg rounded-xl border border-red-500/30 bg-red-950/60 p-5">
-              <p class="font-semibold text-red-200">
-                EXR could not be displayed
-              </p>
-              <p class="mt-2 break-words text-sm text-red-300/80">
-                {{ errorMessage }}
-              </p>
-              <button
-                class="mt-4 rounded-lg bg-red-400 px-4 py-2 text-sm font-semibold text-red-950 transition hover:bg-red-300"
-                type="button"
-                @click="loadSelectedExr"
-              >
-                Try again
-              </button>
-            </div>
+            GitHub
+          </a>
+        </nav>
+
+        <div class="flex flex-col gap-5">
+          <h1 class="max-w-4xl text-4xl font-semibold tracking-tight sm:text-6xl">
+            {{ projectSummary.tagline }}
+          </h1>
+          <p class="max-w-3xl text-sm leading-7 text-slate-400 sm:text-base">
+            {{ projectSummary.description }}
+          </p>
+
+          <div class="flex flex-wrap gap-3">
+            <a
+              class="rounded-xl bg-cyan-400 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
+              :href="projectLinks.repository"
+              rel="noreferrer"
+              target="_blank"
+            >
+              View source
+            </a>
+            <a
+              class="rounded-xl border border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-200 transition hover:border-cyan-400 hover:text-cyan-300"
+              :href="projectLinks.architecture"
+              rel="noreferrer"
+              target="_blank"
+            >
+              Architecture docs
+            </a>
           </div>
         </div>
+
+        <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div
+            v-for="highlight in highlights"
+            :key="highlight.label"
+            class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
+          >
+            <dt class="text-xs uppercase tracking-[0.18em] text-slate-500">
+              {{ highlight.label }}
+            </dt>
+            <dd class="mt-2 text-base font-medium text-slate-100">
+              {{ highlight.value }}
+            </dd>
+          </div>
+        </dl>
+      </header>
+
+      <section
+        id="features"
+        class="flex scroll-mt-8 flex-col gap-6"
+      >
+        <div class="flex flex-col gap-2">
+          <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Supported features
+          </h2>
+          <p class="max-w-3xl text-sm leading-6 text-slate-400">
+            Capabilities already implemented in the renderer.
+          </p>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <article
+            v-for="feature in features"
+            :key="feature.title"
+            class="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-5 transition hover:border-cyan-400/40"
+          >
+            <h3 class="text-lg font-semibold text-slate-100">
+              {{ feature.title }}
+            </h3>
+            <p class="text-sm leading-6 text-slate-400">
+              {{ feature.summary }}
+            </p>
+            <ul class="mt-auto flex flex-wrap gap-2 pt-1">
+              <li
+                v-for="tag in feature.tags"
+                :key="tag"
+                class="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300"
+              >
+                {{ tag }}
+              </li>
+            </ul>
+          </article>
+        </div>
       </section>
+
+      <section
+        id="roadmap"
+        class="flex scroll-mt-8 flex-col gap-6"
+      >
+        <div class="flex flex-col gap-3">
+          <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Todo list
+          </h2>
+          <p class="max-w-3xl text-sm leading-6 text-slate-400">
+            {{ doneCount }} of {{ roadmap.length }} items completed.
+          </p>
+          <div class="h-2 w-full max-w-md overflow-hidden rounded-full bg-slate-800">
+            <div
+              class="h-full rounded-full bg-cyan-400"
+              :style="{ width: `${progressPercent}%` }"
+            />
+          </div>
+        </div>
+
+        <ol class="flex flex-col gap-3">
+          <li
+            v-for="(item, index) in roadmap"
+            :key="item.title"
+            class="flex gap-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
+            :class="item.done ? 'border-cyan-400/30' : ''"
+          >
+            <span
+              class="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-xs font-semibold"
+              :class="item.done ? 'bg-cyan-400 text-slate-950' : 'border border-slate-700 text-slate-500'"
+            >
+              {{ item.done ? '✓' : index + 1 }}
+            </span>
+            <div class="flex flex-col gap-1">
+              <p
+                class="text-sm leading-6"
+                :class="item.done ? 'text-slate-200' : 'text-slate-300'"
+              >
+                {{ item.title }}
+              </p>
+              <a
+                v-if="item.reference"
+                class="w-fit text-xs text-cyan-400 underline-offset-4 transition hover:underline"
+                :href="item.reference.url"
+                rel="noreferrer"
+                target="_blank"
+              >
+                Reference: {{ item.reference.label }}
+              </a>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section
+        id="demo"
+        ref="demoSection"
+        class="flex scroll-mt-8 flex-col gap-6"
+      >
+        <div class="flex flex-col gap-2">
+          <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">
+            EXR environment gallery
+          </h2>
+          <p class="max-w-3xl text-sm leading-6 text-slate-400">
+            An OpenEXR asset decoded in the browser and displayed with selectable tone mapping,
+            mirroring the presentation options exposed by the renderer.
+          </p>
+        </div>
+
+        <ExrViewer v-if="demoActive" />
+        <p
+          v-else
+          class="grid min-h-[55vh] place-items-center rounded-2xl border border-slate-800 bg-slate-900/60 text-sm text-slate-500"
+        >
+          The viewer and its EXR asset load when this section becomes visible.
+        </p>
+      </section>
+
+      <footer class="border-t border-slate-800 pt-6 text-sm text-slate-500">
+        <a
+          class="transition hover:text-cyan-300"
+          :href="projectLinks.readme"
+          rel="noreferrer"
+          target="_blank"
+        >
+          {{ projectSummary.name }} on GitHub
+        </a>
+      </footer>
     </div>
   </main>
 </template>

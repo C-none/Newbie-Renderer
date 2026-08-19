@@ -80,23 +80,6 @@ public struct RtMaterialTextureRef
     public uint uvSet = 0u;
 };
 
-[Flags]
-public enum RtNeuralMaterialFlag : uint
-{
-    none = 0u,
-    enabled = 1u << 0u,
-}
-
-// Parallel to RtMaterialHeader. This stays separate so the established RT material
-// header ABI and SBT specialization keys do not depend on neural residency.
-public struct RtNeuralMaterialRef
-{
-    public RtNeuralMaterialFlag flags = RtNeuralMaterialFlag.none;
-    public uint artifactIndex = 0u;
-    public uint reserved0 = 0u;
-    public uint reserved1 = 0u;
-};
-
 public struct RtGeometryMetadata
 {
     public uint materialIndex = kRtMaterialFallbackIndex;

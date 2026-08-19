@@ -10,7 +10,6 @@ import nr.utils;
 namespace
 {
 inline constexpr auto kCheckpointFrameInterval = std::uint64_t{64u};
-inline constexpr auto kCompleteTrainingStep = std::uint32_t{32768u};
 
 void printUsage()
 {
@@ -25,6 +24,7 @@ void printUsage()
     std::println("  --checkpoint <path>               Override the resumable checkpoint path.");
     std::println("                                    Default: <artifact-path>.checkpoint.");
     std::println("  --resume <path>                   Require and resume the specified checkpoint.");
+    std::println("  --seed <n>                        Training seed for initialization and sample order.");
     std::println("View: left native, middle neural, right absolute error.");
 }
 
@@ -39,7 +39,42 @@ struct CommandLineOptions
 {
     std::optional<TrainingCommandLineOptions> training{};
     bool showHelp = false;
+    std::uint32_t trainingSeed = 0u;
 };
+
+// `--seed <n>` is extracted before positional parsing so it can appear anywhere
+// without disturbing the existing argument order.
+[[nodiscard]] std::optional<std::pair<std::uint32_t, std::vector<char *>>> extractSeedOption(std::span<char *> args)
+{
+    auto seed = std::uint32_t{0u};
+    auto remaining = std::vector<char *>{};
+    remaining.reserve(args.size());
+    for (auto index = std::size_t{0u}; index < args.size(); ++index)
+    {
+        auto const value = args[index] != nullptr ? std::string_view{args[index]} : std::string_view{};
+        if (value != "--seed")
+        {
+            remaining.push_back(args[index]);
+            continue;
+        }
+        if (index + 1u >= args.size() || args[index + 1u] == nullptr)
+        {
+            nr::nrLog<nr::LogLevel::warning>("--seed requires an unsigned 32-bit value.");
+            return std::nullopt;
+        }
+        auto const seedText = std::string_view{args[index + 1u]};
+        auto parsed = std::uint32_t{};
+        auto const result = std::from_chars(seedText.data(), seedText.data() + seedText.size(), parsed);
+        if (result.ec != std::errc{} || result.ptr != seedText.data() + seedText.size())
+        {
+            nr::nrLog<nr::LogLevel::warning>("--seed value '{}' is not an unsigned 32-bit integer.", seedText);
+            return std::nullopt;
+        }
+        seed = parsed;
+        ++index;
+    }
+    return std::pair{seed, std::move(remaining)};
+}
 
 [[nodiscard]] std::optional<std::filesystem::path> parsePathArgument(std::span<char *> args, std::size_t index,
                                                                      std::string_view optionName)
@@ -285,7 +320,8 @@ struct CommandLineOptions
     return graphSpec;
 }
 
-[[nodiscard]] int runViewer(const std::optional<TrainingCommandLineOptions> &trainingOptions)
+[[nodiscard]] int runViewer(const std::optional<TrainingCommandLineOptions> &trainingOptions,
+                            std::uint32_t trainingSeed)
 {
     auto app = nr::app::AppSession{};
     app.initialize(nr::renderer::RendererCreateInfo{
@@ -306,7 +342,8 @@ struct CommandLineOptions
 
     auto &renderer = app.renderer();
     auto &presentation = renderer.device().presentationContext;
-    auto neuralAppearanceNode = std::make_shared<nr::renderPasses::NeuralAppearanceNode>(!trainingOptions.has_value());
+    auto neuralAppearanceNode =
+        std::make_shared<nr::renderPasses::NeuralAppearanceNode>(!trainingOptions.has_value(), trainingSeed);
     auto graphSpec = buildViewerGraphSpec(neuralAppearanceNode, !trainingOptions.has_value());
     auto const preflight = renderer.preflightGraph(graphSpec);
     nr::nrAssert(static_cast<bool>(preflight), "Neural material viewer graph preflight failed.");
@@ -409,11 +446,11 @@ struct CommandLineOptions
             auto &device = renderer.device();
             auto const completedStep =
                 neuralAppearanceNode->saveTrainingCheckpoint(device, trainingOptions->checkpointPath);
-            if (!completedStep || *completedStep != kCompleteTrainingStep)
+            if (!completedStep || *completedStep != nr::renderPasses::NeuralAppearanceNode::totalTrainingStepCount())
             {
                 nr::nrLog<nr::LogLevel::warning>(
                     "Failed to save a complete neural appearance checkpoint '{}' at GPU step {}.",
-                    trainingOptions->checkpointPath.string(), kCompleteTrainingStep);
+                    trainingOptions->checkpointPath.string(), nr::renderPasses::NeuralAppearanceNode::totalTrainingStepCount());
                 app.shutdown();
                 return 1;
             }
@@ -492,7 +529,14 @@ int main(int argc, char **argv)
         args = std::span<char *>{argv + 1, static_cast<std::size_t>(argc - 1)};
     }
 
-    auto const options = parseCommandLine(args);
+    auto seedExtraction = extractSeedOption(args);
+    if (!seedExtraction)
+    {
+        printUsage();
+        return 2;
+    }
+
+    auto const options = parseCommandLine(std::span<char *>{seedExtraction->second});
     if (!options)
     {
         printUsage();
@@ -505,5 +549,5 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    return runViewer(options->training);
+    return runViewer(options->training, seedExtraction->first);
 }

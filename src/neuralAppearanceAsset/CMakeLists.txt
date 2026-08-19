@@ -4,7 +4,6 @@ file(GLOB IMPL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 nr_add_library(nrneuralappearanceasset STATIC)
 target_link_libraries(nrneuralappearanceasset
     PUBLIC
-        nrload
         dependency_services
 )
 target_sources(nrneuralappearanceasset

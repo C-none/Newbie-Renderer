@@ -1,7 +1,6 @@
 module materialPayloadPackingContract;
 import common;
 import renderer.pathTracing.pathState;
-import renderer.pathTracing.neuralMaterial;
 
 [[vk::binding(8, 3)]]
 RWStructuredBuffer<uint> gContractResults;
@@ -143,70 +142,4 @@ void payloadPackingContractMain(uint3 dispatchThreadId: SV_DispatchThreadID)
         all(decodedScatter.diffuseWeight == scatter.diffuseWeight) &&
         all(decodedScatter.specularWeight == scatter.specularWeight) && decodedScatter.etaRatio == scatter.etaRatio);
     gContractResults[18] = verifyMaterialFilterPacketAdvance();
-
-    // `resolvedMaterialScatterFromRayPayload` deliberately reconstructs q as zero.
-    // The neural correction therefore has to consume the original closest-hit
-    // scatter before this transport write.
-    ResolvedMaterialScatter neuralScatter = scatter;
-    neuralScatter.valid = true;
-    neuralScatter.delta = false;
-    neuralScatter.pdf = 0.875f;
-    float3 neuralProjected = float3(0.21875f, 0.4375f, 0.65625f);
-    bool neuralApplied = replaceRtAnalyticSpecularWithNeuralProjected(neuralScatter, neuralProjected);
-    gContractResults[19] = uint(neuralApplied &&
-                                all(abs(neuralScatter.specularWeight * neuralScatter.pdf - neuralProjected) <
-                                    float3(1.0e-6f)));
-    MaterialRayPayload neuralPayload = MaterialRayPayload(scatterRandomValues, filterSequence, 1.25f, 1.75f);
-    writeResolvedMaterialRayPayload(neuralPayload, material, neuralScatter);
-    gContractResults[20] = uint(resolvedMaterialScatterFromRayPayload(neuralPayload).pdf == 0.0f);
-
-    ResolvedMaterialScatter analyticFallback = scatter;
-    analyticFallback.valid = true;
-    analyticFallback.delta = false;
-    analyticFallback.pdf = 0.875f;
-    float invalidNeural = asfloat(0x7fc00000u);
-    bool invalidApplied =
-        replaceRtAnalyticSpecularWithNeuralProjected(analyticFallback, float3(invalidNeural, 0.25f, 0.5f));
-    gContractResults[21] = uint(!invalidApplied && all(analyticFallback.specularWeight == scatter.specularWeight) &&
-                                all(analyticFallback.weight == scatter.weight));
-
-    ResolvedMaterialPayload neuralEligible =
-        ResolvedMaterialPayload(RtMaterialLayerFlag.baseSurface, fallbackY, fallbackY, float3(1.0f, 0.0f, 0.0f),
-                                0.0f, float4(1.0f), 0.5f, 0.5f);
-    ResolvedMaterialPayload neuralIneligible = neuralEligible;
-    neuralIneligible.alphaMode = AlphaMode.blend;
-    ResolvedMaterialPayload anisotropicIneligible = neuralEligible;
-    anisotropicIneligible.anisotropyStrength = 0.25f;
-    gContractResults[22] = uint(rtNeuralP0Eligible(neuralEligible, true) && !rtNeuralP0Eligible(neuralEligible, false) &&
-                                !rtNeuralP0Eligible(neuralIneligible, true) &&
-                                !rtNeuralP0Eligible(anisotropicIneligible, true));
-
-    float3 directRadiance = float3(2.0f, 3.0f, 5.0f);
-    float3 analyticDirect = float3(0.75f, 0.5f, 0.25f);
-    ResolvedMaterialScatter sameDirectionContinuation = scatter;
-    sameDirectionContinuation.valid = true;
-    sameDirectionContinuation.delta = false;
-    sameDirectionContinuation.pdf = 0.875f;
-    bool sameDirectionApplied =
-        replaceRtAnalyticSpecularWithNeuralProjected(sameDirectionContinuation, neuralProjected);
-    float3 sameDirectionNee =
-        resolveRtNeuralDirectSpecularRadiance(analyticDirect, neuralProjected, directRadiance, true);
-    gContractResults[23] = uint(sameDirectionApplied &&
-                                all(abs(sameDirectionContinuation.specularWeight * sameDirectionContinuation.pdf -
-                                        neuralProjected) < float3(1.0e-6f)) &&
-                                all(abs(sameDirectionNee - neuralProjected * directRadiance) < float3(1.0e-6f)));
-
-    float3 negativeProjected = float3(-0.25f, 0.5f, 0.75f);
-    ResolvedMaterialScatter negativeFallback = scatter;
-    negativeFallback.valid = true;
-    negativeFallback.delta = false;
-    negativeFallback.pdf = 0.875f;
-    bool negativeApplied = replaceRtAnalyticSpecularWithNeuralProjected(negativeFallback, negativeProjected);
-    float3 invalidNee =
-        resolveRtNeuralDirectSpecularRadiance(analyticDirect, negativeProjected, directRadiance, true);
-    float3 nonFiniteNee = resolveRtNeuralDirectSpecularRadiance(
-        analyticDirect, float3(invalidNeural, 0.25f, 0.5f), directRadiance, true);
-    gContractResults[24] = uint(!negativeApplied && all(negativeFallback.specularWeight == scatter.specularWeight) &&
-                                all(negativeFallback.weight == scatter.weight) && all(invalidNee == analyticDirect) &&
-                                all(nonFiniteNee == analyticDirect));
 }

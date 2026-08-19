@@ -1,5 +1,6 @@
 module viewer;
 import common;
+import include.neuralAppearance.fixture;
 import include.neuralAppearance.layout;
 import include.neuralAppearance.model;
 import include.neuralAppearance.reference;
@@ -15,12 +16,6 @@ struct NeuralAppearancePushConstants
     uint comparisonEnabled;
     float errorGain;
 };
-
-[[vk::binding(0, 1)]]
-Sampler2D<float4> gLatentTexture0;
-
-[[vk::binding(1, 1)]]
-Sampler2D<float4> gLatentTexture1;
 
 [[vk::binding(1, 2)]]
 ByteAddressBuffer gInferenceParameters;
@@ -45,15 +40,6 @@ float3 neuralAppearanceViewerLightDirection(uint frameIndex)
 {
     float phase = float(frameIndex) * 0.015f;
     return safeNormalize(float3(cos(phase), 0.65f, sin(phase)), float3(0.0f, 1.0f, 0.0f));
-}
-
-[noinline]
-float3 evaluateNeuralAppearanceViewer(
-    float2 materialUv, float3 viewDirection, float3 lightDirection)
-{
-    return evaluateNeuralAppearanceRuntime(
-        gInferenceParameters, gLatentTexture0, gLatentTexture1,
-        materialUv, viewDirection, lightDirection);
 }
 
 [shader("compute")]
@@ -95,32 +81,39 @@ void viewerMain(uint3 dispatchThreadID: SV_DispatchThreadID)
         return;
     }
 
-    float panelCoordinate = outputUv.x * 3.0f;
-    uint panel = min(uint(panelCoordinate), 2u);
-    float2 materialUv = float2(frac(panelCoordinate), outputUv.y);
+    // Three columns compare native, neural, and amplified error. The upper row
+    // shows the specular lobe and the lower row the diffuse lobe.
+    float columnCoordinate = outputUv.x * 3.0f;
+    uint column = min(uint(columnCoordinate), 2u);
+    float rowCoordinate = outputUv.y * 2.0f;
+    bool diffuseRow = rowCoordinate >= 1.0f;
+    float2 materialUv = float2(frac(columnCoordinate), frac(rowCoordinate));
 
     float3 viewDirection = neuralAppearanceViewerViewDirection(materialUv);
     float3 lightDirection = neuralAppearanceViewerLightDirection(gNeuralAppearance.frameIndex);
+    NeuralAppearanceFixture fixture = neuralAppearanceFixture(materialUv);
+    NeuralAppearanceLobes nativeLobes =
+        neuralAppearanceReferenceLobes(fixture, viewDirection, lightDirection);
+    float3 nativeValue = diffuseRow ? nativeLobes.diffuse : nativeLobes.specular;
+
+    // Inference is evaluated unconditionally and never behind a [noinline]
+    // boundary: a non-inlined cooperative-vector call compiles to a pathological
+    // shader that loses the device, and an unconditional call keeps every
+    // invocation in a workgroup on the same path across a panel boundary.
+    NeuralAppearanceLobes neuralLobes = evaluateNeuralAppearanceRuntime(
+        gInferenceParameters, neuralAppearanceMaterialInput(fixture), viewDirection, lightDirection);
+    float3 neuralValue = diffuseRow ? neuralLobes.diffuse : neuralLobes.specular;
+
     float3 outputValue;
-    if (panel == 0u)
+    if (column == 0u)
     {
-        outputValue = neuralAppearanceReferenceSpecularProjected(
-            materialUv, viewDirection, lightDirection);
+        outputValue = nativeValue;
     }
     else
     {
-        float3 neuralValue = evaluateNeuralAppearanceViewer(
-            materialUv, viewDirection, lightDirection);
-        if (panel == 1u)
-        {
-            outputValue = neuralValue;
-        }
-        else
-        {
-            float3 nativeValue = neuralAppearanceReferenceSpecularProjected(
-                materialUv, viewDirection, lightDirection);
-            outputValue = abs(nativeValue - neuralValue) * max(gNeuralAppearance.errorGain, 0.0f);
-        }
+        outputValue = column == 1u
+                          ? neuralValue
+                          : abs(nativeValue - neuralValue) * max(gNeuralAppearance.errorGain, 0.0f);
     }
     if (status.w < 0.5f || !all(isfinite(status)))
     {

@@ -7,7 +7,6 @@ import nr.renderer;
 import nr.rhi;
 import nr.scene;
 import nr.resource;
-import nr.neuralAppearanceAsset;
 import nr.utils;
 import std;
 import :nodeType;
@@ -103,17 +102,12 @@ struct RtMetadataResidentSet
     nr::rhi::Buffer materialHeaders{};
     nr::rhi::Buffer materialLayers{};
     nr::rhi::Buffer materialTextureRefs{};
-    nr::rhi::Buffer neuralMaterialRefs{};
-    nr::rhi::Buffer neuralModelParameters{};
-    nr::rhi::Image neuralLatentTexture0{};
-    nr::rhi::Image neuralLatentTexture1{};
     std::uint64_t planGeneration = 0u;
 
     [[nodiscard]] bool valid() const noexcept
     {
         return instances.valid() && geometries.valid() && materialHeaders.valid() && materialLayers.valid() &&
-               materialTextureRefs.valid() && neuralMaterialRefs.valid() && neuralModelParameters.valid() &&
-               neuralLatentTexture0.valid() && neuralLatentTexture1.valid();
+               materialTextureRefs.valid();
     }
 };
 
@@ -213,31 +207,12 @@ struct AsStructuralMeshSemanticEntry
     [[nodiscard]] bool operator==(const AsStructuralMeshSemanticEntry &) const noexcept = default;
 };
 
-// Artifacts are immutable after strict V2 loading, but their payload is not
-// represented by the scene RT revision domains. Keep their complete binding
-// identity in the structural key so a different resident payload cannot reuse
-// stale neural descriptor resources.
-struct NeuralArtifactStructuralIdentity
-{
-    nr::resource::MaterialHandle material{};
-    std::uint32_t bindingSourceMaterialIndex = 0u;
-    std::uint32_t artifactSourceMaterialIndex = 0u;
-    std::uint32_t uvSet = 0u;
-    std::array<float, 6u> uvAffine{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
-    std::array<std::byte, 32u> sourceSceneDigest{};
-    std::array<std::byte, 32u> trainingProfileDigest{};
-    std::array<std::byte, 32u> payloadDigest{};
-
-    [[nodiscard]] bool operator==(const NeuralArtifactStructuralIdentity &) const noexcept = default;
-};
-
 struct AsStructuralPlanKey
 {
     std::uint64_t sceneIdentity = 0u;
     AsStructuralRevisionProjection revisions{};
     std::vector<AsStructuralPacketKey> packets{};
     std::vector<AsStructuralMeshSemanticEntry> meshSemantics{};
-    std::vector<NeuralArtifactStructuralIdentity> neuralArtifacts{};
 
     [[nodiscard]] bool operator==(const AsStructuralPlanKey &) const noexcept = default;
 };
@@ -256,14 +231,6 @@ struct RtMetadataBuildState
     std::vector<nr::scene::RtInstanceMetadata> instances{};
 };
 
-struct RtNeuralMaterialTable
-{
-    std::vector<nr::shader::share::RtNeuralMaterialRef> refs{};
-    std::shared_ptr<const nr::neuralAppearance::Artifact> artifact{};
-};
-static_assert(sizeof(nr::shader::share::RtNeuralMaterialRef) == 16u,
-              "RT neural material reference ABI must stay four uint32 lanes.");
-
 struct StaticRtInstanceTemplate
 {
     std::size_t packetOrdinal = 0u;
@@ -280,7 +247,6 @@ struct RtStructuralPlanCache
     std::optional<AsStructuralPlanKey> key{};
     RtMetadataBuildState metadata{};
     nr::scene::RtMaterialTable materialTable{};
-    RtNeuralMaterialTable neuralMaterialTable{};
     std::shared_ptr<const SceneRtHitSbtPlan> hitSbtPlan{};
     std::vector<StaticRtInstanceTemplate> instances{};
     std::uint64_t generation = 0u;
@@ -317,7 +283,6 @@ struct AccelerationStructureBuildRuntimeCache
     std::uint64_t frameSerial = 0;
     std::uint64_t activeSceneIdentity = 0u;
     std::optional<BlasRevisionProjection> blasRevisions{};
-    std::optional<std::uint64_t> neuralFallbackWarningGeneration{};
 };
 
 [[nodiscard]] vk::DeviceSize alignUp(vk::DeviceSize value, vk::DeviceSize alignment) noexcept
@@ -758,32 +723,6 @@ void ensureInstanceBuffer(nr::rhi::Device &device, FrameSlotAsResources &slot, v
     return buffer;
 }
 
-[[nodiscard]] nr::rhi::Buffer createRtNeuralBuffer(nr::rhi::Device &device, vk::DeviceSize byteSize,
-                                                    std::string_view debugName)
-{
-    auto const createInfo = nr::rhi::makeBufferCreateInfo(
-        std::max<vk::DeviceSize>(byteSize, 1u),
-        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
-    return device.resourceFactory.createBuffer(createInfo, nr::rhi::MemoryUsage::GpuOnly, debugName);
-}
-
-[[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeRtNeuralUploadPlan(
-    nr::rhi::Device &device, vk::AccessFlags2 destinationAccess)
-{
-    return nr::rhi::ops::BufferUploadOwnershipPlan{
-        .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
-            device.queueManager.transfer().queueFamilyIndex(), device.queueManager.graphics().queueFamilyIndex(),
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eAllCommands,
-                .access = destinationAccess,
-            }),
-    };
-}
-
 template <typename T>
 [[nodiscard]] std::uint64_t uploadRtMetadataTable(nr::rhi::Device &device, const nr::rhi::Buffer &buffer,
                                                   std::span<const T> values)
@@ -814,8 +753,7 @@ void retireRtMetadata(AccelerationStructureBuildRuntimeCache &runtime, std::uint
 
 void ensureRtMetadataResidentSet(AccelerationStructureBuildRuntimeCache &runtime, nr::rhi::Device &device,
                                  const RtMetadataBuildState &metadata,
-                                 const nr::scene::RtMaterialTable &materialTable,
-                                 const RtNeuralMaterialTable &neuralMaterialTable, std::uint64_t planGeneration,
+                                 const nr::scene::RtMaterialTable &materialTable, std::uint64_t planGeneration,
                                  std::uint64_t retireDelay)
 {
     if (runtime.rtMetadata.planGeneration == planGeneration && runtime.rtMetadata.valid())
@@ -824,31 +762,6 @@ void ensureRtMetadataResidentSet(AccelerationStructureBuildRuntimeCache &runtime
     }
 
     auto const families = rtMetadataQueueFamilyIndices(device);
-    auto const neuralModelParameters = neuralMaterialTable.artifact
-                                           ? neuralMaterialTable.artifact->modelBytes()
-                                           : std::span<const std::byte>{};
-    auto const neuralLatent0 = neuralMaterialTable.artifact ? neuralMaterialTable.artifact->latentPlane(0u)
-                                                             : std::span<const std::byte>{};
-    auto const neuralLatent1 = neuralMaterialTable.artifact ? neuralMaterialTable.artifact->latentPlane(1u)
-                                                             : std::span<const std::byte>{};
-    auto const neutralModelParameters = std::array<std::byte, nr::neuralAppearance::v2ModelBytes>{};
-    auto const neutralLatent = std::array<std::byte, nr::neuralAppearance::v2LatentPlaneBytes>{};
-    auto const modelBytes = neuralModelParameters.empty() ? std::span<const std::byte>{neutralModelParameters}
-                                                            : neuralModelParameters;
-    auto const latent0Bytes = neuralLatent0.empty() ? std::span<const std::byte>{neutralLatent} : neuralLatent0;
-    auto const latent1Bytes = neuralLatent1.empty() ? std::span<const std::byte>{neutralLatent} : neuralLatent1;
-    nrAssert(modelBytes.size() == nr::neuralAppearance::v2ModelBytes,
-             "RT neural material model parameter size must match the V2 ABI.");
-    nrAssert(latent0Bytes.size() == nr::neuralAppearance::v2LatentPlaneBytes &&
-                 latent1Bytes.size() == nr::neuralAppearance::v2LatentPlaneBytes,
-             "RT neural material latent plane size must match the V2 ABI.");
-    auto createNeuralLatentImage = [&](std::string_view debugName) {
-        auto createInfo = nr::rhi::makeImageCreateInfo(
-            vk::Format::eR16G16B16A16Sfloat, vk::Extent2D{64u, 64u},
-            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-        createInfo.sharingMode = vk::SharingMode::eExclusive;
-        return device.resourceFactory.createImage(createInfo, nr::rhi::MemoryUsage::GpuOnly, debugName);
-    };
     auto resident = RtMetadataResidentSet{
         .instances = createRtMetadataBuffer(device, metadata.instances.size() * sizeof(nr::scene::RtInstanceMetadata),
                                             families, "ASBuild.RT.InstanceMetadata"),
@@ -889,126 +802,6 @@ void ensureRtMetadataResidentSet(AccelerationStructureBuildRuntimeCache &runtime
         device.uploadReadback().reclaimCompletedUploads();
     }
 
-    auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
-    auto const storageUploadPlan = makeRtNeuralUploadPlan(device, vk::AccessFlagBits2::eShaderStorageRead);
-    auto const sampledUploadPlan = makeRtNeuralUploadPlan(device, vk::AccessFlagBits2::eShaderSampledRead);
-    auto createNeuralResources = [&](RtMetadataResidentSet &target) {
-        target.neuralMaterialRefs = createRtNeuralBuffer(
-            device, neuralMaterialTable.refs.size() * sizeof(nr::shader::share::RtNeuralMaterialRef),
-            "ASBuild.RT.NeuralMaterialRefs");
-        target.neuralModelParameters =
-            createRtNeuralBuffer(device, nr::neuralAppearance::v2ModelBytes, "ASBuild.RT.NeuralModelParameters");
-        target.neuralLatentTexture0 = createNeuralLatentImage("ASBuild.RT.NeuralLatentTexture0");
-        target.neuralLatentTexture1 = createNeuralLatentImage("ASBuild.RT.NeuralLatentTexture1");
-        return target.neuralMaterialRefs.valid() && target.neuralModelParameters.valid() &&
-               target.neuralLatentTexture0.valid() && target.neuralLatentTexture1.valid();
-    };
-    auto tryUploadNeuralResources = [&](RtMetadataResidentSet &target,
-                                        std::span<const nr::shader::share::RtNeuralMaterialRef> refs,
-                                        std::span<const std::byte> parameters, std::span<const std::byte> latent0,
-                                        std::span<const std::byte> latent1) {
-        if (!target.neuralMaterialRefs.valid() || !target.neuralModelParameters.valid() ||
-            !target.neuralLatentTexture0.valid() || !target.neuralLatentTexture1.valid())
-        {
-            return false;
-        }
-        auto const bufferTickets = std::array{
-            device.uploadReadback().uploadBuffer(std::as_bytes(refs), target.neuralMaterialRefs, 0, storageUploadPlan),
-            device.uploadReadback().uploadBuffer(parameters, target.neuralModelParameters, 0, storageUploadPlan),
-        };
-        auto const imageTickets = std::array{
-            device.uploadReadback().uploadImage(latent0, target.neuralLatentTexture0, vk::ImageLayout::eUndefined,
-                                                 vk::ImageLayout::eShaderReadOnlyOptimal, sampledUploadPlan),
-            device.uploadReadback().uploadImage(latent1, target.neuralLatentTexture1, vk::ImageLayout::eUndefined,
-                                                 vk::ImageLayout::eShaderReadOnlyOptimal, sampledUploadPlan),
-        };
-        auto const uploadSignal = std::ranges::fold_left(
-            bufferTickets | std::views::transform([](const nr::rhi::ops::BufferUploadTicket &ticket) {
-                return ticket.signalValue;
-            }), std::uint64_t{0u}, [](std::uint64_t maximum, std::uint64_t value) { return std::max(maximum, value); });
-        auto const completedSignal = std::ranges::fold_left(
-            imageTickets | std::views::transform([](const nr::rhi::ops::ImageUploadTicket &ticket) {
-                return ticket.signalValue;
-            }), uploadSignal, [](std::uint64_t maximum, std::uint64_t value) { return std::max(maximum, value); });
-        auto const ticketsValid =
-            std::ranges::all_of(bufferTickets, [](const nr::rhi::ops::BufferUploadTicket &ticket) {
-                return ticket.valid();
-            }) &&
-            std::ranges::all_of(imageTickets, [](const nr::rhi::ops::ImageUploadTicket &ticket) {
-                return ticket.valid();
-            });
-        if (!ticketsValid)
-        {
-            if (completedSignal > 0u)
-            {
-                device.uploadReadback().waitUploadComplete(completedSignal);
-                device.uploadReadback().reclaimCompletedUploads();
-            }
-            return false;
-        }
-        if (transferQueueFamily == graphicsQueueFamily)
-        {
-            device.uploadReadback().waitUploadComplete(completedSignal);
-            device.uploadReadback().reclaimCompletedUploads();
-            return true;
-        }
-
-        auto commandPool = nr::rhi::CommandPool{device.device, graphicsQueueFamily,
-                                                 vk::CommandPoolCreateFlagBits::eTransient};
-        auto commandBuffers = commandPool.allocatePrimary(1u);
-        auto &commandBuffer = commandBuffers.front();
-        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-        std::ranges::for_each(bufferTickets,
-                              [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
-                                  device.uploadReadback().recordAcquireBarrier(commandBuffer, ticket);
-                              });
-        std::ranges::for_each(imageTickets,
-                              [&](const nr::rhi::ops::ImageUploadTicket &ticket) {
-                                  device.uploadReadback().recordImageAcquireBarrier(commandBuffer, ticket);
-                              });
-        nr::rhi::CommandRecorder::end(commandBuffer);
-        auto submission = nr::rhi::CommandBatch{};
-        submission.addWait(device.uploadReadback().uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
-                           completedSignal);
-        submission.addCommandBuffer(commandBuffer);
-        auto fence = vk::raii::Fence(device.device, vk::FenceCreateInfo{});
-        device.queueManager.graphics().submit(std::move(submission), std::cref(fence));
-        auto const waitResult =
-            device.device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
-        device.uploadReadback().reclaimCompletedUploads();
-        return waitResult == vk::Result::eSuccess;
-    };
-
-    auto const neutralRefs = std::vector<nr::shader::share::RtNeuralMaterialRef>{neuralMaterialTable.refs.size()};
-    auto const artifactRequested = static_cast<bool>(neuralMaterialTable.artifact);
-    auto neuralReady = createNeuralResources(resident) &&
-                       tryUploadNeuralResources(resident,
-                                                artifactRequested
-                                                    ? std::span<const nr::shader::share::RtNeuralMaterialRef>{
-                                                          neuralMaterialTable.refs}
-                                                    : std::span<const nr::shader::share::RtNeuralMaterialRef>{neutralRefs},
-                                                modelBytes, latent0Bytes, latent1Bytes);
-    if (!neuralReady && artifactRequested)
-    {
-        if (runtime.neuralFallbackWarningGeneration != planGeneration)
-        {
-            nr::nrLog<nr::LogLevel::warning>(
-                "RT neural artifact upload failed for structural revision {}; publishing analytic-material fallback.",
-                planGeneration);
-            runtime.neuralFallbackWarningGeneration = planGeneration;
-        }
-        resident.neuralMaterialRefs = {};
-        resident.neuralModelParameters = {};
-        resident.neuralLatentTexture0 = {};
-        resident.neuralLatentTexture1 = {};
-        neuralReady = createNeuralResources(resident) &&
-                      tryUploadNeuralResources(resident, neutralRefs, std::span<const std::byte>{neutralModelParameters},
-                                               std::span<const std::byte>{neutralLatent},
-                                               std::span<const std::byte>{neutralLatent});
-    }
-    nrAssert(neuralReady,
-             "AccelerationStructureBuildNode could not publish the mandatory neutral neural material fallback.");
     retireRtMetadata(runtime, retireDelay);
     runtime.rtMetadata = std::move(resident);
 }
@@ -1275,102 +1068,9 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         materialRefs.data(), materialRefs.size()});
 }
 
-[[nodiscard]] bool neuralP0MaterialEligible(const nr::resource::Material &material) noexcept
-{
-    auto const identityUv = [](const nr::resource::MaterialTextureTransform &transform) noexcept {
-        return transform.linear.x == 1.0f && transform.linear.y == 0.0f && transform.linear.z == 0.0f &&
-               transform.linear.w == 1.0f && transform.offset.x == 0.0f && transform.offset.y == 0.0f;
-    };
-    auto const slotPresent = [&](nr::resource::MaterialTextureSlotSemantic semantic) noexcept {
-        return material.slot(semantic).texture.valid();
-    };
-    auto const &baseColor = material.slot(nr::resource::MaterialTextureSlotSemantic::baseColor);
-    return material.isOpaque() && material.core.baseColorFactor.w == 1.0f && !material.core.doubleSided && !material.unlit &&
-           !material.volumeBoundary.has_value() && baseColor.texture.valid() && baseColor.uvSet == 0u &&
-           identityUv(baseColor.transform) &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::normal) && !material.clearcoat.has_value() &&
-           !material.sheen.has_value() && !material.transmission.has_value() && !material.anisotropy.has_value() &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::clearcoat) &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::clearcoatRoughness) &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::clearcoatNormal) &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::sheenColor) &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::sheenRoughness) &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::transmission) &&
-           !slotPresent(nr::resource::MaterialTextureSlotSemantic::anisotropy);
-}
-
-[[nodiscard]] std::vector<NeuralArtifactStructuralIdentity> makeNeuralArtifactStructuralIdentities(
-    const nr::scene::Scene &scene, const std::map<nr::resource::MeshHandle, PendingBlasBuild> &pendingByMesh)
-{
-    auto identitiesByMaterial = std::map<nr::resource::MaterialHandle, NeuralArtifactStructuralIdentity>{};
-    std::ranges::for_each(pendingByMesh, [&](const auto &pendingEntry) {
-        auto const &sceneMesh = pendingEntry.second.cachedBuild.get().sceneMesh;
-        std::ranges::for_each(sceneMesh.geometries, [&](const nr::scene::SceneAccelerationStructureGeometry &geometry) {
-            auto const materialHandle = rtGeometryMaterialHandle(scene, pendingEntry.first, geometry.geometryIndex);
-            auto const materialRecord = scene.tryGetMaterialAsset(materialHandle);
-            if (!materialRecord.has_value() || !materialRecord->get().neuralAppearance.has_value())
-            {
-                return;
-            }
-
-            auto const &binding = *materialRecord->get().neuralAppearance;
-            if (!binding.artifact)
-            {
-                return;
-            }
-
-            auto const &contract = binding.artifact->bindingContract();
-            identitiesByMaterial.emplace(materialHandle, NeuralArtifactStructuralIdentity{
-                                                          .material = materialHandle,
-                                                          .bindingSourceMaterialIndex = binding.sourceMaterialIndex,
-                                                          .artifactSourceMaterialIndex = contract.sourceMaterialIndex,
-                                                          .uvSet = contract.uvSet,
-                                                          .uvAffine = contract.uvAffine,
-                                                          .sourceSceneDigest = contract.sourceSceneDigest,
-                                                          .trainingProfileDigest = contract.trainingProfileDigest,
-                                                          .payloadDigest = binding.artifact->payloadDigest(),
-                                                      });
-        });
-    });
-    return identitiesByMaterial | std::views::values | std::ranges::to<std::vector>();
-}
-
-[[nodiscard]] RtNeuralMaterialTable makeRtNeuralMaterialTable(const RtMetadataBuildState &state,
-                                                               const nr::scene::Scene &scene)
-{
-    auto table = RtNeuralMaterialTable{};
-    table.refs.resize(state.materials.size());
-    std::ranges::for_each(state.materialIndexByHandle, [&](const auto &entry) {
-        auto const materialRecord = scene.tryGetMaterialAsset(entry.first);
-        if (!materialRecord.has_value() || !materialRecord->get().neuralAppearance.has_value())
-        {
-            return;
-        }
-
-        auto const &binding = *materialRecord->get().neuralAppearance;
-        if (!binding.artifact || !neuralP0MaterialEligible(materialRecord->get().cpu))
-        {
-            nr::nrLog<nr::LogLevel::warning>(
-                "RT neural material binding '{}' is not eligible for the strict P0 base-surface contract; using analytic material.",
-                materialRecord->get().stableKey);
-            return;
-        }
-        nrAssert(binding.sourceMaterialIndex == 0u,
-                 "RT neural material binding must target the P0 source material index 0.");
-        nrAssert(!table.artifact || table.artifact == binding.artifact,
-                 "P0 supports exactly one neural artifact per scene.");
-        table.artifact = binding.artifact;
-        table.refs[entry.second] = nr::shader::share::RtNeuralMaterialRef{
-            .flags = nr::shader::share::RtNeuralMaterialFlag::enabled,
-            .artifactIndex = 0u,
-        };
-    });
-    return table;
-}
-
 [[nodiscard]] AsStructuralPlanKey makeAsStructuralPlanKey(
     const nr::scene::SceneRevisionSnapshot &revisions, std::span<const nr::scene::TlasBuildInputPacket> packets,
-    const std::map<nr::resource::MeshHandle, PendingBlasBuild> &pendingByMesh, const nr::scene::Scene &scene)
+    const std::map<nr::resource::MeshHandle, PendingBlasBuild> &pendingByMesh)
 {
     auto packetKeys = packets | std::views::transform([](const nr::scene::TlasBuildInputPacket &packet) {
                           return AsStructuralPacketKey{
@@ -1392,7 +1092,6 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         .revisions = AsStructuralRevisionProjection::capture(revisions.rt),
         .packets = std::move(packetKeys),
         .meshSemantics = std::move(meshSemantics),
-        .neuralArtifacts = makeNeuralArtifactStructuralIdentities(scene, pendingByMesh),
     };
 }
 
@@ -1582,7 +1281,7 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
         entry.lastSeenFrameSerial = runtime.frameSerial;
         prepared.dirtyMeshes.push_back(pending.get().mesh);
     });
-    auto structuralKey = makeAsStructuralPlanKey(revisions, packets, pendingByMesh, scene);
+    auto structuralKey = makeAsStructuralPlanKey(revisions, packets, pendingByMesh);
     auto &structuralPlan = runtime.structuralPlan;
     if (!structuralPlan.key.has_value() || *structuralPlan.key != structuralKey)
     {
@@ -1624,12 +1323,10 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
                                         ? 1u
                                         : structuralPlan.generation + 1u;
         auto materialTable = makeRtMaterialTable(metadata);
-        auto neuralMaterialTable = makeRtNeuralMaterialTable(metadata, scene);
         structuralPlan = RtStructuralPlanCache{
             .key = std::move(structuralKey),
             .metadata = std::move(metadata),
             .materialTable = std::move(materialTable),
-            .neuralMaterialTable = std::move(neuralMaterialTable),
             .hitSbtPlan = std::make_shared<const SceneRtHitSbtPlan>(std::move(hitSbtPlan)),
             .instances = std::move(templates),
             .generation = nextGeneration,
@@ -1670,9 +1367,7 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
 
     auto const &metadata = structuralPlan.metadata;
     auto const &materialTable = structuralPlan.materialTable;
-    auto const &neuralMaterialTable = structuralPlan.neuralMaterialTable;
-    ensureRtMetadataResidentSet(runtime, device, metadata, materialTable, neuralMaterialTable,
-                                structuralPlan.generation, retireDelay);
+    ensureRtMetadataResidentSet(runtime, device, metadata, materialTable, structuralPlan.generation, retireDelay);
 
     prepared.tlasInput = nr::rhi::TlasBuildInput{
         .instancesAddress = slot.instanceBuffer.deviceAddress(),
@@ -1723,15 +1418,6 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
     auto const materialHeaders = importStorage(rtMetadata.materialHeaders, "ASBuild.RT.MaterialHeaders");
     auto const materialLayers = importStorage(rtMetadata.materialLayers, "ASBuild.RT.MaterialLayers");
     auto const materialTextureRefs = importStorage(rtMetadata.materialTextureRefs, "ASBuild.RT.MaterialTextureRefs");
-    auto const neuralMaterialRefs = importStorage(rtMetadata.neuralMaterialRefs, "ASBuild.RT.NeuralMaterialRefs");
-    auto const neuralModelParameters =
-        importStorage(rtMetadata.neuralModelParameters, "ASBuild.RT.NeuralModelParameters");
-    auto const neuralLatentTexture0 = context.importSampledImage(
-        rtMetadata.neuralLatentTexture0, "ASBuild.RT.NeuralLatentTexture0", vk::Extent3D{64u, 64u, 1u},
-        vk::Format::eR16G16B16A16Sfloat, ResourceLifetime::ScenePersistent, ownership);
-    auto const neuralLatentTexture1 = context.importSampledImage(
-        rtMetadata.neuralLatentTexture1, "ASBuild.RT.NeuralLatentTexture1", vk::Extent3D{64u, 64u, 1u},
-        vk::Format::eR16G16B16A16Sfloat, ResourceLifetime::ScenePersistent, ownership);
 
     auto const &atlasMesh = runtime.blasCache.at(prepared.rtAtlasMesh).cachedBuild.sceneMesh;
     auto const vertexAtlas =
@@ -1749,10 +1435,6 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
     context.publishFrameResource(nr::renderer::frameResource::sceneRtMaterialHeaders, materialHeaders);
     context.publishFrameResource(nr::renderer::frameResource::sceneRtMaterialLayers, materialLayers);
     context.publishFrameResource(nr::renderer::frameResource::sceneRtMaterialTextureRefs, materialTextureRefs);
-    context.publishFrameResource(nr::renderer::frameResource::sceneRtNeuralMaterialRefs, neuralMaterialRefs);
-    context.publishFrameResource(nr::renderer::frameResource::sceneRtNeuralModelParameters, neuralModelParameters);
-    context.publishFrameResource(nr::renderer::frameResource::sceneRtNeuralLatentTexture0, neuralLatentTexture0);
-    context.publishFrameResource(nr::renderer::frameResource::sceneRtNeuralLatentTexture1, neuralLatentTexture1);
     context.publishFrameResource(nr::renderer::frameResource::sceneRtVertexAtlas, vertexAtlas);
     context.publishFrameResource(nr::renderer::frameResource::sceneRtIndexAtlas, indexAtlas);
     auto const hitPlan = context.importFrameData("ASBuild.RT.HitSbtPlan", runtime.structuralPlan.hitSbtPlan);
@@ -1882,11 +1564,6 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
 
 namespace nr::renderPasses
 {
-[[nodiscard]] bool neuralMaterialP0Eligible(const nr::resource::Material &material) noexcept
-{
-    return detail::neuralP0MaterialEligible(material);
-}
-
 AccelerationStructureBuildNode::~AccelerationStructureBuildNode() = default;
 
 void AccelerationStructureBuildNode::initialize(NodeInitContext &context)

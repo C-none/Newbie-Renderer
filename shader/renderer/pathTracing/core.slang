@@ -2,7 +2,6 @@ module core;
 import common;
 import renderer.pathTracing.params;
 import renderer.pathTracing.pathState;
-import renderer.pathTracing.neuralMaterial;
 import renderer.pathTracing.resources;
 import renderer.pathTracing.environment;
 import renderer.pathTracing.guides;
@@ -90,7 +89,7 @@ ResolvedMaterialDirectComponents dispatchEvaluateResolvedMaterialDirectComponent
     }
 }
 
-void sampleDirectLighting(inout PathState path, ResolvedMaterialPayload material, RtNeuralMaterialPayloadContext neural,
+void sampleDirectLighting(inout PathState path, ResolvedMaterialPayload material,
                            float3 viewDirection, float2 randomValues)
 {
     SceneLightSample lightSample;
@@ -116,16 +115,6 @@ void sampleDirectLighting(inout PathState path, ResolvedMaterialPayload material
     ResolvedMaterialDirectComponents direct =
         dispatchEvaluateResolvedMaterialDirectComponents(
             material, MaterialDirectLightingInput(viewDirection, contribution.direction, contribution.radiance));
-    if (rtNeuralP0Eligible(material, neural.enabled))
-    {
-        bool neuralValid = false;
-        float3 neuralProjected = evaluateRtNeuralProjected(neural.repeatUv, material.anisotropyTangent,
-                                                            material.shadingNormal, neural.tangentSign, viewDirection,
-                                                            contribution.direction, neuralValid);
-        direct.specularRadiance =
-            resolveRtNeuralDirectSpecularRadiance(direct.specularRadiance, neuralProjected, contribution.radiance,
-                                                  neuralValid);
-    }
     if (path.vertexIndex == 1u)
     {
         addPrimaryPathContribution(path, direct.specularRadiance, direct.diffuseRadiance);
@@ -221,8 +210,7 @@ bool applyResolvedMaterialMediumTransition(inout PathState path, ResolvedMateria
     return true;
 }
 
-void handleHit(inout PathState path, ResolvedMaterialPayload material, ResolvedMaterialScatter scatter,
-               RtNeuralMaterialPayloadContext neural)
+void handleHit(inout PathState path, ResolvedMaterialPayload material, ResolvedMaterialScatter scatter)
 {
     float3 viewDirection = safeNormalize(-path.direction, material.geometryNormal);
 
@@ -283,7 +271,7 @@ void handleHit(inout PathState path, ResolvedMaterialPayload material, ResolvedM
     if (hasDirectLightSample)
     {
         directLightRandomPacket = path.rng.rand4();
-        sampleDirectLighting(path, material, neural, viewDirection, directLightRandomPacket.xy);
+        sampleDirectLighting(path, material, viewDirection, directLightRandomPacket.xy);
     }
 
     if (reachedBounceLimit(path))
@@ -420,11 +408,10 @@ public struct Pt
     {
         if (payload.hit)
         {
-            RtNeuralMaterialPayloadContext neural = rtNeuralMaterialPayloadContext(payload);
             ResolvedMaterialPayload material =
                 resolvedMaterialFromRayPayload(payload, pathCurrentMediumIor(path), pathExteriorMediumIor(path));
             ResolvedMaterialScatter scatter = resolvedMaterialScatterFromRayPayload(payload);
-            handleHit(material, scatter, neural);
+            handleHit(material, scatter);
         }
         else
         {
@@ -433,10 +420,9 @@ public struct Pt
     }
 
     [mutating]
-    internal void handleHit(ResolvedMaterialPayload material, ResolvedMaterialScatter scatter,
-                            RtNeuralMaterialPayloadContext neural = RtNeuralMaterialPayloadContext())
+    internal void handleHit(ResolvedMaterialPayload material, ResolvedMaterialScatter scatter)
     {
-        handleHit(path, material, scatter, neural);
+        handleHit(path, material, scatter);
     }
 
     [mutating]

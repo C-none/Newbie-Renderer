@@ -1,45 +1,24 @@
 # Newbie-Renderer
 
+<p align="center">
+  <a href="https://c-none.github.io/Newbie-Renderer/">
+    <img src="https://img.shields.io/badge/Showcase%20Page-Newbie%20Renderer-0ea5e9?style=for-the-badge&logo=github&logoColor=white" alt="Open the Newbie-Renderer showcase page" />
+  </a>
+  <a href="https://c-none.github.io/Newbie-Renderer/#features">
+    <img src="https://img.shields.io/badge/Features-Supported-22c55e?style=for-the-badge" alt="Supported features on the showcase page" />
+  </a>
+  <a href="https://c-none.github.io/Newbie-Renderer/#roadmap">
+    <img src="https://img.shields.io/badge/Todo%20List-Roadmap-f59e0b?style=for-the-badge" alt="Todo list on the showcase page" />
+  </a>
+</p>
+
+**Showcase page: <https://c-none.github.io/Newbie-Renderer/>** — supported features, todo list, and a browser EXR tone mapping demo. Direct links: [Features](https://c-none.github.io/Newbie-Renderer/#features) · [Todo List](https://c-none.github.io/Newbie-Renderer/#roadmap) · [EXR Demo](https://c-none.github.io/Newbie-Renderer/#demo). The page source lives in `docs/web` and is deployed by `.github/workflows/deploy-web.yml`.
+
 ## Introduction
 
 Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slang, and Vulkan. The project is intentionally focused on a narrow target stack for now: Windows, Vulkan, and RTX-class NVIDIA hardware. The goal is not broad compatibility first, but a clean experimental platform for advanced rendering algorithms, modern resource management, and future neural rendering workflows.
 
-
-## Key Features
-
-- **Modular Architecture:** Host-side code is organized with C++26 modules, while shader code is organized around Slang modules and reusable multi-entrypoint shader programs. This keeps compile boundaries explicit and makes the renderer easier to scale without turning the codebase into a header jungle.
-
-- **Shader Reflection:** Slang reflection is already used to inspect shader parameters, validate resource layouts, build descriptor bindings, and keep host/shader contracts synchronized with less manual bookkeeping.
-
-- **Scene-Driven Ray Tracing:** Scene data drives cached BLAS rebuilds, per-frame TLAS construction, and the RT metadata and SBT plan consumed by ray-tracing passes.
-
-- **Path Tracing + DLSS Ray Reconstruction:** Path tracing produces a fixed 1spp seven-resource RR input set. DLSS quality selects render resolution; DLAA renders at display resolution and is the only mode that permits output bypass.
-
-- **Filter After Shading (FAS):** RT path-traced materials expose an off-by-default A/B graph option backed by ABI-stable Slang root variants. The path tracer reserves a fixed three-`rand4` schedule for eleven material texture semantics regardless of the selected policy or optional material layers; when enabled, FAS selects one bilinear reconstruction tap and performs one nearest LOD0 fetch per lookup. Changing the option resets temporal history, while alpha-mask any-hit remains deterministic. The implemented filtering path is intentionally mipless and does not use derivatives or ray cones.
-
-- **Async Copy and Async Compute:** The multi-queue RDG implements asynchronous copy work on the transfer queue and asynchronous compute work on the compute queue, synchronized with graphics through timeline semaphores and queue-ownership transitions.
-
-- **UI and HDR Presentation:** ImGui tooling integrates with SDR, HDR10, and scRGB presentation conversion, selectable tone mapping, screenshots, and readback.
-
-## Todo List
-
-1. [x] RHI layer abstraction around Vulkan with modular RAII-style resource management.
-2. [x] Slang compilation and reflection pipeline for reusable shader/module workflows.
-3. [x] flecs integration as the scene-layer ECS runtime.
-4. [x] Asset import and decode foundation for glTF-oriented content ingestion.
-5. [x] Multi-queue RDG execution with Async Copy and Async Compute.
-6. [x] Scene-driven cached BLAS rebuilds with per-frame TLAS construction and RT metadata.
-7.  [x] Alias-table many-light sampling for active punctual lights. Suggested reference: [Dynamic Many-Light Sampling for Real-Time Ray Tracing](https://research.nvidia.com/sites/default/files/pubs/2019-07_Dynamic-Many-Light-Sampling//MPC19.pdf)
-8.  [ ] Light BVH.
-9.  [ ] Neural Material System. Suggested reference: [Real-Time Neural Appearance Models](https://research.nvidia.com/labs/rtr/neural_appearance_models/)
-10. [ ] NTC. Suggested reference: [Random-Access Neural Compression of Material Textures](https://research.nvidia.com/labs/rtr/neural_texture_compression/)
-11. [ ] Neural Radiance Caching. Suggested reference: [Real-time Neural Radiance Caching for Path Tracing](https://research.nvidia.com/publication/2021-06_real-time-neural-radiance-caching-path-tracing)
-12. [x] RT Filter After Shading (FAS) first stage: an ABI-stable root A/B variant, fixed random-dimension mapping for eleven material texture semantics, and one-sample stochastic bilinear reconstruction at LOD0. Suggested reference: [Filtering After Shading with Stochastic Texture Filtering](https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/)
-13. [x] DLSS Ray Reconstruction with quality-driven render resolution and DLAA-only output bypass. Suggested reference: [DLSS Developer Resources](https://developer.nvidia.com/dlss)
-14. [ ] ReSTIR PT / GRIS. Suggested reference: [Generalized Resampled Importance Sampling: Foundations of ReSTIR](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir)
-15. [ ] NeuSample / neural material importance sampling. Suggested reference: [NeuSample: Importance Sampling for Neural Materials](https://cseweb.ucsd.edu/~viscomp/projects/neusample/)
-16. [ ] Neural shading optimization stability. Suggested reference: [Taming Optimization Variance in Compact Neural Shading Networks](https://research.nvidia.com/labs/rtr/publication/bitterli2026taming/)
-17. [ ] Comprehensive neural materials. Suggested reference: [Towards Comprehensive Neural Materials: Dynamic Structure-Preserving Synthesis with Accurate Silhouette at Instant Inference Speed](https://dl.acm.org/doi/full/10.1145/3721238.3730626)
+The supported feature list and the todo list are maintained on the showcase page: [Features](https://c-none.github.io/Newbie-Renderer/#features) and [Todo List](https://c-none.github.io/Newbie-Renderer/#roadmap). Their source of truth is `docs/web/src/data/project.js`.
 
 ## Prerequisites
 
