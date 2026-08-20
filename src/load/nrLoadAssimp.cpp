@@ -397,6 +397,37 @@ struct TangentUvSelection
     };
 }
 
+[[nodiscard]] std::optional<std::array<float, 4>> normalDerivedFallbackTangent(const std::array<float, 3> &normal,
+                                                                               float signSource) noexcept
+{
+    auto const normalLengthSquared = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+    if (!std::isfinite(normalLengthSquared) || normalLengthSquared <= 1e-12f)
+    {
+        return std::nullopt;
+    }
+
+    auto const inverseNormalLength = 1.0f / std::sqrt(normalLengthSquared);
+    auto const unitNormal = std::array<float, 3>{
+        normal[0] * inverseNormalLength,
+        normal[1] * inverseNormalLength,
+        normal[2] * inverseNormalLength,
+    };
+
+    // Duff et al. (2017) branchless orthonormal-basis construction, using b1 as the tangent direction.
+    auto const zSign = std::copysign(1.0f, unitNormal[2]);
+    auto const a = -1.0f / (zSign + unitNormal[2]);
+    auto const b = unitNormal[0] * unitNormal[1] * a;
+    return normalizedTangent(nr::dependency::mikktspace::Tangent{
+        .direction =
+            {
+                1.0f + zSign * unitNormal[0] * unitNormal[0] * a,
+                zSign * b,
+                -zSign * unitNormal[0],
+            },
+        .sign = std::isfinite(signSource) ? signSource : 1.0f,
+    });
+}
+
 [[nodiscard]] bool tangentsCompatible(const std::array<float, 4> &lhs, const std::array<float, 4> &rhs) noexcept
 {
     constexpr float directionTolerance = 1e-5f;
@@ -460,6 +491,9 @@ struct VertexTangentVariant
 
     auto const originalVertexCount = mesh.vertices.size();
     auto tangentVariants = std::vector<std::vector<VertexTangentVariant>>(originalVertexCount);
+    auto fallbackTangentCount = std::size_t{0u};
+    auto firstFallbackCorner = std::optional<std::size_t>{};
+    auto firstFallbackVertex = std::optional<std::uint32_t>{};
     auto cornerIndices = std::views::iota(std::size_t{0}, mesh.indices.size());
     for (auto cornerIndex : cornerIndices)
     {
@@ -467,9 +501,23 @@ struct VertexTangentVariant
         auto tangent = normalizedTangent(cornerTangents[cornerIndex]);
         if (!tangent.has_value())
         {
-            return makeLoadError(LoadErrorCode::invalidScene, "assimp", sourcePath,
-                                 std::format("MikkTSpace generated an invalid tangent frame for mesh '{}' corner {}.",
-                                             mesh.name, cornerIndex));
+            tangent = normalDerivedFallbackTangent(mesh.vertices[originalVertexIndex].normal,
+                                                   cornerTangents[cornerIndex].sign);
+            if (!tangent.has_value())
+            {
+                return makeLoadError(
+                    LoadErrorCode::invalidScene, "assimp", sourcePath,
+                    std::format("MikkTSpace generated an invalid tangent frame for mesh '{}' corner {}, and a "
+                                "normal-derived fallback tangent could not be constructed for vertex {}.",
+                                mesh.name, cornerIndex, originalVertexIndex));
+            }
+
+            ++fallbackTangentCount;
+            if (!firstFallbackCorner.has_value())
+            {
+                firstFallbackCorner = cornerIndex;
+                firstFallbackVertex = originalVertexIndex;
+            }
         }
 
         auto &variants = tangentVariants[originalVertexIndex];
@@ -503,6 +551,15 @@ struct VertexTangentVariant
             .vertexIndex = targetVertexIndex,
         });
         mesh.indices[cornerIndex] = targetVertexIndex;
+    }
+
+    if (fallbackTangentCount > 0u)
+    {
+        nr::nrLog<nr::LogLevel::warning, "LOAD">(
+            "Mesh '{}' used normal-derived orthonormal fallback tangents for {} invalid MikkTSpace corner frames. "
+            "First fallback: corner {}, vertex {}. Finite MikkTSpace handedness is preserved; unavailable handedness "
+            "uses +1.",
+            mesh.name, fallbackTangentCount, firstFallbackCorner.value_or(0u), firstFallbackVertex.value_or(0u));
     }
 
     return std::nullopt;

@@ -98,6 +98,49 @@ void runLoadCase(std::string_view label, const std::filesystem::path &relativeSo
            almostEqual(vertex.tangent[3], expectedSign, tolerance);
 }
 
+[[nodiscard]] std::array<float, 3> duffOrthonormalTangent(const std::array<float, 3> &normal) noexcept
+{
+    auto const normalLengthSquared = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+    auto const inverseNormalLength = 1.0f / std::sqrt(normalLengthSquared);
+    auto const unitNormal = std::array<float, 3>{
+        normal[0] * inverseNormalLength,
+        normal[1] * inverseNormalLength,
+        normal[2] * inverseNormalLength,
+    };
+    auto const zSign = std::copysign(1.0f, unitNormal[2]);
+    auto const a = -1.0f / (zSign + unitNormal[2]);
+    auto const b = unitNormal[0] * unitNormal[1] * a;
+    auto const tangent = std::array<float, 3>{
+        1.0f + zSign * unitNormal[0] * unitNormal[0] * a,
+        zSign * b,
+        -zSign * unitNormal[0],
+    };
+    auto const tangentLengthSquared = tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2];
+    auto const inverseTangentLength = 1.0f / std::sqrt(tangentLengthSquared);
+    return {
+        tangent[0] * inverseTangentLength,
+        tangent[1] * inverseTangentLength,
+        tangent[2] * inverseTangentLength,
+    };
+}
+
+[[nodiscard]] bool vertexAttributesNear(const nr::load::VertexAsset &vertex, const std::array<float, 3> &position,
+                                        const std::array<float, 3> &normal, float tolerance = 1e-4f) noexcept
+{
+    return std::ranges::all_of(std::views::iota(std::size_t{0}, std::size_t{3}), [&](std::size_t component) {
+        return almostEqual(vertex.position[component], position[component], tolerance) &&
+               almostEqual(vertex.normal[component], normal[component], tolerance);
+    });
+}
+
+[[nodiscard]] bool tangentDirectionNear(const nr::load::VertexAsset &vertex,
+                                        const std::array<float, 3> &expectedDirection, float tolerance = 1e-4f) noexcept
+{
+    return almostEqual(vertex.tangent[0], expectedDirection[0], tolerance) &&
+           almostEqual(vertex.tangent[1], expectedDirection[1], tolerance) &&
+           almostEqual(vertex.tangent[2], expectedDirection[2], tolerance);
+}
+
 void requireGeneratedTransformedTangentMesh(const nr::load::MeshAsset &mesh, std::string_view label)
 {
     nr::test::requireEqual(mesh.indices.size(), std::size_t{6},
@@ -163,6 +206,45 @@ void requireNormalTextureTangentCase()
                                               return tangentNear(vertex, std::array<float, 3>{1.0f, 0.0f, 0.0f}, 1.0f);
                                           }),
                       "authored glTF tangent direction and handedness should be preserved instead of regenerated");
+}
+
+void requireDamagedHelmetFallbackTangentCase()
+{
+    auto scene =
+        loadSceneCase("DamagedHelmet MikkTSpace fallback",
+                      std::filesystem::path{"assets/glTF-Sample-Assets/Models/DamagedHelmet/glTF/DamagedHelmet.gltf"});
+    auto const &mesh = requireMesh(scene, "mesh_helmet_LP_13930damagedHelmet");
+
+    constexpr auto failingPosition = std::array<float, 3>{-0.94466156f, -0.61244285f, -0.02745436f};
+    constexpr auto failingNormal = std::array<float, 3>{-0.83883172f, -0.54380929f, -0.02435377f};
+    auto const matchingSourceVertex = std::ranges::find_if(mesh.vertices, [&](const nr::load::VertexAsset &vertex) {
+        return vertexAttributesNear(vertex, failingPosition, failingNormal);
+    });
+    nr::test::require(matchingSourceVertex != mesh.vertices.end(),
+                      "DamagedHelmet should retain the known MikkTSpace fallback vertex attributes");
+
+    auto const expectedDirection = duffOrthonormalTangent(failingNormal);
+    auto const fallbackVertex = std::ranges::find_if(mesh.vertices, [&](const nr::load::VertexAsset &vertex) {
+        return vertexAttributesNear(vertex, failingPosition, failingNormal) &&
+               tangentDirectionNear(vertex, expectedDirection);
+    });
+    nr::test::require(fallbackVertex != mesh.vertices.end(),
+                      "DamagedHelmet fallback vertex should use the normal-derived Duff orthonormal tangent");
+
+    auto const &vertex = *fallbackVertex;
+    auto const tangentLengthSquared = vertex.tangent[0] * vertex.tangent[0] + vertex.tangent[1] * vertex.tangent[1] +
+                                      vertex.tangent[2] * vertex.tangent[2];
+    auto const tangentNormalDot = vertex.tangent[0] * vertex.normal[0] + vertex.tangent[1] * vertex.normal[1] +
+                                  vertex.tangent[2] * vertex.normal[2];
+    nr::test::require(std::isfinite(vertex.tangent[0]) && std::isfinite(vertex.tangent[1]) &&
+                          std::isfinite(vertex.tangent[2]),
+                      "DamagedHelmet fallback tangent direction should be finite");
+    nr::test::require(almostEqual(tangentLengthSquared, 1.0f, 1e-4f),
+                      "DamagedHelmet fallback tangent direction should be unit length");
+    nr::test::require(std::abs(tangentNormalDot) <= 1e-4f,
+                      "DamagedHelmet fallback tangent direction should be orthogonal to the normal");
+    nr::test::require(almostEqual(std::abs(vertex.tangent[3]), 1.0f, 1e-4f),
+                      "DamagedHelmet fallback tangent handedness should be either -1 or +1");
 }
 
 void requireTextureTransformCase()
@@ -287,6 +369,10 @@ const nr::test::CaseRegistrar gltfTextureTransformCase{"load smoke imports UV1 a
 const nr::test::CaseRegistrar gltfNormalTextureTangentCase{
     "load smoke generates MikkTSpace tangents from normal texture effective UVs",
     [] { requireNormalTextureTangentCase(); }};
+
+const nr::test::CaseRegistrar gltfDamagedHelmetFallbackTangentCase{
+    "load smoke imports DamagedHelmet with normal-derived MikkTSpace fallback tangents",
+    [] { requireDamagedHelmetFallbackTangentCase(); }};
 
 const nr::test::CaseRegistrar gltfMeshGpuInstancingCase{
     "load smoke imports EXT_mesh_gpu_instancing from glTF", [] {
