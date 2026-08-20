@@ -22,23 +22,23 @@ const progressPercent = computed(() => Math.round((doneCount.value / roadmap.len
 const sections = [
   { id: 'features', label: 'Features' },
   { id: 'roadmap', label: 'Todo List' },
-  { id: 'demo', label: 'EXR Demo' },
+  { id: 'gallery', label: 'Gallery' },
 ];
 
-const demoSection = ref(null);
-const demoActive = ref(false);
-let demoObserver;
+const gallerySection = ref(null);
+const galleryActive = ref(false);
+let galleryObserver;
 
 onMounted(() => {
-  demoObserver = new IntersectionObserver((entries) => {
+  galleryObserver = new IntersectionObserver((entries) => {
     if (!entries.some(({ isIntersecting }) => isIntersecting)) return;
-    demoActive.value = true;
-    demoObserver.disconnect();
+    galleryActive.value = true;
+    galleryObserver.disconnect();
   }, { rootMargin: '256px' });
-  demoObserver.observe(demoSection.value);
+  galleryObserver.observe(gallerySection.value);
 });
 
-onBeforeUnmount(() => demoObserver?.disconnect());
+onBeforeUnmount(() => galleryObserver?.disconnect());
 </script>
 
 <template>
@@ -201,26 +201,25 @@ onBeforeUnmount(() => demoObserver?.disconnect());
       </section>
 
       <section
-        id="demo"
-        ref="demoSection"
+        id="gallery"
+        ref="gallerySection"
         class="flex scroll-mt-8 flex-col gap-6"
       >
         <div class="flex flex-col gap-2">
           <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">
-            EXR environment gallery
+            Gallery
           </h2>
           <p class="max-w-3xl text-sm leading-6 text-slate-400">
-            An OpenEXR asset decoded in the browser and displayed with selectable tone mapping,
-            mirroring the presentation options exposed by the renderer.
+            Browse renderer captures in OpenEXR with on-demand decoding and selectable tone mapping.
           </p>
         </div>
 
-        <ExrViewer v-if="demoActive" />
+        <ExrViewer v-if="galleryActive" />
         <p
           v-else
-          class="grid min-h-[55vh] place-items-center rounded-2xl border border-slate-800 bg-slate-900/60 text-sm text-slate-500"
+          class="grid min-h-[30rem] place-items-center rounded-2xl border border-slate-800 bg-slate-900/60 text-sm text-slate-500 lg:min-h-[55vh]"
         >
-          The viewer and its EXR asset load when this section becomes visible.
+          The gallery and its first EXR load when this section becomes visible.
         </p>
       </section>
 
